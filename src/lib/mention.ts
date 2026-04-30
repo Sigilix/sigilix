@@ -1,14 +1,25 @@
-// Detect @-mentions of OpenClaw in Linear comment bodies. Ported from
-// rema-portal/tools/openclaw/lib/mention-detection.mjs. The mechanics
-// are identical (markdown-quote stripping, code-fence stripping, regex
-// match against trigger handles) — Linear's comment body is markdown
-// just like GitHub's.
+// Detect @-mentions of the bot ("Arc") in Linear comment bodies. Ported
+// from rema-portal/tools/openclaw/lib/mention-detection.mjs. The
+// mechanics are identical (markdown-quote stripping, code-fence
+// stripping, regex match against trigger handles) — Linear's comment
+// body is markdown just like GitHub's.
 //
-// Default triggers cover both the OAuth app slug and the [bot]-suffixed
-// form, so users can @ either one. Override with OPENCLAW_MENTION_TRIGGERS
-// env var when the bot's display handle changes.
+// Default triggers include both the new `arc` handles and the legacy
+// `openclaw` handles so:
+//   1. users typing @arc trigger the bot
+//   2. comments left over from the OpenClaw era still reply if mentioned
+// Override with OPENCLAW_MENTION_TRIGGERS env var when the bot's
+// display handle differs (still named OPENCLAW_* for zero-config impact;
+// the env var name is internal infra, not user-visible).
 
-const DEFAULT_TRIGGERS = ["openclaw", "openclaw[bot]", "OpenClaw[bot]"]
+const DEFAULT_TRIGGERS = [
+  "arc",
+  "arc[bot]",
+  "Arc[bot]",
+  "openclaw",
+  "openclaw[bot]",
+  "OpenClaw[bot]",
+]
 
 export function getMentionTriggers(envValue?: string): string[] {
   const raw = envValue?.trim()
@@ -78,6 +89,12 @@ export function stripMentionFromBody(body: string, triggers: string[]): string {
  * Heuristic for "is this comment authored by a bot." Linear identifies
  * the bot by the OAuth app actor having `[bot]` in the displayName.
  * Skip-self protection so the bot never replies to its own past replies.
+ *
+ * Legacy `openclaw` substring stays in for now: comments authored by the
+ * old "OpenClaw[bot]" identity should still be detected as self after
+ * the rename to "Arc[bot]". The substring is loose but the only way to
+ * recognize legacy comments without storing a known-bot list. Drop it
+ * once all OpenClaw-era comments age out of the active issue threads.
  */
 export function isLikelyBotAuthor(displayName: string | null | undefined): boolean {
   if (!displayName) return false

@@ -13,13 +13,19 @@ import {
   stripQuotesAndCode,
 } from "../src/lib/mention"
 
-const TRIGGERS = ["openclaw", "openclaw[bot]", "OpenClaw[bot]"]
+// Test triggers cover both the new `arc` handles and the legacy
+// `openclaw` handles since both are in the production default list.
+const TRIGGERS = ["arc", "arc[bot]", "Arc[bot]", "openclaw", "openclaw[bot]", "OpenClaw[bot]"]
 
 describe("getMentionTriggers", () => {
   it("returns defaults when env value is empty / undefined", () => {
+    expect(getMentionTriggers(undefined)).toContain("arc")
+    expect(getMentionTriggers("")).toContain("arc")
+    expect(getMentionTriggers("   ")).toContain("arc")
+  })
+
+  it("includes legacy openclaw handles in defaults for backward compat", () => {
     expect(getMentionTriggers(undefined)).toContain("openclaw")
-    expect(getMentionTriggers("")).toContain("openclaw")
-    expect(getMentionTriggers("   ")).toContain("openclaw")
   })
 
   it("parses comma-separated overrides", () => {
@@ -29,7 +35,7 @@ describe("getMentionTriggers", () => {
 
   it("falls back to defaults if override is all whitespace", () => {
     const t = getMentionTriggers(", ,  ")
-    expect(t).toContain("openclaw")
+    expect(t).toContain("arc")
   })
 })
 

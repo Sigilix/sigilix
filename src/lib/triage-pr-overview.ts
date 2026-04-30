@@ -10,6 +10,8 @@
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient, type PrCommit, type PullRequestMeta } from "./github"
+import { parseFirstJsonObject } from "./json-extract"
+import { PR_OVERVIEW_SCHEMA } from "./schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
 import type { Env } from "../index"
 
@@ -60,7 +62,9 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   // succession on the same head SHA would otherwise both reach the
   // listIssueComments → no-marker branch and POST a duplicate top-level
   // comment. Keyed on (prNumber, headSha) so a new push (different SHA)
-  // still runs again as expected.
+  // still runs again as expected. Released on any exit path via the
+  // try/finally below — queue retries can re-attempt without being
+  // blocked by a stale lock.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
   if (await env.OPENCLAW_STATE.get(dedupeKey)) {
     console.log(`pr-overview already running for ${dedupeKey} — skipping`)
@@ -70,72 +74,76 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     expirationTtl: DEDUPE_TTL_SECONDS,
   })
 
-  const client = await buildClient(env, installationId)
-  since("auth-ready")
+  try {
+    const client = await buildClient(env, installationId)
+    since("auth-ready")
 
-  const [meta, diff, commits] = await Promise.all([
-    client.getPullRequest(owner, repo, prNumber),
-    client.getPullRequestDiff(owner, repo, prNumber),
-    client.getPullRequestCommits(owner, repo, prNumber).catch(() => [] as PrCommit[]),
-  ])
-  since("pr-fetched")
+    const [meta, diff, commits] = await Promise.all([
+      client.getPullRequest(owner, repo, prNumber),
+      client.getPullRequestDiff(owner, repo, prNumber),
+      client.getPullRequestCommits(owner, repo, prNumber).catch(() => [] as PrCommit[]),
+    ])
+    since("pr-fetched")
 
-  const existing = await findExistingOverviewComment(client, owner, repo, prNumber)
-  const isFirstRun = existing == null
-  since("dedupe-checked")
+    const existing = await findExistingOverviewComment(client, owner, repo, prNumber)
+    const isFirstRun = existing == null
+    since("dedupe-checked")
 
-  // For incremental runs we only show the most recent commits (matches the
-  // upstream `commits[-10:]` slice). First-run gets the same window — the
-  // prompt says "summarize the whole change" and the diff carries the full
-  // story in either case.
-  const recentCommits = commits.slice(-10)
+    // For incremental runs we only show the most recent commits (matches the
+    // upstream `commits[-10:]` slice). First-run gets the same window — the
+    // prompt says "summarize the whole change" and the diff carries the full
+    // story in either case.
+    const recentCommits = commits.slice(-10)
 
-  const prompt = buildPrompt({
-    prNumber,
-    meta,
-    diff,
-    newCommits: recentCommits,
-    isFirstRun,
-  })
-
-  const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
-  since("ollama-start")
-  const response = await generate({
-    model,
-    prompt,
-    apiKey: env.OLLAMA_API_KEY,
-    temperature: 0.2,
-  })
-  since("ollama-done")
-
-  const verdict = parseOverviewResponse(response)
-  if (!verdict) {
-    // Log only metadata — never raw model output. The response is
-    // derived from the PR diff + body and could echo secrets/code into
-    // Worker logs. Length + a short hash is enough to correlate runs.
-    console.error("pr-overview verdict did not parse", {
-      owner,
-      repo,
+    const prompt = buildPrompt({
       prNumber,
-      responseLength: response.length,
+      meta,
+      diff,
+      newCommits: recentCommits,
+      isFirstRun,
     })
-    return
-  }
 
-  const body = formatOverviewComment({ verdict, isFirstRun })
+    const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+    since("ollama-start")
+    const response = await generate({
+      model,
+      prompt,
+      apiKey: env.OLLAMA_API_KEY,
+      format: PR_OVERVIEW_SCHEMA as unknown as Record<string, unknown>,
+    })
+    since("ollama-done")
 
-  if (existing != null) {
-    await client.updateIssueComment(owner, repo, existing, body)
-    since("comment-updated")
-    console.log(
-      `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files)`
-    )
-  } else {
-    const created = await client.createIssueComment(owner, repo, prNumber, body)
-    since("comment-created")
-    console.log(
-      `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files)`
-    )
+    const verdict = parseOverviewResponse(response)
+    if (!verdict) {
+      console.error("pr-overview verdict did not parse", {
+        owner,
+        repo,
+        prNumber,
+        responseLength: response.length,
+      })
+      return
+    }
+
+    const body = formatOverviewComment({ verdict, isFirstRun })
+
+    if (existing != null) {
+      await client.updateIssueComment(owner, repo, existing, body)
+      since("comment-updated")
+      console.log(
+        `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files)`
+      )
+    } else {
+      const created = await client.createIssueComment(owner, repo, prNumber, body)
+      since("comment-created")
+      console.log(
+        `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files)`
+      )
+    }
+  } finally {
+    // Always release the dedupe lock — even on failure — so the queue's
+    // retry can attempt again. Without this, the first failure leaves
+    // a 5-min lock that blocks every retry until it expires.
+    await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
   }
 }
 
@@ -183,22 +191,17 @@ function truncate(value: string, max: number, marker = "\n[…truncated…]"): s
 }
 
 /**
- * Parse the model's overview response into a typed verdict. Tolerates a
- * surrounding markdown fence. Returns null for any output that isn't the
- * expected shape so callers can fail loudly rather than post junk.
+ * Parse the model's overview response into a typed verdict. Tolerates:
+ *   1. Clean JSON object
+ *   2. JSON wrapped in a ```json ... ``` fence
+ *   3. JSON embedded in surrounding prose ("Here's the overview: { ... }")
+ *
+ * Returns null when the output contains no valid JSON object that has
+ * the required shape, so callers can fail loudly rather than post junk.
  */
 export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
-  if (typeof text !== "string") return null
-  let trimmed = text.trim()
-  trimmed = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "")
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return null
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
-  const obj = parsed as Record<string, unknown>
+  const obj = parseFirstJsonObject(text)
+  if (!obj) return null
 
   const summary = typeof obj.summary === "string" ? obj.summary.trim() : ""
   if (!summary) return null
@@ -254,7 +257,7 @@ interface FormatArgs {
  */
 export function formatOverviewComment({ verdict, isFirstRun }: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
-  lines.push("## OpenClaw Overview")
+  lines.push("## Arc Overview")
   lines.push("")
   lines.push(`### Summary${isFirstRun ? "" : " — latest push"}`)
   lines.push("")

@@ -76,6 +76,36 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
     expirationTtl: DEDUPE_TTL_SECONDS,
   })
 
+  try {
+    await runCiTriage({
+      owner,
+      repo,
+      prNumber,
+      runId,
+      headSha,
+      installationId,
+      env,
+      since,
+    })
+  } finally {
+    // Release on any exit path so queue retries can re-attempt.
+    await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+  }
+}
+
+interface CiTriageInner {
+  owner: string
+  repo: string
+  prNumber: number
+  runId: number
+  headSha: string
+  installationId: number
+  env: Env
+  since: (label: string) => void
+}
+
+async function runCiTriage(args: CiTriageInner): Promise<void> {
+  const { owner, repo, prNumber, runId, headSha, installationId, env, since } = args
   const client = await buildClient(env, installationId)
   since("auth-ready")
 
@@ -169,7 +199,7 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
     return
   }
 
-  const footer = `\n\n${CI_MARKER}\n_🦞 Auto-triage by OpenClaw · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
+  const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Arc · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
   const body = response + footer
 
   const existing = await findExistingCiComment(client, owner, repo, prNumber)

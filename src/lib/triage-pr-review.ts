@@ -29,6 +29,8 @@ import {
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
+import { parseFirstJsonObject } from "./json-extract"
+import { PR_REVIEW_SCHEMA } from "./schemas"
 import { PR_REVIEW_PROMPT } from "../prompts/pr-review"
 import type { Env } from "../index"
 
@@ -83,87 +85,88 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
 
   since("start")
 
+  // Concurrent-run guard with try/finally release so queue retries
+  // can re-attempt on failure. Keyed on (prNumber, headSha) — a new
+  // push (different SHA) gets a different key and re-runs as expected.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
     console.log(`pr-review already ran for ${dedupeKey} — skipping`)
     return
   }
-
-  const client = await buildClient(env, installationId)
-  since("auth-ready")
-
-  const [meta, diff, allReviewComments] = await Promise.all([
-    client.getPullRequest(owner, repo, prNumber),
-    client.getPullRequestDiff(owner, repo, prNumber),
-    client
-      .listPullRequestReviewComments(owner, repo, prNumber)
-      .catch(() => [] as ReviewComment[]),
-  ])
-  since(`pr-fetched-${allReviewComments.length}-cr-comments`)
-
-  // Set the dedupe marker BEFORE the heavy LLM call so a retried webhook
-  // doesn't trigger a duplicate review while the first one is still in
-  // flight. KV propagates eventually-consistently across regions, so this
-  // is best-effort but eliminates the common case.
   await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
-    expirationTtl: 7 * 24 * 60 * 60, // 7 days — long enough to outlive retries
+    expirationTtl: 7 * 24 * 60 * 60, // 7 days — long enough to outlive retries on success
   })
 
-  // Filter to CR-authored comments. Other inline comments (human
-  // reviewers, OpenClaw itself) aren't part of the "what did CR miss"
-  // exclusion set — they're separate signals.
-  const crComments = allReviewComments.filter((c) =>
-    typeof c.user?.login === "string" && /^coderabbit/i.test(c.user.login)
-  )
-
-  const prompt = buildPrompt({
-    prNumber,
-    title: meta.title,
-    body: meta.body ?? "",
-    diff,
-    crComments,
-  })
-
-  const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
-  since("ollama-start")
-  const response = await generate({
-    model,
-    prompt,
-    apiKey: env.OLLAMA_API_KEY,
-    temperature: 0.2,
-  })
-  since("ollama-done")
-
-  const verdict = parsePrReviewResponse(response)
-  if (!verdict) {
-    // Log only metadata — never raw model output (could echo PR diff
-    // / secrets into Worker logs).
-    console.error("pr-review verdict did not parse", {
-      owner,
-      repo,
-      prNumber,
-      responseLength: response.length,
-    })
-    return
-  }
-
-  const reviewBody = buildReviewSubmission({
-    verdict,
-    prAuthor: meta.user?.login ?? null,
-    headSha,
-  })
-
+  let posted = false
   try {
+    const client = await buildClient(env, installationId)
+    since("auth-ready")
+
+    const [meta, diff, allReviewComments] = await Promise.all([
+      client.getPullRequest(owner, repo, prNumber),
+      client.getPullRequestDiff(owner, repo, prNumber),
+      client
+        .listPullRequestReviewComments(owner, repo, prNumber)
+        .catch(() => [] as ReviewComment[]),
+    ])
+    since(`pr-fetched-${allReviewComments.length}-cr-comments`)
+
+    // Filter to CR-authored comments. Other inline comments (human
+    // reviewers, Arc itself) aren't part of the "what did CR miss"
+    // exclusion set — they're separate signals.
+    const crComments = allReviewComments.filter((c) =>
+      typeof c.user?.login === "string" && /^coderabbit/i.test(c.user.login)
+    )
+
+    const prompt = buildPrompt({
+      prNumber,
+      title: meta.title,
+      body: meta.body ?? "",
+      diff,
+      crComments,
+    })
+
+    const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+    since("ollama-start")
+    const response = await generate({
+      model,
+      prompt,
+      apiKey: env.OLLAMA_API_KEY,
+      format: PR_REVIEW_SCHEMA as unknown as Record<string, unknown>,
+    })
+    since("ollama-done")
+
+    const verdict = parsePrReviewResponse(response)
+    if (!verdict) {
+      console.error("pr-review verdict did not parse", {
+        owner,
+        repo,
+        prNumber,
+        responseLength: response.length,
+      })
+      return
+    }
+
+    const reviewBody = buildReviewSubmission({
+      verdict,
+      prAuthor: meta.user?.login ?? null,
+      headSha,
+    })
+
     const submitted = await client.submitReview(owner, repo, prNumber, reviewBody)
+    posted = true
     since(`review-submitted-${submitted.state}`)
     console.log(
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
     )
-  } catch (error) {
-    // Rollback dedupe marker so a follow-up webhook can retry.
-    await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
-    throw error
+  } finally {
+    // Release the lock unless we actually posted a review. On a
+    // successful post, the 7-day TTL stays — we don't want CR's
+    // submitted-event firing a duplicate review on the same head SHA.
+    if (!posted) {
+      await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+    }
   }
 }
 
@@ -220,22 +223,14 @@ function truncate(value: string, max: number, marker = "\n[…truncated…]"): s
 }
 
 /**
- * Parse the model's primary-review response. Tolerates a surrounding
- * markdown fence. Returns null on shape errors so callers can fail
- * loudly. Pure — exported for tests.
+ * Parse the model's primary-review response. Tolerates clean JSON,
+ * fenced JSON, AND prose-wrapped JSON via balanced-brace extraction.
+ * Returns null on shape errors so callers can fail loudly. Pure —
+ * exported for tests.
  */
 export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
-  if (typeof text !== "string") return null
-  let trimmed = text.trim()
-  trimmed = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "")
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return null
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
-  const obj = parsed as Record<string, unknown>
+  const obj = parseFirstJsonObject(text)
+  if (!obj) return null
 
   const summary = typeof obj.summary === "string" ? obj.summary.trim() : ""
   if (!summary) return null
@@ -349,7 +344,7 @@ function formatReviewBody(
       : event === "REQUEST_CHANGES"
         ? "BLOCKER"
         : "REVIEW"
-  lines.push(`🦞 [${tag}] ${verdict.summary}`)
+  lines.push(`⚓ [${tag}] ${verdict.summary}`)
   lines.push("")
   if (event === "APPROVE" && prAuthor && !prAuthor.toLowerCase().includes("[bot]")) {
     if (verdict.findings.length === 0) {
@@ -385,7 +380,7 @@ function formatFindingComment(finding: PrReviewFinding): string {
   // not a CR comment. Suggestion blocks (when present in body) pass
   // through unchanged so GitHub renders them as one-click apply.
   const lines: string[] = [`<!-- openclaw:pr-review-finding -->`]
-  lines.push(`🦞 [score ${finding.score}/5] ${finding.headline}`)
+  lines.push(`⚓ [score ${finding.score}/5] ${finding.headline}`)
   lines.push("")
   lines.push(finding.body)
   return lines.join("\n")

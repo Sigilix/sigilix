@@ -9,10 +9,21 @@
 // other route is gated by Cloudflare auth or rejected.
 
 import { triageIssue } from "./lib/triage"
+import { handleMention } from "./lib/mention-reply"
+import { bodyMentionsBot, getMentionTriggers } from "./lib/mention"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
 
 export interface Env {
   OPENCLAW_STATE: KVNamespace
+  // Vectorize index storing 768-dim embeddings of code chunks per repo.
+  // Populated by scripts/index-repo.mjs (or a future GitHub Action).
+  // Queries are scoped by namespace == repo name, mapped from the
+  // Linear team key on the inbound webhook (see retrieval.ts).
+  OPENCLAW_CODE_INDEX: VectorizeIndex
+  // Workers AI binding. Used to embed the issue / question text at
+  // query time with the same model the indexer used (BGE base v1.5,
+  // 768 dims).
+  AI: Ai
   // Personal API key. Required at minimum because the manual-trigger route
   // gates on it as a shared bearer secret (see handleManualTrigger). Used
   // for talking to Linear only when LINEAR_OAUTH_CLIENT_ID is unset — once
@@ -28,13 +39,22 @@ export interface Env {
   // industry-standard bot pattern Linear supports.
   LINEAR_OAUTH_CLIENT_ID?: string
   LINEAR_OAUTH_CLIENT_SECRET?: string
+  // JSON object mapping Linear team keys to Vectorize namespaces.
+  // Example: '{"ARC":"rema-portal","RFD":"rubberfit-desktop"}'.
+  // Optional — when unset, the team key (lowercased) IS the namespace.
+  OPENCLAW_TEAM_REPO_MAP?: string
   OPENCLAW_MODEL?: string
   OPENCLAW_TEAM_KEY?: string
+  // Comma-separated list of @-handles that trigger the mention-reply path.
+  // Defaults to "openclaw,openclaw[bot],OpenClaw[bot]". Override when the
+  // OAuth app's display name differs.
+  OPENCLAW_MENTION_TRIGGERS?: string
 }
 
-// Linear sends webhooks for the action types we subscribe to. We only
-// care about Issue create/update — Comment events are noise for triage
-// (we'd retrigger on our own bot's comments).
+// Linear sends webhooks for the action types we subscribe to. We dispatch
+// on (type, action) — Issue.create kicks off triage, Comment.create with a
+// bot mention kicks off the mention-reply path. Everything else returns
+// 200 "skipped" so Linear doesn't retry.
 interface LinearWebhookPayload {
   action: "create" | "update" | "remove"
   type: "Issue" | "Comment" | string
@@ -42,7 +62,9 @@ interface LinearWebhookPayload {
     id: string
     title?: string
     description?: string
+    body?: string // Comment events
     team?: { key?: string }
+    user?: { displayName?: string; name?: string } // Comment author
   }
   webhookTimestamp: number
 }
@@ -89,34 +111,46 @@ async function handleLinearWebhook(
     return new Response("invalid json\n", { status: 400 })
   }
 
-  // Filter: we only triage Issue.create. Issue.update fires on every field
-  // change including our own — would create an infinite loop without a marker
-  // check. Skip cleanly to keep the surface narrow.
-  if (payload.type !== "Issue" || payload.action !== "create") {
-    return new Response("skipped\n", { status: 200 })
+  // Issue.create → full triage pipeline.
+  if (payload.type === "Issue" && payload.action === "create") {
+    if (env.OPENCLAW_TEAM_KEY && payload.data.team?.key !== env.OPENCLAW_TEAM_KEY) {
+      console.warn("team scope mismatch", {
+        got: payload.data.team?.key ?? null,
+        want: env.OPENCLAW_TEAM_KEY,
+      })
+      return new Response("team scope mismatch\n", { status: 200 })
+    }
+    ctx.waitUntil(triageIssue(payload.data.id, env).catch((error) => {
+      console.error("triage failed", { issueId: payload.data.id, error: String(error) })
+    }))
+    return new Response("ok\n", { status: 200 })
   }
 
-  // Optional team scope — if OPENCLAW_TEAM_KEY is set, only triage issues
-  // from that team. Useful when one OpenClaw instance serves a workspace
-  // with multiple teams and you don't want it firing on all of them.
-  if (env.OPENCLAW_TEAM_KEY && payload.data.team?.key !== env.OPENCLAW_TEAM_KEY) {
-    // Log the mismatch so operators can spot a misconfigured OPENCLAW_TEAM_KEY
-    // — silent early return here was hiding a real config bug where every
-    // webhook skipped triage with no visibility in wrangler tail.
-    console.warn("team scope mismatch", {
-      got: payload.data.team?.key ?? null,
-      want: env.OPENCLAW_TEAM_KEY,
-    })
-    return new Response("team scope mismatch\n", { status: 200 })
+  // Comment.create with @-mention → mention-reply pipeline.
+  // Pre-check the body here before spending a Linear GraphQL roundtrip —
+  // most comments don't @ us, and we'd waste a query rebuilding context
+  // for a comment we'd skip anyway.
+  if (payload.type === "Comment" && payload.action === "create") {
+    const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
+    const body = payload.data.body ?? ""
+    if (!bodyMentionsBot(body, triggers)) {
+      return new Response("no mention\n", { status: 200 })
+    }
+    // Skip-self short-circuit using the webhook payload's user field.
+    // mention-reply.ts also re-checks via the comment fetch, but cheap
+    // to reject self-comments before scheduling the waitUntil.
+    const author =
+      payload.data.user?.displayName ?? payload.data.user?.name ?? null
+    if (author && (/\[bot\]$/i.test(author) || /openclaw/i.test(author))) {
+      return new Response("skip self\n", { status: 200 })
+    }
+    ctx.waitUntil(handleMention(payload.data.id, env).catch((error) => {
+      console.error("mention reply failed", { commentId: payload.data.id, error: String(error) })
+    }))
+    return new Response("ok\n", { status: 200 })
   }
 
-  // Run triage in the background so the webhook returns 200 immediately.
-  // Linear retries on non-2xx; long synchronous work would hammer us.
-  ctx.waitUntil(triageIssue(payload.data.id, env).catch((error) => {
-    console.error("triage failed", { issueId: payload.data.id, error: String(error) })
-  }))
-
-  return new Response("ok\n", { status: 200 })
+  return new Response("skipped\n", { status: 200 })
 }
 
 async function handleManualTrigger(

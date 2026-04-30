@@ -1,0 +1,26 @@
+# Drop this file into each Arc-and-Anchor repo you want OpenClaw to read
+# from, at `.github/workflows/openclaw-index.yml`. Triggers on every push
+# to `dev` (active development) AND `main` (customer-facing releases) so
+# the bot's retrieval reflects whichever branch most recently changed.
+# Each push reindexes into the same namespace (`<repo-name>` lowercased) —
+# the latest push wins, which is what we want.
+#
+# Required org-level secrets (set once at
+# https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions
+# with access granted to all repos that need to index):
+#   - CLOUDFLARE_ACCOUNT_ID
+#   - CLOUDFLARE_AI_TOKEN  (Workers AI Read + Vectorize Edit)
+
+name: OpenClaw codebase index
+
+on:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+jobs:
+  index:
+    uses: Arc-and-Anchor/openclaw-worker/.github/workflows/codebase-index.yml@main
+    secrets:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}

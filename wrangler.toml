@@ -27,6 +27,26 @@ cpu_ms = 300000
 binding = "OPENCLAW_STATE"
 id = "df689379ea6240f7808997a75ceaed7e"
 
+# Vectorize index for codebase chunks. Embeddings are 768-dim vectors
+# from Cloudflare's @cf/baai/bge-base-en-v1.5, indexed under one
+# namespace per repo (e.g. "rema-portal", "rubberfit-desktop") so
+# triage on a Linear issue can scope retrieval to the relevant repo.
+#
+# Run once: `wrangler vectorize create openclaw-code-index \
+#   --dimensions=768 --metric=cosine`
+# Then populate via scripts/index-repo.mjs (see README).
+[[vectorize]]
+binding = "OPENCLAW_CODE_INDEX"
+index_name = "openclaw-code-index"
+
+# Cloudflare Workers AI binding — used for embedding the issue/comment
+# body at query time. Keeps the embedding model identical between
+# index time (CLI/CI script also calls @cf/baai/bge-base-en-v1.5 via
+# the REST API) and retrieval time, which is critical for cosine sim
+# to be meaningful.
+[ai]
+binding = "AI"
+
 # Required secrets (set via `wrangler secret put`):
 #
 #   LINEAR_API_KEY                Personal API key — used as the manual-trigger

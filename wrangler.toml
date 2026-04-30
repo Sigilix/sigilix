@@ -3,10 +3,18 @@ main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 
-# Workers Unbound — needed because Ollama Turbo calls take 30-90s,
-# which exceeds the 10ms CPU budget of the free Bundled tier.
-# Cost: $5/mo + $0.50/M requests.
-usage_model = "unbound"
+# Standard usage model — Bundled gives ctx.waitUntil() only ~30s of
+# wall-clock budget after the response, which Ollama Turbo blows past
+# routinely (its calls take 30-90s for a description rewrite). On
+# Standard we get up to 30 min of waitUntil time and an explicit CPU
+# budget in milliseconds, which is what the triage path needs.
+#
+# The legacy `usage_model = "unbound"` directive was removed in
+# wrangler 4 and is silently ignored — the Worker was actually
+# running on the Bundled default, which was killing waitUntil mid-
+# triage and leaving every test issue with no comment / no rewrite.
+[limits]
+cpu_ms = 60000
 
 # KV namespace for dedupe state.
 # Stores marker comment IDs by issue identifier so re-firing

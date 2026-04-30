@@ -230,7 +230,11 @@ export default {
           maxRetries: MAX_RETRIES,
           error: String(error),
         })
-        message.retry()
+        if (isFinalAttempt) {
+          message.ack()
+        } else {
+          message.retry()
+        }
       }
     }
   },

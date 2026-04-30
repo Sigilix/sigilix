@@ -10,7 +10,7 @@ import { generate } from "./ollama"
 import { LinearClient, estimateToPoints, severityToPriority } from "./linear"
 import { getMarker, setMarker } from "./dedupe"
 import type { Env } from "../index"
-import promptText from "../../prompts/issue-triage.md"
+import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
 
 const TRIAGE_MARKER = "<!-- openclaw:issue-triage -->"
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -115,7 +115,7 @@ interface PromptCtx {
 function buildPrompt(ctx: PromptCtx): string {
   const sections = [
     "[SYSTEM INSTRUCTIONS]",
-    promptText.trim(),
+    ISSUE_TRIAGE_PROMPT.trim(),
     "",
     "[ISSUE METADATA]",
     `Identifier: ${ctx.identifier}`,

@@ -150,10 +150,11 @@ openclaw-worker/
 ├── wrangler.toml                          # Cloudflare config + KV binding + secrets list
 ├── .dev.vars.example                      # local secret template (.dev.vars is gitignored)
 ├── .github/workflows/deploy.yml           # auto-deploy on push to main
-├── prompts/
-│   └── issue-triage.md                    # OpenClaw v5 system prompt (verbatim from rema-portal)
+├── .github/workflows/ci.yml               # PR typecheck (lint job for branch protection)
 └── src/
     ├── index.ts                           # main fetch handler — routing + auth
+    ├── prompts/
+    │   └── issue-triage.ts                # OpenClaw v5 system prompt (TS string, ported from rema-portal/.md)
     └── lib/
         ├── linear.ts                      # Linear GraphQL client (issue + comment + update)
         ├── ollama.ts                      # Ollama Turbo client (single generate call)
@@ -182,6 +183,6 @@ openclaw-worker/
 
 **Webhook returns 200 but no comment appears**: check Worker logs (`npx wrangler tail`). Common causes — Ollama Turbo timeout (>5 min), KV namespace ID still set to `REPLACE_WITH_KV_NAMESPACE_ID`, or model name typo.
 
-**Triage comment is wrong / hallucinated**: the model output didn't parse cleanly and got fabricated content. Check the raw response in logs, then iterate on the prompt at `prompts/issue-triage.md`.
+**Triage comment is wrong / hallucinated**: the model output didn't parse cleanly and got fabricated content. Check the raw response in logs, then iterate on the prompt at `src/prompts/issue-triage.ts`.
 
 **Same comment posted twice**: KV is empty (cold cache) and the comment-body marker scan also missed the existing one. Check that the marker `<!-- openclaw:issue-triage -->` appears in your existing triage comments.

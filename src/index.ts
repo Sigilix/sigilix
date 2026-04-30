@@ -274,6 +274,26 @@ async function handleGitHubWebhook(
     return new Response("invalid json\n", { status: 400 })
   }
 
+  // GitHub fires `ping` when a webhook URL is set or updated. The payload
+  // doesn't include repository/installation, so it would fail the field
+  // check below and return 400 — leaving the operator with a red test
+  // delivery on the App's "Recent Deliveries" tab. Acknowledge it here.
+  if (event === "ping") {
+    return new Response("pong\n", { status: 200 })
+  }
+
+  // App-level events (installation, installation_repositories, etc.)
+  // also lack a repository field. We don't act on them — return 200 so
+  // GitHub stops retrying.
+  if (
+    event === "installation" ||
+    event === "installation_repositories" ||
+    event === "installation_target" ||
+    event === "github_app_authorization"
+  ) {
+    return new Response("app-level event ignored\n", { status: 200 })
+  }
+
   const installationId = payload.installation?.id
   const owner = payload.repository?.owner?.login
   const repo = payload.repository?.name

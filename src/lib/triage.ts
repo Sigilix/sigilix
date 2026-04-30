@@ -96,7 +96,9 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
 
   const verdict = parseVerdict(response)
   if (!verdict) {
-    console.error("verdict did not parse", { issueId, response: response.slice(0, 500) })
+    // Log only metadata — never raw model output (could echo issue
+    // content / secrets into Worker logs).
+    console.error("verdict did not parse", { issueId, responseLength: response.length })
     return
   }
 

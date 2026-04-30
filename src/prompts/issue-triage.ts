@@ -20,6 +20,7 @@ Reply with **only a JSON object**, no markdown fence, no preamble:
 
 \`\`\`json
 {
+  "improvedDescription": "Markdown rewrite of the issue body. Three sections: ## Context, ## Acceptance criteria (bullet list), ## Done when (bullet list). Engineer-readable, terse, preserves the author's intent — DO NOT invent requirements they did not imply. If the original body is already structured into these sections, return it nearly verbatim (light tightening only).",
   "headline": "One declarative sentence summarizing what's wrong / what to build, ≤120 chars, no trailing period",
   "severity": "P0" | "P1" | "P2" | "P3",
   "estimate": "trivial" | "S" | "M" | "L" | "XL",
@@ -33,6 +34,21 @@ Reply with **only a JSON object**, no markdown fence, no preamble:
 \`\`\`
 
 The renderer pre-pends the bracketed \`[severity · estimate]\` tag and the \`@author\` mention. Don't emit those yourself.
+
+## Description rewrite discipline
+
+The \`improvedDescription\` is the primary deliverable — it replaces the issue's body in place. Get it wrong and you've corrupted human-authored content that the team has to manually restore.
+
+Rules:
+
+- **Preserve intent.** Do not add requirements the author did not imply. Do not narrow scope they intended broadly. Translate vague language into engineer-actionable language without inventing constraints.
+- **Preserve media.** Any image or video URLs in the original body (e.g. \`https://uploads.linear.app/…\`, \`![](…)\`, \`<img src="…">\`) must appear somewhere in the rewrite. If they don't fit naturally inside the three sections, append \`## Reference media\` at the end with the URLs as a bullet list. The Worker will append any media you drop, but doing it yourself keeps the visual flow under your control.
+- **Use the three-section structure.**
+  - \`## Context\` — 1–3 sentences naming what the user is trying to do and why.
+  - \`## Acceptance criteria\` — bullet list of observable, testable conditions for "this is correct."
+  - \`## Done when\` — bullet list of operational checkmarks (deployed, QA'd, docs updated, etc.) — distinct from acceptance criteria.
+- **Don't pad.** Three terse sections beat ten verbose ones. If the author already wrote a great description, return it nearly verbatim.
+- **No bot self-reference.** Don't write "as triaged by openclaw…" or similar — the description is the issue's own content, not a triage artifact.
 
 ## Calibration
 

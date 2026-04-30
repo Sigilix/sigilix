@@ -8,6 +8,7 @@
 
 import { generate } from "./ollama"
 import { LinearClient, estimateToPoints, severityToPriority } from "./linear"
+import { getAppActorToken } from "./linear-oauth"
 import { getMarker, setMarker } from "./dedupe"
 import type { Env } from "../index"
 import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
@@ -32,10 +33,11 @@ interface Verdict {
   relevantFiles: string[]
   research: string | undefined
   diagram: string | undefined
+  improvedDescription: string | undefined
 }
 
 export async function triageIssue(issueId: string, env: Env): Promise<void> {
-  const linear = new LinearClient(env.LINEAR_API_KEY)
+  const linear = new LinearClient(await buildAuth(env))
   const issue = await linear.getIssue(issueId)
   if (!issue) {
     console.warn("issue not found", { issueId })
@@ -84,17 +86,27 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   }
   await setMarker(env.OPENCLAW_STATE, issue.id, commentId)
 
-  // Apply priority + estimate + labels on the issue itself. Best-effort —
-  // a label apply failure shouldn't block the comment, which is the
-  // primary deliverable.
+  // Apply priority + estimate + labels + rewritten description on the issue
+  // itself. Best-effort — a single field failure shouldn't block the comment,
+  // which is the primary deliverable. The description rewrite is the most
+  // destructive of these (overwrites human-authored content), so we run media
+  // preservation on it before committing.
   try {
     const priority = severityToPriority(verdict.severity)
     const estimate = estimateToPoints(verdict.estimate)
     const labelIds = await linear.resolveLabels(issue.team.id, verdict.labels)
-    const updates: { priority?: number; estimate?: number; labelIds?: string[] } = {}
+    const updates: {
+      priority?: number
+      estimate?: number
+      labelIds?: string[]
+      description?: string
+    } = {}
     if (priority > 0) updates.priority = priority
     if (typeof estimate === "number") updates.estimate = estimate
     if (labelIds.length > 0) updates.labelIds = labelIds
+    if (verdict.improvedDescription) {
+      updates.description = preserveMedia(verdict.improvedDescription, issue.description ?? "")
+    }
     if (Object.keys(updates).length > 0) {
       await linear.updateIssue(issue.id, updates)
     }
@@ -190,7 +202,81 @@ function parseVerdict(text: string): Verdict | null {
       : ""
   const diagram = sanitizedDiagram.length > 0 ? sanitizedDiagram : undefined
 
-  return { headline, severity, estimate, labels, summary, approach, relevantFiles, research, diagram }
+  const improvedDescription =
+    typeof obj.improvedDescription === "string" && obj.improvedDescription.trim().length > 0
+      ? obj.improvedDescription.trim()
+      : undefined
+
+  return {
+    headline,
+    severity,
+    estimate,
+    labels,
+    summary,
+    approach,
+    relevantFiles,
+    research,
+    diagram,
+    improvedDescription,
+  }
+}
+
+/**
+ * Build the auth credential the LinearClient uses. Prefers OAuth client_credentials
+ * (gives bot identity in comment author) and falls back to a personal API key
+ * when OAuth isn't configured. Personal-key mode posts comments under the
+ * human owner of the key, which is fine for dev/setup but not the prod path.
+ */
+async function buildAuth(env: Env): Promise<{ apiKey: string } | { oauthToken: string }> {
+  if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
+    const token = await getAppActorToken(
+      env.OPENCLAW_STATE,
+      env.LINEAR_OAUTH_CLIENT_ID,
+      env.LINEAR_OAUTH_CLIENT_SECRET
+    )
+    return { oauthToken: token }
+  }
+  return { apiKey: env.LINEAR_API_KEY }
+}
+
+/**
+ * Extract image / video URLs from the original issue description so we can
+ * preserve them across a rewrite. The model is instructed to keep media
+ * inline, but we extract here as a defense-in-depth step — if the model
+ * drops a URL we append it under "## Reference media".
+ *
+ * Pulls canonical URLs only — never raw HTML/markdown fragments. A hostile
+ * issue body could embed `<img onerror="…">` and we must not replay the
+ * attacker's HTML attributes back into the rewrite. The URL alone is safe.
+ */
+function extractMediaUrls(body: string): string[] {
+  if (!body) return []
+  const matches = body.match(/https?:\/\/[^\s)"'<>]+/g) ?? []
+  const mediaPattern =
+    /uploads\.linear\.app|user-images\.githubusercontent\.com|github\.com\/user-attachments|\.(?:png|jpe?g|gif|webp|svg|mp4|mov|webm)(?:[?#]|$)/i
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const url of matches) {
+    if (!mediaPattern.test(url)) continue
+    if (seen.has(url)) continue
+    seen.add(url)
+    out.push(url)
+  }
+  return out
+}
+
+/**
+ * Apply media-preservation to a rewritten description. Any media URL from
+ * the original that the model didn't carry forward gets appended under a
+ * "## Reference media" section. Returns the rewrite unchanged if no media
+ * needs preserving.
+ */
+function preserveMedia(rewrite: string, originalBody: string): string {
+  const media = extractMediaUrls(originalBody)
+  if (media.length === 0) return rewrite
+  const missing = media.filter((url) => !rewrite.includes(url))
+  if (missing.length === 0) return rewrite
+  return `${rewrite}\n\n## Reference media\n\n${missing.map((u) => `- ${u}`).join("\n")}\n`
 }
 
 interface FormatArgs {

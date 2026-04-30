@@ -13,9 +13,21 @@ import { verifyLinearWebhook } from "./lib/webhook-verify"
 
 export interface Env {
   OPENCLAW_STATE: KVNamespace
+  // Personal API key. Required at minimum because the manual-trigger route
+  // gates on it as a shared bearer secret (see handleManualTrigger). Used
+  // for talking to Linear only when LINEAR_OAUTH_CLIENT_ID is unset — once
+  // OAuth is configured, the Worker prefers the app-actor token so comments
+  // are attributed to the OAuth app instead of the human owner of the key.
   LINEAR_API_KEY: string
   LINEAR_WEBHOOK_SECRET: string
   OLLAMA_API_KEY: string
+  // OAuth client_credentials pair for the Linear app actor identity. When
+  // both are present, the Worker fetches a 30-day app-actor token (cached
+  // in KV) and uses it for every Linear API call. Comments and field
+  // updates then appear as the OAuth app (e.g. "OpenClaw"), which is the
+  // industry-standard bot pattern Linear supports.
+  LINEAR_OAUTH_CLIENT_ID?: string
+  LINEAR_OAUTH_CLIENT_SECRET?: string
   OPENCLAW_MODEL?: string
   OPENCLAW_TEAM_KEY?: string
 }

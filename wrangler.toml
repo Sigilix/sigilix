@@ -21,15 +21,26 @@ id = "df689379ea6240f7808997a75ceaed7e"
 
 # Required secrets (set via `wrangler secret put`):
 #
-#   LINEAR_API_KEY            Personal API key OR OAuth client_credentials token
-#                             Linear → Settings → API → Personal API keys
-#   LINEAR_WEBHOOK_SECRET     Signing secret from the OAuth app's webhook config
-#                             Used to verify the HMAC on every webhook delivery
-#   OLLAMA_API_KEY            Ollama Turbo API key (https://ollama.com/settings/keys)
+#   LINEAR_API_KEY                Personal API key — used as the manual-trigger
+#                                 route's bearer secret AND as the Linear API
+#                                 fallback when OAuth isn't configured.
+#                                 Linear → Settings → API → Personal API keys
+#   LINEAR_WEBHOOK_SECRET         Signing secret from the Linear webhook config.
+#                                 Used to verify the HMAC on every webhook delivery.
+#   OLLAMA_API_KEY                Ollama Turbo API key (https://ollama.com/settings/keys)
 #
-# Optional:
-#   OPENCLAW_MODEL            Override the default model (defaults to glm-5.1:cloud)
-#   OPENCLAW_TEAM_KEY         Linear team key to scope to (e.g. "ARC")
+# Optional (recommended for production — gives the Worker its own bot identity):
+#
+#   LINEAR_OAUTH_CLIENT_ID        OAuth app client_id from Linear → Settings →
+#   LINEAR_OAUTH_CLIENT_SECRET    API → OAuth applications. Together they let
+#                                 the Worker mint a 30-day app-actor token via
+#                                 client_credentials. Comments and field
+#                                 updates then appear as the OAuth app rather
+#                                 than the human owner of LINEAR_API_KEY.
+#
+# Optional (other):
+#   OPENCLAW_MODEL                Override the default model (defaults to glm-5.1:cloud)
+#   OPENCLAW_TEAM_KEY             Linear team key to scope to (e.g. "ARC")
 
 # Environment-specific overrides go below as `[env.production]`,
 # `[env.staging]`, etc. The default config above is what `wrangler deploy`

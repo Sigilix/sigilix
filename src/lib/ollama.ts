@@ -25,6 +25,18 @@ interface GenerateArgs {
   temperature?: number
   /** Wall-clock timeout. Cloud routes can take 30-180s on long prompts; default 10min. */
   timeoutMs?: number
+  /**
+   * JSON Schema enforced by Ollama during decoding. Eliminates the
+   * class of parse failures we previously hit ("verdict did not
+   * parse") because the runtime literally cannot emit malformed
+   * output — every token is constrained to the schema.
+   *
+   * When set, temperature defaults to 0 unless overridden, since
+   * structured output is deterministic by design.
+   *
+   * Reference: https://docs.ollama.com/structured-outputs
+   */
+  format?: Record<string, unknown>
 }
 
 interface OllamaStreamChunk {
@@ -37,11 +49,24 @@ export async function generate({
   model,
   prompt,
   apiKey,
-  temperature = 0.2,
+  temperature,
   timeoutMs = 600_000,
+  format,
 }: GenerateArgs): Promise<string> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+  // Default temperature: 0 when format is set (deterministic JSON),
+  // 0.2 otherwise (mild creativity for free-form prose).
+  const effectiveTemperature = temperature ?? (format ? 0 : 0.2)
+
+  const requestBody: Record<string, unknown> = {
+    model,
+    prompt,
+    stream: true,
+    options: { temperature: effectiveTemperature },
+  }
+  if (format) requestBody.format = format
 
   try {
     const res = await fetch(OLLAMA_TURBO_URL, {
@@ -50,12 +75,7 @@ export async function generate({
         "content-type": "application/json",
         authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({
-        model,
-        prompt,
-        stream: true,
-        options: { temperature },
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     })
 

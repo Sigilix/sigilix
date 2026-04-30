@@ -17,6 +17,7 @@
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient, type ReviewComment } from "./github"
+import { CR_EVAL_SCHEMA } from "./schemas"
 import { CR_EVALUATION_PROMPT } from "../prompts/cr-evaluation"
 import { deleteMarker, getMarker, setMarker } from "./dedupe"
 import type { Env } from "../index"
@@ -128,7 +129,7 @@ export async function handleCrEval(args: TriageCrArgs): Promise<void> {
     model,
     prompt,
     apiKey: env.OLLAMA_API_KEY,
-    temperature: 0.15,
+    format: CR_EVAL_SCHEMA as unknown as Record<string, unknown>,
   })
   since("ollama-done")
 

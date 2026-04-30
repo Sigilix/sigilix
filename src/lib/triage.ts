@@ -11,6 +11,7 @@ import { LinearClient, estimateToPoints, severityToPriority } from "./linear"
 import { getAppActorToken } from "./linear-oauth"
 import { getMarker, setMarker } from "./dedupe"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
+import { ISSUE_TRIAGE_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
 
@@ -90,7 +91,7 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
     model,
     prompt,
     apiKey: env.OLLAMA_API_KEY,
-    temperature: 0.2,
+    format: ISSUE_TRIAGE_SCHEMA as unknown as Record<string, unknown>,
   })
   since("ollama-done")
 

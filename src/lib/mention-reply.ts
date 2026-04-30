@@ -17,6 +17,7 @@ import {
   stripMentionFromBody,
 } from "./mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
+import { MENTION_REPLY_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
 
@@ -114,7 +115,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     model,
     prompt,
     apiKey: env.OLLAMA_API_KEY,
-    temperature: 0.2,
+    format: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
   })
   log("ollama-done")
 

@@ -30,6 +30,7 @@ import {
   type SubmitReviewComment,
 } from "./github"
 import { parseFirstJsonObject } from "./json-extract"
+import { PR_REVIEW_SCHEMA } from "./schemas"
 import { PR_REVIEW_PROMPT } from "../prompts/pr-review"
 import type { Env } from "../index"
 
@@ -132,7 +133,7 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,
-      temperature: 0.2,
+      format: PR_REVIEW_SCHEMA as unknown as Record<string, unknown>,
     })
     since("ollama-done")
 

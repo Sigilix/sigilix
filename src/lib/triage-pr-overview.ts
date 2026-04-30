@@ -11,6 +11,7 @@ import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient, type PrCommit, type PullRequestMeta } from "./github"
 import { parseFirstJsonObject } from "./json-extract"
+import { PR_OVERVIEW_SCHEMA } from "./schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
 import type { Env } from "../index"
 
@@ -108,7 +109,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,
-      temperature: 0.2,
+      format: PR_OVERVIEW_SCHEMA as unknown as Record<string, unknown>,
     })
     since("ollama-done")
 

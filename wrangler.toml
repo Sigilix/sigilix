@@ -17,7 +17,7 @@ usage_model = "unbound"
 # Then paste the returned ID below.
 [[kv_namespaces]]
 binding = "OPENCLAW_STATE"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
+id = "df689379ea6240f7808997a75ceaed7e"
 
 # Required secrets (set via `wrangler secret put`):
 #

@@ -115,15 +115,11 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
 
     const verdict = parseOverviewResponse(response)
     if (!verdict) {
-      // Temporary: log first 300 chars of response to diagnose why
-      // schema-constrained output isn't parsing. Remove after fix.
       console.error("pr-overview verdict did not parse", {
         owner,
         repo,
         prNumber,
         responseLength: response.length,
-        responseHead: response.slice(0, 300),
-        responseTail: response.slice(-200),
       })
       return
     }

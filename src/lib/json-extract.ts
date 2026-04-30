@@ -7,8 +7,17 @@
 // helper tries several extraction strategies in order from most-clean
 // to least so the caller's loop short-circuits on the cleanest hit.
 //
-// Pure helper. No I/O. Returns candidate strings — caller is responsible
-// for `JSON.parse(candidate)` and shape validation.
+// Common malformations beyond shape-mismatch:
+//   - Unescaped raw newlines inside string values (GLM-5.1 long-form bug)
+//   - Trailing commas before } / ]
+//   - Smart quotes (curly U+201C/D) instead of straight ASCII
+//   - Single quotes around keys/values
+//
+// We use `jsonrepair` as a final tolerant fallback. It runs only after
+// strict JSON.parse fails on every extracted candidate, so well-formed
+// output still goes through the fast path.
+
+import { jsonrepair } from "jsonrepair"
 
 export function extractJsonObjectCandidates(text: string): string[] {
   if (typeof text !== "string") return []
@@ -70,19 +79,63 @@ export function extractJsonObjectCandidates(text: string): string[] {
 
 /**
  * Run extractJsonObjectCandidates and return the first candidate that
- * parses to a non-null, non-array object. Convenience wrapper that
- * encapsulates the try/catch loop callers always need.
+ * parses to a non-null, non-array object. Tries strict JSON.parse first
+ * on every candidate (fast path for well-formed output), then falls
+ * back to jsonrepair on every candidate (handles unescaped newlines,
+ * trailing commas, smart quotes, etc. that GLM-5.1 routinely emits).
  */
 export function parseFirstJsonObject(text: string): Record<string, unknown> | null {
-  for (const candidate of extractJsonObjectCandidates(text)) {
+  const candidates = extractJsonObjectCandidates(text)
+
+  for (const candidate of candidates) {
     try {
       const parsed = JSON.parse(candidate)
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         return parsed as Record<string, unknown>
       }
     } catch {
+      // Try the next candidate (and after that, the repair pass).
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const repaired = jsonrepair(candidate)
+      const parsed = JSON.parse(repaired)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // Try the next repair candidate.
+    }
+  }
+
+  return null
+}
+
+/**
+ * Same parse strategy as parseFirstJsonObject but accepts top-level
+ * JSON arrays too. Used by triage-cr where the model emits
+ * `[{verdict}, {verdict}, ...]`.
+ */
+export function parseFirstJsonValue(text: string): unknown {
+  const candidates = extractJsonObjectCandidates(text)
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
       // Try the next candidate.
     }
   }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(jsonrepair(candidate))
+    } catch {
+      // Try the next repair candidate.
+    }
+  }
+
   return null
 }

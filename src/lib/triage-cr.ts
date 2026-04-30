@@ -18,6 +18,7 @@ import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient, type ReviewComment } from "./github"
 import { CR_EVAL_SCHEMA } from "./schemas"
+import { parseFirstJsonValue } from "./json-extract"
 import { CR_EVALUATION_PROMPT } from "../prompts/cr-evaluation"
 import { deleteMarker, getMarker, setMarker } from "./dedupe"
 import type { Env } from "../index"
@@ -292,22 +293,15 @@ function truncate(value: string, max: number, marker = "\n[…truncated…]"): s
 }
 
 /**
- * Parse the model's evaluator output into typed verdicts. Tolerates a
- * surrounding markdown code fence. Returns null when output isn't a
- * JSON array of verdicts so callers can fail loudly rather than post junk.
+ * Parse the model's evaluator output into typed verdicts. Tolerates
+ * markdown fences, prose preambles, AND malformations like unescaped
+ * newlines / trailing commas / smart quotes via jsonrepair. Returns
+ * null when output isn't a JSON array of verdicts so callers can fail
+ * loudly rather than post junk.
  */
 export function parseEvaluatorResponse(text: string): CrVerdict[] | null {
   if (typeof text !== "string") return null
-  let body = text.trim()
-  const fence = body.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  if (fence?.[1]) body = fence[1].trim()
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(body)
-  } catch {
-    return null
-  }
+  const parsed = parseFirstJsonValue(text)
   // Some models occasionally return a single object even though the
   // prompt asks for an array. Tolerate that — wrap it.
   const arr = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object" ? [parsed] : null

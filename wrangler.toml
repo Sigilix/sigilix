@@ -14,7 +14,7 @@ compatibility_flags = ["nodejs_compat"]
 # running on the Bundled default, which was killing waitUntil mid-
 # triage and leaving every test issue with no comment / no rewrite.
 [limits]
-cpu_ms = 60000
+cpu_ms = 300000
 
 # KV namespace for dedupe state.
 # Stores marker comment IDs by issue identifier so re-firing

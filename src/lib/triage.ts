@@ -37,8 +37,17 @@ interface Verdict {
 }
 
 export async function triageIssue(issueId: string, env: Env): Promise<void> {
+  const t0 = Date.now()
+  const since = (label: string): void => {
+    console.log(`[triage] ${label} +${Date.now() - t0}ms`, { issueId })
+  }
+
+  since("start")
   const linear = new LinearClient(await buildAuth(env))
+  since("auth-ready")
+
   const issue = await linear.getIssue(issueId)
+  since("issue-fetched")
   if (!issue) {
     console.warn("issue not found", { issueId })
     return
@@ -62,12 +71,14 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+  since("ollama-start")
   const response = await generate({
     model,
     prompt,
     apiKey: env.OLLAMA_API_KEY,
     temperature: 0.2,
   })
+  since("ollama-done")
 
   const verdict = parseVerdict(response)
   if (!verdict) {
@@ -85,6 +96,7 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
     commentId = await linear.createComment(issue.id, body)
   }
   await setMarker(env.OPENCLAW_STATE, issue.id, commentId)
+  since("comment-posted")
 
   // Apply priority + estimate + labels + rewritten description on the issue
   // itself. Best-effort — a single field failure shouldn't block the comment,
@@ -110,6 +122,7 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
     if (Object.keys(updates).length > 0) {
       await linear.updateIssue(issue.id, updates)
     }
+    since("fields-applied")
   } catch (error) {
     console.warn("field apply failed", { issueId, error: String(error) })
   }

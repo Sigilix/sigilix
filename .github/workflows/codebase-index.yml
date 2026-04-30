@@ -13,7 +13,7 @@ name: Index codebase to Vectorize (reusable)
 #   name: OpenClaw codebase index
 #   on:
 #     push:
-#       branches: [main]
+#       branches: [dev, main]
 #     workflow_dispatch:
 #   jobs:
 #     index:
@@ -21,6 +21,11 @@ name: Index codebase to Vectorize (reusable)
 #       secrets:
 #         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 #         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
+#
+# Note: triggers on push to dev OR main. dev is the active development
+# branch; main is customer-facing. Both reindex into the same namespace
+# (`<repo-name>` lowercased) — whichever branch changed last wins,
+# matching what the team is actually working on at any given moment.
 #
 # The org-level secrets CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN
 # (configured at https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions)

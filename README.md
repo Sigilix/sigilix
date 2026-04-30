@@ -121,7 +121,7 @@ Set them with **Repository access → All repositories** (or pick the specific r
 name: OpenClaw codebase index
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   workflow_dispatch:
 
 jobs:
@@ -132,7 +132,7 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
 ```
 
-The reusable workflow checks out the calling repo, runs the indexer against it, and upserts vectors into the namespace named after the calling repo (lowercased). After the first push, every subsequent merge to main reindexes automatically.
+Triggers on push to `dev` OR `main`. dev is the active development branch; main is the customer-facing release. Both reindex into the same namespace (`<repo-name>` lowercased) — whichever branch changed last wins, matching what the team is actually working on at any given moment. The reusable workflow checks out the calling repo at the triggering ref, runs the indexer, and upserts vectors into Vectorize.
 
 ### 5. Set the three secrets
 

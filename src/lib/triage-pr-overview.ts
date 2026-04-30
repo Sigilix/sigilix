@@ -110,11 +110,14 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
 
   const verdict = parseOverviewResponse(response)
   if (!verdict) {
+    // Log only metadata — never raw model output. The response is
+    // derived from the PR diff + body and could echo secrets/code into
+    // Worker logs. Length + a short hash is enough to correlate runs.
     console.error("pr-overview verdict did not parse", {
       owner,
       repo,
       prNumber,
-      response: response.slice(0, 500),
+      responseLength: response.length,
     })
     return
   }
@@ -160,7 +163,7 @@ function buildPrompt(ctx: PromptCtx): string {
     truncate(ctx.meta.body ?? "(no description)", LIMITS.prBody),
     "",
     ctx.isFirstRun
-      ? "[FULL PR DIFF — first overview, summarize the whole change]"
+      ? "[RECENT COMMITS — context for the first overview; the [DIFF] section below is the full change to summarize]"
       : "[NEW COMMITS — only summarize what's been pushed since the previous overview]",
     truncate(commitsBlock, LIMITS.newCommitsBlock),
     "",

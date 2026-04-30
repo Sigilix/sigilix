@@ -137,11 +137,13 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
 
   const verdict = parsePrReviewResponse(response)
   if (!verdict) {
+    // Log only metadata — never raw model output (could echo PR diff
+    // / secrets into Worker logs).
     console.error("pr-review verdict did not parse", {
       owner,
       repo,
       prNumber,
-      response: response.slice(0, 500),
+      responseLength: response.length,
     })
     return
   }

@@ -134,9 +134,11 @@ export async function handleCrEval(args: TriageCrArgs): Promise<void> {
 
   const verdicts = parseEvaluatorResponse(response)
   if (!verdicts || verdicts.length === 0) {
+    // Log only metadata — never raw model output (could echo PR
+    // content / secrets into Worker logs).
     console.error("cr-eval verdict did not parse", {
       commentId: comment.id,
-      response: response.slice(0, 500),
+      responseLength: response.length,
     })
     return
   }

@@ -57,11 +57,11 @@ Replaces `tools/openclaw/triage-issue.mjs` and `triage-mention.mjs` from the rem
 - Replaces the polling state file with Cloudflare KV.
 - Replaces the auto-update + restart logic with `wrangler deploy` from CI.
 
-All four PR-side scripts (`triage-ci`, `triage-cr`, `triage-pr-overview`) plus a new **proactive primary reviewer** now run in the Worker via a GitHub App. The Windows daemon is fully decommissioned.
+The three ported PR-side scripts (`triage-ci`, `triage-cr`, `triage-pr-overview`) plus one new **proactive primary reviewer** now run in the Worker via a GitHub App. The Windows daemon is fully decommissioned.
 
 ## Architecture
 
-```
+```text
 Linear (Issue.create / Comment.create)        GitHub (PR / workflow_run / review_comment / review)
     │ HMAC-signed POST                            │ HMAC-signed POST (X-Hub-Signature-256)
     ▼                                             ▼

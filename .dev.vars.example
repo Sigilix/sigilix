@@ -1,0 +1,8 @@
+# Local dev secrets. Copy to .dev.vars (gitignored) and fill in.
+# Production secrets live in Cloudflare via `wrangler secret put`.
+
+LINEAR_API_KEY=lin_api_xxxxxxxxxxxx
+LINEAR_WEBHOOK_SECRET=lin_wh_xxxxxxxxxxxx
+OLLAMA_API_KEY=ollama_xxxxxxxxxxxx
+OPENCLAW_MODEL=glm-5.1:cloud
+OPENCLAW_TEAM_KEY=ARC

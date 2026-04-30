@@ -1,0 +1,36 @@
+name = "openclaw-worker"
+main = "src/index.ts"
+compatibility_date = "2025-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers Unbound — needed because Ollama Turbo calls take 30-90s,
+# which exceeds the 10ms CPU budget of the free Bundled tier.
+# Cost: $5/mo + $0.50/M requests.
+usage_model = "unbound"
+
+# KV namespace for dedupe state.
+# Stores marker comment IDs by issue identifier so re-firing
+# webhooks edit-in-place instead of duplicating triage comments.
+# Replaces the file-on-disk poll-state.json the Node daemon used.
+#
+# Run once: `wrangler kv:namespace create OPENCLAW_STATE`
+# Then paste the returned ID below.
+[[kv_namespaces]]
+binding = "OPENCLAW_STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Required secrets (set via `wrangler secret put`):
+#
+#   LINEAR_API_KEY            Personal API key OR OAuth client_credentials token
+#                             Linear → Settings → API → Personal API keys
+#   LINEAR_WEBHOOK_SECRET     Signing secret from the OAuth app's webhook config
+#                             Used to verify the HMAC on every webhook delivery
+#   OLLAMA_API_KEY            Ollama Turbo API key (https://ollama.com/settings/keys)
+#
+# Optional:
+#   OPENCLAW_MODEL            Override the default model (defaults to glm-5.1:cloud)
+#   OPENCLAW_TEAM_KEY         Linear team key to scope to (e.g. "ARC")
+
+# Environment-specific overrides go below as `[env.production]`,
+# `[env.staging]`, etc. The default config above is what `wrangler deploy`
+# uses when no `--env` flag is passed.

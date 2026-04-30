@@ -1,0 +1,30 @@
+# Re-indexes this repo into the OpenClaw Cloudflare Vectorize store on
+# every push to `main`. The bot then knows about its own source code
+# and can answer "what does the worker do?" / "where is X handled?" type
+# questions about itself. (No `dev` branch on this repo — `main` is
+# direct.)
+#
+# Implementation lives in this same repo at
+# `.github/workflows/codebase-index.yml`. We call it via `uses:` so the
+# indexer logic and its callers share the exact same code path that
+# every other Arc-and-Anchor repo runs.
+#
+# Required org-level secrets (set once at
+# https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions
+# with access granted to all repos that need to index):
+#   - CLOUDFLARE_ACCOUNT_ID
+#   - CLOUDFLARE_AI_TOKEN  (Workers AI Read + Vectorize Edit)
+
+name: OpenClaw codebase index
+
+on:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+jobs:
+  index:
+    uses: Arc-and-Anchor/openclaw-worker/.github/workflows/codebase-index.yml@main
+    secrets:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}

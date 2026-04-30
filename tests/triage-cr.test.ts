@@ -239,18 +239,20 @@ describe("formatVerdictReply", () => {
     expect(reply).not.toContain("@danielmartinezjulio07")
   })
 
-  it("preserves a model-emitted @coderabbitai mention in body verbatim", () => {
+  it("preserves a model-emitted @author mention in body verbatim", () => {
     // The cr-evaluation prompt instructs the model to weave a natural
-    // @coderabbitai mention into its body on debatable SKIP_*
-    // verdicts. The formatter must not strip it.
+    // @<author> mention into its body on debatable SKIP_* verdicts.
+    // The formatter must not strip it. (CR's bot-loop protection
+    // ignores @coderabbitai mentions in threaded replies, so the
+    // model is told to escalate to the PR author instead.)
     const skip: CrVerdict = {
       commentId: 1,
       classification: "SKIP_OUT_OF_SCOPE",
       headline: "edges of scope",
-      body: "Looks like out-of-scope to me — happy to revise if @coderabbitai disagrees on the boundary.",
+      body: "Reading this as out of scope — @alice if that's wrong, push back.",
     }
     const reply = formatVerdictReply(skip, "alice")
-    expect(reply).toContain("@coderabbitai")
+    expect(reply).toContain("@alice")
   })
 
   it("does not inject any hardcoded pushback dialogue into the body", () => {
@@ -266,5 +268,6 @@ describe("formatVerdictReply", () => {
     const reply = formatVerdictReply(skip, "alice")
     expect(reply).not.toMatch(/if I've misread/i)
     expect(reply).not.toMatch(/push back here — happy to revise/i)
+    expect(reply).not.toMatch(/@coderabbitai/i)
   })
 })

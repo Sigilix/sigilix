@@ -78,8 +78,19 @@ describe("parseOverviewResponse", () => {
     expect(parseOverviewResponse("Sure! Here's the overview...")).toBeNull()
   })
 
-  it("returns null on a JSON array (must be a single object)", () => {
-    expect(parseOverviewResponse('[{"summary":"x","confidence":3}]')).toBeNull()
+  it("extracts the first object even when wrapped in an array (lenient fallback)", () => {
+    // Model occasionally returns `[{...}]` despite the prompt asking for
+    // a bare object. Balanced-brace scan picks the first `{...}` inside.
+    const out = parseOverviewResponse('[{"summary":"x","confidence":3}]')
+    expect(out?.summary).toBe("x")
+    expect(out?.confidence).toBe(3)
+  })
+
+  it("extracts the JSON object from prose-wrapped responses", () => {
+    const wrapped = `Here's the overview for the PR:\n\n{"summary":"adds a guard","confidence":4}\n\nLet me know if you need adjustments.`
+    const out = parseOverviewResponse(wrapped)
+    expect(out?.summary).toBe("adds a guard")
+    expect(out?.confidence).toBe(4)
   })
 })
 

@@ -29,6 +29,7 @@ import {
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
+import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_PROMPT } from "../prompts/pr-review"
 import type { Env } from "../index"
 
@@ -220,22 +221,14 @@ function truncate(value: string, max: number, marker = "\n[…truncated…]"): s
 }
 
 /**
- * Parse the model's primary-review response. Tolerates a surrounding
- * markdown fence. Returns null on shape errors so callers can fail
- * loudly. Pure — exported for tests.
+ * Parse the model's primary-review response. Tolerates clean JSON,
+ * fenced JSON, AND prose-wrapped JSON via balanced-brace extraction.
+ * Returns null on shape errors so callers can fail loudly. Pure —
+ * exported for tests.
  */
 export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
-  if (typeof text !== "string") return null
-  let trimmed = text.trim()
-  trimmed = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "")
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return null
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
-  const obj = parsed as Record<string, unknown>
+  const obj = parseFirstJsonObject(text)
+  if (!obj) return null
 
   const summary = typeof obj.summary === "string" ? obj.summary.trim() : ""
   if (!summary) return null

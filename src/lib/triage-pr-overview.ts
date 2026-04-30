@@ -10,6 +10,7 @@
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient, type PrCommit, type PullRequestMeta } from "./github"
+import { parseFirstJsonObject } from "./json-extract"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
 import type { Env } from "../index"
 
@@ -183,22 +184,17 @@ function truncate(value: string, max: number, marker = "\n[…truncated…]"): s
 }
 
 /**
- * Parse the model's overview response into a typed verdict. Tolerates a
- * surrounding markdown fence. Returns null for any output that isn't the
- * expected shape so callers can fail loudly rather than post junk.
+ * Parse the model's overview response into a typed verdict. Tolerates:
+ *   1. Clean JSON object
+ *   2. JSON wrapped in a ```json ... ``` fence
+ *   3. JSON embedded in surrounding prose ("Here's the overview: { ... }")
+ *
+ * Returns null when the output contains no valid JSON object that has
+ * the required shape, so callers can fail loudly rather than post junk.
  */
 export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
-  if (typeof text !== "string") return null
-  let trimmed = text.trim()
-  trimmed = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "")
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed)
-  } catch {
-    return null
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
-  const obj = parsed as Record<string, unknown>
+  const obj = parseFirstJsonObject(text)
+  if (!obj) return null
 
   const summary = typeof obj.summary === "string" ? obj.summary.trim() : ""
   if (!summary) return null

@@ -1,4 +1,4 @@
-// OpenClaw Worker — Linear webhook → triage; GitHub webhook → PR review.
+// Arc Worker — Linear webhooks → triage; GitHub webhooks → PR review.
 //
 // Routes:
 //   GET  /                     liveness probe
@@ -7,8 +7,19 @@
 //   POST /github/webhook       GitHub sends pull_request, workflow_run,
 //                              pull_request_review_comment, pull_request_review
 //
-// HMAC verification on Linear uses LINEAR_WEBHOOK_SECRET (raw hex).
-// HMAC verification on GitHub uses GITHUB_WEBHOOK_SECRET (sha256= prefix).
+// HMAC verification on Linear uses LINEAR_WEBHOOK_SECRET. GitHub uses
+// GITHUB_WEBHOOK_SECRET (sha256= prefix).
+//
+// Long-running work (Ollama Turbo calls, 30-90s typical) runs in a
+// Cloudflare Queue consumer instead of `ctx.waitUntil()`. The 30-second
+// waitUntil cap is hard-coded by the Workers runtime (not configurable
+// on any plan), so any long-running task must be deferred. Queue
+// consumers get up to 15 minutes per invocation, which is plenty.
+//
+// Flow:
+//   webhook arrives → fetch handler verifies + parses → enqueues a
+//   typed JobMessage → returns 200 in ~50ms → queue() handler runs the
+//   actual work (Ollama + GitHub/Linear API calls) with full budget.
 
 import { triageIssue } from "./lib/triage"
 import { handleMention } from "./lib/mention-reply"
@@ -21,64 +32,78 @@ import { handleCrEval, isCodeRabbitAuthor } from "./lib/triage-cr"
 import { handlePrReview } from "./lib/triage-pr-review"
 import type { ReviewComment } from "./lib/github"
 
-type ReviewCommentArg = ReviewComment
-
 export interface Env {
   OPENCLAW_STATE: KVNamespace
   // Vectorize index storing 768-dim embeddings of code chunks per repo.
-  // Populated by scripts/index-repo.mjs (or a future GitHub Action).
-  // Queries are scoped by namespace == repo name, mapped from the
-  // Linear team key on the inbound webhook (see retrieval.ts).
   OPENCLAW_CODE_INDEX: VectorizeIndex
-  // Workers AI binding. Used to embed the issue / question text at
-  // query time with the same model the indexer used (BGE base v1.5,
-  // 768 dims).
+  // Workers AI binding for embedding queries at retrieval time.
   AI: Ai
-  // Personal API key. Required at minimum because the manual-trigger route
-  // gates on it as a shared bearer secret (see handleManualTrigger). Used
-  // for talking to Linear only when LINEAR_OAUTH_CLIENT_ID is unset — once
-  // OAuth is configured, the Worker prefers the app-actor token so comments
-  // are attributed to the OAuth app instead of the human owner of the key.
+  // Cloudflare Queue producer binding. Webhook handlers enqueue
+  // JobMessages here; the queue() handler below consumes them. The
+  // Queue exists separately on Cloudflare and was created via
+  // `wrangler queues create openclaw-jobs` before first deploy.
+  OPENCLAW_JOBS: Queue<JobMessage>
   LINEAR_API_KEY: string
   LINEAR_WEBHOOK_SECRET: string
   OLLAMA_API_KEY: string
-  // OAuth client_credentials pair for the Linear app actor identity. When
-  // both are present, the Worker fetches a 30-day app-actor token (cached
-  // in KV) and uses it for every Linear API call. Comments and field
-  // updates then appear as the OAuth app (e.g. "OpenClaw"), which is the
-  // industry-standard bot pattern Linear supports.
   LINEAR_OAUTH_CLIENT_ID?: string
   LINEAR_OAUTH_CLIENT_SECRET?: string
-  // GitHub App credentials. When all three are present the Worker can
-  // post comments / submit reviews under the @openclaw[bot] identity.
-  // Without them the /github/webhook route returns 503 — we never want
-  // to fall back to a developer's PAT for PR-side actions.
-  //
-  //   GITHUB_APP_ID         numeric App ID
-  //   GITHUB_PRIVATE_KEY    PEM-encoded RSA private key (PKCS#1 or PKCS#8)
-  //   GITHUB_WEBHOOK_SECRET HMAC secret for inbound webhook verification
-  //
-  // Installation IDs come from each webhook payload (`installation.id`)
-  // so a single Worker can serve every repo where the App is installed.
   GITHUB_APP_ID?: string
   GITHUB_PRIVATE_KEY?: string
   GITHUB_WEBHOOK_SECRET?: string
-  // JSON object mapping Linear team keys to Vectorize namespaces.
-  // Example: '{"ARC":"rema-portal","RFD":"rubberfit-desktop"}'.
-  // Optional — when unset, the team key (lowercased) IS the namespace.
   OPENCLAW_TEAM_REPO_MAP?: string
   OPENCLAW_MODEL?: string
   OPENCLAW_TEAM_KEY?: string
-  // Comma-separated list of @-handles that trigger the mention-reply path.
-  // Defaults to "openclaw,openclaw[bot],OpenClaw[bot]". Override when the
-  // OAuth app's display name differs.
   OPENCLAW_MENTION_TRIGGERS?: string
 }
 
-// Linear sends webhooks for the action types we subscribe to. We dispatch
-// on (type, action) — Issue.create kicks off triage, Comment.create with a
-// bot mention kicks off the mention-reply path. Everything else returns
-// 200 "skipped" so Linear doesn't retry.
+/**
+ * Discriminated union of all job kinds the queue handler dispatches.
+ * `env` is intentionally NOT serialized — the queue consumer receives
+ * its own `env` argument from Cloudflare and re-injects it before
+ * calling the per-job handler.
+ *
+ * Linear `cr-eval` carries the full ReviewComment because it's small
+ * (1-5 KB) and avoids a redundant `listPullRequestReviewComments` call
+ * in the consumer just to re-fetch what we already had at webhook time.
+ */
+export type JobMessage =
+  | { type: "linear-triage"; issueId: string }
+  | { type: "linear-mention"; commentId: string }
+  | {
+      type: "pr-overview"
+      owner: string
+      repo: string
+      prNumber: number
+      headSha: string
+      installationId: number
+    }
+  | {
+      type: "pr-review"
+      owner: string
+      repo: string
+      prNumber: number
+      headSha: string
+      installationId: number
+    }
+  | {
+      type: "ci-triage"
+      owner: string
+      repo: string
+      prNumber: number
+      runId: number
+      headSha: string
+      installationId: number
+    }
+  | {
+      type: "cr-eval"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+      comment: ReviewComment
+    }
+
 interface LinearWebhookPayload {
   action: "create" | "update" | "remove"
   type: "Issue" | "Comment" | string
@@ -86,9 +111,9 @@ interface LinearWebhookPayload {
     id: string
     title?: string
     description?: string
-    body?: string // Comment events
+    body?: string
     team?: { key?: string }
-    user?: { displayName?: string; name?: string } // Comment author
+    user?: { displayName?: string; name?: string }
   }
   webhookTimestamp: number
 }
@@ -154,12 +179,83 @@ export default {
 
     return new Response("not found\n", { status: 404, headers: { "content-type": "text/plain" } })
   },
+
+  /**
+   * Queue consumer. Cloudflare invokes this for each JobMessage we
+   * `.send()` from the fetch handlers. Each invocation gets up to 15
+   * minutes of wall-clock time — enough for any Ollama call.
+   *
+   * One message per invocation (`max_batch_size = 1` in wrangler.toml).
+   * On success we ack; on failure we retry (Cloudflare backs off
+   * automatically up to `max_retries = 3`).
+   */
+  async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
+    for (const message of batch.messages) {
+      try {
+        await dispatchJob(message.body, env)
+        message.ack()
+      } catch (error) {
+        console.error("queue job failed", {
+          type: message.body.type,
+          attempts: message.attempts,
+          error: String(error),
+        })
+        message.retry()
+      }
+    }
+  },
+}
+
+async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
+  switch (job.type) {
+    case "linear-triage":
+      return triageIssue(job.issueId, env)
+    case "linear-mention":
+      return handleMention(job.commentId, env)
+    case "pr-overview":
+      return handlePrOverview({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        headSha: job.headSha,
+        installationId: job.installationId,
+        env,
+      })
+    case "pr-review":
+      return handlePrReview({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        headSha: job.headSha,
+        installationId: job.installationId,
+        env,
+      })
+    case "ci-triage":
+      return handleCiTriage({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        runId: job.runId,
+        headSha: job.headSha,
+        installationId: job.installationId,
+        env,
+      })
+    case "cr-eval":
+      return handleCrEval({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        installationId: job.installationId,
+        comment: job.comment,
+        env,
+      })
+  }
 }
 
 async function handleLinearWebhook(
   request: Request,
   env: Env,
-  ctx: ExecutionContext
+  _ctx: ExecutionContext
 ): Promise<Response> {
   const rawBody = await request.text()
   const signature = request.headers.get("linear-signature") ?? ""
@@ -176,7 +272,7 @@ async function handleLinearWebhook(
     return new Response("invalid json\n", { status: 400 })
   }
 
-  // Issue.create → full triage pipeline.
+  // Issue.create → enqueue full triage pipeline.
   if (payload.type === "Issue" && payload.action === "create") {
     if (env.OPENCLAW_TEAM_KEY && payload.data.team?.key !== env.OPENCLAW_TEAM_KEY) {
       console.warn("team scope mismatch", {
@@ -185,34 +281,26 @@ async function handleLinearWebhook(
       })
       return new Response("team scope mismatch\n", { status: 200 })
     }
-    ctx.waitUntil(triageIssue(payload.data.id, env).catch((error) => {
-      console.error("triage failed", { issueId: payload.data.id, error: String(error) })
-    }))
-    return new Response("ok\n", { status: 200 })
+    await env.OPENCLAW_JOBS.send({ type: "linear-triage", issueId: payload.data.id })
+    return new Response("queued\n", { status: 202 })
   }
 
-  // Comment.create with @-mention → mention-reply pipeline.
-  // Pre-check the body here before spending a Linear GraphQL roundtrip —
-  // most comments don't @ us, and we'd waste a query rebuilding context
-  // for a comment we'd skip anyway.
+  // Comment.create with @-mention → enqueue mention-reply pipeline.
+  // Pre-check the body before queueing — most comments don't @ us, and
+  // we don't want to spend Queue messages on no-op invocations.
   if (payload.type === "Comment" && payload.action === "create") {
     const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
     const body = payload.data.body ?? ""
     if (!bodyMentionsBot(body, triggers)) {
       return new Response("no mention\n", { status: 200 })
     }
-    // Skip-self short-circuit using the webhook payload's user field.
-    // mention-reply.ts also re-checks via the comment fetch, but cheap
-    // to reject self-comments before scheduling the waitUntil.
     const author =
       payload.data.user?.displayName ?? payload.data.user?.name ?? null
-    if (author && (/\[bot\]$/i.test(author) || /openclaw/i.test(author))) {
+    if (author && (/\[bot\]$/i.test(author) || /openclaw|^arc/i.test(author))) {
       return new Response("skip self\n", { status: 200 })
     }
-    ctx.waitUntil(handleMention(payload.data.id, env).catch((error) => {
-      console.error("mention reply failed", { commentId: payload.data.id, error: String(error) })
-    }))
-    return new Response("ok\n", { status: 200 })
+    await env.OPENCLAW_JOBS.send({ type: "linear-mention", commentId: payload.data.id })
+    return new Response("queued\n", { status: 202 })
   }
 
   return new Response("skipped\n", { status: 200 })
@@ -221,12 +309,11 @@ async function handleLinearWebhook(
 async function handleManualTrigger(
   request: Request,
   env: Env,
-  ctx: ExecutionContext
+  _ctx: ExecutionContext
 ): Promise<Response> {
-  // Manual trigger is gated by a static API key in the request — any client
-  // who reaches this route without it gets 401. The auth model is intentionally
-  // shared with LINEAR_API_KEY so there's no extra secret to manage; the route
-  // exists for ad-hoc re-triage during dev, not for end users.
+  // Manual trigger is gated by a static API key. Auth is intentionally
+  // shared with LINEAR_API_KEY so there's no extra secret to manage;
+  // the route exists for ad-hoc re-triage during dev.
   const auth = request.headers.get("authorization") ?? ""
   const expected = `Bearer ${env.LINEAR_API_KEY}`
   if (auth !== expected) {
@@ -243,16 +330,14 @@ async function handleManualTrigger(
     return new Response("missing issueId\n", { status: 400 })
   }
 
-  ctx.waitUntil(triageIssue(body.issueId, env).catch((error) => {
-    console.error("manual triage failed", { issueId: body.issueId, error: String(error) })
-  }))
+  await env.OPENCLAW_JOBS.send({ type: "linear-triage", issueId: body.issueId })
   return new Response("queued\n", { status: 202 })
 }
 
 async function handleGitHubWebhook(
   request: Request,
   env: Env,
-  ctx: ExecutionContext
+  _ctx: ExecutionContext
 ): Promise<Response> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY || !env.GITHUB_WEBHOOK_SECRET) {
     return new Response("github app not configured\n", { status: 503 })
@@ -274,17 +359,13 @@ async function handleGitHubWebhook(
     return new Response("invalid json\n", { status: 400 })
   }
 
-  // GitHub fires `ping` when a webhook URL is set or updated. The payload
-  // doesn't include repository/installation, so it would fail the field
-  // check below and return 400 — leaving the operator with a red test
-  // delivery on the App's "Recent Deliveries" tab. Acknowledge it here.
+  // GitHub fires `ping` when a webhook URL is set or updated. Ack and
+  // move on — no installation/repo context, nothing to enqueue.
   if (event === "ping") {
     return new Response("pong\n", { status: 200 })
   }
 
-  // App-level events (installation, installation_repositories, etc.)
-  // also lack a repository field. We don't act on them — return 200 so
-  // GitHub stops retrying.
+  // App-level events have no repository field. Ignore with 200.
   if (
     event === "installation" ||
     event === "installation_repositories" ||
@@ -301,7 +382,6 @@ async function handleGitHubWebhook(
     return new Response("missing installation / repo\n", { status: 400 })
   }
 
-  // pull_request — overview + (on first open / push) primary review.
   if (event === "pull_request") {
     const action = payload.action
     const pr = payload.pull_request
@@ -316,30 +396,30 @@ async function handleGitHubWebhook(
     const headSha = pr.head?.sha ?? ""
     if (!headSha) return new Response("missing head sha\n", { status: 400 })
 
-    ctx.waitUntil(
-      handlePrOverview({ owner, repo, prNumber, headSha, installationId, env }).catch((error) => {
-        console.error("pr-overview failed", { owner, repo, prNumber, error: String(error) })
-      })
-    )
-    // pr-review is the "what did CR miss?" pass — fire it ONLY on the
-    // initial PR `opened` (so PRs in repos without CR still get a
-    // proactive review) and on `pull_request_review.submitted` from CR
-    // (handled in the dedicated branch below). On `synchronize` /
-    // `reopened` / `ready_for_review` we skip pr-review and let CR run
-    // first — its `pull_request_review.submitted` event will trigger
-    // pr-review afterwards. Without this guard, pr-review races CR and
-    // re-flags what CR was about to flag itself.
+    await env.OPENCLAW_JOBS.send({
+      type: "pr-overview",
+      owner,
+      repo,
+      prNumber,
+      headSha,
+      installationId,
+    })
+    // pr-review only on initial open — synchronize/reopened/ready_for_review
+    // would race CR. The pull_request_review.submitted branch below picks up
+    // pr-review after CR finishes its review.
     if (action === "opened") {
-      ctx.waitUntil(
-        handlePrReview({ owner, repo, prNumber, headSha, installationId, env }).catch((error) => {
-          console.error("pr-review failed", { owner, repo, prNumber, error: String(error) })
-        })
-      )
+      await env.OPENCLAW_JOBS.send({
+        type: "pr-review",
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+      })
     }
-    return new Response("ok\n", { status: 200 })
+    return new Response("queued\n", { status: 202 })
   }
 
-  // workflow_run.completed (failure) on a PR head commit → CI triage.
   if (event === "workflow_run") {
     const action = payload.action
     const run = payload.workflow_run
@@ -357,29 +437,18 @@ async function handleGitHubWebhook(
     if (!headSha) return new Response("missing head sha\n", { status: 400 })
     if (typeof run.id !== "number") return new Response("missing run id\n", { status: 400 })
 
-    const args = {
+    await env.OPENCLAW_JOBS.send({
+      type: "ci-triage",
       owner,
       repo,
       prNumber: prRef.number,
       runId: run.id,
       headSha,
       installationId,
-      env,
-    }
-    ctx.waitUntil(
-      handleCiTriage(args).catch((error) => {
-        console.error("ci-triage failed", {
-          owner,
-          repo,
-          prNumber: args.prNumber,
-          error: String(error),
-        })
-      })
-    )
-    return new Response("ok\n", { status: 200 })
+    })
+    return new Response("queued\n", { status: 202 })
   }
 
-  // pull_request_review_comment.created from coderabbitai → CR-eval.
   if (event === "pull_request_review_comment") {
     if (payload.action !== "created" || !payload.comment) {
       return new Response("skip review comment action\n", { status: 200 })
@@ -388,7 +457,6 @@ async function handleGitHubWebhook(
     if (!isCodeRabbitAuthor(c.user?.login ?? null)) {
       return new Response("skip non-cr author\n", { status: 200 })
     }
-    // Ignore CR's own threaded replies — only top-level inline comments.
     if (typeof c.in_reply_to_id === "number") {
       return new Response("skip threaded reply\n", { status: 200 })
     }
@@ -396,7 +464,8 @@ async function handleGitHubWebhook(
     if (!pr || typeof pr.number !== "number" || typeof c.id !== "number" || !c.path) {
       return new Response("missing review-comment fields\n", { status: 400 })
     }
-    const reviewComment: ReviewCommentArg = {
+
+    const reviewComment: ReviewComment = {
       id: c.id,
       path: c.path,
       line: c.line ?? null,
@@ -409,35 +478,18 @@ async function handleGitHubWebhook(
     if (typeof c.original_commit_id === "string") {
       reviewComment.original_commit_id = c.original_commit_id
     }
-    // in_reply_to_id is never set here — the early return at the top of
-    // this branch already drops threaded replies, so by the time we get
-    // here c.in_reply_to_id is undefined by construction.
-    const args = {
+
+    await env.OPENCLAW_JOBS.send({
+      type: "cr-eval",
       owner,
       repo,
       prNumber: pr.number,
       installationId,
-      env,
       comment: reviewComment,
-    }
-    ctx.waitUntil(
-      handleCrEval(args).catch((error) => {
-        console.error("cr-eval failed", {
-          owner,
-          repo,
-          prNumber: args.prNumber,
-          commentId: c.id,
-          error: String(error),
-        })
-      })
-    )
-    return new Response("ok\n", { status: 200 })
+    })
+    return new Response("queued\n", { status: 202 })
   }
 
-  // pull_request_review.submitted from coderabbitai → re-run primary
-  // review. CR's submitted event fires after all its inline comments
-  // are in, so this is the cleanest signal that "CR is done — now
-  // OpenClaw can fill in what CR missed."
   if (event === "pull_request_review") {
     if (payload.action !== "submitted" || !payload.review) {
       return new Response("skip review action\n", { status: 200 })
@@ -451,24 +503,15 @@ async function handleGitHubWebhook(
     }
     const headSha = pr.head?.sha ?? ""
     if (!headSha) return new Response("missing head sha\n", { status: 400 })
-    ctx.waitUntil(
-      handlePrReview({
-        owner,
-        repo,
-        prNumber: pr.number,
-        headSha,
-        installationId,
-        env,
-      }).catch((error) => {
-        console.error("pr-review (post-cr) failed", {
-          owner,
-          repo,
-          prNumber: pr.number,
-          error: String(error),
-        })
-      })
-    )
-    return new Response("ok\n", { status: 200 })
+    await env.OPENCLAW_JOBS.send({
+      type: "pr-review",
+      owner,
+      repo,
+      prNumber: pr.number,
+      headSha,
+      installationId,
+    })
+    return new Response("queued\n", { status: 202 })
   }
 
   return new Response("skipped\n", { status: 200 })

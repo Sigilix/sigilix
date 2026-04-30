@@ -67,17 +67,25 @@ The three ported PR-side scripts (`triage-ci`, `triage-cr`, `triage-pr-overview`
 Linear (Issue.create / Comment.create)        GitHub (PR / workflow_run / review_comment / review)
     │ HMAC-signed POST                            │ HMAC-signed POST (X-Hub-Signature-256)
     ▼                                             ▼
-                Cloudflare Worker (this repo)
+              Cloudflare Worker — fetch() handler
     │ ┌─ HMAC verify per provider
     │ ├─ Route on (path, headers, payload)
-    │ ├─ KV dedupe (OPENCLAW_STATE)
+    │ └─ Enqueue typed JobMessage → return 202 in ~50ms
+    ▼
+              Cloudflare Queue (openclaw-jobs)
+    │
+    ▼
+              Cloudflare Worker — queue() handler (15-min budget)
+    │ ┌─ KV dedupe (OPENCLAW_STATE)
     │ ├─ Linear OAuth or GitHub App installation token (KV-cached)
     │ ├─ Vectorize retrieval (Workers AI + OPENCLAW_CODE_INDEX)
-    │ ├─ Ollama Turbo: glm-5.1:cloud → JSON verdict
+    │ ├─ Ollama Turbo: glm-5.1:cloud / kimi-k2.6:cloud → JSON verdict
     │ └─ Post comment / submit review back to provider
     ▼
 Linear issue / GitHub PR updated
 ```
+
+The queue indirection is mandatory: Cloudflare's `ctx.waitUntil()` is hard-capped at 30 seconds and Ollama Turbo calls routinely take 30-90s. Queue consumers get up to 15 minutes per invocation, plenty for any model. Webhooks return 202 in ~50ms — well under GitHub's 10s webhook timeout — and the actual work runs decoupled.
 
 GitHub auth uses a GitHub App: the Worker signs RS256 JWTs with the App's private key (Web Crypto, not node:crypto), exchanges them for per-installation access tokens via `POST /app/installations/{id}/access_tokens`, and caches the tokens in KV. Installation IDs come from the `installation.id` field on each inbound webhook, so a single Worker fans out across every repo where the App is installed.
 
@@ -109,7 +117,15 @@ npx wrangler kv:namespace create OPENCLAW_STATE
 
 Copy the returned `id` into `wrangler.toml`, replacing `REPLACE_WITH_KV_NAMESPACE_ID`.
 
-### 4b. Create the Vectorize index
+### 4b. Create the Cloudflare Queue
+
+```bash
+npx wrangler queues create openclaw-jobs
+```
+
+Long-running work (Ollama Turbo calls, 30-90s typical) runs in a queue consumer instead of `ctx.waitUntil()`. Cloudflare's `waitUntil` is hard-capped at 30 seconds on every plan and isn't configurable; queue consumers get up to 15 minutes per invocation. The webhook handlers `.send()` a typed `JobMessage` and return 200 in ~50ms; the consumer picks the message up and runs the actual triage. Producer + consumer bindings are already declared in `wrangler.toml` — this command just creates the queue itself.
+
+### 4c. Create the Vectorize index
 
 ```bash
 npx wrangler vectorize create openclaw-code-index --dimensions=768 --metric=cosine
@@ -117,7 +133,7 @@ npx wrangler vectorize create openclaw-code-index --dimensions=768 --metric=cosi
 
 This creates the index that holds embedded code chunks. The Worker queries it at triage / mention-reply time.
 
-### 4c. Index your repos
+### 4d. Index your repos
 
 For each repo you want Arc to know about, run the local indexer:
 
@@ -133,7 +149,7 @@ The default namespace is the repo directory name lowercased. Linear team keys ma
 
 The first run takes several minutes for a 10k-chunk repo. Subsequent runs are full re-embeds — incremental indexing is a future enhancement.
 
-### 4d. Auto-reindex on every push (recommended)
+### 4e. Auto-reindex on every push (recommended)
 
 To keep the index fresh without running the CLI manually, drop a thin workflow file into each tracked repo. It calls a **reusable workflow** in this repo (`.github/workflows/codebase-index.yml`) so the indexer logic stays in one place.
 

@@ -47,6 +47,34 @@ index_name = "openclaw-code-index"
 [ai]
 binding = "AI"
 
+# Cloudflare Queue — `ctx.waitUntil()` has a hard 30s cap that's not
+# configurable on any plan, and Ollama Turbo calls (Kimi/GLM) routinely
+# take 30-90s. Webhooks now enqueue a JobMessage and return 200 fast
+# (~50ms); the queue consumer below processes the job with up to 15
+# minutes of wall-clock time per Cloudflare's documented limits.
+#
+# Run once before first deploy:
+#   npx wrangler queues create openclaw-jobs
+#
+# Producer binding — the fetch handler `.send()`s here.
+[[queues.producers]]
+binding = "OPENCLAW_JOBS"
+queue = "openclaw-jobs"
+
+# Consumer binding — invokes the `queue()` handler in src/index.ts.
+# max_batch_size = 1 because each job is a slow, expensive Ollama call;
+# batching N would mean one slow job blocks the others. max_concurrency
+# lets the platform run several jobs in parallel across invocations.
+# max_retries = 3 covers transient Ollama / GitHub blips; after that
+# the message goes to the dead-letter sink (none configured — message
+# is dropped, which is fine for triage jobs).
+[[queues.consumers]]
+queue = "openclaw-jobs"
+max_batch_size = 1
+max_concurrency = 5
+max_retries = 3
+max_batch_timeout = 1
+
 # Required secrets (set via `wrangler secret put`):
 #
 #   LINEAR_API_KEY                Personal API key — used as the manual-trigger

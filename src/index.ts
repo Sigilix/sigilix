@@ -301,11 +301,21 @@ async function handleGitHubWebhook(
         console.error("pr-overview failed", { owner, repo, prNumber, error: String(error) })
       })
     )
-    ctx.waitUntil(
-      handlePrReview({ owner, repo, prNumber, headSha, installationId, env }).catch((error) => {
-        console.error("pr-review failed", { owner, repo, prNumber, error: String(error) })
-      })
-    )
+    // pr-review is the "what did CR miss?" pass — fire it ONLY on the
+    // initial PR `opened` (so PRs in repos without CR still get a
+    // proactive review) and on `pull_request_review.submitted` from CR
+    // (handled in the dedicated branch below). On `synchronize` /
+    // `reopened` / `ready_for_review` we skip pr-review and let CR run
+    // first — its `pull_request_review.submitted` event will trigger
+    // pr-review afterwards. Without this guard, pr-review races CR and
+    // re-flags what CR was about to flag itself.
+    if (action === "opened") {
+      ctx.waitUntil(
+        handlePrReview({ owner, repo, prNumber, headSha, installationId, env }).catch((error) => {
+          console.error("pr-review failed", { owner, repo, prNumber, error: String(error) })
+        })
+      )
+    }
     return new Response("ok\n", { status: 200 })
   }
 

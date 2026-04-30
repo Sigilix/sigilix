@@ -34,9 +34,9 @@ OpenClaw — Linear-side issue triage + GitHub-side PR review, running as a sing
 **GitHub: CR-comment evaluator** (`pull_request_review_comment.created` from `coderabbitai*`)
 1. Fetches the file contents + extracts ±20 lines of context around the comment's anchor line.
 2. Asks the model to classify the CR comment as `ACCEPT` / `SKIP_NITPICK` / `SKIP_OUT_OF_SCOPE` / `SKIP_FALSE_POSITIVE`.
-3. Posts a Greptile-style threaded reply. ACCEPT replies @-mention the PR author and may include a one-click `\`\`\`suggestion` block. SKIP\_\* verdicts auto-resolve the review thread via GraphQL.
+3. Posts a Greptile-style threaded reply. ACCEPT replies @-mention the PR author and may include a one-click ```` ```suggestion ```` block. `SKIP_*` verdicts auto-resolve the review thread via GraphQL.
 
-**GitHub: Proactive primary review** (`pull_request.opened/synchronize` AND `pull_request_review.submitted` from CR)
+**GitHub: Proactive primary review** (`pull_request.opened` AND `pull_request_review.submitted` from CR)
 1. Fetches PR diff + every existing CR inline comment.
 2. Asks the model to identify only what CR missed (anti-redundancy is a hard rule in the prompt). Each finding gets a 1–5 score.
 3. Submits ONE review via `POST /pulls/{n}/reviews` with all findings as inline comments. Approval state is derived from the max finding score:

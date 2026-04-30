@@ -264,8 +264,11 @@ export function formatOverviewComment({ verdict, isFirstRun }: FormatArgs): stri
     lines.push("| File | Score | Notes | Next step |")
     lines.push("| --- | :---: | --- | --- |")
     for (const f of verdict.files) {
+      // Model output is interpolated into a markdown table — a literal
+      // `|` in `overview` or `nextStep` would split the cell and corrupt
+      // the table. Escape with `\|` per CommonMark.
       lines.push(
-        `| \`${f.path}\` | ${f.score}/5 | ${f.overview || "—"} | ${f.nextStep || "—"} |`
+        `| \`${f.path}\` | ${f.score}/5 | ${escapeTableCell(f.overview) || "—"} | ${escapeTableCell(f.nextStep) || "—"} |`
       )
     }
   }
@@ -285,6 +288,10 @@ export function formatOverviewComment({ verdict, isFirstRun }: FormatArgs): stri
   }
 
   return lines.join("\n")
+}
+
+function escapeTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\n/g, " ")
 }
 
 async function findExistingOverviewComment(

@@ -19,6 +19,8 @@ import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const CI_MARKER = "<!-- openclaw:ci-triage -->"
+const DEDUPE_PREFIX = "ci-triage:"
+const DEDUPE_TTL_SECONDS = 300
 const MAX_FILES_FROM_LOG = 6
 const MAX_FAILED_JOBS = 5
 
@@ -59,8 +61,39 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
   }
 
   since("start")
+
+  // Concurrent-run guard. Two retried webhooks for the same workflow
+  // run must not both reach the listIssueComments → no-marker branch.
+  // Keyed on (prNumber, runId, headSha) — same run + same head = skip.
+  // A subsequent push (different headSha) and a different failing run
+  // (different runId) both produce different keys and re-run as expected.
+  const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}/run/${runId}`
+  if (await env.OPENCLAW_STATE.get(dedupeKey)) {
+    console.log(`ci-triage already running for ${dedupeKey} — skipping`)
+    return
+  }
+  await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
+    expirationTtl: DEDUPE_TTL_SECONDS,
+  })
+
   const client = await buildClient(env, installationId)
   since("auth-ready")
+
+  const meta = await client.getPullRequest(owner, repo, prNumber)
+  since("pr-fetched")
+
+  // Stale-run guard. The webhook fires when a workflow run completes,
+  // but by then the PR head may have moved (developer pushed again
+  // while CI was running). Mixing an old failure log with the latest
+  // PR diff produces a misleading diagnosis — the diff shows code that
+  // the failure didn't actually run against. When the run's head SHA
+  // doesn't match the PR head, skip rather than post nonsense.
+  if (meta.head.sha !== headSha) {
+    console.log(
+      `ci-triage stale run on ${owner}/${repo}#${prNumber} — run head ${headSha.slice(0, 7)} != PR head ${meta.head.sha.slice(0, 7)}; skipping`
+    )
+    return
+  }
 
   const failedJobs = await listFailedJobs(client, owner, repo, runId)
   if (failedJobs.length === 0) {
@@ -72,11 +105,8 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
   const ciLog = await fetchFailedJobLogs(client, owner, repo, failedJobs)
   since(`logs-${ciLog.length}chars`)
 
-  const [meta, diff] = await Promise.all([
-    client.getPullRequest(owner, repo, prNumber),
-    client.getPullRequestDiff(owner, repo, prNumber),
-  ])
-  since("pr-fetched")
+  const diff = await client.getPullRequestDiff(owner, repo, prNumber)
+  since("diff-fetched")
 
   // File context — pull the contents of files the failure log names so
   // the model can reason about the fix in context. Capped to a handful

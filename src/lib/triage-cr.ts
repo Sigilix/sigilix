@@ -46,7 +46,6 @@ const TAG_BY_CLASS: Record<Classification, string> = {
 }
 
 const LIMITS = {
-  prDiff: 16_000,
   prBody: 4_000,
   commentBody: 2_000,
   fileContext: 1_500,
@@ -119,7 +118,6 @@ export async function handleCrEval(args: TriageCrArgs): Promise<void> {
     prNumber,
     prTitle: meta.title,
     prBody: meta.body ?? "",
-    prDiff: "",
     comment,
     fileContext,
   })
@@ -196,7 +194,6 @@ interface PromptCtx {
   prNumber: number
   prTitle: string
   prBody: string
-  prDiff: string
   comment: ReviewComment
   fileContext: string | null
 }
@@ -261,6 +258,11 @@ function buildEvaluatorPrompt(ctx: PromptCtx): string {
     )
   }
 
+  // No PR diff section here — the per-comment ±20-line file context above
+  // is the surgical context the verdict actually needs, and the diff is
+  // expensive to fetch + tokenize for the marginal benefit. See
+  // upstream rema-portal triage-cr.mjs which dropped the diff for the
+  // same reason.
   const sections = [
     "[SYSTEM INSTRUCTIONS]",
     CR_EVALUATION_PROMPT.trim(),
@@ -270,9 +272,6 @@ function buildEvaluatorPrompt(ctx: PromptCtx): string {
     `Title: ${ctx.prTitle}`,
     "Body:",
     truncate(ctx.prBody || "(no description)", LIMITS.prBody),
-    "",
-    "[PR DIFF (truncated)]",
-    truncate(ctx.prDiff, LIMITS.prDiff),
     "",
     "[CR COMMENT TO EVALUATE]",
     commentBlock.join("\n"),

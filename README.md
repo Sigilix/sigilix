@@ -2,15 +2,25 @@
 
 OpenClaw issue-triage bot, ported from the local NSSM daemon to a Cloudflare Worker.
 
-When a Linear issue is created in the Arc and Anchor workspace, this Worker:
+When a Linear issue is created or a comment @-mentions OpenClaw, this Worker:
 
-1. Receives the webhook from Linear (HMAC-verified).
+**Issue triage** (Issue.create webhook)
+1. Verifies the HMAC signature on the webhook.
 2. Fetches the issue body via the Linear GraphQL API.
-3. Calls Ollama Turbo (`glm-5.1:cloud` by default) for a structured triage verdict.
-4. Posts a Greptile-style comment on the issue (with `<!-- openclaw:issue-triage -->` marker for idempotent re-runs).
-5. Sets `priority`, `estimate`, and adds `labels` on the issue.
+3. Embeds the issue body via Cloudflare Workers AI (`@cf/baai/bge-base-en-v1.5`, 768 dims) and queries the Vectorize index for top-K relevant code chunks.
+4. Calls Ollama Turbo (`glm-5.1:cloud` by default) with the issue text + retrieved chunks.
+5. Rewrites the issue description into `## Context / ## Acceptance criteria / ## Done when` (with media URLs preserved).
+6. Posts a triage comment on the issue.
+7. Sets `priority`, `estimate`, and `labels` on the issue (auto-creating any team-missing labels).
 
-It is a one-file fetch handler with three routes (`/`, `/linear/webhook`, `/linear/manual`). No daemon, no polling, no key on disk.
+**Mention reply** (Comment.create webhook with @-mention)
+1. Verifies HMAC, then checks the comment body for `@openclaw` / `@openclaw[bot]` triggers.
+2. Fetches the comment + parent issue + recent thread context.
+3. Runs the same Vectorize retrieval against the asker's question.
+4. Calls Ollama Turbo with the mention-reply prompt and posts the answer back.
+5. Skips replies to its own comments (loop prevention) and dedupes via KV so retried webhooks don't double-post.
+
+Routes: `/` (liveness), `/linear/webhook`, `/linear/manual`. No daemon, no polling, no key on disk.
 
 ## Why a Worker
 
@@ -69,6 +79,30 @@ npx wrangler kv:namespace create OPENCLAW_STATE
 
 Copy the returned `id` into `wrangler.toml`, replacing `REPLACE_WITH_KV_NAMESPACE_ID`.
 
+### 4b. Create the Vectorize index
+
+```bash
+npx wrangler vectorize create openclaw-code-index --dimensions=768 --metric=cosine
+```
+
+This creates the index that holds embedded code chunks. The Worker queries it at triage / mention-reply time.
+
+### 4c. Index your repos
+
+For each repo you want OpenClaw to know about, run the local indexer:
+
+```bash
+export CLOUDFLARE_ACCOUNT_ID=<your account id>
+export CLOUDFLARE_API_TOKEN=<token with Workers AI Read + Vectorize Write>
+
+node scripts/index-repo.mjs ../rema-portal
+node scripts/index-repo.mjs ../Rubberfit-Desktop --namespace=rubberfit-desktop
+```
+
+The default namespace is the repo directory name lowercased. Linear team keys map to namespaces via `OPENCLAW_TEAM_REPO_MAP` (see step 5).
+
+The first run takes several minutes for a 10k-chunk repo. Subsequent runs are full re-embeds — incremental indexing is a future enhancement.
+
 ### 5. Set the three secrets
 
 ```bash
@@ -86,9 +120,15 @@ npx wrangler secret put OLLAMA_API_KEY
 Optional:
 
 ```bash
-npx wrangler secret put OPENCLAW_MODEL          # defaults to glm-5.1:cloud
-npx wrangler secret put OPENCLAW_TEAM_KEY       # e.g. "ARC" — scope to one team
+npx wrangler secret put OPENCLAW_MODEL              # defaults to glm-5.1:cloud
+npx wrangler secret put OPENCLAW_TEAM_KEY           # e.g. "ARC" — scope to one team
+npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "openclaw,openclaw[bot],OpenClaw[bot]"
+npx wrangler secret put OPENCLAW_TEAM_REPO_MAP      # JSON: {"ARC":"rema-portal","RFD":"rubberfit-desktop"}
+npx wrangler secret put LINEAR_OAUTH_CLIENT_ID      # OAuth app — comments post as the app actor
+npx wrangler secret put LINEAR_OAUTH_CLIENT_SECRET  # paired with the client_id above
 ```
+
+`OPENCLAW_TEAM_REPO_MAP` controls which Vectorize namespace gets queried for triage / mention-reply on each Linear team's issues. Without it, the team key (lowercased) is used as the namespace — so a Linear team with key `ARC` queries the `arc` namespace.
 
 ### 6. Deploy
 
@@ -103,8 +143,7 @@ Wrangler prints the Worker URL — something like `https://openclaw-worker.<your
 In Linear → **Settings → API → Webhooks** (or in your OAuth app's webhook config):
 
 - **URL**: `https://openclaw-worker.<your-account>.workers.dev/linear/webhook`
-- **Events**: `Issue create` (and `Issue update` if you want re-triage on body edits — disabled by default in the Worker; toggle in `src/index.ts`)
-- **Resource types**: `Issue`
+- **Resource types**: check **Issue** AND **Comment** — Issue triggers triage, Comment triggers the @-mention reply path
 - **Signing secret**: copy this and store it as `LINEAR_WEBHOOK_SECRET` (step 5 above)
 
 Save. Linear sends a test payload — the Worker should return 200 and log a "skipped" line (test payloads aren't real `Issue.create` events).

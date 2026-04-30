@@ -10,6 +10,7 @@ import { generate } from "./ollama"
 import { LinearClient, estimateToPoints, severityToPriority } from "./linear"
 import { getAppActorToken } from "./linear-oauth"
 import { getMarker, setMarker } from "./dedupe"
+import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import type { Env } from "../index"
 import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
 
@@ -62,12 +63,25 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   const kvMarker = await getMarker(env.OPENCLAW_STATE, issue.id)
   const existingComment = kvMarker ? { id: kvMarker.commentId } : null
 
+  // Retrieve codebase chunks before building the prompt. Soft-fails to
+  // empty when Vectorize is unconfigured / empty / the team has no
+  // mapped repo — the model is instructed in the prompt to abstain
+  // from inventing file references when no chunks are present.
+  const retrievalText = `${issue.title}\n\n${issue.description ?? ""}`
+  const chunks = await retrieveChunks({
+    text: retrievalText,
+    teamKey: issue.team?.key ?? null,
+    env,
+  })
+  since("retrieval-done")
+
   const prompt = buildPrompt({
     identifier: issue.identifier,
     title: issue.title,
     body: issue.description ?? "",
     author: issue.creator?.displayName ?? issue.creator?.name ?? null,
     labels: issue.labels.nodes.map((l) => l.name),
+    codebaseChunks: formatChunksForPrompt(chunks),
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -134,6 +148,7 @@ interface PromptCtx {
   body: string
   author: string | null
   labels: string[]
+  codebaseChunks: string | null
 }
 
 function buildPrompt(ctx: PromptCtx): string {
@@ -150,6 +165,15 @@ function buildPrompt(ctx: PromptCtx): string {
     sections.push(`Existing labels: ${ctx.labels.join(", ")}`)
   }
   sections.push("", "Body:", truncate(ctx.body || "(no description)", LIMITS.issueBody))
+  if (ctx.codebaseChunks) {
+    sections.push(
+      "",
+      "[RELEVANT CODEBASE CHUNKS (semantic similarity to issue body)]",
+      "Verify each is actually relevant before citing — retrieval can return false positives.",
+      "",
+      ctx.codebaseChunks
+    )
+  }
   sections.push(
     "",
     "[OUTPUT]",

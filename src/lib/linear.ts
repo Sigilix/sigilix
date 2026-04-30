@@ -7,7 +7,7 @@
 
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
 
-interface LinearIssue {
+export interface LinearIssue {
   id: string
   identifier: string // e.g. "ARC-42"
   title: string
@@ -17,6 +17,27 @@ interface LinearIssue {
   creator: { name: string | null; displayName: string | null } | null
   labels: { nodes: Array<{ name: string }> }
   comments: { nodes: Array<{ id: string; body: string }> }
+}
+
+export interface LinearCommentWithIssue {
+  id: string
+  body: string
+  user: { name: string | null; displayName: string | null } | null
+  issue: {
+    id: string
+    identifier: string
+    title: string
+    description: string | null
+    team: { id: string; key: string }
+    comments: {
+      nodes: Array<{
+        id: string
+        body: string
+        createdAt: string
+        user: { name: string | null; displayName: string | null } | null
+      }>
+    }
+  }
 }
 
 interface IssueLabel {
@@ -35,6 +56,41 @@ export class LinearClient {
     // produces a 401 on every call, which is the expected mode failure.
     this.authHeader =
       "oauthToken" in auth ? `Bearer ${auth.oauthToken}` : auth.apiKey
+  }
+
+  /**
+   * Fetch a single comment along with its parent issue and the surrounding
+   * thread. Used by the mention-reply path to build context for the model.
+   * The thread is bounded — Linear can return tens of thousands of comments
+   * on busy issues, but we only need the most recent for a coherent reply.
+   */
+  async getCommentWithIssue(commentId: string): Promise<LinearCommentWithIssue | null> {
+    const query = /* GraphQL */ `
+      query CommentWithIssue($id: String!) {
+        comment(id: $id) {
+          id
+          body
+          user { name displayName }
+          issue {
+            id
+            identifier
+            title
+            description
+            team { id key }
+            comments(first: 50) {
+              nodes {
+                id
+                body
+                createdAt
+                user { name displayName }
+              }
+            }
+          }
+        }
+      }
+    `
+    const data = await this.gql<{ comment: LinearCommentWithIssue | null }>(query, { id: commentId })
+    return data.comment
   }
 
   /** Fetch issue + recent comments. Used for triage dedupe + context. */

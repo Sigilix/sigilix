@@ -349,7 +349,7 @@ function formatReviewBody(
       : event === "REQUEST_CHANGES"
         ? "BLOCKER"
         : "REVIEW"
-  lines.push(`🦞 [${tag}] ${verdict.summary}`)
+  lines.push(`⚓ [${tag}] ${verdict.summary}`)
   lines.push("")
   if (event === "APPROVE" && prAuthor && !prAuthor.toLowerCase().includes("[bot]")) {
     if (verdict.findings.length === 0) {
@@ -385,7 +385,7 @@ function formatFindingComment(finding: PrReviewFinding): string {
   // not a CR comment. Suggestion blocks (when present in body) pass
   // through unchanged so GitHub renders them as one-click apply.
   const lines: string[] = [`<!-- openclaw:pr-review-finding -->`]
-  lines.push(`🦞 [score ${finding.score}/5] ${finding.headline}`)
+  lines.push(`⚓ [score ${finding.score}/5] ${finding.headline}`)
   lines.push("")
   lines.push(finding.body)
   return lines.join("\n")

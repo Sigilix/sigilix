@@ -358,7 +358,7 @@ export function formatVerdictReply(verdict: CrVerdict, prAuthor: string | null):
   const headline = verdict.headline?.trim() || ""
 
   const lines: string[] = [`${REPLY_MARKER_PREFIX}${verdict.commentId} -->`]
-  lines.push(`🦞 [${tag}] ${headline}`.trim())
+  lines.push(`⚓ [${tag}] ${headline}`.trim())
   lines.push("")
 
   if (verdict.classification === "ACCEPT" && prAuthor && !prAuthor.toLowerCase().includes("[bot]")) {

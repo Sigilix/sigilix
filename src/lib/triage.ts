@@ -326,7 +326,7 @@ interface FormatArgs {
 function formatComment({ verdict, author }: FormatArgs): string {
   const tag = `${verdict.severity} · ${verdict.estimate}`
   const lines: string[] = []
-  lines.push(`🦞 [${tag}] ${verdict.headline}`)
+  lines.push(`⚓ [${tag}] ${verdict.headline}`)
   lines.push("")
   if (author && !author.toLowerCase().includes("[bot]")) {
     lines.push(`@${author} — first read on your issue, hope it saves you a few minutes scoping.`)

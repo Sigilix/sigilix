@@ -1,6 +1,8 @@
 # `openclaw-worker`
 
-OpenClaw — Linear-side issue triage + GitHub-side PR review, running as a single Cloudflare Worker. Ported from the local NSSM daemon (`rema-portal/tools/openclaw/`).
+**Arc** — Linear-side issue triage + GitHub-side PR review, running as a single Cloudflare Worker. Ported from the local NSSM daemon (`rema-portal/tools/openclaw/`).
+
+The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and dedupe markers all keep the legacy `openclaw` name for stability and zero-config impact. The user-facing bot identity (display names on Linear and GitHub, comment headings, footers, mention triggers) is **Arc**.
 
 **Linear side** — issue triage and @-mention replies on Linear webhooks.
 **GitHub side** — PR overview, CI failure triage, CodeRabbit-comment evaluator, and proactive primary review on GitHub App webhooks.
@@ -14,7 +16,7 @@ OpenClaw — Linear-side issue triage + GitHub-side PR review, running as a sing
 4. Rewrites the issue description into `## Context / ## Acceptance criteria / ## Done when` (preserves media URLs).
 5. Posts a triage comment, sets priority + estimate + labels (auto-creates missing labels).
 
-**Linear: Mention reply** (`Comment.create` with `@openclaw`)
+**Linear: Mention reply** (`Comment.create` with `@arc` — also matches legacy `@openclaw`)
 1. Pre-filters on the comment body, then fetches the comment + parent issue + recent thread.
 2. Runs the same Vectorize retrieval against the asker's question.
 3. Calls Ollama Turbo with the mention-reply prompt; posts the answer back.
@@ -117,7 +119,7 @@ This creates the index that holds embedded code chunks. The Worker queries it at
 
 ### 4c. Index your repos
 
-For each repo you want OpenClaw to know about, run the local indexer:
+For each repo you want Arc to know about, run the local indexer:
 
 ```bash
 export CLOUDFLARE_ACCOUNT_ID=<your account id>
@@ -198,7 +200,7 @@ npx wrangler secret put GITHUB_WEBHOOK_SECRET
 ```bash
 npx wrangler secret put OPENCLAW_MODEL              # defaults to glm-5.1:cloud
 npx wrangler secret put OPENCLAW_TEAM_KEY           # e.g. "ARC" — scope to one team
-npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "openclaw,openclaw[bot],OpenClaw[bot]"
+npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "arc,arc[bot],Arc[bot],openclaw,openclaw[bot],OpenClaw[bot]" (legacy aliases included)
 npx wrangler secret put OPENCLAW_TEAM_REPO_MAP      # JSON: {"ARC":"rema-portal","RFD":"rubberfit-desktop"}
 npx wrangler secret put LINEAR_OAUTH_CLIENT_ID      # OAuth app — comments post as the app actor
 npx wrangler secret put LINEAR_OAUTH_CLIENT_SECRET  # paired with the client_id above
@@ -227,7 +229,7 @@ Set the webhook URL to `https://openclaw-worker.<your-account>.workers.dev/githu
 
 Generate a private key from the App settings page; paste the whole PEM into `GITHUB_PRIVATE_KEY`.
 
-Install the App on the repos you want OpenClaw to review.
+Install the App on the repos you want Arc to review.
 
 ### 6. Deploy
 
@@ -249,7 +251,7 @@ Save. Linear sends a test payload — the Worker should return 200 and log a "sk
 
 ### 8. Smoke test
 
-Create a new issue in Linear. Within ~30-90 seconds, OpenClaw posts a triage comment with priority, estimate, and label suggestions.
+Create a new issue in Linear. Within ~30-90 seconds, Arc posts a triage comment with priority, estimate, and label suggestions.
 
 If you want to manually re-trigger a triage on an existing issue:
 

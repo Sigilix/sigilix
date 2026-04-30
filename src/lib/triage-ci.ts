@@ -169,7 +169,7 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
     return
   }
 
-  const footer = `\n\n${CI_MARKER}\n_🦞 Auto-triage by OpenClaw · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
+  const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Arc · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
   const body = response + footer
 
   const existing = await findExistingCiComment(client, owner, repo, prNumber)

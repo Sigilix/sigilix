@@ -244,7 +244,7 @@ function formatReply({ verdict, askerHandle, sourceCommentId }: FormatArgs): str
   const marker = `${REPLY_MARKER_PREFIX}${sourceCommentId}${REPLY_MARKER_SUFFIX}`
   const lines: string[] = []
   if (askerHandle && !askerHandle.toLowerCase().includes("[bot]")) {
-    lines.push(`@${askerHandle} 🦞`)
+    lines.push(`@${askerHandle} ⚓`)
     lines.push("")
   }
   lines.push(verdict.answer)

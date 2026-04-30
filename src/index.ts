@@ -135,7 +135,7 @@ export default {
     const url = new URL(request.url)
 
     if (request.method === "GET" && url.pathname === "/") {
-      return new Response("OpenClaw Worker — alive\n", {
+      return new Response("Arc Worker — alive\n", {
         headers: { "content-type": "text/plain" },
       })
     }

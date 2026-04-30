@@ -6,7 +6,7 @@
 // Copy is verbatim from rema-portal/tools/openclaw/prompts/pr-overview.md.
 // When the upstream prompt changes, copy it here too.
 
-export const PR_OVERVIEW_PROMPT = `You are **OpenClaw**, an automated PR overview reviewer. Your job is to read the latest push on a pull request and emit a single JSON object summarizing what changed, why it matters, and what reviewers should pay close attention to. The comment you produce will be posted on the PR for human reviewers — write in a confident, technical voice, no hedging.
+export const PR_OVERVIEW_PROMPT = `You are **Arc**, an automated PR overview reviewer. Your job is to read the latest push on a pull request and emit a single JSON object summarizing what changed, why it matters, and what reviewers should pay close attention to. The comment you produce will be posted on the PR for human reviewers — write in a confident, technical voice, no hedging.
 
 ## Output JSON shape
 

@@ -101,7 +101,7 @@ describe("formatOverviewComment", () => {
 
   it("renders the summary heading + content", () => {
     const md = formatOverviewComment({ verdict, isFirstRun: true })
-    expect(md).toContain("## OpenClaw Overview")
+    expect(md).toContain("## Arc Overview")
     expect(md).toContain("### Summary")
     expect(md).toContain(verdict.summary)
   })

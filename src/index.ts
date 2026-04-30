@@ -100,6 +100,13 @@ async function handleLinearWebhook(
   // from that team. Useful when one OpenClaw instance serves a workspace
   // with multiple teams and you don't want it firing on all of them.
   if (env.OPENCLAW_TEAM_KEY && payload.data.team?.key !== env.OPENCLAW_TEAM_KEY) {
+    // Log the mismatch so operators can spot a misconfigured OPENCLAW_TEAM_KEY
+    // — silent early return here was hiding a real config bug where every
+    // webhook skipped triage with no visibility in wrangler tail.
+    console.warn("team scope mismatch", {
+      got: payload.data.team?.key ?? null,
+      want: env.OPENCLAW_TEAM_KEY,
+    })
     return new Response("team scope mismatch\n", { status: 200 })
   }
 

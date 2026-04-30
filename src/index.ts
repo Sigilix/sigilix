@@ -5,7 +5,7 @@
 //   POST /linear/webhook       Linear sends Issue.create / Comment.create (mention)
 //   POST /linear/manual        manual triage trigger (dev/admin) — body: { issueId }
 //   POST /github/webhook       GitHub sends pull_request, workflow_run,
-//                              pull_request_review_comment, pull_request_review
+//                              pull_request_review
 //
 // HMAC verification on Linear uses LINEAR_WEBHOOK_SECRET. GitHub uses
 // GITHUB_WEBHOOK_SECRET (sha256= prefix).
@@ -23,14 +23,17 @@
 
 import { triageIssue } from "./lib/triage"
 import { handleMention } from "./lib/mention-reply"
-import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "./lib/mention"
+import {
+  bodyMentionsBot,
+  getMentionTriggers,
+  isBotHandle,
+  isCodeRabbitAuthor,
+} from "./lib/mention"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
-import { handleCrEval, handleCrPushback, isCodeRabbitAuthor } from "./lib/triage-cr"
 import { handlePrReview } from "./lib/triage-pr-review"
-import type { ReviewComment } from "./lib/github"
 
 export interface Env {
   OPENCLAW_STATE: KVNamespace
@@ -62,10 +65,6 @@ export interface Env {
  * `env` is intentionally NOT serialized — the queue consumer receives
  * its own `env` argument from Cloudflare and re-injects it before
  * calling the per-job handler.
- *
- * Linear `cr-eval` carries the full ReviewComment because it's small
- * (1-5 KB) and avoids a redundant `listPullRequestReviewComments` call
- * in the consumer just to re-fetch what we already had at webhook time.
  */
 export type JobMessage =
   | { type: "linear-triage"; issueId: string }
@@ -102,30 +101,6 @@ export type JobMessage =
       runId: number
       headSha: string
       installationId: number
-    }
-  | {
-      type: "cr-eval"
-      owner: string
-      repo: string
-      prNumber: number
-      installationId: number
-      comment: ReviewComment
-    }
-  | {
-      /**
-       * CR posted a threaded reply to one of Arc's prior cr-eval
-       * verdicts. Arc has been wrong about SKIP_* classifications, so
-       * we treat any CR pushback as a signal to escalate to the PR
-       * author for a tiebreaker rather than re-evaluating ourselves
-       * (which would risk doubling down on the wrong call).
-       */
-      type: "cr-pushback"
-      owner: string
-      repo: string
-      prNumber: number
-      installationId: number
-      /** The threaded reply CR posted that triggered the escalation. */
-      comment: ReviewComment
     }
 
 interface LinearWebhookPayload {
@@ -273,24 +248,6 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         runId: job.runId,
         headSha: job.headSha,
         installationId: job.installationId,
-        env,
-      })
-    case "cr-eval":
-      return handleCrEval({
-        owner: job.owner,
-        repo: job.repo,
-        prNumber: job.prNumber,
-        installationId: job.installationId,
-        comment: job.comment,
-        env,
-      })
-    case "cr-pushback":
-      return handleCrPushback({
-        owner: job.owner,
-        repo: job.repo,
-        prNumber: job.prNumber,
-        installationId: job.installationId,
-        comment: job.comment,
         env,
       })
     default: {
@@ -507,69 +464,13 @@ async function handleGitHubWebhook(
     return new Response("queued\n", { status: 202 })
   }
 
-  if (event === "pull_request_review_comment") {
-    if (payload.action !== "created" || !payload.comment) {
-      return new Response("skip review comment action\n", { status: 200 })
-    }
-    const c = payload.comment
-    if (!isCodeRabbitAuthor(c.user?.login ?? null)) {
-      return new Response("skip non-cr author\n", { status: 200 })
-    }
-    const pr = payload.pull_request
-    if (!pr || typeof pr.number !== "number" || typeof c.id !== "number" || !c.path) {
-      return new Response("missing review-comment fields\n", { status: 400 })
-    }
-
-    const reviewComment: ReviewComment = {
-      id: c.id,
-      path: c.path,
-      line: c.line ?? null,
-      original_line: c.original_line ?? null,
-      body: c.body ?? "",
-      user: c.user ? { login: c.user.login ?? "" } : null,
-      pull_request_review_id: c.pull_request_review_id ?? null,
-    }
-    if (typeof c.commit_id === "string") reviewComment.commit_id = c.commit_id
-    if (typeof c.original_commit_id === "string") {
-      reviewComment.original_commit_id = c.original_commit_id
-    }
-    if (typeof c.in_reply_to_id === "number") {
-      reviewComment.in_reply_to_id = c.in_reply_to_id
-    }
-
-    // Top-level vs threaded reply routing:
-    //
-    //   in_reply_to_id == undefined → CR's primary inline comment.
-    //     Run the cr-eval handler to classify ACCEPT/SKIP_*.
-    //
-    //   in_reply_to_id present → CR is replying inside a thread. The
-    //     thread might be one Arc started (CR pushing back on a
-    //     SKIP_* verdict) or unrelated. The cr-pushback handler
-    //     fetches the thread, checks whether Arc's prior message was
-    //     SKIP_*, and if so escalates to the PR author for a
-    //     tiebreaker rather than re-evaluating itself.
-    if (typeof c.in_reply_to_id === "number") {
-      await env.OPENCLAW_JOBS.send({
-        type: "cr-pushback",
-        owner,
-        repo,
-        prNumber: pr.number,
-        installationId,
-        comment: reviewComment,
-      })
-      return new Response("queued (pushback)\n", { status: 202 })
-    }
-
-    await env.OPENCLAW_JOBS.send({
-      type: "cr-eval",
-      owner,
-      repo,
-      prNumber: pr.number,
-      installationId,
-      comment: reviewComment,
-    })
-    return new Response("queued\n", { status: 202 })
-  }
+  // pull_request_review_comment events (CR's individual inline
+  // comments) are intentionally not handled — Arc used to evaluate
+  // each one with an ACCEPT/SKIP_* verdict, but CR's bot-loop
+  // protection skips threaded replies from other bots, so the
+  // verdict landed in a one-way conversation no human asked for.
+  // pr-review still reads CR's posted comments to avoid duplicating
+  // findings, which is the meaningful integration point.
 
   if (event === "pull_request_review") {
     if (payload.action !== "submitted" || !payload.review) {

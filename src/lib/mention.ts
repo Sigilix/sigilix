@@ -119,3 +119,18 @@ export function isBotHandle(displayName: string | null | undefined): boolean {
 export function isLikelyBotAuthor(displayName: string | null | undefined): boolean {
   return isBotHandle(displayName)
 }
+
+/**
+ * Detect a CodeRabbit-authored handle. Used by the GitHub webhook
+ * router to filter the pr-review re-run to CR's `pull_request_review.
+ * submitted` events specifically (we re-run pr-review after CR
+ * finishes its own review so Arc has CR's findings to compare
+ * against).
+ *
+ * Pattern matches `coderabbitai`, `coderabbitai[bot]`, and
+ * `coderabbit-staging[bot]`. Case-insensitive.
+ */
+export function isCodeRabbitAuthor(login: string | null | undefined): boolean {
+  if (!login) return false
+  return /^coderabbit/i.test(login)
+}

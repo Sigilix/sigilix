@@ -5,7 +5,7 @@
 The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and dedupe markers all keep the legacy `openclaw` name for stability and zero-config impact. The user-facing bot identity (display names on Linear and GitHub, comment headings, footers, mention triggers) is **Arc**.
 
 **Linear side** — issue triage and @-mention replies on Linear webhooks.
-**GitHub side** — PR overview, CI failure triage, CodeRabbit-comment evaluator, and proactive primary review on GitHub App webhooks.
+**GitHub side** — PR overview, CI failure triage, and proactive primary review on GitHub App webhooks.
 
 ## What it does
 
@@ -32,11 +32,6 @@ The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and
 2. Pulls PR diff + file contents the failure log mentions (Contents API at the PR head SHA) + Vectorize chunks.
 3. Asks the model for a Greptile-shaped diagnosis (root cause / likely fix / failure excerpt / confidence).
 4. Posts only when confidence is `high` or `medium`; updates in place via the `<!-- openclaw:ci-triage -->` marker.
-
-**GitHub: CR-comment evaluator** (`pull_request_review_comment.created` from `coderabbitai*`)
-1. Fetches the file contents + extracts ±20 lines of context around the comment's anchor line.
-2. Asks the model to classify the CR comment as `ACCEPT` / `SKIP_NITPICK` / `SKIP_OUT_OF_SCOPE` / `SKIP_FALSE_POSITIVE`.
-3. Posts a Greptile-style threaded reply. ACCEPT replies @-mention the PR author and may include a one-click ```` ```suggestion ```` block. `SKIP_*` verdicts auto-resolve the review thread via GraphQL.
 
 **GitHub: Proactive primary review** (`pull_request.opened` AND `pull_request_review.submitted` from CR)
 1. Fetches PR diff + every existing CR inline comment.
@@ -317,7 +312,6 @@ openclaw-worker/
     │   ├── mention-reply.ts               # @-mention reply prompt
     │   ├── pr-overview.ts                 # GitHub PR top-level overview
     │   ├── ci-triage.ts                   # GitHub CI failure diagnosis
-    │   ├── cr-evaluation.ts               # CodeRabbit comment evaluator
     │   └── pr-review.ts                   # Proactive primary reviewer (greptile-style)
     └── lib/
         ├── linear.ts                      # Linear GraphQL client
@@ -334,7 +328,6 @@ openclaw-worker/
         ├── mention-reply.ts               # Linear mention-reply pipeline
         ├── triage-pr-overview.ts          # GitHub PR overview pipeline
         ├── triage-ci.ts                   # GitHub CI failure pipeline
-        ├── triage-cr.ts                   # GitHub CR-comment evaluator pipeline
         ├── triage-pr-review.ts            # GitHub proactive primary review pipeline
         └── dedupe.ts                      # KV-backed marker lookup / set
 ```

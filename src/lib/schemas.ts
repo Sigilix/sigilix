@@ -71,33 +71,6 @@ export const PR_REVIEW_SCHEMA = {
 } as const
 
 /**
- * cr-eval verdict array (one verdict per CR comment evaluated).
- * Mirrors CrVerdict[] in src/lib/triage-cr.ts.
- *
- * Note: schema is the array itself — Ollama accepts top-level array
- * schemas. Keys match the parser's discriminated-union expectations.
- */
-export const CR_EVAL_SCHEMA = {
-  type: "array",
-  minItems: 1,
-  items: {
-    type: "object",
-    properties: {
-      commentId: { type: "integer" },
-      classification: {
-        type: "string",
-        enum: ["ACCEPT", "SKIP_NITPICK", "SKIP_OUT_OF_SCOPE", "SKIP_FALSE_POSITIVE"],
-      },
-      headline: { type: "string" },
-      body: { type: "string" },
-      opener: { type: "string" },
-      location: { type: "string" },
-    },
-    required: ["commentId", "classification", "headline", "body"],
-  },
-} as const
-
-/**
  * Issue-triage verdict (Linear issue post + field updates).
  * Mirrors Verdict in src/lib/triage.ts.
  */
@@ -139,17 +112,3 @@ export const MENTION_REPLY_SCHEMA = {
   required: ["answer", "confidence", "abstain"],
 } as const
 
-/**
- * cr-pushback verdict — what Arc says back when CR replies to a prior
- * cr-eval verdict, pushing back. Either retract (Arc was wrong) or
- * escalate to the PR author. Mirrors CrPushbackVerdict in
- * src/lib/triage-cr.ts.
- */
-export const CR_PUSHBACK_SCHEMA = {
-  type: "object",
-  properties: {
-    decision: { type: "string", enum: ["retract", "escalate"] },
-    message: { type: "string" },
-  },
-  required: ["decision", "message"],
-} as const

@@ -76,6 +76,36 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
     expirationTtl: DEDUPE_TTL_SECONDS,
   })
 
+  try {
+    await runCiTriage({
+      owner,
+      repo,
+      prNumber,
+      runId,
+      headSha,
+      installationId,
+      env,
+      since,
+    })
+  } finally {
+    // Release on any exit path so queue retries can re-attempt.
+    await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+  }
+}
+
+interface CiTriageInner {
+  owner: string
+  repo: string
+  prNumber: number
+  runId: number
+  headSha: string
+  installationId: number
+  env: Env
+  since: (label: string) => void
+}
+
+async function runCiTriage(args: CiTriageInner): Promise<void> {
+  const { owner, repo, prNumber, runId, headSha, installationId, env, since } = args
   const client = await buildClient(env, installationId)
   since("auth-ready")
 

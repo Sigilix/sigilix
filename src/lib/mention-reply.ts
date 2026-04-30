@@ -21,8 +21,11 @@ import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
-const REPLY_MARKER_PREFIX = "<!-- openclaw:mention-reply src="
-const REPLY_MARKER_SUFFIX = " -->"
+// Note: no HTML-comment marker in the rendered body. Linear renders
+// `<!-- ... -->` as visible plain text in comment bodies (unlike
+// GitHub which hides them), so leaking a marker shows up as
+// `<!-- openclaw:mention-reply src=abc -->` at the bottom of every
+// reply. KV (`mention-reply:<commentId>`) is the authoritative dedupe.
 const KV_PREFIX = "mention-reply"
 
 const LIMITS = {
@@ -124,7 +127,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     return
   }
 
-  const body = formatReply({ verdict, askerHandle, sourceCommentId: data.id })
+  const body = formatReply({ verdict, askerHandle })
   const newCommentId = await linear.createComment(data.issue.id, body)
   log("reply-posted", { newCommentId })
 
@@ -234,22 +237,15 @@ function parseVerdict(text: string): MentionVerdict | null {
 interface FormatArgs {
   verdict: MentionVerdict
   askerHandle: string
-  sourceCommentId: string
 }
 
-function formatReply({ verdict, askerHandle, sourceCommentId }: FormatArgs): string {
-  // Marker carries the source-comment ID so a future scan can identify
-  // bot replies even when KV is cold. Hidden enough not to dominate the
-  // visual but discoverable for dedupe.
-  const marker = `${REPLY_MARKER_PREFIX}${sourceCommentId}${REPLY_MARKER_SUFFIX}`
+function formatReply({ verdict, askerHandle }: FormatArgs): string {
   const lines: string[] = []
   if (askerHandle && !askerHandle.toLowerCase().includes("[bot]")) {
     lines.push(`@${askerHandle} ⚓`)
     lines.push("")
   }
   lines.push(verdict.answer)
-  lines.push("")
-  lines.push(marker)
   return lines.join("\n")
 }
 

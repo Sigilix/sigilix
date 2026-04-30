@@ -24,8 +24,18 @@ interface IssueLabel {
   name: string
 }
 
+export type LinearAuth = { apiKey: string } | { oauthToken: string }
+
 export class LinearClient {
-  constructor(private readonly apiKey: string) {}
+  private readonly authHeader: string
+
+  constructor(auth: LinearAuth) {
+    // Personal API keys go through as the raw header value (Linear's docs).
+    // OAuth access tokens use the standard Bearer prefix. Mixing them up
+    // produces a 401 on every call, which is the expected mode failure.
+    this.authHeader =
+      "oauthToken" in auth ? `Bearer ${auth.oauthToken}` : auth.apiKey
+  }
 
   /** Fetch issue + recent comments. Used for triage dedupe + context. */
   async getIssue(issueId: string): Promise<LinearIssue | null> {
@@ -48,7 +58,14 @@ export class LinearClient {
     return data.issue
   }
 
-  /** Resolve label NAMES to IDs for the given team. Linear requires IDs on update. */
+  /**
+   * Resolve label NAMES to IDs for the given team. Auto-creates any name
+   * the team doesn't have yet — matches the original GitHub openclaw which
+   * relies on `POST /labels` to create-on-add. Without auto-create, the
+   * model's suggestions would silently disappear when a label is new to
+   * a workspace, which is exactly what shipped originally and broke the
+   * ARC test issue.
+   */
   async resolveLabels(teamId: string, names: string[]): Promise<string[]> {
     if (names.length === 0) return []
     const query = /* GraphQL */ `
@@ -61,18 +78,65 @@ export class LinearClient {
     const data = await this.gql<{
       team: { labels: { nodes: IssueLabel[] } } | null
     }>(query, { teamId })
-    const all = data.team?.labels.nodes ?? []
-    const wanted = new Set(names.map((n) => n.toLowerCase()))
-    return all.filter((l) => wanted.has(l.name.toLowerCase())).map((l) => l.id)
+    const existing = data.team?.labels.nodes ?? []
+    const byNameLower = new Map(existing.map((l) => [l.name.toLowerCase(), l.id]))
+
+    const ids: string[] = []
+    for (const rawName of names) {
+      const name = rawName.trim()
+      if (!name) continue
+      const found = byNameLower.get(name.toLowerCase())
+      if (found) {
+        ids.push(found)
+        continue
+      }
+      try {
+        const created = await this.createLabel(teamId, name)
+        ids.push(created)
+        byNameLower.set(name.toLowerCase(), created)
+      } catch (error) {
+        console.warn("label create failed (skipping)", {
+          teamId,
+          name,
+          error: String(error),
+        })
+      }
+    }
+    return ids
   }
 
-  /** Update issue priority, estimate, and add labels. All fields optional. */
+  /** Create a new issue label scoped to a team. Returns the new label ID. */
+  private async createLabel(teamId: string, name: string): Promise<string> {
+    const mutation = /* GraphQL */ `
+      mutation IssueLabelCreate($input: IssueLabelCreateInput!) {
+        issueLabelCreate(input: $input) {
+          success
+          issueLabel { id }
+        }
+      }
+    `
+    const data = await this.gql<{
+      issueLabelCreate: { success: boolean; issueLabel: { id: string } }
+    }>(mutation, { input: { teamId, name } })
+    if (!data.issueLabelCreate.success) {
+      throw new Error(`issueLabelCreate returned success=false for "${name}"`)
+    }
+    return data.issueLabelCreate.issueLabel.id
+  }
+
+  /**
+   * Update issue priority, estimate, labels, and/or description. All fields
+   * optional. Description writes overwrite the issue body in place — the
+   * caller (triage) is responsible for preserving any media URLs from the
+   * original before passing the new description here.
+   */
   async updateIssue(
     issueId: string,
     fields: {
       priority?: number
       estimate?: number
       labelIds?: string[]
+      description?: string
     }
   ): Promise<void> {
     const mutation = /* GraphQL */ `
@@ -85,6 +149,9 @@ export class LinearClient {
     if (typeof fields.estimate === "number") input.estimate = fields.estimate
     if (Array.isArray(fields.labelIds) && fields.labelIds.length > 0) {
       input.labelIds = fields.labelIds
+    }
+    if (typeof fields.description === "string" && fields.description.trim().length > 0) {
+      input.description = fields.description
     }
     if (Object.keys(input).length === 0) return
     await this.gql(mutation, { id: issueId, input })
@@ -121,7 +188,7 @@ export class LinearClient {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: this.apiKey,
+        authorization: this.authHeader,
       },
       body: JSON.stringify({ query, variables }),
     })

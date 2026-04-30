@@ -23,33 +23,45 @@ export function extractJsonObjectCandidates(text: string): string[] {
   const fenceMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
   if (fenceMatch?.[1]) candidates.push(fenceMatch[1].trim())
 
-  // Balanced-brace scan: walk from the first `{`, count depth, capture
-  // up to the matching `}`. Skips braces inside string literals so a
-  // quoted `"{"` doesn't shift depth.
-  const start = trimmed.indexOf("{")
-  if (start >= 0) {
-    let depth = 0
-    let inString = false
-    let escape = false
-    for (let i = start; i < trimmed.length; i++) {
-      const ch = trimmed[i]
-      if (escape) {
-        escape = false
-        continue
-      }
-      if (inString) {
-        if (ch === "\\") escape = true
-        else if (ch === '"') inString = false
-        continue
-      }
-      if (ch === '"') inString = true
-      else if (ch === "{") depth++
-      else if (ch === "}") {
-        depth--
-        if (depth === 0) {
-          candidates.push(trimmed.slice(start, i + 1))
-          break
-        }
+  // Balanced-brace scan: walk the whole string and collect EVERY
+  // top-level balanced `{...}` chunk as a candidate. Important: we do
+  // NOT stop at the first match — a model that wrote
+  // "Use {placeholder} for the field, then return:\n{ ... real JSON ... }"
+  // would have `{placeholder}` matched first, fail to parse, and we'd
+  // never reach the real verdict downstream. Push all of them so the
+  // caller's parse loop can pick whichever is valid JSON.
+  // Skips braces inside string literals so a quoted `"{"` doesn't
+  // shift depth.
+  let depth = 0
+  let segmentStart = -1
+  let inString = false
+  let escape = false
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i]
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (inString) {
+      if (ch === "\\") escape = true
+      else if (ch === '"') inString = false
+      continue
+    }
+    if (ch === '"') {
+      inString = true
+    } else if (ch === "{") {
+      if (depth === 0) segmentStart = i
+      depth++
+    } else if (ch === "}") {
+      depth--
+      if (depth === 0 && segmentStart >= 0) {
+        candidates.push(trimmed.slice(segmentStart, i + 1))
+        segmentStart = -1
+      } else if (depth < 0) {
+        // Stray closing brace — reset and keep scanning so a malformed
+        // prefix doesn't prevent us from finding a later valid object.
+        depth = 0
+        segmentStart = -1
       }
     }
   }

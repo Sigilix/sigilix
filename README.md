@@ -1,26 +1,51 @@
 # `openclaw-worker`
 
-OpenClaw issue-triage bot, ported from the local NSSM daemon to a Cloudflare Worker.
+OpenClaw — Linear-side issue triage + GitHub-side PR review, running as a single Cloudflare Worker. Ported from the local NSSM daemon (`rema-portal/tools/openclaw/`).
 
-When a Linear issue is created or a comment @-mentions OpenClaw, this Worker:
+**Linear side** — issue triage and @-mention replies on Linear webhooks.
+**GitHub side** — PR overview, CI failure triage, CodeRabbit-comment evaluator, and proactive primary review on GitHub App webhooks.
 
-**Issue triage** (Issue.create webhook)
-1. Verifies the HMAC signature on the webhook.
-2. Fetches the issue body via the Linear GraphQL API.
-3. Embeds the issue body via Cloudflare Workers AI (`@cf/baai/bge-base-en-v1.5`, 768 dims) and queries the Vectorize index for top-K relevant code chunks.
-4. Calls Ollama Turbo (`glm-5.1:cloud` by default) with the issue text + retrieved chunks.
-5. Rewrites the issue description into `## Context / ## Acceptance criteria / ## Done when` (with media URLs preserved).
-6. Posts a triage comment on the issue.
-7. Sets `priority`, `estimate`, and `labels` on the issue (auto-creating any team-missing labels).
+## What it does
 
-**Mention reply** (Comment.create webhook with @-mention)
-1. Verifies HMAC, then checks the comment body for `@openclaw` / `@openclaw[bot]` triggers.
-2. Fetches the comment + parent issue + recent thread context.
-3. Runs the same Vectorize retrieval against the asker's question.
-4. Calls Ollama Turbo with the mention-reply prompt and posts the answer back.
-5. Skips replies to its own comments (loop prevention) and dedupes via KV so retried webhooks don't double-post.
+**Linear: Issue triage** (`Issue.create`)
+1. Verifies HMAC, then fetches the issue body via Linear GraphQL.
+2. Embeds the issue body (Workers AI, `@cf/baai/bge-base-en-v1.5`, 768 dims) and queries Vectorize for top-K relevant code chunks.
+3. Calls Ollama Turbo (`glm-5.1:cloud` default) with issue + chunks.
+4. Rewrites the issue description into `## Context / ## Acceptance criteria / ## Done when` (preserves media URLs).
+5. Posts a triage comment, sets priority + estimate + labels (auto-creates missing labels).
 
-Routes: `/` (liveness), `/linear/webhook`, `/linear/manual`. No daemon, no polling, no key on disk.
+**Linear: Mention reply** (`Comment.create` with `@openclaw`)
+1. Pre-filters on the comment body, then fetches the comment + parent issue + recent thread.
+2. Runs the same Vectorize retrieval against the asker's question.
+3. Calls Ollama Turbo with the mention-reply prompt; posts the answer back.
+4. Skips self-mentions; dedupes via KV.
+
+**GitHub: PR overview** (`pull_request.opened/synchronize/reopened/ready_for_review`)
+1. Fetches PR title + body + diff + recent commits.
+2. Asks the model for a structured overview: 1–5 confidence, per-file priority scores, bullets to scrutinize.
+3. Posts (or PATCHes in place) a single sticky top-level comment with the dedupe marker `<!-- openclaw:pr-overview -->`.
+
+**GitHub: CI failure triage** (`workflow_run.completed` with `conclusion=failure`)
+1. Lists failed jobs on the run, fetches each job's plain-text log, concatenates them.
+2. Pulls PR diff + file contents the failure log mentions (Contents API at the PR head SHA) + Vectorize chunks.
+3. Asks the model for a Greptile-shaped diagnosis (root cause / likely fix / failure excerpt / confidence).
+4. Posts only when confidence is `high` or `medium`; updates in place via the `<!-- openclaw:ci-triage -->` marker.
+
+**GitHub: CR-comment evaluator** (`pull_request_review_comment.created` from `coderabbitai*`)
+1. Fetches the file contents + extracts ±20 lines of context around the comment's anchor line.
+2. Asks the model to classify the CR comment as `ACCEPT` / `SKIP_NITPICK` / `SKIP_OUT_OF_SCOPE` / `SKIP_FALSE_POSITIVE`.
+3. Posts a Greptile-style threaded reply. ACCEPT replies @-mention the PR author and may include a one-click `\`\`\`suggestion` block. SKIP\_\* verdicts auto-resolve the review thread via GraphQL.
+
+**GitHub: Proactive primary review** (`pull_request.opened/synchronize` AND `pull_request_review.submitted` from CR)
+1. Fetches PR diff + every existing CR inline comment.
+2. Asks the model to identify only what CR missed (anti-redundancy is a hard rule in the prompt). Each finding gets a 1–5 score.
+3. Submits ONE review via `POST /pulls/{n}/reviews` with all findings as inline comments. Approval state is derived from the max finding score:
+   - max 5 → `REQUEST_CHANGES`
+   - max 3–4 → `COMMENT`
+   - max 1–2 (or no findings) → `APPROVE`
+4. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review.
+
+Routes: `/` (liveness), `/linear/webhook`, `/linear/manual`, `/github/webhook`. No daemon, no polling, no key on disk.
 
 ## Why a Worker
 
@@ -32,24 +57,27 @@ Replaces `tools/openclaw/triage-issue.mjs` and `triage-mention.mjs` from the rem
 - Replaces the polling state file with Cloudflare KV.
 - Replaces the auto-update + restart logic with `wrangler deploy` from CI.
 
-PR-side scripts (`triage-ci`, `triage-cr`, `triage-pr-overview`) stay on the Windows box for now — they need PR diffs and the codebase semantic index. Migration of those is tracked separately.
+All four PR-side scripts (`triage-ci`, `triage-cr`, `triage-pr-overview`) plus a new **proactive primary reviewer** now run in the Worker via a GitHub App. The Windows daemon is fully decommissioned.
 
 ## Architecture
 
 ```
-Linear (issue.created webhook)
-    │ HMAC-signed POST
-    ▼
-Cloudflare Worker (this repo)
-    │ ┌─ HMAC verify (LINEAR_WEBHOOK_SECRET)
-    │ ├─ KV dedupe check (OPENCLAW_STATE)
-    │ ├─ Linear GraphQL: fetch issue body + labels
+Linear (Issue.create / Comment.create)        GitHub (PR / workflow_run / review_comment / review)
+    │ HMAC-signed POST                            │ HMAC-signed POST (X-Hub-Signature-256)
+    ▼                                             ▼
+                Cloudflare Worker (this repo)
+    │ ┌─ HMAC verify per provider
+    │ ├─ Route on (path, headers, payload)
+    │ ├─ KV dedupe (OPENCLAW_STATE)
+    │ ├─ Linear OAuth or GitHub App installation token (KV-cached)
+    │ ├─ Vectorize retrieval (Workers AI + OPENCLAW_CODE_INDEX)
     │ ├─ Ollama Turbo: glm-5.1:cloud → JSON verdict
-    │ ├─ Linear GraphQL: post/edit comment with marker
-    │ └─ Linear GraphQL: set priority, estimate, labels
+    │ └─ Post comment / submit review back to provider
     ▼
-Linear issue updated
+Linear issue / GitHub PR updated
 ```
+
+GitHub auth uses a GitHub App: the Worker signs RS256 JWTs with the App's private key (Web Crypto, not node:crypto), exchanges them for per-installation access tokens via `POST /app/installations/{id}/access_tokens`, and caches the tokens in KV. Installation IDs come from the `installation.id` field on each inbound webhook, so a single Worker fans out across every repo where the App is installed.
 
 ## Setup
 
@@ -134,12 +162,13 @@ jobs:
 
 Triggers on push to `dev` OR `main`. dev is the active development branch; main is the customer-facing release. Both reindex into the same namespace (`<repo-name>` lowercased) — whichever branch changed last wins, matching what the team is actually working on at any given moment. The reusable workflow checks out the calling repo at the triggering ref, runs the indexer, and upserts vectors into Vectorize.
 
-### 5. Set the three secrets
+### 5. Set the secrets
+
+**Linear:**
 
 ```bash
 npx wrangler secret put LINEAR_API_KEY
 # Paste your Linear personal API key (Settings → API → Personal API keys)
-# OR an OAuth client_credentials token if using the OAuth app pattern
 
 npx wrangler secret put LINEAR_WEBHOOK_SECRET
 # Paste the signing secret from your Linear OAuth app's webhook config
@@ -148,7 +177,23 @@ npx wrangler secret put OLLAMA_API_KEY
 # Paste your Ollama Turbo API key (https://ollama.com/settings/keys)
 ```
 
-Optional:
+**GitHub App** (required for the `/github/webhook` route — without these the route returns 503):
+
+```bash
+npx wrangler secret put GITHUB_APP_ID
+# Numeric App ID from
+# https://github.com/organizations/Arc-and-Anchor/settings/apps/<your-app>
+
+npx wrangler secret put GITHUB_PRIVATE_KEY
+# PEM-encoded RSA private key from "Generate a private key" on the App
+# settings page. PKCS#1 (BEGIN RSA PRIVATE KEY) and PKCS#8 (BEGIN PRIVATE KEY)
+# both work — paste the whole multi-line PEM, including BEGIN/END markers.
+
+npx wrangler secret put GITHUB_WEBHOOK_SECRET
+# HMAC secret from the GitHub App's webhook config
+```
+
+**Optional:**
 
 ```bash
 npx wrangler secret put OPENCLAW_MODEL              # defaults to glm-5.1:cloud
@@ -160,6 +205,29 @@ npx wrangler secret put LINEAR_OAUTH_CLIENT_SECRET  # paired with the client_id 
 ```
 
 `OPENCLAW_TEAM_REPO_MAP` controls which Vectorize namespace gets queried for triage / mention-reply on each Linear team's issues. Without it, the team key (lowercased) is used as the namespace — so a Linear team with key `ARC` queries the `arc` namespace.
+
+### 5b. Create + install the GitHub App
+
+Go to <https://github.com/organizations/Arc-and-Anchor/settings/apps> → **New GitHub App**.
+
+**Required permissions** (Repository):
+- **Actions**: Read (CI run jobs + logs)
+- **Contents**: Read (file contents at a given ref)
+- **Issues**: Write (top-level PR comments)
+- **Pull requests**: Read & write (PR diff, review comments, submit review)
+- **Metadata**: Read (default)
+
+**Required webhook events:**
+- `Pull request` (opened, synchronize, ready_for_review, reopened)
+- `Pull request review comment` (CR inline-comment evaluator)
+- `Pull request review` (CR review.submitted → re-run primary review)
+- `Workflow run` (CI failure triage)
+
+Set the webhook URL to `https://openclaw-worker.<your-account>.workers.dev/github/webhook` and copy the webhook secret to `GITHUB_WEBHOOK_SECRET` (step 5 above).
+
+Generate a private key from the App settings page; paste the whole PEM into `GITHUB_PRIVATE_KEY`.
+
+Install the App on the repos you want OpenClaw to review.
 
 ### 6. Deploy
 
@@ -217,34 +285,55 @@ openclaw-worker/
 ├── README.md                              # this file
 ├── package.json
 ├── tsconfig.json
-├── wrangler.toml                          # Cloudflare config + KV binding + secrets list
+├── wrangler.toml                          # Cloudflare config + KV/Vectorize bindings + secrets list
 ├── .dev.vars.example                      # local secret template (.dev.vars is gitignored)
 ├── .github/workflows/deploy.yml           # auto-deploy on push to main
 ├── .github/workflows/ci.yml               # PR typecheck (lint job for branch protection)
+├── .github/workflows/codebase-index.yml   # reusable workflow — auto-reindex on push to dev/main
+├── examples/openclaw-index.yml            # template caller for each tracked repo
+├── scripts/index-repo.mjs                 # CLI indexer (chunk + embed + upsert to Vectorize)
 └── src/
-    ├── index.ts                           # main fetch handler — routing + auth
+    ├── index.ts                           # main fetch handler — routing + HMAC verify
     ├── prompts/
-    │   └── issue-triage.ts                # OpenClaw v5 system prompt (TS string, ported from rema-portal/.md)
+    │   ├── issue-triage.ts                # Linear issue triage prompt
+    │   ├── mention-reply.ts               # @-mention reply prompt
+    │   ├── pr-overview.ts                 # GitHub PR top-level overview
+    │   ├── ci-triage.ts                   # GitHub CI failure diagnosis
+    │   ├── cr-evaluation.ts               # CodeRabbit comment evaluator
+    │   └── pr-review.ts                   # Proactive primary reviewer (greptile-style)
     └── lib/
-        ├── linear.ts                      # Linear GraphQL client (issue + comment + update)
-        ├── ollama.ts                      # Ollama Turbo client (single generate call)
-        ├── triage.ts                      # prompt build + verdict parse + comment format
-        ├── webhook-verify.ts              # HMAC-SHA256 signature verify
+        ├── linear.ts                      # Linear GraphQL client
+        ├── linear-oauth.ts                # Linear OAuth client_credentials (app-actor token)
+        ├── webhook-verify.ts              # Linear HMAC-SHA256 verify
+        ├── github.ts                      # GitHub REST + GraphQL client (Worker-friendly)
+        ├── github-app.ts                  # RS256 JWT signer + installation token cache
+        ├── github-webhook-verify.ts       # GitHub HMAC-SHA256 verify (sha256= prefix)
+        ├── ollama.ts                      # Ollama Turbo client
+        ├── embeddings.ts                  # Workers AI BGE base v1.5 wrapper
+        ├── retrieval.ts                   # Vectorize query + chunk formatting
+        ├── mention.ts                     # @-mention detection helpers
+        ├── triage.ts                      # Linear issue-triage pipeline
+        ├── mention-reply.ts               # Linear mention-reply pipeline
+        ├── triage-pr-overview.ts          # GitHub PR overview pipeline
+        ├── triage-ci.ts                   # GitHub CI failure pipeline
+        ├── triage-cr.ts                   # GitHub CR-comment evaluator pipeline
+        ├── triage-pr-review.ts            # GitHub proactive primary review pipeline
         └── dedupe.ts                      # KV-backed marker lookup / set
 ```
 
 ## Roadmap
 
-- **PR-side scripts**: port `triage-ci`, `triage-cr`, `triage-pr-overview` once the Linear-issue path is validated. Add a `/github/webhook` route, GitHub App JWT signing in-Worker, and a Vectorize binding for the codebase index.
 - **Cycle awareness**: when triaging an issue mid-cycle, suggest whether it fits the current cycle or should be deferred to the next based on team capacity.
 - **Linked PR detection**: when a PR mentions an issue, post a "PR ready for review" comment on the issue side.
+- **Incremental indexing**: re-embed only changed files on each push (current scripts/index-repo.mjs re-embeds the whole repo).
 
 ## Security
 
-- HMAC verification on every webhook delivery — invalid signatures return 401.
+- HMAC verification on every webhook delivery — invalid signatures return 401. Linear: raw hex digest in `linear-signature`. GitHub: `sha256=<hex>` in `X-Hub-Signature-256`.
 - All secrets live in Cloudflare's secret store, encrypted at rest, never logged.
 - The Worker has no filesystem; the GitHub App private key path that historically lived on the Windows box is gone.
 - Linear API token is workspace-scoped; the Worker can't write outside the Arc and Anchor workspace.
+- GitHub App installation tokens are scoped to whatever the App is installed on. Tokens last ~1 hour and are KV-cached per-installation; the App's master private key is the only sensitive credential.
 - Manual trigger route requires a Bearer token equal to `LINEAR_API_KEY`. Random clients can't fire triages.
 
 ## Troubleshooting

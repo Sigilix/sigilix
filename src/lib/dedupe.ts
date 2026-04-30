@@ -26,3 +26,17 @@ export async function setMarker(
   const record: MarkerRecord = { commentId, triagedAt: Date.now() }
   await kv.put(`triage:${issueId}`, JSON.stringify(record))
 }
+
+/**
+ * Remove a marker. Used to roll the marker back when a post operation
+ * fails after the marker was already written — without rollback, a
+ * manual retrigger would be skipped because the marker (incorrectly)
+ * indicates the post already succeeded. Best-effort: KV deletes that
+ * fail are not fatal.
+ */
+export async function deleteMarker(
+  kv: KVNamespace,
+  issueId: string
+): Promise<void> {
+  await kv.delete(`triage:${issueId}`).catch(() => {})
+}

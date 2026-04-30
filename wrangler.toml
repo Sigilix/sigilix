@@ -66,9 +66,44 @@ binding = "AI"
 #                                 updates then appear as the OAuth app rather
 #                                 than the human owner of LINEAR_API_KEY.
 #
+# Required for the GitHub webhook routes (PR overview, CI triage, CR eval,
+# proactive PR review). Without these the /github/webhook route returns 503
+# — we never want to fall back to a developer's PAT for PR-side actions.
+#
+#   GITHUB_APP_ID                 Numeric App ID from
+#                                 https://github.com/organizations/Arc-and-Anchor/settings/apps/<app-name>
+#   GITHUB_PRIVATE_KEY            PEM-encoded RSA private key (PKCS#1 or PKCS#8).
+#                                 GitHub's "Generate a private key" button
+#                                 downloads PKCS#1 — paste it as-is.
+#   GITHUB_WEBHOOK_SECRET         HMAC secret on the App's webhook config.
+#                                 Used to verify X-Hub-Signature-256 on every
+#                                 inbound delivery.
+#
+# Required GitHub App permissions:
+#   Repository → Actions: Read       (CI logs)
+#   Repository → Contents: Read      (file contents at a given ref)
+#   Repository → Issues: Write       (top-level PR comments)
+#   Repository → Pull requests: R/W  (PR diff, review comments, submit review)
+#   Repository → Metadata: Read      (default)
+#
+# Required GitHub App webhook events:
+#   pull_request                  (opened, synchronize, ready_for_review, reopened)
+#   pull_request_review_comment   (CR inline-comment evaluator)
+#   pull_request_review           (CR review.submitted → re-run primary review)
+#   workflow_run                  (CI failure triage)
+#
 # Optional (other):
 #   OPENCLAW_MODEL                Override the default model (defaults to glm-5.1:cloud)
 #   OPENCLAW_TEAM_KEY             Linear team key to scope to (e.g. "ARC")
+
+# Cloudflare Workers Logs — keep the full Workers Observability product
+# disabled (it costs per-event ingest) but turn on `invocation_logs` so
+# every webhook delivery still produces a head-sampled request line that
+# `wrangler tail` and the dashboard can show. Without this, the Worker
+# fires silently and triage failures are invisible.
+[observability.logs]
+enabled = false
+invocation_logs = true
 
 # Environment-specific overrides go below as `[env.production]`,
 # `[env.staging]`, etc. The default config above is what `wrangler deploy`

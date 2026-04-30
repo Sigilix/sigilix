@@ -12,7 +12,6 @@ import { getMarker, setMarker } from "./dedupe"
 import type { Env } from "../index"
 import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
 
-const TRIAGE_MARKER = "<!-- openclaw:issue-triage -->"
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const MAX_LABELS = 3
 
@@ -43,14 +42,14 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
     return
   }
 
-  // Skip if our own marker comment is already on the issue. Idempotency
-  // guard — Linear retries webhooks on 5xx, and we want re-runs to update
-  // not duplicate. The KV marker is the fast path; the comment-body scan
-  // is the fallback for cases where KV is missing (cold KV, secret rotation).
+  // Idempotency guard — Linear retries webhooks on 5xx, and we want re-runs
+  // to edit the existing comment instead of duplicating. Dedupe is KV-only
+  // since Linear renders HTML comments as visible text, ruling out the
+  // marker-in-body fallback the GitHub original used. KV is durable; the
+  // worst-case cost of a cold cache is a single duplicate comment that an
+  // operator can delete.
   const kvMarker = await getMarker(env.OPENCLAW_STATE, issue.id)
-  const existingComment = kvMarker
-    ? { id: kvMarker.commentId }
-    : issue.comments.nodes.find((c) => c.body.includes(TRIAGE_MARKER)) ?? null
+  const existingComment = kvMarker ? { id: kvMarker.commentId } : null
 
   const prompt = buildPrompt({
     identifier: issue.identifier,
@@ -201,7 +200,7 @@ interface FormatArgs {
 
 function formatComment({ verdict, author }: FormatArgs): string {
   const tag = `${verdict.severity} · ${verdict.estimate}`
-  const lines: string[] = [TRIAGE_MARKER]
+  const lines: string[] = []
   lines.push(`🦞 [${tag}] ${verdict.headline}`)
   lines.push("")
   if (author && !author.toLowerCase().includes("[bot]")) {
@@ -232,8 +231,5 @@ function formatComment({ verdict, author }: FormatArgs): string {
     lines.push("")
     lines.push(`_Suggested labels:_ ${verdict.labels.map((l) => `\`${l}\``).join(", ")}`)
   }
-  lines.push("")
-  lines.push("---")
-  lines.push("_Auto-triage. Severity and estimate are best-effort — adjust as you scope the work._")
   return lines.join("\n")
 }

@@ -1,0 +1,15 @@
+# Default owner for everything in this repo.
+# Required by the org ruleset "Arc and Anchor Members Need Approval" which
+# enforces code-owner review on every PR into main.
+
+* @damartinezjulio
+
+# Bot identity / triage prompt — these have direct user-facing impact when
+# the Worker triages a Linear issue. Worth flagging for explicit review.
+/src/prompts/                @damartinezjulio
+/src/lib/triage.ts           @damartinezjulio
+
+# CI / deploy / secrets surface — anything that touches how the Worker
+# ships or what credentials it has access to.
+/.github/workflows/          @damartinezjulio
+/wrangler.toml               @damartinezjulio

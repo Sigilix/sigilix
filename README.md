@@ -103,6 +103,37 @@ The default namespace is the repo directory name lowercased. Linear team keys ma
 
 The first run takes several minutes for a 10k-chunk repo. Subsequent runs are full re-embeds — incremental indexing is a future enhancement.
 
+### 4d. Auto-reindex on every push (recommended)
+
+To keep the index fresh without running the CLI manually, drop a thin workflow file into each tracked repo. It calls a **reusable workflow** in this repo (`.github/workflows/codebase-index.yml`) so the indexer logic stays in one place.
+
+**Step 1 — set org-level secrets** (one-time, applies to every repo):
+
+Go to https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions and add:
+- `CLOUDFLARE_ACCOUNT_ID` — your CF account ID
+- `CLOUDFLARE_AI_TOKEN` — token with `Account → Workers AI → Read` and `Account → Vectorize → Edit`
+
+Set them with **Repository access → All repositories** (or pick the specific repos you want to index).
+
+**Step 2 — drop the caller workflow into each tracked repo**, at `.github/workflows/openclaw-index.yml`. Copy from `examples/openclaw-index.yml` in this repo:
+
+```yaml
+name: OpenClaw codebase index
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  index:
+    uses: Arc-and-Anchor/openclaw-worker/.github/workflows/codebase-index.yml@main
+    secrets:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
+```
+
+The reusable workflow checks out the calling repo, runs the indexer against it, and upserts vectors into the namespace named after the calling repo (lowercased). After the first push, every subsequent merge to main reindexes automatically.
+
 ### 5. Set the three secrets
 
 ```bash

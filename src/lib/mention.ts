@@ -86,17 +86,36 @@ export function stripMentionFromBody(body: string, triggers: string[]): string {
 }
 
 /**
- * Heuristic for "is this comment authored by a bot." Linear identifies
- * the bot by the OAuth app actor having `[bot]` in the displayName.
- * Skip-self protection so the bot never replies to its own past replies.
+ * Strict bot-handle detector. Returns true when the display name is
+ * either:
  *
- * Legacy `openclaw` substring stays in for now: comments authored by the
- * old "OpenClaw[bot]" identity should still be detected as self after
- * the rename to "Arc[bot]". The substring is loose but the only way to
- * recognize legacy comments without storing a known-bot list. Drop it
- * once all OpenClaw-era comments age out of the active issue threads.
+ *   1. Any handle ending in `[bot]` (Linear's standard suffix on OAuth
+ *      app actors, GitHub's standard suffix on App-installed bots), or
+ *   2. An exact match for "openclaw" or "arc" (with optional `[bot]`
+ *      suffix), so legacy display names without the suffix still
+ *      register as self.
+ *
+ * Single shared predicate used by:
+ *   - Linear webhook self-author guard (src/index.ts) — skip Comment
+ *     events authored by Arc itself to prevent reply loops.
+ *   - mention-reply pipeline (src/lib/mention-reply.ts) — same purpose
+ *     but checked after the GraphQL fetch.
+ *
+ * Previously the mention-pipeline check used a loose `/openclaw/i`
+ * substring that incorrectly matched human display names containing
+ * "openclaw" or "arch". Tightened on PR #15 after CodeRabbit caught
+ * the inconsistency between the two call sites. The strict pattern is
+ * what every caller should use going forward.
+ */
+export function isBotHandle(displayName: string | null | undefined): boolean {
+  if (!displayName) return false
+  return /\[bot\]$/i.test(displayName) || /^(openclaw|arc)(\[bot\])?$/i.test(displayName)
+}
+
+/**
+ * Legacy alias preserved for callers that already imported this name.
+ * Deprecated — new code should call isBotHandle() directly.
  */
 export function isLikelyBotAuthor(displayName: string | null | undefined): boolean {
-  if (!displayName) return false
-  return /\[bot\]$/i.test(displayName) || /openclaw/i.test(displayName)
+  return isBotHandle(displayName)
 }

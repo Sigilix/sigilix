@@ -238,4 +238,33 @@ describe("formatVerdictReply", () => {
     expect(reply).toContain("[NITPICK — safe to skip]")
     expect(reply).not.toContain("@danielmartinezjulio07")
   })
+
+  it("preserves a model-emitted @coderabbitai mention in body verbatim", () => {
+    // The cr-evaluation prompt instructs the model to weave a natural
+    // @coderabbitai mention into its body on debatable SKIP_*
+    // verdicts. The formatter must not strip it.
+    const skip: CrVerdict = {
+      commentId: 1,
+      classification: "SKIP_OUT_OF_SCOPE",
+      headline: "edges of scope",
+      body: "Looks like out-of-scope to me — happy to revise if @coderabbitai disagrees on the boundary.",
+    }
+    const reply = formatVerdictReply(skip, "alice")
+    expect(reply).toContain("@coderabbitai")
+  })
+
+  it("does not inject any hardcoded pushback dialogue into the body", () => {
+    // Earlier versions appended a canned line on every SKIP_*. We
+    // dropped that — the model decides whether to invite pushback per
+    // verdict instead of every reply ending the same way.
+    const skip: CrVerdict = {
+      commentId: 1,
+      classification: "SKIP_NITPICK",
+      headline: "stylistic",
+      body: "existing code is fine",
+    }
+    const reply = formatVerdictReply(skip, "alice")
+    expect(reply).not.toMatch(/if I've misread/i)
+    expect(reply).not.toMatch(/push back here — happy to revise/i)
+  })
 })

@@ -23,12 +23,12 @@
 
 import { triageIssue } from "./lib/triage"
 import { handleMention } from "./lib/mention-reply"
-import { bodyMentionsBot, getMentionTriggers } from "./lib/mention"
+import { bodyMentionsBot, getMentionTriggers, isBotHandle } from "./lib/mention"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
-import { handleCrEval, isCodeRabbitAuthor } from "./lib/triage-cr"
+import { handleCrEval, handleCrPushback, isCodeRabbitAuthor } from "./lib/triage-cr"
 import { handlePrReview } from "./lib/triage-pr-review"
 import type { ReviewComment } from "./lib/github"
 
@@ -85,6 +85,14 @@ export type JobMessage =
       prNumber: number
       headSha: string
       installationId: number
+      /**
+       * Why pr-review is firing. The two paths are independent:
+       *   "opened"            initial proactive read on PR.opened
+       *   "review-submitted"  refinement after CR submits its review
+       * Same headSha + different trigger = different dedupe key, so
+       * the second pass isn't blocked by the first's lock.
+       */
+      trigger: "opened" | "review-submitted"
     }
   | {
       type: "ci-triage"
@@ -101,6 +109,22 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
+      comment: ReviewComment
+    }
+  | {
+      /**
+       * CR posted a threaded reply to one of Arc's prior cr-eval
+       * verdicts. Arc has been wrong about SKIP_* classifications, so
+       * we treat any CR pushback as a signal to escalate to the PR
+       * author for a tiebreaker rather than re-evaluating ourselves
+       * (which would risk doubling down on the wrong call).
+       */
+      type: "cr-pushback"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+      /** The threaded reply CR posted that triggered the escalation. */
       comment: ReviewComment
     }
 
@@ -235,6 +259,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
+        trigger: job.trigger,
       })
     case "ci-triage":
       return handleCiTriage({
@@ -248,6 +273,15 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       })
     case "cr-eval":
       return handleCrEval({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        installationId: job.installationId,
+        comment: job.comment,
+        env,
+      })
+    case "cr-pushback":
+      return handleCrPushback({
         owner: job.owner,
         repo: job.repo,
         prNumber: job.prNumber,
@@ -312,13 +346,10 @@ async function handleLinearWebhook(
     }
     const author =
       payload.data.user?.displayName ?? payload.data.user?.name ?? null
-    // Self-author guard. The first regex catches any name ending in
-    // `[bot]` (Linear's standard OAuth-app suffix). The second is an
-    // anchored exact-match list for the bot's actual handles —
-    // tightened from `/openclaw|^arc/i` which incorrectly matched
-    // human names like "archie" or anyone with "openclaw" in their
-    // display name.
-    if (author && (/\[bot\]$/i.test(author) || /^(openclaw|arc)(\[bot\])?$/i.test(author))) {
+    // Self-author guard. Shared isBotHandle() helper (src/lib/mention.ts)
+    // is the single source of truth for the strict pattern — same check
+    // runs again inside handleMention() for defense in depth.
+    if (isBotHandle(author)) {
       return new Response("skip self\n", { status: 200 })
     }
     await env.OPENCLAW_JOBS.send({ type: "linear-mention", commentId: payload.data.id })
@@ -437,6 +468,7 @@ async function handleGitHubWebhook(
         prNumber,
         headSha,
         installationId,
+        trigger: "opened",
       })
     }
     return new Response("queued\n", { status: 202 })
@@ -479,9 +511,6 @@ async function handleGitHubWebhook(
     if (!isCodeRabbitAuthor(c.user?.login ?? null)) {
       return new Response("skip non-cr author\n", { status: 200 })
     }
-    if (typeof c.in_reply_to_id === "number") {
-      return new Response("skip threaded reply\n", { status: 200 })
-    }
     const pr = payload.pull_request
     if (!pr || typeof pr.number !== "number" || typeof c.id !== "number" || !c.path) {
       return new Response("missing review-comment fields\n", { status: 400 })
@@ -499,6 +528,32 @@ async function handleGitHubWebhook(
     if (typeof c.commit_id === "string") reviewComment.commit_id = c.commit_id
     if (typeof c.original_commit_id === "string") {
       reviewComment.original_commit_id = c.original_commit_id
+    }
+    if (typeof c.in_reply_to_id === "number") {
+      reviewComment.in_reply_to_id = c.in_reply_to_id
+    }
+
+    // Top-level vs threaded reply routing:
+    //
+    //   in_reply_to_id == undefined → CR's primary inline comment.
+    //     Run the cr-eval handler to classify ACCEPT/SKIP_*.
+    //
+    //   in_reply_to_id present → CR is replying inside a thread. The
+    //     thread might be one Arc started (CR pushing back on a
+    //     SKIP_* verdict) or unrelated. The cr-pushback handler
+    //     fetches the thread, checks whether Arc's prior message was
+    //     SKIP_*, and if so escalates to the PR author for a
+    //     tiebreaker rather than re-evaluating itself.
+    if (typeof c.in_reply_to_id === "number") {
+      await env.OPENCLAW_JOBS.send({
+        type: "cr-pushback",
+        owner,
+        repo,
+        prNumber: pr.number,
+        installationId,
+        comment: reviewComment,
+      })
+      return new Response("queued (pushback)\n", { status: 202 })
     }
 
     await env.OPENCLAW_JOBS.send({
@@ -532,6 +587,7 @@ async function handleGitHubWebhook(
       prNumber: pr.number,
       headSha,
       installationId,
+      trigger: "review-submitted",
     })
     return new Response("queued\n", { status: 202 })
   }

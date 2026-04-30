@@ -138,3 +138,18 @@ export const MENTION_REPLY_SCHEMA = {
   },
   required: ["answer", "confidence", "abstain"],
 } as const
+
+/**
+ * cr-pushback verdict — what Arc says back when CR replies to a prior
+ * cr-eval verdict, pushing back. Either retract (Arc was wrong) or
+ * escalate to the PR author. Mirrors CrPushbackVerdict in
+ * src/lib/triage-cr.ts.
+ */
+export const CR_PUSHBACK_SCHEMA = {
+  type: "object",
+  properties: {
+    decision: { type: "string", enum: ["retract", "escalate"] },
+    message: { type: "string" },
+  },
+  required: ["decision", "message"],
+} as const

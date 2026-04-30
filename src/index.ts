@@ -187,17 +187,23 @@ export default {
    *
    * One message per invocation (`max_batch_size = 1` in wrangler.toml).
    * On success we ack; on failure we retry (Cloudflare backs off
-   * automatically up to `max_retries = 3`).
+   * automatically up to `max_retries = 3`). After max_retries the
+   * message is dropped — we log a final-attempt error explicitly so
+   * the failure is visible in Workers Logs as `dropped` instead of
+   * blending into the regular retry chatter.
    */
   async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
+    const MAX_RETRIES = 3
     for (const message of batch.messages) {
       try {
         await dispatchJob(message.body, env)
         message.ack()
       } catch (error) {
-        console.error("queue job failed", {
+        const isFinalAttempt = message.attempts >= MAX_RETRIES
+        console.error(isFinalAttempt ? "queue job dropped (max retries)" : "queue job failed (will retry)", {
           type: message.body.type,
           attempts: message.attempts,
+          maxRetries: MAX_RETRIES,
           error: String(error),
         })
         message.retry()
@@ -249,6 +255,16 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         comment: job.comment,
         env,
       })
+    default: {
+      // Exhaustiveness check — if a new JobMessage variant is added but
+      // not handled here, TypeScript flags it via the `never` type at
+      // compile time, AND we throw at runtime so a stale producer/
+      // consumer pairing surfaces loudly instead of silently acking.
+      const exhaustive: never = job
+      throw new Error(
+        `unknown queue job type: ${JSON.stringify(exhaustive).slice(0, 200)}`
+      )
+    }
   }
 }
 
@@ -296,7 +312,13 @@ async function handleLinearWebhook(
     }
     const author =
       payload.data.user?.displayName ?? payload.data.user?.name ?? null
-    if (author && (/\[bot\]$/i.test(author) || /openclaw|^arc/i.test(author))) {
+    // Self-author guard. The first regex catches any name ending in
+    // `[bot]` (Linear's standard OAuth-app suffix). The second is an
+    // anchored exact-match list for the bot's actual handles —
+    // tightened from `/openclaw|^arc/i` which incorrectly matched
+    // human names like "archie" or anyone with "openclaw" in their
+    // display name.
+    if (author && (/\[bot\]$/i.test(author) || /^(openclaw|arc)(\[bot\])?$/i.test(author))) {
       return new Response("skip self\n", { status: 200 })
     }
     await env.OPENCLAW_JOBS.send({ type: "linear-mention", commentId: payload.data.id })

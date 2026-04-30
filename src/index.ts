@@ -199,7 +199,7 @@ export default {
         await dispatchJob(message.body, env)
         message.ack()
       } catch (error) {
-        const isFinalAttempt = message.attempts >= MAX_RETRIES
+        const isFinalAttempt = message.attempts > MAX_RETRIES
         console.error(isFinalAttempt ? "queue job dropped (max retries)" : "queue job failed (will retry)", {
           type: message.body.type,
           attempts: message.attempts,

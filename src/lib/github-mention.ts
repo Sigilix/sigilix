@@ -241,7 +241,8 @@ async function fetchThread(
   const all = await client.listPullRequestReviewComments(owner, repo, prNumber)
   const byId = new Map<number, ReviewComment>()
   for (const c of all) byId.set(c.id, c)
-  const rootId = threadRootId ?? findThreadRootId(byId, commentId) ?? commentId
+  const startId = threadRootId ?? commentId
+  const rootId = findThreadRootId(byId, startId) ?? startId
   // Thread = the root + every comment that descends to it via the
   // `in_reply_to_id` chain. GitHub flattens this — replies-to-replies
   // all carry `in_reply_to_id = root_id` in practice, but we walk the

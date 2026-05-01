@@ -26,14 +26,15 @@ import { handleMention } from "./lib/mention-reply"
 import {
   bodyMentionsBot,
   getMentionTriggers,
+  isArcGithubLogin,
   isBotHandle,
-  isCodeRabbitAuthor,
 } from "./lib/mention"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview } from "./lib/triage-pr-review"
+import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 
 export interface Env {
   OPENCLAW_STATE: KVNamespace
@@ -84,14 +85,6 @@ export type JobMessage =
       prNumber: number
       headSha: string
       installationId: number
-      /**
-       * Why pr-review is firing. The two paths are independent:
-       *   "opened"            initial proactive read on PR.opened
-       *   "review-submitted"  refinement after CR submits its review
-       * Same headSha + different trigger = different dedupe key, so
-       * the second pass isn't blocked by the first's lock.
-       */
-      trigger: "opened" | "review-submitted"
     }
   | {
       type: "ci-triage"
@@ -101,6 +94,16 @@ export type JobMessage =
       runId: number
       headSha: string
       installationId: number
+    }
+  | {
+      type: "github-mention"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+      surface: GhMentionSurface
+      commentId: number
+      threadRootId?: number
     }
 
 interface LinearWebhookPayload {
@@ -151,6 +154,13 @@ interface GitHubWebhookPayload {
     commit_id?: string
     original_commit_id?: string
     pull_request_review_id?: number | null
+  }
+  // `issue_comment` events deliver an `issue` block. When the issue
+  // is a PR, `issue.pull_request` is present (otherwise it's a plain
+  // issue and we ignore the event).
+  issue?: {
+    number?: number
+    pull_request?: { url?: string } | null
   }
 }
 
@@ -238,7 +248,6 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
-        trigger: job.trigger,
       })
     case "ci-triage":
       return handleCiTriage({
@@ -248,6 +257,17 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         runId: job.runId,
         headSha: job.headSha,
         installationId: job.installationId,
+        env,
+      })
+    case "github-mention":
+      return handleGithubMention({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        installationId: job.installationId,
+        surface: job.surface,
+        commentId: job.commentId,
+        ...(job.threadRootId !== undefined ? { threadRootId: job.threadRootId } : {}),
         env,
       })
     default: {
@@ -418,9 +438,10 @@ async function handleGitHubWebhook(
       headSha,
       installationId,
     })
-    // pr-review only on initial open — synchronize/reopened/ready_for_review
-    // would race CR. The pull_request_review.submitted branch below picks up
-    // pr-review after CR finishes its review.
+    // pr-review fires only on `opened` so we don't re-review on every
+    // push. Each new push gets a pr-overview update (which PATCHes the
+    // existing top-level comment) but doesn't re-submit a fresh
+    // primary review with new inline comments.
     if (action === "opened") {
       await env.OPENCLAW_JOBS.send({
         type: "pr-review",
@@ -429,7 +450,6 @@ async function handleGitHubWebhook(
         prNumber,
         headSha,
         installationId,
-        trigger: "opened",
       })
     }
     return new Response("queued\n", { status: 202 })
@@ -464,38 +484,102 @@ async function handleGitHubWebhook(
     return new Response("queued\n", { status: 202 })
   }
 
-  // pull_request_review_comment events (CR's individual inline
-  // comments) are intentionally not handled — Arc used to evaluate
-  // each one with an ACCEPT/SKIP_* verdict, but CR's bot-loop
-  // protection skips threaded replies from other bots, so the
-  // verdict landed in a one-way conversation no human asked for.
-  // pr-review still reads CR's posted comments to avoid duplicating
-  // findings, which is the meaningful integration point.
-
-  if (event === "pull_request_review") {
-    if (payload.action !== "submitted" || !payload.review) {
-      return new Response("skip review action\n", { status: 200 })
+  // GitHub @-mention reply — top-level PR conversation thread.
+  // `issue_comment` fires for both issues and PR conversation comments;
+  // we only care when the issue is actually a PR (`issue.pull_request`
+  // is present) and the body @-mentions Arc.
+  if (event === "issue_comment") {
+    if (payload.action !== "created") {
+      return new Response("skip issue_comment action\n", { status: 200 })
     }
-    if (!isCodeRabbitAuthor(payload.review.user?.login ?? null)) {
-      return new Response("skip non-cr review\n", { status: 200 })
+    if (!payload.issue?.pull_request) {
+      return new Response("skip non-PR issue_comment\n", { status: 200 })
     }
-    const pr = payload.pull_request
-    if (!pr || typeof pr.number !== "number") {
-      return new Response("missing pr\n", { status: 400 })
-    }
-    const headSha = pr.head?.sha ?? ""
-    if (!headSha) return new Response("missing head sha\n", { status: 400 })
-    await env.OPENCLAW_JOBS.send({
-      type: "pr-review",
+    return queueGithubMention({
+      env,
+      payload,
       owner,
       repo,
-      prNumber: pr.number,
-      headSha,
       installationId,
-      trigger: "review-submitted",
+      surface: "issue",
+      prNumber: payload.issue.number,
     })
-    return new Response("queued\n", { status: 202 })
+  }
+
+  // GitHub @-mention reply — inline PR review comment thread.
+  if (event === "pull_request_review_comment") {
+    if (payload.action !== "created") {
+      return new Response("skip review_comment action\n", { status: 200 })
+    }
+    return queueGithubMention({
+      env,
+      payload,
+      owner,
+      repo,
+      installationId,
+      surface: "review-comment",
+      prNumber: payload.pull_request?.number,
+    })
   }
 
   return new Response("skipped\n", { status: 200 })
+}
+
+interface QueueGithubMentionArgs {
+  env: Env
+  payload: GitHubWebhookPayload
+  owner: string
+  repo: string
+  installationId: number
+  surface: GhMentionSurface
+  prNumber: number | undefined
+}
+
+/**
+ * Common gating for both `issue_comment.created` and
+ * `pull_request_review_comment.created`:
+ *
+ *   1. body @-mentions Arc (uses the same trigger list as Linear)
+ *   2. comment author is NOT Arc itself (prevents reply loops)
+ *   3. PR number is present
+ *
+ * On pass, enqueues a `github-mention` JobMessage. The body itself is
+ * re-fetched from GitHub at handler time so an edit between webhook
+ * delivery and processing doesn't reply to stale text.
+ */
+async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Response> {
+  const { env, payload, owner, repo, installationId, surface, prNumber } = args
+  const comment = payload.comment
+  if (!comment || typeof comment.id !== "number") {
+    return new Response("missing comment\n", { status: 400 })
+  }
+  if (typeof prNumber !== "number") {
+    return new Response("missing pr number\n", { status: 400 })
+  }
+  const body = comment.body ?? ""
+  const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
+  if (!bodyMentionsBot(body, triggers)) {
+    return new Response("no mention\n", { status: 200 })
+  }
+  // Self-author guard. We only skip Arc itself — CR or other bots
+  // can mention us and we should respond. Tighter than isBotHandle()
+  // which would also match CR.
+  if (isArcGithubLogin(comment.user?.login ?? null)) {
+    return new Response("skip self\n", { status: 200 })
+  }
+
+  const message: JobMessage = {
+    type: "github-mention",
+    owner,
+    repo,
+    prNumber,
+    installationId,
+    surface,
+    commentId: comment.id,
+    ...(typeof comment.in_reply_to_id === "number"
+      ? { threadRootId: comment.in_reply_to_id }
+      : {}),
+  }
+  await env.OPENCLAW_JOBS.send(message)
+  return new Response("queued\n", { status: 202 })
 }

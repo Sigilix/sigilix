@@ -60,10 +60,24 @@ export const PR_REVIEW_SCHEMA = {
           line: { type: "integer", minimum: 1 },
           startLine: { type: "integer", minimum: 1 },
           score: { type: "integer", minimum: 1, maximum: 5 },
+          category: {
+            type: "string",
+            enum: [
+              "logic",
+              "security",
+              "performance",
+              "error-handling",
+              "testing",
+              "complexity",
+              "style",
+              "syntax",
+              "docs",
+            ],
+          },
           headline: { type: "string" },
           body: { type: "string" },
         },
-        required: ["path", "line", "score", "headline", "body"],
+        required: ["path", "line", "score", "category", "headline", "body"],
       },
     },
   },
@@ -103,6 +117,27 @@ export const ISSUE_TRIAGE_SCHEMA = {
  * Mirrors MentionVerdict in src/lib/mention-reply.ts.
  */
 export const MENTION_REPLY_SCHEMA = {
+  type: "object",
+  properties: {
+    answer: { type: "string" },
+    confidence: { type: "integer", minimum: 1, maximum: 5 },
+    abstain: { type: "boolean" },
+  },
+  required: ["answer", "confidence", "abstain"],
+} as const
+
+/**
+ * GitHub @-mention reply verdict (greptile-style verification).
+ * Mirrors GithubMentionVerdict in src/lib/github-mention.ts.
+ *
+ * Same shape as MENTION_REPLY_SCHEMA — the surface is different
+ * (PR thread vs Linear comment), but the JSON contract is the same:
+ * a single Markdown body + confidence + abstain. The structural
+ * discipline (verdict-tagged headers, code spans, etc.) lives in
+ * the prompt, not the schema, because the model's body is freeform
+ * Markdown and we only constrain the envelope.
+ */
+export const GITHUB_MENTION_SCHEMA = {
   type: "object",
   properties: {
     answer: { type: "string" },

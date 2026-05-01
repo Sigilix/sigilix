@@ -33,14 +33,22 @@ The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and
 3. Asks the model for a Greptile-shaped diagnosis (root cause / likely fix / failure excerpt / confidence).
 4. Posts only when confidence is `high` or `medium`; updates in place via the `<!-- openclaw:ci-triage -->` marker.
 
-**GitHub: Proactive primary review** (`pull_request.opened` AND `pull_request_review.submitted` from CR)
-1. Fetches PR diff + every existing CR inline comment.
-2. Asks the model to identify only what CR missed (anti-redundancy is a hard rule in the prompt). Each finding gets a 1–5 score.
+**GitHub: Proactive primary review** (`pull_request.opened`)
+1. Fetches PR diff and reviews it in isolation — no awareness of other reviewers.
+2. Each finding gets a 1–5 score and a category (`logic`, `security`, `performance`, `error-handling`, `testing`, `complexity`, `style`, `syntax`, `docs`). The category leads the inline comment as `**category:**` (greptile-style).
 3. Submits ONE review via `POST /pulls/{n}/reviews` with all findings as inline comments. Approval state is derived from the max finding score:
    - max 5 → `REQUEST_CHANGES`
    - max 3–4 → `COMMENT`
    - max 1–2 (or no findings) → `APPROVE`
 4. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review.
+
+**GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@arc`)
+1. Filters on the comment body before queueing — most PR comments don't @ Arc.
+2. Fetches PR + diff + the source comment + surrounding thread (issue comment thread for top-level, the inline review-comment chain for inline mentions).
+3. Runs Vectorize retrieval against the asker's question, scoped to the repo's namespace.
+4. Calls Ollama with the greptile-style verification prompt; the model picks a verdict tag per concern (`✅ FIXED`, `↩️ WITHDRAWN`, `⚠️ STANDS`, `🔍 Analysis`, `💬 Answer`, etc.) and writes the prose itself.
+5. Posts on the right surface: top-level → new issue comment; inline → reply threaded under the root review comment.
+6. Skips self-authored comments via `isArcGithubLogin()`. Other bots (CR, etc.) CAN mention Arc and get a response.
 
 Routes: `/` (liveness), `/linear/webhook`, `/linear/manual`, `/github/webhook`. No daemon, no polling, no key on disk.
 
@@ -59,7 +67,7 @@ The three ported PR-side scripts (`triage-ci`, `triage-cr`, `triage-pr-overview`
 ## Architecture
 
 ```text
-Linear (Issue.create / Comment.create)        GitHub (PR / workflow_run / review_comment / review)
+Linear (Issue.create / Comment.create)        GitHub (PR / workflow_run / review / issue_comment / review_comment)
     │ HMAC-signed POST                            │ HMAC-signed POST (X-Hub-Signature-256)
     ▼                                             ▼
               Cloudflare Worker — fetch() handler
@@ -232,9 +240,9 @@ Go to <https://github.com/organizations/Arc-and-Anchor/settings/apps> → **New 
 
 **Required webhook events:**
 - `Pull request` (opened, synchronize, ready_for_review, reopened)
-- `Pull request review comment` (CR inline-comment evaluator)
-- `Pull request review` (CR review.submitted → re-run primary review)
 - `Workflow run` (CI failure triage)
+- `Issue comment` (top-level PR conversation @-mentions)
+- `Pull request review comment` (inline review-comment @-mentions)
 
 Set the webhook URL to `https://openclaw-worker.<your-account>.workers.dev/github/webhook` and copy the webhook secret to `GITHUB_WEBHOOK_SECRET` (step 5 above).
 
@@ -309,7 +317,8 @@ openclaw-worker/
     ├── index.ts                           # main fetch handler — routing + HMAC verify
     ├── prompts/
     │   ├── issue-triage.ts                # Linear issue triage prompt
-    │   ├── mention-reply.ts               # @-mention reply prompt
+    │   ├── mention-reply.ts               # Linear @-mention reply prompt
+    │   ├── github-mention.ts              # GitHub PR @-mention reply prompt (greptile-style verification)
     │   ├── pr-overview.ts                 # GitHub PR top-level overview
     │   ├── ci-triage.ts                   # GitHub CI failure diagnosis
     │   └── pr-review.ts                   # Proactive primary reviewer (greptile-style)
@@ -329,6 +338,7 @@ openclaw-worker/
         ├── triage-pr-overview.ts          # GitHub PR overview pipeline
         ├── triage-ci.ts                   # GitHub CI failure pipeline
         ├── triage-pr-review.ts            # GitHub proactive primary review pipeline
+        ├── github-mention.ts              # GitHub PR @-mention reply pipeline
         └── dedupe.ts                      # KV-backed marker lookup / set
 ```
 

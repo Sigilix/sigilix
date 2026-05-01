@@ -116,8 +116,9 @@ max_batch_timeout = 1
 #
 # Required GitHub App webhook events:
 #   pull_request                  (opened, synchronize, ready_for_review, reopened)
-#   pull_request_review           (CR review.submitted → re-run primary review)
 #   workflow_run                  (CI failure triage)
+#   issue_comment                 (top-level PR conversation @-mentions)
+#   pull_request_review_comment   (inline PR review comment @-mentions)
 #
 # Optional (other):
 #   OPENCLAW_MODEL                Override the default model (defaults to glm-5.1:cloud)

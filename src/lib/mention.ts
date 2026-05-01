@@ -16,6 +16,8 @@ const DEFAULT_TRIGGERS = [
   "arc",
   "arc[bot]",
   "Arc[bot]",
+  "arc-copilot",
+  "arc-copilot[bot]",
   "openclaw",
   "openclaw[bot]",
   "OpenClaw[bot]",
@@ -133,4 +135,20 @@ export function isLikelyBotAuthor(displayName: string | null | undefined): boole
 export function isCodeRabbitAuthor(login: string | null | undefined): boolean {
   if (!login) return false
   return /^coderabbit/i.test(login)
+}
+
+/**
+ * Strict Arc-on-GitHub login detector. Matches `arc[bot]`,
+ * `arc-copilot[bot]`, `openclaw[bot]` (legacy), and the bare
+ * variants without the `[bot]` suffix.
+ *
+ * Used to skip self-authored @-mentions on GitHub PR threads — when
+ * Arc posts a review summary that contains a "@arc" string in a
+ * code-fenced suggestion or quoted prior comment, the resulting
+ * webhook should NOT re-fire the mention handler. Tighter than
+ * isBotHandle() which also matches CodeRabbit and other bots.
+ */
+export function isArcGithubLogin(login: string | null | undefined): boolean {
+  if (!login) return false
+  return /^(arc|arc-copilot|openclaw)(\[bot\])?$/i.test(login)
 }

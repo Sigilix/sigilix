@@ -21,16 +21,25 @@ name: Index codebase to Vectorize (reusable)
 #       secrets:
 #         CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 #         CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
+#         OPENCLAW_REPO_TOKEN: ${{ secrets.OPENCLAW_REPO_TOKEN }}
 #
 # Note: triggers on push to dev OR main. dev is the active development
 # branch; main is customer-facing. Both reindex into the same namespace
 # (`<repo-name>` lowercased) — whichever branch changed last wins,
 # matching what the team is actually working on at any given moment.
 #
-# The org-level secrets CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_AI_TOKEN
-# (configured at https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions)
-# need to be made available to each repo that calls this. The token
-# requires `Account → Workers AI → Read` and `Account → Vectorize → Edit`.
+# Required org-level secrets (configured at
+# https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions
+# with visibility:all so every calling repo can read them):
+#
+#   CLOUDFLARE_ACCOUNT_ID    Cloudflare account UUID
+#   CLOUDFLARE_AI_TOKEN      API token with Workers AI:Read + Vectorize:Edit
+#   OPENCLAW_REPO_TOKEN      Fine-grained PAT with Contents:Read on
+#                            Arc-and-Anchor/openclaw-worker. Required because
+#                            the runner's default GITHUB_TOKEN is scoped to
+#                            the calling repo only and can't clone the private
+#                            indexer source repo. Without it the second
+#                            checkout step fails with "Repository not found."
 
 on:
   workflow_call:
@@ -49,6 +58,10 @@ on:
       CLOUDFLARE_ACCOUNT_ID:
         required: true
       CLOUDFLARE_API_TOKEN:
+        required: true
+      # Fine-grained PAT with Contents:Read on Arc-and-Anchor/openclaw-worker.
+      # See header comment for why this is needed.
+      OPENCLAW_REPO_TOKEN:
         required: true
 
 jobs:
@@ -69,6 +82,10 @@ jobs:
           ref: main
           path: openclaw-worker
           fetch-depth: 1
+          # The default GITHUB_TOKEN is scoped to the calling repo and
+          # can't read this private indexer repo. The fine-grained PAT
+          # at OPENCLAW_REPO_TOKEN has Contents:Read on openclaw-worker.
+          token: ${{ secrets.OPENCLAW_REPO_TOKEN }}
 
       - uses: actions/setup-node@v4
         with:

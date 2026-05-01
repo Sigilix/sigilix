@@ -13,7 +13,12 @@
 # https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions
 # with access granted to all repos that need to index):
 #   - CLOUDFLARE_ACCOUNT_ID
-#   - CLOUDFLARE_AI_TOKEN  (Workers AI Read + Vectorize Edit)
+#   - CLOUDFLARE_AI_TOKEN     (Workers AI Read + Vectorize Edit)
+#   - OPENCLAW_REPO_TOKEN     (fine-grained PAT, Contents:Read on
+#                              Arc-and-Anchor/openclaw-worker — required
+#                              by the reusable workflow even when self-
+#                              indexing, since the second checkout
+#                              clones the indexer source)
 
 name: OpenClaw codebase index
 
@@ -28,3 +33,4 @@ jobs:
     secrets:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
+      OPENCLAW_REPO_TOKEN: ${{ secrets.OPENCLAW_REPO_TOKEN }}

@@ -69,10 +69,18 @@ export interface TriagePrReviewArgs {
   headSha: string
   installationId: number
   env: Env
+  /**
+   * Why pr-review is firing. The two paths fire independently:
+   *   "opened"            initial proactive read on PR.opened
+   *   "review-submitted"  refinement after CR submits its review
+   * Same headSha + different trigger = different dedupe key, so
+   * the second pass isn't blocked by the first's lock.
+   */
+  trigger: "opened" | "review-submitted"
 }
 
 export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env } = args
+  const { owner, repo, prNumber, headSha, installationId, env, trigger } = args
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-review] ${label} +${Date.now() - t0}ms`, {
@@ -80,15 +88,18 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
       repo,
       prNumber,
       headSha: headSha.slice(0, 7),
+      trigger,
     })
   }
 
   since("start")
 
   // Concurrent-run guard with try/finally release so queue retries
-  // can re-attempt on failure. Keyed on (prNumber, headSha) — a new
-  // push (different SHA) gets a different key and re-runs as expected.
-  const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
+  // can re-attempt on failure. Keyed on (prNumber, headSha, trigger):
+  // a new push (different SHA) gets a different key, AND the post-CR
+  // re-run uses a different trigger so it isn't blocked by the
+  // already-completed `opened` pass on the same head SHA.
+  const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}#${trigger}`
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
     console.log(`pr-review already ran for ${dedupeKey} — skipping`)
@@ -332,67 +343,84 @@ export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
   return "APPROVE"
 }
 
+/**
+ * Greptile-style review body. Prose-first with structured headers and
+ * NO mechanical "Findings: N (max score N)" footer or numerical
+ * confidence score in the body. The model's confidenceReason becomes
+ * the lead, the summary is sub-text, and findings live as inline
+ * comments below — so the body itself reads like a senior reviewer's
+ * one-paragraph take, not a structured report.
+ *
+ * Reference shape (per Codex's audit of greptile-apps output):
+ *   ### Arc Summary
+ *   <prose paragraph>
+ *
+ *   <optional approval note when applicable>
+ *
+ *   <optional `### Important Files Changed` section, only when useful>
+ *
+ *   <"See N findings inline below" pointer when findings exist>
+ */
 function formatReviewBody(
   verdict: PrReviewVerdict,
-  prAuthor: string | null,
-  event: ReviewEvent
+  _prAuthor: string | null,
+  _event: ReviewEvent
 ): string {
-  const lines: string[] = ["<!-- openclaw:pr-review -->"]
-  const tag =
-    event === "APPROVE"
-      ? "READY"
-      : event === "REQUEST_CHANGES"
-        ? "BLOCKER"
-        : "REVIEW"
-  lines.push(`⚓ [${tag}] ${verdict.summary}`)
+  // Body is greptile-styled and prose-only. The structure is fixed
+  // (marker, header, model's summary, model's confidence reason,
+  // finding count pointer) but every word inside is the model's. No
+  // hardcoded author notes ("@author — items below are non-blocking,
+  // approving") because canned dialogue feels mechanical when it
+  // recurs across PRs. The model's summary already addresses the
+  // engineer reviewing the PR — that's the message.
+  const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
+  lines.push("### Arc Summary")
   lines.push("")
-  if (event === "APPROVE" && prAuthor && !prAuthor.toLowerCase().includes("[bot]")) {
-    if (verdict.findings.length === 0) {
-      lines.push(
-        `@${prAuthor} — nothing CR missed that I'd hold this on. Approving so you can merge when ready.`
-      )
-    } else {
-      lines.push(
-        `@${prAuthor} — flagging the items below for visibility, but none are blockers. Up to you whether to apply.`
-      )
-    }
-    lines.push("")
-  } else if (event === "REQUEST_CHANGES" && prAuthor && !prAuthor.toLowerCase().includes("[bot]")) {
-    lines.push(`@${prAuthor} — at least one finding below is a blocker. Worth a look before merge.`)
-    lines.push("")
-  }
-  lines.push(`**Confidence:** ${verdict.confidence}/5`)
+  lines.push(verdict.summary)
   if (verdict.confidenceReason) {
+    lines.push("")
     lines.push(verdict.confidenceReason)
   }
   if (verdict.findings.length > 0) {
     lines.push("")
     lines.push(
-      `**Findings:** ${verdict.findings.length} (max score ${maxScore(verdict.findings)})`
+      `_${verdict.findings.length} ${verdict.findings.length === 1 ? "finding" : "findings"} inline below._`
     )
   }
   return lines.join("\n")
 }
 
+/**
+ * Inline finding comment, greptile-styled. Each finding gets a
+ * priority label as the lead — `Bug (P1)`, `Bug (P2)`, `Nit` —
+ * derived from the model's 1-5 score, then prose, then any
+ * \`\`\`suggestion block the model emitted in the body.
+ *
+ * Score → label mapping (Codex-suggested greptile shape):
+ *   5 → Bug (P1)         critical, do not merge
+ *   4 → Bug (P2)         important, address before merge
+ *   3 → Style (P3)       quality concern, your call
+ *   2 → Nit              minor / opinion
+ *   1 → Note             pure observation
+ */
 function formatFindingComment(finding: PrReviewFinding): string {
-  // Inline reply marker so we can detect/dedupe later if needed; also
-  // signals to readers that this is OpenClaw's primary-review pass and
-  // not a CR comment. Suggestion blocks (when present in body) pass
-  // through unchanged so GitHub renders them as one-click apply.
-  const lines: string[] = [`<!-- openclaw:pr-review-finding -->`]
-  lines.push(`⚓ [score ${finding.score}/5] ${finding.headline}`)
+  const label =
+    finding.score >= 5
+      ? "Bug (P1)"
+      : finding.score >= 4
+        ? "Bug (P2)"
+        : finding.score >= 3
+          ? "Style (P3)"
+          : finding.score >= 2
+            ? "Nit"
+            : "Note"
+  const lines: string[] = ["<!-- openclaw:pr-review-finding -->"]
+  lines.push(`**${label}** — ${finding.headline}`)
   lines.push("")
   lines.push(finding.body)
   return lines.join("\n")
 }
 
-function maxScore(findings: PrReviewFinding[]): number {
-  let max = 0
-  for (const f of findings) {
-    if (f.score > max) max = f.score
-  }
-  return max
-}
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {

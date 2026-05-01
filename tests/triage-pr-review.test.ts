@@ -168,14 +168,37 @@ describe("buildReviewSubmission", () => {
     expect(out.comments).toBeUndefined()
   })
 
-  it("renders the dedupe marker, severity tag, and confidence in the body", () => {
+  it("renders the dedupe marker, summary header, and confidence reason in the body", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("<!-- openclaw:pr-review -->")
-    expect(out.body).toContain("[BLOCKER]")
-    expect(out.body).toContain("**Confidence:** 2/5")
+    expect(out.body).toContain("### Arc Summary")
+    expect(out.body).toContain(verdict.summary)
+    expect(out.body).toContain(verdict.confidenceReason)
+    // Greptile-style format: no numerical confidence score in the body,
+    // no `[BLOCKER]` / `[READY]` tag, no "Findings: N (max score N)"
+    // footer. Findings live as inline comments below.
+    expect(out.body).not.toContain("[BLOCKER]")
+    expect(out.body).not.toContain("**Confidence:**")
+    expect(out.body).not.toContain("max score")
   })
 
-  it("uses the READY tag + author mention on clean approval", () => {
+  it("body is prose-only — no hardcoded author dialogue", () => {
+    // The body lets the model's summary speak. We don't append
+    // canned `@author — flagging items below for visibility...`
+    // dialogue because it reads mechanical when it recurs across PRs.
+    // Author-facing tone is the model's responsibility via `summary`.
+    const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
+    expect(out.body).not.toMatch(/@alice — /)
+    expect(out.body).not.toMatch(/non-blocking/i)
+    expect(out.body).not.toMatch(/Approving\.$/m)
+  })
+
+  it("renders the finding-count pointer when there are findings", () => {
+    const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
+    expect(out.body).toMatch(/1 finding inline below/i)
+  })
+
+  it("omits the finding-count pointer when there are zero findings", () => {
     const empty: PrReviewVerdict = {
       summary: "Looks clean.",
       confidence: 5,
@@ -183,8 +206,7 @@ describe("buildReviewSubmission", () => {
       findings: [],
     }
     const out = buildReviewSubmission({ verdict: empty, prAuthor: "alice", headSha: "abc" })
-    expect(out.body).toContain("[READY]")
-    expect(out.body).toContain("@alice")
+    expect(out.body).not.toMatch(/inline below/)
   })
 
   it("does not @-mention bot authors", () => {

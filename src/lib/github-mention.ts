@@ -116,13 +116,16 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
 
   // Codebase retrieval scoped to the repo. The Vectorize namespace
   // matches the repo name lowercased (same convention scripts/index-
-  // repo.mjs uses). Soft-fails to empty when retrieval errors or the
+  // repo.mjs uses). teamKeyToNamespace() lowercases as a fallback,
+  // but normalize at the boundary too so a case-sensitive entry in
+  // OPENCLAW_TEAM_REPO_MAP can't accidentally collide with a mixed-
+  // case repo name. Soft-fails to empty when retrieval errors or the
   // repo isn't indexed — the prompt instructs the model to abstain
   // rather than fabricate when chunks are empty.
   const retrievalText = `${meta.title}\n\n${question}`
   const chunks = await retrieveChunks({
     text: retrievalText,
-    teamKey: repo,
+    teamKey: repo.toLowerCase(),
     env,
   })
   since("retrieval-done", { chunks: chunks.length })
@@ -241,6 +244,10 @@ async function fetchThread(
   const all = await client.listPullRequestReviewComments(owner, repo, prNumber)
   const byId = new Map<number, ReviewComment>()
   for (const c of all) byId.set(c.id, c)
+  // Always walk up from whichever ID we have. The webhook's
+  // `in_reply_to_id` points to the *immediate* parent, not necessarily
+  // the thread root — replies to mid-chain comments would otherwise
+  // omit the real root + everything above it from the prompt context.
   const startId = threadRootId ?? commentId
   const rootId = findThreadRootId(byId, startId) ?? startId
   // Thread = the root + every comment that descends to it via the

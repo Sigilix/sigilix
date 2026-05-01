@@ -240,7 +240,6 @@ Go to <https://github.com/organizations/Arc-and-Anchor/settings/apps> → **New 
 
 **Required webhook events:**
 - `Pull request` (opened, synchronize, ready_for_review, reopened)
-- `Pull request review` (re-run primary review on CR's submission)
 - `Workflow run` (CI failure triage)
 - `Issue comment` (top-level PR conversation @-mentions)
 - `Pull request review comment` (inline review-comment @-mentions)

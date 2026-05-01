@@ -1,8 +1,8 @@
-// Proactive primary review (greptile-style). CodeRabbit is the team's
-// main reviewer; OpenClaw fires AFTER CR has posted its comments and
-// surfaces only what CR missed. Each finding is anchored to a specific
-// line + scored 1-5 (matching pr-overview's scoring vocabulary), with
-// an optional `\`\`\`suggestion` block when the fix is mechanical.
+// Proactive primary review (greptile-style). Reviews the PR in
+// isolation — does its own pass independent of CR or any other
+// reviewer. Each finding is anchored to a specific line, scored 1-5,
+// and tagged with a category (logic / style / security / etc.) that
+// leads the inline comment.
 //
 // Submits a single review via POST /pulls/{n}/reviews so all findings
 // arrive as one coherent unit on GitHub. Approval state is derived from
@@ -15,7 +15,6 @@
 //
 // Triggers (wired in src/index.ts):
 //   pull_request.opened              first review pass when PR opens
-//   pull_request_review.submitted    re-run after CR finishes its review
 //   pull_request.synchronize         re-run after each push
 //
 // Dedupe is keyed on (prNumber, headSha) — same head sha + same PR =
@@ -25,7 +24,6 @@ import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import {
   GitHubClient,
-  type ReviewComment,
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
@@ -46,11 +44,35 @@ const LIMITS = {
 
 type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
 
+export type FindingCategory =
+  | "logic"
+  | "security"
+  | "performance"
+  | "error-handling"
+  | "testing"
+  | "complexity"
+  | "style"
+  | "syntax"
+  | "docs"
+
+export const FINDING_CATEGORIES: ReadonlySet<FindingCategory> = new Set([
+  "logic",
+  "security",
+  "performance",
+  "error-handling",
+  "testing",
+  "complexity",
+  "style",
+  "syntax",
+  "docs",
+])
+
 export interface PrReviewFinding {
   path: string
   line: number
   startLine?: number
   score: number
+  category: FindingCategory
   headline: string
   body: string
 }
@@ -69,18 +91,10 @@ export interface TriagePrReviewArgs {
   headSha: string
   installationId: number
   env: Env
-  /**
-   * Why pr-review is firing. The two paths fire independently:
-   *   "opened"            initial proactive read on PR.opened
-   *   "review-submitted"  refinement after CR submits its review
-   * Same headSha + different trigger = different dedupe key, so
-   * the second pass isn't blocked by the first's lock.
-   */
-  trigger: "opened" | "review-submitted"
 }
 
 export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env, trigger } = args
+  const { owner, repo, prNumber, headSha, installationId, env } = args
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-review] ${label} +${Date.now() - t0}ms`, {
@@ -88,18 +102,15 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
       repo,
       prNumber,
       headSha: headSha.slice(0, 7),
-      trigger,
     })
   }
 
   since("start")
 
   // Concurrent-run guard with try/finally release so queue retries
-  // can re-attempt on failure. Keyed on (prNumber, headSha, trigger):
-  // a new push (different SHA) gets a different key, AND the post-CR
-  // re-run uses a different trigger so it isn't blocked by the
-  // already-completed `opened` pass on the same head SHA.
-  const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}#${trigger}`
+  // can re-attempt on failure. Keyed on (prNumber, headSha) — a new
+  // push (different SHA) gets a different key and re-runs as expected.
+  const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
     console.log(`pr-review already ran for ${dedupeKey} — skipping`)
@@ -114,28 +125,17 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
     const client = await buildClient(env, installationId)
     since("auth-ready")
 
-    const [meta, diff, allReviewComments] = await Promise.all([
+    const [meta, diff] = await Promise.all([
       client.getPullRequest(owner, repo, prNumber),
       client.getPullRequestDiff(owner, repo, prNumber),
-      client
-        .listPullRequestReviewComments(owner, repo, prNumber)
-        .catch(() => [] as ReviewComment[]),
     ])
-    since(`pr-fetched-${allReviewComments.length}-cr-comments`)
-
-    // Filter to CR-authored comments. Other inline comments (human
-    // reviewers, Arc itself) aren't part of the "what did CR miss"
-    // exclusion set — they're separate signals.
-    const crComments = allReviewComments.filter((c) =>
-      typeof c.user?.login === "string" && /^coderabbit/i.test(c.user.login)
-    )
+    since("pr-fetched")
 
     const prompt = buildPrompt({
       prNumber,
       title: meta.title,
       body: meta.body ?? "",
       diff,
-      crComments,
     })
 
     const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -186,7 +186,6 @@ interface PromptCtx {
   title: string
   body: string
   diff: string
-  crComments: ReviewComment[]
 }
 
 function buildPrompt(ctx: PromptCtx): string {
@@ -203,27 +202,9 @@ function buildPrompt(ctx: PromptCtx): string {
     "[PR DIFF]",
     truncate(ctx.diff, LIMITS.prDiff),
     "",
-    "[EXISTING CR COMMENTS — DO NOT DUPLICATE]",
+    "[OUTPUT]",
+    "Return only the JSON object. No prose, no Markdown fence.",
   ]
-
-  if (ctx.crComments.length === 0) {
-    sections.push("(none — CR has not posted any inline comments on this PR)")
-  } else {
-    let remaining = LIMITS.crCommentsBlock
-    for (const c of ctx.crComments) {
-      if (remaining <= 0) {
-        sections.push("(more CR comments omitted due to budget)")
-        break
-      }
-      const line = c.line ?? c.original_line ?? "?"
-      const body = truncate(c.body ?? "", LIMITS.crCommentBody)
-      const block = `--- ${c.path}:${line} (CR comment ${c.id}) ---\n${body}`
-      remaining -= block.length
-      sections.push(block)
-    }
-  }
-
-  sections.push("", "[OUTPUT]", "Return only the JSON object. No prose, no Markdown fence.")
   return sections.join("\n")
 }
 
@@ -263,9 +244,17 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     const headline = typeof finding.headline === "string" ? finding.headline.trim() : ""
     const body = typeof finding.body === "string" ? finding.body.trim() : ""
     const scoreRaw = Number(finding.score)
+    const categoryRaw = typeof finding.category === "string" ? finding.category.trim().toLowerCase() : ""
     if (!path || !Number.isFinite(line) || line <= 0) continue
     if (!headline || !body) continue
     if (!Number.isFinite(scoreRaw) || scoreRaw < 1 || scoreRaw > 5) continue
+    // Default to "logic" when the model omits or returns an unknown
+    // category — better than dropping the finding entirely. The schema
+    // enforces the enum at decode time, so this fallback only catches
+    // schema-bypass paths (jsonrepair, etc.).
+    const category: FindingCategory = FINDING_CATEGORIES.has(categoryRaw as FindingCategory)
+      ? (categoryRaw as FindingCategory)
+      : "logic"
     const startLineRaw = Number(finding.startLine)
     const validStartLine =
       Number.isFinite(startLineRaw) && startLineRaw > 0 && startLineRaw < line
@@ -275,6 +264,7 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
       path,
       line: Math.floor(line),
       score: Math.max(1, Math.min(5, Math.round(scoreRaw))),
+      category,
       headline,
       body,
     }
@@ -391,31 +381,16 @@ function formatReviewBody(
 }
 
 /**
- * Inline finding comment, greptile-styled. Each finding gets a
- * priority label as the lead — `Bug (P1)`, `Bug (P2)`, `Nit` —
- * derived from the model's 1-5 score, then prose, then any
- * \`\`\`suggestion block the model emitted in the body.
- *
- * Score → label mapping (Codex-suggested greptile shape):
- *   5 → Bug (P1)         critical, do not merge
- *   4 → Bug (P2)         important, address before merge
- *   3 → Style (P3)       quality concern, your call
- *   2 → Nit              minor / opinion
- *   1 → Note             pure observation
+ * Inline finding comment, greptile-style. The category leads as
+ * \`**category:**\` (logic, style, security, performance, etc.) so
+ * a reviewer can scan a thread and immediately see what kind of
+ * concern it is. Severity is implicit in the body / approval state,
+ * not in the inline tag — that's how greptile-apps does it. Body and
+ * any \`\`\`suggestion block flow underneath verbatim.
  */
 function formatFindingComment(finding: PrReviewFinding): string {
-  const label =
-    finding.score >= 5
-      ? "Bug (P1)"
-      : finding.score >= 4
-        ? "Bug (P2)"
-        : finding.score >= 3
-          ? "Style (P3)"
-          : finding.score >= 2
-            ? "Nit"
-            : "Note"
   const lines: string[] = ["<!-- openclaw:pr-review-finding -->"]
-  lines.push(`**${label}** — ${finding.headline}`)
+  lines.push(`**${finding.category}:** ${finding.headline}`)
   lines.push("")
   lines.push(finding.body)
   return lines.join("\n")

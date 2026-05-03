@@ -150,13 +150,19 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
 
     const verdict = parsePrReviewResponse(response)
     if (!verdict) {
+      // Throw — don't silently return. Silent return acks the queue
+      // message and produces no formal review and no visible failure
+      // signal (PR #19's actual failure mode). Throwing routes through
+      // the queue handler's MAX_RETRIES + "queue job dropped" log so
+      // operators see the failure, and a transient Ollama hiccup gets
+      // a re-attempt before being declared dead.
       console.error("pr-review verdict did not parse", {
         owner,
         repo,
         prNumber,
         responseLength: response.length,
       })
-      return
+      throw new Error("pr-review verdict did not parse")
     }
 
     const reviewBody = buildReviewSubmission({
@@ -329,7 +335,12 @@ export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
     if (f.score > max) max = f.score
   }
   if (max >= 5) return "REQUEST_CHANGES"
-  if (max >= 3) return "COMMENT"
+  // score-3 = "quality / maintainability concern" (magic constants,
+  // inconsistent error handling, missing tests). The model finds one
+  // of these on almost every PR — gating APPROVE on `max <= 2` made
+  // arc emit COMMENT on 5 of every 6 PRs even when the diff was clean.
+  // score-3 nits are advisory; only score-4+ blocks the formal APPROVE.
+  if (max >= 4) return "COMMENT"
   return "APPROVE"
 }
 

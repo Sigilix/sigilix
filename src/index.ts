@@ -495,11 +495,12 @@ async function handleGitHubWebhook(
       headSha,
       installationId,
     })
-    // pr-review fires only on `opened` so we don't re-review on every
-    // push. Each new push gets a pr-overview update (which PATCHes the
-    // existing top-level comment) but doesn't re-submit a fresh
-    // primary review with new inline comments.
-    if (action === "opened") {
+    // pr-review fires on `opened` AND `ready_for_review` so we don't
+    // re-review on every push. Including `ready_for_review` catches
+    // PRs opened as draft — the original `opened` was skipped at the
+    // draft check above, so without this branch the PR would only get
+    // a pr-overview when it flips to ready, no formal review.
+    if (action === "opened" || action === "ready_for_review") {
       await env.OPENCLAW_JOBS.send({
         type: "pr-review",
         owner,

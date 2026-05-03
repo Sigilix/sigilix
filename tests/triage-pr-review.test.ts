@@ -105,12 +105,15 @@ describe("chooseReviewEvent", () => {
     expect(chooseReviewEvent([f(1), f(2), f(2)])).toBe("APPROVE")
   })
 
-  it("COMMENT when max score is 3", () => {
-    expect(chooseReviewEvent([f(2), f(3)])).toBe("COMMENT")
+  it("APPROVE when max score is 3 (maintainability nits are non-blocking)", () => {
+    expect(chooseReviewEvent([f(2), f(3)])).toBe("APPROVE")
+    expect(chooseReviewEvent([f(3)])).toBe("APPROVE")
+    expect(chooseReviewEvent([f(3), f(3), f(3)])).toBe("APPROVE")
   })
 
   it("COMMENT when max score is 4", () => {
     expect(chooseReviewEvent([f(4), f(2)])).toBe("COMMENT")
+    expect(chooseReviewEvent([f(4), f(3)])).toBe("COMMENT")
   })
 
   it("REQUEST_CHANGES when any finding is score 5", () => {

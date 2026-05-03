@@ -30,11 +30,7 @@ interface Verdict {
   severity: string
   estimate: string
   labels: string[]
-  summary: string
-  approach: string
-  relevantFiles: string[]
-  research: string | undefined
-  diagram: string | undefined
+  body: string
   improvedDescription: string | undefined
 }
 
@@ -103,7 +99,7 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
     return
   }
 
-  const body = formatComment({ verdict, author: issue.creator?.displayName ?? null })
+  const body = formatComment({ verdict })
 
   let commentId: string
   if (existingComment) {
@@ -191,13 +187,13 @@ function truncate(value: string, max: number, marker = "\n[…truncated…]"): s
 }
 
 function parseVerdict(text: string): Verdict | null {
-  let body = text.trim()
-  const fence = body.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  if (fence?.[1]) body = fence[1].trim()
+  let raw = text.trim()
+  const fence = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
+  if (fence?.[1]) raw = fence[1].trim()
 
   let parsed: unknown
   try {
-    parsed = JSON.parse(body)
+    parsed = JSON.parse(raw)
   } catch {
     return null
   }
@@ -205,9 +201,8 @@ function parseVerdict(text: string): Verdict | null {
   const obj = parsed as Record<string, unknown>
 
   const headline = typeof obj.headline === "string" ? obj.headline.trim() : ""
-  const summary = typeof obj.summary === "string" ? obj.summary.trim() : ""
-  const approach = typeof obj.approach === "string" ? obj.approach.trim() : ""
-  if (!headline || !summary) return null
+  const body = typeof obj.body === "string" ? obj.body.trim() : ""
+  if (!headline || !body) return null
 
   const severity = typeof obj.severity === "string" ? obj.severity.toUpperCase() : "P2"
   const estimate = typeof obj.estimate === "string" ? obj.estimate : "S"
@@ -224,23 +219,6 @@ function parseVerdict(text: string): Verdict | null {
         .filter(Boolean)
         .slice(0, MAX_LABELS)
     : []
-  const relevantFiles = Array.isArray(obj.relevantFiles)
-    ? obj.relevantFiles.filter((p): p is string => typeof p === "string" && p.trim().length > 0)
-    : []
-  const research =
-    typeof obj.research === "string" && obj.research.trim().length > 0
-      ? obj.research.trim()
-      : undefined
-  const sanitizedDiagram =
-    typeof obj.diagram === "string"
-      ? obj.diagram
-          .trim()
-          .replace(/^```(?:mermaid)?\s*/i, "")
-          .replace(/\s*```$/i, "")
-          .replace(/```+/g, "")
-          .trim()
-      : ""
-  const diagram = sanitizedDiagram.length > 0 ? sanitizedDiagram : undefined
 
   const improvedDescription =
     typeof obj.improvedDescription === "string" && obj.improvedDescription.trim().length > 0
@@ -252,11 +230,7 @@ function parseVerdict(text: string): Verdict | null {
     severity,
     estimate,
     labels,
-    summary,
-    approach,
-    relevantFiles,
-    research,
-    diagram,
+    body,
     improvedDescription,
   }
 }
@@ -321,41 +295,15 @@ function preserveMedia(rewrite: string, originalBody: string): string {
 
 interface FormatArgs {
   verdict: Verdict
-  author: string | null
 }
 
-function formatComment({ verdict, author }: FormatArgs): string {
-  const tag = `${verdict.severity} · ${verdict.estimate}`
-  const lines: string[] = []
-  lines.push(`⚓ [${tag}] ${verdict.headline}`)
-  lines.push("")
-  if (author && !author.toLowerCase().includes("[bot]")) {
-    lines.push(`@${author} — first read on your issue, hope it saves you a few minutes scoping.`)
-    lines.push("")
-  }
-  lines.push(`**Summary:** ${verdict.summary}`)
-  if (verdict.approach) {
-    lines.push("")
-    lines.push(`**Approach:** ${verdict.approach}`)
-  }
-  if (verdict.relevantFiles.length > 0) {
-    lines.push("")
-    lines.push("**Relevant files:**")
-    for (const path of verdict.relevantFiles) lines.push(`- \`${path}\``)
-  }
-  if (verdict.research) {
-    lines.push("")
-    lines.push(`**Prior art / research:** ${verdict.research}`)
-  }
-  if (verdict.diagram) {
-    lines.push("")
-    lines.push("```mermaid")
-    lines.push(verdict.diagram)
-    lines.push("```")
-  }
-  if (verdict.labels.length > 0) {
-    lines.push("")
-    lines.push(`_Suggested labels:_ ${verdict.labels.map((l) => `\`${l}\``).join(", ")}`)
-  }
-  return lines.join("\n")
+function formatComment({ verdict }: FormatArgs): string {
+  // Renderer adds a single `[severity · estimate] headline` tag line
+  // above the model's free-form body. Everything else — greeting,
+  // sections, file refs, any optional Mermaid diagram, prior-art
+  // mentions, etc. — is the model's voice and shape, written into
+  // `verdict.body` verbatim. Labels are applied to the issue
+  // programmatically (priority/estimate/labelIds), not re-rendered
+  // in the comment body.
+  return `[${verdict.severity} · ${verdict.estimate}] ${verdict.headline}\n\n${verdict.body}`
 }

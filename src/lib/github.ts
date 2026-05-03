@@ -188,15 +188,31 @@ export class GitHubClient {
     return this.restGetText(`/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`, "*/*")
   }
 
-  /** List PR review comments (the inline ones). Used by triage-cr. */
+  /**
+   * List PR review comments (the inline ones). Paginates so callers
+   * doing thread-ancestry walks (e.g. `arcInThreadAbove`) don't get
+   * silently truncated on PRs with >100 review comments — Arc's
+   * parent comment could otherwise be missing from the result and
+   * legitimate replies would be skipped. Mirrors the pagination
+   * pattern in `listIssueComments` above.
+   */
   async listPullRequestReviewComments(
     owner: string,
     repo: string,
     prNumber: number
   ): Promise<ReviewComment[]> {
-    return this.restGet<ReviewComment[]>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100`
-    )
+    const out: ReviewComment[] = []
+    let page = 1
+    while (page < 50) {
+      const items = await this.restGet<ReviewComment[]>(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100&page=${page}`
+      )
+      if (!Array.isArray(items) || items.length === 0) break
+      out.push(...items)
+      if (items.length < 100) break
+      page += 1
+    }
+    return out
   }
 
   /**
@@ -263,6 +279,41 @@ export class GitHubClient {
     body: string
   ): Promise<void> {
     await this.restPatch<unknown>(`/repos/${owner}/${repo}/issues/comments/${commentId}`, { body })
+  }
+
+  /**
+   * Add an emoji reaction to a top-level issue/PR-conversation comment.
+   * Idempotent at the API level — re-posting the same reaction returns
+   * the existing one with 200, not a duplicate. We use it to "ack" an
+   * @-mention with 👀 so the asker knows Arc saw the message before
+   * the LLM call returns (which can take 30-90s on Ollama Turbo).
+   *
+   * Returns 200 on existing-reaction, 201 on newly-created. We don't
+   * distinguish; both paths are fine.
+   */
+  async addReactionToIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    content: ReactionContent
+  ): Promise<void> {
+    await this.restPost<unknown>(
+      `/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
+      { content }
+    )
+  }
+
+  /** Same as `addReactionToIssueComment` but for inline review comments. */
+  async addReactionToReviewComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    content: ReactionContent
+  ): Promise<void> {
+    await this.restPost<unknown>(
+      `/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`,
+      { content }
+    )
   }
 
   /**
@@ -347,6 +398,17 @@ export class GitHubClient {
     return h
   }
 }
+
+/** GitHub's accepted reaction emoji values. */
+export type ReactionContent =
+  | "+1"
+  | "-1"
+  | "laugh"
+  | "confused"
+  | "heart"
+  | "hooray"
+  | "rocket"
+  | "eyes"
 
 export class GitHubHttpError extends Error {
   readonly status: number

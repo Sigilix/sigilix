@@ -20,6 +20,10 @@ import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { MENTION_REPLY_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
+import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
+import { parseTeamGithubRepo } from "./github-installation"
+import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
+import { escapeXmlAttribute, escapeXmlText } from "./xml-escape"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -82,17 +86,31 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     return
   }
 
-  const question = stripMentionFromBody(data.body, triggers).slice(0, LIMITS.questionChars)
+  const fullQuestion = stripMentionFromBody(data.body, triggers)
+  const question = fullQuestion.slice(0, LIMITS.questionChars)
   if (!question) {
     log("empty-question-after-strip")
     return
   }
 
+  // Linked-PR context: extract PR refs from the full pre-truncation
+  // question text (NOT issueBody — a stale PR URL in the issue
+  // description would poison context for unrelated follow-up questions).
+  // Using the pre-truncation text ensures a long comment with a PR ref
+  // at the end isn't silently stripped by the questionChars limit.
+  // Each ref gets an independent fetch with isolated failure handling.
+  const teamKey = data.issue.team?.key ?? null
+  const inferRepo = (): { owner: string; repo: string } | null =>
+    parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
+  const prRefs = extractPullRequestRefs(fullQuestion, inferRepo)
+  const linkedPrs = await fetchLinkedPrs(prRefs, env)
+  log("linked-prs", { refs: prRefs.length, fetched: linkedPrs.length })
+
   // Codebase retrieval scoped to the issue's team. Soft-fails to empty.
   const retrievalText = `${data.issue.title}\n\n${question}`
   const chunks = await retrieveChunks({
     text: retrievalText,
-    teamKey: data.issue.team?.key ?? null,
+    teamKey,
     env,
   })
   log("retrieval-done", { chunks: chunks.length })
@@ -107,6 +125,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     recentComments: data.issue.comments.nodes,
     sourceCommentId: data.id,
     codebaseChunks: formatChunksForPrompt(chunks),
+    linkedPrs,
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -152,6 +171,7 @@ interface PromptCtx {
   }>
   sourceCommentId: string
   codebaseChunks: string | null
+  linkedPrs: PrContext[]
 }
 
 function buildPrompt(ctx: PromptCtx): string {
@@ -188,6 +208,19 @@ function buildPrompt(ctx: PromptCtx): string {
     sections.push("[RECENT THREAD CONTEXT — chronological]", recent, "")
   }
 
+  // Linked PR context goes BEFORE retrieval chunks so the model treats
+  // it as ground truth for the specific PRs being asked about. Every
+  // user-controlled field is XML-escaped to prevent a malicious PR
+  // title/body containing `</pr_context>` from breaking out of the
+  // structural delimiters and injecting fake system instructions.
+  if (ctx.linkedPrs.length > 0) {
+    sections.push(
+      "[LINKED PR CONTEXT — ground truth for what these PRs changed]",
+      ctx.linkedPrs.map(renderPrContext).join("\n\n"),
+      ""
+    )
+  }
+
   if (ctx.codebaseChunks) {
     sections.push(
       "[RELEVANT CODEBASE CHUNKS]",
@@ -200,6 +233,60 @@ function buildPrompt(ctx: PromptCtx): string {
 
   sections.push("[OUTPUT]", "Return only the JSON object. No prose, no Markdown fence.")
   return sections.join("\n")
+}
+
+export function renderPrContext(pr: PrContext): string {
+  const attrs = [
+    `owner="${escapeXmlAttribute(pr.owner)}"`,
+    `repo="${escapeXmlAttribute(pr.repo)}"`,
+    `number="${pr.number}"`,
+    `state="${escapeXmlAttribute(pr.state)}"`,
+    `merged_at="${escapeXmlAttribute(pr.mergedAt ?? "")}"`,
+  ].join(" ")
+  const filesBlock =
+    typeof pr.filesChanged === "string"
+      ? `  <pr_files_changed status="${pr.filesChanged.slice(1, -1)}" />`
+      : `  <pr_files_changed total="${pr.filesChanged.total}">\n${pr.filesChanged.items
+          .map((f) => `    ${escapeXmlText(f)}`)
+          .join("\n")}\n  </pr_files_changed>`
+  const diffBlock =
+    pr.diff === "[timeout]" || pr.diff === "[error]" || pr.diff === "[truncated]"
+      ? `  <pr_diff status="${pr.diff.slice(1, -1)}" />`
+      : `  <pr_diff>\n${escapeXmlText(pr.diff)}\n  </pr_diff>`
+  return [
+    `<pr_context ${attrs}>`,
+    `  <pr_title>${escapeXmlText(pr.title)}</pr_title>`,
+    `  <pr_body>${escapeXmlText(pr.body)}</pr_body>`,
+    filesBlock,
+    diffBlock,
+    `</pr_context>`,
+  ].join("\n")
+}
+
+async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<PrContext[]> {
+  if (refs.length === 0) return []
+  const pairs = await Promise.all(
+    refs.map(async (r) => ({
+      ref: r,
+      result: await fetchPullRequestContext({
+        owner: r.owner,
+        repo: r.repo,
+        number: r.number,
+        env,
+      }),
+    }))
+  )
+  const out: PrContext[] = []
+  for (const { ref, result } of pairs) {
+    if (result.ok) {
+      out.push(result.context)
+    } else {
+      console.warn(
+        `[linear-mention] pr-fetch.skip ref=${ref.owner}/${ref.repo}#${ref.number} reason=${result.reason}`
+      )
+    }
+  }
+  return out
 }
 
 function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {

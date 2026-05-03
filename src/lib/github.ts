@@ -28,13 +28,17 @@ export class GitHubClient {
   }
 
   /** Raw REST GET that parses JSON. Throws on !ok. */
-  async restGet<T>(path: string): Promise<T> {
-    return this.request<T>("GET", path, undefined, "json")
+  async restGet<T>(path: string, opts?: { signal?: AbortSignal }): Promise<T> {
+    return this.request<T>("GET", path, undefined, "json", undefined, opts?.signal)
   }
 
   /** Raw REST GET that returns the response body as text. */
-  async restGetText(path: string, accept = "application/vnd.github+json"): Promise<string> {
-    return this.request<string>("GET", path, undefined, "text", accept)
+  async restGetText(
+    path: string,
+    accept = "application/vnd.github+json",
+    opts?: { signal?: AbortSignal }
+  ): Promise<string> {
+    return this.request<string>("GET", path, undefined, "text", accept, opts?.signal)
   }
 
   async restPost<T>(path: string, body: unknown): Promise<T> {
@@ -50,16 +54,64 @@ export class GitHubClient {
    * `Accept: application/vnd.github.v3.diff` is set; without it the
    * response is the metadata JSON.
    */
-  async getPullRequestDiff(owner: string, repo: string, prNumber: number): Promise<string> {
+  async getPullRequestDiff(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    opts?: { signal?: AbortSignal }
+  ): Promise<string> {
     return this.restGetText(
       `/repos/${owner}/${repo}/pulls/${prNumber}`,
-      "application/vnd.github.v3.diff"
+      "application/vnd.github.v3.diff",
+      opts
     )
   }
 
   /** Fetch PR metadata (title, body, head sha, author, labels, etc.). */
-  async getPullRequest(owner: string, repo: string, prNumber: number): Promise<PullRequestMeta> {
-    return this.restGet<PullRequestMeta>(`/repos/${owner}/${repo}/pulls/${prNumber}`)
+  async getPullRequest(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    opts?: { signal?: AbortSignal }
+  ): Promise<PullRequestMeta> {
+    return this.restGet<PullRequestMeta>(`/repos/${owner}/${repo}/pulls/${prNumber}`, opts)
+  }
+
+  /**
+   * List the files changed in a PR. Pages until either `maxFiles` is
+   * collected OR no more pages — does NOT continue past `maxFiles` to
+   * compute the total. Total file count comes from `changed_files` in
+   * the PR meta returned by `getPullRequest`.
+   */
+  async listPullRequestFiles(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    opts?: { perPage?: number; maxFiles?: number; signal?: AbortSignal }
+  ): Promise<PrChangedFile[]> {
+    const perPage = opts?.perPage ?? 100
+    const maxFiles = opts?.maxFiles ?? 50
+    const out: PrChangedFile[] = []
+    let page = 1
+    while (out.length < maxFiles && page < 50) {
+      const items = await this.restGet<RawPrFile[]>(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${perPage}&page=${page}`,
+        opts?.signal !== undefined ? { signal: opts.signal } : undefined
+      )
+      if (!Array.isArray(items) || items.length === 0) break
+      for (const it of items) {
+        if (out.length >= maxFiles) break
+        out.push({
+          filename: it.filename ?? "",
+          status: it.status ?? "",
+          additions: typeof it.additions === "number" ? it.additions : 0,
+          deletions: typeof it.deletions === "number" ? it.deletions : 0,
+        })
+      }
+      if (items.length < perPage) break
+      page += 1
+    }
+    return out
   }
 
   /**
@@ -261,7 +313,8 @@ export class GitHubClient {
     path: string,
     body: unknown,
     parse: "json" | "text",
-    accept = "application/vnd.github+json"
+    accept = "application/vnd.github+json",
+    signal?: AbortSignal
   ): Promise<T> {
     const url = path.startsWith("http") ? path : `${GITHUB_API}${path}`
     const init: RequestInit = {
@@ -269,6 +322,7 @@ export class GitHubClient {
       headers: this.headers(accept, body !== undefined),
     }
     if (body !== undefined) init.body = JSON.stringify(body)
+    if (signal !== undefined) init.signal = signal
     const res = await fetch(url, init)
     if (!res.ok) {
       const text = await res.text().catch(() => "")
@@ -311,6 +365,24 @@ export interface PullRequestMeta {
   head: { sha: string; ref: string }
   base: { sha: string; ref: string }
   draft?: boolean
+  /** GitHub REST returns "open" or "closed" only — `merged` is inferred from `merged_at`. */
+  state?: "open" | "closed"
+  merged_at?: string | null
+  changed_files?: number
+}
+
+export interface PrChangedFile {
+  filename: string
+  status: string
+  additions: number
+  deletions: number
+}
+
+interface RawPrFile {
+  filename?: string
+  status?: string
+  additions?: number
+  deletions?: number
 }
 
 export interface PrCommit {

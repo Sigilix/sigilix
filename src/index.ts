@@ -35,6 +35,7 @@ import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview } from "./lib/triage-pr-review"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
+import { parseValidateMode, validateEnv } from "./lib/env-validate"
 
 export interface Env {
   OPENCLAW_STATE: KVNamespace
@@ -59,6 +60,17 @@ export interface Env {
   OPENCLAW_MODEL?: string
   OPENCLAW_TEAM_KEY?: string
   OPENCLAW_MENTION_TRIGGERS?: string
+  // Phase 1 — Linear PR-aware @-mentions.
+  // OPENCLAW_TEAM_GITHUB_REPO_MAP carries owner+repo identity per team
+  // (separate from OPENCLAW_TEAM_REPO_MAP which is namespace-only).
+  // Schema: {"ARC":{"owner":"Arc-and-Anchor","repo":"rema-portal"}}
+  OPENCLAW_TEAM_GITHUB_REPO_MAP?: string
+  // Schema: {"<owner>/<repo>":"<id>","<owner>":"<id>"}
+  // Lookup order: exact owner/repo, then owner-only fallback.
+  OPENCLAW_GITHUB_INSTALLATION_MAP?: string
+  // "strict" → return 500 when team/installation maps are inconsistent.
+  // Anything else (including unset, "warn", "STRICT", typos) → warn only.
+  OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS?: string
 }
 
 /**
@@ -164,8 +176,53 @@ interface GitHubWebhookPayload {
   }
 }
 
+// Validation cache — Cloudflare Workers can't read `env` at module top
+// level (it's per-request), so validation runs once per env signature
+// inside the fetch handler. The cache key includes every env value that
+// affects validation, so an isolate that multiplexes envs across
+// preview/staging/prod revalidates per signature instead of locking to
+// the first-request env. The key is set BEFORE the validateEnv call so
+// a throw doesn't trigger a retry loop on every subsequent request.
+let validatedKey: string | null = null
+let validationError: Error | null = null
+
+function validationCacheKey(env: Env): string {
+  // NUL-separated to avoid ambiguity if any value contains an embedded "|".
+  return [
+    env.OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS ?? "warn",
+    env.OPENCLAW_TEAM_GITHUB_REPO_MAP ?? "",
+    env.OPENCLAW_GITHUB_INSTALLATION_MAP ?? "",
+  ].join("\0")
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const key = validationCacheKey(env)
+    if (validatedKey !== key) {
+      validatedKey = key  // SET BEFORE call — prevents retry loop on throw
+      validationError = null
+      try {
+        validateEnv(env, parseValidateMode(env.OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS))
+      } catch (e) {
+        validationError = e as Error
+      }
+    }
+    if (
+      validationError &&
+      parseValidateMode(env.OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS) === "strict"
+    ) {
+      // Never include validationError.message in the response body — it
+      // names the team / repo / installation entries that are missing,
+      // which we don't want to leak to whoever's poking the public URL.
+      // The full diagnostic is already in the server logs (env-validate
+      // emits console.error before throwing in strict mode).
+      console.error("env validation failed", { error: validationError.message })
+      return new Response("misconfigured\n", {
+        status: 500,
+        headers: { "content-type": "text/plain" },
+      })
+    }
+
     const url = new URL(request.url)
 
     if (request.method === "GET" && url.pathname === "/") {

@@ -266,6 +266,41 @@ export class GitHubClient {
   }
 
   /**
+   * Add an emoji reaction to a top-level issue/PR-conversation comment.
+   * Idempotent at the API level — re-posting the same reaction returns
+   * the existing one with 200, not a duplicate. We use it to "ack" an
+   * @-mention with 👀 so the asker knows Arc saw the message before
+   * the LLM call returns (which can take 30-90s on Ollama Turbo).
+   *
+   * Returns 200 on existing-reaction, 201 on newly-created. We don't
+   * distinguish; both paths are fine.
+   */
+  async addReactionToIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    content: ReactionContent
+  ): Promise<void> {
+    await this.restPost<unknown>(
+      `/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
+      { content }
+    )
+  }
+
+  /** Same as `addReactionToIssueComment` but for inline review comments. */
+  async addReactionToReviewComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    content: ReactionContent
+  ): Promise<void> {
+    await this.restPost<unknown>(
+      `/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`,
+      { content }
+    )
+  }
+
+  /**
    * Reply to an existing PR review comment. GitHub creates a new comment
    * threaded under the parent. Used by triage-cr to post per-comment
    * verdicts.
@@ -347,6 +382,17 @@ export class GitHubClient {
     return h
   }
 }
+
+/** GitHub's accepted reaction emoji values. */
+export type ReactionContent =
+  | "+1"
+  | "-1"
+  | "laugh"
+  | "confused"
+  | "heart"
+  | "hooray"
+  | "rocket"
+  | "eyes"
 
 export class GitHubHttpError extends Error {
   readonly status: number

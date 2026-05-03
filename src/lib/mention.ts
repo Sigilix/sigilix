@@ -152,3 +152,39 @@ export function isArcGithubLogin(login: string | null | undefined): boolean {
   if (!login) return false
   return /^(arc|arc-copilot|openclaw)(\[bot\])?$/i.test(login)
 }
+
+/**
+ * True if any review comment in the thread above (or at) `sourceId`
+ * was authored by Arc. Powers "implicit mention" — once Arc has spoken
+ * in a thread, replies in that thread don't need an explicit @-mention
+ * to trigger a response. Without this, users have to retype @arc on
+ * every back-and-forth, which feels broken next to CR's behavior.
+ *
+ * Walks the `in_reply_to_id` chain from `sourceId` up to the thread
+ * root, checking the author of each visited comment. Source itself is
+ * excluded (it's the asker's reply — checking its author would just be
+ * the author guard which is handled at the webhook layer).
+ *
+ * Scoped to PR review-comment threads (real reply chains). Top-level
+ * `issue_comment` events have no chain structure on GitHub's side, so
+ * implicit-mention there would mean "Arc commented at any point on the
+ * PR" → too eager; mention-only is the right default.
+ */
+export function arcInThreadAbove<
+  T extends { id: number; in_reply_to_id?: number; user: { login: string } | null },
+>(comments: T[], sourceId: number): boolean {
+  const byId = new Map<number, T>()
+  for (const c of comments) byId.set(c.id, c)
+  const start = byId.get(sourceId)
+  if (!start) return false
+  let curId: number | undefined = start.in_reply_to_id
+  // 32-iteration cap defends against pathological cycles.
+  for (let i = 0; i < 32; i++) {
+    if (curId === undefined) return false
+    const cur = byId.get(curId)
+    if (!cur) return false
+    if (isArcGithubLogin(cur.user?.login ?? null)) return true
+    curId = cur.in_reply_to_id
+  }
+  return false
+}

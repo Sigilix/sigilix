@@ -21,7 +21,7 @@ import { parseFirstJsonObject } from "./json-extract"
 import { GITHUB_MENTION_SCHEMA } from "./schemas"
 import { GITHUB_MENTION_PROMPT } from "../prompts/github-mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
-import { getMentionTriggers, stripMentionFromBody } from "./mention"
+import { arcInThreadAbove, bodyMentionsBot, getMentionTriggers, stripMentionFromBody } from "./mention"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -108,7 +108,47 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   }
 
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
-  const question = stripMentionFromBody(sourceComment.body, triggers).slice(0, LIMITS.questionChars)
+
+  // Gate: explicit @-mention OR (review-comment surface AND Arc was in
+  // the thread above). The webhook layer queues every reply with an
+  // `in_reply_to_id` for review-comment, so we have to re-check here —
+  // that lets the cheap "fire on any reply" webhook gate stay simple
+  // while the handler enforces the real "Arc was in this thread" rule.
+  // Top-level issue_comment stays mention-only (no real thread chain
+  // on GitHub's side; implicit there = too eager).
+  const explicit = bodyMentionsBot(sourceComment.body, triggers)
+  let implicit = false
+  if (!explicit && surface === "review-comment") {
+    const allReviewComments = await client.listPullRequestReviewComments(owner, repo, prNumber)
+    implicit = arcInThreadAbove(allReviewComments, commentId)
+  }
+  if (!explicit && !implicit) {
+    since("skip-no-mention-no-thread")
+    return
+  }
+
+  // Eye-emoji "ack". Posts a 👀 reaction on the source comment so the
+  // asker knows Arc saw the message before the LLM call returns
+  // (Ollama Turbo is 30-90s typical). Best-effort — if the reaction
+  // call fails for any reason we still proceed with the actual reply.
+  const addReaction =
+    surface === "issue"
+      ? client.addReactionToIssueComment.bind(client)
+      : client.addReactionToReviewComment.bind(client)
+  await addReaction(owner, repo, commentId, "eyes").catch((error: unknown) => {
+    console.warn("[gh-mention] eye-reaction failed (non-fatal)", {
+      commentId,
+      error: String(error),
+    })
+  })
+  since("eye-reaction-posted", { explicit, implicit })
+
+  // Strip the mention from the body before passing to the model. For
+  // implicit-thread fires there's no mention to strip; the body is
+  // already the question text.
+  const question = (
+    explicit ? stripMentionFromBody(sourceComment.body, triggers) : sourceComment.body
+  ).slice(0, LIMITS.questionChars)
   if (!question) {
     since("empty-question-after-strip")
     return

@@ -596,9 +596,15 @@ interface QueueGithubMentionArgs {
  * Common gating for both `issue_comment.created` and
  * `pull_request_review_comment.created`:
  *
- *   1. body @-mentions Arc (uses the same trigger list as Linear)
+ *   1. PR number + comment id are present
  *   2. comment author is NOT Arc itself (prevents reply loops)
- *   3. PR number is present
+ *   3. EITHER body @-mentions Arc, OR (review-comment surface AND has
+ *      `in_reply_to_id`) — the second branch is the cheap webhook
+ *      signal for "this might be a reply in Arc's thread"; the
+ *      handler does the actual chain walk to confirm Arc was above.
+ *      Wasted-queue cost is tiny (Cloudflare Queues are ~$0.40/M
+ *      messages); the upside is users don't have to retype @arc on
+ *      every reply.
  *
  * On pass, enqueues a `github-mention` JobMessage. The body itself is
  * re-fetched from GitHub at handler time so an edit between webhook
@@ -613,16 +619,20 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
   if (typeof prNumber !== "number") {
     return new Response("missing pr number\n", { status: 400 })
   }
-  const body = comment.body ?? ""
-  const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
-  if (!bodyMentionsBot(body, triggers)) {
-    return new Response("no mention\n", { status: 200 })
-  }
-  // Self-author guard. We only skip Arc itself — CR or other bots
-  // can mention us and we should respond. Tighter than isBotHandle()
-  // which would also match CR.
+  // Self-author guard runs BEFORE the mention check so Arc's own
+  // replies (which obviously have `in_reply_to_id` on review-comment)
+  // can't open a feedback loop via the implicit-thread path.
   if (isArcGithubLogin(comment.user?.login ?? null)) {
     return new Response("skip self\n", { status: 200 })
+  }
+
+  const body = comment.body ?? ""
+  const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
+  const hasMention = bodyMentionsBot(body, triggers)
+  const isReviewCommentReply =
+    surface === "review-comment" && typeof comment.in_reply_to_id === "number"
+  if (!hasMention && !isReviewCommentReply) {
+    return new Response("no mention\n", { status: 200 })
   }
 
   const message: JobMessage = {

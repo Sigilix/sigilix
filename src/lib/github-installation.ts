@@ -41,8 +41,16 @@ function parseMap(raw: string | undefined): InstallationMap | null {
 
 function coerceId(value: string | number | undefined): number | null {
   if (value === undefined) return null
-  const n = typeof value === "number" ? value : Number.parseInt(value, 10)
-  return Number.isFinite(n) && n > 0 ? n : null
+  // Strings: only accept pure digit sequences. `Number.parseInt("123abc", 10)`
+  // returns 123, which would silently route auth to the wrong installation.
+  // Numbers: require a positive safe integer — `Number.isFinite(1.5)` is true,
+  // and floats / NaN / Infinity / negatives must not be accepted as IDs.
+  if (typeof value === "string") {
+    if (!/^\d+$/.test(value)) return null
+    const n = Number(value)
+    return Number.isSafeInteger(n) && n > 0 ? n : null
+  }
+  return Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
 export function resolveInstallation(

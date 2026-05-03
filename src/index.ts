@@ -211,7 +211,13 @@ export default {
       validationError &&
       parseValidateMode(env.OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS) === "strict"
     ) {
-      return new Response(`misconfigured: ${validationError.message}\n`, {
+      // Never include validationError.message in the response body — it
+      // names the team / repo / installation entries that are missing,
+      // which we don't want to leak to whoever's poking the public URL.
+      // The full diagnostic is already in the server logs (env-validate
+      // emits console.error before throwing in strict mode).
+      console.error("env validation failed", { error: validationError.message })
+      return new Response("misconfigured\n", {
         status: 500,
         headers: { "content-type": "text/plain" },
       })

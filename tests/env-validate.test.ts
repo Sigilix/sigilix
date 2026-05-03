@@ -73,7 +73,8 @@ describe("validateEnv", () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
-  it("throws in strict mode when a team-repo references a missing install", () => {
+  it("throws a generic error in strict mode when a team-repo references a missing install", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
     const env = makeEnv({
       OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
         ARC: { owner: "Arc-and-Anchor", repo: "rema-portal" },
@@ -83,7 +84,11 @@ describe("validateEnv", () => {
         "Arc-and-Anchor/rema-portal": "12345",
       }),
     })
-    expect(() => validateEnv(env, "strict")).toThrow(/RFD → Arc-and-Anchor\/rubberfit-desktop/)
+    // Thrown error must NOT include team / repo names (those reach the
+    // public 500 response in strict mode) — full diagnostic stays in logs.
+    expect(() => validateEnv(env, "strict")).toThrow("GitHub installation mapping validation failed")
+    expect(error).toHaveBeenCalled()
+    expect(String(error.mock.calls[0]?.[0] ?? "")).toMatch(/RFD → Arc-and-Anchor\/rubberfit-desktop/)
   })
 
   it("warns (does not throw) in warn mode when entries are missing", () => {
@@ -96,7 +101,9 @@ describe("validateEnv", () => {
     })
     expect(() => validateEnv(env, "warn")).not.toThrow()
     expect(warn).toHaveBeenCalledTimes(1)
-    expect(String(warn.mock.calls[0][0])).toMatch(/ARC → Arc-and-Anchor\/rema-portal/)
+    // warn-mode keeps full detail in the warning (only the strict-mode
+    // throw is sanitized — the warn console output is server-side only).
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/ARC → Arc-and-Anchor\/rema-portal/)
   })
 
   it("warns when team-repo present but install map missing entirely", () => {
@@ -109,9 +116,36 @@ describe("validateEnv", () => {
       // no_installation, which we DO surface as a warning so operators see it.
     })
     expect(() => validateEnv(env, "warn")).not.toThrow()
-    // Note: warn-mode does emit one warning here because the map IS configured
-    // for ARC but install map is unset. This is intentional — the team-repo
-    // map being set without the install map IS the misconfig signal.
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it("strict mode throws when team-repo map is set but malformed JSON (not silently no-op)", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const env = makeEnv({
+      OPENCLAW_TEAM_GITHUB_REPO_MAP: "{not json",
+    })
+    // Without this distinction, malformed JSON would silently disable
+    // Phase 1 — strict-mode contract says "loud failure on misconfig".
+    expect(() => validateEnv(env, "strict")).toThrow("GitHub installation mapping validation failed")
+    expect(error).toHaveBeenCalled()
+  })
+
+  it("warn mode warns (does not throw) when team-repo map is set but malformed JSON", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const env = makeEnv({
+      OPENCLAW_TEAM_GITHUB_REPO_MAP: "{not json",
+    })
+    expect(() => validateEnv(env, "warn")).not.toThrow()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0] ?? "")).toMatch(/produced no usable team→repo mappings/)
+  })
+
+  it("strict mode throws when team-repo map is set but wrong shape (e.g. array)", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    const env = makeEnv({
+      OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify(["not", "an", "object"]),
+    })
+    expect(() => validateEnv(env, "strict")).toThrow("GitHub installation mapping validation failed")
+    expect(error).toHaveBeenCalled()
   })
 })

@@ -145,8 +145,7 @@ async function fetchDiffPartial(
       (signal) => client.getPullRequestDiff(owner, repo, number, { signal }),
       TIMEOUT_MS
     )
-    if (!raw) return "[truncated]"
-    return truncateDiff(raw)
+    return truncateDiff(raw ?? "")
   } catch (error) {
     return isAbortError(error) ? "[timeout]" : "[error]"
   }

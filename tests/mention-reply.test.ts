@@ -11,7 +11,7 @@
 // intact and the hostile payload renders as escaped text.
 
 import { describe, expect, it } from "vitest"
-import { renderPrContext } from "../src/lib/mention-reply"
+import { renderPrContext, renderPrUnavailable, type LinkedPrFailure } from "../src/lib/mention-reply"
 import type { PrContext } from "../src/lib/github-pr-context"
 
 function basePr(overrides: Partial<PrContext> = {}): PrContext {
@@ -122,5 +122,47 @@ describe("renderPrContext — adversarial XML injection", () => {
     )
     expect(out).not.toContain('extra="1"')
     expect(out).not.toContain('extra2="2"')
+  })
+})
+
+describe("renderPrUnavailable — failed-fetch placeholder", () => {
+  function failure(overrides: Partial<LinkedPrFailure> = {}): LinkedPrFailure {
+    return {
+      owner: "Arc-and-Anchor",
+      repo: "rema-portal",
+      number: 162,
+      reason: "not_found",
+      ...overrides,
+    }
+  }
+
+  it("renders a self-closing tag with owner/repo/number/reason", () => {
+    const out = renderPrUnavailable(failure())
+    expect(out).toBe(
+      '<pr_unavailable owner="Arc-and-Anchor" repo="rema-portal" number="162" reason="not_found" />'
+    )
+  })
+
+  it("escapes attribute injection in owner/repo (defensive — these come from extracted refs)", () => {
+    const out = renderPrUnavailable(
+      failure({ owner: 'evil" extra="1', repo: 'r" extra2="2' })
+    )
+    expect(out).not.toContain('extra="1"')
+    expect(out).not.toContain('extra2="2"')
+    expect(out).toContain("&quot;")
+  })
+
+  it("renders each known reason verbatim", () => {
+    const reasons: LinkedPrFailure["reason"][] = [
+      "no_installation",
+      "not_found",
+      "forbidden",
+      "timeout",
+      "error",
+    ]
+    for (const reason of reasons) {
+      const out = renderPrUnavailable(failure({ reason }))
+      expect(out).toContain(`reason="${reason}"`)
+    }
   })
 })

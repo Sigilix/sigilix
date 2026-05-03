@@ -30,7 +30,21 @@ export function parseValidateMode(value: string | undefined): ValidateMode {
 
 export function validateEnv(env: Env, mode: ValidateMode): void {
   const teamMappings = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP)
-  if (teamMappings.length === 0) return // Phase 1 not configured — nothing to validate
+  if (teamMappings.length === 0) {
+    // Distinguish "not configured" from "configured but unparseable / empty
+    // shape". The former is the Phase-1-disabled path; the latter is a
+    // strict-mode contract violation (silently no-op'd on bad config would
+    // make `strict` indistinguishable from `warn`).
+    if (env.OPENCLAW_TEAM_GITHUB_REPO_MAP) {
+      const internalMessage = `OPENCLAW_TEAM_GITHUB_REPO_MAP is set but produced no usable team→repo mappings (malformed JSON, wrong shape, or empty object)`
+      if (mode === "strict") {
+        console.error(`[env-validate] ${internalMessage}`)
+        throw new Error("GitHub installation mapping validation failed")
+      }
+      console.warn(`[env-validate] ${internalMessage}`)
+    }
+    return
+  }
 
   const missing: Array<{ teamKey: string; owner: string; repo: string }> = []
   for (const m of teamMappings) {
@@ -39,10 +53,14 @@ export function validateEnv(env: Env, mode: ValidateMode): void {
   }
   if (missing.length === 0) return
 
+  // Keep full diagnostic in logs only — the thrown error reaches src/index.ts
+  // which exposes it to external callers in strict mode, so the throw uses a
+  // generic message to avoid leaking team / repo names.
   const detail = missing.map((m) => `${m.teamKey} → ${m.owner}/${m.repo}`).join(", ")
-  const message = `OPENCLAW_TEAM_GITHUB_REPO_MAP references team→repo entries with no matching OPENCLAW_GITHUB_INSTALLATION_MAP entry: ${detail}`
+  const internalMessage = `OPENCLAW_TEAM_GITHUB_REPO_MAP references team→repo entries with no matching OPENCLAW_GITHUB_INSTALLATION_MAP entry: ${detail}`
   if (mode === "strict") {
-    throw new Error(message)
+    console.error(`[env-validate] ${internalMessage}`)
+    throw new Error("GitHub installation mapping validation failed")
   }
-  console.warn(`[env-validate] ${message}`)
+  console.warn(`[env-validate] ${internalMessage}`)
 }

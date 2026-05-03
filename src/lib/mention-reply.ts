@@ -103,8 +103,12 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
   const inferRepo = (): { owner: string; repo: string } | null =>
     parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
   const prRefs = extractPullRequestRefs(fullQuestion, inferRepo)
-  const linkedPrs = await fetchLinkedPrs(prRefs, env)
-  log("linked-prs", { refs: prRefs.length, fetched: linkedPrs.length })
+  const { contexts: linkedPrs, failures: linkedPrFailures } = await fetchLinkedPrs(prRefs, env)
+  log("linked-prs", {
+    refs: prRefs.length,
+    fetched: linkedPrs.length,
+    failures: linkedPrFailures.length,
+  })
 
   // Codebase retrieval scoped to the issue's team. Soft-fails to empty.
   const retrievalText = `${data.issue.title}\n\n${question}`
@@ -126,6 +130,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     sourceCommentId: data.id,
     codebaseChunks: formatChunksForPrompt(chunks),
     linkedPrs,
+    linkedPrFailures,
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -157,6 +162,13 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
   await env.OPENCLAW_STATE.put(kvKey, newCommentId, { expirationTtl: 60 * 60 * 24 * 30 })
 }
 
+export interface LinkedPrFailure {
+  owner: string
+  repo: string
+  number: number
+  reason: "no_installation" | "not_found" | "forbidden" | "timeout" | "error"
+}
+
 interface PromptCtx {
   issueIdentifier: string
   issueTitle: string
@@ -172,6 +184,7 @@ interface PromptCtx {
   sourceCommentId: string
   codebaseChunks: string | null
   linkedPrs: PrContext[]
+  linkedPrFailures: LinkedPrFailure[]
 }
 
 function buildPrompt(ctx: PromptCtx): string {
@@ -213,10 +226,17 @@ function buildPrompt(ctx: PromptCtx): string {
   // user-controlled field is XML-escaped to prevent a malicious PR
   // title/body containing `</pr_context>` from breaking out of the
   // structural delimiters and injecting fake system instructions.
-  if (ctx.linkedPrs.length > 0) {
+  // Failed-to-fetch refs are rendered as `<pr_unavailable>` markers so
+  // the model can tell "PR was referenced but couldn't be loaded" from
+  // "no PR was referenced" — without these, retrieval-only fallback
+  // would let the model answer with false confidence.
+  if (ctx.linkedPrs.length > 0 || ctx.linkedPrFailures.length > 0) {
+    const blocks: string[] = []
+    for (const pr of ctx.linkedPrs) blocks.push(renderPrContext(pr))
+    for (const f of ctx.linkedPrFailures) blocks.push(renderPrUnavailable(f))
     sections.push(
       "[LINKED PR CONTEXT — ground truth for what these PRs changed]",
-      ctx.linkedPrs.map(renderPrContext).join("\n\n"),
+      blocks.join("\n\n"),
       ""
     )
   }
@@ -263,8 +283,23 @@ export function renderPrContext(pr: PrContext): string {
   ].join("\n")
 }
 
-async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<PrContext[]> {
-  if (refs.length === 0) return []
+export function renderPrUnavailable(f: LinkedPrFailure): string {
+  const attrs = [
+    `owner="${escapeXmlAttribute(f.owner)}"`,
+    `repo="${escapeXmlAttribute(f.repo)}"`,
+    `number="${f.number}"`,
+    `reason="${escapeXmlAttribute(f.reason)}"`,
+  ].join(" ")
+  return `<pr_unavailable ${attrs} />`
+}
+
+interface LinkedPrFetchResult {
+  contexts: PrContext[]
+  failures: LinkedPrFailure[]
+}
+
+async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<LinkedPrFetchResult> {
+  if (refs.length === 0) return { contexts: [], failures: [] }
   const pairs = await Promise.all(
     refs.map(async (r) => ({
       ref: r,
@@ -276,17 +311,19 @@ async function fetchLinkedPrs(refs: PrRef[], env: Env): Promise<PrContext[]> {
       }),
     }))
   )
-  const out: PrContext[] = []
+  const contexts: PrContext[] = []
+  const failures: LinkedPrFailure[] = []
   for (const { ref, result } of pairs) {
     if (result.ok) {
-      out.push(result.context)
+      contexts.push(result.context)
     } else {
       console.warn(
         `[linear-mention] pr-fetch.skip ref=${ref.owner}/${ref.repo}#${ref.number} reason=${result.reason}`
       )
+      failures.push({ owner: ref.owner, repo: ref.repo, number: ref.number, reason: result.reason })
     }
   }
-  return out
+  return { contexts, failures }
 }
 
 function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {

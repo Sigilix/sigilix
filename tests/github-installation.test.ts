@@ -58,6 +58,44 @@ describe("resolveInstallation", () => {
       reason: "no_installation",
     })
   })
+
+  it("rejects digit-prefixed strings like '123abc' (parseInt would silently truncate)", () => {
+    expect(resolveInstallation("o", "r", JSON.stringify({ "o/r": "123abc" }))).toEqual({
+      ok: false,
+      reason: "no_installation",
+    })
+  })
+
+  it("rejects fractional numbers like 1.5 (would route auth to wrong installation)", () => {
+    expect(resolveInstallation("o", "r", JSON.stringify({ "o/r": 1.5 }))).toEqual({
+      ok: false,
+      reason: "no_installation",
+    })
+  })
+
+  it("rejects negative / Infinity / NaN numbers", () => {
+    expect(resolveInstallation("o", "r", JSON.stringify({ "o/r": -1 }))).toEqual({
+      ok: false,
+      reason: "no_installation",
+    })
+    // Note: JSON.stringify(NaN) and JSON.stringify(Infinity) both produce "null",
+    // so we test those by hand-crafting the JSON.
+    expect(resolveInstallation("o", "r", '{"o/r": null}')).toEqual({
+      ok: false,
+      reason: "no_installation",
+    })
+  })
+
+  it("rejects whitespace-padded numeric strings", () => {
+    expect(resolveInstallation("o", "r", JSON.stringify({ "o/r": " 123" }))).toEqual({
+      ok: false,
+      reason: "no_installation",
+    })
+    expect(resolveInstallation("o", "r", JSON.stringify({ "o/r": "123 " }))).toEqual({
+      ok: false,
+      reason: "no_installation",
+    })
+  })
 })
 
 describe("listTeamRepoMappings", () => {

@@ -144,7 +144,7 @@ For each repo you want Arc to know about, run the local indexer:
 export CLOUDFLARE_ACCOUNT_ID=<your account id>
 export CLOUDFLARE_API_TOKEN=<token with Workers AI Read + Vectorize Write>
 
-node scripts/index-repo.mjs ../rema-portal
+node scripts/index-repo.mjs ../rubberfit
 node scripts/index-repo.mjs ../Rubberfit-Desktop --namespace=rubberfit-desktop
 ```
 
@@ -220,7 +220,7 @@ npx wrangler secret put GITHUB_WEBHOOK_SECRET
 npx wrangler secret put OPENCLAW_MODEL              # defaults to glm-5.1:cloud
 npx wrangler secret put OPENCLAW_TEAM_KEY           # e.g. "ARC" — scope to one team
 npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "arc,arc[bot],Arc[bot],openclaw,openclaw[bot],OpenClaw[bot]" (legacy aliases included)
-npx wrangler secret put OPENCLAW_TEAM_REPO_MAP      # JSON: {"ARC":"rema-portal","RFD":"rubberfit-desktop"}
+npx wrangler secret put OPENCLAW_TEAM_REPO_MAP      # JSON: {"ARC":"rubberfit","RFD":"rubberfit-desktop"}
 npx wrangler secret put LINEAR_OAUTH_CLIENT_ID      # OAuth app — comments post as the app actor
 npx wrangler secret put LINEAR_OAUTH_CLIENT_SECRET  # paired with the client_id above
 ```

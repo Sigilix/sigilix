@@ -29,7 +29,7 @@ id = "df689379ea6240f7808997a75ceaed7e"
 
 # Vectorize index for codebase chunks. Embeddings are 768-dim vectors
 # from Cloudflare's @cf/baai/bge-base-en-v1.5, indexed under one
-# namespace per repo (e.g. "rema-portal", "rubberfit-desktop") so
+# namespace per repo (e.g. "rubberfit", "rubberfit-desktop") so
 # triage on a Linear issue can scope retrieval to the relevant repo.
 #
 # Run once: `wrangler vectorize create openclaw-code-index \

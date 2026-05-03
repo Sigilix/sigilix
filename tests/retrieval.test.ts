@@ -8,7 +8,7 @@ import { formatChunksForPrompt } from "../src/lib/retrieval"
 
 describe("teamKeyToNamespace", () => {
   it("returns the default when team key is null", () => {
-    expect(teamKeyToNamespace(null)).toBe("rema-portal")
+    expect(teamKeyToNamespace(null)).toBe("rubberfit")
   })
 
   it("lowercases the team key when no map is given", () => {
@@ -17,13 +17,13 @@ describe("teamKeyToNamespace", () => {
   })
 
   it("uses the explicit map when valid JSON", () => {
-    const map = JSON.stringify({ ARC: "rema-portal", RFD: "rubberfit-desktop" })
-    expect(teamKeyToNamespace("ARC", map)).toBe("rema-portal")
+    const map = JSON.stringify({ ARC: "rubberfit", RFD: "rubberfit-desktop" })
+    expect(teamKeyToNamespace("ARC", map)).toBe("rubberfit")
     expect(teamKeyToNamespace("RFD", map)).toBe("rubberfit-desktop")
   })
 
   it("falls back to lowercase team key when team is not in map", () => {
-    const map = JSON.stringify({ ARC: "rema-portal" })
+    const map = JSON.stringify({ ARC: "rubberfit" })
     expect(teamKeyToNamespace("XYZ", map)).toBe("xyz")
   })
 

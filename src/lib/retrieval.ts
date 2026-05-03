@@ -4,13 +4,14 @@
 // section the prompt already expects.
 //
 // Multi-repo: the index uses one namespace per repo. The Linear team key
-// on the incoming webhook decides which namespace to query. Without a
-// known mapping we fall back to "rema-portal" (the first / primary repo)
-// to keep one team's issues from silently returning zero context.
+// on the incoming webhook decides which namespace to query. With a
+// missing team key we fall back to "rubberfit" (the first / primary repo,
+// renamed from "rema-portal" on 2026-05-03). For unmapped team keys, we
+// query the lowercased team key as the namespace.
 
 import { embedText } from "./embeddings"
 
-const DEFAULT_NAMESPACE = "rema-portal"
+const DEFAULT_NAMESPACE = "rubberfit"
 const TOP_K = 6
 const MAX_CHUNK_CHARS = 4_000
 const MAX_TOTAL_CHARS = 18_000
@@ -64,7 +65,7 @@ export interface RetrievedChunk {
 /**
  * Map a Linear team key to a Vectorize namespace. Operator-overridable
  * via OPENCLAW_TEAM_REPO_MAP env var (JSON object, e.g.
- * `{"ARC":"rema-portal","RFD":"rubberfit-desktop"}`). Bad JSON falls
+ * `{"ARC":"rubberfit","RFD":"rubberfit-desktop"}`). Bad JSON falls
  * through to the default rather than crashing the triage pipeline —
  * a wrong namespace just produces zero matches, not an error.
  */

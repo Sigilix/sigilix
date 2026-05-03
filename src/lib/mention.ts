@@ -178,9 +178,13 @@ export function arcInThreadAbove<
   const start = byId.get(sourceId)
   if (!start) return false
   let curId: number | undefined = start.in_reply_to_id
-  // 32-iteration cap defends against pathological cycles.
-  for (let i = 0; i < 32; i++) {
-    if (curId === undefined) return false
+  // Visited-set defends against self-referential / cyclic chains
+  // without a fixed iteration cap (a legitimate long thread can
+  // exceed any small constant — a hard cap there would silently
+  // skip Arc when it's truly above the source).
+  const seen = new Set<number>()
+  while (typeof curId === "number" && !seen.has(curId)) {
+    seen.add(curId)
     const cur = byId.get(curId)
     if (!cur) return false
     if (isArcGithubLogin(cur.user?.login ?? null)) return true

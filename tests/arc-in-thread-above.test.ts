@@ -64,10 +64,29 @@ describe("arcInThreadAbove", () => {
     expect(arcInThreadAbove(comments, 2)).toBe(false)
   })
 
-  it("does not infinite-loop on a self-referential chain (defensive cap)", () => {
+  it("does not infinite-loop on a self-referential chain (cycle detection)", () => {
     // Pathological: comment 1 says it replies to itself.
     const comments = [{ id: 1, in_reply_to_id: 1, user: { login: "danny" } }] as TestComment[]
     expect(arcInThreadAbove(comments, 1)).toBe(false)
+  })
+
+  it("does not infinite-loop on a multi-comment cycle (1 → 2 → 1)", () => {
+    const comments = [
+      { id: 1, in_reply_to_id: 2, user: { login: "danny" } },
+      { id: 2, in_reply_to_id: 1, user: { login: "danny" } },
+    ] as TestComment[]
+    expect(arcInThreadAbove(comments, 1)).toBe(false)
+  })
+
+  it("still finds Arc when the chain exceeds the legacy 32-iter cap", () => {
+    // Build a 100-deep chain of humans with Arc at the very top.
+    // The old fixed cap would return false here even though Arc IS
+    // above; the visited-set fix correctly walks the whole chain.
+    const comments: TestComment[] = [arc(0)]
+    for (let i = 1; i <= 100; i++) {
+      comments.push(human(i, i - 1))
+    }
+    expect(arcInThreadAbove(comments, 100)).toBe(true)
   })
 
   it("handles comments with null user (deleted accounts)", () => {

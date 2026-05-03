@@ -87,40 +87,31 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   const client = await buildClient(env, installationId)
   since("auth-ready")
 
-  // Fetch PR + diff + the source comment + thread context in parallel.
-  // The source comment is what was @-mentioned; thread context is the
-  // surrounding conversation so the model can pick up where the asker
-  // left off.
-  const [meta, diff, sourceComment, thread] = await Promise.all([
-    client.getPullRequest(owner, repo, prNumber),
-    client.getPullRequestDiff(owner, repo, prNumber),
-    fetchSourceComment(client, owner, repo, prNumber, surface, commentId),
-    fetchThread(client, owner, repo, prNumber, surface, commentId, args.threadRootId),
-  ])
-  since("github-fetched", {
-    threadCount: thread.length,
-    sourceFound: sourceComment !== null,
-  })
-
+  // Stage 1 — cheap gate. Fetch ONLY the source comment (and, if we
+  // need to evaluate implicit-thread on review-comment, the review
+  // comment list for the chain walk). This keeps human-only review
+  // replies from burning the full PR/diff/thread fanout, and makes
+  // the 👀 ack land in seconds rather than after the heavy fetch.
+  const sourceComment = await fetchSourceComment(client, owner, repo, prNumber, surface, commentId)
   if (!sourceComment) {
     console.warn("source comment not found", { commentId, surface })
     return
   }
+  since("source-fetched")
 
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
-
-  // Gate: explicit @-mention OR (review-comment surface AND Arc was in
-  // the thread above). The webhook layer queues every reply with an
-  // `in_reply_to_id` for review-comment, so we have to re-check here —
-  // that lets the cheap "fire on any reply" webhook gate stay simple
-  // while the handler enforces the real "Arc was in this thread" rule.
-  // Top-level issue_comment stays mention-only (no real thread chain
-  // on GitHub's side; implicit there = too eager).
   const explicit = bodyMentionsBot(sourceComment.body, triggers)
+
+  // Implicit-thread: only relevant when there's no explicit mention,
+  // and only on review-comment surface (top-level issue_comment has
+  // no chain structure — see comment in src/lib/mention.ts:arcIn-
+  // ThreadAbove). Reuses the paginated listPullRequestReviewComments
+  // result later by passing it to fetchThread, so we don't refetch.
   let implicit = false
+  let cachedReviewComments: ReviewComment[] | null = null
   if (!explicit && surface === "review-comment") {
-    const allReviewComments = await client.listPullRequestReviewComments(owner, repo, prNumber)
-    implicit = arcInThreadAbove(allReviewComments, commentId)
+    cachedReviewComments = await client.listPullRequestReviewComments(owner, repo, prNumber)
+    implicit = arcInThreadAbove(cachedReviewComments, commentId)
   }
   if (!explicit && !implicit) {
     since("skip-no-mention-no-thread")
@@ -131,6 +122,8 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   // asker knows Arc saw the message before the LLM call returns
   // (Ollama Turbo is 30-90s typical). Best-effort — if the reaction
   // call fails for any reason we still proceed with the actual reply.
+  // Fires NOW so the user sees it within ~1s of webhook delivery,
+  // before the PR/diff fetch + Ollama call.
   const addReaction =
     surface === "issue"
       ? client.addReactionToIssueComment.bind(client)
@@ -153,6 +146,26 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     since("empty-question-after-strip")
     return
   }
+
+  // Stage 2 — heavy fanout. Now that we know we're going to reply,
+  // fetch PR meta + diff + thread context in parallel. Reuse the
+  // review-comment list from the implicit-thread check if we have
+  // it (avoids re-paginating).
+  const [meta, diff, thread] = await Promise.all([
+    client.getPullRequest(owner, repo, prNumber),
+    client.getPullRequestDiff(owner, repo, prNumber),
+    fetchThread(
+      client,
+      owner,
+      repo,
+      prNumber,
+      surface,
+      commentId,
+      args.threadRootId,
+      cachedReviewComments
+    ),
+  ])
+  since("github-fetched", { threadCount: thread.length })
 
   // Codebase retrieval scoped to the repo. The Vectorize namespace
   // matches the repo name lowercased (same convention scripts/index-
@@ -271,7 +284,11 @@ async function fetchThread(
   prNumber: number,
   surface: GhMentionSurface,
   commentId: number,
-  threadRootId: number | undefined
+  threadRootId: number | undefined,
+  /** Pre-fetched review comments — avoids re-paginating when the
+   * caller already paid for `listPullRequestReviewComments` (e.g.
+   * for the implicit-thread chain walk). Ignored for "issue" surface. */
+  prefetchedReviewComments?: ReviewComment[] | null
 ): Promise<ThreadEntry[]> {
   if (surface === "issue") {
     const all = await client.listIssueComments(owner, repo, prNumber)
@@ -281,7 +298,9 @@ async function fetchThread(
       .map((c) => issueCommentToEntry(c))
   }
 
-  const all = await client.listPullRequestReviewComments(owner, repo, prNumber)
+  const all =
+    prefetchedReviewComments ??
+    (await client.listPullRequestReviewComments(owner, repo, prNumber))
   const byId = new Map<number, ReviewComment>()
   for (const c of all) byId.set(c.id, c)
   // Always walk up from whichever ID we have. The webhook's

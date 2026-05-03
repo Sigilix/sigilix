@@ -188,15 +188,31 @@ export class GitHubClient {
     return this.restGetText(`/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`, "*/*")
   }
 
-  /** List PR review comments (the inline ones). Used by triage-cr. */
+  /**
+   * List PR review comments (the inline ones). Paginates so callers
+   * doing thread-ancestry walks (e.g. `arcInThreadAbove`) don't get
+   * silently truncated on PRs with >100 review comments — Arc's
+   * parent comment could otherwise be missing from the result and
+   * legitimate replies would be skipped. Mirrors the pagination
+   * pattern in `listIssueComments` above.
+   */
   async listPullRequestReviewComments(
     owner: string,
     repo: string,
     prNumber: number
   ): Promise<ReviewComment[]> {
-    return this.restGet<ReviewComment[]>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100`
-    )
+    const out: ReviewComment[] = []
+    let page = 1
+    while (page < 50) {
+      const items = await this.restGet<ReviewComment[]>(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/comments?per_page=100&page=${page}`
+      )
+      if (!Array.isArray(items) || items.length === 0) break
+      out.push(...items)
+      if (items.length < 100) break
+      page += 1
+    }
+    return out
   }
 
   /**

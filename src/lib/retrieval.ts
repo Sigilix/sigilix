@@ -4,10 +4,10 @@
 // section the prompt already expects.
 //
 // Multi-repo: the index uses one namespace per repo. The Linear team key
-// on the incoming webhook decides which namespace to query. Without a
-// known mapping we fall back to "rubberfit" (the first / primary repo,
-// renamed from "rema-portal" on 2026-05-03) to keep one team's issues
-// from silently returning zero context.
+// on the incoming webhook decides which namespace to query. With a
+// missing team key we fall back to "rubberfit" (the first / primary repo,
+// renamed from "rema-portal" on 2026-05-03). For unmapped team keys, we
+// query the lowercased team key as the namespace.
 
 import { embedText } from "./embeddings"
 

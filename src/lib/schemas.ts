@@ -91,6 +91,9 @@ export const PR_REVIEW_SCHEMA = {
 export const ISSUE_TRIAGE_SCHEMA = {
   type: "object",
   properties: {
+    // Programmatic fields — applied to the Linear issue (priority,
+    // estimate, labels) and used to render the [tag] header. The
+    // model controls these as data, not prose.
     headline: { type: "string" },
     severity: { type: "string", enum: ["P0", "P1", "P2", "P3"] },
     estimate: { type: "string", enum: ["trivial", "S", "M", "L", "XL"] },
@@ -99,17 +102,17 @@ export const ISSUE_TRIAGE_SCHEMA = {
       items: { type: "string" },
       maxItems: 3,
     },
-    summary: { type: "string" },
-    approach: { type: "string" },
-    relevantFiles: {
-      type: "array",
-      items: { type: "string" },
-    },
-    research: { type: "string" },
-    diagram: { type: "string" },
+    // Free-form Markdown body. The model writes whatever shape it
+    // wants here — its own headers, bullet lists, file refs, prior
+    // art, optional Mermaid diagrams. The renderer adds the
+    // [severity · estimate] headline tag above and posts as-is.
+    body: { type: "string" },
+    // Issue-description rewrite — separate codepath that PATCHes
+    // the Linear issue body. Has its own structural rules in the
+    // prompt because it replaces author content in place.
     improvedDescription: { type: "string" },
   },
-  required: ["headline", "severity", "estimate", "labels", "summary", "approach"],
+  required: ["headline", "severity", "estimate", "labels", "body"],
 } as const
 
 /**

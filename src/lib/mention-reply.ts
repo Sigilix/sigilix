@@ -367,7 +367,7 @@ interface FormatArgs {
 function formatReply({ verdict, askerHandle }: FormatArgs): string {
   const lines: string[] = []
   if (askerHandle && !askerHandle.toLowerCase().includes("[bot]")) {
-    lines.push(`@${askerHandle} ⚓`)
+    lines.push(`@${askerHandle}`)
     lines.push("")
   }
   lines.push(verdict.answer)

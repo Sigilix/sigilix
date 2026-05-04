@@ -102,6 +102,34 @@ export function listTeamRepoMappings(
 }
 
 /**
+ * The universe of repo namespaces the agent loop is allowed to query
+ * via `retrieve_codebase`. Resolved in priority order:
+ *   1. `OPENCLAW_INDEXED_REPOS` (comma-separated lowercased slugs) if set —
+ *      explicit override for repos that are indexed but not Linear-team-
+ *      mapped (e.g. the website repo when no Linear team owns it).
+ *   2. Otherwise: the union of repo names in `OPENCLAW_TEAM_GITHUB_REPO_MAP`,
+ *      lowercased and de-duplicated. Each Linear-team-mapped repo is by
+ *      construction one we index, so this is a sensible default.
+ *
+ * Returned slugs are always lowercased (Vectorize namespaces are
+ * lowercased at index time — see scripts/index-repo.mjs).
+ */
+export function listIndexedRepos(env: {
+  OPENCLAW_INDEXED_REPOS?: string
+  OPENCLAW_TEAM_GITHUB_REPO_MAP?: string
+}): string[] {
+  const explicit = (env.OPENCLAW_INDEXED_REPOS ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => s.length > 0)
+  if (explicit.length > 0) return [...new Set(explicit)]
+  const fromMap = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).map((m) =>
+    m.repo.toLowerCase(),
+  )
+  return [...new Set(fromMap)]
+}
+
+/**
  * Resolve the team-key → {owner, repo} mapping for the current Linear
  * team. Used by mention-reply.ts to power the `inferRepo()` callback
  * passed into extractPullRequestRefs.

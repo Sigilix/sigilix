@@ -21,7 +21,7 @@ import { MENTION_REPLY_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
 import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
-import { parseTeamGithubRepo } from "./github-installation"
+import { listIndexedRepos, parseTeamGithubRepo } from "./github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
 import { escapeXmlAttribute, escapeXmlText } from "./xml-escape"
 import { runAgentLoop } from "./agent-loop"
@@ -160,6 +160,12 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         // this the model has to guess; if the team→repo mapping is
         // missing it can't ground retrieval at all.
         repo: inferRepo()?.repo?.toLowerCase() ?? null,
+        // The full set of indexed namespaces the agent is allowed to
+        // query. The team's primary repo (above) is the default, but
+        // the model picks a different namespace from this list when the
+        // issue is clearly about another repo (e.g. ARC-team issue
+        // about the website).
+        availableRepos: listIndexedRepos(env),
       }),
       tools: createAgentTools({
         env,
@@ -361,6 +367,7 @@ interface AgentInitialMessageCtx {
   askerHandle: string
   question: string
   repo: string | null
+  availableRepos: string[]
 }
 
 /**
@@ -370,9 +377,27 @@ interface AgentInitialMessageCtx {
  * codebase chunks + linked PRs and stuffs them into the prompt).
  */
 function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
-  const repoLine = ctx.repo
-    ? `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased repo name '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
-    : "Use your tools to gather context as needed. retrieve_codebase queries against the lowercased repo name (e.g. 'rubberfit') as the namespace; if you cannot determine the right repo from the issue context, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt."
+  // Surface the full set of indexed namespaces so the agent can pick
+  // the right one when an issue is clearly about a different repo than
+  // the team's primary (e.g. an issue in the ARC team about the
+  // marketing site). Tool already accepts an arbitrary `repo` arg —
+  // this just informs the model which choices are valid.
+  const universe = ctx.availableRepos.length > 0
+    ? ctx.availableRepos
+    : ctx.repo
+      ? [ctx.repo]
+      : []
+  const universeText = universe.length > 0 ? universe.map((r) => `'${r}'`).join(", ") : "(none configured)"
+  let repoLine: string
+  if (ctx.repo && universe.length > 1) {
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo (e.g. the asker references a different repo by name, or links to a PR/issue that lives in another repo). Final answer is the JSON shape defined by the system prompt.`
+  } else if (ctx.repo) {
+    repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased repo name '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
+  } else if (universe.length > 0) {
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. Pick the one that matches the issue's subject. If none clearly fits, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt.`
+  } else {
+    repoLine = "Use your tools to gather context as needed. retrieve_codebase queries against the lowercased repo name as the namespace; if you cannot determine the right repo from the issue context, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt."
+  }
   const lines: string[] = [
     "[SURFACE] Linear issue comment",
     `[ISSUE] ${ctx.issueIdentifier} — ${ctx.issueTitle}`,

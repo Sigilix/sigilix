@@ -23,10 +23,7 @@
 //   - Step 3 = human-labeled sample evaluation; this script outputs
 //     enough detail for that to happen quickly.
 //
-// Auth (all four env vars required):
-//   OLLAMA_API_KEY          — same key the worker uses (unused here
-//                             but env-validated for parity with the
-//                             phase3 bake-off script)
+// Auth (three env vars required — OLLAMA is NOT used by this script):
 //   CLOUDFLARE_ACCOUNT_ID   — owns OPENCLAW_STATE KV
 //   CLOUDFLARE_API_TOKEN    — Workers KV Read on the namespace
 //   GH_TOKEN or GITHUB_TOKEN — for fetching Phase 3 reviews from
@@ -263,80 +260,108 @@ function formatCfErrors(json) {
  * if Phase 3 itself failed silently).
  */
 async function fetchPhase3Review({ owner, repo, prNumber, headSha }) {
-  // Get all reviews on the PR + filter to ones submitted on the same SHA.
-  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), GITHUB_REQUEST_TIMEOUT_MS)
-  try {
-    const res = await fetch(url, {
-      headers: {
-        authorization: `Bearer ${githubToken}`,
-        accept: "application/vnd.github+json",
-        "x-github-api-version": "2022-11-28",
-      },
-      signal: ctrl.signal,
-    })
-    if (!res.ok) {
-      const text = await res.text().catch(() => "")
-      throw new Error(`GitHub reviews API HTTP ${res.status}: ${text.slice(0, 500)}`)
-    }
-    const reviews = await res.json()
-    if (!Array.isArray(reviews)) return null
-    // Filter to reviews on this SHA, by arc-copilot, with our dedupe marker.
-    const matching = reviews.filter((r) =>
-      r.commit_id === headSha &&
-      r.user?.login === "arc-copilot[bot]" &&
-      typeof r.body === "string" &&
-      r.body.includes("<!-- openclaw:pr-review -->"),
-    )
-    if (matching.length === 0) return null
-    // Pick the latest (highest submitted_at) — there should usually be
-    // exactly one but defensively handle multiples.
-    matching.sort((a, b) => (a.submitted_at < b.submitted_at ? 1 : -1))
-    const chosen = matching[0]
+  // Reviews list endpoint is paginated; default 30, max 100. Walk
+  // every page so the matching arc-copilot review is never silently
+  // missed because it lives past the first page (CR + arc PR #36 catch).
+  const reviews = await githubGetPaginated(
+    `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+  )
+  // Filter to reviews on this SHA, by arc-copilot, with our dedupe marker.
+  const matching = reviews.filter((r) =>
+    r.commit_id === headSha &&
+    r.user?.login === "arc-copilot[bot]" &&
+    typeof r.body === "string" &&
+    r.body.includes("<!-- openclaw:pr-review -->"),
+  )
+  if (matching.length === 0) return null
+  // Pick the latest (highest submitted_at) — there should usually be
+  // exactly one but defensively handle multiples.
+  matching.sort((a, b) => (a.submitted_at < b.submitted_at ? 1 : -1))
+  const chosen = matching[0]
 
-    // Pull inline comments for this review to reconstruct the findings list.
-    const inline = await fetchReviewInlineComments({ owner, repo, prNumber, reviewId: chosen.id })
+  // Pull inline comments for this review to reconstruct the findings list.
+  const inline = await fetchReviewInlineComments({ owner, repo, prNumber, reviewId: chosen.id })
 
-    return {
-      source: "github_review",
-      reviewId: chosen.id,
-      submittedAt: chosen.submitted_at,
-      state: chosen.state,
-      body: chosen.body,
-      findings: inline.map((c) => ({
-        path: c.path,
-        line: c.line ?? c.original_line ?? null,
-        side: c.side ?? "RIGHT",
-        body: c.body,
-        score: extractScoreFromBody(c.body),
-      })),
-    }
-  } finally {
-    clearTimeout(timer)
+  return {
+    source: "github_review",
+    reviewId: chosen.id,
+    submittedAt: chosen.submitted_at,
+    state: chosen.state,
+    body: chosen.body,
+    findings: inline.map((c) => ({
+      path: c.path,
+      line: c.line ?? c.original_line ?? null,
+      side: c.side ?? "RIGHT",
+      body: c.body,
+      score: extractScoreFromBody(c.body),
+    })),
   }
 }
 
 async function fetchReviewInlineComments({ owner, repo, prNumber, reviewId }) {
   // GitHub only exposes per-review comments via the dedicated endpoint;
   // the PR-comments endpoint conflates reviews. Use the per-review one.
-  const url = `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), GITHUB_REQUEST_TIMEOUT_MS)
-  try {
-    const res = await fetch(url, {
-      headers: {
-        authorization: `Bearer ${githubToken}`,
-        accept: "application/vnd.github+json",
-      },
-      signal: ctrl.signal,
-    })
-    if (!res.ok) return []
-    const json = await res.json()
-    return Array.isArray(json) ? json : []
-  } finally {
-    clearTimeout(timer)
+  // Also paginated (default 30, max 100). Use the same paginated helper
+  // and THROW on non-ok so silent [] doesn't skew comparison metrics
+  // in Phase 4's favor when GitHub returns 401/403/429 (arc PR #36 catch).
+  return githubGetPaginated(
+    `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/comments`,
+  )
+}
+
+/**
+ * Walk a paginated GitHub REST endpoint, returning the concatenated
+ * list of items. Uses `?per_page=100` to minimize round trips and
+ * follows the `Link: rel="next"` header for full coverage. THROWS on
+ * non-2xx so callers can't silently miss pages (arc + CR PR #36 catch).
+ */
+async function githubGetPaginated(baseUrl) {
+  const all = []
+  // Add per_page=100 to the URL (preserve any existing query params).
+  const url0 = new URL(baseUrl)
+  url0.searchParams.set("per_page", "100")
+  let nextUrl = url0.toString()
+  while (nextUrl) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), GITHUB_REQUEST_TIMEOUT_MS)
+    try {
+      const res = await fetch(nextUrl, {
+        headers: {
+          authorization: `Bearer ${githubToken}`,
+          accept: "application/vnd.github+json",
+          "x-github-api-version": "2022-11-28",
+        },
+        signal: ctrl.signal,
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => "")
+        throw new Error(`GitHub API HTTP ${res.status} on ${nextUrl}: ${text.slice(0, 500)}`)
+      }
+      const page = await res.json()
+      if (Array.isArray(page)) all.push(...page)
+      nextUrl = parseLinkHeaderNext(res.headers.get("link"))
+    } finally {
+      clearTimeout(timer)
+    }
   }
+  return all
+}
+
+/**
+ * Extract the `rel="next"` URL from a GitHub Link header. Returns
+ * null when no next page (last page or single page).
+ *
+ * Header looks like:
+ *   <https://api.github.com/...?page=2>; rel="next", <...>; rel="last"
+ */
+function parseLinkHeaderNext(header) {
+  if (!header) return null
+  const parts = header.split(",")
+  for (const part of parts) {
+    const match = part.match(/<([^>]+)>;\s*rel="next"/)
+    if (match) return match[1]
+  }
+  return null
 }
 
 /**

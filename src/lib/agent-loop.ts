@@ -72,6 +72,13 @@ export interface AgentLoopTelemetryRecordInput {
   totalMs: number
   finalAnswer: unknown
   fallback?: string
+  /** Raw model output when fallback is `final_answer_did_not_parse`.
+   *  Only set on that failure mode — null/absent for any other path.
+   *  The sink truncates + redacts before persisting (same treatment
+   *  as agentInitialUserMessage / singleShotPrompt). Without this we
+   *  can see the loop failed but not WHY — was the JSON malformed,
+   *  was it the wrong shape, was it prose, etc. */
+  failureRawAnswer?: string
 }
 
 export interface AgentLoopTelemetrySink {
@@ -641,7 +648,12 @@ export function buildTelemetryRecordInput(
     finalAnswer: result.ok ? result.answer : null,
   }
   if (typeof args.prNumber === "number") out.prNumber = args.prNumber
-  if (!result.ok) out.fallback = result.reason
+  if (!result.ok) {
+    out.fallback = result.reason
+    if (result.reason === "final_answer_did_not_parse") {
+      out.failureRawAnswer = result.rawAnswer
+    }
+  }
   return out
 }
 

@@ -315,6 +315,7 @@ openclaw-worker/
 ├── examples/openclaw-index.yml            # template caller for each tracked repo
 ├── scripts/index-repo.mjs                 # CLI indexer (chunk + embed + upsert to Vectorize)
 ├── scripts/phase3-bakeoff.mjs             # Phase 3 bake-off — replay agent-loop runs through single-shot
+├── scripts/phase4-bakeoff.mjs             # Phase 4 bake-off — paired ensemble vs Phase 3 review comparison
 └── src/
     ├── index.ts                           # main fetch handler — routing + HMAC verify
     ├── prompts/

@@ -30,7 +30,7 @@ const KEY_PREFIX = "agent-loop-telemetry"
 const TTL_DAYS = 30
 
 interface StoredPayload extends Omit<AgentLoopTelemetryRecordInput,
-  "agentInitialUserMessage" | "singleShotPrompt" | "promptBuilderSource"> {
+  "agentInitialUserMessage" | "singleShotPrompt" | "promptBuilderSource" | "failureRawAnswer"> {
   agentInitialUserMessage: string
   agentInitialUserMessageTruncated: boolean
   singleShotPrompt: string
@@ -38,6 +38,10 @@ interface StoredPayload extends Omit<AgentLoopTelemetryRecordInput,
   singleShotPromptHash: string
   singleShotSchemaHash: string
   promptBuilderSourceHash: string
+  /** Truncated + redacted raw model output when the loop ended in
+   *  `final_answer_did_not_parse`. Absent on any other path. */
+  failureRawAnswer?: string
+  failureRawAnswerTruncated?: boolean
 }
 
 let memoizedSourceHash: { source: string; hash: string } | null = null
@@ -99,6 +103,11 @@ async function buildStoredPayload(
   }
   if (typeof input.prNumber === "number") out.prNumber = input.prNumber
   if (input.fallback) out.fallback = input.fallback
+  if (typeof input.failureRawAnswer === "string") {
+    const trunc = truncateAndRedact(input.failureRawAnswer)
+    out.failureRawAnswer = trunc.text
+    out.failureRawAnswerTruncated = trunc.truncated
+  }
   return out
 }
 

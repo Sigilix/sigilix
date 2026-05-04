@@ -34,6 +34,7 @@ import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview } from "./lib/triage-pr-review"
+import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 
@@ -88,6 +89,47 @@ export interface Env {
   // endpoint without redeploying. Both runAgentLoop AND ad-hoc chat()
   // callers honor it.
   OLLAMA_CHAT_ENABLE?: string
+
+  // Phase 4 — multi-agent ensemble PR review (kill-switched off by
+  // default). See .claude/handoff/arc-phase4-spec-v3.1-LOCKED.md.
+  //
+  // Mode gate: "off" | "shadow" | "post". When "off" (default), Phase
+  // 3 single-agent path remains in production. "shadow" runs Phase 3
+  // as customer-facing review AND runs ensemble in parallel for
+  // telemetry only. "post" submits ensemble verdict to GitHub.
+  OPENCLAW_ENSEMBLE_REVIEW_MODE?: string
+  // Comma-separated owner/repo allowlist. When set, ensemble only
+  // fires on these repos. Empty/unset = all repos eligible (use with
+  // care during rollout).
+  OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS?: string
+  // Per-PR cap on total model invocations (counts retries). Default 8
+  // (4 specialists + 1 synth + 3 headroom).
+  OPENCLAW_ENSEMBLE_MAX_MODEL_CALLS_PER_PR?: string
+  // Per-PR cap on retrieve_codebase calls (covers pre-flight + every
+  // specialist follow-up + synth conflict-verification). Default 3.
+  OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string
+  // Daily ensemble call budget (best-effort via KV; 1-2 call overshoot
+  // under concurrent webhooks accepted). Default 200.
+  OPENCLAW_ENSEMBLE_DAILY_BUDGET?: string
+  // Emergency-only: re-enables specialist-verdict fallback when synth
+  // fails in `post` mode. Default off — synth failure falls back to
+  // Phase 3, not raw specialist output.
+  OPENCLAW_ENSEMBLE_ALLOW_SPECIALIST_FALLBACK?: string
+  // Phase 4 router (Option C consolidation): when "on", router decides
+  // which specialists fire based on static signals from the diff
+  // (lockfile→security, auth-path→security, docs-only→none, etc.).
+  // Default "off" = always-fire all four specialists, which is the
+  // baseline-data-collection mode reviewers wanted for Phase 4a.
+  // Phase 4b activation = flag-flip, no code change.
+  OPENCLAW_ENSEMBLE_ROUTER_ENABLED?: string
+
+  // When "on", PRs from a dev-style branch (dev/develop/staging/...)
+  // into a release-style branch (main/master/release/...) skip the
+  // pr-review job. The diff was already reviewed when the feature
+  // branches went into dev; re-running on the dev→main promotion is
+  // duplicate noise + duplicate API spend. pr-overview still fires
+  // so the release PR still gets a summary blurb.
+  OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES?: string
 }
 
 /**
@@ -145,18 +187,37 @@ export type JobMessage =
  *   - pr-overview always fires for opened/synchronize/reopened/ready_for_review.
  *   - pr-review fires the same EXCEPT `reopened` (closing+reopening
  *     a PR doesn't change the diff, so re-reviewing would be noise).
+ *   - When OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES=on, PRs from a
+ *     dev/develop/staging branch into main/master/release skip the
+ *     pr-review job entirely (dev→main is a release-promotion of
+ *     already-reviewed code; re-reviewing doubles spend + adds noise).
+ *     pr-overview still fires so the release PR gets a summary blurb.
  */
 export function decidePullRequestJobs(args: {
   action: string
   draft: boolean
+  baseRef?: string
+  headRef?: string
+  skipReleasePromotions?: boolean
 }): { overview: boolean; review: boolean } {
   if (args.draft) return { overview: false, review: false }
   const supported = ["opened", "synchronize", "reopened", "ready_for_review"]
   if (!supported.includes(args.action)) return { overview: false, review: false }
-  return {
-    overview: true,
-    review: args.action !== "reopened",
+  let review = args.action !== "reopened"
+  if (review && args.skipReleasePromotions && isReleasePromotion(args.baseRef, args.headRef)) {
+    review = false
   }
+  return { overview: true, review }
+}
+
+const RELEASE_BASE_BRANCHES = new Set(["main", "master", "release", "production", "prod"])
+const PROMOTION_HEAD_BRANCHES = new Set(["dev", "develop", "development", "staging", "stage"])
+
+function isReleasePromotion(baseRef: string | undefined, headRef: string | undefined): boolean {
+  if (!baseRef || !headRef) return false
+  const base = baseRef.toLowerCase()
+  const head = headRef.toLowerCase()
+  return RELEASE_BASE_BRANCHES.has(base) && PROMOTION_HEAD_BRANCHES.has(head)
 }
 
 interface LinearWebhookPayload {
@@ -182,7 +243,8 @@ interface GitHubWebhookPayload {
   }
   pull_request?: {
     number?: number
-    head?: { sha?: string }
+    head?: { sha?: string; ref?: string }
+    base?: { ref?: string }
     draft?: boolean
   }
   workflow_run?: {
@@ -338,15 +400,36 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         installationId: job.installationId,
         env,
       })
-    case "pr-review":
-      return handlePrReview({
+    case "pr-review": {
+      // Phase 4 routing: ensemble (shadow/post), Phase 3 agentic, or
+      // Phase 3 single-shot legacy. See triage-pr-review-ensemble.ts
+      // for the full decision matrix.
+      const decision = await routeReview({ env, owner: job.owner, repo: job.repo })
+      const baseArgs = {
         owner: job.owner,
         repo: job.repo,
         prNumber: job.prNumber,
         headSha: job.headSha,
         installationId: job.installationId,
         env,
-      })
+      }
+      if (decision.primary === "ensemble-shadow") {
+        // Shadow: Phase 3 posts the customer-facing review FIRST,
+        // ensemble runs after for telemetry only. Serial per v3.1
+        // catch — simpler pairing invariant.
+        await handlePrReview(baseArgs)
+        await handlePrReviewEnsemble(baseArgs, "shadow")
+        return
+      }
+      if (decision.primary === "ensemble-post") {
+        await handlePrReviewEnsemble(baseArgs, "post")
+        return
+      }
+      // Phase 3 paths (agentic or singleshot-legacy) both go through
+      // handlePrReview — the agentic toggle is gated inside that
+      // function via OPENCLAW_AGENTIC_GITHUB_MODE.
+      return handlePrReview(baseArgs)
+    }
     case "ci-triage":
       return handleCiTriage({
         owner: job.owner,
@@ -521,7 +604,14 @@ async function handleGitHubWebhook(
       return new Response("missing pr\n", { status: 400 })
     }
     if (pr.draft) return new Response("skip draft\n", { status: 200 })
-    const decision = decidePullRequestJobs({ action: action ?? "", draft: false })
+    const decideArgs: Parameters<typeof decidePullRequestJobs>[0] = {
+      action: action ?? "",
+      draft: false,
+      skipReleasePromotions: env.OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES === "on",
+    }
+    if (pr.base?.ref) decideArgs.baseRef = pr.base.ref
+    if (pr.head?.ref) decideArgs.headRef = pr.head.ref
+    const decision = decidePullRequestJobs(decideArgs)
     if (!decision.overview && !decision.review) {
       return new Response("skip pr action\n", { status: 200 })
     }

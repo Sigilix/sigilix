@@ -52,4 +52,72 @@ describe("decidePullRequestJobs", () => {
       })
     }
   })
+
+  describe("release-promotion skip rule", () => {
+    it("skips pr-review on dev → main when skipReleasePromotions=true", () => {
+      const out = decidePullRequestJobs({
+        action: "opened",
+        draft: false,
+        baseRef: "main",
+        headRef: "dev",
+        skipReleasePromotions: true,
+      })
+      expect(out).toEqual({ overview: true, review: false })
+    })
+
+    it.each([
+      ["dev", "main"],
+      ["develop", "main"],
+      ["staging", "main"],
+      ["dev", "master"],
+      ["dev", "release"],
+      ["dev", "production"],
+      ["development", "prod"],
+    ])("skips pr-review on %s → %s with flag on", (head, base) => {
+      const out = decidePullRequestJobs({
+        action: "synchronize",
+        draft: false,
+        baseRef: base,
+        headRef: head,
+        skipReleasePromotions: true,
+      })
+      expect(out.review).toBe(false)
+      expect(out.overview).toBe(true)
+    })
+
+    it("does NOT skip on feature → main even with flag on", () => {
+      // Feature branches → main need full review (they haven't been
+      // reviewed elsewhere first).
+      const out = decidePullRequestJobs({
+        action: "opened",
+        draft: false,
+        baseRef: "main",
+        headRef: "feat/add-login",
+        skipReleasePromotions: true,
+      })
+      expect(out).toEqual({ overview: true, review: true })
+    })
+
+    it("does NOT skip when flag is off (default behavior)", () => {
+      const out = decidePullRequestJobs({
+        action: "opened",
+        draft: false,
+        baseRef: "main",
+        headRef: "dev",
+        skipReleasePromotions: false,
+      })
+      expect(out).toEqual({ overview: true, review: true })
+    })
+
+    it("matches branch names case-insensitively", () => {
+      const out = decidePullRequestJobs({
+        action: "opened",
+        draft: false,
+        baseRef: "MAIN",
+        headRef: "DEV",
+        skipReleasePromotions: true,
+      })
+      expect(out.review).toBe(false)
+    })
+  })
 })

@@ -41,8 +41,15 @@ const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
 const KV_LIST_PAGE_SIZE = 1000
 const DEFAULT_TIMEOUT_MS = 600_000
 const KV_REQUEST_TIMEOUT_MS = 30_000
+const ALLOWED_SURFACES = new Set(["linear-mention", "github-mention"])
 
-const args = parseArgs(process.argv.slice(2))
+let args
+try {
+  args = parseArgs(process.argv.slice(2))
+} catch (e) {
+  console.error(`error: ${e instanceof Error ? e.message : String(e)}`)
+  process.exit(1)
+}
 const apiKey = process.env.OLLAMA_API_KEY
 const cfAccountId = process.env.CLOUDFLARE_ACCOUNT_ID
 const cfApiToken = process.env.CLOUDFLARE_API_TOKEN
@@ -183,16 +190,29 @@ console.log(`[bakeoff] summary: ${join(outDir, "_summary.json")}`)
 function parseArgs(argv) {
   const out = { limit: null, surface: null, out: null }
   for (const arg of argv) {
+    // Fail fast on anything that isn't --key=value. Silently dropping
+    // typos like `--limt=10` or space-separated `--limit 10` causes
+    // unintended full-replay runs because limit stays null.
+    if (!arg.startsWith("--") || !arg.includes("=")) {
+      throw new Error(`invalid argument '${arg}' — expected --key=value`)
+    }
     const eq = arg.indexOf("=")
-    if (eq < 0) continue
-    const k = arg.slice(0, eq).replace(/^--/, "")
+    const k = arg.slice(2, eq)
     const v = arg.slice(eq + 1)
     if (k === "limit") {
       // Strict: only accept a string of digits. `Number.parseInt("10abc",
       // 10)` would happily return 10, silently masking typos.
       out.limit = /^\d+$/.test(v) ? Number(v) : Number.NaN
-    } else if (k === "surface") out.surface = v
-    else if (k === "out") out.out = v
+    } else if (k === "surface") {
+      if (!ALLOWED_SURFACES.has(v)) {
+        throw new Error(`invalid --surface '${v}' — allowed: ${[...ALLOWED_SURFACES].join(", ")}`)
+      }
+      out.surface = v
+    } else if (k === "out") {
+      out.out = v
+    } else {
+      throw new Error(`unknown flag --${k}`)
+    }
   }
   return out
 }

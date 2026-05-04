@@ -1,0 +1,51 @@
+name: Deploy
+
+# Auto-deploy on every push to main. Replaces the older deploy workflow
+# that was removed when we assumed Cloudflare's GitHub-connector would
+# handle it — that connector turned out not to fire for several days of
+# merges (PRs #28, #29, #30 all merged but didn't deploy), forcing
+# manual `wrangler deploy` calls. This brings auto-deploy back in-repo
+# so it lives under our git history and PR review.
+#
+# Required repo secrets (org-level is fine):
+#   CLOUDFLARE_API_TOKEN   — token with Workers Edit permission
+#   CLOUDFLARE_ACCOUNT_ID  — the Cloudflare account that owns the worker
+#
+# Gates: typecheck + tests must pass before `wrangler deploy` runs.
+# A failing test should NEVER produce a production deploy.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push to main while a previous deploy is mid-flight should
+# cancel the older run — only the newest commit needs to land in prod.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

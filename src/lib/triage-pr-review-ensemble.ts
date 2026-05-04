@@ -84,13 +84,85 @@ const ORCHESTRATOR_TIMEOUT_MS = 240_000
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
 
-const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
-  logic: "deepseek-v4-pro:cloud",
-  security: "qwen3-coder:30b:cloud",
-  performance: "minimax-m2.1:cloud",
-  tests: "qwen3-coder:30b:cloud",
+/**
+ * Per-role model lineup with retry/fallback config (v3.1 LOCKED spec
+ * amendment, post-shadow-mode telemetry from PR #35-36 dogfooding).
+ *
+ * Initial v3.1 lineup had two real bugs:
+ *   - `qwen3-coder:30b:cloud` was a phantom — Ollama Turbo's tag list
+ *     doesn't include a 30B variant on cloud (verified via /api/tags).
+ *     Security + tests specialists 404'd on every call.
+ *   - `deepseek-v4-pro:cloud` is the latest reasoning model, capacity-
+ *     constrained on Ollama Turbo's underlying provider; routinely
+ *     returns 503 under demand spikes. With specialist retries
+ *     disabled per original spec, that = silent specialist failure
+ *     and quorum loss.
+ *
+ * After dual sign-off (Codex + Kimi K2.6) the lineup is now:
+ *   - Same primary models where they were working (logic, perf, synth)
+ *   - Replaced phantom qwen3-coder:30b → deepseek-v4-flash for
+ *     security + tests (known-working family member, predictable cost)
+ *   - Cross-provider fallbacks per role (true uncorrelated resilience —
+ *     Kimi-B's argument: same-family fallback fails when the upstream
+ *     provider has an outage, defeating the fallback's purpose)
+ *   - Retries enabled per-role, sized by criticality (logic gets 2,
+ *     others 1, synth 1; user constraint "logic cannot fail").
+ */
+interface ModelConfig {
+  primary: string
+  /** Number of retry attempts on the primary BEFORE falling back. 0 = no retry. */
+  retries: number
+  /** Cross-provider fallback model. null = fail without fallback. */
+  fallback: string | null
 }
-const SYNTHESIZER_MODEL = "kimi-k2.6:cloud"
+
+const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
+  logic: {
+    primary: "deepseek-v4-pro:cloud",
+    retries: 2,
+    fallback: "kimi-k2.5:cloud",  // Moonshot — different infra than DeepSeek
+  },
+  security: {
+    primary: "deepseek-v4-flash:cloud",  // known-working family member
+    retries: 1,
+    fallback: "qwen3-coder-next:cloud",  // cross-provider
+  },
+  performance: {
+    primary: "minimax-m2.1:cloud",  // worked in initial telemetry
+    retries: 1,
+    fallback: "glm-5.1:cloud",  // cross-provider
+  },
+  tests: {
+    primary: "deepseek-v4-flash:cloud",
+    retries: 1,
+    // Reuses qwen3-coder-next:cloud as the cross-provider fallback
+    // rather than devstral-small-2:24b:cloud — the size tag (`24b`)
+    // and the cloud-routing tag (`cloud`) don't compose in Ollama's
+    // syntax (same gotcha that broke `qwen3-coder:30b:cloud`).
+    // qwen3-coder-next has no size tag baked in, so `:cloud` works.
+    fallback: "qwen3-coder-next:cloud",
+  },
+}
+
+const SYNTHESIZER_CONFIG: ModelConfig = {
+  primary: "kimi-k2.6:cloud",
+  retries: 1,
+  fallback: "kimi-k2.5:cloud",
+}
+
+/** @deprecated kept for telemetry compatibility — derive from SPECIALIST_CONFIGS instead */
+const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
+  logic: SPECIALIST_CONFIGS.logic.primary,
+  security: SPECIALIST_CONFIGS.security.primary,
+  performance: SPECIALIST_CONFIGS.performance.primary,
+  tests: SPECIALIST_CONFIGS.tests.primary,
+}
+const SYNTHESIZER_MODEL = SYNTHESIZER_CONFIG.primary
+
+/** Backoff schedule (ms) for retry attempts. 800ms, 2.5s — short
+ *  enough to fit within specialist timeout budget (90s), long enough
+ *  to ride through most transient 503s. */
+const RETRY_BACKOFF_MS = [800, 2500]
 
 // ─── public types ──────────────────────────────────────────────────────
 
@@ -462,44 +534,213 @@ interface SpecialistRunResult {
   failureReason?: string
   failureRawAnswer?: string
   elapsedMs: number
+  /** Which model actually produced the verdict (or last attempted on failure).
+   *  Differs from SPECIALIST_MODELS[role] when fallback fired. */
+  modelUsed: string
+  /** Total model invocations across primary retries + fallback. */
+  attemptsUsed: number
 }
 
 async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
   const t0 = Date.now()
   if (!args.apiKey) {
-    return { verdict: null, failureReason: "missing_api_key", elapsedMs: 0 }
+    return {
+      verdict: null,
+      failureReason: "missing_api_key",
+      elapsedMs: 0,
+      modelUsed: SPECIALIST_CONFIGS[args.role].primary,
+      attemptsUsed: 0,
+    }
   }
   const messages: ChatMessage[] = [
     { role: "system", content: args.systemPrompt },
     { role: "user", content: args.initialMessage },
   ]
+  const config = SPECIALIST_CONFIGS[args.role]
+  return runWithRetryAndFallback({
+    config,
+    apiKey: args.apiKey,
+    messages,
+    signal: args.signal,
+    chatEnabled: args.chatEnabled,
+    format: PR_REVIEW_SCHEMA as unknown as Record<string, unknown>,
+    parseAnswer: parsePrReviewResponse,
+    parseFailureLabel: "specialist_did_not_parse",
+    startedAt: t0,
+  })
+}
+
+/**
+ * Run a chat call with retry + cross-provider fallback. Used by both
+ * specialist and synthesizer paths to centralize the retry policy
+ * (added post-shadow-mode telemetry; original v3.1 spec disabled
+ * retries for cost reasons but capacity 503s on frontier models made
+ * that untenable for the logic specialist specifically).
+ *
+ * Sequence:
+ *   1. Try primary (attempt 1)
+ *   2. If retryable failure (503/429/network/abort-not-from-orch) AND
+ *      retries remaining → backoff + retry (attempts 2..N+1)
+ *   3. If primary exhausted AND fallback configured → try fallback once
+ *   4. Return final outcome (success OR last failure)
+ *
+ * Parse failures are NOT retried — they indicate a model output
+ * problem, not a capacity problem; retrying the same prompt at
+ * temperature 0 will yield the same bad output.
+ */
+async function runWithRetryAndFallback<T>(args: {
+  config: ModelConfig
+  apiKey: string
+  messages: ChatMessage[]
+  signal: AbortSignal
+  chatEnabled: "on" | "off"
+  format: Record<string, unknown> | undefined
+  parseAnswer: (content: string) => T | null
+  parseFailureLabel: string
+  startedAt: number
+}): Promise<{
+  verdict: T | null
+  failureReason?: string
+  failureRawAnswer?: string
+  elapsedMs: number
+  modelUsed: string
+  attemptsUsed: number
+}> {
+  const { config, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel, startedAt } = args
+
+  let attemptsUsed = 0
+  let lastFailureReason: string | undefined
+  let lastFailureRaw: string | undefined
+
+  // Try primary with retries
+  for (let attempt = 0; attempt <= config.retries; attempt++) {
+    if (signal.aborted) {
+      return wrapFailure("aborted", undefined, config.primary, attemptsUsed, startedAt)
+    }
+    if (attempt > 0) {
+      // Backoff before retry
+      const delay = RETRY_BACKOFF_MS[attempt - 1] ?? RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1] ?? 0
+      await sleepWithSignal(delay, signal)
+      if (signal.aborted) {
+        return wrapFailure("aborted", undefined, config.primary, attemptsUsed, startedAt)
+      }
+    }
+    attemptsUsed++
+    const outcome = await attemptChat({ model: config.primary, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel })
+    if (outcome.verdict !== null) {
+      return {
+        verdict: outcome.verdict,
+        elapsedMs: Date.now() - startedAt,
+        modelUsed: config.primary,
+        attemptsUsed,
+      }
+    }
+    lastFailureReason = outcome.failureReason
+    lastFailureRaw = outcome.failureRawAnswer
+    // Don't retry parse failures — same prompt at temp=0 produces same output.
+    if (outcome.failureReason === parseFailureLabel) break
+  }
+
+  // Primary exhausted. Try fallback.
+  if (config.fallback && !signal.aborted) {
+    attemptsUsed++
+    const outcome = await attemptChat({ model: config.fallback, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel })
+    if (outcome.verdict !== null) {
+      return {
+        verdict: outcome.verdict,
+        elapsedMs: Date.now() - startedAt,
+        modelUsed: config.fallback,
+        attemptsUsed,
+      }
+    }
+    // Fallback also failed. Use ITS failure as the reason (more recent + relevant).
+    return wrapFailure(
+      `fallback_failed: ${outcome.failureReason ?? "unknown"}`,
+      outcome.failureRawAnswer,
+      config.fallback,
+      attemptsUsed,
+      startedAt,
+    )
+  }
+
+  return wrapFailure(lastFailureReason ?? "exhausted_no_fallback", lastFailureRaw, config.primary, attemptsUsed, startedAt)
+}
+
+function wrapFailure<T>(
+  reason: string,
+  rawAnswer: string | undefined,
+  modelUsed: string,
+  attemptsUsed: number,
+  startedAt: number,
+): {
+  verdict: T | null
+  failureReason?: string
+  failureRawAnswer?: string
+  elapsedMs: number
+  modelUsed: string
+  attemptsUsed: number
+} {
+  const out: ReturnType<typeof wrapFailure<T>> = {
+    verdict: null,
+    elapsedMs: Date.now() - startedAt,
+    modelUsed,
+    attemptsUsed,
+  }
+  if (reason) out.failureReason = reason
+  if (rawAnswer) out.failureRawAnswer = rawAnswer
+  return out
+}
+
+async function attemptChat<T>(args: {
+  model: string
+  apiKey: string
+  messages: ChatMessage[]
+  signal: AbortSignal
+  chatEnabled: "on" | "off"
+  format: Record<string, unknown> | undefined
+  parseAnswer: (content: string) => T | null
+  parseFailureLabel: string
+}): Promise<{ verdict: T | null; failureReason?: string; failureRawAnswer?: string }> {
   try {
     const result = await chat({
-      model: SPECIALIST_MODELS[args.role],
-      messages,
+      model: args.model,
+      messages: args.messages,
       apiKey: args.apiKey,
       signal: args.signal,
       chatEnabled: args.chatEnabled,
-      format: PR_REVIEW_SCHEMA as unknown as Record<string, unknown>,
+      ...(args.format ? { format: args.format } : {}),
       temperature: 0,
     })
-    const verdict = parsePrReviewResponse(result.message.content)
+    const verdict = args.parseAnswer(result.message.content)
     if (!verdict) {
       return {
         verdict: null,
-        failureReason: "specialist_did_not_parse",
+        failureReason: args.parseFailureLabel,
         failureRawAnswer: result.message.content.slice(0, 32_000),
-        elapsedMs: Date.now() - t0,
       }
     }
-    return { verdict, elapsedMs: Date.now() - t0 }
+    return { verdict }
   } catch (e) {
     return {
       verdict: null,
       failureReason: e instanceof Error ? e.message : String(e),
-      elapsedMs: Date.now() - t0,
     }
   }
+}
+
+async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
+  if (ms <= 0) return
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      { once: true },
+    )
+  })
 }
 
 // ─── synthesizer runner ───────────────────────────────────────────────
@@ -518,6 +759,8 @@ interface SynthesizerRunOutput {
   failureReason?: string
   failureRawAnswer?: string
   elapsedMs: number
+  modelUsed: string
+  attemptsUsed: number
 }
 
 export interface SynthesizerProvenance {
@@ -536,79 +779,92 @@ export interface SynthesizerProvenance {
   retrievalCallsUsed: number
 }
 
+/**
+ * Composite type the synth retry path emits — both verdict + provenance
+ * are needed for a successful synth, so the runWithRetryAndFallback
+ * helper treats this as the parsed-answer shape.
+ */
+interface SynthParsedOutput {
+  verdict: PrReviewVerdict
+  provenance: SynthesizerProvenance
+}
+
+function parseSynthAnswer(content: string): SynthParsedOutput | null {
+  // Expect `{verdict: PrReviewVerdict, provenance: {...}}`.
+  const parsed = parseFirstJsonObject(content)
+  if (!parsed) return null
+  const verdict = parsePrReviewResponse(JSON.stringify(parsed.verdict))
+  if (!verdict) return null
+  if (!isValidProvenance(parsed.provenance)) return null
+  return { verdict, provenance: parsed.provenance }
+}
+
 async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
   const t0 = Date.now()
   if (!args.apiKey) {
-    return { verdict: null, provenance: null, failureReason: "missing_api_key", elapsedMs: 0 }
+    return {
+      verdict: null,
+      provenance: null,
+      failureReason: "missing_api_key",
+      elapsedMs: 0,
+      modelUsed: SYNTHESIZER_CONFIG.primary,
+      attemptsUsed: 0,
+    }
   }
 
-  // Phase 4a: synthesizer is a single chat() call (no tools yet).
-  // Phase 4b can extend to give it retrieve_codebase for sev≥4 conflicts.
   const messages: ChatMessage[] = [
     { role: "system", content: args.systemPrompt },
     { role: "user", content: args.userMessage },
   ]
-  let raw: string
-  try {
-    const result = await chat({
-      model: SYNTHESIZER_MODEL,
-      messages,
-      apiKey: args.apiKey,
-      signal: args.signal,
-      chatEnabled: args.chatEnabled,
-      // No format here — synth output is `{verdict, provenance}` which
-      // doesn't match PR_REVIEW_SCHEMA shape directly. Tolerated by
-      // parseFirstJsonObject + post-validation.
-      temperature: 0,
-    })
-    raw = result.message.content
-  } catch (e) {
+
+  // No `format` arg here — synth output is `{verdict, provenance}` which
+  // doesn't match PR_REVIEW_SCHEMA shape directly. Tolerated by
+  // parseFirstJsonObject + post-validation.
+  const outcome = await runWithRetryAndFallback<SynthParsedOutput>({
+    config: SYNTHESIZER_CONFIG,
+    apiKey: args.apiKey,
+    messages,
+    signal: args.signal,
+    chatEnabled: args.chatEnabled,
+    format: undefined,
+    parseAnswer: parseSynthAnswer,
+    parseFailureLabel: "synth_failed_parse",
+    startedAt: t0,
+  })
+
+  if (outcome.verdict) {
     return {
-      verdict: null,
-      provenance: null,
-      failureReason: e instanceof Error ? e.message : String(e),
-      elapsedMs: Date.now() - t0,
+      verdict: outcome.verdict.verdict,
+      provenance: outcome.verdict.provenance,
+      elapsedMs: outcome.elapsedMs,
+      modelUsed: outcome.modelUsed,
+      attemptsUsed: outcome.attemptsUsed,
     }
   }
 
-  // Parse: expect `{verdict: PrReviewVerdict, provenance: {...}}`.
-  const parsed = parseFirstJsonObject(raw)
-  if (!parsed) {
-    return {
-      verdict: null,
-      provenance: null,
-      failureReason: "synth_failed_parse",
-      failureRawAnswer: raw.slice(0, 32_000),
-      elapsedMs: Date.now() - t0,
+  // Distinguish parse-vs-provenance failures in telemetry. parseSynthAnswer
+  // returns null for either case, but we lose the distinction inside the
+  // retry helper. Re-parse the raw answer here to label the failure
+  // accurately (CR PR #35 catch — telemetry consumers need this split).
+  let failureReason = outcome.failureReason ?? "synth_failed_parse"
+  if (outcome.failureRawAnswer) {
+    const parsed = parseFirstJsonObject(outcome.failureRawAnswer)
+    const hasVerdict = parsed && parsePrReviewResponse(JSON.stringify(parsed.verdict))
+    if (hasVerdict && !isValidProvenance(parsed?.provenance)) {
+      failureReason = "synth_invalid_provenance"
     }
   }
 
-  const verdict = parsePrReviewResponse(JSON.stringify(parsed.verdict))
-  const provenance = isValidProvenance(parsed.provenance) ? (parsed.provenance as SynthesizerProvenance) : null
-
-  if (!verdict) {
-    return {
-      verdict: null,
-      provenance: null,
-      failureReason: "synth_failed_parse",
-      failureRawAnswer: raw.slice(0, 32_000),
-      elapsedMs: Date.now() - t0,
-    }
+  const result: SynthesizerRunOutput = {
+    verdict: null,
+    provenance: null,
+    elapsedMs: outcome.elapsedMs,
+    modelUsed: outcome.modelUsed,
+    attemptsUsed: outcome.attemptsUsed,
   }
-  if (!provenance) {
-    return {
-      verdict: null,
-      provenance: null,
-      failureReason: "synth_invalid_provenance",
-      failureRawAnswer: raw.slice(0, 32_000),
-      elapsedMs: Date.now() - t0,
-    }
-  }
-  return {
-    verdict,
-    provenance,
-    elapsedMs: Date.now() - t0,
-  }
+  if (failureReason) result.failureReason = failureReason
+  if (outcome.failureRawAnswer) result.failureRawAnswer = outcome.failureRawAnswer
+  return result
 }
 
 function isValidProvenance(value: unknown): value is SynthesizerProvenance {

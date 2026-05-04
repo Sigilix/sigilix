@@ -205,10 +205,23 @@ describe("listIndexedRepos", () => {
     ).toEqual(["rubberfit"])
   })
 
-  it("returns empty array when both inputs are missing/empty", () => {
+  it("returns empty array when both inputs are unset", () => {
     expect(listIndexedRepos({})).toEqual([])
-    expect(listIndexedRepos({ OPENCLAW_INDEXED_REPOS: "" })).toEqual([])
-    expect(listIndexedRepos({ OPENCLAW_INDEXED_REPOS: " , , " })).toEqual([])
+  })
+
+  it("treats an empty/whitespace OPENCLAW_INDEXED_REPOS as authoritative (locks to nothing) — does NOT fall back", () => {
+    // CR PR #30 catch: presence of the var is the override signal, not
+    // whether parsed entries are non-empty. An operator setting the
+    // var to "" or whitespace is intentionally locking the universe
+    // down — falling back to the map would make the override
+    // ambiguous.
+    const teamMap = JSON.stringify({ ARC: { owner: "x", repo: "rubberfit" } })
+    expect(
+      listIndexedRepos({ OPENCLAW_INDEXED_REPOS: "", OPENCLAW_TEAM_GITHUB_REPO_MAP: teamMap }),
+    ).toEqual([])
+    expect(
+      listIndexedRepos({ OPENCLAW_INDEXED_REPOS: " , , ", OPENCLAW_TEAM_GITHUB_REPO_MAP: teamMap }),
+    ).toEqual([])
   })
 
   it("returns empty array on malformed team-repo JSON (soft-fail)", () => {

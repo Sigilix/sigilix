@@ -44,6 +44,13 @@ export interface AgentToolsContext {
     defaultRef: string
     installationId: number
   }
+  /** Optional allow-list of lowercased Vectorize namespaces the
+   *  `retrieve_codebase` tool will accept. When set and non-empty, a
+   *  call with a `repo` outside the list returns a recoverable
+   *  `{ok:false, error, allowedRepos}` so the model can pick again.
+   *  When unset OR empty, the tool accepts any value (back-compat with
+   *  GitHub-mention surface that doesn't pass this). */
+  allowedRepos?: string[]
 }
 
 export interface AgentTool {
@@ -98,6 +105,20 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       const repo = typeof args.repo === "string" ? args.repo : ""
       if (!query || !repo) {
         return { ok: false, error: "retrieve_codebase requires non-empty `query` and `repo` strings" }
+      }
+      // CR PR #30 catch: enforce the namespace universe at execution
+      // time, not just in prompt text. Otherwise the model could query
+      // an unindexed namespace, retrieveChunks would soft-fail to [],
+      // and the model gets no hint that its choice was invalid.
+      if (ctx.allowedRepos && ctx.allowedRepos.length > 0) {
+        const lower = repo.toLowerCase()
+        if (!ctx.allowedRepos.includes(lower)) {
+          return {
+            ok: false,
+            error: `repo '${repo}' is not in the indexed namespace set`,
+            allowedRepos: ctx.allowedRepos,
+          }
+        }
       }
       // The signal here is the loop's wall-clock signal; if it fires
       // mid-retrieval, the underlying embed/query calls will see it

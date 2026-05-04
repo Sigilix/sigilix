@@ -118,11 +118,18 @@ export function listIndexedRepos(env: {
   OPENCLAW_INDEXED_REPOS?: string
   OPENCLAW_TEAM_GITHUB_REPO_MAP?: string
 }): string[] {
-  const explicit = (env.OPENCLAW_INDEXED_REPOS ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter((s) => s.length > 0)
-  if (explicit.length > 0) return [...new Set(explicit)]
+  // CR PR #30 catch: presence-based check. If OPENCLAW_INDEXED_REPOS is
+  // DEFINED at all (even empty/whitespace), treat it as authoritative —
+  // an explicit "intentionally lock down to nothing" reading. Falling
+  // back to the team-repo map only when the var is truly unset removes
+  // the ambiguous middle ground.
+  if (env.OPENCLAW_INDEXED_REPOS !== undefined) {
+    const explicit = env.OPENCLAW_INDEXED_REPOS
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s.length > 0)
+    return [...new Set(explicit)]
+  }
   const fromMap = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).map((m) =>
     m.repo.toLowerCase(),
   )

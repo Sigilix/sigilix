@@ -162,6 +162,66 @@ describe("retrieve_codebase", () => {
       tool!.execute({ query: "x", repo: "y" }, ctrl.signal, new Map()),
     ).rejects.toThrow(/aborted/)
   })
+
+  it("rejects out-of-allowedRepos as recoverable (does not throw, includes valid choices)", async () => {
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: ["rubberfit", "arc-and-anchor-website"],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "made-up-repo" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string; allowedRepos: string[] }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/'made-up-repo' is not in the indexed namespace set/)
+    expect(result.allowedRepos).toEqual(["rubberfit", "arc-and-anchor-website"])
+    expect(mockRetrieveChunks).not.toHaveBeenCalled()
+  })
+
+  it("matches allowedRepos case-insensitively", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: ["rubberfit"],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "RubberFit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean }
+    expect(result.ok).toBe(true)
+    expect(mockRetrieveChunks).toHaveBeenCalledOnce()
+  })
+
+  it("accepts any repo when allowedRepos is unset (back-compat with existing GitHub-mention surface)", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
+    const result = (await tool!.execute(
+      { query: "x", repo: "anything" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean }
+    expect(result.ok).toBe(true)
+    expect(mockRetrieveChunks).toHaveBeenCalledOnce()
+  })
+
+  it("accepts any repo when allowedRepos is empty array (treated as 'no restriction')", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: [],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "anything" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean }
+    expect(result.ok).toBe(true)
+  })
 })
 
 describe("fetch_pr", () => {

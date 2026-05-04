@@ -142,6 +142,11 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
 
   if (env.OPENCLAW_AGENTIC_LINEAR_MODE === "on") {
     log("agent-loop-start")
+    // Resolved once so the prompt's advisory list and the tool's
+    // hard enforcement can't drift (CR PR #30 caught the gap where
+    // the prompt advertised the universe but the tool didn't enforce
+    // it — the model could still query unindexed namespaces).
+    const availableRepos = listIndexedRepos(env)
     const loopResult = await runAgentLoop({
       model,
       apiKey: env.OLLAMA_API_KEY,
@@ -165,11 +170,16 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         // the model picks a different namespace from this list when the
         // issue is clearly about another repo (e.g. ARC-team issue
         // about the website).
-        availableRepos: listIndexedRepos(env),
+        availableRepos,
       }),
       tools: createAgentTools({
         env,
         surface: "linear-mention",
+        // Same set the prompt advertises — enforced inside
+        // retrieve_codebase so a hallucinated namespace gets a
+        // recoverable error with the valid choices, not a silent
+        // empty-result.
+        allowedRepos: availableRepos,
         // Linear surface — no GitHub auth/repo identity, so no fetch_pr/read_file_lines.
       }),
       finalAnswerSchema: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,

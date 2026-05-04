@@ -199,7 +199,10 @@ export async function handlePrReviewEnsemble(
 
     // ─── Router decision ───────────────────────────────────────
     const totalLinesChanged = countLines(diff)
-    const router = decideSpecialists({ paths: filePaths, totalLinesChanged }, env)
+    // CR PR #35 catch: pass diffText so the router can content-aware
+    // check markdown fenced code blocks before taking the docs-only
+    // shortcut.
+    const router = decideSpecialists({ paths: filePaths, totalLinesChanged, diffText: diff }, env)
     telemetry.routerDecision = router
 
     if (router.specialists.length === 0) {
@@ -381,6 +384,12 @@ function isRepoAllowed(
   return list.includes(target)
 }
 
+// Maximum model calls one ensemble run can possibly consume:
+//   4 specialists + 1 synthesizer = 5
+// Used to pre-check the daily budget at admission so a single PR
+// doesn't admit-then-overshoot the cap by ~5 calls (CR PR #35 catch).
+const MAX_CALLS_PER_ENSEMBLE_RUN = 5
+
 async function dailyBudgetAvailable(env: Env): Promise<boolean> {
   const cap = parseIntEnv(env.OPENCLAW_ENSEMBLE_DAILY_BUDGET, DEFAULT_DAILY_BUDGET)
   if (cap <= 0) return false
@@ -388,7 +397,12 @@ async function dailyBudgetAvailable(env: Env): Promise<boolean> {
   const key = `ensemble-budget:${today}`
   const raw = await env.OPENCLAW_STATE.get(key)
   const used = raw ? Number.parseInt(raw, 10) : 0
-  return used < cap
+  // CR catch: previously checked `used < cap`, which could admit a PR
+  // when only 1 call of headroom remained, then finalize would charge 5.
+  // Now require room for a FULL ensemble run before admitting. Best-
+  // effort under concurrent webhooks (KV race window 1-2 calls,
+  // documented in v3.1 spec) but no longer per-PR overshoot by 5.
+  return used + MAX_CALLS_PER_ENSEMBLE_RUN <= cap
 }
 
 async function incrementDailyBudget(env: Env, by: number): Promise<void> {
@@ -593,9 +607,30 @@ async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunO
 }
 
 function isValidProvenance(value: unknown): value is SynthesizerProvenance {
+  // CR PR #35 catch: tighten shape check beyond "are findings + dropped
+  // arrays?" — without this, a payload like `{findings:[{}], dropped:[],
+  // retrievalCallsUsed:0}` passes and validateForSubmission then crashes
+  // on `provenance.findings[i].sourceFindingIds.length` (undefined).
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const v = value as Record<string, unknown>
-  return Array.isArray(v.findings) && Array.isArray(v.dropped) && typeof v.retrievalCallsUsed === "number"
+  if (!Array.isArray(v.findings) || !Array.isArray(v.dropped) || typeof v.retrievalCallsUsed !== "number") {
+    return false
+  }
+  // Each provenance.findings[i] must have an array sourceFindingIds.
+  // The hallucination guard in validateForSubmission relies on this.
+  for (const f of v.findings) {
+    if (!f || typeof f !== "object" || Array.isArray(f)) return false
+    const entry = f as Record<string, unknown>
+    if (!Array.isArray(entry.sourceFindingIds)) return false
+    if (!entry.sourceFindingIds.every((id) => typeof id === "string")) return false
+  }
+  // dropped entries are looser — they're informational only and never
+  // dereferenced into the customer-facing verdict, but still validate
+  // for shape stability.
+  for (const d of v.dropped) {
+    if (!d || typeof d !== "object" || Array.isArray(d)) return false
+  }
+  return true
 }
 
 // ─── verdict post-processing ──────────────────────────────────────────
@@ -734,12 +769,17 @@ export function validateForSubmission(args: {
     const f = synthOutput.verdict.findings[i]!
     const provenance = synthOutput.provenance.findings[i]
 
-    // Hallucination guard
-    if (!provenance || provenance.sourceFindingIds.length === 0) {
+    // Hallucination guard. Defensive against malformed provenance
+    // even though isValidProvenance pre-validated (belt + suspenders
+    // per CR PR #35 — provenance might be partially valid).
+    const sourceIds = Array.isArray(provenance?.sourceFindingIds)
+      ? provenance.sourceFindingIds
+      : []
+    if (sourceIds.length === 0) {
       droppedForHallucination++
       continue
     }
-    if (!provenance.sourceFindingIds.every((id) => validIds.has(id))) {
+    if (!sourceIds.every((id) => validIds.has(id))) {
       droppedForHallucination++
       continue
     }

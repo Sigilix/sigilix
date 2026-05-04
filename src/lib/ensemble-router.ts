@@ -57,6 +57,11 @@ export interface DiffSignals {
   paths: string[]
   /** Total lines changed across all files (informational only — NOT a routing signal). */
   totalLinesChanged: number
+  /** Raw unified diff text. Used for content-aware checks: e.g. detecting
+   *  fenced code blocks in markdown-only PRs (CR PR #35 catch). When
+   *  unavailable (callers that don't pass it), content-aware checks fail
+   *  closed — the docs-only shortcut is NOT taken. */
+  diffText?: string
 }
 
 /**
@@ -101,12 +106,25 @@ export function decideSpecialists(
   // sensitive paths) → just overview, no specialists. Maximally
   // conservative: any non-doc file present means we don't take this
   // shortcut.
+  //
+  // CR PR #35 catch: extension-only check is unsafe — markdown can
+  // carry executable fenced code blocks (sh/bash, yaml, dockerfile,
+  // hcl/tf, json IaC config). Reviewers explicitly flagged this as
+  // a docs-only blind spot. Skip the shortcut if added markdown
+  // contains suspicious fenced content. Fail closed: when diffText
+  // isn't passed, treat as "might contain fences" → don't shortcut.
   if (fileTypes.allDocsOnly && forced.size === 0) {
-    return {
-      specialists: [],
-      reason: "docs_only_no_specialists",
-      routerEnabled: true,
+    const hasSuspiciousFences = signals.diffText === undefined
+      || diffContainsExecutableMarkdownFences(signals.diffText)
+    if (!hasSuspiciousFences) {
+      return {
+        specialists: [],
+        reason: "docs_only_no_specialists",
+        routerEnabled: true,
+      }
     }
+    // Fall through — docs-only-with-fences gets the default ensemble
+    // so security/logic can review what the fenced code actually does.
   }
 
   // Pure CSS-only PRs → skip logic/security/tests; perf still relevant
@@ -212,6 +230,49 @@ function touchesPackagesOrLockfile(paths: string[]): boolean {
       name === "gemfile.lock"
     )
   })
+}
+
+/**
+ * Detect whether the added lines in a unified diff contain markdown
+ * fenced code blocks with executable / sensitive languages. CR PR #35
+ * catch: docs-only PRs aren't safe to skip when they include shell
+ * commands, GitHub Actions YAML, Dockerfile fragments, IaC, etc.
+ *
+ * Looks at lines starting with `+` (added content) for the opening of
+ * a fenced block: ```<lang>. Languages flagged as suspicious include
+ * shell variants, infra/config DSLs, and anything that could carry
+ * deploy/auth/security implications.
+ */
+const SUSPICIOUS_FENCE_LANGUAGES = new Set([
+  "sh", "bash", "shell", "zsh", "fish", "powershell", "ps", "ps1",
+  "yaml", "yml", "json",
+  "dockerfile", "docker",
+  "hcl", "tf", "terraform",
+  "groovy",  // Jenkins
+  "ts", "typescript", "js", "javascript",
+  "py", "python",
+  "rb", "ruby",
+  "go",
+  "rs", "rust",
+  "sql",
+  "nginx", "apache",
+])
+
+function diffContainsExecutableMarkdownFences(diff: string): boolean {
+  if (!diff || typeof diff !== "string") return false
+  const lines = diff.split("\n")
+  for (const line of lines) {
+    if (!line.startsWith("+") || line.startsWith("+++")) continue
+    // Strip the leading "+", trim, look for fenced opener.
+    const content = line.slice(1).trimStart()
+    const match = content.match(/^```(\w+)/)
+    if (!match) continue
+    const lang = match[1]?.toLowerCase()
+    if (lang && SUSPICIOUS_FENCE_LANGUAGES.has(lang)) {
+      return true
+    }
+  }
+  return false
 }
 
 /**

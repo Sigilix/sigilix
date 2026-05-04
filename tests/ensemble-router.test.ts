@@ -45,14 +45,72 @@ describe("decideSpecialists — router ON (Phase 4b activation)", () => {
     expect(decision.routerEnabled).toBe(true)
   })
 
-  it("returns NO specialists for docs-only PRs (overview only)", () => {
+  it("returns NO specialists for docs-only PRs WITH safe content (no executable fences)", () => {
+    // Empty diffText → fail closed; supply benign markdown to take the shortcut.
+    const benignDiff = [
+      "diff --git a/README.md b/README.md",
+      "+++ b/README.md",
+      "@@ -1,2 +1,3 @@",
+      "+# Heading",
+      "+",
+      "+Just some prose with `inline code`.",
+    ].join("\n")
     const decision = decideSpecialists(
-      { paths: ["README.md", "CONTRIBUTING.md", "docs/intro.mdx"], totalLinesChanged: 30 },
+      { paths: ["README.md", "CONTRIBUTING.md", "docs/intro.mdx"], totalLinesChanged: 30, diffText: benignDiff },
       onEnv,
     )
     expect(decision.specialists).toEqual([])
     expect(decision.reason).toBe("docs_only_no_specialists")
   })
+
+  it("FAILS CLOSED on docs-only when diffText is not provided (router can't be sure content is safe)", () => {
+    // CR PR #35 catch: extension-only check is unsafe. Without diffText
+    // the router falls through to the default-all-four path because
+    // it can't verify the markdown doesn't contain executable fences.
+    const decision = decideSpecialists(
+      { paths: ["README.md"], totalLinesChanged: 30 },  // no diffText
+      onEnv,
+    )
+    expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
+  })
+
+  it("does NOT skip docs-only when markdown contains executable fences (sh/bash)", () => {
+    const dangerousDiff = [
+      "diff --git a/docs/setup.md b/docs/setup.md",
+      "+++ b/docs/setup.md",
+      "@@ -1,2 +1,5 @@",
+      "+# Setup",
+      "+",
+      "+```bash",
+      "+curl https://example.com/install.sh | sudo bash",
+      "+```",
+    ].join("\n")
+    const decision = decideSpecialists(
+      { paths: ["docs/setup.md"], totalLinesChanged: 5, diffText: dangerousDiff },
+      onEnv,
+    )
+    // Bash fence found → docs-only shortcut skipped → run default ensemble.
+    expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
+  })
+
+  it.each(["yaml", "dockerfile", "hcl", "terraform", "json", "powershell", "sql"])(
+    "does NOT skip docs-only when markdown contains a %s fenced block",
+    (lang) => {
+      const diff = [
+        "diff --git a/docs/x.md b/docs/x.md",
+        "+++ b/docs/x.md",
+        "@@ -1,1 +1,3 @@",
+        `+\`\`\`${lang}`,
+        "+content",
+        "+```",
+      ].join("\n")
+      const decision = decideSpecialists(
+        { paths: ["docs/x.md"], totalLinesChanged: 3, diffText: diff },
+        onEnv,
+      )
+      expect(decision.specialists).toEqual([...ALL_SPECIALISTS])
+    },
+  )
 
   it("returns ONLY performance for CSS-only PRs", () => {
     const decision = decideSpecialists(

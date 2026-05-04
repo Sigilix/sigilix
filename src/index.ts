@@ -422,7 +422,15 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         return
       }
       if (decision.primary === "ensemble-post") {
-        await handlePrReviewEnsemble(baseArgs, "post")
+        // CR PR #35 catch: ensemble-post can return "skipped"/"errored"
+        // for stale-head, quorum, synth-parse, and internal-error
+        // paths. Without this fallback the PR gets no customer-facing
+        // review at all (the queue still acks). Fall through to
+        // Phase 3 single-agent on any non-success.
+        const result = await handlePrReviewEnsemble(baseArgs, "post")
+        if (result.status !== "posted") {
+          await handlePrReview(baseArgs)
+        }
         return
       }
       // Phase 3 paths (agentic or singleshot-legacy) both go through

@@ -26,6 +26,7 @@ import type {
   ChatToolDef,
 } from "./ollama-chat"
 import type { AgentTool } from "./agent-tools"
+import { parseFirstJsonObject } from "./json-extract"
 import type { Env } from "../index"
 
 // ──────────────────────────────────────────────────────────────── types
@@ -72,6 +73,13 @@ export interface AgentLoopTelemetryRecordInput {
   totalMs: number
   finalAnswer: unknown
   fallback?: string
+  /** Raw model output when fallback is `final_answer_did_not_parse`.
+   *  Only set on that failure mode — null/absent for any other path.
+   *  The sink truncates + redacts before persisting (same treatment
+   *  as agentInitialUserMessage / singleShotPrompt). Without this we
+   *  can see the loop failed but not WHY — was the JSON malformed,
+   *  was it the wrong shape, was it prose, etc. */
+  failureRawAnswer?: string
 }
 
 export interface AgentLoopTelemetrySink {
@@ -576,15 +584,23 @@ function validateAgainstSchema(
 }
 
 function parseAnswerJson(content: string): unknown {
-  let body = content.trim()
-  // Strip optional ```json fence.
-  const fence = body.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  if (fence?.[1]) body = fence[1].trim()
-  try {
-    return JSON.parse(body)
-  } catch {
-    return null
-  }
+  // Use parseFirstJsonObject so prose-prefixed and prose-suffixed JSON
+  // both extract cleanly. Observed in production (PR #32 telemetry on
+  // ARC-149): GLM-5.1 emits a final answer like
+  //
+  //   "No mention of Todd Bowles found in either repo... [prose]
+  //
+  //   ```json
+  //   { ... }
+  //   ```"
+  //
+  // The previous parser required the entire content to be a JSON
+  // object (with at most a surrounding fence), so prose-then-fenced-
+  // JSON failed to parse and the loop fell back to single-shot.
+  // parseFirstJsonObject handles all the common malformations the
+  // single-shot path already tolerates (markdown fence, prose wrap,
+  // jsonrepair fallback for unescaped newlines / smart quotes / etc.).
+  return parseFirstJsonObject(content)
 }
 
 /**
@@ -641,7 +657,12 @@ export function buildTelemetryRecordInput(
     finalAnswer: result.ok ? result.answer : null,
   }
   if (typeof args.prNumber === "number") out.prNumber = args.prNumber
-  if (!result.ok) out.fallback = result.reason
+  if (!result.ok) {
+    out.fallback = result.reason
+    if (result.reason === "final_answer_did_not_parse") {
+      out.failureRawAnswer = result.rawAnswer
+    }
+  }
   return out
 }
 

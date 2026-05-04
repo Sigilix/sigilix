@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  listIndexedRepos,
   listTeamRepoMappings,
   parseTeamGithubRepo,
   resolveInstallation,
@@ -155,5 +156,77 @@ describe("parseTeamGithubRepo", () => {
     expect(parseTeamGithubRepo(undefined, "ARC")).toBeNull()
     expect(parseTeamGithubRepo("", "ARC")).toBeNull()
     expect(parseTeamGithubRepo("{not json", "ARC")).toBeNull()
+  })
+})
+
+describe("listIndexedRepos", () => {
+  it("returns the explicit OPENCLAW_INDEXED_REPOS list when set", () => {
+    expect(
+      listIndexedRepos({
+        OPENCLAW_INDEXED_REPOS: "rubberfit, arc-and-anchor-website ,Rubberfit-Desktop",
+        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+          ARC: { owner: "Arc-and-Anchor", repo: "openclaw-worker" },
+        }),
+      }),
+    ).toEqual(["rubberfit", "arc-and-anchor-website", "rubberfit-desktop"])
+  })
+
+  it("ignores the team-repo map when explicit override is set", () => {
+    // Confirms priority: explicit override wins, even when both are set.
+    expect(
+      listIndexedRepos({
+        OPENCLAW_INDEXED_REPOS: "alpha,beta",
+        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+          ARC: { owner: "x", repo: "gamma" },
+        }),
+      }),
+    ).toEqual(["alpha", "beta"])
+  })
+
+  it("falls back to the team-repo map values when override is unset", () => {
+    expect(
+      listIndexedRepos({
+        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+          ARC: { owner: "Arc-and-Anchor", repo: "Rubberfit" },
+          OTHER: { owner: "Arc-and-Anchor", repo: "openclaw-worker" },
+        }),
+      }),
+    ).toEqual(["rubberfit", "openclaw-worker"])
+  })
+
+  it("dedupes repeated values across teams", () => {
+    expect(
+      listIndexedRepos({
+        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+          ARC: { owner: "x", repo: "rubberfit" },
+          OTHER: { owner: "y", repo: "RubberFit" },
+        }),
+      }),
+    ).toEqual(["rubberfit"])
+  })
+
+  it("returns empty array when both inputs are unset", () => {
+    expect(listIndexedRepos({})).toEqual([])
+  })
+
+  it("treats an empty/whitespace OPENCLAW_INDEXED_REPOS as authoritative (locks to nothing) — does NOT fall back", () => {
+    // CR PR #30 catch: presence of the var is the override signal, not
+    // whether parsed entries are non-empty. An operator setting the
+    // var to "" or whitespace is intentionally locking the universe
+    // down — falling back to the map would make the override
+    // ambiguous.
+    const teamMap = JSON.stringify({ ARC: { owner: "x", repo: "rubberfit" } })
+    expect(
+      listIndexedRepos({ OPENCLAW_INDEXED_REPOS: "", OPENCLAW_TEAM_GITHUB_REPO_MAP: teamMap }),
+    ).toEqual([])
+    expect(
+      listIndexedRepos({ OPENCLAW_INDEXED_REPOS: " , , ", OPENCLAW_TEAM_GITHUB_REPO_MAP: teamMap }),
+    ).toEqual([])
+  })
+
+  it("returns empty array on malformed team-repo JSON (soft-fail)", () => {
+    expect(
+      listIndexedRepos({ OPENCLAW_TEAM_GITHUB_REPO_MAP: "{not json" }),
+    ).toEqual([])
   })
 })

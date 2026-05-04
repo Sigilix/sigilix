@@ -44,6 +44,15 @@ export interface AgentToolsContext {
     defaultRef: string
     installationId: number
   }
+  /** Optional allow-list of lowercased Vectorize namespaces the
+   *  `retrieve_codebase` tool will accept. Three states:
+   *   - `undefined`: no restriction (back-compat for callers that
+   *     don't pass it, e.g. github-mention surface).
+   *   - `[]`: explicit lock to none — every call gets the recoverable
+   *     rejection. Matches `listIndexedRepos`'s presence semantics so
+   *     `OPENCLAW_INDEXED_REPOS=""` actually locks the agent down.
+   *   - non-empty: repo must be in the set (case-insensitive match). */
+  allowedRepos?: string[]
 }
 
 export interface AgentTool {
@@ -98,6 +107,26 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       const repo = typeof args.repo === "string" ? args.repo : ""
       if (!query || !repo) {
         return { ok: false, error: "retrieve_codebase requires non-empty `query` and `repo` strings" }
+      }
+      // CR PR #30 catch: enforce the namespace universe at execution
+      // time, not just in prompt text. Otherwise the model could query
+      // an unindexed namespace, retrieveChunks would soft-fail to [],
+      // and the model gets no hint that its choice was invalid.
+      //
+      // Presence-based — `[]` means "lock to none," matching
+      // listIndexedRepos's semantics so OPENCLAW_INDEXED_REPOS=""
+      // actually locks the agent down (CR PR #30 round-2 catch:
+      // empty-as-allow-all silently undid the operator's lockout).
+      if (ctx.allowedRepos !== undefined) {
+        const lower = repo.trim().toLowerCase()
+        const allowed = new Set(ctx.allowedRepos.map((r) => r.toLowerCase()))
+        if (!allowed.has(lower)) {
+          return {
+            ok: false,
+            error: `repo '${repo}' is not in the indexed namespace set`,
+            allowedRepos: ctx.allowedRepos,
+          }
+        }
       }
       // The signal here is the loop's wall-clock signal; if it fires
       // mid-retrieval, the underlying embed/query calls will see it

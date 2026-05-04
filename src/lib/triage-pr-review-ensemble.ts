@@ -374,6 +374,8 @@ export async function handlePrReviewEnsemble(
 
     const synthEntry: NonNullable<EnsembleTelemetry["synthesizer"]> = {
       model: SYNTHESIZER_MODEL,
+      modelUsed: synthOutput.modelUsed,
+      attemptsUsed: synthOutput.attemptsUsed,
       verdict: synthOutput.verdict,
       provenance: synthOutput.provenance,
       retrievalCallsUsed: 0,  // Phase 4a synth doesn't use retrieve; reserved for Phase 4b
@@ -457,11 +459,29 @@ function isRepoAllowed(
   return list.includes(target)
 }
 
-// Maximum model calls one ensemble run can possibly consume:
-//   4 specialists + 1 synthesizer = 5
-// Used to pre-check the daily budget at admission so a single PR
-// doesn't admit-then-overshoot the cap by ~5 calls (CR PR #35 catch).
-const MAX_CALLS_PER_ENSEMBLE_RUN = 5
+/**
+ * Max model invocations one ensemble run can possibly consume.
+ * Derived from SPECIALIST_CONFIGS + SYNTHESIZER_CONFIG (CR PR #37
+ * catch: hard-coded 5 was wrong because retries + fallbacks can push
+ * a single run to ~16 calls).
+ *
+ * Per role: (1 primary attempt) + (config.retries) + (1 fallback if set)
+ * Sum across all 4 specialists + synth.
+ *
+ * Used at admission time to reserve worst-case budget so we don't
+ * admit a PR we might overflow. Actual spend at finalize() comes
+ * from each role's `attemptsUsed`, not from this constant.
+ */
+function maxAttempts(config: ModelConfig): number {
+  return 1 + config.retries + (config.fallback ? 1 : 0)
+}
+const MAX_CALLS_PER_ENSEMBLE_RUN = (
+  maxAttempts(SPECIALIST_CONFIGS.logic)
+  + maxAttempts(SPECIALIST_CONFIGS.security)
+  + maxAttempts(SPECIALIST_CONFIGS.performance)
+  + maxAttempts(SPECIALIST_CONFIGS.tests)
+  + maxAttempts(SYNTHESIZER_CONFIG)
+)
 
 async function dailyBudgetAvailable(env: Env): Promise<boolean> {
   const cap = parseIntEnv(env.OPENCLAW_ENSEMBLE_DAILY_BUDGET, DEFAULT_DAILY_BUDGET)
@@ -588,7 +608,7 @@ async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResu
  * problem, not a capacity problem; retrying the same prompt at
  * temperature 0 will yield the same bad output.
  */
-async function runWithRetryAndFallback<T>(args: {
+export async function runWithRetryAndFallback<T>(args: {
   config: ModelConfig
   apiKey: string
   messages: ChatMessage[]
@@ -637,31 +657,28 @@ async function runWithRetryAndFallback<T>(args: {
     }
     lastFailureReason = outcome.failureReason
     lastFailureRaw = outcome.failureRawAnswer
-    // CR PR #37 catch: classify failure as permanent vs transient.
+    // Failure classification:
     //
     //   Permanent (404 missing-model, 401/403 auth, 400 validation,
-    //   parse failure) → retrying or falling back wastes attempts. The
-    //   primary will keep returning the same error, and same-shape
-    //   failures from the fallback are equally likely. Return now so
-    //   the orchestrator's quorum/Phase-3-fallback path runs immediately
-    //   instead of after burning the full retry+fallback budget.
+    //   parse failure) → don't retry primary (same prompt → same error).
+    //   But DO try the cross-provider fallback (arc PR #37 catch): a
+    //   404 on deepseek-v4-pro says nothing about whether kimi-k2.5
+    //   exists — they're different providers entirely. Same for parse
+    //   failures: a different model may format output correctly. So
+    //   `break` out of the retry loop to skip ahead to fallback.
     //
     //   Transient (5xx upstream-overload, 429 rate-limited, network
-    //   errors, timeout) → keep retrying primary, then try fallback.
-    //   These are the cases the retry policy was actually built for.
+    //   errors, timeout) → keep retrying primary; backoff helps. Fall
+    //   back if all retries exhausted.
     if (isPermanentFailure(outcome.failureReason, parseFailureLabel)) {
-      return wrapFailure(
-        outcome.failureReason ?? "unknown_permanent",
-        outcome.failureRawAnswer,
-        config.primary,
-        attemptsUsed,
-        startedAt,
-      )
+      break
     }
   }
 
-  // Primary exhausted on TRANSIENT errors only — try the cross-provider
-  // fallback. (Permanent failures already returned above.)
+  // Primary exhausted (either retries used up on transient errors, OR
+  // primary hit a permanent failure and broke early). In BOTH cases
+  // try the cross-provider fallback before giving up — fallback runs
+  // on different infra and may succeed where primary couldn't.
   if (config.fallback && !signal.aborted) {
     attemptsUsed++
     const outcome = await attemptChat({ model: config.fallback, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel })
@@ -788,7 +805,12 @@ export function isPermanentFailure(failureReason: string | undefined, parseFailu
 }
 
 async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
-  if (ms <= 0) return
+  // CR + arc PR #37 catch: if the signal is already aborted on entry,
+  // the abort event has already fired and our addEventListener will
+  // never trigger — without this guard we'd sleep the full ms before
+  // returning. Closes the race between caller's abort check + our
+  // listener installation.
+  if (ms <= 0 || signal.aborted) return
   await new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, ms)
     signal.addEventListener(
@@ -982,6 +1004,9 @@ function collectSpecialistVerdicts(
         : "unknown_settlement"
       const collected: CollectedVerdict = { role, verdict: null, elapsedMs: 0, failureReason: reason }
       out.push(collected)
+      // No attemptsUsed available — the wrapper threw before runSpecialist
+      // returned, so we don't know how many attempts ran. Leave undefined
+      // so finalize()'s defensive `?? 1` kicks in.
       telemetry.specialistVerdicts.push({
         role,
         model: SPECIALIST_MODELS[role],
@@ -1001,6 +1026,8 @@ function collectSpecialistVerdicts(
       const telEntry: EnsembleTelemetry["specialistVerdicts"][number] = {
         role,
         model: SPECIALIST_MODELS[role],
+        modelUsed: value.modelUsed,
+        attemptsUsed: value.attemptsUsed,
         verdict: null,
         elapsedMs: value.elapsedMs,
         timedOut: false,
@@ -1015,6 +1042,8 @@ function collectSpecialistVerdicts(
     telemetry.specialistVerdicts.push({
       role,
       model: SPECIALIST_MODELS[role],
+      modelUsed: value.modelUsed,
+      attemptsUsed: value.attemptsUsed,
       verdict: withIds,
       elapsedMs: value.elapsedMs,
       timedOut: false,
@@ -1176,7 +1205,15 @@ interface EnsembleTelemetry {
   routerDecision: RouterDecision | null
   specialistVerdicts: Array<{
     role: SpecialistRole
+    /** Configured primary model. Kept for backward telemetry compat. */
     model: string
+    /** The model that actually answered (or last attempted on failure).
+     *  Differs from `model` when the cross-provider fallback fired. */
+    modelUsed?: string
+    /** Total model invocations across primary retries + fallback.
+     *  Used by finalize() to charge the daily budget accurately
+     *  (CR PR #37 catch — previously assumed 1 call per specialist). */
+    attemptsUsed?: number
     verdict: PrReviewVerdictWithIds | null
     failureReason?: string
     failureRawAnswer?: string
@@ -1185,6 +1222,8 @@ interface EnsembleTelemetry {
   }>
   synthesizer: {
     model: string
+    modelUsed?: string
+    attemptsUsed?: number
     verdict: PrReviewVerdict | null
     provenance: SynthesizerProvenance | null
     retrievalCallsUsed: number
@@ -1224,8 +1263,20 @@ async function finalize(
   if (cache !== null) {
     telemetry.retrievalCacheStats = cache.stats()
   }
-  // Best-effort daily-budget increment (model calls actually used).
-  const callsUsed = telemetry.specialistVerdicts.length + (telemetry.synthesizer ? 1 : 0)
+  // Best-effort daily-budget increment.
+  //
+  // CR PR #37 catch: previously this counted dispatched specialists as
+  // 1 each + synth as 1. With retries + cross-provider fallback, a
+  // single role can use up to 4 model invocations. Using attemptsUsed
+  // (set by runWithRetryAndFallback) gives accurate spend telemetry
+  // and keeps the daily budget honest.
+  let callsUsed = 0
+  for (const sv of telemetry.specialistVerdicts) {
+    callsUsed += sv.attemptsUsed ?? 1  // ?? 1 — defensive for legacy records
+  }
+  if (telemetry.synthesizer) {
+    callsUsed += telemetry.synthesizer.attemptsUsed ?? 1
+  }
   await incrementDailyBudget(env, callsUsed).catch(() => {})
   // Best-effort telemetry write.
   await writeTelemetry(env, telemetry).catch(() => {})

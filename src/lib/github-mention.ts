@@ -22,6 +22,10 @@ import { GITHUB_MENTION_SCHEMA } from "./schemas"
 import { GITHUB_MENTION_PROMPT } from "../prompts/github-mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { arcInThreadAbove, bodyMentionsBot, getMentionTriggers, stripMentionFromBody } from "./mention"
+import { runAgentLoop } from "./agent-loop"
+import { createAgentTools } from "./agent-tools"
+import { makeKvTelemetrySink } from "./agent-telemetry-kv"
+import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -198,21 +202,81 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
-  since("ollama-start")
-  const response = await generate({
-    model,
-    prompt,
-    apiKey: env.OLLAMA_API_KEY,
-    format: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,
-  })
-  since("ollama-done")
+  let verdict: ReturnType<typeof parseGithubMentionResponse> = null
 
-  const verdict = parseGithubMentionResponse(response)
-  if (!verdict) {
-    console.error("gh-mention verdict did not parse", {
-      commentId,
-      responseLength: response.length,
+  if (env.OPENCLAW_AGENTIC_GITHUB_MODE === "on") {
+    since("agent-loop-start")
+    const loopResult = await runAgentLoop({
+      model,
+      apiKey: env.OLLAMA_API_KEY,
+      env,
+      surface: "github-mention",
+      commentId: String(commentId),
+      prNumber,
+      systemPrompt: AGENT_SYSTEM_PROMPT,
+      initialUserMessage: buildGhAgentInitialUserMessage({
+        owner,
+        repo,
+        prNumber,
+        title: meta.title,
+        question,
+        askerHandle: sourceComment.author,
+        inlineAnchor: surface === "review-comment" ? extractAnchor(sourceComment) : null,
+        // CR PR #24 catch: forward existing thread context. Without it
+        // the agent restarts the conversation cold and can't see what
+        // earlier replies in the same review-thread already said.
+        thread,
+      }),
+      tools: createAgentTools({
+        env,
+        surface: "github-mention",
+        github: {
+          githubClient: client,
+          allowedRepos: [{ owner, repo }],
+          defaultRef: meta.head?.ref ?? "main",
+          installationId,
+        },
+      }),
+      finalAnswerSchema: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,
+      telemetry: makeKvTelemetrySink(env.OPENCLAW_STATE),
+      telemetryContext: {
+        singleShotPrompt: prompt,
+        singleShotSchema: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,
+        promptBuilderVersion: "github-mention-v1",
+        promptBuilderSource: GITHUB_MENTION_PROMPT,
+      },
+      log: (event) => since(`agent-loop ${event.kind}`),
     })
+    since("agent-loop-done", { ok: loopResult.ok })
+    if (loopResult.ok) {
+      verdict = parseGithubMentionResponse(JSON.stringify(loopResult.answer))
+    } else {
+      console.warn("[gh-mention] agent loop fell back to single-shot", {
+        commentId,
+        reason: loopResult.reason,
+      })
+      const response = await generate({
+        model,
+        prompt,
+        apiKey: env.OLLAMA_API_KEY,
+        format: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,
+      })
+      verdict = parseGithubMentionResponse(response)
+    }
+  } else {
+    since("ollama-start")
+    const response = await generate({
+      model,
+      prompt,
+      apiKey: env.OLLAMA_API_KEY,
+      format: GITHUB_MENTION_SCHEMA as unknown as Record<string, unknown>,
+    })
+    since("ollama-done")
+    verdict = parseGithubMentionResponse(response)
+  }
+
+  if (!verdict) {
+    console.error("gh-mention verdict did not parse", { commentId })
     return
   }
 
@@ -495,6 +559,52 @@ async function postReply(args: PostReplyArgs): Promise<number> {
   }
   const res = await client.replyToReviewComment(owner, repo, prNumber, threadRootId, body)
   return res.id
+}
+
+interface GhAgentInitialMessageCtx {
+  owner: string
+  repo: string
+  prNumber: number
+  title: string
+  question: string
+  askerHandle: string
+  inlineAnchor: InlineAnchor | null
+  thread: ThreadEntry[]
+}
+
+function buildGhAgentInitialUserMessage(ctx: GhAgentInitialMessageCtx): string {
+  const lines: string[] = [
+    "[SURFACE] GitHub PR mention",
+    `[REPO] ${ctx.owner}/${ctx.repo}`,
+    `[PR] #${ctx.prNumber} — ${ctx.title}`,
+    "",
+    `[ASKER] @${ctx.askerHandle}`,
+    "",
+  ]
+  if (ctx.inlineAnchor) {
+    lines.push(
+      "[INLINE ANCHOR]",
+      `File: ${ctx.inlineAnchor.path}`,
+      ctx.inlineAnchor.line ? `Line: ${ctx.inlineAnchor.line}` : "Line: (deleted/multi)",
+      "",
+    )
+  }
+  if (ctx.thread.length > 0) {
+    lines.push("[THREAD CONTEXT — earlier replies in this thread, oldest first]")
+    for (const entry of ctx.thread) {
+      // Mirror the single-shot path's per-comment cap so a few long
+      // replies can't blow the agent's context budget.
+      lines.push(`- @${entry.author}: ${truncate(entry.body, LIMITS.threadComment)}`)
+    }
+    lines.push("")
+  }
+  lines.push(
+    "[QUESTION]",
+    ctx.question,
+    "",
+    "Use your tools to gather context. fetch_pr can pull this PR (or others the asker references) — owner/repo/number must match the allowed-repos set. retrieve_codebase queries the lowercased repo name. Final answer is the JSON shape defined by the system prompt.",
+  )
+  return lines.join("\n")
 }
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {

@@ -71,6 +71,16 @@ export interface Env {
   // "strict" → return 500 when team/installation maps are inconsistent.
   // Anything else (including unset, "warn", "STRICT", typos) → warn only.
   OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS?: string
+  // Phase 3 — agent loop (tool-using) per-surface flags + provider
+  // kill-switch. All "on"|"off" strings (case-sensitive); unset or
+  // anything other than "on" defaults to off.
+  OPENCLAW_AGENTIC_LINEAR_MODE?: string
+  OPENCLAW_AGENTIC_GITHUB_MODE?: string
+  // Provider kill-switch for the /api/chat path. Independent of the
+  // per-surface agentic flags — flipping this off disables the chat
+  // endpoint without redeploying. Both runAgentLoop AND ad-hoc chat()
+  // callers honor it.
+  OLLAMA_CHAT_ENABLE?: string
 }
 
 /**

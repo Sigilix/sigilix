@@ -36,7 +36,16 @@ const DEFAULT_MODEL = "glm-5.1:cloud"
 const DEDUPE_PREFIX = "pr-review:"
 
 const LIMITS = {
-  prDiff: 22_000,
+  // Bumped from 22_000 to 80_000 (2026-05-04) — the prior cap was
+  // truncating large PR diffs to ~14% of their actual content, which
+  // (a) starved the model of signal on big PRs and (b) coincided with
+  // observed JSON-output-discipline degradation on PR #24 (3.1k lines
+  // added). 80k stays comfortably under Cloudflare Workers prompt budget
+  // AND under GLM-5.1's effective context for clean structured output.
+  // jsonrepair is already wired in via parseFirstJsonObject for the
+  // "lightly malformed JSON" case; this just gives the model less reason
+  // to malform output in the first place.
+  prDiff: 80_000,
   prBody: 4_000,
   crCommentsBlock: 8_000,
   crCommentBody: 1_200,

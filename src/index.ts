@@ -128,6 +128,30 @@ export type JobMessage =
       threadRootId?: number
     }
 
+/**
+ * Pure decision: given a `pull_request` webhook action + draft flag,
+ * which jobs should we enqueue? Extracted so the gating intent is
+ * directly testable without simulating the full webhook handler.
+ *
+ * Rules (matches the routing in handleGitHubWebhook):
+ *   - Drafts and unsupported actions get nothing.
+ *   - pr-overview always fires for opened/synchronize/reopened/ready_for_review.
+ *   - pr-review fires the same EXCEPT `reopened` (closing+reopening
+ *     a PR doesn't change the diff, so re-reviewing would be noise).
+ */
+export function decidePullRequestJobs(args: {
+  action: string
+  draft: boolean
+}): { overview: boolean; review: boolean } {
+  if (args.draft) return { overview: false, review: false }
+  const supported = ["opened", "synchronize", "reopened", "ready_for_review"]
+  if (!supported.includes(args.action)) return { overview: false, review: false }
+  return {
+    overview: true,
+    review: args.action !== "reopened",
+  }
+}
+
 interface LinearWebhookPayload {
   action: "create" | "update" | "remove"
   type: "Issue" | "Comment" | string
@@ -490,27 +514,32 @@ async function handleGitHubWebhook(
       return new Response("missing pr\n", { status: 400 })
     }
     if (pr.draft) return new Response("skip draft\n", { status: 200 })
-    if (action !== "opened" && action !== "synchronize" && action !== "reopened" && action !== "ready_for_review") {
+    const decision = decidePullRequestJobs({ action: action ?? "", draft: false })
+    if (!decision.overview && !decision.review) {
       return new Response("skip pr action\n", { status: 200 })
     }
     const prNumber = pr.number
     const headSha = pr.head?.sha ?? ""
     if (!headSha) return new Response("missing head sha\n", { status: 400 })
 
-    await env.OPENCLAW_JOBS.send({
-      type: "pr-overview",
-      owner,
-      repo,
-      prNumber,
-      headSha,
-      installationId,
-    })
-    // pr-review fires on `opened` AND `ready_for_review` so we don't
-    // re-review on every push. Including `ready_for_review` catches
-    // PRs opened as draft — the original `opened` was skipped at the
-    // draft check above, so without this branch the PR would only get
-    // a pr-overview when it flips to ready, no formal review.
-    if (action === "opened" || action === "ready_for_review") {
+    if (decision.overview) {
+      await env.OPENCLAW_JOBS.send({
+        type: "pr-overview",
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+      })
+    }
+    // pr-review fires on `opened`, `ready_for_review`, AND `synchronize`
+    // so the bot keeps verifying after each fix push (and can flip to
+    // APPROVE when the diff is clean). The consumer carries a per-
+    // (prNumber, headSha) dedupe key + a stale-head guard, so retries
+    // and out-of-order delivery don't produce duplicate or wrong-diff
+    // reviews. `ready_for_review` catches drafts that were skipped on
+    // `opened`. See decidePullRequestJobs() for the gating contract.
+    if (decision.review) {
       await env.OPENCLAW_JOBS.send({
         type: "pr-review",
         owner,

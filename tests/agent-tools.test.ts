@@ -208,8 +208,10 @@ describe("retrieve_codebase", () => {
     expect(mockRetrieveChunks).toHaveBeenCalledOnce()
   })
 
-  it("accepts any repo when allowedRepos is empty array (treated as 'no restriction')", async () => {
-    mockRetrieveChunks.mockResolvedValue([])
+  it("rejects every repo when allowedRepos is empty array (explicit lock to none)", async () => {
+    // Matches listIndexedRepos's presence semantics: the operator
+    // setting OPENCLAW_INDEXED_REPOS="" means "lock the agent down to
+    // no namespaces." Anything else would silently undo the lockout.
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",
@@ -219,8 +221,11 @@ describe("retrieve_codebase", () => {
       { query: "x", repo: "anything" },
       new AbortController().signal,
       new Map(),
-    )) as { ok: boolean }
-    expect(result.ok).toBe(true)
+    )) as { ok: boolean; error: string; allowedRepos: string[] }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/not in the indexed namespace set/)
+    expect(result.allowedRepos).toEqual([])
+    expect(mockRetrieveChunks).not.toHaveBeenCalled()
   })
 })
 

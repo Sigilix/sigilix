@@ -45,11 +45,13 @@ export interface AgentToolsContext {
     installationId: number
   }
   /** Optional allow-list of lowercased Vectorize namespaces the
-   *  `retrieve_codebase` tool will accept. When set and non-empty, a
-   *  call with a `repo` outside the list returns a recoverable
-   *  `{ok:false, error, allowedRepos}` so the model can pick again.
-   *  When unset OR empty, the tool accepts any value (back-compat with
-   *  GitHub-mention surface that doesn't pass this). */
+   *  `retrieve_codebase` tool will accept. Three states:
+   *   - `undefined`: no restriction (back-compat for callers that
+   *     don't pass it, e.g. github-mention surface).
+   *   - `[]`: explicit lock to none — every call gets the recoverable
+   *     rejection. Matches `listIndexedRepos`'s presence semantics so
+   *     `OPENCLAW_INDEXED_REPOS=""` actually locks the agent down.
+   *   - non-empty: repo must be in the set (case-insensitive match). */
   allowedRepos?: string[]
 }
 
@@ -110,9 +112,15 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       // time, not just in prompt text. Otherwise the model could query
       // an unindexed namespace, retrieveChunks would soft-fail to [],
       // and the model gets no hint that its choice was invalid.
-      if (ctx.allowedRepos && ctx.allowedRepos.length > 0) {
-        const lower = repo.toLowerCase()
-        if (!ctx.allowedRepos.includes(lower)) {
+      //
+      // Presence-based — `[]` means "lock to none," matching
+      // listIndexedRepos's semantics so OPENCLAW_INDEXED_REPOS=""
+      // actually locks the agent down (CR PR #30 round-2 catch:
+      // empty-as-allow-all silently undid the operator's lockout).
+      if (ctx.allowedRepos !== undefined) {
+        const lower = repo.trim().toLowerCase()
+        const allowed = new Set(ctx.allowedRepos.map((r) => r.toLowerCase()))
+        if (!allowed.has(lower)) {
           return {
             ok: false,
             error: `repo '${repo}' is not in the indexed namespace set`,

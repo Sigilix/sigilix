@@ -14,6 +14,13 @@ name: Deploy
 # Gates: typecheck + tests must pass before `wrangler deploy` runs.
 # A failing test should NEVER produce a production deploy.
 
+# Least-privilege GITHUB_TOKEN. This workflow only needs to read
+# the repo for checkout — the actual deploy uses the Cloudflare
+# API token, not the GitHub token. Default org/repo permissions
+# may grant more than that.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -29,9 +36,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned to immutable commit SHAs (CR + arc PR #31 catch).
+      # A moved/compromised v3/v4 tag would otherwise run untrusted code
+      # with Cloudflare deploy credentials. Bump the SHA + the trailing
+      # version comment together when upgrading.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
@@ -45,7 +56,7 @@ jobs:
         run: npm test
 
       - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@9681c2997648301493e78cacbfb790a9f19c833f # v3.9.0
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

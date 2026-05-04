@@ -60,8 +60,12 @@ if (args.surface) {
   kept = kept.filter((k) => k.includes(`:${args.surface}:`))
   console.log(`[bakeoff] surface=${args.surface} → ${kept.length} record(s)`)
 }
-if (args.limit && kept.length > args.limit) {
-  kept = kept.slice(0, args.limit)
+if (args.limit !== null) {
+  if (!Number.isInteger(args.limit) || args.limit < 0) {
+    console.error(`error: --limit must be a non-negative integer (got ${args.limit})`)
+    process.exit(1)
+  }
+  if (kept.length > args.limit) kept = kept.slice(0, args.limit)
   console.log(`[bakeoff] limit=${args.limit} → ${kept.length} record(s)`)
 }
 
@@ -143,7 +147,7 @@ for (let i = 0; i < kept.length; i++) {
       agentToolCalls: payload.toolCalls?.length ?? 0,
       agentMs: payload.totalMs,
       singleShotMs: replayMs,
-      agentFallback: payload.fallback?.reason ?? null,
+      agentFallback: payload.fallback ?? null,
     })
     console.log(`[bakeoff] [${tag}] done — agent ${payload.totalMs}ms (${payload.turns} turns), single-shot ${replayMs}ms`)
   } catch (e) {
@@ -169,7 +173,7 @@ function parseArgs(argv) {
     if (eq < 0) continue
     const k = arg.slice(0, eq).replace(/^--/, "")
     const v = arg.slice(eq + 1)
-    if (k === "limit") out.limit = Number(v)
+    if (k === "limit") out.limit = Number.parseInt(v, 10)
     else if (k === "surface") out.surface = v
     else if (k === "out") out.out = v
   }

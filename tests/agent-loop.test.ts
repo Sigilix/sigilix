@@ -530,6 +530,33 @@ describe("buildTelemetryRecordInput", () => {
     const payload = buildTelemetryRecordInput(result, args, state)
     expect(payload.prNumber).toBe(162)
   })
+
+  it("includes failureRawAnswer ONLY on final_answer_did_not_parse", () => {
+    const { args } = makeArgs()
+    const state: LoopTelemetryState = { startMs: Date.now(), turns: 3, toolCalls: [] }
+
+    // The failure mode we instrumented for: model returned something
+    // that didn't parse as JSON OR didn't match the schema.
+    const parseFail: AgentLoopResult = {
+      ok: false,
+      reason: "final_answer_did_not_parse",
+      rawAnswer: "Sure, here's my answer: { \"answer\": 42 }",
+    }
+    expect(buildTelemetryRecordInput(parseFail, args, state).failureRawAnswer).toBe(
+      "Sure, here's my answer: { \"answer\": 42 }",
+    )
+
+    // Other failure modes don't carry rawAnswer — the field stays absent.
+    const wallClock: AgentLoopResult = { ok: false, reason: "wall_clock_exceeded" }
+    expect(buildTelemetryRecordInput(wallClock, args, state).failureRawAnswer).toBeUndefined()
+
+    const success: AgentLoopResult = {
+      ok: true,
+      answer: { x: 1 },
+      stats: { toolTurns: 1, totalMs: 100, toolCallCount: 1 },
+    }
+    expect(buildTelemetryRecordInput(success, args, state).failureRawAnswer).toBeUndefined()
+  })
 })
 
 // ──────────────────────────────────────────────────────────── withComposedTimeout

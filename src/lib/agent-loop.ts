@@ -233,8 +233,13 @@ async function runLoopBody(args: RunLoopBodyArgs): Promise<RunLoopBodyResult> {
     }
 
     if (!result.hasToolCalls) {
-      // Final answer this turn — parse and return.
-      const parsed = parseAnswerJson(result.message.content)
+      // Final answer this turn — parse + VALIDATE against schema and
+      // return. Schema-shape validation (CR PR #24 catch) means a
+      // parseable-but-wrong-shape response routes through the same
+      // fallback path as a parse failure, instead of escaping into the
+      // handler's downstream verdict parser where the loop's fallback
+      // opportunity is already gone.
+      const parsed = parseAndValidateFinalAnswer(result.message.content, args.finalAnswerSchema)
       if (parsed === null) {
         return {
           result: {
@@ -304,7 +309,7 @@ async function runLoopBody(args: RunLoopBodyArgs): Promise<RunLoopBodyResult> {
           telemetryState,
         }
       }
-      const parsed = parseAnswerJson(forced.message.content)
+      const parsed = parseAndValidateFinalAnswer(forced.message.content, args.finalAnswerSchema)
       if (parsed === null) {
         return {
           result: {
@@ -580,6 +585,28 @@ function parseAnswerJson(content: string): unknown {
   } catch {
     return null
   }
+}
+
+/**
+ * Parse + validate the final answer against finalAnswerSchema. Returns
+ * null if either parse OR validation fails — the caller treats both as
+ * `final_answer_did_not_parse` and falls back to single-shot.
+ *
+ * (CR catch on PR #24: previously the loop only did JSON.parse, so any
+ * parseable JSON of the wrong shape — missing `answer`, wrong types,
+ * etc. — was treated as success. The handler's downstream verdict
+ * parser then rejected it AFTER the loop's fallback opportunity was
+ * already gone, leaving the user with no reply at all.)
+ */
+function parseAndValidateFinalAnswer(
+  content: string,
+  schema: Record<string, unknown>,
+): unknown {
+  const parsed = parseAnswerJson(content)
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+  const obj = parsed as Record<string, unknown>
+  const validation = validateAgainstSchema(obj, schema)
+  return validation.ok ? parsed : null
 }
 
 function stringifyToolResult(value: unknown): string {

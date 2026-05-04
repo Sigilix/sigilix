@@ -155,6 +155,11 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         issueBody: data.issue.description ?? "",
         askerHandle,
         question,
+        // CR PR #24 catch: pass the resolved repo namespace so the
+        // model knows which `repo` to pass to its only tool. Without
+        // this the model has to guess; if the team→repo mapping is
+        // missing it can't ground retrieval at all.
+        repo: inferRepo()?.repo?.toLowerCase() ?? null,
       }),
       tools: createAgentTools({
         env,
@@ -355,6 +360,7 @@ interface AgentInitialMessageCtx {
   issueBody: string
   askerHandle: string
   question: string
+  repo: string | null
 }
 
 /**
@@ -364,6 +370,9 @@ interface AgentInitialMessageCtx {
  * codebase chunks + linked PRs and stuffs them into the prompt).
  */
 function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
+  const repoLine = ctx.repo
+    ? `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased repo name '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
+    : "Use your tools to gather context as needed. retrieve_codebase queries against the lowercased repo name (e.g. 'rubberfit') as the namespace; if you cannot determine the right repo from the issue context, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt."
   const lines: string[] = [
     "[SURFACE] Linear issue comment",
     `[ISSUE] ${ctx.issueIdentifier} — ${ctx.issueTitle}`,
@@ -375,7 +384,7 @@ function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
     "[QUESTION]",
     ctx.question,
     "",
-    "Use your tools to gather context as needed. retrieve_codebase queries against the lowercased repo name (e.g. 'rubberfit') as the namespace. Final answer is the JSON shape defined by the system prompt.",
+    repoLine,
   ]
   return lines.join("\n")
 }

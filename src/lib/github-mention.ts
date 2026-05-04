@@ -222,6 +222,10 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
         question,
         askerHandle: sourceComment.author,
         inlineAnchor: surface === "review-comment" ? extractAnchor(sourceComment) : null,
+        // CR PR #24 catch: forward existing thread context. Without it
+        // the agent restarts the conversation cold and can't see what
+        // earlier replies in the same review-thread already said.
+        thread,
       }),
       tools: createAgentTools({
         env,
@@ -565,6 +569,7 @@ interface GhAgentInitialMessageCtx {
   question: string
   askerHandle: string
   inlineAnchor: InlineAnchor | null
+  thread: ThreadEntry[]
 }
 
 function buildGhAgentInitialUserMessage(ctx: GhAgentInitialMessageCtx): string {
@@ -583,6 +588,15 @@ function buildGhAgentInitialUserMessage(ctx: GhAgentInitialMessageCtx): string {
       ctx.inlineAnchor.line ? `Line: ${ctx.inlineAnchor.line}` : "Line: (deleted/multi)",
       "",
     )
+  }
+  if (ctx.thread.length > 0) {
+    lines.push("[THREAD CONTEXT — earlier replies in this thread, oldest first]")
+    for (const entry of ctx.thread) {
+      // Mirror the single-shot path's per-comment cap so a few long
+      // replies can't blow the agent's context budget.
+      lines.push(`- @${entry.author}: ${truncate(entry.body, LIMITS.threadComment)}`)
+    }
+    lines.push("")
   }
   lines.push(
     "[QUESTION]",

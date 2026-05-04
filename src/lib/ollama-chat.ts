@@ -127,12 +127,13 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
   const timer = setTimeout(() => internalCtrl.abort(), timeoutMs)
 
   // Compose the external signal (loop-wide AbortController) with the
-  // internal timeout signal so either source can abort the fetch. If the
-  // external is already aborted, fire the internal immediately so the
-  // race doesn't wait.
-  if (args.signal?.aborted) internalCtrl.abort()
+  // internal timeout signal so either source can abort the fetch.
+  // Install the listener BEFORE checking `aborted` so we don't miss an
+  // abort that fires between the boolean read and the addEventListener
+  // call (race window).
   const onExternalAbort = (): void => internalCtrl.abort()
   args.signal?.addEventListener("abort", onExternalAbort, { once: true })
+  if (args.signal?.aborted) internalCtrl.abort()
 
   // Default temperature: 0 when format is set (deterministic JSON),
   // 0.2 otherwise (mild creativity for free-form / tool-use prose).

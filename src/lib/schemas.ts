@@ -135,10 +135,9 @@ export const MENTION_REPLY_SCHEMA = {
  *
  * Same shape as MENTION_REPLY_SCHEMA — the surface is different
  * (PR thread vs Linear comment), but the JSON contract is the same:
- * a single Markdown body + confidence + abstain. The structural
- * discipline (verdict-tagged headers, code spans, etc.) lives in
- * the prompt, not the schema, because the model's body is freeform
- * Markdown and we only constrain the envelope.
+ * a single Markdown body + confidence + abstain. The body itself is
+ * freeform Markdown — the prompt only constrains voice and the JSON
+ * envelope, not the prose shape.
  */
 export const GITHUB_MENTION_SCHEMA = {
   type: "object",

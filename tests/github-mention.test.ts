@@ -11,7 +11,7 @@ import {
 
 describe("parseGithubMentionResponse", () => {
   const valid = {
-    answer: "## ✅ Critical - Off-by-one: FIXED\n\nGuard now uses `<=` on `bounds.length`.",
+    answer: "Fixed — guard now uses `<=` on `bounds.length` at `src/lib/foo.ts:42`.",
     confidence: 4,
     abstain: false,
   }
@@ -64,12 +64,12 @@ describe("parseGithubMentionResponse", () => {
 describe("formatReply", () => {
   it("prepends the dedupe marker so Arc's own replies are detectable", () => {
     const out = formatReply({
-      answer: "## ✅ Critical - X: FIXED\n\nbody",
+      answer: "Fixed — guard now uses `<=` on `bounds.length`.",
       confidence: 5,
       abstain: false,
     })
     expect(out.startsWith("<!-- openclaw:gh-mention-reply -->")).toBe(true)
-    expect(out).toContain("## ✅ Critical - X: FIXED")
+    expect(out).toContain("Fixed — guard now uses")
   })
 
   it("preserves the model's Markdown verbatim under the marker", () => {

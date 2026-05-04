@@ -73,7 +73,7 @@ describe("formatReply", () => {
   })
 
   it("preserves the model's Markdown verbatim under the marker", () => {
-    const answer = "## 💬 Answer - foo\n\nReturns `null` when `x` is empty."
+    const answer = "Returns `null` when `x` is empty — see `src/lib/foo.ts:42`."
     const out = formatReply({ answer, confidence: 3, abstain: false })
     expect(out.endsWith(answer)).toBe(true)
   })

@@ -313,6 +313,7 @@ openclaw-worker/
 ├── .github/workflows/codebase-index.yml   # reusable workflow — auto-reindex on push to dev/main
 ├── examples/openclaw-index.yml            # template caller for each tracked repo
 ├── scripts/index-repo.mjs                 # CLI indexer (chunk + embed + upsert to Vectorize)
+├── scripts/phase3-bakeoff.mjs             # Phase 3 bake-off — replay agent-loop runs through single-shot
 └── src/
     ├── index.ts                           # main fetch handler — routing + HMAC verify
     ├── prompts/

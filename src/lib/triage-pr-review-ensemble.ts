@@ -46,6 +46,7 @@ import {
 } from "./triage-pr-review"
 import {
   decideSpecialists,
+  ALL_SPECIALISTS,
   type SpecialistRole,
   type RouterDecision,
 } from "./ensemble-router"
@@ -267,7 +268,7 @@ export async function handlePrReviewEnsemble(
 
     // ─── Quorum check ──────────────────────────────────────────
     const succeeded = specialistVerdicts.filter((v) => v.verdict !== null)
-    if (!checkQuorum(succeeded, mode)) {
+    if (!checkQuorum(succeeded, mode, router.specialists)) {
       telemetry.fellBackToPhase3 = mode === "post"
       telemetry.fellBackReason = succeeded.length <= 1
         ? "specialists_failed"
@@ -416,7 +417,11 @@ async function incrementDailyBudget(env: Env, by: number): Promise<void> {
 function parseIntEnv(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback
   const parsed = Number.parseInt(raw, 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+  // Arc PR #35 catch: `parsed > 0` made the `cap <= 0` guard in
+  // dailyBudgetAvailable() dead code — operators setting
+  // OPENCLAW_ENSEMBLE_DAILY_BUDGET=0 silently got the default (200)
+  // instead of disabling ensemble. Allow 0 to propagate.
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
 }
 
 function countLines(diff: string): number {
@@ -710,12 +715,34 @@ export function assignStableFindingIds(role: SpecialistRole, verdict: PrReviewVe
   }
 }
 
-export function checkQuorum(succeeded: CollectedVerdict[], mode: "shadow" | "post"): boolean {
-  if (succeeded.length < 2) return false
-  if (mode === "shadow") return true  // any 2 OK in shadow
-  // post mode: require ≥1 of {logic, security}
-  const hasLogicOrSec = succeeded.some((v) => v.role === "logic" || v.role === "security")
-  return hasLogicOrSec
+export function checkQuorum(
+  succeeded: CollectedVerdict[],
+  mode: "shadow" | "post",
+  dispatchedSpecialists?: SpecialistRole[],
+): boolean {
+  // Arc PR #35 catch: when the router dispatches fewer than 4
+  // specialists (e.g., CSS-only → ["performance"]), the original
+  // `succeeded.length < 2` rule always failed because there were
+  // never 2 to begin with. Make quorum proportional to what the
+  // router actually requested.
+  //
+  // Rule:
+  //   - Need min(2, dispatched.length) successes (so single-dispatch
+  //     PRs need just that 1 to succeed; multi-dispatch needs ≥2).
+  //   - In post mode, ALSO require ≥1 of {logic, security} to have
+  //     succeeded — but only if the router actually dispatched them.
+  //     If the router intentionally excluded both (rare; would only
+  //     happen for CSS-only → ["performance"] type cases), the post-
+  //     mode check is effectively just the count requirement.
+  const dispatched = dispatchedSpecialists ?? [...ALL_SPECIALISTS]
+  const dispatchedSet = new Set(dispatched)
+  const minSuccesses = Math.min(2, dispatched.length)
+  if (succeeded.length < minSuccesses) return false
+  if (mode === "shadow") return true
+  // post mode: enforce logic/security only if router dispatched them
+  const dispatchedLogicOrSec = dispatchedSet.has("logic") || dispatchedSet.has("security")
+  if (!dispatchedLogicOrSec) return true
+  return succeeded.some((v) => v.role === "logic" || v.role === "security")
 }
 
 /**

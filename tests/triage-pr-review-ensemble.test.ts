@@ -56,26 +56,54 @@ describe("checkQuorum", () => {
     verdict: { ...baseVerdict, findings: [{ ...baseFinding, id: `${role}-0` }] },
     elapsedMs: 100,
   })
+  const allFour: Array<"logic" | "security" | "performance" | "tests"> = [
+    "logic", "security", "performance", "tests",
+  ]
 
-  it("returns false on 0 or 1 successes (regardless of mode)", () => {
-    expect(checkQuorum([], "shadow")).toBe(false)
-    expect(checkQuorum([], "post")).toBe(false)
-    expect(checkQuorum([v("logic")], "shadow")).toBe(false)
-    expect(checkQuorum([v("logic")], "post")).toBe(false)
+  it("returns false on 0 successes (any dispatched count)", () => {
+    expect(checkQuorum([], "shadow", allFour)).toBe(false)
+    expect(checkQuorum([], "post", allFour)).toBe(false)
+    expect(checkQuorum([], "shadow", ["performance"])).toBe(false)
   })
 
-  it("shadow accepts any 2/4", () => {
-    expect(checkQuorum([v("performance"), v("tests")], "shadow")).toBe(true)
-    expect(checkQuorum([v("logic"), v("security")], "shadow")).toBe(true)
+  it("with all 4 dispatched: returns false on only 1 success", () => {
+    expect(checkQuorum([v("logic")], "shadow", allFour)).toBe(false)
+    expect(checkQuorum([v("logic")], "post", allFour)).toBe(false)
   })
 
-  it("post requires ≥1 of {logic, security}", () => {
-    // perf+tests alone is NOT enough in post mode.
-    expect(checkQuorum([v("performance"), v("tests")], "post")).toBe(false)
-    // Any combination including logic OR security passes.
-    expect(checkQuorum([v("logic"), v("performance")], "post")).toBe(true)
-    expect(checkQuorum([v("security"), v("tests")], "post")).toBe(true)
-    expect(checkQuorum([v("logic"), v("security"), v("performance")], "post")).toBe(true)
+  it("shadow accepts any 2/4 when 4 dispatched", () => {
+    expect(checkQuorum([v("performance"), v("tests")], "shadow", allFour)).toBe(true)
+    expect(checkQuorum([v("logic"), v("security")], "shadow", allFour)).toBe(true)
+  })
+
+  it("post requires ≥1 of {logic, security} when router dispatched them", () => {
+    expect(checkQuorum([v("performance"), v("tests")], "post", allFour)).toBe(false)
+    expect(checkQuorum([v("logic"), v("performance")], "post", allFour)).toBe(true)
+    expect(checkQuorum([v("security"), v("tests")], "post", allFour)).toBe(true)
+    expect(checkQuorum([v("logic"), v("security"), v("performance")], "post", allFour)).toBe(true)
+  })
+
+  // Arc PR #35 catch: router-aware quorum
+  it("router dispatched ONLY 1 specialist → that 1 success is enough (CSS-only case)", () => {
+    // CSS-only → router returns ["performance"]. If perf succeeds,
+    // ensemble proceeds; original `< 2` rule blocked this.
+    expect(checkQuorum([v("performance")], "shadow", ["performance"])).toBe(true)
+    expect(checkQuorum([v("performance")], "post", ["performance"])).toBe(true)
+  })
+
+  it("router dispatched 2 specialists → both must succeed in shadow", () => {
+    expect(checkQuorum([v("logic")], "shadow", ["logic", "security"])).toBe(false)
+    expect(checkQuorum([v("logic"), v("security")], "shadow", ["logic", "security"])).toBe(true)
+  })
+
+  it("router excluded logic+security (rare) → post mode skips that requirement", () => {
+    // If router dispatched only ["performance"] (no logic/sec), post
+    // mode shouldn't fail just because logic/sec aren't in succeeded.
+    expect(checkQuorum([v("performance")], "post", ["performance"])).toBe(true)
+  })
+
+  it("router dispatched 1 specialist that failed → quorum fails", () => {
+    expect(checkQuorum([], "shadow", ["performance"])).toBe(false)
   })
 })
 

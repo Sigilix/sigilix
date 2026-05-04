@@ -33,14 +33,15 @@ The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and
 3. Asks the model for a Greptile-shaped diagnosis (root cause / likely fix / failure excerpt / confidence).
 4. Posts only when confidence is `high` or `medium`; updates in place via the `<!-- openclaw:ci-triage -->` marker.
 
-**GitHub: Proactive primary review** (`pull_request.opened`)
+**GitHub: Proactive primary review** (`pull_request.opened/synchronize/reopened/ready_for_review`)
 1. Fetches PR diff and reviews it in isolation — no awareness of other reviewers.
 2. Each finding gets a 1–5 score and a category (`logic`, `security`, `performance`, `error-handling`, `testing`, `complexity`, `style`, `syntax`, `docs`). The category leads the inline comment as `**category:**` (greptile-style).
 3. Submits ONE review via `POST /pulls/{n}/reviews` with all findings as inline comments. Approval state is derived from the max finding score:
    - max 5 → `REQUEST_CHANGES`
    - max 3–4 → `COMMENT`
    - max 1–2 (or no findings) → `APPROVE`
-4. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review.
+4. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review the same code.
+5. Re-runs on every push (`synchronize`) so the bot keeps verifying after fix commits and can flip to `APPROVE`. A stale-head guard in the consumer skips jobs whose queued SHA no longer matches the PR head, preventing out-of-order queue processing from posting reviews against superseded commits.
 
 **GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@arc`)
 1. Filters on the comment body before queueing — most PR comments don't @ Arc.

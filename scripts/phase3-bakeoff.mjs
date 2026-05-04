@@ -20,25 +20,43 @@
 // v1 is store-only — no LLM-as-judge pass. We need a corpus first; the
 // judge can be a follow-up that consumes these comparison files.
 //
-// Auth:
-//   OLLAMA_API_KEY   — same key the worker uses (Ollama Turbo)
+// Auth (all three env vars required):
+//   OLLAMA_API_KEY          — same key the worker uses (Ollama Turbo)
+//   CLOUDFLARE_ACCOUNT_ID   — account that owns the OPENCLAW_STATE KV namespace
+//   CLOUDFLARE_API_TOKEN    — token with Workers KV Read on that namespace
 //
-// Wrangler must be authenticated (`wrangler login`) and configured for
-// the openclaw-worker account.
+// We hit the Cloudflare REST API directly rather than shelling out to
+// `wrangler kv key list`: wrangler's CLI doesn't accept a cursor flag,
+// so it silently caps at 1000 keys per call. Using the REST API
+// directly gives us proper cursor pagination + native fetch timeouts
+// with no subprocess to babysit.
 
 import { mkdir, writeFile } from "node:fs/promises"
 import { resolve, join } from "node:path"
-import { spawn } from "node:child_process"
 
 const KV_NAMESPACE_ID = "df689379ea6240f7808997a75ceaed7e"
 const KEY_PREFIX = "agent-loop-telemetry:"
 const OLLAMA_TURBO_URL = "https://ollama.com/api/generate"
+const CLOUDFLARE_API_BASE = "https://api.cloudflare.com/client/v4"
+const KV_LIST_PAGE_SIZE = 1000
 const DEFAULT_TIMEOUT_MS = 600_000
+const KV_REQUEST_TIMEOUT_MS = 30_000
 
 const args = parseArgs(process.argv.slice(2))
 const apiKey = process.env.OLLAMA_API_KEY
-if (!apiKey) {
-  console.error("error: OLLAMA_API_KEY env var is required")
+const cfAccountId = process.env.CLOUDFLARE_ACCOUNT_ID
+const cfApiToken = process.env.CLOUDFLARE_API_TOKEN
+const missingEnv = [
+  ["OLLAMA_API_KEY", apiKey],
+  ["CLOUDFLARE_ACCOUNT_ID", cfAccountId],
+  ["CLOUDFLARE_API_TOKEN", cfApiToken],
+].filter(([, v]) => !v).map(([k]) => k)
+if (missingEnv.length > 0) {
+  console.error(`error: missing required env var(s): ${missingEnv.join(", ")}`)
+  process.exit(1)
+}
+if (args.limit !== null && (!Number.isInteger(args.limit) || args.limit < 0)) {
+  console.error(`error: --limit must be a non-negative integer (got ${args.limit})`)
   process.exit(1)
 }
 
@@ -61,10 +79,6 @@ if (args.surface) {
   console.log(`[bakeoff] surface=${args.surface} → ${kept.length} record(s)`)
 }
 if (args.limit !== null) {
-  if (!Number.isInteger(args.limit) || args.limit < 0) {
-    console.error(`error: --limit must be a non-negative integer (got ${args.limit})`)
-    process.exit(1)
-  }
   if (kept.length > args.limit) kept = kept.slice(0, args.limit)
   console.log(`[bakeoff] limit=${args.limit} → ${kept.length} record(s)`)
 }
@@ -173,8 +187,11 @@ function parseArgs(argv) {
     if (eq < 0) continue
     const k = arg.slice(0, eq).replace(/^--/, "")
     const v = arg.slice(eq + 1)
-    if (k === "limit") out.limit = Number.parseInt(v, 10)
-    else if (k === "surface") out.surface = v
+    if (k === "limit") {
+      // Strict: only accept a string of digits. `Number.parseInt("10abc",
+      // 10)` would happily return 10, silently masking typos.
+      out.limit = /^\d+$/.test(v) ? Number(v) : Number.NaN
+    } else if (k === "surface") out.surface = v
     else if (k === "out") out.out = v
   }
   return out
@@ -182,54 +199,74 @@ function parseArgs(argv) {
 
 /**
  * Page through every key in the production KV namespace under the given
- * prefix. Wrangler's `kv key list` returns the full set in one shot for
- * smaller namespaces; we still read it to completion.
+ * prefix. Uses the Cloudflare REST API with cursor pagination — the
+ * wrangler CLI doesn't accept a cursor flag, so it would silently cap
+ * at 1000 keys per call.
  */
 async function listKvKeys(prefix) {
-  const stdout = await runWrangler([
-    "kv",
-    "key",
-    "list",
-    `--namespace-id=${KV_NAMESPACE_ID}`,
-    "--remote",
-    `--prefix=${prefix}`,
-  ])
-  const parsed = JSON.parse(stdout)
-  if (!Array.isArray(parsed)) {
-    throw new Error("wrangler kv key list returned non-array output")
+  const all = []
+  let cursor = ""
+  for (;;) {
+    const params = new URLSearchParams({ prefix, limit: String(KV_LIST_PAGE_SIZE) })
+    if (cursor) params.set("cursor", cursor)
+    const url = `${CLOUDFLARE_API_BASE}/accounts/${cfAccountId}/storage/kv/namespaces/${KV_NAMESPACE_ID}/keys?${params}`
+    const json = await cloudflareJsonGet(url)
+    if (!json.success) throw new Error(`KV list failed: ${formatCfErrors(json)}`)
+    if (!Array.isArray(json.result)) throw new Error("KV list returned non-array result")
+    for (const entry of json.result) all.push(entry.name)
+    cursor = json.result_info?.cursor ?? ""
+    if (!cursor || json.result.length === 0) break
   }
   // Reverse-timestamped keys sort newest-first lexicographically already,
-  // but be explicit so callers don't have to trust wrangler's ordering.
-  return parsed.map((entry) => entry.name).sort()
+  // but be explicit so callers don't have to trust REST ordering.
+  return all.sort()
 }
 
 async function getKvJson(key) {
-  const stdout = await runWrangler([
-    "kv",
-    "key",
-    "get",
-    `--namespace-id=${KV_NAMESPACE_ID}`,
-    "--remote",
-    key,
-  ])
-  return JSON.parse(stdout)
+  // Values endpoint returns the raw stored bytes (not the success-wrapped
+  // shape), so we parse the body text directly.
+  const url = `${CLOUDFLARE_API_BASE}/accounts/${cfAccountId}/storage/kv/namespaces/${KV_NAMESPACE_ID}/values/${encodeURIComponent(key)}`
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), KV_REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${cfApiToken}` },
+      signal: ctrl.signal,
+    })
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      throw new Error(`KV get HTTP ${res.status}: ${text.slice(0, 500)}`)
+    }
+    return JSON.parse(await res.text())
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
-function runWrangler(args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("npx", ["wrangler", ...args], {
-      stdio: ["ignore", "pipe", "pipe"],
+async function cloudflareJsonGet(url) {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), KV_REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(url, {
+      headers: {
+        authorization: `Bearer ${cfApiToken}`,
+        accept: "application/json",
+      },
+      signal: ctrl.signal,
     })
-    let stdout = ""
-    let stderr = ""
-    child.stdout.on("data", (d) => (stdout += d.toString()))
-    child.stderr.on("data", (d) => (stderr += d.toString()))
-    child.on("error", reject)
-    child.on("exit", (code) => {
-      if (code === 0) resolve(stdout)
-      else reject(new Error(`wrangler exited ${code}: ${stderr.trim() || stdout.trim()}`))
-    })
-  })
+    if (!res.ok) {
+      const text = await res.text().catch(() => "")
+      throw new Error(`Cloudflare API HTTP ${res.status}: ${text.slice(0, 500)}`)
+    }
+    return await res.json()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function formatCfErrors(json) {
+  if (!Array.isArray(json.errors)) return JSON.stringify(json).slice(0, 300)
+  return json.errors.map((e) => `${e.code}: ${e.message}`).join("; ")
 }
 
 async function ollamaGenerate({ model, prompt, format, apiKey }) {

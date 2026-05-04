@@ -462,6 +462,35 @@ describe("runAgentLoop — failure paths (telemetry on each)", () => {
     expect(captured.callCount).toBe(1)
   })
 
+  it("final-answer with prose preamble + fenced JSON parses successfully (regression: GLM-5.1 on ARC-149)", async () => {
+    // Verbatim shape captured from production telemetry (PR #32) — GLM-5.1
+    // wrote a prose summary of its tool-call findings, then a ```json
+    // fence with the actual final answer. The previous parser required
+    // the entire content to be a JSON object (with at most a surrounding
+    // fence), so this fell into final_answer_did_not_parse and the loop
+    // wasted a single-shot fallback that itself produced the wrong reply.
+    const realProsePlusFence = [
+      "No mention of \"Todd Bowles\" found in either the `arc-and-anchor-website` or `rubberfit` repos. The `arc-and-anchor-website` search returned zero results, and the `rubberfit` search returned only unrelated code chunks with low relevance scores.",
+      "",
+      "```json",
+      "{\"answer\": \"No mention of Todd Bowles found anywhere in the arc-and-anchor-website repo (or the other indexed repos).\", \"confidence\": 4, \"abstain\": false}",
+      "```",
+    ].join("\n")
+    mockChat.mockResolvedValueOnce({
+      message: { role: "assistant", content: realProsePlusFence },
+      hasToolCalls: false,
+    })
+    const { args } = makeArgs()
+    const result = await runAgentLoop(args)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.answer).toEqual({
+      answer: expect.stringContaining("No mention of Todd Bowles"),
+      confidence: 4,
+      abstain: false,
+    })
+  })
+
   it("unexpected throw from runLoopBody → internal_error → telemetry STILL records", async () => {
     // Force a throw from chat() that's NOT AbortError or ChatDisabledError
     // (those have specific handling). Any other throw type should still

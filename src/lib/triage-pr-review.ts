@@ -140,6 +140,20 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
     ])
     since("pr-fetched")
 
+    // Stale-head guard: with synchronize-driven re-reviews, a slow job
+    // for SHA A can finish AFTER SHA B's job has already posted. The
+    // diff fetch above returns the *current* PR head (B), but we'd
+    // submit the review against the queued commit_id (A) — bad anchors,
+    // and arc would appear to regress B's verdict. Skip if head moved.
+    // The finally block below releases this SHA's dedupe key, but B
+    // has its own dedupe key (key is per-SHA) so B isn't affected.
+    if (meta.head?.sha && meta.head.sha !== headSha) {
+      console.log(
+        `pr-review skipping stale job: queued ${headSha}, current ${meta.head.sha}`,
+      )
+      return
+    }
+
     const prompt = buildPrompt({
       prNumber,
       title: meta.title,

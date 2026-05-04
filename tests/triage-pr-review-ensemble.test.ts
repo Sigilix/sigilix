@@ -11,6 +11,7 @@ import {
   truncateVerdictToTokens,
   validateForSubmission,
   routeReview,
+  isPermanentFailure,
 } from "../src/lib/triage-pr-review-ensemble"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { Env } from "../src/index"
@@ -436,5 +437,60 @@ describe("routeReview", () => {
       repo: "openclaw-worker",
     })
     expect(decision.primary).toBe("phase3-agentic")
+  })
+})
+
+describe("isPermanentFailure", () => {
+  // CR PR #37 catch — permanent failures should fast-fail; transient
+  // ones should retry/fall back. Classifier is the policy split.
+
+  const PARSE_LABEL = "specialist_did_not_parse"
+
+  it("returns false for undefined / null reasons (treat as transient)", () => {
+    expect(isPermanentFailure(undefined, PARSE_LABEL)).toBe(false)
+  })
+
+  it("returns true for the parse failure label", () => {
+    expect(isPermanentFailure(PARSE_LABEL, PARSE_LABEL)).toBe(true)
+    expect(isPermanentFailure("synth_failed_parse", "synth_failed_parse")).toBe(true)
+  })
+
+  it("returns true for missing_api_key and aborted (defensive)", () => {
+    expect(isPermanentFailure("missing_api_key", PARSE_LABEL)).toBe(true)
+    expect(isPermanentFailure("aborted", PARSE_LABEL)).toBe(true)
+  })
+
+  it.each([
+    "Ollama HTTP 404: model not found",
+    "Ollama HTTP 401: unauthorized",
+    "Ollama HTTP 403: forbidden",
+    "Ollama HTTP 400: bad request",
+    "Ollama HTTP 422: invalid format",
+    "HTTP 451",  // unavailable for legal reasons — still permanent
+  ])("returns true for permanent 4xx (%s)", (reason) => {
+    expect(isPermanentFailure(reason, PARSE_LABEL)).toBe(true)
+  })
+
+  it("returns FALSE for HTTP 429 — rate-limited is transient (retry helps)", () => {
+    expect(isPermanentFailure("Ollama HTTP 429: rate limit exceeded", PARSE_LABEL)).toBe(false)
+  })
+
+  it.each([
+    "Ollama HTTP 500: internal server error",
+    "Ollama HTTP 502: bad gateway",
+    "Ollama HTTP 503: server overloaded, please retry shortly",
+    "Ollama HTTP 504: gateway timeout",
+  ])("returns false for HTTP 5xx (%s) — transient by definition", (reason) => {
+    expect(isPermanentFailure(reason, PARSE_LABEL)).toBe(false)
+  })
+
+  it("returns false for non-HTTP errors (network/timeout) — assume transient", () => {
+    expect(isPermanentFailure("fetch failed", PARSE_LABEL)).toBe(false)
+    expect(isPermanentFailure("AbortError: request timed out", PARSE_LABEL)).toBe(false)
+    expect(isPermanentFailure("ECONNREFUSED", PARSE_LABEL)).toBe(false)
+  })
+
+  it("matches HTTP status case-insensitively", () => {
+    expect(isPermanentFailure("ollama http 404: nope", PARSE_LABEL)).toBe(true)
   })
 })

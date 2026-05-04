@@ -1,0 +1,62 @@
+name: Deploy
+
+# Auto-deploy on every push to main. Replaces the older deploy workflow
+# that was removed when we assumed Cloudflare's GitHub-connector would
+# handle it — that connector turned out not to fire for several days of
+# merges (PRs #28, #29, #30 all merged but didn't deploy), forcing
+# manual `wrangler deploy` calls. This brings auto-deploy back in-repo
+# so it lives under our git history and PR review.
+#
+# Required repo secrets (org-level is fine):
+#   CLOUDFLARE_API_TOKEN   — token with Workers Edit permission
+#   CLOUDFLARE_ACCOUNT_ID  — the Cloudflare account that owns the worker
+#
+# Gates: typecheck + tests must pass before `wrangler deploy` runs.
+# A failing test should NEVER produce a production deploy.
+
+# Least-privilege GITHUB_TOKEN. This workflow only needs to read
+# the repo for checkout — the actual deploy uses the Cloudflare
+# API token, not the GitHub token. Default org/repo permissions
+# may grant more than that.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push to main while a previous deploy is mid-flight should
+# cancel the older run — only the newest commit needs to land in prod.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # Actions pinned to immutable commit SHAs (CR + arc PR #31 catch).
+      # A moved/compromised v3/v4 tag would otherwise run untrusted code
+      # with Cloudflare deploy credentials. Bump the SHA + the trailing
+      # version comment together when upgrading.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@9681c2997648301493e78cacbfb790a9f19c833f # v3.9.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

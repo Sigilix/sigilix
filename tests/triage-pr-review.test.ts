@@ -97,26 +97,29 @@ describe("parsePrReviewResponse", () => {
 describe("chooseReviewEvent", () => {
   const f = (score: number): PrReviewFinding => ({ ...baseFinding, score })
 
-  it("APPROVE on no findings", () => {
+  // Two-state strict verdict: empty findings → APPROVE, anything else
+  // → REQUEST_CHANGES. Score still sorts/severity-tags findings in the
+  // body but no longer changes the verdict. Closed-loop semantics:
+  // user pushes fixes → arc re-reviews on the new SHA → empty findings
+  // → APPROVE. See PR #28 (synchronize re-review).
+
+  it("APPROVE only when findings are empty", () => {
     expect(chooseReviewEvent([])).toBe("APPROVE")
   })
 
-  it("APPROVE when max score ≤ 2", () => {
-    expect(chooseReviewEvent([f(1), f(2), f(2)])).toBe("APPROVE")
+  it("REQUEST_CHANGES on ANY finding regardless of score", () => {
+    // Critical: even score-1 nits block now. The model is told via the
+    // prompt to only emit findings worth blocking over — if it surfaces
+    // one, treat it as a blocker.
+    expect(chooseReviewEvent([f(1)])).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent([f(2)])).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent([f(3)])).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent([f(4)])).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent([f(5)])).toBe("REQUEST_CHANGES")
   })
 
-  it("APPROVE when max score is 3 (maintainability nits are non-blocking)", () => {
-    expect(chooseReviewEvent([f(2), f(3)])).toBe("APPROVE")
-    expect(chooseReviewEvent([f(3)])).toBe("APPROVE")
-    expect(chooseReviewEvent([f(3), f(3), f(3)])).toBe("APPROVE")
-  })
-
-  it("COMMENT when max score is 4", () => {
-    expect(chooseReviewEvent([f(4), f(2)])).toBe("COMMENT")
-    expect(chooseReviewEvent([f(4), f(3)])).toBe("COMMENT")
-  })
-
-  it("REQUEST_CHANGES when any finding is score 5", () => {
+  it("REQUEST_CHANGES on a mix regardless of max score", () => {
+    expect(chooseReviewEvent([f(1), f(2), f(2)])).toBe("REQUEST_CHANGES")
     expect(chooseReviewEvent([f(2), f(5), f(3)])).toBe("REQUEST_CHANGES")
   })
 })

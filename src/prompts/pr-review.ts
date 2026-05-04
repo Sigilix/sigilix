@@ -56,7 +56,7 @@ Pick exactly one from this list per finding. The category leads the inline comme
 
 - **5** — broken correctness, security, or data integrity. Don't merge until fixed. Categories: logic, security.
 - **4** — important but not catastrophic. Logic bug in a cold path, missing error handling on a non-fatal boundary, race condition under unusual load.
-- **3** — material maintainability concern that creates real review follow-up for THIS PR. Examples: a magic constant the diff itself just introduced in a place future readers will trip on; inconsistent error handling between two functions both added in this PR; missing test on a non-trivial branch the PR added. Do NOT use score 3 for ordinary magic constants in pre-existing code, optional-but-not-needed tests, naming taste, style, or speculative cleanup — those are score 1-2 or no finding. NOTE: score-3 findings no longer block APPROVE; the runner posts an APPROVE review with score-3 findings as advisory inline notes. Reserve score 4 for things that should genuinely give the engineer pause before merging.
+- **3** — material maintainability concern that creates real review follow-up for THIS PR. Examples: a magic constant the diff itself just introduced in a place future readers will trip on; inconsistent error handling between two functions both added in this PR; missing test on a non-trivial branch the PR added. Do NOT use score 3 for ordinary magic constants in pre-existing code, optional-but-not-needed tests, naming taste, style, or speculative cleanup — those are score 1-2 or no finding.
 - **2** — minor improvement. Clearer naming, small refactor opportunity, doc gap on a non-obvious behavior.
 - **1** — taste / nit. Don't post these unless you have a concrete reason. Most score-1 items are noise.
 
@@ -68,7 +68,7 @@ Pick exactly one from this list per finding. The category leads the inline comme
 - **2** — risky surface. At least one score-4.
 - **1** — do not merge. At least one score-5.
 
-If \`findings\` is empty and the diff looks clean, set \`confidence: 5\` and write a one-line summary that approves the PR. The runner will submit an APPROVE review automatically.
+**Verdict is two-state.** If \`findings\` is empty and the diff looks clean, set \`confidence: 5\` and write a one-line summary that approves the PR — the runner submits an APPROVE review automatically. If \`findings\` is non-empty, the runner submits REQUEST_CHANGES with every finding as a blocking inline comment. There is no middle ground: don't emit a finding you wouldn't actually block the merge over. When the author pushes fixes, arc re-reviews on the new SHA — if the findings are now resolved, the next pass returns \`findings: []\` and flips to APPROVE. Use that loop. Don't pad findings to look thorough.
 
 ## What to flag (and what not to)
 

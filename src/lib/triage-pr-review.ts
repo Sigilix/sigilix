@@ -8,10 +8,14 @@
 // arrive as one coherent unit on GitHub. Approval state is derived from
 // the max finding score:
 //
-//   max score 5      → REQUEST_CHANGES (do not merge)
-//   max score 3-4    → COMMENT (concerns, your call)
-//   max score 1-2    → APPROVE (ready to merge)
 //   findings empty   → APPROVE
+//   any findings     → REQUEST_CHANGES
+//
+// Strict, two-state. Paired with synchronize-driven re-reviews
+// (PR #28): user pushes fixes → arc re-reviews → if findings now
+// empty, flips to APPROVE. The closed loop replaces the previous
+// "APPROVE with score-3 nits posted as advisory inline comments,"
+// which read as contradictory (green check + 'fix this' comments).
 //
 // Triggers (wired in src/index.ts):
 //   pull_request.opened              first review pass when PR opens
@@ -51,7 +55,7 @@ const LIMITS = {
   crCommentBody: 1_200,
 }
 
-type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+type ReviewEvent = "APPROVE" | "REQUEST_CHANGES"
 
 export type FindingCategory =
   | "logic"
@@ -313,10 +317,14 @@ interface BuildReviewArgs {
 
 /**
  * Translate a parsed verdict into the GitHub review submission body.
- * Approval logic from the max finding score:
- *   - 5  → REQUEST_CHANGES
- *   - 3-4 → COMMENT
- *   - 1-2 (or no findings) → APPROVE
+ * Approval logic is strict + two-state:
+ *   - findings empty → APPROVE
+ *   - any findings   → REQUEST_CHANGES
+ *
+ * Score still sorts/orders findings in the body but no longer changes
+ * the verdict. Paired with synchronize-driven re-reviews (PR #28):
+ * user pushes fixes → arc re-reviews → if findings now empty, flips
+ * to APPROVE. Closed loop, no contradictory APPROVE-with-inline-fixes.
  *
  * Top-level body becomes a sticky summary with confidence + the model's
  * own confidenceReason so a reviewer skimming the PR sees OpenClaw's
@@ -352,19 +360,12 @@ export function buildReviewSubmission({
 }
 
 export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
-  if (findings.length === 0) return "APPROVE"
-  let max = 0
-  for (const f of findings) {
-    if (f.score > max) max = f.score
-  }
-  if (max >= 5) return "REQUEST_CHANGES"
-  // score-3 = "quality / maintainability concern" (magic constants,
-  // inconsistent error handling, missing tests). The model finds one
-  // of these on almost every PR — gating APPROVE on `max <= 2` made
-  // arc emit COMMENT on 5 of every 6 PRs even when the diff was clean.
-  // score-3 nits are advisory; only score-4+ blocks the formal APPROVE.
-  if (max >= 4) return "COMMENT"
-  return "APPROVE"
+  // Strict: any inline finding the model surfaces is a blocker. The
+  // verdict is two-state (APPROVE | REQUEST_CHANGES) — score still
+  // sorts/severity-tags the findings but doesn't decide the gate.
+  // Closed loop comes from synchronize-driven re-reviews (PR #28):
+  // user pushes fixes → arc re-reviews → empty findings → APPROVE.
+  return findings.length === 0 ? "APPROVE" : "REQUEST_CHANGES"
 }
 
 /**

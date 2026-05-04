@@ -24,6 +24,10 @@ import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
 import { parseTeamGithubRepo } from "./github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
 import { escapeXmlAttribute, escapeXmlText } from "./xml-escape"
+import { runAgentLoop } from "./agent-loop"
+import { createAgentTools } from "./agent-tools"
+import { makeKvTelemetrySink } from "./agent-telemetry-kv"
+import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -134,21 +138,73 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
   })
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
-  log("ollama-start")
-  const response = await generate({
-    model,
-    prompt,
-    apiKey: env.OLLAMA_API_KEY,
-    format: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
-  })
-  log("ollama-done")
+  let verdict: MentionVerdict | null = null
 
-  const verdict = parseVerdict(response)
-  if (!verdict) {
-    console.error("mention verdict did not parse", {
-      commentId,
-      response: response.slice(0, 500),
+  if (env.OPENCLAW_AGENTIC_LINEAR_MODE === "on") {
+    log("agent-loop-start")
+    const loopResult = await runAgentLoop({
+      model,
+      apiKey: env.OLLAMA_API_KEY,
+      env,
+      surface: "linear-mention",
+      commentId: data.id,
+      systemPrompt: AGENT_SYSTEM_PROMPT,
+      initialUserMessage: buildAgentInitialUserMessage({
+        issueIdentifier: data.issue.identifier,
+        issueTitle: data.issue.title,
+        issueBody: data.issue.description ?? "",
+        askerHandle,
+        question,
+      }),
+      tools: createAgentTools({
+        env,
+        surface: "linear-mention",
+        // Linear surface — no GitHub auth/repo identity, so no fetch_pr/read_file_lines.
+      }),
+      finalAnswerSchema: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
+      telemetry: makeKvTelemetrySink(env.OPENCLAW_STATE),
+      telemetryContext: {
+        singleShotPrompt: prompt,
+        singleShotSchema: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
+        promptBuilderVersion: "linear-mention-reply-v7",
+        promptBuilderSource: MENTION_REPLY_PROMPT,
+      },
+      log: (event) => log(`agent-loop ${event.kind}`),
     })
+    log("agent-loop-done", { ok: loopResult.ok })
+    if (loopResult.ok) {
+      verdict = parseVerdict(JSON.stringify(loopResult.answer))
+    } else {
+      // Loop failed for any reason — fall back to single-shot using the
+      // EXISTING prompt and schema, no drift. This is the structural
+      // contract from the spec: agent loop's value is captured in the
+      // happy path; failure means we degrade to the proven path.
+      console.warn("[mention-reply] agent loop fell back to single-shot", {
+        commentId,
+        reason: loopResult.reason,
+      })
+      const response = await generate({
+        model,
+        prompt,
+        apiKey: env.OLLAMA_API_KEY,
+        format: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
+      })
+      verdict = parseVerdict(response)
+    }
+  } else {
+    log("ollama-start")
+    const response = await generate({
+      model,
+      prompt,
+      apiKey: env.OLLAMA_API_KEY,
+      format: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
+    })
+    log("ollama-done")
+    verdict = parseVerdict(response)
+  }
+
+  if (!verdict) {
+    console.error("mention verdict did not parse", { commentId })
     return
   }
 
@@ -291,6 +347,37 @@ export function renderPrUnavailable(f: LinkedPrFailure): string {
     `reason="${escapeXmlAttribute(f.reason)}"`,
   ].join(" ")
   return `<pr_unavailable ${attrs} />`
+}
+
+interface AgentInitialMessageCtx {
+  issueIdentifier: string
+  issueTitle: string
+  issueBody: string
+  askerHandle: string
+  question: string
+}
+
+/**
+ * Build the initial user message for the Phase 3 agent loop. Single
+ * compact text block; the agent decides what to fetch from there
+ * using its tools (vs the single-shot path which pre-fetches
+ * codebase chunks + linked PRs and stuffs them into the prompt).
+ */
+function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
+  const lines: string[] = [
+    "[SURFACE] Linear issue comment",
+    `[ISSUE] ${ctx.issueIdentifier} — ${ctx.issueTitle}`,
+    "[ISSUE BODY]",
+    ctx.issueBody.length > 0 ? ctx.issueBody : "(no description)",
+    "",
+    `[ASKER] @${ctx.askerHandle}`,
+    "",
+    "[QUESTION]",
+    ctx.question,
+    "",
+    "Use your tools to gather context as needed. retrieve_codebase queries against the lowercased repo name (e.g. 'rubberfit') as the namespace. Final answer is the JSON shape defined by the system prompt.",
+  ]
+  return lines.join("\n")
 }
 
 interface LinkedPrFetchResult {

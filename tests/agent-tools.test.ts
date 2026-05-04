@@ -1,0 +1,394 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+
+// Mock the Phase 1 primitives this layer wraps. retrieveChunks +
+// fetchPullRequestContext + getInstallationToken + GitHubClient.
+const mockRetrieveChunks = vi.fn()
+const mockFetchPullRequestContext = vi.fn()
+const mockGetInstallationToken = vi.fn(async () => "test-token")
+const mockGetFileContent = vi.fn()
+
+vi.mock("../src/lib/retrieval", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/retrieval")>("../src/lib/retrieval")
+  return {
+    ...actual,
+    retrieveChunks: (args: unknown) => mockRetrieveChunks(args),
+  }
+})
+
+vi.mock("../src/lib/github-pr-context", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/github-pr-context")>(
+    "../src/lib/github-pr-context"
+  )
+  return {
+    ...actual,
+    fetchPullRequestContext: (args: unknown) => mockFetchPullRequestContext(args),
+  }
+})
+
+vi.mock("../src/lib/github-app", () => ({
+  getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
+}))
+
+vi.mock("../src/lib/github", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/github")>("../src/lib/github")
+  return {
+    ...actual,
+    GitHubClient: vi.fn().mockImplementation(() => ({
+      getFileContent: (...args: unknown[]) => mockGetFileContent(...args),
+    })),
+  }
+})
+
+import { createAgentTools, type AgentToolsContext } from "../src/lib/agent-tools"
+import { GitHubClient } from "../src/lib/github"
+import type { Env } from "../src/index"
+
+beforeEach(() => {
+  mockRetrieveChunks.mockReset()
+  mockFetchPullRequestContext.mockReset()
+  mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
+  mockGetFileContent.mockReset()
+})
+
+afterEach(() => {
+  vi.clearAllMocks()
+})
+
+function makeEnv(overrides: Partial<Env> = {}): Env {
+  return {
+    OPENCLAW_STATE: { get: vi.fn(), put: vi.fn() } as unknown as KVNamespace,
+    OPENCLAW_CODE_INDEX: {} as VectorizeIndex,
+    AI: {} as Ai,
+    OPENCLAW_JOBS: {} as Queue<never>,
+    LINEAR_API_KEY: "x",
+    LINEAR_WEBHOOK_SECRET: "x",
+    OLLAMA_API_KEY: "x",
+    GITHUB_APP_ID: "1",
+    GITHUB_PRIVATE_KEY: "key",
+    ...overrides,
+  } as Env
+}
+
+function makeGithubCtx(): NonNullable<AgentToolsContext["github"]> {
+  return {
+    githubClient: new GitHubClient({ token: "t" }),
+    allowedRepos: [{ owner: "Arc-and-Anchor", repo: "rubberfit" }],
+    defaultRef: "main",
+    installationId: 12345,
+  }
+}
+
+describe("createAgentTools — surface scoping", () => {
+  it("Linear surface gets retrieve_codebase only", () => {
+    const tools = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
+    expect(tools.map((t) => t.name)).toEqual(["retrieve_codebase"])
+  })
+
+  it("GitHub surface gets all 3 tools", () => {
+    const tools = createAgentTools({
+      env: makeEnv(),
+      surface: "github-mention",
+      github: makeGithubCtx(),
+    })
+    expect(tools.map((t) => t.name).sort()).toEqual([
+      "fetch_pr",
+      "read_file_lines",
+      "retrieve_codebase",
+    ])
+  })
+
+  it("Linear with no github ctx never exposes fetch_pr / read_file_lines", () => {
+    const tools = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
+    expect(tools.find((t) => t.name === "fetch_pr")).toBeUndefined()
+    expect(tools.find((t) => t.name === "read_file_lines")).toBeUndefined()
+  })
+})
+
+describe("retrieve_codebase", () => {
+  it("returns ok with chunks when retrieveChunks succeeds", async () => {
+    mockRetrieveChunks.mockResolvedValue([
+      { path: "src/foo.ts", lineStart: 10, lineEnd: 30, score: 0.85, content: "function foo() {}" },
+    ])
+    const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
+    const result = await tool!.execute(
+      { query: "where is foo defined", repo: "rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )
+    expect(result).toEqual({
+      ok: true,
+      chunks: [
+        {
+          path: "src/foo.ts",
+          lineStart: 10,
+          lineEnd: 30,
+          score: 0.85,
+          content: "function foo() {}",
+        },
+      ],
+      count: 1,
+    })
+  })
+
+  it("returns ok with empty chunks when retrieval finds nothing", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
+    const result = (await tool!.execute(
+      { query: "x", repo: "rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; count: number }
+    expect(result.ok).toBe(true)
+    expect(result.count).toBe(0)
+  })
+
+  it("returns recoverable error on missing args (does not throw)", async () => {
+    const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
+    const result = (await tool!.execute(
+      { query: "" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/non-empty/)
+    expect(mockRetrieveChunks).not.toHaveBeenCalled()
+  })
+
+  it("re-throws AbortError so loop maps to wall_clock_exceeded", async () => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })
+    await expect(
+      tool!.execute({ query: "x", repo: "y" }, ctrl.signal, new Map()),
+    ).rejects.toThrow(/aborted/)
+  })
+})
+
+describe("fetch_pr", () => {
+  function ghTool(): ReturnType<typeof createAgentTools>[number] {
+    const tools = createAgentTools({
+      env: makeEnv(),
+      surface: "github-mention",
+      github: makeGithubCtx(),
+    })
+    return tools.find((t) => t.name === "fetch_pr")!
+  }
+
+  it("returns ok with PR context when fetch succeeds", async () => {
+    mockFetchPullRequestContext.mockResolvedValue({
+      ok: true,
+      context: {
+        owner: "Arc-and-Anchor",
+        repo: "rubberfit",
+        number: 162,
+        title: "x",
+        body: "",
+        diff: "diff",
+        filesChanged: { items: ["a.ts"], total: 1 },
+        state: "merged",
+        mergedAt: null,
+      },
+    })
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", number: 162 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; pr: unknown }
+    expect(result.ok).toBe(true)
+    expect(result.pr).toMatchObject({ number: 162 })
+  })
+
+  it("REJECTS out-of-allowedRepos as recoverable tool error (not throw)", async () => {
+    const result = (await ghTool().execute(
+      { owner: "torvalds", repo: "linux", number: 1 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string; allowedRepos: Array<{ owner: string; repo: string }> }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/outside the allowed set/)
+    expect(result.allowedRepos).toEqual([{ owner: "Arc-and-Anchor", repo: "rubberfit" }])
+    expect(mockFetchPullRequestContext).not.toHaveBeenCalled()
+  })
+
+  it("returns recoverable error on missing args", async () => {
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/positive integer/)
+  })
+
+  it("returns recoverable error on number = 0 or negative", async () => {
+    for (const n of [0, -1, 1.5]) {
+      const result = (await ghTool().execute(
+        { owner: "Arc-and-Anchor", repo: "rubberfit", number: n },
+        new AbortController().signal,
+        new Map(),
+      )) as { ok: boolean }
+      expect(result.ok).toBe(false)
+    }
+  })
+
+  it("propagates fetchPullRequestContext failure as recoverable error", async () => {
+    mockFetchPullRequestContext.mockResolvedValue({ ok: false, reason: "not_found" })
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", number: 999 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/not_found/)
+  })
+})
+
+describe("read_file_lines", () => {
+  function ghTool(): ReturnType<typeof createAgentTools>[number] {
+    const tools = createAgentTools({
+      env: makeEnv(),
+      surface: "github-mention",
+      github: makeGithubCtx(),
+    })
+    return tools.find((t) => t.name === "read_file_lines")!
+  }
+
+  it("returns ok with sliced content on happy path", async () => {
+    const fileContent = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join("\n")
+    mockGetFileContent.mockResolvedValue(fileContent)
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "src/foo.ts", lineStart: 10, lineEnd: 14 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; content: string; lineStart: number; lineEnd: number; totalLinesInFile: number }
+    expect(result.ok).toBe(true)
+    expect(result.content).toBe("line 10\nline 11\nline 12\nline 13\nline 14")
+    expect(result.lineStart).toBe(10)
+    expect(result.lineEnd).toBe(14)
+    expect(result.totalLinesInFile).toBe(100)
+  })
+
+  it("rejects lineEnd < lineStart with recoverable error", async () => {
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "src/foo.ts", lineStart: 50, lineEnd: 10 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/lineEnd.*must be >= lineStart/)
+    expect(mockGetFileContent).not.toHaveBeenCalled()
+  })
+
+  it("rejects per-call cap (>200 lines)", async () => {
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "src/foo.ts", lineStart: 1, lineEnd: 500 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/per-call cap is 200 lines.*requested 500/)
+  })
+
+  it("rejects out-of-allowedRepos as recoverable", async () => {
+    const result = (await ghTool().execute(
+      { owner: "torvalds", repo: "linux", path: "kernel.c", lineStart: 1, lineEnd: 10 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string; allowedRepos: unknown }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/outside the allowed set/)
+    expect(result.allowedRepos).toEqual([{ owner: "Arc-and-Anchor", repo: "rubberfit" }])
+  })
+
+  it("enforces 50KB per-loop bytes budget across multiple calls", async () => {
+    // First call: 30KB (allowed). Second call: 30KB more (rejected — budget exhausted).
+    const lineSize = 600 // ~600 chars per line
+    const fileLines = Array.from({ length: 200 }, () => "x".repeat(lineSize))
+    mockGetFileContent.mockResolvedValue(fileLines.join("\n"))
+
+    const tool = ghTool()
+    const perLoopContext = new Map()
+
+    // First call returns 50 lines * ~601 bytes = ~30KB
+    const r1 = (await tool.execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 50 },
+      new AbortController().signal,
+      perLoopContext,
+    )) as { ok: boolean; bytesReturned: number; bytesBudgetRemaining: number }
+    expect(r1.ok).toBe(true)
+    expect(r1.bytesReturned).toBeGreaterThan(20_000)
+    expect(r1.bytesReturned).toBeLessThan(50_000)
+
+    // Second call should be rejected because bytesUsed > 50KB cap
+    // (we make sure to push it over by another big read)
+    const r2 = (await tool.execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 51, lineEnd: 200 },
+      new AbortController().signal,
+      perLoopContext,
+    )) as { ok: boolean; bytesReturned?: number; error?: string }
+    // At this point bytesUsed >= 30KB. Budget is 50KB. Second call may
+    // succeed or fail depending on cumulative cost. Check semantics:
+    // either it's ok and budget went DOWN, or it's not ok with the
+    // budget-exhausted message. Either is consistent with the spec.
+    if (!r2.ok) {
+      expect(r2.error).toMatch(/budget exhausted/)
+    } else {
+      // Third call WILL be rejected.
+      const r3 = (await tool.execute(
+        { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 50 },
+        new AbortController().signal,
+        perLoopContext,
+      )) as { ok: boolean; error?: string }
+      expect(r3.ok).toBe(false)
+      expect(r3.error).toMatch(/budget exhausted/)
+    }
+  })
+
+  it("returns recoverable error when file is missing or unreadable", async () => {
+    mockGetFileContent.mockResolvedValue(null)
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "nope.ts", lineStart: 1, lineEnd: 5 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/Could not read/)
+  })
+
+  it("returns recoverable error when lineStart exceeds file length", async () => {
+    mockGetFileContent.mockResolvedValue("a\nb\nc")
+    const result = (await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 100, lineEnd: 150 },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/exceeds file length/)
+  })
+
+  it("THROWS on getInstallationToken failure (real auth runtime error)", async () => {
+    mockGetInstallationToken.mockRejectedValue(new Error("token expired"))
+    await expect(
+      ghTool().execute(
+        { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 5 },
+        new AbortController().signal,
+        new Map(),
+      ),
+    ).rejects.toThrow(/install token failed/)
+  })
+
+  it("uses defaultRef when ref omitted", async () => {
+    mockGetFileContent.mockResolvedValue("a\nb\nc")
+    await ghTool().execute(
+      { owner: "Arc-and-Anchor", repo: "rubberfit", path: "f.ts", lineStart: 1, lineEnd: 2 },
+      new AbortController().signal,
+      new Map(),
+    )
+    expect(mockGetFileContent).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "rubberfit",
+      "f.ts",
+      "main", // defaultRef
+    )
+  })
+})

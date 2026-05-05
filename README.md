@@ -54,7 +54,7 @@ The user-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sig
 5. Re-runs on every push (`synchronize`) so the bot keeps verifying after fix commits and can flip to `APPROVE`. A stale-head guard in the consumer skips jobs whose queued SHA no longer matches the PR head, preventing out-of-order queue processing from posting reviews against superseded commits.
 
 **GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@sigilix`)
-1. Filters on the comment body before queueing — most PR comments don't @ Arc.
+1. Filters on the comment body before queueing — most PR comments don't @ Sigilix.
 2. Fetches PR + diff + the source comment + surrounding thread (issue comment thread for top-level, the inline review-comment chain for inline mentions).
 3. Runs Vectorize retrieval against the asker's question, scoped to the repo's namespace.
 4. Calls Ollama with the greptile-style verification prompt; the model picks a verdict tag per concern (`✅ FIXED`, `↩️ WITHDRAWN`, `⚠️ STANDS`, `🔍 Analysis`, `💬 Answer`, etc.) and writes the prose itself.
@@ -186,7 +186,7 @@ on:
 
 jobs:
   index:
-    uses: Arc-and-Anchor/openclaw-worker/.github/workflows/codebase-index.yml@main
+    uses: Arc-and-Anchor/Sigilix/.github/workflows/codebase-index.yml@main
     secrets:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
@@ -255,7 +255,7 @@ Go to <https://github.com/organizations/Arc-and-Anchor/settings/apps> → **New 
 - `Issue comment` (top-level PR conversation @-mentions)
 - `Pull request review comment` (inline review-comment @-mentions)
 
-Set the webhook URL to `https://openclaw-worker.<your-account>.workers.dev/github/webhook` and copy the webhook secret to `GITHUB_WEBHOOK_SECRET` (step 5 above).
+Set the webhook URL to `https://sigilix.<your-account>.workers.dev/github/webhook` and copy the webhook secret to `GITHUB_WEBHOOK_SECRET` (step 5 above).
 
 Generate a private key from the App settings page; paste the whole PEM into `GITHUB_PRIVATE_KEY`.
 
@@ -267,13 +267,13 @@ Install the App on the repos you want Arc to review.
 npm run deploy
 ```
 
-Wrangler prints the Worker URL — something like `https://openclaw-worker.<your-account>.workers.dev`. Copy it.
+Wrangler prints the Worker URL — something like `https://sigilix.<your-account>.workers.dev`. Copy it.
 
 ### 7. Wire the Linear webhook
 
 In Linear → **Settings → API → Webhooks** (or in your OAuth app's webhook config):
 
-- **URL**: `https://openclaw-worker.<your-account>.workers.dev/linear/webhook`
+- **URL**: `https://sigilix.<your-account>.workers.dev/linear/webhook`
 - **Resource types**: check **Issue** AND **Comment** — Issue triggers triage, Comment triggers the @-mention reply path
 - **Signing secret**: copy this and store it as `LINEAR_WEBHOOK_SECRET` (step 5 above)
 
@@ -286,7 +286,7 @@ Create a new issue in Linear. Within ~30-90 seconds, Arc posts a triage comment 
 If you want to manually re-trigger a triage on an existing issue:
 
 ```bash
-curl -X POST "https://openclaw-worker.<your-account>.workers.dev/linear/manual" \
+curl -X POST "https://sigilix.<your-account>.workers.dev/linear/manual" \
   -H "authorization: Bearer $LINEAR_API_KEY" \
   -H "content-type: application/json" \
   -d '{"issueId": "ARC-42"}'
@@ -313,7 +313,7 @@ Use `ngrok` or `cloudflared tunnel` to expose `localhost:8787` to Linear if you 
 ## Files
 
 ```
-openclaw-worker/
+Sigilix/
 ├── README.md                              # this file
 ├── package.json
 ├── tsconfig.json

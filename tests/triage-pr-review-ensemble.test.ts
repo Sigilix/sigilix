@@ -19,6 +19,7 @@ import {
   RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
+  MAX_CALLS_PER_ENSEMBLE_RUN,
 } from "../src/lib/triage-pr-review-ensemble"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { Env } from "../src/index"
@@ -564,27 +565,35 @@ describe("Phase 4a.1 — model lineup", () => {
     expect(SYNTHESIZER_CONFIG.retries).toBe(1)
   })
 
-  it("max model calls per ensemble run = 16 (Phase 4a.1: was 17 with logic retries=2)", () => {
-    // Per-PR worst-case attempts:
-    //   logic:       primary + 1 retry + fallback           = 3 calls
-    //   security:    primary + 1 retry + fallback           = 3 calls
-    //   performance: primary + 1 retry + fallback           = 3 calls
-    //   tests:       primary + 1 retry + fallback           = 3 calls
-    //   synth:       primary + 1 retry + fallback           = 3 calls
-    //   pre-flight retrieve:                                  1 call
-    // total worst-case: 16 (Phase 4a.1)  vs.  17 (pre-Phase-4a.1 with
-    // logic retries=2 — was 4 logic + 3 each others + 3 synth + 1 = 17).
-    const specialistCallsPerRole = (config: { retries: number; fallback: string | null }) =>
-      1 /* primary */ + config.retries + (config.fallback ? 1 : 0)
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (15)", () => {
+    // The production constant is what `dailyBudgetAvailable()` reserves
+    // before admitting a PR, so the regression must assert against it
+    // directly — not against a hand-calc that would silently drift if
+    // someone changes the production formula. Pre-flight retrieve is
+    // a Vectorize call (gated by OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR),
+    // not a model call (gated by OPENCLAW_ENSEMBLE_DAILY_BUDGET), so it
+    // is intentionally NOT counted here.
+    //
+    // Worst-case model calls per ensemble run:
+    //   logic:       primary + 1 retry + fallback = 3
+    //   security:    primary + 1 retry + fallback = 3
+    //   performance: primary + 1 retry + fallback = 3
+    //   tests:       primary + 1 retry + fallback = 3
+    //   synth:       primary + 1 retry + fallback = 3
+    //   total: 15 (Phase 4a.1).  Was 16 pre-Phase-4a.1 with logic
+    //   retries=2 (4 logic + 3×4 + 3 synth = 19? no — 4+3+3+3+3 = 16).
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(15)
 
-    const total =
-      specialistCallsPerRole(SPECIALIST_CONFIGS.logic) +
-      specialistCallsPerRole(SPECIALIST_CONFIGS.security) +
-      specialistCallsPerRole(SPECIALIST_CONFIGS.performance) +
-      specialistCallsPerRole(SPECIALIST_CONFIGS.tests) +
-      specialistCallsPerRole(SYNTHESIZER_CONFIG) +
-      1 /* pre-flight retrieve */
-
-    expect(total).toBe(16)
+    // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
+    // across all 5 model-using roles.
+    const expected =
+      [
+        SPECIALIST_CONFIGS.logic,
+        SPECIALIST_CONFIGS.security,
+        SPECIALIST_CONFIGS.performance,
+        SPECIALIST_CONFIGS.tests,
+        SYNTHESIZER_CONFIG,
+      ].reduce((acc, c) => acc + 1 + c.retries + (c.fallback ? 1 : 0), 0)
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(expected)
   })
 })

@@ -162,7 +162,11 @@ let md = `# Phase 4b shadow data — corrected summary
 |------|------|--------------|------------------|----------------|-------------|---------------|----------------------|
 ${ROLES.map((r) => {
   const x = perRole[r]
-  const reasons = Object.entries(x.failureReasons).slice(0, 2).map(([k, v]) => `${k}×${v}`).join(", ") || "—"
+  // Provider error strings can contain raw newlines and pipe characters
+  // that break Markdown table cells. Single-line + escape pipes before
+  // interpolating (CR catch on PR #42).
+  const safe = (s) => String(s).replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|").trim()
+  const reasons = Object.entries(x.failureReasons).slice(0, 2).map(([k, v]) => `${safe(k)}×${v}`).join(", ") || "—"
   return `| ${r} | ${x.runs} | ${x.successRate}% | ${x.fellToFallbackCount} | ${x.medianLatencyMs ? (x.medianLatencyMs / 1000).toFixed(1) + "s" : "—"} | ${x.p95LatencyMs ? (x.p95LatencyMs / 1000).toFixed(1) + "s" : "—"} | ${x.meanFindings ?? "—"} | ${reasons} |`
 }).join("\n")}
 
@@ -170,7 +174,12 @@ ${ROLES.map((r) => {
 
 | Time (UTC) | PR | SHA | Quorum | Synth | Findings | Total | FellBack | Logic | Security | Perf | Tests |
 |------------|----|-----|--------|-------|----------|-------|----------|-------|----------|------|-------|
-${summary.perPR.sort((a, b) => a.ts.localeCompare(b.ts)).map((p) => `| ${p.ts.slice(11)} | ${p.pr.split("/")[1]} | ${p.sha} | ${p.quorum} | ${p.synth} | ${p.finalFindings} | ${p.totalS}s | ${p.fellBackReason ?? "—"} | ${p.perSpec.logic} | ${p.perSpec.security} | ${p.perSpec.performance} | ${p.perSpec.tests} |`).join("\n")}
+${summary.perPR.sort((a, b) => a.ts.localeCompare(b.ts)).map((p) => {
+  // Same defensive escape — failure strings in per-spec cells can carry
+  // newlines + pipes from upstream provider errors.
+  const safe = (s) => String(s ?? "—").replace(/[\r\n]+/g, " ").replace(/\|/g, "\\|").trim()
+  return `| ${p.ts.slice(11)} | ${safe(p.pr.split("/")[1])} | ${p.sha} | ${p.quorum} | ${p.synth} | ${p.finalFindings} | ${p.totalS}s | ${safe(p.fellBackReason ?? "—")} | ${safe(p.perSpec.logic)} | ${safe(p.perSpec.security)} | ${safe(p.perSpec.performance)} | ${safe(p.perSpec.tests)} |`
+}).join("\n")}
 `
 
 writeFileSync(".claude/research/phase4b-shadow/_report.md", md)

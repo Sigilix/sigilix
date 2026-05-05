@@ -384,13 +384,18 @@ export async function handlePrReviewEnsemble(
     const specialistResults = await Promise.allSettled(
       router.specialists.map((role) =>
         withComposedTimeout(
-          () => runSpecialist({
+          // Use the composed signal `withComposedTimeout` provides — it
+          // aborts on EITHER the per-specialist 180s timer OR the outer
+          // orch abort. Passing `orchCtrl.signal` directly only cancels
+          // the await wrapper, leaving the in-flight model fetch alive
+          // until the outer 400s wall fires (CR catch on PR #42).
+          (signal) => runSpecialist({
             role,
             apiKey: env.OLLAMA_API_KEY,
             systemPrompt: SPECIALIST_PROMPTS[role],
             initialMessage,
             chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-            signal: orchCtrl.signal,
+            signal,
           }),
           SPECIALIST_TIMEOUT_MS,
           orchCtrl.signal,
@@ -436,12 +441,17 @@ export async function handlePrReviewEnsemble(
     const synthStartMs = Date.now()
     try {
       synthOutput = await withComposedTimeout(
-        () => runSynthesizer({
+        // Use the composed signal so a synth-only 180s timeout actually
+        // cancels the underlying model call. Passing `orchCtrl.signal`
+        // directly only rejects this await; the in-flight model fetch
+        // would keep running until the outer 400s orch wall fires
+        // (CR catch on PR #42).
+        (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: SYNTHESIZER_PROMPT,
           userMessage: synthMessage,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-          signal: orchCtrl.signal,
+          signal,
         }),
         SYNTHESIZER_TIMEOUT_MS,
         orchCtrl.signal,
@@ -632,7 +642,7 @@ function isRepoAllowed(
 function maxAttempts(config: ModelConfig): number {
   return 1 + config.retries + (config.fallback ? 1 : 0)
 }
-const MAX_CALLS_PER_ENSEMBLE_RUN = (
+export const MAX_CALLS_PER_ENSEMBLE_RUN = (
   maxAttempts(SPECIALIST_CONFIGS.logic)
   + maxAttempts(SPECIALIST_CONFIGS.security)
   + maxAttempts(SPECIALIST_CONFIGS.performance)

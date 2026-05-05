@@ -1,4 +1,12 @@
-name = "openclaw-worker"
+# Worker name — drives the deploy URL (e.g.
+# `sigilix.<account>.workers.dev`) and is what GitHub / Linear webhook
+# configs point at. Renamed from `openclaw-worker` during the Sigilix
+# rebrand. KV/Queue/Vectorize binding NAMES still use the legacy
+# `OPENCLAW_*` prefix (deferred to a follow-up to avoid churning ~100
+# `env.OPENCLAW_*` references in code in the same PR — bindings are
+# internal, not user-visible, so the visible-surface rebrand can ship
+# first).
+name = "sigilix"
 main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]

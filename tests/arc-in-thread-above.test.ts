@@ -44,8 +44,17 @@ describe("arcInThreadAbove", () => {
     expect(arcInThreadAbove(comments, 999)).toBe(false)
   })
 
-  it("returns true for arc[bot], openclaw[bot], arc, etc. (handle variants)", () => {
-    const variants = ["arc[bot]", "Arc[bot]", "arc-copilot[bot]", "openclaw[bot]", "arc"]
+  it("returns true for sigilix[bot] and every legacy alias (handle variants)", () => {
+    const variants = [
+      "sigilix",
+      "sigilix[bot]",
+      "Sigilix[bot]",
+      "arc",
+      "arc[bot]",
+      "Arc[bot]",
+      "arc-copilot[bot]",
+      "openclaw[bot]",
+    ]
     for (const login of variants) {
       const parent = { id: 1, user: { login } }
       const comments = [parent as TestComment, human(2, 1)]

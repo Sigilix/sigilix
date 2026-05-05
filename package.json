@@ -1,8 +1,8 @@
 {
-  "name": "openclaw-worker",
+  "name": "sigilix",
   "version": "0.1.0",
   "private": true,
-  "description": "OpenClaw issue-triage bot running on Cloudflare Workers. Linear webhook → Ollama Turbo → Linear comment + field updates.",
+  "description": "Sigilix — multi-agent AI code review for GitHub. Cloudflare Worker + Ollama Turbo specialists. The mark of merge-ready code.",
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

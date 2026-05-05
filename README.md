@@ -1,8 +1,18 @@
-# `openclaw-worker`
+# Sigilix
 
-**Arc** — Linear-side issue triage + GitHub-side PR review, running as a single Cloudflare Worker. Ported from the local NSSM daemon (`rema-portal/tools/openclaw/`).
+> *The mark of merge-ready code.*
 
-The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and dedupe markers all keep the legacy `openclaw` name for stability and zero-config impact. The user-facing bot identity (display names on Linear and GitHub, comment headings, footers, mention triggers) is **Arc**.
+**Sigilix** — multi-agent AI code review for GitHub, plus Linear-side issue triage and @-mention replies, running as a single Cloudflare Worker.
+
+Four specialists (logic, security, performance, tests) review every PR in parallel via Ollama Turbo cloud-routed models. A synthesizer dedupes their verdicts and posts one coherent review with inline anchored findings. This is the ensemble architecture other AI review tools (CodeRabbit, Greptile, Cursor Bugbot) don't run.
+
+## Naming history
+
+The product was previously named **Arc** (2026-04 to 2026-05), and before that **OpenClaw** (initial daemon, ported from `rema-portal/tools/openclaw/`).
+
+Internal infrastructure — Cloudflare KV namespace, Vectorize index, Queue, env var prefixes, dedupe markers (`<!-- openclaw:* -->`) — all keep the legacy `OPENCLAW_*` / `openclaw` names for stability and zero-config impact. Renaming those is deferred to a separate operational migration, since they're internal and not user-visible.
+
+The user-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sigilix`, bot login `sigilix[bot]`, repository, deploy domain, comment headings, footers) are all rebranded to **Sigilix**. Mention triggers continue to accept legacy `@arc`, `@arc-copilot`, and `@openclaw` for back-compat with historical PR threads.
 
 **Linear side** — issue triage and @-mention replies on Linear webhooks.
 **GitHub side** — PR overview, CI failure triage, and proactive primary review on GitHub App webhooks.
@@ -16,7 +26,7 @@ The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and
 4. Rewrites the issue description into `## Context / ## Acceptance criteria / ## Done when` (preserves media URLs).
 5. Posts a triage comment, sets priority + estimate + labels (auto-creates missing labels).
 
-**Linear: Mention reply** (`Comment.create` with `@arc` — also matches legacy `@openclaw`)
+**Linear: Mention reply** (`Comment.create` with `@sigilix` — also matches legacy `@arc`, `@openclaw`)
 1. Pre-filters on the comment body, then fetches the comment + parent issue + recent thread.
 2. Runs the same Vectorize retrieval against the asker's question.
 3. Calls Ollama Turbo with the mention-reply prompt; posts the answer back.
@@ -43,8 +53,8 @@ The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and
 4. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review the same code.
 5. Re-runs on every push (`synchronize`) so the bot keeps verifying after fix commits and can flip to `APPROVE`. A stale-head guard in the consumer skips jobs whose queued SHA no longer matches the PR head, preventing out-of-order queue processing from posting reviews against superseded commits.
 
-**GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@arc`)
-1. Filters on the comment body before queueing — most PR comments don't @ Arc.
+**GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@sigilix`)
+1. Filters on the comment body before queueing — most PR comments don't @ Sigilix.
 2. Fetches PR + diff + the source comment + surrounding thread (issue comment thread for top-level, the inline review-comment chain for inline mentions).
 3. Runs Vectorize retrieval against the asker's question, scoped to the repo's namespace.
 4. Calls Ollama with the greptile-style verification prompt; the model picks a verdict tag per concern (`✅ FIXED`, `↩️ WITHDRAWN`, `⚠️ STANDS`, `🔍 Analysis`, `💬 Answer`, etc.) and writes the prose itself.
@@ -176,7 +186,7 @@ on:
 
 jobs:
   index:
-    uses: Arc-and-Anchor/openclaw-worker/.github/workflows/codebase-index.yml@main
+    uses: Arc-and-Anchor/Sigilix/.github/workflows/codebase-index.yml@main
     secrets:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
@@ -220,7 +230,7 @@ npx wrangler secret put GITHUB_WEBHOOK_SECRET
 ```bash
 npx wrangler secret put OPENCLAW_MODEL              # defaults to glm-5.1:cloud
 npx wrangler secret put OPENCLAW_TEAM_KEY           # e.g. "ARC" — scope to one team
-npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "arc,arc[bot],Arc[bot],openclaw,openclaw[bot],OpenClaw[bot]" (legacy aliases included)
+npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "sigilix,sigilix[bot],Sigilix[bot],arc,arc[bot],Arc[bot],arc-copilot,arc-copilot[bot],openclaw,openclaw[bot],OpenClaw[bot]" (env var name kept legacy for zero-config compatibility; legacy aliases preserved for historical PR threads)
 npx wrangler secret put OPENCLAW_TEAM_REPO_MAP      # JSON: {"ARC":"rubberfit","RFD":"rubberfit-desktop"}
 npx wrangler secret put LINEAR_OAUTH_CLIENT_ID      # OAuth app — comments post as the app actor
 npx wrangler secret put LINEAR_OAUTH_CLIENT_SECRET  # paired with the client_id above
@@ -245,7 +255,7 @@ Go to <https://github.com/organizations/Arc-and-Anchor/settings/apps> → **New 
 - `Issue comment` (top-level PR conversation @-mentions)
 - `Pull request review comment` (inline review-comment @-mentions)
 
-Set the webhook URL to `https://openclaw-worker.<your-account>.workers.dev/github/webhook` and copy the webhook secret to `GITHUB_WEBHOOK_SECRET` (step 5 above).
+Set the webhook URL to `https://sigilix.<your-account>.workers.dev/github/webhook` and copy the webhook secret to `GITHUB_WEBHOOK_SECRET` (step 5 above).
 
 Generate a private key from the App settings page; paste the whole PEM into `GITHUB_PRIVATE_KEY`.
 
@@ -257,13 +267,13 @@ Install the App on the repos you want Arc to review.
 npm run deploy
 ```
 
-Wrangler prints the Worker URL — something like `https://openclaw-worker.<your-account>.workers.dev`. Copy it.
+Wrangler prints the Worker URL — something like `https://sigilix.<your-account>.workers.dev`. Copy it.
 
 ### 7. Wire the Linear webhook
 
 In Linear → **Settings → API → Webhooks** (or in your OAuth app's webhook config):
 
-- **URL**: `https://openclaw-worker.<your-account>.workers.dev/linear/webhook`
+- **URL**: `https://sigilix.<your-account>.workers.dev/linear/webhook`
 - **Resource types**: check **Issue** AND **Comment** — Issue triggers triage, Comment triggers the @-mention reply path
 - **Signing secret**: copy this and store it as `LINEAR_WEBHOOK_SECRET` (step 5 above)
 
@@ -276,7 +286,7 @@ Create a new issue in Linear. Within ~30-90 seconds, Arc posts a triage comment 
 If you want to manually re-trigger a triage on an existing issue:
 
 ```bash
-curl -X POST "https://openclaw-worker.<your-account>.workers.dev/linear/manual" \
+curl -X POST "https://sigilix.<your-account>.workers.dev/linear/manual" \
   -H "authorization: Bearer $LINEAR_API_KEY" \
   -H "content-type: application/json" \
   -d '{"issueId": "ARC-42"}'
@@ -303,7 +313,7 @@ Use `ngrok` or `cloudflared tunnel` to expose `localhost:8787` to Linear if you 
 ## Files
 
 ```
-openclaw-worker/
+Sigilix/
 ├── README.md                              # this file
 ├── package.json
 ├── tsconfig.json

@@ -69,19 +69,30 @@ binding = "AI"
 binding = "OPENCLAW_JOBS"
 queue = "openclaw-jobs"
 
-# Consumer binding — invokes the `queue()` handler in src/index.ts.
-# max_batch_size = 1 because each job is a slow, expensive Ollama call;
-# batching N would mean one slow job blocks the others. max_concurrency
-# lets the platform run several jobs in parallel across invocations.
-# max_retries = 3 covers transient Ollama / GitHub blips; after that
-# the message goes to the dead-letter sink (none configured — message
-# is dropped, which is fine for triage jobs).
-[[queues.consumers]]
-queue = "openclaw-jobs"
-max_batch_size = 1
-max_concurrency = 5
-max_retries = 3
-max_batch_timeout = 1
+# Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
+# Queue API rejects re-registering a consumer that's already bound to
+# this same script (HTTP 11004 — "Queue already has a consumer"), and
+# the CF Workers Builds CI re-runs `wrangler deploy` on every push. The
+# initial registration was done once via `wrangler deploy` from a local
+# checkout after the openclaw-worker → sigilix cutover; subsequent
+# deploys must not try to re-register, or CI fails.
+#
+# The consumer is still active — bound at the dashboard / queue level,
+# not at deploy time. `src/index.ts` still exports a `queue()` handler
+# that processes openclaw-jobs messages.
+#
+# To rebind manually if it ever comes loose:
+#   npx wrangler queues consumer add openclaw-jobs sigilix \
+#     --batch-size 1 --max-concurrency 5 --max-retries 3 --batch-timeout 1
+# Or via dashboard: Workers & Pages → openclaw-jobs (queue) → Settings
+# → Consumers → Add consumer → pick `sigilix`.
+#
+# [[queues.consumers]]
+# queue = "openclaw-jobs"
+# max_batch_size = 1
+# max_concurrency = 5
+# max_retries = 3
+# max_batch_timeout = 1
 
 # Required secrets (set via `wrangler secret put`):
 #

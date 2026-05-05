@@ -1,8 +1,18 @@
-# `openclaw-worker`
+# Sigilix
 
-**Arc** — Linear-side issue triage + GitHub-side PR review, running as a single Cloudflare Worker. Ported from the local NSSM daemon (`rema-portal/tools/openclaw/`).
+> *The mark of merge-ready code.*
 
-The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and dedupe markers all keep the legacy `openclaw` name for stability and zero-config impact. The user-facing bot identity (display names on Linear and GitHub, comment headings, footers, mention triggers) is **Arc**.
+**Sigilix** — multi-agent AI code review for GitHub, plus Linear-side issue triage and @-mention replies, running as a single Cloudflare Worker.
+
+Four specialists (logic, security, performance, tests) review every PR in parallel via Ollama Turbo cloud-routed models. A synthesizer dedupes their verdicts and posts one coherent review with inline anchored findings. This is the ensemble architecture other AI review tools (CodeRabbit, Greptile, Cursor Bugbot) don't run.
+
+## Naming history
+
+The product was previously named **Arc** (2026-04 to 2026-05), and before that **OpenClaw** (initial daemon, ported from `rema-portal/tools/openclaw/`).
+
+Internal infrastructure — Cloudflare KV namespace, Vectorize index, Queue, env var prefixes, dedupe markers (`<!-- openclaw:* -->`) — all keep the legacy `OPENCLAW_*` / `openclaw` names for stability and zero-config impact. Renaming those is deferred to a separate operational migration, since they're internal and not user-visible.
+
+The user-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sigilix`, bot login `sigilix[bot]`, repository, deploy domain, comment headings, footers) are all rebranded to **Sigilix**. Mention triggers continue to accept legacy `@arc`, `@arc-copilot`, and `@openclaw` for back-compat with historical PR threads.
 
 **Linear side** — issue triage and @-mention replies on Linear webhooks.
 **GitHub side** — PR overview, CI failure triage, and proactive primary review on GitHub App webhooks.
@@ -16,7 +26,7 @@ The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and
 4. Rewrites the issue description into `## Context / ## Acceptance criteria / ## Done when` (preserves media URLs).
 5. Posts a triage comment, sets priority + estimate + labels (auto-creates missing labels).
 
-**Linear: Mention reply** (`Comment.create` with `@arc` — also matches legacy `@openclaw`)
+**Linear: Mention reply** (`Comment.create` with `@sigilix` — also matches legacy `@arc`, `@openclaw`)
 1. Pre-filters on the comment body, then fetches the comment + parent issue + recent thread.
 2. Runs the same Vectorize retrieval against the asker's question.
 3. Calls Ollama Turbo with the mention-reply prompt; posts the answer back.
@@ -43,7 +53,7 @@ The repository, infrastructure (KV / Vectorize / wrangler config), env vars, and
 4. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review the same code.
 5. Re-runs on every push (`synchronize`) so the bot keeps verifying after fix commits and can flip to `APPROVE`. A stale-head guard in the consumer skips jobs whose queued SHA no longer matches the PR head, preventing out-of-order queue processing from posting reviews against superseded commits.
 
-**GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@arc`)
+**GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@sigilix`)
 1. Filters on the comment body before queueing — most PR comments don't @ Arc.
 2. Fetches PR + diff + the source comment + surrounding thread (issue comment thread for top-level, the inline review-comment chain for inline mentions).
 3. Runs Vectorize retrieval against the asker's question, scoped to the repo's namespace.
@@ -220,7 +230,7 @@ npx wrangler secret put GITHUB_WEBHOOK_SECRET
 ```bash
 npx wrangler secret put OPENCLAW_MODEL              # defaults to glm-5.1:cloud
 npx wrangler secret put OPENCLAW_TEAM_KEY           # e.g. "ARC" — scope to one team
-npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "arc,arc[bot],Arc[bot],openclaw,openclaw[bot],OpenClaw[bot]" (legacy aliases included)
+npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults to "sigilix,sigilix[bot],Sigilix[bot],arc,arc[bot],Arc[bot],arc-copilot,arc-copilot[bot],openclaw,openclaw[bot],OpenClaw[bot]" (env var name kept legacy for zero-config compatibility; legacy aliases preserved for historical PR threads)
 npx wrangler secret put OPENCLAW_TEAM_REPO_MAP      # JSON: {"ARC":"rubberfit","RFD":"rubberfit-desktop"}
 npx wrangler secret put LINEAR_OAUTH_CLIENT_ID      # OAuth app — comments post as the app actor
 npx wrangler secret put LINEAR_OAUTH_CLIENT_SECRET  # paired with the client_id above

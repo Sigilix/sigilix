@@ -13,19 +13,39 @@ import {
   stripQuotesAndCode,
 } from "../src/lib/mention"
 
-// Test triggers cover both the new `arc` handles and the legacy
-// `openclaw` handles since both are in the production default list.
-const TRIGGERS = ["arc", "arc[bot]", "Arc[bot]", "openclaw", "openclaw[bot]", "OpenClaw[bot]"]
+// Test triggers cover the current Sigilix brand AND every legacy
+// alias (Arc, OpenClaw) since all three live in the production default
+// list to keep historical PR threads triggering after the rebrands.
+const TRIGGERS = [
+  "sigilix",
+  "sigilix[bot]",
+  "Sigilix[bot]",
+  "arc",
+  "arc[bot]",
+  "Arc[bot]",
+  "openclaw",
+  "openclaw[bot]",
+  "OpenClaw[bot]",
+]
 
 describe("getMentionTriggers", () => {
   it("returns defaults when env value is empty / undefined", () => {
-    expect(getMentionTriggers(undefined)).toContain("arc")
-    expect(getMentionTriggers("")).toContain("arc")
-    expect(getMentionTriggers("   ")).toContain("arc")
+    expect(getMentionTriggers(undefined)).toContain("sigilix")
+    expect(getMentionTriggers("")).toContain("sigilix")
+    expect(getMentionTriggers("   ")).toContain("sigilix")
   })
 
-  it("includes legacy openclaw handles in defaults for backward compat", () => {
-    expect(getMentionTriggers(undefined)).toContain("openclaw")
+  it("includes the current sigilix handles in defaults", () => {
+    const t = getMentionTriggers(undefined)
+    expect(t).toContain("sigilix")
+    expect(t).toContain("sigilix[bot]")
+  })
+
+  it("includes legacy arc and openclaw handles in defaults for back-compat", () => {
+    const t = getMentionTriggers(undefined)
+    expect(t).toContain("arc")
+    expect(t).toContain("arc-copilot[bot]")
+    expect(t).toContain("openclaw")
   })
 
   it("parses comma-separated overrides", () => {
@@ -35,7 +55,7 @@ describe("getMentionTriggers", () => {
 
   it("falls back to defaults if override is all whitespace", () => {
     const t = getMentionTriggers(", ,  ")
-    expect(t).toContain("arc")
+    expect(t).toContain("sigilix")
   })
 })
 
@@ -112,9 +132,17 @@ describe("stripMentionFromBody", () => {
 
 describe("isLikelyBotAuthor", () => {
   it.each([
+    // Current brand
+    ["Sigilix[bot]", true],
+    ["sigilix", true],
+    // Legacy aliases (back-compat)
     ["OpenClaw[bot]", true],
     ["openclaw", true],
+    ["arc", true],
+    ["Arc[bot]", true],
+    // Other bots — caught by the generic [bot] suffix arm
     ["GitHub-actions[bot]", true],
+    // Humans
     ["danny", false],
     ["Daniel", false],
     [null, false],

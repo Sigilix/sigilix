@@ -259,17 +259,29 @@ function formatCfErrors(json) {
  * for some reason — shouldn't happen in shadow mode but is possible
  * if Phase 3 itself failed silently).
  */
+// Bot logins this script accepts as "ours" when filtering Phase 3
+// reviews to compare against. Includes the current Sigilix brand AND
+// every legacy alias from the rebrand chain so historical bake-off data
+// remains comparable across the rename boundary.
+const SELF_BOT_LOGINS = new Set([
+  "sigilix[bot]",
+  "arc-copilot[bot]",
+  "openclaw[bot]",
+])
+
 async function fetchPhase3Review({ owner, repo, prNumber, headSha }) {
   // Reviews list endpoint is paginated; default 30, max 100. Walk
-  // every page so the matching arc-copilot review is never silently
+  // every page so the matching self-bot review is never silently
   // missed because it lives past the first page (CR + arc PR #36 catch).
   const reviews = await githubGetPaginated(
     `${GITHUB_API_BASE}/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
   )
-  // Filter to reviews on this SHA, by arc-copilot, with our dedupe marker.
+  // Filter to reviews on this SHA, by Sigilix (or a legacy alias), with
+  // our dedupe marker.
   const matching = reviews.filter((r) =>
     r.commit_id === headSha &&
-    r.user?.login === "arc-copilot[bot]" &&
+    typeof r.user?.login === "string" &&
+    SELF_BOT_LOGINS.has(r.user.login) &&
     typeof r.body === "string" &&
     r.body.includes("<!-- openclaw:pr-review -->"),
   )

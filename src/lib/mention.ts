@@ -1,23 +1,31 @@
-// Detect @-mentions of the bot ("Arc") in Linear comment bodies. Ported
-// from rema-portal/tools/openclaw/lib/mention-detection.mjs. The
+// Detect @-mentions of the bot ("Sigilix") in Linear comment bodies.
+// Ported from rema-portal/tools/openclaw/lib/mention-detection.mjs. The
 // mechanics are identical (markdown-quote stripping, code-fence
 // stripping, regex match against trigger handles) — Linear's comment
 // body is markdown just like GitHub's.
 //
-// Default triggers include both the new `arc` handles and the legacy
-// `openclaw` handles so:
-//   1. users typing @arc trigger the bot
-//   2. comments left over from the OpenClaw era still reply if mentioned
+// Default triggers include the new `sigilix` handles AND every legacy
+// alias (`arc`, `arc-copilot`, `openclaw`) so:
+//   1. users typing @sigilix trigger the bot
+//   2. comments left over from the Arc / OpenClaw eras still reply if
+//      mentioned (no orphaned threads after the rebrand)
 // Override with OPENCLAW_MENTION_TRIGGERS env var when the bot's
-// display handle differs (still named OPENCLAW_* for zero-config impact;
-// the env var name is internal infra, not user-visible).
+// display handle differs (env var name is internal infra and stays
+// OPENCLAW_* for zero-config impact on existing deployments).
 
 const DEFAULT_TRIGGERS = [
+  // Current brand
+  "sigilix",
+  "sigilix[bot]",
+  "Sigilix[bot]",
+  // Legacy: Arc (pre-Sigilix rebrand). Kept so existing PR threads that
+  // @-mention the old name still trigger the bot after the rebrand.
   "arc",
   "arc[bot]",
   "Arc[bot]",
   "arc-copilot",
   "arc-copilot[bot]",
+  // Legacy: OpenClaw (pre-Arc rebrand). Same back-compat rationale.
   "openclaw",
   "openclaw[bot]",
   "OpenClaw[bot]",
@@ -93,13 +101,13 @@ export function stripMentionFromBody(body: string, triggers: string[]): string {
  *
  *   1. Any handle ending in `[bot]` (Linear's standard suffix on OAuth
  *      app actors, GitHub's standard suffix on App-installed bots), or
- *   2. An exact match for "openclaw" or "arc" (with optional `[bot]`
- *      suffix), so legacy display names without the suffix still
- *      register as self.
+ *   2. An exact match for "sigilix", "openclaw", or "arc" (with
+ *      optional `[bot]` suffix), so legacy display names without the
+ *      suffix still register as self across both pre-Sigilix rebrands.
  *
  * Single shared predicate used by:
  *   - Linear webhook self-author guard (src/index.ts) — skip Comment
- *     events authored by Arc itself to prevent reply loops.
+ *     events authored by Sigilix itself to prevent reply loops.
  *   - mention-reply pipeline (src/lib/mention-reply.ts) — same purpose
  *     but checked after the GraphQL fetch.
  *
@@ -111,7 +119,10 @@ export function stripMentionFromBody(body: string, triggers: string[]): string {
  */
 export function isBotHandle(displayName: string | null | undefined): boolean {
   if (!displayName) return false
-  return /\[bot\]$/i.test(displayName) || /^(openclaw|arc)(\[bot\])?$/i.test(displayName)
+  return (
+    /\[bot\]$/i.test(displayName) ||
+    /^(sigilix|openclaw|arc)(\[bot\])?$/i.test(displayName)
+  )
 }
 
 /**
@@ -138,19 +149,24 @@ export function isCodeRabbitAuthor(login: string | null | undefined): boolean {
 }
 
 /**
- * Strict Arc-on-GitHub login detector. Matches `arc[bot]`,
- * `arc-copilot[bot]`, `openclaw[bot]` (legacy), and the bare
+ * Strict self-bot login detector for the GitHub side. Matches the
+ * current brand `sigilix[bot]` plus every legacy alias from the rebrand
+ * chain: `arc[bot]`, `arc-copilot[bot]`, `openclaw[bot]`, and the bare
  * variants without the `[bot]` suffix.
  *
  * Used to skip self-authored @-mentions on GitHub PR threads — when
- * Arc posts a review summary that contains a "@arc" string in a
+ * Sigilix posts a review summary that contains a "@sigilix" string in a
  * code-fenced suggestion or quoted prior comment, the resulting
  * webhook should NOT re-fire the mention handler. Tighter than
  * isBotHandle() which also matches CodeRabbit and other bots.
+ *
+ * Function name kept (`isArcGithubLogin`) for back-compat with imports
+ * across the codebase. The semantics now cover Sigilix and every
+ * legacy alias.
  */
 export function isArcGithubLogin(login: string | null | undefined): boolean {
   if (!login) return false
-  return /^(arc|arc-copilot|openclaw)(\[bot\])?$/i.test(login)
+  return /^(sigilix|arc|arc-copilot|openclaw)(\[bot\])?$/i.test(login)
 }
 
 /**

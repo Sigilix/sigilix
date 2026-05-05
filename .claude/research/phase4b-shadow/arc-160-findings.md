@@ -32,7 +32,7 @@ So Phase 4a.1 did its job on the orchestrator-level cascade failure: the synth, 
 
 Both real post-deploy runs share an identical failure fingerprint on the logic role:
 
-```
+```text
 role:           "logic"
 model:          "deepseek-v4-pro:cloud"
 modelUsed:      null              ← never reached the request stage
@@ -71,7 +71,7 @@ Hold ARC-161 (router activation) and ARC-162 (Devstral A/B) — both depend on A
 
 ## Per-record post-deploy detail
 
-```
+```text
 2026-05-05 18:25:32 PR42 81c52c5  fellBack=stale_head_before_fanout  totalMs=478ms       ← orchestration race, ignore
 2026-05-05 18:25:51 PR42 17de38f  fellBack=stale_head_before_fanout  totalMs=~1s         ← orchestration race, ignore
 2026-05-05 18:26:04 PR42 13a74b4  3/4 quorum, synth ok, 6 findings, totalMs=302s

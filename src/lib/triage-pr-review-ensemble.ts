@@ -480,6 +480,16 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "skipped", cache)
     }
 
+    // Phase 4a.2: withComposedTimeout no longer throws when its own
+    // timer or the orch signal aborts an abort-aware factory — it
+    // returns the factory's structured wrapFailure with
+    // failureReason="aborted". That now reaches this branch instead of
+    // the synth_timeout catch above, so derive timedOut + fellBackReason
+    // here too. Without this, synth-timer aborts would silently land in
+    // synth_failed_parse with timedOut=false (CR catch on PR #44).
+    const synthFailureReason = synthOutput.failureReason ?? ""
+    const synthAborted = /abort/i.test(synthFailureReason) || /timeout/i.test(synthFailureReason)
+
     const synthEntry: NonNullable<EnsembleTelemetry["synthesizer"]> = {
       model: SYNTHESIZER_MODEL,
       modelUsed: synthOutput.modelUsed,
@@ -488,7 +498,7 @@ export async function handlePrReviewEnsemble(
       provenance: synthOutput.provenance,
       retrievalCallsUsed: 0,  // Phase 4a synth doesn't use retrieve; reserved for Phase 4b
       elapsedMs: synthOutput.elapsedMs,
-      timedOut: false,
+      timedOut: synthAborted,
     }
     if (synthOutput.failureReason) synthEntry.failureReason = synthOutput.failureReason
     if (synthOutput.failureRawAnswer) synthEntry.failureRawAnswer = synthOutput.failureRawAnswer
@@ -496,9 +506,11 @@ export async function handlePrReviewEnsemble(
 
     if (!synthOutput.verdict || !synthOutput.provenance) {
       telemetry.fellBackToPhase3 = mode === "post"
-      telemetry.fellBackReason = synthOutput.failureReason === "synth_invalid_provenance"
-        ? "synth_invalid_provenance"
-        : "synth_failed_parse"
+      telemetry.fellBackReason = synthAborted
+        ? "synth_timeout"
+        : synthOutput.failureReason === "synth_invalid_provenance"
+          ? "synth_invalid_provenance"
+          : "synth_failed_parse"
       return finalize(telemetry, env, "skipped", cache)
     }
 
@@ -1190,6 +1202,18 @@ function collectSpecialistVerdicts(
       if (value.failureReason) collected.failureReason = value.failureReason
       if (value.failureRawAnswer) collected.failureRawAnswer = value.failureRawAnswer
       out.push(collected)
+      // Phase 4a.2: aborts (timer- or parent-signal-driven) now reach
+      // this branch via withComposedTimeout's grace window — the
+      // factory's structured wrapFailure(reason="aborted", ...) flows
+      // through Promise.allSettled as a fulfilled value with verdict
+      // null. Derive timedOut from the reason string so timer-driven
+      // aborts stay visible in telemetry. The reason can be the
+      // canonical "aborted" (signal.aborted check between attempts),
+      // a DOMException message like "The operation was aborted." (when
+      // fetch threw mid-attempt), or `fallback_failed: ... aborted`
+      // (primary AND fallback both aborted) — a single /abort/i regex
+      // captures all three.
+      const reason = value.failureReason ?? ""
       const telEntry: EnsembleTelemetry["specialistVerdicts"][number] = {
         role,
         model: SPECIALIST_MODELS[role],
@@ -1197,7 +1221,7 @@ function collectSpecialistVerdicts(
         attemptsUsed: value.attemptsUsed,
         verdict: null,
         elapsedMs: value.elapsedMs,
-        timedOut: false,
+        timedOut: /abort/i.test(reason) || /timeout/i.test(reason),
       }
       if (value.failureReason) telEntry.failureReason = value.failureReason
       if (value.failureRawAnswer) telEntry.failureRawAnswer = value.failureRawAnswer

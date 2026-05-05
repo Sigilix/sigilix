@@ -14,9 +14,13 @@
 //   runLoopBody()        — inner state machine; returns its result and
 //                          accumulated telemetry state explicitly, no
 //                          shared mutation.
-//   withComposedTimeout()— hard timeout that races factory(signal)
-//                          against an abort promise so a tool that
-//                          ignores its signal still gets killed.
+//   withComposedTimeout()— hard timeout that aborts factory's signal
+//                          on timer/parent abort, then awaits factory's
+//                          settlement up to a small grace window so
+//                          abort-aware factories can return their own
+//                          structured failure (Phase 4a.2). If factory
+//                          ignores the signal past the grace, the
+//                          wrapper throws to unblock the caller.
 
 import { chat, isChatDisabledError } from "./ollama-chat"
 import type {
@@ -458,25 +462,54 @@ async function runLoopBody(args: RunLoopBodyArgs): Promise<RunLoopBodyResult> {
 // ──────────────────────────────────────────────────────────────── withComposedTimeout
 
 /**
- * Hard timeout that COMPOSES with an external signal AND races the
- * factory against an abort promise. Either the factory returns first
- * or the abort wins (rejects). Critical: a factory that ignores its
- * signal still gets its await killed when the cap fires (round-6
- * Codex catch).
+ * Grace window (ms) for the factory to settle its own structured
+ * failure after `withComposedTimeout` aborts. Phase 4a.2 fix: when the
+ * timer or parent signal fires, an abort-aware factory (e.g.
+ * `runWithRetryAndFallback`) sees `signal.aborted` and returns a
+ * `wrapFailure(...)` with `attemptsUsed`, `modelUsed`, `elapsedMs`
+ * populated. Awaiting that settlement preserves diagnostic telemetry
+ * across the abort path. If the factory ignores its signal past this
+ * window, the wrapper throws — preserving the round-6 Codex
+ * hard-timeout guarantee for non-cancellation-aware factories.
+ */
+export const WITH_COMPOSED_TIMEOUT_ABORT_GRACE_MS = 500
+
+/**
+ * Hard timeout that COMPOSES with an external signal. Either the
+ * factory returns first (success or its own structured failure) or
+ * the timeout/parent-signal aborts the factory.
  *
- * Pre-aborted-parent race (joint Codex+Kimi round 5, refined Codex
- * round 6): the abortPromise factory checks `ctrl.signal.aborted`
- * synchronously on entry and rejects immediately if so. Without this,
- * a parentSignal already aborted on entry would trigger `abort()`
- * BEFORE the listener attached, leaving abortPromise pending forever.
+ * Phase 4a.2: on abort, the wrapper does NOT immediately throw — it
+ * gives the factory a `WITH_COMPOSED_TIMEOUT_ABORT_GRACE_MS` window to
+ * detect the aborted signal and settle on its own (abort-aware code
+ * paths return a `wrapFailure(...)` with proper diagnostics). The
+ * round-6 Codex hard-timeout guarantee is preserved: if the factory
+ * ignores its signal and never settles, the grace window expires and
+ * the wrapper rejects with `Operation aborted`, killing the await.
+ *
+ * The abort branch is the NORMAL path for abort-aware factories, not
+ * a fallback: when the timer / parent fires, the factory's own abort
+ * listener fires first (registered earlier) and resolves the factory
+ * promise with its structured failure, then the wrapper's `abortFired`
+ * listener fires. The grace-window race observes the factory already
+ * settled and returns its value. Don't "fix" the resolve-not-reject
+ * pattern below — rejecting on `abortFired` is what produced the
+ * Phase 4a.1 lost-settlement bug.
+ *
+ * Pre-aborted parent: if `parentSignal.aborted` is true on entry, the
+ * factory is never invoked — we throw `Operation aborted` synchronously
+ * (the caller asked us to bail before doing any work).
  */
 export async function withComposedTimeout<T>(
   factory: (signal: AbortSignal) => Promise<T>,
   ms: number,
   parentSignal?: AbortSignal,
 ): Promise<T> {
+  if (parentSignal?.aborted) {
+    throw new DOMException("Operation aborted", "AbortError")
+  }
+
   const ctrl = new AbortController()
-  let timer: ReturnType<typeof setTimeout> | undefined
 
   const abort = (): void => {
     if (!ctrl.signal.aborted) {
@@ -484,32 +517,51 @@ export async function withComposedTimeout<T>(
     }
   }
 
-  // Install abortPromise listener BEFORE the parent-aborted check, so
-  // the immediate abort() below has a listener to reject the race.
-  const abortPromise = new Promise<never>((_, reject) => {
-    if (ctrl.signal.aborted) {
-      reject(new DOMException("Operation aborted", "AbortError"))
-      return
-    }
-    ctrl.signal.addEventListener(
-      "abort",
-      () => {
-        reject(new DOMException("Operation aborted", "AbortError"))
-      },
-      { once: true },
-    )
-  })
-
-  if (parentSignal?.aborted) abort()
-
-  timer = setTimeout(abort, ms)
+  const timer = setTimeout(abort, ms)
   const onParentAbort = abort
   parentSignal?.addEventListener("abort", onParentAbort, { once: true })
 
   try {
-    return await Promise.race([factory(ctrl.signal), abortPromise])
+    const factoryPromise = factory(ctrl.signal)
+
+    // Watch for abort. Resolves (does not reject) when ctrl aborts so
+    // the race below can detect "abort fired" without losing factory's
+    // settlement.
+    const abortFired = new Promise<void>((resolve) => {
+      if (ctrl.signal.aborted) {
+        resolve()
+        return
+      }
+      ctrl.signal.addEventListener("abort", () => resolve(), { once: true })
+    })
+
+    const winner = await Promise.race<{ kind: "value"; value: T } | { kind: "abort" }>([
+      factoryPromise.then((value) => ({ kind: "value" as const, value })),
+      abortFired.then(() => ({ kind: "abort" as const })),
+    ])
+
+    if (winner.kind === "value") return winner.value
+
+    // Abort fired. Give factory a brief grace window to settle on its
+    // own (it sees the aborted signal and should produce a structured
+    // wrapFailure). If it ignores the signal past the grace, throw to
+    // unblock the caller — round-6 Codex hard-timeout guarantee.
+    let graceTimer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        factoryPromise,
+        new Promise<T>((_, reject) => {
+          graceTimer = setTimeout(
+            () => reject(new DOMException("Operation aborted", "AbortError")),
+            WITH_COMPOSED_TIMEOUT_ABORT_GRACE_MS,
+          )
+        }),
+      ])
+    } finally {
+      if (graceTimer !== undefined) clearTimeout(graceTimer)
+    }
   } finally {
-    if (timer) clearTimeout(timer)
+    clearTimeout(timer)
     parentSignal?.removeEventListener("abort", onParentAbort)
   }
 }

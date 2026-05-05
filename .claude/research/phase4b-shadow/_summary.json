@@ -1,0 +1,324 @@
+{
+  "totalRecords": 15,
+  "fullyHealthy": 1,
+  "partiallyHealthy": 4,
+  "quorumLost": 7,
+  "wallClock": {
+    "medianMs": 95734,
+    "p95Ms": 211074,
+    "maxMs": 211074
+  },
+  "fellBack": 0,
+  "fellBackReasons": {
+    "internal_error": 4,
+    "specialists_failed": 7
+  },
+  "synthRan": 4,
+  "synthSucceeded": 4,
+  "perSpecialist": {
+    "logic": {
+      "runs": 15,
+      "successes": 2,
+      "successRate": 13,
+      "meanFindings": 1,
+      "medianLatencyMs": 78385,
+      "p95LatencyMs": 78385,
+      "fellToFallbackCount": 0,
+      "failureReasons": {
+        "Operation aborted": 12,
+        "Ollama HTTP 503: {\"error\":\"Server overloaded, please retry shortly (ref: 63be6f24-0203-4cd8-8e28-7337f117dfd1)\"}\n": 1
+      }
+    },
+    "security": {
+      "runs": 15,
+      "successes": 8,
+      "successRate": 53,
+      "meanFindings": 0.25,
+      "medianLatencyMs": 53375,
+      "p95LatencyMs": 65006,
+      "fellToFallbackCount": 1,
+      "failureReasons": {
+        "Ollama HTTP 404: {\"error\": \"model 'qwen3-coder:30b:cloud' not found\"}\n": 4,
+        "Operation aborted": 3
+      }
+    },
+    "performance": {
+      "runs": 15,
+      "successes": 12,
+      "successRate": 80,
+      "meanFindings": 0.92,
+      "medianLatencyMs": 20956,
+      "p95LatencyMs": 85772,
+      "fellToFallbackCount": 6,
+      "failureReasons": {
+        "Operation aborted": 3
+      }
+    },
+    "tests": {
+      "runs": 15,
+      "successes": 4,
+      "successRate": 27,
+      "meanFindings": 1.25,
+      "medianLatencyMs": 49615,
+      "p95LatencyMs": 67053,
+      "fellToFallbackCount": 0,
+      "failureReasons": {
+        "Operation aborted": 7,
+        "Ollama HTTP 404: {\"error\": \"model 'qwen3-coder:30b:cloud' not found\"}\n": 4
+      }
+    }
+  },
+  "perPR": [
+    {
+      "ts": "2026-05-05T05:39:57",
+      "pr": "Arc-and-Anchor/sigilix#41",
+      "sha": "35667ed",
+      "quorum": "4/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 199,
+      "fellBack": false,
+      "fellBackReason": "internal_error",
+      "perSpec": {
+        "logic": "78s",
+        "security": "41s",
+        "performance": "7s",
+        "tests": "25s"
+      }
+    },
+    {
+      "ts": "2026-05-05T05:06:37",
+      "pr": "Arc-and-Anchor/sigilix#41",
+      "sha": "2b2fb56",
+      "quorum": "4/4",
+      "synth": "ok",
+      "finalFindings": 1,
+      "totalS": 96,
+      "fellBack": false,
+      "perSpec": {
+        "logic": "35s",
+        "security": "65s",
+        "performance": "17s",
+        "tests": "16s"
+      }
+    },
+    {
+      "ts": "2026-05-05T04:46:09",
+      "pr": "Arc-and-Anchor/sigilix#41",
+      "sha": "b175201",
+      "quorum": "2/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 211,
+      "fellBack": false,
+      "fellBackReason": "internal_error",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "13s",
+        "performance": "Operation aborted",
+        "tests": "50s"
+      }
+    },
+    {
+      "ts": "2026-05-05T03:26:30",
+      "pr": "Arc-and-Anchor/openclaw-worker#39",
+      "sha": "a179c4c",
+      "quorum": "2/4",
+      "synth": "ok",
+      "finalFindings": 0,
+      "totalS": 135,
+      "fellBack": false,
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "10s",
+        "performance": "17s",
+        "tests": "Operation aborted"
+      }
+    },
+    {
+      "ts": "2026-05-05T03:26:44",
+      "pr": "Arc-and-Anchor/openclaw-worker#40",
+      "sha": "5b93e86",
+      "quorum": "1/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 91,
+      "fellBack": false,
+      "fellBackReason": "specialists_failed",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "Operation aborted",
+        "performance": "86s",
+        "tests": "Operation aborted"
+      }
+    },
+    {
+      "ts": "2026-05-05T03:26:35",
+      "pr": "Arc-and-Anchor/openclaw-worker#38",
+      "sha": "41f8708",
+      "quorum": "0/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 91,
+      "fellBack": false,
+      "fellBackReason": "specialists_failed",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "Operation aborted",
+        "performance": "Operation aborted",
+        "tests": "Operation aborted"
+      }
+    },
+    {
+      "ts": "2026-05-05T03:19:28",
+      "pr": "Arc-and-Anchor/openclaw-worker#39",
+      "sha": "b944930",
+      "quorum": "2/4",
+      "synth": "ok",
+      "finalFindings": 0,
+      "totalS": 128,
+      "fellBack": false,
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "58s",
+        "performance": "36s",
+        "tests": "Operation aborted"
+      }
+    },
+    {
+      "ts": "2026-05-05T03:17:09",
+      "pr": "Arc-and-Anchor/openclaw-worker#38",
+      "sha": "da4ba2b",
+      "quorum": "2/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 211,
+      "fellBack": false,
+      "fellBackReason": "internal_error",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "53s",
+        "performance": "67s",
+        "tests": "Operation aborted"
+      }
+    },
+    {
+      "ts": "2026-05-05T03:03:20",
+      "pr": "Arc-and-Anchor/openclaw-worker#39",
+      "sha": "cd39faa",
+      "quorum": "3/4",
+      "synth": "ok",
+      "finalFindings": 0,
+      "totalS": 141,
+      "fellBack": false,
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "32s",
+        "performance": "10s",
+        "tests": "67s"
+      }
+    },
+    {
+      "ts": "2026-05-05T03:03:35",
+      "pr": "Arc-and-Anchor/openclaw-worker#38",
+      "sha": "4fe47e4",
+      "quorum": "0/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 91,
+      "fellBack": false,
+      "fellBackReason": "specialists_failed",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "Operation aborted",
+        "performance": "Operation aborted",
+        "tests": "Operation aborted"
+      }
+    },
+    {
+      "ts": "2026-05-04T19:58:15",
+      "pr": "Arc-and-Anchor/openclaw-worker#37",
+      "sha": "dc04979",
+      "quorum": "2/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 211,
+      "fellBack": false,
+      "fellBackReason": "internal_error",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "53s",
+        "performance": "22s",
+        "tests": "Operation aborted"
+      }
+    },
+    {
+      "ts": "2026-05-04T19:40:35",
+      "pr": "Arc-and-Anchor/openclaw-worker#37",
+      "sha": "ce46ac4",
+      "quorum": "1/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 91,
+      "fellBack": false,
+      "fellBackReason": "specialists_failed",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "Ollama HTTP 404: {",
+        "performance": "26s",
+        "tests": "Ollama HTTP 404: {"
+      }
+    },
+    {
+      "ts": "2026-05-04T19:22:57",
+      "pr": "Arc-and-Anchor/openclaw-worker#37",
+      "sha": "b21d0ab",
+      "quorum": "1/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 91,
+      "fellBack": false,
+      "fellBackReason": "specialists_failed",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "Ollama HTTP 404: {",
+        "performance": "21s",
+        "tests": "Ollama HTTP 404: {"
+      }
+    },
+    {
+      "ts": "2026-05-04T18:58:35",
+      "pr": "Arc-and-Anchor/openclaw-worker#36",
+      "sha": "a228c23",
+      "quorum": "1/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 91,
+      "fellBack": false,
+      "fellBackReason": "specialists_failed",
+      "perSpec": {
+        "logic": "Operation aborted",
+        "security": "Ollama HTTP 404: {",
+        "performance": "16s",
+        "tests": "Ollama HTTP 404: {"
+      }
+    },
+    {
+      "ts": "2026-05-04T18:48:30",
+      "pr": "Arc-and-Anchor/openclaw-worker#36",
+      "sha": "c7a56b2",
+      "quorum": "1/4",
+      "synth": "—",
+      "finalFindings": "—",
+      "totalS": 19,
+      "fellBack": false,
+      "fellBackReason": "specialists_failed",
+      "perSpec": {
+        "logic": "Ollama HTTP 503: {",
+        "security": "Ollama HTTP 404: {",
+        "performance": "17s",
+        "tests": "Ollama HTTP 404: {"
+      }
+    }
+  ]
+}

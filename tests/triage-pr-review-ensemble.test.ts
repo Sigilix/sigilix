@@ -12,6 +12,13 @@ import {
   validateForSubmission,
   routeReview,
   isPermanentFailure,
+  SPECIALIST_TIMEOUT_MS,
+  SYNTHESIZER_TIMEOUT_MS,
+  ORCHESTRATOR_TIMEOUT_MS,
+  RESERVED_HEADROOM_MS,
+  RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+  SPECIALIST_CONFIGS,
+  SYNTHESIZER_CONFIG,
 } from "../src/lib/triage-pr-review-ensemble"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { Env } from "../src/index"
@@ -492,5 +499,92 @@ describe("isPermanentFailure", () => {
 
   it("matches HTTP status case-insensitively", () => {
     expect(isPermanentFailure("ollama http 404: nope", PARSE_LABEL)).toBe(true)
+  })
+})
+
+// ─── Phase 4a.1: configuration invariants ─────────────────────────────────
+
+describe("Phase 4a.1 — timeout schedule", () => {
+  it("enforces SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS ≤ ORCHESTRATOR_TIMEOUT_MS", () => {
+    // Static budget invariant. The module already throws at load if
+    // this is ever violated; the test is a regression guard so a
+    // future constant tweak doesn't accidentally relax it past where
+    // the synth would lose budget to pre-flight or stale-head latency.
+    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
+      .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
+  })
+
+  it("uses the v3.1 LOCKED + Phase 4a.1 timeouts", () => {
+    expect(SPECIALIST_TIMEOUT_MS).toBe(180_000)
+    expect(SYNTHESIZER_TIMEOUT_MS).toBe(180_000)
+    expect(RESERVED_HEADROOM_MS).toBe(40_000)
+    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(400_000)
+    expect(RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBe(15_000)
+  })
+
+  it("pre-flight timeout is well within the orchestrator's reserved headroom", () => {
+    // Pre-flight runs inside the RESERVED_HEADROOM_MS slice (alongside
+    // diff parse, stale-head guards, telemetry write). If pre-flight
+    // alone is allowed to consume more than 40s the synth's 180s
+    // budget can be eaten by a slow Vectorize. Keep 25s slack.
+    expect(RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
+    expect(RESERVED_HEADROOM_MS - RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBeGreaterThanOrEqual(25_000)
+  })
+})
+
+describe("Phase 4a.1 — model lineup", () => {
+  it("logic specialist runs deepseek-v4-pro:cloud with 1 retry + kimi-k2.5 fallback", () => {
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
+    // Phase 4a.1: dropped from 2 → 1. Two retries × 80s primary attempt
+    // exceeds the 180s specialist budget; one retry + cross-provider
+    // fallback gives better resilience per unit time.
+    expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("kimi-k2.5:cloud")
+  })
+
+  it("performance specialist runs glm-5.1:cloud (Phase 4a.1 promotion) with kimi-k2.5 fallback", () => {
+    // Shadow telemetry: glm-5.1 won 6/12 perf fallback runs while
+    // minimax-m2.1 was unreliable. Promoting glm-5.1 to primary makes
+    // the perf specialist match the success-path of the shadow data.
+    expect(SPECIALIST_CONFIGS.performance.primary).toBe("glm-5.1:cloud")
+    expect(SPECIALIST_CONFIGS.performance.fallback).toBe("kimi-k2.5:cloud")
+    expect(SPECIALIST_CONFIGS.performance.retries).toBe(1)
+  })
+
+  it("security and tests specialists keep deepseek-v4-flash:cloud (PR #37 fix retained)", () => {
+    expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek-v4-flash:cloud")
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek-v4-flash:cloud")
+    expect(SPECIALIST_CONFIGS.security.fallback).toBe("qwen3-coder-next:cloud")
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("qwen3-coder-next:cloud")
+  })
+
+  it("synthesizer keeps kimi-k2.6 primary + kimi-k2.5 fallback", () => {
+    expect(SYNTHESIZER_CONFIG.primary).toBe("kimi-k2.6:cloud")
+    expect(SYNTHESIZER_CONFIG.fallback).toBe("kimi-k2.5:cloud")
+    expect(SYNTHESIZER_CONFIG.retries).toBe(1)
+  })
+
+  it("max model calls per ensemble run = 16 (Phase 4a.1: was 17 with logic retries=2)", () => {
+    // Per-PR worst-case attempts:
+    //   logic:       primary + 1 retry + fallback           = 3 calls
+    //   security:    primary + 1 retry + fallback           = 3 calls
+    //   performance: primary + 1 retry + fallback           = 3 calls
+    //   tests:       primary + 1 retry + fallback           = 3 calls
+    //   synth:       primary + 1 retry + fallback           = 3 calls
+    //   pre-flight retrieve:                                  1 call
+    // total worst-case: 16 (Phase 4a.1)  vs.  17 (pre-Phase-4a.1 with
+    // logic retries=2 — was 4 logic + 3 each others + 3 synth + 1 = 17).
+    const specialistCallsPerRole = (config: { retries: number; fallback: string | null }) =>
+      1 /* primary */ + config.retries + (config.fallback ? 1 : 0)
+
+    const total =
+      specialistCallsPerRole(SPECIALIST_CONFIGS.logic) +
+      specialistCallsPerRole(SPECIALIST_CONFIGS.security) +
+      specialistCallsPerRole(SPECIALIST_CONFIGS.performance) +
+      specialistCallsPerRole(SPECIALIST_CONFIGS.tests) +
+      specialistCallsPerRole(SYNTHESIZER_CONFIG) +
+      1 /* pre-flight retrieve */
+
+    expect(total).toBe(16)
   })
 })

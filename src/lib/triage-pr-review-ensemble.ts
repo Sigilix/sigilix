@@ -79,11 +79,42 @@ import type { Env } from "../index"
 // fully wired.
 const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 const DEFAULT_DAILY_BUDGET = 200
-const SPECIALIST_TIMEOUT_MS = 90_000
-const SYNTHESIZER_TIMEOUT_MS = 120_000
-const ORCHESTRATOR_TIMEOUT_MS = 240_000
+
+// Phase 4a.1 timeout schedule (LOCKED 2026-05-05 after dual sign-off).
+// Sized off shadow telemetry: median successful logic latency = 78s, so
+// one primary attempt + one transient-503 retry needs ~161s (80+0.8+80).
+// 180s leaves 19s slack within the specialist budget.
+export const SPECIALIST_TIMEOUT_MS = 180_000
+// Synth on 4× 8K-token verdicts observed at 30-100s; 180s gives p99
+// headroom for cross-specialist disagreement cases.
+export const SYNTHESIZER_TIMEOUT_MS = 180_000
+// Reserved for pre-flight retrieval + diff parse + stale-head guards +
+// telemetry write. The orchestrator must always have at least this much
+// headroom beyond (specialist + synth) so a slow Vectorize round-trip
+// doesn't eat into the synth budget.
+export const RESERVED_HEADROOM_MS = 40_000
+// 180 + 180 + 40 = 400. Cloudflare queue ceiling is 900s.
+export const ORCHESTRATOR_TIMEOUT_MS = 400_000
+// Cap the pre-flight Vectorize round-trip so a slow retrieval can't
+// silently consume the synth budget. Failed pre-flight is non-fatal
+// per v3.1 §8 — specialists fall back to empty snapshot.
+export const RETRIEVAL_PREFLIGHT_TIMEOUT_MS = 15_000
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
+
+// Static budget invariant — guarantees the synth always has its full
+// 180s budget regardless of pre-flight + diff-parse + stale-head latency.
+// Tripped → throws at module load, not at runtime, so misconfigured
+// builds fail fast.
+if (SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS > ORCHESTRATOR_TIMEOUT_MS) {
+  throw new Error(
+    `[ensemble] timeout invariant violated: ` +
+      `SPECIALIST_TIMEOUT_MS (${SPECIALIST_TIMEOUT_MS}) + ` +
+      `SYNTHESIZER_TIMEOUT_MS (${SYNTHESIZER_TIMEOUT_MS}) + ` +
+      `RESERVED_HEADROOM_MS (${RESERVED_HEADROOM_MS}) ` +
+      `must be ≤ ORCHESTRATOR_TIMEOUT_MS (${ORCHESTRATOR_TIMEOUT_MS}).`,
+  )
+}
 
 /**
  * Per-role model lineup with retry/fallback config (v3.1 LOCKED spec
@@ -117,10 +148,14 @@ interface ModelConfig {
   fallback: string | null
 }
 
-const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
+export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   logic: {
     primary: "deepseek-v4-pro:cloud",
-    retries: 2,
+    // Phase 4a.1: dropped 2 → 1. Two retries at ~80s each = 240s of primary
+    // attempts, exceeds the 180s specialist budget. One retry + cross-provider
+    // fallback gives better resilience per unit time, validated by shadow
+    // telemetry showing 12/15 logic runs hit "Operation aborted" at 90s wall.
+    retries: 1,
     fallback: "kimi-k2.5:cloud",  // Moonshot — different infra than DeepSeek
   },
   security: {
@@ -129,9 +164,14 @@ const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     fallback: "qwen3-coder-next:cloud",  // cross-provider
   },
   performance: {
-    primary: "minimax-m2.1:cloud",  // worked in initial telemetry
+    // Phase 4a.1: glm-5.1 promoted from fallback → primary.
+    // Shadow telemetry: glm-5.1 won 6/12 fallback runs, minimax was unreliable.
+    primary: "glm-5.1:cloud",
     retries: 1,
-    fallback: "glm-5.1:cloud",  // cross-provider
+    // Cross-provider fallback retained — kimi-k2.5 same family as logic's
+    // fallback so we know it's reachable. Concentrates Moonshot risk on the
+    // logic + perf fallback paths simultaneously (noted in v2 risk register).
+    fallback: "kimi-k2.5:cloud",
   },
   tests: {
     primary: "deepseek-v4-flash:cloud",
@@ -145,7 +185,7 @@ const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   },
 }
 
-const SYNTHESIZER_CONFIG: ModelConfig = {
+export const SYNTHESIZER_CONFIG: ModelConfig = {
   primary: "kimi-k2.6:cloud",
   retries: 1,
   fallback: "kimi-k2.5:cloud",
@@ -295,14 +335,40 @@ export async function handlePrReviewEnsemble(
     })
     const namespace = repo.toLowerCase()
     const preflightQuery = `${meta.title}\n\n${meta.body ?? ""}`
-    const preflight = await cache.cachedRetrieve({
-      caller: "preflight",
-      query: preflightQuery,
-      namespace,
-      fetcher: () => retrieveChunks({ text: preflightQuery, teamKey: namespace, env }),
-    })
-    const retrievalSnapshot = preflight.chunks
-      ? formatChunksForPrompt(preflight.chunks) ?? ""
+    // Phase 4a.1: cap the pre-flight Vectorize round-trip so a slow
+    // retrieval can't silently consume the synth budget. Failure here
+    // is non-fatal (per v3.1 §8) — specialists fall back to empty
+    // snapshot and may still call `retrieve_codebase` themselves.
+    // Capture cache locally so the lambda below sees a non-null narrowing.
+    const preflightCache = cache
+    let preflightChunks: Awaited<ReturnType<typeof preflightCache.cachedRetrieve>>["chunks"] = null
+    try {
+      const preflight = await withComposedTimeout(
+        () => preflightCache.cachedRetrieve({
+          caller: "preflight",
+          query: preflightQuery,
+          namespace,
+          fetcher: () => retrieveChunks({ text: preflightQuery, teamKey: namespace, env }),
+        }),
+        RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+        orchCtrl.signal,
+      )
+      preflightChunks = preflight.chunks
+    } catch (err) {
+      // If the orchestrator's outer signal aborted, propagate — that's a
+      // genuine internal_error, not a pre-flight timeout.
+      if (orchCtrl.signal.aborted) throw err
+      // Pre-flight-only timeout / error. The cache itself wraps the
+      // fetcher in its own try/catch so its log will eventually capture
+      // the fetcher's outcome (success/error) once the background call
+      // settles — we just stop awaiting it and proceed with an empty
+      // snapshot. Total wall-clock vs. the cache log's elapsedMs lets
+      // post-hoc analysis distinguish "we gave up at 15s" from "fetcher
+      // threw a hard error".
+      preflightChunks = null
+    }
+    const retrievalSnapshot = preflightChunks
+      ? formatChunksForPrompt(preflightChunks) ?? ""
       : ""
 
     // ─── Fan out specialists ────────────────────────────────────
@@ -361,17 +427,48 @@ export async function handlePrReviewEnsemble(
       specialistVerdictsBlock: synthVerdictBlock,
     })
 
-    const synthOutput = await withComposedTimeout(
-      () => runSynthesizer({
-        apiKey: env.OLLAMA_API_KEY,
-        systemPrompt: SYNTHESIZER_PROMPT,
-        userMessage: synthMessage,
-        chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-        signal: orchCtrl.signal,
-      }),
-      SYNTHESIZER_TIMEOUT_MS,
-      orchCtrl.signal,
-    )
+    // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
+    // Without this, `withComposedTimeout` rejection on synth's own 180s
+    // timer bubbles to the outer catch and is recorded as
+    // `internalError: "Operation aborted"` with `synthesizer: null` —
+    // the spec promised `synthesizer.timedOut: true` for this case.
+    let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
+    const synthStartMs = Date.now()
+    try {
+      synthOutput = await withComposedTimeout(
+        () => runSynthesizer({
+          apiKey: env.OLLAMA_API_KEY,
+          systemPrompt: SYNTHESIZER_PROMPT,
+          userMessage: synthMessage,
+          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+          signal: orchCtrl.signal,
+        }),
+        SYNTHESIZER_TIMEOUT_MS,
+        orchCtrl.signal,
+      )
+    } catch (err) {
+      // If the orchestrator's outer signal aborted, propagate — outer
+      // timeout is a genuine internal_error and lands in the top-level
+      // catch as before.
+      if (orchCtrl.signal.aborted) throw err
+      // Synth-local timeout. Record as a structured synth failure and
+      // short-circuit through the failure path. Quorum already passed
+      // so this is a synth-only fall-back.
+      telemetry.synthesizer = {
+        model: SYNTHESIZER_MODEL,
+        modelUsed: SYNTHESIZER_MODEL,
+        attemptsUsed: 1,
+        verdict: null,
+        provenance: null,
+        retrievalCallsUsed: 0,
+        elapsedMs: Date.now() - synthStartMs,
+        timedOut: true,
+        failureReason: "synth_timeout",
+      }
+      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackReason = "synth_timeout"
+      return finalize(telemetry, env, "skipped", cache)
+    }
 
     const synthEntry: NonNullable<EnsembleTelemetry["synthesizer"]> = {
       model: SYNTHESIZER_MODEL,

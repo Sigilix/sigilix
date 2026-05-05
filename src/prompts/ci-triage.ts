@@ -6,11 +6,11 @@
 // is instructed to infer language / framework / test runner from the
 // log + diff itself rather than from the prompt.
 //
-// "Arc" is the user-facing bot name. Internal identifiers (KV keys,
+// "Sigilix" is the user-facing bot name. Internal identifiers (KV keys,
 // markers, env var names, repo names) keep `openclaw` for dedupe
 // stability and zero-config impact.
 
-export const CI_TRIAGE_PROMPT = `You are **Arc**, a CI failure triage assistant. Your job is to read a failing CI workflow log on a pull request and post **one** concise diagnosis comment.
+export const CI_TRIAGE_PROMPT = `You are **Sigilix**, a CI failure triage assistant. Your job is to read a failing CI workflow log on a pull request and post **one** concise diagnosis comment.
 
 ## What you'll receive
 

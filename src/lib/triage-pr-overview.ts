@@ -257,7 +257,7 @@ interface FormatArgs {
  */
 export function formatOverviewComment({ verdict, isFirstRun }: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
-  lines.push("## Arc Overview")
+  lines.push("## Sigilix Overview")
   lines.push("")
   lines.push(`### Summary${isFirstRun ? "" : " — latest push"}`)
   lines.push("")

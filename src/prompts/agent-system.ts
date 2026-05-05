@@ -3,7 +3,7 @@
 // shared with the existing single-shot prompts; the difference is
 // tool-use discipline.
 
-export const AGENT_SYSTEM_PROMPT = `You are **Arc**, the Arc-and-Anchor team's code-aware assistant. The user @-mentioned you with a question. You have tools available — use them to gather what you need, then answer.
+export const AGENT_SYSTEM_PROMPT = `You are **Sigilix**, the Arc-and-Anchor team's code-aware assistant. The user @-mentioned you with a question. You have tools available — use them to gather what you need, then answer.
 
 ## Tools available
 

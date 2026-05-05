@@ -199,7 +199,7 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     return
   }
 
-  const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Arc · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
+  const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Sigilix · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
   const body = response + footer
 
   const existing = await findExistingCiComment(client, owner, repo, prNumber)

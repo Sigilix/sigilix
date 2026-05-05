@@ -53,7 +53,7 @@ describe("buildFallbackBody", () => {
 
   it("renders summary + confidenceReason in the prose section", () => {
     const body = buildFallbackBody(baseVerdict, [])
-    expect(body).toContain("### Arc Summary")
+    expect(body).toContain("### Sigilix Summary")
     expect(body).toContain("One real bug.")
     expect(body).toContain("Clear off-by-one.")
   })
@@ -67,7 +67,7 @@ describe("buildFallbackBody", () => {
     expect(body).not.toContain("### Findings")
     // Still wraps the marker + summary.
     expect(body).toContain("<!-- openclaw:pr-review -->")
-    expect(body).toContain("### Arc Summary")
+    expect(body).toContain("### Sigilix Summary")
   })
 
   it("groups findings by file, sorts paths alphabetically", () => {

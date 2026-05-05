@@ -439,7 +439,7 @@ export function buildFallbackBody(
   }
 
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
-  lines.push("### Arc Summary")
+  lines.push("### Sigilix Summary")
   lines.push("")
   lines.push(verdict.summary)
   if (verdict.confidenceReason) {
@@ -498,7 +498,7 @@ function formatReviewBody(
   // is appended so findings whose lines fell outside the diff still
   // get surfaced (rather than silently dropped on the success path).
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
-  lines.push("### Arc Summary")
+  lines.push("### Sigilix Summary")
   lines.push("")
   lines.push(verdict.summary)
   if (verdict.confidenceReason) {

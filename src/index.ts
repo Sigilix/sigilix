@@ -329,7 +329,7 @@ export default {
     const url = new URL(request.url)
 
     if (request.method === "GET" && url.pathname === "/") {
-      return new Response("Arc Worker — alive\n", {
+      return new Response("Sigilix — alive\n", {
         headers: { "content-type": "text/plain" },
       })
     }

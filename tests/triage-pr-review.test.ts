@@ -177,7 +177,7 @@ describe("buildReviewSubmission", () => {
   it("renders the dedupe marker, summary header, and confidence reason in the body", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("<!-- openclaw:pr-review -->")
-    expect(out.body).toContain("### Arc Summary")
+    expect(out.body).toContain("### Sigilix Summary")
     expect(out.body).toContain(verdict.summary)
     expect(out.body).toContain(verdict.confidenceReason)
     // Greptile-style format: no numerical confidence score in the body,

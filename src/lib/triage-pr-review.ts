@@ -359,6 +359,100 @@ export function buildReviewSubmission({
   return submission
 }
 
+interface BuildFallbackArgs {
+  verdict: PrReviewVerdict
+  unanchored: PrReviewFinding[]
+  prAuthor: string | null
+  headSha: string
+}
+
+/**
+ * Greptile-style submit-review fallback: when the inline-anchored review
+ * (POST /reviews with `comments`) is rejected by GitHub, retry the same
+ * review WITHOUT inline anchors, embedding every finding in the body as
+ * markdown grouped by file. Recovers the verdict instead of losing it.
+ *
+ * Findings come from two sources:
+ *   1. `verdict.findings` — passed every validator (line-valid, anchored)
+ *   2. `unanchored` — passed the hallucination guard but failed
+ *      `deriveSide()` (e.g., model picked a line outside the diff). With
+ *      no inline anchoring in fallback mode, the position-validity gate
+ *      no longer matters — these still describe real concerns.
+ *
+ * Both lists are merged, grouped by `path`, and rendered as a Markdown
+ * `### Findings` section. The dedupe marker `<!-- openclaw:pr-review -->`
+ * is preserved at the top so existing dedupe-by-marker logic still
+ * recognizes the comment.
+ *
+ * Pure — exported for tests.
+ */
+export function buildFallbackSubmission({
+  verdict,
+  unanchored,
+  headSha,
+}: BuildFallbackArgs): SubmitReviewBody {
+  const event = chooseReviewEvent(verdict.findings)
+  const body = buildFallbackBody(verdict, unanchored)
+  return {
+    event,
+    body,
+    commit_id: headSha,
+    // No `comments` array — every finding lives in `body`.
+  }
+}
+
+export function buildFallbackBody(
+  verdict: PrReviewVerdict,
+  unanchored: PrReviewFinding[]
+): string {
+  const all = [...verdict.findings, ...unanchored]
+  if (all.length === 0) {
+    // No inline findings to relocate; the standard prose body is fine.
+    // Still flow through formatReviewBody to keep the marker + summary.
+    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings))
+  }
+
+  const byPath = new Map<string, PrReviewFinding[]>()
+  for (const f of all) {
+    if (!byPath.has(f.path)) byPath.set(f.path, [])
+    byPath.get(f.path)!.push(f)
+  }
+  const sortedPaths = [...byPath.keys()].sort()
+
+  const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
+  lines.push("### Arc Summary")
+  lines.push("")
+  lines.push(verdict.summary)
+  if (verdict.confidenceReason) {
+    lines.push("")
+    lines.push(verdict.confidenceReason)
+  }
+  lines.push("")
+  lines.push(`### Findings (${all.length})`)
+
+  for (const path of sortedPaths) {
+    const findings = byPath.get(path)!
+    findings.sort((a, b) => b.score - a.score || a.line - b.line)
+    lines.push("")
+    lines.push(`**${path}**`)
+    for (const f of findings) {
+      const range =
+        f.startLine != null && f.startLine !== f.line
+          ? `Lines ${f.startLine}-${f.line}`
+          : `Line ${f.line}`
+      lines.push(`- ${range} — **${f.category}:** ${f.headline}`)
+      // Indent the body so it nests under the bullet visually.
+      const bodyLines = f.body
+        .split("\n")
+        .map((l) => `  ${l}`)
+        .join("\n")
+      lines.push(bodyLines)
+    }
+  }
+
+  return lines.join("\n")
+}
+
 export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
   // Strict: any inline finding the model surfaces is a blocker. The
   // verdict is two-state (APPROVE | REQUEST_CHANGES) — score still

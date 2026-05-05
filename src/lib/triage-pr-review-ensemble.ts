@@ -43,6 +43,7 @@ import {
   type PrReviewFinding,
   parsePrReviewResponse,
   buildReviewSubmission,
+  buildFallbackSubmission,
 } from "./triage-pr-review"
 import {
   decideSpecialists,
@@ -421,14 +422,44 @@ export async function handlePrReviewEnsemble(
     }
 
     // ─── Submit ────────────────────────────────────────────────
+    // GitHub validates every inline anchor and rejects the entire review
+    // on a single bad position (typical 422). When that happens the
+    // ensemble verdict is good but unsubmittable in its inline shape —
+    // Greptile's pr_review.ts handles this by re-posting the review
+    // anchorless with all findings rolled into the body. Same pattern
+    // here: catch any submit error and retry with `buildFallbackSubmission`.
+    // If the fallback ALSO fails, the outer try/catch records it as
+    // `internal_error` (same behaviour as before this change).
     const submission = buildReviewSubmission({
       verdict: validated.verdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
     })
-    await client.submitReview(owner, repo, prNumber, submission)
-    telemetry.submitted = true
-    return finalize(telemetry, env, "posted", cache)
+    try {
+      await client.submitReview(owner, repo, prNumber, submission)
+      telemetry.submitted = true
+      return finalize(telemetry, env, "posted", cache)
+    } catch (submitErr) {
+      const fallbackReason =
+        submitErr instanceof Error ? submitErr.message : String(submitErr)
+      console.warn("[ensemble] inline submit rejected; falling back to anchorless review", {
+        owner,
+        repo,
+        prNumber,
+        reason: fallbackReason,
+      })
+      const fallback = buildFallbackSubmission({
+        verdict: validated.verdict,
+        unanchored: validated.unanchoredFindings,
+        prAuthor: meta.user?.login ?? null,
+        headSha,
+      })
+      await client.submitReview(owner, repo, prNumber, fallback)
+      telemetry.submitted = true
+      telemetry.submitFallback = true
+      telemetry.submitFallbackReason = fallbackReason
+      return finalize(telemetry, env, "posted", cache)
+    }
   } catch (e) {
     telemetry.fellBackToPhase3 = mode === "post"
     telemetry.fellBackReason = "internal_error"
@@ -1112,6 +1143,13 @@ export function truncateVerdictToTokens(
 
 export interface ValidatedOutput {
   verdict: PrReviewVerdict
+  /**
+   * Findings that passed the hallucination guard and the score-1 demotion
+   * check but failed `deriveSide()` (line not in the PR diff). Empty in
+   * the success path; the submit-review fallback uses this list to
+   * recover findings whose value survives without an inline anchor.
+   */
+  unanchoredFindings: PrReviewFinding[]
   droppedForInvalidLine: number
   droppedForHallucination: number
   demotedScore1: number
@@ -1130,6 +1168,7 @@ export function validateForSubmission(args: {
   }
 
   const cleanFindings: PrReviewFinding[] = []
+  const unanchoredFindings: PrReviewFinding[] = []
   let droppedForInvalidLine = 0
   let droppedForHallucination = 0
   let demotedScore1 = 0
@@ -1166,6 +1205,10 @@ export function validateForSubmission(args: {
     const side = deriveSide(reviewable, f.path, f.line)
     if (!side) {
       droppedForInvalidLine++
+      // Preserve for submit-fallback. Inline anchoring would fail here,
+      // but the finding's *content* is still actionable when posted as
+      // free-form markdown in the body of an anchorless review.
+      unanchoredFindings.push(f)
       continue
     }
     cleanFindings.push(f)
@@ -1184,6 +1227,7 @@ export function validateForSubmission(args: {
 
   return {
     verdict: { ...synthOutput.verdict, summary, findings: cleanFindings },
+    unanchoredFindings,
     droppedForInvalidLine,
     droppedForHallucination,
     demotedScore1,
@@ -1240,6 +1284,16 @@ interface EnsembleTelemetry {
   retrievalCacheStats: RetrievalCacheStats | null
   shadowVerdict?: PrReviewVerdict
   submitted?: boolean
+  /**
+   * True when the inline-anchored submission was rejected by GitHub
+   * and the orchestrator successfully recovered by re-submitting an
+   * anchorless review with all findings rolled into the body. Set
+   * alongside `submitted: true` — the review was posted, just not in
+   * the inline-comment shape.
+   */
+  submitFallback?: boolean
+  /** Error message from the original (failed) inline submission. */
+  submitFallbackReason?: string
   startMs: number
   totalMs: number
 }

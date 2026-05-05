@@ -1,0 +1,359 @@
+// Unit tests for the submit-review fallback path (Greptile-style port).
+//
+// When GitHub rejects an inline-anchored review (typical 422 on a bad
+// position), the orchestrator re-submits the same review WITHOUT inline
+// comments, embedding every finding in the body as markdown grouped by
+// file. The point of this test file is to verify three pure helpers:
+//
+//   1. validateForSubmission populates `unanchoredFindings` for findings
+//      that pass the hallucination guard but fail line-validity. These
+//      are the findings the fallback recovers.
+//   2. buildFallbackBody groups findings by file, sorts within file by
+//      score desc, includes both anchored + unanchored, and preserves
+//      the dedupe marker.
+//   3. buildFallbackSubmission emits a SubmitReviewBody with NO
+//      `comments` array (so GitHub doesn't re-validate inline anchors).
+//
+// Orchestrator-level integration testing of the catch-and-retry flow is
+// deferred to shadow-mode dogfooding — same rationale as the existing
+// triage-pr-review-ensemble.test.ts: too much network mocking surface
+// for unit value, and Phase 4a ships off-by-default.
+
+import { describe, expect, it } from "vitest"
+import {
+  buildFallbackBody,
+  buildFallbackSubmission,
+} from "../src/lib/triage-pr-review"
+import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
+import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
+import type { ReviewableMap } from "../src/lib/diff-positions"
+
+const baseFinding: PrReviewFinding = {
+  path: "src/lib/foo.ts",
+  line: 42,
+  score: 4,
+  category: "logic",
+  headline: "off-by-one in `clampIndex`",
+  body: "Use `i <= n` instead of `i < n`.",
+}
+
+const baseVerdict: PrReviewVerdict = {
+  summary: "One real bug.",
+  confidence: 4,
+  confidenceReason: "Clear off-by-one.",
+  findings: [baseFinding],
+}
+
+describe("buildFallbackBody", () => {
+  it("preserves the dedupe marker so existing comment-marker logic still finds it", () => {
+    const body = buildFallbackBody(baseVerdict, [])
+    expect(body.startsWith("<!-- openclaw:pr-review -->")).toBe(true)
+  })
+
+  it("renders summary + confidenceReason in the prose section", () => {
+    const body = buildFallbackBody(baseVerdict, [])
+    expect(body).toContain("### Arc Summary")
+    expect(body).toContain("One real bug.")
+    expect(body).toContain("Clear off-by-one.")
+  })
+
+  it("falls back to standard prose body when there are zero findings", () => {
+    const body = buildFallbackBody(
+      { ...baseVerdict, findings: [] },
+      []
+    )
+    // No `### Findings (N)` header when nothing to render.
+    expect(body).not.toContain("### Findings")
+    // Still wraps the marker + summary.
+    expect(body).toContain("<!-- openclaw:pr-review -->")
+    expect(body).toContain("### Arc Summary")
+  })
+
+  it("groups findings by file, sorts paths alphabetically", () => {
+    const findings: PrReviewFinding[] = [
+      { ...baseFinding, path: "src/z.ts", line: 10, headline: "z-issue" },
+      { ...baseFinding, path: "src/a.ts", line: 20, headline: "a-issue" },
+      { ...baseFinding, path: "src/m.ts", line: 30, headline: "m-issue" },
+    ]
+    const body = buildFallbackBody({ ...baseVerdict, findings }, [])
+    const aIdx = body.indexOf("**src/a.ts**")
+    const mIdx = body.indexOf("**src/m.ts**")
+    const zIdx = body.indexOf("**src/z.ts**")
+    expect(aIdx).toBeGreaterThan(-1)
+    expect(mIdx).toBeGreaterThan(aIdx)
+    expect(zIdx).toBeGreaterThan(mIdx)
+  })
+
+  it("sorts findings within a file by score DESC then line ASC", () => {
+    const findings: PrReviewFinding[] = [
+      { ...baseFinding, line: 100, score: 2, headline: "low-score-late" },
+      { ...baseFinding, line: 50, score: 5, headline: "high-score-early" },
+      { ...baseFinding, line: 10, score: 5, headline: "high-score-earlier" },
+    ]
+    const body = buildFallbackBody({ ...baseVerdict, findings }, [])
+    const earlierIdx = body.indexOf("high-score-earlier")
+    const earlyIdx = body.indexOf("high-score-early")
+    const lateIdx = body.indexOf("low-score-late")
+    // Score 5 (line 10) comes before score 5 (line 50) which comes before score 2.
+    expect(earlierIdx).toBeLessThan(earlyIdx)
+    expect(earlyIdx).toBeLessThan(lateIdx)
+  })
+
+  it("MERGES anchored verdict.findings with unanchored findings", () => {
+    const anchored = { ...baseFinding, line: 10, headline: "anchored-finding" }
+    const unanchored: PrReviewFinding = {
+      ...baseFinding,
+      line: 999,
+      headline: "unanchored-finding",
+    }
+    const body = buildFallbackBody(
+      { ...baseVerdict, findings: [anchored] },
+      [unanchored]
+    )
+    expect(body).toContain("anchored-finding")
+    expect(body).toContain("unanchored-finding")
+    expect(body).toContain("### Findings (2)")
+  })
+
+  it("renders a multi-line range when startLine differs from line", () => {
+    const ranged: PrReviewFinding = {
+      ...baseFinding,
+      startLine: 40,
+      line: 50,
+    }
+    const body = buildFallbackBody({ ...baseVerdict, findings: [ranged] }, [])
+    expect(body).toContain("Lines 40-50")
+    expect(body).not.toContain("Line 50 — ")
+  })
+
+  it("renders single-line target when startLine is omitted", () => {
+    const single: PrReviewFinding = { ...baseFinding, line: 50 }
+    const body = buildFallbackBody({ ...baseVerdict, findings: [single] }, [])
+    expect(body).toContain("Line 50 — ")
+    expect(body).not.toContain("Lines ")
+  })
+
+  it("includes category prefix in the bullet headline", () => {
+    const body = buildFallbackBody(baseVerdict, [])
+    expect(body).toContain("**logic:** off-by-one in `clampIndex`")
+  })
+
+  it("indents the finding body so it nests under its bullet visually", () => {
+    const body = buildFallbackBody(
+      {
+        ...baseVerdict,
+        findings: [{ ...baseFinding, body: "first line\nsecond line" }],
+      },
+      []
+    )
+    expect(body).toContain("  first line")
+    expect(body).toContain("  second line")
+  })
+
+  it("omits confidenceReason line when empty", () => {
+    const body = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
+    // confidenceReason is the only non-summary content above ### Findings;
+    // when blank, the layout should not include an empty line for it.
+    const lines = body.split("\n")
+    const summaryIdx = lines.findIndex((l) => l === "One real bug.")
+    expect(summaryIdx).toBeGreaterThan(-1)
+    // The line after summary should be blank, then ### Findings.
+    expect(lines[summaryIdx + 1]).toBe("")
+    expect(lines[summaryIdx + 2]).toBe("### Findings (1)")
+  })
+})
+
+describe("buildFallbackSubmission", () => {
+  it("emits no `comments` array (so GitHub does not re-validate inline anchors)", () => {
+    const submission = buildFallbackSubmission({
+      verdict: baseVerdict,
+      unanchored: [],
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.comments).toBeUndefined()
+  })
+
+  it("preserves event from chooseReviewEvent (REQUEST_CHANGES with findings)", () => {
+    const submission = buildFallbackSubmission({
+      verdict: baseVerdict,
+      unanchored: [],
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.event).toBe("REQUEST_CHANGES")
+  })
+
+  it("returns APPROVE when both anchored and unanchored are empty", () => {
+    const submission = buildFallbackSubmission({
+      verdict: { ...baseVerdict, findings: [] },
+      unanchored: [],
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.event).toBe("APPROVE")
+  })
+
+  it("threads commit_id from headSha so the review is pinned to the reviewed sha", () => {
+    const submission = buildFallbackSubmission({
+      verdict: baseVerdict,
+      unanchored: [],
+      prAuthor: null,
+      headSha: "abc123",
+    })
+    expect(submission.commit_id).toBe("abc123")
+  })
+
+  it("body contains every finding from both anchored + unanchored sources", () => {
+    const anchored = { ...baseFinding, headline: "anchored-here" }
+    const unanchored: PrReviewFinding = {
+      ...baseFinding,
+      line: 999,
+      headline: "unanchored-here",
+    }
+    const submission = buildFallbackSubmission({
+      verdict: { ...baseVerdict, findings: [anchored] },
+      unanchored: [unanchored],
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.body).toContain("anchored-here")
+    expect(submission.body).toContain("unanchored-here")
+  })
+})
+
+describe("validateForSubmission populates unanchoredFindings", () => {
+  // Two reviewable lines on `src/lib/foo.ts` so the deriveSide() guard
+  // is exercised — line 42 valid, line 999 not.
+  const reviewable: ReviewableMap = new Map([
+    [
+      "src/lib/foo.ts",
+      [{ line: 42, side: "RIGHT" as const }],
+    ],
+  ])
+
+  const specialistVerdicts = [
+    {
+      role: "logic" as const,
+      verdict: {
+        ...baseVerdict,
+        findings: [{ ...baseFinding, id: "logic-0" }],
+      },
+      elapsedMs: 100,
+    },
+  ]
+
+  it("pushes line-invalid (but non-hallucinated, score>=2) findings into unanchoredFindings", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          ...baseVerdict,
+          findings: [{ ...baseFinding, line: 999, score: 4 }],
+        },
+        provenance: {
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          retrievalCallsUsed: 0,
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(0)
+    expect(out.droppedForInvalidLine).toBe(1)
+    expect(out.unanchoredFindings).toHaveLength(1)
+    expect(out.unanchoredFindings[0]?.line).toBe(999)
+  })
+
+  it("does NOT push hallucinated findings into unanchoredFindings (still fully dropped)", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          ...baseVerdict,
+          findings: [{ ...baseFinding, line: 999, score: 4 }],
+        },
+        provenance: {
+          // sourceFindingIds references a specialist finding that does
+          // not exist — this should fail the hallucination guard, not
+          // make it into unanchored.
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-nonexistent"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          retrievalCallsUsed: 0,
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.droppedForHallucination).toBe(1)
+    expect(out.unanchoredFindings).toHaveLength(0)
+  })
+
+  it("does NOT push score-1 findings into unanchoredFindings (still demoted to summary)", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          ...baseVerdict,
+          summary: "ok",
+          findings: [{ ...baseFinding, line: 999, score: 1, headline: "tiny nit" }],
+        },
+        provenance: {
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          retrievalCallsUsed: 0,
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.demotedScore1).toBe(1)
+    expect(out.unanchoredFindings).toHaveLength(0)
+    // The score-1 should appear in summary aggregation, not unanchored.
+    expect(out.verdict.summary).toContain("tiny nit")
+  })
+
+  it("returns empty unanchoredFindings on the happy-path (line valid)", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: { ...baseVerdict, findings: [baseFinding] },
+        provenance: {
+          findings: [
+            {
+              sourceSpecialists: ["logic"],
+              sourceFindingIds: ["logic-0"],
+              action: "kept",
+              verifiedViaRetrieval: false,
+            },
+          ],
+          dropped: [],
+          retrievalCallsUsed: 0,
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.unanchoredFindings).toHaveLength(0)
+    expect(out.droppedForInvalidLine).toBe(0)
+  })
+})

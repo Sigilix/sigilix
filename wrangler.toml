@@ -6,7 +6,7 @@
 # `env.OPENCLAW_*` references in code in the same PR — bindings are
 # internal, not user-visible, so the visible-surface rebrand can ship
 # first).
-name = "sigilix"
+name = "openclaw-worker"
 main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]

@@ -34,7 +34,7 @@
 
 import { chat, type ChatMessage } from "./ollama-chat"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
-import { GitHubClient } from "./github"
+import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_SCHEMA } from "./schemas"
@@ -446,9 +446,34 @@ export async function handlePrReviewEnsemble(
       telemetry.submitted = true
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
-      const fallbackReason =
-        submitErr instanceof Error ? submitErr.message : String(submitErr)
-      console.warn("[ensemble] inline submit rejected; falling back to anchorless review", {
+      // Narrow the fallback to GitHub HTTP 422 (Unprocessable Entity)
+      // — that's the specific status GitHub returns when an inline
+      // anchor is invalid. CR PR #38 round-2 catch: the original
+      // catch-all retry was unsafe because `POST /pulls/{n}/reviews`
+      // is non-idempotent. A timeout / network error after GitHub
+      // accepted the first submission would have produced a duplicate
+      // review on retry. Rethrow anything that isn't a 422 so the
+      // outer try/catch records it as `internal_error` (the original
+      // pre-fallback behaviour for those failure modes).
+      //
+      // I originally chose "catch any error" via the dispatch Q&A
+      // because it sounded more defensive. Round-2 review showed the
+      // opposite — the broader catch creates a worse failure mode.
+      if (
+        !(submitErr instanceof GitHubHttpError) ||
+        submitErr.status !== 422
+      ) {
+        throw submitErr
+      }
+      const fallbackReason = `HTTP 422 ${submitErr.message}`
+      // Set telemetry BEFORE the fallback submit. If the fallback
+      // ALSO fails, the outer catch overwrites `internalError` but
+      // these two fields stay set — preserves the "we attempted a
+      // fallback" signal that Phase 4b shadow-mode monitoring needs.
+      // CR PR #38 round-2 catch.
+      telemetry.submitFallback = true
+      telemetry.submitFallbackReason = fallbackReason
+      console.warn("[ensemble] inline submit rejected (HTTP 422); falling back to anchorless review", {
         owner,
         repo,
         prNumber,
@@ -462,8 +487,6 @@ export async function handlePrReviewEnsemble(
       })
       await client.submitReview(owner, repo, prNumber, fallback)
       telemetry.submitted = true
-      telemetry.submitFallback = true
-      telemetry.submitFallbackReason = fallbackReason
       return finalize(telemetry, env, "posted", cache)
     }
   } catch (e) {

@@ -1190,6 +1190,18 @@ function collectSpecialistVerdicts(
       if (value.failureReason) collected.failureReason = value.failureReason
       if (value.failureRawAnswer) collected.failureRawAnswer = value.failureRawAnswer
       out.push(collected)
+      // Phase 4a.2: aborts (timer- or parent-signal-driven) now reach
+      // this branch via withComposedTimeout's grace window — the
+      // factory's structured wrapFailure(reason="aborted", ...) flows
+      // through Promise.allSettled as a fulfilled value with verdict
+      // null. Derive timedOut from the reason string so timer-driven
+      // aborts stay visible in telemetry. The reason can be the
+      // canonical "aborted" (signal.aborted check between attempts),
+      // a DOMException message like "The operation was aborted." (when
+      // fetch threw mid-attempt), or `fallback_failed: ... aborted`
+      // (primary AND fallback both aborted) — a single /abort/i regex
+      // captures all three.
+      const reason = value.failureReason ?? ""
       const telEntry: EnsembleTelemetry["specialistVerdicts"][number] = {
         role,
         model: SPECIALIST_MODELS[role],
@@ -1197,7 +1209,7 @@ function collectSpecialistVerdicts(
         attemptsUsed: value.attemptsUsed,
         verdict: null,
         elapsedMs: value.elapsedMs,
-        timedOut: false,
+        timedOut: /abort/i.test(reason) || /timeout/i.test(reason),
       }
       if (value.failureReason) telEntry.failureReason = value.failureReason
       if (value.failureRawAnswer) telEntry.failureRawAnswer = value.failureRawAnswer

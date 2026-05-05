@@ -19,6 +19,7 @@ import {
   buildTelemetryRecordInput,
   runAgentLoop,
   withComposedTimeout,
+  WITH_COMPOSED_TIMEOUT_ABORT_GRACE_MS,
   type AgentLoopArgs,
   type AgentLoopResult,
   type AgentLoopTelemetryRecordInput,
@@ -598,12 +599,15 @@ describe("withComposedTimeout", () => {
 
   it("HARD timeout: factory ignoring its signal still gets killed", async () => {
     // Factory that NEVER resolves and NEVER reads its signal — pure
-    // setTimeout that doesn't honor abort.
+    // setTimeout that doesn't honor abort. Killed at timer + grace.
     const slowFactory = (): Promise<string> =>
       new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
     const start = Date.now()
     await expect(withComposedTimeout(slowFactory, 50)).rejects.toThrow(/aborted/)
-    expect(Date.now() - start).toBeLessThan(500) // killed in ~50ms, not 10s
+    // Phase 4a.2: grace window allows abort-aware factories to settle;
+    // ignored-signal factories die at timer + WITH_COMPOSED_TIMEOUT_ABORT_GRACE_MS.
+    const slack = 500
+    expect(Date.now() - start).toBeLessThan(50 + WITH_COMPOSED_TIMEOUT_ABORT_GRACE_MS + slack)
   })
 
   it("composes parent signal — parent abort kills the call", async () => {
@@ -615,18 +619,135 @@ describe("withComposedTimeout", () => {
     await expect(promise).rejects.toThrow(/aborted/)
   })
 
-  it("pre-aborted parent rejects immediately (round-5/6 race fix)", async () => {
+  it("pre-aborted parent rejects synchronously without invoking factory", async () => {
     const parent = new AbortController()
     parent.abort() // already aborted BEFORE call
-    const factory = (): Promise<string> =>
-      new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
+    let factoryInvoked = false
+    const factory = (): Promise<string> => {
+      factoryInvoked = true
+      return new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
+    }
     const start = Date.now()
     await expect(withComposedTimeout(factory, 60_000, parent.signal)).rejects.toThrow(/aborted/)
     expect(Date.now() - start).toBeLessThan(100)
+    // Phase 4a.2: pre-aborted parent means caller asked us to bail
+    // before doing any work. Factory should never run.
+    expect(factoryInvoked).toBe(false)
   })
 
   it("propagates non-Abort errors", async () => {
     await expect(withComposedTimeout(async () => { throw new Error("boom") }, 1_000)).rejects.toThrow("boom")
+  })
+
+  // ─── Phase 4a.2 grace-window behavior ─────────────────────────
+
+  it("preserves abort-aware factory's structured failure when timer fires", async () => {
+    // Phase 4a.2: a factory that respects its signal and produces a
+    // structured failure on abort (not a throw) should have its
+    // settlement returned, not discarded by the wrapper.
+    type Result = { ok: false; reason: string; attemptsUsed: number; modelUsed: string }
+    const abortAwareFactory = async (signal: AbortSignal): Promise<Result> => {
+      // Simulate a long-running call that resolves cleanly when aborted,
+      // returning a structured failure with diagnostic fields populated.
+      return await new Promise<Result>((resolve) => {
+        const t = setTimeout(
+          () => resolve({ ok: false, reason: "should_not_reach", attemptsUsed: 0, modelUsed: "primary" }),
+          10_000,
+        )
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(t)
+            resolve({ ok: false, reason: "aborted", attemptsUsed: 1, modelUsed: "primary" })
+          },
+          { once: true },
+        )
+      })
+    }
+    const result = await withComposedTimeout(abortAwareFactory, 50)
+    expect(result).toEqual({ ok: false, reason: "aborted", attemptsUsed: 1, modelUsed: "primary" })
+  })
+
+  it("preserves abort-aware factory's structured failure when parent aborts mid-flight", async () => {
+    type Result = { ok: false; reason: string; modelUsed: string }
+    const abortAwareFactory = async (signal: AbortSignal): Promise<Result> =>
+      new Promise<Result>((resolve) => {
+        const t = setTimeout(
+          () => resolve({ ok: false, reason: "should_not_reach", modelUsed: "primary" }),
+          10_000,
+        )
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(t)
+            resolve({ ok: false, reason: "aborted_by_parent", modelUsed: "primary" })
+          },
+          { once: true },
+        )
+      })
+    const parent = new AbortController()
+    const promise = withComposedTimeout(abortAwareFactory, 60_000, parent.signal)
+    setTimeout(() => parent.abort(), 30)
+    const result = await promise
+    expect(result).toEqual({ ok: false, reason: "aborted_by_parent", modelUsed: "primary" })
+  })
+
+  it("grace window expires: signal-ignoring factory still throws", async () => {
+    // Factory that ignores its signal AND never resolves on its own
+    // within the grace window. Wrapper must throw to unblock the caller.
+    const ignoresSignalFactory = (): Promise<string> =>
+      new Promise((resolve) => setTimeout(() => resolve("late"), 10_000))
+    const start = Date.now()
+    await expect(withComposedTimeout(ignoresSignalFactory, 50)).rejects.toThrow(/aborted/)
+    // Should not wait for full 10s; should throw at ~timer + grace.
+    expect(Date.now() - start).toBeLessThan(50 + WITH_COMPOSED_TIMEOUT_ABORT_GRACE_MS + 500)
+  })
+
+  it("propagates non-Abort error thrown after the timer fired", async () => {
+    // Factory that detects abort but rejects with its own non-Abort
+    // error during cleanup. The grace branch must surface the real
+    // error, not mask it with the wrapper's abort rejection.
+    const failingFactory = (signal: AbortSignal): Promise<string> =>
+      new Promise((_, reject) => {
+        const t = setTimeout(() => reject(new Error("never-fired")), 10_000)
+        signal.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(t)
+            reject(new Error("custom_cleanup_error"))
+          },
+          { once: true },
+        )
+      })
+    await expect(withComposedTimeout(failingFactory, 50)).rejects.toThrow("custom_cleanup_error")
+  })
+
+  it("double-abort (parent + timer both fire) is idempotent", async () => {
+    // Both the per-call timer and the parent signal fire. The wrapper's
+    // `abort()` is guarded by `ctrl.signal.aborted`, so the second call
+    // is a no-op. Factory should still receive a single abort and
+    // settle once with its structured failure.
+    type Result = { reason: string; abortCount: number }
+    let abortCount = 0
+    const abortAwareFactory = (signal: AbortSignal): Promise<Result> =>
+      new Promise<Result>((resolve) => {
+        const t = setTimeout(() => resolve({ reason: "should_not_reach", abortCount }), 10_000)
+        signal.addEventListener(
+          "abort",
+          () => {
+            abortCount++
+            clearTimeout(t)
+            resolve({ reason: "aborted", abortCount })
+          },
+          { once: true },
+        )
+      })
+    const parent = new AbortController()
+    // Timer fires at 30ms; parent fires at 35ms — both should call abort.
+    setTimeout(() => parent.abort(), 35)
+    const result = await withComposedTimeout(abortAwareFactory, 30, parent.signal)
+    expect(result.reason).toBe("aborted")
+    expect(result.abortCount).toBe(1)
   })
 })
 

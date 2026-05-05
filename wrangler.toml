@@ -142,6 +142,28 @@ queue = "openclaw-jobs"
 # Optional (other):
 #   OPENCLAW_MODEL                Override the default model (defaults to glm-5.1:cloud)
 #   OPENCLAW_TEAM_KEY             Linear team key to scope to (e.g. "ARC")
+#
+# Optional (Phase 5 user-OAuth — required only for /auth/* routes; if
+# unset, /auth/github + /auth/github/callback return 503 and the rest
+# of the Worker is unaffected). See `.claude/handoff/arc-phase5-auth-spec-v2-LOCKED.md`.
+#
+#   GITHUB_OAUTH_CLIENT_ID        OAuth client_id from the same GitHub App as
+#   GITHUB_OAUTH_CLIENT_SECRET    GITHUB_APP_ID. The App settings page exposes
+#                                 both server-to-server (JWT, used for repo
+#                                 access) AND user-to-server (OAuth, used to
+#                                 sign humans into the app.sigilix.ai dashboard).
+#   OPENCLAW_SESSION_ENCRYPTION_KEY  32 random bytes, base64url-encoded. Used to
+#                                 AES-GCM-encrypt user access tokens at rest in
+#                                 OPENCLAW_STATE. Generate with:
+#                                 openssl rand 32 | basenc --base64url -w0
+#                                 Rotating this invalidates every active session.
+#   OPENCLAW_BASE_URL             Public origin for OAuth callbacks (must match
+#                                 the GitHub App's configured callback URL).
+#                                 Defaults to https://app.sigilix.ai when unset.
+#
+# GitHub App callback URL (required for OAuth): set on the App settings page →
+# Identifying and authorizing users → User authorization callback URL:
+#   https://app.sigilix.ai/auth/github/callback
 
 # Cloudflare Workers Logs — keep the full Workers Observability product
 # disabled (it costs per-event ingest) but turn on `invocation_logs` so

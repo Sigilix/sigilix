@@ -1,0 +1,417 @@
+// GitHub user-to-server OAuth handler (Phase 5 v2 LOCKED).
+//
+// The same GitHub App that signs server-to-server JWTs (see github-app.ts)
+// also exposes a user OAuth flow at the client_id/client_secret pair on
+// the App's settings page. Sigilix uses both: server-to-server for
+// repo/PR access, user-to-server for "who is signed in to the dashboard."
+//
+// Flow:
+//   GET /auth/github           — mint nonce, set state cookie, 302 to GitHub
+//   GET /auth/github/callback  — validate (KV nonce) AND (state cookie matches)
+//                                 read-then-delete nonce from KV
+//                                 exchange code for token
+//                                 fetch GET /user
+//                                 mint session + encrypt token + store + cookie
+//                                 302 to redirectAfter or /auth/welcome
+//
+// Browser binding: the state cookie is a separate signal from the KV nonce.
+// Either one alone is insufficient (see spec § Browser-bound OAuth state).
+
+import {
+  base64urlEncode,
+  clearStateCookie,
+  createSession,
+  mintSessionId,
+  mintStateNonce,
+  readCookie,
+  setSessionCookie,
+  setStateCookie,
+  STATE_COOKIE_NAME,
+} from "./auth-session"
+
+const STATE_KV_PREFIX = "auth_state:"
+const STATE_TTL_SECONDS = 600
+const SCOPES = "read:user user:email"
+
+interface AuthOauthEnv {
+  OPENCLAW_STATE: KVNamespace
+  GITHUB_OAUTH_CLIENT_ID?: string
+  GITHUB_OAUTH_CLIENT_SECRET?: string
+  OPENCLAW_SESSION_ENCRYPTION_KEY?: string
+  OPENCLAW_BASE_URL?: string
+}
+
+function baseUrl(env: AuthOauthEnv): string {
+  return env.OPENCLAW_BASE_URL ?? "https://app.sigilix.ai"
+}
+
+function isMisconfigured(env: AuthOauthEnv): string | null {
+  if (!env.GITHUB_OAUTH_CLIENT_ID) return "GITHUB_OAUTH_CLIENT_ID missing"
+  if (!env.GITHUB_OAUTH_CLIENT_SECRET) return "GITHUB_OAUTH_CLIENT_SECRET missing"
+  if (!env.OPENCLAW_SESSION_ENCRYPTION_KEY) return "OPENCLAW_SESSION_ENCRYPTION_KEY missing"
+  return null
+}
+
+// ─── /auth/github ───────────────────────────────────────────────────
+
+interface StateRecord {
+  createdAt: number
+  redirectAfter?: string
+}
+
+export async function handleGitHubAuthKickoff(
+  request: Request,
+  env: AuthOauthEnv,
+): Promise<Response> {
+  const misconfigured = isMisconfigured(env)
+  if (misconfigured) {
+    console.error("github oauth kickoff misconfigured", { missing: misconfigured })
+    return new Response("auth misconfigured\n", { status: 503 })
+  }
+
+  const url = new URL(request.url)
+  const rawRedirect = url.searchParams.get("redirectAfter") ?? undefined
+  const redirectAfter = safeRedirectAfter(rawRedirect, baseUrl(env))
+
+  const nonce = mintStateNonce()
+  const record: StateRecord = { createdAt: Date.now(), redirectAfter }
+  await env.OPENCLAW_STATE.put(`${STATE_KV_PREFIX}${nonce}`, JSON.stringify(record), {
+    expirationTtl: STATE_TTL_SECONDS,
+  })
+
+  const authorizeUrl = new URL("https://github.com/login/oauth/authorize")
+  authorizeUrl.searchParams.set("client_id", env.GITHUB_OAUTH_CLIENT_ID!)
+  authorizeUrl.searchParams.set("redirect_uri", `${baseUrl(env)}/auth/github/callback`)
+  authorizeUrl.searchParams.set("scope", SCOPES)
+  authorizeUrl.searchParams.set("state", nonce)
+  authorizeUrl.searchParams.set("allow_signup", "true")
+
+  await writeAuthEvent(env.OPENCLAW_STATE, {
+    kind: "kickoff",
+    provider: "github",
+    ts: Date.now(),
+  })
+
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: authorizeUrl.toString(),
+      "set-cookie": setStateCookie(nonce),
+    },
+  })
+}
+
+// ─── /auth/github/callback ──────────────────────────────────────────
+
+interface AccessTokenResponse {
+  access_token?: string
+  token_type?: string
+  scope?: string
+  error?: string
+  error_description?: string
+}
+
+interface GitHubUserResponse {
+  login?: string
+  id?: number
+  email?: string | null
+}
+
+export async function handleGitHubAuthCallback(
+  request: Request,
+  env: AuthOauthEnv,
+): Promise<Response> {
+  const misconfigured = isMisconfigured(env)
+  if (misconfigured) {
+    console.error("github oauth callback misconfigured", { missing: misconfigured })
+    return new Response("auth misconfigured\n", { status: 503 })
+  }
+
+  const url = new URL(request.url)
+  const code = url.searchParams.get("code")
+  const state = url.searchParams.get("state")
+  const cookieNonce = readCookie(request, STATE_COOKIE_NAME)
+
+  if (!code || !state) {
+    return new Response("missing code or state\n", {
+      status: 400,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+
+  // 1. Browser-binding check. Cookie must exist and match the query state.
+  if (!cookieNonce || cookieNonce !== state) {
+    await writeAuthEvent(env.OPENCLAW_STATE, {
+      kind: "callback_failed",
+      provider: "github",
+      reason: "state_mismatch",
+      ts: Date.now(),
+    })
+    return new Response("state_mismatch\n", {
+      status: 400,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+
+  // 2. KV nonce check. Read-then-delete (single-use, best-effort under KV
+  //    eventual consistency — browser-binding above protects against the
+  //    multi-region race).
+  const stateRaw = (await env.OPENCLAW_STATE.get(
+    `${STATE_KV_PREFIX}${state}`,
+    "json",
+  )) as StateRecord | null
+  if (!stateRaw) {
+    await writeAuthEvent(env.OPENCLAW_STATE, {
+      kind: "callback_failed",
+      provider: "github",
+      reason: "state_invalid",
+      ts: Date.now(),
+    })
+    return new Response("state_invalid\n", {
+      status: 400,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+  await env.OPENCLAW_STATE.delete(`${STATE_KV_PREFIX}${state}`)
+
+  // 3. Exchange code for access token.
+  let tokenRes: Response
+  try {
+    tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_id: env.GITHUB_OAUTH_CLIENT_ID!,
+        client_secret: env.GITHUB_OAUTH_CLIENT_SECRET!,
+        code,
+        redirect_uri: `${baseUrl(env)}/auth/github/callback`,
+      }),
+    })
+  } catch (e) {
+    console.error("github oauth code exchange threw", { error: String(e) })
+    await writeAuthEvent(env.OPENCLAW_STATE, {
+      kind: "callback_failed",
+      provider: "github",
+      reason: "code_exchange_failed",
+      ts: Date.now(),
+    })
+    return new Response("code_exchange_failed\n", {
+      status: 502,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+  if (!tokenRes.ok) {
+    console.error("github oauth code exchange http error", { status: tokenRes.status })
+    await writeAuthEvent(env.OPENCLAW_STATE, {
+      kind: "callback_failed",
+      provider: "github",
+      reason: "code_exchange_failed",
+      ts: Date.now(),
+    })
+    return new Response("code_exchange_failed\n", {
+      status: 502,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+  const tokenJson = (await tokenRes.json()) as AccessTokenResponse
+  if (!tokenJson.access_token) {
+    console.error("github oauth code exchange missing access_token", { error: tokenJson.error })
+    await writeAuthEvent(env.OPENCLAW_STATE, {
+      kind: "callback_failed",
+      provider: "github",
+      reason: "code_exchange_failed",
+      ts: Date.now(),
+    })
+    return new Response("code_exchange_failed\n", {
+      status: 502,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+  const accessToken = tokenJson.access_token
+
+  // 4. Fetch user profile.
+  let userRes: Response
+  try {
+    userRes = await fetch("https://api.github.com/user", {
+      headers: {
+        accept: "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        authorization: `Bearer ${accessToken}`,
+        "user-agent": "sigilix-worker",
+      },
+    })
+  } catch (e) {
+    console.error("github user fetch threw", { error: String(e) })
+    await writeAuthEvent(env.OPENCLAW_STATE, {
+      kind: "callback_failed",
+      provider: "github",
+      reason: "user_fetch_failed",
+      ts: Date.now(),
+    })
+    return new Response("user_fetch_failed\n", {
+      status: 502,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+  if (!userRes.ok) {
+    console.error("github user fetch http error", { status: userRes.status })
+    await writeAuthEvent(env.OPENCLAW_STATE, {
+      kind: "callback_failed",
+      provider: "github",
+      reason: "user_fetch_failed",
+      ts: Date.now(),
+    })
+    return new Response("user_fetch_failed\n", {
+      status: 502,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+  const user = (await userRes.json()) as GitHubUserResponse
+  if (!user.login || typeof user.id !== "number") {
+    console.error("github user response missing login or id")
+    return new Response("user_fetch_failed\n", {
+      status: 502,
+      headers: { "set-cookie": clearStateCookie() },
+    })
+  }
+
+  // 5. Mint session + encrypt token + store.
+  const sessionId = mintSessionId()
+  await createSession({
+    kv: env.OPENCLAW_STATE,
+    sessionId,
+    login: user.login,
+    githubUserId: user.id,
+    accessToken,
+    encryptionKeyB64url: env.OPENCLAW_SESSION_ENCRYPTION_KEY!,
+  })
+
+  await writeAuthEvent(env.OPENCLAW_STATE, {
+    kind: "callback_success",
+    provider: "github",
+    githubUserId: user.id,
+    sessionId,
+    ts: Date.now(),
+  })
+
+  // 6. 302 to redirectAfter (validated) or /auth/welcome.
+  const dest = stateRaw.redirectAfter ?? "/auth/welcome"
+  const finalDest = safeRedirectAfter(dest, baseUrl(env))
+
+  const headers = new Headers({ location: finalDest })
+  headers.append("set-cookie", setSessionCookie(sessionId))
+  headers.append("set-cookie", clearStateCookie())
+
+  return new Response(null, { status: 302, headers })
+}
+
+// ─── redirect-after validation (Codex catch on Phase 5 v1) ──────────
+
+export function safeRedirectAfter(raw: string | undefined, baseUrlStr: string): string {
+  const fallback = "/auth/welcome"
+  if (!raw) return fallback
+  // Reject scheme-relative URLs (`//evil.com`), backslash variants, NUL,
+  // and absolute URLs (`https://...`, `javascript:...`).
+  if (
+    raw.startsWith("//") ||
+    raw.includes("\\") ||
+    raw.includes("\0") ||
+    !raw.startsWith("/")
+  ) {
+    return fallback
+  }
+  // Reject encoded slashes / backslashes / NUL — middleware in front of
+  // the Worker may percent-decode the path, turning `/%2f%2fevil.com`
+  // into `//evil.com` (scheme-relative) before a redirect lands. Block
+  // the encoded form at the validator.
+  if (/%2[Ff]|%5[Cc]|%00/.test(raw)) return fallback
+  let parsed: URL
+  try {
+    parsed = new URL(raw, baseUrlStr)
+  } catch {
+    return fallback
+  }
+  if (parsed.origin !== new URL(baseUrlStr).origin) return fallback
+  return parsed.pathname + parsed.search + parsed.hash
+}
+
+// ─── auth event telemetry ───────────────────────────────────────────
+
+const AUTH_EVENT_KV_PREFIX = "auth_event:"
+const AUTH_EVENT_TTL_SECONDS = 24 * 60 * 60
+
+export type AuthEvent =
+  | { kind: "kickoff"; provider: "github"; ts: number }
+  | {
+      kind: "callback_success"
+      provider: "github"
+      githubUserId: number
+      sessionId: string
+      ts: number
+    }
+  | {
+      kind: "callback_failed"
+      provider: "github"
+      reason: "state_mismatch" | "state_invalid" | "code_exchange_failed" | "user_fetch_failed"
+      ts: number
+    }
+  | { kind: "logout"; sessionId: string; ts: number }
+
+export async function writeAuthEvent(kv: KVNamespace, event: AuthEvent): Promise<void> {
+  const sessionId =
+    event.kind === "callback_success"
+      ? event.sessionId
+      : event.kind === "logout"
+        ? event.sessionId
+        : ""
+  // Reverse-timestamp key prefix so newest entries list first under
+  // wrangler kv key list (same convention as ensemble-review-telemetry).
+  const reverseTs = base64urlEncode(
+    new TextEncoder().encode(String(Number.MAX_SAFE_INTEGER - event.ts)),
+  )
+  const key = `${AUTH_EVENT_KV_PREFIX}${reverseTs}:${sessionId}`
+  try {
+    await kv.put(key, JSON.stringify(event), { expirationTtl: AUTH_EVENT_TTL_SECONDS })
+  } catch (e) {
+    // Telemetry write failures must never block the auth flow.
+    console.error("auth event write failed", { error: String(e), kind: event.kind })
+  }
+}
+
+// ─── /auth/logout ───────────────────────────────────────────────────
+
+export async function handleLogout(
+  _request: Request,
+  _env: AuthOauthEnv,
+  sessionId: string | null,
+): Promise<Response> {
+  if (sessionId) {
+    try {
+      await _env.OPENCLAW_STATE.delete(`auth_session:${sessionId}`)
+      await writeAuthEvent(_env.OPENCLAW_STATE, {
+        kind: "logout",
+        sessionId,
+        ts: Date.now(),
+      })
+    } catch (e) {
+      console.error("logout cleanup failed", { error: String(e) })
+    }
+  }
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: "/",
+      "set-cookie": [
+        `__Host-sigilix_session=`,
+        "Path=/",
+        "HttpOnly",
+        "Secure",
+        "SameSite=Lax",
+        "Max-Age=0",
+      ].join("; "),
+    },
+  })
+}

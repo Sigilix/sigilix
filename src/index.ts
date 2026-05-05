@@ -37,6 +37,14 @@ import { handlePrReview } from "./lib/triage-pr-review"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
+import {
+  handleGitHubAuthCallback,
+  handleGitHubAuthKickoff,
+  handleLogout,
+} from "./lib/auth-oauth-github"
+import { requireSession } from "./lib/auth-middleware"
+import { renderWelcomePage } from "./lib/auth-welcome"
+import { readCookie, SESSION_COOKIE_NAME } from "./lib/auth-session"
 
 export interface Env {
   OPENCLAW_STATE: KVNamespace
@@ -57,6 +65,21 @@ export interface Env {
   GITHUB_APP_ID?: string
   GITHUB_PRIVATE_KEY?: string
   GITHUB_WEBHOOK_SECRET?: string
+
+  // Phase 5 user-OAuth (ARC-163). Same GitHub App as GITHUB_APP_ID — its
+  // OAuth credentials live on the App settings page next to the JWT
+  // private key. Only used to authenticate human users into the Sigilix
+  // dashboard at app.sigilix.ai; repo access still goes through the
+  // server-to-server JWT path in github-app.ts.
+  GITHUB_OAUTH_CLIENT_ID?: string
+  GITHUB_OAUTH_CLIENT_SECRET?: string
+  // 32 random bytes, base64url-encoded. Used to AES-GCM-encrypt user
+  // access tokens at rest in OPENCLAW_STATE. Rotating this invalidates
+  // every active session.
+  OPENCLAW_SESSION_ENCRYPTION_KEY?: string
+  // Public origin for OAuth callbacks (must match the GitHub App's
+  // configured callback URL). Defaults to https://app.sigilix.ai.
+  OPENCLAW_BASE_URL?: string
   OPENCLAW_TEAM_REPO_MAP?: string
   OPENCLAW_MODEL?: string
   OPENCLAW_TEAM_KEY?: string
@@ -344,6 +367,56 @@ export default {
 
     if (request.method === "POST" && url.pathname === "/github/webhook") {
       return handleGitHubWebhook(request, env, ctx)
+    }
+
+    // ─── Phase 5 user OAuth (ARC-163) ────────────────────────────
+    if (request.method === "GET" && url.pathname === "/auth/github") {
+      return handleGitHubAuthKickoff(request, env)
+    }
+    if (request.method === "GET" && url.pathname === "/auth/github/callback") {
+      return handleGitHubAuthCallback(request, env)
+    }
+    if (request.method === "GET" && url.pathname === "/auth/welcome") {
+      const authed = await requireSession(request, env, ctx)
+      if (!authed) {
+        return new Response(null, { status: 302, headers: { location: "/" } })
+      }
+      return renderWelcomePage(authed.record)
+    }
+    if (request.method === "GET" && url.pathname === "/auth/me") {
+      const authed = await requireSession(request, env, ctx)
+      if (!authed) {
+        return new Response(JSON.stringify({ error: "unauthenticated" }), {
+          status: 401,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      return new Response(
+        JSON.stringify({
+          login: authed.record.login,
+          githubUserId: authed.record.githubUserId,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+    }
+    if (request.method === "POST" && url.pathname === "/auth/logout") {
+      const sessionId = readCookie(request, SESSION_COOKIE_NAME)
+      return handleLogout(request, env, sessionId)
+    }
+    // Stubs for deferred providers — return 501 with a plain message
+    // so the marketing site's "Soon"-labeled buttons don't 404.
+    if (
+      request.method === "GET" &&
+      (url.pathname === "/auth/google" ||
+        url.pathname === "/auth/email" ||
+        url.pathname === "/auth/gitlab" ||
+        url.pathname === "/auth/bitbucket" ||
+        url.pathname === "/auth/azure")
+    ) {
+      return new Response("provider not implemented yet — see /\n", {
+        status: 501,
+        headers: { "content-type": "text/plain" },
+      })
     }
 
     return new Response("not found\n", { status: 404, headers: { "content-type": "text/plain" } })

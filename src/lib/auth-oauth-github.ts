@@ -314,8 +314,7 @@ export function safeRedirectAfter(raw: string | undefined, baseUrlStr: string): 
   const fallback = "/auth/welcome"
   if (!raw) return fallback
   // Reject scheme-relative URLs (`//evil.com`), backslash variants, NUL,
-  // and absolute URLs (`https://...`, `javascript:...`). Then parse and
-  // require same origin as a defense-in-depth check.
+  // and absolute URLs (`https://...`, `javascript:...`).
   if (
     raw.startsWith("//") ||
     raw.includes("\\") ||
@@ -324,6 +323,11 @@ export function safeRedirectAfter(raw: string | undefined, baseUrlStr: string): 
   ) {
     return fallback
   }
+  // Reject encoded slashes / backslashes / NUL — middleware in front of
+  // the Worker may percent-decode the path, turning `/%2f%2fevil.com`
+  // into `//evil.com` (scheme-relative) before a redirect lands. Block
+  // the encoded form at the validator.
+  if (/%2[Ff]|%5[Cc]|%00/.test(raw)) return fallback
   let parsed: URL
   try {
     parsed = new URL(raw, baseUrlStr)

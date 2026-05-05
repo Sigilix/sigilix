@@ -67,16 +67,15 @@ describe("safeRedirectAfter", () => {
   })
 
   it("rejects encoded slashes that look in-app but break out", () => {
-    // /%2f%2fevil.com would be decoded by some routers as //evil.com.
-    // Per spec we reject anything not matching a strict pathname plus
-    // same-origin parse.
-    const result = safeRedirectAfter("/%2f%2fevil.com", base)
-    // URL("/%2f%2fevil.com", "https://app.sigilix.ai") yields pathname
-    // "/%2f%2fevil.com" with origin https://app.sigilix.ai — same-origin
-    // check passes. Encoded slashes stay encoded; modern browsers do
-    // NOT decode %2F before navigation, so this stays in-app. Acceptable.
-    expect(result.startsWith("/")).toBe(true)
-    expect(result).not.toContain("evil.com.")
+    // Middleware in front of the Worker may percent-decode the path,
+    // turning `/%2f%2fevil.com` into `//evil.com` (scheme-relative)
+    // before a redirect lands. The validator must reject ANY encoded
+    // slash / backslash / NUL up-front so a router-side decoder can't
+    // turn an in-app-looking path into an open redirect.
+    expect(safeRedirectAfter("/%2f%2fevil.com", base)).toBe("/auth/welcome")
+    expect(safeRedirectAfter("/%2F%2Fevil.com", base)).toBe("/auth/welcome")
+    expect(safeRedirectAfter("/path%5Cleak", base)).toBe("/auth/welcome")
+    expect(safeRedirectAfter("/path%00null", base)).toBe("/auth/welcome")
   })
 
   it("rejects NUL byte injections", () => {
@@ -177,7 +176,15 @@ describe("handleGitHubAuthCallback", () => {
     userStatus?: number
   }) {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : (input as Request).url
+      // RequestInfo | URL is { string | Request | URL }. Each shape has
+      // a different way to get the request URL — normalize all three
+      // explicitly so the mock doesn't throw on a URL input.
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
       if (url.includes("github.com/login/oauth/access_token")) {
         return new Response(
           JSON.stringify(args.tokenResponse ?? { access_token: "ghu_token", token_type: "bearer" }),

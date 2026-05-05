@@ -4,7 +4,7 @@
 
 | Reviewer | Round | Verdict | Catches integrated in v2 |
 |---|---|---|---|
-| Codex | r1 | **do not ship** | (1) AAD binding on AES-GCM, (2) browser-bound state cookie, (3) KV eventual-consistency caveat documented, (4) redirectAfter URL-parse instead of regex, (5) tests for all of the above |
+| Codex | r1 | **do not ship** | (1) AAD binding on AES-GCM (AAD = `auth_session:<sessionId>` — see § AES-GCM with AAD), (2) browser-bound state cookie, (3) KV eventual-consistency caveat documented, (4) redirectAfter URL-parse instead of regex, (5) tests for all of the above |
 | Kimi K2.6 | r1 | ship with 4 tweaks | (6) `/welcome` → `/auth/welcome`, (7) `SIGILIX_BASE_URL` → `OPENCLAW_BASE_URL`, (8) KV prefixes use underscores (`auth_session:`, `auth_event:`), (9) GitHub scope adds `user:email` |
 
 v1 lives at `arc-phase5-auth-spec-v1.md` for audit. **This document is the source of truth for implementation.**

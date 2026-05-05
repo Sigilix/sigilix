@@ -23,6 +23,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildFallbackBody,
   buildFallbackSubmission,
+  buildReviewSubmission,
 } from "../src/lib/triage-pr-review"
 import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
@@ -194,6 +195,22 @@ describe("buildFallbackSubmission", () => {
     expect(submission.event).toBe("APPROVE")
   })
 
+  // CR + Sigilix PR #38 catch: event derivation merges anchored AND
+  // unanchored — otherwise a verdict whose only blocking findings are
+  // unanchored posts as APPROVE while the body lists blockers.
+  it("returns REQUEST_CHANGES when only unanchored findings exist (anchored empty)", () => {
+    const unanchored: PrReviewFinding[] = [
+      { ...baseFinding, line: 999, headline: "drift-flagged-but-line-out-of-diff" },
+    ]
+    const submission = buildFallbackSubmission({
+      verdict: { ...baseVerdict, findings: [] },
+      unanchored,
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.event).toBe("REQUEST_CHANGES")
+  })
+
   it("threads commit_id from headSha so the review is pinned to the reviewed sha", () => {
     const submission = buildFallbackSubmission({
       verdict: baseVerdict,
@@ -219,6 +236,75 @@ describe("buildFallbackSubmission", () => {
     })
     expect(submission.body).toContain("anchored-here")
     expect(submission.body).toContain("unanchored-here")
+  })
+})
+
+describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catch)", () => {
+  it("rolls unanchored findings into the body even on the success path", () => {
+    const anchored = { ...baseFinding, line: 42, headline: "anchored-here" }
+    const unanchored: PrReviewFinding[] = [
+      { ...baseFinding, line: 999, headline: "unanchored-must-not-be-lost" },
+    ]
+    const submission = buildReviewSubmission({
+      verdict: { ...baseVerdict, findings: [anchored] },
+      prAuthor: null,
+      headSha: "deadbeef",
+      unanchored,
+    })
+    expect(submission.body).toContain("unanchored-must-not-be-lost")
+    expect(submission.body).toContain("Additional findings")
+  })
+
+  it("still emits inline comments for the anchored findings (UX preserved)", () => {
+    const anchored = { ...baseFinding, line: 42, headline: "anchored-here" }
+    const unanchored: PrReviewFinding[] = [
+      { ...baseFinding, line: 999, headline: "drift" },
+    ]
+    const submission = buildReviewSubmission({
+      verdict: { ...baseVerdict, findings: [anchored] },
+      prAuthor: null,
+      headSha: "deadbeef",
+      unanchored,
+    })
+    expect(submission.comments).toBeDefined()
+    expect(submission.comments).toHaveLength(1)
+    expect(submission.comments?.[0]?.line).toBe(42)
+  })
+
+  it("derives event from anchored + unanchored merged set (no APPROVE-with-blockers)", () => {
+    // Anchored empty + only-unanchored blocking findings → MUST be REQUEST_CHANGES.
+    const unanchored: PrReviewFinding[] = [
+      { ...baseFinding, line: 999, headline: "blocking-but-unanchored" },
+    ]
+    const submission = buildReviewSubmission({
+      verdict: { ...baseVerdict, findings: [] },
+      prAuthor: null,
+      headSha: "deadbeef",
+      unanchored,
+    })
+    expect(submission.event).toBe("REQUEST_CHANGES")
+  })
+
+  it("APPROVE when both anchored and unanchored are empty", () => {
+    const submission = buildReviewSubmission({
+      verdict: { ...baseVerdict, findings: [] },
+      prAuthor: null,
+      headSha: "deadbeef",
+      unanchored: [],
+    })
+    expect(submission.event).toBe("APPROVE")
+  })
+
+  it("body unchanged on the common path when unanchored is empty / omitted", () => {
+    // Default `unanchored = []` keeps the prior behaviour: body has no
+    // "Additional findings" section, just the inline-count pointer.
+    const submission = buildReviewSubmission({
+      verdict: baseVerdict,
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.body).not.toContain("Additional findings")
+    expect(submission.body).toContain("1 finding inline below")
   })
 })
 

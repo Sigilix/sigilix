@@ -430,10 +430,16 @@ export async function handlePrReviewEnsemble(
     // here: catch any submit error and retry with `buildFallbackSubmission`.
     // If the fallback ALSO fails, the outer try/catch records it as
     // `internal_error` (same behaviour as before this change).
+    // Pass `unanchoredFindings` to the primary submission so any
+    // findings that failed line-validity are still rolled into the
+    // body (instead of being recovered ONLY when the inline submit
+    // fails). CR PR #38 catch — without this, GitHub's success path
+    // silently drops the unanchored set.
     const submission = buildReviewSubmission({
       verdict: validated.verdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
+      unanchored: validated.unanchoredFindings,
     })
     try {
       await client.submitReview(owner, repo, prNumber, submission)

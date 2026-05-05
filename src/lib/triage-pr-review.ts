@@ -313,6 +313,24 @@ interface BuildReviewArgs {
   verdict: PrReviewVerdict
   prAuthor: string | null
   headSha: string
+  /**
+   * Findings that passed the hallucination guard but failed the
+   * line-validity check. The inline-comments path can't anchor them
+   * (GitHub would 422), so they get rolled into the review body as
+   * markdown grouped by file. Without this, unanchored findings were
+   * silently dropped on the success path of the orchestrator (only
+   * the submit-fallback path recovered them). CodeRabbit + Sigilix
+   * both caught the regression on PR #38.
+   *
+   * Default `[]` — the common case where every finding anchored
+   * cleanly. When non-empty:
+   *   - The chosen review event takes ALL findings into account
+   *     (anchored + unanchored), so a verdict with only-unanchored
+   *     blocking findings doesn't post as APPROVE.
+   *   - The body grows with an `### Additional findings (could not
+   *     anchor to diff)` section listing the unanchored set.
+   */
+  unanchored?: PrReviewFinding[]
 }
 
 /**
@@ -334,9 +352,13 @@ export function buildReviewSubmission({
   verdict,
   prAuthor,
   headSha,
+  unanchored = [],
 }: BuildReviewArgs): SubmitReviewBody {
-  const event = chooseReviewEvent(verdict.findings)
-  const body = formatReviewBody(verdict, prAuthor, event)
+  // Event derivation merges anchored + unanchored so a verdict whose
+  // only blocking findings happen to be unanchored doesn't post APPROVE
+  // (CR + Sigilix PR #38 catch).
+  const event = chooseReviewEvent([...verdict.findings, ...unanchored])
+  const body = formatReviewBody(verdict, prAuthor, event, unanchored)
   const comments: SubmitReviewComment[] = verdict.findings.map((f) => {
     const c: SubmitReviewComment = {
       path: f.path,
@@ -391,7 +413,11 @@ export function buildFallbackSubmission({
   unanchored,
   headSha,
 }: BuildFallbackArgs): SubmitReviewBody {
-  const event = chooseReviewEvent(verdict.findings)
+  // Event derivation merges anchored + unanchored — same fix as
+  // `buildReviewSubmission`. Without this, a verdict whose only
+  // blocking findings are unanchored would post APPROVE while the
+  // body lists blockers (CR + Sigilix PR #38 catch).
+  const event = chooseReviewEvent([...verdict.findings, ...unanchored])
   const body = buildFallbackBody(verdict, unanchored)
   return {
     event,
@@ -412,13 +438,6 @@ export function buildFallbackBody(
     return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings))
   }
 
-  const byPath = new Map<string, PrReviewFinding[]>()
-  for (const f of all) {
-    if (!byPath.has(f.path)) byPath.set(f.path, [])
-    byPath.get(f.path)!.push(f)
-  }
-  const sortedPaths = [...byPath.keys()].sort()
-
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
   lines.push("### Arc Summary")
   lines.push("")
@@ -429,26 +448,7 @@ export function buildFallbackBody(
   }
   lines.push("")
   lines.push(`### Findings (${all.length})`)
-
-  for (const path of sortedPaths) {
-    const findings = byPath.get(path)!
-    findings.sort((a, b) => b.score - a.score || a.line - b.line)
-    lines.push("")
-    lines.push(`**${path}**`)
-    for (const f of findings) {
-      const range =
-        f.startLine != null && f.startLine !== f.line
-          ? `Lines ${f.startLine}-${f.line}`
-          : `Line ${f.line}`
-      lines.push(`- ${range} — **${f.category}:** ${f.headline}`)
-      // Indent the body so it nests under the bullet visually.
-      const bodyLines = f.body
-        .split("\n")
-        .map((l) => `  ${l}`)
-        .join("\n")
-      lines.push(bodyLines)
-    }
-  }
+  lines.push(...renderFindingsByFile(all))
 
   return lines.join("\n")
 }
@@ -483,7 +483,8 @@ export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
 function formatReviewBody(
   verdict: PrReviewVerdict,
   _prAuthor: string | null,
-  _event: ReviewEvent
+  _event: ReviewEvent,
+  unanchored: PrReviewFinding[] = []
 ): string {
   // Body is greptile-styled and prose-only. The structure is fixed
   // (marker, header, model's summary, model's confidence reason,
@@ -492,6 +493,10 @@ function formatReviewBody(
   // approving") because canned dialogue feels mechanical when it
   // recurs across PRs. The model's summary already addresses the
   // engineer reviewing the PR — that's the message.
+  //
+  // When `unanchored` is non-empty, an "Additional findings" section
+  // is appended so findings whose lines fell outside the diff still
+  // get surfaced (rather than silently dropped on the success path).
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
   lines.push("### Arc Summary")
   lines.push("")
@@ -506,7 +511,53 @@ function formatReviewBody(
       `_${verdict.findings.length} ${verdict.findings.length === 1 ? "finding" : "findings"} inline below._`
     )
   }
+  if (unanchored.length > 0) {
+    lines.push("")
+    lines.push(`### Additional findings (could not anchor to diff)`)
+    lines.push(...renderFindingsByFile(unanchored))
+  }
   return lines.join("\n")
+}
+
+/**
+ * Group findings by file path, sort within each file by score DESC
+ * then line ASC, and render as a Markdown bullet list. Shared by
+ * `formatReviewBody` (when unanchored findings need to be surfaced
+ * alongside the inline-anchored ones) and `buildFallbackBody` (when
+ * the entire submission is anchorless and every finding lives in the
+ * body).
+ *
+ * Returns an array of lines (caller joins with `\n`). Pure.
+ */
+function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
+  const byPath = new Map<string, PrReviewFinding[]>()
+  for (const f of findings) {
+    if (!byPath.has(f.path)) byPath.set(f.path, [])
+    byPath.get(f.path)!.push(f)
+  }
+  const sortedPaths = [...byPath.keys()].sort()
+
+  const lines: string[] = []
+  for (const path of sortedPaths) {
+    const arr = byPath.get(path)!
+    arr.sort((a, b) => b.score - a.score || a.line - b.line)
+    lines.push("")
+    lines.push(`**${path}**`)
+    for (const f of arr) {
+      const range =
+        f.startLine != null && f.startLine !== f.line
+          ? `Lines ${f.startLine}-${f.line}`
+          : `Line ${f.line}`
+      lines.push(`- ${range} — **${f.category}:** ${f.headline}`)
+      // Indent the body so it nests under the bullet visually.
+      const bodyLines = f.body
+        .split("\n")
+        .map((l) => `  ${l}`)
+        .join("\n")
+      lines.push(bodyLines)
+    }
+  }
+  return lines
 }
 
 /**

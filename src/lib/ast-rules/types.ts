@@ -54,6 +54,14 @@ export interface AstRuleHit {
   evidence: string
   /** 1-based line number from acorn `loc.start.line`. */
   line: number
+  /**
+   * 1-based end line from acorn `loc.end.line`. Optional — when
+   * absent the runner treats the span as a single line. CR catch on
+   * PR #67: rules that match multi-line nodes (function bodies, loop
+   * bodies) MUST set this so the diff-line filter sees edits later
+   * in the body, not just at the node's start line.
+   */
+  endLine?: number
   /** 0-based column from acorn `loc.start.column`. */
   column: number
 }

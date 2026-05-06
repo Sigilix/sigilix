@@ -90,6 +90,7 @@ export const noAwaitInLoop: AstRule = {
       message: "`await` inside a loop body executes iterations sequentially. If iterations are independent, use `Promise.all(arr.map(...))` for parallelism.",
       evidence: sliceEvidence(ctx.source, first.node),
       line: first.node.loc?.start?.line ?? 1,
+      endLine: first.node.loc?.end?.line ?? first.node.loc?.start?.line ?? 1,
       column: first.node.loc?.start?.column ?? 0,
     }
   },

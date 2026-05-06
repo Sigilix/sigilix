@@ -60,6 +60,10 @@ export const noAsyncWithoutAwait: AstRule = {
       message: "`async` function with no `await` — the wrapping is unnecessary microtask overhead. Drop `async` or add the missing `await`.",
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
+      // Pass the full function body span so the runner's diff-line
+      // filter sees edits later in the body even when the function
+      // declaration line itself is unchanged.
+      endLine: node.loc?.end?.line ?? node.loc?.start?.line ?? 1,
       column: node.loc?.start?.column ?? 0,
     }
   },

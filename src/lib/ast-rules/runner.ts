@@ -84,7 +84,10 @@ function redactEvidence(raw: string): string {
   // string literal whose body exceeds the threshold to a placeholder.
   // The runner only reaches here on rule-emitted evidence which is
   // already a syntactic slice; full lexical analysis isn't needed.
-  const stringRe = /(["'`])((?:\\.|(?!\1).){40,})\1/g
+  // CR catch on PR #67: `.` doesn't match newlines, so a long
+  // multi-line template literal would slip past the redaction. Use
+  // `[\s\S]` to match any character including `\n`.
+  const stringRe = /(["'`])((?:\\[\s\S]|(?!\1)[\s\S]){40,})\1/g
   const collapsed = raw.replace(stringRe, (_full, q) => `${q}<redacted-literal>${q}`)
   return collapsed.length > EVIDENCE_MAX_CHARS
     ? collapsed.slice(0, EVIDENCE_MAX_CHARS) + "…"
@@ -207,14 +210,12 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
 
     // Filter hits by changed-lines + emit findings.
     for (const { rule, hit } of fileHits) {
-      // Determine node line span. The rule's `hit.line` is the
-      // primary line; multi-line spans are caught by walking the
-      // changed-lines set across the inclusive range. v1 uses a
-      // single-line check (line == hit.line) since rules emit on
-      // the *start* line of their target node; multi-line bodies
-      // are caught only when their start line is in the changed
-      // set. Future: thread end-line through the rule contract.
-      if (!nodeOverlapsChanged(changedLines, path, hit.line, hit.line)) continue
+      // Hit's line span. CR catch on PR #67: when `endLine` is set,
+      // the diff-line filter walks the full inclusive range so edits
+      // later in a multi-line body trigger the finding even when
+      // `hit.line` (the node's start) is in untouched code.
+      const endLine = hit.endLine ?? hit.line
+      if (!nodeOverlapsChanged(changedLines, path, hit.line, endLine)) continue
 
       const id = await astFindingId(rule.id, path, hit.line)
       // Dedupe: same (rule, path, line) → one finding only.

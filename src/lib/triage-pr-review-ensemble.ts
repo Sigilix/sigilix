@@ -655,10 +655,18 @@ export async function handlePrReviewEnsemble(
     // ARC-181 Task 9: auto-inline poster — gated behind
     // `astRules.autoInline === true` AND mode === "post". Default-
     // false v1 cautious rollout; flips after 2 weeks of FP telemetry
-    // shows < 5% rate. CR catch on PR #67: shadow mode is
-    // telemetry-only by contract — auto-inline posting in shadow
-    // would leak customer-visible comments and break the contract.
-    if (mode === "post" && astRulesConfig.autoInline && astResult.findings.length > 0) {
+    // shows < 5% rate.
+    //
+    // Posting is DEFERRED until the ensemble's own review submits
+    // successfully (CR catch on PR #67) so an aborted run — stale
+    // head SHA, synth_timeout, specialist failure-cascade — doesn't
+    // leave orphan AST comments on a PR whose ensemble review never
+    // landed. The closure captures everything we need; the two
+    // submission-success paths below invoke it.
+    const maybePostAstAutoInline = async (): Promise<void> => {
+      if (mode !== "post") return
+      if (!astRulesConfig.autoInline) return
+      if (astResult.findings.length === 0) return
       try {
         await postAstInlineFindings({
           client,
@@ -667,9 +675,9 @@ export async function handlePrReviewEnsemble(
           perFindingPositions: astResult.perFinding,
         })
       } catch {
-        // Swallowed — the poster's own try/catch already does this,
-        // but we belt-and-suspenders here so a poster bug never
-        // blocks the ensemble run.
+        // Swallowed — the poster's own try/catch already does this;
+        // belt-and-suspenders so a poster bug never blocks the
+        // ensemble's finalize.
       }
     }
     const baseInitialMessage = buildSpecialistInitialMessage({
@@ -938,6 +946,7 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submitted.id,
       })
+      await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
       // Narrow the fallback to GitHub HTTP 422 (Unprocessable Entity)
@@ -991,6 +1000,7 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submittedFallback.id,
       })
+      await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }
   } catch (e) {

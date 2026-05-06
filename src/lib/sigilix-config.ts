@@ -114,6 +114,14 @@ export interface SigilixConfig {
    *   - explicit `fallbacks: []` → treated as missing (use defaults)
    */
   commands?: Partial<Record<SigilixCommandName, SigilixCommandConfig>>
+  /**
+   * ARC-186: per-repo opt-OUT for the dependency-vulnerability scan.
+   * Default (missing field) = enabled. Mirrors the `describe.enabled`
+   * shape — strict-bool parsing, only literal `false` disables.
+   */
+  depVulnScan?: {
+    enabled?: boolean
+  }
 }
 
 export type SigilixCommandName = "review" | "improve" | "describe" | "ask"
@@ -403,6 +411,18 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (Object.keys(commandsOut).length > 0) {
       out.commands = commandsOut
+    }
+  }
+  // ARC-186: depVulnScan.enabled — same strict-bool semantics as
+  // describe.enabled. Unknown subfields ignored (forward-compat).
+  if (
+    obj.depVulnScan &&
+    typeof obj.depVulnScan === "object" &&
+    !Array.isArray(obj.depVulnScan)
+  ) {
+    const depIn = obj.depVulnScan as Record<string, unknown>
+    if (typeof depIn.enabled === "boolean") {
+      out.depVulnScan = { enabled: depIn.enabled }
     }
   }
   return { ok: true, config: out }

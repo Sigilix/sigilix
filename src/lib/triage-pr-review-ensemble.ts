@@ -107,6 +107,7 @@ import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
 import { renderAstFindingsForPrompt, renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
+import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import type { Env } from "../index"
 
@@ -650,6 +651,24 @@ export async function handlePrReviewEnsemble(
       .filter((s) => s.length > 0)
       .join("\n\n")
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
+
+    // ARC-181 Task 9: auto-inline poster — gated behind
+    // `astRules.autoInline === true`. Default-false v1 cautious
+    // rollout; flips after 2 weeks of FP telemetry shows < 5% rate.
+    if (astRulesConfig.autoInline && astResult.findings.length > 0) {
+      try {
+        await postAstInlineFindings({
+          client,
+          owner, repo, prNumber, headSha,
+          findings: astResult.findings,
+          perFindingPositions: astResult.perFinding,
+        })
+      } catch {
+        // Swallowed — the poster's own try/catch already does this,
+        // but we belt-and-suspenders here so a poster bug never
+        // blocks the ensemble run.
+      }
+    }
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,

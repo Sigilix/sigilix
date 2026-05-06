@@ -20,6 +20,43 @@
 
 import type { DescribeMode } from "./slash-commands"
 import { describeModeFriendlyName } from "./slash-commands"
+import { parseFirstJsonObject } from "./json-extract"
+
+export interface PrDescribeVerdict {
+  summary: string
+  body: string
+}
+
+const MIN_SUMMARY_CHARS = 10
+const MIN_BODY_CHARS = 50
+
+/**
+ * Parse the model's JSON response into a verdict. Returns null on
+ * any structural problem (parse failure, missing fields, wrong
+ * types, too-short content). Caller posts the failure comment +
+ * returns (no re-throw — see spec §4 retry contract).
+ *
+ * Length floors:
+ *   - summary ≥ 10 chars (avoid one-word "OK" / "Done" outputs)
+ *   - body ≥ 50 chars (Codex spec catch: LLMs occasionally return
+ *     a single line for body when context is thin; useless for
+ *     a PR description, hard to distinguish from no-op)
+ *
+ * Whitespace is trimmed before length check so trailing newlines
+ * don't accidentally satisfy the floor.
+ */
+export function parsePrDescribeResponse(text: string): PrDescribeVerdict | null {
+  const obj = parseFirstJsonObject(text)
+  if (!obj) return null
+  const summaryRaw = obj.summary
+  const bodyRaw = obj.body
+  if (typeof summaryRaw !== "string" || typeof bodyRaw !== "string") return null
+  const summary = summaryRaw.trim()
+  const body = bodyRaw.trim()
+  if (summary.length < MIN_SUMMARY_CHARS) return null
+  if (body.length < MIN_BODY_CHARS) return null
+  return { summary, body }
+}
 
 /**
  * Visible draft + hidden metadata, ready for `createIssueComment`.

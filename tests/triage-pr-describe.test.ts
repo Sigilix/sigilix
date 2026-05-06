@@ -9,6 +9,7 @@ import {
   renderUsageComment,
   renderFailureComment,
   renderNoChangesComment,
+  parsePrDescribeResponse,
 } from "../src/lib/triage-pr-describe"
 
 describe("renderDescribeComment", () => {
@@ -154,5 +155,76 @@ describe("renderNoChangesComment", () => {
     const out = renderNoChangesComment(42)
     expect(out).toContain("no changes")
     expect(out).toContain("#42")
+  })
+})
+
+describe("parsePrDescribeResponse", () => {
+  it("parses a clean verdict", () => {
+    const json = JSON.stringify({
+      summary: "Adds the foo bar widget for users.",
+      body: "## Summary\n\nAdds the foo bar widget. Users will see a new button on the home screen.",
+    })
+    const v = parsePrDescribeResponse(json)
+    expect(v).not.toBeNull()
+    expect(v!.summary).toBe("Adds the foo bar widget for users.")
+    expect(v!.body).toContain("foo bar widget")
+  })
+
+  it("returns null for unparseable text", () => {
+    expect(parsePrDescribeResponse("not json")).toBeNull()
+  })
+
+  it("returns null for missing summary", () => {
+    expect(parsePrDescribeResponse(JSON.stringify({ body: "x".repeat(60) }))).toBeNull()
+  })
+
+  it("returns null for missing body", () => {
+    expect(parsePrDescribeResponse(JSON.stringify({ summary: "ten chars." }))).toBeNull()
+  })
+
+  it("returns null for too-short summary (< 10 chars)", () => {
+    expect(parsePrDescribeResponse(JSON.stringify({
+      summary: "short",
+      body: "x".repeat(60),
+    }))).toBeNull()
+  })
+
+  it("returns null for too-short body (< 50 chars)", () => {
+    expect(parsePrDescribeResponse(JSON.stringify({
+      summary: "ten chars exactly here.",
+      body: "still too short",
+    }))).toBeNull()
+  })
+
+  it("returns null for non-string fields", () => {
+    expect(parsePrDescribeResponse(JSON.stringify({
+      summary: 42,
+      body: "x".repeat(60),
+    }))).toBeNull()
+    expect(parsePrDescribeResponse(JSON.stringify({
+      summary: "ten chars exactly here.",
+      body: ["array", "not", "string"],
+    }))).toBeNull()
+  })
+
+  it("trims whitespace from summary + body", () => {
+    const v = parsePrDescribeResponse(JSON.stringify({
+      summary: "   ten chars exactly here.   ",
+      body: "   " + "x".repeat(60) + "   ",
+    }))
+    expect(v!.summary).toBe("ten chars exactly here.")
+    expect(v!.body.startsWith(" ")).toBe(false)
+    expect(v!.body.endsWith(" ")).toBe(false)
+  })
+
+  it("tolerates light JSON malformation via parseFirstJsonObject", () => {
+    // The model sometimes wraps in a code fence; parseFirstJsonObject
+    // already strips that.
+    const text = "```json\n" + JSON.stringify({
+      summary: "Adds the foo bar widget.",
+      body: "x".repeat(60),
+    }) + "\n```"
+    const v = parsePrDescribeResponse(text)
+    expect(v).not.toBeNull()
   })
 })

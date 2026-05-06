@@ -75,6 +75,7 @@ import {
   batchToDiff,
   estimateTokens,
 } from "./diff-packing"
+import { shouldReview } from "./path-glob"
 import {
   runDeterministicChecks,
   renderHitsForPrompt,
@@ -393,42 +394,51 @@ export async function handlePrReviewEnsemble(
     }
     const fullDiff = diffSelection.diff
 
-    // ARC-192: hunk-level diff packing. Split the diff by file, pack
-    // greedily into batches under the per-call token cap. v1 reviews
-    // only the FIRST batch; files in subsequent batches are recorded
-    // in telemetry as `filesNotReviewed` so the operator can see how
-    // often we drop content. Files larger than the cap individually
-    // are dropped via `filesDroppedTooLarge` (don't split mid-file in
-    // v1 — it's almost always generated content like lockfiles).
-    //
-    // Multi-batch with parallel specialist calls + verdict merge is
-    // the v2 enhancement; v1 ships the bound + telemetry so we have
-    // data on whether v2 is worth the call-count multiplier.
-    const allFiles = splitDiffByFile(fullDiff)
-    const { batches, droppedTooLarge } = packFilesIntoBatches(allFiles)
+    // ARC-174: per-repo `sigilix.json` config. Read at the PR head SHA
+    // so the guidance reflects whatever the PR author committed (lets
+    // them iterate on the rules in the same PR). Always resolves —
+    // missing or malformed config falls back to EMPTY_CONFIG. Loaded
+    // BEFORE the diff split so ARC-176 pathFilters can drop files
+    // before packing decides what to send to specialists.
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+
+    // ARC-192 + ARC-176: hunk-level diff packing with config-aware
+    // filtering. Split the diff by file, drop files matched by
+    // `sigilixConfig.pathFilters` (lockfiles, generated content, etc.
+    // that shouldn't burn token budget), pack the remainder greedily
+    // into batches under the per-call token cap. v1 reviews only the
+    // FIRST batch; files in subsequent batches are recorded in
+    // telemetry as `filesNotReviewed`. Files larger than the cap
+    // individually are dropped via `filesDroppedTooLarge`. Multi-batch
+    // with parallel specialist calls + verdict merge is the v2
+    // enhancement; v1 ships the bound + telemetry.
+    const splitFiles = splitDiffByFile(fullDiff)
+    const filterPatterns = sigilixConfig.pathFilters ?? []
+    const filesAfterFilter = filterPatterns.length === 0
+      ? splitFiles
+      : splitFiles.filter((f) => shouldReview(f.path, filterPatterns))
+    const filesDroppedByFilter = filterPatterns.length === 0
+      ? []
+      : splitFiles.filter((f) => !shouldReview(f.path, filterPatterns)).map((f) => f.path)
+    const { batches, droppedTooLarge } = packFilesIntoBatches(filesAfterFilter)
     const reviewedFiles = batches[0] ?? []
     const filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
-    const diff = reviewedFiles.length === allFiles.length && droppedTooLarge.length === 0
+    const diff = reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0
       ? fullDiff
       : batchToDiff(reviewedFiles)
 
     telemetry.diffPacking = {
       diffTokensEstimated: estimateTokens(fullDiff),
-      totalFiles: allFiles.length,
+      totalFiles: splitFiles.length,
       batchCount: batches.length,
       filesReviewed: reviewedFiles.map((f) => f.path),
       filesDroppedTooLarge: droppedTooLarge,
       filesNotReviewed,
+      ...(filesDroppedByFilter.length > 0 ? { filesDroppedByFilter } : {}),
     }
 
     const reviewable = parseDiffToReviewablePositions(diff)
     const filePaths = [...reviewable.keys()]
-
-    // ARC-174: per-repo `sigilix.json` config. Read at the PR head SHA
-    // so the guidance reflects whatever the PR author committed (lets
-    // them iterate on the rules in the same PR). Always resolves —
-    // missing or malformed config falls back to EMPTY_CONFIG.
-    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
 
     // ARC-193: deterministic regex checks run BEFORE specialist fanout.
     // Hits become structured findings prepended to specialist prompts
@@ -517,6 +527,7 @@ export async function handlePrReviewEnsemble(
       retrievalSnapshot,
       namespace,
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+      ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
       ...(deterministicBlock ? { deterministicChecksBlock: deterministicBlock } : {}),
     })
 
@@ -1659,6 +1670,12 @@ interface EnsembleTelemetry {
     filesReviewed: string[]
     filesDroppedTooLarge: string[]
     filesNotReviewed: string[]
+    /**
+     * ARC-176: paths excluded by `sigilix.json` `pathFilters` BEFORE
+     * packing. Helps operators tune the filter list — surfacing files
+     * we filtered lets them spot accidental over-exclusion.
+     */
+    filesDroppedByFilter?: string[]
   }
   /**
    * ARC-193: deterministic regex check telemetry. `hits` are the

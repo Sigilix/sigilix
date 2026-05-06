@@ -733,6 +733,18 @@ export async function handlePrReviewEnsemble(
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
     })
 
+    // ARC-181 Task 8: thread structured AST findings into the synth
+    // prompt so the model can mark specialist findings superseded
+    // by deterministic AST entries on (path, line, role_hint) match
+    // (spec §5.5). v1 prompt-only — no validator on output ID
+    // references; a malformed `superseded_by_ast/<id>` would still
+    // appear in the comment body. Defensive validation deferred to
+    // v1.1 when we have telemetry on supersession-rate observations.
+    const astFindingsForSynth = renderAstFindingsAsJsonForSynth(astResult.findings)
+    const synthMessageWithAst = astFindingsForSynth.length > 0
+      ? `${synthMessage}\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\nMatch these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.\n\n\`\`\`json\n${astFindingsForSynth}\n\`\`\``
+      : synthMessage
+
     // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
     // Without this, `withComposedTimeout` rejection on synth's own 180s
     // timer bubbles to the outer catch and is recorded as
@@ -787,7 +799,7 @@ export async function handlePrReviewEnsemble(
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: synthSystemPrompt,
-          userMessage: synthMessage,
+          userMessage: synthMessageWithAst,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
           ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),

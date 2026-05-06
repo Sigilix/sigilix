@@ -22,6 +22,24 @@ import type { DescribeMode } from "./slash-commands"
 import { describeModeFriendlyName } from "./slash-commands"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
+import { generate } from "./ollama"
+import { getInstallationToken } from "./github-app"
+import { GitHubClient } from "./github"
+import { loadSigilixConfig } from "./sigilix-config"
+import { isRepoSensitive } from "./repo-policy"
+import { PR_DESCRIBE_SCHEMA } from "./schemas"
+import type { Env } from "../index"
+
+const DEFAULT_MODEL = "glm-5.1:cloud"
+
+export interface TriagePrDescribeArgs {
+  owner: string
+  repo: string
+  prNumber: number
+  installationId: number
+  mode: DescribeMode
+  env: Env
+}
 
 export const LIMITS = {
   prDiff: 80_000,
@@ -239,4 +257,257 @@ export function renderFailureComment(mode: DescribeMode): string {
  */
 export function renderNoChangesComment(prNumber: number): string {
   return `**Sigilix describe** — no changes to describe on PR #${prNumber}.`
+}
+
+/**
+ * Main entry. Wired from the `pr-describe` queue handler in
+ * src/index.ts. Pipeline mirrors handlePrImprove with describe-
+ * specific gates + post-and-return failure semantics.
+ *
+ * Failure-retry contract (Codex spec catch + resolution):
+ *   - Model parse / validation failures → post failure comment + RETURN
+ *     (do NOT re-throw — would cause queue retry → another comment).
+ *   - generate() rejection (network / Ollama 5xx) → post failure
+ *     comment + RETURN (same path; user re-runs explicitly).
+ *   - 5xx posting the SUCCESS draft → re-throw (queue retry path with
+ *     fresh dedupe key; the user has not yet seen any output).
+ *   - 4xx posting the SUCCESS draft → log + return (4xx isn't queue-
+ *     retriable; an idempotent retry would just 4xx again).
+ *   - Failure-comment post itself failing → log + return (no nested
+ *     error spiral).
+ *
+ * Dedupe-key release contract (Codex spec catch):
+ *   - `successPosted` is set ONLY after a successful real-output post
+ *     (the draft, the no-changes notice). Failure-comment posts do NOT
+ *     set it — `finally` releases the key so the user can re-run.
+ */
+export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void> {
+  const { owner, repo, prNumber, installationId, mode, env } = args
+  const tag = { owner, repo, prNumber, mode }
+
+  // Sensitive-repo gate (BEFORE any auth or LLM call). Posts a denial
+  // comment unlike improve's silent drop — describe is invoked by an
+  // explicit `/sigilix describe` from a known author who saw the ack.
+  if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
+    console.log(JSON.stringify({
+      event: "pr-describe-skipped",
+      reason: "sensitive_repo",
+      ...tag,
+    }))
+    await tryPostComment(env, args, mode, renderSensitiveDenialComment())
+    return
+  }
+
+  // Auth + meta. We resolve head SHA up front because the dedupe key
+  // includes it.
+  let client: GitHubClient
+  try {
+    client = await buildClient(env, installationId)
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "pr-describe-auth-failed",
+      err: err instanceof Error ? err.message : String(err),
+      ...tag,
+    }))
+    return
+  }
+
+  const meta = await client.getPullRequest(owner, repo, prNumber)
+  const headSha = meta.head.sha
+
+  // Disabled-config gate. Loaded AT the head ref so per-PR config
+  // changes are honored.
+  const config = await loadSigilixConfig(client, owner, repo, headSha)
+  if (config.describe?.enabled === false) {
+    console.log(JSON.stringify({
+      event: "pr-describe-skipped",
+      reason: "disabled_in_config",
+      headSha,
+      ...tag,
+    }))
+    await tryPostComment(env, args, mode, renderDisabledComment())
+    return
+  }
+
+  // Per-(PR, headSha, mode) dedupe lock. Mode-keyed so `internal`
+  // and `external` on the same head can both run within the hour.
+  // Released in `finally` if successPosted is false, so failed runs
+  // (parse failure, generate rejection, 4xx post) leave the lock
+  // open for a manual re-run via `/sigilix describe <mode>`.
+  const dedupeKey = `pr-describe:${owner}/${repo}#${prNumber}@${headSha}:${mode}`
+  const seen = await env.OPENCLAW_STATE.get(dedupeKey)
+  if (seen) {
+    console.log(JSON.stringify({
+      event: "pr-describe-skipped",
+      reason: "already_ran",
+      headSha,
+      ...tag,
+    }))
+    return
+  }
+  await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
+    expirationTtl: 60 * 60,
+  })
+
+  let successPosted = false
+  try {
+    const diffRaw = await client.getPullRequestDiff(owner, repo, prNumber)
+    if (!diffRaw || diffRaw.trim().length === 0) {
+      console.log(JSON.stringify({
+        event: "pr-describe-no-diff",
+        headSha,
+        ...tag,
+      }))
+      await tryPostComment(env, args, mode, renderNoChangesComment(prNumber))
+      successPosted = true
+      return
+    }
+
+    // Diff truncation telemetry (spec §7). Detect by comparing raw
+    // length to the cap; we log BEFORE building the prompt so the
+    // builder's internal truncate() is just shaping the prompt.
+    if (diffRaw.length > LIMITS.prDiff) {
+      console.log(JSON.stringify({
+        event: "pr-describe-truncated",
+        truncated_diff: true,
+        diffRawLength: diffRaw.length,
+        diffCap: LIMITS.prDiff,
+        headSha,
+        ...tag,
+      }))
+    }
+
+    const prompt = buildPrompt({
+      mode,
+      prNumber,
+      title: meta.title ?? "",
+      body: meta.body ?? "",
+      diff: diffRaw,
+    })
+
+    const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+
+    let response: string
+    try {
+      response = await generate({
+        model,
+        prompt,
+        apiKey: env.OLLAMA_API_KEY,
+        format: PR_DESCRIBE_SCHEMA as unknown as Record<string, unknown>,
+      })
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "pr-describe-generate-failed",
+        err: err instanceof Error ? err.message : String(err),
+        headSha,
+        ...tag,
+      }))
+      await tryPostComment(env, args, mode, renderFailureComment(mode))
+      return
+    }
+
+    const verdict = parsePrDescribeResponse(response)
+    if (!verdict) {
+      console.error(JSON.stringify({
+        event: "pr-describe-parse-failed",
+        headSha,
+        responseLength: response.length,
+        ...tag,
+      }))
+      await tryPostComment(env, args, mode, renderFailureComment(mode))
+      return
+    }
+
+    const truncatedBody = truncateForGitHub(verdict.body, COMMENT_BODY_CAP)
+    const commentBody = renderDescribeComment({
+      mode,
+      headSha,
+      summary: verdict.summary,
+      body: truncatedBody,
+    })
+
+    try {
+      await client.createIssueComment(owner, repo, prNumber, commentBody)
+      successPosted = true
+      console.log(JSON.stringify({
+        event: "pr-describe-posted",
+        headSha,
+        truncated: truncatedBody.length < verdict.body.length,
+        ...tag,
+      }))
+    } catch (err) {
+      const status = readHttpStatus(err)
+      if (status !== null && status >= 500) {
+        // 5xx posting the success draft: re-throw → queue retry.
+        // User has not seen any output yet (only the ack), so a
+        // single retry is the right behavior. Dedupe key released
+        // in `finally` so retry can re-run from scratch.
+        throw err
+      }
+      // 4xx: log + return (4xx isn't queue-retriable).
+      console.error(JSON.stringify({
+        event: "pr-describe-post-failed",
+        status,
+        err: err instanceof Error ? err.message : String(err),
+        headSha,
+        ...tag,
+      }))
+    }
+  } finally {
+    if (!successPosted) {
+      await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+    }
+  }
+}
+
+/**
+ * Best-effort comment post for non-success branches (failure /
+ * disabled / sensitive / no-changes). Swallows errors to avoid
+ * nested error spirals (a comment-post failure for a comment
+ * about a failure must not throw). Logs include `mode` per the
+ * spec §7 telemetry invariant (Kimi spec catch).
+ */
+async function tryPostComment(
+  env: Env,
+  args: { owner: string; repo: string; prNumber: number; installationId: number },
+  mode: DescribeMode,
+  body: string,
+): Promise<void> {
+  try {
+    const client = await buildClient(env, args.installationId)
+    await client.createIssueComment(args.owner, args.repo, args.prNumber, body)
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "pr-describe-best-effort-post-failed",
+      err: err instanceof Error ? err.message : String(err),
+      mode,
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+    }))
+  }
+}
+
+async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    throw new Error("GITHUB_APP_ID and GITHUB_PRIVATE_KEY required")
+  }
+  const token = await getInstallationToken({
+    kv: env.OPENCLAW_STATE,
+    appId: env.GITHUB_APP_ID,
+    privateKey: env.GITHUB_PRIVATE_KEY,
+    installationId,
+  })
+  return new GitHubClient({ token })
+}
+
+/**
+ * Best-effort extraction of a numeric HTTP status from an error.
+ * Mirrors triage-pr-improve's helper (the GitHubClient throws plain
+ * Errors with the status embedded in the message string).
+ */
+function readHttpStatus(err: unknown): number | null {
+  if (!(err instanceof Error)) return null
+  const m = err.message.match(/\b(\d{3})\b/)
+  if (!m) return null
+  const n = Number(m[1])
+  return Number.isFinite(n) ? n : null
 }

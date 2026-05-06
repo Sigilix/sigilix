@@ -1,6 +1,6 @@
 # ARC-186 — Dependency vulnerability lookup — design spec
 
-**Status:** v2 — incorporates Codex APPROVE-WITH-CHANGES findings; Kimi pending
+**Status:** v3 — fully dual-signed-off (Codex + Kimi APPROVE-WITH-CHANGES, all blocking + major findings addressed)
 **Linear:** [ARC-186](https://linear.app/arc-and-anchor/issue/ARC-186/dependency-vulnerability-lookup-aikido-intel-style-advisory-records)
 **Reference:** `AikidoSec/intel:README.md`, `AikidoSec/safe-chain`
 
@@ -86,6 +86,16 @@ A simple set-difference on `(name, version)` tuples surfaces:
 If the lockfile changed but `package.json` did not, the upgrade IS still detected — `package-lock.json` is the authoritative source for resolved versions. (This addresses Codex MAJOR #3: lockfile-only changes are detected.)
 
 If a manifest is missing or fails to parse on either side, the scan skips that pair with a structured warning — never fails the review.
+
+### Missing-lockfile policy (Kimi MAJOR #3)
+
+Many npm libraries gitignore `package-lock.json`. v1 makes the lockfile **strictly required for the scan to fire**:
+
+- No lockfile at head SHA → emit `dep-vuln-scan-skipped { reason: "missing-lockfile" }` and exit cleanly. No findings, no LLM-side noise.
+- No lockfile at base SHA but present at head → first PR introducing the lockfile; treat ALL head-resolved packages as "added" and scan them.
+- Lockfile at base, missing at head → unusual. Same skip reason; lockfile deletion is out of v1 scope.
+
+A `package.json`-only fallback (declared ranges without resolved versions) is **not implemented in v1** because the matching is fundamentally less precise (a range like `^1.0.0` could resolve to anything from 1.0.0 to <2.0.0). Listed as v2 future scope. Repos without lockfiles get the silent-skip behavior with operator-visible telemetry.
 
 ### Diff-extracted manifests
 
@@ -235,15 +245,42 @@ To make the staleness operationally legible:
 - The bundled file's first record is a metadata header: `{snapshotDate, sourceHash, advisoryCount, schemaVersion}`.
 - Telemetry emits `dep-vuln-snapshot-meta` once per scan with these fields so downstream tools can flag old snapshots.
 - A build-time check enforces the 500 KB cap (CI fails if `src/data/dep-vulns.json` exceeds it). Prevents silent drift past the bundle budget.
+- **Retention policy** (Kimi MINOR #5): the manual refresh script enforces an explicit selection rule — all `critical` + `high` advisories regardless of age, plus all `medium` advisories from the last 12 months, plus the top-N packages by npm download count for `low`. No older `low`-severity advisories. Documented in `scripts/refresh-advisories.ts` (out of v1 scope but rule is locked in for the operator).
 - The README documents the snapshot model + the planned operator workflow for quarterly refreshes.
 
 ## 10b. Workspaces / monorepos (Codex MINOR #7 — explicit deferral)
 
 v1 scans every changed `package.json` + `package-lock.json` PAIR as an independent unit. Workspace-level manifests (`pnpm-workspace.yaml`, `lerna.json`, `package.json` with `workspaces` field) are NOT walked recursively — each touched leaf manifest is scanned standalone. Deferred to v2 alongside transitive resolution.
 
-## 11. Open questions for sign-off
+## 11. Decisions on prior open questions (resolved during sign-off)
 
-1. **Bundle `semver` or hand-roll matcher?** Bundle-`semver` is safer; hand-roll is dep-free. v1 leans bundle.
-2. **Bundled DB size cap.** Aikido Intel's full advisory set could be 5-10 MB. Worker bundle hard cap is 25 MB; we're at ~3 MB today. Cap the bundled DB at **500 KB** (top-N severity, recent advisories) to leave room. Stale advisories drop off the bottom; full scans use the API in v2.
-3. **Where does the bundled DB live in the bundle?** Inline as a `require()` / `import` of a JSON file (esbuild bundles it). v1 leans inline-import.
-4. **What model should the security specialist see when there are zero findings?** Empty section omitted entirely (consistent with ARC-187 behavior).
+1. **Bundle `semver`** with tree-shaken imports (`satisfies`, `gte`). Pin a specific audited version. Both signers agreed.
+2. **500 KB cap accepted** with explicit retention policy (§10a) + snapshot metadata (§5). Both signers agreed.
+3. **Inline JSON import** (`import db from "../data/dep-vulns.json"`). Both signers agreed. Build-time size check in CI.
+4. **Empty findings → omit the section entirely** in the prompt. Both signers agreed. Internal API still returns an empty array so downstream code doesn't infer scan failure.
+
+## 12. Sign-off summary
+
+### Codex (v1 → v2)
+
+| Codex finding | v2 change |
+|---|---|
+| **[BLOCKING]** Patch suppression incorrect (global vs range-scoped) | §6 schema changed to `ranges: AdvisoryRangeRecord[]` with per-range `patched_in`. Suppression is range-aware. |
+| **[MAJOR]** v7+ hoisted-transitive confusion | §4 lockfile parser intersects with root `package.json` deps; scoped paths normalized. |
+| **[MAJOR]** Base-lockfile fetch missing | §4 explicitly fetches base + head lockfiles; lockfile-only PRs detected. |
+| **[MAJOR]** 500 KB cap → false negatives by design | §10a frames as "partial advisory snapshot" with metadata + build-time check + quarterly refresh. |
+| **[MINOR]** Match-type naming (`exact-vulnerable` → `range-vulnerable`) | Renamed in §6. Findings include matched range string. |
+| **[MINOR]** Semver normalization rules | §6 documents v-prefix strip, invalid-version reject, `includePrerelease: false`. |
+| **[MINOR]** Workspaces/monorepos not addressed | §10b deferred explicitly; v1 scans leaf manifest pairs independently. |
+
+### Kimi (v2 → v3)
+
+| Kimi finding | v3 change |
+|---|---|
+| **[BLOCKING]** Base-lockfile fetch missing | Already addressed in v2 §4. |
+| **[MAJOR]** Range-scoped patch suppression | Already addressed in v2 §6. |
+| **[MAJOR]** Missing-lockfile policy explicit | New "Missing-lockfile policy" subsection in §4 — strict skip with telemetry; package.json-only fallback deferred to v2. |
+| **[MINOR]** snapshot_generated_at field | Already addressed in v2 §10a (`snapshotDate` in metadata header). |
+| **[MINOR]** 500 KB retention policy explicit | §10a now documents the selection rule (all critical/high + medium last 12 months + top-N low by download count). |
+| **[NIT]** "added/modified" vs "added/upgraded" wording | Internal-only — telemetry field is already `match_type`; no externally-visible "upgrade" wording. |
+| **[NIT]** Pin semver version + tree-shake | Plan task will pin + import only `satisfies` + `gte`. |

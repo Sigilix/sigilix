@@ -115,6 +115,19 @@ export const ORCHESTRATOR_TIMEOUT_MS = 490_000
 // silently consume the synth budget. Failed pre-flight is non-fatal
 // per v3.1 §8 — specialists fall back to empty snapshot.
 export const RETRIEVAL_PREFLIGHT_TIMEOUT_MS = 15_000
+// Phase 4a.4 (ARC-175): cap each individual model attempt inside
+// `runWithRetryAndFallback` so a single slow primary call can't eat
+// the entire `SPECIALIST_TIMEOUT_MS` budget and starve the retry +
+// fallback. Telemetry on PR #47 (Phase 4a.3 era) showed v4-pro logic
+// stalling for the full 270s on a single attempt with `attempts=1` —
+// the budget extension just gave the primary more rope.
+//
+// Math under this cap: 2 × 85s primary + ~1s backoff + 85s fallback
+// = ~256s, fits within the 270s SPECIALIST budget. Sized to leave
+// each attempt enough room for v4-pro reasoning on real PRs (median
+// successful logic latency was 78s on healthy runs) while still
+// guaranteeing the fallback gets its slot.
+export const PER_ATTEMPT_TIMEOUT_MS = 85_000
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
 
@@ -846,6 +859,14 @@ export async function runWithRetryAndFallback<T>(args: {
   parseAnswer: (content: string) => T | null
   parseFailureLabel: string
   startedAt: number
+  /**
+   * Phase 4a.4 (ARC-175): per-attempt timeout cap. Each individual
+   * `attemptChat` call aborts after this many ms so a single slow
+   * primary can't eat the entire `SPECIALIST_TIMEOUT_MS` budget.
+   * Defaults to `PER_ATTEMPT_TIMEOUT_MS` (85s) — tests pass a smaller
+   * value to exercise the abort path without real-time waits.
+   */
+  perAttemptTimeoutMs?: number
 }): Promise<{
   verdict: T | null
   failureReason?: string
@@ -855,6 +876,7 @@ export async function runWithRetryAndFallback<T>(args: {
   attemptsUsed: number
 }> {
   const { config, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel, startedAt } = args
+  const perAttemptCap = args.perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS
 
   let attemptsUsed = 0
   let lastFailureReason: string | undefined
@@ -874,7 +896,19 @@ export async function runWithRetryAndFallback<T>(args: {
       }
     }
     attemptsUsed++
-    const outcome = await attemptChat({ model: config.primary, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel })
+    // Phase 4a.4: per-attempt cap. attemptChat already returns a
+    // structured failure on AbortError (its inner try/catch catches
+    // chat()'s thrown abort), so withComposedTimeout's grace path
+    // observes a settled `{verdict: null, failureReason: ...}` and
+    // returns it cleanly — no extra throw/catch needed here.
+    const outcome = await withComposedTimeout(
+      (perAttemptSignal) => attemptChat({
+        model: config.primary, apiKey, messages, signal: perAttemptSignal,
+        chatEnabled, format, parseAnswer, parseFailureLabel,
+      }),
+      perAttemptCap,
+      signal,
+    )
     if (outcome.verdict !== null) {
       return {
         verdict: outcome.verdict,
@@ -908,8 +942,19 @@ export async function runWithRetryAndFallback<T>(args: {
   // try the cross-provider fallback before giving up — fallback runs
   // on different infra and may succeed where primary couldn't.
   if (config.fallback && !signal.aborted) {
+    const fallbackModel = config.fallback
     attemptsUsed++
-    const outcome = await attemptChat({ model: config.fallback, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel })
+    // Phase 4a.4: same per-attempt cap on the fallback. The fallback
+    // gets one shot — capped — so even if the cross-provider model is
+    // also slow, the overall specialist run finishes within budget.
+    const outcome = await withComposedTimeout(
+      (perAttemptSignal) => attemptChat({
+        model: fallbackModel, apiKey, messages, signal: perAttemptSignal,
+        chatEnabled, format, parseAnswer, parseFailureLabel,
+      }),
+      perAttemptCap,
+      signal,
+    )
     if (outcome.verdict !== null) {
       return {
         verdict: outcome.verdict,

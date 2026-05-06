@@ -25,7 +25,13 @@ import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient } from "./github"
-import { loadSigilixConfig, resolveCommandConfig } from "./sigilix-config"
+import {
+  loadSigilixConfig,
+  loadSigilixConfigRaw,
+  parseSigilixConfigDetailed,
+  resolveCommandConfig,
+} from "./sigilix-config"
+import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import { isRepoSensitive } from "./repo-policy"
 import { PR_DESCRIBE_SCHEMA } from "./schemas"
 import type { Env } from "../index"
@@ -316,9 +322,41 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   const meta = await client.getPullRequest(owner, repo, prNumber)
   const headSha = meta.head.sha
 
+  // ARC-185: load with detailed parse for the parse-error PR
+  // comment. On parse failure, post the comment fire-and-forget
+  // (idempotent per head SHA) and proceed with EMPTY_CONFIG so the
+  // describe still runs in default mode.
+  const rawConfig = await loadSigilixConfigRaw(client, owner, repo, headSha)
+  let config: Awaited<ReturnType<typeof loadSigilixConfig>>
+  if (rawConfig === null) {
+    config = await loadSigilixConfig(client, owner, repo, headSha)
+  } else {
+    const parsed = parseSigilixConfigDetailed(rawConfig)
+    if (parsed.ok) {
+      config = parsed.config
+    } else {
+      console.log(JSON.stringify({
+        event: "command-config-parse-error",
+        owner, repo, prNumber,
+        command: "describe",
+        reason: parsed.reason,
+      }))
+      postConfigErrorComment({
+        env, client, owner, repo, prNumber, headSha,
+        reason: parsed.reason,
+        raw: parsed.raw,
+      }).catch((err) => {
+        console.error(JSON.stringify({
+          event: "command-config-error-comment-bubbled",
+          err: err instanceof Error ? err.message : String(err),
+          owner, repo, prNumber,
+        }))
+      })
+      config = await loadSigilixConfig(client, owner, repo, headSha)
+    }
+  }
   // Disabled-config gate. Loaded AT the head ref so per-PR config
   // changes are honored.
-  const config = await loadSigilixConfig(client, owner, repo, headSha)
   if (config.describe?.enabled === false) {
     console.log(JSON.stringify({
       event: "pr-describe-skipped",

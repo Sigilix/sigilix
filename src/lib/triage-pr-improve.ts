@@ -33,7 +33,13 @@ import {
   type ReviewableMap,
 } from "./diff-positions"
 import { isRepoSensitive } from "./repo-policy"
-import { loadSigilixConfig, resolveCommandConfig } from "./sigilix-config"
+import {
+  loadSigilixConfigRaw,
+  parseSigilixConfigDetailed,
+  resolveCommandConfig,
+  EMPTY_CONFIG,
+} from "./sigilix-config"
+import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -140,11 +146,39 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
 
     const reviewable = parseDiffToReviewablePositions(diff)
 
-    // ARC-185: load sigilix.json + resolve per-command config.
-    // Best-effort — config errors degrade to default behavior; the
-    // slash-command dispatch path posts the parse-error PR comment
-    // (Task 7), this path doesn't double-post.
-    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+    // ARC-185: load sigilix.json with detailed parse so we can post
+    // a parse-error PR comment on user-invoked slash commands. On
+    // parse failure: fire-and-forget the comment (idempotent per
+    // head SHA) and continue with EMPTY_CONFIG (degraded mode).
+    const rawConfig = await loadSigilixConfigRaw(client, owner, repo, headSha)
+    let sigilixConfig: typeof EMPTY_CONFIG = EMPTY_CONFIG
+    if (rawConfig !== null) {
+      const result = parseSigilixConfigDetailed(rawConfig)
+      if (result.ok) {
+        sigilixConfig = result.config
+      } else {
+        console.log(JSON.stringify({
+          event: "command-config-parse-error",
+          owner, repo, prNumber,
+          command: "improve",
+          reason: result.reason,
+        }))
+        // Fire-and-forget — never block the user-invoked command.
+        postConfigErrorComment({
+          env, client, owner, repo, prNumber, headSha,
+          reason: result.reason,
+          raw: result.raw,
+        }).catch((err) => {
+          console.error(JSON.stringify({
+            event: "command-config-error-comment-bubbled",
+            err: err instanceof Error ? err.message : String(err),
+            owner, repo, prNumber,
+          }))
+        })
+      }
+    }
+    // rawConfig === null → file missing or fetch failed → silent
+    // EMPTY_CONFIG (same as loadSigilixConfig's null path).
     const commandConfig = resolveCommandConfig(sigilixConfig, "improve")
 
     const prompt = buildPrompt({

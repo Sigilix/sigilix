@@ -464,3 +464,25 @@ export async function loadSigilixConfig(
   const parsed = parseSigilixConfig(raw)
   return parsed ?? EMPTY_CONFIG
 }
+
+/**
+ * ARC-185: fetch the raw `sigilix.json` text without parsing. Used
+ * by the slash-command dispatch path to feed `parseSigilixConfigDetailed`
+ * (which preserves the raw text alongside parse errors so the
+ * resulting PR comment can show a snippet). Never throws — returns
+ * null on missing file or fetch failure.
+ */
+export async function loadSigilixConfigRaw(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  ref: string,
+): Promise<string | null> {
+  try {
+    const raw = await client.getFileContent(owner, repo, SIGILIX_CONFIG_PATH, ref)
+    if (raw === null || raw.trim().length === 0) return null
+    return raw
+  } catch {
+    return null
+  }
+}

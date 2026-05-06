@@ -2,7 +2,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import { parseSlashCommand, renderSlashCommandAck } from "../src/lib/slash-commands"
+import { parseSlashCommand, renderSlashCommandAck, renderHelpBody } from "../src/lib/slash-commands"
 import { stripQuotesAndCode } from "../src/lib/mention"
 
 describe("parseSlashCommand", () => {
@@ -40,7 +40,13 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("@sigilix review please")).toBeNull()
   })
 
-  it("returns null for unsupported subcommands (v1 review-only)", () => {
+  it("recognizes `/sigilix help`", () => {
+    expect(parseSlashCommand("/sigilix help")).toEqual({ cmd: "help" })
+    expect(parseSlashCommand("/Sigilix HELP")).toEqual({ cmd: "help" })
+    expect(parseSlashCommand("/sigilix help me please")).toEqual({ cmd: "help" })
+  })
+
+  it("returns null for unsupported subcommands", () => {
     expect(parseSlashCommand("/sigilix ask anything")).toBeNull()
     expect(parseSlashCommand("/sigilix improve")).toBeNull()
     expect(parseSlashCommand("/sigilix describe")).toBeNull()
@@ -98,10 +104,12 @@ describe("parseSlashCommand", () => {
   it("doesn't let an unsupported earlier line suppress a supported later one (sigilix-bot catch)", () => {
     // Sigilix-bot's self-review on PR #58 caught this: previously,
     // hitting a `/sigilix <unsupported>` line returned null without
-    // checking later lines, so a body that opened with `/sigilix help`
-    // would silently drop a valid `/sigilix review` further down.
+    // checking later lines, so a body that opened with an unknown
+    // subcommand would silently drop a valid `/sigilix review`
+    // further down. Use a still-unrecognized subcommand here so the
+    // test stays meaningful as we add more commands.
     const body = [
-      "/sigilix help",
+      "/sigilix bogus",
       "/sigilix review",
     ].join("\n")
     expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
@@ -153,5 +161,36 @@ describe("renderSlashCommandAck", () => {
     expect(typeof out).toBe("string")
     expect(out.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toContain("review")
+  })
+
+  it("renders the help body for the help command (the body IS the response)", () => {
+    const out = renderSlashCommandAck("help")
+    expect(out).toContain("Sigilix slash commands")
+    expect(out).toContain("`/sigilix review`")
+    expect(out).toContain("`/sigilix help`")
+  })
+})
+
+describe("renderHelpBody", () => {
+  const body = renderHelpBody()
+
+  it("lists every currently-live command", () => {
+    expect(body).toContain("`/sigilix review`")
+    expect(body).toContain("`/sigilix help`")
+  })
+
+  it("documents the ACL gate", () => {
+    expect(body).toMatch(/OWNER.*MEMBER.*COLLABORATOR/)
+  })
+
+  it("calls out the line-start + fenced-block recognition rules", () => {
+    expect(body.toLowerCase()).toMatch(/start of a line|line start/)
+    expect(body.toLowerCase()).toMatch(/fenced|blockquote/)
+  })
+
+  it("flags upcoming commands so users know what's coming", () => {
+    expect(body).toContain("/sigilix improve")
+    expect(body).toContain("/sigilix ask")
+    expect(body).toContain("/sigilix describe")
   })
 })

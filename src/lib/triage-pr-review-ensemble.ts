@@ -666,18 +666,24 @@ export async function handlePrReviewEnsemble(
       demotedScore1: validated.demotedScore1,
     }
 
-    // ARC-194: record the SHA we just reviewed so subsequent pushes
-    // can fetch the compare diff (`reviewedSha...newHead`) instead of
-    // the full PR diff. Best-effort — write failures don't fail the
-    // run; next push falls back to full diff and re-establishes the
-    // marker on the following review.
-    await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
-
     if (mode === "shadow") {
-      // Shadow: telemetry only, no GitHub submission.
+      // Shadow: telemetry only, no GitHub submission. Deliberately
+      // do NOT write the last-reviewed SHA — shadow runs don't post
+      // findings, so a later real review must still see the full
+      // base..head diff to surface them. Recording the shadow SHA
+      // would cause subsequent post-mode runs to incrementally
+      // review only `shadowSha..head` and miss everything before
+      // (sigilix-bot dogfood catch on PR #53).
       telemetry.shadowVerdict = validated.verdict
       return finalize(telemetry, env, "shadow_recorded", cache)
     }
+
+    // ARC-194: record the SHA we just reviewed (post mode only) so
+    // subsequent pushes can fetch the compare diff (`reviewedSha...
+    // newHead`) instead of the full PR diff. Best-effort — write
+    // failures don't fail the run; next push falls back to full diff
+    // and re-establishes the marker on the following review.
+    await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
 
     // ─── Stale-head guard #2 ───────────────────────────────────
     const meta2 = await client.getPullRequest(owner, repo, prNumber)

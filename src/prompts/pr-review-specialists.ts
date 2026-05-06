@@ -247,12 +247,25 @@ export interface SpecialistInitialMessageCtx {
   diff: string
   retrievalSnapshot: string  // pre-formatted chunks (or empty when preflight failed)
   namespace: string  // for follow-up retrieve_codebase calls
+  /**
+   * ARC-174: per-repo guidance from `sigilix.json`. Prepended to the
+   * message in a labeled block so the specialist treats it as
+   * authoritative rules from the repo owner. Per-role rules are
+   * appended downstream by the orchestrator (see `appendRoleRule`).
+   */
+  guidance?: string
 }
 
 export function buildSpecialistInitialMessage(
   ctx: SpecialistInitialMessageCtx,
 ): string {
-  return [
+  const lines: string[] = []
+  if (ctx.guidance && ctx.guidance.length > 0) {
+    lines.push("[REPO GUIDANCE — applies to ALL specialists (from sigilix.json)]")
+    lines.push(ctx.guidance)
+    lines.push("")
+  }
+  lines.push(
     `[PR] #${ctx.prNumber} — ${ctx.title}`,
     "",
     "[PR BODY]",
@@ -266,7 +279,8 @@ export function buildSpecialistInitialMessage(
     "",
     `[CODEBASE NAMESPACE FOR FOLLOW-UP retrieve_codebase CALLS]`,
     ctx.namespace,
-  ].join("\n")
+  )
+  return lines.join("\n")
 }
 
 export interface SynthesizerInitialMessageCtx {
@@ -274,12 +288,25 @@ export interface SynthesizerInitialMessageCtx {
   diff: string
   /** Pre-rendered specialist verdict block: see renderSpecialistVerdictsForSynth(). */
   specialistVerdictsBlock: string
+  /**
+   * ARC-174: same per-repo guidance the specialists saw, prepended to
+   * the synth message so it can apply repo-wide rules when merging
+   * findings (e.g., guidance like "always promote security findings to
+   * `score=5`" affects the synthesizer's deduping + rescoring).
+   */
+  guidance?: string
 }
 
 export function buildSynthesizerInitialMessage(
   ctx: SynthesizerInitialMessageCtx,
 ): string {
-  return [
+  const lines: string[] = []
+  if (ctx.guidance && ctx.guidance.length > 0) {
+    lines.push("[REPO GUIDANCE (from sigilix.json)]")
+    lines.push(ctx.guidance)
+    lines.push("")
+  }
+  lines.push(
     `[PR] #${ctx.prNumber}`,
     "",
     "[DIFF]",
@@ -287,7 +314,8 @@ export function buildSynthesizerInitialMessage(
     "",
     "[SPECIALIST VERDICTS]",
     ctx.specialistVerdictsBlock,
-  ].join("\n")
+  )
+  return lines.join("\n")
 }
 
 /**

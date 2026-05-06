@@ -66,6 +66,49 @@ describe("runAstRules — skip paths", () => {
   })
 })
 
+describe("runAstRules — pathFilters compatibility (Codex MAJOR #4)", () => {
+  // The ensemble orchestrator filters changed-file paths through
+  // sigilix.json `pathFilters` BEFORE handing the file list to
+  // runAstRules. The runner trusts this — paths NOT in
+  // `filesByPath` are never fetched, parsed, or scanned. These
+  // tests lock that contract.
+
+  it("excluded paths (not in filesByPath) are NEVER scanned", async () => {
+    const r = await runAstRules({
+      // Diff mentions BOTH dist/foo.js (excluded by pathFilters)
+      // AND src/bar.js (included). Caller passes only src/bar.js
+      // in filesByPath — simulating pathFilters dropping dist/**.
+      diff: diffWithEvalAt(1, "dist/foo.js") + diffWithEvalAt(1, "src/bar.js"),
+      filesByPath: new Map([
+        // dist/foo.js INTENTIONALLY OMITTED — caller's pathFilters dropped it
+        ["src/bar.js", `const x = eval("p")\n`],
+      ]),
+      reviewable: new Map([
+        ["dist/foo.js", [{ line: 1, side: "RIGHT" }]],
+        ["src/bar.js", [{ line: 1, side: "RIGHT" }]],
+      ]),
+      config: DEFAULT_CONFIG,
+      ctx: CTX,
+    })
+    // Only src/bar.js gets a finding — dist/foo.js is invisible to
+    // the runner.
+    expect(r.findings.length).toBe(1)
+    expect(r.findings[0].path).toBe("src/bar.js")
+  })
+
+  it("when ALL paths are filtered out, no scan happens", async () => {
+    const r = await runAstRules({
+      diff: diffWithEvalAt(1, "dist/foo.js"),
+      filesByPath: new Map(),  // nothing left after pathFilters
+      reviewable: new Map([["dist/foo.js", [{ line: 1, side: "RIGHT" }]]]),
+      config: DEFAULT_CONFIG,
+      ctx: CTX,
+    })
+    expect(r.findings.length).toBe(0)
+    expect(r.telemetry.skipReason).toBe("no-js-ts-files")
+  })
+})
+
 describe("runAstRules — finding emission", () => {
   it("emits a finding for eval() in a changed line", async () => {
     const r = await runAstRules({

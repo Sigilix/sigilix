@@ -399,11 +399,12 @@ When a hit fires, the security specialist receives it as an authoritative fact i
 
 ## Slash commands (ARC-178)
 
-Reviewers can re-trigger Sigilix from any PR comment without pushing a no-op commit. v1 ships one command:
+Reviewers can drive Sigilix from any PR comment without pushing a no-op commit. Currently live:
 
 | Command | Effect |
 |---|---|
 | `/sigilix review` | Re-runs the ensemble review against the PR's current head SHA. Sigilix posts a short ack, clears the per-(PR, headSha) dedupe lock, then the regular sticky review comment updates when the run completes. |
+| `/sigilix help` | Posts an inline list of supported commands. No model call, no diff fetch — just an authenticated comment post. |
 
 Recognition rules:
 
@@ -412,16 +413,16 @@ Recognition rules:
 - Distinct from `@sigilix` mentions — those still flow through the existing Q&A reply path.
 - Code-fenced or blockquoted invocations are stripped before parsing, so commands inside `\`\`\`` blocks or `>` quotes are ignored.
 
-Authorization (B2 gate):
+Authorization:
 
-- Commenter must be `OWNER`, `MEMBER`, or `COLLABORATOR` on the repo (per GitHub's `author_association` field). `CONTRIBUTOR` is intentionally excluded — anyone whose PR has merged is permanently `CONTRIBUTOR`, which is too broad a circle for a command that triggers an expensive ensemble run.
+- Commenter must be `OWNER`, `MEMBER`, or `COLLABORATOR` on the repo (per GitHub's `author_association` field). `CONTRIBUTOR` is intentionally excluded — anyone whose PR has merged is permanently `CONTRIBUTOR`, which is too broad a circle for a privileged channel.
 - Untrusted authors get a 403 (silent to the user — no comment posted). Decision is logged via the `slash-command-rejected` telemetry event for ops review.
 
 Burst behavior:
 
-- Concurrent `/sigilix review` posts on the same PR are coalesced for 60s via a KV lock (`pr-review-rerun:<owner>/<repo>#<n>`). The first invocation posts the ack and re-enqueues; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently.
+- Concurrent invocations of the same slash command on the same PR are coalesced for 60s via a per-`(cmd, PR)` KV lock (`slash-cmd:<cmd>:<owner>/<repo>#<n>`). The first invocation enqueues the job; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently. The key includes the command name so different commands on the same PR don't accidentally suppress each other.
 
-Unsupported subcommands (`/sigilix ask`, `/sigilix improve`, `/sigilix help`, etc.) are reserved for follow-up issues. Today they currently fall silently through to the @-mention pipeline — which means a bare `/sigilix help` (no `@sigilix`) goes nowhere. Future versions will recognize `help` and respond with the supported command list.
+Unsupported subcommands (`/sigilix ask`, `/sigilix improve`, `/sigilix describe`) are reserved for follow-up issues. Until they ship, those invocations fall silently through to the @-mention pipeline.
 
 ## CI / auto-deploy
 

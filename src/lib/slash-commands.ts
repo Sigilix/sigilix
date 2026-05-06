@@ -1,15 +1,13 @@
-// ARC-178: slash-command parser for `/sigilix <cmd> [args]` invocations
-// in PR comments.
+// Slash-command parser for `/sigilix <cmd> [args]` invocations in PR
+// comments.
 //
-// v1 scope (ship now):
-//   - `/sigilix review` → re-trigger the ensemble on the PR's current
-//     head SHA. Useful when a reviewer wants a fresh review without
-//     pushing a no-op commit (e.g., the bot's prior review missed
-//     something obvious and they want it to retry).
+// Live commands:
+//   - `/sigilix review`  → re-trigger the ensemble (ARC-178)
+//   - `/sigilix help`    → post a list of supported commands inline
 //
-// v2+ (deferred to follow-up issues):
-//   - `/sigilix ask <question>` — Q&A using existing PR context + RAG
-//   - `/sigilix improve` — emit GitHub suggested-change comments
+// Deferred to follow-up issues:
+//   - `/sigilix improve`  — suggested-change patches (ARC-179, in flight)
+//   - `/sigilix ask <q>`  — Q&A using PR context + RAG
 //   - `/sigilix describe` — draft a PR description / changelog
 //
 // Recognition rules:
@@ -23,9 +21,10 @@
 
 export type SlashCommand =
   | { cmd: "review" }
-  // v2 reserved shapes (parser doesn't return these yet — adding the
-  // type now keeps the dispatch table forward-compat once handlers
-  // exist):
+  | { cmd: "help" }
+  // Reserved shapes (parser doesn't return these yet — adding the
+  // type when handlers exist will surface missed dispatch cases via
+  // the exhaustive switch in renderSlashCommandAck):
   // | { cmd: "ask"; query: string }
   // | { cmd: "improve" }
   // | { cmd: "describe" }
@@ -57,6 +56,9 @@ export function parseSlashCommand(body: string): SlashCommand | null {
     if (head === "review") {
       return { cmd: "review" }
     }
+    if (head === "help") {
+      return { cmd: "help" }
+    }
     // Recognized prefix (`/sigilix ...`) but unsupported subcommand.
     // Continue scanning later lines — a comment that opens with
     // `/sigilix help` followed by `/sigilix review` should still
@@ -84,9 +86,36 @@ export function renderSlashCommandAck(cmd: SlashCommand["cmd"]): string {
   switch (cmd) {
     case "review":
       return "Re-running ensemble review on the current head. Standard sticky comment will update when complete."
+    case "help":
+      // Help is its own answer — the queue handler posts the full
+      // command list directly. No separate ack needed; the help body
+      // doubles as the ack.
+      return renderHelpBody()
     default: {
       const _exhaustive: never = cmd
       return _exhaustive
     }
   }
+}
+
+/**
+ * Static help-comment body listing the slash commands Sigilix
+ * currently understands. Added to the public surface so callers
+ * (the help handler itself, future docs scrapers, tests) all share
+ * one source of truth — keep this in sync with the README's
+ * "Slash commands" section when adding a command.
+ */
+export function renderHelpBody(): string {
+  return [
+    "**Sigilix slash commands**",
+    "",
+    "| Command | Effect |",
+    "|---|---|",
+    "| `/sigilix review` | Re-run the ensemble review against the PR's current head SHA. |",
+    "| `/sigilix help` | Show this list. |",
+    "",
+    "Slash commands are gated to `OWNER`, `MEMBER`, and `COLLABORATOR` authors. Match must be at the start of a line; commands inside fenced code blocks or markdown blockquotes are ignored.",
+    "",
+    "Coming soon: `/sigilix improve` (apply-able patches), `/sigilix ask <question>` (PR-context Q&A), `/sigilix describe` (PR description draft).",
+  ].join("\n")
 }

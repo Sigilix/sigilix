@@ -85,6 +85,39 @@ export const PR_REVIEW_SCHEMA = {
 } as const
 
 /**
+ * pr-improve verdict (ARC-179: `/sigilix improve` suggested changes).
+ * Mirrors PrImproveVerdict in src/lib/triage-pr-improve.ts. Tighter
+ * scope than the regular review — no score, narrower category list,
+ * cap at 5.
+ */
+export const PR_IMPROVE_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    suggestions: {
+      type: "array",
+      maxItems: 5,
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          line: { type: "integer", minimum: 1 },
+          startLine: { type: "integer", minimum: 1 },
+          category: {
+            type: "string",
+            enum: ["naming", "clarity", "dead-code", "error-handling", "style", "docs"],
+          },
+          headline: { type: "string", maxLength: 120 },
+          body: { type: "string" },
+        },
+        required: ["path", "line", "category", "headline", "body"],
+      },
+    },
+  },
+  required: ["summary", "suggestions"],
+} as const
+
+/**
  * Issue-triage verdict (Linear issue post + field updates).
  * Mirrors Verdict in src/lib/triage.ts.
  */

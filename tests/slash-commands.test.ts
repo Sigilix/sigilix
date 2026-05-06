@@ -40,6 +40,12 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("@sigilix review please")).toBeNull()
   })
 
+  it("recognizes `/sigilix improve` (ARC-179)", () => {
+    expect(parseSlashCommand("/sigilix improve")).toEqual({ cmd: "improve" })
+    expect(parseSlashCommand("/Sigilix IMPROVE")).toEqual({ cmd: "improve" })
+    expect(parseSlashCommand("/sigilix improve please")).toEqual({ cmd: "improve" })
+  })
+
   it("recognizes `/sigilix help`", () => {
     expect(parseSlashCommand("/sigilix help")).toEqual({ cmd: "help" })
     expect(parseSlashCommand("/Sigilix HELP")).toEqual({ cmd: "help" })
@@ -48,7 +54,6 @@ describe("parseSlashCommand", () => {
 
   it("returns null for unsupported subcommands", () => {
     expect(parseSlashCommand("/sigilix ask anything")).toBeNull()
-    expect(parseSlashCommand("/sigilix improve")).toBeNull()
     expect(parseSlashCommand("/sigilix describe")).toBeNull()
     expect(parseSlashCommand("/sigilix bogus")).toBeNull()
   })
@@ -163,6 +168,13 @@ describe("renderSlashCommandAck", () => {
     expect(out.toLowerCase()).toContain("review")
   })
 
+  it("renders a non-empty ack for the improve command", () => {
+    const out = renderSlashCommandAck("improve")
+    expect(typeof out).toBe("string")
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.toLowerCase()).toMatch(/(suggest|apply|patch)/)
+  })
+
   it("renders the help body for the help command (the body IS the response)", () => {
     const out = renderSlashCommandAck("help")
     expect(out).toContain("Sigilix slash commands")
@@ -176,6 +188,7 @@ describe("renderHelpBody", () => {
 
   it("lists every currently-live command", () => {
     expect(body).toContain("`/sigilix review`")
+    expect(body).toContain("`/sigilix improve`")
     expect(body).toContain("`/sigilix help`")
   })
 
@@ -189,7 +202,6 @@ describe("renderHelpBody", () => {
   })
 
   it("flags upcoming commands so users know what's coming", () => {
-    expect(body).toContain("/sigilix improve")
     expect(body).toContain("/sigilix ask")
     expect(body).toContain("/sigilix describe")
   })

@@ -30,7 +30,7 @@ import {
   isBotHandle,
   stripQuotesAndCode,
 } from "./lib/mention"
-import { parseSlashCommand, renderSlashCommandAck } from "./lib/slash-commands"
+import { parseSlashCommand, renderSlashCommandAck, type SlashCommand } from "./lib/slash-commands"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
@@ -38,6 +38,7 @@ import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
+import { handlePrImprove } from "./lib/triage-pr-improve"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
@@ -198,6 +199,17 @@ export type JobMessage =
   // request was received.
   | {
       type: "pr-review-rerun"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
+  // ARC-179: `/sigilix improve` — single-shot LLM call producing
+  // apply-able suggested-change comments. Independent of the
+  // ensemble; does NOT consume the ensemble daily budget. headSha
+  // is resolved at handler time (same rationale as pr-review-rerun).
+  | {
+      type: "pr-improve"
       owner: string
       repo: string
       prNumber: number
@@ -498,6 +510,34 @@ export default {
   },
 }
 
+/**
+ * Post the slash-command ack comment for `cmd` on the given PR.
+ * Used by pr-review-rerun and pr-improve queue handlers so the user
+ * gets fast feedback that the command was received before the
+ * (potentially 30-90s) LLM call completes. Throws on auth/comment
+ * failure so callers can decide whether to swallow.
+ */
+async function postSlashCommandAck(
+  env: Env,
+  cmd: SlashCommand["cmd"],
+  args: { owner: string; repo: string; prNumber: number; installationId: number },
+): Promise<void> {
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    throw new Error("GITHUB_APP_ID and GITHUB_PRIVATE_KEY required")
+  }
+  const token = await getInstallationToken({
+    kv: env.OPENCLAW_STATE,
+    appId: env.GITHUB_APP_ID,
+    privateKey: env.GITHUB_PRIVATE_KEY,
+    installationId: args.installationId,
+  })
+  const client = new GitHubClient({ token })
+  await client.createIssueComment(
+    args.owner, args.repo, args.prNumber,
+    renderSlashCommandAck(cmd),
+  )
+}
+
 async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
@@ -610,6 +650,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           console.error(JSON.stringify({
             event: "slash-command-ack-failed",
             err: err instanceof Error ? err.message : String(err),
+            cmd: "review",
             ...tag,
           }))
         }
@@ -641,30 +682,41 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       }
       return
     }
-    case "pr-help": {
-      // `/sigilix help` — post a static command-list comment. No model
-      // call. The renderHelpBody markdown IS the response, so we go
-      // straight to createIssueComment without a separate ack step.
+    case "pr-improve":
+      // ARC-179: `/sigilix improve` slash command. Single-shot LLM
+      // call producing apply-able GitHub suggested-change comments.
+      // Independent of the ensemble; fail-soft on ack but re-throws
+      // on the actual run so queue retries get a chance.
       try {
-        if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-          console.error(JSON.stringify({
-            event: "pr-help-misconfigured",
-            reason: "missing_github_app_credentials",
-            owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-          }))
-          return
-        }
-        const token = await getInstallationToken({
-          kv: env.OPENCLAW_STATE,
-          appId: env.GITHUB_APP_ID,
-          privateKey: env.GITHUB_PRIVATE_KEY,
+        await postSlashCommandAck(env, "improve", {
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
           installationId: job.installationId,
         })
-        const client = new GitHubClient({ token })
-        await client.createIssueComment(
-          job.owner, job.repo, job.prNumber,
-          renderSlashCommandAck("help"),
-        )
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "slash-command-ack-failed",
+          err: err instanceof Error ? err.message : String(err),
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          cmd: "improve",
+        }))
+      }
+      return handlePrImprove({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        installationId: job.installationId,
+        env,
+      })
+    case "pr-help": {
+      // `/sigilix help` — post a static command-list comment. No model
+      // call. `renderSlashCommandAck("help")` returns the full
+      // help-body markdown (the body IS the response), so the same
+      // ack helper used by other slash commands does the entire job.
+      try {
+        await postSlashCommandAck(env, "help", {
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          installationId: job.installationId,
+        })
       } catch (err) {
         console.error(JSON.stringify({
           event: "pr-help-error",
@@ -1011,17 +1063,17 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
 
   // Slash-command dispatch. Recognize `/sigilix <cmd>` at a line
   // start and route to a dedicated job type instead of the generic
-  // mention-reply pipeline. ARC-178 ships `review`, this change adds
-  // `help`. Other commands (ask, improve, describe) fall silently
-  // through to the @-mention pipeline (which means they're ignored
-  // unless the same comment also @-mentions Sigilix); README
-  // documents the limitation.
+  // mention-reply pipeline. Currently handles `review`, `improve`,
+  // and `help`. Other commands (ask, describe) fall silently through
+  // to the @-mention pipeline (which means they're ignored unless
+  // the same comment also @-mentions Sigilix); README documents this.
   const cleaned = stripQuotesAndCode(body)
   const slashCmd = parseSlashCommand(cleaned)
   if (slashCmd) {
-    // ACL gate: slash commands all post to the PR (review, help, ...);
-    // on public repos anyone could otherwise spam them. Restrict to
-    // authors GitHub considers trusted. CONTRIBUTOR is intentionally
+    // ACL gate: slash commands either trigger an LLM call (review,
+    // improve) or post a comment (help) — on public repos any
+    // commenter could otherwise spam them. Restrict to authors
+    // GitHub considers trusted. CONTRIBUTOR is intentionally
     // excluded — anyone whose PR has merged becomes CONTRIBUTOR
     // forever, which is too broad a circle for a privileged channel.
     const association = (comment.author_association ?? "").toUpperCase()
@@ -1038,9 +1090,10 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
       return new Response("forbidden\n", { status: 403 })
     }
 
-    // Per-command coalesce lock so concurrent invocations of the same
-    // slash command on the same PR collapse to one ack + one job.
-    // Keying includes the cmd name so different commands don't
+    // Per-command coalesce lock: if the same (PR, command) is in
+    // flight, drop subsequent invocations within 60s. Collapses N
+    // concurrent posts into 1 ack + 1 LLM run. Keying includes the
+    // command name so different commands on the same PR don't
     // accidentally suppress each other.
     const coalesceKey = `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
     const existing = await env.OPENCLAW_STATE.get(coalesceKey)
@@ -1063,6 +1116,12 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
           owner, repo, prNumber, installationId,
         }
         break
+      case "improve":
+        message = {
+          type: "pr-improve",
+          owner, repo, prNumber, installationId,
+        }
+        break
       case "help":
         message = {
           type: "pr-help",
@@ -1074,7 +1133,16 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
         return _exhaustive
       }
     }
-    await env.OPENCLAW_JOBS.send(message)
+    // CR PR #61 catch: roll back the coalesce key if enqueue fails.
+    // Otherwise GitHub redelivers the webhook, sees the key, and
+    // returns "coalesced" without ever queueing the command — the
+    // original invocation gets silently dropped.
+    try {
+      await env.OPENCLAW_JOBS.send(message)
+    } catch (err) {
+      await env.OPENCLAW_STATE.delete(coalesceKey).catch(() => {})
+      throw err
+    }
     return new Response("queued slash-command\n", { status: 202 })
   }
 

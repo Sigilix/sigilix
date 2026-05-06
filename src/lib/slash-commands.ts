@@ -3,10 +3,10 @@
 //
 // Live commands:
 //   - `/sigilix review`  → re-trigger the ensemble (ARC-178)
+//   - `/sigilix improve` → suggested-change patches (ARC-179)
 //   - `/sigilix help`    → post a list of supported commands inline
 //
 // Deferred to follow-up issues:
-//   - `/sigilix improve`  — suggested-change patches (ARC-179, in flight)
 //   - `/sigilix ask <q>`  — Q&A using PR context + RAG
 //   - `/sigilix describe` — draft a PR description / changelog
 //
@@ -21,12 +21,12 @@
 
 export type SlashCommand =
   | { cmd: "review" }
+  | { cmd: "improve" }
   | { cmd: "help" }
   // Reserved shapes (parser doesn't return these yet — adding the
   // type when handlers exist will surface missed dispatch cases via
   // the exhaustive switch in renderSlashCommandAck):
   // | { cmd: "ask"; query: string }
-  // | { cmd: "improve" }
   // | { cmd: "describe" }
 
 /**
@@ -40,10 +40,10 @@ export type SlashCommand =
  *   "/sigilix review"            → { cmd: "review" }
  *   "  /sigilix review  "        → { cmd: "review" } (leading ws ok)
  *   "/Sigilix REVIEW"            → { cmd: "review" }
- *   "/sigilix review please"     → { cmd: "review" } (extra args ignored in v1)
+ *   "/sigilix review please"     → { cmd: "review" } (extra args ignored)
  *   "Hey /sigilix review"        → null (not at line start)
  *   "@sigilix review"            → null (mention != slash command)
- *   "/sigilix ask anything"      → null (v1 only handles review)
+ *   "/sigilix ask anything"      → null (unsupported in this version)
  */
 export function parseSlashCommand(body: string): SlashCommand | null {
   if (typeof body !== "string" || body.length === 0) return null
@@ -56,18 +56,18 @@ export function parseSlashCommand(body: string): SlashCommand | null {
     if (head === "review") {
       return { cmd: "review" }
     }
+    if (head === "improve") {
+      return { cmd: "improve" }
+    }
     if (head === "help") {
       return { cmd: "help" }
     }
     // Recognized prefix (`/sigilix ...`) but unsupported subcommand.
-    // Continue scanning later lines — a comment that opens with
-    // `/sigilix help` followed by `/sigilix review` should still
-    // execute the review (sigilix-bot self-review catch on PR #58:
-    // returning null here would let an unsupported earlier line
-    // suppress a supported later one). When v2 adds the missing
-    // subcommands they get recognized in the branches above; until
-    // then, the README documents the limitation rather than papering
-    // over it with a synthetic ack.
+    // Continue scanning later lines — a comment that opens with an
+    // unknown subcommand should still execute a valid one further
+    // down (sigilix-bot self-review catch on PR #58: returning null
+    // here would let an unsupported earlier line suppress a
+    // supported later one).
     continue
   }
   return null
@@ -86,6 +86,8 @@ export function renderSlashCommandAck(cmd: SlashCommand["cmd"]): string {
   switch (cmd) {
     case "review":
       return "Re-running ensemble review on the current head. Standard sticky comment will update when complete."
+    case "improve":
+      return "Generating suggested-change patches against the current head. Apply-able suggestions will appear inline shortly."
     case "help":
       // Help is its own answer — the queue handler posts the full
       // command list directly. No separate ack needed; the help body
@@ -112,10 +114,11 @@ export function renderHelpBody(): string {
     "| Command | Effect |",
     "|---|---|",
     "| `/sigilix review` | Re-run the ensemble review against the PR's current head SHA. |",
+    "| `/sigilix improve` | Generate apply-able GitHub suggested-change comments (single-shot, narrow scope). |",
     "| `/sigilix help` | Show this list. |",
     "",
     "Slash commands are gated to `OWNER`, `MEMBER`, and `COLLABORATOR` authors. Match must be at the start of a line; commands inside fenced code blocks or markdown blockquotes are ignored.",
     "",
-    "Coming soon: `/sigilix improve` (apply-able patches), `/sigilix ask <question>` (PR-context Q&A), `/sigilix describe` (PR description draft).",
+    "Coming soon: `/sigilix ask <question>` (PR-context Q&A), `/sigilix describe` (PR description draft).",
   ].join("\n")
 }

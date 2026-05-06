@@ -397,13 +397,14 @@ Built-in rule baseline (severity = `error` unless noted):
 
 When a hit fires, the security specialist receives it as an authoritative fact in the prompt and the review surfaces a "rotate immediately" recommendation. The scan covers added diff lines only — pre-existing secrets aren't re-flagged on every PR.
 
-## Slash commands (ARC-178)
+## Slash commands (ARC-178 / ARC-179)
 
 Reviewers can drive Sigilix from any PR comment without pushing a no-op commit. Currently live:
 
 | Command | Effect |
 |---|---|
 | `/sigilix review` | Re-runs the ensemble review against the PR's current head SHA. Sigilix posts a short ack, clears the per-(PR, headSha) dedupe lock, then the regular sticky review comment updates when the run completes. |
+| `/sigilix improve` | Single-shot LLM pass (NOT the ensemble) that produces apply-able GitHub suggested-change comments. Each suggestion is anchored to a changed line in the diff and rendered as a `\`\`\`suggestion` block, apply-able from the GitHub UI's "Commit suggestion" button. Suggestions are advisory (event = `COMMENT`, never `REQUEST_CHANGES`); scope is intentionally narrow — naming / clarity / dead-code / docs / light error-handling polish. Correctness or security findings stay on `/sigilix review`. When nothing is patch-worthy, Sigilix posts a brief "no high-confidence patches" comment. |
 | `/sigilix help` | Posts an inline list of supported commands. No model call, no diff fetch — just an authenticated comment post. |
 
 Recognition rules:
@@ -422,7 +423,7 @@ Burst behavior:
 
 - Concurrent invocations of the same slash command on the same PR are coalesced for 60s via a per-`(cmd, PR)` KV lock (`slash-cmd:<cmd>:<owner>/<repo>#<n>`). The first invocation enqueues the job; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently. The key includes the command name so different commands on the same PR don't accidentally suppress each other.
 
-Unsupported subcommands (`/sigilix ask`, `/sigilix improve`, `/sigilix describe`) are reserved for follow-up issues. Until they ship, those invocations fall silently through to the @-mention pipeline.
+Unsupported subcommands (`/sigilix ask`, `/sigilix describe`) are reserved for follow-up issues. Until they ship, those invocations fall silently through to the @-mention pipeline.
 
 ## CI / auto-deploy
 

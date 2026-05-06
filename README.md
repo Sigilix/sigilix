@@ -437,6 +437,28 @@ Per-repo opt-OUT for the dependency-vulnerability scan. Default (missing field) 
 
 When disabled, the scanner short-circuits silently and emits `dep-vuln-scan-skipped { reason: "disabled-config" }` telemetry. The security-specialist prompt loses the dep-vuln fact block; everything else (secret scan, deterministic regex checks, full LLM review) still runs.
 
+### `astRules` (object) — ARC-181
+
+Per-repo configuration for the AST rule-pack scanner. All subfields optional:
+
+```json
+{
+  "astRules": {
+    "enabled": true,
+    "severityThreshold": "warning",
+    "disabledRules": ["no-await-in-loop"],
+    "autoInline": false
+  }
+}
+```
+
+- `enabled` (default `true`) — hard kill-switch. Strict-bool; only literal `false` disables.
+- `severityThreshold` (default `"warning"`) — `info` / `warning` / `error`. `info` is reserved for future expansion (v1 ships zero info-severity rules).
+- `disabledRules` (default `[]`) — ruleId list. Unknown IDs silently ignored (forward-compat).
+- `autoInline` (default `false`) — opt-IN to deterministic inline-comment posting for `error`-severity findings without LLM intermediation. Default flips to `true` after 2 weeks of FP-telemetry shows < 5%.
+
+Full rule-pack reference + telemetry events live in the [AST rule-pack scanner section](#ast-rule-pack-scanner-arc-181).
+
 ## Review provenance + stale markers (ARC-184)
 
 After every successful review, Sigilix persists a per-PR **review manifest** to KV (`pr-review-manifest:<owner>/<repo>#<n>`) capturing the inputs the model reviewed against:
@@ -514,6 +536,55 @@ Sigilix runs a **deterministic dep-vuln scan** before the LLM specialist fanout 
 **v2 future scope:** Python ecosystems (`requirements.txt`, `Pipfile`, `Pipfile.lock`), live Aikido/OSS-Index API fetch, transitive resolution, workspaces / monorepos (v1 scans every changed leaf manifest pair independently).
 
 **Telemetry:** `dep-vuln-scan-skipped` (with reason), `dep-vuln-scan-ran` (with `findingsCount`, `depsScanned`, `durationMs`), `dep-vuln-snapshot-meta` (snapshot date + advisory count once per scan), `dep-vuln-finding` (per emitted finding for severity aggregation).
+
+## AST rule-pack scanner (ARC-181)
+
+Sigilix runs a **deterministic AST rule scan** over changed JS/TS files BEFORE the LLM specialist fanout (alongside the secret scan, dep-vuln scan, and deterministic regex checks). v1 ships **10 curated rules** — 5 security (`error` severity) + 5 correctness/perf (`warning` severity). Findings are injected into the security/logic/performance specialist prompts as authoritative facts. Bundle delta: ~52 KB gzipped (`acorn` + `acorn-walk` + `acorn-typescript`).
+
+**v1 rule pack:**
+
+| Rule ID | Severity | Role |
+|---|---|---|
+| `no-eval-call` | error | security |
+| `no-new-function-constructor` | error | security |
+| `spawn-shell-true` | error | security |
+| `no-disabled-tls-reject-unauthorized` | error | security |
+| `no-document-write-call` | error | security |
+| `no-async-without-await` | warning | logic |
+| `no-throw-literal` | warning | logic |
+| `no-await-in-loop` | warning | performance |
+| `no-floating-promise-call-known-async` | warning | logic |
+| `no-process-env-mutation` | warning | logic |
+
+**How it works:**
+
+1. After `pathFilters` excludes lockfiles/dist/etc., the runner fetches each changed JS/TS file at the PR head SHA via the GitHub Contents API.
+2. acorn parses each file (`acorn-typescript` handles `.ts`/`.tsx`/`.mts`/`.cts`/`.jsx` syntax). Files > 500 KB are skipped with `ast-rules-scan-skipped-large-file` telemetry.
+3. Each enabled rule visits matching node types via `acorn-walk` and emits zero or more `AstRuleHit` candidates.
+4. Hits are filtered to lines in the unified diff's `+` (new-side) set — pre-existing code in unchanged regions of touched files is NOT re-flagged. Multi-line node spans intersect with the changed-line set.
+5. Each kept hit becomes an `AstFinding` with a stable `astFindingId = ast/<ruleId>/<pathHash7>/<line>` for synth supersession and audit-marker rendering.
+6. Findings are rendered as a `[AST RULE FINDINGS — pre-LLM]` block in the specialist prompts AND as a structured JSON block in the synth prompt for `(path, line, role_hint)` supersession matching.
+
+**Auto-inline posting (opt-IN):** when `astRules.autoInline: true` is set in `sigilix.json`, `error`-severity findings post inline review comments without LLM intermediation. Default `false` for v1 cautious rollout — flips after 2 weeks of FP-rate telemetry shows < 5%. Each posted comment carries a hidden `<!-- ast/<ruleId>/<pathHash7>/<line> -->` audit marker so re-review tooling can identify deterministic supersessions.
+
+**`sigilix.json` config:**
+
+```json
+{
+  "astRules": {
+    "enabled": true,
+    "severityThreshold": "warning",
+    "disabledRules": ["no-await-in-loop"],
+    "autoInline": false
+  }
+}
+```
+
+Locked defaults when fields are absent: `{ enabled: true, severityThreshold: "warning", disabledRules: [], autoInline: false }`. `severityThreshold` of `"info"` is reserved for future expansion (v1 ships zero info-severity rules).
+
+**v2 future scope:** type-aware rules (requires the TypeScript compiler, much larger bundle), cross-file analysis, custom user-defined rules in JSON/YAML DSL, multi-emit-per-file (currently the rule-pack emits one finding per `Program` visit for `no-await-in-loop`).
+
+**Telemetry:** `ast-rules-scan-skipped` (with reason), `ast-rules-scan-ran` (`filesScanned`, `findingsCount`, `durationMs`), `ast-rules-finding` (per finding with `roleHint`), `ast-rules-scan-skipped-large-file`, `ast-rules-finding-no-review-position`, `ast-rules-parse-failed`, `ast-rules-inline-posted` (per auto-posted comment), `ast-rules-auto-inline-summary`.
 
 ## Slash commands (ARC-178 / ARC-179 / ARC-191)
 

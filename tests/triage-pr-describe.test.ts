@@ -10,6 +10,8 @@ import {
   renderFailureComment,
   renderNoChangesComment,
   parsePrDescribeResponse,
+  buildPrompt,
+  truncateForGitHub,
 } from "../src/lib/triage-pr-describe"
 
 describe("renderDescribeComment", () => {
@@ -226,5 +228,76 @@ describe("parsePrDescribeResponse", () => {
     }) + "\n```"
     const v = parsePrDescribeResponse(text)
     expect(v).not.toBeNull()
+  })
+})
+
+describe("buildPrompt", () => {
+  it("wraps PR title / body / diff in UNTRUSTED-CONTENT blocks per mode", () => {
+    const prompt = buildPrompt({
+      mode: "pr-description",
+      prNumber: 42,
+      title: "Add the widget",
+      body: "Closes #41. Adds a widget.",
+      diff: "diff --git a/src/foo.ts ...\n+console.log('hi')",
+    })
+    expect(prompt).toContain('<UNTRUSTED-CONTENT type="pr-title">Add the widget</UNTRUSTED-CONTENT>')
+    expect(prompt).toContain('<UNTRUSTED-CONTENT type="pr-body">Closes #41. Adds a widget.</UNTRUSTED-CONTENT>')
+    expect(prompt).toContain('<UNTRUSTED-CONTENT type="pr-diff">')
+    expect(prompt).toContain("diff --git a/src/foo.ts")
+    expect(prompt).toContain("PR description")
+  })
+
+  it("uses internal-changelog prompt for that mode", () => {
+    const prompt = buildPrompt({
+      mode: "internal-changelog",
+      prNumber: 1, title: "x", body: "", diff: "",
+    })
+    expect(prompt).toContain("internal changelog")
+  })
+
+  it("uses external-changelog prompt with disclosure boundary for that mode", () => {
+    const prompt = buildPrompt({
+      mode: "external-changelog",
+      prNumber: 1, title: "x", body: "", diff: "",
+    })
+    expect(prompt).toContain("external changelog")
+    expect(prompt).toContain("Disclosure boundary")
+    expect(prompt).toContain("(no user-facing changes)")
+  })
+
+  it("truncates oversized diffs with the existing improve marker", () => {
+    const huge = "x".repeat(200_000)
+    const prompt = buildPrompt({
+      mode: "pr-description",
+      prNumber: 1, title: "x", body: "", diff: huge,
+    })
+    expect(prompt).toContain("[…truncated…]")
+    expect(prompt.length).toBeLessThan(huge.length)
+  })
+
+  it("substitutes a placeholder for empty PR body so the model knows it's intentional", () => {
+    const prompt = buildPrompt({
+      mode: "pr-description",
+      prNumber: 1, title: "x", body: "", diff: "",
+    })
+    expect(prompt).toContain("(no description)")
+  })
+})
+
+describe("truncateForGitHub", () => {
+  it("returns input unchanged when under the cap", () => {
+    expect(truncateForGitHub("hello", 60_000)).toBe("hello")
+  })
+
+  it("truncates the body field with a marker when output would exceed the cap", () => {
+    const body = "x".repeat(70_000)
+    const out = truncateForGitHub(body, 60_000)
+    expect(out.length).toBeLessThanOrEqual(60_000)
+    expect(out).toContain("[…truncated to fit GitHub comment limit]")
+  })
+
+  it("handles a cap smaller than the marker length gracefully", () => {
+    const out = truncateForGitHub("x".repeat(100), 10)
+    expect(out.length).toBeLessThanOrEqual(10)
   })
 })

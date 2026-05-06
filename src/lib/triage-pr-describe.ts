@@ -21,6 +21,80 @@
 import type { DescribeMode } from "./slash-commands"
 import { describeModeFriendlyName } from "./slash-commands"
 import { parseFirstJsonObject } from "./json-extract"
+import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
+
+export const LIMITS = {
+  prDiff: 80_000,
+  prBody: 4_000,
+}
+
+export const COMMENT_BODY_CAP = 60_000
+
+interface BuildPromptArgs {
+  mode: DescribeMode
+  prNumber: number
+  title: string
+  body: string
+  diff: string
+}
+
+/**
+ * Build the full prompt sent to Ollama. Three sections:
+ *
+ *   1. Mode-specific system prompt (from PR_DESCRIBE_PROMPTS) which
+ *      ends with the shared envelope describing the
+ *      <UNTRUSTED-CONTENT> contract.
+ *   2. The three <UNTRUSTED-CONTENT> blocks: pr-title, pr-body,
+ *      pr-diff. Empty-body / empty-diff get sentinel placeholders
+ *      so the model doesn't think the input is malformed.
+ *   3. A brief output reminder.
+ *
+ * Diff is truncated at LIMITS.prDiff with the same marker pattern
+ * the improve handler uses, so very large PRs don't bomb the
+ * context window. PR body is truncated at LIMITS.prBody.
+ */
+export function buildPrompt(args: BuildPromptArgs): string {
+  const { mode, prNumber, title, body, diff } = args
+  const systemPrompt = PR_DESCRIBE_PROMPTS[mode]
+  const titleSection = `<UNTRUSTED-CONTENT type="pr-title">${title}</UNTRUSTED-CONTENT>`
+  const bodySection = `<UNTRUSTED-CONTENT type="pr-body">${truncate(body || "(no description)", LIMITS.prBody)}</UNTRUSTED-CONTENT>`
+  const diffSection = `<UNTRUSTED-CONTENT type="pr-diff">${truncate(diff || "(no diff)", LIMITS.prDiff)}</UNTRUSTED-CONTENT>`
+  return [
+    "[SYSTEM INSTRUCTIONS]",
+    systemPrompt.trim(),
+    "",
+    `[PR #${prNumber}]`,
+    titleSection,
+    bodySection,
+    diffSection,
+    "",
+    "[OUTPUT]",
+    "Return only the JSON object. No prose, no Markdown fence.",
+  ].join("\n")
+}
+
+function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {
+  if (typeof value !== "string") return ""
+  if (value.length <= max) return value
+  return value.slice(0, max - marker.length) + marker
+}
+
+/**
+ * Truncate the model's body field so the rendered comment stays
+ * under GitHub's ~65,536-character issue-comment ceiling. The
+ * cap (60,000 by default) leaves ~5kB for the surrounding wrapper
+ * text (title, summary, markers, subtext, hidden meta). Truncation
+ * is on the body only — the wrapper sections are bounded.
+ *
+ * If the cap is smaller than the marker (edge case in tests),
+ * we just truncate hard without crashing.
+ */
+export function truncateForGitHub(body: string, maxChars: number): string {
+  const marker = "\n\n[…truncated to fit GitHub comment limit]"
+  if (body.length <= maxChars) return body
+  if (maxChars <= marker.length) return body.slice(0, maxChars)
+  return body.slice(0, maxChars - marker.length) + marker
+}
 
 export interface PrDescribeVerdict {
   summary: string

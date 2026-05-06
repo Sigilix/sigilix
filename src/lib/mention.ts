@@ -4,31 +4,21 @@
 // stripping, regex match against trigger handles) — Linear's comment
 // body is markdown just like GitHub's.
 //
-// Default triggers include the new `sigilix` handles AND every legacy
-// alias (`arc`, `arc-copilot`, `openclaw`) so:
-//   1. users typing @sigilix trigger the bot
-//   2. comments left over from the Arc / OpenClaw eras still reply if
-//      mentioned (no orphaned threads after the rebrand)
-// Override with OPENCLAW_MENTION_TRIGGERS env var when the bot's
-// display handle differs (env var name is internal infra and stays
-// OPENCLAW_* for zero-config impact on existing deployments).
+// Default triggers include ONLY the current `sigilix` handles. The
+// legacy `arc` / `arc-copilot` / `openclaw` aliases were dropped on
+// 2026-05-06 after a rubberfit PR (rubberfit#177) showed the bot
+// answering an `@arc` mention that wasn't intended for it — `arc` is
+// also a common dictionary word, and the back-compat value didn't
+// outweigh the false-positive trigger rate.
+//
+// Override with OPENCLAW_MENTION_TRIGGERS env var when a deployment
+// genuinely needs to keep an old alias (env var name is internal infra
+// and stays OPENCLAW_* for zero-config impact on existing deployments).
 
 const DEFAULT_TRIGGERS = [
-  // Current brand
   "sigilix",
   "sigilix[bot]",
   "Sigilix[bot]",
-  // Legacy: Arc (pre-Sigilix rebrand). Kept so existing PR threads that
-  // @-mention the old name still trigger the bot after the rebrand.
-  "arc",
-  "arc[bot]",
-  "Arc[bot]",
-  "arc-copilot",
-  "arc-copilot[bot]",
-  // Legacy: OpenClaw (pre-Arc rebrand). Same back-compat rationale.
-  "openclaw",
-  "openclaw[bot]",
-  "OpenClaw[bot]",
 ]
 
 export function getMentionTriggers(envValue?: string): string[] {

@@ -13,19 +13,15 @@ import {
   stripQuotesAndCode,
 } from "../src/lib/mention"
 
-// Test triggers cover the current Sigilix brand AND every legacy
-// alias (Arc, OpenClaw) since all three live in the production default
-// list to keep historical PR threads triggering after the rebrands.
+// Test triggers match the production default after 2026-05-06 — sigilix
+// only. The previous DEFAULT_TRIGGERS included legacy `arc` and
+// `openclaw` aliases, but a rubberfit#177 case showed `@arc` is too
+// common a dictionary word to leave in production defaults; the false-
+// positive trigger rate didn't justify the back-compat value.
 const TRIGGERS = [
   "sigilix",
   "sigilix[bot]",
   "Sigilix[bot]",
-  "arc",
-  "arc[bot]",
-  "Arc[bot]",
-  "openclaw",
-  "openclaw[bot]",
-  "OpenClaw[bot]",
 ]
 
 describe("getMentionTriggers", () => {
@@ -41,10 +37,26 @@ describe("getMentionTriggers", () => {
     expect(t).toContain("sigilix[bot]")
   })
 
-  it("includes legacy arc and openclaw handles in defaults for back-compat", () => {
+  it("EXCLUDES legacy arc/openclaw handles from defaults (rubberfit#177 false-positive)", () => {
+    // Production default was tightened on 2026-05-06 to only match the
+    // current `sigilix` brand. `arc` is a common English word and was
+    // triggering on unrelated comments; the back-compat value of
+    // matching old @arc threads didn't justify the noise.
     const t = getMentionTriggers(undefined)
+    expect(t).not.toContain("arc")
+    expect(t).not.toContain("arc[bot]")
+    expect(t).not.toContain("arc-copilot")
+    expect(t).not.toContain("arc-copilot[bot]")
+    expect(t).not.toContain("openclaw")
+    expect(t).not.toContain("openclaw[bot]")
+  })
+
+  it("STILL allows opting back into legacy aliases via OPENCLAW_MENTION_TRIGGERS", () => {
+    // For deployments that genuinely want legacy support back, the env
+    // var override is the supported path.
+    const t = getMentionTriggers("sigilix, arc, openclaw")
+    expect(t).toContain("sigilix")
     expect(t).toContain("arc")
-    expect(t).toContain("arc-copilot[bot]")
     expect(t).toContain("openclaw")
   })
 
@@ -61,32 +73,40 @@ describe("getMentionTriggers", () => {
 
 describe("bodyMentionsBot", () => {
   it("matches a plain @-mention", () => {
-    expect(bodyMentionsBot("hey @openclaw can you help", TRIGGERS)).toBe(true)
+    expect(bodyMentionsBot("hey @sigilix can you help", TRIGGERS)).toBe(true)
   })
 
-  it("matches @openclaw[bot]", () => {
-    expect(bodyMentionsBot("@openclaw[bot] thoughts?", TRIGGERS)).toBe(true)
+  it("matches @sigilix[bot]", () => {
+    expect(bodyMentionsBot("@sigilix[bot] thoughts?", TRIGGERS)).toBe(true)
   })
 
   it("is case-insensitive", () => {
-    expect(bodyMentionsBot("@OpenClaw what now", TRIGGERS)).toBe(true)
+    expect(bodyMentionsBot("@Sigilix what now", TRIGGERS)).toBe(true)
+  })
+
+  it("does NOT match legacy @arc by default (rubberfit#177)", () => {
+    expect(bodyMentionsBot("hey @arc can you help", TRIGGERS)).toBe(false)
+  })
+
+  it("does NOT match legacy @openclaw by default", () => {
+    expect(bodyMentionsBot("hey @openclaw can you help", TRIGGERS)).toBe(false)
   })
 
   it("ignores email-like suffixes", () => {
-    expect(bodyMentionsBot("send to openclaw@example.com", TRIGGERS)).toBe(false)
+    expect(bodyMentionsBot("send to sigilix@example.com", TRIGGERS)).toBe(false)
   })
 
-  it("ignores @openclaw inside backticks", () => {
-    expect(bodyMentionsBot("the trigger is `@openclaw` btw", TRIGGERS)).toBe(false)
+  it("ignores @sigilix inside backticks", () => {
+    expect(bodyMentionsBot("the trigger is `@sigilix` btw", TRIGGERS)).toBe(false)
   })
 
-  it("ignores @openclaw inside fenced code", () => {
-    const body = "```\n@openclaw test\n```\nplus some text"
+  it("ignores @sigilix inside fenced code", () => {
+    const body = "```\n@sigilix test\n```\nplus some text"
     expect(bodyMentionsBot(body, TRIGGERS)).toBe(false)
   })
 
-  it("ignores @openclaw inside markdown blockquotes (self-quote loop)", () => {
-    const body = "> @openclaw — first read on your issue\n\nthanks!"
+  it("ignores @sigilix inside markdown blockquotes (self-quote loop)", () => {
+    const body = "> @sigilix — first read on your issue\n\nthanks!"
     expect(bodyMentionsBot(body, TRIGGERS)).toBe(false)
   })
 
@@ -112,21 +132,21 @@ describe("stripQuotesAndCode", () => {
 
 describe("stripMentionFromBody", () => {
   it("removes plain @-mentions", () => {
-    expect(stripMentionFromBody("@openclaw what does this do?", TRIGGERS)).toBe(
+    expect(stripMentionFromBody("@sigilix what does this do?", TRIGGERS)).toBe(
       "what does this do?"
     )
   })
 
   it("removes @-mentions with a trailing comma", () => {
-    expect(stripMentionFromBody("@openclaw, please advise", TRIGGERS)).toBe("please advise")
+    expect(stripMentionFromBody("@sigilix, please advise", TRIGGERS)).toBe("please advise")
   })
 
   it("removes [bot]-suffix mentions", () => {
-    expect(stripMentionFromBody("@OpenClaw[bot] take a look", TRIGGERS)).toBe("take a look")
+    expect(stripMentionFromBody("@Sigilix[bot] take a look", TRIGGERS)).toBe("take a look")
   })
 
   it("returns trimmed empty string for input that's only the mention", () => {
-    expect(stripMentionFromBody("  @openclaw   ", TRIGGERS)).toBe("")
+    expect(stripMentionFromBody("  @sigilix   ", TRIGGERS)).toBe("")
   })
 })
 

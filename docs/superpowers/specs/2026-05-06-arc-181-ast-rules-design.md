@@ -1,6 +1,6 @@
 # ARC-181 — AST rule-pack scanner before LLM (JS/TS) — design spec
 
-**Status:** DRAFT v1 — pending dual sign-off (Kimi K2.6 + Codex)
+**Status:** v2 — fully dual-signed-off (Codex APPROVE-WITH-CHANGES + Kimi APPROVE-WITH-CHANGES; all BLOCKING + MAJOR + MINOR addressed; one disagreement resolved in favor of Codex's cautious-rollout posture)
 **Linear:** [ARC-181](https://linear.app/arc-and-anchor/issue/ARC-181/ast-rule-pack-scanner-before-llm-jsts)
 **Branch:** `arc-181-ast-rules`
 **Sibling pre-LLM scanners (already shipped):**
@@ -25,14 +25,15 @@ A regex matching `eval(` produces false positives on every test fixture and JSDo
 - [ ] AST scan runs **before** the LLM specialist fanout on JS/TS changed files.
 - [ ] **10 curated rules** ship in v1 (5 security + 5 correctness) per Linear AC.
 - [ ] Findings flow as structured evidence to the security/perf/logic specialist prompts: `{ ruleId, severity, path, line, column, message, evidence, roleHint }`.
-- [ ] **High-confidence findings** (severity ≥ `error`, security category) post inline review comments without LLM intermediation — same surface as `submitReview` inline comments.
+- [ ] **Auto-inline posting is opt-IN via `astRules.autoInline: true`** (default `false` for v1 cautious rollout; Codex BLOCKING #1). When opted in, `error`-severity findings post inline review comments without LLM intermediation; positions come from the existing `parseDiffToReviewablePositions` infrastructure (Codex BLOCKING #2). When opt-out, the prompt-injection path still runs and the LLM remains the sole comment author. Default flips to `true` after 2 weeks of telemetry shows aggregate FP rate < 5% (Kimi §10.5).
 - [ ] Synthesizer dedupes AST findings vs LLM findings at the same `(path, line, ruleId-topic)` so reviewers don't see two voices saying the same thing.
 - [ ] Per-rule disable via `sigilix.json`:
   ```json
   { "astRules": {
-      "enabled": false,                                // hard kill-switch
-      "severityThreshold": "warning",                  // info | warning | error
-      "disabledRules": ["no-await-in-loop"]            // string[] of ruleId
+      "enabled": false,                                // hard kill-switch (default: true)
+      "severityThreshold": "info",                     // info | warning | error (default: "info" reserved for future use, treated as no-op below "warning")
+      "disabledRules": ["no-await-in-loop"],           // string[] of ruleId
+      "autoInline": true                               // opt-IN to deterministic inline posting (default: false; flips after FP-telemetry review)
   } }
   ```
 - [ ] **3+ positive + 3+ negative test fixtures per rule** (the AC says "3+ positive + 3+ negative test fixtures" — interpreted as 3+ positives + 3+ negatives **across the rule pack**, but v1 ships per-rule for confidence; sign-off may relax).
@@ -88,8 +89,8 @@ The Linear AC says rules live at `rules/ast/js-ts/*.json|yaml`. v1 deviates from
 |---|---|---|---|
 | `no-eval-call` | `eval(<arg>)` direct call | High — extremely rare false positive | `security` |
 | `no-new-function-constructor` | `new Function(<arg>)` | High | `security` |
-| `child-process-shell-true` | `exec({...shell: true...})` or `execSync({...shell: true...})` | High — string literal `true` only | `security` |
-| `no-disabled-tls-reject-unauthorized` | `{ rejectUnauthorized: false }` literal in any object expression | High — string literal `false` only | `security` |
+| `spawn-shell-true` | `spawn(...)`, `spawnSync(...)`, `execFile(...)`, `execFileSync(...)` with `{ shell: true }` literal in the options object — Codex MINOR #7: `exec` already runs through a shell so `{shell:true}` is redundant there; the dangerous case is when callers explicitly opt the *non-shell* APIs into shell mode | High — literal-`true` AST match only | `security` |
+| `no-disabled-tls-reject-unauthorized` | `{ rejectUnauthorized: false }` literal in any object expression | High — literal-`false` AST match only. Codex MINOR #8: legitimate test/local-agent uses are suppressed via the existing `pathFilters` (ARC-176) and `disabledRules` mechanisms; emitter does NOT special-case test paths to keep the rule simple. | `security` |
 | `no-document-write-call` | `document.write(...)` or `document.writeln(...)` | High | `security` |
 
 ### 4.2 Correctness rules (severity = `warning`)
@@ -98,8 +99,8 @@ The Linear AC says rules live at `rules/ast/js-ts/*.json|yaml`. v1 deviates from
 |---|---|---|---|
 | `no-async-without-await` | `async` function declaration / arrow with no `await` in body | Medium — sometimes intentional | `logic` |
 | `no-throw-literal` | `throw "string"` or `throw 42` (non-Error throws) | High | `logic` |
-| `no-await-in-loop-iter-independent` | `for (const x of arr) { await f(x) }` where iterations are independent | Medium — perf hint | `performance` |
-| `no-floating-promise-statement` | `someAsync()` as expression statement (not awaited, not assigned, not returned) | Medium — false positives on fire-and-forget by design | `logic` |
+| `no-await-in-loop` | `await` inside any `for`/`for-of`/`for-in`/`while`/`do-while` body — pure syntactic perf hint. **Renamed from `no-await-in-loop-iter-independent`** (Codex MAJOR #5 + Kimi MAJOR #3): "iteration-independent" requires dataflow analysis acorn can't provide. v1 emits the simpler perf hint and lets the LLM judge applicability. | Medium — known sequential-by-design false positives | `performance` |
+| `no-floating-promise-call-known-async` | `someAsync()` as expression statement where `someAsync` is a same-file `async function` declaration. **Narrowed from "any call returning Promise"** (Codex MAJOR #4): without type info the original framing was high-FP. v1 only flags calls whose target is a syntactic-async function declared in the same file; cross-file / type-inferred Promise returns deferred to v2. | High (within the narrow scope) | `logic` |
 | `no-process-env-mutation` | `process.env.X = "..."` assignment | High — almost always a test-leak bug | `logic` |
 
 ### 4.3 v2+ candidates (NOT in v1)
@@ -182,17 +183,48 @@ specialist fanout
 
 For `error`-severity AST findings, the runner ALSO returns an `inlineComments` array that the ensemble posts via `submitReview` after the synth completes — bypassing the LLM. The synth receives the same findings as facts so it can dedupe.
 
-### 5.4 Diff-line filtering
+### 5.4 Diff-line filtering + reviewable-position resolution
 
-The walker computes `(addedLines: Set<number>) per file` from the unified diff (existing `parseDiffToReviewablePositions` infrastructure). When a rule emits a hit at line `L`, the runner filters: `addedLines.has(L) ? keep : drop`. This is the single hot-spot for false positives in v1 — pre-existing `eval(...)` calls don't get re-flagged when an unrelated line in the same file changes.
+**Two filters, in order:**
 
-### 5.5 Synthesizer dedup
+1. **Changed-line intersection** (Kimi BLOCKING #2): from the unified diff, build a `changedLines: Map<path, Set<number>>` containing every `+` line (i.e. **net-new AND replaced** lines on the new-file side; the same set GitHub considers a `synchronize` event "changed"). When a rule emits a hit at AST node spanning lines `[startLine, endLine]`, the runner keeps the finding iff `[startLine, endLine] ∩ changedLines[path]` is non-empty. This catches multi-line bugs where the offending line is later in the node body. Pre-existing `eval(...)` calls in untouched code are not re-flagged.
 
-Synth receives the AST findings block as authoritative facts. The synth prompt instructs:
+2. **Reviewable-position resolution** (Codex BLOCKING #2): for findings that may post inline (i.e. `error`-severity AND `astRules.autoInline === true`), the runner cross-references the existing `parseDiffToReviewablePositions(diff): Map<path, ReviewablePosition[]>` infrastructure to resolve each finding's `(path, line)` to a `{ line, side: "RIGHT" }` review position. If no matching review position exists (rare but possible — e.g. file-deletion edge cases), the finding stays in the prompt block but does NOT auto-post. Telemetry: `ast-rules-finding-no-review-position`.
 
-> If a specialist verdict targets the same `(path, line)` as an entry in `[AST RULE FINDINGS — pre-LLM]` and overlaps in topic, drop the specialist finding (the AST one is canonical).
+**Skip large files:** files with `(headFile.length > 500_000)` chars short-circuit before the parse with `ast-rules-scan-skipped-large-file` telemetry (NIT #10 — Codex). The 500 KB cap matches `pathFilters` exclusion semantics and prevents pathological acorn parses from eating the queue budget.
 
-A heuristic check on overlap: if the specialist's finding shares ≥1 keyword from the AST rule's `id` (e.g., specialist mentions "eval" and AST finding is `no-eval-call`), treat as dup.
+### 5.5 Synthesizer dedup — structured supersession
+
+**Replaces v1's keyword-overlap heuristic** (Codex MAJOR #3 + Kimi BLOCKING #1).
+
+Each AST finding carries a stable `astFindingId = "ast/${ruleId}/${pathHash7}/${line}"`. The runner injects findings into the synth prompt as a machine-readable JSON block:
+
+```jsonc
+{
+  "ast_findings": [
+    {
+      "id": "ast/no-eval-call/abc1234/42",
+      "rule_id": "no-eval-call",
+      "path": "src/auth/login.ts",
+      "line": 42,
+      "severity": "error",
+      "role_hint": "security",
+      "message": "Direct eval() call",
+      "evidence": "eval(userInput)"
+    }
+  ]
+}
+```
+
+The synth prompt instructs the model to:
+
+1. Match each specialist finding against `ast_findings` on `(path, line, role_hint)` triple. A specialist finding superseded by an AST finding shares the SAME `path`, the SAME `line` (±0 — line numbers are deterministic, no fuzzing), AND a `role_hint`-compatible category. (`security` AST finding may supersede `security`-categorized specialist findings; cross-role does not supersede.)
+2. When matched, the synth output's `provenance.dropped[]` array carries `{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<astFindingId>" }`. This gives downstream review of dedup decisions and surfaces the AST finding as canonical in the comment body.
+3. Specialist findings with NO matching AST entry pass through untouched.
+
+**No keyword overlap, no role-hint guessing.** Deterministic structured-ID matching only.
+
+If the synth output drops a specialist finding via this path, the rendered review body cites the AST finding directly (with the deterministic `ast/...` ID in a hidden HTML comment marker for audit).
 
 ## 6. Configuration
 
@@ -217,7 +249,9 @@ Strict-bool parsing on `enabled` (mirror of `describe.enabled` / `depVulnScan.en
 |---|---|---|
 | `ast-rules-scan-skipped` | Disabled in config OR no JS/TS files in diff | `{ owner, repo, prNumber, reason }` |
 | `ast-rules-scan-ran` | Scan completed | `{ owner, repo, prNumber, filesScanned, findingsCount, durationMs }` |
-| `ast-rules-finding` | Per emitted finding (post-threshold, post-disable) | `{ owner, repo, prNumber, ruleId, severity, path, line }` |
+| `ast-rules-finding` | Per emitted finding (post-threshold, post-disable) | `{ owner, repo, prNumber, ruleId, severity, roleHint, path, line }` (Kimi MINOR #6: include `roleHint` for FP-rate segmentation) |
+| `ast-rules-scan-skipped-large-file` | File > 500 KB short-circuited before parse (Codex NIT #10) | `{ owner, repo, prNumber, path, sizeBytes }` |
+| `ast-rules-finding-no-review-position` | Finding had no matching review position (file deletion edge cases) | `{ owner, repo, prNumber, ruleId, path, line }` |
 | `ast-rules-parse-failed` | acorn threw on a file | `{ owner, repo, prNumber, path, errMessage }` — non-blocking, file is skipped |
 | `ast-rules-inline-posted` | Error-severity finding became an inline comment | `{ owner, repo, prNumber, ruleId, path, line }` |
 
@@ -228,9 +262,13 @@ Like ARC-186, raw evidence is redacted (literal strings > 40 chars truncated) be
 Per AC, **3+ positive + 3+ negative test fixtures**. v1 interpretation:
 
 - **Per-rule tests**: 3 positive (must flag) + 3 negative (must NOT flag) = **60 micro-tests** for the 10 rules.
-- **Pipeline integration test**: a synthetic diff with one of each severity tier; verify (a) error findings post inline, (b) warning findings reach the specialist prompt, (c) below-threshold findings drop, (d) `disabledRules` filters work, (e) `pathFilters` short-circuit.
-- **Diff-line filter**: a fixture where a rule matches at line `L` but `L` is NOT in the diff's added set → finding suppressed.
+- **Pipeline integration test**: a synthetic diff with one of each severity tier; verify (a) error findings post inline ONLY when `autoInline: true`, (b) warning findings reach the specialist prompt, (c) below-threshold findings drop, (d) `disabledRules` filters work, (e) `pathFilters` short-circuit, (f) `astRules.enabled: false` short-circuits the whole scan.
+- **Diff-line filter** (multi-line): a fixture where a rule matches at lines `[L1..L3]`, only `L2` is in `changedLines` → finding kept (intersection non-empty). Another where `[L1..L3]` are all OUTSIDE `changedLines` → finding suppressed.
+- **Reviewable-position resolution**: a finding at `(path, line)` with no matching entry in `parseDiffToReviewablePositions` output → `ast-rules-finding-no-review-position` telemetry, finding stays in prompt block but does NOT auto-post.
+- **Synth dedup structured matching**: synthetic synth output with specialist finding at `(path, line, role_hint)` matching an AST finding → `provenance.dropped[]` carries `superseded_by_ast/...` reason and the LLM finding is removed from the inline comments list. Cross-role does NOT supersede.
 - **Parse-failure resilience**: a malformed JS file → `ast-rules-parse-failed` telemetry, scan continues with other files.
+- **Large-file skip**: a 600 KB file → `ast-rules-scan-skipped-large-file` telemetry, no parse attempted.
+- **TypeScript-syntax fixture coverage** (Codex MAJOR #6): explicit parse tests for the TS surface — TSX, decorators, import attributes (`with { type: "json" }`), `satisfies` operator, enums, namespaces, mixed JSX-in-TS, generic-arrow-with-comma-disambiguation. The `parser.ts` test suite asserts each parses without throwing AND that a smoke rule (e.g. `no-eval-call`) still fires on injected `eval()` calls inside each syntactic construct.
 
 ## 9. Constraints / non-goals (v1)
 
@@ -240,13 +278,42 @@ Per AC, **3+ positive + 3+ negative test fixtures**. v1 interpretation:
 - No incremental cache. Scan re-runs full on every PR push.
 - Rule pack is hard-coded; no custom user-defined rules in v1.
 
-## 10. Open questions for sign-off
+## 10. Decisions on prior open questions (resolved during sign-off)
 
-1. **Rule definition format.** §3.2 deviates from the AC's `*.json|yaml` rule files in favor of TypeScript modules. Sign off or push back to JSON DSL?
-2. **Diff-line filter strictness.** §5.4 emits findings only on lines in the diff's added set. Should "modified" lines (changed but not net-added) also count? v1 leans **yes** — modified lines surface bugs the diff just introduced.
-3. **Synth dedup heuristic.** §5.5 uses a keyword-overlap check between rule ID and specialist text. Is that reliable enough, or should we wire a structured "supersedes" reference from synth output?
-4. **High-confidence inline posting.** §3.4 auto-posts `error`-severity findings without LLM. Acceptable for v1, or gate behind an explicit `astRules.autoInline: true` config field for opt-in?
-5. **Rule cap of 10.** AC says 10. v1 ships exactly 10. After two weeks of real-PR signal, do we expand quickly or wait for v2 review? (Operational question, not blocking.)
+1. **Rule definition format → TypeScript modules** (both signers approved). The Linear AC will be updated to record the deviation explicitly: "first-party TS rule modules; no user-defined rule files in v1; revisit declarative DSL in v2 if external contributions become a goal" (Codex MINOR #9 + Kimi MAJOR #4).
+2. **Diff-line filter scope → added + modified lines** (Kimi §10.2): the `changedLines` set is every `+` line in the unified diff (added AND replacement-target lines), not just net-new. Multi-line node spans intersect with this set (§5.4).
+3. **Synth dedup → structured supersession, no keywords** (Codex MAJOR #3 + Kimi BLOCKING #1 + Kimi §10.3): `(path, line, role_hint)` triple-match with deterministic `astFindingId` carry-through (§5.5). Discarded the v1 keyword-overlap heuristic.
+4. **Auto-inline default → `false` for v1** (Codex BLOCKING #1 wins the disagreement with Kimi §10.4): the blast-radius of deterministic comments without LLM intermediation is a UX risk, not a parser-correctness issue. Ship the `astRules.autoInline` toggle with default `false`. Default flips to `true` after 2 weeks of real-PR FP-rate telemetry < 5% (Kimi §10.5 — fast-follow). Kimi's "consistency with ARC-187" reasoning was incorrect: ARC-187 secret-scan does NOT auto-post; it injects facts to the security-specialist prompt and the LLM authors the comment. ARC-181 follows the same posture by default.
+5. **Rule cap → exactly 10 in v1; fast-follow after 2 weeks** (Kimi §10.5): if telemetry shows pack-aggregate FP < 5%, add 2-3 syntax-only rules in a minor bump. Reserve v2 for type-aware or cross-file analysis.
+
+## 11. Sign-off summary
+
+### Codex (v1 → v2)
+
+| Codex finding | v2 change |
+|---|---|
+| **[BLOCKING]** Auto-inline should not default solely from `severity=error` | §2 + §3.4 + §6 — `astRules.autoInline` config, default `false`. |
+| **[BLOCKING]** Diff-line filter must use reviewable diff positions | §5.4 — two-stage filter: `changedLines` intersection THEN `parseDiffToReviewablePositions` lookup. |
+| **[MAJOR]** Synth dedup keyword overlap too fragile | §5.5 — structured `(path, line, role_hint)` matching with `astFindingId` carry-through. |
+| **[MAJOR]** `no-floating-promise-statement` high-FP without type info | §4.2 — narrowed to `no-floating-promise-call-known-async` (same-file `async function` declaration target only). |
+| **[MAJOR]** `no-await-in-loop-iter-independent` over-ambitious | §4.2 — renamed to `no-await-in-loop`, pure syntactic perf hint. |
+| **[MAJOR]** Parser compatibility needs real fixture coverage | §8 — explicit parse-test surface for TSX, decorators, import attributes, `satisfies`, enums, namespaces, mixed JSX-in-TS. |
+| **[MINOR]** `child-process-shell-true` semantics | §4.1 — renamed `spawn-shell-true`, scoped to `spawn`/`spawnSync`/`execFile`/`execFileSync` (the dangerous case). |
+| **[MINOR]** TLS rejectUnauthorized test FP risk | §4.1 — note added: legitimate test/local uses suppressed via existing `pathFilters` + `disabledRules` mechanisms. |
+| **[MINOR]** Update AC for rule format deviation | §10.1 — Linear AC update logged. |
+| **[NIT]** Add `skippedLargeFile` skip reason | §5.4 + §7 — `ast-rules-scan-skipped-large-file` telemetry event. |
+
+### Kimi (v1 → v2)
+
+| Kimi finding | v2 change |
+|---|---|
+| **[BLOCKING]** Synth dedup keyword overlap too brittle | Already addressed via Codex MAJOR #3 reconciliation (§5.5). |
+| **[BLOCKING]** Diff-line filter geometry needs `changedLines` + span intersection | §5.4 — explicit multi-line span intersection over the full `+` line set. |
+| **[MAJOR]** `no-await-in-loop-iter-independent` rename | Already addressed via Codex MAJOR #5. |
+| **[MAJOR]** Update Linear AC for TS module format deviation | Already addressed via Codex MINOR #9. |
+| **[MINOR]** `astRules.autoInline` global toggle | §3.4 + §6 — toggle added; default `false` (sided with Codex BLOCKING #1). |
+| **[MINOR]** Telemetry `ast-rules-finding` missing `roleHint` | §7 — `roleHint` field added to event shape. |
+| **[NIT]** `severityThreshold` default `"warning"` silently drops `info` tier | §2 — default changed to `"info"`; `info` tier reserved for future expansion and is currently a no-op below `"warning"`. |
 
 ## 11. Bundle-size budget
 

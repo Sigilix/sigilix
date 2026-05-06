@@ -19,10 +19,17 @@ function sliceEvidence(source: string, node: AstNode): string {
 function bodyHasAwait(body: AstNode): boolean {
   if (!body || typeof body !== "object") return false
   if (body.type === "AwaitExpression") return true
-  // Don't recurse into nested function declarations — their `await`s
-  // belong to a different scope.
+  // Crossing a function-scope boundary — `await` inside a nested
+  // FunctionDeclaration / FunctionExpression / ArrowFunctionExpression
+  // belongs to that nested function's scope, not ours. Bail
+  // unconditionally. The caller invokes us only with the outer async
+  // function's `body` field (a BlockStatement, or for concise-body
+  // arrows the body expression), so a Function* node here is always a
+  // nested scope. (Sigilix-bot caught this on PR #67: the previous
+  // `body !== arguments[0]` guard was always false because in every
+  // call frame `arguments[0]` is the same as `body`.)
   if (body.type === "FunctionDeclaration" || body.type === "FunctionExpression" || body.type === "ArrowFunctionExpression") {
-    if (body !== arguments[0]) return false  // skip nested fn (don't compare to outer)
+    return false
   }
   for (const k of Object.keys(body)) {
     if (k === "type" || k === "loc" || k === "start" || k === "end") continue

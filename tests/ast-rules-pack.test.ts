@@ -124,6 +124,14 @@ describe("no-async-without-await", () => {
   it("does NOT flag async function with await", () => expect(runRule(r, `async function f() { return await g() }`).length).toBe(0))
   it("does NOT flag a sync function",           () => expect(runRule(r, `function f() { return 1 }`).length).toBe(0))
   it("does NOT flag await deep in body",        () => expect(runRule(r, `async function f() { if (cond) { for (let i=0;i<1;i++) { await g() } } }`).length).toBe(0))
+  // PR #67 sigilix-bot self-review regression: bodyHasAwait must NOT
+  // count `await` inside a nested function as belonging to the outer.
+  it("FLAGS async outer with await ONLY in nested fn body",
+    () => expect(runRule(r, `async function outer() { (async function inner() { await g() })() }`).length).toBe(1))
+  it("FLAGS async outer with await ONLY in nested arrow body",
+    () => expect(runRule(r, `async function outer() { const inner = async () => await g(); }`).length).toBe(1))
+  it("FLAGS async arrow with await ONLY in nested fn",
+    () => expect(runRule(r, `const outer = async () => { async function inner() { await g() } }`).length).toBe(1))
 })
 
 // ─── no-throw-literal ───────────────────────────────────────────

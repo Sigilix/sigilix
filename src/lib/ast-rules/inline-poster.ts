@@ -53,7 +53,13 @@ export async function postAstInlineFindings(
   let skippedNoReviewPosition = 0
   let skippedNonError = 0
 
+  // Track findings alongside comments so telemetry can read structured
+  // fields (`ruleId`, `path`, `line`) directly off the finding object —
+  // not by regex-parsing the rendered comment body, which would break
+  // silently if `renderInlineBody` ever changes shape (sigilix-bot
+  // self-review on PR #67).
   const comments: SubmitReviewComment[] = []
+  const commentFindings: AstFinding[] = []
   for (const f of findings) {
     if (f.severity !== "error") {
       skippedNonError++
@@ -70,6 +76,7 @@ export async function postAstInlineFindings(
       side: pos.side,
       body: renderInlineBody(f),
     })
+    commentFindings.push(f)
   }
 
   if (comments.length === 0) {
@@ -90,12 +97,12 @@ export async function postAstInlineFindings(
   try {
     await client.submitReview(owner, repo, prNumber, body)
     posted = comments.length
-    for (const c of comments) {
+    for (const f of commentFindings) {
       emit("ast-rules-inline-posted", {
         ...ctx,
-        ruleId: c.body.match(/\*\*([\w-]+)\*\*/)?.[1] ?? "unknown",
-        path: c.path,
-        line: c.line,
+        ruleId: f.ruleId,
+        path: f.path,
+        line: f.line,
       })
     }
   } catch (err) {

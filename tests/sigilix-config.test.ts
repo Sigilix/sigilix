@@ -134,6 +134,52 @@ describe("parseSigilixConfig — defensive returns null", () => {
   })
 })
 
+// ─── ARC-176 v2 fields: pathFilters + profile ────────────────────────
+
+describe("parseSigilixConfig — pathFilters (ARC-176)", () => {
+  it("accepts an array of glob patterns", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      pathFilters: ["dist/**", "**/*.lock", "!critical/important.lock"],
+    }))
+    expect(result?.pathFilters).toEqual(["dist/**", "**/*.lock", "!critical/important.lock"])
+  })
+
+  it("drops empty-string entries", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      pathFilters: ["", "dist/**", ""],
+    }))
+    expect(result?.pathFilters).toEqual(["dist/**"])
+  })
+
+  it("drops the array entirely when all entries are empty/non-string", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      pathFilters: ["", null, 42, ""],
+    }))
+    expect(result?.pathFilters).toBeUndefined()
+  })
+
+  it("ignores pathFilters when not an array", () => {
+    expect(parseSigilixConfig(JSON.stringify({ pathFilters: "dist/**" }))?.pathFilters).toBeUndefined()
+    expect(parseSigilixConfig(JSON.stringify({ pathFilters: { glob: "x" } }))?.pathFilters).toBeUndefined()
+  })
+})
+
+describe("parseSigilixConfig — profile (ARC-176)", () => {
+  it("accepts 'chill'", () => {
+    expect(parseSigilixConfig(JSON.stringify({ profile: "chill" }))?.profile).toBe("chill")
+  })
+
+  it("accepts 'assertive'", () => {
+    expect(parseSigilixConfig(JSON.stringify({ profile: "assertive" }))?.profile).toBe("assertive")
+  })
+
+  it("rejects unknown values (omits the field)", () => {
+    expect(parseSigilixConfig(JSON.stringify({ profile: "savage" }))?.profile).toBeUndefined()
+    expect(parseSigilixConfig(JSON.stringify({ profile: 42 }))?.profile).toBeUndefined()
+    expect(parseSigilixConfig(JSON.stringify({ profile: null }))?.profile).toBeUndefined()
+  })
+})
+
 describe("loadSigilixConfig — fail-open contract", () => {
   it("returns EMPTY_CONFIG when the file is missing (404 → null)", async () => {
     const client = fakeClient(vi.fn().mockResolvedValue(null))
@@ -218,6 +264,25 @@ describe("buildSpecialistInitialMessage — sigilix.json guidance injection", ()
     // Guidance must appear BEFORE the PR header so the model treats it
     // as authoritative context, not as something to reason about.
     expect(msg.indexOf("REPO GUIDANCE")).toBeLessThan(msg.indexOf("[PR]"))
+  })
+
+  // ARC-176: profile rendering
+  it("renders [REVIEW PROFILE — chill] when profile=chill", () => {
+    const msg = buildSpecialistInitialMessage({ ...baseCtx, profile: "chill" })
+    expect(msg).toContain("[REVIEW PROFILE — chill]")
+    expect(msg).toContain("must-fix")
+    expect(msg.indexOf("REVIEW PROFILE")).toBeLessThan(msg.indexOf("[PR]"))
+  })
+
+  it("renders [REVIEW PROFILE — assertive] when profile=assertive", () => {
+    const msg = buildSpecialistInitialMessage({ ...baseCtx, profile: "assertive" })
+    expect(msg).toContain("[REVIEW PROFILE — assertive]")
+    expect(msg).toContain("nits")
+  })
+
+  it("omits the REVIEW PROFILE block entirely when profile is unset", () => {
+    const msg = buildSpecialistInitialMessage(baseCtx)
+    expect(msg).not.toContain("REVIEW PROFILE")
   })
 })
 

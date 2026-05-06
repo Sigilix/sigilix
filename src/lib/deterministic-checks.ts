@@ -80,89 +80,11 @@ export function parseDeterministicChecks(raw: unknown): DeterministicCheck[] {
   return out
 }
 
-/**
- * Translate a single glob pattern into a RegExp. Handles `**`, `*`,
- * and `?`; escapes other regex metacharacters. Anchored at both
- * ends. Same shape as the sigilix.json v2 pathFilter glob (filed
- * separately in ARC-176); duplicated here so this module ships
- * self-contained and doesn't introduce a cross-issue dependency.
- *
- * Globstar semantics (sigilix-bot dogfood catch on PR #52 fix commit
- * — emitted patterns described in plain prose to avoid closing the
- * JSDoc block with a literal asterisk-slash sequence):
- *   - globstar followed by slash (mid-pattern): emits a regex that
- *     matches zero or more complete path segments. So src/<gs>/foo.ts
- *     matches src/foo.ts AND src/sub/foo.ts but NOT src/barfoo.ts
- *     (segment boundary required).
- *   - slash followed by globstar at end of pattern: emits a regex
- *     that matches zero or more trailing segments. So dist/<gs>
- *     matches dist itself AND dist/anything/below.
- *   - bare globstar (no adjacent slash) falls through to a permissive
- *     match for rare middle-of-segment usage.
- *
- * Bare star matches anything except slash (single segment); question
- * mark is one non-slash character.
- */
-function compileGlob(pattern: string): RegExp {
-  let regex = ""
-  let i = 0
-  while (i < pattern.length) {
-    const ch = pattern[i]
-    // `**/` → match zero or more complete path segments
-    if (ch === "*" && pattern[i + 1] === "*" && pattern[i + 2] === "/") {
-      regex += "(?:.*/)?"
-      i += 3
-      continue
-    }
-    // `/**` at end of pattern → match zero or more trailing segments
-    // (and the leading `/` is optional so `dist/**` matches `dist`)
-    if (
-      ch === "/" &&
-      pattern[i + 1] === "*" &&
-      pattern[i + 2] === "*" &&
-      i + 3 === pattern.length
-    ) {
-      regex += "(?:/.*)?"
-      i += 3
-      continue
-    }
-    // bare `**` — fall through; rare usage, treat as `.*`
-    if (ch === "*" && pattern[i + 1] === "*") {
-      regex += ".*"
-      i += 2
-      continue
-    }
-    if (ch === "*") {
-      regex += "[^/]*"
-      i++
-      continue
-    }
-    if (ch === "?") {
-      regex += "[^/]"
-      i++
-      continue
-    }
-    if (ch !== undefined) {
-      // Escape any regex special character.
-      regex += ch.replace(/[\\^$.|*+?()[\]{}]/g, "\\$&")
-      i++
-    }
-  }
-  return new RegExp(`^${regex}$`)
-}
-
-function pathMatchesAny(path: string, patterns: string[]): boolean {
-  if (patterns.length === 0) return true
-  for (const p of patterns) {
-    try {
-      if (compileGlob(p).test(path)) return true
-    } catch {
-      // Bad glob → skip rather than throw; we don't want config
-      // mistakes to break review.
-    }
-  }
-  return false
-}
+// ARC-176: glob compilation moved to `path-glob.ts` so sigilix-config's
+// pathFilters and this module's per-rule `paths` share one proven
+// implementation (the segment-boundary fix from sigilix-bot's PR #52
+// review applies to both).
+import { pathMatchesAny } from "./path-glob"
 
 /**
  * Run every check against added lines in the diff. Returns one hit

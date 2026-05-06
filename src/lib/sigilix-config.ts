@@ -34,6 +34,14 @@ import { parseDeterministicChecks, type DeterministicCheck } from "./determinist
 
 export const SIGILIX_CONFIG_PATH = "sigilix.json"
 
+/**
+ * ARC-176: review tone. `chill` (default) only flags must-fix
+ * issues; `assertive` includes nits and style. Maps to a one-line
+ * prefix on the specialist initial message; the model still weighs
+ * context but the floor on flag-worthiness shifts.
+ */
+export type SigilixProfile = "chill" | "assertive"
+
 export interface SigilixConfig {
   /** Repo-wide guidance prepended to every specialist + synthesizer prompt. */
   guidance?: string
@@ -54,6 +62,26 @@ export interface SigilixConfig {
    * See `deterministic-checks.ts` for the runner + rendering.
    */
   deterministicChecks?: DeterministicCheck[]
+  /**
+   * ARC-176: glob-pattern filter that drops files from review BEFORE
+   * specialist fanout. Plain pattern excludes; `!pattern` re-includes
+   * (overrides earlier excludes). Saves token spend on lockfiles,
+   * generated content, etc. AND triggers the existing "router said no
+   * specialists" short-circuit when only filtered paths changed.
+   *
+   * Examples (using "GS" for globstar to avoid closing the JSDoc):
+   *   ["dist/GS", "GS/*.lock", "package-lock.json"]
+   *   ["GS/*.snap", "!critical/important.snap"]
+   *
+   * Globstar semantics defined by the shared compileGlob in
+   * `path-glob.ts`.
+   */
+  pathFilters?: string[]
+  /**
+   * ARC-176: review tone. Default `chill` (only must-fix). Set to
+   * `assertive` to also surface nits and style.
+   */
+  profile?: SigilixProfile
 }
 
 export const EMPTY_CONFIG: SigilixConfig = {}
@@ -96,6 +124,20 @@ export function parseSigilixConfig(raw: string): SigilixConfig | null {
   if (obj.deterministicChecks !== undefined) {
     const checks = parseDeterministicChecks(obj.deterministicChecks)
     if (checks.length > 0) out.deterministicChecks = checks
+  }
+  // ARC-176: pathFilters — glob-pattern include/exclude with `!`
+  // negation. Drop entries that aren't strings; bad globs are
+  // tolerated downstream (compileGlob throws → caller skips).
+  if (Array.isArray(obj.pathFilters)) {
+    const filters = obj.pathFilters.filter(
+      (p): p is string => typeof p === "string" && p.length > 0,
+    )
+    if (filters.length > 0) out.pathFilters = filters
+  }
+  // ARC-176: profile — accept only the two known values; anything
+  // else falls back to default (omitted = chill behavior).
+  if (obj.profile === "chill" || obj.profile === "assertive") {
+    out.profile = obj.profile
   }
   return out
 }

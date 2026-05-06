@@ -314,6 +314,39 @@ Both top-level fields are optional. Missing file = no extra context (current beh
 
 `guidance` is prepended to every specialist's prompt **and** the synthesizer's prompt. `rules.<role>` is appended only to that role's prompt. Unknown fields are forward-compat ignored.
 
+### Path filters (ARC-176)
+
+Drop files from review entirely via the top-level `pathFilters` array. Plain pattern excludes; `!pattern` re-includes (override prior excludes). Saves model spend on lockfiles, generated files, snapshots, etc. Triggers the existing "router said no specialists" short-circuit when only filtered paths changed.
+
+```json
+{
+  "pathFilters": [
+    "dist/**",
+    "**/*.lock",
+    "**/*.snap",
+    "package-lock.json",
+    "!critical/important.lock"
+  ]
+}
+```
+
+Applied BEFORE the diff packing layer, so filtered files don't burn token budget. Telemetry records dropped paths under `diffPacking.filesDroppedByFilter` — useful for tuning the list (spotting accidental over-exclusion).
+
+### Review profile (ARC-176)
+
+`profile` is a one-line directive prepended to specialist prompts:
+
+| Value | Behavior |
+|---|---|
+| `"chill"` (default if absent) | Surface only must-fix findings; skip nits and style |
+| `"assertive"` | Surface must-fix findings AND nits and style; thorough mode |
+
+```json
+{ "profile": "chill" }
+```
+
+The model still weighs context — `profile` shifts the floor on flag-worthiness, not a hard rule.
+
 ### Deterministic checks (ARC-193)
 
 Add a `deterministicChecks` array to `sigilix.json` to surface flat

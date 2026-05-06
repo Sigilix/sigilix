@@ -261,6 +261,13 @@ export interface SpecialistInitialMessageCtx {
    * = no deterministic findings to surface.
    */
   deterministicChecksBlock?: string
+  /**
+   * ARC-176: review-tone preset from sigilix.json `profile`. `chill`
+   * (default; absent = chill) → flag must-fix only. `assertive` →
+   * also surface nits and style. Rendered as a one-line directive
+   * after guidance, before the diff.
+   */
+  profile?: "chill" | "assertive"
 }
 
 export function buildSpecialistInitialMessage(
@@ -270,6 +277,13 @@ export function buildSpecialistInitialMessage(
   if (ctx.guidance && ctx.guidance.length > 0) {
     lines.push("[REPO GUIDANCE — applies to ALL specialists (from sigilix.json)]")
     lines.push(ctx.guidance)
+    lines.push("")
+  }
+  if (ctx.profile === "chill") {
+    lines.push("[REVIEW PROFILE — chill] Surface only must-fix findings (correctness, security, real bugs). Skip nits, style preferences, and minor refactors.")
+    lines.push("")
+  } else if (ctx.profile === "assertive") {
+    lines.push("[REVIEW PROFILE — assertive] Surface must-fix findings AND nits/style. Be thorough; the team has opted into more comments.")
     lines.push("")
   }
   if (ctx.deterministicChecksBlock && ctx.deterministicChecksBlock.length > 0) {

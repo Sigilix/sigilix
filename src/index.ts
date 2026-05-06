@@ -170,6 +170,12 @@ export interface Env {
   // duplicate noise + duplicate API spend. pr-overview still fires
   // so the release PR still gets a summary blurb.
   OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES?: string
+
+  // ARC-184 kill-switch for the review-provenance + stale-marker
+  // pipeline. When set to "off", manifest writes and stale-mark
+  // enqueues short-circuit. Default (unset / any other value) = on.
+  // Single-flag rollback if a bug surfaces post-deploy.
+  OPENCLAW_REVIEW_MANIFEST_ENABLED?: string
 }
 
 /**

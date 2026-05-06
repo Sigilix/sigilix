@@ -33,7 +33,12 @@ import {
 } from "./github"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_SCHEMA } from "./schemas"
-import { PR_REVIEW_PROMPT } from "../prompts/pr-review"
+import { PR_REVIEW_PROMPT, PROMPT_VERSION } from "../prompts/pr-review"
+import {
+  computeFileListHash,
+  writeReviewManifest,
+  type ReviewManifestV1,
+} from "./review-manifest"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -220,6 +225,56 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
     console.log(
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
     )
+
+    // ARC-184: write the review manifest. Best-effort — never blocks
+    // the review flow. Captures the inputs we reviewed against
+    // (head/base/merge-base SHAs, file-list hash, prompt version,
+    // model id, GitHub review id) so a later webhook can detect drift
+    // and PATCH a stale notice into THIS review's body.
+    if (env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off") {
+      try {
+        const baseSha = meta.base?.sha ?? ""
+        const [files, mergeBaseSha] = await Promise.all([
+          client.listPullFilesForManifest(owner, repo, prNumber),
+          baseSha ? client.getMergeBase(owner, repo, baseSha, headSha) : Promise.resolve(null),
+        ])
+        const fileListHash = await computeFileListHash(files)
+        const manifest: ReviewManifestV1 = {
+          v: 1,
+          prNumber,
+          baseSha,
+          headSha,
+          mergeBaseSha,
+          fileListHash,
+          promptVersion: PROMPT_VERSION,
+          modelId: model,
+          target: { kind: "review", reviewId: submitted.id },
+          reviewedAt: Date.now(),
+        }
+        const ok = await writeReviewManifest(env, owner, repo, prNumber, manifest)
+        if (ok) {
+          console.log(JSON.stringify({
+            event: "review-manifest-written",
+            owner, repo, prNumber,
+            headSha, baseSha, modelId: model,
+            promptVersion: PROMPT_VERSION,
+            target: { kind: "review", id: submitted.id },
+          }))
+        } else {
+          console.error(JSON.stringify({
+            event: "review-manifest-write-failed",
+            owner, repo, prNumber,
+            err: "writeReviewManifest returned false",
+          }))
+        }
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "review-manifest-write-failed",
+          owner, repo, prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
   } finally {
     // Release the lock unless we actually posted a review. On a
     // successful post, the 7-day TTL stays — we don't want CR's

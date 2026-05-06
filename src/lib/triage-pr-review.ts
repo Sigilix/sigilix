@@ -39,6 +39,22 @@ import type { Env } from "../index"
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const DEDUPE_PREFIX = "pr-review:"
 
+/**
+ * Build the per-(PR, headSha) dedupe-lock KV key used by
+ * `handlePrReview`. Exported so the ARC-178 slash-command rerun
+ * handler can clear the lock before re-enqueueing — without this,
+ * `/sigilix review` would silently no-op on any PR that already
+ * has a posted review for the current head.
+ */
+export function buildPrReviewDedupeKey(args: {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+}): string {
+  return `${DEDUPE_PREFIX}${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
+}
+
 const LIMITS = {
   // Bumped from 22_000 to 80_000 (2026-05-04) — the prior cap was
   // truncating large PR diffs to ~14% of their actual content, which
@@ -123,7 +139,7 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
   // Concurrent-run guard with try/finally release so queue retries
   // can re-attempt on failure. Keyed on (prNumber, headSha) — a new
   // push (different SHA) gets a different key and re-runs as expected.
-  const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
+  const dedupeKey = buildPrReviewDedupeKey({ owner, repo, prNumber, headSha })
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
     console.log(`pr-review already ran for ${dedupeKey} — skipping`)

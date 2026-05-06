@@ -28,12 +28,16 @@ import {
   getMentionTriggers,
   isArcGithubLogin,
   isBotHandle,
+  stripQuotesAndCode,
 } from "./lib/mention"
+import { parseSlashCommand, renderSlashCommandAck } from "./lib/slash-commands"
+import { getInstallationToken } from "./lib/github-app"
+import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
-import { handlePrReview } from "./lib/triage-pr-review"
+import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
@@ -186,6 +190,19 @@ export type JobMessage =
       headSha: string
       installationId: number
     }
+  // ARC-178: slash-command-driven re-review. Same shape as pr-review
+  // but headSha is resolved at handler time (the comment that
+  // triggered it doesn't carry the PR's current head SHA in all
+  // surfaces). Handler fetches PR meta, then enqueues a regular
+  // pr-review job. Posts an ack comment so the user knows the
+  // request was received.
+  | {
+      type: "pr-review-rerun"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
   | {
       type: "ci-triage"
       owner: string
@@ -298,6 +315,11 @@ interface GitHubWebhookPayload {
     commit_id?: string
     original_commit_id?: string
     pull_request_review_id?: number | null
+    // GitHub's relationship between the comment author and the
+    // repository: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, FIRST_TIMER,
+    // FIRST_TIME_CONTRIBUTOR, MANNEQUIN, NONE. Used by ARC-178 to gate
+    // slash commands that trigger expensive review re-runs.
+    author_association?: string
   }
   // `issue_comment` events deliver an `issue` block. When the issue
   // is a PR, `issue.pull_request` is present (otherwise it's a plain
@@ -531,6 +553,81 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // handlePrReview — the agentic toggle is gated inside that
       // function via OPENCLAW_AGENTIC_GITHUB_MODE.
       return handlePrReview(baseArgs)
+    }
+    case "pr-review-rerun": {
+      // ARC-178: `/sigilix review` slash command. Resolve the current
+      // head SHA from PR meta, post an ack comment, clear the per-
+      // (PR, headSha) dedupe lock the previous run installed, then
+      // re-enqueue a regular pr-review job (which goes through the
+      // standard routing: sensitive gate, ensemble vs Phase 3, etc.).
+      const tag = { owner: job.owner, repo: job.repo, prNumber: job.prNumber }
+      try {
+        if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+          console.error(JSON.stringify({
+            event: "pr-review-rerun-misconfigured",
+            reason: "missing_github_app_credentials",
+            ...tag,
+          }))
+          return
+        }
+        const token = await getInstallationToken({
+          kv: env.OPENCLAW_STATE,
+          appId: env.GITHUB_APP_ID,
+          privateKey: env.GITHUB_PRIVATE_KEY,
+          installationId: job.installationId,
+        })
+        const client = new GitHubClient({ token })
+        const meta = await client.getPullRequest(job.owner, job.repo, job.prNumber)
+        const headSha = meta.head.sha
+        if (!headSha) {
+          console.error(JSON.stringify({
+            event: "pr-review-rerun-skipped",
+            reason: "no_head_sha",
+            ...tag,
+          }))
+          return
+        }
+        // Post ack comment so the user knows the request was received.
+        // Best-effort: a failed ack doesn't block the re-review.
+        try {
+          await client.createIssueComment(
+            job.owner, job.repo, job.prNumber,
+            renderSlashCommandAck("review"),
+          )
+        } catch (err) {
+          console.error(JSON.stringify({
+            event: "slash-command-ack-failed",
+            err: err instanceof Error ? err.message : String(err),
+            ...tag,
+          }))
+        }
+        // Clear the legacy single-shot dedupe lock so handlePrReview
+        // doesn't no-op when invoked on the same head SHA. Without
+        // this, the slash command's whole purpose (re-run after a
+        // prior review already posted) would be silently swallowed
+        // by the 7-day TTL set in triage-pr-review.ts.
+        const dedupeKey = buildPrReviewDedupeKey({
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber, headSha,
+        })
+        await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+
+        const reviewMessage: JobMessage = {
+          type: "pr-review",
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          headSha,
+          installationId: job.installationId,
+        }
+        await env.OPENCLAW_JOBS.send(reviewMessage)
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-rerun-error",
+          err: err instanceof Error ? err.message : String(err),
+          ...tag,
+        }))
+      }
+      return
     }
     case "ci-triage":
       return handleCiTriage({
@@ -866,6 +963,69 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
   }
 
   const body = comment.body ?? ""
+
+  // ARC-178: slash-command dispatch. Recognize `/sigilix <cmd>` at a
+  // line start and route to a dedicated job type instead of the
+  // generic mention-reply pipeline. v1 only handles `review`; other
+  // commands (ask, improve, describe, help, ...) currently fall
+  // through to the existing mention path — which means they're
+  // SILENTLY ignored unless the same comment also carries an
+  // @-mention. Document the limitation in the README before
+  // promising users that `/sigilix help` works.
+  const cleaned = stripQuotesAndCode(body)
+  const slashCmd = parseSlashCommand(cleaned)
+  if (slashCmd?.cmd === "review") {
+    // ACL gate (review-team B2): the slash command triggers a full
+    // ensemble run, which is materially expensive. On a public repo
+    // any commenter could otherwise spam this. Restrict to authors
+    // GitHub considers trusted with the repo. CONTRIBUTOR is
+    // intentionally excluded — anyone whose PR has merged becomes a
+    // CONTRIBUTOR forever, which is too broad a circle for this gate.
+    const association = (comment.author_association ?? "").toUpperCase()
+    const allowed = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
+    if (!allowed.has(association)) {
+      console.log(JSON.stringify({
+        event: "slash-command-rejected",
+        reason: "untrusted_author_association",
+        author_association: association || null,
+        login: comment.user?.login ?? null,
+        owner, repo, prNumber,
+      }))
+      return new Response("forbidden\n", { status: 403 })
+    }
+
+    // Rerun coalesce (review-team H1): if the same PR already has a
+    // rerun in flight, drop subsequent invocations within a short
+    // window. This collapses N concurrent `/sigilix review` posts
+    // into 1 ack + 1 ensemble run, which is the user expectation.
+    // KV is best-effort under concurrent webhooks — a 1–2 message
+    // race window is fine; the downstream pr-review dedupe is
+    // re-armed by the rerun handler so any racers will collapse there
+    // too once the lock is reinstated.
+    const coalesceKey = `pr-review-rerun:${owner}/${repo}#${prNumber}`
+    const existing = await env.OPENCLAW_STATE.get(coalesceKey)
+    if (existing) {
+      console.log(JSON.stringify({
+        event: "slash-command-coalesced",
+        coalesceKey, owner, repo, prNumber,
+      }))
+      return new Response("coalesced\n", { status: 202 })
+    }
+    await env.OPENCLAW_STATE.put(coalesceKey, String(Date.now()), {
+      expirationTtl: 60, // 60s — long enough to swallow comment bursts
+    })
+
+    const message: JobMessage = {
+      type: "pr-review-rerun",
+      owner,
+      repo,
+      prNumber,
+      installationId,
+    }
+    await env.OPENCLAW_JOBS.send(message)
+    return new Response("queued slash-command\n", { status: 202 })
+  }
+
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
   const hasMention = bodyMentionsBot(body, triggers)
   const isReviewCommentReply =

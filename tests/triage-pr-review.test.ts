@@ -6,6 +6,7 @@ import {
   buildReviewSubmission,
   chooseReviewEvent,
   parsePrReviewResponse,
+  renderFixPlan,
   type PrReviewFinding,
   type PrReviewVerdict,
 } from "../src/lib/triage-pr-review"
@@ -243,5 +244,94 @@ describe("buildReviewSubmission", () => {
     const out = buildReviewSubmission({ verdict: v, prAuthor: "alice", headSha: "abc" })
     expect(out.comments?.[0]?.body).toContain("```suggestion")
     expect(out.comments?.[0]?.body).toContain("const x = a ?? b")
+  })
+})
+
+describe("renderFixPlan (ARC-180)", () => {
+  const fnd = (overrides: Partial<PrReviewFinding>): PrReviewFinding => ({
+    ...baseFinding,
+    ...overrides,
+  })
+
+  it("returns null when no findings score >= 4", () => {
+    expect(renderFixPlan([fnd({ score: 1 }), fnd({ score: 3 })])).toBeNull()
+  })
+
+  it("returns null on an empty list", () => {
+    expect(renderFixPlan([])).toBeNull()
+  })
+
+  it("renders only the Critical section when no High findings exist", () => {
+    const out = renderFixPlan([
+      fnd({ score: 5, path: "a.ts", line: 1, headline: "deref crash" }),
+      fnd({ score: 2, path: "b.ts", line: 5, headline: "naming" }),
+    ])
+    expect(out).not.toBeNull()
+    expect(out!).toContain("Fix Plan")
+    expect(out!).toContain("Critical (score 5)")
+    expect(out!).not.toContain("High (score 4)")
+    expect(out!).toContain("a.ts:1")
+    expect(out!).not.toContain("b.ts:5")
+  })
+
+  it("renders Critical before High and groups within each severity by path then line", () => {
+    const out = renderFixPlan([
+      fnd({ score: 4, path: "z.ts", line: 10, headline: "h1" }),
+      fnd({ score: 5, path: "a.ts", line: 50, headline: "h2" }),
+      fnd({ score: 5, path: "a.ts", line: 5, headline: "h3" }),
+      fnd({ score: 4, path: "a.ts", line: 20, headline: "h4" }),
+    ])!
+    // Critical block appears before High block.
+    const criticalIdx = out.indexOf("Critical (score 5)")
+    const highIdx = out.indexOf("High (score 4)")
+    expect(criticalIdx).toBeGreaterThan(-1)
+    expect(highIdx).toBeGreaterThan(criticalIdx)
+    // Within Critical: a.ts:5 before a.ts:50 (line ASC within same path).
+    const a5 = out.indexOf("a.ts:5", criticalIdx)
+    const a50 = out.indexOf("a.ts:50", criticalIdx)
+    expect(a5).toBeGreaterThan(-1)
+    expect(a50).toBeGreaterThan(a5)
+    // Within High: a.ts:20 before z.ts:10 (path ASC).
+    const a20 = out.indexOf("a.ts:20", highIdx)
+    const z10 = out.indexOf("z.ts:10", highIdx)
+    expect(a20).toBeGreaterThan(-1)
+    expect(z10).toBeGreaterThan(a20)
+  })
+
+  it("renders multi-line range when startLine is set", () => {
+    const out = renderFixPlan([
+      fnd({ score: 5, path: "a.ts", line: 20, startLine: 15, headline: "h" }),
+    ])!
+    expect(out).toContain("a.ts:15-20")
+    expect(out).not.toContain("a.ts:20 ")
+  })
+
+  it("uses single-line format when startLine equals line", () => {
+    const out = renderFixPlan([
+      fnd({ score: 5, path: "a.ts", line: 20, startLine: 20, headline: "h" }),
+    ])!
+    expect(out).toContain("a.ts:20")
+    expect(out).not.toContain("a.ts:20-20")
+  })
+
+  it("truncates over-long headlines", () => {
+    const long = "x".repeat(200)
+    const out = renderFixPlan([fnd({ score: 5, headline: long })])!
+    expect(out).toContain("…")
+    expect(out.length).toBeLessThan(long.length + 200)
+  })
+
+  it("singularizes the count label", () => {
+    const out = renderFixPlan([fnd({ score: 5, headline: "only one" })])!
+    expect(out).toMatch(/Critical \(score 5\)\*\*\s*—\s*1 finding\b/)
+    expect(out).not.toMatch(/1 findings\b/)
+  })
+
+  it("pluralizes the count label", () => {
+    const out = renderFixPlan([
+      fnd({ score: 4, path: "a.ts", line: 1, headline: "h1" }),
+      fnd({ score: 4, path: "b.ts", line: 1, headline: "h2" }),
+    ])!
+    expect(out).toMatch(/High \(score 4\)\*\*\s*—\s*2 findings\b/)
   })
 })

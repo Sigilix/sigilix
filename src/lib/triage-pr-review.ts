@@ -462,6 +462,12 @@ export function buildFallbackBody(
     lines.push("")
     lines.push(verdict.confidenceReason)
   }
+  // ARC-180 deliberately does NOT add a Fix Plan section here — the
+  // fallback already renders every finding grouped by file (a few
+  // lines below), so a severity-prioritized header above the same
+  // data would duplicate content. The inline-anchor path uses Fix
+  // Plan because findings live BELOW the body as separate inline
+  // comments, not in the body itself.
   lines.push("")
   lines.push(`### Findings (${all.length})`)
   lines.push(...renderFindingsByFile(all))
@@ -527,12 +533,85 @@ function formatReviewBody(
       `_${verdict.findings.length} ${verdict.findings.length === 1 ? "finding" : "findings"} inline below._`
     )
   }
+  // ARC-180: Fix Plan — surface high/critical findings (score >= 4)
+  // as a prioritized repair queue at the top of the review. Anchored
+  // and unanchored findings both contribute, since the prioritization
+  // is severity-based and a blocker is a blocker regardless of
+  // whether the inline comment landed cleanly.
+  const fixPlan = renderFixPlan([...verdict.findings, ...unanchored])
+  if (fixPlan) {
+    lines.push("")
+    lines.push(fixPlan)
+  }
   if (unanchored.length > 0) {
     lines.push("")
     lines.push(`### Additional findings (could not anchor to diff)`)
     lines.push(...renderFindingsByFile(unanchored))
   }
   return lines.join("\n")
+}
+
+/**
+ * ARC-180: render the "Fix Plan" section listing score >= 4 findings
+ * (high or critical) as a prioritized repair queue. Returns the
+ * Markdown string ready to drop into the review body, or null when
+ * there are no findings at that severity (in which case the section
+ * is omitted entirely — no empty headers).
+ *
+ * Format:
+ *   ### Fix Plan
+ *
+ *   **Critical (score 5)**
+ *   - \`src/foo.ts:42\` — \`logic\`: Headline
+ *   - \`src/bar.ts:88\` — \`security\`: Headline
+ *
+ *   **High (score 4)**
+ *   - \`src/baz.ts:15\` — \`error-handling\`: Headline
+ *
+ * Within each severity, ordered by path then line so the queue stays
+ * stable across runs (a reviewer working top-to-bottom can re-run
+ * /sigilix review and the queue won't shuffle on them).
+ *
+ * Pure — exported for tests.
+ */
+export function renderFixPlan(findings: PrReviewFinding[]): string | null {
+  const critical: PrReviewFinding[] = []
+  const high: PrReviewFinding[] = []
+  for (const f of findings) {
+    if (f.score >= 5) critical.push(f)
+    else if (f.score >= 4) high.push(f)
+  }
+  if (critical.length === 0 && high.length === 0) return null
+
+  const sortByLocation = (a: PrReviewFinding, b: PrReviewFinding): number => {
+    if (a.path !== b.path) return a.path < b.path ? -1 : 1
+    return a.line - b.line
+  }
+  critical.sort(sortByLocation)
+  high.sort(sortByLocation)
+
+  const lines: string[] = ["### Fix Plan"]
+  if (critical.length > 0) {
+    lines.push("")
+    lines.push(`**Critical (score 5)** — ${critical.length} ${critical.length === 1 ? "finding" : "findings"}`)
+    for (const f of critical) lines.push(formatFixPlanRow(f))
+  }
+  if (high.length > 0) {
+    lines.push("")
+    lines.push(`**High (score 4)** — ${high.length} ${high.length === 1 ? "finding" : "findings"}`)
+    for (const f of high) lines.push(formatFixPlanRow(f))
+  }
+  return lines.join("\n")
+}
+
+function formatFixPlanRow(f: PrReviewFinding): string {
+  const range = f.startLine != null && f.startLine !== f.line
+    ? `${f.path}:${f.startLine}-${f.line}`
+    : `${f.path}:${f.line}`
+  // Headline only — the inline comment carries the body. Truncate
+  // defensively so an over-long headline can't break the bullet list.
+  const headline = f.headline.length > 140 ? `${f.headline.slice(0, 137)}…` : f.headline
+  return `- \`${range}\` — \`${f.category}\`: ${headline}`
 }
 
 /**

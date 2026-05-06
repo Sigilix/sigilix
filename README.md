@@ -378,6 +378,27 @@ Required fields: `id`, `pattern`, `message`. Optional: `severity` (`info|warn|er
 
 A malformed regex is dropped silently and recorded in telemetry; never breaks the review.
 
+## Secret scanning (ARC-187)
+
+Sigilix runs a Worker-native secret scanner against added diff lines BEFORE the LLM specialist fanout. **Always on**, no config needed — secret detection is baseline behavior, not opt-in.
+
+Built-in rule baseline (severity = `error` unless noted):
+
+| Rule | Pattern shape |
+|---|---|
+| `aws-access-key` | `AKIA...` / `ASIA...` (16 chars) |
+| `github-token` | `gh{p,o,s,r,u}_...` (36-255 chars) |
+| `slack-webhook` | `https://hooks.slack.com/services/...` |
+| `stripe-secret-key` | `sk_live_...` / `sk_test_...` |
+| `anthropic-api-key` | `sk-ant-...` |
+| `openai-api-key` | `sk-...` (excluding `sk-ant-`) |
+| `private-key-pem-header` | `-----BEGIN ... PRIVATE KEY-----` |
+| `generic-high-entropy-token` (warn) | 40+ char base64-ish; suppresses hex-only and URL fragments |
+
+**Privacy contract:** raw secrets are NEVER stored, logged, or returned. Hits surface only a redacted preview (first 4 + ... + last 4 chars) and a stable fingerprint for cross-run dedup. Telemetry (`secretScan.fingerprints`) stores fingerprints only.
+
+When a hit fires, the security specialist receives it as an authoritative fact in the prompt and the review surfaces a "rotate immediately" recommendation. The scan covers added diff lines only — pre-existing secrets aren't re-flagged on every PR.
+
 ## CI / auto-deploy
 
 The `.github/workflows/deploy.yml` Action deploys on every push to `main`. Add two repo secrets:

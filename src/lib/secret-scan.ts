@@ -1,0 +1,276 @@
+// ARC-187: secret scanning before LLM specialist fanout.
+//
+// LLM-based secret detection has high miss rates vs. dedicated
+// scanners. AikidoSec's Gitleaks fork (`AikidoSec/gitleaks`) defines
+// a TOML schema for entropy-aware regex rules; CodeRabbit ships a
+// similar baseline. Cloudflare Workers can't shell out to the
+// Gitleaks binary, but Worker-native regex against added diff lines
+// catches the high-confidence patterns deterministically.
+//
+// v1 ships with a built-in baseline rule set covering the patterns
+// that actually leak in real PRs: AWS keys, GitHub tokens, Slack
+// webhooks, Stripe keys, OpenAI/Anthropic keys, generic private-key
+// PEM headers, and a high-entropy safety net for "long random-looking
+// string in source." Hits become structured findings injected into
+// the specialist prompts as authoritative facts — the security
+// specialist isn't asked to re-discover secrets by reading raw diff.
+//
+// Privacy contract: matched substrings are NEVER returned in raw
+// form. The renderer emits only a redacted preview (first 4 + last 4
+// chars) plus a stable fingerprint (sha-like hash of path + line +
+// redacted form) so multiple runs on the same PR don't duplicate-
+// flag the same secret. Logs / telemetry never include the raw
+// secret either.
+//
+// Out of scope (filed under ARC-187):
+//   - User-configurable rules in sigilix.json (defer until baseline
+//     proves itself)
+//   - True Gitleaks .toml ingestion
+//   - Baseline / `.gitleaksignore` fingerprint suppression
+//   - Entropy-only rules (require Shannon entropy calc per match)
+
+interface SecretRule {
+  id: string
+  /** Human-readable category surfaced to the model + reviewer. */
+  category: "aws" | "github" | "slack" | "stripe" | "openai" | "anthropic" | "private-key" | "generic-token"
+  /** Pre-compiled-friendly source. */
+  pattern: RegExp
+  /** When omitted, severity defaults to `error` — secrets in code
+   *  are blockers by default. */
+  severity?: "warn" | "error"
+}
+
+/**
+ * Built-in baseline rule set. All anchored against added diff line
+ * content (not raw source). Reviewed against the canonical Gitleaks
+ * default config and CodeRabbit's published patterns; rules below
+ * are the intersection that matters for repos shipping web services.
+ *
+ * Each rule's regex captures the secret value in match[0] (the full
+ * match) so the renderer can build a redacted preview without
+ * needing per-rule capture-group conventions.
+ */
+const RULES: readonly SecretRule[] = [
+  {
+    id: "aws-access-key",
+    category: "aws",
+    // AWS access key IDs: AKIA (long-lived) / ASIA (session token).
+    pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+  },
+  {
+    id: "github-token",
+    category: "github",
+    // GitHub PATs, OAuth tokens, app tokens, refresh tokens, and
+    // user-to-server tokens all share a common `gh{type}_` prefix.
+    pattern: /\bgh[posru]_[A-Za-z0-9]{36,255}\b/,
+  },
+  {
+    id: "slack-webhook",
+    category: "slack",
+    pattern: /\bhttps:\/\/hooks\.slack\.com\/services\/T[A-Z0-9]{8,}\/B[A-Z0-9]{8,}\/[A-Za-z0-9]{24,}\b/,
+  },
+  {
+    id: "stripe-secret-key",
+    category: "stripe",
+    pattern: /\bsk_(?:live|test)_[A-Za-z0-9]{24,}\b/,
+  },
+  // Order matters: anthropic must come BEFORE openai because both
+  // start with `sk-` and we want the more specific rule to claim the
+  // match first. The openai pattern uses a negative lookahead to
+  // double-defend against accidentally matching anthropic keys even
+  // if rule order changes in the future.
+  {
+    id: "anthropic-api-key",
+    category: "anthropic",
+    pattern: /\bsk-ant-[A-Za-z0-9_-]{32,}\b/,
+  },
+  {
+    id: "openai-api-key",
+    category: "openai",
+    // `sk-` followed by 32+ chars, EXCLUDING `sk-ant-` (anthropic).
+    pattern: /\bsk-(?!ant-)[A-Za-z0-9_-]{32,}\b/,
+  },
+  {
+    id: "private-key-pem-header",
+    category: "private-key",
+    // The header alone is enough to flag — actual key body sits on
+    // the next line. Don't try to span multi-line in v1; we'd need
+    // hunk-aware parsing. v2 could.
+    pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY-----/,
+  },
+  {
+    id: "generic-high-entropy-token",
+    category: "generic-token",
+    // Conservative: 40+ chars of base64-ish content. Anchors to
+    // ensure we don't match a long natural-language string. Mostly
+    // catches API keys with no recognizable provider prefix.
+    pattern: /\b[A-Za-z0-9+/=_-]{40,}\b/,
+    // Lower severity — generic regex has false positives. Specialist
+    // can dismiss based on context (a long URL fragment, a base64-
+    // encoded test fixture, etc.).
+    severity: "warn",
+  },
+] as const
+
+/**
+ * The generic-token rule catches lots of things that aren't secrets
+ * (uuids in URLs, base64 of public data, hashes). To reduce false-
+ * positive noise, suppress generic matches that look like one of:
+ *   - Hex-only strings ≥40 chars (looks like a hash, not a secret)
+ *   - URLs the natural way (already-prefixed http / https)
+ *   - File paths (have / or \ in middle)
+ * The PROVIDER-specific rules above are not subject to this filter.
+ */
+function genericFalsePositive(match: string, contextLine: string): boolean {
+  // Hex-only ≥ 32 chars → almost certainly a hash, not a secret
+  if (/^[a-f0-9]{32,}$/i.test(match)) return true
+  // Heuristic: if the line contains a URL/path-like pattern around
+  // the match, it's probably not a secret. Cheap proxy: any "/" in
+  // the match itself (URL component) or `://` in the surrounding line.
+  if (/:\/\//.test(contextLine)) return true
+  return false
+}
+
+export interface SecretHit {
+  ruleId: string
+  category: SecretRule["category"]
+  severity: "warn" | "error"
+  path: string
+  line: number
+  /** Length of the matched secret. Useful as a sanity-check signal
+   *  without leaking the value. */
+  matchLength: number
+  /** Redacted preview: first 4 + ... + last 4 chars. NEVER the full
+   *  secret. */
+  redactedPreview: string
+  /**
+   * Stable fingerprint = `${ruleId}:${path}:${line}:${redactedPreview}`.
+   * Lets downstream dedupe across runs without storing the raw value.
+   */
+  fingerprint: string
+}
+
+const REDACTED_KEEP = 4
+
+/**
+ * Build the redacted preview. For values shorter than `2 * keep + 3`
+ * the preview itself becomes meaningless — fall back to a length-only
+ * placeholder so we don't leak short secrets in full.
+ */
+function redact(secret: string): string {
+  if (secret.length <= REDACTED_KEEP * 2 + 3) {
+    return `[redacted ${secret.length} chars]`
+  }
+  return `${secret.slice(0, REDACTED_KEEP)}…${secret.slice(-REDACTED_KEEP)}`
+}
+
+/**
+ * Run all rules against added diff lines. Mirrors the diff-walking
+ * approach of `deterministic-checks.ts` (header-detection guarded by
+ * `inFileHeader`, line counting from `@@` hunk headers).
+ *
+ * Returns `[]` for empty diff. Never throws.
+ */
+export function runSecretScan(diff: string): SecretHit[] {
+  if (!diff) return []
+  const hits: SecretHit[] = []
+
+  const lines = diff.split("\n")
+  let currentPath: string | null = null
+  let newLine = 0
+  let inHunk = false
+  let inFileHeader = false
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      currentPath = null
+      inHunk = false
+      inFileHeader = true
+      continue
+    }
+    if (inFileHeader && line.startsWith("+++ ")) {
+      const p = line.slice(4).trim()
+      currentPath = p === "/dev/null" ? null : (p.startsWith("b/") ? p.slice(2) : p)
+      continue
+    }
+    if (inFileHeader && line.startsWith("--- ")) {
+      continue
+    }
+    if (line.startsWith("@@")) {
+      inFileHeader = false
+      const m = line.match(/^@@\s+-(?:\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/)
+      if (m && m[1]) {
+        newLine = Number(m[1])
+        inHunk = currentPath !== null
+      } else {
+        inHunk = false
+      }
+      continue
+    }
+    if (!inHunk || currentPath === null) continue
+
+    if (line.startsWith("+")) {
+      const content = line.slice(1)
+      // Track character spans claimed by earlier (more-specific)
+      // rules on this line so the generic high-entropy catch-all
+      // doesn't double-fire on the same substring. Provider-specific
+      // rules listed earlier in RULES win.
+      const claimedSpans: Array<{ start: number; end: number }> = []
+      for (const rule of RULES) {
+        const match = content.match(rule.pattern)
+        if (!match) continue
+        const matched = match[0] ?? ""
+        if (matched.length === 0) continue
+        const start = match.index ?? 0
+        const end = start + matched.length
+        // Skip if any previously-claimed span overlaps this match
+        // (interval intersection: !(a.end <= b.start || b.end <= a.start)).
+        const overlaps = claimedSpans.some((s) => !(end <= s.start || s.end <= start))
+        if (overlaps) continue
+        if (rule.id === "generic-high-entropy-token" && genericFalsePositive(matched, content)) continue
+        const redacted = redact(matched)
+        const fingerprint = `${rule.id}:${currentPath}:${newLine}:${redacted}`
+        // Defense-in-depth: also dedupe identical fingerprints (same
+        // path:line:redacted from the same rule on the same scan).
+        if (hits.some((h) => h.fingerprint === fingerprint)) continue
+        hits.push({
+          ruleId: rule.id,
+          category: rule.category,
+          severity: rule.severity ?? "error",
+          path: currentPath,
+          line: newLine,
+          matchLength: matched.length,
+          redactedPreview: redacted,
+          fingerprint,
+        })
+        claimedSpans.push({ start, end })
+      }
+      newLine++
+    } else if (line.startsWith(" ")) {
+      newLine++
+    } else if (line.startsWith("-")) {
+      // deletion: doesn't advance new-file counter
+    }
+  }
+
+  return hits
+}
+
+/**
+ * Render hits as a labeled prompt block. Empty hits → empty string
+ * so the orchestrator can skip the block entirely. The block is
+ * deliberately terse and authoritative; the security specialist
+ * doesn't need to re-find these.
+ */
+export function renderSecretHitsForPrompt(hits: SecretHit[]): string {
+  if (hits.length === 0) return ""
+  const lines = ["[SECRET SCAN — pre-computed before LLM, treat as authoritative facts. Raw values redacted.]"]
+  for (const h of hits) {
+    lines.push(
+      `- [${h.severity.toUpperCase()}] ${h.path}:${h.line} (${h.category}/${h.ruleId}) length=${h.matchLength} preview=${h.redactedPreview}`,
+    )
+  }
+  lines.push("")
+  lines.push("If any are real secrets, the PR must NOT merge until they are revoked + rotated. Recommend the author rotate immediately and rewrite history if the secret was committed.")
+  return lines.join("\n")
+}

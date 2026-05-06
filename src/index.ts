@@ -39,6 +39,7 @@ import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
 import { handlePrImprove } from "./lib/triage-pr-improve"
+import { handlePrDescribe } from "./lib/triage-pr-describe"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
@@ -226,6 +227,18 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
+    }
+  // ARC-191: `/sigilix describe` — single-shot LLM draft of a PR
+  // description / internal changelog / external changelog. Mode is
+  // resolved at parse time (one of three canonical names).
+  // headSha is resolved at handler time (same rationale as pr-improve).
+  | {
+      type: "pr-describe"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+      mode: import("./lib/slash-commands").DescribeMode
     }
   | {
       type: "ci-triage"
@@ -519,7 +532,7 @@ export default {
  */
 async function postSlashCommandAck(
   env: Env,
-  cmd: SlashCommand["cmd"],
+  cmd: SlashCommand,
   args: { owner: string; repo: string; prNumber: number; installationId: number },
 ): Promise<void> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
@@ -644,7 +657,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         try {
           await client.createIssueComment(
             job.owner, job.repo, job.prNumber,
-            renderSlashCommandAck("review"),
+            renderSlashCommandAck({ cmd: "review" }),
           )
         } catch (err) {
           console.error(JSON.stringify({
@@ -688,7 +701,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // Independent of the ensemble; fail-soft on ack but re-throws
       // on the actual run so queue retries get a chance.
       try {
-        await postSlashCommandAck(env, "improve", {
+        await postSlashCommandAck(env, { cmd: "improve" }, {
           owner: job.owner, repo: job.repo, prNumber: job.prNumber,
           installationId: job.installationId,
         })
@@ -713,7 +726,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // help-body markdown (the body IS the response), so the same
       // ack helper used by other slash commands does the entire job.
       try {
-        await postSlashCommandAck(env, "help", {
+        await postSlashCommandAck(env, { cmd: "help" }, {
           owner: job.owner, repo: job.repo, prNumber: job.prNumber,
           installationId: job.installationId,
         })
@@ -726,6 +739,34 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       }
       return
     }
+    case "pr-describe":
+      // ARC-191: `/sigilix describe`. Single-shot LLM call producing
+      // a PR description / changelog draft posted as a top-level
+      // comment with marker-wrapped body + hidden meta line for
+      // future apply parsing. Independent of the ensemble; does
+      // NOT consume the ensemble daily budget.
+      try {
+        await postSlashCommandAck(env, { cmd: "describe", mode: job.mode }, {
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          installationId: job.installationId,
+        })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "slash-command-ack-failed",
+          err: err instanceof Error ? err.message : String(err),
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          cmd: "describe",
+          mode: job.mode,
+        }))
+      }
+      return handlePrDescribe({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        installationId: job.installationId,
+        mode: job.mode,
+        env,
+      })
     case "ci-triage":
       return handleCiTriage({
         owner: job.owner,

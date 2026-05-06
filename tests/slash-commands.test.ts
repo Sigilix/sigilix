@@ -220,24 +220,44 @@ describe("parseSlashCommand + stripQuotesAndCode integration", () => {
 
 describe("renderSlashCommandAck", () => {
   it("renders a non-empty ack for the review command", () => {
-    const out = renderSlashCommandAck("review")
+    const out = renderSlashCommandAck({ cmd: "review" })
     expect(typeof out).toBe("string")
     expect(out.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toContain("review")
   })
 
   it("renders a non-empty ack for the improve command", () => {
-    const out = renderSlashCommandAck("improve")
+    const out = renderSlashCommandAck({ cmd: "improve" })
     expect(typeof out).toBe("string")
     expect(out.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toMatch(/(suggest|apply|patch)/)
   })
 
   it("renders the help body for the help command (the body IS the response)", () => {
-    const out = renderSlashCommandAck("help")
+    const out = renderSlashCommandAck({ cmd: "help" })
     expect(out).toContain("Sigilix slash commands")
     expect(out).toContain("`/sigilix review`")
     expect(out).toContain("`/sigilix help`")
+  })
+
+  it("renders an ack for `describe` (mode-aware)", () => {
+    const out = renderSlashCommandAck({ cmd: "describe", mode: "pr-description" })
+    expect(typeof out).toBe("string")
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.toLowerCase()).toContain("describe")
+    expect(out.toLowerCase()).toContain("pr description")
+  })
+
+  it("renders a usage comment for unknown describe arg (NOT a generic ack)", () => {
+    const out = renderSlashCommandAck({
+      cmd: "describe",
+      mode: "unknown",
+      rawArg: "foo",
+    })
+    expect(out).toContain("`foo`")
+    expect(out).toMatch(/`pr`/)
+    expect(out).toMatch(/`internal`/)
+    expect(out).toMatch(/`external`/)
   })
 })
 

@@ -118,9 +118,13 @@ export function parseSlashCommand(body: string): SlashCommand | null {
  * Uses an exhaustive switch so adding a new SlashCommand variant
  * surfaces as a tsc error here (via the `never` assignment), rather
  * than silently routing to a generic "Acknowledged." fallback.
+ *
+ * For `describe` the mode is part of the ack so the user knows
+ * which artifact is coming. For unknown describe args we return
+ * the usage comment (NOT silent fallback per Codex spec catch).
  */
-export function renderSlashCommandAck(cmd: SlashCommand["cmd"]): string {
-  switch (cmd) {
+export function renderSlashCommandAck(cmd: SlashCommand): string {
+  switch (cmd.cmd) {
     case "review":
       return "Re-running ensemble review on the current head. Standard sticky comment will update when complete."
     case "improve":
@@ -130,10 +134,31 @@ export function renderSlashCommandAck(cmd: SlashCommand["cmd"]): string {
       // command list directly. No separate ack needed; the help body
       // doubles as the ack.
       return renderHelpBody()
+    case "describe":
+      if (cmd.mode === "unknown") {
+        return `**Sigilix describe** — unknown mode \`${cmd.rawArg}\`. Try \`pr\`, \`internal\`, or \`external\`.`
+      }
+      return `Generating ${describeModeFriendlyName(cmd.mode)} draft via \`/sigilix describe\`. Output will appear inline shortly.`
     default: {
       const _exhaustive: never = cmd
       return _exhaustive
     }
+  }
+}
+
+/**
+ * Human-readable label for a describe mode. Used in ack + comment
+ * headers + telemetry-friendly logs. Pure mapping; tested via the
+ * snapshot tests downstream.
+ */
+export function describeModeFriendlyName(mode: DescribeMode): string {
+  switch (mode) {
+    case "pr-description":
+      return "PR description"
+    case "internal-changelog":
+      return "internal changelog"
+    case "external-changelog":
+      return "external changelog"
   }
 }
 

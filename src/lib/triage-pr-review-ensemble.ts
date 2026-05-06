@@ -71,6 +71,7 @@ import { withComposedTimeout } from "./agent-loop"
 import {
   loadSigilixConfig,
   resolveCommandConfig,
+  resolveAstRulesConfig,
   type SigilixConfig,
 } from "./sigilix-config"
 import {
@@ -104,6 +105,8 @@ import {
 } from "./review-manifest"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
+import { runAstRules } from "./ast-rules/runner"
+import { renderAstFindingsForPrompt, renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import type { Env } from "../index"
 
@@ -590,16 +593,63 @@ export async function handlePrReviewEnsemble(
           manifestsScanned: depVulnResult.manifestsScanned,
         }
 
+    // ─── ARC-181: AST rule-pack scan ────────────────────────────
+    // Pre-LLM AST scan over pathFiltered JS/TS files. Fetches each
+    // file at the PR head; runner applies the 500 KB cap and skips
+    // unsupported extensions. Findings flow into combinedFactsBlock
+    // alongside the other deterministic blocks, AND the structured
+    // JSON variant is threaded into the synth prompt for §5.5
+    // supersession matching (Task 8).
+    const astRulesConfig = resolveAstRulesConfig(sigilixConfig)
+    const jsTsPaths = filePaths.filter((p) => /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i.test(p))
+    const astFilesByPath = new Map<string, string>()
+    if (astRulesConfig.enabled && jsTsPaths.length > 0) {
+      const fetchResults = await Promise.allSettled(
+        jsTsPaths.map(async (p) => {
+          const src = await client.getFileContent(owner, repo, p, headSha)
+          return { p, src }
+        }),
+      )
+      for (const r of fetchResults) {
+        if (r.status === "fulfilled" && typeof r.value.src === "string") {
+          astFilesByPath.set(r.value.p, r.value.src)
+        }
+      }
+    }
+    const astResult = await runAstRules({
+      diff,
+      filesByPath: astFilesByPath,
+      reviewable,
+      config: astRulesConfig,
+      ctx: { owner, repo, prNumber },
+    })
+    const astBlock = renderAstFindingsForPrompt(astResult.findings)
+    telemetry.astRules = astResult.telemetry.scanned
+      ? {
+          scanned: true,
+          filesScanned: astResult.telemetry.filesScanned,
+          filesSkippedLarge: astResult.telemetry.filesSkippedLarge,
+          filesParseFailed: astResult.telemetry.filesParseFailed,
+          findingsCount: astResult.findings.length,
+          durationMs: astResult.telemetry.durationMs,
+        }
+      : {
+          scanned: false,
+          ...(astResult.telemetry.skipReason ? { skipReason: astResult.telemetry.skipReason } : {}),
+          findingsCount: 0,
+        }
+
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
-    // Combine deterministic + secret + dep-vuln blocks into one
-    // labeled section so the specialist sees them all as authoritative
-    // facts. Order: secrets first (highest severity), dep vulns
-    // second, regex deterministic checks last.
-    const combinedFactsBlock = [secretScanBlock, depVulnBlock, deterministicBlock]
+    // Combine deterministic + secret + dep-vuln + AST-rule blocks
+    // into one labeled section so the specialist sees them all as
+    // authoritative facts. Order: secrets first (highest severity),
+    // dep vulns, AST rules, regex deterministic checks last.
+    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, deterministicBlock]
       .filter((s) => s.length > 0)
       .join("\n\n")
+    void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -1925,6 +1975,14 @@ interface EnsembleTelemetry {
   depVulnScan?:
     | { skipped: true; reason: DepVulnSkipReason; findingsCount: 0 }
     | { skipped: false; findingsCount: number; depsScanned: number; manifestsScanned: number }
+  /**
+   * ARC-181: AST rule-pack scan telemetry. Mirrors the dep-vuln
+   * shape — `scanned: true` with metrics on the run path,
+   * `scanned: false` with optional `skipReason` on skip paths.
+   */
+  astRules?:
+    | { scanned: true; filesScanned: number; filesSkippedLarge: number; filesParseFailed: number; findingsCount: number; durationMs: number }
+    | { scanned: false; skipReason?: "disabled-config" | "no-js-ts-files"; findingsCount: 0 }
   /**
    * ARC-194: incremental-review telemetry. `mode` is `incremental`
    * (savings path), `full` (we tried but bailed), or `first-review`

@@ -579,3 +579,42 @@ describe("resolveCommandConfig (ARC-185)", () => {
     expect(resolveCommandConfig(config, "review").promptAddendum).toBeNull()
   })
 })
+
+describe("parseSigilixConfig — depVulnScan.enabled (ARC-186)", () => {
+  it("captures depVulnScan.enabled: false", () => {
+    const result = parseSigilixConfig(JSON.stringify({ depVulnScan: { enabled: false } }))
+    expect(result?.depVulnScan?.enabled).toBe(false)
+  })
+
+  it("captures depVulnScan.enabled: true", () => {
+    const result = parseSigilixConfig(JSON.stringify({ depVulnScan: { enabled: true } }))
+    expect(result?.depVulnScan?.enabled).toBe(true)
+  })
+
+  it("STRICT-BOOL: string \"false\" does NOT disable", () => {
+    const result = parseSigilixConfig(JSON.stringify({ depVulnScan: { enabled: "false" } }))
+    expect(result?.depVulnScan).toBeUndefined()
+  })
+
+  it("STRICT-BOOL: numeric 0 does NOT disable", () => {
+    const result = parseSigilixConfig(JSON.stringify({ depVulnScan: { enabled: 0 } }))
+    expect(result?.depVulnScan).toBeUndefined()
+  })
+
+  it("missing depVulnScan field → undefined (handler defaults to enabled)", () => {
+    const result = parseSigilixConfig(JSON.stringify({ guidance: "x" }))
+    expect(result?.depVulnScan).toBeUndefined()
+  })
+
+  it("ignores unknown subfields under depVulnScan (forward-compat)", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      depVulnScan: { enabled: false, futureField: "ignored" },
+    }))
+    expect(result).toEqual({ depVulnScan: { enabled: false } })
+  })
+
+  it("strips a top-level depVulnScan value that isn't an object", () => {
+    expect(parseSigilixConfig(JSON.stringify({ depVulnScan: "off" }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ depVulnScan: false }))).toEqual({})
+  })
+})

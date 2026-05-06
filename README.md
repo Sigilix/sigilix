@@ -423,6 +423,20 @@ Each slash command (`review`, `improve`, `describe`, `ask`) can declare its own 
 
 **Telemetry:** `command-config-resolved`, `command-config-parse-error`, `command-config-error-comment-posted`, `command-config-error-comment-suppressed-dedupe`, `command-config-error-comment-failed`.
 
+### `depVulnScan.enabled` (boolean, default true) — ARC-186
+
+Per-repo opt-OUT for the dependency-vulnerability scan. Default (missing field) = enabled. Strict-bool parsing (mirror of `describe.enabled`).
+
+```json
+{
+  "depVulnScan": {
+    "enabled": false
+  }
+}
+```
+
+When disabled, the scanner short-circuits silently and emits `dep-vuln-scan-skipped { reason: "disabled-config" }` telemetry. The security-specialist prompt loses the dep-vuln fact block; everything else (secret scan, deterministic regex checks, full LLM review) still runs.
+
 ## Review provenance + stale markers (ARC-184)
 
 After every successful review, Sigilix persists a per-PR **review manifest** to KV (`pr-review-manifest:<owner>/<repo>#<n>`) capturing the inputs the model reviewed against:
@@ -481,6 +495,25 @@ Built-in rule baseline (severity = `error` unless noted):
 **Privacy contract:** raw secrets are NEVER stored, logged, or returned. Hits surface only a redacted preview (first 4 + ... + last 4 chars) and a stable fingerprint for cross-run dedup. Telemetry (`secretScan.fingerprints`) stores fingerprints only.
 
 When a hit fires, the security specialist receives it as an authoritative fact in the prompt and the review surfaces a "rotate immediately" recommendation. The scan covers added diff lines only — pre-existing secrets aren't re-flagged on every PR.
+
+## Dependency vulnerability scan (ARC-186)
+
+Sigilix runs a **deterministic dep-vuln scan** before the LLM specialist fanout (alongside the secret scan + deterministic regex checks). v1 covers npm only — `package.json` + `package-lock.json`. Findings are injected into the security-specialist + synthesizer prompts as authoritative facts. **Always on**, opt-OUT via `sigilix.json` (`depVulnScan.enabled: false`).
+
+**How it works:**
+
+1. Fetches `package.json` + `package-lock.json` at the PR head + base SHA via the existing GitHub Contents API.
+2. Parses both lockfile formats (npm v6 + npm v7+) and **filters to root deps only** by intersecting lockfile entries with the union of `dependencies` + `devDependencies` + `peerDependencies` from `package.json`. Hoisted transitives are dropped.
+3. Computes the added/upgraded set as the `(name, version)` pairs in the head lockfile that differ from the base lockfile. Lockfile-only changes (e.g. `npm audit fix` bumps with no `package.json` edit) are detected.
+4. For each added/upgraded dep, looks it up in the bundled advisory DB and runs **range-aware** matching: a finding emits only when the version is inside a vulnerable range AND below the patch_in for THAT specific range. Multi-major advisories (e.g. patched in `1.4.2` AND `2.1.3`) are matched correctly without the false-negative trap of a global-min `>= patched_in` rule.
+
+**Bundled advisory DB:** `src/data/dep-vulns.json` — capped at **500 KB** (CI enforces). v1 ships 8 well-known historical advisories as a seed. Full curation lands in a quarterly operator-refresh PR per the §10a retention policy: all critical+high regardless of age, all medium from the last 12 months, top-N low by npm download count.
+
+**Strict missing-lockfile policy:** if the head lockfile is absent (gitignored, etc.), the scan emits `dep-vuln-scan-skipped { reason: "missing-lockfile" }` and exits cleanly. No `package.json`-only fallback in v1; deferred to v2.
+
+**v2 future scope:** Python ecosystems (`requirements.txt`, `Pipfile`, `Pipfile.lock`), live Aikido/OSS-Index API fetch, transitive resolution, workspaces / monorepos (v1 scans every changed leaf manifest pair independently).
+
+**Telemetry:** `dep-vuln-scan-skipped` (with reason), `dep-vuln-scan-ran` (with `findingsCount`, `depsScanned`, `durationMs`), `dep-vuln-snapshot-meta` (snapshot date + advisory count once per scan), `dep-vuln-finding` (per emitted finding for severity aggregation).
 
 ## Slash commands (ARC-178 / ARC-179 / ARC-191)
 

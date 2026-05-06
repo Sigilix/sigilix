@@ -399,6 +399,32 @@ Built-in rule baseline (severity = `error` unless noted):
 
 When a hit fires, the security specialist receives it as an authoritative fact in the prompt and the review surfaces a "rotate immediately" recommendation. The scan covers added diff lines only — pre-existing secrets aren't re-flagged on every PR.
 
+## Slash commands (ARC-178)
+
+Reviewers can re-trigger Sigilix from any PR comment without pushing a no-op commit. v1 ships one command:
+
+| Command | Effect |
+|---|---|
+| `/sigilix review` | Re-runs the ensemble review against the PR's current head SHA. Sigilix posts a short ack, clears the per-(PR, headSha) dedupe lock, then the regular sticky review comment updates when the run completes. |
+
+Recognition rules:
+
+- Must be at the **start of a line** (after leading whitespace). Quoted/inline references like `> /sigilix review` or `Hey /sigilix review please` don't trigger.
+- Case-insensitive on both the prefix and the command word (`/Sigilix REVIEW` works).
+- Distinct from `@sigilix` mentions — those still flow through the existing Q&A reply path.
+- Code-fenced or blockquoted invocations are stripped before parsing, so commands inside `\`\`\`` blocks or `>` quotes are ignored.
+
+Authorization (B2 gate):
+
+- Commenter must be `OWNER`, `MEMBER`, or `COLLABORATOR` on the repo (per GitHub's `author_association` field). `CONTRIBUTOR` is intentionally excluded — anyone whose PR has merged is permanently `CONTRIBUTOR`, which is too broad a circle for a command that triggers an expensive ensemble run.
+- Untrusted authors get a 403 (silent to the user — no comment posted). Decision is logged via the `slash-command-rejected` telemetry event for ops review.
+
+Burst behavior:
+
+- Concurrent `/sigilix review` posts on the same PR are coalesced for 60s via a KV lock (`pr-review-rerun:<owner>/<repo>#<n>`). The first invocation posts the ack and re-enqueues; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently.
+
+Unsupported subcommands (`/sigilix ask`, `/sigilix improve`, `/sigilix help`, etc.) are reserved for follow-up issues. Today they currently fall silently through to the @-mention pipeline — which means a bare `/sigilix help` (no `@sigilix`) goes nowhere. Future versions will recognize `help` and respond with the supported command list.
+
 ## CI / auto-deploy
 
 The `.github/workflows/deploy.yml` Action deploys on every push to `main`. Add two repo secrets:

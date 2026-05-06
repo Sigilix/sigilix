@@ -30,6 +30,7 @@
 
 import type { GitHubClient } from "./github"
 import type { SpecialistRole } from "./ensemble-router"
+import { parseDeterministicChecks, type DeterministicCheck } from "./deterministic-checks"
 
 export const SIGILIX_CONFIG_PATH = "sigilix.json"
 
@@ -42,6 +43,17 @@ export interface SigilixConfig {
    * check for X" without polluting the other roles' prompts.
    */
   rules?: Partial<Record<SpecialistRole, string>>
+  /**
+   * ARC-193: deterministic regex checks run BEFORE the LLM specialist
+   * fanout. Each rule defines a JS regex matched against added diff
+   * lines; matches surface as structured findings injected into the
+   * specialist prompts as authoritative facts. Pure-LLM detection has
+   * higher miss rates on flat patterns (TODO comments, console.log,
+   * hardcoded secrets); deterministic checks close that gap cheaply.
+   *
+   * See `deterministic-checks.ts` for the runner + rendering.
+   */
+  deterministicChecks?: DeterministicCheck[]
 }
 
 export const EMPTY_CONFIG: SigilixConfig = {}
@@ -78,6 +90,12 @@ export function parseSigilixConfig(raw: string): SigilixConfig | null {
       }
     }
     if (Object.keys(rulesOut).length > 0) out.rules = rulesOut
+  }
+  // ARC-193: deterministicChecks parsing delegated to the runner module
+  // so the schema stays co-located with the runtime that consumes it.
+  if (obj.deterministicChecks !== undefined) {
+    const checks = parseDeterministicChecks(obj.deterministicChecks)
+    if (checks.length > 0) out.deterministicChecks = checks
   }
   return out
 }

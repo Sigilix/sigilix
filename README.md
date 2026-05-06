@@ -314,6 +314,37 @@ Both top-level fields are optional. Missing file = no extra context (current beh
 
 `guidance` is prepended to every specialist's prompt **and** the synthesizer's prompt. `rules.<role>` is appended only to that role's prompt. Unknown fields are forward-compat ignored.
 
+### Deterministic checks (ARC-193)
+
+Add a `deterministicChecks` array to `sigilix.json` to surface flat
+patterns BEFORE the LLM runs. Each rule defines a JS regex matched
+against added diff lines; matches become structured findings injected
+into the specialist prompts as authoritative facts:
+
+```json
+{
+  "deterministicChecks": [
+    {
+      "id": "no-todo-without-author",
+      "pattern": "TODO(?!\\([^)]+\\))",
+      "severity": "warn",
+      "message": "TODOs must include an author: TODO(name): ...",
+      "paths": ["src/**/*.ts"]
+    },
+    {
+      "id": "no-console-log",
+      "pattern": "console\\.log\\(",
+      "severity": "error",
+      "message": "console.log left in production code"
+    }
+  ]
+}
+```
+
+Required fields: `id`, `pattern`, `message`. Optional: `severity` (`info|warn|error`, defaults to `warn`), `paths` (glob array; rule applies repo-wide when omitted).
+
+A malformed regex is dropped silently and recorded in telemetry; never breaks the review.
+
 ## CI / auto-deploy
 
 The `.github/workflows/deploy.yml` Action deploys on every push to `main`. Add two repo secrets:

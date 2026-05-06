@@ -82,6 +82,11 @@ import {
   type DeterministicCheckHit,
 } from "./deterministic-checks"
 import {
+  runSecretScan,
+  renderSecretHitsForPrompt,
+  type SecretHit,
+} from "./secret-scan"
+import {
   readLastReviewedSha,
   writeLastReviewedSha,
   selectDiff,
@@ -457,6 +462,23 @@ export async function handlePrReviewEnsemble(
       }
     }
 
+    // ARC-187: secret scan. Built-in baseline rule set (AWS, GitHub,
+    // Slack, Stripe, OpenAI, Anthropic keys + private-key PEM headers
+    // + a generic high-entropy safety net). Hits are redacted before
+    // anything reaches logs / prompts / telemetry — raw secrets never
+    // leave the runner. Always-on; no config knob in v1 because secret
+    // detection is baseline behavior, not opt-in.
+    const secretHits: SecretHit[] = runSecretScan(diff)
+    if (secretHits.length > 0) {
+      telemetry.secretScan = {
+        hitCount: secretHits.length,
+        // Telemetry stores fingerprints (path:line:redacted) — never
+        // the raw values. Lets post-hoc analysis dedupe across runs
+        // without exposing the secret to KV reads.
+        fingerprints: secretHits.map((h) => h.fingerprint),
+      }
+    }
+
     // ─── Router decision ───────────────────────────────────────
     const totalLinesChanged = countLines(diff)
     // CR PR #35 catch: pass diffText so the router can content-aware
@@ -519,6 +541,14 @@ export async function handlePrReviewEnsemble(
 
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
+    const secretScanBlock = renderSecretHitsForPrompt(secretHits)
+    // Combine deterministic + secret blocks into one labeled section
+    // so the specialist sees both as authoritative facts. Order
+    // doesn't materially affect quality but secret hits are higher
+    // severity → list them first.
+    const combinedFactsBlock = [secretScanBlock, deterministicBlock]
+      .filter((s) => s.length > 0)
+      .join("\n\n")
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -528,7 +558,7 @@ export async function handlePrReviewEnsemble(
       namespace,
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
       ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
-      ...(deterministicBlock ? { deterministicChecksBlock: deterministicBlock } : {}),
+      ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
     })
 
     const specialistResults = await Promise.allSettled(
@@ -1687,6 +1717,16 @@ interface EnsembleTelemetry {
   deterministicChecks?: {
     hits: DeterministicCheckHit[]
     compiledRegexFailures: string[]
+  }
+  /**
+   * ARC-187: secret-scan telemetry. Stores hit count + fingerprints
+   * only. Raw secrets are NEVER stored or logged — fingerprints are
+   * `${ruleId}:${path}:${line}:${redactedPreview}` so post-hoc
+   * analysis can dedupe across runs without exposing the value.
+   */
+  secretScan?: {
+    hitCount: number
+    fingerprints: string[]
   }
   /**
    * ARC-194: incremental-review telemetry. `mode` is `incremental`

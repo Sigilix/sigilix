@@ -85,12 +85,17 @@ const DEFAULT_DAILY_BUDGET = 200
 // based on "median successful logic latency = 78s" — but that figure
 // excluded the failed-aborted runs that were silently capped at 90s
 // pre-Phase-4a.1 and 180s pre-Phase-4a.3. Real post-4a.2 telemetry
-// showed `deepseek-v4-pro:cloud` consistently doing 2 primary attempts
-// of ~90s each, exhausting the 180s budget mid-second-attempt and
-// killing the cross-provider fallback before it could fire. Bumped to
-// 240s so logic gets 2 primary attempts + 1 fallback attempt within
-// the specialist budget.
-export const SPECIALIST_TIMEOUT_MS = 240_000
+// (PR #45 record) showed `deepseek-v4-pro:cloud` consistently doing 2
+// primary attempts of ~90s each, exhausting the 180s budget mid-
+// second-attempt and killing the cross-provider fallback before it
+// could fire.
+//
+// Sized to fit `2 primary attempts (2×90s) + retry backoff (~1s) +
+// 1 cross-provider fallback attempt (~80s, kimi-k2.5:cloud)` = 261s,
+// rounded up to 270s for slack. The static invariant test below
+// regression-guards this so a future "tighten for headroom" change
+// can't silently re-break the fallback firing.
+export const SPECIALIST_TIMEOUT_MS = 270_000
 // Synth on 4× 8K-token verdicts observed at 22-100s post-4a.2; 180s
 // gives p99 headroom for cross-specialist disagreement cases. Kept
 // unchanged in 4a.3 — observed margin is fine, and a tighter synth
@@ -101,10 +106,10 @@ export const SYNTHESIZER_TIMEOUT_MS = 180_000
 // headroom beyond (specialist + synth) so a slow Vectorize round-trip
 // doesn't eat into the synth budget.
 export const RESERVED_HEADROOM_MS = 40_000
-// 240 + 180 + 40 = 460. Cloudflare queue ceiling is 900s. The 60s
+// 270 + 180 + 40 = 490. Cloudflare queue ceiling is 900s. The 90s
 // orch bump (Phase 4a.3) is well under any user-perceptible review
 // latency budget for background PR triage.
-export const ORCHESTRATOR_TIMEOUT_MS = 460_000
+export const ORCHESTRATOR_TIMEOUT_MS = 490_000
 // Cap the pre-flight Vectorize round-trip so a slow retrieval can't
 // silently consume the synth budget. Failed pre-flight is non-fatal
 // per v3.1 §8 — specialists fall back to empty snapshot.
@@ -403,10 +408,10 @@ export async function handlePrReviewEnsemble(
       router.specialists.map((role) =>
         withComposedTimeout(
           // Use the composed signal `withComposedTimeout` provides — it
-          // aborts on EITHER the per-specialist 240s timer OR the outer
+          // aborts on EITHER the per-specialist 270s timer OR the outer
           // orch abort. Passing `orchCtrl.signal` directly only cancels
           // the await wrapper, leaving the in-flight model fetch alive
-          // until the outer 460s wall fires (CR catch on PR #42).
+          // until the outer 490s wall fires (CR catch on PR #42).
           (signal) => runSpecialist({
             role,
             apiKey: env.OLLAMA_API_KEY,
@@ -462,7 +467,7 @@ export async function handlePrReviewEnsemble(
         // Use the composed signal so a synth-only 180s timeout actually
         // cancels the underlying model call. Passing `orchCtrl.signal`
         // directly only rejects this await; the in-flight model fetch
-        // would keep running until the outer 460s orch wall fires
+        // would keep running until the outer 490s orch wall fires
         // (CR catch on PR #42).
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,

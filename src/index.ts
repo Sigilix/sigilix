@@ -45,6 +45,9 @@ import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
 import { handlePrImprove } from "./lib/triage-pr-improve"
 import { handlePrDescribe } from "./lib/triage-pr-describe"
+import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
+import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
+import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
@@ -170,6 +173,12 @@ export interface Env {
   // duplicate noise + duplicate API spend. pr-overview still fires
   // so the release PR still gets a summary blurb.
   OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES?: string
+
+  // ARC-184 kill-switch for the review-provenance + stale-marker
+  // pipeline. When set to "off", manifest writes and stale-mark
+  // enqueues short-circuit. Default (unset / any other value) = on.
+  // Single-flag rollback if a bug surfaces post-deploy.
+  OPENCLAW_REVIEW_MANIFEST_ENABLED?: string
 }
 
 /**
@@ -244,6 +253,25 @@ export type JobMessage =
       prNumber: number
       installationId: number
       mode: import("./lib/slash-commands").DescribeMode
+    }
+  // ARC-184: review provenance + stale markers. Enqueued from the
+  // webhook handler alongside `pr-review` on `synchronize` / `edited`
+  // when a prior review-manifest exists. The consumer reads the live
+  // manifest, computes drift against current PR state, and PATCHes
+  // the prior review/issue-comment body with a stale notice block.
+  // No model call; no ensemble budget consumption.
+  | {
+      type: "pr-stale-mark"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+      manifestSnapshot: ReviewManifestV1
+      newHeadSha: string
+      newBaseSha: string
+      // Pinned at enqueue time so a concurrent prompt deploy between
+      // enqueue and consume doesn't change drift detection.
+      currentPromptVersion: string
     }
   | {
       type: "ci-triage"
@@ -332,7 +360,7 @@ interface GitHubWebhookPayload {
   pull_request?: {
     number?: number
     head?: { sha?: string; ref?: string }
-    base?: { ref?: string }
+    base?: { sha?: string; ref?: string }
     draft?: boolean
   }
   workflow_run?: {
@@ -772,6 +800,33 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         mode: job.mode,
         env,
       })
+    case "pr-stale-mark":
+      // ARC-184: review-provenance stale marker. Independent of any
+      // model call; consumes only GitHub-side metadata + a single
+      // PATCH per drift. Wrapped in try/catch so a failure here never
+      // blocks the queue dispatch loop — the handler itself emits
+      // structured telemetry on every branch.
+      try {
+        await handlePrStaleMark({
+          env,
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          installationId: job.installationId,
+          manifestSnapshot: job.manifestSnapshot,
+          newHeadSha: job.newHeadSha,
+          newBaseSha: job.newBaseSha,
+          currentPromptVersion: job.currentPromptVersion,
+        })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-stale-mark-bubbled",
+          err: err instanceof Error ? err.message : String(err),
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        }))
+        throw err
+      }
+      return
     case "ci-triage":
       return handleCiTriage({
         owner: job.owner,
@@ -987,6 +1042,48 @@ async function handleGitHubWebhook(
         headSha,
         installationId,
       })
+
+      // ARC-184: when the action is `synchronize` or `edited` AND a
+      // prior review-manifest exists, enqueue a parallel `pr-stale-mark`
+      // job. The stale-mark consumer detects drift and PATCHes the
+      // prior review's body with a stale notice — this gives the user
+      // an immediate "old verdict no longer applies" signal while the
+      // fresh review is in flight (~30-90s).
+      //
+      // No manifest = no prior review to mark stale (first-review or
+      // pre-ARC-184 PR). Skip silently. Kill-switch via
+      // OPENCLAW_REVIEW_MANIFEST_ENABLED=off short-circuits both the
+      // KV read and the enqueue.
+      if (
+        env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off" &&
+        (action === "synchronize" || action === "edited")
+      ) {
+        const baseSha = pr.base?.sha ?? ""
+        if (baseSha) {
+          try {
+            const result = await readReviewManifest(env, owner, repo, prNumber)
+            if (result.kind === "ok") {
+              await env.OPENCLAW_JOBS.send({
+                type: "pr-stale-mark",
+                owner,
+                repo,
+                prNumber,
+                installationId,
+                manifestSnapshot: result.manifest,
+                newHeadSha: headSha,
+                newBaseSha: baseSha,
+                currentPromptVersion: PROMPT_VERSION,
+              })
+            }
+          } catch (err) {
+            console.error(JSON.stringify({
+              event: "pr-stale-mark-enqueue-failed",
+              err: err instanceof Error ? err.message : String(err),
+              owner, repo, prNumber,
+            }))
+          }
+        }
+      }
     }
     return new Response("queued\n", { status: 202 })
   }

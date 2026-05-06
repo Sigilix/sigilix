@@ -93,6 +93,12 @@ import {
   type DiffMode,
 } from "./incremental-review"
 import { isRepoSensitive } from "./repo-policy"
+import {
+  computeFileListHash,
+  writeReviewManifest,
+  type ReviewManifestV1,
+} from "./review-manifest"
+import { PROMPT_VERSION } from "../prompts/pr-review"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -769,8 +775,16 @@ export async function handlePrReviewEnsemble(
       unanchored: validated.unanchoredFindings,
     })
     try {
-      await client.submitReview(owner, repo, prNumber, submission)
+      const submitted = await client.submitReview(owner, repo, prNumber, submission)
       telemetry.submitted = true
+      // ARC-184: write review-provenance manifest. Best-effort.
+      await writeReviewManifestForEnsemble({
+        env, client, owner, repo, prNumber,
+        headSha,
+        baseSha: meta.base?.sha ?? "",
+        modelId: "ensemble-synth",
+        reviewId: submitted.id,
+      })
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
       // Narrow the fallback to GitHub HTTP 422 (Unprocessable Entity)
@@ -812,8 +826,18 @@ export async function handlePrReviewEnsemble(
         prAuthor: meta.user?.login ?? null,
         headSha,
       })
-      await client.submitReview(owner, repo, prNumber, fallback)
+      const submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
       telemetry.submitted = true
+      // ARC-184: write manifest for the fallback path too. Same target
+      // shape (kind: "review") because the fallback is still a GitHub
+      // review (just anchorless body).
+      await writeReviewManifestForEnsemble({
+        env, client, owner, repo, prNumber,
+        headSha,
+        baseSha: meta.base?.sha ?? "",
+        modelId: "ensemble-synth",
+        reviewId: submittedFallback.id,
+      })
       return finalize(telemetry, env, "posted", cache)
     }
   } catch (e) {
@@ -823,6 +847,73 @@ export async function handlePrReviewEnsemble(
     return finalize(telemetry, env, "errored", cache)
   } finally {
     clearTimeout(orchTimer)
+  }
+}
+
+// ─── ARC-184 manifest helper ──────────────────────────────────────────
+
+/**
+ * Best-effort write of the review-provenance manifest from the
+ * ensemble post-mode submit paths. Captures the full manifest shape
+ * required by Linear AC #1 (head/base/merge-base SHAs, file-list hash,
+ * prompt version, model id, target id). KV write failures degrade
+ * gracefully — never block the review flow.
+ *
+ * Skipped when the kill-switch is set: `OPENCLAW_REVIEW_MANIFEST_ENABLED=off`.
+ */
+async function writeReviewManifestForEnsemble(args: {
+  env: Env
+  client: GitHubClient
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  baseSha: string
+  modelId: string
+  reviewId: number
+}): Promise<void> {
+  const { env, client, owner, repo, prNumber, headSha, baseSha, modelId, reviewId } = args
+  if (env.OPENCLAW_REVIEW_MANIFEST_ENABLED === "off") return
+  try {
+    const [files, mergeBaseSha] = await Promise.all([
+      client.listPullFilesForManifest(owner, repo, prNumber),
+      baseSha ? client.getMergeBase(owner, repo, baseSha, headSha) : Promise.resolve(null),
+    ])
+    const fileListHash = await computeFileListHash(files)
+    const manifest: ReviewManifestV1 = {
+      v: 1,
+      prNumber,
+      baseSha,
+      headSha,
+      mergeBaseSha,
+      fileListHash,
+      promptVersion: PROMPT_VERSION,
+      modelId,
+      target: { kind: "review", reviewId },
+      reviewedAt: Date.now(),
+    }
+    const ok = await writeReviewManifest(env, owner, repo, prNumber, manifest)
+    if (ok) {
+      console.log(JSON.stringify({
+        event: "review-manifest-written",
+        owner, repo, prNumber,
+        headSha, baseSha, modelId,
+        promptVersion: PROMPT_VERSION,
+        target: { kind: "review", id: reviewId },
+      }))
+    } else {
+      console.error(JSON.stringify({
+        event: "review-manifest-write-failed",
+        owner, repo, prNumber,
+        err: "writeReviewManifest returned false",
+      }))
+    }
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "review-manifest-write-failed",
+      owner, repo, prNumber,
+      err: err instanceof Error ? err.message : String(err),
+    }))
   }
 }
 

@@ -8,6 +8,22 @@
 //   score 1-5 per finding (5 = critical, 1 = trivial)
 //   confidence 1-5 overall (5 = ready to merge, 1 = do not merge)
 
+/**
+ * Monotonic version of the PR-review prompt + scoring contract.
+ * Recorded in the per-PR review manifest (ARC-184) and compared on
+ * subsequent webhook arrivals — a mismatch marks the prior review
+ * stale even when head/base SHAs haven't changed (because the prompt
+ * itself shifts the verdict the model produces).
+ *
+ * Bump rules:
+ *   - Bump on substantive scope/style changes (new categories, severity
+ *     re-calibration, output-format changes that affect downstream
+ *     parsing).
+ *   - Do NOT bump on typo fixes, minor wording polish, or clarifying
+ *     comments that don't change the model's behavior.
+ */
+export const PROMPT_VERSION = "1"
+
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, anchor every finding to a specific line.
 
 ## What you'll receive

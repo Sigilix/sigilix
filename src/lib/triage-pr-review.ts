@@ -33,7 +33,12 @@ import {
 } from "./github"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_SCHEMA } from "./schemas"
-import { PR_REVIEW_PROMPT } from "../prompts/pr-review"
+import { PR_REVIEW_PROMPT, PROMPT_VERSION } from "../prompts/pr-review"
+import {
+  computeFileListHash,
+  writeReviewManifest,
+  type ReviewManifestV1,
+} from "./review-manifest"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -220,6 +225,56 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
     console.log(
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
     )
+
+    // ARC-184: write the review manifest. Best-effort — never blocks
+    // the review flow. Captures the inputs we reviewed against
+    // (head/base/merge-base SHAs, file-list hash, prompt version,
+    // model id, GitHub review id) so a later webhook can detect drift
+    // and PATCH a stale notice into THIS review's body.
+    if (env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off") {
+      try {
+        const baseSha = meta.base?.sha ?? ""
+        const [files, mergeBaseSha] = await Promise.all([
+          client.listPullFilesForManifest(owner, repo, prNumber),
+          baseSha ? client.getMergeBase(owner, repo, baseSha, headSha) : Promise.resolve(null),
+        ])
+        const fileListHash = await computeFileListHash(files)
+        const manifest: ReviewManifestV1 = {
+          v: 1,
+          prNumber,
+          baseSha,
+          headSha,
+          mergeBaseSha,
+          fileListHash,
+          promptVersion: PROMPT_VERSION,
+          modelId: model,
+          target: { kind: "review", reviewId: submitted.id },
+          reviewedAt: Date.now(),
+        }
+        const ok = await writeReviewManifest(env, owner, repo, prNumber, manifest)
+        if (ok) {
+          console.log(JSON.stringify({
+            event: "review-manifest-written",
+            owner, repo, prNumber,
+            headSha, baseSha, modelId: model,
+            promptVersion: PROMPT_VERSION,
+            target: { kind: "review", id: submitted.id },
+          }))
+        } else {
+          console.error(JSON.stringify({
+            event: "review-manifest-write-failed",
+            owner, repo, prNumber,
+            err: "writeReviewManifest returned false",
+          }))
+        }
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "review-manifest-write-failed",
+          owner, repo, prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
   } finally {
     // Release the lock unless we actually posted a review. On a
     // successful post, the 7-day TTL stays — we don't want CR's
@@ -330,6 +385,12 @@ interface BuildReviewArgs {
   prAuthor: string | null
   headSha: string
   /**
+   * ARC-184: Override `Date.now()` for deterministic snapshots in
+   * tests. Production callers omit this and the renderer falls back
+   * to wall-clock time at submit-render time.
+   */
+  nowMs?: number
+  /**
    * Findings that passed the hallucination guard but failed the
    * line-validity check. The inline-comments path can't anchor them
    * (GitHub would 422), so they get rolled into the review body as
@@ -369,12 +430,14 @@ export function buildReviewSubmission({
   prAuthor,
   headSha,
   unanchored = [],
+  nowMs,
 }: BuildReviewArgs): SubmitReviewBody {
   // Event derivation merges anchored + unanchored so a verdict whose
   // only blocking findings happen to be unanchored doesn't post APPROVE
   // (CR + Sigilix PR #38 catch).
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
-  const body = formatReviewBody(verdict, prAuthor, event, unanchored)
+  const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
+  const body = formatReviewBody(verdict, prAuthor, event, unanchored, prov)
   const comments: SubmitReviewComment[] = verdict.findings.map((f) => {
     const c: SubmitReviewComment = {
       path: f.path,
@@ -443,15 +506,23 @@ export function buildFallbackSubmission({
   }
 }
 
+export interface ProvenanceCtx {
+  /** Head SHA of the PR being reviewed (40-char hex). */
+  headSha: string
+  /** Override Date.now() for deterministic tests. */
+  nowMs?: number
+}
+
 export function buildFallbackBody(
   verdict: PrReviewVerdict,
-  unanchored: PrReviewFinding[]
+  unanchored: PrReviewFinding[],
+  prov?: ProvenanceCtx,
 ): string {
   const all = [...verdict.findings, ...unanchored]
   if (all.length === 0) {
     // No inline findings to relocate; the standard prose body is fine.
     // Still flow through formatReviewBody to keep the marker + summary.
-    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings))
+    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings), [], prov)
   }
 
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
@@ -472,7 +543,7 @@ export function buildFallbackBody(
   lines.push(`### Findings (${all.length})`)
   lines.push(...renderFindingsByFile(all))
 
-  return lines.join("\n")
+  return capForGitHub(lines.join("\n"), prov)
 }
 
 export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
@@ -506,7 +577,8 @@ function formatReviewBody(
   verdict: PrReviewVerdict,
   _prAuthor: string | null,
   _event: ReviewEvent,
-  unanchored: PrReviewFinding[] = []
+  unanchored: PrReviewFinding[] = [],
+  prov?: ProvenanceCtx,
 ): string {
   // Body is greptile-styled and prose-only. The structure is fixed
   // (marker, header, model's summary, model's confidence reason,
@@ -548,7 +620,41 @@ function formatReviewBody(
     lines.push(`### Additional findings (could not anchor to diff)`)
     lines.push(...renderFindingsByFile(unanchored))
   }
-  return lines.join("\n")
+  return capForGitHub(lines.join("\n"), prov)
+}
+
+// ARC-184: provenance footer + writer-side 65k cap.
+//
+// GitHub PR review bodies and issue comments are capped at 65,535
+// chars. Sigilix's bodies almost never approach this (typical 2-8 KB),
+// so the cap here is defense-in-depth — it preserves the footer
+// exactly so the manifest's reviewed-at SHA always appears, and
+// truncates the body content above with a marker that links the
+// reader to the full review history.
+const GH_BODY_CAP = 65000
+
+function renderProvenanceFooter(prov: ProvenanceCtx | undefined): string | null {
+  if (!prov || !prov.headSha) return null
+  const headShort = prov.headSha.slice(0, 7)
+  const ts = new Date(prov.nowMs ?? Date.now()).toISOString()
+  return `_Reviewed against \`${headShort}\` at ${ts}._`
+}
+
+function capForGitHub(body: string, prov: ProvenanceCtx | undefined): string {
+  const footer = renderProvenanceFooter(prov)
+  // Always append the footer (or omit when there's no provenance ctx,
+  // for backwards compatibility with callers that don't provide one).
+  if (!footer) return body
+  const withFooter = `${body}\n\n${footer}\n`
+  if (withFooter.length <= GH_BODY_CAP) return withFooter
+  // Truncate the body content (NOT the footer) and append a pointer
+  // marker. The footer is appended below so the reader still sees
+  // which head SHA the review was generated against.
+  const TRUNC = "\n\n_[summary truncated to fit GitHub's 65535 limit]_"
+  const overhead = TRUNC.length + footer.length + 4 // 4 = "\n\n" before footer + "\n" tail
+  const room = GH_BODY_CAP - overhead
+  const truncated = body.slice(0, Math.max(0, room))
+  return `${truncated}${TRUNC}\n\n${footer}\n`
 }
 
 /**

@@ -67,6 +67,32 @@ export class GitHubClient {
     )
   }
 
+  /**
+   * ARC-194: incremental review support. Fetch the unified diff
+   * representing changes between two commits/refs. Used to review
+   * only the new commits since the last successful review on a PR
+   * that's been pushed-to multiple times — saves model spend on
+   * iteration-heavy PRs.
+   *
+   * Returns the diff in unified format (same shape as
+   * `getPullRequestDiff`). GitHub's compare endpoint accepts SHAs,
+   * branch names, or refs separated by `...` (3 dots = base...head
+   * showing only commits ahead on head, which is what we want).
+   */
+  async getCompareDiff(
+    owner: string,
+    repo: string,
+    base: string,
+    head: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<string> {
+    return this.restGetText(
+      `/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+      "application/vnd.github.v3.diff",
+      opts
+    )
+  }
+
   /** Fetch PR metadata (title, body, head sha, author, labels, etc.). */
   async getPullRequest(
     owner: string,

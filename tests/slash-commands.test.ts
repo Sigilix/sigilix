@@ -94,6 +94,18 @@ describe("parseSlashCommand", () => {
     ].join("\n")
     expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
   })
+
+  it("doesn't let an unsupported earlier line suppress a supported later one (sigilix-bot catch)", () => {
+    // Sigilix-bot's self-review on PR #58 caught this: previously,
+    // hitting a `/sigilix <unsupported>` line returned null without
+    // checking later lines, so a body that opened with `/sigilix help`
+    // would silently drop a valid `/sigilix review` further down.
+    const body = [
+      "/sigilix help",
+      "/sigilix review",
+    ].join("\n")
+    expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
+  })
 })
 
 describe("parseSlashCommand + stripQuotesAndCode integration", () => {

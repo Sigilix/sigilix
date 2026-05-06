@@ -58,14 +58,15 @@ export function parseSlashCommand(body: string): SlashCommand | null {
       return { cmd: "review" }
     }
     // Recognized prefix (`/sigilix ...`) but unsupported subcommand.
-    // Returning null here means the caller's ONLY fallback is the
-    // existing @-mention pipeline — and that requires an explicit
-    // `@sigilix` somewhere else in the body. A bare `/sigilix help`
-    // (no @-mention) currently goes silently nowhere. When v2 adds
-    // help/ask/improve, expose them here; until then, the README
-    // documents the limitation rather than papering over it with a
-    // synthetic ack.
-    return null
+    // Continue scanning later lines — a comment that opens with
+    // `/sigilix help` followed by `/sigilix review` should still
+    // execute the review (sigilix-bot self-review catch on PR #58:
+    // returning null here would let an unsupported earlier line
+    // suppress a supported later one). When v2 adds the missing
+    // subcommands they get recognized in the branches above; until
+    // then, the README documents the limitation rather than papering
+    // over it with a synthetic ack.
+    continue
   }
   return null
 }

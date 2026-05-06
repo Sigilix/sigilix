@@ -1104,10 +1104,11 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
 
   // Slash-command dispatch. Recognize `/sigilix <cmd>` at a line
   // start and route to a dedicated job type instead of the generic
-  // mention-reply pipeline. Currently handles `review`, `improve`,
-  // and `help`. Other commands (ask, describe) fall silently through
-  // to the @-mention pipeline (which means they're ignored unless
-  // the same comment also @-mentions Sigilix); README documents this.
+  // mention-reply pipeline. Handles `review`, `improve`, `help`, and
+  // `describe`. Other commands (e.g. future `ask`) fall silently
+  // through to the @-mention pipeline (which means they're ignored
+  // unless the same comment also @-mentions Sigilix); README
+  // documents this.
   const cleaned = stripQuotesAndCode(body)
   const slashCmd = parseSlashCommand(cleaned)
   if (slashCmd) {
@@ -1131,12 +1132,47 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
       return new Response("forbidden\n", { status: 403 })
     }
 
+    // ARC-191 unknown-arg fast path: post the usage comment and
+    // return, BEFORE coalesce / dedupe / enqueue. The user's typo
+    // shouldn't enter the queue and consume budget; the response is
+    // synchronous and tells them how to re-invoke.
+    if (slashCmd.cmd === "describe" && slashCmd.mode === "unknown") {
+      try {
+        const token = await getInstallationToken({
+          kv: env.OPENCLAW_STATE,
+          appId: env.GITHUB_APP_ID!,
+          privateKey: env.GITHUB_PRIVATE_KEY!,
+          installationId,
+        })
+        const client = new GitHubClient({ token })
+        await client.createIssueComment(
+          owner, repo, prNumber,
+          renderSlashCommandAck(slashCmd),
+        )
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "slash-command-usage-post-failed",
+          err: err instanceof Error ? err.message : String(err),
+          cmd: "describe", rawArg: slashCmd.rawArg,
+          owner, repo, prNumber,
+        }))
+      }
+      return new Response("usage posted\n", { status: 200 })
+    }
+
     // Per-command coalesce lock: if the same (PR, command) is in
     // flight, drop subsequent invocations within 60s. Collapses N
     // concurrent posts into 1 ack + 1 LLM run. Keying includes the
     // command name so different commands on the same PR don't
     // accidentally suppress each other.
-    const coalesceKey = `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
+    // Coalesce key: mode-keyed for describe so `internal` and
+    // `external` on the same PR don't suppress each other within
+    // the 60s window. Other commands keep the existing key shape.
+    // (The `unknown` describe variant returned via the fast path
+    // above, so here describe.mode is always a canonical DescribeMode.)
+    const coalesceKey = slashCmd.cmd === "describe"
+      ? `slash-cmd:describe:${slashCmd.mode}:${owner}/${repo}#${prNumber}`
+      : `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
     const existing = await env.OPENCLAW_STATE.get(coalesceKey)
     if (existing) {
       console.log(JSON.stringify({
@@ -1167,6 +1203,16 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
         message = {
           type: "pr-help",
           owner, repo, prNumber, installationId,
+        }
+        break
+      case "describe":
+        // mode === "unknown" was handled above by the fast path;
+        // TypeScript narrows slashCmd here to the canonical-mode
+        // variant of the describe union.
+        message = {
+          type: "pr-describe",
+          owner, repo, prNumber, installationId,
+          mode: slashCmd.mode,
         }
         break
       default: {

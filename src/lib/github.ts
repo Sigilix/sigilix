@@ -266,6 +266,134 @@ export class GitHubClient {
     )
   }
 
+  /**
+   * ARC-184: fully-paginated changed-file list for the per-PR review
+   * manifest. Distinct from `listPullRequestFiles` (capped at 50 for
+   * other call sites) — drains pages until exhausted, includes
+   * `previous_filename` for renames, and surfaces a 3000-entry
+   * overflow flag (caller hashes to a sentinel sha256:overflow:N).
+   */
+  async listPullFilesForManifest(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<{
+    overflow: boolean
+    entries: Array<{ filename: string; previous_filename: string | null; status: string }>
+  }> {
+    const PER_PAGE = 100
+    const MAX_PAGES = 30 // 3000 entries — GitHub's hard cap on /files
+    const entries: Array<{ filename: string; previous_filename: string | null; status: string }> = []
+    let page = 1
+    let overflow = false
+    while (page <= MAX_PAGES) {
+      const items = await this.restGet<
+        Array<{ filename?: string; previous_filename?: string; status?: string }>
+      >(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${PER_PAGE}&page=${page}`,
+      )
+      if (!Array.isArray(items) || items.length === 0) break
+      for (const it of items) {
+        entries.push({
+          filename: it.filename ?? "",
+          previous_filename: typeof it.previous_filename === "string" ? it.previous_filename : null,
+          status: it.status ?? "",
+        })
+      }
+      if (items.length < PER_PAGE) break
+      page += 1
+      if (page > MAX_PAGES) {
+        overflow = true
+        break
+      }
+    }
+    return { overflow, entries }
+  }
+
+  /**
+   * ARC-184: fetch the merge-base SHA for a base/head pair. Records
+   * the recommended-merge-base in the manifest for forensic value
+   * (drift-detection itself doesn't compare merge-base directly).
+   * Best-effort — returns null on any failure shape.
+   */
+  async getMergeBase(
+    owner: string,
+    repo: string,
+    base: string,
+    head: string,
+  ): Promise<string | null> {
+    try {
+      const res = await this.restGet<{ merge_base_commit?: { sha?: string } }>(
+        `/repos/${owner}/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`,
+      )
+      return typeof res.merge_base_commit?.sha === "string" ? res.merge_base_commit.sha : null
+    } catch (error) {
+      if (error instanceof GitHubHttpError) return null
+      throw error
+    }
+  }
+
+  /**
+   * ARC-184: fetch a single PR review's body for stale-marker
+   * insertion. Returns null on 404 (review deleted) — caller exits
+   * cleanly via `review-stale-target-missing` telemetry.
+   */
+  async getReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    reviewId: number,
+  ): Promise<{ body: string } | null> {
+    try {
+      const res = await this.restGet<{ body?: string | null }>(
+        `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
+      )
+      return { body: res.body ?? "" }
+    } catch (error) {
+      if (error instanceof GitHubHttpError && error.status === 404) return null
+      throw error
+    }
+  }
+
+  /**
+   * ARC-184: PATCH a review body in place. Used by the stale-mark
+   * queue handler to non-destructively prepend a stale-notice block to
+   * a previously-submitted review.
+   */
+  async updateReviewBody(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    reviewId: number,
+    body: string,
+  ): Promise<void> {
+    await this.restPatch<unknown>(
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
+      { body },
+    )
+  }
+
+  /**
+   * ARC-184: fetch a single issue comment's body. Used as the
+   * counterpart to `getReview` when the prior review fell back to an
+   * issue comment (422-on-submit). Returns null on 404.
+   */
+  async getIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+  ): Promise<{ body: string } | null> {
+    try {
+      const res = await this.restGet<{ body?: string | null }>(
+        `/repos/${owner}/${repo}/issues/comments/${commentId}`,
+      )
+      return { body: res.body ?? "" }
+    } catch (error) {
+      if (error instanceof GitHubHttpError && error.status === 404) return null
+      throw error
+    }
+  }
+
   /** List top-level issue comments on a PR. Used to find existing markers. */
   async listIssueComments(
     owner: string,

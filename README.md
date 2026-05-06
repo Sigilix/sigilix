@@ -390,6 +390,44 @@ Per-repo opt-out for `/sigilix describe`. Default behavior (missing field) is en
 
 When disabled, Sigilix posts a brief "feature disabled" comment so the user knows the gate fired (rather than silently dropping the command). Strict boolean parsing — string `"false"` does NOT disable; only literal `false`.
 
+## Review provenance + stale markers (ARC-184)
+
+After every successful review, Sigilix persists a per-PR **review manifest** to KV (`pr-review-manifest:<owner>/<repo>#<n>`) capturing the inputs the model reviewed against:
+
+- PR / base / head / merge-base SHAs
+- File-list hash (SHA-256 of the sorted changed-file set, with rename pairs)
+- Prompt version (`PROMPT_VERSION` constant in `src/prompts/pr-review.ts`)
+- Model id (specialist or `ensemble-synth`)
+- Target id (`{kind: "review", reviewId}` in the success path; `{kind: "issue-comment", commentId}` reserved for fallback paths)
+
+When a `synchronize` or `edited` webhook arrives and a manifest exists, Sigilix enqueues a parallel **stale-mark job** alongside the regular review. The consumer reads the live manifest, fetches current state via the GitHub `pulls/files` and `compare` endpoints, computes drift, and PATCHes a stale-notice block into the prior review's body.
+
+**Drift triggers:** head SHA, base SHA, file-list hash, prompt version. Model id is recorded but does not trigger stale (cost — model bumps shouldn't invalidate every open PR). The stale check has a head-SHA short-circuit: if `manifest.headSha === current.headSha`, the manifest IS the up-to-date one and no other deltas matter.
+
+**Stale notice format:**
+
+```
+<!-- sigilix:stale-marker:start -->
+> [!WARNING]
+> **This review is stale.** Reviewed head `<old>` against base `<old>`. PR is now at `<new>` against base `<new>`. Run `/sigilix review` to re-review the current diff, or wait — Sigilix will refresh on the next push.
+<!-- sigilix:stale-marker:end -->
+```
+
+Idempotent on re-application — re-running on a body that already has a stale block replaces in place. The block sits between the leading `<!-- openclaw:pr-review -->` marker and the original review body; the rest is untouched.
+
+**Sticky summary footer:** every review body now ends with `_Reviewed against \`<sha7>\` at <ISO timestamp>._` so a reader can see at a glance which head SHA the verdict applies to (without reading the markers).
+
+**Permission requirement:** the GitHub App needs both `pull_requests: write` AND `issues: write`. The first covers `PATCH /pulls/{n}/reviews/{id}`; the second covers the issue-comment fallback path's `PATCH /issues/comments/{id}`.
+
+**Kill-switch:** `OPENCLAW_REVIEW_MANIFEST_ENABLED=off` short-circuits both manifest writes and stale-mark enqueues. Single flag for production rollback.
+
+**Known v1 limitations** (documented in spec §13a, accepted for v1):
+- Cloudflare KV is eventually consistent; manifest written by a just-completed review may not be visible to the next webhook for ~60 s. Mitigated by the head-SHA short-circuit; remaining false-stale cases self-correct on the next webhook.
+- A `synchronize` webhook arriving while the previous review is still in-queue (no manifest yet) sees `manifest = null` and emits `review-manifest-missing` without a stale mark. Brief gap (seconds) until the new review lands and writes a fresh manifest.
+- Inline review comments are NOT individually marked stale in v1 — only the top-level review body. Re-reviewing rebuilds the inline comments anyway.
+
+**Telemetry events:** `review-manifest-written`, `review-manifest-write-failed`, `review-manifest-missing`, `review-manifest-invalid`, `review-stale-detected`, `review-stale-not-detected`, `review-stale-current-state-empty-retry`, `review-stale-superseded`, `review-stale-target-missing`, `review-stale-marked`, `review-stale-mark-failed`.
+
 ## Secret scanning (ARC-187)
 
 Sigilix runs a Worker-native secret scanner against added diff lines BEFORE the LLM specialist fanout. **Always on**, no config needed — secret detection is baseline behavior, not opt-in.

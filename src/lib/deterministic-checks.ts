@@ -166,28 +166,38 @@ export function runDeterministicChecks(
 
   // Walk the diff. Track current file path + new-line counter so
   // each hit carries an accurate `(path, line)` anchor.
+  //
+  // Header-detection guard: `--- ` and `+++ ` lines ONLY appear in
+  // file headers, between `diff --git` and the first `@@`. Inside a
+  // hunk, a content line like `--- comment` (SQL/Lua/Haskell-style
+  // comment) or `+++ extra-args` (CLI flag list) is a real diff
+  // line — interpreting it as a header would corrupt parser state
+  // and silently skip the rest of the hunk. Track `inFileHeader`
+  // explicitly so the header checks only fire in the right zone
+  // (sigilix-bot dogfood catch on PR #52).
   const lines = diff.split("\n")
   let currentPath: string | null = null
   let newLine = 0
   let inHunk = false
+  let inFileHeader = false
 
   for (const line of lines) {
     if (line.startsWith("diff --git ")) {
       currentPath = null
       inHunk = false
+      inFileHeader = true
       continue
     }
-    if (line.startsWith("+++ ")) {
+    if (inFileHeader && line.startsWith("+++ ")) {
       const p = line.slice(4).trim()
       currentPath = p === "/dev/null" ? null : (p.startsWith("b/") ? p.slice(2) : p)
-      inHunk = false
       continue
     }
-    if (line.startsWith("--- ")) {
-      inHunk = false
+    if (inFileHeader && line.startsWith("--- ")) {
       continue
     }
     if (line.startsWith("@@")) {
+      inFileHeader = false
       const m = line.match(/^@@\s+-(?:\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/)
       if (m && m[1]) {
         newLine = Number(m[1])

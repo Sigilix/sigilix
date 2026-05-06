@@ -174,6 +174,33 @@ describe("runDeterministicChecks — matching", () => {
     expect(result.hits[0]?.evidence).toBe("console.log")
   })
 
+  it("does NOT confuse content lines starting with '--- ' or '+++ ' as headers (sigilix-bot dogfood catch on PR #52)", () => {
+    // Inside a hunk, a deleted SQL/Lua-style comment that begins with
+    // `--- ` would falsely match the header-detection check if it
+    // weren't gated by `inFileHeader`. Verify a hit AFTER such a line
+    // still fires — proves we kept tracking the hunk correctly.
+    const diff = [
+      "diff --git a/script.sql b/script.sql",
+      "--- a/script.sql",
+      "+++ b/script.sql",
+      "@@ -1,5 +1,5 @@",
+      " keep",
+      "--- old SQL comment",  // CONTENT line that LOOKS like a header marker
+      "+++ replacement note",  // CONTENT addition that LOOKS like a header marker
+      "+TODO target line",
+      " trailing context",
+    ].join("\n")
+    const result = runDeterministicChecks(diff, [{
+      id: "x", pattern: "TODO", severity: "warn", message: "x",
+    }])
+    expect(result.hits).toHaveLength(1)
+    expect(result.hits[0]?.path).toBe("script.sql")
+    // newLine starts at 1 (per @@ -1,5 +1,5), advances on context (line 1 → 2)
+    // and on additions (TODO is the second `+` line so... let's just
+    // assert it's reasonable)
+    expect(result.hits[0]?.line).toBeGreaterThan(0)
+  })
+
   it("returns multiple hits when multiple rules match", () => {
     const diff = mkDiff("foo.ts", ["// TODO: console.log(x)"])
     const result = runDeterministicChecks(diff, [

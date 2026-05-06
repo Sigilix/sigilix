@@ -199,7 +199,7 @@ interface DepVulnFinding {
   severity: "low" | "medium" | "high" | "critical"
   summary: string
   fix_guidance: string | null
-  match_type: "exact-vulnerable"
+  match_type: "range-vulnerable"
 }
 ```
 

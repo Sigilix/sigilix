@@ -390,6 +390,39 @@ Per-repo opt-out for `/sigilix describe`. Default behavior (missing field) is en
 
 When disabled, Sigilix posts a brief "feature disabled" comment so the user knows the gate fired (rather than silently dropping the command). Strict boolean parsing — string `"false"` does NOT disable; only literal `false`.
 
+### `commands.<cmd>` per-command overrides — ARC-185
+
+Each slash command (`review`, `improve`, `describe`, `ask`) can declare its own `prompt.addendum` (text appended to the system prompt, ≤ 4000 Unicode code points) AND `model.primary` / `model.fallbacks` (model lineup override). Configures cost/quality knobs per command — cheap fast `ask`, thorough `review`, etc.
+
+```json
+{
+  "commands": {
+    "review": {
+      "prompt": { "addendum": "Pay extra attention to AbortSignal handling." },
+      "model":  { "primary": "kimi-k2.6:cloud", "fallbacks": ["glm-5.1:cloud"] }
+    },
+    "improve": {
+      "prompt": { "addendum": "Match the existing TypeScript style; favor `??` over `||`." }
+    }
+  }
+}
+```
+
+**Wiring (v1):**
+- `improve`, `describe` — per-command override applies to the single-shot model + retry chain.
+- `review` — addendum appended to the **synthesizer** prompt; `model.primary` overrides the synth model. Specialists stay on the v3.1 LOCKED lineup. v1 limitation: only the *first* user-supplied fallback reaches the synth runtime (single-fallback `ModelConfig`); telemetry records the dropped count.
+- `ask` — schema slot reserved; runtime path lands when `/sigilix ask` ships.
+
+**Validation (strict):**
+- Unknown command keys (typos like `"reviews"`) → parse error.
+- Unknown model names (not in the routing registry) → parse error.
+- `addendum` > 4000 code points → parse error.
+- `fallbacks` > 4 entries → parse error.
+
+**Parse-error PR comment:** when a slash-command-driven handler runs (`/sigilix improve`, `/sigilix describe`) and the config fails strict parse, Sigilix posts a top-level PR comment with the parse reason and a snippet of the raw config. Idempotent per head SHA (marker `<!-- openclaw:config-error:<sha7> -->`); a fresh config on the next push replaces the comment by virtue of the new head SHA producing a new marker. Sigilix continues to operate in default-config mode in the meantime.
+
+**Telemetry:** `command-config-resolved`, `command-config-parse-error`, `command-config-error-comment-posted`, `command-config-error-comment-suppressed-dedupe`, `command-config-error-comment-failed`.
+
 ## Review provenance + stale markers (ARC-184)
 
 After every successful review, Sigilix persists a per-PR **review manifest** to KV (`pr-review-manifest:<owner>/<repo>#<n>`) capturing the inputs the model reviewed against:

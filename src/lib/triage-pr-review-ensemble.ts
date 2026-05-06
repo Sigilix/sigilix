@@ -68,7 +68,11 @@ import {
   renderSpecialistVerdictsForSynth,
 } from "../prompts/pr-review-specialists"
 import { withComposedTimeout } from "./agent-loop"
-import { loadSigilixConfig, type SigilixConfig } from "./sigilix-config"
+import {
+  loadSigilixConfig,
+  resolveCommandConfig,
+  type SigilixConfig,
+} from "./sigilix-config"
 import {
   splitDiffByFile,
   packFilesIntoBatches,
@@ -641,6 +645,43 @@ export async function handlePrReviewEnsemble(
     let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
     const synthStartMs = Date.now()
     try {
+      // ARC-185: per-PR commands.review.{prompt.addendum, model.{primary,
+      // fallbacks}} override. Specialists left untouched on the v3.1
+      // LOCKED lineup. v1 limitation: ModelConfig.fallback is a single
+      // string — only the first user-supplied fallback reaches the
+      // synth runtime. Telemetry records the dropped count.
+      const reviewCmdConfig = resolveCommandConfig(sigilixConfig, "review")
+      const synthSystemPrompt = reviewCmdConfig.promptAddendum
+        ? `${SYNTHESIZER_PROMPT}\n\n[REPO-SPECIFIC GUIDANCE]\n${reviewCmdConfig.promptAddendum}`
+        : SYNTHESIZER_PROMPT
+      const synthConfigOverride: ModelConfig | undefined = (
+        reviewCmdConfig.modelPrimary !== null ||
+        reviewCmdConfig.modelFallbacks.override
+      )
+        ? {
+            primary: reviewCmdConfig.modelPrimary ?? SYNTHESIZER_CONFIG.primary,
+            retries: SYNTHESIZER_CONFIG.retries,
+            fallback: reviewCmdConfig.modelFallbacks.override
+              ? (reviewCmdConfig.modelFallbacks.models[0] ?? SYNTHESIZER_CONFIG.fallback)
+              : SYNTHESIZER_CONFIG.fallback,
+          }
+        : undefined
+      if (
+        reviewCmdConfig.promptAddendum !== null ||
+        reviewCmdConfig.modelPrimary !== null ||
+        reviewCmdConfig.modelFallbacks.override
+      ) {
+        console.log(JSON.stringify({
+          event: "command-config-resolved",
+          owner, repo, prNumber,
+          command: "review",
+          hasPromptAddendum: reviewCmdConfig.promptAddendum !== null,
+          modelPrimary: reviewCmdConfig.modelPrimary,
+          modelFallbacksCount: reviewCmdConfig.modelFallbacks.override
+            ? reviewCmdConfig.modelFallbacks.models.length
+            : 0,
+        }))
+      }
       synthOutput = await withComposedTimeout(
         // Use the composed signal so a synth-only 180s timeout actually
         // cancels the underlying model call. Passing `orchCtrl.signal`
@@ -649,10 +690,11 @@ export async function handlePrReviewEnsemble(
         // (CR catch on PR #42).
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: SYNTHESIZER_PROMPT,
+          systemPrompt: synthSystemPrompt,
           userMessage: synthMessage,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
+          ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
         }),
         SYNTHESIZER_TIMEOUT_MS,
         orchCtrl.signal,
@@ -1359,6 +1401,19 @@ interface SynthesizerRunArgs {
   userMessage: string
   chatEnabled: "on" | "off"
   signal: AbortSignal
+  /**
+   * ARC-185: per-PR synthesizer config override sourced from
+   * `commands.review.{model.primary, model.fallbacks}` in
+   * `sigilix.json`. When undefined, the runner uses the
+   * `SYNTHESIZER_CONFIG` constant (current default behavior).
+   *
+   * v1 limitation: `ModelConfig.fallback` is a single string; if
+   * the user supplies multiple fallbacks, only the first is used at
+   * the synth path. The user-facing API still accepts an array (so
+   * the schema doesn't churn when we extend the runtime support)
+   * but the runtime drops the tail. Telemetry records the count.
+   */
+  configOverride?: ModelConfig
 }
 
 interface SynthesizerRunOutput {
@@ -1409,13 +1464,14 @@ function parseSynthAnswer(content: string): SynthParsedOutput | null {
 
 async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
   const t0 = Date.now()
+  const effectiveConfig: ModelConfig = args.configOverride ?? SYNTHESIZER_CONFIG
   if (!args.apiKey) {
     return {
       verdict: null,
       provenance: null,
       failureReason: "missing_api_key",
       elapsedMs: 0,
-      modelUsed: SYNTHESIZER_CONFIG.primary,
+      modelUsed: effectiveConfig.primary,
       attemptsUsed: 0,
     }
   }
@@ -1429,7 +1485,7 @@ async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunO
   // doesn't match PR_REVIEW_SCHEMA shape directly. Tolerated by
   // parseFirstJsonObject + post-validation.
   const outcome = await runWithRetryAndFallback<SynthParsedOutput>({
-    config: SYNTHESIZER_CONFIG,
+    config: effectiveConfig,
     apiKey: args.apiKey,
     messages,
     signal: args.signal,

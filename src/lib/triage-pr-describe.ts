@@ -25,7 +25,13 @@ import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient } from "./github"
-import { loadSigilixConfig } from "./sigilix-config"
+import {
+  loadSigilixConfig,
+  loadSigilixConfigRaw,
+  parseSigilixConfigDetailed,
+  resolveCommandConfig,
+} from "./sigilix-config"
+import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import { isRepoSensitive } from "./repo-policy"
 import { PR_DESCRIBE_SCHEMA } from "./schemas"
 import type { Env } from "../index"
@@ -71,7 +77,7 @@ interface BuildPromptArgs {
  * the improve handler uses, so very large PRs don't bomb the
  * context window. PR body is truncated at LIMITS.prBody.
  */
-export function buildPrompt(args: BuildPromptArgs): string {
+export function buildPrompt(args: BuildPromptArgs, addendum: string | null = null): string {
   const { mode, prNumber, title, body, diff } = args
   const systemPrompt = PR_DESCRIBE_PROMPTS[mode]
   const titleSection = `<UNTRUSTED-CONTENT type="pr-title">${title}</UNTRUSTED-CONTENT>`
@@ -80,6 +86,7 @@ export function buildPrompt(args: BuildPromptArgs): string {
   return [
     "[SYSTEM INSTRUCTIONS]",
     systemPrompt.trim(),
+    ...(addendum ? ["", "[REPO-SPECIFIC GUIDANCE]", addendum] : []),
     "",
     `[PR #${prNumber}]`,
     titleSection,
@@ -315,9 +322,41 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   const meta = await client.getPullRequest(owner, repo, prNumber)
   const headSha = meta.head.sha
 
+  // ARC-185: load with detailed parse for the parse-error PR
+  // comment. On parse failure, post the comment fire-and-forget
+  // (idempotent per head SHA) and proceed with EMPTY_CONFIG so the
+  // describe still runs in default mode.
+  const rawConfig = await loadSigilixConfigRaw(client, owner, repo, headSha)
+  let config: Awaited<ReturnType<typeof loadSigilixConfig>>
+  if (rawConfig === null) {
+    config = await loadSigilixConfig(client, owner, repo, headSha)
+  } else {
+    const parsed = parseSigilixConfigDetailed(rawConfig)
+    if (parsed.ok) {
+      config = parsed.config
+    } else {
+      console.log(JSON.stringify({
+        event: "command-config-parse-error",
+        owner, repo, prNumber,
+        command: "describe",
+        reason: parsed.reason,
+      }))
+      postConfigErrorComment({
+        env, client, owner, repo, prNumber, headSha,
+        reason: parsed.reason,
+        raw: parsed.raw,
+      }).catch((err) => {
+        console.error(JSON.stringify({
+          event: "command-config-error-comment-bubbled",
+          err: err instanceof Error ? err.message : String(err),
+          owner, repo, prNumber,
+        }))
+      })
+      config = await loadSigilixConfig(client, owner, repo, headSha)
+    }
+  }
   // Disabled-config gate. Loaded AT the head ref so per-PR config
   // changes are honored.
-  const config = await loadSigilixConfig(client, owner, repo, headSha)
   if (config.describe?.enabled === false) {
     console.log(JSON.stringify({
       event: "pr-describe-skipped",
@@ -377,34 +416,74 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
       }))
     }
 
+    // ARC-185: per-command config (commands.describe.{prompt.addendum, model.{primary, fallbacks}}).
+    const commandConfig = resolveCommandConfig(config, "describe")
+
     const prompt = buildPrompt({
       mode,
       prNumber,
       title: meta.title ?? "",
       body: meta.body ?? "",
       diff: diffRaw,
-    })
+    }, commandConfig.promptAddendum)
 
-    const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+    const primaryModel = commandConfig.modelPrimary ?? env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+    const modelChain = commandConfig.modelFallbacks.override
+      ? [primaryModel, ...commandConfig.modelFallbacks.models]
+      : [primaryModel]
 
-    let response: string
-    try {
-      response = await generate({
-        model,
-        prompt,
-        apiKey: env.OLLAMA_API_KEY,
-        format: PR_DESCRIBE_SCHEMA as unknown as Record<string, unknown>,
-      })
-    } catch (err) {
+    if (
+      commandConfig.promptAddendum !== null ||
+      commandConfig.modelPrimary !== null ||
+      commandConfig.modelFallbacks.override
+    ) {
+      console.log(JSON.stringify({
+        event: "command-config-resolved",
+        owner, repo, prNumber,
+        command: "describe",
+        hasPromptAddendum: commandConfig.promptAddendum !== null,
+        modelPrimary: commandConfig.modelPrimary,
+        modelFallbacksCount: commandConfig.modelFallbacks.override
+          ? commandConfig.modelFallbacks.models.length
+          : 0,
+      }))
+    }
+
+    let response: string | null = null
+    let modelUsed = primaryModel
+    let lastErr: unknown
+    for (const m of modelChain) {
+      modelUsed = m
+      try {
+        response = await generate({
+          model: m,
+          prompt,
+          apiKey: env.OLLAMA_API_KEY,
+          format: PR_DESCRIBE_SCHEMA as unknown as Record<string, unknown>,
+        })
+        break
+      } catch (err) {
+        lastErr = err
+        console.error(JSON.stringify({
+          event: "pr-describe-generate-failed",
+          err: err instanceof Error ? err.message : String(err),
+          headSha, model: m,
+          ...tag,
+        }))
+      }
+    }
+    if (response === null) {
       console.error(JSON.stringify({
-        event: "pr-describe-generate-failed",
-        err: err instanceof Error ? err.message : String(err),
+        event: "pr-describe-generate-exhausted",
         headSha,
+        modelChainLength: modelChain.length,
+        err: lastErr instanceof Error ? lastErr.message : String(lastErr ?? "unknown"),
         ...tag,
       }))
       await tryPostComment(env, args, mode, renderFailureComment(mode))
       return
     }
+    void modelUsed // recorded above in telemetry; not used downstream
 
     const verdict = parsePrDescribeResponse(response)
     if (!verdict) {

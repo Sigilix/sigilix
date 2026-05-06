@@ -33,6 +33,13 @@ import {
   type ReviewableMap,
 } from "./diff-positions"
 import { isRepoSensitive } from "./repo-policy"
+import {
+  loadSigilixConfigRaw,
+  parseSigilixConfigDetailed,
+  resolveCommandConfig,
+  EMPTY_CONFIG,
+} from "./sigilix-config"
+import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -139,31 +146,108 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
 
     const reviewable = parseDiffToReviewablePositions(diff)
 
+    // ARC-185: load sigilix.json with detailed parse so we can post
+    // a parse-error PR comment on user-invoked slash commands. On
+    // parse failure: fire-and-forget the comment (idempotent per
+    // head SHA) and continue with EMPTY_CONFIG (degraded mode).
+    const rawConfig = await loadSigilixConfigRaw(client, owner, repo, headSha)
+    let sigilixConfig: typeof EMPTY_CONFIG = EMPTY_CONFIG
+    if (rawConfig !== null) {
+      const result = parseSigilixConfigDetailed(rawConfig)
+      if (result.ok) {
+        sigilixConfig = result.config
+      } else {
+        console.log(JSON.stringify({
+          event: "command-config-parse-error",
+          owner, repo, prNumber,
+          command: "improve",
+          reason: result.reason,
+        }))
+        // Fire-and-forget — never block the user-invoked command.
+        postConfigErrorComment({
+          env, client, owner, repo, prNumber, headSha,
+          reason: result.reason,
+          raw: result.raw,
+        }).catch((err) => {
+          console.error(JSON.stringify({
+            event: "command-config-error-comment-bubbled",
+            err: err instanceof Error ? err.message : String(err),
+            owner, repo, prNumber,
+          }))
+        })
+      }
+    }
+    // rawConfig === null → file missing or fetch failed → silent
+    // EMPTY_CONFIG (same as loadSigilixConfig's null path).
+    const commandConfig = resolveCommandConfig(sigilixConfig, "improve")
+
     const prompt = buildPrompt({
       prNumber,
       title: meta.title,
       body: meta.body ?? "",
       diff,
-    })
+    }, commandConfig.promptAddendum)
 
-    const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
-    since("ollama-start")
-    const response = await generate({
-      model,
-      prompt,
-      apiKey: env.OLLAMA_API_KEY,
-      format: PR_IMPROVE_SCHEMA as unknown as Record<string, unknown>,
-    })
-    since("ollama-done")
+    // ARC-185: precedence — sigilix.json `commands.improve.model.primary`
+    // > env.OPENCLAW_MODEL > DEFAULT_MODEL. Per-command fallback chain
+    // (when override: true) is appended to the call list.
+    const primaryModel = commandConfig.modelPrimary ?? env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+    const modelChain = commandConfig.modelFallbacks.override
+      ? [primaryModel, ...commandConfig.modelFallbacks.models]
+      : [primaryModel]
 
-    const verdict = parsePrImproveResponse(response)
-    if (!verdict) {
-      console.error(JSON.stringify({
-        event: "pr-improve-parse-failed",
+    if (
+      commandConfig.promptAddendum !== null ||
+      commandConfig.modelPrimary !== null ||
+      commandConfig.modelFallbacks.override
+    ) {
+      console.log(JSON.stringify({
+        event: "command-config-resolved",
         owner, repo, prNumber,
-        responseLength: response.length,
+        command: "improve",
+        hasPromptAddendum: commandConfig.promptAddendum !== null,
+        modelPrimary: commandConfig.modelPrimary,
+        modelFallbacksCount: commandConfig.modelFallbacks.override
+          ? commandConfig.modelFallbacks.models.length
+          : 0,
       }))
-      throw new Error("pr-improve verdict did not parse")
+    }
+
+    since("ollama-start")
+    let verdict: ReturnType<typeof parsePrImproveResponse> = null
+    let lastErr: unknown
+    let modelUsed = primaryModel
+    for (const m of modelChain) {
+      modelUsed = m
+      try {
+        const response = await generate({
+          model: m,
+          prompt,
+          apiKey: env.OLLAMA_API_KEY,
+          format: PR_IMPROVE_SCHEMA as unknown as Record<string, unknown>,
+        })
+        const parsed = parsePrImproveResponse(response)
+        if (parsed) {
+          verdict = parsed
+          break
+        }
+        console.error(JSON.stringify({
+          event: "pr-improve-parse-failed",
+          owner, repo, prNumber, model: m,
+          responseLength: response.length,
+        }))
+      } catch (err) {
+        lastErr = err
+        console.error(JSON.stringify({
+          event: "pr-improve-call-failed",
+          owner, repo, prNumber, model: m,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
+    since(`ollama-done (model=${modelUsed})`)
+    if (!verdict) {
+      throw new Error(`pr-improve verdict did not parse after ${modelChain.length} attempt(s); last error: ${lastErr instanceof Error ? lastErr.message : "parse-failed"}`)
     }
 
     // Filter suggestions to those that anchor cleanly to the diff,
@@ -265,10 +349,11 @@ interface PromptCtx {
   diff: string
 }
 
-function buildPrompt(ctx: PromptCtx): string {
+function buildPrompt(ctx: PromptCtx, addendum: string | null = null): string {
   const sections = [
     "[SYSTEM INSTRUCTIONS]",
     PR_IMPROVE_PROMPT.trim(),
+    ...(addendum ? ["", "[REPO-SPECIFIC GUIDANCE]", addendum] : []),
     "",
     "[PR SCOPE]",
     `Number: #${ctx.prNumber}`,

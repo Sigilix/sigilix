@@ -93,9 +93,93 @@ export interface SigilixConfig {
   describe?: {
     enabled?: boolean
   }
+  /**
+   * ARC-185: per-command prompt addendum + model overrides. Each
+   * command (`review`, `improve`, `describe`, `ask`) can declare its
+   * own `prompt.addendum` (string ≤ 4000 code points appended to the
+   * system prompt) AND `model.primary` / `model.fallbacks` (override
+   * the default model + retry chain).
+   *
+   * v1 wires `improve`, `describe`, and the `review` synthesizer.
+   * Specialist-level model overrides for `review` remain on the v3.1
+   * LOCKED lineup. `ask` schema slot is reserved for the future
+   * `/sigilix ask` handler.
+   *
+   * Validation rules (per spec v3 §5.1):
+   *   - unknown command keys → parse error (typo catching)
+   *   - addendum length > 4000 code points → parse error
+   *   - whitespace-only model.primary → parse error
+   *   - >4 fallback entries → parse error
+   *   - unknown model name (not in `KNOWN_MODELS`) → parse error
+   *   - explicit `fallbacks: []` → treated as missing (use defaults)
+   */
+  commands?: Partial<Record<SigilixCommandName, SigilixCommandConfig>>
 }
 
+export type SigilixCommandName = "review" | "improve" | "describe" | "ask"
+
+export interface SigilixCommandPromptConfig {
+  addendum?: string
+}
+
+export interface SigilixCommandModelConfig {
+  primary?: string
+  fallbacks?: string[]
+}
+
+export interface SigilixCommandConfig {
+  prompt?: SigilixCommandPromptConfig
+  model?: SigilixCommandModelConfig
+}
+
+const COMMAND_NAMES: ReadonlySet<SigilixCommandName> = new Set([
+  "review",
+  "improve",
+  "describe",
+  "ask",
+])
+
+const ADDENDUM_MAX_CODE_POINTS = 4000
+const FALLBACKS_MAX_ENTRIES = 4
+
+/**
+ * Registry of model names accepted by `commands.<cmd>.model.primary`
+ * and `commands.<cmd>.model.fallbacks`. Sourced from:
+ *   - the v3.1 LOCKED ensemble per-role lineup in
+ *     `triage-pr-review-ensemble.ts`
+ *   - the single-shot defaults in `triage-pr-improve.ts`,
+ *     `triage-pr-describe.ts`
+ *
+ * Keep this list aligned with the runtime reality. Adding a new model
+ * to the routing table is a code change; that change should also
+ * extend this set so user configs can reference it.
+ */
+export const KNOWN_MODELS: ReadonlySet<string> = new Set([
+  "glm-5.1:cloud",
+  "kimi-k2.6:cloud",
+  "qwen3-coder:480b-cloud",
+  "deepseek-v4-pro:cloud",
+])
+
 export const EMPTY_CONFIG: SigilixConfig = {}
+
+/**
+ * ARC-185: tagged result of `parseSigilixConfigDetailed`. The detail
+ * surface is the new entry point — preserves the parse-error reason
+ * so the caller can post a PR comment with a specific message rather
+ * than a generic "config invalid". Existing call sites that don't
+ * need the reason keep using the legacy `parseSigilixConfig`
+ * signature (which is now a thin wrapper).
+ */
+export type ParseResult =
+  | { ok: true; config: SigilixConfig }
+  | { ok: false; reason: string; raw: string }
+
+function codePointLength(s: string): number {
+  let n = 0
+  for (const _ of s) n += 1
+  return n
+}
 
 /**
  * Defensively parse a candidate `sigilix.json` body. Returns null on
@@ -107,13 +191,42 @@ export const EMPTY_CONFIG: SigilixConfig = {}
  * once the schema stabilizes.
  */
 export function parseSigilixConfig(raw: string): SigilixConfig | null {
+  const result = parseSigilixConfigDetailed(raw)
+  return result.ok ? result.config : null
+}
+
+/**
+ * ARC-185: detailed parser used by the slash-command dispatch path
+ * to surface a parse-error PR comment with a specific reason. The
+ * legacy `parseSigilixConfig` is now a thin wrapper over this
+ * function (see above) — single source of truth for validation.
+ *
+ * Returns:
+ *   - `{ok: true, config}` when raw is parseable AND every field
+ *     respects the schema contract
+ *   - `{ok: false, reason, raw}` on any structural / validation
+ *     failure. `raw` is preserved so the caller can include the
+ *     first-N-chars in a parse-error PR comment.
+ *
+ * Validation strictness for ARC-185 fields is documented inline.
+ * Pre-ARC-185 fields keep the v1 forgiving-on-unknown semantics so
+ * existing valid configs don't regress.
+ */
+export function parseSigilixConfigDetailed(raw: string): ParseResult {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
-  } catch {
-    return null
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "JSON parse failed"
+    return { ok: false, reason: `JSON parse failed: ${msg}`, raw }
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      ok: false,
+      reason: "Top-level value must be a JSON object (got array or non-object)",
+      raw,
+    }
+  }
   const obj = parsed as Record<string, unknown>
   const out: SigilixConfig = {}
   if (typeof obj.guidance === "string" && obj.guidance.length > 0) {
@@ -168,7 +281,157 @@ export function parseSigilixConfig(raw: string): SigilixConfig | null {
       out.describe = { enabled: describeIn.enabled }
     }
   }
-  return out
+  // ARC-185: commands.<cmd>.{prompt.addendum, model.{primary, fallbacks}}
+  if (obj.commands !== undefined) {
+    if (typeof obj.commands !== "object" || obj.commands === null || Array.isArray(obj.commands)) {
+      return { ok: false, reason: "`commands` must be an object", raw }
+    }
+    const commandsIn = obj.commands as Record<string, unknown>
+    const commandsOut: Partial<Record<SigilixCommandName, SigilixCommandConfig>> = {}
+    for (const [key, value] of Object.entries(commandsIn)) {
+      if (!COMMAND_NAMES.has(key as SigilixCommandName)) {
+        return {
+          ok: false,
+          reason: `unknown command \`${key}\` in \`commands\`. Valid commands: ${[...COMMAND_NAMES].join(", ")}`,
+          raw,
+        }
+      }
+      const cmdName = key as SigilixCommandName
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        return {
+          ok: false,
+          reason: `\`commands.${key}\` must be an object`,
+          raw,
+        }
+      }
+      const cmdIn = value as Record<string, unknown>
+      const cmdOut: SigilixCommandConfig = {}
+      if (cmdIn.prompt !== undefined) {
+        if (typeof cmdIn.prompt !== "object" || cmdIn.prompt === null || Array.isArray(cmdIn.prompt)) {
+          return { ok: false, reason: `\`commands.${key}.prompt\` must be an object`, raw }
+        }
+        const promptIn = cmdIn.prompt as Record<string, unknown>
+        if (promptIn.addendum !== undefined) {
+          if (typeof promptIn.addendum !== "string") {
+            return { ok: false, reason: `\`commands.${key}.prompt.addendum\` must be a string`, raw }
+          }
+          if (codePointLength(promptIn.addendum) > ADDENDUM_MAX_CODE_POINTS) {
+            return {
+              ok: false,
+              reason: `\`commands.${key}.prompt.addendum\` exceeds maximum length of ${ADDENDUM_MAX_CODE_POINTS} code points`,
+              raw,
+            }
+          }
+          if (promptIn.addendum.length > 0) {
+            cmdOut.prompt = { addendum: promptIn.addendum }
+          }
+        }
+      }
+      if (cmdIn.model !== undefined) {
+        if (typeof cmdIn.model !== "object" || cmdIn.model === null || Array.isArray(cmdIn.model)) {
+          return { ok: false, reason: `\`commands.${key}.model\` must be an object`, raw }
+        }
+        const modelIn = cmdIn.model as Record<string, unknown>
+        const modelOut: SigilixCommandModelConfig = {}
+        if (modelIn.primary !== undefined) {
+          if (typeof modelIn.primary !== "string") {
+            return { ok: false, reason: `\`commands.${key}.model.primary\` must be a string`, raw }
+          }
+          const trimmed = modelIn.primary.trim()
+          if (trimmed.length === 0) {
+            return {
+              ok: false,
+              reason: `\`commands.${key}.model.primary\` must be a non-empty string after trimming`,
+              raw,
+            }
+          }
+          if (!KNOWN_MODELS.has(trimmed)) {
+            return {
+              ok: false,
+              reason: `\`commands.${key}.model.primary\` references an unknown model \`${trimmed}\` (not in routing registry). Check the spelling, or contact ops if it should be supported.`,
+              raw,
+            }
+          }
+          modelOut.primary = trimmed
+        }
+        if (modelIn.fallbacks !== undefined) {
+          if (!Array.isArray(modelIn.fallbacks)) {
+            return { ok: false, reason: `\`commands.${key}.model.fallbacks\` must be an array of strings`, raw }
+          }
+          if (modelIn.fallbacks.length > FALLBACKS_MAX_ENTRIES) {
+            return {
+              ok: false,
+              reason: `\`commands.${key}.model.fallbacks\` accepts at most ${FALLBACKS_MAX_ENTRIES} entries`,
+              raw,
+            }
+          }
+          const fb: string[] = []
+          for (const item of modelIn.fallbacks) {
+            if (typeof item !== "string") {
+              return {
+                ok: false,
+                reason: `\`commands.${key}.model.fallbacks\` entries must be strings`,
+                raw,
+              }
+            }
+            const trimmed = item.trim()
+            if (trimmed.length === 0) {
+              return {
+                ok: false,
+                reason: `\`commands.${key}.model.fallbacks\` entries must be non-empty after trimming`,
+                raw,
+              }
+            }
+            if (!KNOWN_MODELS.has(trimmed)) {
+              return {
+                ok: false,
+                reason: `\`commands.${key}.model.fallbacks\` references an unknown model \`${trimmed}\` (not in routing registry).`,
+                raw,
+              }
+            }
+            fb.push(trimmed)
+          }
+          modelOut.fallbacks = fb
+        }
+        if (Object.keys(modelOut).length > 0) {
+          cmdOut.model = modelOut
+        }
+      }
+      if (Object.keys(cmdOut).length > 0) {
+        commandsOut[cmdName] = cmdOut
+      }
+    }
+    if (Object.keys(commandsOut).length > 0) {
+      out.commands = commandsOut
+    }
+  }
+  return { ok: true, config: out }
+}
+
+/**
+ * ARC-185: resolve the per-command override shape from a config.
+ * Pure function; never throws. The `modelFallbacks.override` flag
+ * lets consumers distinguish "user explicitly set fallbacks" from
+ * "use the command's existing default chain" — explicit empty array
+ * (`fallbacks: []`) AND missing key both map to `override: false`
+ * (per spec v3 §5.1).
+ */
+export function resolveCommandConfig(
+  config: SigilixConfig | null,
+  command: SigilixCommandName,
+): {
+  promptAddendum: string | null
+  modelPrimary: string | null
+  modelFallbacks: { override: false } | { override: true; models: string[] }
+} {
+  const cmd = config?.commands?.[command]
+  const promptAddendum = cmd?.prompt?.addendum ?? null
+  const modelPrimary = cmd?.model?.primary ?? null
+  const fallbacks = cmd?.model?.fallbacks
+  const modelFallbacks = (fallbacks && fallbacks.length > 0)
+    ? { override: true as const, models: fallbacks }
+    : { override: false as const }
+  return { promptAddendum, modelPrimary, modelFallbacks }
 }
 
 /**
@@ -200,4 +463,26 @@ export async function loadSigilixConfig(
   if (raw === null || raw.trim().length === 0) return EMPTY_CONFIG
   const parsed = parseSigilixConfig(raw)
   return parsed ?? EMPTY_CONFIG
+}
+
+/**
+ * ARC-185: fetch the raw `sigilix.json` text without parsing. Used
+ * by the slash-command dispatch path to feed `parseSigilixConfigDetailed`
+ * (which preserves the raw text alongside parse errors so the
+ * resulting PR comment can show a snippet). Never throws — returns
+ * null on missing file or fetch failure.
+ */
+export async function loadSigilixConfigRaw(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  ref: string,
+): Promise<string | null> {
+  try {
+    const raw = await client.getFileContent(owner, repo, SIGILIX_CONFIG_PATH, ref)
+    if (raw === null || raw.trim().length === 0) return null
+    return raw
+  } catch {
+    return null
+  }
 }

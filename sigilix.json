@@ -6,5 +6,12 @@
     "security": "Authentication paths: `src/lib/auth-oauth-github.ts` (Phase 5). AES-GCM with AAD bound to sessionId, browser-bound state cookie via `__Host-sigilix_oauth_state`, HMAC verification in `src/lib/github-webhook-verify.ts` and `src/lib/webhook-verify.ts`. Always check: token storage paths, redirect-after URL parsing (rejecting scheme-relative + encoded slashes/backslashes/NULs + absolute URLs), KV TTLs, and any new env var that touches a secret. New secrets need a `wrangler secret put` doc entry in `wrangler.toml` comments and `README.md`.",
     "performance": "Cloudflare runtime budgets: queue consumer has up to 15-minute wall-clock; fetch handler `ctx.waitUntil()` is hard-capped at 30s; the orchestrator's static budget caps a single ensemble run at `ORCHESTRATOR_TIMEOUT_MS`. Don't block the webhook response — enqueue and return ~50ms. Vectorize calls go through `src/lib/retrieval.ts::retrieveChunks` and the per-PR cache (`src/lib/retrieval-cache.ts`) — never bypass the cache, it caps per-PR call counts. Synth is observed at 22-100s; specialists at 35-180s.",
     "tests": "Vitest with strict TS. Test signal-abort paths EXPLICITLY: pre-aborted parent, mid-call abort, signal-ignoring factory, double-abort idempotency (see `tests/agent-loop.test.ts::withComposedTimeout`). Use `ReturnType<typeof setTimeout>` for timer typing — `number` (Workers) and `Timer` (Node) both satisfy it. Mock the GitHub client minimally via `as unknown as GitHubClient` rather than pulling in the full surface. Test names are descriptive sentences (`it(\"resolves when factory returns before timeout\", ...)`)."
+  },
+  "commands": {
+    "improve": {
+      "prompt": {
+        "addendum": "Repo-specific style: prefer `??` over `||` for nullish coalescing. Use conditional spread (`...(value ? { field: value } : {})`) for optional fields under `exactOptionalPropertyTypes`. Avoid Node-only APIs in `src/**` (Cloudflare Workers runtime). Don't propose suggestions that would break the static timeout-budget invariant in `triage-pr-review-ensemble.ts`."
+      }
+    }
   }
 }

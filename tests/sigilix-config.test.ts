@@ -9,8 +9,11 @@ import { describe, it, expect, vi } from "vitest"
 
 import {
   parseSigilixConfig,
+  parseSigilixConfigDetailed,
+  resolveCommandConfig,
   loadSigilixConfig,
   EMPTY_CONFIG,
+  KNOWN_MODELS,
   SIGILIX_CONFIG_PATH,
   type SigilixConfig,
 } from "../src/lib/sigilix-config"
@@ -356,5 +359,223 @@ describe("parseSigilixConfig — describe.enabled (ARC-191)", () => {
     const result = parseSigilixConfig(JSON.stringify({ guidance: "x" }))
     expect(result).toEqual({ guidance: "x" })
     expect(result?.describe).toBeUndefined()
+  })
+})
+
+describe("parseSigilixConfigDetailed — commands schema (ARC-185)", () => {
+  // Use a real model name from the registry so happy-path tests don't
+  // hit the unknown-model branch.
+  const KNOWN = [...KNOWN_MODELS][0] ?? "qwen3-coder:480b-cloud"
+
+  it("returns {ok: true} for an empty config", () => {
+    const result = parseSigilixConfigDetailed("{}")
+    expect(result).toEqual({ ok: true, config: {} })
+  })
+
+  it("captures commands.review.prompt.addendum", () => {
+    const raw = JSON.stringify({
+      commands: { review: { prompt: { addendum: "Be terse." } } },
+    })
+    const result = parseSigilixConfigDetailed(raw)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.config.commands?.review?.prompt?.addendum).toBe("Be terse.")
+  })
+
+  it("captures commands.review.model.primary (after trim)", () => {
+    const raw = JSON.stringify({
+      commands: { review: { model: { primary: `  ${KNOWN}  ` } } },
+    })
+    const result = parseSigilixConfigDetailed(raw)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.config.commands?.review?.model?.primary).toBe(KNOWN)
+  })
+
+  it("captures commands.review.model.fallbacks", () => {
+    const fallbacks = [...KNOWN_MODELS].slice(0, 2)
+    const raw = JSON.stringify({
+      commands: { review: { model: { primary: KNOWN, fallbacks } } },
+    })
+    const result = parseSigilixConfigDetailed(raw)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.config.commands?.review?.model?.fallbacks).toEqual(fallbacks)
+  })
+
+  it("rejects commands as a non-object (array)", () => {
+    const result = parseSigilixConfigDetailed(JSON.stringify({ commands: ["review"] }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/commands.*must be an object/i)
+  })
+
+  it("rejects commands as a non-object (string)", () => {
+    const result = parseSigilixConfigDetailed(JSON.stringify({ commands: "review" }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/commands.*must be an object/i)
+  })
+
+  it("rejects unknown command names (typo catching)", () => {
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { reviews: { prompt: { addendum: "x" } } },
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/unknown command/i)
+    expect(result.reason).toContain("reviews")
+  })
+
+  it("rejects addendum > 4000 code points", () => {
+    const long = "a".repeat(4001)
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { review: { prompt: { addendum: long } } },
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/addendum.*length|too long/i)
+  })
+
+  it("accepts addendum exactly 4000 code points", () => {
+    const exact = "a".repeat(4000)
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { review: { prompt: { addendum: exact } } },
+    }))
+    expect(result.ok).toBe(true)
+  })
+
+  it("counts addendum length in code points (surrogate-pair safe)", () => {
+    // Each emoji is 2 UTF-16 code units but 1 code point.
+    // 2001 emoji = 2001 code points (under cap), but 4002 UTF-16 units.
+    const emoji = "😀"
+    const addendum = emoji.repeat(2001)
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { review: { prompt: { addendum } } },
+    }))
+    expect(result.ok).toBe(true)
+  })
+
+  it("rejects whitespace-only model.primary", () => {
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { review: { model: { primary: "   " } } },
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/model.primary/i)
+  })
+
+  it("rejects non-array fallbacks", () => {
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { review: { model: { fallbacks: "x" } } },
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/fallbacks.*array of strings/i)
+  })
+
+  it("rejects >4 fallback entries", () => {
+    // Pad with duplicates if KNOWN_MODELS has fewer than 5 entries.
+    const tooMany = [KNOWN, KNOWN, KNOWN, KNOWN, KNOWN]
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { review: { model: { primary: KNOWN, fallbacks: tooMany } } },
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/fallbacks.*4 entries|at most 4/i)
+  })
+
+  it("rejects unknown model names (not in registry)", () => {
+    const result = parseSigilixConfigDetailed(JSON.stringify({
+      commands: { review: { model: { primary: "definitely-not-a-real-model" } } },
+    }))
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.reason).toMatch(/unknown model|not in.*registry/i)
+  })
+
+  it("BACK-COMPAT: parseSigilixConfig still returns null on the same bad inputs", () => {
+    const bad = JSON.stringify({ commands: ["review"] })
+    expect(parseSigilixConfig(bad)).toBeNull()
+    const bad2 = JSON.stringify({ commands: { review: { prompt: { addendum: "a".repeat(5000) } } } })
+    expect(parseSigilixConfig(bad2)).toBeNull()
+  })
+
+  it("BACK-COMPAT: parseSigilixConfig still returns the parsed config on valid inputs (no .ok wrapper)", () => {
+    const raw = JSON.stringify({
+      commands: { review: { prompt: { addendum: "x" } } },
+    })
+    const result = parseSigilixConfig(raw)
+    expect(result).toEqual({
+      commands: { review: { prompt: { addendum: "x" } } },
+    })
+  })
+})
+
+describe("resolveCommandConfig (ARC-185)", () => {
+  const KNOWN = [...KNOWN_MODELS][0] ?? "qwen3-coder:480b-cloud"
+
+  it("null config → all defaults", () => {
+    const out = resolveCommandConfig(null, "improve")
+    expect(out).toEqual({
+      promptAddendum: null,
+      modelPrimary: null,
+      modelFallbacks: { override: false },
+    })
+  })
+
+  it("missing commands key → all defaults", () => {
+    const out = resolveCommandConfig({}, "improve")
+    expect(out.modelFallbacks).toEqual({ override: false })
+  })
+
+  it("missing per-command entry → all defaults", () => {
+    const out = resolveCommandConfig({ commands: {} }, "improve")
+    expect(out.modelFallbacks).toEqual({ override: false })
+  })
+
+  it("captures the addendum", () => {
+    const out = resolveCommandConfig(
+      { commands: { improve: { prompt: { addendum: "x" } } } },
+      "improve",
+    )
+    expect(out.promptAddendum).toBe("x")
+  })
+
+  it("captures the model primary", () => {
+    const out = resolveCommandConfig(
+      { commands: { improve: { model: { primary: KNOWN } } } },
+      "improve",
+    )
+    expect(out.modelPrimary).toBe(KNOWN)
+  })
+
+  it("EXPLICIT EMPTY fallbacks → use defaults (override: false)", () => {
+    const out = resolveCommandConfig(
+      { commands: { improve: { model: { fallbacks: [] } } } },
+      "improve",
+    )
+    expect(out.modelFallbacks).toEqual({ override: false })
+  })
+
+  it("non-empty fallbacks → override: true with the array", () => {
+    const fallbacks = [...KNOWN_MODELS].slice(0, 2)
+    const out = resolveCommandConfig(
+      { commands: { improve: { model: { fallbacks } } } },
+      "improve",
+    )
+    expect(out.modelFallbacks).toEqual({ override: true, models: fallbacks })
+  })
+
+  it("each command resolves independently", () => {
+    const config: SigilixConfig = {
+      commands: {
+        improve: { prompt: { addendum: "improve-text" } },
+        describe: { prompt: { addendum: "describe-text" } },
+      },
+    }
+    expect(resolveCommandConfig(config, "improve").promptAddendum).toBe("improve-text")
+    expect(resolveCommandConfig(config, "describe").promptAddendum).toBe("describe-text")
+    expect(resolveCommandConfig(config, "review").promptAddendum).toBeNull()
   })
 })

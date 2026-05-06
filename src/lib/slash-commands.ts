@@ -177,10 +177,13 @@ export function renderHelpBody(): string {
     "|---|---|",
     "| `/sigilix review` | Re-run the ensemble review against the PR's current head SHA. |",
     "| `/sigilix improve` | Generate apply-able GitHub suggested-change comments (single-shot, narrow scope). |",
+    "| `/sigilix describe` | Draft a PR description or internal / external changelog. Posted as an inline comment with markers — body never auto-edited. |",
     "| `/sigilix help` | Show this list. |",
+    "",
+    "`/sigilix describe` accepts an optional mode arg: `pr` (default), `internal`, or `external`. Example: `/sigilix describe internal`.",
     "",
     "Slash commands are gated to `OWNER`, `MEMBER`, and `COLLABORATOR` authors. Match must be at the start of a line; commands inside fenced code blocks or markdown blockquotes are ignored.",
     "",
-    "Coming soon: `/sigilix ask <question>` (PR-context Q&A), `/sigilix describe` (PR description draft).",
+    "Coming soon: `/sigilix ask <question>` (PR-context Q&A).",
   ].join("\n")
 }

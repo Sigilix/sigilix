@@ -264,10 +264,17 @@ describe("renderSlashCommandAck", () => {
 describe("renderHelpBody", () => {
   const body = renderHelpBody()
 
-  it("lists every currently-live command", () => {
+  it("lists every currently-live command (including describe, ARC-191)", () => {
     expect(body).toContain("`/sigilix review`")
     expect(body).toContain("`/sigilix improve`")
+    expect(body).toContain("`/sigilix describe`")
     expect(body).toContain("`/sigilix help`")
+  })
+
+  it("documents the describe mode tokens", () => {
+    expect(body).toContain("`pr`")
+    expect(body).toContain("`internal`")
+    expect(body).toContain("`external`")
   })
 
   it("documents the ACL gate", () => {
@@ -279,8 +286,10 @@ describe("renderHelpBody", () => {
     expect(body.toLowerCase()).toMatch(/fenced|blockquote/)
   })
 
-  it("flags upcoming commands so users know what's coming", () => {
+  it("flags only `/sigilix ask` as coming soon (describe shipped in ARC-191)", () => {
     expect(body).toContain("/sigilix ask")
-    expect(body).toContain("/sigilix describe")
+    const comingSoonLine = body.split("\n").find((l) => l.toLowerCase().includes("coming soon")) ?? ""
+    expect(comingSoonLine).toContain("ask")
+    expect(comingSoonLine).not.toContain("describe")
   })
 })

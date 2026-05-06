@@ -33,6 +33,7 @@ import {
   type ReviewableMap,
 } from "./diff-positions"
 import { isRepoSensitive } from "./repo-policy"
+import { loadSigilixConfig, resolveCommandConfig } from "./sigilix-config"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -139,31 +140,80 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
 
     const reviewable = parseDiffToReviewablePositions(diff)
 
+    // ARC-185: load sigilix.json + resolve per-command config.
+    // Best-effort — config errors degrade to default behavior; the
+    // slash-command dispatch path posts the parse-error PR comment
+    // (Task 7), this path doesn't double-post.
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+    const commandConfig = resolveCommandConfig(sigilixConfig, "improve")
+
     const prompt = buildPrompt({
       prNumber,
       title: meta.title,
       body: meta.body ?? "",
       diff,
-    })
+    }, commandConfig.promptAddendum)
 
-    const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
-    since("ollama-start")
-    const response = await generate({
-      model,
-      prompt,
-      apiKey: env.OLLAMA_API_KEY,
-      format: PR_IMPROVE_SCHEMA as unknown as Record<string, unknown>,
-    })
-    since("ollama-done")
+    // ARC-185: precedence — sigilix.json `commands.improve.model.primary`
+    // > env.OPENCLAW_MODEL > DEFAULT_MODEL. Per-command fallback chain
+    // (when override: true) is appended to the call list.
+    const primaryModel = commandConfig.modelPrimary ?? env.OPENCLAW_MODEL ?? DEFAULT_MODEL
+    const modelChain = commandConfig.modelFallbacks.override
+      ? [primaryModel, ...commandConfig.modelFallbacks.models]
+      : [primaryModel]
 
-    const verdict = parsePrImproveResponse(response)
-    if (!verdict) {
-      console.error(JSON.stringify({
-        event: "pr-improve-parse-failed",
+    if (
+      commandConfig.promptAddendum !== null ||
+      commandConfig.modelPrimary !== null ||
+      commandConfig.modelFallbacks.override
+    ) {
+      console.log(JSON.stringify({
+        event: "command-config-resolved",
         owner, repo, prNumber,
-        responseLength: response.length,
+        command: "improve",
+        hasPromptAddendum: commandConfig.promptAddendum !== null,
+        modelPrimary: commandConfig.modelPrimary,
+        modelFallbacksCount: commandConfig.modelFallbacks.override
+          ? commandConfig.modelFallbacks.models.length
+          : 0,
       }))
-      throw new Error("pr-improve verdict did not parse")
+    }
+
+    since("ollama-start")
+    let verdict: ReturnType<typeof parsePrImproveResponse> = null
+    let lastErr: unknown
+    let modelUsed = primaryModel
+    for (const m of modelChain) {
+      modelUsed = m
+      try {
+        const response = await generate({
+          model: m,
+          prompt,
+          apiKey: env.OLLAMA_API_KEY,
+          format: PR_IMPROVE_SCHEMA as unknown as Record<string, unknown>,
+        })
+        const parsed = parsePrImproveResponse(response)
+        if (parsed) {
+          verdict = parsed
+          break
+        }
+        console.error(JSON.stringify({
+          event: "pr-improve-parse-failed",
+          owner, repo, prNumber, model: m,
+          responseLength: response.length,
+        }))
+      } catch (err) {
+        lastErr = err
+        console.error(JSON.stringify({
+          event: "pr-improve-call-failed",
+          owner, repo, prNumber, model: m,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
+    since(`ollama-done (model=${modelUsed})`)
+    if (!verdict) {
+      throw new Error(`pr-improve verdict did not parse after ${modelChain.length} attempt(s); last error: ${lastErr instanceof Error ? lastErr.message : "parse-failed"}`)
     }
 
     // Filter suggestions to those that anchor cleanly to the diff,
@@ -265,10 +315,11 @@ interface PromptCtx {
   diff: string
 }
 
-function buildPrompt(ctx: PromptCtx): string {
+function buildPrompt(ctx: PromptCtx, addendum: string | null = null): string {
   const sections = [
     "[SYSTEM INSTRUCTIONS]",
     PR_IMPROVE_PROMPT.trim(),
+    ...(addendum ? ["", "[REPO-SPECIFIC GUIDANCE]", addendum] : []),
     "",
     "[PR SCOPE]",
     `Number: #${ctx.prNumber}`,

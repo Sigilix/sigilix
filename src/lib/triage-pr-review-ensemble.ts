@@ -80,21 +80,31 @@ import type { Env } from "../index"
 const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 const DEFAULT_DAILY_BUDGET = 200
 
-// Phase 4a.1 timeout schedule (LOCKED 2026-05-05 after dual sign-off).
-// Sized off shadow telemetry: median successful logic latency = 78s, so
-// one primary attempt + one transient-503 retry needs ~161s (80+0.8+80).
-// 180s leaves 19s slack within the specialist budget.
-export const SPECIALIST_TIMEOUT_MS = 180_000
-// Synth on 4× 8K-token verdicts observed at 30-100s; 180s gives p99
-// headroom for cross-specialist disagreement cases.
+// Phase 4a.3 timeout schedule (rebalanced 2026-05-06 after Phase 4a.2
+// telemetry validation, ARC-171). The Phase 4a.1 sizing (180s) was
+// based on "median successful logic latency = 78s" — but that figure
+// excluded the failed-aborted runs that were silently capped at 90s
+// pre-Phase-4a.1 and 180s pre-Phase-4a.3. Real post-4a.2 telemetry
+// showed `deepseek-v4-pro:cloud` consistently doing 2 primary attempts
+// of ~90s each, exhausting the 180s budget mid-second-attempt and
+// killing the cross-provider fallback before it could fire. Bumped to
+// 240s so logic gets 2 primary attempts + 1 fallback attempt within
+// the specialist budget.
+export const SPECIALIST_TIMEOUT_MS = 240_000
+// Synth on 4× 8K-token verdicts observed at 22-100s post-4a.2; 180s
+// gives p99 headroom for cross-specialist disagreement cases. Kept
+// unchanged in 4a.3 — observed margin is fine, and a tighter synth
+// budget would mix concerns with the specialist rebalance.
 export const SYNTHESIZER_TIMEOUT_MS = 180_000
 // Reserved for pre-flight retrieval + diff parse + stale-head guards +
 // telemetry write. The orchestrator must always have at least this much
 // headroom beyond (specialist + synth) so a slow Vectorize round-trip
 // doesn't eat into the synth budget.
 export const RESERVED_HEADROOM_MS = 40_000
-// 180 + 180 + 40 = 400. Cloudflare queue ceiling is 900s.
-export const ORCHESTRATOR_TIMEOUT_MS = 400_000
+// 240 + 180 + 40 = 460. Cloudflare queue ceiling is 900s. The 60s
+// orch bump (Phase 4a.3) is well under any user-perceptible review
+// latency budget for background PR triage.
+export const ORCHESTRATOR_TIMEOUT_MS = 460_000
 // Cap the pre-flight Vectorize round-trip so a slow retrieval can't
 // silently consume the synth budget. Failed pre-flight is non-fatal
 // per v3.1 §8 — specialists fall back to empty snapshot.
@@ -152,9 +162,17 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   logic: {
     primary: "deepseek-v4-pro:cloud",
     // Phase 4a.1: dropped 2 → 1. Two retries at ~80s each = 240s of primary
-    // attempts, exceeds the 180s specialist budget. One retry + cross-provider
-    // fallback gives better resilience per unit time, validated by shadow
-    // telemetry showing 12/15 logic runs hit "Operation aborted" at 90s wall.
+    // attempts, exceeds the original 180s specialist budget. One retry +
+    // cross-provider fallback gives better resilience per unit time,
+    // validated by shadow telemetry showing 12/15 logic runs hit "Operation
+    // aborted" at 90s wall.
+    //
+    // Phase 4a.3 (ARC-171): specialist budget extended to 240s. Two
+    // retries (3 primary attempts ≈ 240s + backoffs) would exceed the new
+    // budget too, so retries=1 stays. The new headroom funds the
+    // cross-provider fallback (kimi-k2.5:cloud) which Phase 4a.2
+    // telemetry proved was being killed by the 180s wall before it
+    // could fire.
     retries: 1,
     fallback: "kimi-k2.5:cloud",  // Moonshot — different infra than DeepSeek
   },
@@ -385,10 +403,10 @@ export async function handlePrReviewEnsemble(
       router.specialists.map((role) =>
         withComposedTimeout(
           // Use the composed signal `withComposedTimeout` provides — it
-          // aborts on EITHER the per-specialist 180s timer OR the outer
+          // aborts on EITHER the per-specialist 240s timer OR the outer
           // orch abort. Passing `orchCtrl.signal` directly only cancels
           // the await wrapper, leaving the in-flight model fetch alive
-          // until the outer 400s wall fires (CR catch on PR #42).
+          // until the outer 460s wall fires (CR catch on PR #42).
           (signal) => runSpecialist({
             role,
             apiKey: env.OLLAMA_API_KEY,
@@ -444,7 +462,7 @@ export async function handlePrReviewEnsemble(
         // Use the composed signal so a synth-only 180s timeout actually
         // cancels the underlying model call. Passing `orchCtrl.signal`
         // directly only rejects this await; the in-flight model fetch
-        // would keep running until the outer 400s orch wall fires
+        // would keep running until the outer 460s orch wall fires
         // (CR catch on PR #42).
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,

@@ -503,9 +503,9 @@ describe("isPermanentFailure", () => {
   })
 })
 
-// ─── Phase 4a.1: configuration invariants ─────────────────────────────────
+// ─── Phase 4a.3: configuration invariants ─────────────────────────────────
 
-describe("Phase 4a.1 — timeout schedule", () => {
+describe("Phase 4a.3 — timeout schedule", () => {
   it("enforces SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS ≤ ORCHESTRATOR_TIMEOUT_MS", () => {
     // Static budget invariant. The module already throws at load if
     // this is ever violated; the test is a regression guard so a
@@ -515,11 +515,16 @@ describe("Phase 4a.1 — timeout schedule", () => {
       .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
   })
 
-  it("uses the v3.1 LOCKED + Phase 4a.1 timeouts", () => {
-    expect(SPECIALIST_TIMEOUT_MS).toBe(180_000)
+  it("uses the Phase 4a.3 timeouts", () => {
+    // Phase 4a.3 (ARC-171): SPECIALIST 180→240, ORCH 400→460. Synth +
+    // headroom unchanged. The bump funds the cross-provider fallback
+    // which Phase 4a.2 telemetry showed was being killed by the old
+    // 180s wall before it could fire on deepseek-v4-pro:cloud logic
+    // runs.
+    expect(SPECIALIST_TIMEOUT_MS).toBe(240_000)
     expect(SYNTHESIZER_TIMEOUT_MS).toBe(180_000)
     expect(RESERVED_HEADROOM_MS).toBe(40_000)
-    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(400_000)
+    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(460_000)
     expect(RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBe(15_000)
   })
 

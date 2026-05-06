@@ -46,12 +46,10 @@ The user-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sig
 **GitHub: Proactive primary review** (`pull_request.opened/synchronize/reopened/ready_for_review`)
 1. Fetches PR diff and reviews it in isolation — no awareness of other reviewers.
 2. Each finding gets a 1–5 score and a category (`logic`, `security`, `performance`, `error-handling`, `testing`, `complexity`, `style`, `syntax`, `docs`). The category leads the inline comment as `**category:**` (greptile-style).
-3. Submits ONE review via `POST /pulls/{n}/reviews` with all findings as inline comments. Approval state is derived from the max finding score:
-   - max 5 → `REQUEST_CHANGES`
-   - max 3–4 → `COMMENT`
-   - max 1–2 (or no findings) → `APPROVE`
-4. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review the same code.
-5. Re-runs on every push (`synchronize`) so the bot keeps verifying after fix commits and can flip to `APPROVE`. A stale-head guard in the consumer skips jobs whose queued SHA no longer matches the PR head, preventing out-of-order queue processing from posting reviews against superseded commits.
+3. Submits ONE review via `POST /pulls/{n}/reviews` with all findings as inline comments. Approval state is two-state: any finding posts `REQUEST_CHANGES`; an empty findings list posts `APPROVE`.
+4. **Fix Plan** (ARC-180): when at least one finding scores ≥ 4, the review body opens with a prioritized repair queue grouping Critical (score 5) and High (score 4) findings by severity, ordered by path then line. The Fix Plan stays stable across re-reviews so a reviewer working top-to-bottom sees the same queue ordering they did last time.
+5. KV-deduped on `(prNumber, headSha)` so re-firing webhooks don't double-review the same code.
+6. Re-runs on every push (`synchronize`) so the bot keeps verifying after fix commits and can flip to `APPROVE`. A stale-head guard in the consumer skips jobs whose queued SHA no longer matches the PR head, preventing out-of-order queue processing from posting reviews against superseded commits.
 
 **GitHub: @-mention reply** (`issue_comment.created` and `pull_request_review_comment.created` with `@sigilix`)
 1. Filters on the comment body before queueing — most PR comments don't @ Sigilix.

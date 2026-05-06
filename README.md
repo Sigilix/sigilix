@@ -292,6 +292,28 @@ curl -X POST "https://sigilix.<your-account>.workers.dev/linear/manual" \
   -d '{"issueId": "ARC-42"}'
 ```
 
+## Per-repo config (`sigilix.json`)
+
+Drop a `sigilix.json` at the repo root to give Sigilix per-repo
+guidance. Read at the PR head SHA on every review run, so you can
+iterate on the rules in the same PR they apply to.
+
+```json
+{
+  "guidance": "This repo is a TypeScript Cloudflare Worker. Reject any new class declarations. Comments should explain the WHY, not the WHAT.",
+  "rules": {
+    "logic":       "Flag any function over 50 lines.",
+    "security":    "Always check token handling and signal-aborted paths.",
+    "performance": "Reject sync I/O in request handlers.",
+    "tests":       "Require at least one test per new exported function."
+  }
+}
+```
+
+Both top-level fields are optional. Missing file = no extra context (current behavior). Malformed JSON = ignored with a structured warning logged but the review still runs — the config is never load-bearing for review correctness.
+
+`guidance` is prepended to every specialist's prompt **and** the synthesizer's prompt. `rules.<role>` is appended only to that role's prompt. Unknown fields are forward-compat ignored.
+
 ## CI / auto-deploy
 
 The `.github/workflows/deploy.yml` Action deploys on every push to `main`. Add two repo secrets:

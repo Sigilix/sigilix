@@ -68,6 +68,7 @@ import {
   renderSpecialistVerdictsForSynth,
 } from "../prompts/pr-review-specialists"
 import { withComposedTimeout } from "./agent-loop"
+import { loadSigilixConfig, type SigilixConfig } from "./sigilix-config"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -334,6 +335,12 @@ export async function handlePrReviewEnsemble(
     const reviewable = parseDiffToReviewablePositions(diff)
     const filePaths = [...reviewable.keys()]
 
+    // ARC-174: per-repo `sigilix.json` config. Read at the PR head SHA
+    // so the guidance reflects whatever the PR author committed (lets
+    // them iterate on the rules in the same PR). Always resolves —
+    // missing or malformed config falls back to EMPTY_CONFIG.
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+
     // ─── Router decision ───────────────────────────────────────
     const totalLinesChanged = countLines(diff)
     // CR PR #35 catch: pass diffText so the router can content-aware
@@ -395,13 +402,14 @@ export async function handlePrReviewEnsemble(
       : ""
 
     // ─── Fan out specialists ────────────────────────────────────
-    const initialMessage = buildSpecialistInitialMessage({
+    const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
       body: meta.body ?? "",
       diff,
       retrievalSnapshot,
       namespace,
+      ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
     })
 
     const specialistResults = await Promise.allSettled(
@@ -416,7 +424,7 @@ export async function handlePrReviewEnsemble(
             role,
             apiKey: env.OLLAMA_API_KEY,
             systemPrompt: SPECIALIST_PROMPTS[role],
-            initialMessage,
+            initialMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
             chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
             signal,
           }),
@@ -453,6 +461,7 @@ export async function handlePrReviewEnsemble(
       prNumber,
       diff,
       specialistVerdictsBlock: synthVerdictBlock,
+      ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
     })
 
     // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
@@ -642,6 +651,23 @@ export async function handlePrReviewEnsemble(
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────
+
+/**
+ * ARC-174: append the per-role rule from `sigilix.json` to a
+ * specialist's initial message. No-op when the config defines no rule
+ * for that role. The role-specific rule is rendered as a labeled
+ * block so the specialist can clearly attribute it to repo config
+ * rather than mistake it for ambient context.
+ */
+function appendRoleRule(
+  baseMessage: string,
+  role: SpecialistRole,
+  config: SigilixConfig,
+): string {
+  const rule = config.rules?.[role]
+  if (!rule) return baseMessage
+  return `${baseMessage}\n\n[REPO RULES — ${role.toUpperCase()} (from sigilix.json)]\n${rule}`
+}
 
 function parseMode(raw: string | undefined): EnsembleMode {
   if (raw === "shadow") return "shadow"

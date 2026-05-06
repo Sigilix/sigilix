@@ -40,9 +40,14 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("@sigilix review please")).toBeNull()
   })
 
-  it("returns null for unsupported subcommands (v1 review-only)", () => {
+  it("recognizes `/sigilix improve` (ARC-179)", () => {
+    expect(parseSlashCommand("/sigilix improve")).toEqual({ cmd: "improve" })
+    expect(parseSlashCommand("/Sigilix IMPROVE")).toEqual({ cmd: "improve" })
+    expect(parseSlashCommand("/sigilix improve please")).toEqual({ cmd: "improve" })
+  })
+
+  it("returns null for unsupported subcommands", () => {
     expect(parseSlashCommand("/sigilix ask anything")).toBeNull()
-    expect(parseSlashCommand("/sigilix improve")).toBeNull()
     expect(parseSlashCommand("/sigilix describe")).toBeNull()
     expect(parseSlashCommand("/sigilix bogus")).toBeNull()
   })
@@ -153,5 +158,12 @@ describe("renderSlashCommandAck", () => {
     expect(typeof out).toBe("string")
     expect(out.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toContain("review")
+  })
+
+  it("renders a non-empty ack for the improve command", () => {
+    const out = renderSlashCommandAck("improve")
+    expect(typeof out).toBe("string")
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.toLowerCase()).toMatch(/(suggest|apply|patch)/)
   })
 })

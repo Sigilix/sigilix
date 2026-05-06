@@ -30,7 +30,7 @@ import {
   isBotHandle,
   stripQuotesAndCode,
 } from "./lib/mention"
-import { parseSlashCommand, renderSlashCommandAck } from "./lib/slash-commands"
+import { parseSlashCommand, renderSlashCommandAck, type SlashCommand } from "./lib/slash-commands"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
@@ -38,6 +38,7 @@ import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
+import { handlePrImprove } from "./lib/triage-pr-improve"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
@@ -198,6 +199,17 @@ export type JobMessage =
   // request was received.
   | {
       type: "pr-review-rerun"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
+  // ARC-179: `/sigilix improve` — single-shot LLM call producing
+  // apply-able suggested-change comments. Independent of the
+  // ensemble; does NOT consume the ensemble daily budget. headSha
+  // is resolved at handler time (same rationale as pr-review-rerun).
+  | {
+      type: "pr-improve"
       owner: string
       repo: string
       prNumber: number
@@ -486,6 +498,34 @@ export default {
   },
 }
 
+/**
+ * Post the slash-command ack comment for `cmd` on the given PR.
+ * Used by pr-review-rerun and pr-improve queue handlers so the user
+ * gets fast feedback that the command was received before the
+ * (potentially 30-90s) LLM call completes. Throws on auth/comment
+ * failure so callers can decide whether to swallow.
+ */
+async function postSlashCommandAck(
+  env: Env,
+  cmd: SlashCommand["cmd"],
+  args: { owner: string; repo: string; prNumber: number; installationId: number },
+): Promise<void> {
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    throw new Error("GITHUB_APP_ID and GITHUB_PRIVATE_KEY required")
+  }
+  const token = await getInstallationToken({
+    kv: env.OPENCLAW_STATE,
+    appId: env.GITHUB_APP_ID,
+    privateKey: env.GITHUB_PRIVATE_KEY,
+    installationId: args.installationId,
+  })
+  const client = new GitHubClient({ token })
+  await client.createIssueComment(
+    args.owner, args.repo, args.prNumber,
+    renderSlashCommandAck(cmd),
+  )
+}
+
 async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
@@ -598,6 +638,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           console.error(JSON.stringify({
             event: "slash-command-ack-failed",
             err: err instanceof Error ? err.message : String(err),
+            cmd: "review",
             ...tag,
           }))
         }
@@ -629,6 +670,31 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       }
       return
     }
+    case "pr-improve":
+      // ARC-179: `/sigilix improve` slash command. Single-shot LLM
+      // call producing apply-able GitHub suggested-change comments.
+      // Independent of the ensemble; fail-soft on ack but re-throws
+      // on the actual run so queue retries get a chance.
+      try {
+        await postSlashCommandAck(env, "improve", {
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          installationId: job.installationId,
+        })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "slash-command-ack-failed",
+          err: err instanceof Error ? err.message : String(err),
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          cmd: "improve",
+        }))
+      }
+      return handlePrImprove({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        installationId: job.installationId,
+        env,
+      })
     case "ci-triage":
       return handleCiTriage({
         owner: job.owner,
@@ -964,20 +1030,19 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
 
   const body = comment.body ?? ""
 
-  // ARC-178: slash-command dispatch. Recognize `/sigilix <cmd>` at a
-  // line start and route to a dedicated job type instead of the
-  // generic mention-reply pipeline. v1 only handles `review`; other
-  // commands (ask, improve, describe, help, ...) currently fall
-  // through to the existing mention path — which means they're
-  // SILENTLY ignored unless the same comment also carries an
-  // @-mention. Document the limitation in the README before
-  // promising users that `/sigilix help` works.
+  // ARC-178 / ARC-179: slash-command dispatch. Recognize
+  // `/sigilix <cmd>` at a line start and route to a dedicated job
+  // type instead of the generic mention-reply pipeline. Currently
+  // handles `review` (ARC-178) and `improve` (ARC-179); other
+  // commands (ask, describe, help) currently fall silently through
+  // to the @-mention path — which means they're ignored unless the
+  // same comment also carries an @-mention. README documents this.
   const cleaned = stripQuotesAndCode(body)
   const slashCmd = parseSlashCommand(cleaned)
-  if (slashCmd?.cmd === "review") {
-    // ACL gate (review-team B2): the slash command triggers a full
-    // ensemble run, which is materially expensive. On a public repo
-    // any commenter could otherwise spam this. Restrict to authors
+  if (slashCmd) {
+    // ACL gate (review-team B2 / ARC-178): the slash command triggers
+    // an LLM call, which is materially expensive. On a public repo
+    // any commenter could otherwise spam these. Restrict to authors
     // GitHub considers trusted with the repo. CONTRIBUTOR is
     // intentionally excluded — anyone whose PR has merged becomes a
     // CONTRIBUTOR forever, which is too broad a circle for this gate.
@@ -987,6 +1052,7 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
       console.log(JSON.stringify({
         event: "slash-command-rejected",
         reason: "untrusted_author_association",
+        cmd: slashCmd.cmd,
         author_association: association || null,
         login: comment.user?.login ?? null,
         owner, repo, prNumber,
@@ -994,20 +1060,17 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
       return new Response("forbidden\n", { status: 403 })
     }
 
-    // Rerun coalesce (review-team H1): if the same PR already has a
-    // rerun in flight, drop subsequent invocations within a short
-    // window. This collapses N concurrent `/sigilix review` posts
-    // into 1 ack + 1 ensemble run, which is the user expectation.
-    // KV is best-effort under concurrent webhooks — a 1–2 message
-    // race window is fine; the downstream pr-review dedupe is
-    // re-armed by the rerun handler so any racers will collapse there
-    // too once the lock is reinstated.
-    const coalesceKey = `pr-review-rerun:${owner}/${repo}#${prNumber}`
+    // Per-command coalesce lock: if the same (PR, command) is in
+    // flight, drop subsequent invocations within 60s. Collapses N
+    // concurrent posts into 1 ack + 1 LLM run. Keying includes the
+    // command name so `/sigilix review` and `/sigilix improve` on
+    // the same PR don't accidentally suppress each other.
+    const coalesceKey = `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
     const existing = await env.OPENCLAW_STATE.get(coalesceKey)
     if (existing) {
       console.log(JSON.stringify({
         event: "slash-command-coalesced",
-        coalesceKey, owner, repo, prNumber,
+        coalesceKey, owner, repo, prNumber, cmd: slashCmd.cmd,
       }))
       return new Response("coalesced\n", { status: 202 })
     }
@@ -1015,12 +1078,24 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
       expirationTtl: 60, // 60s — long enough to swallow comment bursts
     })
 
-    const message: JobMessage = {
-      type: "pr-review-rerun",
-      owner,
-      repo,
-      prNumber,
-      installationId,
+    let message: JobMessage
+    switch (slashCmd.cmd) {
+      case "review":
+        message = {
+          type: "pr-review-rerun",
+          owner, repo, prNumber, installationId,
+        }
+        break
+      case "improve":
+        message = {
+          type: "pr-improve",
+          owner, repo, prNumber, installationId,
+        }
+        break
+      default: {
+        const _exhaustive: never = slashCmd
+        return _exhaustive
+      }
     }
     await env.OPENCLAW_JOBS.send(message)
     return new Response("queued slash-command\n", { status: 202 })

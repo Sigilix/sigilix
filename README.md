@@ -399,13 +399,14 @@ Built-in rule baseline (severity = `error` unless noted):
 
 When a hit fires, the security specialist receives it as an authoritative fact in the prompt and the review surfaces a "rotate immediately" recommendation. The scan covers added diff lines only — pre-existing secrets aren't re-flagged on every PR.
 
-## Slash commands (ARC-178)
+## Slash commands (ARC-178 / ARC-179)
 
-Reviewers can re-trigger Sigilix from any PR comment without pushing a no-op commit. v1 ships one command:
+Reviewers can drive Sigilix from any PR comment without pushing a no-op commit. Two commands are live:
 
 | Command | Effect |
 |---|---|
 | `/sigilix review` | Re-runs the ensemble review against the PR's current head SHA. Sigilix posts a short ack, clears the per-(PR, headSha) dedupe lock, then the regular sticky review comment updates when the run completes. |
+| `/sigilix improve` | Single-shot LLM pass (NOT the ensemble) that produces apply-able GitHub suggested-change comments. Each suggestion is anchored to a changed line in the diff and rendered as a `\`\`\`suggestion` block, applyable from the GitHub UI's "Commit suggestion" button. Suggestions are advisory (event = `COMMENT`, never `REQUEST_CHANGES`); scope is intentionally narrow — naming / clarity / dead-code / docs / light error-handling polish. Correctness or security findings stay on `/sigilix review`. When nothing is patch-worthy, Sigilix posts a brief "no high-confidence patches" comment. |
 
 Recognition rules:
 
@@ -421,7 +422,7 @@ Authorization (B2 gate):
 
 Burst behavior:
 
-- Concurrent `/sigilix review` posts on the same PR are coalesced for 60s via a KV lock (`pr-review-rerun:<owner>/<repo>#<n>`). The first invocation posts the ack and re-enqueues; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently.
+- Concurrent invocations of the same slash command on the same PR are coalesced for 60s via a per-`(cmd, PR)` KV lock (`slash-cmd:<cmd>:<owner>/<repo>#<n>`). The first invocation posts the ack and enqueues the job; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently. The key includes the command name, so `/sigilix review` and `/sigilix improve` on the same PR don't accidentally suppress each other.
 
 Unsupported subcommands (`/sigilix ask`, `/sigilix improve`, `/sigilix help`, etc.) are reserved for follow-up issues. Today they currently fall silently through to the @-mention pipeline — which means a bare `/sigilix help` (no `@sigilix`) goes nowhere. Future versions will recognize `help` and respond with the supported command list.
 

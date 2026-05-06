@@ -1,15 +1,16 @@
-// ARC-178: slash-command parser for `/sigilix <cmd> [args]` invocations
-// in PR comments.
+// ARC-178 / ARC-179: slash-command parser for `/sigilix <cmd> [args]`
+// invocations in PR comments.
 //
-// v1 scope (ship now):
+// Scope (current):
 //   - `/sigilix review` → re-trigger the ensemble on the PR's current
 //     head SHA. Useful when a reviewer wants a fresh review without
-//     pushing a no-op commit (e.g., the bot's prior review missed
-//     something obvious and they want it to retry).
+//     pushing a no-op commit (ARC-178).
+//   - `/sigilix improve` → run the suggested-change pass and post
+//     apply-able patches as inline review comments (ARC-179). Cheap
+//     single-shot — does not consume the ensemble budget.
 //
-// v2+ (deferred to follow-up issues):
+// Deferred to follow-up issues:
 //   - `/sigilix ask <question>` — Q&A using existing PR context + RAG
-//   - `/sigilix improve` — emit GitHub suggested-change comments
 //   - `/sigilix describe` — draft a PR description / changelog
 //
 // Recognition rules:
@@ -23,11 +24,11 @@
 
 export type SlashCommand =
   | { cmd: "review" }
-  // v2 reserved shapes (parser doesn't return these yet — adding the
+  | { cmd: "improve" }
+  // Deferred shapes (parser doesn't return these yet — adding the
   // type now keeps the dispatch table forward-compat once handlers
   // exist):
   // | { cmd: "ask"; query: string }
-  // | { cmd: "improve" }
   // | { cmd: "describe" }
 
 /**
@@ -57,6 +58,9 @@ export function parseSlashCommand(body: string): SlashCommand | null {
     if (head === "review") {
       return { cmd: "review" }
     }
+    if (head === "improve") {
+      return { cmd: "improve" }
+    }
     // Recognized prefix (`/sigilix ...`) but unsupported subcommand.
     // Continue scanning later lines — a comment that opens with
     // `/sigilix help` followed by `/sigilix review` should still
@@ -84,6 +88,8 @@ export function renderSlashCommandAck(cmd: SlashCommand["cmd"]): string {
   switch (cmd) {
     case "review":
       return "Re-running ensemble review on the current head. Standard sticky comment will update when complete."
+    case "improve":
+      return "Generating suggested-change patches against the current head. Apply-able suggestions will appear inline shortly."
     default: {
       const _exhaustive: never = cmd
       return _exhaustive

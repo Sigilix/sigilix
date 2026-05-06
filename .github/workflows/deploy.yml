@@ -13,6 +13,15 @@ name: Deploy
 #
 # Gates: typecheck + tests must pass before `wrangler deploy` runs.
 # A failing test should NEVER produce a production deploy.
+#
+# ARC-173: the deploy step uses a bash retry loop instead of
+# `cloudflare/wrangler-action` because of the intermittent CF API
+# regression at https://github.com/cloudflare/workers-sdk/issues/13828
+# — `wrangler deploy` randomly fails with `code: 10023` "binding
+# require [type] perms" on every binding type, across wrangler
+# 4.83-4.88, and a manual retry typically clears it. The loop tries up
+# to 5 times with 30s backoff so a transient flake doesn't block
+# main from shipping.
 
 # Least-privilege GITHUB_TOKEN. This workflow only needs to read
 # the repo for checkout — the actual deploy uses the Cloudflare
@@ -55,8 +64,29 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@9681c2997648301493e78cacbfb790a9f19c833f # v3.9.0
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Deploy to Cloudflare Workers (with retry, ARC-173)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          # Retry wrangler deploy up to 5 times to ride out the CF API
+          # `code: 10023` flake (workers-sdk #13828). 30s backoff between
+          # attempts. First success exits 0; all 5 failures exit 1 so a
+          # genuine outage still surfaces as a workflow failure.
+          set +e
+          for attempt in 1 2 3 4 5; do
+            echo "::group::wrangler deploy — attempt $attempt/5"
+            npx wrangler deploy
+            rc=$?
+            echo "::endgroup::"
+            if [ "$rc" -eq 0 ]; then
+              echo "Deploy succeeded on attempt $attempt."
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              echo "Attempt $attempt failed (exit $rc). Sleeping 30s before retry."
+              sleep 30
+            fi
+          done
+          echo "::error::Deploy failed after 5 attempts. See https://github.com/cloudflare/workers-sdk/issues/13828 for context if the error message mentions \`code: 10023\`."
+          exit 1

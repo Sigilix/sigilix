@@ -86,25 +86,63 @@ export function parseDeterministicChecks(raw: unknown): DeterministicCheck[] {
  * ends. Same shape as the sigilix.json v2 pathFilter glob (filed
  * separately in ARC-176); duplicated here so this module ships
  * self-contained and doesn't introduce a cross-issue dependency.
+ *
+ * Globstar semantics (sigilix-bot dogfood catch on PR #52 fix commit
+ * — emitted patterns described in plain prose to avoid closing the
+ * JSDoc block with a literal asterisk-slash sequence):
+ *   - globstar followed by slash (mid-pattern): emits a regex that
+ *     matches zero or more complete path segments. So src/<gs>/foo.ts
+ *     matches src/foo.ts AND src/sub/foo.ts but NOT src/barfoo.ts
+ *     (segment boundary required).
+ *   - slash followed by globstar at end of pattern: emits a regex
+ *     that matches zero or more trailing segments. So dist/<gs>
+ *     matches dist itself AND dist/anything/below.
+ *   - bare globstar (no adjacent slash) falls through to a permissive
+ *     match for rare middle-of-segment usage.
+ *
+ * Bare star matches anything except slash (single segment); question
+ * mark is one non-slash character.
  */
 function compileGlob(pattern: string): RegExp {
   let regex = ""
   let i = 0
   while (i < pattern.length) {
     const ch = pattern[i]
+    // `**/` → match zero or more complete path segments
+    if (ch === "*" && pattern[i + 1] === "*" && pattern[i + 2] === "/") {
+      regex += "(?:.*/)?"
+      i += 3
+      continue
+    }
+    // `/**` at end of pattern → match zero or more trailing segments
+    // (and the leading `/` is optional so `dist/**` matches `dist`)
+    if (
+      ch === "/" &&
+      pattern[i + 1] === "*" &&
+      pattern[i + 2] === "*" &&
+      i + 3 === pattern.length
+    ) {
+      regex += "(?:/.*)?"
+      i += 3
+      continue
+    }
+    // bare `**` — fall through; rare usage, treat as `.*`
     if (ch === "*" && pattern[i + 1] === "*") {
       regex += ".*"
       i += 2
-      // Consume an optional trailing slash so `dist/**` matches `dist`
-      // itself as well as anything under it.
-      if (pattern[i] === "/") i++
-    } else if (ch === "*") {
+      continue
+    }
+    if (ch === "*") {
       regex += "[^/]*"
       i++
-    } else if (ch === "?") {
+      continue
+    }
+    if (ch === "?") {
       regex += "[^/]"
       i++
-    } else if (ch !== undefined) {
+      continue
+    }
+    if (ch !== undefined) {
       // Escape any regex special character.
       regex += ch.replace(/[\\^$.|*+?()[\]{}]/g, "\\$&")
       i++

@@ -326,14 +326,14 @@ into the specialist prompts as authoritative facts:
   "deterministicChecks": [
     {
       "id": "no-todo-without-author",
-      "pattern": "TODO(?!\\\\([^)]+\\\\))",
+      "pattern": "TODO(?!\\([^)]+\\))",
       "severity": "warn",
       "message": "TODOs must include an author: TODO(name): ...",
       "paths": ["src/**/*.ts"]
     },
     {
       "id": "no-console-log",
-      "pattern": "console\\\\.log\\\\(",
+      "pattern": "console\\.log\\(",
       "severity": "error",
       "message": "console.log left in production code"
     }

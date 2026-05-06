@@ -165,6 +165,35 @@ describe("runDeterministicChecks — matching", () => {
     expect(runDeterministicChecks(diffOther, [check]).hits).toHaveLength(0)
   })
 
+  it("glob `**` matches whole path segments only (not partial filename)", () => {
+    // sigilix-bot dogfood catch on PR #52 fix commit: prior
+    // `**`-as-`.*` translation let `src/**/foo.ts` match
+    // `src/barfoo.ts`. Verify the segment-boundary fix.
+    const check: DeterministicCheck = {
+      id: "x", pattern: "TODO", severity: "warn", message: "x", paths: ["src/**/foo.ts"],
+    }
+    // Should NOT match — no segment boundary between src/ and foo.ts
+    expect(runDeterministicChecks(mkDiff("src/barfoo.ts", ["TODO no"]), [check]).hits).toHaveLength(0)
+    // SHOULD match — direct child
+    expect(runDeterministicChecks(mkDiff("src/foo.ts", ["TODO yes"]), [check]).hits).toHaveLength(1)
+    // SHOULD match — nested
+    expect(runDeterministicChecks(mkDiff("src/sub/dir/foo.ts", ["TODO yes"]), [check]).hits).toHaveLength(1)
+  })
+
+  it("glob `dist/**` matches `dist` itself AND anything under it", () => {
+    // sigilix-bot dogfood catch on PR #52 fix commit: prior translation
+    // emitted `^dist/.*$` which required the trailing slash; `dist`
+    // (no trailing slash) wouldn't match. Verify `(?:/.*)?` fix.
+    const check: DeterministicCheck = {
+      id: "x", pattern: "TODO", severity: "warn", message: "x", paths: ["dist/**"],
+    }
+    expect(runDeterministicChecks(mkDiff("dist", ["TODO yes"]), [check]).hits).toHaveLength(1)
+    expect(runDeterministicChecks(mkDiff("dist/index.js", ["TODO yes"]), [check]).hits).toHaveLength(1)
+    expect(runDeterministicChecks(mkDiff("dist/sub/file.js", ["TODO yes"]), [check]).hits).toHaveLength(1)
+    // NOT a match — different prefix
+    expect(runDeterministicChecks(mkDiff("distinct/foo.js", ["TODO no"]), [check]).hits).toHaveLength(0)
+  })
+
   it("supports JS regex syntax (groups, classes)", () => {
     const diff = mkDiff("foo.ts", ["console.log(x)", "logger.info(y)"])
     const result = runDeterministicChecks(diff, [{

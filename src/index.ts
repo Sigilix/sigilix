@@ -1133,7 +1133,16 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
         return _exhaustive
       }
     }
-    await env.OPENCLAW_JOBS.send(message)
+    // CR PR #61 catch: roll back the coalesce key if enqueue fails.
+    // Otherwise GitHub redelivers the webhook, sees the key, and
+    // returns "coalesced" without ever queueing the command — the
+    // original invocation gets silently dropped.
+    try {
+      await env.OPENCLAW_JOBS.send(message)
+    } catch (err) {
+      await env.OPENCLAW_STATE.delete(coalesceKey).catch(() => {})
+      throw err
+    }
     return new Response("queued slash-command\n", { status: 202 })
   }
 

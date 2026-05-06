@@ -6,6 +6,7 @@ import {
   parsePrImproveResponse,
   filterAnchorableSuggestions,
   hasSuggestionBlock,
+  isContiguousRightRange,
   renderInlineFallbackBody,
   type PrImproveSuggestion,
 } from "../src/lib/triage-pr-improve"
@@ -236,6 +237,80 @@ describe("filterAnchorableSuggestions", () => {
     )
     expect(out).toHaveLength(1)
     expect(out[0]!.startLine).toBe(8)
+  })
+
+  it("drops multi-line suggestions whose range spans a missing intermediate line (CR PR #61)", () => {
+    // Line 10 + line 13 are RIGHT-reviewable, but lines 11-12 are
+    // NOT in the diff at all. This is the multi-hunk case CodeRabbit
+    // flagged: validating only the endpoints would let this through
+    // and GitHub would 422 the whole batch.
+    const reviewable = makeReviewable([
+      { path: "src/foo.ts", line: 10, side: "RIGHT" },
+      { path: "src/foo.ts", line: 13, side: "RIGHT" },
+    ])
+    const out = filterAnchorableSuggestions(
+      [okSuggestion({ line: 13, startLine: 10 })],
+      reviewable,
+    )
+    expect(out).toHaveLength(0)
+  })
+})
+
+describe("isContiguousRightRange (CR PR #61 — multi-hunk guard)", () => {
+  function makeReviewable(entries: Array<{ path: string; line: number; side: "LEFT" | "RIGHT" }>): ReviewableMap {
+    const m: ReviewableMap = new Map()
+    for (const e of entries) {
+      const arr = m.get(e.path) ?? []
+      arr.push({ line: e.line, side: e.side })
+      m.set(e.path, arr)
+    }
+    return m
+  }
+
+  it("accepts a fully-contiguous RIGHT range", () => {
+    const r = makeReviewable([
+      { path: "f.ts", line: 5, side: "RIGHT" },
+      { path: "f.ts", line: 6, side: "RIGHT" },
+      { path: "f.ts", line: 7, side: "RIGHT" },
+    ])
+    expect(isContiguousRightRange(r, "f.ts", 5, 7)).toBe(true)
+  })
+
+  it("rejects a range with a gap", () => {
+    const r = makeReviewable([
+      { path: "f.ts", line: 5, side: "RIGHT" },
+      { path: "f.ts", line: 7, side: "RIGHT" },
+    ])
+    expect(isContiguousRightRange(r, "f.ts", 5, 7)).toBe(false)
+  })
+
+  it("rejects a range where an intermediate line is LEFT-only", () => {
+    // Line 6 is a deleted line (LEFT) — `\`\`\`suggestion` block can't
+    // span it; treat as not-contiguous on RIGHT.
+    const r = makeReviewable([
+      { path: "f.ts", line: 5, side: "RIGHT" },
+      { path: "f.ts", line: 6, side: "LEFT" },
+      { path: "f.ts", line: 7, side: "RIGHT" },
+    ])
+    expect(isContiguousRightRange(r, "f.ts", 5, 7)).toBe(false)
+  })
+
+  it("accepts a single-line range (startLine === line)", () => {
+    const r = makeReviewable([{ path: "f.ts", line: 5, side: "RIGHT" }])
+    expect(isContiguousRightRange(r, "f.ts", 5, 5)).toBe(true)
+  })
+
+  it("rejects an inverted range (startLine > line)", () => {
+    const r = makeReviewable([
+      { path: "f.ts", line: 5, side: "RIGHT" },
+      { path: "f.ts", line: 6, side: "RIGHT" },
+    ])
+    expect(isContiguousRightRange(r, "f.ts", 6, 5)).toBe(false)
+  })
+
+  it("rejects when path isn't in the map", () => {
+    const r = makeReviewable([{ path: "f.ts", line: 5, side: "RIGHT" }])
+    expect(isContiguousRightRange(r, "g.ts", 5, 5)).toBe(false)
   })
 })
 

@@ -49,7 +49,7 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
 
 ## Anchor rules
 
-- \`path\`, \`line\` are **mandatory**. \`startLine\` is mandatory when the replacement spans more than one line; omit for single-line patches.
+- \`path\`, \`line\` are **mandatory**. \`startLine\` denotes the first line of the **original (pre-patch) range** being replaced. Set it only when the suggestion replaces multiple original lines; omit for single-line replacements (even if your replacement code itself happens to span multiple lines).
 - Use **post-image (RIGHT-side) line numbers** from the new file. The orchestrator validates every suggestion against the diff and silently drops anchors that don't correspond to a changed or context line within a hunk.
 - Range \`startLine\`..\`line\` must be a contiguous slice of one hunk. No multi-hunk suggestions.
 

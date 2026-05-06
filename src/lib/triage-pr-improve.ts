@@ -29,6 +29,7 @@ import { PR_IMPROVE_PROMPT } from "../prompts/pr-improve"
 import {
   parseDiffToReviewablePositions,
   deriveSide,
+  isPositionReviewable,
   type ReviewableMap,
 } from "./diff-positions"
 import { isRepoSensitive } from "./repo-policy"
@@ -348,7 +349,7 @@ export function parsePrImproveResponse(text: string): PrImproveVerdict | null {
  * model should already cap at 5 and any duplicate is a model-side
  * mistake.
  *
- * Hard rules (review-team B1 / H2):
+ * Hard rules (review-team B1 / H2 / CR PR #61 catch):
  *   - **RIGHT-side only.** `\`\`\`suggestion` blocks can't be applied
  *     against deleted lines (the file no longer has those lines).
  *     Drop any anchor whose primary side resolves to LEFT.
@@ -356,6 +357,13 @@ export function parsePrImproveResponse(text: string): PrImproveVerdict | null {
  *     GitHub 422s the whole review on one bad anchor, so a model
  *     that picks a valid `line` but an out-of-hunk `startLine` would
  *     poison the whole batch.
+ *   - **The full \[startLine..line\] range must be contiguous in the
+ *     diff** — every line in between must be RIGHT-reviewable.
+ *     `ReviewableMap` doesn't track hunk boundaries, but the absence
+ *     of an intermediate line is exactly the signal that the range
+ *     escapes its hunk. CR PR #61 catch: validating only the two
+ *     endpoints would let a range jumping across hunks through, and
+ *     `submitReview()` would 422 the whole batch.
  */
 export function filterAnchorableSuggestions(
   raw: PrImproveSuggestion[],
@@ -368,8 +376,9 @@ export function filterAnchorableSuggestions(
     if (lineSide !== "RIGHT") continue
     if (!hasSuggestionBlock(s.body)) continue
     if (typeof s.startLine === "number" && s.startLine < s.line) {
-      const startSide = deriveSide(reviewable, s.path, s.startLine)
-      if (startSide !== "RIGHT") continue
+      if (!isContiguousRightRange(reviewable, s.path, s.startLine, s.line)) {
+        continue
+      }
     }
     const key = `${s.path}:${s.startLine ?? s.line}-${s.line}`
     if (seen.has(key)) continue
@@ -377,6 +386,29 @@ export function filterAnchorableSuggestions(
     out.push(s)
   }
   return out
+}
+
+/**
+ * Return true iff every line in `[startLine..line]` is RIGHT-reviewable
+ * for the given path. Used by `filterAnchorableSuggestions` to ensure a
+ * multi-line suggestion's range stays inside one hunk — `ReviewableMap`
+ * records every reviewable position, so a missing intermediate line is
+ * a sufficient signal that the range crosses a hunk boundary or
+ * escapes the hunk altogether.
+ *
+ * Pure — exported for tests.
+ */
+export function isContiguousRightRange(
+  reviewable: ReviewableMap,
+  path: string,
+  startLine: number,
+  line: number,
+): boolean {
+  if (startLine > line) return false
+  for (let l = startLine; l <= line; l++) {
+    if (!isPositionReviewable(reviewable, path, l, "RIGHT")) return false
+  }
+  return true
 }
 
 /**

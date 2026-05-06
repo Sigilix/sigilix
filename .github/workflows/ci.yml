@@ -23,3 +23,6 @@ jobs:
 
       - name: Unit tests
         run: npm test
+
+      - name: ARC-186 advisory DB size check
+        run: npm run check:advisory-db-size

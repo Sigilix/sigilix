@@ -9,7 +9,8 @@
     "deploy": "wrangler deploy",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:advisory-db-size": "./scripts/check-advisory-db-size.sh"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

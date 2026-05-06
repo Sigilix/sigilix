@@ -172,12 +172,12 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // validated by shadow telemetry showing 12/15 logic runs hit "Operation
     // aborted" at 90s wall.
     //
-    // Phase 4a.3 (ARC-171): specialist budget extended to 240s. Two
-    // retries (3 primary attempts ≈ 240s + backoffs) would exceed the new
-    // budget too, so retries=1 stays. The new headroom funds the
-    // cross-provider fallback (kimi-k2.5:cloud) which Phase 4a.2
-    // telemetry proved was being killed by the 180s wall before it
-    // could fire.
+    // Phase 4a.3 (ARC-171): specialist budget extended to 270s. Two
+    // retries (3 primary attempts ≈ 270s at the 90s/attempt observed
+    // in Phase 4a.2 telemetry, + backoffs) would exceed the new budget
+    // too, so retries=1 stays. The new headroom funds the cross-
+    // provider fallback (kimi-k2.5:cloud) which Phase 4a.2 telemetry
+    // proved was being killed by the 180s wall before it could fire.
     retries: 1,
     fallback: "kimi-k2.5:cloud",  // Moonshot — different infra than DeepSeek
   },

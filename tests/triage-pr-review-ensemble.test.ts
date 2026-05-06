@@ -503,9 +503,9 @@ describe("isPermanentFailure", () => {
   })
 })
 
-// ─── Phase 4a.1: configuration invariants ─────────────────────────────────
+// ─── Phase 4a.3: configuration invariants ─────────────────────────────────
 
-describe("Phase 4a.1 — timeout schedule", () => {
+describe("Phase 4a.3 — timeout schedule", () => {
   it("enforces SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS ≤ ORCHESTRATOR_TIMEOUT_MS", () => {
     // Static budget invariant. The module already throws at load if
     // this is ever violated; the test is a regression guard so a
@@ -515,12 +515,37 @@ describe("Phase 4a.1 — timeout schedule", () => {
       .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
   })
 
-  it("uses the v3.1 LOCKED + Phase 4a.1 timeouts", () => {
-    expect(SPECIALIST_TIMEOUT_MS).toBe(180_000)
+  it("uses the Phase 4a.3 timeouts", () => {
+    // Phase 4a.3 (ARC-171): SPECIALIST 180→270, ORCH 400→490. Synth +
+    // headroom unchanged. The bump funds the cross-provider fallback
+    // which Phase 4a.2 telemetry showed was being killed by the old
+    // 180s wall before it could fire on deepseek-v4-pro:cloud logic
+    // runs. Sized to fit 2×90s primary + ~1s backoff + 80s fallback
+    // = 261s rounded to 270s for slack.
+    expect(SPECIALIST_TIMEOUT_MS).toBe(270_000)
     expect(SYNTHESIZER_TIMEOUT_MS).toBe(180_000)
     expect(RESERVED_HEADROOM_MS).toBe(40_000)
-    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(400_000)
+    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(490_000)
     expect(RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBe(15_000)
+  })
+
+  it("specialist budget accommodates 2 primary attempts + 1 fallback at observed latencies", () => {
+    // Phase 4a.3 (ARC-171) intent: logic specialist gets enough budget
+    // for runWithRetryAndFallback to fire BOTH retries (2 primary
+    // attempts) AND the cross-provider fallback within a single
+    // SPECIALIST_TIMEOUT_MS window. Phase 4a.2 telemetry observed
+    // ~90s per primary attempt on deepseek-v4-pro:cloud and the
+    // fallback (kimi-k2.5:cloud) at a roughly comparable shape.
+    //
+    // Regression guard: if a future change tightens SPECIALIST_TIMEOUT_MS
+    // below the budget needed for `2 * attempt + backoff + fallback`,
+    // the cross-provider fallback would silently stop firing — the
+    // exact failure mode that motivated this rebalance.
+    const observedPrimaryAttemptMs = 90_000  // PR #45 record, n=1
+    const retryBackoffMs = 1_000
+    const fallbackAttemptMs = 80_000  // conservative kimi-k2.5 estimate
+    const minBudget = 2 * observedPrimaryAttemptMs + retryBackoffMs + fallbackAttemptMs
+    expect(SPECIALIST_TIMEOUT_MS).toBeGreaterThanOrEqual(minBudget)
   })
 
   it("pre-flight timeout is well within the orchestrator's reserved headroom", () => {

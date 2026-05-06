@@ -75,13 +75,18 @@ export function buildChangedLines(diff: string): ChangedLines {
 
     if (!inHunk || currentPath === null) continue
 
-    if (raw.startsWith("+") && !raw.startsWith("+++")) {
+    // Inside a hunk, `+++ b/path` / `--- a/path` headers don't
+    // appear — those branches already set `inHunk = false`. So
+    // checking the leading char is safe AND avoids false-skipping
+    // content lines whose CONTENT starts with `++` or `--` (which
+    // render as `+++` / `---` in the diff). CR catch on PR #67.
+    if (raw[0] === "+") {
       const set = out.get(currentPath)
       if (set) set.add(newLine)
       newLine++
       continue
     }
-    if (raw.startsWith("-") && !raw.startsWith("---")) {
+    if (raw[0] === "-") {
       // Old-side line — does NOT advance the new-side counter and is
       // NOT added to the new-side changed set.
       continue

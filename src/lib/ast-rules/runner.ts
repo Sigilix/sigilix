@@ -123,6 +123,11 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
 
   const findings: AstFinding[] = []
   const perFinding: Map<string, { line: number; side: "RIGHT" } | null> = new Map()
+  // CR catch on PR #67: dedupe by `astFindingId`. Two rule hits at
+  // the same `(ruleId, path, line)` collapse to a single finding —
+  // otherwise downstream gets duplicate IDs while `perFinding` keeps
+  // only one entry, producing inconsistent state.
+  const emittedFindingIds = new Set<string>()
 
   let filesScanned = 0
   let filesSkippedLarge = 0
@@ -134,11 +139,15 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     if (!ext) continue
     anyJsTs = true
 
-    if (source.length > LARGE_FILE_BYTES) {
+    // CR catch on PR #67: compare BYTE length, not UTF-16 code-unit
+    // length. Non-ASCII source files would otherwise sneak past the
+    // 500 KB guard and slow down acorn parsing.
+    const sourceBytes = new TextEncoder().encode(source).length
+    if (sourceBytes > LARGE_FILE_BYTES) {
       filesSkippedLarge++
       emitTelemetry("ast-rules-scan-skipped-large-file", {
         path,
-        sizeBytes: source.length,
+        sizeBytes: sourceBytes,
         ...ctx,
       })
       continue
@@ -208,6 +217,9 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
       if (!nodeOverlapsChanged(changedLines, path, hit.line, hit.line)) continue
 
       const id = await astFindingId(rule.id, path, hit.line)
+      // Dedupe: same (rule, path, line) → one finding only.
+      if (emittedFindingIds.has(id)) continue
+      emittedFindingIds.add(id)
       const reviewPos = findReviewPosition(reviewable, path, hit.line)
       if (reviewPos === null) {
         emitTelemetry("ast-rules-finding-no-review-position", {

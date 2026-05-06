@@ -26,7 +26,13 @@ export const noDisabledTlsRejectUnauthorized: AstRule = {
     if (!node || node.type !== "Property") return null
     const k = node.key
     const v = node.value
-    const keyName = k?.type === "Identifier" ? k.name : (k?.type === "Literal" ? k.value : null)
+    // CR catch on PR #67: respect `node.computed`. `{ [variable]:
+    // false }` must NOT match even when `variable` is named
+    // "rejectUnauthorized" — the key is dynamic, not a literal property
+    // named "rejectUnauthorized".
+    const keyName = node.computed
+      ? (k?.type === "Literal" && typeof k.value === "string" ? k.value : null)
+      : (k?.type === "Identifier" ? k.name : (k?.type === "Literal" ? k.value : null))
     if (keyName !== "rejectUnauthorized") return null
     if (v?.type !== "Literal" || v.value !== false) return null
     return {

@@ -23,7 +23,10 @@ function calleeName(node: AstNode): string | null {
   const c = node?.callee
   if (!c) return null
   if (c.type === "Identifier") return c.name as string
-  if (c.type === "MemberExpression" && c.property?.type === "Identifier") {
+  // CR catch on PR #67: skip computed member access — `obj[varName]()`
+  // where `varName` is an Identifier with the target name should not
+  // match the static-method pattern.
+  if (c.type === "MemberExpression" && !c.computed && c.property?.type === "Identifier") {
     return c.property.name as string
   }
   return null
@@ -36,7 +39,11 @@ function hasShellTrueLiteral(args: AstNode[]): boolean {
       if (prop?.type !== "Property") continue
       const k = prop.key
       const v = prop.value
-      const keyName = k?.type === "Identifier" ? k.name : (k?.type === "Literal" ? k.value : null)
+      // Same `computed` guard — `{ [shell]: true }` where `shell` is a
+      // variable shouldn't match the literal `shell:true` pattern.
+      const keyName = prop.computed
+        ? (k?.type === "Literal" && typeof k.value === "string" ? k.value : null)
+        : (k?.type === "Identifier" ? k.name : (k?.type === "Literal" ? k.value : null))
       if (keyName !== "shell") continue
       if (v?.type === "Literal" && v.value === true) return true
     }

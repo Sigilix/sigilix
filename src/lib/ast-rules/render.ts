@@ -14,6 +14,15 @@
 
 import type { AstFinding } from "./types"
 
+// CR catch on PR #67: prompt-block fields are line-delimited; an
+// `evidence` or `message` value containing a literal newline would
+// split the field across multiple lines and break deterministic
+// parsing. Collapse all whitespace runs (including newlines) to a
+// single space.
+function normalizePromptScalar(value: string): string {
+  return value.replace(/\s+/g, " ").trim()
+}
+
 export function renderAstFindingsForPrompt(findings: readonly AstFinding[]): string {
   if (findings.length === 0) return ""
   const lines: string[] = []
@@ -27,8 +36,8 @@ export function renderAstFindingsForPrompt(findings: readonly AstFinding[]): str
     lines.push(`  severity: ${f.severity}`)
     lines.push(`  role_hint: ${f.roleHint}`)
     lines.push(`  path: ${f.path}:${f.line}`)
-    lines.push(`  message: ${f.message}`)
-    lines.push(`  evidence: ${f.evidence}`)
+    lines.push(`  message: ${normalizePromptScalar(f.message)}`)
+    lines.push(`  evidence: ${normalizePromptScalar(f.evidence)}`)
     lines.push(`  ast_finding_id: ${f.astFindingId}`)
     lines.push("")
   }

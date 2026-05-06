@@ -472,9 +472,15 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       astOut.severityThreshold = astIn.severityThreshold
     }
     if (Array.isArray(astIn.disabledRules)) {
-      const ids = astIn.disabledRules.filter(
-        (v): v is string => typeof v === "string" && v.length > 0,
-      )
+      // CR catch on PR #67: trim + dedupe entries so `" no-eval-call "`
+      // matches the canonical rule id and a config that lists the same
+      // id twice doesn't silently bloat the disabled set.
+      const ids = [...new Set(
+        astIn.disabledRules
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
       // Keep an empty array distinct from "absent" so resolvers can
       // observe the explicit-empty case. Both still map to "no rules
       // disabled" semantically — the distinction is for telemetry only.

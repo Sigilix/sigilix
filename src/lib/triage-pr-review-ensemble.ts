@@ -653,9 +653,12 @@ export async function handlePrReviewEnsemble(
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
 
     // ARC-181 Task 9: auto-inline poster — gated behind
-    // `astRules.autoInline === true`. Default-false v1 cautious
-    // rollout; flips after 2 weeks of FP telemetry shows < 5% rate.
-    if (astRulesConfig.autoInline && astResult.findings.length > 0) {
+    // `astRules.autoInline === true` AND mode === "post". Default-
+    // false v1 cautious rollout; flips after 2 weeks of FP telemetry
+    // shows < 5% rate. CR catch on PR #67: shadow mode is
+    // telemetry-only by contract — auto-inline posting in shadow
+    // would leak customer-visible comments and break the contract.
+    if (mode === "post" && astRulesConfig.autoInline && astResult.findings.length > 0) {
       try {
         await postAstInlineFindings({
           client,

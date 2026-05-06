@@ -122,13 +122,13 @@ src/lib/ast-rules/
 └── rules/
     ├── no-eval-call.ts
     ├── no-new-function-constructor.ts
-    ├── child-process-shell-true.ts
+    ├── spawn-shell-true.ts
     ├── no-disabled-tls-reject-unauthorized.ts
     ├── no-document-write-call.ts
     ├── no-async-without-await.ts
     ├── no-throw-literal.ts
-    ├── no-await-in-loop-iter-independent.ts
-    ├── no-floating-promise-statement.ts
+    ├── no-await-in-loop.ts
+    ├── no-floating-promise-call-known-async.ts
     └── no-process-env-mutation.ts
 ```
 

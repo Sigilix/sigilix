@@ -80,6 +80,12 @@ import {
   renderHitsForPrompt,
   type DeterministicCheckHit,
 } from "./deterministic-checks"
+import {
+  readLastReviewedSha,
+  writeLastReviewedSha,
+  selectDiff,
+  type DiffMode,
+} from "./incremental-review"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -355,7 +361,37 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "skipped", cache)
     }
 
-    const fullDiff = await client.getPullRequestDiff(owner, repo, prNumber)
+    const fullPrDiff = await client.getPullRequestDiff(owner, repo, prNumber)
+
+    // ARC-194: incremental review. If we've reviewed this PR before
+    // and the current head SHA differs from the recorded one, fetch
+    // the compare diff and use that — saves model spend on
+    // iteration-heavy PRs where most pushes only touch a small subset
+    // of files. Fail-safe: any error / suspicious shape falls back to
+    // full diff so we never review LESS than what's open.
+    const lastReviewed = await readLastReviewedSha(env, owner, repo, prNumber)
+    let compareDiff: string | null = null
+    if (lastReviewed !== null && lastReviewed.reviewedSha !== headSha) {
+      try {
+        compareDiff = await client.getCompareDiff(
+          owner, repo, lastReviewed.reviewedSha, headSha,
+        )
+      } catch {
+        compareDiff = null
+      }
+    }
+    const diffSelection = selectDiff({
+      fullDiff: fullPrDiff,
+      compareDiff,
+      previousSha: lastReviewed?.reviewedSha ?? null,
+      currentHeadSha: headSha,
+    })
+    telemetry.incrementalReview = {
+      mode: diffSelection.mode,
+      ...(diffSelection.previousSha ? { previousSha: diffSelection.previousSha } : {}),
+      ...(diffSelection.reason ? { reason: diffSelection.reason } : {}),
+    }
+    const fullDiff = diffSelection.diff
 
     // ARC-192: hunk-level diff packing. Split the diff by file, pack
     // greedily into batches under the per-call token cap. v1 reviews
@@ -631,10 +667,23 @@ export async function handlePrReviewEnsemble(
     }
 
     if (mode === "shadow") {
-      // Shadow: telemetry only, no GitHub submission.
+      // Shadow: telemetry only, no GitHub submission. Deliberately
+      // do NOT write the last-reviewed SHA — shadow runs don't post
+      // findings, so a later real review must still see the full
+      // base..head diff to surface them. Recording the shadow SHA
+      // would cause subsequent post-mode runs to incrementally
+      // review only `shadowSha..head` and miss everything before
+      // (sigilix-bot dogfood catch on PR #53).
       telemetry.shadowVerdict = validated.verdict
       return finalize(telemetry, env, "shadow_recorded", cache)
     }
+
+    // ARC-194: record the SHA we just reviewed (post mode only) so
+    // subsequent pushes can fetch the compare diff (`reviewedSha...
+    // newHead`) instead of the full PR diff. Best-effort — write
+    // failures don't fail the run; next push falls back to full diff
+    // and re-establishes the marker on the following review.
+    await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
 
     // ─── Stale-head guard #2 ───────────────────────────────────
     const meta2 = await client.getPullRequest(owner, repo, prNumber)
@@ -1621,6 +1670,19 @@ interface EnsembleTelemetry {
   deterministicChecks?: {
     hits: DeterministicCheckHit[]
     compiledRegexFailures: string[]
+  }
+  /**
+   * ARC-194: incremental-review telemetry. `mode` is `incremental`
+   * (savings path), `full` (we tried but bailed), or `first-review`
+   * (no previous record). `previousSha` is the SHA we previously
+   * reviewed (if any). `reason` explains why we didn't take the
+   * incremental path (`same_sha`, `compare_fetch_failed`,
+   * `compare_empty`, `compare_not_smaller`).
+   */
+  incrementalReview?: {
+    mode: DiffMode
+    previousSha?: string
+    reason?: string
   }
   shadowVerdict?: PrReviewVerdict
   submitted?: boolean

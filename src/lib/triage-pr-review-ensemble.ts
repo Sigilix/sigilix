@@ -69,6 +69,12 @@ import {
 } from "../prompts/pr-review-specialists"
 import { withComposedTimeout } from "./agent-loop"
 import { loadSigilixConfig, type SigilixConfig } from "./sigilix-config"
+import {
+  splitDiffByFile,
+  packFilesIntoBatches,
+  batchToDiff,
+  estimateTokens,
+} from "./diff-packing"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -344,7 +350,36 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "skipped", cache)
     }
 
-    const diff = await client.getPullRequestDiff(owner, repo, prNumber)
+    const fullDiff = await client.getPullRequestDiff(owner, repo, prNumber)
+
+    // ARC-192: hunk-level diff packing. Split the diff by file, pack
+    // greedily into batches under the per-call token cap. v1 reviews
+    // only the FIRST batch; files in subsequent batches are recorded
+    // in telemetry as `filesNotReviewed` so the operator can see how
+    // often we drop content. Files larger than the cap individually
+    // are dropped via `filesDroppedTooLarge` (don't split mid-file in
+    // v1 — it's almost always generated content like lockfiles).
+    //
+    // Multi-batch with parallel specialist calls + verdict merge is
+    // the v2 enhancement; v1 ships the bound + telemetry so we have
+    // data on whether v2 is worth the call-count multiplier.
+    const allFiles = splitDiffByFile(fullDiff)
+    const { batches, droppedTooLarge } = packFilesIntoBatches(allFiles)
+    const reviewedFiles = batches[0] ?? []
+    const filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
+    const diff = reviewedFiles.length === allFiles.length && droppedTooLarge.length === 0
+      ? fullDiff
+      : batchToDiff(reviewedFiles)
+
+    telemetry.diffPacking = {
+      diffTokensEstimated: estimateTokens(fullDiff),
+      totalFiles: allFiles.length,
+      batchCount: batches.length,
+      filesReviewed: reviewedFiles.map((f) => f.path),
+      filesDroppedTooLarge: droppedTooLarge,
+      filesNotReviewed,
+    }
+
     const reviewable = parseDiffToReviewablePositions(diff)
     const filePaths = [...reviewable.keys()]
 
@@ -1536,6 +1571,22 @@ interface EnsembleTelemetry {
     demotedScore1: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
+  /**
+   * ARC-192: hunk-level diff packing telemetry. Records how the diff
+   * was split for the model call. `batchCount > 1` means the PR was
+   * too large to fit in one specialist call; v1 reviews only the
+   * first batch and lists the rest in `filesNotReviewed`. Operators
+   * use this to decide whether v2 (multi-call merge) is worth the
+   * cost increase.
+   */
+  diffPacking?: {
+    diffTokensEstimated: number
+    totalFiles: number
+    batchCount: number
+    filesReviewed: string[]
+    filesDroppedTooLarge: string[]
+    filesNotReviewed: string[]
+  }
   shadowVerdict?: PrReviewVerdict
   submitted?: boolean
   /**

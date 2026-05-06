@@ -376,6 +376,20 @@ Required fields: `id`, `pattern`, `message`. Optional: `severity` (`info|warn|er
 
 A malformed regex is dropped silently and recorded in telemetry; never breaks the review.
 
+### `describe.enabled` (boolean, default true) — ARC-191
+
+Per-repo opt-out for `/sigilix describe`. Default behavior (missing field) is enabled — any OWNER / MEMBER / COLLABORATOR can invoke `/sigilix describe` on a PR. Set to `false` to disable, e.g. for repos with strict mandatory PR templates that should not be drafted over:
+
+```json
+{
+  "describe": {
+    "enabled": false
+  }
+}
+```
+
+When disabled, Sigilix posts a brief "feature disabled" comment so the user knows the gate fired (rather than silently dropping the command). Strict boolean parsing — string `"false"` does NOT disable; only literal `false`.
+
 ## Secret scanning (ARC-187)
 
 Sigilix runs a Worker-native secret scanner against added diff lines BEFORE the LLM specialist fanout. **Always on**, no config needed — secret detection is baseline behavior, not opt-in.
@@ -397,7 +411,7 @@ Built-in rule baseline (severity = `error` unless noted):
 
 When a hit fires, the security specialist receives it as an authoritative fact in the prompt and the review surfaces a "rotate immediately" recommendation. The scan covers added diff lines only — pre-existing secrets aren't re-flagged on every PR.
 
-## Slash commands (ARC-178 / ARC-179)
+## Slash commands (ARC-178 / ARC-179 / ARC-191)
 
 Reviewers can drive Sigilix from any PR comment without pushing a no-op commit. Currently live:
 
@@ -405,6 +419,7 @@ Reviewers can drive Sigilix from any PR comment without pushing a no-op commit. 
 |---|---|
 | `/sigilix review` | Re-runs the ensemble review against the PR's current head SHA. Sigilix posts a short ack, clears the per-(PR, headSha) dedupe lock, then the regular sticky review comment updates when the run completes. |
 | `/sigilix improve` | Single-shot LLM pass (NOT the ensemble) that produces apply-able GitHub suggested-change comments. Each suggestion is anchored to a changed line in the diff and rendered as a `\`\`\`suggestion` block, apply-able from the GitHub UI's "Commit suggestion" button. Suggestions are advisory (event = `COMMENT`, never `REQUEST_CHANGES`); scope is intentionally narrow — naming / clarity / dead-code / docs / light error-handling polish. Correctness or security findings stay on `/sigilix review`. When nothing is patch-worthy, Sigilix posts a brief "no high-confidence patches" comment. |
+| `/sigilix describe [pr\|internal\|external]` | Single-shot LLM draft of a PR description (`pr`, default) or internal / external changelog. Posted as a top-level comment with `<!-- sigilix:describe:<mode>:start/end -->` markers around the draft body and a hidden `<!-- sigilix-meta: {...} -->` line for future apply-verb parsing. The PR body itself is **never** auto-edited by v1; copy the section between markers manually. Per-repo opt-OUT via `sigilix.json` (`describe.enabled: false`). External-mode disclosure is prompt-level best-effort, NOT a security control — disable for repos that need hard guarantees. |
 | `/sigilix help` | Posts an inline list of supported commands. No model call, no diff fetch — just an authenticated comment post. |
 
 Recognition rules:
@@ -423,7 +438,7 @@ Burst behavior:
 
 - Concurrent invocations of the same slash command on the same PR are coalesced for 60s via a per-`(cmd, PR)` KV lock (`slash-cmd:<cmd>:<owner>/<repo>#<n>`). The first invocation enqueues the job; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently. The key includes the command name so different commands on the same PR don't accidentally suppress each other.
 
-Unsupported subcommands (`/sigilix ask`, `/sigilix describe`) are reserved for follow-up issues. Until they ship, those invocations fall silently through to the @-mention pipeline.
+Unsupported subcommands (`/sigilix ask`) are reserved for follow-up issues. Until they ship, those invocations fall silently through to the @-mention pipeline.
 
 ## CI / auto-deploy
 

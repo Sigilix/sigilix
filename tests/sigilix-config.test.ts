@@ -11,6 +11,7 @@ import {
   parseSigilixConfig,
   parseSigilixConfigDetailed,
   resolveCommandConfig,
+  resolveAstRulesConfig,
   loadSigilixConfig,
   EMPTY_CONFIG,
   KNOWN_MODELS,
@@ -616,5 +617,128 @@ describe("parseSigilixConfig — depVulnScan.enabled (ARC-186)", () => {
   it("strips a top-level depVulnScan value that isn't an object", () => {
     expect(parseSigilixConfig(JSON.stringify({ depVulnScan: "off" }))).toEqual({})
     expect(parseSigilixConfig(JSON.stringify({ depVulnScan: false }))).toEqual({})
+  })
+})
+
+describe("parseSigilixConfig — astRules (ARC-181)", () => {
+  it("captures astRules.enabled: false", () => {
+    const r = parseSigilixConfig(JSON.stringify({ astRules: { enabled: false } }))
+    expect(r?.astRules?.enabled).toBe(false)
+  })
+
+  it("captures astRules.enabled: true", () => {
+    const r = parseSigilixConfig(JSON.stringify({ astRules: { enabled: true } }))
+    expect(r?.astRules?.enabled).toBe(true)
+  })
+
+  it("STRICT-BOOL: string \"false\" does NOT disable", () => {
+    const r = parseSigilixConfig(JSON.stringify({ astRules: { enabled: "false" } }))
+    expect(r?.astRules?.enabled).toBeUndefined()
+  })
+
+  it("captures severityThreshold for each known value", () => {
+    for (const v of ["info", "warning", "error"] as const) {
+      const r = parseSigilixConfig(JSON.stringify({ astRules: { severityThreshold: v } }))
+      expect(r?.astRules?.severityThreshold).toBe(v)
+    }
+  })
+
+  it("rejects unknown severityThreshold values", () => {
+    const r = parseSigilixConfig(JSON.stringify({ astRules: { severityThreshold: "spicy" } }))
+    expect(r?.astRules?.severityThreshold).toBeUndefined()
+  })
+
+  it("captures disabledRules string array", () => {
+    const r = parseSigilixConfig(JSON.stringify({
+      astRules: { disabledRules: ["no-eval-call", "no-throw-literal"] },
+    }))
+    expect(r?.astRules?.disabledRules).toEqual(["no-eval-call", "no-throw-literal"])
+  })
+
+  it("filters non-string entries from disabledRules", () => {
+    const r = parseSigilixConfig(JSON.stringify({
+      astRules: { disabledRules: ["no-eval-call", 42, null, ""] },
+    }))
+    expect(r?.astRules?.disabledRules).toEqual(["no-eval-call"])
+  })
+
+  it("rejects non-array disabledRules", () => {
+    const r = parseSigilixConfig(JSON.stringify({
+      astRules: { disabledRules: "no-eval-call" },
+    }))
+    expect(r?.astRules?.disabledRules).toBeUndefined()
+  })
+
+  it("captures autoInline: true", () => {
+    const r = parseSigilixConfig(JSON.stringify({ astRules: { autoInline: true } }))
+    expect(r?.astRules?.autoInline).toBe(true)
+  })
+
+  it("STRICT-BOOL: autoInline string is dropped", () => {
+    const r = parseSigilixConfig(JSON.stringify({ astRules: { autoInline: "yes" } }))
+    expect(r?.astRules?.autoInline).toBeUndefined()
+  })
+
+  it("ignores unknown subfields under astRules (forward-compat)", () => {
+    const r = parseSigilixConfig(JSON.stringify({
+      astRules: { enabled: true, futureField: "x" },
+    }))
+    expect(r?.astRules).toEqual({ enabled: true })
+  })
+
+  it("strips top-level astRules value that isn't an object", () => {
+    expect(parseSigilixConfig(JSON.stringify({ astRules: "off" }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ astRules: [] }))).toEqual({})
+  })
+})
+
+describe("resolveAstRulesConfig (ARC-181)", () => {
+  it("locks defaults when config is null", () => {
+    expect(resolveAstRulesConfig(null)).toEqual({
+      enabled: true,
+      severityThreshold: "warning",
+      disabledRules: [],
+      autoInline: false,
+    })
+  })
+
+  it("ABSENT-CONFIG (Codex MAJOR #5): astRules undefined → defaults", () => {
+    const cfg = parseSigilixConfig("{}")
+    expect(resolveAstRulesConfig(cfg)).toEqual({
+      enabled: true,
+      severityThreshold: "warning",
+      disabledRules: [],
+      autoInline: false,
+    })
+  })
+
+  it("EMPTY astRules: {} → defaults", () => {
+    expect(resolveAstRulesConfig({ astRules: {} })).toEqual({
+      enabled: true,
+      severityThreshold: "warning",
+      disabledRules: [],
+      autoInline: false,
+    })
+  })
+
+  it("autoInline default is false (not undefined, not true)", () => {
+    expect(resolveAstRulesConfig({}).autoInline).toBe(false)
+  })
+
+  it("severityThreshold default is warning (not info)", () => {
+    expect(resolveAstRulesConfig({}).severityThreshold).toBe("warning")
+  })
+
+  it("respects explicit enabled: false", () => {
+    expect(resolveAstRulesConfig({ astRules: { enabled: false } }).enabled).toBe(false)
+  })
+
+  it("respects explicit autoInline: true", () => {
+    expect(resolveAstRulesConfig({ astRules: { autoInline: true } }).autoInline).toBe(true)
+  })
+
+  it("returns user disabledRules array", () => {
+    const out = resolveAstRulesConfig({ astRules: { disabledRules: ["a", "b"] } })
+    expect(out.disabledRules).toEqual(["a", "b"])
   })
 })

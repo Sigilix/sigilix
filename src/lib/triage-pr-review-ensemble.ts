@@ -103,6 +103,8 @@ import {
   type ReviewManifestV1,
 } from "./review-manifest"
 import { PROMPT_VERSION } from "../prompts/pr-review"
+import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
+import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -563,14 +565,39 @@ export async function handlePrReviewEnsemble(
       ? formatChunksForPrompt(preflightChunks) ?? ""
       : ""
 
+    // ─── ARC-186: dependency-vulnerability scan ────────────────
+    // Runs after secret-scan + deterministic-checks but BEFORE the
+    // specialist fanout. Findings are pre-LLM facts injected alongside
+    // the other deterministic blocks.
+    const depVulnEnabled = sigilixConfig.depVulnScan?.enabled !== false
+    const baseShaForDepVuln = meta.base?.sha ?? ""
+    const depVulnResult = await runDepVulnScan({
+      env,
+      client,
+      owner, repo, prNumber,
+      headSha,
+      baseSha: baseShaForDepVuln,
+      enabled: depVulnEnabled,
+    })
+    const depVulnFindings = depVulnResult.skipped ? [] : depVulnResult.findings
+    const depVulnBlock = renderDepVulnFindingsForPrompt(depVulnFindings)
+    telemetry.depVulnScan = depVulnResult.skipped
+      ? { skipped: true, reason: depVulnResult.reason, findingsCount: 0 }
+      : {
+          skipped: false,
+          findingsCount: depVulnResult.findings.length,
+          depsScanned: depVulnResult.depsScanned,
+          manifestsScanned: depVulnResult.manifestsScanned,
+        }
+
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
-    // Combine deterministic + secret blocks into one labeled section
-    // so the specialist sees both as authoritative facts. Order
-    // doesn't materially affect quality but secret hits are higher
-    // severity → list them first.
-    const combinedFactsBlock = [secretScanBlock, deterministicBlock]
+    // Combine deterministic + secret + dep-vuln blocks into one
+    // labeled section so the specialist sees them all as authoritative
+    // facts. Order: secrets first (highest severity), dep vulns
+    // second, regex deterministic checks last.
+    const combinedFactsBlock = [secretScanBlock, depVulnBlock, deterministicBlock]
       .filter((s) => s.length > 0)
       .join("\n\n")
     const baseInitialMessage = buildSpecialistInitialMessage({
@@ -1889,6 +1916,15 @@ interface EnsembleTelemetry {
     hitCount: number
     fingerprints: string[]
   }
+  /**
+   * ARC-186: dependency-vulnerability scan telemetry. `skipped: true`
+   * with a reason for the skip-paths (disabled, missing manifest,
+   * etc.); `skipped: false` with the finding count + scanned counts
+   * on the run path.
+   */
+  depVulnScan?:
+    | { skipped: true; reason: DepVulnSkipReason; findingsCount: 0 }
+    | { skipped: false; findingsCount: number; depsScanned: number; manifestsScanned: number }
   /**
    * ARC-194: incremental-review telemetry. `mode` is `incremental`
    * (savings path), `full` (we tried but bailed), or `first-review`

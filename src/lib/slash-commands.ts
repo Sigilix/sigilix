@@ -187,3 +187,25 @@ export function renderHelpBody(): string {
     "Coming soon: `/sigilix ask <question>` (PR-context Q&A).",
   ].join("\n")
 }
+
+/**
+ * ACL gate predicate for slash commands. Only `OWNER`, `MEMBER`, and
+ * `COLLABORATOR` author associations are trusted — they have explicit
+ * write or maintainer relationships with the repo. `CONTRIBUTOR` is
+ * intentionally excluded: anyone whose PR has ever merged becomes
+ * `CONTRIBUTOR` forever, which is too broad a circle for a privileged
+ * channel that triggers LLM calls and posts comments.
+ *
+ * Pure — extracted from src/index.ts so the gate has direct unit
+ * coverage (Kimi spec catch on ARC-191). The webhook handler still
+ * owns the response (403 + telemetry log) but delegates the
+ * decision to this helper.
+ */
+const ALLOWED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
+
+export function isAuthorAllowedForSlashCommand(
+  association: string | null | undefined,
+): boolean {
+  if (typeof association !== "string" || association.length === 0) return false
+  return ALLOWED_AUTHOR_ASSOCIATIONS.has(association.toUpperCase())
+}

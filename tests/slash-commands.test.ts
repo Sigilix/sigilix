@@ -2,7 +2,12 @@
 
 import { describe, it, expect } from "vitest"
 
-import { parseSlashCommand, renderSlashCommandAck, renderHelpBody } from "../src/lib/slash-commands"
+import {
+  parseSlashCommand,
+  renderSlashCommandAck,
+  renderHelpBody,
+  isAuthorAllowedForSlashCommand,
+} from "../src/lib/slash-commands"
 import { stripQuotesAndCode } from "../src/lib/mention"
 
 describe("parseSlashCommand", () => {
@@ -291,5 +296,41 @@ describe("renderHelpBody", () => {
     const comingSoonLine = body.split("\n").find((l) => l.toLowerCase().includes("coming soon")) ?? ""
     expect(comingSoonLine).toContain("ask")
     expect(comingSoonLine).not.toContain("describe")
+  })
+})
+
+describe("isAuthorAllowedForSlashCommand", () => {
+  it("allows OWNER", () => {
+    expect(isAuthorAllowedForSlashCommand("OWNER")).toBe(true)
+  })
+  it("allows MEMBER", () => {
+    expect(isAuthorAllowedForSlashCommand("MEMBER")).toBe(true)
+  })
+  it("allows COLLABORATOR", () => {
+    expect(isAuthorAllowedForSlashCommand("COLLABORATOR")).toBe(true)
+  })
+  it("is case-insensitive", () => {
+    expect(isAuthorAllowedForSlashCommand("owner")).toBe(true)
+    expect(isAuthorAllowedForSlashCommand("Member")).toBe(true)
+  })
+  it("rejects CONTRIBUTOR (excluded — anyone whose PR has merged is forever CONTRIBUTOR)", () => {
+    expect(isAuthorAllowedForSlashCommand("CONTRIBUTOR")).toBe(false)
+  })
+  it("rejects FIRST_TIME_CONTRIBUTOR", () => {
+    expect(isAuthorAllowedForSlashCommand("FIRST_TIME_CONTRIBUTOR")).toBe(false)
+  })
+  it("rejects NONE", () => {
+    expect(isAuthorAllowedForSlashCommand("NONE")).toBe(false)
+  })
+  it("rejects an empty string (missing association)", () => {
+    expect(isAuthorAllowedForSlashCommand("")).toBe(false)
+  })
+  it("rejects null / undefined", () => {
+    expect(isAuthorAllowedForSlashCommand(null)).toBe(false)
+    expect(isAuthorAllowedForSlashCommand(undefined)).toBe(false)
+  })
+  it("rejects unknown values defensively", () => {
+    expect(isAuthorAllowedForSlashCommand("ROOT")).toBe(false)
+    expect(isAuthorAllowedForSlashCommand("ADMIN")).toBe(false)
   })
 })

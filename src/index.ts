@@ -30,7 +30,12 @@ import {
   isBotHandle,
   stripQuotesAndCode,
 } from "./lib/mention"
-import { parseSlashCommand, renderSlashCommandAck, type SlashCommand } from "./lib/slash-commands"
+import {
+  parseSlashCommand,
+  renderSlashCommandAck,
+  isAuthorAllowedForSlashCommand,
+  type SlashCommand,
+} from "./lib/slash-commands"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
@@ -1118,9 +1123,8 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
     // GitHub considers trusted. CONTRIBUTOR is intentionally
     // excluded — anyone whose PR has merged becomes CONTRIBUTOR
     // forever, which is too broad a circle for a privileged channel.
-    const association = (comment.author_association ?? "").toUpperCase()
-    const allowed = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
-    if (!allowed.has(association)) {
+    if (!isAuthorAllowedForSlashCommand(comment.author_association)) {
+      const association = (comment.author_association ?? "").toUpperCase()
       console.log(JSON.stringify({
         event: "slash-command-rejected",
         reason: "untrusted_author_association",

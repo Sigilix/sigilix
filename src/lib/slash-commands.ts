@@ -2,13 +2,13 @@
 // comments.
 //
 // Live commands:
-//   - `/sigilix review`  → re-trigger the ensemble (ARC-178)
-//   - `/sigilix improve` → suggested-change patches (ARC-179)
-//   - `/sigilix help`    → post a list of supported commands inline
+//   - `/sigilix review`              → re-trigger the ensemble (ARC-178)
+//   - `/sigilix improve`             → suggested-change patches (ARC-179)
+//   - `/sigilix describe [mode]`     → draft PR description / changelog (ARC-191)
+//   - `/sigilix help`                → post a list of supported commands inline
 //
 // Deferred to follow-up issues:
 //   - `/sigilix ask <q>`  — Q&A using PR context + RAG
-//   - `/sigilix describe` — draft a PR description / changelog
 //
 // Recognition rules:
 //   - Match must be at the start of a line (after leading whitespace),
@@ -19,15 +19,44 @@
 //   - Stripping markdown blockquotes + fenced code blocks is the
 //     caller's responsibility (mirrors `bodyMentionsBot`'s contract)
 
+export type DescribeMode =
+  | "pr-description"
+  | "internal-changelog"
+  | "external-changelog"
+
 export type SlashCommand =
   | { cmd: "review" }
   | { cmd: "improve" }
   | { cmd: "help" }
-  // Reserved shapes (parser doesn't return these yet — adding the
+  | { cmd: "describe"; mode: DescribeMode }
+  | { cmd: "describe"; mode: "unknown"; rawArg: string }
+  // Reserved shape (parser doesn't return this yet — adding the
   // type when handlers exist will surface missed dispatch cases via
   // the exhaustive switch in renderSlashCommandAck):
   // | { cmd: "ask"; query: string }
-  // | { cmd: "describe" }
+
+/**
+ * Map the trailing arg of `/sigilix describe <arg>` to a canonical mode.
+ * Short tokens (`pr` / `internal` / `external`) are the user-facing form;
+ * canonical names are used in JSON schemas + telemetry + the apply
+ * marker. Unknown args map to a sentinel so the handler can post a
+ * usage comment instead of silently defaulting (Codex spec catch:
+ * audience boundary between internal/external is too important to
+ * swallow user typos).
+ */
+function parseDescribeMode(rawArg: string | undefined):
+  | { mode: DescribeMode }
+  | { mode: "unknown"; rawArg: string }
+{
+  if (rawArg === undefined || rawArg.length === 0) {
+    return { mode: "pr-description" }
+  }
+  const lower = rawArg.toLowerCase()
+  if (lower === "pr") return { mode: "pr-description" }
+  if (lower === "internal") return { mode: "internal-changelog" }
+  if (lower === "external") return { mode: "external-changelog" }
+  return { mode: "unknown", rawArg }
+}
 
 /**
  * Parse a comment body for a `/sigilix <cmd>` invocation. Returns
@@ -61,6 +90,14 @@ export function parseSlashCommand(body: string): SlashCommand | null {
     }
     if (head === "help") {
       return { cmd: "help" }
+    }
+    if (head === "describe") {
+      const argRaw = after.slice(head.length).trim().split(/\s+/)[0]
+      const mode = parseDescribeMode(argRaw)
+      if (mode.mode === "unknown") {
+        return { cmd: "describe", mode: "unknown", rawArg: mode.rawArg }
+      }
+      return { cmd: "describe", mode: mode.mode }
     }
     // Recognized prefix (`/sigilix ...`) but unsupported subcommand.
     // Continue scanning later lines — a comment that opens with an

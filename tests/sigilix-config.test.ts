@@ -309,3 +309,52 @@ describe("buildSynthesizerInitialMessage — sigilix.json guidance injection", (
     expect(msg.indexOf("REPO GUIDANCE")).toBeLessThan(msg.indexOf("[PR]"))
   })
 })
+
+describe("parseSigilixConfig — describe.enabled (ARC-191)", () => {
+  it("parses describe.enabled === true", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      describe: { enabled: true },
+    }))
+    expect(result).toEqual({ describe: { enabled: true } })
+  })
+
+  it("parses describe.enabled === false", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      describe: { enabled: false },
+    }))
+    expect(result).toEqual({ describe: { enabled: false } })
+  })
+
+  it('strips a string `"false"` (strict boolean — no JS truthy nonsense)', () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      describe: { enabled: "false" },
+    }))
+    expect(result).toEqual({})
+  })
+
+  it("strips a number 0 (strict boolean)", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      describe: { enabled: 0 },
+    }))
+    expect(result).toEqual({})
+  })
+
+  it("strips a top-level describe value that isn't an object", () => {
+    expect(parseSigilixConfig(JSON.stringify({ describe: "yes" }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ describe: true }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ describe: [] }))).toEqual({})
+  })
+
+  it("ignores unknown subfields under describe (forward-compat)", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      describe: { enabled: false, futureField: "ignored" },
+    }))
+    expect(result).toEqual({ describe: { enabled: false } })
+  })
+
+  it("missing describe field → no field on output (handler treats as enabled)", () => {
+    const result = parseSigilixConfig(JSON.stringify({ guidance: "x" }))
+    expect(result).toEqual({ guidance: "x" })
+    expect(result?.describe).toBeUndefined()
+  })
+})

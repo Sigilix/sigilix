@@ -182,3 +182,27 @@ export const GITHUB_MENTION_SCHEMA = {
   required: ["answer", "confidence", "abstain"],
 } as const
 
+/**
+ * pr-describe verdict (ARC-191: `/sigilix describe`).
+ * Mirrors PrDescribeVerdict in src/lib/triage-pr-describe.ts.
+ *
+ * Single-shot text generation. `summary` is a one-sentence
+ * orientation line shown above the marker block; `body` is the
+ * actual draft (PR description / internal changelog / external
+ * changelog) wrapped in marker comments downstream.
+ *
+ * Length constraints are belt-and-suspenders: the runtime hint
+ * (`minLength`/`maxLength`) helps the model self-cap, and the
+ * post-decode validator in triage-pr-describe.ts enforces them
+ * for real (Ollama JSON-mode honors `required` + `type` reliably
+ * but length constraints are advisory in current builds).
+ */
+export const PR_DESCRIBE_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string", minLength: 10, maxLength: 500 },
+    body: { type: "string", minLength: 50, maxLength: 32000 },
+  },
+  required: ["summary", "body"],
+} as const
+

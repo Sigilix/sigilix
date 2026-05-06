@@ -30,7 +30,12 @@ import {
   isBotHandle,
   stripQuotesAndCode,
 } from "./lib/mention"
-import { parseSlashCommand, renderSlashCommandAck, type SlashCommand } from "./lib/slash-commands"
+import {
+  parseSlashCommand,
+  renderSlashCommandAck,
+  isAuthorAllowedForSlashCommand,
+  type SlashCommand,
+} from "./lib/slash-commands"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
@@ -39,6 +44,7 @@ import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
 import { handlePrImprove } from "./lib/triage-pr-improve"
+import { handlePrDescribe } from "./lib/triage-pr-describe"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
@@ -226,6 +232,18 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
+    }
+  // ARC-191: `/sigilix describe` — single-shot LLM draft of a PR
+  // description / internal changelog / external changelog. Mode is
+  // resolved at parse time (one of three canonical names).
+  // headSha is resolved at handler time (same rationale as pr-improve).
+  | {
+      type: "pr-describe"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+      mode: import("./lib/slash-commands").DescribeMode
     }
   | {
       type: "ci-triage"
@@ -519,7 +537,7 @@ export default {
  */
 async function postSlashCommandAck(
   env: Env,
-  cmd: SlashCommand["cmd"],
+  cmd: SlashCommand,
   args: { owner: string; repo: string; prNumber: number; installationId: number },
 ): Promise<void> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
@@ -644,7 +662,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         try {
           await client.createIssueComment(
             job.owner, job.repo, job.prNumber,
-            renderSlashCommandAck("review"),
+            renderSlashCommandAck({ cmd: "review" }),
           )
         } catch (err) {
           console.error(JSON.stringify({
@@ -688,7 +706,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // Independent of the ensemble; fail-soft on ack but re-throws
       // on the actual run so queue retries get a chance.
       try {
-        await postSlashCommandAck(env, "improve", {
+        await postSlashCommandAck(env, { cmd: "improve" }, {
           owner: job.owner, repo: job.repo, prNumber: job.prNumber,
           installationId: job.installationId,
         })
@@ -713,7 +731,7 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // help-body markdown (the body IS the response), so the same
       // ack helper used by other slash commands does the entire job.
       try {
-        await postSlashCommandAck(env, "help", {
+        await postSlashCommandAck(env, { cmd: "help" }, {
           owner: job.owner, repo: job.repo, prNumber: job.prNumber,
           installationId: job.installationId,
         })
@@ -726,6 +744,34 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       }
       return
     }
+    case "pr-describe":
+      // ARC-191: `/sigilix describe`. Single-shot LLM call producing
+      // a PR description / changelog draft posted as a top-level
+      // comment with marker-wrapped body + hidden meta line for
+      // future apply parsing. Independent of the ensemble; does
+      // NOT consume the ensemble daily budget.
+      try {
+        await postSlashCommandAck(env, { cmd: "describe", mode: job.mode }, {
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          installationId: job.installationId,
+        })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "slash-command-ack-failed",
+          err: err instanceof Error ? err.message : String(err),
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          cmd: "describe",
+          mode: job.mode,
+        }))
+      }
+      return handlePrDescribe({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        installationId: job.installationId,
+        mode: job.mode,
+        env,
+      })
     case "ci-triage":
       return handleCiTriage({
         owner: job.owner,
@@ -1063,10 +1109,11 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
 
   // Slash-command dispatch. Recognize `/sigilix <cmd>` at a line
   // start and route to a dedicated job type instead of the generic
-  // mention-reply pipeline. Currently handles `review`, `improve`,
-  // and `help`. Other commands (ask, describe) fall silently through
-  // to the @-mention pipeline (which means they're ignored unless
-  // the same comment also @-mentions Sigilix); README documents this.
+  // mention-reply pipeline. Handles `review`, `improve`, `help`, and
+  // `describe`. Other commands (e.g. future `ask`) fall silently
+  // through to the @-mention pipeline (which means they're ignored
+  // unless the same comment also @-mentions Sigilix); README
+  // documents this.
   const cleaned = stripQuotesAndCode(body)
   const slashCmd = parseSlashCommand(cleaned)
   if (slashCmd) {
@@ -1076,9 +1123,8 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
     // GitHub considers trusted. CONTRIBUTOR is intentionally
     // excluded — anyone whose PR has merged becomes CONTRIBUTOR
     // forever, which is too broad a circle for a privileged channel.
-    const association = (comment.author_association ?? "").toUpperCase()
-    const allowed = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
-    if (!allowed.has(association)) {
+    if (!isAuthorAllowedForSlashCommand(comment.author_association)) {
+      const association = (comment.author_association ?? "").toUpperCase()
       console.log(JSON.stringify({
         event: "slash-command-rejected",
         reason: "untrusted_author_association",
@@ -1090,12 +1136,47 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
       return new Response("forbidden\n", { status: 403 })
     }
 
+    // ARC-191 unknown-arg fast path: post the usage comment and
+    // return, BEFORE coalesce / dedupe / enqueue. The user's typo
+    // shouldn't enter the queue and consume budget; the response is
+    // synchronous and tells them how to re-invoke.
+    if (slashCmd.cmd === "describe" && slashCmd.mode === "unknown") {
+      try {
+        const token = await getInstallationToken({
+          kv: env.OPENCLAW_STATE,
+          appId: env.GITHUB_APP_ID!,
+          privateKey: env.GITHUB_PRIVATE_KEY!,
+          installationId,
+        })
+        const client = new GitHubClient({ token })
+        await client.createIssueComment(
+          owner, repo, prNumber,
+          renderSlashCommandAck(slashCmd),
+        )
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "slash-command-usage-post-failed",
+          err: err instanceof Error ? err.message : String(err),
+          cmd: "describe", rawArg: slashCmd.rawArg,
+          owner, repo, prNumber,
+        }))
+      }
+      return new Response("usage posted\n", { status: 200 })
+    }
+
     // Per-command coalesce lock: if the same (PR, command) is in
     // flight, drop subsequent invocations within 60s. Collapses N
     // concurrent posts into 1 ack + 1 LLM run. Keying includes the
     // command name so different commands on the same PR don't
     // accidentally suppress each other.
-    const coalesceKey = `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
+    // Coalesce key: mode-keyed for describe so `internal` and
+    // `external` on the same PR don't suppress each other within
+    // the 60s window. Other commands keep the existing key shape.
+    // (The `unknown` describe variant returned via the fast path
+    // above, so here describe.mode is always a canonical DescribeMode.)
+    const coalesceKey = slashCmd.cmd === "describe"
+      ? `slash-cmd:describe:${slashCmd.mode}:${owner}/${repo}#${prNumber}`
+      : `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
     const existing = await env.OPENCLAW_STATE.get(coalesceKey)
     if (existing) {
       console.log(JSON.stringify({
@@ -1126,6 +1207,16 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
         message = {
           type: "pr-help",
           owner, repo, prNumber, installationId,
+        }
+        break
+      case "describe":
+        // mode === "unknown" was handled above by the fast path;
+        // TypeScript narrows slashCmd here to the canonical-mode
+        // variant of the describe union.
+        message = {
+          type: "pr-describe",
+          owner, repo, prNumber, installationId,
+          mode: slashCmd.mode,
         }
         break
       default: {

@@ -5,3 +5,10 @@ dist/
 *.log
 .DS_Store
 bakeoff-runs/
+
+# Working artifacts — handoff briefs, research scratch, scripts, worktrees.
+# Specs + plans land under docs/superpowers/ and ARE committed.
+.claude/handoff/
+.claude/research/
+.claude/scripts/
+.claude/worktrees/

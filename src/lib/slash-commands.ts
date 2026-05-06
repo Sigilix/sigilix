@@ -2,13 +2,13 @@
 // comments.
 //
 // Live commands:
-//   - `/sigilix review`  → re-trigger the ensemble (ARC-178)
-//   - `/sigilix improve` → suggested-change patches (ARC-179)
-//   - `/sigilix help`    → post a list of supported commands inline
+//   - `/sigilix review`              → re-trigger the ensemble (ARC-178)
+//   - `/sigilix improve`             → suggested-change patches (ARC-179)
+//   - `/sigilix describe [mode]`     → draft PR description / changelog (ARC-191)
+//   - `/sigilix help`                → post a list of supported commands inline
 //
 // Deferred to follow-up issues:
 //   - `/sigilix ask <q>`  — Q&A using PR context + RAG
-//   - `/sigilix describe` — draft a PR description / changelog
 //
 // Recognition rules:
 //   - Match must be at the start of a line (after leading whitespace),
@@ -19,15 +19,44 @@
 //   - Stripping markdown blockquotes + fenced code blocks is the
 //     caller's responsibility (mirrors `bodyMentionsBot`'s contract)
 
+export type DescribeMode =
+  | "pr-description"
+  | "internal-changelog"
+  | "external-changelog"
+
 export type SlashCommand =
   | { cmd: "review" }
   | { cmd: "improve" }
   | { cmd: "help" }
-  // Reserved shapes (parser doesn't return these yet — adding the
+  | { cmd: "describe"; mode: DescribeMode }
+  | { cmd: "describe"; mode: "unknown"; rawArg: string }
+  // Reserved shape (parser doesn't return this yet — adding the
   // type when handlers exist will surface missed dispatch cases via
   // the exhaustive switch in renderSlashCommandAck):
   // | { cmd: "ask"; query: string }
-  // | { cmd: "describe" }
+
+/**
+ * Map the trailing arg of `/sigilix describe <arg>` to a canonical mode.
+ * Short tokens (`pr` / `internal` / `external`) are the user-facing form;
+ * canonical names are used in JSON schemas + telemetry + the apply
+ * marker. Unknown args map to a sentinel so the handler can post a
+ * usage comment instead of silently defaulting (Codex spec catch:
+ * audience boundary between internal/external is too important to
+ * swallow user typos).
+ */
+function parseDescribeMode(rawArg: string | undefined):
+  | { mode: DescribeMode }
+  | { mode: "unknown"; rawArg: string }
+{
+  if (rawArg === undefined || rawArg.length === 0) {
+    return { mode: "pr-description" }
+  }
+  const lower = rawArg.toLowerCase()
+  if (lower === "pr") return { mode: "pr-description" }
+  if (lower === "internal") return { mode: "internal-changelog" }
+  if (lower === "external") return { mode: "external-changelog" }
+  return { mode: "unknown", rawArg }
+}
 
 /**
  * Parse a comment body for a `/sigilix <cmd>` invocation. Returns
@@ -62,6 +91,14 @@ export function parseSlashCommand(body: string): SlashCommand | null {
     if (head === "help") {
       return { cmd: "help" }
     }
+    if (head === "describe") {
+      const argRaw = after.slice(head.length).trim().split(/\s+/)[0]
+      const mode = parseDescribeMode(argRaw)
+      if (mode.mode === "unknown") {
+        return { cmd: "describe", mode: "unknown", rawArg: mode.rawArg }
+      }
+      return { cmd: "describe", mode: mode.mode }
+    }
     // Recognized prefix (`/sigilix ...`) but unsupported subcommand.
     // Continue scanning later lines — a comment that opens with an
     // unknown subcommand should still execute a valid one further
@@ -81,9 +118,13 @@ export function parseSlashCommand(body: string): SlashCommand | null {
  * Uses an exhaustive switch so adding a new SlashCommand variant
  * surfaces as a tsc error here (via the `never` assignment), rather
  * than silently routing to a generic "Acknowledged." fallback.
+ *
+ * For `describe` the mode is part of the ack so the user knows
+ * which artifact is coming. For unknown describe args we return
+ * the usage comment (NOT silent fallback per Codex spec catch).
  */
-export function renderSlashCommandAck(cmd: SlashCommand["cmd"]): string {
-  switch (cmd) {
+export function renderSlashCommandAck(cmd: SlashCommand): string {
+  switch (cmd.cmd) {
     case "review":
       return "Re-running ensemble review on the current head. Standard sticky comment will update when complete."
     case "improve":
@@ -93,10 +134,31 @@ export function renderSlashCommandAck(cmd: SlashCommand["cmd"]): string {
       // command list directly. No separate ack needed; the help body
       // doubles as the ack.
       return renderHelpBody()
+    case "describe":
+      if (cmd.mode === "unknown") {
+        return `**Sigilix describe** — unknown mode \`${cmd.rawArg}\`. Try \`pr\`, \`internal\`, or \`external\`.`
+      }
+      return `Generating ${describeModeFriendlyName(cmd.mode)} draft via \`/sigilix describe\`. Output will appear inline shortly.`
     default: {
       const _exhaustive: never = cmd
       return _exhaustive
     }
+  }
+}
+
+/**
+ * Human-readable label for a describe mode. Used in ack + comment
+ * headers + telemetry-friendly logs. Pure mapping; tested via the
+ * snapshot tests downstream.
+ */
+export function describeModeFriendlyName(mode: DescribeMode): string {
+  switch (mode) {
+    case "pr-description":
+      return "PR description"
+    case "internal-changelog":
+      return "internal changelog"
+    case "external-changelog":
+      return "external changelog"
   }
 }
 
@@ -115,10 +177,35 @@ export function renderHelpBody(): string {
     "|---|---|",
     "| `/sigilix review` | Re-run the ensemble review against the PR's current head SHA. |",
     "| `/sigilix improve` | Generate apply-able GitHub suggested-change comments (single-shot, narrow scope). |",
+    "| `/sigilix describe` | Draft a PR description or internal / external changelog. Posted as an inline comment with markers — body never auto-edited. |",
     "| `/sigilix help` | Show this list. |",
+    "",
+    "`/sigilix describe` accepts an optional mode arg: `pr` (default), `internal`, or `external`. Example: `/sigilix describe internal`.",
     "",
     "Slash commands are gated to `OWNER`, `MEMBER`, and `COLLABORATOR` authors. Match must be at the start of a line; commands inside fenced code blocks or markdown blockquotes are ignored.",
     "",
-    "Coming soon: `/sigilix ask <question>` (PR-context Q&A), `/sigilix describe` (PR description draft).",
+    "Coming soon: `/sigilix ask <question>` (PR-context Q&A).",
   ].join("\n")
+}
+
+/**
+ * ACL gate predicate for slash commands. Only `OWNER`, `MEMBER`, and
+ * `COLLABORATOR` author associations are trusted — they have explicit
+ * write or maintainer relationships with the repo. `CONTRIBUTOR` is
+ * intentionally excluded: anyone whose PR has ever merged becomes
+ * `CONTRIBUTOR` forever, which is too broad a circle for a privileged
+ * channel that triggers LLM calls and posts comments.
+ *
+ * Pure — extracted from src/index.ts so the gate has direct unit
+ * coverage (Kimi spec catch on ARC-191). The webhook handler still
+ * owns the response (403 + telemetry log) but delegates the
+ * decision to this helper.
+ */
+const ALLOWED_AUTHOR_ASSOCIATIONS = new Set(["OWNER", "MEMBER", "COLLABORATOR"])
+
+export function isAuthorAllowedForSlashCommand(
+  association: string | null | undefined,
+): boolean {
+  if (typeof association !== "string" || association.length === 0) return false
+  return ALLOWED_AUTHOR_ASSOCIATIONS.has(association.toUpperCase())
 }

@@ -82,6 +82,17 @@ export interface SigilixConfig {
    * `assertive` to also surface nits and style.
    */
   profile?: SigilixProfile
+  /**
+   * ARC-191: per-repo opt-OUT for `/sigilix describe`. Default
+   * (missing field) = enabled. Only `enabled: false` disables;
+   * anything else (string, number, undefined) is dropped at parse
+   * time and treated as missing → enabled. The slash command is
+   * already user-invoked + ACL-gated, so opt-IN was rejected as
+   * redundant friction.
+   */
+  describe?: {
+    enabled?: boolean
+  }
 }
 
 export const EMPTY_CONFIG: SigilixConfig = {}
@@ -138,6 +149,24 @@ export function parseSigilixConfig(raw: string): SigilixConfig | null {
   // else falls back to default (omitted = chill behavior).
   if (obj.profile === "chill" || obj.profile === "assertive") {
     out.profile = obj.profile
+  }
+  // ARC-191: describe.enabled — strict boolean parsing only.
+  // `Boolean(v)` would treat the string `"false"` as truthy. Only
+  // a literal JavaScript boolean `true` or `false` is recognized;
+  // anything else drops the field, which the handler treats as
+  // missing = enabled. Unknown subfields under describe are
+  // ignored (forward-compat for future fields like describe.tone,
+  // describe.maxWords, etc., which would land under a separate
+  // Linear issue, e.g. ARC-185).
+  if (
+    obj.describe &&
+    typeof obj.describe === "object" &&
+    !Array.isArray(obj.describe)
+  ) {
+    const describeIn = obj.describe as Record<string, unknown>
+    if (typeof describeIn.enabled === "boolean") {
+      out.describe = { enabled: describeIn.enabled }
+    }
   }
   return out
 }

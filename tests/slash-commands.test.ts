@@ -2,7 +2,12 @@
 
 import { describe, it, expect } from "vitest"
 
-import { parseSlashCommand, renderSlashCommandAck, renderHelpBody } from "../src/lib/slash-commands"
+import {
+  parseSlashCommand,
+  renderSlashCommandAck,
+  renderHelpBody,
+  isAuthorAllowedForSlashCommand,
+} from "../src/lib/slash-commands"
 import { stripQuotesAndCode } from "../src/lib/mention"
 
 describe("parseSlashCommand", () => {
@@ -54,7 +59,6 @@ describe("parseSlashCommand", () => {
 
   it("returns null for unsupported subcommands", () => {
     expect(parseSlashCommand("/sigilix ask anything")).toBeNull()
-    expect(parseSlashCommand("/sigilix describe")).toBeNull()
     expect(parseSlashCommand("/sigilix bogus")).toBeNull()
   })
 
@@ -121,6 +125,65 @@ describe("parseSlashCommand", () => {
   })
 })
 
+describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
+  it("recognizes `/sigilix describe` with no arg → default pr-description mode", () => {
+    expect(parseSlashCommand("/sigilix describe")).toEqual({
+      cmd: "describe",
+      mode: "pr-description",
+    })
+  })
+
+  it("recognizes the short token `pr` → pr-description", () => {
+    expect(parseSlashCommand("/sigilix describe pr")).toEqual({
+      cmd: "describe",
+      mode: "pr-description",
+    })
+  })
+
+  it("recognizes `internal` → internal-changelog", () => {
+    expect(parseSlashCommand("/sigilix describe internal")).toEqual({
+      cmd: "describe",
+      mode: "internal-changelog",
+    })
+  })
+
+  it("recognizes `external` → external-changelog", () => {
+    expect(parseSlashCommand("/sigilix describe external")).toEqual({
+      cmd: "describe",
+      mode: "external-changelog",
+    })
+  })
+
+  it("returns mode=unknown + rawArg for an unrecognized arg (NOT silent fallback)", () => {
+    expect(parseSlashCommand("/sigilix describe foo")).toEqual({
+      cmd: "describe",
+      mode: "unknown",
+      rawArg: "foo",
+    })
+  })
+
+  it("is case-insensitive on the command word and the mode arg", () => {
+    expect(parseSlashCommand("/Sigilix DESCRIBE Internal")).toEqual({
+      cmd: "describe",
+      mode: "internal-changelog",
+    })
+  })
+
+  it("ignores trailing tokens after the mode arg", () => {
+    expect(parseSlashCommand("/sigilix describe internal please now")).toEqual({
+      cmd: "describe",
+      mode: "internal-changelog",
+    })
+  })
+
+  it("treats a bare `/sigilix describe` followed by trailing spaces as default mode", () => {
+    expect(parseSlashCommand("/sigilix describe   ")).toEqual({
+      cmd: "describe",
+      mode: "pr-description",
+    })
+  })
+})
+
 describe("parseSlashCommand + stripQuotesAndCode integration", () => {
   // The webhook handler calls stripQuotesAndCode(body) before
   // parseSlashCommand, so commands inside fenced blocks or markdown
@@ -162,34 +225,61 @@ describe("parseSlashCommand + stripQuotesAndCode integration", () => {
 
 describe("renderSlashCommandAck", () => {
   it("renders a non-empty ack for the review command", () => {
-    const out = renderSlashCommandAck("review")
+    const out = renderSlashCommandAck({ cmd: "review" })
     expect(typeof out).toBe("string")
     expect(out.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toContain("review")
   })
 
   it("renders a non-empty ack for the improve command", () => {
-    const out = renderSlashCommandAck("improve")
+    const out = renderSlashCommandAck({ cmd: "improve" })
     expect(typeof out).toBe("string")
     expect(out.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toMatch(/(suggest|apply|patch)/)
   })
 
   it("renders the help body for the help command (the body IS the response)", () => {
-    const out = renderSlashCommandAck("help")
+    const out = renderSlashCommandAck({ cmd: "help" })
     expect(out).toContain("Sigilix slash commands")
     expect(out).toContain("`/sigilix review`")
     expect(out).toContain("`/sigilix help`")
+  })
+
+  it("renders an ack for `describe` (mode-aware)", () => {
+    const out = renderSlashCommandAck({ cmd: "describe", mode: "pr-description" })
+    expect(typeof out).toBe("string")
+    expect(out.length).toBeGreaterThan(0)
+    expect(out.toLowerCase()).toContain("describe")
+    expect(out.toLowerCase()).toContain("pr description")
+  })
+
+  it("renders a usage comment for unknown describe arg (NOT a generic ack)", () => {
+    const out = renderSlashCommandAck({
+      cmd: "describe",
+      mode: "unknown",
+      rawArg: "foo",
+    })
+    expect(out).toContain("`foo`")
+    expect(out).toMatch(/`pr`/)
+    expect(out).toMatch(/`internal`/)
+    expect(out).toMatch(/`external`/)
   })
 })
 
 describe("renderHelpBody", () => {
   const body = renderHelpBody()
 
-  it("lists every currently-live command", () => {
+  it("lists every currently-live command (including describe, ARC-191)", () => {
     expect(body).toContain("`/sigilix review`")
     expect(body).toContain("`/sigilix improve`")
+    expect(body).toContain("`/sigilix describe`")
     expect(body).toContain("`/sigilix help`")
+  })
+
+  it("documents the describe mode tokens", () => {
+    expect(body).toContain("`pr`")
+    expect(body).toContain("`internal`")
+    expect(body).toContain("`external`")
   })
 
   it("documents the ACL gate", () => {
@@ -201,8 +291,46 @@ describe("renderHelpBody", () => {
     expect(body.toLowerCase()).toMatch(/fenced|blockquote/)
   })
 
-  it("flags upcoming commands so users know what's coming", () => {
+  it("flags only `/sigilix ask` as coming soon (describe shipped in ARC-191)", () => {
     expect(body).toContain("/sigilix ask")
-    expect(body).toContain("/sigilix describe")
+    const comingSoonLine = body.split("\n").find((l) => l.toLowerCase().includes("coming soon")) ?? ""
+    expect(comingSoonLine).toContain("ask")
+    expect(comingSoonLine).not.toContain("describe")
+  })
+})
+
+describe("isAuthorAllowedForSlashCommand", () => {
+  it("allows OWNER", () => {
+    expect(isAuthorAllowedForSlashCommand("OWNER")).toBe(true)
+  })
+  it("allows MEMBER", () => {
+    expect(isAuthorAllowedForSlashCommand("MEMBER")).toBe(true)
+  })
+  it("allows COLLABORATOR", () => {
+    expect(isAuthorAllowedForSlashCommand("COLLABORATOR")).toBe(true)
+  })
+  it("is case-insensitive", () => {
+    expect(isAuthorAllowedForSlashCommand("owner")).toBe(true)
+    expect(isAuthorAllowedForSlashCommand("Member")).toBe(true)
+  })
+  it("rejects CONTRIBUTOR (excluded — anyone whose PR has merged is forever CONTRIBUTOR)", () => {
+    expect(isAuthorAllowedForSlashCommand("CONTRIBUTOR")).toBe(false)
+  })
+  it("rejects FIRST_TIME_CONTRIBUTOR", () => {
+    expect(isAuthorAllowedForSlashCommand("FIRST_TIME_CONTRIBUTOR")).toBe(false)
+  })
+  it("rejects NONE", () => {
+    expect(isAuthorAllowedForSlashCommand("NONE")).toBe(false)
+  })
+  it("rejects an empty string (missing association)", () => {
+    expect(isAuthorAllowedForSlashCommand("")).toBe(false)
+  })
+  it("rejects null / undefined", () => {
+    expect(isAuthorAllowedForSlashCommand(null)).toBe(false)
+    expect(isAuthorAllowedForSlashCommand(undefined)).toBe(false)
+  })
+  it("rejects unknown values defensively", () => {
+    expect(isAuthorAllowedForSlashCommand("ROOT")).toBe(false)
+    expect(isAuthorAllowedForSlashCommand("ADMIN")).toBe(false)
   })
 })

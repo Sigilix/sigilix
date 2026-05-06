@@ -75,6 +75,11 @@ import {
   batchToDiff,
   estimateTokens,
 } from "./diff-packing"
+import {
+  runDeterministicChecks,
+  renderHitsForPrompt,
+  type DeterministicCheckHit,
+} from "./deterministic-checks"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -389,6 +394,23 @@ export async function handlePrReviewEnsemble(
     // missing or malformed config falls back to EMPTY_CONFIG.
     const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
 
+    // ARC-193: deterministic regex checks run BEFORE specialist fanout.
+    // Hits become structured findings prepended to specialist prompts
+    // as authoritative facts (LLM still weighs context). Cheap +
+    // deterministic — closes the well-known LLM miss-rate gap on flat
+    // patterns (TODO markers, console.log, hardcoded API-key shapes).
+    const deterministicRunResult = runDeterministicChecks(
+      diff,
+      sigilixConfig.deterministicChecks ?? [],
+    )
+    const deterministicHits: DeterministicCheckHit[] = deterministicRunResult.hits
+    if (deterministicHits.length > 0 || deterministicRunResult.compiledRegexFailures.length > 0) {
+      telemetry.deterministicChecks = {
+        hits: deterministicHits,
+        compiledRegexFailures: deterministicRunResult.compiledRegexFailures,
+      }
+    }
+
     // ─── Router decision ───────────────────────────────────────
     const totalLinesChanged = countLines(diff)
     // CR PR #35 catch: pass diffText so the router can content-aware
@@ -450,6 +472,7 @@ export async function handlePrReviewEnsemble(
       : ""
 
     // ─── Fan out specialists ────────────────────────────────────
+    const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -458,6 +481,7 @@ export async function handlePrReviewEnsemble(
       retrievalSnapshot,
       namespace,
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+      ...(deterministicBlock ? { deterministicChecksBlock: deterministicBlock } : {}),
     })
 
     const specialistResults = await Promise.allSettled(
@@ -1586,6 +1610,17 @@ interface EnsembleTelemetry {
     filesReviewed: string[]
     filesDroppedTooLarge: string[]
     filesNotReviewed: string[]
+  }
+  /**
+   * ARC-193: deterministic regex check telemetry. `hits` are the
+   * matches injected into specialist prompts as facts; analyses can
+   * confirm the rules are firing as expected. `compiledRegexFailures`
+   * are rule IDs whose pattern didn't compile — surfaces config
+   * mistakes without breaking review.
+   */
+  deterministicChecks?: {
+    hits: DeterministicCheckHit[]
+    compiledRegexFailures: string[]
   }
   shadowVerdict?: PrReviewVerdict
   submitted?: boolean

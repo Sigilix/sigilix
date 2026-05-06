@@ -254,6 +254,13 @@ export interface SpecialistInitialMessageCtx {
    * appended downstream by the orchestrator (see `appendRoleRule`).
    */
   guidance?: string
+  /**
+   * ARC-193: pre-rendered deterministic-check hits block. Injected
+   * BEFORE the diff so the specialist sees these as authoritative
+   * facts about lines the regex layer already flagged. Empty/absent
+   * = no deterministic findings to surface.
+   */
+  deterministicChecksBlock?: string
 }
 
 export function buildSpecialistInitialMessage(
@@ -263,6 +270,10 @@ export function buildSpecialistInitialMessage(
   if (ctx.guidance && ctx.guidance.length > 0) {
     lines.push("[REPO GUIDANCE — applies to ALL specialists (from sigilix.json)]")
     lines.push(ctx.guidance)
+    lines.push("")
+  }
+  if (ctx.deterministicChecksBlock && ctx.deterministicChecksBlock.length > 0) {
+    lines.push(ctx.deterministicChecksBlock)
     lines.push("")
   }
   lines.push(

@@ -92,6 +92,7 @@ import {
   selectDiff,
   type DiffMode,
 } from "./incremental-review"
+import { isRepoSensitive } from "./repo-policy"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -283,6 +284,10 @@ export type RouteDecision =
   | { primary: "ensemble-post" }
   | { primary: "phase3-agentic" }
   | { primary: "phase3-singleshot-legacy" }
+  // ARC-183: sensitive repo — skip ALL review pipelines. Sigilix
+  // never fetches the diff or sends content to any LLM. Caller logs
+  // the skip + reason for audit but performs no GitHub API call.
+  | { primary: "skipped-sensitive"; reason: "repo_in_sensitive_denylist" }
 
 /**
  * Top-level routing: given env + repo + budget state, decide which
@@ -296,6 +301,15 @@ export async function routeReview(args: {
   repo: string
 }): Promise<RouteDecision> {
   const { env, owner, repo } = args
+
+  // ARC-183: sensitive-repo gate runs FIRST, before any other
+  // routing logic. Even Phase 3 is blocked — the policy is "no LLM
+  // ever sees this repo's content," not "use a different review
+  // path." Match is case-insensitive on `owner/repo`.
+  if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
+    return { primary: "skipped-sensitive", reason: "repo_in_sensitive_denylist" }
+  }
+
   const mode = parseMode(env.OPENCLAW_ENSEMBLE_REVIEW_MODE)
 
   if (mode === "off") {

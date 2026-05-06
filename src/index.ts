@@ -125,6 +125,12 @@ export interface Env {
   // fires on these repos. Empty/unset = all repos eligible (use with
   // care during rollout).
   OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS?: string
+  // ARC-183: comma-separated owner/repo DENYlist. When a repo is
+  // listed here, Sigilix never fetches its diff or sends content to
+  // any LLM. Use for compliance / customer-data / secrets-heavy
+  // repos. Empty/unset = no sensitive repos. Match is
+  // case-insensitive on `owner/repo`.
+  OPENCLAW_SENSITIVE_REPOS?: string
   // Per-PR cap on total model invocations (counts retries). Default 8
   // (4 specialists + 1 synth + 3 headroom).
   OPENCLAW_ENSEMBLE_MAX_MODEL_CALLS_PER_PR?: string
@@ -485,6 +491,21 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
+      }
+      // ARC-183: sensitive-repo gate. Skip ALL review pipelines —
+      // Sigilix never fetches the diff or sends content to any LLM
+      // for repos on the OPENCLAW_SENSITIVE_REPOS denylist. Audit log
+      // entry contains owner/repo/prNumber/reason but no code or
+      // diff content (we never fetched it).
+      if (decision.primary === "skipped-sensitive") {
+        console.log(JSON.stringify({
+          event: "pr-review-skipped",
+          reason: decision.reason,
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+        }))
+        return
       }
       if (decision.primary === "ensemble-shadow") {
         // Shadow: Phase 3 posts the customer-facing review FIRST,

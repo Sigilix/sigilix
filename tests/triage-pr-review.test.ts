@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  buildFallbackBody,
   buildReviewSubmission,
   chooseReviewEvent,
   parsePrReviewResponse,
@@ -244,6 +245,52 @@ describe("buildReviewSubmission", () => {
     const out = buildReviewSubmission({ verdict: v, prAuthor: "alice", headSha: "abc" })
     expect(out.comments?.[0]?.body).toContain("```suggestion")
     expect(out.comments?.[0]?.body).toContain("const x = a ?? b")
+  })
+})
+
+describe("provenance footer (ARC-184)", () => {
+  const verdict: PrReviewVerdict = {
+    summary: "Solid.",
+    confidence: 5,
+    confidenceReason: "All passing.",
+    findings: [],
+  }
+  const HEAD = "abc1234567890abcdef1234567890abcdef1234"
+  const NOW = 1733494200000 // 2024-12-06T13:30:00.000Z
+
+  it("formatReviewBody (via buildReviewSubmission) ends with the provenance footer", () => {
+    const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
+    const body = out.body ?? ""
+    expect(body).toMatch(
+      /_Reviewed against `abc1234` at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\._\s*$/,
+    )
+  })
+
+  it("buildFallbackBody also ends with the provenance footer", () => {
+    const expected = `_Reviewed against \`abc1234\` at ${new Date(NOW).toISOString()}._`
+    const out = buildFallbackBody(verdict, [], { headSha: HEAD, nowMs: NOW })
+    expect(out.trimEnd().endsWith(expected)).toBe(true)
+  })
+
+  it("body is well under 65000 chars on a small fixture", () => {
+    const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
+    expect((out.body ?? "").length).toBeLessThan(2000)
+  })
+
+  it("WRITER-SIDE 65k CAP: when summary is huge, summary truncates but footer stays intact", () => {
+    const huge: PrReviewVerdict = {
+      summary: "x".repeat(64000),
+      confidence: 5,
+      confidenceReason: "y".repeat(2000),
+      findings: [],
+    }
+    const out = buildReviewSubmission({ verdict: huge, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
+    const body = out.body ?? ""
+    expect(body.length).toBeLessThanOrEqual(65000)
+    // Footer survived
+    expect(body).toMatch(/_Reviewed against `abc1234` at .+\._/)
+    // Truncation marker is present
+    expect(body).toContain("[summary truncated to fit GitHub's 65535 limit]")
   })
 })
 

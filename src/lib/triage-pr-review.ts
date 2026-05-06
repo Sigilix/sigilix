@@ -330,6 +330,12 @@ interface BuildReviewArgs {
   prAuthor: string | null
   headSha: string
   /**
+   * ARC-184: Override `Date.now()` for deterministic snapshots in
+   * tests. Production callers omit this and the renderer falls back
+   * to wall-clock time at submit-render time.
+   */
+  nowMs?: number
+  /**
    * Findings that passed the hallucination guard but failed the
    * line-validity check. The inline-comments path can't anchor them
    * (GitHub would 422), so they get rolled into the review body as
@@ -369,12 +375,14 @@ export function buildReviewSubmission({
   prAuthor,
   headSha,
   unanchored = [],
+  nowMs,
 }: BuildReviewArgs): SubmitReviewBody {
   // Event derivation merges anchored + unanchored so a verdict whose
   // only blocking findings happen to be unanchored doesn't post APPROVE
   // (CR + Sigilix PR #38 catch).
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
-  const body = formatReviewBody(verdict, prAuthor, event, unanchored)
+  const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
+  const body = formatReviewBody(verdict, prAuthor, event, unanchored, prov)
   const comments: SubmitReviewComment[] = verdict.findings.map((f) => {
     const c: SubmitReviewComment = {
       path: f.path,
@@ -443,15 +451,23 @@ export function buildFallbackSubmission({
   }
 }
 
+export interface ProvenanceCtx {
+  /** Head SHA of the PR being reviewed (40-char hex). */
+  headSha: string
+  /** Override Date.now() for deterministic tests. */
+  nowMs?: number
+}
+
 export function buildFallbackBody(
   verdict: PrReviewVerdict,
-  unanchored: PrReviewFinding[]
+  unanchored: PrReviewFinding[],
+  prov?: ProvenanceCtx,
 ): string {
   const all = [...verdict.findings, ...unanchored]
   if (all.length === 0) {
     // No inline findings to relocate; the standard prose body is fine.
     // Still flow through formatReviewBody to keep the marker + summary.
-    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings))
+    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings), [], prov)
   }
 
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
@@ -472,7 +488,7 @@ export function buildFallbackBody(
   lines.push(`### Findings (${all.length})`)
   lines.push(...renderFindingsByFile(all))
 
-  return lines.join("\n")
+  return capForGitHub(lines.join("\n"), prov)
 }
 
 export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
@@ -506,7 +522,8 @@ function formatReviewBody(
   verdict: PrReviewVerdict,
   _prAuthor: string | null,
   _event: ReviewEvent,
-  unanchored: PrReviewFinding[] = []
+  unanchored: PrReviewFinding[] = [],
+  prov?: ProvenanceCtx,
 ): string {
   // Body is greptile-styled and prose-only. The structure is fixed
   // (marker, header, model's summary, model's confidence reason,
@@ -548,7 +565,41 @@ function formatReviewBody(
     lines.push(`### Additional findings (could not anchor to diff)`)
     lines.push(...renderFindingsByFile(unanchored))
   }
-  return lines.join("\n")
+  return capForGitHub(lines.join("\n"), prov)
+}
+
+// ARC-184: provenance footer + writer-side 65k cap.
+//
+// GitHub PR review bodies and issue comments are capped at 65,535
+// chars. Sigilix's bodies almost never approach this (typical 2-8 KB),
+// so the cap here is defense-in-depth — it preserves the footer
+// exactly so the manifest's reviewed-at SHA always appears, and
+// truncates the body content above with a marker that links the
+// reader to the full review history.
+const GH_BODY_CAP = 65000
+
+function renderProvenanceFooter(prov: ProvenanceCtx | undefined): string | null {
+  if (!prov || !prov.headSha) return null
+  const headShort = prov.headSha.slice(0, 7)
+  const ts = new Date(prov.nowMs ?? Date.now()).toISOString()
+  return `_Reviewed against \`${headShort}\` at ${ts}._`
+}
+
+function capForGitHub(body: string, prov: ProvenanceCtx | undefined): string {
+  const footer = renderProvenanceFooter(prov)
+  // Always append the footer (or omit when there's no provenance ctx,
+  // for backwards compatibility with callers that don't provide one).
+  if (!footer) return body
+  const withFooter = `${body}\n\n${footer}\n`
+  if (withFooter.length <= GH_BODY_CAP) return withFooter
+  // Truncate the body content (NOT the footer) and append a pointer
+  // marker. The footer is appended below so the reader still sees
+  // which head SHA the review was generated against.
+  const TRUNC = "\n\n_[summary truncated to fit GitHub's 65535 limit]_"
+  const overhead = TRUNC.length + footer.length + 4 // 4 = "\n\n" before footer + "\n" tail
+  const room = GH_BODY_CAP - overhead
+  const truncated = body.slice(0, Math.max(0, room))
+  return `${truncated}${TRUNC}\n\n${footer}\n`
 }
 
 /**

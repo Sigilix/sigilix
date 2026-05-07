@@ -100,6 +100,15 @@ export function normalizeSarifPath(
     if (/^\/[A-Za-z]:[\\/]/.test(uri)) {
       return { ok: false, reason: "absolute Windows path under file://" }
     }
+    // Non-empty authority (`file://hostname/path`) references a
+    // specific host's filesystem, not the repo. After scheme strip
+    // such URIs land as `hostname/path` and would otherwise sneak
+    // past the leading-`/` host-absolute reject. Only empty
+    // authority (`file:///...`) or relative authority (`file://./...`)
+    // are safe; sigilix-bot caught this gap on PR #68.
+    if (!uri.startsWith("/") && !uri.startsWith("./")) {
+      return { ok: false, reason: "file:// URI with non-empty host component" }
+    }
   } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(uri)) {
     return { ok: false, reason: `unsupported URI scheme: ${uri}` }
   }

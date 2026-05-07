@@ -17,8 +17,8 @@ describe("normalizeSarifPath — happy paths", () => {
     expect(normalizeSarifPath("src%2Ffoo.js")).toEqual({ ok: true, path: "src/foo.js" })
   })
 
-  it("strips file:// scheme on relative-looking remainder", () => {
-    expect(normalizeSarifPath("file://src/foo.js")).toEqual({ ok: true, path: "src/foo.js" })
+  it("strips file:// scheme with relative authority (./)", () => {
+    expect(normalizeSarifPath("file://./src/foo.js")).toEqual({ ok: true, path: "src/foo.js" })
   })
 
   it("strips leading ./", () => {
@@ -107,6 +107,18 @@ describe("normalizeSarifPath — rejection paths", () => {
     const r = normalizeSarifPath("file:///C:/path/foo.js")
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toMatch(/Windows/)
+  })
+
+  it("file:// URI with non-empty host authority rejected (sigilix-bot PR #68)", () => {
+    const r = normalizeSarifPath("file://hostname/src/foo.ts")
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toMatch(/non-empty host component/)
+  })
+
+  it("file:// URI with bare authority + no path rejected", () => {
+    const r = normalizeSarifPath("file://malicious-host/etc/shadow")
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toMatch(/non-empty host component/)
   })
 
   it("UNC path rejected", () => {

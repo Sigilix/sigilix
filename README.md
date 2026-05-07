@@ -785,9 +785,11 @@ Unsupported subcommands (`/sigilix ask`) are reserved for follow-up issues. Unti
 
 Deploys are owned by **Cloudflare Workers Builds** — the GitHub integration on the worker's CF dashboard auto-deploys on every push (including PR pushes; the `mode=off` env-var default keeps new code paths dormant in production until explicitly flipped).
 
-The deploy command in the dashboard is `npx wrangler deploy` (NOT `npx wrangler versions upload`) — DO migrations require a non-versioned deployment, so gradual deployments would fail with CF error 10211. See <https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/#gradual-deployments-for-durable-objects>.
+**Build command (test+typecheck gate):** the dashboard's build command is `npm run build`, and `npm run build` is wired to `tsc --noEmit && vitest run` — so a failing typecheck OR a failing vitest run aborts the build before `wrangler deploy` ever runs. A broken commit can never produce a production deploy.
 
-`.github/workflows/ci.yml` runs typecheck + tests + the advisory-DB size check on every PR (separate from the deploy path).
+**Deploy command:** `npx wrangler deploy` (NOT `npx wrangler versions upload`). DO migrations require a non-versioned deployment, so gradual deployments would fail with CF error 10211. See <https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/#gradual-deployments-for-durable-objects>.
+
+`.github/workflows/ci.yml` ALSO runs typecheck + tests on every PR for fast in-PR feedback (separate from the dashboard-side gate; the dashboard's gate is the load-bearing pre-deploy check).
 
 ## Local dev
 

@@ -46,17 +46,37 @@ describe("buildSbomSummary", () => {
     expect(r.text).toContain("Direct deps: 1 | Transitive: 1")
   })
 
-  it("detects SBOM via result.kind: informational", () => {
+  it("detects SBOM via result.kind: informational + SBOM taxa signal", () => {
     const r = buildSbomSummary({
       version: "2.1.0",
       runs: [{
         tool: { driver: { name: "Trivy" } },
-        results: [{ message: { text: "package metadata" }, kind: "informational" }],
+        results: [{
+          message: { text: "package metadata" },
+          kind: "informational",
+          taxa: [{ id: "trivy-sbom-component" }],
+        }],
         artifacts: [{ properties: { name: "react", version: "18.2.0", license: "MIT", relationship: "direct" } }],
       }],
     })
     expect(r.present).toBe(true)
     expect(r.packageCount).toBe(1)
+  })
+
+  it("ignores result.kind: informational without SBOM taxa signal (avoids non-SBOM informational FP)", () => {
+    const r = buildSbomSummary({
+      version: "2.1.0",
+      runs: [{
+        tool: { driver: { name: "Trivy" } },
+        results: [{
+          message: { text: "suppressed finding" },
+          kind: "informational",
+        }],
+        artifacts: [{ properties: { name: "react", version: "18.2.0" } }],
+      }],
+    })
+    expect(r.present).toBe(false)
+    expect(r.packageCount).toBe(0)
   })
 
   it("multi-run with one SBOM + one regular — only SBOM contributes", () => {

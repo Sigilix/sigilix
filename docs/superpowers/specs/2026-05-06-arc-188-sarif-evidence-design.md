@@ -35,7 +35,7 @@ Three options considered:
 
 The ingestor accepts ONE SARIF file. Multi-tool scans should be aggregated by the user's CI before commit — SARIF supports multiple `runs[]` in a single file, so a `trivy ... && trivy-aggregate ...` step or a CI plugin like `microsoft/sarif-multitool` does the merge upstream. v1 supports multi-`runs` parsing inside the single file (Kimi MAJOR #3 + Codex MINOR #7 reconciled).
 
-`sigilix.json` `sarif.path` overrides the default file path; v1 accepts ONLY single-file paths (no glob).
+`sigilix.json` `sarifEvidence.path` overrides the default file path; v1 accepts ONLY single-file paths (no glob).
 
 ### 3.1a Caps + stale-report telemetry (Codex MINOR #5)
 
@@ -156,10 +156,10 @@ secret-scan       (ARC-187)
 deterministic     (ARC-193)
 dep-vuln-scan     (ARC-186)
 ast-rules         (ARC-181)
-trivy-evidence    (ARC-188)  ← NEW
+sarif-evidence    (ARC-188)  ← NEW
    │
    ▼
-combinedFactsBlock = [secretScan, depVulnBlock, astBlock, trivyBlock, deterministicBlock]
+combinedFactsBlock = [secretScan, depVulnBlock, astBlock, sarifBlock, deterministicBlock]
    │
    ▼
 specialist fanout

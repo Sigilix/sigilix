@@ -29,9 +29,18 @@ interface SbomPackage {
 
 function isSbomRun(run: SarifReport["runs"][number]): boolean {
   if (run.tool?.driver?.properties?.kind === SBOM_TOOL_KIND) return true
+  // Result-level detection requires BOTH `kind === "informational"`
+  // AND an SBOM taxonomy signal — Trivy emits `kind: "informational"`
+  // for many non-SBOM things (suppressed findings, generic notes).
+  // The spec header promised this taxa check; CR PR #68 caught the
+  // implementation gap.
   if (Array.isArray(run.results)) {
     for (const r of run.results) {
-      if (r.kind === SBOM_RESULT_KIND) return true
+      if (r.kind !== SBOM_RESULT_KIND) continue
+      const hasSbomTaxaSignal = Array.isArray(r.taxa) && r.taxa.some((t) =>
+        typeof t.id === "string" && t.id.toLowerCase().includes("sbom"),
+      )
+      if (hasSbomTaxaSignal) return true
     }
   }
   return false

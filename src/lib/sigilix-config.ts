@@ -543,6 +543,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       const cats = [...new Set(
         sarifIn.disabledCategories
           .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
           .filter((v): v is SarifFindingCategoryRef => SARIF_FINDING_CATEGORIES.has(v as SarifFindingCategoryRef)),
       )]
       sarifOut.disabledCategories = cats

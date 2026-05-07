@@ -36,7 +36,7 @@
           "level": "error",
           "message": { "text": "Container image pulled from non-allowlisted registry" },
           "taxa": [
-            { "id": "K8S-NETWORK", "toolComponent": { "guid": "kubescape-rego-1-network" } }
+            { "id": "K8S-NETWORK", "toolComponent": { "guid": "kubescape-rego-1" } }
           ],
           "locations": [
             {

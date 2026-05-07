@@ -120,6 +120,10 @@ import {
   categoryFromRoleHint,
   markerSeverityFromScore,
 } from "./review-memory/marker"
+import { runReviewMemoryLookup } from "./review-memory/lookup"
+import { renderReviewMemoryForPrompt } from "./review-memory/render"
+import { resolveReviewMemoryConfig } from "./sigilix-config"
+import type { ReviewMemorySkipReason } from "./review-memory/types"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -789,6 +793,40 @@ export async function handlePrReviewEnsemble(
       ? `${synthMessageWithAst}\n\n[SARIF EVIDENCE — synth-only structured]\n\n\`\`\`\n${sarifSynthBlock}\n\`\`\``
       : synthMessageWithAst
 
+    // ─── ARC-189: cross-PR review-memory injection ────────────
+    // Synth-only (specialists do NOT see this block — we want them to
+    // surface the finding and let synth decide whether to soften).
+    // Gates per spec §5.2 truth table: env=on AND sigilix.json
+    // enabled=true. Lookup pipeline does its own gate-check; this
+    // outer guard avoids paying the (cheap) lookup cost when
+    // disabled.
+    const reviewMemoryConfig = resolveReviewMemoryConfig(sigilixConfig)
+    const reviewMemoryResult = await runReviewMemoryLookup({
+      env, owner, repo, prNumber,
+      paths: filePaths,
+      config: reviewMemoryConfig,
+    })
+    const memoryBlock = reviewMemoryResult.skipped
+      ? ""
+      : renderReviewMemoryForPrompt(reviewMemoryResult.findings)
+    // Codex BLOCKING on plan v2: gate the append on memoryBlock
+    // length, NOT sarifBlock length. The two blocks are independent.
+    const synthMessageWithMemory = memoryBlock.length > 0
+      ? `${synthMessageWithSarif}\n\n${memoryBlock}`
+      : synthMessageWithSarif
+    telemetry.reviewMemory = reviewMemoryResult.skipped
+      ? {
+          skipped: true,
+          reason: reviewMemoryResult.reason,
+          findingsCount: 0,
+        }
+      : {
+          skipped: false,
+          findingsCount: reviewMemoryResult.findings.length,
+          memoriesInjected: reviewMemoryResult.findings.length,
+          durationMs: reviewMemoryResult.durationMs,
+        }
+
     // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
     // Without this, `withComposedTimeout` rejection on synth's own 180s
     // timer bubbles to the outer catch and is recorded as
@@ -843,7 +881,7 @@ export async function handlePrReviewEnsemble(
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: synthSystemPrompt,
-          userMessage: synthMessageWithSarif,
+          userMessage: synthMessageWithMemory,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
           ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
@@ -2108,6 +2146,16 @@ interface EnsembleTelemetry {
   sarifEvidence?:
     | { skipped: true; reason: SarifSkipReason; findingsCount: 0 }
     | { skipped: false; findingsCount: number; truncatedCount: number; durationMs: number }
+  /**
+   * ARC-189: cross-PR review-memory lookup telemetry. `skipped`
+   * paths emit a reason from the union; the run path carries the
+   * per-finding count + duration. `memoriesInjected` mirrors
+   * `findingsCount` in v1 (no extra render-time cap beyond what
+   * `selectTopMemories` already applied at lookup time).
+   */
+  reviewMemory?:
+    | { skipped: true; reason: ReviewMemorySkipReason; findingsCount: 0 }
+    | { skipped: false; findingsCount: number; memoriesInjected: number; durationMs: number }
   /**
    * ARC-194: incremental-review telemetry. `mode` is `incremental`
    * (savings path), `full` (we tried but bailed), or `first-review`

@@ -13,5 +13,11 @@
         "addendum": "Repo-specific style: prefer `??` over `||` for nullish coalescing. Use conditional spread (`...(value ? { field: value } : {})`) for optional fields under `exactOptionalPropertyTypes`. Avoid Node-only APIs in `src/**` (Cloudflare Workers runtime). Don't propose suggestions that would break the static timeout-budget invariant in `triage-pr-review-ensemble.ts`."
       }
     }
+  },
+  "astRules": {
+    "enabled": true,
+    "severityThreshold": "warning",
+    "disabledRules": [],
+    "autoInline": false
   }
 }

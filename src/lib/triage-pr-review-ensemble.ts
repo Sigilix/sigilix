@@ -71,6 +71,7 @@ import { withComposedTimeout } from "./agent-loop"
 import {
   loadSigilixConfig,
   resolveCommandConfig,
+  resolveAstRulesConfig,
   type SigilixConfig,
 } from "./sigilix-config"
 import {
@@ -104,6 +105,9 @@ import {
 } from "./review-manifest"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
+import { runAstRules } from "./ast-rules/runner"
+import { renderAstFindingsForPrompt, renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
+import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import type { Env } from "../index"
 
@@ -590,16 +594,92 @@ export async function handlePrReviewEnsemble(
           manifestsScanned: depVulnResult.manifestsScanned,
         }
 
+    // ─── ARC-181: AST rule-pack scan ────────────────────────────
+    // Pre-LLM AST scan over pathFiltered JS/TS files. Fetches each
+    // file at the PR head; runner applies the 500 KB cap and skips
+    // unsupported extensions. Findings flow into combinedFactsBlock
+    // alongside the other deterministic blocks, AND the structured
+    // JSON variant is threaded into the synth prompt for §5.5
+    // supersession matching (Task 8).
+    const astRulesConfig = resolveAstRulesConfig(sigilixConfig)
+    const jsTsPaths = filePaths.filter((p) => /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i.test(p))
+    const astFilesByPath = new Map<string, string>()
+    if (astRulesConfig.enabled && jsTsPaths.length > 0) {
+      const fetchResults = await Promise.allSettled(
+        jsTsPaths.map(async (p) => {
+          const src = await client.getFileContent(owner, repo, p, headSha)
+          return { p, src }
+        }),
+      )
+      for (const r of fetchResults) {
+        if (r.status === "fulfilled" && typeof r.value.src === "string") {
+          astFilesByPath.set(r.value.p, r.value.src)
+        }
+      }
+    }
+    const astResult = await runAstRules({
+      diff,
+      filesByPath: astFilesByPath,
+      reviewable,
+      config: astRulesConfig,
+      ctx: { owner, repo, prNumber },
+    })
+    const astBlock = renderAstFindingsForPrompt(astResult.findings)
+    telemetry.astRules = astResult.telemetry.scanned
+      ? {
+          scanned: true,
+          filesScanned: astResult.telemetry.filesScanned,
+          filesSkippedLarge: astResult.telemetry.filesSkippedLarge,
+          filesParseFailed: astResult.telemetry.filesParseFailed,
+          findingsCount: astResult.findings.length,
+          durationMs: astResult.telemetry.durationMs,
+        }
+      : {
+          scanned: false,
+          ...(astResult.telemetry.skipReason ? { skipReason: astResult.telemetry.skipReason } : {}),
+          findingsCount: 0,
+        }
+
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
-    // Combine deterministic + secret + dep-vuln blocks into one
-    // labeled section so the specialist sees them all as authoritative
-    // facts. Order: secrets first (highest severity), dep vulns
-    // second, regex deterministic checks last.
-    const combinedFactsBlock = [secretScanBlock, depVulnBlock, deterministicBlock]
+    // Combine deterministic + secret + dep-vuln + AST-rule blocks
+    // into one labeled section so the specialist sees them all as
+    // authoritative facts. Order: secrets first (highest severity),
+    // dep vulns, AST rules, regex deterministic checks last.
+    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, deterministicBlock]
       .filter((s) => s.length > 0)
       .join("\n\n")
+    void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
+
+    // ARC-181 Task 9: auto-inline poster — gated behind
+    // `astRules.autoInline === true` AND mode === "post". Default-
+    // false v1 cautious rollout; flips after 2 weeks of FP telemetry
+    // shows < 5% rate.
+    //
+    // Posting is DEFERRED until the ensemble's own review submits
+    // successfully (CR catch on PR #67) so an aborted run — stale
+    // head SHA, synth_timeout, specialist failure-cascade — doesn't
+    // leave orphan AST comments on a PR whose ensemble review never
+    // landed. The closure captures everything we need; the two
+    // submission-success paths below invoke it.
+    const maybePostAstAutoInline = async (): Promise<void> => {
+      if (mode !== "post") return
+      if (!astRulesConfig.autoInline) return
+      if (astResult.findings.length === 0) return
+      try {
+        await postAstInlineFindings({
+          client,
+          owner, repo, prNumber, headSha,
+          findings: astResult.findings,
+          perFindingPositions: astResult.perFinding,
+        })
+      } catch {
+        // Swallowed — the poster's own try/catch already does this;
+        // belt-and-suspenders so a poster bug never blocks the
+        // ensemble's finalize.
+      }
+    }
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -664,6 +744,18 @@ export async function handlePrReviewEnsemble(
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
     })
 
+    // ARC-181 Task 8: thread structured AST findings into the synth
+    // prompt so the model can mark specialist findings superseded
+    // by deterministic AST entries on (path, line, role_hint) match
+    // (spec §5.5). v1 prompt-only — no validator on output ID
+    // references; a malformed `superseded_by_ast/<id>` would still
+    // appear in the comment body. Defensive validation deferred to
+    // v1.1 when we have telemetry on supersession-rate observations.
+    const astFindingsForSynth = renderAstFindingsAsJsonForSynth(astResult.findings)
+    const synthMessageWithAst = astFindingsForSynth.length > 0
+      ? `${synthMessage}\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\nMatch these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.\n\n\`\`\`json\n${astFindingsForSynth}\n\`\`\``
+      : synthMessage
+
     // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
     // Without this, `withComposedTimeout` rejection on synth's own 180s
     // timer bubbles to the outer catch and is recorded as
@@ -718,7 +810,7 @@ export async function handlePrReviewEnsemble(
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: synthSystemPrompt,
-          userMessage: synthMessage,
+          userMessage: synthMessageWithAst,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
           ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
@@ -854,6 +946,7 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submitted.id,
       })
+      await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
       // Narrow the fallback to GitHub HTTP 422 (Unprocessable Entity)
@@ -907,6 +1000,7 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submittedFallback.id,
       })
+      await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }
   } catch (e) {
@@ -1925,6 +2019,14 @@ interface EnsembleTelemetry {
   depVulnScan?:
     | { skipped: true; reason: DepVulnSkipReason; findingsCount: 0 }
     | { skipped: false; findingsCount: number; depsScanned: number; manifestsScanned: number }
+  /**
+   * ARC-181: AST rule-pack scan telemetry. Mirrors the dep-vuln
+   * shape — `scanned: true` with metrics on the run path,
+   * `scanned: false` with optional `skipReason` on skip paths.
+   */
+  astRules?:
+    | { scanned: true; filesScanned: number; filesSkippedLarge: number; filesParseFailed: number; findingsCount: number; durationMs: number }
+    | { scanned: false; skipReason?: "disabled-config" | "no-js-ts-files"; findingsCount: 0 }
   /**
    * ARC-194: incremental-review telemetry. `mode` is `incremental`
    * (savings path), `full` (we tried but bailed), or `first-review`

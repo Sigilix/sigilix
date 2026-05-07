@@ -122,6 +122,30 @@ export interface SigilixConfig {
   depVulnScan?: {
     enabled?: boolean
   }
+  /**
+   * ARC-181: per-repo configuration for the AST rule-pack scanner.
+   * All subfields optional. When `astRules` is absent OR any subfield
+   * is absent, the runner falls back to locked defaults:
+   *   { enabled: true, severityThreshold: "warning",
+   *     disabledRules: [], autoInline: false }
+   *
+   * - `enabled`: hard kill-switch. Only literal `false` disables.
+   * - `severityThreshold`: minimum severity that surfaces findings.
+   *   `"info"` is reserved for future expansion (v1 ships zero
+   *   info-severity rules). Unknown enum values fall back to default.
+   * - `disabledRules`: ruleId list. Unknown IDs are silently ignored
+   *   (forward-compat with future rule additions).
+   * - `autoInline`: opt-IN to deterministic inline comment posting
+   *   for `error`-severity findings without LLM intermediation.
+   *   Default `false` for v1 cautious rollout; flips after FP
+   *   telemetry shows < 5% rate.
+   */
+  astRules?: {
+    enabled?: boolean
+    severityThreshold?: "info" | "warning" | "error"
+    disabledRules?: string[]
+    autoInline?: boolean
+  }
 }
 
 export type SigilixCommandName = "review" | "improve" | "describe" | "ask"
@@ -425,7 +449,78 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       out.depVulnScan = { enabled: depIn.enabled }
     }
   }
+  // ARC-181: astRules — sub-fields are independently optional. Each
+  // is parsed defensively; unknown values fall back to the locked
+  // defaults at resolveAstRulesConfig time. Unknown subfield keys
+  // are silently ignored (forward-compat with future additions like
+  // `astRules.allowedRules`).
+  if (
+    obj.astRules &&
+    typeof obj.astRules === "object" &&
+    !Array.isArray(obj.astRules)
+  ) {
+    const astIn = obj.astRules as Record<string, unknown>
+    const astOut: NonNullable<SigilixConfig["astRules"]> = {}
+    if (typeof astIn.enabled === "boolean") {
+      astOut.enabled = astIn.enabled
+    }
+    if (
+      astIn.severityThreshold === "info" ||
+      astIn.severityThreshold === "warning" ||
+      astIn.severityThreshold === "error"
+    ) {
+      astOut.severityThreshold = astIn.severityThreshold
+    }
+    if (Array.isArray(astIn.disabledRules)) {
+      // CR catch on PR #67: trim + dedupe entries so `" no-eval-call "`
+      // matches the canonical rule id and a config that lists the same
+      // id twice doesn't silently bloat the disabled set.
+      const ids = [...new Set(
+        astIn.disabledRules
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      // Keep an empty array distinct from "absent" so resolvers can
+      // observe the explicit-empty case. Both still map to "no rules
+      // disabled" semantically — the distinction is for telemetry only.
+      astOut.disabledRules = ids
+    }
+    if (typeof astIn.autoInline === "boolean") {
+      astOut.autoInline = astIn.autoInline
+    }
+    if (Object.keys(astOut).length > 0) {
+      out.astRules = astOut
+    }
+  }
   return { ok: true, config: out }
+}
+
+/**
+ * ARC-181: resolve the per-repo astRules config to a fully-locked
+ * shape with defaults filled in. Pure function; never throws.
+ *
+ * Locked defaults (see spec §2 + plan Task 2):
+ *   - enabled: true
+ *   - severityThreshold: "warning"
+ *   - disabledRules: []
+ *   - autoInline: false
+ */
+export function resolveAstRulesConfig(
+  config: SigilixConfig | null,
+): {
+  enabled: boolean
+  severityThreshold: "info" | "warning" | "error"
+  disabledRules: string[]
+  autoInline: boolean
+} {
+  const cfg = config?.astRules
+  return {
+    enabled: cfg?.enabled !== false,                       // default true; only literal `false` disables
+    severityThreshold: cfg?.severityThreshold ?? "warning",
+    disabledRules: cfg?.disabledRules ?? [],
+    autoInline: cfg?.autoInline === true,                  // default false; only literal `true` opts in
+  }
 }
 
 /**

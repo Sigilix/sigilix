@@ -9,11 +9,11 @@
 // constructor that accepts the standard `(state, env)` shape.
 
 export class DurableObject<EnvT = unknown> {
-  protected readonly state: DurableObjectState
+  protected readonly ctx: DurableObjectState
   protected readonly env: EnvT
 
-  constructor(state: DurableObjectState, env: EnvT) {
-    this.state = state
+  constructor(ctx: DurableObjectState, env: EnvT) {
+    this.ctx = ctx
     this.env = env
   }
 

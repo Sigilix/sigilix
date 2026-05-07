@@ -55,6 +55,7 @@ import { loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-conf
 import { handleReviewStatusRoute } from "./do/status-route"
 import { runPrReviewWithDoCallback } from "./do/consumer-wrapper"
 import { enqueuePrReviewJob } from "./do/webhook-enqueue"
+import { postSlashCommandEyesAck } from "./lib/slash-command-eyes-ack"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   handleGitHubAuthCallback,
@@ -1226,6 +1227,7 @@ async function handleGitHubWebhook(
     }
     return queueGithubMention({
       env,
+      ctx,
       payload,
       owner,
       repo,
@@ -1278,6 +1280,7 @@ async function handleGitHubWebhook(
 
     return queueGithubMention({
       env,
+      ctx,
       payload,
       owner,
       repo,
@@ -1344,6 +1347,12 @@ async function dispatchReviewMemoryCapture(args: {
 
 interface QueueGithubMentionArgs {
   env: Env
+  /**
+   * ARC-190 Task 10: passed through so the slash-command 👀 ack can
+   * run via `ctx.waitUntil(...)` — the reaction POST happens in the
+   * background without blocking the webhook's 202 response.
+   */
+  ctx: ExecutionContext
   payload: GitHubWebhookPayload
   owner: string
   repo: string
@@ -1370,8 +1379,8 @@ interface QueueGithubMentionArgs {
  * re-fetched from GitHub at handler time so an edit between webhook
  * delivery and processing doesn't reply to stale text.
  */
-async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Response> {
-  const { env, payload, owner, repo, installationId, surface, prNumber } = args
+export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Response> {
+  const { env, ctx, payload, owner, repo, installationId, surface, prNumber } = args
   const comment = payload.comment
   if (!comment || typeof comment.id !== "number") {
     return new Response("missing comment\n", { status: 400 })
@@ -1469,6 +1478,19 @@ async function queueGithubMention(args: QueueGithubMentionArgs): Promise<Respons
     await env.OPENCLAW_STATE.put(coalesceKey, String(Date.now()), {
       expirationTtl: 60, // 60s — long enough to swallow comment bursts
     })
+
+    // ARC-190 Task 10: 👀 ack on the source comment so the user sees
+    // visible feedback within ~1s. Mirrors the @-mention path
+    // (github-mention.ts:131-147). Best-effort; runs via
+    // ctx.waitUntil so the webhook can return 202 immediately. Fires
+    // ONLY when the slash command parsed AND ACL passed AND coalesce
+    // didn't hit — earlier branches return without touching this.
+    ctx.waitUntil(postSlashCommandEyesAck({
+      env, owner, repo,
+      commentId: comment.id,
+      surface,
+      installationId,
+    }))
 
     let message: JobMessage
     switch (slashCmd.cmd) {

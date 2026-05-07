@@ -775,6 +775,10 @@ Burst behavior:
 
 - Concurrent invocations of the same slash command on the same PR are coalesced for 60s via a per-`(cmd, PR)` KV lock (`slash-cmd:<cmd>:<owner>/<repo>#<n>`). The first invocation enqueues the job; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently. The key includes the command name so different commands on the same PR don't accidentally suppress each other.
 
+Visible ack:
+
+- The bot posts a 👀 reaction on the source comment within ~1s of webhook delivery (immediately after ACL + coalesce gates pass) so reviewers see Sigilix received the command before the queue-side LLM run completes (~30-90s typical). Best-effort — a reaction-API failure is logged and the actual command still runs.
+
 Unsupported subcommands (`/sigilix ask`) are reserved for follow-up issues. Until they ship, those invocations fall silently through to the @-mention pipeline.
 
 ## CI / auto-deploy

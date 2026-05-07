@@ -53,6 +53,7 @@ import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention
 import { captureReviewFeedback } from "./lib/review-memory/capture"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
 import { handleReviewStatusRoute } from "./do/status-route"
+import { runPrReviewWithDoCallback } from "./do/consumer-wrapper"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   handleGitHubAuthCallback,
@@ -662,7 +663,7 @@ async function postSlashCommandAck(
   )
 }
 
-async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
+export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
       return triageIssue(job.issueId, env)
@@ -678,10 +679,10 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env,
       })
     case "pr-review": {
-      // Phase 4 routing: ensemble (shadow/post), Phase 3 agentic, or
-      // Phase 3 single-shot legacy. See triage-pr-review-ensemble.ts
-      // for the full decision matrix.
-      const decision = await routeReview({ env, owner: job.owner, repo: job.repo })
+      // ARC-190 Task 7: when the message carries a string `runId`, the
+      // DO is the dedupe + retry source-of-truth. The wrapper posts
+      // /pickup → runs the work → posts /run-result. Legacy direct-path
+      // messages (no runId) bypass and run unchanged.
       const baseArgs = {
         owner: job.owner,
         repo: job.repo,
@@ -690,45 +691,51 @@ async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         installationId: job.installationId,
         env,
       }
-      // ARC-183: sensitive-repo gate. Skip ALL review pipelines —
-      // Sigilix never fetches the diff or sends content to any LLM
-      // for repos on the OPENCLAW_SENSITIVE_REPOS denylist. Audit log
-      // entry contains owner/repo/prNumber/reason but no code or
-      // diff content (we never fetched it).
-      if (decision.primary === "skipped-sensitive") {
-        console.log(JSON.stringify({
-          event: "pr-review-skipped",
-          reason: decision.reason,
-          owner: job.owner,
-          repo: job.repo,
-          prNumber: job.prNumber,
-        }))
-        return
-      }
-      if (decision.primary === "ensemble-shadow") {
-        // Shadow: Phase 3 posts the customer-facing review FIRST,
-        // ensemble runs after for telemetry only. Serial per v3.1
-        // catch — simpler pairing invariant.
-        await handlePrReview(baseArgs)
-        await handlePrReviewEnsemble(baseArgs, "shadow")
-        return
-      }
-      if (decision.primary === "ensemble-post") {
-        // CR PR #35 catch: ensemble-post can return "skipped"/"errored"
-        // for stale-head, quorum, synth-parse, and internal-error
-        // paths. Without this fallback the PR gets no customer-facing
-        // review at all (the queue still acks). Fall through to
-        // Phase 3 single-agent on any non-success.
-        const result = await handlePrReviewEnsemble(baseArgs, "post")
-        if (result.status !== "posted") {
-          await handlePrReview(baseArgs)
+      return runPrReviewWithDoCallback(job, env, async () => {
+        // Phase 4 routing: ensemble (shadow/post), Phase 3 agentic, or
+        // Phase 3 single-shot legacy. See triage-pr-review-ensemble.ts
+        // for the full decision matrix.
+        const decision = await routeReview({ env, owner: job.owner, repo: job.repo })
+        // ARC-183: sensitive-repo gate. Skip ALL review pipelines —
+        // Sigilix never fetches the diff or sends content to any LLM
+        // for repos on the OPENCLAW_SENSITIVE_REPOS denylist. Audit log
+        // entry contains owner/repo/prNumber/reason but no code or
+        // diff content (we never fetched it).
+        if (decision.primary === "skipped-sensitive") {
+          console.log(JSON.stringify({
+            event: "pr-review-skipped",
+            reason: decision.reason,
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+          }))
+          return
         }
-        return
-      }
-      // Phase 3 paths (agentic or singleshot-legacy) both go through
-      // handlePrReview — the agentic toggle is gated inside that
-      // function via OPENCLAW_AGENTIC_GITHUB_MODE.
-      return handlePrReview(baseArgs)
+        if (decision.primary === "ensemble-shadow") {
+          // Shadow: Phase 3 posts the customer-facing review FIRST,
+          // ensemble runs after for telemetry only. Serial per v3.1
+          // catch — simpler pairing invariant.
+          await handlePrReview(baseArgs)
+          await handlePrReviewEnsemble(baseArgs, "shadow")
+          return
+        }
+        if (decision.primary === "ensemble-post") {
+          // CR PR #35 catch: ensemble-post can return "skipped"/"errored"
+          // for stale-head, quorum, synth-parse, and internal-error
+          // paths. Without this fallback the PR gets no customer-facing
+          // review at all (the queue still acks). Fall through to
+          // Phase 3 single-agent on any non-success.
+          const result = await handlePrReviewEnsemble(baseArgs, "post")
+          if (result.status !== "posted") {
+            await handlePrReview(baseArgs)
+          }
+          return
+        }
+        // Phase 3 paths (agentic or singleshot-legacy) both go through
+        // handlePrReview — the agentic toggle is gated inside that
+        // function via OPENCLAW_AGENTIC_GITHUB_MODE.
+        await handlePrReview(baseArgs)
+      })
     }
     case "pr-review-rerun": {
       // ARC-178: `/sigilix review` slash command. Resolve the current

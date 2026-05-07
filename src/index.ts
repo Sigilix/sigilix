@@ -179,6 +179,26 @@ export interface Env {
   // enqueues short-circuit. Default (unset / any other value) = on.
   // Single-flag rollback if a bug surfaces post-deploy.
   OPENCLAW_REVIEW_MANIFEST_ENABLED?: string
+
+  // ARC-189 cross-PR review-memory feature gates (default OFF for
+  // both — opposite polarity from every other scanner). Retrieval
+  // requires both the env flag AND `sigilix.json`
+  // `reviewMemory.enabled === true`. Capture requires the env flag
+  // AND (`enabled === true` OR `captureOnly === true`). See spec
+  // §5.2 truth table.
+  OPENCLAW_REVIEW_MEMORY_ENABLED?: string
+  OPENCLAW_REVIEW_MEMORY_CAPTURE?: string
+
+  // ARC-189 one-shot deploy aid for the PROMPT_VERSION="1" → "2"
+  // bump (Task 10b). When `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
+  // is "on", `triage-pr-stale-mark` filters the `"prompt-version"`
+  // reason out of the StaleResult.reasons[] array — it does NOT skip
+  // stale-marking entirely. Other drift reasons (head/base/file-list)
+  // continue to fire. The companion `_SET_AT` env (UNIX seconds at
+  // suppression-flag set time) drives the 24h heartbeat /
+  // 72h-fail-safe ladder per spec §4.8.
+  OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE?: string
+  OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE_SET_AT?: string
 }
 
 /**

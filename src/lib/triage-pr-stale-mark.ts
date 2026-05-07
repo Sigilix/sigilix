@@ -20,8 +20,142 @@ import {
   renderStaleBlock,
   applyStaleBlock,
   type ReviewManifestV1,
+  type StaleReason,
 } from "./review-manifest"
 import type { Env } from "../index"
+
+// ─── ARC-189 Task 11: PROMPT_VERSION stale suppression ────────
+
+const SUPPRESSION_FAIL_SAFE_HOURS = 72
+const SUPPRESSION_HEARTBEAT_WARN_HOURS = 24
+/**
+ * Tolerate up to 60s of clock skew between the deploy-time
+ * `date +%s` and the worker's `Date.now()`.
+ */
+const SET_AT_FUTURE_TOLERANCE_SECONDS = 60
+
+export type PromptVersionSuppressionReason =
+  | "off"
+  | "applies"
+  | "set-at-missing"
+  | "set-at-malformed"
+  | "set-at-future"
+  | "set-at-stale"
+
+export interface PromptVersionSuppressionResult {
+  /** True when the caller should filter `"prompt-version"` out of
+   *  StaleResult.reasons[]. False on every other branch (off,
+   *  misconfigured, fail-safe). */
+  applies: boolean
+  reason: PromptVersionSuppressionReason
+  /** Age in hours from SET_AT to now. Negative on future-skew, NaN
+   *  on missing/malformed. Used for heartbeat telemetry. */
+  ageHours: number
+  /** Heartbeat log level when applies=true: info < 24h, warn ≥ 24h.
+   *  Undefined on every applies=false branch. */
+  heartbeatLevel?: "info" | "warn"
+}
+
+/**
+ * Pure evaluation of the OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE +
+ * companion `_SET_AT` env pair. Spec §4.8 + plan v3 §Task 11. Never
+ * throws.
+ *
+ * Fail-closed default: any misconfiguration (missing/malformed/
+ * future SET_AT, or > 72h-stale SET_AT) returns `applies: false` so
+ * stale-marking proceeds normally. Misconfiguration NEVER silently
+ * disables stale-marking — the worst case is over-firing, never
+ * under-firing.
+ */
+export function evaluatePromptVersionSuppression(
+  env: Env,
+  nowMs: number,
+): PromptVersionSuppressionResult {
+  if (env.OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE !== "on") {
+    return { applies: false, reason: "off", ageHours: NaN }
+  }
+  const setAtRaw = env.OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE_SET_AT
+  if (typeof setAtRaw !== "string" || setAtRaw.trim().length === 0) {
+    return { applies: false, reason: "set-at-missing", ageHours: NaN }
+  }
+  const setAtSec = Number(setAtRaw)
+  if (!Number.isFinite(setAtSec)) {
+    return { applies: false, reason: "set-at-malformed", ageHours: NaN }
+  }
+  const nowSec = nowMs / 1000
+  const ageSeconds = nowSec - setAtSec
+  const ageHours = ageSeconds / 3600
+  if (ageSeconds < -SET_AT_FUTURE_TOLERANCE_SECONDS) {
+    return { applies: false, reason: "set-at-future", ageHours }
+  }
+  if (ageHours > SUPPRESSION_FAIL_SAFE_HOURS) {
+    return { applies: false, reason: "set-at-stale", ageHours }
+  }
+  const heartbeatLevel: "info" | "warn" =
+    ageHours >= SUPPRESSION_HEARTBEAT_WARN_HOURS ? "warn" : "info"
+  return { applies: true, reason: "applies", ageHours, heartbeatLevel }
+}
+
+/**
+ * Surgical filter: drops the `"prompt-version"` reason from a
+ * StaleResult.reasons[] array when suppression applies. Other drift
+ * (head/base/file-list) is preserved so legitimate stale-marking
+ * still fires during the deploy window. Pure.
+ */
+export function filterReasonsForSuppression(
+  reasons: readonly StaleReason[],
+  suppressionApplies: boolean,
+): StaleReason[] {
+  if (!suppressionApplies) return [...reasons]
+  return reasons.filter((r) => r !== "prompt-version")
+}
+
+const HEARTBEAT_THROTTLE_KEY = "prompt-version-suppress-heartbeat-emitted-at"
+const HEARTBEAT_THROTTLE_TTL_SECONDS = 7 * 24 * 60 * 60
+const HEARTBEAT_DEDUPE_HOURS = 24
+
+/**
+ * KV-backed best-effort heartbeat throttle. Emits the heartbeat
+ * event at most once per 24h GLOBAL (singleton key — env-driven, so
+ * not per-repo). Workers KV has no CAS so concurrent stale-mark
+ * checks crossing the 24h boundary may both emit; spec §4.8 documents
+ * this as acceptable. Alert pipelines should de-dupe on
+ * `(deployVersion, ageHours)` if exact-once is required.
+ */
+async function emitSuppressionHeartbeatIfDue(
+  env: Env,
+  nowMs: number,
+  result: PromptVersionSuppressionResult,
+  ctx: { owner: string; repo: string; prNumber: number },
+): Promise<void> {
+  if (!result.applies || !result.heartbeatLevel) return
+  const nowSec = Math.floor(nowMs / 1000)
+  let lastEmitSec = 0
+  try {
+    const raw = await env.OPENCLAW_STATE.get(HEARTBEAT_THROTTLE_KEY)
+    if (typeof raw === "string") {
+      const parsed = Number(raw)
+      if (Number.isFinite(parsed)) lastEmitSec = parsed
+    }
+  } catch {
+    // Best-effort: if we can't read the throttle, just emit (worst
+    // case: a duplicate heartbeat).
+  }
+  if (nowSec - lastEmitSec < HEARTBEAT_DEDUPE_HOURS * 3600) return
+  console.log(JSON.stringify({
+    event: "review-stale-prompt-version-suppressed-heartbeat",
+    owner: ctx.owner, repo: ctx.repo, prNumber: ctx.prNumber,
+    ageHours: result.ageHours,
+    level: result.heartbeatLevel,
+  }))
+  try {
+    await env.OPENCLAW_STATE.put(HEARTBEAT_THROTTLE_KEY, String(nowSec), {
+      expirationTtl: HEARTBEAT_THROTTLE_TTL_SECONDS,
+    })
+  } catch {
+    // Best-effort: if write fails, the next check may double-emit.
+  }
+}
 
 export interface PrStaleMarkArgs {
   env: Env
@@ -130,10 +264,50 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
     console.log(JSON.stringify({ event: "review-stale-not-detected", owner, repo, prNumber }))
     return
   }
+
+  // ARC-189 Task 11: prompt-version suppression. Inserted AFTER
+  // detectReviewStale (so the underlying drift detector stays pure)
+  // and BEFORE any side-effects (no PATCHes yet emitted). Filters
+  // ONLY the "prompt-version" reason out of staleResult.reasons[];
+  // other drift (head/base/file-list) is preserved.
+  const suppression = evaluatePromptVersionSuppression(env, Date.now())
+  if (suppression.reason === "set-at-missing"
+    || suppression.reason === "set-at-malformed"
+    || suppression.reason === "set-at-future") {
+    console.log(JSON.stringify({
+      event: "review-stale-prompt-version-suppress-misconfig",
+      owner, repo, prNumber,
+      reason: suppression.reason,
+    }))
+  } else if (suppression.reason === "set-at-stale") {
+    console.log(JSON.stringify({
+      event: "review-stale-prompt-version-suppressed-stale",
+      owner, repo, prNumber,
+      ageHours: suppression.ageHours,
+    }))
+  }
+  if (suppression.applies) {
+    await emitSuppressionHeartbeatIfDue(env, Date.now(), suppression, {
+      owner, repo, prNumber,
+    })
+  }
+  const filteredReasons = filterReasonsForSuppression(
+    staleResult.reasons, suppression.applies,
+  )
+  if (filteredReasons.length === 0) {
+    // Only "prompt-version" was the reason and suppression applies →
+    // skip stale-mark entirely. Other branches (env off, misconfig,
+    // fail-safe) leave the original reasons in place.
+    console.log(JSON.stringify({
+      event: "review-stale-prompt-version-suppressed",
+      owner, repo, prNumber,
+    }))
+    return
+  }
   console.log(JSON.stringify({
     event: "review-stale-detected",
     owner, repo, prNumber,
-    reasons: staleResult.reasons,
+    reasons: filteredReasons,
     manifestHeadSha: manifest.headSha,
     currentHeadSha: newHeadSha,
     manifestBaseSha: manifest.baseSha,
@@ -168,7 +342,7 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
         event: "review-stale-marked",
         owner, repo, prNumber,
         target: { kind: "review", id: target.reviewId },
-        reasons: staleResult.reasons,
+        reasons: filteredReasons,
       }))
     } else {
       const comment = await client.getIssueComment(owner, repo, target.commentId)
@@ -186,7 +360,7 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
         event: "review-stale-marked",
         owner, repo, prNumber,
         target: { kind: "issue-comment", id: target.commentId },
-        reasons: staleResult.reasons,
+        reasons: filteredReasons,
       }))
     }
   } catch (err) {

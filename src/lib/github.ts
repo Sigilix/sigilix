@@ -394,6 +394,41 @@ export class GitHubClient {
     }
   }
 
+  /**
+   * ARC-189: fetch a single inline-review comment by ID. Used by the
+   * cross-PR review-memory capture pipeline to read the parent comment
+   * body when a reviewer replies on a thread (the
+   * `pull_request_review_comment.created` webhook payload only carries
+   * `in_reply_to_id` — a number — not the parent body).
+   *
+   * Returns null on 404 (parent already deleted by the time the
+   * webhook fires) so the capture pipeline can skip cleanly.
+   */
+  async getPullRequestReviewComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+  ): Promise<{ id: number; body: string; in_reply_to_id?: number } | null> {
+    try {
+      const res = await this.restGet<{
+        id: number
+        body?: string | null
+        in_reply_to_id?: number | null
+      }>(`/repos/${owner}/${repo}/pulls/comments/${commentId}`)
+      const out: { id: number; body: string; in_reply_to_id?: number } = {
+        id: res.id,
+        body: res.body ?? "",
+      }
+      if (typeof res.in_reply_to_id === "number") {
+        out.in_reply_to_id = res.in_reply_to_id
+      }
+      return out
+    } catch (error) {
+      if (error instanceof GitHubHttpError && error.status === 404) return null
+      throw error
+    }
+  }
+
   /** List top-level issue comments on a PR. Used to find existing markers. */
   async listIssueComments(
     owner: string,

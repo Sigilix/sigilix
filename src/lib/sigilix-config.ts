@@ -153,7 +153,37 @@ export interface SigilixConfig {
     disabledRules?: string[]
     disabledCategories?: SarifFindingCategoryRef[]
   }
+
+  /**
+   * ARC-189: per-repo cross-PR review-memory configuration. Defaults
+   * to OFF (opposite polarity from every other scanner) per the
+   * ticket's "default off" requirement. Retrieval requires
+   * `enabled === true` AND env `OPENCLAW_REVIEW_MEMORY_ENABLED=on`.
+   * Capture requires (`enabled === true` OR `captureOnly === true`)
+   * AND env `OPENCLAW_REVIEW_MEMORY_CAPTURE=on`. See spec §5.2 truth
+   * table.
+   */
+  reviewMemory?: {
+    enabled?: boolean
+    captureOnly?: boolean
+    categories?: ReviewMemoryCategoryRef[]
+    maxInjectedMemories?: number
+    minSignalThreshold?: number
+    maxSignalAgeDays?: number
+  }
 }
+
+/**
+ * ARC-189: re-exported from `review-memory/types.ts` so the config
+ * surface declares the categories without `sigilix-config.ts` pulling
+ * the entire review-memory type chain. Same 4-value literal union as
+ * `ReviewMemoryCategory`.
+ */
+export type ReviewMemoryCategoryRef =
+  | "security"
+  | "logic"
+  | "performance"
+  | "tests"
 
 /**
  * ARC-188: re-exported from `sarif-evidence/types.ts` so the config
@@ -552,7 +582,105 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       out.sarifEvidence = sarifOut
     }
   }
+  // ARC-189: reviewMemory — cross-PR review memory (default OFF).
+  if (
+    obj.reviewMemory &&
+    typeof obj.reviewMemory === "object" &&
+    !Array.isArray(obj.reviewMemory)
+  ) {
+    const rmIn = obj.reviewMemory as Record<string, unknown>
+    const rmOut: NonNullable<SigilixConfig["reviewMemory"]> = {}
+    // Strict-bool: only literal true opts in. Truthy non-bool (1, "true")
+    // is silently dropped — the default-OFF polarity makes the strict
+    // check semantically meaningful.
+    if (rmIn.enabled === true || rmIn.enabled === false) {
+      rmOut.enabled = rmIn.enabled
+    }
+    if (rmIn.captureOnly === true || rmIn.captureOnly === false) {
+      rmOut.captureOnly = rmIn.captureOnly
+    }
+    if (Array.isArray(rmIn.categories)) {
+      const seen = new Set<ReviewMemoryCategoryRef>()
+      for (const v of rmIn.categories) {
+        if (typeof v !== "string") continue
+        const trimmed = v.trim()
+        if (REVIEW_MEMORY_CATEGORIES.has(trimmed as ReviewMemoryCategoryRef)) {
+          seen.add(trimmed as ReviewMemoryCategoryRef)
+        }
+      }
+      rmOut.categories = [...seen]
+    }
+    if (typeof rmIn.maxInjectedMemories === "number") {
+      rmOut.maxInjectedMemories = clamp(rmIn.maxInjectedMemories, 1, 10)
+    }
+    if (typeof rmIn.minSignalThreshold === "number") {
+      rmOut.minSignalThreshold = clamp(rmIn.minSignalThreshold, 2, 20)
+    }
+    if (typeof rmIn.maxSignalAgeDays === "number") {
+      rmOut.maxSignalAgeDays = clamp(rmIn.maxSignalAgeDays, 7, 365)
+    }
+    if (Object.keys(rmOut).length > 0) {
+      out.reviewMemory = rmOut
+    }
+  }
   return { ok: true, config: out }
+}
+
+/** Pure clamp helper for the reviewMemory numeric fields. */
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, Math.round(v)))
+}
+
+const REVIEW_MEMORY_CATEGORIES: ReadonlySet<ReviewMemoryCategoryRef> = new Set([
+  "security",
+  "logic",
+  "performance",
+  "tests",
+])
+
+const DEFAULT_REVIEW_MEMORY_CATEGORIES: ReadonlyArray<ReviewMemoryCategoryRef> = [
+  "security",
+  "logic",
+  "performance",
+  "tests",
+]
+
+/**
+ * ARC-189: resolve the per-repo `reviewMemory` config to a
+ * fully-locked shape with defaults filled in. Pure; never throws.
+ *
+ * Locked defaults (spec §5.1):
+ *   - enabled: false  (default OFF — opposite of every other scanner)
+ *   - captureOnly: false
+ *   - categories: ALL 4 (empty array also resolves to all 4)
+ *   - maxInjectedMemories: 5
+ *   - minSignalThreshold: 3
+ *   - maxSignalAgeDays: 90
+ */
+export function resolveReviewMemoryConfig(
+  config: SigilixConfig | null,
+): {
+  enabled: boolean
+  captureOnly: boolean
+  categories: readonly ReviewMemoryCategoryRef[]
+  maxInjectedMemories: number
+  minSignalThreshold: number
+  maxSignalAgeDays: number
+} {
+  const cfg = config?.reviewMemory
+  const cats = cfg?.categories
+  const resolvedCats =
+    Array.isArray(cats) && cats.length > 0
+      ? cats
+      : DEFAULT_REVIEW_MEMORY_CATEGORIES
+  return {
+    enabled: cfg?.enabled === true,
+    captureOnly: cfg?.captureOnly === true,
+    categories: resolvedCats,
+    maxInjectedMemories: cfg?.maxInjectedMemories ?? 5,
+    minSignalThreshold: cfg?.minSignalThreshold ?? 3,
+    maxSignalAgeDays: cfg?.maxSignalAgeDays ?? 90,
+  }
 }
 
 /**

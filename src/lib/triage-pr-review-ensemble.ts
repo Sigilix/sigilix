@@ -115,6 +115,15 @@ import {
 } from "./sarif-evidence/render"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
+import {
+  buildSigilixMarker,
+  categoryFromRoleHint,
+  markerSeverityFromScore,
+} from "./review-memory/marker"
+import { runReviewMemoryLookup } from "./review-memory/lookup"
+import { renderReviewMemoryForPrompt } from "./review-memory/render"
+import { resolveReviewMemoryConfig } from "./sigilix-config"
+import type { ReviewMemorySkipReason } from "./review-memory/types"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -784,6 +793,40 @@ export async function handlePrReviewEnsemble(
       ? `${synthMessageWithAst}\n\n[SARIF EVIDENCE — synth-only structured]\n\n\`\`\`\n${sarifSynthBlock}\n\`\`\``
       : synthMessageWithAst
 
+    // ─── ARC-189: cross-PR review-memory injection ────────────
+    // Synth-only (specialists do NOT see this block — we want them to
+    // surface the finding and let synth decide whether to soften).
+    // Gates per spec §5.2 truth table: env=on AND sigilix.json
+    // enabled=true. Lookup pipeline does its own gate-check; this
+    // outer guard avoids paying the (cheap) lookup cost when
+    // disabled.
+    const reviewMemoryConfig = resolveReviewMemoryConfig(sigilixConfig)
+    const reviewMemoryResult = await runReviewMemoryLookup({
+      env, owner, repo, prNumber,
+      paths: filePaths,
+      config: reviewMemoryConfig,
+    })
+    const memoryBlock = reviewMemoryResult.skipped
+      ? ""
+      : renderReviewMemoryForPrompt(reviewMemoryResult.findings)
+    // Codex BLOCKING on plan v2: gate the append on memoryBlock
+    // length, NOT sarifBlock length. The two blocks are independent.
+    const synthMessageWithMemory = memoryBlock.length > 0
+      ? `${synthMessageWithSarif}\n\n${memoryBlock}`
+      : synthMessageWithSarif
+    telemetry.reviewMemory = reviewMemoryResult.skipped
+      ? {
+          skipped: true,
+          reason: reviewMemoryResult.reason,
+          findingsCount: 0,
+        }
+      : {
+          skipped: false,
+          findingsCount: reviewMemoryResult.findings.length,
+          memoriesInjected: reviewMemoryResult.findings.length,
+          durationMs: reviewMemoryResult.durationMs,
+        }
+
     // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
     // Without this, `withComposedTimeout` rejection on synth's own 180s
     // timer bubbles to the outer catch and is recorded as
@@ -838,7 +881,7 @@ export async function handlePrReviewEnsemble(
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: synthSystemPrompt,
-          userMessage: synthMessageWithSarif,
+          userMessage: synthMessageWithMemory,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
           ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
@@ -957,11 +1000,76 @@ export async function handlePrReviewEnsemble(
     // body (instead of being recovered ONLY when the inline submit
     // fails). CR PR #38 catch — without this, GitHub's success path
     // silently drops the unanchored set.
+    //
+    // ARC-189 Task 10b: apply review-memory soften BEFORE rendering.
+    // The synth's `provenance.softened[]` references specialist
+    // sourceFindingIds (e.g., "logic-3"); for each kept finding whose
+    // provenance.sourceFindingIds intersects the softened set, build
+    // a CLONE of the finding with `score = Math.max(1, score - 1)`.
+    // Original finding objects are NEVER mutated (Kimi MINOR on plan
+    // v2 — preserves immutability for downstream telemetry).
+    const softenedSet = new Set<string>()
+    if (synthOutput.provenance?.softened) {
+      for (const s of synthOutput.provenance.softened) {
+        if (typeof s.sourceFindingId === "string") {
+          softenedSet.add(s.sourceFindingId)
+        }
+      }
+    }
+    let softenedCount = 0
+    const renderableFindings = validated.verdict.findings.map((f, i) => {
+      const sourceIds = validated.cleanFindingProvenance[i]?.sourceFindingIds ?? []
+      const matched = sourceIds.some((id) => softenedSet.has(id))
+      if (!matched) return f
+      const effectiveScore = Math.max(1, f.score - 1)
+      if (effectiveScore === f.score) return f  // already at floor
+      softenedCount++
+      return { ...f, score: effectiveScore }
+    })
+    const renderableUnanchored = validated.unanchoredFindings  // unanchored never matches by index
+    const renderableVerdict: PrReviewVerdict = {
+      ...validated.verdict,
+      findings: renderableFindings,
+    }
+    if (softenedCount > 0) {
+      console.log(JSON.stringify({
+        event: "review-memory-softened-rendered",
+        owner, repo, prNumber, softenedCount,
+      }))
+    }
+
+    // ARC-189: pre-compute the per-finding sigilix marker BEFORE
+    // calling buildReviewSubmission so marker construction (async via
+    // crypto.subtle) doesn't force the whole renderer async. Markers
+    // align by index with `validated.verdict.findings` AND
+    // `validated.cleanFindingProvenance` — the same walk in
+    // validateForSubmission produced both. Findings with no source
+    // specialist (defensive, shouldn't happen post-hallucination
+    // guard) emit `null` and skip the marker.
+    //
+    // Marker severity uses the ORIGINAL (pre-soften) score so the
+    // marker reflects what synth actually emitted; the soften
+    // applies to the rendered finding body only.
+    const findingMarkers: Array<string | null> = await Promise.all(
+      validated.verdict.findings.map(async (f, i) => {
+        const sourceSpec = validated.cleanFindingProvenance[i]?.sourceSpecialists?.[0]
+        if (!sourceSpec) return null
+        return await buildSigilixMarker({
+          ruleId: null,
+          path: f.path,
+          line: f.line,
+          headline: f.headline,
+          category: categoryFromRoleHint(sourceSpec),
+          severity: markerSeverityFromScore(f.score),
+        })
+      }),
+    )
     const submission = buildReviewSubmission({
-      verdict: validated.verdict,
+      verdict: renderableVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
-      unanchored: validated.unanchoredFindings,
+      unanchored: renderableUnanchored,
+      findingMarkers,
     })
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
@@ -1011,8 +1119,11 @@ export async function handlePrReviewEnsemble(
         reason: fallbackReason,
       })
       const fallback = buildFallbackSubmission({
-        verdict: validated.verdict,
-        unanchored: validated.unanchoredFindings,
+        // ARC-189: fallback path also receives the soften-applied
+        // verdict. Markers are NOT emitted on the fallback (it's a
+        // body-only review with no inline anchors) — see Task 2.5.
+        verdict: renderableVerdict,
+        unanchored: renderableUnanchored,
         prAuthor: meta.user?.login ?? null,
         headSha,
       })
@@ -1588,6 +1699,20 @@ export interface SynthesizerProvenance {
     headline: string
     reason: string
   }>
+  /**
+   * ARC-189: findings the synth softened in response to a [REVIEW
+   * MEMORY] block (matched on category, optionally on pathSha12 for
+   * path-scoped memories). Optional + sparse: synths emitting
+   * pre-v2 outputs (no review memory) omit this field, which
+   * `isValidProvenance` accepts. The renderer applies a one-tier
+   * `score` decrement on the matched finding before posting.
+   */
+  softened?: Array<{
+    specialist: SpecialistRole
+    sourceFindingId: string
+    headline: string
+    reason: string
+  }>
   retrievalCallsUsed: number
 }
 
@@ -1703,6 +1828,21 @@ function isValidProvenance(value: unknown): value is SynthesizerProvenance {
   // for shape stability.
   for (const d of v.dropped) {
     if (!d || typeof d !== "object" || Array.isArray(d)) return false
+  }
+  // ARC-189: `softened` is OPTIONAL on the wire (synth outputs from
+  // pre-v2 prompts omit it). When present, must be an array of
+  // object-shaped entries. The renderer dereferences
+  // `softened[i].sourceFindingId` to look up the corresponding
+  // finding for score-decrement, so we tighten the per-item check
+  // to require a string-shaped sourceFindingId — same belt-and-
+  // suspenders pattern as the findings.sourceFindingIds[] guard.
+  if (v.softened !== undefined) {
+    if (!Array.isArray(v.softened)) return false
+    for (const s of v.softened) {
+      if (!s || typeof s !== "object" || Array.isArray(s)) return false
+      const entry = s as Record<string, unknown>
+      if (typeof entry.sourceFindingId !== "string") return false
+    }
   }
   return true
 }
@@ -1866,6 +2006,15 @@ export interface ValidatedOutput {
   droppedForInvalidLine: number
   droppedForHallucination: number
   demotedScore1: number
+  /**
+   * ARC-189: per-clean-finding provenance, aligned by INDEX with
+   * `verdict.findings`. Captured during the same walk that filters
+   * findings so the ensemble caller can derive the source specialist
+   * for each surviving finding without re-walking with the same
+   * filter rules. Used by Task 2.5 marker emission to map each
+   * finding to its `ReviewMemoryCategory`.
+   */
+  cleanFindingProvenance: SynthesizerProvenance["findings"]
 }
 
 export function validateForSubmission(args: {
@@ -1881,6 +2030,7 @@ export function validateForSubmission(args: {
   }
 
   const cleanFindings: PrReviewFinding[] = []
+  const cleanFindingProvenance: SynthesizerProvenance["findings"] = []
   const unanchoredFindings: PrReviewFinding[] = []
   let droppedForInvalidLine = 0
   let droppedForHallucination = 0
@@ -1925,6 +2075,11 @@ export function validateForSubmission(args: {
       continue
     }
     cleanFindings.push(f)
+    // ARC-189: keep the per-clean-finding provenance aligned by index
+    // for the ensemble caller's marker-emission step. `provenance` is
+    // narrowed by the hallucination guard above (sourceIds.length >= 1
+    // implies provenance was non-null).
+    if (provenance) cleanFindingProvenance.push(provenance)
   }
 
   // Aggregate score-1 advisory nits (cap at 5, sort by score DESC then alpha)
@@ -1944,6 +2099,7 @@ export function validateForSubmission(args: {
     droppedForInvalidLine,
     droppedForHallucination,
     demotedScore1,
+    cleanFindingProvenance,
   }
 }
 
@@ -2063,6 +2219,16 @@ interface EnsembleTelemetry {
   sarifEvidence?:
     | { skipped: true; reason: SarifSkipReason; findingsCount: 0 }
     | { skipped: false; findingsCount: number; truncatedCount: number; durationMs: number }
+  /**
+   * ARC-189: cross-PR review-memory lookup telemetry. `skipped`
+   * paths emit a reason from the union; the run path carries the
+   * per-finding count + duration. `memoriesInjected` mirrors
+   * `findingsCount` in v1 (no extra render-time cap beyond what
+   * `selectTopMemories` already applied at lookup time).
+   */
+  reviewMemory?:
+    | { skipped: true; reason: ReviewMemorySkipReason; findingsCount: 0 }
+    | { skipped: false; findingsCount: number; memoriesInjected: number; durationMs: number }
   /**
    * ARC-194: incremental-review telemetry. `mode` is `incremental`
    * (savings path), `full` (we tried but bailed), or `first-review`

@@ -230,13 +230,23 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "reason": "off-domain noise" | "duplicate" | "false positive on diff inspection" | "score-1 advisory"
       }
     ],
+    "softened": [
+      {
+        "specialist": "performance",
+        "sourceFindingId": "performance-3",
+        "headline": "...",
+        "reason": "review-memory/performance" | "review-memory/performance/<pathSha12>"
+      }
+    ],
     "retrievalCallsUsed": 0
   }
 }
 
 CRITICAL: \`provenance.findings[i]\` MUST correspond to \`verdict.findings[i]\` BY INDEX (orchestrator validates by array index, not by headline string match — headlines collide).
 
-If a finding came from only one specialist, \`sourceSpecialists\` has one entry and \`sourceFindingIds\` has one entry. That's fine — single-source findings are admissible.`.trim()
+If a finding came from only one specialist, \`sourceSpecialists\` has one entry and \`sourceFindingIds\` has one entry. That's fine — single-source findings are admissible.
+
+[REVIEW MEMORY] handling (ARC-189): when the user message contains a [REVIEW MEMORY] block, treat each entry as evidence the team has rejected this finding class on this repo. For each KEPT finding whose category matches a memory entry's \`category\` (and, when memory is path-scoped, whose path also matches the memory's \`pathSha12\`), downgrade the finding's \`score\` by one tier (5→4, 4→3, 3→2, 2→1; floor at 1) and shorten the \`body\` to at most 2 sentences. Add an entry to \`provenance.softened[]\` with \`reason: "review-memory/<category>"\` for repo-scope memories or \`reason: "review-memory/<category>/<pathSha12>"\` for path-scope. Do NOT omit findings entirely in v1 — drop is reserved for v2 once telemetry tunes the threshold.`.trim()
 
 // ─── initial user message builders ─────────────────────────────────────
 

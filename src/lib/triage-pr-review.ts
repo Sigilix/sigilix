@@ -408,6 +408,22 @@ interface BuildReviewArgs {
    *     anchor to diff)` section listing the unanchored set.
    */
   unanchored?: PrReviewFinding[]
+  /**
+   * ARC-189: per-finding sigilix comment marker, aligned by INDEX
+   * with `verdict.findings`. When `findingMarkers[i]` is a non-empty
+   * string, it gets appended to the inline comment body on its own
+   * line (with a blank line separator) so the cross-PR review-memory
+   * capture pipeline can correlate dismissals back to the original
+   * finding's category + severity tier.
+   *
+   * Optional + sparse: callers can pass `null` for findings that
+   * shouldn't carry a marker (e.g., synth findings missing
+   * provenance source-specialist). Length must equal
+   * `verdict.findings.length` when supplied; the renderer reads by
+   * index. Default behavior (omitted) is the pre-ARC-189 shape: no
+   * marker appended.
+   */
+  findingMarkers?: ReadonlyArray<string | null>
 }
 
 /**
@@ -431,6 +447,7 @@ export function buildReviewSubmission({
   headSha,
   unanchored = [],
   nowMs,
+  findingMarkers,
 }: BuildReviewArgs): SubmitReviewBody {
   // Event derivation merges anchored + unanchored so a verdict whose
   // only blocking findings happen to be unanchored doesn't post APPROVE
@@ -438,12 +455,20 @@ export function buildReviewSubmission({
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
   const body = formatReviewBody(verdict, prAuthor, event, unanchored, prov)
-  const comments: SubmitReviewComment[] = verdict.findings.map((f) => {
+  const comments: SubmitReviewComment[] = verdict.findings.map((f, i) => {
+    // ARC-189: append per-finding sigilix marker on its own line so
+    // the cross-PR review-memory capture pipeline can correlate
+    // future reply dismissals back to this finding's category + tier.
+    // Marker is hidden HTML — invisible in rendered Markdown but
+    // visible to the marker extractor. Sparse: nullish entries skip.
+    const marker = findingMarkers?.[i]
+    const baseBody = formatFindingComment(f)
+    const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
     const c: SubmitReviewComment = {
       path: f.path,
       line: f.line,
       side: "RIGHT",
-      body: formatFindingComment(f),
+      body: fullBody,
     }
     if (f.startLine != null) {
       c.start_line = f.startLine

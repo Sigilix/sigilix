@@ -22,7 +22,17 @@
  *   - Do NOT bump on typo fixes, minor wording polish, or clarifying
  *     comments that don't change the model's behavior.
  */
-export const PROMPT_VERSION = "1"
+/**
+ * v1 → v2 (ARC-189): synth prompt gains an optional [REVIEW MEMORY]
+ * block injection (synth-only) and the synth output schema gains an
+ * optional `provenance.softened[]` array. The synth instruction now
+ * directs softening of matching findings (score decrement by one
+ * tier) when memory entries match. Existing reviews with v1 prompt
+ * version go stale on first deploy of v2; the
+ * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` env aid (spec §4.8) is
+ * intended to be set during the rollout window.
+ */
+export const PROMPT_VERSION = "2"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, anchor every finding to a specific line.
 

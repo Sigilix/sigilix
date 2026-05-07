@@ -50,6 +50,8 @@ import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
+import { captureReviewFeedback } from "./lib/review-memory/capture"
+import { loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   handleGitHubAuthCallback,
@@ -179,6 +181,26 @@ export interface Env {
   // enqueues short-circuit. Default (unset / any other value) = on.
   // Single-flag rollback if a bug surfaces post-deploy.
   OPENCLAW_REVIEW_MANIFEST_ENABLED?: string
+
+  // ARC-189 cross-PR review-memory feature gates (default OFF for
+  // both — opposite polarity from every other scanner). Retrieval
+  // requires both the env flag AND `sigilix.json`
+  // `reviewMemory.enabled === true`. Capture requires the env flag
+  // AND (`enabled === true` OR `captureOnly === true`). See spec
+  // §5.2 truth table.
+  OPENCLAW_REVIEW_MEMORY_ENABLED?: string
+  OPENCLAW_REVIEW_MEMORY_CAPTURE?: string
+
+  // ARC-189 one-shot deploy aid for the PROMPT_VERSION="1" → "2"
+  // bump (Task 10b). When `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
+  // is "on", `triage-pr-stale-mark` filters the `"prompt-version"`
+  // reason out of the StaleResult.reasons[] array — it does NOT skip
+  // stale-marking entirely. Other drift reasons (head/base/file-list)
+  // continue to fire. The companion `_SET_AT` env (UNIX seconds at
+  // suppression-flag set time) drives the 24h heartbeat /
+  // 72h-fail-safe ladder per spec §4.8.
+  OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE?: string
+  OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE_SET_AT?: string
 }
 
 /**
@@ -949,7 +971,7 @@ async function handleManualTrigger(
 async function handleGitHubWebhook(
   request: Request,
   env: Env,
-  _ctx: ExecutionContext
+  ctx: ExecutionContext,
 ): Promise<Response> {
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY || !env.GITHUB_WEBHOOK_SECRET) {
     return new Response("github app not configured\n", { status: 503 })
@@ -1144,6 +1166,42 @@ async function handleGitHubWebhook(
     if (payload.action !== "created") {
       return new Response("skip review_comment action\n", { status: 200 })
     }
+
+    // ARC-189: cross-PR review-memory capture. Fires alongside (NOT in
+    // place of) the existing mention-trigger pipeline. Runs in
+    // ctx.waitUntil(...) so KV reads + GH API parent fetch never
+    // block the webhook response. The capture pipeline does its own
+    // gate-check (env CAPTURE on AND sigilix.json enabled||captureOnly)
+    // and best-effort error swallowing — failure here cannot affect
+    // the queueGithubMention path.
+    const reviewMemoryComment = payload.comment
+    const reviewMemoryPrNumber = payload.pull_request?.number
+    if (
+      reviewMemoryComment &&
+      typeof reviewMemoryComment.id === "number" &&
+      typeof reviewMemoryComment.body === "string" &&
+      typeof reviewMemoryComment.path === "string" &&
+      typeof reviewMemoryPrNumber === "number"
+    ) {
+      ctx.waitUntil(
+        dispatchReviewMemoryCapture({
+          env,
+          owner,
+          repo,
+          prNumber: reviewMemoryPrNumber,
+          installationId,
+          comment: {
+            id: reviewMemoryComment.id,
+            body: reviewMemoryComment.body,
+            path: reviewMemoryComment.path,
+            ...(typeof reviewMemoryComment.in_reply_to_id === "number"
+              ? { in_reply_to_id: reviewMemoryComment.in_reply_to_id }
+              : {}),
+          },
+        }),
+      )
+    }
+
     return queueGithubMention({
       env,
       payload,
@@ -1156,6 +1214,58 @@ async function handleGitHubWebhook(
   }
 
   return new Response("skipped\n", { status: 200 })
+}
+
+/**
+ * ARC-189: ctx.waitUntil-side capture-feedback dispatch. Builds an
+ * authenticated GitHubClient + loads sigilix.json + invokes
+ * captureReviewFeedback. Best-effort end-to-end: errors logged-and-
+ * swallowed so the webhook response never depends on KV/GH I/O here.
+ *
+ * Called from the `pull_request_review_comment.created` webhook
+ * branch alongside (NOT in place of) the existing mention pipeline.
+ */
+async function dispatchReviewMemoryCapture(args: {
+  env: Env
+  owner: string
+  repo: string
+  prNumber: number
+  installationId: number
+  comment: { id: number; body: string; path: string; in_reply_to_id?: number }
+}): Promise<void> {
+  const { env, owner, repo, prNumber, installationId, comment } = args
+  try {
+    if (env.OPENCLAW_REVIEW_MEMORY_CAPTURE !== "on") {
+      // Cheap pre-flight: env-gate fails fast without paying the
+      // installation-token + sigilix.json fetch costs.
+      return
+    }
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+    // sigilix.json is fetched at the PR head sha. The webhook
+    // payload doesn't carry headSha for the review-comment event;
+    // fall back to the default branch via getFileContent's null
+    // semantics — loadSigilixConfig accepts any ref string.
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, "HEAD")
+    const config = resolveReviewMemoryConfig(sigilixConfig)
+    await captureReviewFeedback({
+      env, client, owner, repo, prNumber,
+      replyComment: comment,
+      config,
+    })
+  } catch (err) {
+    console.log(JSON.stringify({
+      event: "review-memory-capture-dispatch-failed",
+      owner, repo, prNumber, commentId: comment.id,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
 }
 
 interface QueueGithubMentionArgs {

@@ -248,6 +248,85 @@ describe("buildReviewSubmission", () => {
   })
 })
 
+describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", () => {
+  const verdict: PrReviewVerdict = {
+    summary: "Two findings.",
+    confidence: 3,
+    confidenceReason: "Mixed.",
+    findings: [
+      { ...baseFinding, score: 5, headline: "off-by-one in clampIndex" },
+      { ...baseFinding, score: 2, headline: "double-fetch in handler", line: 100 },
+    ],
+  }
+
+  it("appends the marker on its own line at end of comment body", () => {
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      findingMarkers: [
+        "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->",
+        "<!-- sigilix:fid:2222222222222222:cat:logic:sev:info:path:222222222222 -->",
+      ],
+    })
+    expect(out.comments?.[0]?.body.endsWith(
+      "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->",
+    )).toBe(true)
+    expect(out.comments?.[1]?.body).toContain(
+      "<!-- sigilix:fid:2222222222222222:cat:logic:sev:info:path:222222222222 -->",
+    )
+  })
+
+  it("preserves the existing openclaw:pr-review-finding marker AND appends sigilix marker", () => {
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      findingMarkers: [
+        "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->",
+        null,
+      ],
+    })
+    const body = out.comments?.[0]?.body ?? ""
+    expect(body).toContain("<!-- openclaw:pr-review-finding -->")
+    expect(body).toContain("<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->")
+  })
+
+  it("emits no marker when findingMarkers entry is null (sparse opt-out per finding)", () => {
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      findingMarkers: [null, null],
+    })
+    expect(out.comments?.[0]?.body).not.toContain("sigilix:fid:")
+    expect(out.comments?.[1]?.body).not.toContain("sigilix:fid:")
+  })
+
+  it("emits no marker when findingMarkers omitted entirely (backward compat)", () => {
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+    })
+    expect(out.comments?.[0]?.body).not.toContain("sigilix:fid:")
+  })
+
+  it("separates marker from body with a blank line", () => {
+    const marker =
+      "<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->"
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      findingMarkers: [marker, null],
+    })
+    expect(out.comments?.[0]?.body).toMatch(
+      /[^\n]\n\n<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->$/,
+    )
+  })
+})
+
 describe("provenance footer (ARC-184)", () => {
   const verdict: PrReviewVerdict = {
     summary: "Solid.",

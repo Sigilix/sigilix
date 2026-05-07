@@ -783,12 +783,11 @@ Unsupported subcommands (`/sigilix ask`) are reserved for follow-up issues. Unti
 
 ## CI / auto-deploy
 
-The `.github/workflows/deploy.yml` Action deploys on every push to `main`. Add two repo secrets:
+Deploys are owned by **Cloudflare Workers Builds** — the GitHub integration on the worker's CF dashboard auto-deploys on every push (including PR pushes; the `mode=off` env-var default keeps new code paths dormant in production until explicitly flipped).
 
-- `CLOUDFLARE_API_TOKEN` — generate at <https://dash.cloudflare.com/profile/api-tokens> with the **"Edit Cloudflare Workers"** template.
-- `CLOUDFLARE_ACCOUNT_ID` — find in the Workers dashboard sidebar.
+The deploy command in the dashboard is `npx wrangler deploy` (NOT `npx wrangler versions upload`) — DO migrations require a non-versioned deployment, so gradual deployments would fail with CF error 10211. See <https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/#gradual-deployments-for-durable-objects>.
 
-Push to main → Worker redeploys automatically.
+`.github/workflows/ci.yml` runs typecheck + tests + the advisory-DB size check on every PR (separate from the deploy path).
 
 ## Local dev
 
@@ -808,8 +807,7 @@ Sigilix/
 ├── tsconfig.json
 ├── wrangler.toml                          # Cloudflare config + KV/Vectorize bindings + secrets list
 ├── .dev.vars.example                      # local secret template (.dev.vars is gitignored)
-├── .github/workflows/deploy.yml           # auto-deploy on push to main
-├── .github/workflows/ci.yml               # PR typecheck (lint job for branch protection)
+├── .github/workflows/ci.yml               # PR typecheck + tests (deploys are owned by Cloudflare Workers Builds)
 ├── .github/workflows/codebase-index.yml   # reusable workflow — auto-reindex on push to dev/main
 ├── examples/openclaw-index.yml            # template caller for each tracked repo
 ├── scripts/index-repo.mjs                 # CLI indexer (chunk + embed + upsert to Vectorize)

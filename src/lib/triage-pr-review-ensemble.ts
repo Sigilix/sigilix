@@ -108,6 +108,12 @@ import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-
 import { runAstRules } from "./ast-rules/runner"
 import { renderAstFindingsForPrompt, renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
+import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
+import {
+  renderSarifFindingsForPrompt,
+  renderSarifFindingsAsJsonForSynth,
+} from "./sarif-evidence/render"
+import { resolveSarifEvidenceConfig } from "./sigilix-config"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import type { Env } from "../index"
 
@@ -595,12 +601,7 @@ export async function handlePrReviewEnsemble(
         }
 
     // ─── ARC-181: AST rule-pack scan ────────────────────────────
-    // Pre-LLM AST scan over pathFiltered JS/TS files. Fetches each
-    // file at the PR head; runner applies the 500 KB cap and skips
-    // unsupported extensions. Findings flow into combinedFactsBlock
-    // alongside the other deterministic blocks, AND the structured
-    // JSON variant is threaded into the synth prompt for §5.5
-    // supersession matching (Task 8).
+    // Pre-LLM AST scan over pathFiltered JS/TS files.
     const astRulesConfig = resolveAstRulesConfig(sigilixConfig)
     const jsTsPaths = filePaths.filter((p) => /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i.test(p))
     const astFilesByPath = new Map<string, string>()
@@ -640,14 +641,34 @@ export async function handlePrReviewEnsemble(
           findingsCount: 0,
         }
 
+    // ─── ARC-188: SARIF evidence channel ──────────────────────
+    // Reads `.sigilix/trivy.sarif.json` (or configured path) at PR
+    // head; emits Trivy / Kubescape / generic SARIF v2.1.0 findings
+    // as authoritative facts alongside the other deterministic
+    // blocks. SBOM (when present) goes to the synth prompt only.
+    const sarifConfig = resolveSarifEvidenceConfig(sigilixConfig)
+    const sarifResult = await runSarifEvidence({
+      env, client, owner, repo, prNumber, headSha,
+      diff, config: sarifConfig,
+    })
+    const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
+    const sarifBlock = renderSarifFindingsForPrompt(sarifFindings)
+    telemetry.sarifEvidence = sarifResult.skipped
+      ? { skipped: true, reason: sarifResult.reason, findingsCount: 0 }
+      : {
+          skipped: false,
+          findingsCount: sarifResult.findings.length,
+          truncatedCount: sarifResult.telemetry.truncatedCount,
+          durationMs: sarifResult.telemetry.durationMs,
+        }
+
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
-    // Combine deterministic + secret + dep-vuln + AST-rule blocks
-    // into one labeled section so the specialist sees them all as
-    // authoritative facts. Order: secrets first (highest severity),
-    // dep vulns, AST rules, regex deterministic checks last.
-    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, deterministicBlock]
+    // Combine all pre-LLM fact blocks. Order: secrets first
+    // (highest severity), dep vulns, AST rules, SARIF (Trivy IaC +
+    // CVE + license), regex deterministic checks last.
+    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, sarifBlock, deterministicBlock]
       .filter((s) => s.length > 0)
       .join("\n\n")
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
@@ -745,16 +766,23 @@ export async function handlePrReviewEnsemble(
     })
 
     // ARC-181 Task 8: thread structured AST findings into the synth
-    // prompt so the model can mark specialist findings superseded
-    // by deterministic AST entries on (path, line, role_hint) match
-    // (spec §5.5). v1 prompt-only — no validator on output ID
-    // references; a malformed `superseded_by_ast/<id>` would still
-    // appear in the comment body. Defensive validation deferred to
-    // v1.1 when we have telemetry on supersession-rate observations.
+    // prompt for (path, line, role_hint) supersession matching.
     const astFindingsForSynth = renderAstFindingsAsJsonForSynth(astResult.findings)
     const synthMessageWithAst = astFindingsForSynth.length > 0
       ? `${synthMessage}\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\nMatch these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.\n\n\`\`\`json\n${astFindingsForSynth}\n\`\`\``
       : synthMessage
+
+    // ARC-188: append SARIF structured findings + SBOM summary on
+    // top of the AST-augmented prompt. Synth gets the machine-
+    // readable JSON for Fix Plan ordering (direct-dep findings
+    // outrank deep-transitive). Empty when no SARIF run + no SBOM.
+    const sarifSynthBlock = renderSarifFindingsAsJsonForSynth(
+      sarifFindings,
+      sarifResult.skipped ? undefined : sarifResult.sbom,
+    )
+    const synthMessageWithSarif = sarifSynthBlock.length > 0
+      ? `${synthMessageWithAst}\n\n[SARIF EVIDENCE — synth-only structured]\n\n\`\`\`\n${sarifSynthBlock}\n\`\`\``
+      : synthMessageWithAst
 
     // Phase 4a.1: distinguish synth-local timeout from outer-orch abort.
     // Without this, `withComposedTimeout` rejection on synth's own 180s
@@ -810,7 +838,7 @@ export async function handlePrReviewEnsemble(
         (signal) => runSynthesizer({
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: synthSystemPrompt,
-          userMessage: synthMessageWithAst,
+          userMessage: synthMessageWithSarif,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
           ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
@@ -2027,6 +2055,14 @@ interface EnsembleTelemetry {
   astRules?:
     | { scanned: true; filesScanned: number; filesSkippedLarge: number; filesParseFailed: number; findingsCount: number; durationMs: number }
     | { scanned: false; skipReason?: "disabled-config" | "no-js-ts-files"; findingsCount: 0 }
+  /**
+   * ARC-188: SARIF evidence channel telemetry. `findingsCount`
+   * reflects the post-200-cap emitted count (Kimi NIT #6); the
+   * pre-cap total is `findingsCount + truncatedCount`.
+   */
+  sarifEvidence?:
+    | { skipped: true; reason: SarifSkipReason; findingsCount: 0 }
+    | { skipped: false; findingsCount: number; truncatedCount: number; durationMs: number }
   /**
    * ARC-194: incremental-review telemetry. `mode` is `incremental`
    * (savings path), `full` (we tried but bailed), or `first-review`

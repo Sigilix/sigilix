@@ -19,5 +19,12 @@
     "severityThreshold": "warning",
     "disabledRules": [],
     "autoInline": false
+  },
+  "sarifEvidence": {
+    "enabled": true,
+    "path": ".sigilix/trivy.sarif.json",
+    "severityThreshold": "warning",
+    "disabledRules": [],
+    "disabledCategories": []
   }
 }

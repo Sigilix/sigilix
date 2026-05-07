@@ -218,9 +218,9 @@ Parser strict-bool on `enabled`, strict-enum on `severityThreshold`, array-of-st
 
 Per AC, **3 fixture types**: 1 IaC, 1 dep/license, 1 Rego metadata.
 
-- **IaC fixture**: K8s manifest with `securityContext.privileged: true`. Trivy/Kubescape rule `AVD-KSV-0017`. Verify: rendered finding has `category: "iac"`, `roleHint: "security"`, `severity: "error"` (mapped from SARIF `level: "error"`), `source: "trivy"`.
-- **Dep/license fixture**: SARIF report with one CVE finding (`CVE-2024-1234` in lodash) AND one license finding (`GPL-3.0` in some-pkg). Verify: CVE → `category: "vulnerability"`; license → `category: "license"` + `roleHint: "logic"`.
-- **Rego/Kubescape metadata fixture**: SARIF report with `tool.driver.name: "Kubescape"` and a `taxa` reference. Verify: `source: "kubescape"`, taxonomy resolved to `roleHint: "security"`.
+- **IaC fixture**: K8s manifest with `securityContext.privileged: true`. Trivy/Kubescape rule `AVD-KSV-0017`. Verify: rendered finding has `category: "iac"`, `roleHint: "security"`, `severity: "error"` (mapped from SARIF `level: "error"`), `toolName: "Trivy"`.
+- **Dep/license fixture**: SARIF report with one CVE finding (`CVE-2024-1234` in lodash) AND one license finding (`GPL-3.0` in some-pkg). Verify: CVE → `category: "vulnerability"` + `roleHint: "security"`; license → `category: "license"` + `roleHint: "security"` (NOT logic — §3.6 routes license to security since Sigilix has no compliance specialist).
+- **Rego/Kubescape metadata fixture**: SARIF report with `tool.driver.name: "Kubescape"` and a `taxa` reference. Verify: `toolName: "Kubescape"`, taxonomy resolved to `roleHint: "security"`.
 - **Edge cases**: malformed SARIF (no `runs` array), wrong version (`2.0.0`), empty `results` array (no-op), report path 404 (silent skip), finding with no line number (kept if path is changed).
 
 ## 8. Constraints / non-goals (v1)

@@ -20,6 +20,7 @@ the legacy 7-day KV `pr-review:<owner>/<repo>/<pr>/<sha>` dedupe key once
 | `classify-error.ts` | `classifyEnsembleError` / `classifyEnsembleStage` — pure. Shared by the consumer wrapper to map thrown ensemble errors onto `transient | terminal`. |
 | `status-route.ts` | `handleReviewStatusRoute` — public unauth GET `/reviews/<owner>/<repo>/<prNumber>` → DO `/status`. Returns 404 when `mode=off`. |
 | `consumer-wrapper.ts` | `runPrReviewWithDoCallback` — queue-consumer wrapper that posts `/pickup` → runs the ensemble → posts `/run-result`. Bypasses cleanly when the message lacks a string `runId`. |
+| `webhook-enqueue.ts` | `enqueuePrReviewJob` — webhook-side gating. Routes to DO `/enqueue` and/or legacy `OPENCLAW_JOBS.send` based on `OPENCLAW_PR_REVIEW_MODE`. Awaited (NOT `ctx.waitUntil`) so post-mode DO failures bubble up as 503 to GitHub. |
 
 ## Mode semantics (`OPENCLAW_PR_REVIEW_MODE`)
 
@@ -53,19 +54,26 @@ to a fresh `/pickup` attempt without involving the DO retry pipeline.
 
 ## Telemetry
 
-DO-side events follow spec §5 (`do-review-*` namespace). The consumer
-wrapper adds three additional `do-review-consumer-*` events for
-failures it observes locally that the DO can't see (the DO can't log
-its own missing inbound post):
+DO-side events follow spec §5 (`do-review-*` namespace). The webhook
+enqueue + consumer wrapper add a few wrapper-side events for failures
+they observe locally that the DO can't see:
 
 | Event | Emitted from | When |
 |---|---|---|
+| `do-review-enqueue-failed` | `webhook-enqueue.ts` | `await stub.fetch("/enqueue")` threw (transport-level). In `post`, we return 503 to GitHub. In `shadow`, we swallow + continue with the legacy send. |
+| `do-review-enqueue-non-ok` | `webhook-enqueue.ts` | DO `/enqueue` returned non-2xx. Same `post`-vs-`shadow` split. |
 | `do-review-consumer-pickup-unexpected-status` | `consumer-wrapper.ts` | `/pickup` returned a 4xx that wasn't `409`/`410` (deploy mismatch / schema bug). Wrapper acks; DO watchdog catches the missing `/run-result`. |
 | `do-review-consumer-run-result-non-ok` | `consumer-wrapper.ts` | `/run-result` returned non-2xx. Wrapper swallows; DO watchdog is the safety net. |
 | `do-review-consumer-run-result-failed` | `consumer-wrapper.ts` | `/run-result` POST threw (transport-level). Same safety-net story. |
 
 `/pickup` 409/410 paths emit `do-review-pickup-skipped` from inside the
 DO itself (`pr-review-run.ts`), so the wrapper does not double-emit.
+
+Every event carries `dedupe_system: "do"`. The 6 KV-routed sibling
+JobMessage variants (`pr-overview`, `pr-improve`, `pr-describe`,
+`pr-stale-mark`, `ci-triage`, `github-mention`) carry
+`dedupe_system: "kv"` on their dedupe-skip emission sites so dashboards
+can split DO-routed work from KV-routed work after rollout.
 
 ## Tests
 

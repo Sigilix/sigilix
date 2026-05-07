@@ -69,7 +69,12 @@ export async function handleCiTriage(args: TriageCiArgs): Promise<void> {
   // (different runId) both produce different keys and re-run as expected.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}/run/${runId}`
   if (await env.OPENCLAW_STATE.get(dedupeKey)) {
-    console.log(`ci-triage already running for ${dedupeKey} — skipping`)
+    console.log(JSON.stringify({
+      event: "ci-triage-skipped",
+      dedupe_system: "kv",
+      reason: "already_running",
+      owner, repo, prNumber, runId, headSha: headSha.slice(0, 7),
+    }))
     return
   }
   await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {

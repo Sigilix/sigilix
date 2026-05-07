@@ -85,6 +85,12 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   const seen = await env.OPENCLAW_STATE.get(kvKey)
   if (seen) {
     since("already-replied")
+    console.log(JSON.stringify({
+      event: "github-mention-skipped",
+      dedupe_system: "kv",
+      reason: "already_replied",
+      owner, repo, prNumber, surface, commentId,
+    }))
     return
   }
 

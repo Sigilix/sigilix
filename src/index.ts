@@ -54,6 +54,7 @@ import { captureReviewFeedback } from "./lib/review-memory/capture"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
 import { handleReviewStatusRoute } from "./do/status-route"
 import { runPrReviewWithDoCallback } from "./do/consumer-wrapper"
+import { enqueuePrReviewJob } from "./do/webhook-enqueue"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   handleGitHubAuthCallback,
@@ -1119,14 +1120,25 @@ async function handleGitHubWebhook(
     // reviews. `ready_for_review` catches drafts that were skipped on
     // `opened`. See decidePullRequestJobs() for the gating contract.
     if (decision.review) {
-      await env.OPENCLAW_JOBS.send({
-        type: "pr-review",
+      const baseSha: string | null = pr.base?.sha ?? null
+      // ARC-190 Task 8: gate the pr-review enqueue on
+      // OPENCLAW_PR_REVIEW_MODE. Off = legacy queue send only; shadow
+      // = DO observation + legacy send; post = DO only (DO emits the
+      // queue message itself with runId attached). Awaited (NOT
+      // ctx.waitUntil) so a post-mode DO failure surfaces as 503 to
+      // GitHub for redelivery. See spec §4.4.
+      const enq = await enqueuePrReviewJob(env, {
         owner,
         repo,
         prNumber,
         headSha,
+        baseSha,
         installationId,
+        deliveryId: request.headers.get("x-github-delivery"),
       })
+      if (!enq.ok) {
+        return new Response("do enqueue failed\n", { status: 503 })
+      }
 
       // ARC-184: when the action is `synchronize` or `edited` AND a
       // prior review-manifest exists, enqueue a parallel `pr-stale-mark`
@@ -1138,35 +1150,34 @@ async function handleGitHubWebhook(
       // No manifest = no prior review to mark stale (first-review or
       // pre-ARC-184 PR). Skip silently. Kill-switch via
       // OPENCLAW_REVIEW_MANIFEST_ENABLED=off short-circuits both the
-      // KV read and the enqueue.
+      // KV read and the enqueue. This is independent of the DO mode —
+      // pr-stale-mark is KV-routed and shipped before ARC-190.
       if (
         env.OPENCLAW_REVIEW_MANIFEST_ENABLED !== "off" &&
-        (action === "synchronize" || action === "edited")
+        (action === "synchronize" || action === "edited") &&
+        baseSha
       ) {
-        const baseSha = pr.base?.sha ?? ""
-        if (baseSha) {
-          try {
-            const result = await readReviewManifest(env, owner, repo, prNumber)
-            if (result.kind === "ok") {
-              await env.OPENCLAW_JOBS.send({
-                type: "pr-stale-mark",
-                owner,
-                repo,
-                prNumber,
-                installationId,
-                manifestSnapshot: result.manifest,
-                newHeadSha: headSha,
-                newBaseSha: baseSha,
-                currentPromptVersion: PROMPT_VERSION,
-              })
-            }
-          } catch (err) {
-            console.error(JSON.stringify({
-              event: "pr-stale-mark-enqueue-failed",
-              err: err instanceof Error ? err.message : String(err),
-              owner, repo, prNumber,
-            }))
+        try {
+          const result = await readReviewManifest(env, owner, repo, prNumber)
+          if (result.kind === "ok") {
+            await env.OPENCLAW_JOBS.send({
+              type: "pr-stale-mark",
+              owner,
+              repo,
+              prNumber,
+              installationId,
+              manifestSnapshot: result.manifest,
+              newHeadSha: headSha,
+              newBaseSha: baseSha,
+              currentPromptVersion: PROMPT_VERSION,
+            })
           }
+        } catch (err) {
+          console.error(JSON.stringify({
+            event: "pr-stale-mark-enqueue-failed",
+            err: err instanceof Error ? err.message : String(err),
+            owner, repo, prNumber,
+          }))
         }
       }
     }

@@ -1,0 +1,52 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Trivy",
+          "rules": [
+            {
+              "id": "CVE-2024-1234",
+              "name": "Lodash prototype pollution",
+              "properties": { "tags": ["Vulnerability", "CVE"] }
+            },
+            {
+              "id": "TRIVY-LIC-001",
+              "name": "GPL-3.0 incompatible",
+              "properties": { "tags": ["License", "GPL-3.0"] }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CVE-2024-1234",
+          "level": "error",
+          "message": { "text": "lodash@4.17.20 contains a prototype-pollution vulnerability (CVE-2024-1234)" },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "package.json" },
+                "region": { "startLine": 12 }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "TRIVY-LIC-001",
+          "level": "warning",
+          "message": { "text": "some-pkg@1.2.3 ships under GPL-3.0; verify license compliance" },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "package.json" },
+                "region": { "startLine": 18 }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

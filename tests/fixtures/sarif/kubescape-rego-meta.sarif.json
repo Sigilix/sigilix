@@ -1,0 +1,56 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Kubescape",
+          "informationUri": "https://github.com/kubescape/kubescape",
+          "rules": [
+            {
+              "id": "C-0001",
+              "name": "Forbidden Container Registries",
+              "shortDescription": { "text": "Detects images pulled from forbidden registries" },
+              "fullDescription": { "text": "Rego policy enforces an allowlist of trusted container registries." }
+            }
+          ]
+        }
+      },
+      "taxonomies": [
+        {
+          "name": "Kubescape Rego Library",
+          "guid": "kubescape-rego-1",
+          "taxa": [
+            {
+              "id": "K8S-NETWORK",
+              "guid": "kubescape-rego-1-network",
+              "name": "Kubernetes Network",
+              "shortDescription": { "text": "Network-related Kubernetes posture" }
+            }
+          ]
+        }
+      ],
+      "results": [
+        {
+          "ruleId": "C-0001",
+          "level": "error",
+          "message": { "text": "Container image pulled from non-allowlisted registry" },
+          "taxa": [
+            { "id": "K8S-NETWORK", "toolComponent": { "guid": "kubescape-rego-1-network" } }
+          ],
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "k8s/pod.yaml" },
+                "region": { "startLine": 7 }
+              }
+            }
+          ]
+        }
+      ],
+      "invocations": [
+        { "endTimeUtc": "2026-05-06T16:00:00Z", "executionSuccessful": true }
+      ]
+    }
+  ]
+}

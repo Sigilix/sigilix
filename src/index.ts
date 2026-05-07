@@ -52,6 +52,7 @@ import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ense
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
+import { handleReviewStatusRoute } from "./do/status-route"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   handleGitHubAuthCallback,
@@ -544,6 +545,39 @@ export default {
     if (request.method === "POST" && url.pathname === "/auth/logout") {
       const sessionId = readCookie(request, SESSION_COOKIE_NAME)
       return handleLogout(request, env, sessionId)
+    }
+    // ARC-190: GET /reviews/<owner>/<repo>/<prNumber> — public status
+    // route for DO-tracked PR review runs. Spec §4.7. Returns 404
+    // when the feature is off (mode === "off"). v1 unauth (read-only
+    // metadata only). The route handler validates segments + decodes
+    // before fetching the DO.
+    if (request.method === "GET" && url.pathname.startsWith("/reviews/")) {
+      const segments = url.pathname.slice("/reviews/".length).split("/")
+      if (segments.length !== 3) {
+        return new Response(
+          JSON.stringify({ error: "expected /reviews/<owner>/<repo>/<prNumber>" }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        )
+      }
+      let owner: string, repo: string, prNumberRaw: string
+      try {
+        owner = decodeURIComponent(segments[0]!)
+        repo = decodeURIComponent(segments[1]!)
+        prNumberRaw = decodeURIComponent(segments[2]!)
+      } catch {
+        return new Response(
+          JSON.stringify({ error: "malformed percent-encoding in path" }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        )
+      }
+      const prNumber = Number.parseInt(prNumberRaw, 10)
+      if (!Number.isInteger(prNumber)) {
+        return new Response(
+          JSON.stringify({ error: "prNumber must be an integer" }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        )
+      }
+      return handleReviewStatusRoute(env, owner, repo, prNumber)
     }
     // Stubs for deferred providers — return 501 with a plain message
     // so the marketing site's "Soon"-labeled buttons don't 404.

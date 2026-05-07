@@ -11,7 +11,7 @@ Plan: `docs/superpowers/plans/2026-05-07-arc-189-cross-pr-review-memory.md`
 |---|---|
 | `types.ts` | Pure types — `ReviewMemoryCategory`, `ReviewMemoryRecord`, `ReviewMemoryFinding`, `SigilixCommentMarker`, `ResolvedReviewMemoryConfig`, etc. |
 | `marker.ts` | `buildSigilixMarker` / `extractSigilixMarker` (sha16 fid / sha12 path); `computeFid` / `computePathSha256` (Web-Crypto SHA-256 helpers shared with `storage.ts`); `categoryFromRoleHint` (1:1 internal-to-public mapping decoupled for future renames); `markerSeverityFromScore` (numeric score → tier banding for emission). Null `ruleId` canonicalizes to literal `"none"` sentinel. |
-| `parse-dismissal.ts` | (Task 3) `parseDismissalSignal(body) → { kind: "dismissed-textual" } | null`. Keyword regex over reply text; bare-`nit` only. |
+| `parse-dismissal.ts` | `parseDismissalSignal(body) → { kind: "dismissed-textual" } | null`. Keyword set: `not relevant`, `false positive`, `ignore`, `noise`/`noisy`, `dismiss`, `won't fix`, `wontfix`. `nit` is BARE-ONLY (entire trimmed reply equals `nit`/`nit.`/`nit!`); prefix-style `nit: ...` is NOT a dismissal because reviewers use it for their own self-flagged nits. Triple-backtick code blocks are stripped before scanning so keywords inside code samples don't trip the parser. |
 | `storage.ts` | (Task 4) `buildKey` / `readMemory` / `appendSignal` / `pruneStaleSignals`. KV-backed via existing `OPENCLAW_STATE`. |
 | `lookup.ts` | (Task 5) `runReviewMemoryLookup({...}) → findings`. Reads category + path-category KV records, applies activation thresholds, caps + sorts. |
 | `render.ts` | (Task 6) `renderReviewMemoryForPrompt(memories) → string`. Empty-string when no active memories (omit-empty contract). |

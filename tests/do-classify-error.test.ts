@@ -109,3 +109,22 @@ describe("classifyEnsembleStage — labels", () => {
     expect(classifyEnsembleStage(new Error("???"))).toBe("unknown")
   })
 })
+
+describe("classifyEnsembleError — submit_fallback_failed spelling consistency (CR PR #70)", () => {
+  // The structured-failureReason path already treats
+  // `submit_fallback_failed` (underscored) as terminal. The message-
+  // text fallback used to only match the hyphenated form; a plain
+  // `Error("submit_fallback_failed")` would fall through to transient
+  // and get retried unnecessarily.
+  it("Error('submit_fallback_failed') is terminal (underscored)", () => {
+    expect(classifyEnsembleError(new Error("submit_fallback_failed"))).toBe("terminal")
+  })
+
+  it("Error('submit-fallback-failed') is terminal (hyphenated)", () => {
+    expect(classifyEnsembleError(new Error("submit-fallback-failed"))).toBe("terminal")
+  })
+
+  it("Error containing 'submit_fallback_failed: <detail>' is terminal", () => {
+    expect(classifyEnsembleError(new Error("ensemble: submit_fallback_failed: timeout"))).toBe("terminal")
+  })
+})

@@ -573,10 +573,21 @@ export default {
           { status: 400, headers: { "content-type": "application/json" } },
         )
       }
-      const prNumber = Number.parseInt(prNumberRaw, 10)
-      if (!Number.isInteger(prNumber)) {
+      // CR PR #70: strict-positive-integer check. `Number.parseInt`
+      // accepts trailing garbage (`"12foo"` → 12), the unary `+`
+      // operator returns 0 on `""`, and `Number.isInteger(NaN)` is
+      // false but several string forms (e.g. `" 12 "`) would still
+      // parse. Anchor on `^\d+$` and reject anything else with 400.
+      if (!/^\d+$/.test(prNumberRaw)) {
         return new Response(
-          JSON.stringify({ error: "prNumber must be an integer" }),
+          JSON.stringify({ error: "prNumber must be a positive integer" }),
+          { status: 400, headers: { "content-type": "application/json" } },
+        )
+      }
+      const prNumber = Number.parseInt(prNumberRaw, 10)
+      if (!Number.isInteger(prNumber) || prNumber <= 0) {
+        return new Response(
+          JSON.stringify({ error: "prNumber must be a positive integer" }),
           { status: 400, headers: { "content-type": "application/json" } },
         )
       }

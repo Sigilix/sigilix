@@ -419,7 +419,7 @@ describe("PrReviewRunDO /run-result", () => {
     expect(after.state).toBe(beforeState)  // unchanged
   })
 
-  it("runId mismatch (superseded run) → history-only, no current-state mutation", async () => {
+  it("runId mismatch (superseded run) → history transition + telemetry, no current-state mutation, no synthetic history record", async () => {
     const { instance, state, consumerId } = await setupRunningRun()
     const before = (state.store.get("state") as RunState).state
     const res = await postJson(instance, "/run-result", {
@@ -428,8 +428,13 @@ describe("PrReviewRunDO /run-result", () => {
     expect(res.status).toBe(200)
     const after = state.store.get("state") as RunState
     expect(after.state).toBe(before)
-    // Different runId → write to run:OLD-runId history record.
-    expect(state.store.has("run:OLD-runId")).toBe(true)
+    // CR PR #70 contract: cross-runId late results no longer
+    // synthesize a history entry from current state's metadata
+    // (which would clobber a real archive on the off-chance one
+    // existed). The route returns 200, telemetry fires, no storage
+    // mutation. The acceptance archive that /enqueue writes at
+    // supersede time stays untouched.
+    expect(state.store.has("run:OLD-runId")).toBe(false)
   })
 
   // Codex P2 regression: late same-runId result must NOT overwrite
@@ -516,6 +521,96 @@ describe("PrReviewRunDO unknown routes", () => {
     const { instance } = makeDo(env)
     const res = await instance.fetch(new Request("https://do.internal/enqueue", { method: "DELETE" }))
     expect(res.status).toBe(404)
+  })
+})
+
+// ─── CR PR #70 — recovery-metadata-before-send invariant ─────
+
+describe("PrReviewRunDO /enqueue — watchdog armed BEFORE OPENCLAW_JOBS.send (CR PR #70)", () => {
+  // CodeRabbit MAJOR on PR #70: previously /enqueue wrote `state.queued`
+  // FIRST, then called OPENCLAW_JOBS.send, and only AFTER a successful
+  // send did it persist alarm metadata + setAlarm. If send threw, the
+  // run was stuck `queued` forever (no alarm, no requeue, GitHub
+  // redelivery would dedupe against the stuck state). Fix: arm the
+  // watchdog + persist + setAlarm BEFORE send.
+  it("on send-failure, state is still queued AND watchdog alarm is armed (recovery via watchdog)", async () => {
+    const failingSend = vi.fn(async () => { throw new Error("queue producer down") })
+    const env = makeEnv(failingSend)
+    const { instance, state } = makeDo(env)
+    await expect(postJson(instance, "/enqueue", makeEnqueueReq())).rejects.toThrow(/queue producer down/)
+    const stored = state.store.get("state") as RunState
+    expect(stored.state).toBe("queued")
+    expect(stored.alarmKind).toBe("watchdog")
+    expect(stored.alarmTargetRunId).toBe(stored.runId)
+    expect(state.alarms.alarmAt).not.toBeNull()
+  })
+})
+
+// ─── CR PR #70 — superseded-runId archive guard ──────────────
+
+describe("PrReviewRunDO /run-result — does not overwrite existing archived RunRecord (CR PR #70)", () => {
+  // CodeRabbit MAJOR on PR #70: when /run-result lands for a runId !==
+  // current state's runId (a late post for a superseded run), the old
+  // code wrote run:<body.runId> using the CURRENT state's headSha /
+  // attempts / startedAt — clobbering the archive that /enqueue had
+  // correctly written at supersede time.
+  it("an existing archive at run:<oldRunId> is preserved when a late /run-result arrives", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+
+    // First /enqueue creates run-A. Pickup + supersede it via a fresh
+    // /enqueue for a different headSha — this is the path that writes
+    // run:<old-runId> to history.
+    await postJson(instance, "/enqueue", makeEnqueueReq({ headSha: "a".repeat(40) }))
+    const runIdA = (state.store.get("state") as RunState).runId
+    await postJson(instance, "/pickup", { runId: runIdA, consumerId: "c-A" })
+    await postJson(instance, "/enqueue", makeEnqueueReq({ headSha: "b".repeat(40) }))
+    const archived = state.store.get(`run:${runIdA}`) as { runId: string; headSha: string; finalState: string }
+    expect(archived).toBeDefined()
+    expect(archived.runId).toBe(runIdA)
+    expect(archived.headSha).toBe("a".repeat(40))
+
+    // Now a late /run-result lands for run-A (the superseded run).
+    // The current state belongs to the new run; previously this would
+    // overwrite run-A's archive with the new run's metadata.
+    await postJson(instance, "/run-result", {
+      runId: runIdA,
+      consumerId: "c-A",
+      status: "success",
+    })
+
+    const after = state.store.get(`run:${runIdA}`) as { runId: string; headSha: string; finalState: string }
+    expect(after.runId).toBe(runIdA)
+    // The archive must still reflect the OLD run's headSha, not the
+    // new run's. Pre-fix this would have been "b".repeat(40).
+    expect(after.headSha).toBe("a".repeat(40))
+    // /enqueue archived the superseded run as "failed" (existing.state
+    // was "running" when supersede happened — only `state === "done"`
+    // would archive as "done"). The late /run-result with status:
+    // "success" would have flipped this to "done" pre-fix; post-fix
+    // the archive is preserved as-is.
+    expect(after.finalState).toBe("failed")
+  })
+
+  it("late /run-result for an unknown runId does NOT write a synthetic record (cross-instance edge case)", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+
+    // Set up a current run.
+    await postJson(instance, "/enqueue", makeEnqueueReq())
+
+    // /run-result lands for a runId this DO never saw via /enqueue.
+    // Pre-fix: synthesizes a record from current state. Now: DO drops
+    // the put and relies on `do-review-result-superseded` telemetry.
+    const orphanRunId = "00000000-0000-4000-8000-000000000000"
+    await postJson(instance, "/run-result", {
+      runId: orphanRunId,
+      consumerId: "c-orphan",
+      status: "success",
+    })
+    expect(state.store.has(`run:${orphanRunId}`)).toBe(false)
   })
 })
 

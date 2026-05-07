@@ -163,6 +163,94 @@ describe("handleReviewStatusRoute — DO instance ID", () => {
   })
 })
 
+describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", () => {
+  // CodeRabbit MAJOR on PR #70: previously the route trusted any
+  // parsed JSON as a StatusResponse, so a malformed payload could
+  // bubble out as 200. Now: validate via type-narrowing predicate;
+  // return 503 for shapes that don't match the spec.
+  function makeMalformedEnv(payload: unknown): Env {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), {
+      status: 200, headers: { "content-type": "application/json" },
+    }))
+    const stub = { fetch: fetchMock }
+    return {
+      OPENCLAW_PR_REVIEW_MODE: "post",
+      PR_REVIEW_RUN: {
+        idFromName: () => ({ name: "x" }),
+        get: () => stub,
+      },
+    } as unknown as Env
+  }
+
+  it("503 when DO returns kind=found without current", async () => {
+    const env = makeMalformedEnv({ kind: "found", history: [] })
+    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    expect(res.status).toBe(503)
+  })
+
+  it("503 when DO returns kind=found with malformed current", async () => {
+    const env = makeMalformedEnv({ kind: "found", current: "not-an-object", history: [] })
+    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    expect(res.status).toBe(503)
+  })
+
+  it("503 when DO returns kind=found without history", async () => {
+    const env = makeMalformedEnv({
+      kind: "found",
+      current: { runId: "r", headSha: "a".repeat(40), state: "queued", attempts: 1, startedAt: "x" },
+    })
+    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    expect(res.status).toBe(503)
+  })
+
+  it("503 when DO returns kind=garbage", async () => {
+    const env = makeMalformedEnv({ kind: "garbage" })
+    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    expect(res.status).toBe(503)
+  })
+
+  it("503 when DO returns null", async () => {
+    const env = makeMalformedEnv(null)
+    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    expect(res.status).toBe(503)
+  })
+
+  it("503 when current.state is not a RunStateLifecycle literal", async () => {
+    const env = makeMalformedEnv({
+      kind: "found",
+      current: {
+        runId: "r", headSha: "a".repeat(40),
+        state: "bogus-state-label",
+        attempts: 1, startedAt: "2026-05-07T06:00:00.000Z",
+      },
+      history: [],
+    })
+    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    expect(res.status).toBe(503)
+  })
+
+  it("transport-error response body does NOT leak the underlying error message", async () => {
+    const fetchMock = vi.fn(async () => { throw new Error("internal-secret-leak: kv://node-3-internal") })
+    const stub = { fetch: fetchMock }
+    const env = {
+      OPENCLAW_PR_REVIEW_MODE: "post",
+      PR_REVIEW_RUN: {
+        idFromName: () => ({ name: "x" }),
+        get: () => stub,
+      },
+    } as unknown as Env
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
+    expect(res.status).toBe(503)
+    const body = await res.text()
+    expect(body).not.toContain("internal-secret-leak")
+    expect(body).not.toContain("kv://node-3-internal")
+    // The detail does land in server-side logs.
+    expect(warnSpy).toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+})
+
 describe("handleReviewStatusRoute — state shapes", () => {
   for (const stateLabel of [
     "idle", "queued", "running", "done", "failed-transient", "failed",

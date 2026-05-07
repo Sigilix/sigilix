@@ -17,7 +17,7 @@ the legacy 7-day KV `pr-review:<owner>/<repo>#<pr>@<sha>` dedupe key once
 | `types.ts` | `RunState`, `RunRecord`, route payloads, `ResolvedDoConfig`. Pure types, zero runtime. |
 | `config.ts` | `resolveDoConfig(env)` — env → clamped numerics + mode literal. Pure; defaults to `mode = "off"`. |
 | `pr-review-run.ts` | `PrReviewRunDO` class + pure decision helpers. Owns `/enqueue`, `/pickup`, `/run-result`, `/status` routes + `alarm()` (retry + watchdog). |
-| `classify-error.ts` | `classifyEnsembleError` / `classifyEnsembleStage` — pure. Shared by the consumer wrapper to map thrown ensemble errors onto `transient | terminal`. |
+| `classify-error.ts` | `classifyEnsembleError` / `classifyEnsembleStage` — pure. Shared by the consumer wrapper to map thrown ensemble errors onto `transient \| terminal`. |
 | `status-route.ts` | `handleReviewStatusRoute` — public unauth GET `/reviews/<owner>/<repo>/<prNumber>` → DO `/status`. Returns 404 when `mode=off`. |
 | `consumer-wrapper.ts` | `runPrReviewWithDoCallback` — queue-consumer wrapper that posts `/pickup` → runs the ensemble → posts `/run-result`. Bypasses cleanly when the message lacks a string `runId`. |
 | `webhook-enqueue.ts` | `enqueuePrReviewJob` — webhook-side gating. Routes to DO `/enqueue` and/or legacy `OPENCLAW_JOBS.send` based on `OPENCLAW_PR_REVIEW_MODE`. Awaited (NOT `ctx.waitUntil`) so post-mode DO failures bubble up as 503 to GitHub. |
@@ -47,7 +47,7 @@ to a fresh `/pickup` attempt without involving the DO retry pipeline.
 
 | Name | Default | Range | Purpose |
 |---|---|---|---|
-| `OPENCLAW_PR_REVIEW_MODE` | `off` | `off | shadow | post` | Rollout gate. |
+| `OPENCLAW_PR_REVIEW_MODE` | `off` | `off \| shadow \| post` | Rollout gate. |
 | `OPENCLAW_PR_REVIEW_DO_MAX_RETRIES` | `3` | `[1, 10]` | Retry-alarm cap before terminal `failed`. |
 | `OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS` | `1200000` (20 min) | `[60000, 1800000]` | Watchdog horizon per attempt. |
 | `OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT` | `10` | `[1, 100]` | FIFO cap on per-PR `RunRecord` history. |

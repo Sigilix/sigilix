@@ -149,36 +149,78 @@ function buildRunResultPayload(
   return { runId, consumerId, status, error: { stage, message } }
 }
 
+/**
+ * Bounded retry on `/run-result` POST (CR PR #70 catch). A single
+ * failed POST on the success path lets the DO stay non-terminal:
+ * the watchdog later schedules a retry alarm and a second consumer
+ * picks up the same runId. For v1 the legacy KV dedupe in
+ * `handlePrReview` (`pr-review:<owner>/<repo>#<pr>@<sha>` 7-day TTL)
+ * still catches double-posts, but we want the retry rate low enough
+ * that operators don't see watchdog-driven re-runs in the dashboard
+ * for a transient DO blip. Three attempts with 100ms / 400ms backoff
+ * covers the common DO-isolate-handoff case.
+ *
+ * Same-`(runId, consumerId)` POSTs are idempotent server-side: the
+ * DO's `decideRunResultAction` returns the same transition for the
+ * same payload, so a retry that lands after a successful first try
+ * just re-applies the terminal state (no-op).
+ */
+const RUN_RESULT_RETRY_DELAYS_MS = [100, 400] as const
+
+async function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 async function postRunResult(
   stub: DurableObjectStub,
   payload: RunResultRequest,
   job: PrReviewJob,
 ): Promise<void> {
-  // Best-effort. The DO's watchdog alarm is the safety net for any
-  // run that fails to report — see spec §4.6a.
-  try {
-    const res = await stub.fetch(`${DO_BASE_URL}/run-result`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    })
-    if (!res.ok) {
-      console.error(JSON.stringify({
-        event: "do-review-consumer-run-result-non-ok",
-        dedupe_system: "do",
-        owner: job.owner, repo: job.repo, prNumber: job.prNumber,
-        runId: payload.runId, consumerId: payload.consumerId,
-        status: payload.status, doStatus: res.status,
-      }))
+  // Best-effort with bounded retry. The DO's watchdog alarm remains
+  // the ultimate safety net (spec §4.6a); the retry just shrinks the
+  // window where transient DO failures cause unnecessary watchdog-
+  // driven re-runs.
+  let attempt = 0
+  let lastErr: unknown = undefined
+  let lastNonOk: number | undefined
+  const maxAttempts = RUN_RESULT_RETRY_DELAYS_MS.length + 1
+  while (attempt < maxAttempts) {
+    if (attempt > 0) {
+      await sleep(RUN_RESULT_RETRY_DELAYS_MS[attempt - 1] ?? 0)
     }
-  } catch (err) {
+    attempt++
+    try {
+      const res = await stub.fetch(`${DO_BASE_URL}/run-result`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+      if (res.ok) return
+      lastNonOk = res.status
+      lastErr = undefined
+    } catch (err) {
+      lastErr = err
+      lastNonOk = undefined
+    }
+  }
+
+  // All retries exhausted — log + return. Watchdog catches the run.
+  if (lastErr !== undefined) {
     console.error(JSON.stringify({
       event: "do-review-consumer-run-result-failed",
       dedupe_system: "do",
       owner: job.owner, repo: job.repo, prNumber: job.prNumber,
       runId: payload.runId, consumerId: payload.consumerId,
-      status: payload.status,
-      err: err instanceof Error ? err.message : String(err),
+      status: payload.status, attempts: attempt,
+      err: lastErr instanceof Error ? lastErr.message : String(lastErr),
+    }))
+  } else {
+    console.error(JSON.stringify({
+      event: "do-review-consumer-run-result-non-ok",
+      dedupe_system: "do",
+      owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+      runId: payload.runId, consumerId: payload.consumerId,
+      status: payload.status, attempts: attempt, doStatus: lastNonOk,
     }))
   }
 }

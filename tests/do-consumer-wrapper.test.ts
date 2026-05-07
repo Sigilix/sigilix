@@ -323,3 +323,83 @@ describe("runPrReviewWithDoCallback — DO instance scoping", () => {
     expect(idFromName).toHaveBeenCalledWith("Arc-and-Anchor/sigilix#7")
   })
 })
+
+describe("runPrReviewWithDoCallback — /run-result bounded retry (CR PR #70)", () => {
+  // CodeRabbit MAJOR on PR #70: a single /run-result POST failure on
+  // the success path used to log + return, leaving the DO non-
+  // terminal. Bounded retry shrinks the watchdog-driven re-run window.
+  function makeRetryEnv(runResultBehavior: () => Response | "throw"): {
+    env: Env
+    runResultCalls: number
+  } {
+    let pickupCalls = 0
+    let runResultCalls = 0
+    const fetchMock = vi.fn(async (input: string | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url
+      if (url.endsWith("/pickup")) {
+        pickupCalls++
+        return new Response(JSON.stringify({ picked: true }), {
+          status: 200, headers: { "content-type": "application/json" },
+        })
+      }
+      if (url.endsWith("/run-result")) {
+        runResultCalls++
+        const r = runResultBehavior()
+        if (r === "throw") throw new Error(`run-result transport flake #${runResultCalls}`)
+        return r
+      }
+      return new Response("not found", { status: 404 })
+    })
+    const stub = { fetch: fetchMock } as unknown as DurableObjectStub
+    const idFromName = vi.fn(() => ({ name: "test" }) as unknown as DurableObjectId)
+    const get = vi.fn(() => stub) as unknown as DurableObjectNamespace["get"]
+    const env = {
+      PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
+      OPENCLAW_PR_REVIEW_MODE: "post",
+    } as unknown as Env
+    void pickupCalls
+    return { env, get runResultCalls() { return runResultCalls } } as { env: Env; runResultCalls: number }
+  }
+
+  it("succeeds on attempt 2 → no error log, /run-result called twice", async () => {
+    let n = 0
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const harness = makeRetryEnv(() => {
+      n++
+      if (n === 1) return "throw"
+      return new Response(JSON.stringify({ recorded: "state" }), {
+        status: 200, headers: { "content-type": "application/json" },
+      })
+    })
+    await runPrReviewWithDoCallback(makeJob(), harness.env, async () => {})
+    expect(harness.runResultCalls).toBe(2)
+    expect(errSpy).not.toHaveBeenCalled()
+    errSpy.mockRestore()
+  })
+
+  it("3 transport failures → 3 attempts then log + return (watchdog safety net)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const harness = makeRetryEnv(() => "throw")
+    await runPrReviewWithDoCallback(makeJob(), harness.env, async () => {})
+    expect(harness.runResultCalls).toBe(3)
+    expect(errSpy).toHaveBeenCalled()
+    const logged = errSpy.mock.calls.map((c) => String(c[0])).join("\n")
+    expect(logged).toContain("do-review-consumer-run-result-failed")
+    expect(logged).toContain('"attempts":3')
+    errSpy.mockRestore()
+  })
+
+  it("3 non-OK responses → 3 attempts then log + return", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const harness = makeRetryEnv(() => new Response(JSON.stringify({ error: "boom" }), {
+      status: 503, headers: { "content-type": "application/json" },
+    }))
+    await runPrReviewWithDoCallback(makeJob(), harness.env, async () => {})
+    expect(harness.runResultCalls).toBe(3)
+    expect(errSpy).toHaveBeenCalled()
+    const logged = errSpy.mock.calls.map((c) => String(c[0])).join("\n")
+    expect(logged).toContain("do-review-consumer-run-result-non-ok")
+    expect(logged).toContain('"attempts":3')
+    errSpy.mockRestore()
+  })
+})

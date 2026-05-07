@@ -96,21 +96,25 @@ export interface PickupRequest {
   consumerId: string
 }
 
-/** Spec §4.3 — exhaustive route status discriminator. */
-export type PickupStatus = 200 | 409 | 410
+/**
+ * Reasons the DO returns in the JSON body when /pickup blocks.
+ * Aligns with the literals emitted by `decidePickupAction` /
+ * `handlePickup` in `pr-review-run.ts` — the HTTP status code
+ * (200/409/410) is on the `Response` and is not duplicated in the
+ * body (CR PR #70 catch — types previously included a `status`
+ * field that the body never carried).
+ */
+export type PickupBlockedReason =
+  | "duplicate-409"
+  | "terminal-410"
+  | "stale-runId-410"
 
 export interface PickupResponseOk {
-  status: 200
   picked: true
 }
 
 export interface PickupResponseBlocked {
-  status: 409 | 410
-  reason:
-    | "duplicate-consumer-409"
-    | "supersede-410"
-    | "terminal-410"
-    | "stale-runId-410"
+  reason: PickupBlockedReason
 }
 
 export type PickupResponse = PickupResponseOk | PickupResponseBlocked

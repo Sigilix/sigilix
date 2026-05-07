@@ -16,8 +16,46 @@
 // reports `{ kind: "no-state" }`. On DO transport failure → 503.
 
 import type { Env } from "../index"
-import type { StatusResponse } from "./types"
+import type { RunStateLifecycle, StatusResponse } from "./types"
 import { resolveDoConfig } from "./config"
+
+const VALID_STATES: ReadonlySet<RunStateLifecycle> = new Set([
+  "idle",
+  "queued",
+  "running",
+  "done",
+  "failed-transient",
+  "failed",
+])
+
+/**
+ * Type-narrowing validator for the `/status` DO body. CR PR #70
+ * catch — the route previously trusted any parsed JSON as a
+ * `StatusResponse`, so a malformed payload could bubble out as 200.
+ * Returns `false` for shapes that don't match spec §4.7; caller
+ * returns 503 instead.
+ *
+ * Validates the literal-union for `current.state` against
+ * `RunStateLifecycle` so a stray DO version emitting a bogus state
+ * label doesn't bubble up to the public route.
+ */
+function isStatusResponse(body: unknown): body is StatusResponse {
+  if (!body || typeof body !== "object") return false
+  const b = body as Record<string, unknown>
+  if (b.kind === "no-state") return true
+  if (b.kind !== "found") return false
+  if (!Array.isArray(b.history)) return false
+  const current = b.current as Record<string, unknown> | undefined
+  if (!current) return false
+  return (
+    typeof current.runId === "string" &&
+    typeof current.headSha === "string" &&
+    typeof current.state === "string" &&
+    VALID_STATES.has(current.state as RunStateLifecycle) &&
+    typeof current.attempts === "number" &&
+    typeof current.startedAt === "string"
+  )
+}
 
 interface RouteFailure {
   status: 400 | 404 | 503
@@ -89,11 +127,15 @@ export async function handleReviewStatusRoute(
   try {
     doRes = await stub.fetch("https://do.internal/status")
   } catch (err) {
+    // CR PR #70 catch: log internal transport detail server-side but
+    // do not echo it to the public unauth response body.
+    console.warn(JSON.stringify({
+      event: "do-status-route-transport-failed",
+      err: err instanceof Error ? err.message : String(err),
+      owner, repo, prNumber,
+    }))
     return new Response(
-      JSON.stringify({
-        error: "do transport failed",
-        message: err instanceof Error ? err.message : String(err),
-      }),
+      JSON.stringify({ error: "do transport failed" }),
       { status: 503, headers: { "content-type": "application/json" } },
     )
   }
@@ -104,15 +146,26 @@ export async function handleReviewStatusRoute(
     )
   }
 
-  let body: StatusResponse
+  let parsed: unknown
   try {
-    body = (await doRes.json()) as StatusResponse
+    parsed = await doRes.json()
   } catch {
     return new Response(
       JSON.stringify({ error: "do response was not valid JSON" }),
       { status: 503, headers: { "content-type": "application/json" } },
     )
   }
+
+  // CR PR #70 catch: validate the parsed JSON before treating it as a
+  // StatusResponse. A malformed payload would otherwise be returned
+  // verbatim with status 200.
+  if (!isStatusResponse(parsed)) {
+    return new Response(
+      JSON.stringify({ error: "do response shape invalid" }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    )
+  }
+  const body = parsed
 
   if (body.kind === "no-state") {
     return new Response(

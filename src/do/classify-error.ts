@@ -71,7 +71,11 @@ export function classifyEnsembleError(err: unknown): EnsembleErrorClass {
   }
   const msg = readErrMessage(err)
   if (/outside-config-allowed-paths/.test(msg)) return "terminal"
-  if (/submit-fallback-failed/.test(msg)) return "terminal"
+  // CR PR #70: match both hyphenated and underscored spellings so a
+  // plain `Error("submit_fallback_failed")` (which the structured-
+  // failureReason path at line 24 already treats as terminal) is
+  // classified consistently when it surfaces only via err.message.
+  if (/submit[-_]fallback[-_]failed/.test(msg)) return "terminal"
   if (isAbortLike(err)) return "transient"
   if (isNetworkFetchFailure(err)) return "transient"
   return "transient"

@@ -121,12 +121,25 @@ export class PrReviewRunDO extends DurableObject<Env> {
       startedAt: nowIso(),
       lastActivityAt: nowIso(),
     }
-    await this.ctx.storage.put(STATE_KEY, newState)
 
     // Dispatch to OPENCLAW_JOBS queue + schedule watchdog ONLY in
     // post mode. Shadow mode is observation-only; the existing
     // webhook→queue path is the executor.
     if (body.mode === "post") {
+      // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
+      // Previously we wrote `state.queued` and only later persisted
+      // alarm metadata + setAlarm — if the queue producer threw in
+      // between, the run was stuck `queued` forever (no alarm armed,
+      // GitHub's webhook redelivery would dedupe against the stuck
+      // state). Now: arm alarm + persist state + set DO alarm first;
+      // queue.send is the LAST thing. If send throws, the watchdog
+      // catches it on schedule (§4.6a) and reschedules a retry alarm
+      // that re-sends — recovery without operator intervention.
+      const watchdogAt = Date.now() + config.watchdogMs
+      newState.alarmTargetRunId = runId
+      newState.alarmKind = "watchdog"
+      await this.ctx.storage.put(STATE_KEY, newState)
+      await this.ctx.storage.setAlarm(watchdogAt)
       await this.env.OPENCLAW_JOBS.send({
         type: "pr-review",
         owner: body.owner,
@@ -136,14 +149,10 @@ export class PrReviewRunDO extends DurableObject<Env> {
         installationId: body.installationId,
         runId,
       })
-      // Watchdog alarm (spec §4.6a). Persist runId so alarm() can
-      // detect stale fires.
-      const watchdogAt = Date.now() + config.watchdogMs
-      newState.alarmTargetRunId = runId
-      newState.alarmKind = "watchdog"
-      await this.ctx.storage.put(STATE_KEY, newState)
-      await this.ctx.storage.setAlarm(watchdogAt)
     } else if (body.mode === "shadow") {
+      // Shadow: no queue dispatch, no watchdog. Persist the queued
+      // state row so the status route reflects the observed run.
+      await this.ctx.storage.put(STATE_KEY, newState)
       emit("do-review-enqueued-shadow", {
         owner: body.owner, repo: body.repo, prNumber: body.prNumber, runId,
         headSha: body.headSha,
@@ -247,18 +256,22 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // record at `run:<existing.runId>` is either already the
       // canonical terminal record or is being managed by the live
       // run — overwriting it here would corrupt history.
-      if (body.runId !== existing.runId) {
-        const record: RunRecord = {
-          runId: body.runId,
-          headSha: existing.headSha,
-          finalState: body.status === "success" ? "done" : "failed",
-          attempts: existing.attempts,
-          startedAt: existing.startedAt,
-          finishedAt: nowIso(),
-          ...(body.error ? { lastError: body.error } : {}),
-        }
-        await this.ctx.storage.put(`run:${body.runId}`, record)
-      }
+      //
+      // CR PR #70 catch: when `body.runId !== existing.runId`, that
+      // older runId was almost certainly archived by `/enqueue` at
+      // supersede time with the original headSha / attempts /
+      // startedAt. Synthesizing a fresh record from `existing.*`
+      // (which is the NEW run's state, not the old one's) and
+      // putting it back at the same key would clobber the correct
+      // archive with garbage. The cross-instance edge case where a
+      // late /run-result arrives for a runId never seen by
+      // /enqueue on this DO instance is rare (DOs are sticky per
+      // PR), and the `do-review-result-superseded` telemetry event
+      // emitted unconditionally below is the durable record of the
+      // late post — so we skip the put entirely rather than
+      // synthesize a low-fidelity `RunRecord` (per spec §4.2 the
+      // record is meant to be a frozen snapshot, not a sentinel).
+      // No history put for cross-runId late results.
       emit("do-review-result-superseded", {
         owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
         runId: body.runId, currentRunId: existing.runId,

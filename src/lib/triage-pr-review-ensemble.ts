@@ -115,6 +115,11 @@ import {
 } from "./sarif-evidence/render"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
+import {
+  buildSigilixMarker,
+  categoryFromRoleHint,
+  markerSeverityFromScore,
+} from "./review-memory/marker"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -957,11 +962,35 @@ export async function handlePrReviewEnsemble(
     // body (instead of being recovered ONLY when the inline submit
     // fails). CR PR #38 catch — without this, GitHub's success path
     // silently drops the unanchored set.
+    //
+    // ARC-189: pre-compute the per-finding sigilix marker BEFORE
+    // calling buildReviewSubmission so marker construction (async via
+    // crypto.subtle) doesn't force the whole renderer async. Markers
+    // align by index with `validated.verdict.findings` AND
+    // `validated.cleanFindingProvenance` — the same walk in
+    // validateForSubmission produced both. Findings with no source
+    // specialist (defensive, shouldn't happen post-hallucination
+    // guard) emit `null` and skip the marker.
+    const findingMarkers: Array<string | null> = await Promise.all(
+      validated.verdict.findings.map(async (f, i) => {
+        const sourceSpec = validated.cleanFindingProvenance[i]?.sourceSpecialists?.[0]
+        if (!sourceSpec) return null
+        return await buildSigilixMarker({
+          ruleId: null,
+          path: f.path,
+          line: f.line,
+          headline: f.headline,
+          category: categoryFromRoleHint(sourceSpec),
+          severity: markerSeverityFromScore(f.score),
+        })
+      }),
+    )
     const submission = buildReviewSubmission({
       verdict: validated.verdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
       unanchored: validated.unanchoredFindings,
+      findingMarkers,
     })
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
@@ -1866,6 +1895,15 @@ export interface ValidatedOutput {
   droppedForInvalidLine: number
   droppedForHallucination: number
   demotedScore1: number
+  /**
+   * ARC-189: per-clean-finding provenance, aligned by INDEX with
+   * `verdict.findings`. Captured during the same walk that filters
+   * findings so the ensemble caller can derive the source specialist
+   * for each surviving finding without re-walking with the same
+   * filter rules. Used by Task 2.5 marker emission to map each
+   * finding to its `ReviewMemoryCategory`.
+   */
+  cleanFindingProvenance: SynthesizerProvenance["findings"]
 }
 
 export function validateForSubmission(args: {
@@ -1881,6 +1919,7 @@ export function validateForSubmission(args: {
   }
 
   const cleanFindings: PrReviewFinding[] = []
+  const cleanFindingProvenance: SynthesizerProvenance["findings"] = []
   const unanchoredFindings: PrReviewFinding[] = []
   let droppedForInvalidLine = 0
   let droppedForHallucination = 0
@@ -1925,6 +1964,11 @@ export function validateForSubmission(args: {
       continue
     }
     cleanFindings.push(f)
+    // ARC-189: keep the per-clean-finding provenance aligned by index
+    // for the ensemble caller's marker-emission step. `provenance` is
+    // narrowed by the hallucination guard above (sourceIds.length >= 1
+    // implies provenance was non-null).
+    if (provenance) cleanFindingProvenance.push(provenance)
   }
 
   // Aggregate score-1 advisory nits (cap at 5, sort by score DESC then alpha)
@@ -1944,6 +1988,7 @@ export function validateForSubmission(args: {
     droppedForInvalidLine,
     droppedForHallucination,
     demotedScore1,
+    cleanFindingProvenance,
   }
 }
 

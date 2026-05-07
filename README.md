@@ -487,6 +487,30 @@ License findings route to the `security` specialist (Sigilix has no compliance s
 
 Auto-inline posting is **NOT** wired in v1 — Trivy raw output can be noisy in unfamiliar codebases. Findings only appear in the LLM specialist prompts, not as deterministic comments.
 
+### `reviewMemory` (object) — ARC-189
+
+Per-repo configuration for cross-PR review memory. **Default OFF** on both knobs — opposite polarity from every other scanner. Retrieval requires both env (`OPENCLAW_REVIEW_MEMORY_ENABLED=on`) AND `enabled: true` here. Capture requires env (`OPENCLAW_REVIEW_MEMORY_CAPTURE=on`) AND (`enabled: true` OR `captureOnly: true`).
+
+```json
+{
+  "reviewMemory": {
+    "enabled": true,
+    "captureOnly": false,
+    "categories": ["performance", "tests"],
+    "maxInjectedMemories": 5,
+    "minSignalThreshold": 3,
+    "maxSignalAgeDays": 90
+  }
+}
+```
+
+- `enabled` (default `false`) — strict-bool kill-switch. Only literal `true` opts in.
+- `captureOnly` (default `false`) — when set, capture writes to KV but retrieval stays off. Lets a repo build up a corpus before turning on prompt injection.
+- `categories` (default all 4) — opt-in subset of `security` / `logic` / `performance` / `tests`. Empty array means all 4.
+- `maxInjectedMemories` (clamped to `[1, 10]`, default 5) — cap on records injected into the synth prompt.
+- `minSignalThreshold` (clamped to `[2, 20]`, default 3) — minimum dismissal signals required for a category to be "active."
+- `maxSignalAgeDays` (clamped to `[7, 365]`, default 90) — sliding window for active-signal counting. Stored signals older than 180 days are pruned at write time regardless.
+
 ## Review provenance + stale markers (ARC-184)
 
 After every successful review, Sigilix persists a per-PR **review manifest** to KV (`pr-review-manifest:<owner>/<repo>#<n>`) capturing the inputs the model reviewed against:
@@ -644,6 +668,41 @@ Sigilix ingests **SARIF v2.1.0** reports as a generic deterministic evidence cha
 **Single-file model.** Multi-tool aggregation is the user's CI's responsibility — SARIF supports multiple `runs[]` in a single file. v2 candidate: glob support + GHA workflow-run artifact fetch.
 
 **Telemetry:** `sarif-evidence-scan-skipped` (with reason), `sarif-evidence-scan-ran` (with `findingsCount`, `resultsConsidered`, `durationMs`), `sarif-evidence-finding` (per emitted finding), `sarif-evidence-truncated` (when 200-cap fires), `sarif-evidence-stale-report` (with `ageHours` when > 7d), `sarif-evidence-parse-failed`, `unsupported-sarif-version`.
+
+## Cross-PR review memory (ARC-189)
+
+Sigilix is otherwise stateless across PRs — same blind spots, same low-signal nits recur forever. Reviewers either ignore them or reply with "not relevant" / "false positive" / "ignore" — but Sigilix has no memory of those signals and re-emits the same class of comment on the next PR.
+
+ARC-189 adds a **minimal cross-PR review-memory store** so Sigilix carries learned dismissal preferences across reviews on the same `(owner, repo, path?, category)` tuple. When a team has dismissed N+ findings of class C on path P in the last 90 days, the next review's synthesizer prompt receives a `[REVIEW MEMORY]` block instructing it to **soften** matching findings (downgrade `score` by one tier, shorten body) and emit a `provenance.softened[]` entry. Default OFF on both capture and retrieval — opt-in via env + `sigilix.json`.
+
+**How it works:**
+
+1. Every Sigilix-authored inline review comment carries a hidden HTML marker: `<!-- sigilix:fid:<sha16>:cat:<category>:sev:<severity>:path:<sha12> -->`.
+2. When a reviewer posts an inline reply (`pull_request_review_comment.created` webhook), Sigilix dispatches a non-blocking `ctx.waitUntil()` capture pipeline: it fetches the parent comment, extracts the marker, and parses the reply body for dismissal keywords (`not relevant`, `false positive`, `ignore`, `noise`, `dismiss`, `won't fix`/`wontfix`, plus bare-`nit`).
+3. On hit, Sigilix writes a structured signal record to KV under `review-memory:<owner>/<repo>:cat:<category>` AND `review-memory:<owner>/<repo>:path:<sha256>:cat:<category>` (full SHA-256 in the key; the marker's sha12 is a human-readable hint only). Records carry no reviewer identity, no PR title/body, and no free-text quote — only category, severity, finding-ID-hash, path-hash, timestamp, PR number.
+4. On the next review, the synth prompt receives a `[REVIEW MEMORY]` block listing active categories (≥3 dismissals in trailing 90d) and active path-categories (same plus ≥1 signal in trailing 30d). The synth applies the soften and emits `provenance.softened[]` entries the orchestrator dereferences for score-decrement before posting.
+
+**Privacy contract:**
+
+- Raw repo-relative paths NEVER stored in keys, values, or prompts (only sha12/sha256 hashes).
+- No reviewer login persisted (memory aggregates dismissals across reviewers).
+- No `evidenceQuote` of the dismissal text (deferred to v2 with a real PII redaction bundle).
+- KV records are scoped to `(owner, repo)` — fork dismissals don't pollute the upstream repo's memory.
+
+**Default OFF.** Capture requires `OPENCLAW_REVIEW_MEMORY_CAPTURE=on` AND `enabled: true || captureOnly: true` in `sigilix.json`. Retrieval requires `OPENCLAW_REVIEW_MEMORY_ENABLED=on` AND `enabled: true`. See the `reviewMemory` config section above for the full truth table.
+
+**v1 ships soften-only.** The `drop` action is deferred to v2 once telemetry tunes the threshold. v1 always softens (score `-1` clamped at 1).
+
+**v1 scope limitations** (deferred to v2):
+- Only `pull_request_review_comment.created` thread replies are captured. Top-level PR conversation comments (`issue_comment.created`) are NOT — that path needs additional thread-walking heuristics. Estimated coverage gap: ~30-40% of dismissal replies.
+- No reaction-based dismissal (`reaction.created` webhook not subscribed).
+- No `pull_request_review.dismissed` event subscription.
+- KV-only storage (no D1).
+- KV has no CAS, so concurrent same-comment deliveries can record up to 2 signals per replyCommentId — bounded duplicate tolerance documented and absorbed by threshold-3 activation.
+
+**PROMPT_VERSION bump (1 → 2).** Adding the `[REVIEW MEMORY]` injection + `provenance.softened[]` schema bumps the prompt version, which marks every open-PR review manifest stale on first deploy of v2. The one-shot deploy aid `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE=on` (with companion `_SET_AT=$(date +%s)`) surgically filters the `"prompt-version"` reason out of the `StaleResult.reasons[]` array WITHOUT skipping legitimate head/base/file-list drift. The aid auto-fail-safes after 72h (operator alert + suppression turned off automatically) so it can't be left on indefinitely.
+
+**Telemetry:** `review-memory-capture-skipped` (with reason), `review-memory-capture-written`, `review-memory-capture-failed` (with stage), `review-memory-lookup-skipped` (with reason), `review-memory-lookup-ran` (with `memoriesFound`/`memoriesInjected`/`durationMs`), `review-memory-corrupt-record`, `review-memory-softened-rendered` (with `softenedCount`), `review-stale-prompt-version-suppressed`, `review-stale-prompt-version-suppressed-heartbeat` (with `level: info|warn`), `review-stale-prompt-version-suppressed-stale` (after 72h fail-safe), `review-stale-prompt-version-suppress-misconfig` (with reason).
 
 ## Slash commands (ARC-178 / ARC-179 / ARC-191)
 

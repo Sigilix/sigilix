@@ -26,5 +26,13 @@
     "severityThreshold": "warning",
     "disabledRules": [],
     "disabledCategories": []
+  },
+  "reviewMemory": {
+    "enabled": true,
+    "captureOnly": false,
+    "categories": ["performance", "tests"],
+    "maxInjectedMemories": 5,
+    "minSignalThreshold": 3,
+    "maxSignalAgeDays": 90
   }
 }

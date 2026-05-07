@@ -1,7 +1,7 @@
 # `src/do/` — Durable-Object PR-review-run state (ARC-190)
 
 Durable Object that owns dedupe + retry state for `pr-review` jobs. Replaces
-the legacy 7-day KV `pr-review:<owner>/<repo>/<pr>/<sha>` dedupe key once
+the legacy 7-day KV `pr-review:<owner>/<repo>#<pr>@<sha>` dedupe key once
 `OPENCLAW_PR_REVIEW_MODE=post` is enabled.
 
 ## Spec / plan

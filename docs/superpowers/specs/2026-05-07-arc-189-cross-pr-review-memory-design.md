@@ -303,7 +303,8 @@ Both pipelines require the env flag, so ops can disable globally with a single e
 | on  | off | false | false | ❌ | ❌ |
 | on  | off | false | true | ✅ | ❌ |
 | on  | off | true | * | ✅ | ❌ |
-| on  | on  | false | * | ❌ | ❌ |
+| on  | on  | false | false | ❌ | ❌ |
+| on  | on  | false | true | ✅ | ❌ |
 | on  | on  | true | * | ✅ | ✅ |
 
 ## 6. Telemetry
@@ -327,7 +328,7 @@ Both pipelines require the env flag, so ops can disable globally with a single e
 
 Skip reasons: `"capture-disabled"` / `"retrieval-disabled"` / `"not-a-reply-to-sigilix"` / `"no-marker-found"` / `"no-dismissal-keyword"` / `"already-seen"` / `"no-paths-to-query"`.
 
-`stage` (capture-failed): `"kv-read"` / `"kv-write"` / `"json-parse"` / `"marker-extract"`. Distinguishes which step in the read-modify-write pipeline failed for diagnosis.
+`stage` (capture-failed): `"kv-read"` / `"kv-write"` / `"json-parse"` / `"parent-fetch"`. Distinguishes which step in the pipeline failed for diagnosis. (`parent-fetch` covers `client.getPullRequestReviewComment` throws — CR MINOR catch on PR #69 corrected the v1 plan's `marker-extract` label since marker extraction is a pure local string scan that never throws.)
 
 ## 7. Pre-LLM facts pipeline placement
 

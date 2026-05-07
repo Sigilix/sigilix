@@ -147,7 +147,7 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   } catch (err) {
     emitTelemetry("review-memory-capture-failed", {
       owner, repo, prNumber, commentId: replyCommentId,
-      stage: "marker-extract",
+      stage: "parent-fetch",
       err: err instanceof Error ? err.message : String(err),
     })
     return

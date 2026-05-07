@@ -1001,6 +1001,43 @@ export async function handlePrReviewEnsemble(
     // fails). CR PR #38 catch — without this, GitHub's success path
     // silently drops the unanchored set.
     //
+    // ARC-189 Task 10b: apply review-memory soften BEFORE rendering.
+    // The synth's `provenance.softened[]` references specialist
+    // sourceFindingIds (e.g., "logic-3"); for each kept finding whose
+    // provenance.sourceFindingIds intersects the softened set, build
+    // a CLONE of the finding with `score = Math.max(1, score - 1)`.
+    // Original finding objects are NEVER mutated (Kimi MINOR on plan
+    // v2 — preserves immutability for downstream telemetry).
+    const softenedSet = new Set<string>()
+    if (synthOutput.provenance?.softened) {
+      for (const s of synthOutput.provenance.softened) {
+        if (typeof s.sourceFindingId === "string") {
+          softenedSet.add(s.sourceFindingId)
+        }
+      }
+    }
+    let softenedCount = 0
+    const renderableFindings = validated.verdict.findings.map((f, i) => {
+      const sourceIds = validated.cleanFindingProvenance[i]?.sourceFindingIds ?? []
+      const matched = sourceIds.some((id) => softenedSet.has(id))
+      if (!matched) return f
+      const effectiveScore = Math.max(1, f.score - 1)
+      if (effectiveScore === f.score) return f  // already at floor
+      softenedCount++
+      return { ...f, score: effectiveScore }
+    })
+    const renderableUnanchored = validated.unanchoredFindings  // unanchored never matches by index
+    const renderableVerdict: PrReviewVerdict = {
+      ...validated.verdict,
+      findings: renderableFindings,
+    }
+    if (softenedCount > 0) {
+      console.log(JSON.stringify({
+        event: "review-memory-softened-rendered",
+        owner, repo, prNumber, softenedCount,
+      }))
+    }
+
     // ARC-189: pre-compute the per-finding sigilix marker BEFORE
     // calling buildReviewSubmission so marker construction (async via
     // crypto.subtle) doesn't force the whole renderer async. Markers
@@ -1009,6 +1046,10 @@ export async function handlePrReviewEnsemble(
     // validateForSubmission produced both. Findings with no source
     // specialist (defensive, shouldn't happen post-hallucination
     // guard) emit `null` and skip the marker.
+    //
+    // Marker severity uses the ORIGINAL (pre-soften) score so the
+    // marker reflects what synth actually emitted; the soften
+    // applies to the rendered finding body only.
     const findingMarkers: Array<string | null> = await Promise.all(
       validated.verdict.findings.map(async (f, i) => {
         const sourceSpec = validated.cleanFindingProvenance[i]?.sourceSpecialists?.[0]
@@ -1024,10 +1065,10 @@ export async function handlePrReviewEnsemble(
       }),
     )
     const submission = buildReviewSubmission({
-      verdict: validated.verdict,
+      verdict: renderableVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
-      unanchored: validated.unanchoredFindings,
+      unanchored: renderableUnanchored,
       findingMarkers,
     })
     try {
@@ -1078,8 +1119,11 @@ export async function handlePrReviewEnsemble(
         reason: fallbackReason,
       })
       const fallback = buildFallbackSubmission({
-        verdict: validated.verdict,
-        unanchored: validated.unanchoredFindings,
+        // ARC-189: fallback path also receives the soften-applied
+        // verdict. Markers are NOT emitted on the fallback (it's a
+        // body-only review with no inline anchors) — see Task 2.5.
+        verdict: renderableVerdict,
+        unanchored: renderableUnanchored,
         prAuthor: meta.user?.login ?? null,
         headSha,
       })
@@ -1655,6 +1699,20 @@ export interface SynthesizerProvenance {
     headline: string
     reason: string
   }>
+  /**
+   * ARC-189: findings the synth softened in response to a [REVIEW
+   * MEMORY] block (matched on category, optionally on pathSha12 for
+   * path-scoped memories). Optional + sparse: synths emitting
+   * pre-v2 outputs (no review memory) omit this field, which
+   * `isValidProvenance` accepts. The renderer applies a one-tier
+   * `score` decrement on the matched finding before posting.
+   */
+  softened?: Array<{
+    specialist: SpecialistRole
+    sourceFindingId: string
+    headline: string
+    reason: string
+  }>
   retrievalCallsUsed: number
 }
 
@@ -1770,6 +1828,21 @@ function isValidProvenance(value: unknown): value is SynthesizerProvenance {
   // for shape stability.
   for (const d of v.dropped) {
     if (!d || typeof d !== "object" || Array.isArray(d)) return false
+  }
+  // ARC-189: `softened` is OPTIONAL on the wire (synth outputs from
+  // pre-v2 prompts omit it). When present, must be an array of
+  // object-shaped entries. The renderer dereferences
+  // `softened[i].sourceFindingId` to look up the corresponding
+  // finding for score-decrement, so we tighten the per-item check
+  // to require a string-shaped sourceFindingId — same belt-and-
+  // suspenders pattern as the findings.sourceFindingIds[] guard.
+  if (v.softened !== undefined) {
+    if (!Array.isArray(v.softened)) return false
+    for (const s of v.softened) {
+      if (!s || typeof s !== "object" || Array.isArray(s)) return false
+      const entry = s as Record<string, unknown>
+      if (typeof entry.sourceFindingId !== "string") return false
+    }
   }
   return true
 }

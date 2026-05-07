@@ -128,17 +128,6 @@ export interface SigilixConfig {
    * is absent, the runner falls back to locked defaults:
    *   { enabled: true, severityThreshold: "warning",
    *     disabledRules: [], autoInline: false }
-   *
-   * - `enabled`: hard kill-switch. Only literal `false` disables.
-   * - `severityThreshold`: minimum severity that surfaces findings.
-   *   `"info"` is reserved for future expansion (v1 ships zero
-   *   info-severity rules). Unknown enum values fall back to default.
-   * - `disabledRules`: ruleId list. Unknown IDs are silently ignored
-   *   (forward-compat with future rule additions).
-   * - `autoInline`: opt-IN to deterministic inline comment posting
-   *   for `error`-severity findings without LLM intermediation.
-   *   Default `false` for v1 cautious rollout; flips after FP
-   *   telemetry shows < 5% rate.
    */
   astRules?: {
     enabled?: boolean
@@ -146,7 +135,44 @@ export interface SigilixConfig {
     disabledRules?: string[]
     autoInline?: boolean
   }
+  /**
+   * ARC-188: per-repo configuration for the SARIF evidence channel
+   * (Trivy / Kubescape / any SARIF v2.1.0 producer). Locked defaults
+   * when absent: { enabled: true, path: ".sigilix/trivy.sarif.json",
+   * severityThreshold: "warning", disabledRules: [],
+   * disabledCategories: [] }
+   *
+   * `path` is a single file path — no globs in v1 (multi-tool
+   * aggregation is the user's CI's job; SARIF supports multiple
+   * `runs[]` per file).
+   */
+  sarifEvidence?: {
+    enabled?: boolean
+    path?: string
+    severityThreshold?: "info" | "warning" | "error"
+    disabledRules?: string[]
+    disabledCategories?: SarifFindingCategoryRef[]
+  }
 }
+
+/**
+ * ARC-188: re-exported from `sarif-evidence/types.ts` so the config
+ * surface declares the categories without `sigilix-config.ts`
+ * importing the entire SARIF type chain. Kept narrow.
+ */
+export type SarifFindingCategoryRef =
+  | "iac"
+  | "misconfiguration"
+  | "vulnerability"
+  | "license"
+  | "secret"
+  | "other"
+
+const SARIF_FINDING_CATEGORIES: ReadonlySet<SarifFindingCategoryRef> = new Set([
+  "iac", "misconfiguration", "vulnerability", "license", "secret", "other",
+])
+
+const DEFAULT_SARIF_PATH = ".sigilix/trivy.sarif.json"
 
 export type SigilixCommandName = "review" | "improve" | "describe" | "ask"
 
@@ -449,11 +475,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       out.depVulnScan = { enabled: depIn.enabled }
     }
   }
-  // ARC-181: astRules — sub-fields are independently optional. Each
-  // is parsed defensively; unknown values fall back to the locked
-  // defaults at resolveAstRulesConfig time. Unknown subfield keys
-  // are silently ignored (forward-compat with future additions like
-  // `astRules.allowedRules`).
+  // ARC-181: astRules — locked defaults at resolveAstRulesConfig time.
   if (
     obj.astRules &&
     typeof obj.astRules === "object" &&
@@ -472,18 +494,12 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       astOut.severityThreshold = astIn.severityThreshold
     }
     if (Array.isArray(astIn.disabledRules)) {
-      // CR catch on PR #67: trim + dedupe entries so `" no-eval-call "`
-      // matches the canonical rule id and a config that lists the same
-      // id twice doesn't silently bloat the disabled set.
       const ids = [...new Set(
         astIn.disabledRules
           .filter((v): v is string => typeof v === "string")
           .map((v) => v.trim())
           .filter((v) => v.length > 0),
       )]
-      // Keep an empty array distinct from "absent" so resolvers can
-      // observe the explicit-empty case. Both still map to "no rules
-      // disabled" semantically — the distinction is for telemetry only.
       astOut.disabledRules = ids
     }
     if (typeof astIn.autoInline === "boolean") {
@@ -493,18 +509,54 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       out.astRules = astOut
     }
   }
+  // ARC-188: sarifEvidence — single-file SARIF channel config.
+  if (
+    obj.sarifEvidence &&
+    typeof obj.sarifEvidence === "object" &&
+    !Array.isArray(obj.sarifEvidence)
+  ) {
+    const sarifIn = obj.sarifEvidence as Record<string, unknown>
+    const sarifOut: NonNullable<SigilixConfig["sarifEvidence"]> = {}
+    if (typeof sarifIn.enabled === "boolean") {
+      sarifOut.enabled = sarifIn.enabled
+    }
+    if (typeof sarifIn.path === "string" && sarifIn.path.trim().length > 0) {
+      sarifOut.path = sarifIn.path.trim()
+    }
+    if (
+      sarifIn.severityThreshold === "info" ||
+      sarifIn.severityThreshold === "warning" ||
+      sarifIn.severityThreshold === "error"
+    ) {
+      sarifOut.severityThreshold = sarifIn.severityThreshold
+    }
+    if (Array.isArray(sarifIn.disabledRules)) {
+      const ids = [...new Set(
+        sarifIn.disabledRules
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      sarifOut.disabledRules = ids
+    }
+    if (Array.isArray(sarifIn.disabledCategories)) {
+      const cats = [...new Set(
+        sarifIn.disabledCategories
+          .filter((v): v is string => typeof v === "string")
+          .filter((v): v is SarifFindingCategoryRef => SARIF_FINDING_CATEGORIES.has(v as SarifFindingCategoryRef)),
+      )]
+      sarifOut.disabledCategories = cats
+    }
+    if (Object.keys(sarifOut).length > 0) {
+      out.sarifEvidence = sarifOut
+    }
+  }
   return { ok: true, config: out }
 }
 
 /**
  * ARC-181: resolve the per-repo astRules config to a fully-locked
  * shape with defaults filled in. Pure function; never throws.
- *
- * Locked defaults (see spec §2 + plan Task 2):
- *   - enabled: true
- *   - severityThreshold: "warning"
- *   - disabledRules: []
- *   - autoInline: false
  */
 export function resolveAstRulesConfig(
   config: SigilixConfig | null,
@@ -516,10 +568,40 @@ export function resolveAstRulesConfig(
 } {
   const cfg = config?.astRules
   return {
-    enabled: cfg?.enabled !== false,                       // default true; only literal `false` disables
+    enabled: cfg?.enabled !== false,
     severityThreshold: cfg?.severityThreshold ?? "warning",
     disabledRules: cfg?.disabledRules ?? [],
-    autoInline: cfg?.autoInline === true,                  // default false; only literal `true` opts in
+    autoInline: cfg?.autoInline === true,
+  }
+}
+
+/**
+ * ARC-188: resolve the per-repo `sarifEvidence` config into a
+ * fully-locked shape with defaults filled in. Pure; never throws.
+ *
+ * Locked defaults (spec §5 + plan v2 Task 2):
+ *   - enabled: true
+ *   - path: ".sigilix/trivy.sarif.json"
+ *   - severityThreshold: "warning"
+ *   - disabledRules: []
+ *   - disabledCategories: []
+ */
+export function resolveSarifEvidenceConfig(
+  config: SigilixConfig | null,
+): {
+  enabled: boolean
+  path: string
+  severityThreshold: "info" | "warning" | "error"
+  disabledRules: string[]
+  disabledCategories: SarifFindingCategoryRef[]
+} {
+  const cfg = config?.sarifEvidence
+  return {
+    enabled: cfg?.enabled !== false,
+    path: cfg?.path ?? DEFAULT_SARIF_PATH,
+    severityThreshold: cfg?.severityThreshold ?? "warning",
+    disabledRules: cfg?.disabledRules ?? [],
+    disabledCategories: cfg?.disabledCategories ?? [],
   }
 }
 

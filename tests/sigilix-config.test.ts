@@ -12,6 +12,7 @@ import {
   parseSigilixConfigDetailed,
   resolveCommandConfig,
   resolveAstRulesConfig,
+  resolveSarifEvidenceConfig,
   loadSigilixConfig,
   EMPTY_CONFIG,
   KNOWN_MODELS,
@@ -702,7 +703,7 @@ describe("resolveAstRulesConfig (ARC-181)", () => {
     })
   })
 
-  it("ABSENT-CONFIG (Codex MAJOR #5): astRules undefined → defaults", () => {
+  it("ABSENT-CONFIG: astRules undefined → defaults", () => {
     const cfg = parseSigilixConfig("{}")
     expect(resolveAstRulesConfig(cfg)).toEqual({
       enabled: true,
@@ -740,5 +741,114 @@ describe("resolveAstRulesConfig (ARC-181)", () => {
   it("returns user disabledRules array", () => {
     const out = resolveAstRulesConfig({ astRules: { disabledRules: ["a", "b"] } })
     expect(out.disabledRules).toEqual(["a", "b"])
+  })
+})
+
+describe("parseSigilixConfig — sarifEvidence (ARC-188)", () => {
+  it("captures sarifEvidence.enabled: false", () => {
+    const r = parseSigilixConfig(JSON.stringify({ sarifEvidence: { enabled: false } }))
+    expect(r?.sarifEvidence?.enabled).toBe(false)
+  })
+
+  it("captures sarifEvidence.path (trimmed)", () => {
+    const r = parseSigilixConfig(JSON.stringify({ sarifEvidence: { path: "  custom/trivy.sarif.json  " } }))
+    expect(r?.sarifEvidence?.path).toBe("custom/trivy.sarif.json")
+  })
+
+  it("rejects empty/whitespace-only path", () => {
+    const r = parseSigilixConfig(JSON.stringify({ sarifEvidence: { path: "   " } }))
+    expect(r?.sarifEvidence?.path).toBeUndefined()
+  })
+
+  it("captures sarifEvidence severityThreshold for each known value", () => {
+    for (const v of ["info", "warning", "error"] as const) {
+      const r = parseSigilixConfig(JSON.stringify({ sarifEvidence: { severityThreshold: v } }))
+      expect(r?.sarifEvidence?.severityThreshold).toBe(v)
+    }
+  })
+
+  it("rejects unknown sarifEvidence severityThreshold", () => {
+    const r = parseSigilixConfig(JSON.stringify({ sarifEvidence: { severityThreshold: "spicy" } }))
+    expect(r?.sarifEvidence?.severityThreshold).toBeUndefined()
+  })
+
+  it("trims + dedupes sarifEvidence disabledRules", () => {
+    const r = parseSigilixConfig(JSON.stringify({
+      sarifEvidence: { disabledRules: [" rule-1 ", "rule-1", "rule-2", "", 42 as unknown as string] },
+    }))
+    expect(r?.sarifEvidence?.disabledRules).toEqual(["rule-1", "rule-2"])
+  })
+
+  it("filters disabledCategories to known values + dedupes", () => {
+    const r = parseSigilixConfig(JSON.stringify({
+      sarifEvidence: { disabledCategories: ["license", "license", "vulnerability", "bogus", 42 as unknown as string] },
+    }))
+    expect(r?.sarifEvidence?.disabledCategories).toEqual(["license", "vulnerability"])
+  })
+
+  it("STRICT-BOOL: sarifEvidence enabled string \"false\" doesn't disable", () => {
+    const r = parseSigilixConfig(JSON.stringify({ sarifEvidence: { enabled: "false" } }))
+    expect(r?.sarifEvidence?.enabled).toBeUndefined()
+  })
+
+  it("ignores unknown sarifEvidence subfields (forward-compat)", () => {
+    const r = parseSigilixConfig(JSON.stringify({
+      sarifEvidence: { enabled: true, futureField: "x" },
+    }))
+    expect(r?.sarifEvidence).toEqual({ enabled: true })
+  })
+
+  it("strips top-level sarifEvidence value that isn't an object", () => {
+    expect(parseSigilixConfig(JSON.stringify({ sarifEvidence: "on" }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ sarifEvidence: [] }))).toEqual({})
+  })
+})
+
+describe("resolveSarifEvidenceConfig (ARC-188)", () => {
+  it("locks defaults when config is null", () => {
+    expect(resolveSarifEvidenceConfig(null)).toEqual({
+      enabled: true,
+      path: ".sigilix/trivy.sarif.json",
+      severityThreshold: "warning",
+      disabledRules: [],
+      disabledCategories: [],
+    })
+  })
+
+  it("ABSENT-CONFIG: sarifEvidence undefined → defaults", () => {
+    const cfg = parseSigilixConfig("{}")
+    expect(resolveSarifEvidenceConfig(cfg)).toEqual({
+      enabled: true,
+      path: ".sigilix/trivy.sarif.json",
+      severityThreshold: "warning",
+      disabledRules: [],
+      disabledCategories: [],
+    })
+  })
+
+  it("EMPTY sarifEvidence: {} → defaults", () => {
+    expect(resolveSarifEvidenceConfig({ sarifEvidence: {} })).toEqual({
+      enabled: true,
+      path: ".sigilix/trivy.sarif.json",
+      severityThreshold: "warning",
+      disabledRules: [],
+      disabledCategories: [],
+    })
+  })
+
+  it("respects explicit sarifEvidence enabled: false", () => {
+    expect(resolveSarifEvidenceConfig({ sarifEvidence: { enabled: false } }).enabled).toBe(false)
+  })
+
+  it("respects custom sarifEvidence path", () => {
+    expect(resolveSarifEvidenceConfig({ sarifEvidence: { path: "reports/x.sarif.json" } }).path).toBe("reports/x.sarif.json")
+  })
+
+  it("returns sarifEvidence user disabledRules + disabledCategories arrays", () => {
+    const out = resolveSarifEvidenceConfig({
+      sarifEvidence: { disabledRules: ["a", "b"], disabledCategories: ["license"] },
+    })
+    expect(out.disabledRules).toEqual(["a", "b"])
+    expect(out.disabledCategories).toEqual(["license"])
   })
 })

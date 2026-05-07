@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "tsc --noEmit",
+    "build": "tsc --noEmit && vitest run",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:advisory-db-size": "./scripts/check-advisory-db-size.sh"

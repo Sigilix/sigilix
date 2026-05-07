@@ -378,6 +378,7 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
   if (seen) {
     console.log(JSON.stringify({
       event: "pr-describe-skipped",
+      dedupe_system: "kv",
       reason: "already_ran",
       headSha,
       ...tag,

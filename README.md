@@ -232,7 +232,15 @@ npx wrangler secret put OPENCLAW_MENTION_TRIGGERS   # CSV of @-handles, defaults
 npx wrangler secret put OPENCLAW_TEAM_REPO_MAP      # JSON: {"ARC":"rubberfit","RFD":"rubberfit-desktop"}
 npx wrangler secret put LINEAR_OAUTH_CLIENT_ID      # OAuth app — comments post as the app actor
 npx wrangler secret put LINEAR_OAUTH_CLIENT_SECRET  # paired with the client_id above
+
+# ARC-190 — DO-backed pr-review run state (rollout gate, default OFF):
+npx wrangler secret put OPENCLAW_PR_REVIEW_MODE              # "off" | "shadow" | "post" — default "off"
+npx wrangler secret put OPENCLAW_PR_REVIEW_DO_MAX_RETRIES    # 1..10, default 3
+npx wrangler secret put OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS    # 60000..1800000 ms, default 1200000 (20 min)
+npx wrangler secret put OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT  # 1..100, default 10
 ```
+
+`OPENCLAW_PR_REVIEW_MODE` controls how pr-review jobs are dedupe-keyed and dispatched (full rollout details in the [ARC-190 section below](#do-backed-pr-review-run-state-arc-190)). The default `"off"` keeps the legacy 7-day KV `pr-review:<owner>/<repo>#<pr>@<sha>` dedupe key — an upgrading deploy with no env config behaves identically to today.
 
 `OPENCLAW_TEAM_REPO_MAP` controls which Vectorize namespace gets queried for triage / mention-reply on each Linear team's issues. Without it, the team key (lowercased) is used as the namespace — so a Linear team with key `ARC` queries the `arc` namespace.
 
@@ -704,6 +712,42 @@ ARC-189 adds a **minimal cross-PR review-memory store** so Sigilix carries learn
 
 **Telemetry:** `review-memory-capture-skipped` (with reason), `review-memory-capture-written`, `review-memory-capture-failed` (with stage), `review-memory-lookup-skipped` (with reason), `review-memory-lookup-ran` (with `memoriesFound`/`memoriesInjected`/`durationMs`), `review-memory-corrupt-record`, `review-memory-softened-rendered` (with `softenedCount`), `review-stale-prompt-version-suppressed`, `review-stale-prompt-version-suppressed-heartbeat` (with `level: info|warn`), `review-stale-prompt-version-suppressed-stale` (after 72h fail-safe), `review-stale-prompt-version-suppress-misconfig` (with reason).
 
+## DO-backed pr-review run state (ARC-190)
+
+A Cloudflare Durable Object (`PrReviewRunDO`) replaces the legacy 7-day KV `pr-review:<owner>/<repo>#<pr>@<sha>` dedupe key with a per-PR state machine. The DO owns dedupe, retry orchestration, and a public status route; the queue consumer wrapper claims runs via `/pickup` and reports outcomes via `/run-result` so retries are scheduled centrally instead of leaking into queue redelivery.
+
+**Rollout gate (`OPENCLAW_PR_REVIEW_MODE`):**
+
+| Mode | Webhook → DO | Webhook → legacy queue | Consumer wrapper |
+|---|---|---|---|
+| `off` (default) | — | direct `OPENCLAW_JOBS.send` | bypasses (no `runId` on the message) |
+| `shadow` | `/enqueue` (observation only — DO does not enqueue) | direct `OPENCLAW_JOBS.send` | bypasses (existing-path message has no `runId`) |
+| `post` | `/enqueue` (DO emits the queue message itself with `runId`) | — | claims via `/pickup`, reports via `/run-result` |
+
+The DO call is **awaited** (not `ctx.waitUntil`). In `post` mode a transport / non-OK failure returns 503 to GitHub for redelivery. In `shadow` we swallow + log; the legacy send remains the source of truth.
+
+**Status route:** `GET /reviews/<owner>/<repo>/<prNumber>` returns a projection of the current run (`runId`, `headSha`, `state`, `attempts`, `startedAt`, `pickedUpAt?`, `finishedAt?`, `lastError?`) plus a bounded `RunRecord` history as JSON. v1 is unauth (read-only metadata only — no diffs, no comment bodies, no secrets). Returns 404 when `mode === "off"` (feature is fully disabled on this deployment) and when no run state exists for the PR. The full schema lives in `src/do/types.ts` (`StatusResponseFound` / `StatusResponseEmpty`).
+
+**Retry orchestration:** transient verdicts (HTTP 5xx, network/model timeouts, `failureReason ∈ {timeout, aborted, fallback_failed:...}`) trigger a retry alarm with 30s / 90s / 270s backoff. Terminal verdicts (HTTP 422 invalid-anchor, `missing_api_key`, `outside-config-allowed-paths`, `submit_fallback_failed`, hallucination-only verdicts) skip retries. A watchdog alarm (default 20 min, configurable) catches consumers that crashed before posting `/run-result`. Attempts are incremented at retry-alarm fire time only — scheduling does not increment.
+
+**Rollout phases:**
+
+1. Deploy with `OPENCLAW_PR_REVIEW_MODE="off"` (default). DO class is registered; never invoked.
+2. Flip the Sigilix repo only to `shadow` for ~1 week. Verify `do-review-enqueued-shadow` rate matches webhook event count + sample status-route shape against live PRs.
+3. Flip to `post`. Existing KV `pr-review:` keys keep their TTL (~7 days) for any in-flight non-DO runs; new runs use the DO.
+4. After ~30 days of stable `post`, remove the legacy KV write site (deferred follow-up, not part of this PR).
+5. Rollback at any time by flipping the env back to `off` or `shadow` — Cloudflare DOs are durable independent of code; binding removal would route everything through `mode=off`.
+
+**Telemetry split:** every dedupe-related event carries `dedupe_system: "kv" | "do"`. DO-routed events use the `do-review-*` namespace — emitted from inside the DO (`do-review-enqueued`, `do-review-enqueued-shadow`, `do-review-deduped`, `do-review-superseded`, `do-review-pickup-skipped`, `do-review-picked-up`, `do-review-retry-fired`, `do-review-retry-noop`, `do-review-watchdog-transient`, `do-review-watchdog-terminal`, `do-review-watchdog-noop`, `do-review-result-superseded`, `do-review-alarm-stale`) and from the webhook + consumer wrapper (`do-review-enqueue-failed`, `do-review-enqueue-non-ok`, `do-review-consumer-pickup-unexpected-status`, `do-review-consumer-run-result-non-ok`, `do-review-consumer-run-result-failed`). KV-routed sibling JobMessage variants (`pr-overview`, `pr-improve`, `pr-describe`, `pr-stale-mark`, `ci-triage`, `github-mention`) carry `dedupe_system: "kv"` on their dedupe-skip emission so dashboards can split DO-routed from KV-routed work.
+
+**v1 limitations** (deferred to v2):
+- Only `pr-review` is migrated. The 6 sibling per-PR variants stay KV-routed.
+- DO instance GC sweep (`state.storage.deleteAll()` cron) is deferred until Cloudflare's DO `list()` API is stable. v1 instruments `lastActivityAt` on every state mutation so the v2 sweep can rank stale instances.
+- Status route is unauth read-only metadata. Per-installation auth, web UI, and shadow-vs-existing-path verdict-comparison telemetry are v2.
+- Storage backend is KV-backed DO storage. D1 / SQL backing is v2.
+
+Source: `src/do/` (`pr-review-run.ts`, `consumer-wrapper.ts`, `webhook-enqueue.ts`, `status-route.ts`, `classify-error.ts`, `config.ts`, `types.ts`). End-to-end acceptance scenarios live in `tests/do-pr-review-acceptance.test.ts` (3-replay dedupe, transient-failure recovery, watchdog exhaustion).
+
 ## Slash commands (ARC-178 / ARC-179 / ARC-191)
 
 Reviewers can drive Sigilix from any PR comment without pushing a no-op commit. Currently live:
@@ -731,16 +775,21 @@ Burst behavior:
 
 - Concurrent invocations of the same slash command on the same PR are coalesced for 60s via a per-`(cmd, PR)` KV lock (`slash-cmd:<cmd>:<owner>/<repo>#<n>`). The first invocation enqueues the job; subsequent invocations within the window log `slash-command-coalesced` and return 202 silently. The key includes the command name so different commands on the same PR don't accidentally suppress each other.
 
+Visible ack:
+
+- The bot posts a 👀 reaction on the source comment within ~1s of webhook delivery (immediately after ACL + coalesce gates pass) so reviewers see Sigilix received the command before the queue-side LLM run completes (~30-90s typical). Best-effort — a reaction-API failure is logged and the actual command still runs.
+
 Unsupported subcommands (`/sigilix ask`) are reserved for follow-up issues. Until they ship, those invocations fall silently through to the @-mention pipeline.
 
 ## CI / auto-deploy
 
-The `.github/workflows/deploy.yml` Action deploys on every push to `main`. Add two repo secrets:
+Deploys are owned by **Cloudflare Workers Builds** — the GitHub integration on the worker's CF dashboard auto-deploys on every push (including PR pushes; the `mode=off` env-var default keeps new code paths dormant in production until explicitly flipped).
 
-- `CLOUDFLARE_API_TOKEN` — generate at <https://dash.cloudflare.com/profile/api-tokens> with the **"Edit Cloudflare Workers"** template.
-- `CLOUDFLARE_ACCOUNT_ID` — find in the Workers dashboard sidebar.
+**Build command (test+typecheck gate):** the dashboard's build command is `npm run build`, and `npm run build` is wired to `tsc --noEmit && vitest run` — so a failing typecheck OR a failing vitest run aborts the build before `wrangler deploy` ever runs. A broken commit can never produce a production deploy.
 
-Push to main → Worker redeploys automatically.
+**Deploy command:** `npx wrangler deploy` (NOT `npx wrangler versions upload`). DO migrations require a non-versioned deployment, so gradual deployments would fail with CF error 10211. See <https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/#gradual-deployments-for-durable-objects>.
+
+`.github/workflows/ci.yml` ALSO runs typecheck + tests on every PR for fast in-PR feedback (separate from the dashboard-side gate; the dashboard's gate is the load-bearing pre-deploy check).
 
 ## Local dev
 
@@ -760,8 +809,7 @@ Sigilix/
 ├── tsconfig.json
 ├── wrangler.toml                          # Cloudflare config + KV/Vectorize bindings + secrets list
 ├── .dev.vars.example                      # local secret template (.dev.vars is gitignored)
-├── .github/workflows/deploy.yml           # auto-deploy on push to main
-├── .github/workflows/ci.yml               # PR typecheck (lint job for branch protection)
+├── .github/workflows/ci.yml               # PR typecheck + tests (deploys are owned by Cloudflare Workers Builds)
 ├── .github/workflows/codebase-index.yml   # reusable workflow — auto-reindex on push to dev/main
 ├── examples/openclaw-index.yml            # template caller for each tracked repo
 ├── scripts/index-repo.mjs                 # CLI indexer (chunk + embed + upsert to Vectorize)

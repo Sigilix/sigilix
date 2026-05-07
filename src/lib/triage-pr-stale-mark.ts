@@ -207,7 +207,7 @@ export async function handlePrStaleMark(args: PrStaleMarkArgs): Promise<void> {
   }
   const manifest = result.manifest
   if (manifest.reviewedAt > manifestSnapshot.reviewedAt) {
-    console.log(JSON.stringify({ event: "review-stale-superseded", owner, repo, prNumber }))
+    console.log(JSON.stringify({ event: "review-stale-superseded", dedupe_system: "kv", owner, repo, prNumber }))
     return
   }
 

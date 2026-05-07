@@ -130,6 +130,7 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
   if (seen) {
     console.log(JSON.stringify({
       event: "pr-improve-skipped",
+      dedupe_system: "kv",
       reason: "already_ran",
       owner, repo, prNumber, headSha: headSha.slice(0, 7),
     }))

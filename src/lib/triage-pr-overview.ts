@@ -67,7 +67,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   // blocked by a stale lock.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
   if (await env.OPENCLAW_STATE.get(dedupeKey)) {
-    console.log(`pr-overview already running for ${dedupeKey} — skipping`)
+    console.log(JSON.stringify({
+      event: "pr-overview-skipped",
+      dedupe_system: "kv",
+      reason: "already_running",
+      owner, repo, prNumber, headSha: headSha.slice(0, 7),
+    }))
     return
   }
   await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {

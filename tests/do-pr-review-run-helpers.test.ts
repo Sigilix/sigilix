@@ -259,6 +259,95 @@ describe("decideRunResultAction", () => {
     )
     expect(r.transition).toBe("history")
   })
+
+  // Codex P2: terminal current-state must not be flipped by late
+  // success/terminal /run-result. Watchdog-terminal already wrote
+  // history; the late result is a leftover from the abandoned
+  // attempt and belongs in history.
+  it("current state=failed (watchdog-terminal) + late status=success → history (no-flip)", () => {
+    const s = makeState({
+      state: "failed", runId: "rid-1", consumerId: "c-A", attempts: 3,
+    })
+    const r = decideRunResultAction(
+      s,
+      { runId: "rid-1", consumerId: "c-A", status: "success" },
+      MAX_RETRIES,
+    )
+    expect(r.transition).toBe("history")
+  })
+
+  it("current state=failed + late status=terminal → history (no-flip)", () => {
+    const s = makeState({
+      state: "failed", runId: "rid-1", consumerId: "c-A", attempts: 3,
+    })
+    const r = decideRunResultAction(
+      s,
+      {
+        runId: "rid-1", consumerId: "c-A", status: "terminal",
+        error: { stage: "submit-422", message: "x" },
+      },
+      MAX_RETRIES,
+    )
+    expect(r.transition).toBe("history")
+  })
+
+  it("current state=done + late status=transient → history (no-flip)", () => {
+    const s = makeState({
+      state: "done", runId: "rid-1", consumerId: "c-A", attempts: 1,
+    })
+    const r = decideRunResultAction(
+      s,
+      {
+        runId: "rid-1", consumerId: "c-A", status: "transient",
+        error: { stage: "github-5xx", message: "503" },
+      },
+      MAX_RETRIES,
+    )
+    expect(r.transition).toBe("history")
+  })
+
+  // Codex P1: only state==="running" accepts /run-result mutations.
+  // Late posts from a watchdog-abandoned attempt must not cancel the
+  // retry alarm or reset backoff.
+  it("current state=failed-transient (watchdog rescheduled retry) + late same-runId same-consumer success → history (no-flip, retry preserved)", () => {
+    const s = makeState({
+      state: "failed-transient", runId: "rid-1", consumerId: "c-A", attempts: 1,
+    })
+    const r = decideRunResultAction(
+      s,
+      { runId: "rid-1", consumerId: "c-A", status: "success" },
+      MAX_RETRIES,
+    )
+    expect(r.transition).toBe("history")
+  })
+
+  it("current state=queued (retry alarm requeued) + late same-runId same-consumer transient → history (no-flip, no double-schedule)", () => {
+    const s = makeState({
+      state: "queued", runId: "rid-1", consumerId: "c-A", attempts: 2,
+    })
+    const r = decideRunResultAction(
+      s,
+      {
+        runId: "rid-1", consumerId: "c-A", status: "transient",
+        error: { stage: "github-5xx", message: "503" },
+      },
+      MAX_RETRIES,
+    )
+    expect(r.transition).toBe("history")
+    expect(r.nextAlarmAt).toBeUndefined()
+  })
+
+  it("current state=idle + same-runId result → history", () => {
+    const s = makeState({
+      state: "idle", runId: "rid-1", consumerId: "c-A", attempts: 1,
+    })
+    const r = decideRunResultAction(
+      s,
+      { runId: "rid-1", consumerId: "c-A", status: "success" },
+      MAX_RETRIES,
+    )
+    expect(r.transition).toBe("history")
+  })
 })
 
 // ─── pruneHistoryRecords ─────────────────────────────────────

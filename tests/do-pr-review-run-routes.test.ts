@@ -296,6 +296,47 @@ describe("PrReviewRunDO /pickup", () => {
     const res = await postJson(instance, "/pickup", { runId: "anything", consumerId: "any" })
     expect(res.status).toBe(410)
   })
+
+  // Codex P2 regression: shadow-mode pickups must NOT arm a
+  // watchdog/retry pipeline — shadow runs are observation-only.
+  it("shadow-mode pickup does NOT arm watchdog alarm or alarmKind", async () => {
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    // Shadow-mode enqueue.
+    await postJson(instance, "/enqueue", makeEnqueueReq({ mode: "shadow" }))
+    const runId = (state.store.get("state") as RunState).runId
+    expect(state.alarms.alarmAt).toBeNull()  // shadow doesn't arm
+    expect((state.store.get("state") as RunState).alarmKind).toBeUndefined()
+
+    const res = await postJson(instance, "/pickup", { runId, consumerId: "consumer-A" })
+    expect(res.status).toBe(200)
+    // Pickup must NOT have armed an alarm or set alarmKind.
+    expect(state.alarms.alarmAt).toBeNull()
+    const after = state.store.get("state") as RunState
+    expect(after.alarmKind).toBeUndefined()
+    expect(after.alarmTargetRunId).toBeUndefined()
+  })
+
+  // Codex P2 regression: /pickup must refresh the watchdog so the
+  // timer measures from pickup-time (when the consumer actually
+  // starts) rather than enqueue-time. Otherwise a queue-backlog
+  // delay can cause the watchdog to fire while a legitimately
+  // running consumer is still within its allowed processing window.
+  it("claim refreshes the watchdog alarm to now+watchdogMs", async () => {
+    const { instance, state, runId } = await setupQueuedRun()
+    const enqueueAlarmAt = state.alarms.alarmAt
+    expect(enqueueAlarmAt).not.toBeNull()
+    // Simulate time passing in the queue.
+    const beforePickup = Date.now()
+    const res = await postJson(instance, "/pickup", { runId, consumerId: "consumer-A" })
+    expect(res.status).toBe(200)
+    const afterAlarm = state.alarms.alarmAt
+    expect(afterAlarm).not.toBeNull()
+    // The alarm should be (re)scheduled at >= now (with watchdogMs offset),
+    // i.e. strictly later than the enqueue-time alarm value.
+    expect(afterAlarm!).toBeGreaterThanOrEqual(beforePickup)
+  })
 })
 
 // ─── /run-result ──────────────────────────────────────────────
@@ -387,6 +428,47 @@ describe("PrReviewRunDO /run-result", () => {
     expect(res.status).toBe(200)
     const after = state.store.get("state") as RunState
     expect(after.state).toBe(before)
+    // Different runId → write to run:OLD-runId history record.
+    expect(state.store.has("run:OLD-runId")).toBe(true)
+  })
+
+  // Codex P2 regression: late same-runId result must NOT overwrite
+  // an already-written terminal history record.
+  it("late success after watchdog-terminal does NOT overwrite the failed history record", async () => {
+    const { instance, state, runId, consumerId } = await setupRunningRun()
+    // Simulate watchdog-terminal completing the run already.
+    const cur = state.store.get("state") as RunState
+    state.store.set("state", { ...cur, state: "failed", finishedAt: "2026-05-07T06:00:00.000Z" })
+    state.store.set(`run:${runId}`, {
+      runId, headSha: cur.headSha, finalState: "failed",
+      attempts: cur.attempts, startedAt: cur.startedAt,
+      finishedAt: "2026-05-07T06:00:00.000Z",
+      lastError: { stage: "watchdog", message: "timeout" },
+    })
+
+    const res = await postJson(instance, "/run-result", {
+      runId, consumerId, status: "success",  // late "success"
+    })
+    expect(res.status).toBe(200)
+    // Current state still failed.
+    const after = state.store.get("state") as RunState
+    expect(after.state).toBe("failed")
+    // History record still says failed (not flipped to done).
+    const rec = state.store.get(`run:${runId}`) as { finalState: string }
+    expect(rec.finalState).toBe("failed")
+  })
+
+  it("consumerId mismatch on running run does NOT write a half-baked same-runId history record", async () => {
+    const { instance, state, runId } = await setupRunningRun()
+    // No history record exists yet — run is still running.
+    expect(state.store.has(`run:${runId}`)).toBe(false)
+
+    const res = await postJson(instance, "/run-result", {
+      runId, consumerId: "consumer-OLD", status: "success",
+    })
+    expect(res.status).toBe(200)
+    // Still no history record at run:<existing.runId>.
+    expect(state.store.has(`run:${runId}`)).toBe(false)
   })
 })
 

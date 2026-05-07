@@ -186,6 +186,13 @@ export class PrReviewRunDO extends DurableObject<Env> {
     }
 
     // claim
+    const config = resolveDoConfig(this.env)
+    // Post-mode runs were armed with alarmKind at /enqueue; shadow
+    // mode skips dispatch + watchdog entirely (observation-only).
+    // Refresh the watchdog only for post-mode runs so a stray
+    // /pickup on a shadow run can't accidentally arm the retry
+    // pipeline.
+    const isPostMode = existing!.alarmKind !== undefined
     const updated: RunState = {
       ...existing!,
       state: "running",
@@ -193,7 +200,18 @@ export class PrReviewRunDO extends DurableObject<Env> {
       pickedUpAt: existing!.pickedUpAt ?? nowIso(),
       lastActivityAt: nowIso(),
     }
+    if (isPostMode) {
+      updated.alarmTargetRunId = existing!.runId
+      updated.alarmKind = "watchdog"
+    }
     await this.ctx.storage.put(STATE_KEY, updated)
+    if (isPostMode) {
+      // Refresh watchdog: measure from pickup-time, not enqueue-time.
+      // A queue backlog could otherwise burn most of the budget
+      // before the consumer even starts.
+      const watchdogAt = Date.now() + config.watchdogMs
+      await this.ctx.storage.setAlarm(watchdogAt)
+    }
 
     emit("do-review-picked-up", {
       owner: updated.owner, repo: updated.repo, prNumber: updated.prNumber,
@@ -219,21 +237,32 @@ export class PrReviewRunDO extends DurableObject<Env> {
     const decision = decideRunResultAction(existing, body, config.maxRetries)
 
     if (decision.transition === "history") {
-      // Superseded consumer / runId — record the result in history
-      // without touching current state.
-      const record: RunRecord = {
-        runId: body.runId,
-        headSha: existing.headSha,
-        finalState: body.status === "success" ? "done" : "failed",
-        attempts: existing.attempts,
-        startedAt: existing.startedAt,
-        finishedAt: nowIso(),
-        ...(body.error ? { lastError: body.error } : {}),
+      // Superseded consumer / superseded runId / late terminal —
+      // record telemetry without touching current state.
+      //
+      // We only write a `run:<runId>` history record when the
+      // posted runId differs from the current state's runId. For
+      // same-runId late posts (e.g. consumerId-mismatch on a
+      // running run, or late result after watchdog-terminal), the
+      // record at `run:<existing.runId>` is either already the
+      // canonical terminal record or is being managed by the live
+      // run — overwriting it here would corrupt history.
+      if (body.runId !== existing.runId) {
+        const record: RunRecord = {
+          runId: body.runId,
+          headSha: existing.headSha,
+          finalState: body.status === "success" ? "done" : "failed",
+          attempts: existing.attempts,
+          startedAt: existing.startedAt,
+          finishedAt: nowIso(),
+          ...(body.error ? { lastError: body.error } : {}),
+        }
+        await this.ctx.storage.put(`run:${body.runId}`, record)
       }
-      await this.ctx.storage.put(`run:${body.runId}`, record)
       emit("do-review-result-superseded", {
         owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
         runId: body.runId, currentRunId: existing.runId,
+        sameRunId: body.runId === existing.runId,
       })
       return jsonResponse(200, { recorded: "history" })
     }
@@ -247,6 +276,12 @@ export class PrReviewRunDO extends DurableObject<Env> {
     if (body.error) updated.lastError = body.error
     if (decision.transition === "done" || decision.transition === "failed") {
       updated.finishedAt = nowIso()
+      // Cancel any pending retry/watchdog alarm — the run has
+      // reached a terminal state, so no further alarm should fire.
+      delete (updated as { alarmKind?: string }).alarmKind
+      delete (updated as { alarmTargetRunId?: string }).alarmTargetRunId
+      delete (updated as { nextRetryAt?: string }).nextRetryAt
+      await this.ctx.storage.deleteAlarm()
     }
     if (decision.transition === "failed-transient" && decision.nextAlarmAt !== undefined) {
       updated.alarmTargetRunId = existing.runId
@@ -322,6 +357,159 @@ export class PrReviewRunDO extends DurableObject<Env> {
       history: historyRecords,
     }
     return jsonResponse(200, found)
+  }
+
+  // ── alarm() — retry + watchdog (Task 6) ─────────────────────
+  //
+  // DO setAlarm carries no payload; the kind + target runId are
+  // persisted on RunState so alarm() can route correctly. Stale
+  // alarms (state.runId !== alarmTargetRunId) become no-ops with
+  // telemetry — this happens when /enqueue superseded the run before
+  // the alarm fired.
+
+  override async alarm(): Promise<void> {
+    const state = await this.ctx.storage.get<RunState>(STATE_KEY)
+    if (!state) {
+      emit("do-review-alarm-no-state", {})
+      return
+    }
+    const kind = state.alarmKind
+    if (!kind) {
+      emit("do-review-alarm-no-kind", {
+        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        runId: state.runId,
+      })
+      return
+    }
+    if (state.alarmTargetRunId && state.alarmTargetRunId !== state.runId) {
+      emit("do-review-alarm-stale", {
+        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        runId: state.runId, alarmTargetRunId: state.alarmTargetRunId, kind,
+      })
+      return
+    }
+    if (kind === "retry") {
+      await this.handleRetryAlarm(state)
+    } else if (kind === "watchdog") {
+      await this.handleWatchdogAlarm(state)
+    }
+  }
+
+  private async handleRetryAlarm(state: RunState): Promise<void> {
+    // Guard: a retry alarm that fires after the run has already
+    // reached a terminal state must NOT resurrect it. Race window:
+    // /run-result success/terminal lands after watchdog scheduled
+    // the retry alarm but before that alarm fired.
+    if (state.state === "done" || state.state === "failed") {
+      emit("do-review-retry-noop", {
+        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        runId: state.runId, currentState: state.state,
+      })
+      return
+    }
+    // SINGLE-INCREMENT-POINT (spec §4.6a): retry-alarm fire is the
+    // only place attempts is incremented. /run-result schedules but
+    // does not increment; alarm-fire is what actually consumes a
+    // retry slot.
+    const config = resolveDoConfig(this.env)
+    const newAttempts = state.attempts + 1
+    await this.env.OPENCLAW_JOBS.send({
+      type: "pr-review",
+      owner: state.owner,
+      repo: state.repo,
+      prNumber: state.prNumber,
+      headSha: state.headSha,
+      installationId: state.installationId,
+      runId: state.runId,
+    })
+    const watchdogAt = Date.now() + config.watchdogMs
+    const updated: RunState = {
+      ...state,
+      state: "queued",
+      attempts: newAttempts,
+      lastActivityAt: nowIso(),
+      alarmTargetRunId: state.runId,
+      alarmKind: "watchdog",
+    }
+    delete (updated as { nextRetryAt?: string }).nextRetryAt
+    delete (updated as { consumerId?: string }).consumerId
+    // Clear stale pickedUpAt so the next attempt's /pickup records
+    // its own timestamp rather than reusing the prior attempt's.
+    delete (updated as { pickedUpAt?: string }).pickedUpAt
+    await this.ctx.storage.put(STATE_KEY, updated)
+    await this.ctx.storage.setAlarm(watchdogAt)
+    emit("do-review-retry-fired", {
+      owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+      runId: state.runId, attempt: newAttempts,
+    })
+  }
+
+  private async handleWatchdogAlarm(state: RunState): Promise<void> {
+    if (state.state === "done" || state.state === "failed") {
+      emit("do-review-watchdog-noop", {
+        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        runId: state.runId, currentState: state.state,
+      })
+      return
+    }
+    const config = resolveDoConfig(this.env)
+    const lastError = {
+      stage: "watchdog",
+      message: `consumer did not report run-result within ${config.watchdogMs}ms`,
+    }
+    if (state.attempts >= config.maxRetries) {
+      const finishedAt = nowIso()
+      const updated: RunState = {
+        ...state,
+        state: "failed",
+        lastActivityAt: nowIso(),
+        finishedAt,
+        lastError,
+      }
+      await this.ctx.storage.put(STATE_KEY, updated)
+      const record: RunRecord = {
+        runId: state.runId,
+        headSha: state.headSha,
+        finalState: "failed",
+        attempts: state.attempts,
+        startedAt: state.startedAt,
+        finishedAt,
+        lastError,
+      }
+      await this.ctx.storage.put(`run:${state.runId}`, record)
+      // Prune history to limit (mirrors /run-result terminal path).
+      const allHistory = await this.collectHistory()
+      const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
+      if (pruned.evicted > 0) {
+        for (const key of Object.keys(allHistory)) {
+          if (!(key in pruned.kept)) {
+            await this.ctx.storage.delete(key)
+          }
+        }
+      }
+      emit("do-review-watchdog-terminal", {
+        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        runId: state.runId, attempts: state.attempts,
+      })
+      return
+    }
+    const nextAlarmAt = Date.now() + nextBackoffMs(state.attempts)
+    const updated: RunState = {
+      ...state,
+      state: "failed-transient",
+      lastActivityAt: nowIso(),
+      lastError,
+      alarmTargetRunId: state.runId,
+      alarmKind: "retry",
+      nextRetryAt: new Date(nextAlarmAt).toISOString(),
+    }
+    await this.ctx.storage.put(STATE_KEY, updated)
+    await this.ctx.storage.setAlarm(nextAlarmAt)
+    emit("do-review-watchdog-transient", {
+      owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+      runId: state.runId, attempts: state.attempts,
+      nextRetryAt: updated.nextRetryAt,
+    })
   }
 
   // ── helpers ─────────────────────────────────────────────────
@@ -449,6 +637,17 @@ export function decideRunResultAction(
     return { transition: "history" }
   }
   if (state.consumerId && state.consumerId !== payload.consumerId) {
+    return { transition: "history" }
+  }
+  // Only an actively-running attempt can submit /run-result. If the
+  // current state is anything else (idle | queued | failed-transient
+  // | done | failed), the caller is a late post from an abandoned
+  // attempt — its watchdog already classified it as transient and
+  // either scheduled a retry (queued | failed-transient) or
+  // finalized the run (done | failed). Accepting the late result
+  // here would either cancel a scheduled retry, reset backoff, or
+  // overwrite a terminal verdict.
+  if (state.state !== "running") {
     return { transition: "history" }
   }
   if (payload.status === "success") {

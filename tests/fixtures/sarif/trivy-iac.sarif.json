@@ -1,0 +1,42 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Trivy",
+          "informationUri": "https://github.com/aquasecurity/trivy",
+          "rules": [
+            {
+              "id": "AVD-KSV-0017",
+              "name": "PrivilegedContainer",
+              "shortDescription": { "text": "Privileged container" },
+              "fullDescription": { "text": "A privileged container has all root capabilities and bypasses kernel security. Reject by default." },
+              "help": { "text": "Set securityContext.privileged: false on the container spec." },
+              "properties": { "tags": ["Kubernetes", "Misconfiguration"] }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "AVD-KSV-0017",
+          "level": "error",
+          "message": { "text": "Container 'web' runs as privileged" },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": { "uri": "k8s/deployment.yaml" },
+                "region": {
+                  "startLine": 14,
+                  "snippet": { "text": "          privileged: true" }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

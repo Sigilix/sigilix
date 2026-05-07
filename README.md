@@ -459,6 +459,34 @@ Per-repo configuration for the AST rule-pack scanner. All subfields optional:
 
 Full rule-pack reference + telemetry events live in the [AST rule-pack scanner section](#ast-rule-pack-scanner-arc-181).
 
+### `sarifEvidence` (object) — ARC-188
+
+Per-repo configuration for the SARIF evidence channel. Reads `.sigilix/trivy.sarif.json` (or configured path) at the PR head and feeds Trivy / Kubescape / any SARIF v2.1.0 producer's findings into the security-specialist prompt as authoritative facts. SBOM (when present in the report) is rendered as a compact metadata block in the synth prompt only.
+
+```json
+{
+  "sarifEvidence": {
+    "enabled": true,
+    "path": ".sigilix/trivy.sarif.json",
+    "severityThreshold": "warning",
+    "disabledRules": ["TRIVY-LIC-001"],
+    "disabledCategories": ["license"]
+  }
+}
+```
+
+- `enabled` (default `true`) — strict-bool kill-switch.
+- `path` (default `.sigilix/trivy.sarif.json`) — single-file path. v1 explicitly does NOT support globs; aggregate multi-tool scans into one SARIF file in your CI (SARIF supports multiple `runs[]` per file).
+- `severityThreshold` (default `"warning"`) — `info` / `warning` / `error`. SARIF `level: "note"` maps to `info`; `level: "none"` is filtered.
+- `disabledRules` (default `[]`) — SARIF rule_ids to silence.
+- `disabledCategories` (default `[]`) — bulk-disable a class: `iac` / `vulnerability` / `license` / `secret` / `misconfiguration` / `other`.
+
+Caps applied to keep prompts predictable: 2 MB report-size cap, 200 findings per scan (excess truncated with telemetry), 10 findings per file in the human-readable prompt block (full set in the synth JSON). Stale-report telemetry fires when SARIF `invocations[].endTimeUtc` is > 7 days old.
+
+License findings route to the `security` specialist (Sigilix has no compliance specialist; security is the closest superset for governance/compliance signal). Path normalization rejects host-absolute, Windows-absolute, UNC, and traversal-shaped paths.
+
+Auto-inline posting is **NOT** wired in v1 — Trivy raw output can be noisy in unfamiliar codebases. Findings only appear in the LLM specialist prompts, not as deterministic comments.
+
 ## Review provenance + stale markers (ARC-184)
 
 After every successful review, Sigilix persists a per-PR **review manifest** to KV (`pr-review-manifest:<owner>/<repo>#<n>`) capturing the inputs the model reviewed against:
@@ -585,6 +613,37 @@ Locked defaults when fields are absent: `{ enabled: true, severityThreshold: "wa
 **v2 future scope:** type-aware rules (requires the TypeScript compiler, much larger bundle), cross-file analysis, custom user-defined rules in JSON/YAML DSL, multi-emit-per-file (currently the rule-pack emits one finding per `Program` visit for `no-await-in-loop`).
 
 **Telemetry:** `ast-rules-scan-skipped` (with reason), `ast-rules-scan-ran` (`filesScanned`, `findingsCount`, `durationMs`), `ast-rules-finding` (per finding with `roleHint`), `ast-rules-scan-skipped-large-file`, `ast-rules-finding-no-review-position`, `ast-rules-parse-failed`, `ast-rules-inline-posted` (per auto-posted comment), `ast-rules-auto-inline-summary`.
+
+## SARIF evidence channel (ARC-188)
+
+Sigilix ingests **SARIF v2.1.0** reports as a generic deterministic evidence channel. Trivy is the prototype consumer (IaC misconfig, dep CVEs, license violations, secret leaks); the channel works for any SARIF-emitting tool — Kubescape, CodeQL, Snyk, Bandit, Semgrep — without code changes. **Always on**, opt-OUT via `sigilix.json` (`sarifEvidence.enabled: false`).
+
+**How it works:**
+
+1. The runner fetches a single SARIF file at `.sigilix/trivy.sarif.json` (or `sarifEvidence.path`) at the PR head SHA.
+2. Defensive parser validates `version: "2.1.0"`; `2.0.0` and malformed reports skip with telemetry.
+3. Each `result` is path-normalized (URI decode → `file://` strip → leading-`./` strip → Windows-separator normalize → traversal-reject → host-absolute-reject; encoded traversal `%2e%2e/` is caught after decode), filtered against the PR's `+`-line set, and run through the multi-source taxonomy resolver (`result.taxa[]` de-referenced against `runs[].taxonomies[]`, then `properties.tags[]`, then `rule.id` substring, then `rule.name`, then `tool.driver.name`).
+4. Findings emit into the security-specialist prompt as authoritative facts. SBOM-flagged runs produce a compact metadata block (≤20 lines: package count + top-N direct deps + license counts) routed to the synth prompt only — for Fix Plan ordering (direct-dep findings outrank deep transitives).
+
+**Categorization:**
+
+| Category | Detected via | `roleHint` |
+|---|---|---|
+| `iac` / `misconfiguration` | `Kubernetes`/`Helm`/`Dockerfile`/`Terraform`/`AVD-KSV-` ruleId | `security` |
+| `vulnerability` | `CVE-`/`GHSA-` ruleId or `Vulnerability` tag | `security` |
+| `license` | `License` tag or keyword | `security` (Sigilix has no compliance specialist) |
+| `secret` | `Secret`/`credential` tag | `security` |
+| `other` | unmatched fallback | `security` |
+
+**Caps + stale telemetry:** 2 MB report cap (pre-parse), 200 findings per scan (excess truncated + `sarif-evidence-truncated`), 10 findings per file in the human-readable prompt block (full set in synth JSON), stale-report telemetry when `invocations[].endTimeUtc` > 7 days old.
+
+**Path-only fallback:** IaC findings often lack a line number. The runner keeps these when the path is in the PR's changed-file set.
+
+**Auto-inline posting NOT in v1.** Trivy raw output is too noisy to deterministically comment without LLM review; we let the security specialist judge each finding before it surfaces. Defer to v2 once we have FP-rate telemetry from real PRs.
+
+**Single-file model.** Multi-tool aggregation is the user's CI's responsibility — SARIF supports multiple `runs[]` in a single file. v2 candidate: glob support + GHA workflow-run artifact fetch.
+
+**Telemetry:** `sarif-evidence-scan-skipped` (with reason), `sarif-evidence-scan-ran` (with `findingsCount`, `resultsConsidered`, `durationMs`), `sarif-evidence-finding` (per emitted finding), `sarif-evidence-truncated` (when 200-cap fires), `sarif-evidence-stale-report` (with `ageHours` when > 7d), `sarif-evidence-parse-failed`, `unsupported-sarif-version`.
 
 ## Slash commands (ARC-178 / ARC-179 / ARC-191)
 

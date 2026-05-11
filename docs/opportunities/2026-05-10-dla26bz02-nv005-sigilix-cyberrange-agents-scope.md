@@ -10,6 +10,8 @@ Working posture: Arc & Anchor-only SBIR pursuit using synthetic/public lab targe
 
 Recommendation: pursue only if `DLA26BZ02-NV006` does not consume all proposal bandwidth, or if the team decides to submit two Sigilix proposals. This is a strong Sigilix technical fit, but it is more sensitive than RMF Preflight because cyber automation can be read as risky if the safety boundary is weak.
 
+Approval-likelihood priority: **#3 of 3** current Arc & Anchor-only SBIR targets. It remains the second-best Sigilix-only proposal, but `DLA26BZ02-NV010` ranks slightly higher if the priority is approval likelihood across all Arc & Anchor repos.
+
 Arc & Anchor-only likelihood score: `5.5 / 10`.
 
 Planning estimate:
@@ -341,4 +343,3 @@ Choose this proposal if:
 - We are comfortable writing a tight cyber-safety narrative.
 
 Do not choose this as the only proposal if the funding strategy needs the highest probability path. RMF Preflight is cleaner for Arc & Anchor-only pursuit. CyberRange Agents is a credible second bet because the technical fit is real, but the proposal will be judged more harshly if the safety boundary is vague.
-

@@ -23,7 +23,11 @@ That constraint changes the ranking materially:
 - **CMMC/ITAR-heavy topics are possible but should be treated as higher-friction** unless the demo is
   clearly unclassified, synthetic-data based, and bounded.
 
-The strongest current repo-to-topic fits are:
+The priority below is based on **approval likelihood for an Arc & Anchor-only application**, not only
+technical fit. Where product fit and approval likelihood diverge, the order favors the topic that is
+easier to defend with our current repos, a Phase 0 demo, and no formal partner.
+
+The strongest current repo-to-topic fits in approval-likelihood order are:
 
 1. **DLA26BZ02-NV006: AI-Assisted RMF Pre-Adjudication for Research, Development, and Rapid
    Prototyping Environments**
@@ -32,19 +36,20 @@ The strongest current repo-to-topic fits are:
    - Normal Phase I, not Direct-to-Phase-II.
    - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
    - Strong fit with Sigilix review, evidence, audit, and human-attestation patterns.
-2. **DLA26BZ02-NV005: Strengthening Defensive Cybersecurity and Penetration Testing Through Agentic AI
+2. **DLA26BZ02-NV010: Enhancing Tertiary Manufacturing Capacity Utilization with Secure Data Practices**
+   - Best RubberFit manufacturing-operations fit.
+   - SBIR, not STTR.
+   - Normal Phase I.
+   - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
+   - No ITAR flag in DSIP detail, and lower misuse-risk than the agentic cyber topic.
+3. **DLA26BZ02-NV005: Strengthening Defensive Cybersecurity and Penetration Testing Through Agentic AI
    and Automation**
    - Strong fit for Sigilix's agentic/security direction.
    - SBIR, not STTR.
    - Normal Phase I.
    - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
-   - Needs careful cyber-safety scoping and a controlled, defensive lab demo.
-3. **DLA26BZ02-NV010: Enhancing Tertiary Manufacturing Capacity Utilization with Secure Data Practices**
-   - Best RubberFit manufacturing-operations fit.
-   - SBIR, not STTR.
-   - Normal Phase I.
-   - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
-   - No ITAR flag in DSIP detail.
+   - Third by approval likelihood because the cyber-safety, ITAR/EAR, and misuse-control story must
+     be very tight.
 4. **OSW26BZ02-DV003: Generative AI for Secure Workflow Automation and Compliance**
    - Strong technical fit for Sigilix SecureFlow.
    - SBIR, not STTR.
@@ -65,18 +70,36 @@ Excluded despite strong technical fit:
 
 Bottom line:
 
-> If the company-only constraint is firm, pursue `DLA26BZ02-NV006` first, `DLA26BZ02-NV005` second,
-> and `DLA26BZ02-NV010` third. Keep `OSW26BZ02-DV003` as a separate stretch only if we can build a
-> strong demo and clearly show existing production Sigilix evidence. Do not spend proposal time on
-> STTR topics unless a formal research institution partner becomes available.
+> If the company-only constraint is firm, pursue `DLA26BZ02-NV006` first, `DLA26BZ02-NV010` second,
+> and `DLA26BZ02-NV005` third by approval likelihood. If the team wants a Sigilix-only package, use
+> `DLA26BZ02-NV005` as the second proposal instead of `DLA26BZ02-NV010`, but recognize that it carries
+> higher cyber-safety and export-control scrutiny. Keep `OSW26BZ02-DV003` as a separate stretch only if
+> we can build a strong demo and clearly show existing production Sigilix evidence. Do not spend
+> proposal time on STTR topics unless a formal research institution partner becomes available.
+
+## Approval-Likelihood Priority
+
+| Priority | Topic/application number | Product line | Likelihood score | Funding cap | Why this rank |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `DLA26BZ02-NV006` | Sigilix RMF Preflight | 7 / 10 | Phase I: up to $100,000. Phase II: up to $1,000,000. | Best balance of current Sigilix evidence, normal Phase I expectations, controlled synthetic demo path, and clear human-attested compliance value. |
+| 2 | `DLA26BZ02-NV010` | RubberFit CapacityNet | 6 / 10 | Phase I: up to $100,000. Phase II: up to $1,000,000. | Slightly weaker repo evidence than Sigilix, but approval odds are helped by normal Phase I, no topic-level ITAR flag in DSIP detail, lower AI misuse risk, and a practical synthetic manufacturing-capacity demo. |
+| 3 | `DLA26BZ02-NV005` | Sigilix CyberRange Agents | 5.5 / 10 | Phase I: up to $100,000. Phase II: up to $1,000,000. | Strong Sigilix fit, but approval odds are penalized by agentic cyber misuse concerns, ITAR/EAR language, and the need to prove tightly bounded defensive operation without a defense/security SME. |
+
+Operational interpretation:
+
+- **Best single submission:** `DLA26BZ02-NV006`.
+- **Best two-submission package by approval likelihood:** `DLA26BZ02-NV006` plus `DLA26BZ02-NV010`.
+- **Best two-submission package if we want Sigilix only:** `DLA26BZ02-NV006` plus `DLA26BZ02-NV005`.
+- **Do not lead with D2P2:** `OSW26BZ02-DV003` remains a stretch because Direct-to-Phase-II expects
+  Phase-I-equivalent evidence before award.
 
 ## Funding Snapshot
 
 | Rank | Topic | Program | Proposal Path | Funding Cap | Duration Notes |
 | --- | --- | --- | --- | --- | --- |
 | 1 | `DLA26BZ02-NV006` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Phase I up to 12 months; Phase II up to 24 months. |
-| 2 | `DLA26BZ02-NV005` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Phase I up to 12 months; Phase II up to 24 months. |
-| 3 | `DLA26BZ02-NV010` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Topic text has a duration inconsistency: Phase I header says 6 months, body says within 12 months. Ask in Q&A. Phase II up to 24 months. |
+| 2 | `DLA26BZ02-NV010` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Topic text has a duration inconsistency: Phase I header says 6 months, body says within 12 months. Ask in Q&A. Phase II up to 24 months. |
+| 3 | `DLA26BZ02-NV005` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Phase I up to 12 months; Phase II up to 24 months. |
 | 4 | `OSW26BZ02-DV003` | SBIR | Direct-to-Phase-II | D2P2: up to $2,000,000. | No Phase I award; requires Phase-I-equivalent feasibility evidence. SCO D2P2 period of performance is 12 months. |
 | 5 | `DLA26BZ02-NV004` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | DLA general cap is Phase I up to 12 months; Phase II up to 24 months. Topic does not restate dollar caps in the body. |
 | 6 | `DON26BZ01-NV013` | SBIR | Phase I -> Phase II | Phase I: up to $240,000 total: $140,000 Base + $100,000 Option. Phase II: up to $2,000,000. | Navy Phase I Base and Option are exactly 6 months each. |
@@ -88,8 +111,8 @@ Bottom line:
 | Topic/application number | Topic details | Scope doc | Source PDF attachment |
 | --- | --- | --- | --- |
 | [`DLA26BZ02-NV006`](https://www.dodsbirsttr.mil/topics/api/public/topics/e9ccfc68eff94a35b2a275308a38cd44_86496/details) | `e9ccfc68eff94a35b2a275308a38cd44_86496` | [Sigilix RMF Preflight](2026-05-10-dla26bz02-nv006-sigilix-rmf-preflight-scope.md) | [DLA26BZ02-NV006_DLA_SBIR_26.BZ_R2.pdf](source-pdfs/DLA26BZ02-NV006_DLA_SBIR_26.BZ_R2.pdf) |
-| [`DLA26BZ02-NV005`](https://www.dodsbirsttr.mil/topics/api/public/topics/5bb21baa34404ed48f3488c1d90b3dee_86495/details) | `5bb21baa34404ed48f3488c1d90b3dee_86495` | [Sigilix CyberRange Agents](2026-05-10-dla26bz02-nv005-sigilix-cyberrange-agents-scope.md) | [DLA26BZ02-NV005_DLA_SBIR_26.BZ_R2.pdf](source-pdfs/DLA26BZ02-NV005_DLA_SBIR_26.BZ_R2.pdf) |
 | [`DLA26BZ02-NV010`](https://www.dodsbirsttr.mil/topics/api/public/topics/d05de25f092046b6aeecb1a82cfccfbb_86500/details) | `d05de25f092046b6aeecb1a82cfccfbb_86500` | [RubberFit CapacityNet](2026-05-10-dla26bz02-nv010-rubberfit-capacitynet-scope.md) | [DLA26BZ02-NV010_DLA_SBIR_26.BZ_R2.pdf](source-pdfs/DLA26BZ02-NV010_DLA_SBIR_26.BZ_R2.pdf) |
+| [`DLA26BZ02-NV005`](https://www.dodsbirsttr.mil/topics/api/public/topics/5bb21baa34404ed48f3488c1d90b3dee_86495/details) | `5bb21baa34404ed48f3488c1d90b3dee_86495` | [Sigilix CyberRange Agents](2026-05-10-dla26bz02-nv005-sigilix-cyberrange-agents-scope.md) | [DLA26BZ02-NV005_DLA_SBIR_26.BZ_R2.pdf](source-pdfs/DLA26BZ02-NV005_DLA_SBIR_26.BZ_R2.pdf) |
 
 ## Repository Evidence Inventory
 
@@ -170,7 +193,7 @@ Best proposal directions:
 
 Do not lean on ARC3D for 3D/modeling topics unless a real demo is built first.
 
-## Ranked Topic Shortlist Under Arc & Anchor-Only Constraint
+## Detailed Topic Notes Under Arc & Anchor-Only Constraint
 
 Scoring rule:
 
@@ -180,8 +203,10 @@ Scoring rule:
 - Penalize topics that need classified workflows, government-specific system access, or deep defense
   domain proof before award.
 - Treat probability ranges as rough proposal-planning estimates, not award predictions.
+- Use the Approval-Likelihood Priority table above as the decision order when product fit and approval
+  likelihood diverge.
 
-### 1. DLA26BZ02-NV006: AI-Assisted RMF Pre-Adjudication For R&D Environments
+### DLA26BZ02-NV006: AI-Assisted RMF Pre-Adjudication For R&D Environments
 
 Status: Pre-release
 Open date: 2026-05-27
@@ -247,9 +272,9 @@ Chance estimate if Arc & Anchor builds the demo alone:
 - Competitive Phase I proposal: **45-60%**
 - Award odds: **25-40%**
 
-Recommendation: **Highest-priority company-only topic.**
+Recommendation: **Approval-likelihood priority #1. Highest-priority company-only topic.**
 
-### 2. DLA26BZ02-NV005: Agentic AI For Defensive Cybersecurity And Penetration Testing
+### DLA26BZ02-NV005: Agentic AI For Defensive Cybersecurity And Penetration Testing
 
 Status: Pre-release
 Open date: 2026-05-27
@@ -261,7 +286,7 @@ Funding cap: Phase I up to $100,000; Phase II up to $1,000,000
 CMMC: Level 2 self
 ITAR in DSIP detail: true
 Primary repo fit: Sigilix
-Fit rating: **7.5 / 10 technical, 6.5 / 10 Arc & Anchor-only probability**
+Fit rating: **7.5 / 10 technical, 5.5 / 10 approval likelihood**
 
 Why this fits:
 
@@ -306,10 +331,11 @@ Chance estimate if Arc & Anchor builds the demo alone:
 - Competitive Phase I proposal: **40-55%**
 - Award odds: **20-35%**
 
-Recommendation: **Good second choice if we can keep the demo defensive, auditable, and non-exploit
-by default.**
+Recommendation: **Approval-likelihood priority #3. Best Sigilix-only second proposal if the team does
+not want to split attention into RubberFit, but weaker than `DLA26BZ02-NV010` on approval likelihood
+because of cyber-safety and export-control scrutiny.**
 
-### 3. DLA26BZ02-NV010: Enhancing Tertiary Manufacturing Capacity Utilization With Secure Data Practices
+### DLA26BZ02-NV010: Enhancing Tertiary Manufacturing Capacity Utilization With Secure Data Practices
 
 Status: Pre-release
 Open date: 2026-05-27
@@ -374,9 +400,10 @@ Chance estimate if Arc & Anchor builds the demo alone:
 - Competitive Phase I proposal: **35-50%**
 - Award odds: **20-35%**
 
-Recommendation: **Best non-Sigilix opportunity; pursue only if we want a RubberFit SBIR track.**
+Recommendation: **Approval-likelihood priority #2. Best non-Sigilix opportunity; pursue if we are
+willing to run a distinct RubberFit SBIR track alongside, or instead of, a second Sigilix proposal.**
 
-### 4. OSW26BZ02-DV003: Generative AI For Secure Workflow Automation And Compliance
+### OSW26BZ02-DV003: Generative AI For Secure Workflow Automation And Compliance
 
 Status: Pre-release
 Open date: 2026-05-27
@@ -419,7 +446,7 @@ Recommendation:
 - If pursued, submit from a separate `sigilix-secureflow` repo/demo so it looks like a focused product
   line, not an improvised repackaging of the GitHub bot.
 
-### 5. DLA26BZ02-NV004: Enterprise Digital Thread With Mission-Aware Decision Intelligence
+### DLA26BZ02-NV004: Enterprise Digital Thread With Mission-Aware Decision Intelligence
 
 Status: Pre-release
 Open date: 2026-05-27
@@ -466,7 +493,7 @@ Recommendation:
 - Do not pursue unless the DLA topic language strongly favors small, synthetic Phase I feasibility demos
   after Q&A.
 
-### 6. DON26BZ01-NV013: AI-Assisted Modernization And Optimization Of TMPC Software
+### DON26BZ01-NV013: AI-Assisted Modernization And Optimization Of TMPC Software
 
 Status: Open
 Open date: 2026-05-06
@@ -505,7 +532,7 @@ Recommendation:
 - Do not prioritize unless we intentionally want a Navy software-modernization proposal with higher
   classification and domain risk.
 
-### 7. SF254-D1201: Integrated S&T Insight And Co-Investment Decision Support Platform
+### SF254-D1201: Integrated S&T Insight And Co-Investment Decision Support Platform
 
 Status: Open
 Open date: 2026-04-13
@@ -611,10 +638,11 @@ Reason:
 ## Recommended Pursuit Order
 
 This order assumes no formal research institution, defense prime, university lab, or funded partner.
+It is ordered by approval likelihood, not by whether the product is Sigilix-only.
 
 1. **Primary:** `DLA26BZ02-NV006` with Sigilix RMF Preflight.
-2. **Secondary:** `DLA26BZ02-NV005` with Sigilix CyberRange Agents.
-3. **RubberFit path:** `DLA26BZ02-NV010` with RubberFit CapacityNet.
+2. **Secondary by approval likelihood:** `DLA26BZ02-NV010` with RubberFit CapacityNet.
+3. **Secondary if Sigilix-only:** `DLA26BZ02-NV005` with Sigilix CyberRange Agents.
 4. **Stretch:** `OSW26BZ02-DV003` with Sigilix SecureFlow.
 5. **Lower-probability backup:** `DLA26BZ02-NV004` with Arc Mission Thread.
 6. **Do not pursue solo:** `DON26TZ01-NV008` because it is STTR.
@@ -622,8 +650,10 @@ This order assumes no formal research institution, defense prime, university lab
 Recommended submission posture:
 
 - Submit **one serious primary SBIR** if bandwidth is limited: `DLA26BZ02-NV006`.
-- Submit **two** only if we can build two credible demos without weakening the primary: `DLA26BZ02-NV006`
-  plus either `DLA26BZ02-NV005` or `DLA26BZ02-NV010`.
+- Submit **two by approval likelihood** only if we can build two credible demos without weakening the
+  primary: `DLA26BZ02-NV006` plus `DLA26BZ02-NV010`.
+- Submit **two by Sigilix continuity** if the team wants one codebase/product story: `DLA26BZ02-NV006`
+  plus `DLA26BZ02-NV005`.
 - Keep OSW Direct-to-Phase-II as a separate stretch only if the SecureFlow demo becomes strong enough
   to survive Phase-I-equivalent scrutiny.
 
@@ -639,17 +669,17 @@ Recommended submission posture:
 - Frame Arc & Anchor as the builder/operator, with outside reviewers only as optional non-funded
   validators.
 
-### For DLA26BZ02-NV005
-
-- Build a defensive-only cyber lab with intentionally vulnerable services and strict tool allowlists.
-- Show enumeration, evidence capture, vulnerability explanation, and human approval gates.
-- Emphasize misuse prevention, audit logging, and non-exploit default behavior.
-
 ### For DLA26BZ02-NV010
 
 - Build a RubberFit CapacityNet mock dataset and matcher.
 - Ask Q&A whether educational/research institution partner letters are required or simply helpful.
 - Keep it separate from Sigilix unless we decide RubberFit deserves its own proposal lane.
+
+### For DLA26BZ02-NV005
+
+- Build a defensive-only cyber lab with intentionally vulnerable services and strict tool allowlists.
+- Show enumeration, evidence capture, vulnerability explanation, and human approval gates.
+- Emphasize misuse prevention, audit logging, and non-exploit default behavior.
 
 ### For DON26TZ01-NV008
 

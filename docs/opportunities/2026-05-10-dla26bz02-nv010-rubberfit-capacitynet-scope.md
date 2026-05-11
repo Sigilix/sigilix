@@ -21,11 +21,11 @@ Source context:
 
 ## Top-Line Recommendation
 
-Recommendation: conditional go, but only as a distinct RubberFit SBIR lane after the higher-priority Sigilix DLA topics. This is the best non-Sigilix opportunity because it maps directly to RubberFit manufacturing operations, capacity, suppliers, inventory, optimization, and dashboard evidence. It is weaker than the Sigilix cyber/compliance topics because RubberFit is currently narrower than the requested tertiary manufacturing network and would need a credible synthetic demo plus ideally at least one informal institutional or manufacturing advisor.
+Recommendation: conditional go as approval-likelihood priority **#2 of 3** current Arc & Anchor-only SBIR targets, but only as a distinct RubberFit SBIR lane. This is the best non-Sigilix opportunity because it maps directly to RubberFit manufacturing operations, capacity, suppliers, inventory, optimization, and dashboard evidence. It edges `DLA26BZ02-NV005` on approval likelihood because the topic has no DSIP topic-level ITAR flag in the current scan and carries lower agentic-cyber misuse risk, even though it is a less direct Sigilix story.
 
 Arc & Anchor-only likelihood score: 6 / 10 with current evidence. Increase to 7 / 10 if Phase 0 produces a working CapacityNet demo, a clear data schema, and at least one non-contingent support or discovery letter. Current estimated competitive Phase I proposal odds are 35-50%; award odds are 20-35% because the topic likely attracts teams with existing university, lab, or industrial-base relationships.
 
-Pursuit posture: propose a small, secure, unclassified proof of concept that demonstrates the core mapping, matching, and data-governance mechanics using synthetic and public data only. Do not claim access to real DLA demand, controlled technical data, or institutional production schedules unless those are actually obtained.
+Pursuit posture: propose a small, secure, unclassified proof of concept that demonstrates the core mapping, matching, and data-governance mechanics using synthetic and public data only. Do not claim access to real DLA demand, controlled technical data, or institutional production schedules unless those are actually obtained. If the team wants a Sigilix-only proposal package, deprioritize this in favor of `DLA26BZ02-NV005`; if the team wants maximum approval likelihood across all Arc & Anchor repos, keep this second.
 
 ## Solicitation Snapshot
 
@@ -410,7 +410,8 @@ No-go or pause if any are true:
 - DSIP Q&A says Phase I requires handling CUI, export-controlled technical data, or classified information.
 - The Phase 0 demo cannot be made coherent before the Q&A close date of 2026-06-10.
 - The proposal would depend on unsupported claims about live manufacturing networks or DLA demand access.
-- The team cannot keep this RubberFit lane from distracting from higher-priority Sigilix DLA submissions.
+- The team cannot keep this RubberFit lane from distracting from `DLA26BZ02-NV006`, the primary
+  higher-priority Sigilix submission.
 
 ## Q&A Questions For DSIP
 

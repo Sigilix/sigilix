@@ -10,6 +10,8 @@ Working posture: Arc & Anchor-only SBIR pursuit, with informal RMF reviewer inpu
 
 Recommendation: pursue `DLA26BZ02-NV006` as the first-priority Arc & Anchor-only Sigilix opportunity, provided the team can keep the proposal unclassified, artifact-centric, synthetic/public-data based before award, and explicit that the system supports pre-adjudication only. It must not claim to automate an Authority to Operate (ATO), replace assessors, or reduce RMF governance authority.
 
+Approval-likelihood priority: **#1 of 3** current Arc & Anchor-only SBIR targets.
+
 Likelihood score for Arc & Anchor-only pursuit: `7 / 10`.
 
 Planning estimate:

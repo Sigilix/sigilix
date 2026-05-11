@@ -46,6 +46,203 @@ The proposal should be direct about this:
 > Sigilix reduces AI-framework and software-execution risk, but the Phase II technical plan must add
 > or partner for geospatial scene construction, RF/EO/IR physics, and simulator compatibility.
 
+## Separate Repository / Product-Line Strategy
+
+The strongest implementation posture is a **separate repository and product line**:
+
+```text
+sigilix                 -> production AI code-review and assurance product
+sigilix-sceneops        -> defense/geospatial scene-construction control plane
+```
+
+This should still use the Sigilix name, but not live inside the main Sigilix code-review repo. The
+right framing is:
+
+> Sigilix SceneOps is a domain-specific extension of the Sigilix AI orchestration architecture, built
+> as a separate repository and deployment boundary for geospatial, RF, EO/IR, controlled-data, and
+> simulator-integration workflows.
+
+### Why separate it
+
+Separating `sigilix-sceneops` from the main Sigilix repo helps the proposal in several ways.
+
+**1. Compliance boundary.**
+
+The DAF26BZ01-DV005 topic explicitly flags ITAR/EAR risk and CMMC Level 2 self-assessment. The core
+Sigilix repo is a commercial GitHub/Linear code-review product. SceneOps will need different
+controls:
+
+- controlled-data handling;
+- export-control review;
+- U.S.-person / foreign-national participation tracking;
+- CMMC-oriented evidence;
+- local/on-prem model routing;
+- government customer data boundaries;
+- simulator-specific access controls.
+
+A separate repo lets the proposal say we are not bolting controlled-data workflows onto a general
+commercial SaaS surface. We are creating a dedicated controlled-data-ready product boundary.
+
+**2. Heavy dependency boundary.**
+
+Core Sigilix is a Cloudflare Worker. SceneOps needs native/GPU tools:
+
+- GDAL;
+- Rasterio;
+- PDAL;
+- OSMnx;
+- OpenUSD;
+- Blender/BlenderProc;
+- Mitsuba;
+- Sionna RT;
+- libRadtran/Py6S;
+- MLflow;
+- DVC/lakeFS.
+
+Those should not enter the Worker repo. A separate repo can own container images, Python
+environments, GPU job runners, geospatial pipelines, and large artifact schemas while core Sigilix
+stays small, fast, and production-safe.
+
+**3. Licensing boundary.**
+
+Several useful demo tools have GPL or mixed licensing concerns. A separate repo can make component
+boundaries explicit:
+
+- permissive core orchestration code;
+- external CLI/container calls for GPL tools;
+- generated artifacts tracked separately;
+- SBOM and license review per container.
+
+That matters for commercialization and government transition. It is easier to explain than mixing
+GPL-adjacent geospatial/rendering pipelines into the existing Sigilix product repo.
+
+**4. Data and artifact boundary.**
+
+SceneOps will produce large and potentially sensitive artifacts:
+
+- DEM/DSM clips;
+- land-cover rasters;
+- OSM/vector layers;
+- point-cloud derivatives;
+- OpenUSD/glTF/3D Tiles scenes;
+- rendered images;
+- RF maps;
+- ground-truth labels;
+- MLflow/DVC/lakeFS run records.
+
+These should not share assumptions with a code-review repo. A separate repo can define object-storage
+layout, STAC catalogs, data-retention rules, and controlled export rules from day one.
+
+**5. Proposal credibility.**
+
+A separate `sigilix-sceneops` repo makes the Phase II plan look like a deliberate product line, not
+a one-off folder in a code-review tool. The proposal can claim:
+
+- the existing Sigilix repo proves the production AI orchestration substrate;
+- the new SceneOps repo is the dedicated Phase II prototype and transition vehicle;
+- shared ideas flow from Sigilix, but scene-generation work has its own governance and compliance
+  boundary.
+
+### Suggested naming
+
+Best names:
+
+- **Sigilix SceneOps**: strongest for the proposal; implies operations/control plane.
+- **Sigilix GeoScene**: clearer geospatial signal, less tied to operations.
+- **Sigilix Multimodal SceneOps**: verbose but very aligned to the topic.
+- **Sigilix Synthetic SceneOps**: emphasizes synthetic data, but less broad.
+
+Recommended:
+
+```text
+Product name: Sigilix SceneOps
+Repository: arc-and-anchor/sigilix-sceneops
+Package namespace: @arc-and-anchor/sigilix-sceneops or sigilix-sceneops
+```
+
+Avoid names like `sigilix-defense` or `sigilix-dod` in the repo. They narrow the commercial story
+and make export-control questions more prominent than necessary. The product can serve defense first
+while keeping a dual-use geospatial/simulation story.
+
+### Repository structure
+
+Proposed v1 layout:
+
+```text
+sigilix-sceneops/
+  docs/
+    opportunity/
+    architecture/
+    compliance/
+    adapters/
+  sceneir/
+    schema/
+    examples/
+  pipelines/
+    ingest-geospatial/
+    build-sceneir/
+    export-usd/
+    export-3dtiles/
+    render-eo/
+    render-rf/
+    validate/
+  workers/
+    api/
+    job-runner/
+    dashboard/
+  containers/
+    gdal-rasterio/
+    pdal/
+    blenderproc/
+    sionna-rt/
+    radiative-transfer/
+  examples/
+    public-roi-demo/
+  tests/
+    fixtures/
+```
+
+The main Sigilix repo should only reference SceneOps at the documentation/product level unless and
+until shared packages are intentionally extracted.
+
+### Shared components without tight coupling
+
+Do not import the main Sigilix Worker directly into SceneOps at first. Instead, copy or reimplement
+small patterns where needed, then extract shared packages later if both repos stabilize.
+
+Possible future shared packages:
+
+- `@arc-and-anchor/sigilix-agent-core`: structured model calls, JSON parsing, retry/fallback policy.
+- `@arc-and-anchor/sigilix-evidence`: evidence records, provenance rendering, report schemas.
+- `@arc-and-anchor/sigilix-policy`: sensitive-data gates, model-routing policies.
+- `@arc-and-anchor/sigilix-status`: job/run state and status projection types.
+
+Do not extract these prematurely. The first Phase II objective is credible delivery, not internal
+platform elegance.
+
+### Proposal language for separate repo
+
+Use:
+
+> Sigilix SceneOps will be developed as a dedicated sibling repository to the existing Sigilix
+> code-review product. This preserves the proven Sigilix AI orchestration architecture while creating
+> a separate compliance, data, dependency, and deployment boundary for geospatial scene construction,
+> RF/EO/IR backends, controlled-data workflows, and simulator adapters.
+
+Use:
+
+> The existing Sigilix repository is evidence of production readiness for multi-agent AI workflow
+> orchestration. The SceneOps repository is the Phase II prototype vehicle that adapts those
+> operational patterns to ROI ingestion, SceneIR generation, open-source geospatial/RF/EO
+> processing, validation, and transition-adapter development.
+
+Avoid:
+
+> "We will add scene generation to the existing Sigilix GitHub review bot."
+
+That makes the work sound like a feature extension to a code-review product. It is better framed as
+a new domain product using Sigilix's proven architecture.
+
 ## Core Proposal Positioning
 
 ### What Sigilix can claim today

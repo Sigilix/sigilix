@@ -83,6 +83,14 @@ Bottom line:
 | 7 | `SF254-D1201` | SBIR | Direct-to-Phase-II | D2P2: up to $1,500,000. | No Phase I award; max period of performance is 12 months. |
 | Excluded | `DON26TZ01-NV008` | STTR | Phase I -> Phase II | Phase I: up to $240,000 total: $140,000 Base + $100,000 Option. Phase II: up to $2,000,000. | Attractive funding/fit, but STTR requires a formal research institution partner. |
 
+## Application Links For Tomorrow's Scope Review
+
+| Topic/application number | Topic details | Scope doc | Source PDF attachment |
+| --- | --- | --- | --- |
+| [`DLA26BZ02-NV006`](https://www.dodsbirsttr.mil/topics/api/public/topics/e9ccfc68eff94a35b2a275308a38cd44_86496/details) | `e9ccfc68eff94a35b2a275308a38cd44_86496` | [Sigilix RMF Preflight](2026-05-10-dla26bz02-nv006-sigilix-rmf-preflight-scope.md) | [DLA26BZ02-NV006_DLA_SBIR_26.BZ_R2.pdf](source-pdfs/DLA26BZ02-NV006_DLA_SBIR_26.BZ_R2.pdf) |
+| [`DLA26BZ02-NV005`](https://www.dodsbirsttr.mil/topics/api/public/topics/5bb21baa34404ed48f3488c1d90b3dee_86495/details) | `5bb21baa34404ed48f3488c1d90b3dee_86495` | [Sigilix CyberRange Agents](2026-05-10-dla26bz02-nv005-sigilix-cyberrange-agents-scope.md) | [DLA26BZ02-NV005_DLA_SBIR_26.BZ_R2.pdf](source-pdfs/DLA26BZ02-NV005_DLA_SBIR_26.BZ_R2.pdf) |
+| [`DLA26BZ02-NV010`](https://www.dodsbirsttr.mil/topics/api/public/topics/d05de25f092046b6aeecb1a82cfccfbb_86500/details) | `d05de25f092046b6aeecb1a82cfccfbb_86500` | [RubberFit CapacityNet](2026-05-10-dla26bz02-nv010-rubberfit-capacitynet-scope.md) | [DLA26BZ02-NV010_DLA_SBIR_26.BZ_R2.pdf](source-pdfs/DLA26BZ02-NV010_DLA_SBIR_26.BZ_R2.pdf) |
+
 ## Repository Evidence Inventory
 
 ### Sigilix

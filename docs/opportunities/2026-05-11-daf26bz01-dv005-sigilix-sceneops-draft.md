@@ -1,8 +1,13 @@
 # DAF26BZ01-DV005 Draft: Sigilix SceneOps for Multimodal Scene Construction
 
 Date: 2026-05-11
-Status: Draft proposal artifact
+Status: Draft proposal artifact; superseded if pursuing OSW26BZ02-DV003
 Source topic: `DAF26BZ01-DV005: AI Framework for Multimodal Scene Construction and Data Generation`
+
+> Note: This document covers the earlier scene-generation opportunity. The corrected, stronger-fit
+> opportunity is `OSW26BZ02-DV003: Generative AI for Secure Workflow Automation and Compliance`.
+> Use `2026-05-10-osw26bz02-dv003-sigilix-secureflow-draft.md` as the primary proposal draft if
+> pursuing the screenshot topic.
 
 ## Executive Thesis
 

@@ -30,26 +30,31 @@ The strongest current repo-to-topic fits are:
    - Best Arc & Anchor-only Sigilix path.
    - SBIR, not STTR.
    - Normal Phase I, not Direct-to-Phase-II.
+   - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
    - Strong fit with Sigilix review, evidence, audit, and human-attestation patterns.
 2. **DLA26BZ02-NV005: Strengthening Defensive Cybersecurity and Penetration Testing Through Agentic AI
    and Automation**
    - Strong fit for Sigilix's agentic/security direction.
    - SBIR, not STTR.
    - Normal Phase I.
+   - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
    - Needs careful cyber-safety scoping and a controlled, defensive lab demo.
 3. **DLA26BZ02-NV010: Enhancing Tertiary Manufacturing Capacity Utilization with Secure Data Practices**
    - Best RubberFit manufacturing-operations fit.
    - SBIR, not STTR.
    - Normal Phase I.
+   - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
    - No ITAR flag in DSIP detail.
 4. **OSW26BZ02-DV003: Generative AI for Secure Workflow Automation and Compliance**
    - Strong technical fit for Sigilix SecureFlow.
    - SBIR, not STTR.
    - Direct-to-Phase-II, so lower probability without prior defense workflow evidence.
+   - Funding: Direct-to-Phase-II up to $2,000,000 over 12 months.
 5. **DLA26BZ02-NV004: Enterprise Digital Thread with Mission-Aware Decision Intelligence**
    - Adjacent to RubberFit, Predict Market Bot, and Sigilix.
    - SBIR, not STTR.
    - Normal Phase I, but enterprise integration and DLA-system specificity make it harder.
+   - Funding: Phase I up to $100,000; Phase II up to $1,000,000.
 
 Excluded despite strong technical fit:
 
@@ -64,6 +69,19 @@ Bottom line:
 > and `DLA26BZ02-NV010` third. Keep `OSW26BZ02-DV003` as a separate stretch only if we can build a
 > strong demo and clearly show existing production Sigilix evidence. Do not spend proposal time on
 > STTR topics unless a formal research institution partner becomes available.
+
+## Funding Snapshot
+
+| Rank | Topic | Program | Proposal Path | Funding Cap | Duration Notes |
+| --- | --- | --- | --- | --- | --- |
+| 1 | `DLA26BZ02-NV006` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Phase I up to 12 months; Phase II up to 24 months. |
+| 2 | `DLA26BZ02-NV005` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Phase I up to 12 months; Phase II up to 24 months. |
+| 3 | `DLA26BZ02-NV010` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | Topic text has a duration inconsistency: Phase I header says 6 months, body says within 12 months. Ask in Q&A. Phase II up to 24 months. |
+| 4 | `OSW26BZ02-DV003` | SBIR | Direct-to-Phase-II | D2P2: up to $2,000,000. | No Phase I award; requires Phase-I-equivalent feasibility evidence. SCO D2P2 period of performance is 12 months. |
+| 5 | `DLA26BZ02-NV004` | SBIR | Phase I -> Phase II | Phase I: up to $100,000. Phase II: up to $1,000,000. | DLA general cap is Phase I up to 12 months; Phase II up to 24 months. Topic does not restate dollar caps in the body. |
+| 6 | `DON26BZ01-NV013` | SBIR | Phase I -> Phase II | Phase I: up to $240,000 total: $140,000 Base + $100,000 Option. Phase II: up to $2,000,000. | Navy Phase I Base and Option are exactly 6 months each. |
+| 7 | `SF254-D1201` | SBIR | Direct-to-Phase-II | D2P2: up to $1,500,000. | No Phase I award; max period of performance is 12 months. |
+| Excluded | `DON26TZ01-NV008` | STTR | Phase I -> Phase II | Phase I: up to $240,000 total: $140,000 Base + $100,000 Option. Phase II: up to $2,000,000. | Attractive funding/fit, but STTR requires a formal research institution partner. |
 
 ## Repository Evidence Inventory
 
@@ -163,6 +181,7 @@ Close date: 2026-06-24
 Q&A close: 2026-06-10
 Program: SBIR
 Phase path: Phase I / Phase II / Sequential Phase II
+Funding cap: Phase I up to $100,000; Phase II up to $1,000,000
 CMMC: Level 2 self
 ITAR in DSIP detail: true
 Primary repo fit: Sigilix and SecureFlow
@@ -230,6 +249,7 @@ Close date: 2026-06-24
 Q&A close: 2026-06-10
 Program: SBIR
 Phase path: Phase I / Phase II / Sequential Phase II
+Funding cap: Phase I up to $100,000; Phase II up to $1,000,000
 CMMC: Level 2 self
 ITAR in DSIP detail: true
 Primary repo fit: Sigilix
@@ -289,6 +309,7 @@ Close date: 2026-06-24
 Q&A close: 2026-06-10
 Program: SBIR
 Phase path: Phase I / Phase II / Sequential Phase II
+Funding cap: Phase I up to $100,000; Phase II up to $1,000,000
 CMMC: Level 2 self
 ITAR in DSIP detail: false
 Primary repo fit: RubberFit
@@ -355,6 +376,7 @@ Close date: 2026-06-24
 Q&A close: 2026-06-10
 Program: SBIR
 Phase path: Direct to Phase II / Phase II / Sequential Phase II
+Funding cap: Direct-to-Phase-II up to $2,000,000
 CMMC: Level 1
 ITAR in DSIP detail: true
 Primary repo fit: Sigilix
@@ -397,6 +419,7 @@ Close date: 2026-06-24
 Q&A close: 2026-06-10
 Program: SBIR
 Phase path: Phase I / Phase II / Sequential Phase II
+Funding cap: Phase I up to $100,000; Phase II up to $1,000,000
 CMMC: Level 2 self
 ITAR in DSIP detail: true
 Primary repo fit: RubberFit + Sigilix + Predict Market Bot
@@ -443,6 +466,7 @@ Close date: 2026-06-03
 Q&A close: 2026-05-20
 Program: SBIR
 Phase path: Phase I / Phase II / Sequential Phase II
+Funding cap: Phase I up to $240,000 total: $140,000 Base + $100,000 Option; Phase II up to $2,000,000
 CMMC: Level 2 self
 ITAR in DSIP detail: true
 Primary repo fit: Sigilix
@@ -480,6 +504,7 @@ Open date: 2026-04-13
 Close date: 2026-05-13
 Program: SBIR
 Phase path: Direct to Phase II / Phase II / Sequential Phase II
+Funding cap: Direct-to-Phase-II up to $1,500,000
 Primary repo fit: Predict Market Bot + Sigilix
 Fit rating: **6 / 10 technical, 2 / 10 timing**
 
@@ -509,6 +534,7 @@ Open date: 2026-05-06
 Close date: 2026-06-03
 Q&A close: 2026-05-20
 Phase path: Phase I / Phase II / Sequential Phase II
+Funding cap: Phase I up to $240,000 total: $140,000 Base + $100,000 Option; Phase II up to $2,000,000
 CMMC: Level 2 self
 ITAR in DSIP detail: false
 Primary repo fit: Sigilix
@@ -629,5 +655,18 @@ The scan used the DSIP public topics API:
 - `https://www.dodsbirsttr.mil/topics-app/`
 - `https://www.dodsbirsttr.mil/topics/api/public/topics/search`
 - `https://www.dodsbirsttr.mil/topics/api/public/topics/{topicId}/details`
+
+Funding caps were verified against DSIP component instruction PDFs:
+
+- DLA SBIR 26.BZ Release 2 instructions:
+  `https://www.dodsbirsttr.mil/submissions/api/public/download?uploadId=1736714`
+- SCO SBIR 26.BZ Direct-to-Phase-II Release 2 instructions:
+  `https://www.dodsbirsttr.mil/submissions/api/public/download?uploadId=1736475`
+- Navy SBIR 26.BZ Phase I Release 1 instructions:
+  `https://www.dodsbirsttr.mil/submissions/api/public/download?uploadId=1738188`
+- Navy STTR 26.TZ Release 1 instructions:
+  `https://www.dodsbirsttr.mil/submissions/api/public/download?uploadId=1737883`
+- DAF/Space Force SBIR 25.4 D2P2 Release 12 instructions:
+  `https://www.dodsbirsttr.mil/submissions/api/public/download?uploadId=1733239`
 
 Topic statuses and dates can change. Re-run the scan before making a final pursue/no-pursue decision.

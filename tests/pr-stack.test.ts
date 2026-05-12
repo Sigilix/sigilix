@@ -142,6 +142,25 @@ describe("detectStack", () => {
     expect(ctx.root?.number).toBe(42)
   })
 
+  // CodeRabbit PR #72: regression test for multi-hop linear upstack
+  // depth. Pre-fix, depth was computed as `ancestors + 1 + (children
+  // ? 1 : 0)` which undercounts the chain when current PR is at the
+  // bottom of a multi-hop linear stack.
+  it("counts depth correctly for a multi-hop linear upstack from the stack root", () => {
+    const ctx = detectStack({
+      currentPr: current(42, "user-model", "main"),
+      openPrs: [
+        pr(43, "user-routes", "user-model"),
+        pr(44, "user-handlers", "user-routes"),
+      ],
+    })
+    expect(ctx.isStacked).toBe(true)
+    expect(ctx.position).toBe(1)
+    expect(ctx.depth).toBe(3) // #42 + #43 + #44
+    expect(ctx.children.map((c) => c.number)).toEqual([43])
+    expect(ctx.hasUpstackFork).toBe(false)
+  })
+
   it("walks a deeper downstack chain (4 PRs)", () => {
     const ctx = detectStack({
       currentPr: current(45, "user-validation", "user-handlers"),
@@ -297,6 +316,30 @@ describe("detectStack", () => {
     })
     expect(ctx.cycleDetected).toBe(true)
     expect(ctx.ancestors).toEqual([])
+    warnSpy.mockRestore()
+  })
+
+  // Sigilix self-review (PR #72): when the downstack walk degrades
+  // AND children exist, the renderer must signal "parent unknown"
+  // rather than "this PR is the stack root."
+  it("preserves cycleDetected flag when children exist alongside degraded downstack", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const ctx = detectStack({
+      currentPr: current(60, "user-routes", "user-model"),
+      openPrs: [
+        // self-cycle that degrades the downstack walk
+        pr(50, "user-model", "user-model"),
+        // child that uses current PR's head as its base
+        pr(70, "user-handlers", "user-routes"),
+      ],
+    })
+    // isStacked because there's a child; cycleDetected because the
+    // downstack walk hit a cycle and was degraded.
+    expect(ctx.isStacked).toBe(true)
+    expect(ctx.cycleDetected).toBe(true)
+    expect(ctx.parent).toBeNull()
+    expect(ctx.ancestors).toEqual([])
+    expect(ctx.children.map((c) => c.number)).toEqual([70])
     warnSpy.mockRestore()
   })
 

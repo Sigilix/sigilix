@@ -83,6 +83,16 @@ export function renderStackPromptBlock(
     lines.push(
       `- Parent (downstack): #${ctx.parent.number} "${sanitizeTitleForPrompt(ctx.parent.title)}"${authorTag}`,
     )
+  } else if (ctx.cycleDetected || ctx.stackWalkCapped) {
+    // Sigilix self-review (PR #72) catch: when the downstack walk
+    // degraded due to cycle/cap, claiming "this PR is the stack
+    // root" is false — the PR may well have a parent that was lost
+    // to walk degradation. Signal ambiguity so the model considers
+    // downstack-context findings rather than confidently tagging
+    // everything as current-pr.
+    lines.push(
+      "- Parent: unknown (downstack walk degraded — cycle or hop-cap hit; the actual parent may exist but couldn't be determined deterministically)",
+    )
   } else {
     lines.push("- Parent: none (this PR is the stack root)")
   }
@@ -139,6 +149,12 @@ export function renderStackContextSummary(ctx: StackContext): string {
 
   if (ctx.parent) {
     lines.push(`- ⬇ Parent: #${ctx.parent.number} _${escapeForMd(ctx.parent.title)}_`)
+  } else if (ctx.cycleDetected || ctx.stackWalkCapped) {
+    // Mirrors the prompt-block degradation message (Sigilix PR #72
+    // self-review catch). Reviewer-facing copy says "ambiguous" so a
+    // human reading the sticky summary understands the parent isn't
+    // simply absent.
+    lines.push("- ⚠ Parent: unknown (downstack walk degraded)")
   }
   for (const child of ctx.children) {
     lines.push(`- ⬆ Child: #${child.number} _${escapeForMd(child.title)}_`)

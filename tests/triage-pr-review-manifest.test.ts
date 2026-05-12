@@ -18,7 +18,8 @@ const mockGenerate = vi.fn()
 // ARC-182: stack-detection adds a parallel `listOpenPullRequests`
 // call (plus possible follow-up `listPullRequestFiles` for parent
 // overlap). Default both to empty list so the manifest-write test is
-// unaffected.
+// unaffected. CodeRabbit PR #72 minor: both also reset in beforeEach
+// to prevent cross-test bleed.
 const mockListOpenPullRequests = vi.fn(async () => [])
 const mockListPullRequestFiles = vi.fn(async () => [])
 
@@ -88,6 +89,8 @@ beforeEach(() => {
   mockListPullFilesForManifest.mockClear()
   mockGetMergeBase.mockClear()
   mockGenerate.mockClear()
+  mockListOpenPullRequests.mockClear()
+  mockListPullRequestFiles.mockClear()
 })
 
 describe("handlePrReview — review manifest", () => {

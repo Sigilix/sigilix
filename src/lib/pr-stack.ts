@@ -337,9 +337,24 @@ export function detectStack(args: {
   const hasUpstackFork = immediateChildren.length > 1
 
   // ── Position / depth / root ──────────────────────────────────
-
-  const upstackCount = immediateChildren.length > 0 ? 1 : 0
-  const depth = ancestors.length + 1 + upstackCount
+  //
+  // CodeRabbit review (PR #72): the previous `upstackCount = children
+  // ? 1 : 0` undercounted linear upstack chains beyond one hop
+  // (`#42 → #43 → #44` from #42's POV reported depth 2, true 3).
+  // Walk the primary upstack chain (same-author → recency → PR
+  // number — same tiebreaking as the downstack walk) starting from
+  // the first immediate child to count true upstream depth. Fork
+  // branches are still summarized as immediate-children-only via
+  // `hasUpstackFork`; depth uses the PRIMARY chain length, which is
+  // a clearly-defined deterministic choice rather than an arbitrary
+  // pick.
+  let upstackChainCount = 0
+  if (immediateChildren.length > 0) {
+    const primary = immediateChildren[0]!
+    upstackChainCount =
+      1 + walkPrimaryUpstack(primary, peersByBaseKey, currentPr.author)
+  }
+  const depth = ancestors.length + 1 + upstackChainCount
   const position = ancestors.length + 1
   const root: StackPr | null = ancestors.length > 0 ? ancestors[0]! : null
 
@@ -365,6 +380,46 @@ export function detectStack(args: {
     stackWalkCapped: cappedDown,
     hasUpstackFork,
   }
+}
+
+/**
+ * Walk the primary upstack chain from a starting `StackPr` node.
+ * Returns the number of additional upstream PRs discovered (the
+ * starting node itself is counted by the caller). Tiebreaking matches
+ * the downstack walk: same-author → most-recent updated_at → lowest
+ * PR number. Cycle-safe (visited-set) and capped at MAX_CHAIN_HOPS.
+ *
+ * Used by `detectStack` to compute a correct `depth` for multi-hop
+ * linear upstack chains (CodeRabbit PR #72 catch).
+ */
+function walkPrimaryUpstack(
+  startNode: StackPr,
+  peersByBaseKey: Map<string, OpenPrInput[]>,
+  currentAuthor: string | null,
+): number {
+  let count = 0
+  const visited = new Set<number>([startNode.number])
+  let cursorRepo = startNode.headRepo
+  let cursorRef = startNode.headRef
+  while (count < MAX_CHAIN_HOPS) {
+    const childKey = refKey(cursorRepo, cursorRef)
+    const candidates: OpenPrInput[] = peersByBaseKey.get(childKey) ?? []
+    if (candidates.length === 0) break
+    const next: OpenPrInput = candidates.slice().sort((a: OpenPrInput, b: OpenPrInput) => {
+      const aSame = (a.user?.login ?? null) === currentAuthor ? 0 : 1
+      const bSame = (b.user?.login ?? null) === currentAuthor ? 0 : 1
+      if (aSame !== bSame) return aSame - bSame
+      const r = compareRecency(a.updated_at ?? null, b.updated_at ?? null)
+      if (r !== 0) return r
+      return a.number - b.number
+    })[0]!
+    if (visited.has(next.number)) break
+    visited.add(next.number)
+    count++
+    cursorRepo = next.head?.repo?.full_name ?? ""
+    cursorRef = next.head.ref
+  }
+  return count
 }
 
 /** File overlap stats between the current PR's changed-file set and

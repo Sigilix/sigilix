@@ -23,7 +23,7 @@ Graphite-style PR stacks: a PR's base branch is another open PR's head branch. R
 
 ### Module map (new files)
 
-```
+```text
 src/lib/pr-stack.ts                 — pure stack detection + file overlap helpers (~200 LOC)
 src/prompts/pr-stack-prompt.ts      — stack-context prompt block + instruction text
 tests/lib/pr-stack.test.ts          — unit tests for detectStack + file overlap (~250 LOC)
@@ -32,7 +32,7 @@ tests/lib/pr-stack-rendering.test.ts — integration tests for sticky-summary re
 
 ### Modified files
 
-```
+```text
 src/lib/github.ts                       — add listOpenPullRequests()
 src/lib/triage-pr-review.ts             — fetch stack context, inject into prompt, render summary block
 src/lib/triage-pr-review-ensemble.ts    — same, propagated through specialist messages + synthesizer
@@ -132,7 +132,7 @@ export const STACK_AWARENESS_INSTRUCTION: string
 - `""` (empty string) when `!isStacked` — caller can concat freely
 - A formatted block:
 
-```
+```text
 [STACK CONTEXT]
 This PR is position 2 of 3 in a Graphite-style stack.
 - Parent (downstack): #41 "Add user model" by @daniel
@@ -253,7 +253,7 @@ function buildPrompt(ctx: PromptCtx): string {
 
 Add a `### Stack context` section between `### Sigilix Summary` and `### Fix Plan`. Emitted only when `stack.isStacked`:
 
-```
+```text
 ### Stack context
 
 This PR is **#2 of 3** in a stack.
@@ -308,7 +308,7 @@ So we can later measure: what % of reviews are on stacked PRs, distribution of s
 
 ### 10. Tests
 
-```
+```text
 tests/lib/pr-stack.test.ts
   - detectStack: no-stack PR (empty + non-empty openPrs without chain)
   - detectStack: 2-PR stack (current is top, parent is root)

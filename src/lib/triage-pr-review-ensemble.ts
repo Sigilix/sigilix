@@ -266,6 +266,15 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   performance: {
     // Phase 4a.1: glm-5.1 promoted from fallback → primary.
     // Shadow telemetry: glm-5.1 won 6/12 fallback runs, minimax was unreliable.
+    //
+    // ARC-167 spot-check (2026-05-12): swap ratified on a 41-run sample
+    // pulled from production KV. glm-5.1 hits 100% success (26/26) vs
+    // minimax-m2.1's 80% (12/15 with 3 timeouts). Findings depth holds
+    // up — glm-5.1 averages 1.08 findings/verdict (vs 0.92), with 18%
+    // longer body text per finding. The latency tradeoff is real
+    // (glm-5.1 p95 = 144s vs minimax = 86s) but well under the Phase
+    // 4a.3 270s specialist budget. Full analysis in
+    // `.claude/research/arc-167/_report.md`.
     primary: "glm-5.1:cloud",
     retries: 1,
     // Cross-provider fallback retained — kimi-k2.5 same family as logic's

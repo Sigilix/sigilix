@@ -76,6 +76,15 @@ export const PR_REVIEW_SCHEMA = {
           },
           headline: { type: "string" },
           body: { type: "string" },
+          // ARC-182: optional stack-origin tag for findings on PRs
+          // that are part of a Graphite-style stack. Not in `required`
+          // — emitted only when [STACK CONTEXT] is present in the
+          // prompt input. Backwards compatible: existing reviews and
+          // no-stack PRs simply omit the field.
+          stackOrigin: {
+            type: "string",
+            enum: ["current-pr", "downstack-context", "upstack-followup"],
+          },
         },
         required: ["path", "line", "score", "category", "headline", "body"],
       },

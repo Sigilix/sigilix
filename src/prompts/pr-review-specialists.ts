@@ -41,7 +41,8 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "body": "<actionable explanation. Reference identifiers in backticks. End with the minimal fix.>",
       "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
       "primaryLens": "logic" | "security" | "performance" | "tests",
-      "confidenceInLens": 1-5
+      "confidenceInLens": 1-5,
+      "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup"   (OPTIONAL — emit ONLY when a [STACK CONTEXT] block is present in the input. Tag findings introduced or maintained in THIS PR's diff as "current-pr"; tag issues that already exist in a downstack (parent or earlier) PR as "downstack-context" (report for awareness, but DO NOT describe as introduced by this PR); tag issues whose proper fix belongs in an upstack (child or later) PR as "upstack-followup". Default to "current-pr" when uncertain. OMIT this field entirely when no [STACK CONTEXT] block is in the input — that signals an unstacked PR and matches the no-stack baseline shape.)
     }
   ]
 }
@@ -209,7 +210,8 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "score": 1-5,
         "headline": "...",
         "body": "...",
-        "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs"
+        "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
+        "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup"   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
       }
     ]
   },
@@ -278,6 +280,17 @@ export interface SpecialistInitialMessageCtx {
    * after guidance, before the diff.
    */
   profile?: "chill" | "assertive"
+  /**
+   * ARC-182: pre-rendered Graphite-style stack-context block. Injected
+   * BEFORE the diff so the specialist tags findings with stackOrigin.
+   * Empty/absent = no stack (or no stack context to surface) →
+   * specialist omits the stackOrigin field on findings, matching the
+   * "no-stack PRs produce unchanged reviews" acceptance criterion.
+   *
+   * Caller is `handlePrReviewEnsemble`, which builds this string via
+   * `renderStackPromptBlock(stack, overlap)` from `pr-stack-prompt.ts`.
+   */
+  stackBlock?: string
 }
 
 export function buildSpecialistInitialMessage(
@@ -298,6 +311,16 @@ export function buildSpecialistInitialMessage(
   }
   if (ctx.deterministicChecksBlock && ctx.deterministicChecksBlock.length > 0) {
     lines.push(ctx.deterministicChecksBlock)
+    lines.push("")
+  }
+  // ARC-182: stack context goes after guidance/profile/deterministic
+  // blocks and BEFORE [PR] (and therefore before [DIFF]). Codex's
+  // sign-off note flagged that the spec's "between retrieval and
+  // namespace" placement would put it AFTER the diff in this builder,
+  // violating the acceptance criterion that stack metadata appears
+  // before the diff.
+  if (ctx.stackBlock && ctx.stackBlock.length > 0) {
+    lines.push(ctx.stackBlock)
     lines.push("")
   }
   lines.push(
@@ -330,6 +353,14 @@ export interface SynthesizerInitialMessageCtx {
    * `score=5`" affects the synthesizer's deduping + rescoring).
    */
   guidance?: string
+  /**
+   * ARC-182: same stack-context block the specialists saw. Synth uses
+   * it to (a) preserve stackOrigin tags from specialists during
+   * synthesis, and (b) adjudicate disagreement (e.g., two specialists
+   * disagree on whether an issue is "current-pr" vs "downstack-context"
+   * — synth defaults to "current-pr" when in doubt).
+   */
+  stackBlock?: string
 }
 
 export function buildSynthesizerInitialMessage(
@@ -339,6 +370,13 @@ export function buildSynthesizerInitialMessage(
   if (ctx.guidance && ctx.guidance.length > 0) {
     lines.push("[REPO GUIDANCE (from sigilix.json)]")
     lines.push(ctx.guidance)
+    lines.push("")
+  }
+  // ARC-182: stack context goes BEFORE [DIFF] (matching specialist
+  // placement). Synth sees the same context the specialists saw, so
+  // it can preserve / adjudicate stackOrigin tags consistently.
+  if (ctx.stackBlock && ctx.stackBlock.length > 0) {
+    lines.push(ctx.stackBlock)
     lines.push("")
   }
   lines.push(

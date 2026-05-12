@@ -250,7 +250,7 @@ export function detectStack(args: {
   let cappedDown = false
 
   while (cursorRef && downHops < MAX_CHAIN_HOPS) {
-    const candidates = peersByHeadKey.get(refKey(cursorRepo, cursorRef)) ?? []
+    const candidates: OpenPrInput[] = peersByHeadKey.get(refKey(cursorRepo, cursorRef)) ?? []
     if (candidates.length === 0) {
       // No open PR with head matching cursor → bottom of the chain
       // reached. Successful walk termination.
@@ -258,7 +258,7 @@ export function detectStack(args: {
     }
     // Tiebreak: same-author DESC, then updated_at DESC, then PR
     // number ASC.
-    const next = candidates.slice().sort((a, b) => {
+    const next: OpenPrInput = candidates.slice().sort((a: OpenPrInput, b: OpenPrInput) => {
       const aSameAuthor = (a.user?.login ?? null) === currentPr.author ? 0 : 1
       const bSameAuthor = (b.user?.login ?? null) === currentPr.author ? 0 : 1
       if (aSameAuthor !== bSameAuthor) return aSameAuthor - bSameAuthor

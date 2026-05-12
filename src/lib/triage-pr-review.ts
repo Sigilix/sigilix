@@ -28,6 +28,7 @@ import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import {
   GitHubClient,
+  type ListOpenPullsItem,
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
@@ -39,6 +40,16 @@ import {
   writeReviewManifest,
   type ReviewManifestV1,
 } from "./review-manifest"
+import {
+  detectStack,
+  computeFileOverlap,
+  type StackContext,
+  type FileOverlap,
+} from "./pr-stack"
+import {
+  renderStackPromptBlock,
+  renderStackContextSummary,
+} from "../prompts/pr-stack-prompt"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -101,6 +112,19 @@ export const FINDING_CATEGORIES: ReadonlySet<FindingCategory> = new Set([
   "docs",
 ])
 
+/**
+ * ARC-182: stack-origin tag attached to findings on Graphite-style
+ * stacked PRs. Optional — absent on unstacked PRs. See
+ * `src/lib/pr-stack.ts` for the detection logic.
+ */
+export type StackOrigin = "current-pr" | "downstack-context" | "upstack-followup"
+
+export const STACK_ORIGINS: ReadonlySet<StackOrigin> = new Set([
+  "current-pr",
+  "downstack-context",
+  "upstack-followup",
+])
+
 export interface PrReviewFinding {
   path: string
   line: number
@@ -109,6 +133,12 @@ export interface PrReviewFinding {
   category: FindingCategory
   headline: string
   body: string
+  /**
+   * ARC-182: optional stack-origin tag. Emitted only when the input
+   * prompt included a [STACK CONTEXT] block; absent for unstacked PRs.
+   * Schema-bypass paths with an unknown value normalize to "current-pr".
+   */
+  stackOrigin?: StackOrigin
 }
 
 export interface PrReviewVerdict {
@@ -159,9 +189,24 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
     const client = await buildClient(env, installationId)
     since("auth-ready")
 
-    const [meta, diff] = await Promise.all([
+    // ARC-182: fetch open PRs in parallel with meta + diff so the
+    // stack detector has the data it needs without an extra serial
+    // round-trip. Best-effort with `.catch` fallback to no-stack
+    // review — a 403/429 or transient network failure must not block
+    // the review.
+    const [meta, diff, openPrs] = await Promise.all([
       client.getPullRequest(owner, repo, prNumber),
       client.getPullRequestDiff(owner, repo, prNumber),
+      client.listOpenPullRequests(owner, repo).catch((err) => {
+        console.warn(
+          JSON.stringify({
+            event: "pr-stack-open-prs-fetch-failed",
+            owner, repo, prNumber,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
+        return [] as ListOpenPullsItem[]
+      }),
     ])
     since("pr-fetched")
 
@@ -179,11 +224,66 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
       return
     }
 
+    // ARC-182: detect Graphite-style stack relationships. Repo-qualified
+    // matching uses the upstream `owner/repo` for both head and base on
+    // the current PR — fork-source PRs effectively have no children in
+    // the stack sense (no other PR's base lives in a fork), which is
+    // the correct behavior. The detector returns NO_STACK on empty
+    // openPrs (already true when the fetch fell back to []).
+    const repoFullName = `${owner}/${repo}`
+    const stack = detectStack({
+      currentPr: {
+        number: prNumber,
+        title: meta.title ?? "",
+        headRef: meta.head?.ref ?? "",
+        baseRef: meta.base?.ref ?? "",
+        headRepo: repoFullName,
+        baseRepo: repoFullName,
+        author: meta.user?.login ?? null,
+      },
+      openPrs,
+    })
+
+    // ARC-182: file overlap with downstack parent. Only fetched when
+    // stacked + parent exists; the parent files request is best-effort
+    // (404 / 403 / transient → empty parent set, which renders as
+    // "no overlap" — degraded but safe).
+    let overlap: FileOverlap | undefined
+    if (stack.isStacked && stack.parent) {
+      const [currentFilesList, parentFilesList] = await Promise.all([
+        client.listPullRequestFiles(owner, repo, prNumber, { maxFiles: 100 }).catch(() => []),
+        client.listPullRequestFiles(owner, repo, stack.parent.number, { maxFiles: 100 }).catch(() => []),
+      ])
+      overlap = computeFileOverlap({
+        currentFiles: currentFilesList.map((f) => f.filename),
+        parentFiles: parentFilesList.map((f) => f.filename),
+      })
+    }
+
+    console.log(JSON.stringify({
+      event: "pr-stack-context",
+      owner, repo, prNumber,
+      isStacked: stack.isStacked,
+      position: stack.position,
+      depth: stack.depth,
+      parentPrNumber: stack.parent?.number ?? null,
+      childCount: stack.children.length,
+      openPrCount: openPrs.length,
+      openPrsTruncated: openPrs.length >= 200,
+      cycleDetected: stack.cycleDetected,
+      stackWalkCapped: stack.stackWalkCapped,
+      hasUpstackFork: stack.hasUpstackFork,
+      overlapShared: overlap?.sharedCount ?? null,
+      overlapCurrentOnly: overlap?.currentOnlyCount ?? null,
+    }))
+
     const prompt = buildPrompt({
       prNumber,
       title: meta.title,
       body: meta.body ?? "",
       diff,
+      stack,
+      ...(overlap !== undefined ? { overlap } : {}),
     })
 
     const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -217,6 +317,7 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
       verdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
+      stack,
     })
 
     const submitted = await client.submitReview(owner, repo, prNumber, reviewBody)
@@ -290,13 +391,24 @@ interface PromptCtx {
   title: string
   body: string
   diff: string
+  /**
+   * ARC-182: optional stack context. When the PR is part of a
+   * Graphite-style stack (parent's head == this PR's base), a
+   * [STACK CONTEXT] block is injected BEFORE [PR SCOPE] so the model
+   * tags findings with stackOrigin.
+   */
+  stack?: StackContext
+  overlap?: FileOverlap
 }
 
 function buildPrompt(ctx: PromptCtx): string {
-  const sections = [
+  const stackBlock = ctx.stack ? renderStackPromptBlock(ctx.stack, ctx.overlap) : ""
+  const sections: Array<string | null> = [
     "[SYSTEM INSTRUCTIONS]",
     PR_REVIEW_PROMPT.trim(),
     "",
+    stackBlock.length > 0 ? stackBlock : null,
+    stackBlock.length > 0 ? "" : null,
     "[PR SCOPE]",
     `Number: #${ctx.prNumber}`,
     `Title: ${ctx.title}`,
@@ -309,7 +421,7 @@ function buildPrompt(ctx: PromptCtx): string {
     "[OUTPUT]",
     "Return only the JSON object. No prose, no Markdown fence.",
   ]
-  return sections.join("\n")
+  return sections.filter((s): s is string => s !== null).join("\n")
 }
 
 function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {
@@ -364,6 +476,18 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
       Number.isFinite(startLineRaw) && startLineRaw > 0 && startLineRaw < line
         ? Math.floor(startLineRaw)
         : null
+    // ARC-182: read stackOrigin if present. Absent → leave undefined
+    // (no-stack PR or model omitted it). Present-but-unknown enum
+    // value → normalize to "current-pr" (the safe default per the
+    // stack-awareness prompt instruction).
+    const stackOriginRaw =
+      typeof finding.stackOrigin === "string" ? finding.stackOrigin.trim() : ""
+    let stackOrigin: StackOrigin | undefined
+    if (stackOriginRaw.length > 0) {
+      stackOrigin = STACK_ORIGINS.has(stackOriginRaw as StackOrigin)
+        ? (stackOriginRaw as StackOrigin)
+        : "current-pr"
+    }
     const finalFinding: PrReviewFinding = {
       path,
       line: Math.floor(line),
@@ -373,6 +497,7 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
       body,
     }
     if (validStartLine != null) finalFinding.startLine = validStartLine
+    if (stackOrigin) finalFinding.stackOrigin = stackOrigin
     findings.push(finalFinding)
     if (findings.length >= 8) break
   }
@@ -424,6 +549,13 @@ interface BuildReviewArgs {
    * marker appended.
    */
   findingMarkers?: ReadonlyArray<string | null>
+  /**
+   * ARC-182: optional stack context. When the PR is part of a
+   * Graphite-style stack, a "### Stack context" block is injected
+   * into the sticky-summary body so a human reviewer sees the stack
+   * picture at a glance. Absent on unstacked PRs (renderer no-ops).
+   */
+  stack?: StackContext
 }
 
 /**
@@ -448,13 +580,14 @@ export function buildReviewSubmission({
   unanchored = [],
   nowMs,
   findingMarkers,
+  stack,
 }: BuildReviewArgs): SubmitReviewBody {
   // Event derivation merges anchored + unanchored so a verdict whose
   // only blocking findings happen to be unanchored doesn't post APPROVE
   // (CR + Sigilix PR #38 catch).
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
-  const body = formatReviewBody(verdict, prAuthor, event, unanchored, prov)
+  const body = formatReviewBody(verdict, prAuthor, event, unanchored, prov, stack)
   const comments: SubmitReviewComment[] = verdict.findings.map((f, i) => {
     // ARC-189: append per-finding sigilix marker on its own line so
     // the cross-PR review-memory capture pipeline can correlate
@@ -490,6 +623,8 @@ interface BuildFallbackArgs {
   unanchored: PrReviewFinding[]
   prAuthor: string | null
   headSha: string
+  /** ARC-182: optional stack context, forwarded to buildFallbackBody. */
+  stack?: StackContext
 }
 
 /**
@@ -516,13 +651,14 @@ export function buildFallbackSubmission({
   verdict,
   unanchored,
   headSha,
+  stack,
 }: BuildFallbackArgs): SubmitReviewBody {
   // Event derivation merges anchored + unanchored — same fix as
   // `buildReviewSubmission`. Without this, a verdict whose only
   // blocking findings are unanchored would post APPROVE while the
   // body lists blockers (CR + Sigilix PR #38 catch).
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
-  const body = buildFallbackBody(verdict, unanchored)
+  const body = buildFallbackBody(verdict, unanchored, undefined, stack)
   return {
     event,
     body,
@@ -542,12 +678,13 @@ export function buildFallbackBody(
   verdict: PrReviewVerdict,
   unanchored: PrReviewFinding[],
   prov?: ProvenanceCtx,
+  stack?: StackContext,
 ): string {
   const all = [...verdict.findings, ...unanchored]
   if (all.length === 0) {
     // No inline findings to relocate; the standard prose body is fine.
     // Still flow through formatReviewBody to keep the marker + summary.
-    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings), [], prov)
+    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings), [], prov, stack)
   }
 
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
@@ -557,6 +694,16 @@ export function buildFallbackBody(
   if (verdict.confidenceReason) {
     lines.push("")
     lines.push(verdict.confidenceReason)
+  }
+  // ARC-182: inject "### Stack context" between the summary and the
+  // findings list (mirrors placement in formatReviewBody). No-op when
+  // stack is absent or unstacked.
+  if (stack && stack.isStacked) {
+    const stackBlock = renderStackContextSummary(stack)
+    if (stackBlock.length > 0) {
+      lines.push("")
+      lines.push(stackBlock)
+    }
   }
   // ARC-180 deliberately does NOT add a Fix Plan section here — the
   // fallback already renders every finding grouped by file (a few
@@ -604,6 +751,7 @@ function formatReviewBody(
   _event: ReviewEvent,
   unanchored: PrReviewFinding[] = [],
   prov?: ProvenanceCtx,
+  stack?: StackContext,
 ): string {
   // Body is greptile-styled and prose-only. The structure is fixed
   // (marker, header, model's summary, model's confidence reason,
@@ -623,6 +771,17 @@ function formatReviewBody(
   if (verdict.confidenceReason) {
     lines.push("")
     lines.push(verdict.confidenceReason)
+  }
+  // ARC-182: inject "### Stack context" between Sigilix Summary and
+  // either the finding-count pointer or the Fix Plan. No-op when
+  // stack is absent or unstacked (`renderStackContextSummary` returns
+  // empty string in that case).
+  if (stack && stack.isStacked) {
+    const stackBlock = renderStackContextSummary(stack)
+    if (stackBlock.length > 0) {
+      lines.push("")
+      lines.push(stackBlock)
+    }
   }
   if (verdict.findings.length > 0) {
     lines.push("")

@@ -141,6 +141,62 @@ export class GitHubClient {
   }
 
   /**
+   * ARC-182: list open PRs in the repo for Graphite-style stack
+   * detection. Returns up to `maxItems` open PRs (default 200 = 2
+   * pages of 100) sorted by recent update so most-recent peers
+   * surface first. The detector in `src/lib/pr-stack.ts` uses
+   * `head.repo.full_name` + `base.repo.full_name` to distinguish
+   * cross-fork branch-name reuse, so we explicitly include the repo
+   * shape via GitHub's PR list payload (it ships these by default).
+   */
+  async listOpenPullRequests(
+    owner: string,
+    repo: string,
+    opts?: { perPage?: number; maxItems?: number; signal?: AbortSignal }
+  ): Promise<ListOpenPullsItem[]> {
+    const perPage = opts?.perPage ?? 100
+    const maxItems = opts?.maxItems ?? 200
+    const out: ListOpenPullsItem[] = []
+    let page = 1
+    while (out.length < maxItems && page < 50) {
+      const items = await this.restGet<RawListOpenPullsItem[]>(
+        `/repos/${owner}/${repo}/pulls?state=open&sort=updated&direction=desc&per_page=${perPage}&page=${page}`,
+        opts?.signal !== undefined ? { signal: opts.signal } : undefined
+      )
+      if (!Array.isArray(items) || items.length === 0) break
+      for (const it of items) {
+        if (out.length >= maxItems) break
+        const headRef = it.head?.ref ?? ""
+        const baseRef = it.base?.ref ?? ""
+        // Skip any malformed entry that lacks refs entirely — the
+        // stack detector treats empty refs as invalid anyway, so
+        // dropping them here keeps the array clean.
+        if (!headRef || !baseRef) continue
+        out.push({
+          number: typeof it.number === "number" ? it.number : 0,
+          title: typeof it.title === "string" ? it.title : "",
+          state: "open",
+          user: it.user?.login ? { login: it.user.login } : null,
+          head: {
+            ref: headRef,
+            sha: it.head?.sha ?? "",
+            repo: it.head?.repo?.full_name ? { full_name: it.head.repo.full_name } : null,
+          },
+          base: {
+            ref: baseRef,
+            sha: it.base?.sha ?? "",
+            repo: it.base?.repo?.full_name ? { full_name: it.base.repo.full_name } : null,
+          },
+          updated_at: typeof it.updated_at === "string" ? it.updated_at : null,
+        })
+      }
+      if (items.length < perPage) break
+      page += 1
+    }
+    return out
+  }
+
+  /**
    * Fetch the most recent commits on a PR (up to GitHub's 250-commit cap).
    * Returns the list newest-last so callers can `.slice(-N)` the latest.
    */
@@ -627,6 +683,31 @@ export interface PrChangedFile {
   status: string
   additions: number
   deletions: number
+}
+
+/**
+ * ARC-182: an item from `GET /repos/.../pulls?state=open`. Distinct
+ * from `PullRequestMeta` (which is for a single PR's detail page) —
+ * the list payload includes `head.repo` / `base.repo` for cross-fork
+ * disambiguation in the stack detector.
+ */
+export interface ListOpenPullsItem {
+  number: number
+  title: string
+  state: "open"
+  user: { login: string } | null
+  head: { ref: string; sha: string; repo: { full_name: string } | null }
+  base: { ref: string; sha: string; repo: { full_name: string } | null }
+  updated_at: string | null
+}
+
+interface RawListOpenPullsItem {
+  number?: number
+  title?: string
+  user?: { login?: string } | null
+  head?: { ref?: string; sha?: string; repo?: { full_name?: string } | null } | null
+  base?: { ref?: string; sha?: string; repo?: { full_name?: string } | null } | null
+  updated_at?: string
 }
 
 interface RawPrFile {

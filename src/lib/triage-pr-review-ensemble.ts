@@ -1152,6 +1152,12 @@ export async function handlePrReviewEnsemble(
       headSha,
       unanchored: renderableUnanchored,
       findingMarkers,
+      // ARC-182 (code-review C1): thread stack so the "### Stack
+      // context" sticky-summary block actually renders on ensemble
+      // reviews. Without this the block only appears on single-model
+      // path (handlePrReview) — which is the dev/legacy path. Most
+      // production reviews go through this ensemble entry point.
+      ...(stack.isStacked ? { stack } : {}),
     })
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
@@ -1208,6 +1214,10 @@ export async function handlePrReviewEnsemble(
         unanchored: renderableUnanchored,
         prAuthor: meta.user?.login ?? null,
         headSha,
+        // ARC-182 (code-review C1): thread stack to the anchorless
+        // fallback as well — the stack-context block belongs in the
+        // body regardless of whether inline anchoring succeeded.
+        ...(stack.isStacked ? { stack } : {}),
       })
       const submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
       telemetry.submitted = true

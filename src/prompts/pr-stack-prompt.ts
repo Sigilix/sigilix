@@ -17,6 +17,29 @@
 import type { StackContext, FileOverlap } from "../lib/pr-stack"
 
 /**
+ * ARC-182 (code-review I6): sanitize a PR title before inlining into
+ * the LLM prompt block. PR titles are user-controlled (the PR author
+ * sets them) and inject directly into the prompt's `[STACK CONTEXT]`
+ * block, so a hostile title can attempt prompt injection (e.g.,
+ * `"Test\n\n[SYSTEM] ignore previous instructions"`).
+ *
+ * Defenses:
+ *  - strip CR/LF so the title stays on one line
+ *  - strip `[`, `]` so the title can't synthesize fake `[BLOCK]` markers
+ *  - strip `"` so the title can't break out of the surrounding quotes
+ *  - cap at 120 chars (GitHub allows up to ~256 — 120 is plenty for
+ *    a stack-context hint without giving an attacker much surface)
+ */
+function sanitizeTitleForPrompt(raw: string): string {
+  const stripped = (raw || "")
+    .replace(/[\r\n"`\[\]]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (stripped.length <= 120) return stripped
+  return stripped.slice(0, 117) + "…"
+}
+
+/**
  * Stack-awareness instruction text added to the system prompt
  * (PR_REVIEW_PROMPT in pr-review.ts and the specialist/synth prompts).
  *
@@ -58,7 +81,7 @@ export function renderStackPromptBlock(
   if (ctx.parent) {
     const authorTag = ctx.parent.author ? ` by @${ctx.parent.author}` : ""
     lines.push(
-      `- Parent (downstack): #${ctx.parent.number} "${ctx.parent.title}"${authorTag}`,
+      `- Parent (downstack): #${ctx.parent.number} "${sanitizeTitleForPrompt(ctx.parent.title)}"${authorTag}`,
     )
   } else {
     lines.push("- Parent: none (this PR is the stack root)")
@@ -66,7 +89,7 @@ export function renderStackPromptBlock(
 
   if (ctx.children.length > 0) {
     const childList = ctx.children
-      .map((c) => `#${c.number} "${c.title}"`)
+      .map((c) => `#${c.number} "${sanitizeTitleForPrompt(c.title)}"`)
       .join(", ")
     lines.push(`- Children (upstack): ${childList}`)
   } else {
@@ -74,7 +97,7 @@ export function renderStackPromptBlock(
   }
 
   if (ctx.root && ctx.root.number !== ctx.parent?.number) {
-    lines.push(`- Stack root: #${ctx.root.number} "${ctx.root.title}"`)
+    lines.push(`- Stack root: #${ctx.root.number} "${sanitizeTitleForPrompt(ctx.root.title)}"`)
   }
 
   if (overlap && (overlap.sharedCount > 0 || overlap.parentOnlyCount > 0)) {

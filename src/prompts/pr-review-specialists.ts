@@ -41,7 +41,8 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "body": "<actionable explanation. Reference identifiers in backticks. End with the minimal fix.>",
       "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
       "primaryLens": "logic" | "security" | "performance" | "tests",
-      "confidenceInLens": 1-5
+      "confidenceInLens": 1-5,
+      "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup"   (OPTIONAL — emit ONLY when a [STACK CONTEXT] block is present in the input. Tag findings introduced or maintained in THIS PR's diff as "current-pr"; tag issues that already exist in a downstack (parent or earlier) PR as "downstack-context" (report for awareness, but DO NOT describe as introduced by this PR); tag issues whose proper fix belongs in an upstack (child or later) PR as "upstack-followup". Default to "current-pr" when uncertain. OMIT this field entirely when no [STACK CONTEXT] block is in the input — that signals an unstacked PR and matches the no-stack baseline shape.)
     }
   ]
 }
@@ -209,7 +210,8 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "score": 1-5,
         "headline": "...",
         "body": "...",
-        "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs"
+        "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
+        "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup"   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
       }
     ]
   },

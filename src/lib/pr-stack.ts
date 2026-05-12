@@ -206,11 +206,17 @@ export function detectStack(args: {
 
   // Filter out the current PR itself (if the caller included it in
   // openPrs) and PRs with empty refs (defensive; GitHub shouldn't
-  // emit these but the type allows it).
+  // emit these but the type allows it). Also drop peers with missing
+  // `head.repo` / `base.repo` strings — the composite repo-qualified
+  // key `"::ref"` would otherwise false-match across two unrelated
+  // PRs whose head.repo payload was null (GitHub Apps API returns
+  // head.repo=null when the head fork has been deleted). Per
+  // code-review finding I3.
   const peers: OpenPrInput[] = []
   for (const p of openPrs) {
     if (p.number === currentPr.number) continue
     if (!p.head?.ref || !p.base?.ref) continue
+    if (!p.head?.repo?.full_name || !p.base?.repo?.full_name) continue
     peers.push(p)
   }
 

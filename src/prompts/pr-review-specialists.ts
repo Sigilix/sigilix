@@ -21,6 +21,39 @@
 
 import type { SpecialistRole } from "../lib/ensemble-router"
 
+/**
+ * ARC-156 (Greptile port A2): negative-constraint specialist prompts.
+ *
+ * Greptile's PR review bot reports a 30-50% drop in vague comments
+ * after leading every specialist prompt with explicit bans. The bans
+ * below mirror Greptile's published rules; the post-processing
+ * vague-prefix filter in `triage-pr-review-ensemble.ts` is the
+ * backstop for findings that slip through the prompt-level guard.
+ *
+ * Prepended to every specialist system prompt AND the synthesizer
+ * prompt so the rules are the first thing the model sees and apply
+ * to both the initial draft AND the dedup/synthesis step.
+ */
+const SHARED_NEGATIVE_CONSTRAINTS = `
+[REVIEW DISCIPLINE — read first; applies to every finding you emit]
+
+Do NOT tell the author to check, verify, consider, or ensure things related to code or dependencies. The author owns their work; vague nudges waste reviewer time.
+
+Do NOT make comments about logs (log statements, log levels, missing logs, leftover console.log output).
+
+Do NOT tell the author to add docstrings, JSDoc, or inline comments. Either the code is self-explanatory or it isn't; suggesting documentation as a code-review finding is noise.
+
+NEVER describe the change that was made. The author can see their own diff. Findings exist to surface problems, not to summarize the work.
+
+ASSUME the author has added or deleted things intentionally. If a function is removed and you can't see why, do NOT flag "consider whether this was intentional" — assume it was.
+
+ASSUME all design decisions are deliberate. Naming choices, architectural patterns, and library choices are the author's call. Do NOT flag taste-level disagreement as a finding.
+
+If a finding's headline or body would START with the words "Ensure", "Verify", "Validate", "Consider", "Review", or "Confirm" — do NOT emit it. The orchestrator will drop any finding with these prefixes anyway (post-processing filter). Rewrite to state a concrete problem with a concrete fix, or drop the finding entirely.
+
+When referring to HTML or JSX tags in prose (e.g., \`<kbd>\`, \`<Link>\`, \`<details>\`), ALWAYS wrap the tag in backticks. Unbacked tags in your output break GitHub's Markdown rendering — an unclosed \`<kbd>\` opens a real HTML element that wraps the rest of the paragraph in monospace, producing a code-block-like glitch in the rendered review body.
+`.trim()
+
 const SHARED_OUTPUT_INSTRUCTIONS = `
 [OUTPUT SCHEMA]
 Reply with ONLY a single JSON object. No prose preamble, no markdown
@@ -88,7 +121,9 @@ When scoring:
 - 2: minor improvement (clearer naming, small refactor opportunity)
 - 1: nit (rarely emit; usually noise)
 
-${SHARED_OUTPUT_INSTRUCTIONS}`,
+${SHARED_OUTPUT_INSTRUCTIONS}
+
+${SHARED_NEGATIVE_CONSTRAINTS}`,
 
   security: `You are the **SECURITY specialist** in a code review ensemble. Three other specialists (logic, performance, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
@@ -110,7 +145,9 @@ When scoring:
 - 2: small hardening improvement
 - 1: theoretical-only / depth-in-defense (rarely emit)
 
-${SHARED_OUTPUT_INSTRUCTIONS}`,
+${SHARED_OUTPUT_INSTRUCTIONS}
+
+${SHARED_NEGATIVE_CONSTRAINTS}`,
 
   performance: `You are the **PERFORMANCE specialist** in a code review ensemble. Three other specialists (logic, security, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
@@ -135,7 +172,9 @@ When scoring:
 - 2: minor inefficiency (premature optimization opportunity)
 - 1: theoretical (rarely emit)
 
-${SHARED_OUTPUT_INSTRUCTIONS}`,
+${SHARED_OUTPUT_INSTRUCTIONS}
+
+${SHARED_NEGATIVE_CONSTRAINTS}`,
 
   tests: `You are the **TESTS specialist** in a code review ensemble. Three other specialists (logic, security, performance) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
@@ -158,12 +197,16 @@ When scoring:
 - 2: minor coverage gap (one edge case not tested)
 - 1: nit (test naming, redundant test, non-issue)
 
-${SHARED_OUTPUT_INSTRUCTIONS}`,
+${SHARED_OUTPUT_INSTRUCTIONS}
+
+${SHARED_NEGATIVE_CONSTRAINTS}`,
 }
 
 // ─── synthesizer prompt ────────────────────────────────────────────────
 
-export const SYNTHESIZER_PROMPT = `You are the **SYNTHESIZER** in an ensemble code review system.
+export const SYNTHESIZER_PROMPT = `${SHARED_NEGATIVE_CONSTRAINTS}
+
+You are the **SYNTHESIZER** in an ensemble code review system.
 
 Four specialists (LOGIC, SECURITY, PERFORMANCE, TESTS) have each produced a verdict on the same PR. Your job:
 

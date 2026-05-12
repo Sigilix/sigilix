@@ -2023,16 +2023,20 @@ export function hasVaguePrefix(finding: PrReviewFinding): boolean {
   return startsWithVagueWord(finding.headline) || startsWithVagueWord(finding.body)
 }
 
+/**
+ * Word-boundary regex for the vague prefix check. Built once from
+ * VAGUE_PREFIXES so the boundary semantics match the stated
+ * "any non-letter character" contract — covers `-`, `/`, `"`, `'`,
+ * `[`, `\\`, etc. (Sigilix + CodeRabbit catch on arc-156 PR: the
+ * prior `/[\s.,!?:;()]/` check was too narrow.) The `\b` anchor
+ * fires between any word and non-word character, which matches the
+ * intent for headline/body prefix detection.
+ */
+const VAGUE_PREFIX_RE = new RegExp(`^(?:${VAGUE_PREFIXES.join("|")})\\b`)
+
 function startsWithVagueWord(s: string): boolean {
   const trimmed = (s ?? "").trim()
-  if (trimmed.length === 0) return false
-  for (const word of VAGUE_PREFIXES) {
-    if (trimmed.startsWith(word)) {
-      const nextChar = trimmed.charAt(word.length)
-      if (nextChar === "" || /[\s.,!?:;()]/.test(nextChar)) return true
-    }
-  }
-  return false
+  return trimmed.length > 0 && VAGUE_PREFIX_RE.test(trimmed)
 }
 
 export interface ValidatedOutput {

@@ -102,6 +102,34 @@ describe("hasVaguePrefix", () => {
     expect(hasVaguePrefix(finding({ headline: "Consider: refactoring this" }))).toBe(true)
     expect(hasVaguePrefix(finding({ headline: "Review, then merge" }))).toBe(true)
   })
+
+  // Sigilix + CodeRabbit catch on arc-156 PR: the boundary check
+  // was originally narrowed to `[\s.,!?:;()]`, which missed common
+  // separators like `-`, `/`, `"`, `'`, `[`. New regex uses \b
+  // (word-boundary anchor) and matches the stated "non-letter"
+  // contract. These cases should now drop.
+  it("matches when the prefix is followed by a hyphen", () => {
+    expect(hasVaguePrefix(finding({ headline: "Ensure-thing fix" }))).toBe(true)
+  })
+
+  it("matches when the prefix is followed by a slash", () => {
+    expect(hasVaguePrefix(finding({ headline: "Verify/Validate the input" }))).toBe(true)
+  })
+
+  it("matches when the prefix is followed by a double-quote", () => {
+    expect(hasVaguePrefix(finding({ headline: 'Ensure "the value" is set' }))).toBe(true)
+  })
+
+  it("matches when the prefix is followed by an open-bracket", () => {
+    expect(hasVaguePrefix(finding({ headline: "Confirm[]: array bounds" }))).toBe(true)
+  })
+
+  it("does NOT match digit suffix that makes it a different identifier-like word", () => {
+    // "Ensure2" is one identifier-like token; \b does not fire between
+    // letters and digits since both are word chars. This is the
+    // intentional carve-out — letters/digits/underscore stay grouped.
+    expect(hasVaguePrefix(finding({ headline: "Ensure2 is a different word" }))).toBe(false)
+  })
 })
 
 // ── Integration with validateForSubmission ────────────────────

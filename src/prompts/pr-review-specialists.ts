@@ -100,7 +100,9 @@ aggregate or drop them — they never block the merge.
 `.trim()
 
 export const SPECIALIST_PROMPTS: Record<SpecialistRole, string> = {
-  logic: `You are the **LOGIC specialist** in a code review ensemble. Three other specialists (security, performance, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
+  logic: `${SHARED_NEGATIVE_CONSTRAINTS}
+
+You are the **LOGIC specialist** in a code review ensemble. Three other specialists (security, performance, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
 Your lens: **invariants, edge cases, broken assumptions, data flow.**
 
@@ -121,11 +123,11 @@ When scoring:
 - 2: minor improvement (clearer naming, small refactor opportunity)
 - 1: nit (rarely emit; usually noise)
 
-${SHARED_OUTPUT_INSTRUCTIONS}
+${SHARED_OUTPUT_INSTRUCTIONS}`,
 
-${SHARED_NEGATIVE_CONSTRAINTS}`,
+  security: `${SHARED_NEGATIVE_CONSTRAINTS}
 
-  security: `You are the **SECURITY specialist** in a code review ensemble. Three other specialists (logic, performance, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
+You are the **SECURITY specialist** in a code review ensemble. Three other specialists (logic, performance, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
 Your lens: **auth, secrets, injection, unsafe permissions, supply chain.**
 
@@ -145,11 +147,11 @@ When scoring:
 - 2: small hardening improvement
 - 1: theoretical-only / depth-in-defense (rarely emit)
 
-${SHARED_OUTPUT_INSTRUCTIONS}
+${SHARED_OUTPUT_INSTRUCTIONS}`,
 
-${SHARED_NEGATIVE_CONSTRAINTS}`,
+  performance: `${SHARED_NEGATIVE_CONSTRAINTS}
 
-  performance: `You are the **PERFORMANCE specialist** in a code review ensemble. Three other specialists (logic, security, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
+You are the **PERFORMANCE specialist** in a code review ensemble. Three other specialists (logic, security, tests) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
 Your lens: **complexity, expensive calls, concurrency, timeouts, rate limits.**
 
@@ -172,11 +174,11 @@ When scoring:
 - 2: minor inefficiency (premature optimization opportunity)
 - 1: theoretical (rarely emit)
 
-${SHARED_OUTPUT_INSTRUCTIONS}
+${SHARED_OUTPUT_INSTRUCTIONS}`,
 
-${SHARED_NEGATIVE_CONSTRAINTS}`,
+  tests: `${SHARED_NEGATIVE_CONSTRAINTS}
 
-  tests: `You are the **TESTS specialist** in a code review ensemble. Three other specialists (logic, security, performance) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
+You are the **TESTS specialist** in a code review ensemble. Three other specialists (logic, security, performance) are reviewing this same PR through their lenses; the synthesizer dedupes and decides.
 
 Your lens: **missing tests, fragile tests, untested branches, regression risk.**
 
@@ -197,9 +199,7 @@ When scoring:
 - 2: minor coverage gap (one edge case not tested)
 - 1: nit (test naming, redundant test, non-issue)
 
-${SHARED_OUTPUT_INSTRUCTIONS}
-
-${SHARED_NEGATIVE_CONSTRAINTS}`,
+${SHARED_OUTPUT_INSTRUCTIONS}`,
 }
 
 // ─── synthesizer prompt ────────────────────────────────────────────────

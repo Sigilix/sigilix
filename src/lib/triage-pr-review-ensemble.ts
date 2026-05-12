@@ -403,7 +403,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -1039,6 +1039,7 @@ export async function handlePrReviewEnsemble(
       droppedForInvalidLine: validated.droppedForInvalidLine,
       droppedForHallucination: validated.droppedForHallucination,
       demotedScore1: validated.demotedScore1,
+      droppedForVaguePrefix: validated.droppedForVaguePrefix,
     }
 
     if (mode === "shadow") {
@@ -2086,6 +2087,50 @@ export function truncateVerdictToTokens(
 
 // ─── post-synthesis validation ────────────────────────────────────────
 
+/**
+ * ARC-156 (Greptile port A2): vague-prefix filter — drop any finding
+ * whose `headline` or `body` starts with one of these words (case-
+ * sensitive, word-boundary). The negative-constraint specialist
+ * prompts (see `SHARED_NEGATIVE_CONSTRAINTS` in pr-review-specialists.ts)
+ * tell the model not to emit these; this post-processing filter is
+ * the backstop for findings that slip through.
+ */
+export const VAGUE_PREFIXES = [
+  "Ensure",
+  "Verify",
+  "Validate",
+  "Consider",
+  "Review",
+  "Confirm",
+] as const
+
+/**
+ * Returns true when the finding's headline OR body begins with one
+ * of the VAGUE_PREFIXES words (followed by end-of-string or a
+ * non-letter character so we don't false-match e.g. "Ensures").
+ *
+ * Pure — exported for unit tests.
+ */
+export function hasVaguePrefix(finding: PrReviewFinding): boolean {
+  return startsWithVagueWord(finding.headline) || startsWithVagueWord(finding.body)
+}
+
+/**
+ * Word-boundary regex for the vague prefix check. Built once from
+ * VAGUE_PREFIXES so the boundary semantics match the stated
+ * "any non-letter character" contract — covers `-`, `/`, `"`, `'`,
+ * `[`, `\\`, etc. (Sigilix + CodeRabbit catch on arc-156 PR: the
+ * prior `/[\s.,!?:;()]/` check was too narrow.) The `\b` anchor
+ * fires between any word and non-word character, which matches the
+ * intent for headline/body prefix detection.
+ */
+const VAGUE_PREFIX_RE = new RegExp(`^(?:${VAGUE_PREFIXES.join("|")})\\b`)
+
+function startsWithVagueWord(s: string): boolean {
+  const trimmed = (s ?? "").trim()
+  return trimmed.length > 0 && VAGUE_PREFIX_RE.test(trimmed)
+}
+
 export interface ValidatedOutput {
   verdict: PrReviewVerdict
   /**
@@ -2098,6 +2143,13 @@ export interface ValidatedOutput {
   droppedForInvalidLine: number
   droppedForHallucination: number
   demotedScore1: number
+  /**
+   * ARC-156: count of findings dropped because their headline or
+   * body started with a vague prefix word (Ensure / Verify /
+   * Validate / Consider / Review / Confirm). Surfaced to shadow
+   * telemetry so the filter's real-world impact is measurable.
+   */
+  droppedForVaguePrefix: number
   /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
@@ -2127,6 +2179,7 @@ export function validateForSubmission(args: {
   let droppedForInvalidLine = 0
   let droppedForHallucination = 0
   let demotedScore1 = 0
+  let droppedForVaguePrefix = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -2146,6 +2199,18 @@ export function validateForSubmission(args: {
     }
     if (!sourceIds.every((id) => validIds.has(id))) {
       droppedForHallucination++
+      continue
+    }
+
+    // ARC-156: vague-prefix filter. Drop findings whose headline OR
+    // body starts with one of the VAGUE_PREFIXES words (case-
+    // sensitive, word-boundary). Runs BEFORE score-1 demotion so a
+    // vague nit gets dropped outright rather than aggregated into
+    // the advisory bucket. Runs AFTER hallucination guard so the
+    // counter attribution is unambiguous (hallucinated findings
+    // shouldn't have meaningful prefix content anyway).
+    if (hasVaguePrefix(f)) {
+      droppedForVaguePrefix++
       continue
     }
 
@@ -2191,6 +2256,7 @@ export function validateForSubmission(args: {
     droppedForInvalidLine,
     droppedForHallucination,
     demotedScore1,
+    droppedForVaguePrefix,
     cleanFindingProvenance,
   }
 }
@@ -2241,6 +2307,10 @@ interface EnsembleTelemetry {
     droppedForInvalidLine: number
     droppedForHallucination: number
     demotedScore1: number
+    /** ARC-156: count of synth findings dropped by the vague-prefix
+     * post-processing filter (headline or body starts with
+     * Ensure/Verify/Validate/Consider/Review/Confirm). */
+    droppedForVaguePrefix: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

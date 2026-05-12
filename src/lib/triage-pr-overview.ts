@@ -90,8 +90,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     ])
     since("pr-fetched")
 
-    const existing = await findExistingOverviewComment(client, owner, repo, prNumber)
-    const isFirstRun = existing == null
+    // Pre-Ollama marker scan. Used to pick the prompt's "first run vs
+    // incremental" framing. The post-Ollama re-check below is the source
+    // of truth for the POST-vs-PATCH decision (closes the race window
+    // where a sibling Worker posts the marker while we're waiting on the
+    // model).
+    const existingBeforeModel = await findExistingOverviewComment(client, owner, repo, prNumber)
     since("dedupe-checked")
 
     // For incremental runs we only show the most recent commits (matches the
@@ -105,7 +109,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       meta,
       diff,
       newCommits: recentCommits,
-      isFirstRun,
+      isFirstRun: existingBeforeModel == null,
     })
 
     const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -129,10 +133,34 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       return
     }
 
-    const body = formatOverviewComment({ verdict, isFirstRun })
+    // Stage 1 race mitigation (ARC-231). KV remains advisory — Cloudflare
+    // KV is eventually consistent across regions, so two Workers can both
+    // observe an empty `dedupeKey` and both reach this code path. If we
+    // started with no marker visible, re-scan the comments now to see
+    // whether a sibling Worker posted one during the 10-30s Ollama window.
+    // The final write branches on this late value: PATCH-in-place if found,
+    // POST otherwise. Stage 2 (durable serialization mirroring ARC-190's
+    // PrReviewRunDO) is tracked separately.
+    let existingForWrite = existingBeforeModel
+    if (existingForWrite == null) {
+      existingForWrite = await findExistingOverviewComment(client, owner, repo, prNumber)
+      if (existingForWrite != null) {
+        console.log(JSON.stringify({
+          event: "pr-overview-second-pass-dedupe-fired",
+          owner, repo, prNumber,
+          headSha: headSha.slice(0, 7),
+          foundCommentId: existingForWrite,
+        }))
+      }
+    }
 
-    if (existing != null) {
-      await client.updateIssueComment(owner, repo, existing, body)
+    // Build the body AFTER the late re-check so a late-discovered marker
+    // renders as an incremental "— latest push" update, not a fresh
+    // first-run summary.
+    const body = formatOverviewComment({ verdict, isFirstRun: existingForWrite == null })
+
+    if (existingForWrite != null) {
+      await client.updateIssueComment(owner, repo, existingForWrite, body)
       since("comment-updated")
       console.log(
         `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files)`

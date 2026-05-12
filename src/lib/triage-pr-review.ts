@@ -89,6 +89,61 @@ const LIMITS = {
 
 type ReviewEvent = "APPROVE" | "REQUEST_CHANGES"
 
+/**
+ * ARC-156 follow-up (rubberfit PR #232 catch): the model occasionally
+ * emits literal HTML/JSX tag references in prose without wrapping
+ * them in backticks (e.g., "redesigns cmdk shortcuts with per-key
+ * <kbd> boxes…"). GitHub renders the markdown body as HTML, and an
+ * unclosed `<kbd>` opens a real DOM element that wraps the rest of
+ * the paragraph in monospace — producing a code-block-like glitch
+ * in the rendered review.
+ *
+ * This helper wraps any un-backticked `<tag>` pattern in backticks
+ * so GitHub renders the tag as inline code. The negative lookbehind/
+ * lookahead skip tags that the model already wrapped in backticks
+ * (avoids producing double-backticks like ``<Link>``).
+ *
+ * Paired with the prompt-level rule in `SHARED_NEGATIVE_CONSTRAINTS`
+ * which tells the model to wrap tags in backticks itself — this
+ * renderer-level wrap is the backstop for the prose that slips
+ * through.
+ *
+ * Pure — exported for unit tests.
+ */
+const INLINE_HTML_TAG_RE = /(?<!`)(<\/?[A-Za-z][^<>`\n]*?>)(?!`)/g
+
+export function wrapInlineHtmlTags(s: string): string {
+  if (!s || s.indexOf("<") === -1) return s
+  return s.replace(INLINE_HTML_TAG_RE, "`$1`")
+}
+
+/**
+ * Apply `wrapInlineHtmlTags` to every prose field on a verdict so
+ * downstream renderers see GitHub-safe markdown. Pure.
+ */
+function sanitizeVerdictForGitHub(v: PrReviewVerdict): PrReviewVerdict {
+  return {
+    ...v,
+    summary: wrapInlineHtmlTags(v.summary),
+    confidenceReason: wrapInlineHtmlTags(v.confidenceReason),
+    findings: v.findings.map((f) => ({
+      ...f,
+      headline: wrapInlineHtmlTags(f.headline),
+      body: wrapInlineHtmlTags(f.body),
+    })),
+  }
+}
+
+function sanitizeFindingsForGitHub(
+  findings: ReadonlyArray<PrReviewFinding>,
+): PrReviewFinding[] {
+  return findings.map((f) => ({
+    ...f,
+    headline: wrapInlineHtmlTags(f.headline),
+    body: wrapInlineHtmlTags(f.body),
+  }))
+}
+
 export type FindingCategory =
   | "logic"
   | "security"
@@ -574,14 +629,20 @@ interface BuildReviewArgs {
  * read at a glance. Pure — exported for tests.
  */
 export function buildReviewSubmission({
-  verdict,
+  verdict: rawVerdict,
   prAuthor,
   headSha,
-  unanchored = [],
+  unanchored: rawUnanchored = [],
   nowMs,
   findingMarkers,
   stack,
 }: BuildReviewArgs): SubmitReviewBody {
+  // ARC-156 follow-up: sanitize every prose field for GitHub
+  // rendering BEFORE downstream renderers see the verdict. Wraps
+  // un-backticked HTML/JSX tags in backticks so an unclosed `<kbd>`
+  // can't open a real DOM element that breaks paragraph rendering.
+  const verdict = sanitizeVerdictForGitHub(rawVerdict)
+  const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
   // Event derivation merges anchored + unanchored so a verdict whose
   // only blocking findings happen to be unanchored doesn't post APPROVE
   // (CR + Sigilix PR #38 catch).
@@ -648,11 +709,16 @@ interface BuildFallbackArgs {
  * Pure — exported for tests.
  */
 export function buildFallbackSubmission({
-  verdict,
-  unanchored,
+  verdict: rawVerdict,
+  unanchored: rawUnanchored,
   headSha,
   stack,
 }: BuildFallbackArgs): SubmitReviewBody {
+  // ARC-156 follow-up: sanitize prose before rendering — same as
+  // buildReviewSubmission, applied here for the anchorless-fallback
+  // path so the body-rendered findings also get HTML-tag wrap.
+  const verdict = sanitizeVerdictForGitHub(rawVerdict)
+  const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
   // Event derivation merges anchored + unanchored — same fix as
   // `buildReviewSubmission`. Without this, a verdict whose only
   // blocking findings are unanchored would post APPROVE while the

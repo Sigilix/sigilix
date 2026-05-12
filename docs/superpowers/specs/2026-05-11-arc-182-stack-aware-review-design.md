@@ -278,6 +278,14 @@ Same shape:
 
 The `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` env aid (per ARC-189 spec §4.8) is intended to be set during the rollout window so existing reviews don't all flip to stale at once.
 
+**Rollout env requirements** (per Codex sign-off correction):
+
+- `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE=on` — enables suppression.
+- `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE_SET_AT=$(date +%s)` — UNIX seconds at the moment of the `wrangler deploy` command. **Required companion** — without `SET_AT`, the ARC-189 §4.8 fail-closed branch fires `review-stale-prompt-version-suppress-misconfig { reason: "set-at-missing" }` and stale-marking proceeds normally, defeating the spike-mitigation goal.
+- Both must be set in the same `wrangler secret put` step (or as a coordinated double-secret update).
+- **Suppression filters only the `prompt-version` stale reason.** Head/base/file-list drift still marks stale during the rollout window. That's the intended behavior — the rollout aid is about smoothing the prompt-version-bump spike, not about freezing all stale-marking.
+- **Remove the suppression after ~24 hours**, and before the 72-hour fail-safe expires. The 72-hour fail-safe is a backstop; relying on it instead of removing the secret leaves the system in a fail-closed state where the next bump becomes ambiguous.
+
 ### 9. Telemetry
 
 Add to the existing `since(label)` pr-review log lines:

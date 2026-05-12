@@ -32,7 +32,16 @@
  * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` env aid (spec §4.8) is
  * intended to be set during the rollout window.
  */
-export const PROMPT_VERSION = "2"
+/**
+ * v2 → v3 (ARC-182): primary and specialist prompts gain a
+ * stack-awareness instruction + per-PR [STACK CONTEXT] block. Finding
+ * output schema gains optional `stackOrigin` field
+ * ("current-pr" | "downstack-context" | "upstack-followup"). Reviews
+ * with v2 prompt version go stale on first deploy of v3 (same
+ * mechanism as v1→v2). Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
+ * during rollout to avoid the stale-mark spike.
+ */
+export const PROMPT_VERSION = "3"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, anchor every finding to a specific line.
 
@@ -58,7 +67,8 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
       "score": 1-5,
       "category": "logic",
       "headline": "One sentence stating the symptom, ≤120 chars, no period at end.",
-      "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English. When the fix is a clean inline replacement of the lines this finding anchors to, append exactly ONE \`\`\`suggestion fenced block at the very end containing the literal replacement code (no diff markers, no language tag, no surrounding context — just the new line(s) GitHub will swap in when the reviewer clicks \\"Commit suggestion\\"). Skip the suggestion block when the fix spans multiple non-adjacent hunks, multiple files, or requires non-trivial logic."
+      "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English. When the fix is a clean inline replacement of the lines this finding anchors to, append exactly ONE \`\`\`suggestion fenced block at the very end containing the literal replacement code (no diff markers, no language tag, no surrounding context — just the new line(s) GitHub will swap in when the reviewer clicks \\"Commit suggestion\\"). Skip the suggestion block when the fix spans multiple non-adjacent hunks, multiple files, or requires non-trivial logic.",
+      "stackOrigin": "current-pr | downstack-context | upstack-followup (OPTIONAL — only when [STACK CONTEXT] is in input)"
     }
   ]
 }
@@ -77,6 +87,16 @@ Pick exactly one from this list per finding. The category leads the inline comme
 - **style** — naming, formatting, code organization that doesn't affect correctness
 - **syntax** — TypeScript / linter / build errors that would fail CI
 - **docs** — outdated comment, missing JSDoc on an exported API, README gap
+
+## Stack-aware findings (\`stackOrigin\` field, optional)
+
+When the input includes a \`[STACK CONTEXT]\` block, this PR is part of a Graphite-style stack (its base branch is another open PR's head). Tag each finding with \`stackOrigin\`:
+
+- **"current-pr"** — issue is introduced or maintained in THIS PR's diff. Default when uncertain.
+- **"downstack-context"** — issue ALREADY exists in a downstack (parent or earlier) PR. Report it for awareness, but DO NOT describe it as introduced by this PR — that would be a false-positive on the child.
+- **"upstack-followup"** — issue's proper fix belongs in an upstack (child or later) PR. Flag for awareness, don't block on it.
+
+Omit \`stackOrigin\` entirely when no \`[STACK CONTEXT]\` block is present (no-stack PR).
 
 ## Scoring guidelines (per-finding \`score\`)
 

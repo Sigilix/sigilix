@@ -13,6 +13,11 @@ const mockGetPullRequest = vi.fn()
 const mockGetPullRequestDiff = vi.fn(async () => "fake diff")
 const mockSubmitReview = vi.fn()
 const mockGenerate = vi.fn()
+// ARC-182: stack-detection adds a parallel `listOpenPullRequests` call.
+// Default to empty list (no-stack review) so the existing stale-head
+// guard tests are unaffected.
+const mockListOpenPullRequests = vi.fn(async () => [])
+const mockListPullRequestFiles = vi.fn(async () => [])
 
 vi.mock("../src/lib/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -26,6 +31,8 @@ vi.mock("../src/lib/github", async () => {
       getPullRequest: (...args: unknown[]) => mockGetPullRequest(...args),
       getPullRequestDiff: (...args: unknown[]) => mockGetPullRequestDiff(...args),
       submitReview: (...args: unknown[]) => mockSubmitReview(...args),
+      listOpenPullRequests: (...args: unknown[]) => mockListOpenPullRequests(...args),
+      listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
     })),
   }
 })

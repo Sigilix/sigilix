@@ -67,6 +67,14 @@ import {
   buildSynthesizerInitialMessage,
   renderSpecialistVerdictsForSynth,
 } from "../prompts/pr-review-specialists"
+import {
+  detectStack,
+  computeFileOverlap,
+  type FileOverlap,
+  type StackContext,
+} from "./pr-stack"
+import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
+import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
   loadSigilixConfig,
@@ -412,7 +420,25 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "skipped", cache)
     }
 
-    const fullPrDiff = await client.getPullRequestDiff(owner, repo, prNumber)
+    // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
+    // detection needs the open-PR list to find downstack/upstack peers;
+    // running the fetch here (after the stale-head guard, in parallel
+    // with the diff) avoids an extra serial round-trip. Best-effort
+    // with `.catch` → empty list = no-stack review (degraded but
+    // correct).
+    const [fullPrDiff, openPrsForStack] = await Promise.all([
+      client.getPullRequestDiff(owner, repo, prNumber),
+      client.listOpenPullRequests(owner, repo).catch((err) => {
+        console.warn(
+          JSON.stringify({
+            event: "pr-stack-open-prs-fetch-failed",
+            owner, repo, prNumber,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
+        return [] as ListOpenPullsItem[]
+      }),
+    ])
 
     // ARC-194: incremental review. If we've reviewed this PR before
     // and the current head SHA differs from the recorded one, fetch
@@ -710,6 +736,60 @@ export async function handlePrReviewEnsemble(
         // ensemble's finalize.
       }
     }
+    // ARC-182: compute stack context just before specialist fanout.
+    // Stack detection is pure + cheap; the only async work is the
+    // optional parent-files fetch when isStacked && parent. Render
+    // a single stackBlock string and pass to BOTH specialist and
+    // synth messages so they see the same context.
+    const repoFullName = `${owner}/${repo}`
+    const stack: StackContext = detectStack({
+      currentPr: {
+        number: prNumber,
+        title: meta.title ?? "",
+        headRef: meta.head?.ref ?? "",
+        baseRef: meta.base?.ref ?? "",
+        headRepo: repoFullName,
+        baseRepo: repoFullName,
+        author: meta.user?.login ?? null,
+      },
+      openPrs: openPrsForStack,
+    })
+    let stackOverlap: FileOverlap | undefined
+    if (stack.isStacked && stack.parent) {
+      const [currentFilesList, parentFilesList] = await Promise.all([
+        // Reuse the diff-derived file list for the current PR — it's
+        // already in memory (splitFiles) and the parent files fetch
+        // is the only extra request.
+        Promise.resolve(splitFiles.map((f) => ({ filename: f.path }))),
+        client
+          .listPullRequestFiles(owner, repo, stack.parent.number, { maxFiles: 100 })
+          .catch(() => []),
+      ])
+      stackOverlap = computeFileOverlap({
+        currentFiles: currentFilesList.map((f) => f.filename),
+        parentFiles: parentFilesList.map((f) => f.filename),
+      })
+    }
+    const stackBlock = stack.isStacked ? renderStackPromptBlock(stack, stackOverlap) : ""
+
+    console.log(JSON.stringify({
+      event: "pr-stack-context",
+      owner, repo, prNumber,
+      mode,
+      isStacked: stack.isStacked,
+      position: stack.position,
+      depth: stack.depth,
+      parentPrNumber: stack.parent?.number ?? null,
+      childCount: stack.children.length,
+      openPrCount: openPrsForStack.length,
+      openPrsTruncated: openPrsForStack.length >= 200,
+      cycleDetected: stack.cycleDetected,
+      stackWalkCapped: stack.stackWalkCapped,
+      hasUpstackFork: stack.hasUpstackFork,
+      overlapShared: stackOverlap?.sharedCount ?? null,
+      overlapCurrentOnly: stackOverlap?.currentOnlyCount ?? null,
+    }))
+
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -720,6 +800,7 @@ export async function handlePrReviewEnsemble(
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
       ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
       ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
+      ...(stackBlock.length > 0 ? { stackBlock } : {}),
     })
 
     const specialistResults = await Promise.allSettled(
@@ -772,6 +853,7 @@ export async function handlePrReviewEnsemble(
       diff,
       specialistVerdictsBlock: synthVerdictBlock,
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+      ...(stackBlock.length > 0 ? { stackBlock } : {}),
     })
 
     // ARC-181 Task 8: thread structured AST findings into the synth
@@ -1071,6 +1153,12 @@ export async function handlePrReviewEnsemble(
       headSha,
       unanchored: renderableUnanchored,
       findingMarkers,
+      // ARC-182 (code-review C1): thread stack so the "### Stack
+      // context" sticky-summary block actually renders on ensemble
+      // reviews. Without this the block only appears on single-model
+      // path (handlePrReview) — which is the dev/legacy path. Most
+      // production reviews go through this ensemble entry point.
+      ...(stack.isStacked ? { stack } : {}),
     })
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
@@ -1127,6 +1215,10 @@ export async function handlePrReviewEnsemble(
         unanchored: renderableUnanchored,
         prAuthor: meta.user?.login ?? null,
         headSha,
+        // ARC-182 (code-review C1): thread stack to the anchorless
+        // fallback as well — the stack-context block belongs in the
+        // body regardless of whether inline anchoring succeeded.
+        ...(stack.isStacked ? { stack } : {}),
       })
       const submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
       telemetry.submitted = true

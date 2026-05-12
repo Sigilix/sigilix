@@ -254,6 +254,12 @@ export function detectStack(args: {
   let downHops = 0
   let cycleDetectedDown = false
   let cappedDown = false
+  // CodeRabbit PR #72 major: track whether the down-walk EVER found
+  // a matching peer. Used to keep `isStacked: true` even when the
+  // walk degraded into a cycle/cap with no immediate children — the
+  // renderer's "Parent: unknown (downstack walk degraded)" branch is
+  // unreachable otherwise.
+  let matchedDownstackPeer = false
 
   while (cursorRef && downHops < MAX_CHAIN_HOPS) {
     const candidates: OpenPrInput[] = peersByHeadKey.get(refKey(cursorRepo, cursorRef)) ?? []
@@ -262,6 +268,7 @@ export function detectStack(args: {
       // reached. Successful walk termination.
       break
     }
+    matchedDownstackPeer = true
     // Tiebreak: same-author DESC, then updated_at DESC, then PR
     // number ASC.
     const next: OpenPrInput = candidates.slice().sort((a: OpenPrInput, b: OpenPrInput) => {
@@ -358,7 +365,15 @@ export function detectStack(args: {
   const position = ancestors.length + 1
   const root: StackPr | null = ancestors.length > 0 ? ancestors[0]! : null
 
-  const isStacked = parent !== null || immediateChildren.length > 0
+  // CodeRabbit PR #72 major: a downstack walk that matched a peer
+  // but degraded into a cycle/cap is STILL stack context — losing
+  // it makes the renderer's "Parent: unknown (walk degraded)" branch
+  // unreachable for the parent-only-degraded case. Treat the degraded
+  // signal as proof of stackedness even when ancestors are now empty.
+  const isStacked =
+    parent !== null ||
+    immediateChildren.length > 0 ||
+    (matchedDownstackPeer && (cycleDetectedDown || cappedDown))
 
   if (!isStacked) {
     return {

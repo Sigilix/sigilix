@@ -299,8 +299,12 @@ describe("detectStack", () => {
     expect(ctx.parent).toBeNull()
     expect(ctx.ancestors).toEqual([])
     expect(ctx.root).toBeNull()
-    // No-stack overall since there are no children either.
-    expect(ctx.isStacked).toBe(false)
+    // CodeRabbit PR #72 major: a degraded downstack walk that
+    // matched a peer must remain isStacked=true so the renderer's
+    // "Parent: unknown (downstack walk degraded)" branch is
+    // reachable. Pre-fix this returned isStacked=false and the
+    // signal was lost entirely.
+    expect(ctx.isStacked).toBe(true)
     expect(warnSpy).toHaveBeenCalled()
     warnSpy.mockRestore()
   })
@@ -340,6 +344,27 @@ describe("detectStack", () => {
     expect(ctx.parent).toBeNull()
     expect(ctx.ancestors).toEqual([])
     expect(ctx.children.map((c) => c.number)).toEqual([70])
+    warnSpy.mockRestore()
+  })
+
+  // CodeRabbit PR #72: dedicated test for the degraded-no-children
+  // case. Distinct from the "children exist alongside degraded
+  // downstack" test above — here we verify the renderer-reachability
+  // path: isStacked stays true even though there's neither a
+  // resolved parent nor any children, so the renderer can emit
+  // "Parent: unknown (walk degraded)" instead of falling back to
+  // NO_STACK (which the prior behavior produced, losing the signal).
+  it("keeps isStacked=true when downstack walk degraded and no children exist", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const ctx = detectStack({
+      currentPr: current(60, "user-routes", "user-model"),
+      openPrs: [pr(50, "user-model", "user-model")],
+    })
+    expect(ctx.isStacked).toBe(true)
+    expect(ctx.cycleDetected).toBe(true)
+    expect(ctx.parent).toBeNull()
+    expect(ctx.ancestors).toEqual([])
+    expect(ctx.children).toEqual([])
     warnSpy.mockRestore()
   })
 

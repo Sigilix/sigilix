@@ -12,7 +12,7 @@
 
 import { simple as acornWalkSimple, base as defaultBase } from "acorn-walk"
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export type AstNode = any
 
 export type Visitors = Record<string, (node: AstNode) => void>
@@ -31,10 +31,10 @@ export type Visitors = Record<string, (node: AstNode) => void>
 // they declare, including TS-specific ones, but unknown nodes don't
 // derail traversal of standard ESTree siblings.
 //
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 const permissiveBase: any = new Proxy(defaultBase, {
   get(target, prop: string) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const v = (target as any)[prop]
     if (typeof v === "function") return v
     // No-op for unknown node types. acorn-walk's contract is the base

@@ -7,15 +7,19 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "build": "tsc --noEmit && vitest run",
+    "build": "tsc --noEmit && eslint . && vitest run",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "check:advisory-db-size": "./scripts/check-advisory-db-size.sh"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",
     "@types/semver": "7.5.8",
+    "eslint": "^9.39.4",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.59.3",
     "vitest": "^2.1.8",
     "wrangler": "^4.86.0"
   },

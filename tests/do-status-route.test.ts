@@ -11,7 +11,7 @@ interface DoStubArgs {
 }
 
 function makeEnv(args: DoStubArgs, mode: "off" | "shadow" | "post" = "post"): Env {
-  const fetchMock = vi.fn(async (req: Request) => {
+  const fetchMock = vi.fn(async (_req: Request) => {
     if (args.response === "throw") {
       throw new Error("DO transport failed")
     }

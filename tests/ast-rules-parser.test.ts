@@ -98,7 +98,7 @@ describe("parseSource — error handling", () => {
   })
 
   it("rejects non-string code", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const r = parseSource(123 as any, ".js")
     expect(r.ok).toBe(false)
   })

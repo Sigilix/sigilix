@@ -334,7 +334,7 @@ describe("runPrReviewWithDoCallback — /run-result bounded retry (CR PR #70)", 
   } {
     let pickupCalls = 0
     let runResultCalls = 0
-    const fetchMock = vi.fn(async (input: string | Request, init?: RequestInit) => {
+    const fetchMock = vi.fn(async (input: string | Request, _init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.url
       if (url.endsWith("/pickup")) {
         pickupCalls++

@@ -30,7 +30,7 @@ export type ParseResult = ParseOk | ParseErr
 // load. acorn parsers are stateless w.r.t. the configuration so this
 // is cheap.
 const TsAcorn = AcornParser.extend(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   (tsPlugin as any)({ allowSatisfies: true }),
 )
 
@@ -80,7 +80,7 @@ export function parseSource(code: string, ext: SourceExt): ParseResult {
     ...(isJsxExt(ext) ? { jsx: true } : {}),
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const ast = Parser.parse(code, options as any)
     return { ok: true, ast }
   } catch (err) {

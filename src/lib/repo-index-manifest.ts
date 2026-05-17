@@ -26,7 +26,12 @@
 import type { Env } from "../index"
 
 const KV_KEY_PREFIX = "repo-index-manifest:"
-const TTL_SECONDS = 30 * 24 * 60 * 60 // 30 days
+// ARC-238 Codex v1 catch (TTL alignment): bumped 30d → 60d to match
+// the sibling `repo-index-vectors:` TTL so an uninstall right after
+// the prior 30d expiry can still find both records. The consumer-
+// side freshness revalidation makes the TTL mostly a backstop, but
+// alignment keeps the lifecycle bookkeeping simple.
+const TTL_SECONDS = 60 * 24 * 60 * 60 // 60 days
 
 // ---------------------------------------------------------------------
 // Schema (v1)

@@ -429,3 +429,121 @@ describe("handleIndexRepoJob — empty repo (no indexable files)", () => {
     }
   })
 })
+
+// code-reviewer NIT-5: pin the ARC-238 Codex B3 invariant — if the
+// vectors-record KV write fails, the manifest MUST NOT be written
+// (otherwise the repo looks indexed but uninstall has no ids to
+// delete → silent vector retention).
+describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blocks manifest write", () => {
+  it("bootstrap path: when KV.put fails for repo-index-vectors:*, no manifest is written and the job throws", async () => {
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "src/index.ts", type: "blob", size: 100 }],
+      truncated: false,
+    })
+
+    // Custom env: KV.put rejects only when writing the vectors record.
+    const store = new Map<string, string>()
+    const kv = {
+      async get(key: string): Promise<string | null> {
+        return store.get(key) ?? null
+      },
+      async put(key: string, value: string): Promise<void> {
+        if (key.startsWith("repo-index-vectors:")) {
+          throw new Error("KV write failure for vectors record")
+        }
+        store.set(key, value)
+      },
+      async delete(key: string): Promise<void> {
+        store.delete(key)
+      },
+    } as unknown as Env["OPENCLAW_STATE"]
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_JOBS: { send: async (_msg: JobMessage) => {} },
+      AI: { run: (model: string, input: unknown) => mockAiRun(model, input) },
+      OPENCLAW_CODE_INDEX: { upsert: mockVectorizeUpsert },
+      GITHUB_APP_ID: "12345",
+      GITHUB_PRIVATE_KEY: "fake-key",
+    } as unknown as Env
+
+    await expect(handleIndexRepoJob({ job: bootstrapJob(), env })).rejects.toThrow(
+      /repo-index-vectors write failed/,
+    )
+
+    // Manifest must NOT have been written.
+    expect(store.has(repoIndexManifestKey("sigilix"))).toBe(false)
+  })
+
+  it("shard path: same invariant — no manifest write + no next-shard enqueue on vectors-write failure", async () => {
+    const totalFiles = MAX_FILES_PER_JOB + 3
+    const tree = Array.from({ length: totalFiles }, (_, i) => ({
+      path: `src/file-${i}.ts`,
+      type: "blob",
+      size: 100,
+    }))
+    mockGetRepoTree.mockResolvedValue({ tree, truncated: false })
+
+    const store = new Map<string, string>()
+    const sent: JobMessage[] = []
+    const kv = {
+      async get(key: string): Promise<string | null> {
+        return store.get(key) ?? null
+      },
+      async put(key: string, value: string): Promise<void> {
+        if (key.startsWith("repo-index-vectors:")) {
+          throw new Error("KV write failure for vectors record")
+        }
+        store.set(key, value)
+      },
+      async delete(key: string): Promise<void> {
+        store.delete(key)
+      },
+    } as unknown as Env["OPENCLAW_STATE"]
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_JOBS: { send: async (m: JobMessage) => { sent.push(m) } },
+      AI: { run: (model: string, input: unknown) => mockAiRun(model, input) },
+      OPENCLAW_CODE_INDEX: { upsert: mockVectorizeUpsert },
+      GITHUB_APP_ID: "12345",
+      GITHUB_PRIVATE_KEY: "fake-key",
+    } as unknown as Env
+
+    const { computeRunId } = await import("../src/lib/indexer")
+    const headSha = "a".repeat(40)
+    const runId = await computeRunId({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      headSha,
+      // CodeRabbit phase-end fix: use the imported constant so a
+      // future EMBEDDING_MODEL rotation doesn't make this test silently
+      // hit the config-drift guard instead of exercising the B3 invariant.
+      modelId: EMBEDDING_MODEL,
+      chunkerVersion: 1,
+    })
+    const shardJob: JobMessage = {
+      type: "index-repo",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      installationId: 99,
+      reason: "install",
+      shard: {
+        lo: MAX_FILES_PER_JOB,
+        hi: totalFiles,
+        headSha,
+        treeSha: "b".repeat(40),
+        totalFiles,
+        filesDone: MAX_FILES_PER_JOB,
+        chunksDone: 4242,
+        runId,
+      },
+    }
+
+    await expect(handleIndexRepoJob({ job: shardJob, env })).rejects.toThrow(
+      /repo-index-vectors write failed/,
+    )
+    // No manifest, no next-shard enqueue (final shard would have
+    // written the manifest; non-final would have enqueued).
+    expect(store.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(sent).toHaveLength(0)
+  })
+})

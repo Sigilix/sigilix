@@ -750,6 +750,79 @@ export class GitHubClient {
   }
 
   /**
+   * ARC-265: list ALL labels defined on a repo (not just labels
+   * applied to a specific issue). Used by the labelling pipeline to
+   * surface labels with operator-authored descriptions as eligible
+   * candidates alongside `sigilix.json::customLabels`.
+   *
+   * Paginated (100/page, cap at 200 items — labels rarely exceed
+   * that; repos with bigger taxonomies degrade to the first 200 by
+   * GitHub's default ordering).
+   */
+  async listRepositoryLabels(
+    owner: string,
+    repo: string,
+  ): Promise<Array<{ name: string; description: string }>> {
+    type Resp = Array<{ name?: string; description?: string | null }>
+    const out: Array<{ name: string; description: string }> = []
+    for (let page = 1; page <= 2; page += 1) {
+      const items = await this.restGet<Resp>(
+        `/repos/${owner}/${repo}/labels?per_page=100&page=${page}`,
+      )
+      if (!Array.isArray(items) || items.length === 0) break
+      for (const it of items) {
+        if (typeof it.name === "string" && it.name.length > 0) {
+          out.push({
+            name: it.name,
+            description: typeof it.description === "string" ? it.description : "",
+          })
+        }
+      }
+      if (items.length < 100) break
+    }
+    return out
+  }
+
+  /**
+   * ARC-265: add labels to an issue/PR. Idempotent — re-adding a
+   * label that's already present is a no-op on GitHub's side. If
+   * any label in the list doesn't exist on the repo, GitHub
+   * creates it automatically (returns 200 with the full label set).
+   */
+  async addLabelsToIssue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    labels: ReadonlyArray<string>,
+  ): Promise<void> {
+    if (labels.length === 0) return
+    await this.restPost<unknown>(
+      `/repos/${owner}/${repo}/issues/${issueNumber}/labels`,
+      { labels: [...labels] },
+    )
+  }
+
+  /**
+   * ARC-265: remove a single label from an issue/PR by name. 404
+   * means the label wasn't applied to begin with — the caller
+   * treats that as a no-op. URL-encodes the name to handle labels
+   * containing `:` or whitespace.
+   */
+  async removeLabelFromIssue(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    labelName: string,
+  ): Promise<void> {
+    await this.request<unknown>(
+      "DELETE",
+      `/repos/${owner}/${repo}/issues/${issueNumber}/labels/${encodeURIComponent(labelName)}`,
+      undefined,
+      "json",
+    )
+  }
+
+  /**
    * Add an emoji reaction to a top-level issue/PR-conversation comment.
    * Idempotent at the API level — re-posting the same reaction returns
    * the existing one with 200, not a duplicate. We use it to "ack" an
@@ -899,6 +972,13 @@ export interface PullRequestMeta {
   state?: "open" | "closed"
   merged_at?: string | null
   changed_files?: number
+  /**
+   * ARC-265: labels currently applied to the PR. GitHub returns each
+   * as a full label object; we only need the `name` for diffing
+   * against Sigilix's desired set. Empty array when no labels are
+   * applied. Field is optional so older mocks don't have to set it.
+   */
+  labels?: Array<{ name?: string }>
 }
 
 export interface PrChangedFile {

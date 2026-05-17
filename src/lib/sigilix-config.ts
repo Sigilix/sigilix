@@ -171,6 +171,26 @@ export interface SigilixConfig {
     minSignalThreshold?: number
     maxSignalAgeDays?: number
   }
+  /**
+   * ARC-265: customer-defined labels Sigilix's LLM may apply to PRs.
+   * Each entry pairs a label `name` (must already exist on the
+   * repo OR be auto-creatable — see `handlePrLabels`) with a
+   * `description` the LLM uses to judge whether the label fits the
+   * PR's diff + title + body.
+   *
+   * When this field is absent or empty, Sigilix does NOT touch
+   * labels at all — zero behavior change for repos without config.
+   *
+   * Sigilix-managed origin is tracked separately in KV so we never
+   * remove human-applied labels on subsequent runs.
+   *
+   * Example:
+   *   "customLabels": [
+   *     { "name": "area:security", "description": "Touches auth, secrets handling, or known-sensitive paths" },
+   *     { "name": "breaking-change", "description": "Public API or schema migration" }
+   *   ]
+   */
+  customLabels?: Array<{ name: string; description: string }>
 }
 
 /**
@@ -622,6 +642,26 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     if (Object.keys(rmOut).length > 0) {
       out.reviewMemory = rmOut
     }
+  }
+  // ARC-265: customLabels parsing. Strict-ish: each entry must be
+  // an object with non-empty string name + description. Bad entries
+  // are dropped (forward-compat: a typo in one entry shouldn't
+  // disable the whole feature). Empty result drops the field
+  // entirely so `handlePrLabels` sees `undefined` and no-ops.
+  if (Array.isArray(obj.customLabels)) {
+    const labels: NonNullable<SigilixConfig["customLabels"]> = []
+    const seen = new Set<string>()
+    for (const item of obj.customLabels) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue
+      const rec = item as Record<string, unknown>
+      const name = typeof rec.name === "string" ? rec.name.trim() : ""
+      const description = typeof rec.description === "string" ? rec.description.trim() : ""
+      if (name.length === 0 || description.length === 0) continue
+      if (seen.has(name)) continue // dedupe by name within config
+      seen.add(name)
+      labels.push({ name, description })
+    }
+    if (labels.length > 0) out.customLabels = labels
   }
   return { ok: true, config: out }
 }

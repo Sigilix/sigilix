@@ -201,6 +201,25 @@ export const GITHUB_MENTION_SCHEMA = {
 } as const
 
 /**
+ * pr-labels verdict (ARC-265: auto-applied PR labels).
+ *
+ * The model picks 0–5 label NAMES from the candidate pool supplied
+ * in the prompt. Anything outside that pool is dropped post-decode
+ * (the LLM occasionally invents — the parser is the source of truth).
+ */
+export const PR_LABEL_SCHEMA = {
+  type: "object",
+  properties: {
+    labels: {
+      type: "array",
+      maxItems: 5,
+      items: { type: "string" },
+    },
+  },
+  required: ["labels"],
+} as const
+
+/**
  * pr-describe verdict (ARC-191: `/sigilix describe`).
  * Mirrors PrDescribeVerdict in src/lib/triage-pr-describe.ts.
  *

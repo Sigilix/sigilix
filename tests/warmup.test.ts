@@ -220,6 +220,32 @@ describe("updateWarmupStickyToReady", () => {
     const outcome = await updateWarmupStickyToReady({ env, ...baseArgs })
     expect(outcome).toEqual({ skipped: "missing-creds" })
   })
+
+  // CodeRabbit phase-end catch on PR #80: the post-submit call site
+  // (ensemble + Phase 3) MUST NOT see an exception escape from this
+  // helper — would mark a successful review as `errored` and trigger
+  // a duplicate Phase 3 review. Regression test: any throw from
+  // the KV read at the top of the helper degrades to a `failed`
+  // outcome.
+  it("degrades to failed outcome (no throw) when manifest read throws", async () => {
+    const env = {
+      OPENCLAW_STATE: {
+        async get(): Promise<string | null> {
+          throw new Error("KV outage")
+        },
+        async put(): Promise<void> { /* no-op */ },
+        async delete(): Promise<void> { /* no-op */ },
+      },
+      GITHUB_APP_ID: "12345",
+      GITHUB_PRIVATE_KEY: "fake-key",
+    } as unknown as Env
+
+    const outcome = await updateWarmupStickyToReady({ env, ...baseArgs })
+    expect("failed" in outcome).toBe(true)
+    if ("failed" in outcome) {
+      expect(outcome.failed).toContain("KV outage")
+    }
+  })
 })
 
 describe("enqueueWarmupRerunsForIndex", () => {

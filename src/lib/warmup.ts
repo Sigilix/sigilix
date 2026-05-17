@@ -165,17 +165,24 @@ export async function updateWarmupStickyToReady(args: {
   installationId: number
 }): Promise<UpdateWarmupOutcome> {
   const { env, owner, repo, prNumber, installationId } = args
-  // Gate on manifest existence. If we're still in the warmup
-  // window, the review just posted was diff-only — don't tell the
-  // customer indexing is ready.
-  const manifest = await readRepoIndexManifest(env, repo)
-  if (manifest.kind !== "ok") {
-    return { skipped: "not-yet-indexed" }
-  }
-  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    return { skipped: "missing-creds" }
-  }
+  // CodeRabbit phase-end catch on PR #80: this helper is called on
+  // the success path AFTER `submitReview` lands. If it throws, the
+  // surrounding catch in the orchestrator marks an otherwise-
+  // successful review as `errored` and the dispatcher falls through
+  // to Phase 3, posting a duplicate review. Wrap the full body in
+  // try/catch so manifest/KV/network failures degrade to a `failed`
+  // outcome instead of escaping up the stack.
   try {
+    // Gate on manifest existence. If we're still in the warmup
+    // window, the review just posted was diff-only — don't tell the
+    // customer indexing is ready.
+    const manifest = await readRepoIndexManifest(env, repo)
+    if (manifest.kind !== "ok") {
+      return { skipped: "not-yet-indexed" }
+    }
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+      return { skipped: "missing-creds" }
+    }
     const token = await getInstallationToken({
       kv: env.OPENCLAW_STATE,
       appId: env.GITHUB_APP_ID,

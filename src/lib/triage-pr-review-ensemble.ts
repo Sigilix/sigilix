@@ -1085,6 +1085,29 @@ export async function handlePrReviewEnsemble(
       droppedForVaguePrefix: validated.droppedForVaguePrefix,
     }
 
+    // ARC-270 — consensus-aware re-ranking. Strictly additive: we
+    // don't change the verdict gate (`chooseReviewEvent`), drop
+    // findings, or touch scores. Just reorder so multi-specialist
+    // findings surface first and capture a consensus count per
+    // finding for the body annotation below.
+    const consensusRanked = computeConsensusRanking(
+      validated.verdict,
+      validated.cleanFindingProvenance,
+    )
+    const consensusVerdict = consensusRanked.verdict
+    const consensusProvenance = consensusRanked.provenance
+    const consensusByIndex = consensusRanked.consensusByIndex
+    const highConsensusCount = consensusByIndex.filter((c) => c >= 2).length
+    if (consensusVerdict.findings.length > 0) {
+      console.log(JSON.stringify({
+        event: "pr-review-consensus-rerank",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        finding_count: consensusVerdict.findings.length,
+        high_consensus_count: highConsensusCount,
+        max_consensus: consensusByIndex.reduce((m, c) => Math.max(m, c), 0),
+      }))
+    }
+
     if (mode === "shadow") {
       // Shadow: telemetry only, no GitHub submission. Deliberately
       // do NOT write the last-reviewed SHA — shadow runs don't post
@@ -1093,7 +1116,13 @@ export async function handlePrReviewEnsemble(
       // would cause subsequent post-mode runs to incrementally
       // review only `shadowSha..head` and miss everything before
       // (sigilix-bot dogfood catch on PR #53).
-      telemetry.shadowVerdict = validated.verdict
+      // ARC-270 (code-reviewer catch): shadow dogfooding is the
+      // exact channel we use to validate consensus reordering
+      // before flipping to post mode. Capture the consensus-ranked
+      // verdict so the new ordering is visible in telemetry; the
+      // raw post-validation verdict is reconstructible from the
+      // `postValidation` counters + specialist verdicts.
+      telemetry.shadowVerdict = consensusVerdict
       return finalize(telemetry, env, "shadow_recorded", cache)
     }
 
@@ -1156,18 +1185,35 @@ export async function handlePrReviewEnsemble(
       }
     }
     let softenedCount = 0
-    const renderableFindings = validated.verdict.findings.map((f, i) => {
-      const sourceIds = validated.cleanFindingProvenance[i]?.sourceFindingIds ?? []
+    // ARC-270: soften walks the CONSENSUS-RANKED arrays (verdict +
+    // provenance + consensusByIndex stay in lockstep). Body
+    // annotation happens here too, so renderable findings carry both
+    // the (possibly softened) score AND the consensus prefix.
+    //
+    // Caveat: the rendered Fix Plan (`renderFixPlan` in
+    // `triage-pr-review.ts`) and the anchorless 422-fallback's
+    // per-file rendering both apply their own sort (by location /
+    // by score within file). They override consensus ORDER, but the
+    // `_Flagged by N specialists._` body prefix still surfaces the
+    // signal — the badge stays, just the row position differs in
+    // those two surfaces.
+    const renderableFindings = consensusVerdict.findings.map((f, i) => {
+      const sourceIds = consensusProvenance[i]?.sourceFindingIds ?? []
       const matched = sourceIds.some((id) => softenedSet.has(id))
-      if (!matched) return f
-      const effectiveScore = Math.max(1, f.score - 1)
-      if (effectiveScore === f.score) return f  // already at floor
-      softenedCount++
-      return { ...f, score: effectiveScore }
+      let working = f
+      if (matched) {
+        const effectiveScore = Math.max(1, f.score - 1)
+        if (effectiveScore !== f.score) {
+          softenedCount++
+          working = { ...f, score: effectiveScore }
+        }
+      }
+      // Body annotation — only when consensus >= 2.
+      return annotateWithConsensus(working, consensusByIndex[i] ?? 1)
     })
     const renderableUnanchored = validated.unanchoredFindings  // unanchored never matches by index
     const renderableVerdict: PrReviewVerdict = {
-      ...validated.verdict,
+      ...consensusVerdict,
       findings: renderableFindings,
     }
     if (softenedCount > 0) {
@@ -1189,9 +1235,14 @@ export async function handlePrReviewEnsemble(
     // Marker severity uses the ORIGINAL (pre-soften) score so the
     // marker reflects what synth actually emitted; the soften
     // applies to the rendered finding body only.
+    // ARC-270: marker computation walks the consensus-ranked arrays
+    // so per-finding markers stay aligned with the rendered finding
+    // order. `consensusProvenance` and `consensusVerdict.findings`
+    // are in the new ranking; `findingMarkers[i]` lines up with
+    // `renderableFindings[i]`.
     const findingMarkers: Array<string | null> = await Promise.all(
-      validated.verdict.findings.map(async (f, i) => {
-        const sourceSpec = validated.cleanFindingProvenance[i]?.sourceSpecialists?.[0]
+      consensusVerdict.findings.map(async (f, i) => {
+        const sourceSpec = consensusProvenance[i]?.sourceSpecialists?.[0]
         if (!sourceSpec) return null
         return await buildSigilixMarker({
           ruleId: null,
@@ -2146,6 +2197,118 @@ export function assignStableFindingIds(role: SpecialistRole, verdict: PrReviewVe
     ...verdict,
     findings: verdict.findings.map((f, i) => ({ ...f, id: `${role}-${i}` })),
   }
+}
+
+/**
+ * ARC-270 — consensus-aware ranking of post-synth findings.
+ *
+ * Re-orders `verdict.findings` (and the parallel `provenance` array)
+ * by **`(consensus, score)` DESC** where `consensus = number of
+ * distinct specialists that cited the finding via `sourceSpecialists`.
+ * Two specialists independently flagging the same line is much
+ * stronger signal than one specialist's opinion — surface that
+ * agreement at the top, where reviewers will look first.
+ *
+ * **Why consensus is primary, not score.** A 2-specialist score-2
+ * finding ranks above a 1-specialist score-5 finding. This is
+ * deliberate: lone-specialist score-5 is the most common LLM
+ * over-confidence failure mode, and cross-specialist agreement is
+ * exactly the signal that distinguishes "real bug" from "model
+ * hallucinated a confident concern". Reversing the keys would put
+ * over-confident solo findings at the top.
+ *
+ * Strictly additive (Codex spec catch): we do NOT change the gate
+ * (`chooseReviewEvent`) or drop any findings here. The score values
+ * stay untouched. This is a reorder-and-annotate step only.
+ *
+ * Stable: ties on `(consensus, score)` preserve the synth's emit
+ * order (so the synth's logical grouping survives the reorder when
+ * there's no consensus signal to leverage).
+ *
+ * Returns a NEW verdict object + a NEW parallel provenance array +
+ * a `consensusByIndex` array aligned with the new ordering. Callers
+ * use `consensusByIndex` to render a "Flagged by N specialists"
+ * annotation on findings with `consensus >= 2`.
+ *
+ * Pure — exported for unit tests.
+ */
+export interface ConsensusRanked {
+  verdict: PrReviewVerdict
+  provenance: SynthesizerProvenance["findings"]
+  /** `consensusByIndex[i]` is the number of distinct specialists for
+   *  the finding at NEW index `i`. Always >= 1 (validateForSubmission
+   *  drops zero-source findings as hallucinations).
+   */
+  consensusByIndex: number[]
+}
+
+export function computeConsensusRanking(
+  verdict: PrReviewVerdict,
+  provenance: SynthesizerProvenance["findings"],
+): ConsensusRanked {
+  // Defensive: provenance.length should equal findings.length post-
+  // validateForSubmission. If misaligned, fall back to a no-op
+  // (preserve order + emit consensus=1 for all) so we don't
+  // accidentally drop findings.
+  if (provenance.length !== verdict.findings.length) {
+    return {
+      verdict,
+      provenance,
+      consensusByIndex: verdict.findings.map(() => 1),
+    }
+  }
+
+  const consensusOf = (i: number): number => {
+    const specs = provenance[i]?.sourceSpecialists
+    if (!Array.isArray(specs) || specs.length === 0) return 1
+    return new Set(specs).size
+  }
+
+  // Build index permutation. Sort by `(consensus DESC, score DESC,
+  // originalIndex ASC)` for stable tiebreaking.
+  const order = verdict.findings.map((_, i) => i)
+  order.sort((a, b) => {
+    const ca = consensusOf(a)
+    const cb = consensusOf(b)
+    if (cb !== ca) return cb - ca
+    const sa = verdict.findings[a]!.score
+    const sb = verdict.findings[b]!.score
+    if (sb !== sa) return sb - sa
+    return a - b
+  })
+
+  const newFindings = order.map((i) => verdict.findings[i]!)
+  const newProvenance = order.map((i) => provenance[i]!)
+  const consensusByIndex = order.map((i) => consensusOf(i))
+
+  return {
+    verdict: { ...verdict, findings: newFindings },
+    provenance: newProvenance,
+    consensusByIndex,
+  }
+}
+
+/**
+ * ARC-270 — annotate a finding's `body` with a "Flagged by N
+ * specialists" prefix when consensus >= 2. Returns a CLONE of the
+ * finding; never mutates the original (same immutability pattern
+ * as the review-memory soften clone in the ensemble flow).
+ *
+ * For consensus < 2, returns the finding unchanged (no annotation,
+ * since a single specialist's opinion is the default expectation).
+ *
+ * Pure — exported for unit tests.
+ */
+export function annotateWithConsensus(
+  finding: PrReviewFinding,
+  consensus: number,
+): PrReviewFinding {
+  if (consensus < 2) return finding
+  const annotation = `_Flagged by ${consensus} specialists._`
+  const body = finding.body.length > 0
+    ? `${annotation}\n\n${finding.body}`
+    : annotation
+  return { ...finding, body }
 }
 
 export function checkQuorum(

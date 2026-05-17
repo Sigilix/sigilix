@@ -6,8 +6,10 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  annotateWithConsensus,
   assignStableFindingIds,
   checkQuorum,
+  computeConsensusRanking,
   truncateVerdictToTokens,
   validateForSubmission,
   routeReview,
@@ -20,6 +22,7 @@ import {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
   MAX_CALLS_PER_ENSEMBLE_RUN,
+  type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { Env } from "../src/index"
@@ -746,5 +749,174 @@ describe("validateForSubmission — emits cleanFindingProvenance aligned by inde
     // Skipped: this concern is covered by parseSynthAnswer →
     // isValidProvenance unit tests (out of scope for this describe).
     expect(true).toBe(true)
+  })
+})
+
+// ARC-270 — consensus scoring
+describe("computeConsensusRanking", () => {
+  const finding = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
+    ...baseFinding, ...overrides,
+  })
+  const prov = (specialists: string[]): SynthesizerProvenance["findings"][number] => ({
+    sourceSpecialists: specialists as SynthesizerProvenance["findings"][number]["sourceSpecialists"],
+    sourceFindingIds: specialists.map((s, i) => `${s}-${i}`),
+    action: "kept",
+    verifiedViaRetrieval: false,
+  })
+
+  it("ranks 2-specialist findings above 1-specialist findings at the same score", () => {
+    const verdict: PrReviewVerdict = {
+      ...baseVerdict,
+      findings: [
+        finding({ headline: "single", score: 4 }),
+        finding({ headline: "duo", score: 4 }),
+      ],
+    }
+    const provenance = [prov(["logic"]), prov(["logic", "security"])]
+
+    const out = computeConsensusRanking(verdict, provenance)
+
+    expect(out.verdict.findings[0]?.headline).toBe("duo")
+    expect(out.verdict.findings[1]?.headline).toBe("single")
+    expect(out.consensusByIndex).toEqual([2, 1])
+  })
+
+  it("uses score as the tiebreaker when consensus is equal", () => {
+    const verdict: PrReviewVerdict = {
+      ...baseVerdict,
+      findings: [
+        finding({ headline: "low", score: 2 }),
+        finding({ headline: "high", score: 5 }),
+      ],
+    }
+    const provenance = [prov(["logic"]), prov(["security"])]
+
+    const out = computeConsensusRanking(verdict, provenance)
+
+    expect(out.verdict.findings[0]?.headline).toBe("high")
+    expect(out.verdict.findings[1]?.headline).toBe("low")
+  })
+
+  it("preserves original order on full ties (stable sort)", () => {
+    const verdict: PrReviewVerdict = {
+      ...baseVerdict,
+      findings: [
+        finding({ headline: "first", score: 3 }),
+        finding({ headline: "second", score: 3 }),
+        finding({ headline: "third", score: 3 }),
+      ],
+    }
+    const provenance = [prov(["logic"]), prov(["logic"]), prov(["logic"])]
+
+    const out = computeConsensusRanking(verdict, provenance)
+
+    expect(out.verdict.findings.map((f) => f.headline)).toEqual(["first", "second", "third"])
+  })
+
+  it("dedupes specialists when computing consensus (same specialist twice = 1)", () => {
+    const verdict: PrReviewVerdict = {
+      ...baseVerdict,
+      findings: [finding({ headline: "dup-spec" })],
+    }
+    // Pathological provenance — same specialist listed twice. Consensus
+    // should still report 1 (distinct specialists only).
+    const provenance = [prov(["logic", "logic"])]
+
+    const out = computeConsensusRanking(verdict, provenance)
+
+    expect(out.consensusByIndex).toEqual([1])
+  })
+
+  it("3-specialist > 2-specialist > 1-specialist on identical scores", () => {
+    const verdict: PrReviewVerdict = {
+      ...baseVerdict,
+      findings: [
+        finding({ headline: "solo", score: 3 }),
+        finding({ headline: "trio", score: 3 }),
+        finding({ headline: "duo", score: 3 }),
+      ],
+    }
+    const provenance = [
+      prov(["logic"]),
+      prov(["logic", "security", "tests"]),
+      prov(["logic", "performance"]),
+    ]
+
+    const out = computeConsensusRanking(verdict, provenance)
+
+    expect(out.verdict.findings.map((f) => f.headline)).toEqual(["trio", "duo", "solo"])
+    expect(out.consensusByIndex).toEqual([3, 2, 1])
+  })
+
+  it("provenance array is reordered to match the new finding order", () => {
+    const verdict: PrReviewVerdict = {
+      ...baseVerdict,
+      findings: [
+        finding({ headline: "A" }),
+        finding({ headline: "B" }),
+      ],
+    }
+    const provenanceA = prov(["logic"])
+    const provenanceB = prov(["logic", "security"])
+    const provenance = [provenanceA, provenanceB]
+
+    const out = computeConsensusRanking(verdict, provenance)
+
+    // B (consensus 2) is now at index 0 — its provenance moved with it.
+    expect(out.verdict.findings[0]?.headline).toBe("B")
+    expect(out.provenance[0]).toBe(provenanceB)
+    expect(out.provenance[1]).toBe(provenanceA)
+  })
+
+  it("defensive: misaligned arrays → no-op (preserve order, consensus=1 each)", () => {
+    const verdict: PrReviewVerdict = {
+      ...baseVerdict,
+      findings: [finding({ headline: "A" }), finding({ headline: "B" })],
+    }
+    const provenance = [prov(["logic"])] // length=1, mismatch
+
+    const out = computeConsensusRanking(verdict, provenance)
+
+    expect(out.verdict.findings.map((f) => f.headline)).toEqual(["A", "B"])
+    expect(out.consensusByIndex).toEqual([1, 1])
+  })
+
+  it("empty findings list returns empty result without crashing", () => {
+    const out = computeConsensusRanking({ ...baseVerdict, findings: [] }, [])
+    expect(out.verdict.findings).toEqual([])
+    expect(out.provenance).toEqual([])
+    expect(out.consensusByIndex).toEqual([])
+  })
+})
+
+describe("annotateWithConsensus", () => {
+  const f: PrReviewFinding = { ...baseFinding }
+
+  it("prepends a 'Flagged by N specialists' note when consensus >= 2", () => {
+    const out = annotateWithConsensus(f, 3)
+    expect(out.body.startsWith("_Flagged by 3 specialists._")).toBe(true)
+    expect(out.body).toContain(f.body)
+  })
+
+  it("returns the finding unchanged when consensus is 1", () => {
+    const out = annotateWithConsensus(f, 1)
+    expect(out).toBe(f)
+  })
+
+  it("returns the finding unchanged when consensus is 0", () => {
+    const out = annotateWithConsensus(f, 0)
+    expect(out).toBe(f)
+  })
+
+  it("does not mutate the original finding", () => {
+    const original = { ...baseFinding }
+    annotateWithConsensus(original, 2)
+    expect(original.body).toBe(baseFinding.body)
+  })
+
+  it("handles empty body (annotation alone)", () => {
+    const empty = { ...baseFinding, body: "" }
+    const out = annotateWithConsensus(empty, 2)
+    expect(out.body).toBe("_Flagged by 2 specialists._")
   })
 })

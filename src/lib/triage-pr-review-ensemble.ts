@@ -132,6 +132,7 @@ import { runReviewMemoryLookup } from "./review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
+import { handleStaleHead } from "./stale-head"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -426,7 +427,17 @@ export async function handlePrReviewEnsemble(
     if (meta.head?.sha && meta.head.sha !== headSha) {
       telemetry.fellBackToPhase3 = true
       telemetry.fellBackReason = "stale_head_before_fanout"
-      return finalize(telemetry, env, "skipped", cache)
+      // ARC-250: hand off to the helper for structured telemetry + a
+      // user-visible sticky comment. Return `stale_head` so the
+      // dispatcher does NOT fall through to Phase 3 (which would also
+      // stale-head and post a duplicate sticky).
+      await handleStaleHead({
+        env, owner, repo, prNumber, installationId,
+        queuedHeadSha: headSha,
+        currentHeadSha: meta.head.sha,
+        source: "ensemble-before-fanout",
+      })
+      return finalize(telemetry, env, "stale_head", cache)
     }
 
     // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
@@ -1063,19 +1074,29 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "shadow_recorded", cache)
     }
 
-    // ARC-194: record the SHA we just reviewed (post mode only) so
-    // subsequent pushes can fetch the compare diff (`reviewedSha...
-    // newHead`) instead of the full PR diff. Best-effort — write
-    // failures don't fail the run; next push falls back to full diff
-    // and re-establishes the marker on the following review.
-    await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
-
     // ─── Stale-head guard #2 ───────────────────────────────────
+    //
+    // ARC-250 (Codex MAJOR on the design review): this guard MUST run
+    // before `writeLastReviewedSha`. Previously the write happened
+    // first, so if the head moved we still marked `headSha` as
+    // last-reviewed even though no GitHub review was posted. The next
+    // ARC-251 requeue then read that marker and used a `compareDiff`
+    // of `oldSha..newSha` instead of the full PR diff — missing every
+    // finding from before the head move. The fix is twofold: check
+    // staleness here, and move `writeLastReviewedSha` to the two
+    // posted-return sites below so it only runs after a successful
+    // GitHub submit.
     const meta2 = await client.getPullRequest(owner, repo, prNumber)
     if (meta2.head?.sha && meta2.head.sha !== headSha) {
       telemetry.fellBackToPhase3 = true
       telemetry.fellBackReason = "stale_head_after_review"
-      return finalize(telemetry, env, "skipped", cache)
+      await handleStaleHead({
+        env, owner, repo, prNumber, installationId,
+        queuedHeadSha: headSha,
+        currentHeadSha: meta2.head.sha,
+        source: "ensemble-after-review",
+      })
+      return finalize(telemetry, env, "stale_head", cache)
     }
 
     // ─── Submit ────────────────────────────────────────────────
@@ -1180,6 +1201,11 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submitted.id,
       })
+      // ARC-194 (moved here in ARC-250): record `lastReviewedSha`
+      // only after a confirmed GitHub submit. Previously this fired
+      // before guard #2 — a stale-head skip still marked the SHA
+      // reviewed, corrupting the next push's compare-diff. Best-effort.
+      await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
@@ -1241,6 +1267,9 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submittedFallback.id,
       })
+      // ARC-194 (moved here in ARC-250): mirror the primary submit path
+      // — only mark `lastReviewedSha` after a confirmed GitHub submit.
+      await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }
@@ -2429,7 +2458,16 @@ interface EnsembleTelemetry {
   totalMs: number
 }
 
-type EnsembleResultStatus = "posted" | "shadow_recorded" | "skipped" | "errored"
+// ARC-250: `stale_head` is split out from `skipped` so the dispatcher
+// can short-circuit the Phase 3 fallback. Falling through to Phase 3
+// when the ensemble guard fired would just hit Phase 3's identical
+// stale-head guard and skip again — invisible to the customer.
+type EnsembleResultStatus =
+  | "posted"
+  | "shadow_recorded"
+  | "skipped"
+  | "stale_head"
+  | "errored"
 
 export interface EnsembleResult {
   status: EnsembleResultStatus

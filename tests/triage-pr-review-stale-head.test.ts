@@ -18,6 +18,11 @@ const mockGenerate = vi.fn()
 // guard tests are unaffected.
 const mockListOpenPullRequests = vi.fn(async () => [])
 const mockListPullRequestFiles = vi.fn(async () => [])
+// ARC-250: the stale-head guard now hands off to `handleStaleHead`,
+// which lists/creates/updates issue comments to upsert a sticky.
+const mockListIssueComments = vi.fn(async () => [] as { id: number; body: string }[])
+const mockCreateIssueComment = vi.fn(async () => ({ id: 12345 }))
+const mockUpdateIssueComment = vi.fn(async () => undefined)
 
 vi.mock("../src/lib/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -33,6 +38,9 @@ vi.mock("../src/lib/github", async () => {
       submitReview: (...args: unknown[]) => mockSubmitReview(...args),
       listOpenPullRequests: (...args: unknown[]) => mockListOpenPullRequests(...args),
       listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
+      listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
+      createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
+      updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
     })),
   }
 })
@@ -81,6 +89,9 @@ beforeEach(() => {
   mockGetPullRequestDiff.mockClear()
   mockSubmitReview.mockClear()
   mockGenerate.mockClear()
+  mockListIssueComments.mockClear()
+  mockCreateIssueComment.mockClear()
+  mockUpdateIssueComment.mockClear()
 })
 
 describe("handlePrReview stale-head guard", () => {
@@ -94,7 +105,7 @@ describe("handlePrReview stale-head guard", () => {
     })
     const { kv, store, deletes } = makeKvStub()
 
-    await handlePrReview({
+    const result = await handlePrReview({
       owner: "Arc-and-Anchor",
       repo: "openclaw-worker",
       prNumber: 99,
@@ -103,8 +114,19 @@ describe("handlePrReview stale-head guard", () => {
       env: makeEnv(kv),
     })
 
+    // ARC-250: the guard now returns a status so the dispatcher can
+    // short-circuit the Phase 3 fallback instead of running it twice.
+    expect(result).toEqual({ status: "stale_head" })
     expect(mockGenerate).not.toHaveBeenCalled()
     expect(mockSubmitReview).not.toHaveBeenCalled()
+    // ARC-250: a sticky comment is posted so the customer sees that
+    // Sigilix decided not to review (rather than getting no signal at
+    // all). The upsert path tries listIssueComments first to find an
+    // existing marker.
+    expect(mockListIssueComments).toHaveBeenCalledTimes(1)
+    expect(mockCreateIssueComment).toHaveBeenCalledTimes(1)
+    const [, , , body] = mockCreateIssueComment.mock.calls[0]!
+    expect(body).toContain("<!-- sigilix:stale-head-skipped -->")
     // The finally block releases the dedupe key when posted=false, so a
     // queue retry could re-attempt — and on retry the head would still
     // be ahead, so we'd skip again. Confirm release happened.

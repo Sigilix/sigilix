@@ -14,11 +14,12 @@
 //   - When matched: skip the review entirely, log the reason, and
 //     emit telemetry. NEVER fetch the PR diff or call any model.
 //
-// This complements (rather than replaces) the existing
-// `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS` allowlist:
-//   - Allowlist: only specified repos run the ensemble (rollout knob)
-//   - Denylist: specified repos are HARD-blocked from any review
-//     regardless of allowlist state
+// Sensitive denylist is the ONLY repo-level gate on the ensemble.
+// ARC-232 (2026-05-16): the prior `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
+// allowlist was deleted — silent fallback to slower Phase 3 on a
+// missing env-var entry burned us on 2026-05-12 (rubberfit downgrade);
+// the secret has been removed from prod and the code-level cleanup
+// landed too.
 
 /**
  * Parse the env var into a normalized set of `owner/repo` strings.

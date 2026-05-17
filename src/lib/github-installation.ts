@@ -103,37 +103,76 @@ export function listTeamRepoMappings(
 
 /**
  * The universe of repo namespaces the agent loop is allowed to query
- * via `retrieve_codebase`. Resolved in priority order:
- *   1. `OPENCLAW_INDEXED_REPOS` (comma-separated lowercased slugs) if set —
- *      explicit override for repos that are indexed but not Linear-team-
- *      mapped (e.g. the website repo when no Linear team owns it).
- *   2. Otherwise: the union of repo names in `OPENCLAW_TEAM_GITHUB_REPO_MAP`,
- *      lowercased and de-duplicated. Each Linear-team-mapped repo is by
- *      construction one we index, so this is a sensible default.
+ * via `retrieve_codebase`.
+ *
+ * ARC-239 (2026-05-16): source of truth is now the `repo-index-manifest:*`
+ * KV prefix — written by ARC-235's indexer on first install + push
+ * re-index, deleted by ARC-238's uninstall handler. This replaces the
+ * prior `OPENCLAW_INDEXED_REPOS` env-var allowlist that had the same
+ * silent-downgrade failure mode as ARC-232's removed allowlist: an
+ * operator-managed env-var lag would lock customers out of retrieval
+ * even though their repo was actually indexed.
  *
  * Returned slugs are always lowercased (Vectorize namespaces are
- * lowercased at index time — see scripts/index-repo.mjs).
+ * lowercased at index time — see scripts/index-repo.mjs and the
+ * `repoIndexManifestKey` helper in `repo-index-manifest.ts`).
+ *
+ * Cloudflare KV's edge cache absorbs the read cost on hot paths
+ * (the agent loop calls this once per invocation; same-region
+ * reads hit the cache for ~60s by default). The 5-minute caching
+ * layer suggested in the ARC-239 spec is therefore deferred —
+ * KV's built-in caching is sufficient at our scale.
  */
-export function listIndexedRepos(env: {
-  OPENCLAW_INDEXED_REPOS?: string
-  OPENCLAW_TEAM_GITHUB_REPO_MAP?: string
-}): string[] {
-  // CR PR #30 catch: presence-based check. If OPENCLAW_INDEXED_REPOS is
-  // DEFINED at all (even empty/whitespace), treat it as authoritative —
-  // an explicit "intentionally lock down to nothing" reading. Falling
-  // back to the team-repo map only when the var is truly unset removes
-  // the ambiguous middle ground.
-  if (env.OPENCLAW_INDEXED_REPOS !== undefined) {
-    const explicit = env.OPENCLAW_INDEXED_REPOS
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter((s) => s.length > 0)
-    return [...new Set(explicit)]
+export async function listIndexedRepos(env: {
+  OPENCLAW_STATE: KVNamespace
+}): Promise<string[]> {
+  const PREFIX = "repo-index-manifest:"
+  const out = new Set<string>()
+  let cursor: string | undefined
+  for (;;) {
+    let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+    try {
+      page = await env.OPENCLAW_STATE.list({
+        prefix: PREFIX,
+        limit: 1000,
+        ...(cursor ? { cursor } : {}),
+      }) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+    } catch (err) {
+      // Symmetry with `deleteKvPrefix` in src/lib/index-delete.ts:
+      // transient KV.list errors become a partial-result + log; the
+      // queue handler retries the whole job. Returning the partial
+      // set keeps the agent loop from blowing up on a momentary blip.
+      console.error(JSON.stringify({
+        event: "list-indexed-repos-failed",
+        err: err instanceof Error ? err.message : String(err),
+        partial_count: out.size,
+      }))
+      break
+    }
+    for (const key of page.keys) {
+      // CR catch on PR #79: defensive `.toLowerCase()` on the
+      // extracted suffix. The canonical writer (`repoIndexManifestKey`
+      // in repo-index-manifest.ts) always lowercases on the way in,
+      // but a direct `OPENCLAW_STATE.put` bypass with a mixed-case
+      // key would otherwise leak casing into `availableRepos` and
+      // break the case-sensitive lookup downstream.
+      const repo = key.name.slice(PREFIX.length).toLowerCase()
+      if (repo.length > 0) out.add(repo)
+    }
+    if (page.list_complete) break
+    if (!page.cursor) {
+      // SDK violation guard: `list_complete: false` with no cursor is
+      // unreachable per Cloudflare KV's contract, but log if it ever
+      // happens so we notice instead of silently truncating.
+      console.warn(JSON.stringify({
+        event: "list-indexed-repos-truncated-no-cursor",
+        partial_count: out.size,
+      }))
+      break
+    }
+    cursor = page.cursor
   }
-  const fromMap = listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP).map((m) =>
-    m.repo.toLowerCase(),
-  )
-  return [...new Set(fromMap)]
+  return Array.from(out)
 }
 
 /**

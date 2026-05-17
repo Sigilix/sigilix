@@ -209,9 +209,10 @@ describe("retrieve_codebase", () => {
   })
 
   it("rejects every repo when allowedRepos is empty array (explicit lock to none)", async () => {
-    // Matches listIndexedRepos's presence semantics: the operator
-    // setting OPENCLAW_INDEXED_REPOS="" means "lock the agent down to
-    // no namespaces." Anything else would silently undo the lockout.
+    // ARC-239: matches listIndexedRepos's KV-backed semantics — an
+    // empty `repo-index-manifest:*` prefix returns `[]`, meaning
+    // "no repos indexed yet." The agent should cleanly reject
+    // retrieval against any namespace rather than soft-failing.
     const [tool] = createAgentTools({
       env: makeEnv(),
       surface: "linear-mention",

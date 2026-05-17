@@ -123,13 +123,12 @@ export interface Env {
   // Schema: {"<owner>/<repo>":"<id>","<owner>":"<id>"}
   // Lookup order: exact owner/repo, then owner-only fallback.
   OPENCLAW_GITHUB_INSTALLATION_MAP?: string
-  // Comma-separated lowercased Vectorize namespaces the agent loop is
-  // allowed to query. Optional — if unset, derived from the values of
-  // OPENCLAW_TEAM_GITHUB_REPO_MAP. Set this when there are repos that
-  // are indexed but not Linear-team-mapped (e.g. a marketing site that
-  // no Linear team owns directly).
-  // Example: "rubberfit,arc-and-anchor-website,rubberfit-desktop,openclaw-worker"
-  OPENCLAW_INDEXED_REPOS?: string
+  // ARC-239 (2026-05-16): the `OPENCLAW_INDEXED_REPOS` env-var
+  // allowlist was deleted. The agent loop's `retrieve_codebase` tool
+  // now derives the indexed-repo universe from `repo-index-manifest:*`
+  // KV records — ARC-235's bootstrap writer + ARC-238's uninstall
+  // cleanup make that the live source of truth. Same anti-pattern as
+  // ARC-232's allowlist removal.
   // "strict" → return 500 when team/installation maps are inconsistent.
   // Anything else (including unset, "warn", "STRICT", typos) → warn only.
   OPENCLAW_VALIDATE_GITHUB_INSTALLATIONS?: string
@@ -152,10 +151,6 @@ export interface Env {
   // as customer-facing review AND runs ensemble in parallel for
   // telemetry only. "post" submits ensemble verdict to GitHub.
   OPENCLAW_ENSEMBLE_REVIEW_MODE?: string
-  // Comma-separated owner/repo allowlist. When set, ensemble only
-  // fires on these repos. Empty/unset = all repos eligible (use with
-  // care during rollout).
-  OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS?: string
   // ARC-183: comma-separated owner/repo DENYlist. When a repo is
   // listed here, Sigilix never fetches its diff or sends content to
   // any LLM. Use for compliance / customer-data / secrets-heavy

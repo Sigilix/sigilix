@@ -159,74 +159,89 @@ describe("parseTeamGithubRepo", () => {
   })
 })
 
-describe("listIndexedRepos", () => {
-  it("returns the explicit OPENCLAW_INDEXED_REPOS list when set", () => {
-    expect(
-      listIndexedRepos({
-        OPENCLAW_INDEXED_REPOS: "rubberfit, arc-and-anchor-website ,Rubberfit-Desktop",
-        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-          ARC: { owner: "Arc-and-Anchor", repo: "openclaw-worker" },
-        }),
-      }),
-    ).toEqual(["rubberfit", "arc-and-anchor-website", "rubberfit-desktop"])
+describe("listIndexedRepos — KV-backed (ARC-239)", () => {
+  // The function now lists `repo-index-manifest:*` keys from KV
+  // rather than reading the deleted `OPENCLAW_INDEXED_REPOS` env var.
+  // KV is the live source of truth (ARC-235 writes; ARC-238 deletes).
+  type Page = { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+  function makeKvStub(keys: string[]): { OPENCLAW_STATE: KVNamespace } {
+    return {
+      OPENCLAW_STATE: {
+        list: async (opts: { prefix?: string; cursor?: string }): Promise<Page> => {
+          const prefix = opts.prefix ?? ""
+          const filtered = keys.filter((k) => k.startsWith(prefix))
+          return { keys: filtered.map((name) => ({ name })), list_complete: true }
+        },
+      } as unknown as KVNamespace,
+    }
+  }
+
+  it("returns repos derived from `repo-index-manifest:*` keys", async () => {
+    const env = makeKvStub([
+      "repo-index-manifest:rubberfit",
+      "repo-index-manifest:arc-and-anchor-website",
+      "repo-index-manifest:openclaw-worker",
+    ])
+    const result = await listIndexedRepos(env)
+    expect(result.sort()).toEqual(["arc-and-anchor-website", "openclaw-worker", "rubberfit"])
   })
 
-  it("ignores the team-repo map when explicit override is set", () => {
-    // Confirms priority: explicit override wins, even when both are set.
-    expect(
-      listIndexedRepos({
-        OPENCLAW_INDEXED_REPOS: "alpha,beta",
-        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-          ARC: { owner: "x", repo: "gamma" },
-        }),
-      }),
-    ).toEqual(["alpha", "beta"])
+  it("dedupes if the same key is somehow listed twice (defensive)", async () => {
+    const env = makeKvStub([
+      "repo-index-manifest:rubberfit",
+      "repo-index-manifest:rubberfit",
+    ])
+    expect(await listIndexedRepos(env)).toEqual(["rubberfit"])
   })
 
-  it("falls back to the team-repo map values when override is unset", () => {
-    expect(
-      listIndexedRepos({
-        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-          ARC: { owner: "Arc-and-Anchor", repo: "Rubberfit" },
-          OTHER: { owner: "Arc-and-Anchor", repo: "openclaw-worker" },
-        }),
-      }),
-    ).toEqual(["rubberfit", "openclaw-worker"])
+  it("ignores empty repo segments after the prefix", async () => {
+    const env = makeKvStub([
+      "repo-index-manifest:",
+      "repo-index-manifest:rubberfit",
+    ])
+    expect(await listIndexedRepos(env)).toEqual(["rubberfit"])
   })
 
-  it("dedupes repeated values across teams", () => {
-    expect(
-      listIndexedRepos({
-        OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
-          ARC: { owner: "x", repo: "rubberfit" },
-          OTHER: { owner: "y", repo: "RubberFit" },
-        }),
-      }),
-    ).toEqual(["rubberfit"])
+  it("ignores keys outside the `repo-index-manifest:` prefix", async () => {
+    const env = makeKvStub([
+      "repo-index-manifest:rubberfit",
+      "pr-review-manifest:Arc-and-Anchor/sigilix#10",
+      "pr-review:Arc-and-Anchor/rubberfit#5@abc",
+    ])
+    expect(await listIndexedRepos(env)).toEqual(["rubberfit"])
   })
 
-  it("returns empty array when both inputs are unset", () => {
-    expect(listIndexedRepos({})).toEqual([])
+  it("returns empty array when KV is empty (fresh deploy, no installs yet)", async () => {
+    const env = makeKvStub([])
+    expect(await listIndexedRepos(env)).toEqual([])
   })
 
-  it("treats an empty/whitespace OPENCLAW_INDEXED_REPOS as authoritative (locks to nothing) — does NOT fall back", () => {
-    // CR PR #30 catch: presence of the var is the override signal, not
-    // whether parsed entries are non-empty. An operator setting the
-    // var to "" or whitespace is intentionally locking the universe
-    // down — falling back to the map would make the override
-    // ambiguous.
-    const teamMap = JSON.stringify({ ARC: { owner: "x", repo: "rubberfit" } })
-    expect(
-      listIndexedRepos({ OPENCLAW_INDEXED_REPOS: "", OPENCLAW_TEAM_GITHUB_REPO_MAP: teamMap }),
-    ).toEqual([])
-    expect(
-      listIndexedRepos({ OPENCLAW_INDEXED_REPOS: " , , ", OPENCLAW_TEAM_GITHUB_REPO_MAP: teamMap }),
-    ).toEqual([])
-  })
-
-  it("returns empty array on malformed team-repo JSON (soft-fail)", () => {
-    expect(
-      listIndexedRepos({ OPENCLAW_TEAM_GITHUB_REPO_MAP: "{not json" }),
-    ).toEqual([])
+  it("paginates correctly across list_complete=false pages", async () => {
+    const allKeys = Array.from({ length: 1500 }, (_, i) =>
+      `repo-index-manifest:repo-${String(i).padStart(4, "0")}`,
+    )
+    // Stub list that paginates 1000 at a time via cursor.
+    const env = {
+      OPENCLAW_STATE: {
+        list: async (opts: { prefix?: string; cursor?: string }): Promise<Page> => {
+          const prefix = opts.prefix ?? ""
+          const all = allKeys.filter((k) => k.startsWith(prefix)).sort()
+          const start = opts.cursor ? parseInt(opts.cursor, 10) : 0
+          const page = all.slice(start, start + 1000)
+          const nextStart = start + page.length
+          const list_complete = nextStart >= all.length
+          const out: Page = {
+            keys: page.map((name) => ({ name })),
+            list_complete,
+          }
+          if (!list_complete) out.cursor = String(nextStart)
+          return out
+        },
+      } as unknown as KVNamespace,
+    }
+    const result = await listIndexedRepos(env)
+    expect(result.length).toBe(1500)
+    expect(result[0]).toBe("repo-0000")
+    expect(result[1499]).toBe("repo-1499")
   })
 })

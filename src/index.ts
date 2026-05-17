@@ -62,6 +62,7 @@ import {
   isIndexerEnabled,
   type IndexJobReason,
 } from "./lib/index-producer"
+import { handleIndexRepoJob } from "./lib/indexer"
 import {
   handleGitHubAuthCallback,
   handleGitHubAuthKickoff,
@@ -1030,27 +1031,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         ...(job.threadRootId !== undefined ? { threadRootId: job.threadRootId } : {}),
         env,
       })
-    case "index-repo": {
-      // ARC-234 (this commit) ships the webhook producer with the
-      // feature flag OFF, so no `index-repo` messages should enter the
-      // queue until ARC-235 (next commit) ships the real consumer and
-      // the operator flips `OPENCLAW_INDEXER_ENABLED=on`. If a message
-      // does arrive here (developer manually sent one; flag flipped
-      // prematurely), throw so it surfaces in telemetry and gets
-      // retried per the queue's `max_retries` budget before drop —
-      // silent ack would hide the misconfiguration.
-      console.error(JSON.stringify({
-        event: "index-repo-consumer-not-implemented",
-        owner: job.owner,
-        repo: job.repo,
-        installation_id: job.installationId,
-        reason: job.reason,
-        shard: job.shard !== undefined,
-      }))
-      throw new Error(
-        "index-repo consumer not yet implemented (ARC-235); commit 1 only ships the webhook producer with the feature flag off",
-      )
-    }
+    case "index-repo":
+      // ARC-235: customer-ready indexing consumer. Bootstrap jobs walk
+      // the default-branch tree + filter to indexable files + process
+      // up to MAX_FILES_PER_JOB. Shard jobs continue the chain via
+      // continuation tokens. See src/lib/indexer.ts for the full
+      // state machine.
+      return handleIndexRepoJob({ job, env })
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at

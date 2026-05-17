@@ -21,6 +21,10 @@ const mockListIssueComments = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 const mockGenerate = vi.fn()
+// ARC-263: handlePrOverview now also calls listPullRequestFiles for
+// the walkthrough cache. Default to an empty list — the race tests
+// don't care about per-file caching; they assert dedupe/race behavior.
+const mockListPullRequestFiles = vi.fn(async () => [])
 
 vi.mock("../src/lib/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -37,6 +41,7 @@ vi.mock("../src/lib/github", async () => {
       listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
+      listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
     })),
   }
 })

@@ -5,9 +5,12 @@
 import { describe, expect, it } from "vitest"
 import {
   formatOverviewComment,
+  mergeCachedAndFreshRows,
   parseOverviewResponse,
+  scopedDiffFromMisses,
   type PrOverviewVerdict,
 } from "../src/lib/triage-pr-overview"
+import type { CachedFileRow } from "../src/lib/pr-overview-file-cache"
 
 describe("parseOverviewResponse", () => {
   const valid: PrOverviewVerdict = {
@@ -52,15 +55,15 @@ describe("parseOverviewResponse", () => {
     expect(out?.files[1]?.score).toBe(1)
   })
 
-  it("caps files at 5", () => {
-    const many = Array.from({ length: 10 }, (_, i) => ({
+  it("caps files at 20 (ARC-263: bumped from 5 so cache can hold rows for every changed file)", () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({
       path: `src/file-${i}.ts`,
       score: 3,
       overview: "x",
       nextStep: "y",
     }))
     const out = parseOverviewResponse(JSON.stringify({ ...valid, files: many }))
-    expect(out?.files).toHaveLength(5)
+    expect(out?.files).toHaveLength(20)
   })
 
   it("drops files without a path", () => {
@@ -150,5 +153,96 @@ describe("formatOverviewComment", () => {
     })
     expect(md).toContain("- one")
     expect(md).toContain("- two")
+  })
+})
+
+// ARC-263 — walkthrough caching helpers
+describe("scopedDiffFromMisses", () => {
+  it("builds `diff --git` blocks for each miss with a patch", () => {
+    const out = scopedDiffFromMisses(
+      [
+        { filename: "a.ts", patch: "@@ -1 +1 @@\n-x\n+y" },
+        { filename: "b.ts", patch: "@@ -5 +5 @@\n-foo\n+bar" },
+      ],
+      "FALLBACK",
+    )
+    expect(out).toContain("diff --git a/a.ts b/a.ts\n@@ -1 +1 @@")
+    expect(out).toContain("diff --git a/b.ts b/b.ts\n@@ -5 +5 @@")
+    expect(out).not.toContain("FALLBACK")
+  })
+
+  it("falls back to the full diff when no miss has a patch", () => {
+    const out = scopedDiffFromMisses(
+      [{ filename: "huge.lock" }, { filename: "binary.png", patch: "" }],
+      "FULL DIFF HERE",
+    )
+    expect(out).toBe("FULL DIFF HERE")
+  })
+
+  it("appends a no-patch footer when some misses have no patch", () => {
+    const out = scopedDiffFromMisses(
+      [
+        { filename: "a.ts", patch: "@@ -1 +1 @@\n-x\n+y" },
+        { filename: "binary.png", status: "modified" },
+      ],
+      "FALLBACK",
+    )
+    expect(out).toContain("diff --git a/a.ts b/a.ts")
+    expect(out).toContain("[Files changed but no patch available")
+    expect(out).toContain("- binary.png (modified)")
+  })
+})
+
+describe("mergeCachedAndFreshRows", () => {
+  const baseVerdict: PrOverviewVerdict = {
+    summary: "S", confidence: 3, confidenceReason: "R",
+    files: [{ path: "fresh.ts", score: 5, overview: "fresh-o", nextStep: "fresh-n" }],
+    bullets: [],
+  }
+  const cachedRow = (path: string, score: number): CachedFileRow => ({
+    path, score, overview: "cached-o", nextStep: "cached-n",
+  })
+
+  it("includes cached rows whose path isn't in the fresh set", () => {
+    const cached = new Map<string, CachedFileRow>([
+      ["cached-a.ts", cachedRow("cached-a.ts", 2)],
+      ["cached-b.ts", cachedRow("cached-b.ts", 1)],
+    ])
+    const out = mergeCachedAndFreshRows(baseVerdict, cached)
+    const paths = out.files.map((f) => f.path).sort()
+    expect(paths).toEqual(["cached-a.ts", "cached-b.ts", "fresh.ts"])
+  })
+
+  it("fresh rows win on path collision (model just looked at this file)", () => {
+    const cached = new Map<string, CachedFileRow>([
+      ["fresh.ts", cachedRow("fresh.ts", 1)],
+    ])
+    const out = mergeCachedAndFreshRows(baseVerdict, cached)
+    expect(out.files).toHaveLength(1)
+    expect(out.files[0]?.overview).toBe("fresh-o") // fresh, not cached
+  })
+
+  it("truncates the merged list to top-5 by score for display", () => {
+    const fresh: PrOverviewVerdict = {
+      ...baseVerdict,
+      files: Array.from({ length: 4 }, (_, i) => ({
+        path: `fresh-${i}.ts`, score: 5, overview: "o", nextStep: "n",
+      })),
+    }
+    const cached = new Map<string, CachedFileRow>(
+      Array.from({ length: 10 }, (_, i) => [`cached-${i}.ts`, cachedRow(`cached-${i}.ts`, 4)]),
+    )
+    const out = mergeCachedAndFreshRows(fresh, cached)
+    expect(out.files).toHaveLength(5)
+    // All score-5 fresh rows must appear (4 of them) + one score-4 cached.
+    expect(out.files.filter((f) => f.score === 5)).toHaveLength(4)
+    expect(out.files.filter((f) => f.score === 4)).toHaveLength(1)
+  })
+
+  it("preserves non-files verdict fields (summary, confidence, bullets)", () => {
+    const out = mergeCachedAndFreshRows(baseVerdict, new Map())
+    expect(out.summary).toBe(baseVerdict.summary)
+    expect(out.confidence).toBe(baseVerdict.confidence)
+    expect(out.bullets).toEqual(baseVerdict.bullets)
   })
 })

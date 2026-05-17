@@ -11,6 +11,15 @@
 /**
  * pr-overview verdict (top-level PR comment).
  * Mirrors PrOverviewVerdict in src/lib/triage-pr-overview.ts.
+ *
+ * ARC-263: `files` cap raised from 5 → 20 so the model can emit a
+ * row for EVERY changed file in the prompt (not just the top-5).
+ * Walkthrough caching keys each row by `(file-path, patch-sha256)`,
+ * so an unchanged file on a subsequent push reuses its prior row
+ * instead of being silently dropped because it fell out of the
+ * top-5 ranking. The renderer (`formatOverviewComment`) still
+ * truncates to the top-5 by `score` for display — the cap is only
+ * about the model's emission surface.
  */
 export const PR_OVERVIEW_SCHEMA = {
   type: "object",
@@ -20,7 +29,7 @@ export const PR_OVERVIEW_SCHEMA = {
     confidenceReason: { type: "string" },
     files: {
       type: "array",
-      maxItems: 5,
+      maxItems: 20,
       items: {
         type: "object",
         properties: {

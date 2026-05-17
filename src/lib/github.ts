@@ -220,6 +220,9 @@ export class GitHubClient {
           status: it.status ?? "",
           additions: typeof it.additions === "number" ? it.additions : 0,
           deletions: typeof it.deletions === "number" ? it.deletions : 0,
+          ...(typeof it.patch === "string" && it.patch.length > 0
+            ? { patch: it.patch }
+            : {}),
         })
       }
       if (items.length < perPage) break
@@ -903,6 +906,16 @@ export interface PrChangedFile {
   status: string
   additions: number
   deletions: number
+  /**
+   * ARC-263: per-file unified diff returned by GitHub's
+   * `/pulls/{n}/files` endpoint. Used as the cache key input for
+   * walkthrough caching — a file whose patch text hasn't changed
+   * between pushes reuses its cached overview row instead of
+   * re-summarizing via Ollama. GitHub omits `patch` for files
+   * larger than ~500 KB or binary diffs; we treat that as a
+   * cache miss (the file goes back through Ollama as usual).
+   */
+  patch?: string
 }
 
 /**
@@ -935,6 +948,7 @@ interface RawPrFile {
   status?: string
   additions?: number
   deletions?: number
+  patch?: string
 }
 
 export interface PrCommit {

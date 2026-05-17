@@ -346,16 +346,16 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
   lines.push("## Sigilix Overview")
   lines.push("")
 
-  // ARC-258 follow-up: warmup callout. Renders as a quoted "note"
-  // block at the very top of the overview so the customer sees it
-  // first. Dropped on next overview render once the manifest is
-  // present (the rerun fan-out fires after indexing completes).
+  // ARC-258 follow-up + founder pivot (2026-05-17): warmup state is
+  // tracked in the overview body but NOT rendered as customer-visible
+  // text. Originally we surfaced a "> [!NOTE]" callout explaining the
+  // diff-only first review, but the founder pulled the message — it
+  // wasn't worth the visual noise on every cold-install PR. The
+  // marker stays so `enqueueWarmupRerunsForIndex` can still grep PRs
+  // that need the post-indexing rerun; the rerun itself is what
+  // delivers the upgraded review, which is signal enough on its own.
   if (warmup === "pending") {
-    // WARMUP_CALLOUT_MARKER is required: `enqueueWarmupRerunsForIndex`
-    // greps for it to find PRs that need the post-indexing rerun.
-    lines.push(`> [!NOTE] ${WARMUP_CALLOUT_MARKER}`)
-    lines.push("> **Sigilix is warming up its index for this repo.**")
-    lines.push("> This first review uses only the diff — cross-file context isn't available yet because indexing is still running. As soon as it completes, Sigilix will automatically re-review this PR with full codebase-aware retrieval.")
+    lines.push(WARMUP_CALLOUT_MARKER)
     lines.push("")
   }
 

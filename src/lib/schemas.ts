@@ -17,9 +17,11 @@
  * Walkthrough caching keys each row by `(file-path, patch-sha256)`,
  * so an unchanged file on a subsequent push reuses its prior row
  * instead of being silently dropped because it fell out of the
- * top-5 ranking. The renderer (`formatOverviewComment`) still
- * truncates to the top-5 by `score` for display — the cap is only
- * about the model's emission surface.
+ * top-5 ranking. Display-side truncation happens upstream of the
+ * renderer in `mergeCachedAndFreshRows` (triage-pr-overview.ts —
+ * `merged.slice(0, 5)`); `formatOverviewComment` itself just
+ * renders whatever `verdict.files` it receives. The cap here is
+ * only about the model's emission surface.
  */
 export const PR_OVERVIEW_SCHEMA = {
   type: "object",

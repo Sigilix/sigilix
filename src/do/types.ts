@@ -55,6 +55,16 @@ export interface RunState {
   consumerId?: string
   /** ISO of last state mutation; used by spec §4.10 v2 GC sweep. */
   lastActivityAt: string
+  /**
+   * ARC-251: number of times this run was re-enqueued because a
+   * stale-head guard fired on a prior attempt. Persisted on RunState
+   * so DO retry-alarm-generated queue messages (which rebuild the
+   * pr-review message from RunState, not from the original message)
+   * preserve the cap — otherwise the watchdog/retry path silently
+   * resets depth to 0 and bypasses MAX_STALE_HEAD_REQUEUES.
+   * Undefined / absent means depth 0.
+   */
+  staleHeadRequeueDepth?: number
 }
 
 /** Spec §4.2 — frozen snapshot retained in history (FIFO-capped per `historyLimit`). */
@@ -81,6 +91,14 @@ export interface EnqueueRequest {
   deliveryId: string | null
   /** "shadow" mode skips DO-internal queue dispatch + watchdog alarm. */
   mode: PrReviewMode
+  /**
+   * ARC-251: optional requeue depth for stale-head-driven auto-retries.
+   * Webhook-originated enqueues omit this field (treated as 0). The
+   * stale-head helper sets `depth + 1` when re-enqueuing against the
+   * current head SHA. Persisted on RunState so it survives DO retry-
+   * alarm-generated queue messages.
+   */
+  staleHeadRequeueDepth?: number
 }
 
 export type EnqueueAction = "create" | "supersede" | "dedupe-active" | "dedupe-terminal"

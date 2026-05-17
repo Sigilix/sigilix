@@ -23,9 +23,17 @@ const mockListPullRequestFiles = vi.fn(async () => [])
 const mockListIssueComments = vi.fn(async () => [] as { id: number; body: string }[])
 const mockCreateIssueComment = vi.fn(async () => ({ id: 12345 }))
 const mockUpdateIssueComment = vi.fn(async () => undefined)
+// ARC-251: the guard now auto-requeues against the live SHA when retry
+// budget remains, via `enqueuePrReviewJob`. Mocked here so the test
+// doesn't depend on the (un-mocked) DO / queue bindings on the env.
+const mockEnqueuePrReviewJob = vi.fn(async () => ({ ok: true, mode: "off" as const }))
 
 vi.mock("../src/lib/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
+}))
+
+vi.mock("../src/do/webhook-enqueue", () => ({
+  enqueuePrReviewJob: (...args: unknown[]) => mockEnqueuePrReviewJob(...args),
 }))
 
 vi.mock("../src/lib/github", async () => {
@@ -92,16 +100,18 @@ beforeEach(() => {
   mockListIssueComments.mockClear()
   mockCreateIssueComment.mockClear()
   mockUpdateIssueComment.mockClear()
+  mockEnqueuePrReviewJob.mockClear()
 })
 
 describe("handlePrReview stale-head guard", () => {
-  it("skips the job when the PR head has moved past the queued SHA", async () => {
+  it("auto-requeues against the live SHA when retry budget remains (depth 0 → 1)", async () => {
     const queuedSha = "aaaaaaa1111111111111111111111111111aaaa"
     const currentSha = "bbbbbbb2222222222222222222222222222bbbb"
     mockGetPullRequest.mockResolvedValue({
       title: "test",
       body: null,
       head: { sha: currentSha, ref: "feature" },
+      base: { sha: "ccccccc0000000000000000000000000000cccc" },
     })
     const { kv, store, deletes } = makeKvStub()
 
@@ -114,22 +124,27 @@ describe("handlePrReview stale-head guard", () => {
       env: makeEnv(kv),
     })
 
-    // ARC-250: the guard now returns a status so the dispatcher can
+    // ARC-250: the guard returns a status so the dispatcher can
     // short-circuit the Phase 3 fallback instead of running it twice.
     expect(result).toEqual({ status: "stale_head" })
     expect(mockGenerate).not.toHaveBeenCalled()
     expect(mockSubmitReview).not.toHaveBeenCalled()
-    // ARC-250: a sticky comment is posted so the customer sees that
-    // Sigilix decided not to review (rather than getting no signal at
-    // all). The upsert path tries listIssueComments first to find an
-    // existing marker.
-    expect(mockListIssueComments).toHaveBeenCalledTimes(1)
-    expect(mockCreateIssueComment).toHaveBeenCalledTimes(1)
-    const [, , , body] = mockCreateIssueComment.mock.calls[0]!
-    expect(body).toContain("<!-- sigilix:stale-head-skipped -->")
-    // The finally block releases the dedupe key when posted=false, so a
-    // queue retry could re-attempt — and on retry the head would still
-    // be ahead, so we'd skip again. Confirm release happened.
+    // ARC-251: at depth 0 the helper auto-requeues against the live
+    // SHA rather than posting the sticky. The sticky-comment path is
+    // exercised at MAX_STALE_HEAD_REQUEUES in `tests/stale-head.test.ts`.
+    expect(mockEnqueuePrReviewJob).toHaveBeenCalledTimes(1)
+    const [, enqArgs] = mockEnqueuePrReviewJob.mock.calls[0]!
+    expect(enqArgs).toMatchObject({
+      owner: "Arc-and-Anchor",
+      repo: "openclaw-worker",
+      prNumber: 99,
+      headSha: currentSha,
+      staleHeadRequeueDepth: 1,
+    })
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+    // The finally block releases the dedupe key when posted=false. The
+    // re-enqueued job has a different (currentSha) dedupe key and so
+    // is unaffected. Confirm the old-SHA key release happened.
     const dedupeKey = `pr-review:Arc-and-Anchor/openclaw-worker#99@${queuedSha}`
     expect(deletes).toContain(dedupeKey)
     expect(store.has(dedupeKey)).toBe(false)

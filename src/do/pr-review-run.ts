@@ -120,6 +120,13 @@ export class PrReviewRunDO extends DurableObject<Env> {
       attempts: 1,
       startedAt: nowIso(),
       lastActivityAt: nowIso(),
+      // ARC-251 Codex BLOCKER #2: persist requeue depth on RunState so
+      // it survives retry-alarm-generated queue messages. Without this,
+      // the retry-alarm rebuilds the pr-review message from RunState
+      // and the depth silently resets to 0 — bypassing the cap.
+      ...(body.staleHeadRequeueDepth !== undefined
+        ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
+        : {}),
     }
 
     // Dispatch to OPENCLAW_JOBS queue + schedule watchdog ONLY in
@@ -148,6 +155,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
         headSha: body.headSha,
         installationId: body.installationId,
         runId,
+        // ARC-251: forward requeue depth so the consumer side keeps
+        // the cap accurate across the initial enqueue path too.
+        ...(body.staleHeadRequeueDepth !== undefined
+          ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
+          : {}),
       })
     } else if (body.mode === "shadow") {
       // Shadow: no queue dispatch, no watchdog. Persist the queued
@@ -434,6 +446,12 @@ export class PrReviewRunDO extends DurableObject<Env> {
       headSha: state.headSha,
       installationId: state.installationId,
       runId: state.runId,
+      // ARC-251 Codex BLOCKER #2: rebuild the message from RunState
+      // INCLUDING the stale-head requeue depth. Without this the cap
+      // resets to 0 every time the watchdog/retry alarm fires.
+      ...(state.staleHeadRequeueDepth !== undefined
+        ? { staleHeadRequeueDepth: state.staleHeadRequeueDepth }
+        : {}),
     })
     const watchdogAt = Date.now() + config.watchdogMs
     const updated: RunState = {

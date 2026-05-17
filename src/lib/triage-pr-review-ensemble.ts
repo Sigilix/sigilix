@@ -326,6 +326,12 @@ export interface EnsembleHandlerArgs {
   headSha: string
   installationId: number
   env: Env
+  /**
+   * ARC-251: prior stale-head requeue depth, threaded through by the
+   * dispatcher from the JobMessage. Undefined = 0. Forwarded to
+   * `handleStaleHead` when either ensemble guard fires.
+   */
+  staleHeadRequeueDepth?: number
 }
 
 export type RouteDecision =
@@ -392,6 +398,7 @@ export async function handlePrReviewEnsemble(
   mode: "shadow" | "post",
 ): Promise<EnsembleResult> {
   const { owner, repo, prNumber, headSha, installationId, env } = args
+  const staleHeadRequeueDepth = args.staleHeadRequeueDepth ?? 0
   const startMs = Date.now()
   const orchCtrl = new AbortController()
   const orchTimer = setTimeout(() => orchCtrl.abort(), ORCHESTRATOR_TIMEOUT_MS)
@@ -425,16 +432,23 @@ export async function handlePrReviewEnsemble(
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
     if (meta.head?.sha && meta.head.sha !== headSha) {
-      telemetry.fellBackToPhase3 = true
+      // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3` —
+      // the dispatcher short-circuits Phase 3 on `stale_head`, so this
+      // path doesn't actually fall back. Leaving it true would
+      // overcount Phase 3 saves and blur stale-head telemetry.
       telemetry.fellBackReason = "stale_head_before_fanout"
       // ARC-250: hand off to the helper for structured telemetry + a
-      // user-visible sticky comment. Return `stale_head` so the
-      // dispatcher does NOT fall through to Phase 3 (which would also
-      // stale-head and post a duplicate sticky).
+      // user-visible sticky comment. ARC-251: helper auto-requeues
+      // against the live SHA when depth < cap; falls through to the
+      // sticky on exhaustion. Either way we return `stale_head` so
+      // the dispatcher does NOT fall through to Phase 3 (which would
+      // also stale-head and post a duplicate sticky / second requeue).
       await handleStaleHead({
         env, owner, repo, prNumber, installationId,
         queuedHeadSha: headSha,
         currentHeadSha: meta.head.sha,
+        baseSha: meta.base?.sha ?? null,
+        depth: staleHeadRequeueDepth,
         source: "ensemble-before-fanout",
       })
       return finalize(telemetry, env, "stale_head", cache)
@@ -1088,12 +1102,15 @@ export async function handlePrReviewEnsemble(
     // GitHub submit.
     const meta2 = await client.getPullRequest(owner, repo, prNumber)
     if (meta2.head?.sha && meta2.head.sha !== headSha) {
-      telemetry.fellBackToPhase3 = true
+      // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3`
+      // — same reasoning as guard #1.
       telemetry.fellBackReason = "stale_head_after_review"
       await handleStaleHead({
         env, owner, repo, prNumber, installationId,
         queuedHeadSha: headSha,
         currentHeadSha: meta2.head.sha,
+        baseSha: meta2.base?.sha ?? null,
+        depth: staleHeadRequeueDepth,
         source: "ensemble-after-review",
       })
       return finalize(telemetry, env, "stale_head", cache)

@@ -253,6 +253,15 @@ export type JobMessage =
        * `ci-triage`'s separate `runId: number` field is unrelated).
        */
       runId?: string
+      /**
+       * ARC-251: number of times this job was re-enqueued by the
+       * stale-head guard. Webhook-originated jobs omit the field
+       * (treated as 0). Capped at `MAX_STALE_HEAD_REQUEUES` (=2)
+       * before the helper falls through to the sticky comment.
+       * Persisted on DO RunState so retry-alarm-generated messages
+       * preserve the count and don't bypass the cap.
+       */
+      staleHeadRequeueDepth?: number
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that
@@ -703,6 +712,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
+        // ARC-251: thread the requeue depth from the job message into
+        // both review pipelines. Webhook-driven messages omit the
+        // field (treated as 0); stale-head-driven requeues carry the
+        // incremented depth so the helper can cap further retries.
+        ...(job.staleHeadRequeueDepth !== undefined
+          ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth }
+          : {}),
       }
       return runPrReviewWithDoCallback(job, env, async () => {
         // Phase 4 routing: ensemble (shadow/post), Phase 3 agentic, or

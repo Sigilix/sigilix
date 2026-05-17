@@ -28,8 +28,22 @@
 import type { Env } from "../index"
 import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
+import { enqueuePrReviewJob } from "../do/webhook-enqueue"
 
 export const STALE_HEAD_MARKER = "<!-- sigilix:stale-head-skipped -->"
+
+/**
+ * ARC-251: hard cap on auto-requeue depth for stale-head events.
+ * With depth=0 being the original webhook-driven attempt, MAX=2 means
+ * at most 3 swings at the PR head before falling through to the
+ * sticky comment. Calibrated for cost: each requeue can run a full
+ * ensemble (4 specialists), so MAX=3 (4 attempts) is too much spend
+ * on a thrashing PR; MAX=1 is too brittle for the after-review guard.
+ *
+ * The cap counts ONLY stale-head-driven retries — it is independent
+ * of DO `maxRetries` (which bounds infrastructure/consumer retries).
+ */
+export const MAX_STALE_HEAD_REQUEUES = 2
 
 export type StaleHeadGuardSource =
   | "phase3"
@@ -46,6 +60,21 @@ export interface HandleStaleHeadArgs {
   queuedHeadSha: string
   /** SHA we observed live on the PR when the guard fired. */
   currentHeadSha: string
+  /**
+   * PR base.sha from the same `getPullRequest` call that surfaced the
+   * stale head. Required to re-enqueue against the live SHA — the
+   * webhook-enqueue path passes this through to the DO. May be null
+   * when the GitHub API response omits base (rare; handled by treating
+   * as no-baseSha on the requeue).
+   */
+  baseSha: string | null
+  /**
+   * Current attempt's requeue depth. 0 = original webhook-driven
+   * attempt; 1+ = a previous stale-head requeue. The helper compares
+   * against MAX_STALE_HEAD_REQUEUES to decide between requeue and
+   * fall-through to sticky.
+   */
+  depth: number
   source: StaleHeadGuardSource
 }
 
@@ -53,6 +82,7 @@ export type StaleHeadOutcome =
   | { posted: "created"; commentId: number }
   | { posted: "updated"; commentId: number }
   | { posted: "failed"; reason: string }
+  | { requeued: true; newHeadSha: string; nextDepth: number }
 
 /**
  * Emit a structured stale-head telemetry event and upsert a sticky
@@ -72,7 +102,7 @@ export type StaleHeadOutcome =
  * message and trigger Cloudflare Queue retries on every stale-head.
  */
 export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleHeadOutcome> {
-  const { env, owner, repo, prNumber, installationId, queuedHeadSha, currentHeadSha, source } = args
+  const { env, owner, repo, prNumber, installationId, queuedHeadSha, currentHeadSha, baseSha, depth, source } = args
 
   console.log(JSON.stringify({
     event: "pr-review-stale-head",
@@ -83,6 +113,78 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
     installation_id: installationId,
     queued_head_sha: queuedHeadSha,
     current_head_sha: currentHeadSha,
+    depth,
+  }))
+
+  // ARC-251: auto-requeue against the live head when retry budget
+  // remains. Each requeue increments depth by 1. After MAX swings we
+  // fall through to the sticky comment so the customer learns to
+  // push or run `/sigilix review`. The requeue uses the same
+  // `enqueuePrReviewJob` the webhook handler uses, so DO mode (post)
+  // exercises the supersede path and legacy mode (off/shadow) just
+  // sends a new queue message — both paths are dedupe-safe because
+  // dedupe keys are per-SHA.
+  //
+  // CodeRabbit catch (phase-end): on requeue FAILURE (non-ok result
+  // or thrown), we MUST NOT return early — the dispatcher treats this
+  // as `stale_head` and acks the job, so a silent early-return would
+  // reintroduce the exact silent-drop bug ARC-250 was meant to fix.
+  // Fall through to the sticky-comment path instead so the customer
+  // still gets a user-visible signal.
+  if (depth < MAX_STALE_HEAD_REQUEUES) {
+    try {
+      const result = await enqueuePrReviewJob(env, {
+        owner,
+        repo,
+        prNumber,
+        headSha: currentHeadSha,
+        baseSha,
+        installationId,
+        deliveryId: null, // not a webhook delivery
+        staleHeadRequeueDepth: depth + 1,
+      })
+      if (result.ok) {
+        console.log(JSON.stringify({
+          event: "pr-review-stale-head-requeued",
+          owner, repo, pr_number: prNumber, installation_id: installationId,
+          guard_source: source,
+          queued_head_sha: queuedHeadSha,
+          new_head_sha: currentHeadSha,
+          next_depth: depth + 1,
+          mode: result.mode,
+        }))
+        return { requeued: true, newHeadSha: currentHeadSha, nextDepth: depth + 1 }
+      }
+      // result.ok === false → fall through to sticky.
+      const reason = `enqueue_${result.reason}${result.status ? `_${result.status}` : ""}`
+      console.error(JSON.stringify({
+        event: "pr-review-stale-head-requeue-failed",
+        reason,
+        owner, repo, pr_number: prNumber, installation_id: installationId,
+        guard_source: source, depth,
+      }))
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(JSON.stringify({
+        event: "pr-review-stale-head-requeue-failed",
+        reason,
+        owner, repo, pr_number: prNumber, installation_id: installationId,
+        guard_source: source, depth,
+      }))
+      // fall through to sticky
+    }
+  }
+
+  // Reached when either:
+  //   (a) depth >= MAX_STALE_HEAD_REQUEUES — retry budget exhausted, or
+  //   (b) depth <  MAX but the requeue itself failed (non-ok / thrown).
+  // Either way the customer needs a visible signal that Sigilix gave
+  // up so they can push or `/sigilix review` to recover.
+  console.log(JSON.stringify({
+    event: "pr-review-stale-head-fallthrough",
+    owner, repo, pr_number: prNumber, installation_id: installationId,
+    guard_source: source, depth,
+    cap: MAX_STALE_HEAD_REQUEUES,
   }))
 
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {

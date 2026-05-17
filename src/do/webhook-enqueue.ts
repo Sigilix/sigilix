@@ -30,6 +30,12 @@ export interface PrReviewEnqueueArgs {
   installationId: number
   /** GitHub `x-github-delivery` header captured at webhook time. */
   deliveryId: string | null
+  /**
+   * ARC-251: stale-head requeue depth carried through to the DO and/or
+   * legacy queue message. Webhook callers omit this; the stale-head
+   * helper sets `prevDepth + 1` when re-enqueuing.
+   */
+  staleHeadRequeueDepth?: number
 }
 
 export type PrReviewEnqueueResult =
@@ -74,6 +80,9 @@ export async function enqueuePrReviewJob(
       installationId: args.installationId,
       deliveryId: args.deliveryId,
       mode,
+      ...(args.staleHeadRequeueDepth !== undefined
+        ? { staleHeadRequeueDepth: args.staleHeadRequeueDepth }
+        : {}),
     }
     let response: Response | null = null
     try {
@@ -121,6 +130,12 @@ export async function enqueuePrReviewJob(
       prNumber: args.prNumber,
       headSha: args.headSha,
       installationId: args.installationId,
+      // ARC-251: thread the requeue depth through the legacy queue
+      // path. Webhook callers omit this; the stale-head helper sets
+      // it when re-enqueuing against the current head SHA.
+      ...(args.staleHeadRequeueDepth !== undefined
+        ? { staleHeadRequeueDepth: args.staleHeadRequeueDepth }
+        : {}),
     })
   }
 

@@ -211,6 +211,14 @@ export interface TriagePrReviewArgs {
   headSha: string
   installationId: number
   env: Env
+  /**
+   * ARC-251: prior stale-head requeue depth, threaded through by the
+   * dispatcher from the JobMessage. Undefined = 0 (a fresh
+   * webhook-driven attempt). Forwarded to `handleStaleHead` when the
+   * stale-head guard fires so it knows whether to requeue or fall
+   * through to the sticky.
+   */
+  staleHeadRequeueDepth?: number
 }
 
 /**
@@ -231,6 +239,7 @@ export interface PrReviewResult {
 
 export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReviewResult> {
   const { owner, repo, prNumber, headSha, installationId, env } = args
+  const staleHeadRequeueDepth = args.staleHeadRequeueDepth ?? 0
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-review] ${label} +${Date.now() - t0}ms`, {
@@ -304,6 +313,8 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
         installationId,
         queuedHeadSha: headSha,
         currentHeadSha: meta.head.sha,
+        baseSha: meta.base?.sha ?? null,
+        depth: staleHeadRequeueDepth,
         source: "phase3",
       })
       return { status: "stale_head" }

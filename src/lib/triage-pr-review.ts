@@ -495,6 +495,28 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
   // return for). Callers branch on this status to decide whether to
   // run the Phase 3 fallback in the dispatcher (ARC-250: stale_head
   // must NOT fall back, since the next path would also stale-head).
+  //
+  // ARC-258 follow-up: on a successful post, fan out a forced
+  // pr-overview refresh so any stale warmup-callout marker in the
+  // sticky body gets cleared. `force: true` bypasses the per-headSha
+  // dedupe so the refresh runs even within the same headSha as the
+  // initial pr-overview. Best-effort; failure doesn't affect the
+  // review status.
+  if (posted) {
+    try {
+      await env.OPENCLAW_JOBS.send({
+        type: "pr-overview",
+        owner, repo, prNumber, headSha, installationId,
+        force: true,
+      })
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-overview-refresh-enqueue-failed",
+        owner, repo, prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+  }
   return { status: posted ? "posted" : "skipped" }
 }
 

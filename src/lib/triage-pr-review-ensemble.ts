@@ -1246,11 +1246,25 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
-      // ARC-258 follow-up: warmup "ready" signaling now lives in
-      // the unified pr-overview sticky. The rerun fan-out fires
-      // both pr-review-rerun and pr-overview after indexing
-      // completes, so the warmup callout drops organically once
-      // the manifest is present.
+      // ARC-258 follow-up: enqueue a forced pr-overview refresh so
+      // any stale warmup-callout marker in the sticky body gets
+      // cleared. `force: true` bypasses the per-headSha dedupe so
+      // the refresh runs within the same headSha as the initial
+      // overview render (5-min lock would otherwise suppress it).
+      // Best-effort: failure doesn't affect the review status.
+      try {
+        await env.OPENCLAW_JOBS.send({
+          type: "pr-overview",
+          owner, repo, prNumber, headSha, installationId,
+          force: true,
+        })
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "pr-overview-refresh-enqueue-failed",
+          owner, repo, prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
@@ -1326,8 +1340,22 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
-      // ARC-258 follow-up: warmup "ready" signaling lives in the
-      // unified pr-overview sticky now; rerun fan-out re-renders it.
+      // ARC-258 follow-up: forced pr-overview refresh on the 422
+      // fallback success path too — same rationale as the primary
+      // submit (clear any stale warmup callout in the sticky body).
+      try {
+        await env.OPENCLAW_JOBS.send({
+          type: "pr-overview",
+          owner, repo, prNumber, headSha, installationId,
+          force: true,
+        })
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "pr-overview-refresh-enqueue-failed",
+          owner, repo, prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }

@@ -41,6 +41,7 @@ import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
+import { handlePrLabels } from "./lib/triage-pr-labels"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
 import { handlePrImprove } from "./lib/triage-pr-improve"
@@ -248,6 +249,28 @@ export type JobMessage =
   | { type: "linear-mention"; commentId: string }
   | {
       type: "pr-overview"
+      owner: string
+      repo: string
+      prNumber: number
+      headSha: string
+      installationId: number
+      /**
+       * ARC-258 follow-up: when set, the pr-overview handler skips
+       * its per-(PR, headSha) dedupe check and re-runs unconditionally.
+       * Used by the pr-review success path to refresh the overview
+       * after a review completes — without `force`, the per-headSha
+       * dedupe (5-min TTL set by the initial run on this headSha)
+       * would suppress the refresh. Webhook-driven enqueues omit
+       * this flag and keep the dedupe semantics intact.
+       */
+      force?: boolean
+    }
+  | {
+      // ARC-265: auto-label picker. Fires per `pull_request` webhook
+      // alongside pr-overview / pr-review. Handler short-circuits if
+      // `sigilix.json::customLabels` is empty — zero behavior change
+      // for repos without label config.
+      type: "pr-labels"
       owner: string
       repo: string
       prNumber: number
@@ -802,6 +825,19 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       return handleMention(job.commentId, env)
     case "pr-overview":
       return handlePrOverview({
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        headSha: job.headSha,
+        installationId: job.installationId,
+        env,
+        ...(job.force ? { force: true } : {}),
+      })
+    case "pr-labels":
+      // ARC-265: auto-label picker. Short-circuits if
+      // `sigilix.json::customLabels` is empty/absent — zero behavior
+      // change for repos without label config.
+      return handlePrLabels({
         owner: job.owner,
         repo: job.repo,
         prNumber: job.prNumber,
@@ -1476,6 +1512,18 @@ async function handleGitHubWebhook(
     if (decision.overview) {
       await env.OPENCLAW_JOBS.send({
         type: "pr-overview",
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+      })
+      // ARC-265: auto-label picker fires alongside pr-overview (same
+      // webhook events: opened / synchronize / reopened / ready_for_review).
+      // The handler short-circuits if `sigilix.json::customLabels` is
+      // empty/absent, so this is free for repos without label config.
+      await env.OPENCLAW_JOBS.send({
+        type: "pr-labels",
         owner,
         repo,
         prNumber,

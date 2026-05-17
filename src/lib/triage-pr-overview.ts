@@ -9,12 +9,17 @@
 
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
-import { GitHubClient, type PrCommit, type PullRequestMeta } from "./github"
+import { GitHubClient, type PrChangedFile, type PrCommit, type PullRequestMeta } from "./github"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_OVERVIEW_SCHEMA } from "./schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import { LEGACY_WARMUP_MARKER, WARMUP_CALLOUT_MARKER } from "./warmup"
+import {
+  batchReadFileCache,
+  batchWriteFileCache,
+  type CachedFileRow,
+} from "./pr-overview-file-cache"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -41,13 +46,22 @@ export interface PrOverviewArgs {
   headSha: string
   installationId: number
   env: Env
+  /**
+   * ARC-258 follow-up: when set, the dedupe-key check below is
+   * skipped. Used by the pr-review success path to force a fresh
+   * overview render after a review completes — without this flag,
+   * the per-(PR, headSha) dedupe (set by the initial pr-overview
+   * run earlier in the same headSha) would suppress the refresh.
+   * Webhook-driven calls omit this flag and keep dedupe intact.
+   */
+  force?: boolean
 }
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
 
 export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env } = args
+  const { owner, repo, prNumber, headSha, installationId, env, force } = args
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-overview] ${label} +${Date.now() - t0}ms`, {
@@ -68,7 +82,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   // try/finally below — queue retries can re-attempt without being
   // blocked by a stale lock.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
-  if (await env.OPENCLAW_STATE.get(dedupeKey)) {
+  // ARC-258 follow-up: `force === true` bypasses the dedupe so the
+  // pr-review success path can refresh the overview within the
+  // same headSha (the initial run's 5-min lock would otherwise
+  // suppress the refresh). Webhook-driven enqueues omit `force`
+  // and keep the duplicate-comment guard intact.
+  if (!force && (await env.OPENCLAW_STATE.get(dedupeKey))) {
     console.log(JSON.stringify({
       event: "pr-overview-skipped",
       dedupe_system: "kv",
@@ -77,20 +96,101 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     }))
     return
   }
-  await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
-    expirationTtl: DEDUPE_TTL_SECONDS,
-  })
+  if (!force) {
+    await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
+      expirationTtl: DEDUPE_TTL_SECONDS,
+    })
+  }
 
   try {
     const client = await buildClient(env, installationId)
     since("auth-ready")
 
-    const [meta, diff, commits] = await Promise.all([
+    // CodeRabbit catch round-2 on PR #81: track `listPullRequestFiles`
+    // failure explicitly. When this rejects, we can't compute per-file
+    // patch hashes → `missedFiles` ends up empty → the new all-hit
+    // short-circuit in `scopedDiffFromMisses` would emit the placeholder
+    // ("all served from cache") even though we have zero cache hits
+    // and a real diff is available. The fix: pass through `diff` as
+    // the prompt diff when file-list fetch failed.
+    let listFilesFailed = false
+    const [meta, diff, commits, files] = await Promise.all([
       client.getPullRequest(owner, repo, prNumber),
       client.getPullRequestDiff(owner, repo, prNumber),
       client.getPullRequestCommits(owner, repo, prNumber).catch(() => [] as PrCommit[]),
+      // ARC-263: per-file patches power the walkthrough cache. The
+      // default `maxFiles: 50` would silently drop files 51+ from
+      // the cache (code-reviewer H1 catch) — those would never
+      // appear as misses, never get a row, never get cached, AND
+      // would incorrectly trigger all-hit short-circuits. Raise to
+      // 300 (GitHub's hard cap for the /files endpoint is 3000;
+      // 300 covers all realistic PRs while keeping per-page paging
+      // fast). A failure here degrades to an empty array — review
+      // quality preserved; we fall back to the full diff (tracked
+      // via `listFilesFailed` so the scoped-diff helper isn't fooled
+      // into emitting the all-hit placeholder).
+      client.listPullRequestFiles(owner, repo, prNumber, { maxFiles: 300 }).catch((err) => {
+        listFilesFailed = true
+        console.warn(JSON.stringify({
+          event: "pr-overview-list-files-failed",
+          owner, repo, prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        return [] as PrChangedFile[]
+      }),
     ])
     since("pr-fetched")
+
+    // ARC-263: walkthrough cache lookup. For each changed file, look
+    // up `(filename, patch-sha256)` in KV. Hits reuse the cached
+    // per-file row; misses go through Ollama. The cumulative
+    // `summary` / `confidence` / `bullets` regenerate on every run
+    // — they're PR-level state, not file-local. Best-effort
+    // throughout: cache failures behave like misses.
+    //
+    // Note: we DO NOT short-circuit on cache-all-hit. Earlier draft
+    // returned early when every file's row was cached, but the
+    // code-reviewer pass on commit 1 caught two failure modes:
+    //   (a) warmup callout transitions (indexer-completion rerun
+    //       fires `handlePrOverview` with the manifest now present;
+    //       all files hit cache → callout would stick forever)
+    //   (b) legacy `<!-- sigilix:warmup -->` sticky migration delete
+    //       (one-way migration runs only after a successful overview
+    //       write; a quiet PR would keep the legacy sticky forever).
+    // The cost of always running Ollama is bounded — the scoped
+    // diff feeds 0 patches to the model on an all-hit run, so input
+    // tokens are minimal; output tokens are 0 fresh rows (just the
+    // cumulative summary/bullets/confidence).
+    const { hits: cachedRows, misses: missedFiles } = await batchReadFileCache({
+      env, owner, repo, prNumber, files,
+    })
+    since("cache-checked")
+
+    // Telemetry: cache hit-ratio for observability (code-reviewer M4
+    // catch). Lets us answer "is the cache actually helping?" in
+    // production without re-instrumenting.
+    if (files.length > 0) {
+      console.log(JSON.stringify({
+        event: "pr-overview-cache-checked",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        file_count: files.length,
+        hits: cachedRows.size,
+        misses: missedFiles.length,
+        hit_ratio: Math.round((cachedRows.size / files.length) * 100) / 100,
+      }))
+    }
+
+    // Build a scoped diff containing ONLY missed files' patches. The
+    // model still sees commit messages + PR title/body for cumulative
+    // context, but per-file token cost drops by the cache-hit ratio.
+    // If we don't have per-file patches (older API path or list call
+    // failed), fall back to the full diff so the review still runs.
+    // When `listFilesFailed` is true we MUST use the full diff —
+    // `missedFiles=[]` would otherwise hit the all-hit placeholder
+    // path and the model would see no real diff context.
+    const promptDiff = listFilesFailed
+      ? diff
+      : scopedDiffFromMisses(missedFiles, diff)
 
     // Pre-Ollama marker scan. Used to pick the prompt's "first run vs
     // incremental" framing. The post-Ollama re-check below is the source
@@ -117,7 +217,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     const prompt = buildPrompt({
       prNumber,
       meta,
-      diff,
+      diff: promptDiff,
       newCommits: recentCommits,
       isFirstRun: existingBeforeModel == null,
     })
@@ -189,11 +289,19 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       }))
     }
 
+    // ARC-263: merge cached rows with the model's fresh rows. The
+    // model emits rows only for missed files (scoped diff). Cached
+    // rows fill in the unchanged files so the "Important files"
+    // table reflects cumulative PR state, not just this push's
+    // delta. Top-5 by score truncation happens inside the merge so
+    // the rendered comment stays concise even when total rows > 5.
+    const verdictForDisplay = mergeCachedAndFreshRows(verdict, cachedRows)
+
     // Build the body AFTER the late re-check so a late-discovered marker
     // renders as an incremental "— latest push" update, not a fresh
     // first-run summary.
     const body = formatOverviewComment({
-      verdict,
+      verdict: verdictForDisplay,
       isFirstRun: existingForWrite == null,
       warmup,
     })
@@ -212,6 +320,32 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       )
     }
 
+    // ARC-263: write fresh per-file rows to the cache. The misses
+    // came from `batchReadFileCache` above — Ollama (hopefully) emitted
+    // matching rows; we look them up by path. Best-effort; isolated
+    // per-row write failures don't break the overview.
+    const writeResult = await batchWriteFileCache({
+      env, owner, repo, prNumber,
+      misses: missedFiles,
+      rows: verdict.files,
+    })
+    // Telemetry: surfaces silent model-prompt drift (code-reviewer
+    // M1 catch). When `written` < missed files with patches, the
+    // model failed to emit a row for some misses — those files
+    // will re-Ollama on every subsequent push until the model
+    // catches up. Production rollout can grep this event to tune
+    // the prompt.
+    const missedWithPatch = missedFiles.filter((f) => typeof f.patch === "string" && f.patch.length > 0).length
+    if (missedWithPatch !== writeResult.written) {
+      console.warn(JSON.stringify({
+        event: "pr-overview-cache-write-drift",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        expected_writes: missedWithPatch,
+        actual_writes: writeResult.written,
+        model_emitted_rows: verdict.files.length,
+      }))
+    }
+
     // ARC-258 follow-up: one-way migration. Delete the legacy
     // standalone `<!-- sigilix:warmup -->` sticky if our cached scan
     // found one — its content is now inside the overview body.
@@ -225,7 +359,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // Always release the dedupe lock — even on failure — so the queue's
     // retry can attempt again. Without this, the first failure leaves
     // a 5-min lock that blocks every retry until it expires.
-    await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+    //
+    // Force-mode runs don't set the lock (see above), so don't release
+    // it either — we'd risk stomping a sibling non-force run's lock.
+    if (!force) {
+      await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+    }
   }
 }
 
@@ -291,6 +430,9 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
   const confidence = Number(obj.confidence)
   if (!Number.isFinite(confidence) || confidence < 1 || confidence > 5) return null
 
+  // ARC-263: keep all per-file rows (was capped at 5 here). The
+  // schema's `maxItems: 20` is the bound; the renderer truncates to
+  // top-5 by score for display.
   const files = Array.isArray(obj.files)
     ? obj.files
         .filter(
@@ -298,7 +440,7 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
             !!f && typeof f === "object" && !Array.isArray(f) && typeof (f as { path?: unknown }).path === "string"
         )
         .filter((f) => (f.path as string).trim().length > 0)
-        .slice(0, 5)
+        .slice(0, 20)
         .map((f) => ({
           path: (f.path as string).trim(),
           score: Number.isFinite(Number(f.score))
@@ -325,6 +467,82 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
     confidenceReason,
     bullets,
   }
+}
+
+/**
+ * ARC-263: build a scoped unified diff string from the cache-miss
+ * subset of changed files. Each file with a `patch` field renders as
+ * a standard `diff --git a/<path> b/<path>\n<patch>` block. Files
+ * without a patch (binary / >500KB per GitHub) are listed in a
+ * trailing note so the model knows they changed but has no diff to
+ * inspect (no row is emitted for them).
+ *
+ * If `misses` is empty (defensive — caller should have early-returned)
+ * OR every miss has no patch, returns the original full diff as a
+ * fallback so the review still runs. Exposed for unit tests.
+ */
+export function scopedDiffFromMisses(
+  misses: ReadonlyArray<{ filename: string; patch?: string; status?: string }>,
+  fallbackDiff: string,
+): string {
+  // CodeRabbit MAJOR catch on PR #81: all-hit case. When `misses` is
+  // empty, every file's row came from cache — we should NOT feed the
+  // full PR diff to the model (defeats the cost-saving purpose). The
+  // model still needs SOME diff context for the cumulative
+  // `summary`/`confidence`/`bullets`, but those are PR-level fields
+  // and a short placeholder is enough — the model has commit
+  // messages + PR title/body from the rest of the prompt.
+  if (misses.length === 0) {
+    return "[All file rows were served from the walkthrough cache; no fresh per-file patches needed.]"
+  }
+  const withPatch = misses.filter(
+    (f): f is { filename: string; patch: string; status?: string } =>
+      typeof f.patch === "string" && f.patch.length > 0,
+  )
+  if (withPatch.length === 0) {
+    // code-reviewer L3 catch (commit 1): every miss is binary /
+    // >500KB / patch missing. Fall back to the full diff — review
+    // still runs but the cache's cost-saving purpose is defeated for
+    // this run. Distinct from the misses.length === 0 path above:
+    // here the misses are REAL changes that simply don't have a
+    // textual diff, so we need the full context.
+    console.log(JSON.stringify({
+      event: "pr-overview-scoped-diff-fellback-to-full",
+      miss_count: misses.length,
+      reason: "no-patches-available",
+    }))
+    return fallbackDiff
+  }
+  const blocks = withPatch.map(
+    (f) => `diff --git a/${f.filename} b/${f.filename}\n${f.patch}`,
+  )
+  const noPatch = misses.filter((f) => typeof f.patch !== "string" || f.patch.length === 0)
+  let scoped = blocks.join("\n")
+  if (noPatch.length > 0) {
+    scoped += `\n\n[Files changed but no patch available (binary or >500KB):]\n${noPatch.map((f) => `- ${f.filename}${f.status ? ` (${f.status})` : ""}`).join("\n")}`
+  }
+  return scoped
+}
+
+/**
+ * ARC-263: merge cached per-file rows with the Ollama-fresh rows in
+ * a verdict. Fresh rows win on path collision (the model just looked
+ * at this file's current patch, so its judgment supersedes any
+ * stale-by-chance cache hit). Total rows are truncated to top-5 by
+ * score for display — the comment table stays concise even when the
+ * PR has 20 changed files. Exposed for unit tests.
+ */
+export function mergeCachedAndFreshRows(
+  verdict: PrOverviewVerdict,
+  cachedRows: ReadonlyMap<string, CachedFileRow>,
+): PrOverviewVerdict {
+  const freshPaths = new Set(verdict.files.map((f) => f.path))
+  const merged: PrOverviewVerdict["files"] = [...verdict.files]
+  for (const row of cachedRows.values()) {
+    if (!freshPaths.has(row.path)) merged.push(row)
+  }
+  merged.sort((a, b) => b.score - a.score)
+  return { ...verdict, files: merged.slice(0, 5) }
 }
 
 interface FormatArgs {

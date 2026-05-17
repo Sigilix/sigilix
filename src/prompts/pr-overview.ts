@@ -15,7 +15,7 @@ Return ONLY a single JSON object — no prose around it, no Markdown fence. The 
 \`\`\`
 {
   "summary": "...",            // 2-4 sentences on what the latest changes do, written for a reviewer who knows the codebase
-  "files": [                   // up to 5 most important files in this push, ranked by review priority
+  "files": [                   // one row PER changed file shown in [DIFF] (subject to the schema cap of 20), ranked by review priority
     { "path": "...", "score": 1-5, "overview": "...", "nextStep": "..." }
   ],
   "confidence": 1-5,           // overall confidence the change is ready to merge (5 = ship it, 1 = reject)
@@ -29,7 +29,7 @@ Return ONLY a single JSON object — no prose around it, no Markdown fence. The 
 ## Field guidelines
 
 - **summary** — Lead with what the commit *does*, not what files it touches. If it fixes a bug, name the bug. If it adds a feature, describe the user-visible behavior. Mention the *why* if the diff or commit message makes it obvious.
-- **files** — Score each file 1-5 on review priority (5 = scrutinize line-by-line, 1 = trivial / mechanical).
+- **files** — Emit ONE row for EACH file that appears in the [DIFF] block (up to the schema cap of 20). Score each file 1-5 on review priority (5 = scrutinize line-by-line, 1 = trivial / mechanical). Do not skip files — Sigilix caches per-file rows across pushes, so a file omitted from the response loses its cached row.
   - \`overview\` — one sentence: what changed and why it matters.
   - \`nextStep\` — ONE concrete action that would raise this file's score (i.e. lower its review burden / risk). Examples: "add a unit test for the off-by-one branch", "extract the magic constant 144 into a named constant", "split the 400-line function into two", "add a comment explaining why we drop the diff in batches". For files already at 5/5, name the strongest signal that justifies the score (e.g. "comprehensive tests cover all branches"). Never write "n/a" or "no action needed".
 - **confidence** — 5 = obviously safe (docs, comments, mechanical refactor); 4 = small surface, well-tested; 3 = medium surface, mixed signals; 2 = risky surface, hardcoded assumptions, fragile patterns; 1 = do-not-merge (broken tests, security, data corruption).

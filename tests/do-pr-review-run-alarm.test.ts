@@ -146,6 +146,30 @@ describe("PrReviewRunDO.alarm — retry alarm fires", () => {
     expect(after.attempts).toBe(1)  // NOT incremented
     expect(queue.sent.length).toBe(0)  // NOT re-enqueued
   })
+
+  it("ARC-251 Codex BLOCKER #2 — retry alarm preserves staleHeadRequeueDepth from RunState", async () => {
+    // Without this guarantee, the retry-alarm rebuilds the pr-review
+    // message from RunState (not from the original queue message) and
+    // silently resets depth to 0 — bypassing MAX_STALE_HEAD_REQUEUES.
+    const queue: QueueState = { sent: [] }
+    const env = makeEnv(queue)
+    const { ctx, store } = makeDoState()
+    seedState(store, {
+      state: "failed-transient",
+      attempts: 1,
+      alarmKind: "retry",
+      staleHeadRequeueDepth: 2,
+    })
+
+    const instance = new PrReviewRunDO(ctx, env)
+    await instance.alarm!()
+
+    const after = store.get("state") as RunState
+    expect(after.staleHeadRequeueDepth).toBe(2)
+    expect(queue.sent.length).toBe(1)
+    const msg = queue.sent[0] as { staleHeadRequeueDepth?: number }
+    expect(msg.staleHeadRequeueDepth).toBe(2)
+  })
 })
 
 // ─── watchdog alarm ──────────────────────────────────────────

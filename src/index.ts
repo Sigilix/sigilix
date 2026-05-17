@@ -253,6 +253,15 @@ export type JobMessage =
        * `ci-triage`'s separate `runId: number` field is unrelated).
        */
       runId?: string
+      /**
+       * ARC-251: number of times this job was re-enqueued by the
+       * stale-head guard. Webhook-originated jobs omit the field
+       * (treated as 0). Capped at `MAX_STALE_HEAD_REQUEUES` (=2)
+       * before the helper falls through to the sticky comment.
+       * Persisted on DO RunState so retry-alarm-generated messages
+       * preserve the count and don't bypass the cap.
+       */
+      staleHeadRequeueDepth?: number
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that
@@ -703,6 +712,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
+        // ARC-251: thread the requeue depth from the job message into
+        // both review pipelines. Webhook-driven messages omit the
+        // field (treated as 0); stale-head-driven requeues carry the
+        // incremented depth so the helper can cap further retries.
+        ...(job.staleHeadRequeueDepth !== undefined
+          ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth }
+          : {}),
       }
       return runPrReviewWithDoCallback(job, env, async () => {
         // Phase 4 routing: ensemble (shadow/post), Phase 3 agentic, or
@@ -728,25 +744,42 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // Shadow: Phase 3 posts the customer-facing review FIRST,
           // ensemble runs after for telemetry only. Serial per v3.1
           // catch — simpler pairing invariant.
-          await handlePrReview(baseArgs)
+          //
+          // ARC-250 (Codex MAJOR on the design review): when Phase 3
+          // returns `stale_head` we MUST skip the shadow ensemble run.
+          // Otherwise the ensemble's own stale-head guard fires too and
+          // we double-handle the same job — duplicate telemetry, and in
+          // commit 2 (ARC-251) duplicate auto-requeues. Note: `skipped`
+          // (Phase 3 dedupe-hit) still runs the shadow ensemble for
+          // telemetry continuity — shadow is observation-only, so a
+          // double-skip there is harmless and preserves the paired-run
+          // invariant that Phase 4b's shadow analysis depends on.
+          const phase3Result = await handlePrReview(baseArgs)
+          if (phase3Result.status === "stale_head") return
           await handlePrReviewEnsemble(baseArgs, "shadow")
           return
         }
         if (decision.primary === "ensemble-post") {
           // CR PR #35 catch: ensemble-post can return "skipped"/"errored"
-          // for stale-head, quorum, synth-parse, and internal-error
-          // paths. Without this fallback the PR gets no customer-facing
-          // review at all (the queue still acks). Fall through to
-          // Phase 3 single-agent on any non-success.
+          // for quorum, synth-parse, and internal-error paths. Without
+          // this fallback the PR gets no customer-facing review at all.
+          // Fall through to Phase 3 single-agent on those non-successes.
+          //
+          // ARC-250: `stale_head` is the lone exception. Phase 3 would
+          // also stale-head, and `handleStaleHead` already emitted the
+          // user-visible sticky + telemetry, so the fallback must
+          // short-circuit. Other non-posted statuses (router_no_specialists,
+          // quorum failure, synth timeout/parse/provenance failure,
+          // internal error) still benefit from the Phase 3 attempt.
           const result = await handlePrReviewEnsemble(baseArgs, "post")
-          if (result.status !== "posted") {
-            await handlePrReview(baseArgs)
-          }
+          if (result.status === "posted" || result.status === "stale_head") return
+          await handlePrReview(baseArgs)
           return
         }
         // Phase 3 paths (agentic or singleshot-legacy) both go through
         // handlePrReview — the agentic toggle is gated inside that
-        // function via OPENCLAW_AGENTIC_GITHUB_MODE.
+        // function via OPENCLAW_AGENTIC_GITHUB_MODE. The return value
+        // is ignored here: there's no fallback path to short-circuit.
         await handlePrReview(baseArgs)
       })
     }

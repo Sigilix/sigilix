@@ -50,6 +50,7 @@ import {
   renderStackPromptBlock,
   renderStackContextSummary,
 } from "../prompts/pr-stack-prompt"
+import { handleStaleHead } from "./stale-head"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -210,10 +211,35 @@ export interface TriagePrReviewArgs {
   headSha: string
   installationId: number
   env: Env
+  /**
+   * ARC-251: prior stale-head requeue depth, threaded through by the
+   * dispatcher from the JobMessage. Undefined = 0 (a fresh
+   * webhook-driven attempt). Forwarded to `handleStaleHead` when the
+   * stale-head guard fires so it knows whether to requeue or fall
+   * through to the sticky.
+   */
+  staleHeadRequeueDepth?: number
 }
 
-export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
+/**
+ * Result returned by `handlePrReview`. The dispatcher uses `status` to
+ * decide whether to short-circuit the ensemble-fallback path.
+ *
+ * - `posted` — a GitHub review was submitted.
+ * - `skipped` — early-return for benign reasons (dedupe-seen, etc.).
+ * - `stale_head` — the PR head SHA moved between queue-time and
+ *   process-time. ARC-250: caller (dispatcher) MUST NOT fall back to
+ *   another path, since that path would also stale-head.
+ */
+export type PrReviewStatus = "posted" | "skipped" | "stale_head"
+
+export interface PrReviewResult {
+  status: PrReviewStatus
+}
+
+export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReviewResult> {
   const { owner, repo, prNumber, headSha, installationId, env } = args
+  const staleHeadRequeueDepth = args.staleHeadRequeueDepth ?? 0
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-review] ${label} +${Date.now() - t0}ms`, {
@@ -233,7 +259,7 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
     console.log(`pr-review already ran for ${dedupeKey} — skipping`)
-    return
+    return { status: "skipped" }
   }
   await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
     expirationTtl: 7 * 24 * 60 * 60, // 7 days — long enough to outlive retries on success
@@ -272,11 +298,26 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
     // and arc would appear to regress B's verdict. Skip if head moved.
     // The finally block below releases this SHA's dedupe key, but B
     // has its own dedupe key (key is per-SHA) so B isn't affected.
+    //
+    // ARC-250: instead of silent skip, hand off to `handleStaleHead`
+    // which emits structured telemetry + posts an upsert-by-marker
+    // sticky comment so the customer sees something happen. ARC-251
+    // (follow-up commit) extends this to auto-requeue against the
+    // live SHA up to a depth cap before falling through to the sticky.
     if (meta.head?.sha && meta.head.sha !== headSha) {
-      console.log(
-        `pr-review skipping stale job: queued ${headSha}, current ${meta.head.sha}`,
-      )
-      return
+      await handleStaleHead({
+        env,
+        owner,
+        repo,
+        prNumber,
+        installationId,
+        queuedHeadSha: headSha,
+        currentHeadSha: meta.head.sha,
+        baseSha: meta.base?.sha ?? null,
+        depth: staleHeadRequeueDepth,
+        source: "phase3",
+      })
+      return { status: "stale_head" }
     }
 
     // ARC-182: detect Graphite-style stack relationships. Repo-qualified
@@ -439,6 +480,15 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<void> {
       await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
     }
   }
+
+  // The try block above only returns explicitly on `stale_head` /
+  // `skipped` paths or throws. If we reach here, `posted === true`
+  // means the review was submitted; anything else is a defensive
+  // "skipped" (a non-throwing early-out we didn't add an explicit
+  // return for). Callers branch on this status to decide whether to
+  // run the Phase 3 fallback in the dispatcher (ARC-250: stale_head
+  // must NOT fall back, since the next path would also stale-head).
+  return { status: posted ? "posted" : "skipped" }
 }
 
 interface PromptCtx {

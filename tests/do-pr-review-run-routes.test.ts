@@ -179,6 +179,41 @@ describe("PrReviewRunDO /enqueue — first run", () => {
     // State IS recorded for observation
     expect((state.store.get("state") as RunState).state).toBe("queued")
   })
+
+  it("ARC-251 — persists staleHeadRequeueDepth on RunState AND threads it onto the initial queue message", async () => {
+    // Codex BLOCKER #2 (symmetric coverage to the retry-alarm test in
+    // do-pr-review-run-alarm.test.ts). Without persistence on RunState
+    // the watchdog/retry path would later rebuild the queue message
+    // from RunState and silently reset depth to 0 — bypassing
+    // MAX_STALE_HEAD_REQUEUES.
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    const req = makeEnqueueReq({ staleHeadRequeueDepth: 2 })
+    const res = await postJson(instance, "/enqueue", req)
+    expect(res.status).toBe(200)
+    const stored = state.store.get("state") as RunState
+    expect(stored.staleHeadRequeueDepth).toBe(2)
+    expect(queue.sent.length).toBe(1)
+    const queuedMsg = queue.sent[0]!.message as { staleHeadRequeueDepth?: number }
+    expect(queuedMsg.staleHeadRequeueDepth).toBe(2)
+  })
+
+  it("ARC-251 — omits staleHeadRequeueDepth when not provided (webhook-driven baseline)", async () => {
+    // Webhook-driven enqueues omit the field. Confirm the field is
+    // absent (not stored as `undefined`) on both RunState and the
+    // queue message, so JSON serialization stays compact and the
+    // consumer's `?? 0` fallback handles the absent case.
+    const queue = makeQueue()
+    const env = makeEnv(queue.send)
+    const { instance, state } = makeDo(env)
+    const res = await postJson(instance, "/enqueue", makeEnqueueReq())
+    expect(res.status).toBe(200)
+    const stored = state.store.get("state") as RunState
+    expect("staleHeadRequeueDepth" in stored).toBe(false)
+    const queuedMsg = queue.sent[0]!.message as Record<string, unknown>
+    expect("staleHeadRequeueDepth" in queuedMsg).toBe(false)
+  })
 })
 
 describe("PrReviewRunDO /enqueue — dedupe + supersede", () => {

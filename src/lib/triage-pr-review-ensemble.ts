@@ -132,6 +132,7 @@ import { runReviewMemoryLookup } from "./review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
+import { handleStaleHead } from "./stale-head"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -325,6 +326,12 @@ export interface EnsembleHandlerArgs {
   headSha: string
   installationId: number
   env: Env
+  /**
+   * ARC-251: prior stale-head requeue depth, threaded through by the
+   * dispatcher from the JobMessage. Undefined = 0. Forwarded to
+   * `handleStaleHead` when either ensemble guard fires.
+   */
+  staleHeadRequeueDepth?: number
 }
 
 export type RouteDecision =
@@ -391,6 +398,7 @@ export async function handlePrReviewEnsemble(
   mode: "shadow" | "post",
 ): Promise<EnsembleResult> {
   const { owner, repo, prNumber, headSha, installationId, env } = args
+  const staleHeadRequeueDepth = args.staleHeadRequeueDepth ?? 0
   const startMs = Date.now()
   const orchCtrl = new AbortController()
   const orchTimer = setTimeout(() => orchCtrl.abort(), ORCHESTRATOR_TIMEOUT_MS)
@@ -424,9 +432,26 @@ export async function handlePrReviewEnsemble(
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
     if (meta.head?.sha && meta.head.sha !== headSha) {
-      telemetry.fellBackToPhase3 = true
+      // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3` —
+      // the dispatcher short-circuits Phase 3 on `stale_head`, so this
+      // path doesn't actually fall back. Leaving it true would
+      // overcount Phase 3 saves and blur stale-head telemetry.
       telemetry.fellBackReason = "stale_head_before_fanout"
-      return finalize(telemetry, env, "skipped", cache)
+      // ARC-250: hand off to the helper for structured telemetry + a
+      // user-visible sticky comment. ARC-251: helper auto-requeues
+      // against the live SHA when depth < cap; falls through to the
+      // sticky on exhaustion. Either way we return `stale_head` so
+      // the dispatcher does NOT fall through to Phase 3 (which would
+      // also stale-head and post a duplicate sticky / second requeue).
+      await handleStaleHead({
+        env, owner, repo, prNumber, installationId,
+        queuedHeadSha: headSha,
+        currentHeadSha: meta.head.sha,
+        baseSha: meta.base?.sha ?? null,
+        depth: staleHeadRequeueDepth,
+        source: "ensemble-before-fanout",
+      })
+      return finalize(telemetry, env, "stale_head", cache)
     }
 
     // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
@@ -1063,19 +1088,32 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "shadow_recorded", cache)
     }
 
-    // ARC-194: record the SHA we just reviewed (post mode only) so
-    // subsequent pushes can fetch the compare diff (`reviewedSha...
-    // newHead`) instead of the full PR diff. Best-effort — write
-    // failures don't fail the run; next push falls back to full diff
-    // and re-establishes the marker on the following review.
-    await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
-
     // ─── Stale-head guard #2 ───────────────────────────────────
+    //
+    // ARC-250 (Codex MAJOR on the design review): this guard MUST run
+    // before `writeLastReviewedSha`. Previously the write happened
+    // first, so if the head moved we still marked `headSha` as
+    // last-reviewed even though no GitHub review was posted. The next
+    // ARC-251 requeue then read that marker and used a `compareDiff`
+    // of `oldSha..newSha` instead of the full PR diff — missing every
+    // finding from before the head move. The fix is twofold: check
+    // staleness here, and move `writeLastReviewedSha` to the two
+    // posted-return sites below so it only runs after a successful
+    // GitHub submit.
     const meta2 = await client.getPullRequest(owner, repo, prNumber)
     if (meta2.head?.sha && meta2.head.sha !== headSha) {
-      telemetry.fellBackToPhase3 = true
+      // CodeRabbit catch (phase-end): do NOT set `fellBackToPhase3`
+      // — same reasoning as guard #1.
       telemetry.fellBackReason = "stale_head_after_review"
-      return finalize(telemetry, env, "skipped", cache)
+      await handleStaleHead({
+        env, owner, repo, prNumber, installationId,
+        queuedHeadSha: headSha,
+        currentHeadSha: meta2.head.sha,
+        baseSha: meta2.base?.sha ?? null,
+        depth: staleHeadRequeueDepth,
+        source: "ensemble-after-review",
+      })
+      return finalize(telemetry, env, "stale_head", cache)
     }
 
     // ─── Submit ────────────────────────────────────────────────
@@ -1180,6 +1218,25 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submitted.id,
       })
+      // ARC-194 (moved here in ARC-250): record `lastReviewedSha`
+      // only after a confirmed GitHub submit. Previously this fired
+      // before guard #2 — a stale-head skip still marked the SHA
+      // reviewed, corrupting the next push's compare-diff.
+      //
+      // CodeRabbit PR #75 catch: a KV failure here MUST NOT bubble
+      // out as `errored`. The customer-facing review has already
+      // been submitted; an outer-catch `errored` would make
+      // `dispatchJob` fall back to Phase 3 and post a SECOND review
+      // on the same head. Best-effort: swallow + log instead.
+      try {
+        await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-last-reviewed-sha-write-failed",
+          owner, repo, prNumber, headSha,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
@@ -1241,6 +1298,20 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submittedFallback.id,
       })
+      // ARC-194 (moved here in ARC-250): mirror the primary submit
+      // path — only mark `lastReviewedSha` after a confirmed GitHub
+      // submit. CR PR #75 catch: same try/catch as the primary path
+      // so a KV write failure doesn't bubble out as `errored` and
+      // trigger a duplicate Phase 3 fallback review.
+      try {
+        await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-last-reviewed-sha-write-failed",
+          owner, repo, prNumber, headSha,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }
@@ -2429,7 +2500,16 @@ interface EnsembleTelemetry {
   totalMs: number
 }
 
-type EnsembleResultStatus = "posted" | "shadow_recorded" | "skipped" | "errored"
+// ARC-250: `stale_head` is split out from `skipped` so the dispatcher
+// can short-circuit the Phase 3 fallback. Falling through to Phase 3
+// when the ensemble guard fired would just hit Phase 3's identical
+// stale-head guard and skip again — invisible to the customer.
+type EnsembleResultStatus =
+  | "posted"
+  | "shadow_recorded"
+  | "skipped"
+  | "stale_head"
+  | "errored"
 
 export interface EnsembleResult {
   status: EnsembleResultStatus

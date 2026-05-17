@@ -78,10 +78,18 @@ import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
   loadSigilixConfig,
+  passesLabelGate,
+  resolveCostControlsConfig,
+  resolveDocsReviewConfig,
   resolveCommandConfig,
   resolveAstRulesConfig,
   type SigilixConfig,
 } from "./sigilix-config"
+import {
+  runDocsCoverageCheck,
+  renderDocsCoverageForPrompt,
+  type DocsCoverageHit,
+} from "./docs-coverage-check"
 import {
   splitDiffByFile,
   packFilesIntoBatches,
@@ -523,6 +531,30 @@ export async function handlePrReviewEnsemble(
     // before packing decides what to send to specialists.
     const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
 
+    // ARC-273: label gate. When the operator configures
+    // `costControls.runOnLabels`, pr-review only fires on PRs
+    // carrying at least one of those labels. Empty config = no
+    // gating (current behavior). Returns `skipped` so the
+    // dispatcher-owned Check Run completes as `neutral` rather
+    // than misclassifying as a failed review.
+    const costControls = resolveCostControlsConfig(sigilixConfig)
+    if (costControls.runOnLabels.length > 0) {
+      const labelNames = (meta.labels ?? [])
+        .map((l) => l.name)
+        .filter((n): n is string => typeof n === "string")
+      if (!passesLabelGate(labelNames, costControls.runOnLabels)) {
+        console.log(JSON.stringify({
+          event: "pr-review-skipped",
+          reason: "label-gate",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          pr_labels: labelNames,
+          run_on_labels: [...costControls.runOnLabels],
+        }))
+        telemetry.fellBackReason = "label_gate_skip"
+        return finalize(telemetry, env, "skipped", cache)
+      }
+    }
+
     // ARC-192 + ARC-176: hunk-level diff packing with config-aware
     // filtering. Split the diff by file, drop files matched by
     // `sigilixConfig.pathFilters` (lockfiles, generated content, etc.
@@ -544,9 +576,37 @@ export async function handlePrReviewEnsemble(
     const { batches, droppedTooLarge } = packFilesIntoBatches(filesAfterFilter)
     const reviewedFiles = batches[0] ?? []
     const filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
-    const diff = reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0
+    const baseDiff = reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0
       ? fullDiff
       : batchToDiff(reviewedFiles)
+    // ARC-273: hard cap on the diff string passed to specialists.
+    // `packFilesIntoBatches` already bounds total-file budget; this
+    // is a belt-and-suspenders char-level cap for pathological cases
+    // (one enormous file, or operator-narrowed budget). Truncates
+    // from the END so the diff header + leading hunks survive. A
+    // trailing sentinel notes the truncation so the model knows it
+    // didn't see everything.
+    //
+    // code-reviewer M1 catch: `slice(0, negative)` would silently
+    // produce an empty string if the operator set `maxPatchLength`
+    // below the sentinel length. `MAX_PATCH_LENGTH_MIN = 1_000`
+    // makes that impossible today, but the relationship is implicit
+    // — `Math.max(0, …)` codifies the invariant defensively.
+    const PATCH_TRUNCATION_NOTE = "\n\n[…diff truncated to costControls.maxPatchLength…]"
+    const wasTruncated = baseDiff.length > costControls.maxPatchLength
+    const diff = wasTruncated
+      ? baseDiff.slice(0, Math.max(0, costControls.maxPatchLength - PATCH_TRUNCATION_NOTE.length)) +
+        PATCH_TRUNCATION_NOTE
+      : baseDiff
+    if (wasTruncated) {
+      console.log(JSON.stringify({
+        event: "pr-review-diff-truncated",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        original_chars: baseDiff.length,
+        max_patch_length: costControls.maxPatchLength,
+        final_chars: diff.length,
+      }))
+    }
 
     telemetry.diffPacking = {
       diffTokensEstimated: estimateTokens(fullDiff),
@@ -556,6 +616,11 @@ export async function handlePrReviewEnsemble(
       filesDroppedTooLarge: droppedTooLarge,
       filesNotReviewed,
       ...(filesDroppedByFilter.length > 0 ? { filesDroppedByFilter } : {}),
+      // ARC-273 (code-reviewer M2 catch): when the char-level cap
+      // truncated the post-packing diff, surface the post-truncation
+      // size so operators can correlate "diff packing said X files
+      // reviewed" with "model actually saw Y chars."
+      ...(wasTruncated ? { diffTruncatedToChars: diff.length } : {}),
     }
 
     const reviewable = parseDiffToReviewablePositions(diff)
@@ -742,13 +807,42 @@ export async function handlePrReviewEnsemble(
           durationMs: sarifResult.telemetry.durationMs,
         }
 
+    // ARC-272: docs-coverage check. Zero-LLM, pure: takes the
+    // PR's changed-file list + operator config and returns a hit
+    // when architecture-impacting paths were touched without a
+    // matching docs update. Runs BEFORE the prompt is built so the
+    // hit becomes part of the authoritative-fact block fed to the
+    // specialists + synth.
+    //
+    // `splitFiles` is the pre-`pathFilters` changed-file set — we
+    // want every file the PR touched, not the post-filter subset
+    // (the filter drops noise like lockfiles, but docs-coverage
+    // wants to see architectural changes regardless of whether
+    // they're reviewed).
+    const docsReviewConfig = resolveDocsReviewConfig(sigilixConfig)
+    const docsCoverageHit: DocsCoverageHit | null = runDocsCoverageCheck(
+      splitFiles.map((f) => f.path),
+      docsReviewConfig,
+    )
+    if (docsCoverageHit !== null) {
+      console.log(JSON.stringify({
+        event: "pr-review-docs-coverage-hit",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        architecture_files: docsCoverageHit.architectureFiles,
+        doc_paths: [...docsCoverageHit.docPaths],
+      }))
+    }
+
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
+    const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
     // Combine all pre-LLM fact blocks. Order: secrets first
     // (highest severity), dep vulns, AST rules, SARIF (Trivy IaC +
-    // CVE + license), regex deterministic checks last.
-    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, sarifBlock, deterministicBlock]
+    // CVE + license), regex deterministic checks, then the
+    // informational docs-coverage signal last (low-severity nudge,
+    // not a blocker).
+    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, sarifBlock, deterministicBlock, docsCoverageBlock]
       .filter((s) => s.length > 0)
       .join("\n\n")
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
@@ -2824,6 +2918,12 @@ interface EnsembleTelemetry {
      * we filtered lets them spot accidental over-exclusion.
      */
     filesDroppedByFilter?: string[]
+    /**
+     * ARC-273: when the char-level cap `costControls.maxPatchLength`
+     * truncated the post-packing diff, this records the final size
+     * the model actually saw. Absent when no truncation fired.
+     */
+    diffTruncatedToChars?: number
   }
   /**
    * ARC-193: deterministic regex check telemetry. `hits` are the

@@ -191,6 +191,80 @@ export interface SigilixConfig {
    *   ]
    */
   customLabels?: Array<{ name: string; description: string }>
+  /**
+   * ARC-273: operator-tunable cost controls. Pre-customer this is a
+   * polish surface; for repos with very large PRs or strict budget
+   * discipline it's the difference between "review is automatic" and
+   * "review eats our Ollama quota."
+   *
+   * Fields (all optional):
+   *   - `maxPatchLength`: hard cap (chars) on the diff string passed
+   *     to specialists. Truncates from the END (preserves header +
+   *     leading hunks). Defaults to a generous internal value
+   *     (resolved by `resolveCostControlsConfig`); explicit caps
+   *     between 1_000 and 200_000 chars are accepted, others fall
+   *     back to default.
+   *   - `runOnLabels`: when non-empty, pr-review fires ONLY for PRs
+   *     carrying at least one of these label names. Empty / absent
+   *     = no gating (current behavior). Useful for opt-in cost
+   *     control on monorepos where most PRs don't need review.
+   *
+   * `pathFilters` (existing, ARC-176) already covers include/exclude
+   * globs and is the path-scoping surface — `costControls` does NOT
+   * duplicate it.
+   *
+   * Validation: bounds-checked + defensively parsed. Bad values are
+   * dropped silently (fail-open) so a config typo doesn't disable
+   * review.
+   *
+   * Example:
+   *   "costControls": {
+   *     "maxPatchLength": 75000,
+   *     "runOnLabels": ["sigilix:review"]
+   *   }
+   */
+  costControls?: {
+    maxPatchLength?: number
+    runOnLabels?: string[]
+  }
+  /**
+   * ARC-272: zero-LLM documentation-coverage check. Runs in the
+   * pre-fanout deterministic-check pipeline alongside secret scan,
+   * dep-vuln, AST rules, SARIF, and regex deterministic checks. When
+   * a PR touches any file matching `architectureGlobs` but DOES NOT
+   * touch any file matching `docPaths`, the check emits an
+   * authoritative-fact line for the synthesizer + specialists:
+   * "PR touches architecture but adds no documentation update."
+   *
+   * Cheap, deterministic, no model spend. Zero false-positive
+   * tolerance is fine because the check is informational — it never
+   * blocks merges.
+   *
+   * Fields (all optional):
+   *   - `enabled`: master switch. Default `true`; explicit `false`
+   *     disables. Pairs with `architectureGlobs` below — when that
+   *     list is empty, the check is a no-op regardless of this
+   *     flag, so default-on is safe.
+   *   - `architectureGlobs`: glob patterns for architecture-impacting
+   *     paths. Default: **empty** — the check ships silent until
+   *     the operator opts in by configuring patterns. Avoids noisy
+   *     false-positives at scale on repos with non-standard layouts.
+   *   - `docPaths`: glob patterns for documentation paths. Default
+   *     covers `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/<gs>`,
+   *     `CHANGELOG.md`. Operator can override entirely.
+   *
+   * Example:
+   *   "docsReview": {
+   *     "enabled": true,
+   *     "architectureGlobs": ["src/lib/<gs>", "wrangler.toml", "package.json"],
+   *     "docPaths": ["README.md", "docs/<gs>"]
+   *   }
+   */
+  docsReview?: {
+    enabled?: boolean
+    architectureGlobs?: string[]
+    docPaths?: string[]
+  }
 }
 
 /**
@@ -663,7 +737,165 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (labels.length > 0) out.customLabels = labels
   }
+  // ARC-273: costControls parsing. Strict bounds on numbers + string
+  // arrays; bad entries dropped silently (fail-open per the existing
+  // sigilix-config convention).
+  if (obj.costControls && typeof obj.costControls === "object" && !Array.isArray(obj.costControls)) {
+    const ccIn = obj.costControls as Record<string, unknown>
+    const ccOut: NonNullable<SigilixConfig["costControls"]> = {}
+    if (typeof ccIn.maxPatchLength === "number" && Number.isFinite(ccIn.maxPatchLength)) {
+      const v = Math.round(ccIn.maxPatchLength)
+      if (v >= MAX_PATCH_LENGTH_MIN && v <= MAX_PATCH_LENGTH_MAX) {
+        ccOut.maxPatchLength = v
+      }
+    }
+    if (Array.isArray(ccIn.runOnLabels)) {
+      const labels = [...new Set(
+        ccIn.runOnLabels
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      if (labels.length > 0) ccOut.runOnLabels = labels
+    }
+    if (Object.keys(ccOut).length > 0) out.costControls = ccOut
+  }
+  // ARC-272: docsReview parsing. Strict-bool `enabled`; string arrays
+  // with trim+dedupe for both glob lists.
+  if (obj.docsReview && typeof obj.docsReview === "object" && !Array.isArray(obj.docsReview)) {
+    const drIn = obj.docsReview as Record<string, unknown>
+    const drOut: NonNullable<SigilixConfig["docsReview"]> = {}
+    if (typeof drIn.enabled === "boolean") {
+      drOut.enabled = drIn.enabled
+    }
+    if (Array.isArray(drIn.architectureGlobs)) {
+      const globs = [...new Set(
+        drIn.architectureGlobs
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      if (globs.length > 0) drOut.architectureGlobs = globs
+    }
+    if (Array.isArray(drIn.docPaths)) {
+      const paths = [...new Set(
+        drIn.docPaths
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      if (paths.length > 0) drOut.docPaths = paths
+    }
+    if (Object.keys(drOut).length > 0) out.docsReview = drOut
+  }
   return { ok: true, config: out }
+}
+
+// ─── ARC-273: cost control resolution ────────────────────────────────
+
+/**
+ * Default cap for the per-review diff payload. Generous enough that
+ * typical PRs aren't truncated (median Sigilix PR diff is ~10-25 KB),
+ * tight enough that pathological large-rename PRs don't blow through
+ * the model's context.
+ *
+ * Operators tune via `costControls.maxPatchLength`; the parser
+ * accepts values in [MIN, MAX] (see constants below).
+ */
+const DEFAULT_MAX_PATCH_LENGTH = 80_000
+const MAX_PATCH_LENGTH_MIN = 1_000
+const MAX_PATCH_LENGTH_MAX = 200_000
+
+export interface ResolvedCostControls {
+  maxPatchLength: number
+  /** When non-empty, pr-review only runs for PRs carrying at least
+   *  one of these labels. Empty = no gating. */
+  runOnLabels: readonly string[]
+}
+
+/**
+ * ARC-273: resolve cost-control config to a fully-locked shape with
+ * defaults filled in. Pure; never throws.
+ */
+export function resolveCostControlsConfig(
+  config: SigilixConfig | null,
+): ResolvedCostControls {
+  const cc = config?.costControls
+  return {
+    maxPatchLength: cc?.maxPatchLength ?? DEFAULT_MAX_PATCH_LENGTH,
+    runOnLabels: cc?.runOnLabels ?? [],
+  }
+}
+
+/**
+ * ARC-273: label-gate decision. Returns `true` when the PR should
+ * be reviewed given its current label set + the operator's
+ * `runOnLabels` config. When `runOnLabels` is empty, always returns
+ * `true` (current behavior preserved for repos without config).
+ *
+ * Case-insensitive name match (GitHub label names are case-sensitive
+ * at the API level but operators don't always match casing exactly).
+ *
+ * Pure; exported for unit tests.
+ */
+export function passesLabelGate(
+  labels: ReadonlyArray<string>,
+  runOnLabels: ReadonlyArray<string>,
+): boolean {
+  if (runOnLabels.length === 0) return true
+  const labelSet = new Set(labels.map((l) => l.toLowerCase()))
+  return runOnLabels.some((g) => labelSet.has(g.toLowerCase()))
+}
+
+// ─── ARC-272: docs-coverage resolution ───────────────────────────────
+
+/**
+ * Default doc-paths recognized when an operator opts into the
+ * docs-coverage check without overriding `docPaths`. Covers the
+ * common conventions across most repos. Operator can replace by
+ * setting their own `docPaths`.
+ */
+const DEFAULT_DOCS_PATHS: readonly string[] = [
+  "README.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "CHANGELOG.md",
+  "docs/**",
+  "doc/**",
+] as const
+
+export interface ResolvedDocsReview {
+  enabled: boolean
+  /** Architecture-impacting paths. Empty array means the check
+   *  is effectively a no-op (no patterns to flag). */
+  architectureGlobs: readonly string[]
+  /** Documentation paths the check looks for as "if any of these
+   *  were ALSO touched, the PR satisfies docs coverage." */
+  docPaths: readonly string[]
+}
+
+/**
+ * ARC-272: resolve docs-review config to a locked shape. Defaults:
+ *   - `enabled: true` (opt-OUT, but a no-op until `architectureGlobs`
+ *     is non-empty, so default-on doesn't surprise repos without
+ *     opt-in.)
+ *   - `architectureGlobs: []` (operator must list paths they
+ *     consider architecture-impacting; the check has no built-in
+ *     opinion to avoid noisy defaults.)
+ *   - `docPaths: DEFAULT_DOCS_PATHS` (sensible cross-repo defaults
+ *     unless operator overrides.)
+ *
+ * Pure; never throws.
+ */
+export function resolveDocsReviewConfig(
+  config: SigilixConfig | null,
+): ResolvedDocsReview {
+  const dr = config?.docsReview
+  return {
+    enabled: dr?.enabled !== false,
+    architectureGlobs: dr?.architectureGlobs ?? [],
+    docPaths: dr?.docPaths ?? DEFAULT_DOCS_PATHS,
+  }
 }
 
 /** Pure clamp helper for the reviewMemory numeric fields. */

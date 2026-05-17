@@ -728,6 +728,25 @@ export class GitHubClient {
   }
 
   /**
+   * Delete a top-level issue/PR-conversation comment. Used by the
+   * pr-overview helper's one-way migration to delete the legacy
+   * standalone warmup sticky once its content has been folded into
+   * the unified overview body (ARC-258 follow-up).
+   */
+  async deleteIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+  ): Promise<void> {
+    await this.request<unknown>(
+      "DELETE",
+      `/repos/${owner}/${repo}/issues/comments/${commentId}`,
+      undefined,
+      "json",
+    )
+  }
+
+  /**
    * Add an emoji reaction to a top-level issue/PR-conversation comment.
    * Idempotent at the API level — re-posting the same reaction returns
    * the existing one with 200, not a duplicate. We use it to "ack" an

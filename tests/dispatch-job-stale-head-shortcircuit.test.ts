@@ -33,12 +33,9 @@ vi.mock("../src/lib/triage-pr-review", async () => {
     handlePrReview: handlePrReviewMock,
   }
 })
-// ARC-236: dispatchJob now calls `postWarmupStickyIfUnindexed` before
-// `routeReview`. Mock it to a no-op so these tests don't have to
-// stub KV + GitHub installation-token machinery.
-vi.mock("../src/lib/warmup", () => ({
-  postWarmupStickyIfUnindexed: vi.fn(async () => ({ skipped: "already-indexed" })),
-}))
+// ARC-258 follow-up: warmup signaling moved to pr-overview (no
+// per-pr-review sticky any more). This test no longer needs to
+// mock a warmup helper — `dispatchJob` doesn't import one.
 // ARC-258: dispatchJob now also creates a Check Run before routing
 // and completes it after. Mock both helpers so these short-circuit
 // tests stay focused on the routing branch decisions.

@@ -133,7 +133,6 @@ import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
-import { updateWarmupStickyToReady } from "./warmup"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -1247,14 +1246,11 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
-      // ARC-236: flip the warmup sticky to the "ready" body now that
-      // a codebase-aware review has posted. Helper gates on manifest
-      // existence so a still-warming repo keeps its sticky in
-      // "warming up" state (the review that just posted was actually
-      // diff-only — the rerun fires once indexing completes).
-      await updateWarmupStickyToReady({
-        env, owner, repo, prNumber, installationId,
-      })
+      // ARC-258 follow-up: warmup "ready" signaling now lives in
+      // the unified pr-overview sticky. The rerun fan-out fires
+      // both pr-review-rerun and pr-overview after indexing
+      // completes, so the warmup callout drops organically once
+      // the manifest is present.
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
@@ -1330,11 +1326,8 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
-      // ARC-236: same warmup-sticky flip as the primary submit path
-      // (idempotent + manifest-gated).
-      await updateWarmupStickyToReady({
-        env, owner, repo, prNumber, installationId,
-      })
+      // ARC-258 follow-up: warmup "ready" signaling lives in the
+      // unified pr-overview sticky now; rerun fan-out re-renders it.
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }

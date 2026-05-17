@@ -43,9 +43,8 @@ vi.mock("../src/lib/triage-pr-review", async () => {
   const actual = await vi.importActual<typeof import("../src/lib/triage-pr-review")>("../src/lib/triage-pr-review")
   return { ...actual, handlePrReview: handlePrReviewMock }
 })
-vi.mock("../src/lib/warmup", () => ({
-  postWarmupStickyIfUnindexed: vi.fn(async () => ({ skipped: "already-indexed" })),
-}))
+// ARC-258 follow-up: dispatchJob no longer imports a warmup helper
+// for pr-review (the warmup callout now lives inside pr-overview).
 vi.mock("../src/lib/pr-review-check-run", () => ({
   startInProgressCheckRun: startInProgressCheckRunMock,
   completeCheckRun: completeCheckRunMock,

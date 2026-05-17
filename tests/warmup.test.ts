@@ -1,31 +1,25 @@
-// ARC-236 — tests for the cold-start warmup helper.
+// ARC-258 follow-up — tests for the unified warmup fan-out helper.
 //
-// Covers the three entry points:
-//   - `postWarmupStickyIfUnindexed`: posts sticky when manifest is missing,
-//     skips when manifest exists; idempotent upsert when sticky already exists.
-//   - `updateWarmupStickyToReady`: gated on manifest existence; no-ops on
-//     "still warming" repos so a diff-only review doesn't claim indexing is ready.
-//   - `enqueueWarmupRerunsForIndex`: scans open PRs, filters to those with
-//     warmup sticky, enqueues `pr-review-rerun` per match.
+// Historical: ARC-236 originally shipped 3 warmup helpers (post
+// sticky, update sticky to ready, fan-out reruns). The first two
+// were deleted in the unification — warmup state now lives inside
+// the pr-overview comment as a callout block, not a separate sticky.
+// This file only covers `enqueueWarmupRerunsForIndex`.
+//
+// Fan-out behavior: for every open PR whose overview body shows the
+// warmup callout (or carries the legacy standalone sticky marker
+// — backward compat), enqueue BOTH:
+//   - `pr-review-rerun` (refresh the code review with retrieval)
+//   - `pr-overview` (re-render the overview without the callout)
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
-  mockGetInstallationToken,
   mockListIssueComments,
-  mockCreateIssueComment,
-  mockUpdateIssueComment,
   mockListOpenPullRequests,
 } = vi.hoisted(() => ({
-  mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockListIssueComments: vi.fn(),
-  mockCreateIssueComment: vi.fn(),
-  mockUpdateIssueComment: vi.fn(),
   mockListOpenPullRequests: vi.fn(),
-}))
-
-vi.mock("../src/lib/github-app", () => ({
-  getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
 vi.mock("../src/lib/github", async () => {
@@ -33,12 +27,6 @@ vi.mock("../src/lib/github", async () => {
   class GitHubClientMock {
     async listIssueComments(...args: unknown[]): Promise<unknown> {
       return mockListIssueComments(...args)
-    }
-    async createIssueComment(...args: unknown[]): Promise<unknown> {
-      return mockCreateIssueComment(...args)
-    }
-    async updateIssueComment(...args: unknown[]): Promise<unknown> {
-      return mockUpdateIssueComment(...args)
     }
     async listOpenPullRequests(...args: unknown[]): Promise<unknown> {
       return mockListOpenPullRequests(...args)
@@ -49,15 +37,9 @@ vi.mock("../src/lib/github", async () => {
 
 import {
   enqueueWarmupRerunsForIndex,
-  postWarmupStickyIfUnindexed,
-  updateWarmupStickyToReady,
-  WARMUP_MARKER,
+  LEGACY_WARMUP_MARKER,
+  WARMUP_CALLOUT_MARKER,
 } from "../src/lib/warmup"
-import {
-  repoIndexManifestKey,
-  type RepoIndexManifestV1,
-} from "../src/lib/repo-index-manifest"
-import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
 import { GitHubClient } from "../src/lib/github"
 import type { Env, JobMessage } from "../src/index"
 
@@ -74,43 +56,22 @@ function makeKvStub(): {
   return { kv, store }
 }
 
-function makeEnv(opts: { credentials?: boolean } = {}): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
-  const haveCreds = opts.credentials ?? true
+function makeEnv(): { env: Env; sent: JobMessage[]; kv: Map<string, string> } {
   const { kv, store } = makeKvStub()
   const sent: JobMessage[] = []
   const env = {
     OPENCLAW_STATE: kv,
     OPENCLAW_JOBS: { send: async (m: JobMessage) => { sent.push(m) } },
-    GITHUB_APP_ID: haveCreds ? "12345" : undefined,
-    GITHUB_PRIVATE_KEY: haveCreds ? "fake-key" : undefined,
   } as unknown as Env
   return { env, sent, kv: store }
 }
 
-function manifest(over: Partial<RepoIndexManifestV1> = {}): RepoIndexManifestV1 {
-  return {
-    v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
-    headSha: "a".repeat(40), runId: "0123456789abcdef",
-    fileCount: 1, chunkCount: 1, shardCount: 1,
-    indexedAt: "2026-05-17T00:00:00.000Z",
-    modelId: EMBEDDING_MODEL, embeddingDim: EMBEDDING_DIMENSIONS,
-    chunkerVersion: 1, windowLines: 30, overlapLines: 10,
-    ...over,
-  }
+function pr(number: number, headSha = "a".repeat(40)) {
+  return { number, head: { sha: headSha } }
 }
 
-const baseArgs = {
-  owner: "Arc-and-Anchor",
-  repo: "sigilix",
-  prNumber: 237,
-  installationId: 99,
-} as const
-
 beforeEach(() => {
-  mockGetInstallationToken.mockClear()
   mockListIssueComments.mockReset()
-  mockCreateIssueComment.mockReset()
-  mockUpdateIssueComment.mockReset()
   mockListOpenPullRequests.mockReset()
   vi.spyOn(console, "log").mockImplementation(() => undefined)
   vi.spyOn(console, "warn").mockImplementation(() => undefined)
@@ -121,145 +82,14 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe("postWarmupStickyIfUnindexed", () => {
-  it("skips when manifest exists (repo is already indexed)", async () => {
-    const { env, kv } = makeEnv()
-    kv.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
-    const outcome = await postWarmupStickyIfUnindexed({ env, ...baseArgs })
-    expect(outcome).toEqual({ skipped: "already-indexed" })
-    expect(mockGetInstallationToken).not.toHaveBeenCalled()
-    expect(mockCreateIssueComment).not.toHaveBeenCalled()
-  })
-
-  it("creates the warmup sticky when manifest is missing", async () => {
-    mockListIssueComments.mockResolvedValue([])
-    mockCreateIssueComment.mockResolvedValue({ id: 555 })
-
-    const { env } = makeEnv()
-    const outcome = await postWarmupStickyIfUnindexed({ env, ...baseArgs })
-
-    expect(outcome).toEqual({ posted: "created", commentId: 555 })
-    expect(mockCreateIssueComment).toHaveBeenCalledTimes(1)
-    const [, , , body] = mockCreateIssueComment.mock.calls[0]!
-    expect(body).toContain(WARMUP_MARKER)
-    expect(body).toContain("warming up")
-  })
-
-  it("updates the existing sticky in-place (idempotent on re-fire)", async () => {
-    mockListIssueComments.mockResolvedValue([
-      { id: 77, body: `prior ${WARMUP_MARKER} content` },
-    ])
-    mockUpdateIssueComment.mockResolvedValue(undefined)
-
-    const { env } = makeEnv()
-    const outcome = await postWarmupStickyIfUnindexed({ env, ...baseArgs })
-
-    expect(outcome).toEqual({ posted: "updated", commentId: 77 })
-    expect(mockUpdateIssueComment).toHaveBeenCalledTimes(1)
-    expect(mockCreateIssueComment).not.toHaveBeenCalled()
-  })
-
-  it("returns missing-creds skip without throwing when GitHub App not configured", async () => {
-    const { env } = makeEnv({ credentials: false })
-    const outcome = await postWarmupStickyIfUnindexed({ env, ...baseArgs })
-    expect(outcome).toEqual({ skipped: "missing-creds" })
-    expect(mockCreateIssueComment).not.toHaveBeenCalled()
-  })
-
-  it("returns failed without throwing when GitHub rejects the create", async () => {
-    mockListIssueComments.mockResolvedValue([])
-    mockCreateIssueComment.mockRejectedValue(new Error("HTTP 403 Forbidden"))
-    const { env } = makeEnv()
-    const outcome = await postWarmupStickyIfUnindexed({ env, ...baseArgs })
-    expect("failed" in outcome).toBe(true)
-  })
-})
-
-describe("updateWarmupStickyToReady", () => {
-  it("skips (not-yet-indexed) when manifest is missing — the review just posted was diff-only", async () => {
-    const { env } = makeEnv()
-    // No manifest seeded.
-    const outcome = await updateWarmupStickyToReady({ env, ...baseArgs })
-    expect(outcome).toEqual({ skipped: "not-yet-indexed" })
-    expect(mockListIssueComments).not.toHaveBeenCalled()
-  })
-
-  it("flips sticky to ready body when manifest exists AND sticky is present", async () => {
-    mockListIssueComments.mockResolvedValue([
-      { id: 88, body: `${WARMUP_MARKER}\nwarming up` },
-    ])
-    mockUpdateIssueComment.mockResolvedValue(undefined)
-
-    const { env, kv } = makeEnv()
-    kv.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
-    const outcome = await updateWarmupStickyToReady({ env, ...baseArgs })
-
-    expect(outcome).toEqual({ updated: true, commentId: 88 })
-    const [, , commentId, body] = mockUpdateIssueComment.mock.calls[0]!
-    expect(commentId).toBe(88)
-    expect(body).toContain(WARMUP_MARKER)
-    expect(body).toContain("Index ready")
-  })
-
-  it("skips (no-sticky) when sticky doesn't exist — typical post-indexing PR", async () => {
-    mockListIssueComments.mockResolvedValue([
-      { id: 1, body: "unrelated comment" },
-    ])
-
-    const { env, kv } = makeEnv()
-    kv.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
-    const outcome = await updateWarmupStickyToReady({ env, ...baseArgs })
-
-    expect(outcome).toEqual({ skipped: "no-sticky" })
-    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
-  })
-
-  it("returns missing-creds skip when GitHub App not configured", async () => {
-    const { env, kv } = makeEnv({ credentials: false })
-    kv.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
-    const outcome = await updateWarmupStickyToReady({ env, ...baseArgs })
-    expect(outcome).toEqual({ skipped: "missing-creds" })
-  })
-
-  // CodeRabbit phase-end catch on PR #80: the post-submit call site
-  // (ensemble + Phase 3) MUST NOT see an exception escape from this
-  // helper — would mark a successful review as `errored` and trigger
-  // a duplicate Phase 3 review. Regression test: any throw from
-  // the KV read at the top of the helper degrades to a `failed`
-  // outcome.
-  it("degrades to failed outcome (no throw) when manifest read throws", async () => {
-    const env = {
-      OPENCLAW_STATE: {
-        async get(): Promise<string | null> {
-          throw new Error("KV outage")
-        },
-        async put(): Promise<void> { /* no-op */ },
-        async delete(): Promise<void> { /* no-op */ },
-      },
-      GITHUB_APP_ID: "12345",
-      GITHUB_PRIVATE_KEY: "fake-key",
-    } as unknown as Env
-
-    const outcome = await updateWarmupStickyToReady({ env, ...baseArgs })
-    expect("failed" in outcome).toBe(true)
-    if ("failed" in outcome) {
-      expect(outcome.failed).toContain("KV outage")
-    }
-  })
-})
-
 describe("enqueueWarmupRerunsForIndex", () => {
-  it("enqueues pr-review-rerun for every open PR with the warmup sticky", async () => {
-    mockListOpenPullRequests.mockResolvedValue([
-      { number: 10 },
-      { number: 11 },
-      { number: 12 },
-    ])
-    // PR 10 has sticky, PR 11 doesn't, PR 12 has sticky.
+  it("for every open PR with the warmup callout, enqueues BOTH pr-review-rerun AND pr-overview", async () => {
+    mockListOpenPullRequests.mockResolvedValue([pr(10, "h10"), pr(11, "h11"), pr(12, "h12")])
+    // PR 10 has the new callout marker, PR 11 has nothing, PR 12 has the legacy marker.
     mockListIssueComments.mockImplementation(async (_o: string, _r: string, prNumber: number) => {
-      if (prNumber === 10) return [{ id: 1, body: `something ${WARMUP_MARKER}` }]
+      if (prNumber === 10) return [{ id: 1, body: `## Sigilix Overview\n> [!NOTE] ${WARMUP_CALLOUT_MARKER}\n> warming...` }]
       if (prNumber === 11) return [{ id: 2, body: "no marker" }]
-      if (prNumber === 12) return [{ id: 3, body: WARMUP_MARKER }]
+      if (prNumber === 12) return [{ id: 3, body: LEGACY_WARMUP_MARKER }]
       return []
     })
 
@@ -270,10 +100,54 @@ describe("enqueueWarmupRerunsForIndex", () => {
       runId: "run-abc",
     })
 
-    expect(result).toEqual({ enqueued: 2, scanned: 3 })
-    expect(sent).toHaveLength(2)
-    const numbers = sent.flatMap((m) => m.type === "pr-review-rerun" ? [m.prNumber] : [])
-    expect(numbers.sort()).toEqual([10, 12])
+    // 2 PRs match → 2 pr-review-rerun + 2 pr-overview enqueues = 4 total messages.
+    expect(result.enqueued).toBe(2)
+    expect(result.scanned).toBe(3)
+    expect(sent).toHaveLength(4)
+
+    const reruns = sent.filter((m) => m.type === "pr-review-rerun")
+    const overviews = sent.filter((m) => m.type === "pr-overview")
+    expect(reruns.map((m) => "prNumber" in m ? m.prNumber : null).sort()).toEqual([10, 12])
+    expect(overviews.map((m) => "prNumber" in m ? m.prNumber : null).sort()).toEqual([10, 12])
+
+    // The pr-overview messages carry the head SHA so the re-render
+    // can compute its own dedupe key.
+    const overviewHeads = overviews.map((m) => "headSha" in m ? m.headSha : null).sort()
+    expect(overviewHeads).toEqual(["h10", "h12"])
+  })
+
+  it("pr-review-rerun messages carry silent=true (no slash-command ack noise)", async () => {
+    mockListOpenPullRequests.mockResolvedValue([pr(10, "h10")])
+    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_CALLOUT_MARKER }])
+    const { env, sent } = makeEnv()
+    const client = new GitHubClient({ token: "t" })
+
+    await enqueueWarmupRerunsForIndex({
+      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-1",
+    })
+
+    const rerun = sent.find((m) => m.type === "pr-review-rerun")
+    expect(rerun).toBeDefined()
+    if (rerun && rerun.type === "pr-review-rerun") {
+      expect(rerun.silent).toBe(true)
+    }
+  })
+
+  it("skips pr-overview enqueue when the PR has no head SHA (defensive)", async () => {
+    mockListOpenPullRequests.mockResolvedValue([{ number: 10, head: { sha: "" } }])
+    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_CALLOUT_MARKER }])
+    const { env, sent } = makeEnv()
+    const client = new GitHubClient({ token: "t" })
+
+    await enqueueWarmupRerunsForIndex({
+      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-1",
+    })
+
+    // Rerun still fires; overview is skipped because headSha is missing.
+    expect(sent.filter((m) => m.type === "pr-review-rerun")).toHaveLength(1)
+    expect(sent.filter((m) => m.type === "pr-overview")).toHaveLength(0)
   })
 
   it("returns zero counts when listOpenPullRequests fails", async () => {
@@ -289,13 +163,10 @@ describe("enqueueWarmupRerunsForIndex", () => {
   })
 
   it("skips individual PR if listIssueComments fails for it (doesn't abort fan-out)", async () => {
-    mockListOpenPullRequests.mockResolvedValue([
-      { number: 10 },
-      { number: 11 },
-    ])
+    mockListOpenPullRequests.mockResolvedValue([pr(10, "h10"), pr(11, "h11")])
     mockListIssueComments.mockImplementation(async (_o: string, _r: string, prNumber: number) => {
       if (prNumber === 10) throw new Error("403 on PR 10")
-      return [{ id: 99, body: WARMUP_MARKER }]
+      return [{ id: 99, body: WARMUP_CALLOUT_MARKER }]
     })
 
     const { env, sent } = makeEnv()
@@ -305,11 +176,10 @@ describe("enqueueWarmupRerunsForIndex", () => {
       runId: "run-abc",
     })
 
-    expect(result).toEqual({ enqueued: 1, scanned: 2 })
-    expect(sent).toHaveLength(1)
-    if (sent[0]?.type === "pr-review-rerun") {
-      expect(sent[0].prNumber).toBe(11)
-    }
+    expect(result.enqueued).toBe(1)
+    expect(result.scanned).toBe(2)
+    // Only PR 11 produces messages: 1 rerun + 1 overview.
+    expect(sent).toHaveLength(2)
   })
 
   it("handles empty open-PR list", async () => {
@@ -326,11 +196,11 @@ describe("enqueueWarmupRerunsForIndex", () => {
 
   // M4 (CodeRabbit PR #80): the index-repo consumer retries on
   // transient failures; without a dedupe breadcrumb, a redelivered
-  // index-job would fan out a second batch of pr-review-rerun
-  // messages → every warmup PR would get a duplicate review.
+  // index-job would fan out a second batch of messages → every
+  // warmup PR would get a duplicate review.
   it("dedupes against queue-retry redelivery via runId-keyed KV breadcrumb", async () => {
-    mockListOpenPullRequests.mockResolvedValue([{ number: 10 }])
-    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_MARKER }])
+    mockListOpenPullRequests.mockResolvedValue([pr(10, "h10")])
+    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_CALLOUT_MARKER }])
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
 
@@ -338,24 +208,20 @@ describe("enqueueWarmupRerunsForIndex", () => {
       env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
       runId: "same-run-id",
     })
-    expect(first).toEqual({ enqueued: 1, scanned: 1 })
-    expect(sent).toHaveLength(1)
+    expect(first.enqueued).toBe(1)
+    expect(sent).toHaveLength(2) // 1 rerun + 1 overview
 
-    // Simulated queue redelivery — same runId, same args.
     const second = await enqueueWarmupRerunsForIndex({
       env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
       runId: "same-run-id",
     })
     expect(second).toEqual({ enqueued: 0, scanned: 0, skipped: "already-fanned-out" })
-    // Critically: no second fan-out happened.
-    expect(sent).toHaveLength(1)
-    // And the breadcrumb did NOT block listOpenPullRequests on the first call.
-    expect(mockListOpenPullRequests).toHaveBeenCalledTimes(1)
+    expect(sent).toHaveLength(2) // unchanged — second call short-circuited
   })
 
   it("re-fans-out when runId differs (genuine re-index → fresh dedupe key)", async () => {
-    mockListOpenPullRequests.mockResolvedValue([{ number: 10 }])
-    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_MARKER }])
+    mockListOpenPullRequests.mockResolvedValue([pr(10, "h10")])
+    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_CALLOUT_MARKER }])
     const { env, sent } = makeEnv()
     const client = new GitHubClient({ token: "t" })
 
@@ -368,7 +234,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
       runId: "run-two",
     })
 
-    // Two distinct runIds → two distinct breadcrumbs → both fan-outs fire.
-    expect(sent).toHaveLength(2)
+    // Two distinct runIds → 4 messages total (2 reruns + 2 overviews).
+    expect(sent).toHaveLength(4)
   })
 })

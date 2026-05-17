@@ -1,216 +1,52 @@
-// ARC-236 — cold-start warmup UX for the customer-ready indexing pipeline.
+// ARC-258 follow-up — unified warmup + overview sticky.
 //
-// When a customer installs Sigilix on a fresh repo, the install
-// webhook enqueues an `index-repo` job (ARC-234) that walks the tree
-// + chunks + embeds + upserts (ARC-235). That takes seconds to
-// minutes depending on repo size. If a PR webhook fires for the
-// repo BEFORE indexing completes, the ensemble's `retrieve_codebase`
-// returns zero chunks and the review degrades to diff-only with no
-// signal to the customer.
+// Historical context (ARC-236 + initial ARC-258 attempt):
+// Sigilix used to post TWO separate sticky comments on PRs when the
+// indexer hadn't yet produced a manifest:
+//   1. `<!-- sigilix:warmup -->` standalone "warming up" sticky from
+//      `postWarmupStickyIfUnindexed` (called at the head of every
+//      `pr-review` dispatch).
+//   2. `<!-- openclaw:pr-overview -->` overview sticky from
+//      `handlePrOverview` (called on PR opened/synchronize).
 //
-// This module surfaces that race + closes it:
-//   * `postWarmupStickyIfUnindexed` — at PR-review entry, check
-//     `repo-index-manifest:<repo>`; if missing, post a sticky comment
-//     telling the customer indexing is in flight. The review still
-//     proceeds (degraded but real).
-//   * `enqueueWarmupRerunsForIndex` — at index-job completion, list
-//     open PRs on the repo, filter to those carrying the warmup
-//     sticky, and enqueue a `pr-review-rerun` for each. The
-//     customer gets a fresh codebase-aware review automatically.
-//   * `updateWarmupStickyToReady` — after a successful review POST,
-//     update the sticky comment to "Index ready — see the full
-//     review below" so the customer knows the upgrade landed.
+// Founder caught the redundancy on PR #80: two stickies stacked at
+// the top of every PR for new installs, and CodeRabbit (the
+// inspiration) renders its equivalent as ONE comment that morphs
+// through states. The current model:
+//   * The pr-overview comment is the SOLE sticky.
+//   * When `repo-index-manifest:<repo>` is absent, the overview body
+//     gets a top "Sigilix is warming up its index for this repo"
+//     callout block carrying `WARMUP_CALLOUT_MARKER`.
+//   * When indexing completes (`enqueueWarmupRerunsForIndex` below),
+//     we fan out BOTH a `pr-review-rerun` (so the customer gets a
+//     codebase-aware review) AND a `pr-overview` refresh (so the
+//     callout is dropped from the body).
+//   * The legacy `<!-- sigilix:warmup -->` standalone sticky is
+//     one-way migrated → deleted on the next overview render via
+//     `deleteLegacyWarmupStickyIfPresent` in triage-pr-overview.ts.
 //
-// All three are best-effort: a KV/GitHub blip can't take down the
-// review pipeline. Telemetry events flow regardless.
+// All operations remain best-effort: a KV/GitHub blip can't take
+// down the review pipeline. Telemetry events flow regardless.
 
 import type { Env, JobMessage } from "../index"
 import { GitHubClient } from "./github"
-import { getInstallationToken } from "./github-app"
-import { readRepoIndexManifest } from "./repo-index-manifest"
-
-export const WARMUP_MARKER = "<!-- sigilix:warmup -->"
-
-const WARMUP_BODY_PENDING = [
-  WARMUP_MARKER,
-  "",
-  "**Sigilix is warming up its index for this repo.**",
-  "",
-  "This first review uses only the diff — cross-file context isn't available yet because indexing is still running. As soon as it completes, Sigilix will automatically re-review this PR with full codebase-aware retrieval.",
-].join("\n")
-
-const WARMUP_BODY_READY = [
-  WARMUP_MARKER,
-  "",
-  "**Index ready — see the full review below.**",
-  "",
-  "Sigilix has finished indexing this repo and re-reviewed this PR with full codebase-aware retrieval. The diff-only review above is superseded.",
-].join("\n")
-
-// ---------------------------------------------------------------------
-// Entry-time: post sticky if repo isn't indexed yet
-// ---------------------------------------------------------------------
-
-export interface PostWarmupStickyArgs {
-  env: Env
-  owner: string
-  repo: string
-  prNumber: number
-  installationId: number
-}
-
-export type WarmupStickyOutcome =
-  | { posted: "created"; commentId: number }
-  | { posted: "updated"; commentId: number }
-  | { skipped: "already-indexed" }
-  | { skipped: "missing-creds" }
-  | { failed: string }
 
 /**
- * Check whether the repo is indexed (per `repo-index-manifest:<repo>`).
- * If not, post / upsert the warmup sticky. Returns the outcome so
- * callers can include it in telemetry, but the PR-review pipeline
- * proceeds either way — a missing index just means the review will
- * be diff-only.
+ * Marker for the LEGACY standalone warmup sticky. Kept exported so
+ * the overview helper can find + delete any straggler on PRs that
+ * pre-date the unification. Do NOT post new comments with this
+ * marker — the overview comment now carries the warmup state.
  */
-export async function postWarmupStickyIfUnindexed(
-  args: PostWarmupStickyArgs,
-): Promise<WarmupStickyOutcome> {
-  const { env, owner, repo, prNumber, installationId } = args
-
-  const manifest = await readRepoIndexManifest(env, repo)
-  if (manifest.kind === "ok") {
-    return { skipped: "already-indexed" }
-  }
-
-  console.log(JSON.stringify({
-    event: "pr-review-warmup-detected",
-    owner, repo, pr_number: prNumber, installation_id: installationId,
-    manifest_kind: manifest.kind,
-  }))
-
-  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-    console.error(JSON.stringify({
-      event: "pr-review-warmup-skip-missing-creds",
-      owner, repo, pr_number: prNumber, installation_id: installationId,
-    }))
-    return { skipped: "missing-creds" }
-  }
-
-  try {
-    const token = await getInstallationToken({
-      kv: env.OPENCLAW_STATE,
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_PRIVATE_KEY,
-      installationId,
-    })
-    const client = new GitHubClient({ token })
-    const existing = await findWarmupComment(client, owner, repo, prNumber)
-    if (existing !== null) {
-      // Already posted — refresh to the pending body in case the
-      // previous run had replaced it with the "ready" copy (e.g.,
-      // rerun fired but ran against a stale index that's since been
-      // invalidated). Idempotent upsert.
-      await client.updateIssueComment(owner, repo, existing, WARMUP_BODY_PENDING)
-      console.log(JSON.stringify({
-        event: "pr-review-warmup-posted",
-        owner, repo, pr_number: prNumber, installation_id: installationId,
-        action: "updated", comment_id: existing,
-      }))
-      return { posted: "updated", commentId: existing }
-    }
-    const created = await client.createIssueComment(owner, repo, prNumber, WARMUP_BODY_PENDING)
-    console.log(JSON.stringify({
-      event: "pr-review-warmup-posted",
-      owner, repo, pr_number: prNumber, installation_id: installationId,
-      action: "created", comment_id: created.id,
-    }))
-    return { posted: "created", commentId: created.id }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(JSON.stringify({
-      event: "pr-review-warmup-post-failed",
-      owner, repo, pr_number: prNumber, installation_id: installationId,
-      err: message,
-    }))
-    return { failed: message }
-  }
-}
-
-// ---------------------------------------------------------------------
-// Exit-time: update sticky to "ready" after a successful review post
-// ---------------------------------------------------------------------
-
-export type UpdateWarmupOutcome =
-  | { updated: true; commentId: number }
-  | { skipped: "no-sticky" }
-  | { skipped: "not-yet-indexed" }
-  | { skipped: "missing-creds" }
-  | { failed: string }
+export const LEGACY_WARMUP_MARKER = "<!-- sigilix:warmup -->"
 
 /**
- * Best-effort update of the warmup sticky to the "ready" body after a
- * review has been posted. Only flips when the manifest now exists
- * (indexing has completed) — otherwise the review just posted was
- * diff-only and the sticky should stay in "warming up" state. Also
- * no-ops when the sticky doesn't exist (typical: PR opened after
- * indexing already completed). Called from the review pipelines'
- * success paths.
+ * Marker INSIDE the pr-overview body when the warmup callout block
+ * is rendered. Used here at fan-out time to detect which open PRs
+ * have an overview that still claims "warming up" and need their
+ * rerun fired post-indexing. Overview helper emits this string into
+ * the callout block when manifest is absent.
  */
-export async function updateWarmupStickyToReady(args: {
-  env: Env
-  owner: string
-  repo: string
-  prNumber: number
-  installationId: number
-}): Promise<UpdateWarmupOutcome> {
-  const { env, owner, repo, prNumber, installationId } = args
-  // CodeRabbit phase-end catch on PR #80: this helper is called on
-  // the success path AFTER `submitReview` lands. If it throws, the
-  // surrounding catch in the orchestrator marks an otherwise-
-  // successful review as `errored` and the dispatcher falls through
-  // to Phase 3, posting a duplicate review. Wrap the full body in
-  // try/catch so manifest/KV/network failures degrade to a `failed`
-  // outcome instead of escaping up the stack.
-  try {
-    // Gate on manifest existence. If we're still in the warmup
-    // window, the review just posted was diff-only — don't tell the
-    // customer indexing is ready.
-    const manifest = await readRepoIndexManifest(env, repo)
-    if (manifest.kind !== "ok") {
-      return { skipped: "not-yet-indexed" }
-    }
-    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
-      return { skipped: "missing-creds" }
-    }
-    const token = await getInstallationToken({
-      kv: env.OPENCLAW_STATE,
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_PRIVATE_KEY,
-      installationId,
-    })
-    const client = new GitHubClient({ token })
-    const existing = await findWarmupComment(client, owner, repo, prNumber)
-    if (existing === null) {
-      return { skipped: "no-sticky" }
-    }
-    await client.updateIssueComment(owner, repo, existing, WARMUP_BODY_READY)
-    console.log(JSON.stringify({
-      event: "pr-review-warmup-completed",
-      owner, repo, pr_number: prNumber, installation_id: installationId,
-      comment_id: existing,
-    }))
-    return { updated: true, commentId: existing }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(JSON.stringify({
-      event: "pr-review-warmup-update-failed",
-      owner, repo, pr_number: prNumber, installation_id: installationId,
-      err: message,
-    }))
-    return { failed: message }
-  }
-}
+export const WARMUP_CALLOUT_MARKER = "<!-- sigilix:warmup-callout -->"
 
 // ---------------------------------------------------------------------
 // Index-job-completed: fan out reruns for PRs that warmed up
@@ -218,11 +54,21 @@ export async function updateWarmupStickyToReady(args: {
 
 /**
  * After an `index-repo` job's final shard writes the manifest, scan
- * open PRs in the repo and enqueue a `pr-review-rerun` for each PR
- * that has a warmup sticky. Returns the enqueue count for telemetry.
+ * open PRs in the repo and enqueue:
+ *
+ *   - a `pr-review-rerun` for each PR whose overview body shows the
+ *     warmup callout (or legacy standalone sticky — backward-compat
+ *     during migration). The customer gets a fresh codebase-aware
+ *     review automatically.
+ *   - a `pr-overview` for the same PRs so the overview re-renders
+ *     with `warmup === "none"` and the callout disappears.
  *
  * Called from `handleIndexRepoJob`'s success path with an
  * already-built client to avoid a second installation-token mint.
+ *
+ * Returns the enqueue count for telemetry. Best-effort throughout:
+ * any failure logs + continues, never throws (indexer's queue
+ * handler would otherwise retry the entire index job).
  */
 export async function enqueueWarmupRerunsForIndex(args: {
   env: Env
@@ -284,7 +130,7 @@ export async function enqueueWarmupRerunsForIndex(args: {
     }))
   }
 
-  let openPrs: Array<{ number: number }>
+  let openPrs: Array<{ number: number; head: { sha: string } }>
   try {
     openPrs = await client.listOpenPullRequests(owner, repo)
   } catch (err) {
@@ -299,9 +145,9 @@ export async function enqueueWarmupRerunsForIndex(args: {
   let enqueued = 0
   for (const pr of openPrs) {
     if (typeof pr.number !== "number") continue
-    let hasSticky = false
+    let needsRerun = false
     try {
-      hasSticky = await prHasWarmupSticky(client, owner, repo, pr.number)
+      needsRerun = await prHasWarmupState(client, owner, repo, pr.number)
     } catch (err) {
       // List-issue-comments failure for one PR shouldn't abort the
       // whole fan-out. Log + skip + continue.
@@ -312,19 +158,25 @@ export async function enqueueWarmupRerunsForIndex(args: {
       }))
       continue
     }
-    if (!hasSticky) continue
+    if (!needsRerun) continue
+
+    // Enqueue both the rerun (refreshes the code review with
+    // retrieval) AND the overview refresh (drops the warmup
+    // callout from the unified sticky). Both are best-effort; one
+    // failing doesn't block the other.
+    const headSha = pr.head?.sha
     try {
       // code-reviewer M1 catch on PR #80: silent=true so the rerun
       // handler skips the slash-command ack comment. The customer
       // didn't type `/sigilix review` — these reruns are automatic
       // post-indexing and shouldn't generate unsolicited noise on
       // every open PR.
-      const message: JobMessage = {
+      const reviewMessage: JobMessage = {
         type: "pr-review-rerun",
         owner, repo, prNumber: pr.number, installationId,
         silent: true,
       }
-      await env.OPENCLAW_JOBS.send(message)
+      await env.OPENCLAW_JOBS.send(reviewMessage)
       enqueued += 1
       console.log(JSON.stringify({
         event: "pr-review-warmup-rerun-enqueued",
@@ -337,6 +189,29 @@ export async function enqueueWarmupRerunsForIndex(args: {
         err: err instanceof Error ? err.message : String(err),
       }))
     }
+    // The overview refresh requires headSha; PRs without one are
+    // skipped silently — they'd fail downstream anyway when the
+    // overview handler couldn't compute its dedupe key.
+    if (typeof headSha === "string" && headSha.length > 0) {
+      try {
+        const overviewMessage: JobMessage = {
+          type: "pr-overview",
+          owner, repo, prNumber: pr.number, headSha, installationId,
+        }
+        await env.OPENCLAW_JOBS.send(overviewMessage)
+        console.log(JSON.stringify({
+          event: "pr-overview-warmup-refresh-enqueued",
+          owner, repo, pr_number: pr.number, installation_id: installationId,
+          head_sha: headSha.slice(0, 7),
+        }))
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-overview-warmup-refresh-enqueue-failed",
+          owner, repo, pr_number: pr.number, installation_id: installationId,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
   }
   console.log(JSON.stringify({
     event: "pr-review-warmup-rerun-fanout-done",
@@ -346,26 +221,23 @@ export async function enqueueWarmupRerunsForIndex(args: {
   return { enqueued, scanned: openPrs.length }
 }
 
-// ---------------------------------------------------------------------
-// Shared comment-scan helper
-// ---------------------------------------------------------------------
-
-async function findWarmupComment(
-  client: GitHubClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-): Promise<number | null> {
-  const items = await client.listIssueComments(owner, repo, prNumber)
-  const hit = items.find((c) => typeof c.body === "string" && c.body.includes(WARMUP_MARKER))
-  return hit ? hit.id : null
-}
-
-async function prHasWarmupSticky(
+/**
+ * True if any comment on this PR carries either the new warmup
+ * callout marker (inside the overview body) or the legacy standalone
+ * sticky marker (pre-unification PRs). Either signal means this PR
+ * was opened against an un-indexed repo and should get the rerun
+ * fan-out when indexing finishes.
+ */
+async function prHasWarmupState(
   client: GitHubClient,
   owner: string,
   repo: string,
   prNumber: number,
 ): Promise<boolean> {
-  return (await findWarmupComment(client, owner, repo, prNumber)) !== null
+  const items = await client.listIssueComments(owner, repo, prNumber)
+  return items.some(
+    (c) => typeof c.body === "string" && (
+      c.body.includes(WARMUP_CALLOUT_MARKER) || c.body.includes(LEGACY_WARMUP_MARKER)
+    ),
+  )
 }

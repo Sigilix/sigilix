@@ -51,7 +51,6 @@ import {
   renderStackContextSummary,
 } from "../prompts/pr-stack-prompt"
 import { handleStaleHead } from "./stale-head"
-import { updateWarmupStickyToReady } from "./warmup"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -424,14 +423,12 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
     )
 
-    // ARC-236: flip the warmup sticky to "ready" after a successful
-    // submit. Helper gates on `repo-index-manifest:<repo>` existence
-    // so the flip only happens when retrieval was actually
-    // available — a still-warming review keeps the "warming up"
-    // sticky and waits for the rerun.
-    await updateWarmupStickyToReady({
-      env, owner, repo, prNumber, installationId,
-    })
+    // ARC-258 follow-up: warmup "ready" signaling is no longer a
+    // separate sticky flip. The pr-overview comment carries the
+    // warmup callout when manifest is absent; the rerun fan-out at
+    // `enqueueWarmupRerunsForIndex` re-fires both pr-review and
+    // pr-overview after indexing completes, so the callout drops
+    // organically when the overview re-renders.
 
     // ARC-184: write the review manifest. Best-effort — never blocks
     // the review flow. Captures the inputs we reviewed against

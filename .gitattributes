@@ -1,0 +1,12 @@
+# Force TypeScript + JavaScript source as text. PR #76 shipped
+# `src/lib/indexer.ts` with literal NUL bytes inside template-string
+# separators (since fixed in PR #77); without this override git
+# autodetected the file as binary and refused conflict resolution on
+# any merge involving it.
+*.ts text
+*.tsx text
+*.mjs text
+*.js text
+*.json text
+*.md text
+*.toml text

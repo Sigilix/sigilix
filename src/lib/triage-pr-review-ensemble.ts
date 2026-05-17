@@ -78,6 +78,8 @@ import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
   loadSigilixConfig,
+  passesLabelGate,
+  resolveCostControlsConfig,
   resolveCommandConfig,
   resolveAstRulesConfig,
   type SigilixConfig,
@@ -523,6 +525,30 @@ export async function handlePrReviewEnsemble(
     // before packing decides what to send to specialists.
     const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
 
+    // ARC-273: label gate. When the operator configures
+    // `costControls.runOnLabels`, pr-review only fires on PRs
+    // carrying at least one of those labels. Empty config = no
+    // gating (current behavior). Returns `skipped` so the
+    // dispatcher-owned Check Run completes as `neutral` rather
+    // than misclassifying as a failed review.
+    const costControls = resolveCostControlsConfig(sigilixConfig)
+    if (costControls.runOnLabels.length > 0) {
+      const labelNames = (meta.labels ?? [])
+        .map((l) => l.name)
+        .filter((n): n is string => typeof n === "string")
+      if (!passesLabelGate(labelNames, costControls.runOnLabels)) {
+        console.log(JSON.stringify({
+          event: "pr-review-skipped",
+          reason: "label-gate",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          pr_labels: labelNames,
+          run_on_labels: [...costControls.runOnLabels],
+        }))
+        telemetry.fellBackReason = "label_gate_skip"
+        return finalize(telemetry, env, "skipped", cache)
+      }
+    }
+
     // ARC-192 + ARC-176: hunk-level diff packing with config-aware
     // filtering. Split the diff by file, drop files matched by
     // `sigilixConfig.pathFilters` (lockfiles, generated content, etc.
@@ -544,9 +570,37 @@ export async function handlePrReviewEnsemble(
     const { batches, droppedTooLarge } = packFilesIntoBatches(filesAfterFilter)
     const reviewedFiles = batches[0] ?? []
     const filesNotReviewed: string[] = batches.slice(1).flatMap((b) => b.map((f) => f.path))
-    const diff = reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0
+    const baseDiff = reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0
       ? fullDiff
       : batchToDiff(reviewedFiles)
+    // ARC-273: hard cap on the diff string passed to specialists.
+    // `packFilesIntoBatches` already bounds total-file budget; this
+    // is a belt-and-suspenders char-level cap for pathological cases
+    // (one enormous file, or operator-narrowed budget). Truncates
+    // from the END so the diff header + leading hunks survive. A
+    // trailing sentinel notes the truncation so the model knows it
+    // didn't see everything.
+    //
+    // code-reviewer M1 catch: `slice(0, negative)` would silently
+    // produce an empty string if the operator set `maxPatchLength`
+    // below the sentinel length. `MAX_PATCH_LENGTH_MIN = 1_000`
+    // makes that impossible today, but the relationship is implicit
+    // — `Math.max(0, …)` codifies the invariant defensively.
+    const PATCH_TRUNCATION_NOTE = "\n\n[…diff truncated to costControls.maxPatchLength…]"
+    const wasTruncated = baseDiff.length > costControls.maxPatchLength
+    const diff = wasTruncated
+      ? baseDiff.slice(0, Math.max(0, costControls.maxPatchLength - PATCH_TRUNCATION_NOTE.length)) +
+        PATCH_TRUNCATION_NOTE
+      : baseDiff
+    if (wasTruncated) {
+      console.log(JSON.stringify({
+        event: "pr-review-diff-truncated",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        original_chars: baseDiff.length,
+        max_patch_length: costControls.maxPatchLength,
+        final_chars: diff.length,
+      }))
+    }
 
     telemetry.diffPacking = {
       diffTokensEstimated: estimateTokens(fullDiff),
@@ -556,6 +610,11 @@ export async function handlePrReviewEnsemble(
       filesDroppedTooLarge: droppedTooLarge,
       filesNotReviewed,
       ...(filesDroppedByFilter.length > 0 ? { filesDroppedByFilter } : {}),
+      // ARC-273 (code-reviewer M2 catch): when the char-level cap
+      // truncated the post-packing diff, surface the post-truncation
+      // size so operators can correlate "diff packing said X files
+      // reviewed" with "model actually saw Y chars."
+      ...(wasTruncated ? { diffTruncatedToChars: diff.length } : {}),
     }
 
     const reviewable = parseDiffToReviewablePositions(diff)
@@ -2824,6 +2883,12 @@ interface EnsembleTelemetry {
      * we filtered lets them spot accidental over-exclusion.
      */
     filesDroppedByFilter?: string[]
+    /**
+     * ARC-273: when the char-level cap `costControls.maxPatchLength`
+     * truncated the post-packing diff, this records the final size
+     * the model actually saw. Absent when no truncation fired.
+     */
+    diffTruncatedToChars?: number
   }
   /**
    * ARC-193: deterministic regex check telemetry. `hits` are the

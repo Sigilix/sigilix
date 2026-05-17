@@ -10,8 +10,10 @@ import { describe, it, expect, vi } from "vitest"
 import {
   parseSigilixConfig,
   parseSigilixConfigDetailed,
+  passesLabelGate,
   resolveCommandConfig,
   resolveAstRulesConfig,
+  resolveCostControlsConfig,
   resolveSarifEvidenceConfig,
   loadSigilixConfig,
   EMPTY_CONFIG,
@@ -850,5 +852,107 @@ describe("resolveSarifEvidenceConfig (ARC-188)", () => {
     })
     expect(out.disabledRules).toEqual(["a", "b"])
     expect(out.disabledCategories).toEqual(["license"])
+  })
+})
+
+// ARC-273 — cost controls
+describe("parseSigilixConfig — costControls", () => {
+  it("parses maxPatchLength when in valid range", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: { maxPatchLength: 50_000 } }))
+    expect(cfg?.costControls?.maxPatchLength).toBe(50_000)
+  })
+
+  it("rounds non-integer maxPatchLength values", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: { maxPatchLength: 50_000.7 } }))
+    expect(cfg?.costControls?.maxPatchLength).toBe(50_001)
+  })
+
+  it("drops maxPatchLength below the floor", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: { maxPatchLength: 500 } }))
+    expect(cfg?.costControls?.maxPatchLength).toBeUndefined()
+  })
+
+  it("drops maxPatchLength above the ceiling", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: { maxPatchLength: 500_000 } }))
+    expect(cfg?.costControls?.maxPatchLength).toBeUndefined()
+  })
+
+  it("drops non-numeric maxPatchLength entirely", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: { maxPatchLength: "many" } }))
+    expect(cfg?.costControls?.maxPatchLength).toBeUndefined()
+  })
+
+  it("parses runOnLabels — trims, drops empties, dedupes", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({
+      costControls: { runOnLabels: ["sigilix:review", "  needs-review  ", "", "sigilix:review", "ok"] },
+    }))
+    expect(cfg?.costControls?.runOnLabels?.sort()).toEqual(["needs-review", "ok", "sigilix:review"])
+  })
+
+  it("drops runOnLabels when every entry is non-string", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: { runOnLabels: [1, 2, null] } }))
+    expect(cfg?.costControls?.runOnLabels).toBeUndefined()
+  })
+
+  it("drops costControls entirely when nothing valid is present", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: { maxPatchLength: -5, runOnLabels: [] } }))
+    expect(cfg?.costControls).toBeUndefined()
+  })
+
+  it("returns null (not throw) on malformed costControls block", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ costControls: "oops" }))
+    // costControls is dropped silently — top-level config still valid.
+    expect(cfg).not.toBeNull()
+    expect(cfg?.costControls).toBeUndefined()
+  })
+})
+
+describe("resolveCostControlsConfig", () => {
+  it("returns defaults when no config is set", () => {
+    const out = resolveCostControlsConfig(null)
+    expect(out.maxPatchLength).toBeGreaterThanOrEqual(1_000)
+    expect(out.runOnLabels).toEqual([])
+  })
+
+  it("returns defaults when costControls is absent", () => {
+    const out = resolveCostControlsConfig({})
+    expect(out.maxPatchLength).toBeGreaterThanOrEqual(1_000)
+    expect(out.runOnLabels).toEqual([])
+  })
+
+  it("honors operator overrides", () => {
+    const out = resolveCostControlsConfig({
+      costControls: { maxPatchLength: 25_000, runOnLabels: ["needs-review"] },
+    })
+    expect(out.maxPatchLength).toBe(25_000)
+    expect(out.runOnLabels).toEqual(["needs-review"])
+  })
+})
+
+describe("passesLabelGate", () => {
+  it("returns true when runOnLabels is empty (no gating)", () => {
+    expect(passesLabelGate([], [])).toBe(true)
+    expect(passesLabelGate(["random"], [])).toBe(true)
+  })
+
+  it("returns false when PR has no labels but gate requires one", () => {
+    expect(passesLabelGate([], ["sigilix:review"])).toBe(false)
+  })
+
+  it("returns true when PR carries a required label", () => {
+    expect(passesLabelGate(["bug", "sigilix:review"], ["sigilix:review"])).toBe(true)
+  })
+
+  it("returns false when PR carries different labels than required", () => {
+    expect(passesLabelGate(["bug", "feature"], ["sigilix:review"])).toBe(false)
+  })
+
+  it("matches case-insensitively (GitHub labels are case-sensitive but operators don't always match casing)", () => {
+    expect(passesLabelGate(["Needs-Review"], ["needs-review"])).toBe(true)
+    expect(passesLabelGate(["needs-review"], ["NEEDS-REVIEW"])).toBe(true)
+  })
+
+  it("passes when ANY required label matches (OR semantics, not AND)", () => {
+    expect(passesLabelGate(["needs-review"], ["needs-review", "sigilix:review"])).toBe(true)
   })
 })

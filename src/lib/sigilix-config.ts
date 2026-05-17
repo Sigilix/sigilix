@@ -191,6 +191,42 @@ export interface SigilixConfig {
    *   ]
    */
   customLabels?: Array<{ name: string; description: string }>
+  /**
+   * ARC-273: operator-tunable cost controls. Pre-customer this is a
+   * polish surface; for repos with very large PRs or strict budget
+   * discipline it's the difference between "review is automatic" and
+   * "review eats our Ollama quota."
+   *
+   * Fields (all optional):
+   *   - `maxPatchLength`: hard cap (chars) on the diff string passed
+   *     to specialists. Truncates from the END (preserves header +
+   *     leading hunks). Defaults to a generous internal value
+   *     (resolved by `resolveCostControlsConfig`); explicit caps
+   *     between 1_000 and 200_000 chars are accepted, others fall
+   *     back to default.
+   *   - `runOnLabels`: when non-empty, pr-review fires ONLY for PRs
+   *     carrying at least one of these label names. Empty / absent
+   *     = no gating (current behavior). Useful for opt-in cost
+   *     control on monorepos where most PRs don't need review.
+   *
+   * `pathFilters` (existing, ARC-176) already covers include/exclude
+   * globs and is the path-scoping surface — `costControls` does NOT
+   * duplicate it.
+   *
+   * Validation: bounds-checked + defensively parsed. Bad values are
+   * dropped silently (fail-open) so a config typo doesn't disable
+   * review.
+   *
+   * Example:
+   *   "costControls": {
+   *     "maxPatchLength": 75000,
+   *     "runOnLabels": ["sigilix:review"]
+   *   }
+   */
+  costControls?: {
+    maxPatchLength?: number
+    runOnLabels?: string[]
+  }
 }
 
 /**
@@ -663,7 +699,86 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (labels.length > 0) out.customLabels = labels
   }
+  // ARC-273: costControls parsing. Strict bounds on numbers + string
+  // arrays; bad entries dropped silently (fail-open per the existing
+  // sigilix-config convention).
+  if (obj.costControls && typeof obj.costControls === "object" && !Array.isArray(obj.costControls)) {
+    const ccIn = obj.costControls as Record<string, unknown>
+    const ccOut: NonNullable<SigilixConfig["costControls"]> = {}
+    if (typeof ccIn.maxPatchLength === "number" && Number.isFinite(ccIn.maxPatchLength)) {
+      const v = Math.round(ccIn.maxPatchLength)
+      if (v >= MAX_PATCH_LENGTH_MIN && v <= MAX_PATCH_LENGTH_MAX) {
+        ccOut.maxPatchLength = v
+      }
+    }
+    if (Array.isArray(ccIn.runOnLabels)) {
+      const labels = [...new Set(
+        ccIn.runOnLabels
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      if (labels.length > 0) ccOut.runOnLabels = labels
+    }
+    if (Object.keys(ccOut).length > 0) out.costControls = ccOut
+  }
   return { ok: true, config: out }
+}
+
+// ─── ARC-273: cost control resolution ────────────────────────────────
+
+/**
+ * Default cap for the per-review diff payload. Generous enough that
+ * typical PRs aren't truncated (median Sigilix PR diff is ~10-25 KB),
+ * tight enough that pathological large-rename PRs don't blow through
+ * the model's context.
+ *
+ * Operators tune via `costControls.maxPatchLength`; the parser
+ * accepts values in [MIN, MAX] (see constants below).
+ */
+const DEFAULT_MAX_PATCH_LENGTH = 80_000
+const MAX_PATCH_LENGTH_MIN = 1_000
+const MAX_PATCH_LENGTH_MAX = 200_000
+
+export interface ResolvedCostControls {
+  maxPatchLength: number
+  /** When non-empty, pr-review only runs for PRs carrying at least
+   *  one of these labels. Empty = no gating. */
+  runOnLabels: readonly string[]
+}
+
+/**
+ * ARC-273: resolve cost-control config to a fully-locked shape with
+ * defaults filled in. Pure; never throws.
+ */
+export function resolveCostControlsConfig(
+  config: SigilixConfig | null,
+): ResolvedCostControls {
+  const cc = config?.costControls
+  return {
+    maxPatchLength: cc?.maxPatchLength ?? DEFAULT_MAX_PATCH_LENGTH,
+    runOnLabels: cc?.runOnLabels ?? [],
+  }
+}
+
+/**
+ * ARC-273: label-gate decision. Returns `true` when the PR should
+ * be reviewed given its current label set + the operator's
+ * `runOnLabels` config. When `runOnLabels` is empty, always returns
+ * `true` (current behavior preserved for repos without config).
+ *
+ * Case-insensitive name match (GitHub label names are case-sensitive
+ * at the API level but operators don't always match casing exactly).
+ *
+ * Pure; exported for unit tests.
+ */
+export function passesLabelGate(
+  labels: ReadonlyArray<string>,
+  runOnLabels: ReadonlyArray<string>,
+): boolean {
+  if (runOnLabels.length === 0) return true
+  const labelSet = new Set(labels.map((l) => l.toLowerCase()))
+  return runOnLabels.some((g) => labelSet.has(g.toLowerCase()))
 }
 
 /** Pure clamp helper for the reviewMemory numeric fields. */

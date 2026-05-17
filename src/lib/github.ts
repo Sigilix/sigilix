@@ -104,6 +104,94 @@ export class GitHubClient {
   }
 
   /**
+   * ARC-235: fetch top-level repository metadata. The ARC-235 indexer
+   * uses this for the default-branch name (the consumer then resolves
+   * branch → commit SHA + tree SHA via `getBranch`). Returns null on
+   * 404 so the consumer can ack and skip without retrying.
+   */
+  async getRepository(
+    owner: string,
+    repo: string,
+  ): Promise<{ default_branch: string } | null> {
+    try {
+      const res = await this.restGet<{ default_branch?: string }>(
+        `/repos/${owner}/${repo}`,
+      )
+      if (typeof res.default_branch !== "string" || res.default_branch.length === 0) {
+        return null
+      }
+      return { default_branch: res.default_branch }
+    } catch (error) {
+      if (error instanceof GitHubHttpError && error.status === 404) return null
+      throw error
+    }
+  }
+
+  /**
+   * ARC-235: fetch a branch's tip commit SHA AND tree SHA.
+   *
+   * Codex v2 BLOCKING B1: the GitHub Trees endpoint expects a TREE
+   * SHA, not a commit SHA. The earlier draft conflated the two and
+   * would have produced 404s at scale. Now we return both so callers
+   * can pin `headSha` (commit) for file-content fetches + freshness +
+   * runId derivation, and `treeSha` for the `getRepoTree` walk.
+   */
+  async getBranch(
+    owner: string,
+    repo: string,
+    branch: string,
+  ): Promise<{ headSha: string; treeSha: string } | null> {
+    try {
+      const res = await this.restGet<{
+        commit?: { sha?: string; commit?: { tree?: { sha?: string } } }
+      }>(
+        `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
+      )
+      const headSha = res.commit?.sha
+      const treeSha = res.commit?.commit?.tree?.sha
+      if (typeof headSha !== "string" || typeof treeSha !== "string") return null
+      if (headSha.length === 0 || treeSha.length === 0) return null
+      return { headSha, treeSha }
+    } catch (error) {
+      if (error instanceof GitHubHttpError && error.status === 404) return null
+      throw error
+    }
+  }
+
+  /**
+   * ARC-235: walk a git tree object recursively. GitHub truncates
+   * responses at ~100,000 entries or 7 MB and sets `truncated: true`
+   * on the response. The indexer treats truncated trees as a refusal
+   * (no manifest written, no partial index) because a partial index
+   * looks authoritative to retrieval and silently misses parts of the
+   * repo — Codex v2 BLOCKING from the design review.
+   */
+  async getRepoTree(
+    owner: string,
+    repo: string,
+    treeSha: string,
+  ): Promise<{
+    tree: Array<{ path?: string; type?: string; sha?: string; size?: number }>
+    truncated: boolean
+  } | null> {
+    try {
+      const res = await this.restGet<{
+        tree?: Array<{ path?: string; type?: string; sha?: string; size?: number }>
+        truncated?: boolean
+      }>(
+        `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`,
+      )
+      return {
+        tree: Array.isArray(res.tree) ? res.tree : [],
+        truncated: res.truncated === true,
+      }
+    } catch (error) {
+      if (error instanceof GitHubHttpError && error.status === 404) return null
+      throw error
+    }
+  }
+
+  /**
    * List the files changed in a PR. Pages until either `maxFiles` is
    * collected OR no more pages — does NOT continue past `maxFiles` to
    * compute the total. Total file count comes from `changed_files` in

@@ -191,6 +191,16 @@ describe("scopedDiffFromMisses", () => {
     expect(out).toContain("[Files changed but no patch available")
     expect(out).toContain("- binary.png (modified)")
   })
+
+  // CodeRabbit MAJOR catch on PR #81 — the all-hit case (every file
+  // served from cache) is the cache's whole point. Must NOT fall
+  // back to the full diff; should emit a minimal placeholder so
+  // PR-level summary/confidence/bullets still regenerate cheaply.
+  it("returns a minimal placeholder when all files are cache hits (misses is empty)", () => {
+    const out = scopedDiffFromMisses([], "FULL DIFF HERE")
+    expect(out).not.toBe("FULL DIFF HERE")
+    expect(out).toContain("All file rows were served from the walkthrough cache")
+  })
 })
 
 describe("mergeCachedAndFreshRows", () => {

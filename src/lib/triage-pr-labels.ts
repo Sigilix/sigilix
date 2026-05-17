@@ -61,13 +61,30 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
     return
   }
 
-  const token = await getInstallationToken({
-    kv: env.OPENCLAW_STATE,
-    appId: env.GITHUB_APP_ID,
-    privateKey: env.GITHUB_PRIVATE_KEY,
-    installationId,
-  })
-  const client = new GitHubClient({ token })
+  // CodeRabbit catch on PR #81: a rejection from getInstallationToken
+  // would escape `handlePrLabels` and bypass the rest of the
+  // best-effort failure pattern (logged skip + clean return). Wrap
+  // explicitly. Token-mint failures are typically auth/permissions
+  // misconfigurations — surface them in telemetry instead of
+  // propagating up the queue handler.
+  let client: GitHubClient
+  try {
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    client = new GitHubClient({ token })
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-labels-skipped",
+      reason: "token-fetch-failed",
+      ...tag,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return
+  }
 
   // 1. Load sigilix.json — zero behavior change for repos without
   //    `customLabels` configured.

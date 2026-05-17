@@ -448,21 +448,32 @@ export function scopedDiffFromMisses(
   misses: ReadonlyArray<{ filename: string; patch?: string; status?: string }>,
   fallbackDiff: string,
 ): string {
+  // CodeRabbit MAJOR catch on PR #81: all-hit case. When `misses` is
+  // empty, every file's row came from cache — we should NOT feed the
+  // full PR diff to the model (defeats the cost-saving purpose). The
+  // model still needs SOME diff context for the cumulative
+  // `summary`/`confidence`/`bullets`, but those are PR-level fields
+  // and a short placeholder is enough — the model has commit
+  // messages + PR title/body from the rest of the prompt.
+  if (misses.length === 0) {
+    return "[All file rows were served from the walkthrough cache; no fresh per-file patches needed.]"
+  }
   const withPatch = misses.filter(
     (f): f is { filename: string; patch: string; status?: string } =>
       typeof f.patch === "string" && f.patch.length > 0,
   )
   if (withPatch.length === 0) {
-    // code-reviewer L3 catch: every miss is binary / >500KB / patch
-    // missing. Fall back to the full diff — review still runs but the
-    // cache's cost-saving purpose is defeated for this run.
-    if (misses.length > 0) {
-      console.log(JSON.stringify({
-        event: "pr-overview-scoped-diff-fellback-to-full",
-        miss_count: misses.length,
-        reason: "no-patches-available",
-      }))
-    }
+    // code-reviewer L3 catch (commit 1): every miss is binary /
+    // >500KB / patch missing. Fall back to the full diff — review
+    // still runs but the cache's cost-saving purpose is defeated for
+    // this run. Distinct from the misses.length === 0 path above:
+    // here the misses are REAL changes that simply don't have a
+    // textual diff, so we need the full context.
+    console.log(JSON.stringify({
+      event: "pr-overview-scoped-diff-fellback-to-full",
+      miss_count: misses.length,
+      reason: "no-patches-available",
+    }))
     return fallbackDiff
   }
   const blocks = withPatch.map(

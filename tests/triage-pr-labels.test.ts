@@ -369,6 +369,21 @@ describe("handlePrLabels — stale-head guard", () => {
 })
 
 describe("handlePrLabels — error paths", () => {
+  // CodeRabbit nitpick catch on PR #81: lock the best-effort behavior
+  // when the installation-token mint rejects. Previously the rejection
+  // escaped the handler unchecked.
+  it("swallows installation-token fetch failures cleanly", async () => {
+    mockGetInstallationToken.mockRejectedValueOnce(new Error("token mint failed"))
+    mockGetFileContent.mockResolvedValue(JSON.stringify({
+      customLabels: [{ name: "x", description: "y" }],
+    }))
+    const { kv } = makeKvStub()
+    await expect(handlePrLabels({ ...baseArgs, env: makeEnv(kv) })).resolves.toBeUndefined()
+    expect(mockGetFileContent).not.toHaveBeenCalled() // bailed before config load
+    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
+  })
+
   it("swallows Ollama failures and exits cleanly", async () => {
     mockGetFileContent.mockResolvedValue(JSON.stringify({
       customLabels: [{ name: "x", description: "y" }],

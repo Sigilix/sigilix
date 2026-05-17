@@ -154,6 +154,25 @@ describe("formatOverviewComment", () => {
     expect(md).toContain("- one")
     expect(md).toContain("- two")
   })
+
+  // Founder pivot (2026-05-17): the "[!NOTE] Sigilix is warming up
+  // its index..." callout that briefly shipped on PR #80 was pulled
+  // — too noisy on cold-install PRs. The marker stays (so the rerun
+  // fan-out can still grep PRs that need post-indexing re-review)
+  // but the customer-visible text is gone.
+  it("emits the warmup callout marker (no visible text) when warmup is pending", async () => {
+    const { WARMUP_CALLOUT_MARKER } = await import("../src/lib/warmup")
+    const md = formatOverviewComment({ verdict, isFirstRun: true, warmup: "pending" })
+    expect(md).toContain(WARMUP_CALLOUT_MARKER) // marker present (for rerun detection)
+    expect(md).not.toContain("[!NOTE]") // no visible callout block
+    expect(md).not.toContain("Sigilix is warming up its index") // no visible header
+    expect(md).not.toContain("cross-file context isn't available") // no visible body
+  })
+
+  it("omits the warmup marker entirely when warmup is none", () => {
+    const md = formatOverviewComment({ verdict, isFirstRun: true, warmup: "none" })
+    expect(md).not.toContain("sigilix:warmup-callout")
+  })
 })
 
 // ARC-263 — walkthrough caching helpers

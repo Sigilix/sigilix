@@ -114,4 +114,25 @@ describe("dispatchJob — ARC-250 stale-head short-circuit", () => {
     expect(handlePrReviewMock).toHaveBeenCalledTimes(1)
     expect(handlePrReviewEnsembleMock).toHaveBeenCalledTimes(1)
   })
+
+  // CR PR #75 nit: confirm the asymmetry documented in
+  // src/index.ts ensemble-shadow branch holds: only `stale_head` from
+  // Phase 3 short-circuits the shadow run; other non-posted statuses
+  // (`skipped` from dedupe, `errored` from internal failures) still
+  // run the shadow ensemble so paired-run telemetry continuity
+  // (Phase 4b shadow analysis) is preserved.
+  it.each(["skipped" as const, "stale_head" as const, "posted" as const])(
+    "ensemble-shadow: shadow ensemble runs unless Phase 3 returns stale_head (status=%s)",
+    async (phase3Status) => {
+      routeReviewMock.mockResolvedValue({ primary: "ensemble-shadow" })
+      handlePrReviewMock.mockResolvedValue({ status: phase3Status })
+      handlePrReviewEnsembleMock.mockResolvedValue({ status: "shadow_recorded", telemetry: {} })
+
+      await dispatchJob(job, makeEnv())
+
+      expect(handlePrReviewMock).toHaveBeenCalledTimes(1)
+      const expectedEnsembleCalls = phase3Status === "stale_head" ? 0 : 1
+      expect(handlePrReviewEnsembleMock).toHaveBeenCalledTimes(expectedEnsembleCalls)
+    },
+  )
 })

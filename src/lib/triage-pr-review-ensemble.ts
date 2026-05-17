@@ -1221,8 +1221,22 @@ export async function handlePrReviewEnsemble(
       // ARC-194 (moved here in ARC-250): record `lastReviewedSha`
       // only after a confirmed GitHub submit. Previously this fired
       // before guard #2 — a stale-head skip still marked the SHA
-      // reviewed, corrupting the next push's compare-diff. Best-effort.
-      await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
+      // reviewed, corrupting the next push's compare-diff.
+      //
+      // CodeRabbit PR #75 catch: a KV failure here MUST NOT bubble
+      // out as `errored`. The customer-facing review has already
+      // been submitted; an outer-catch `errored` would make
+      // `dispatchJob` fall back to Phase 3 and post a SECOND review
+      // on the same head. Best-effort: swallow + log instead.
+      try {
+        await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-last-reviewed-sha-write-failed",
+          owner, repo, prNumber, headSha,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
@@ -1284,9 +1298,20 @@ export async function handlePrReviewEnsemble(
         modelId: "ensemble-synth",
         reviewId: submittedFallback.id,
       })
-      // ARC-194 (moved here in ARC-250): mirror the primary submit path
-      // — only mark `lastReviewedSha` after a confirmed GitHub submit.
-      await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
+      // ARC-194 (moved here in ARC-250): mirror the primary submit
+      // path — only mark `lastReviewedSha` after a confirmed GitHub
+      // submit. CR PR #75 catch: same try/catch as the primary path
+      // so a KV write failure doesn't bubble out as `errored` and
+      // trigger a duplicate Phase 3 fallback review.
+      try {
+        await writeLastReviewedSha(env, owner, repo, prNumber, headSha)
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-last-reviewed-sha-write-failed",
+          owner, repo, prNumber, headSha,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }

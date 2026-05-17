@@ -78,11 +78,16 @@ describe("walkIndexableFiles", () => {
   })
 
   it("drops files inside node_modules / dist / build / .git", () => {
+    // CodeRabbit nit on PR #76: use allowlisted extensions in the
+    // "should be dropped" entries so directory-gating is the ONLY
+    // thing under test. With non-allowlisted extensions a regression
+    // that removed dir filtering would still pass because the
+    // extension filter would drop them anyway.
     const entries: TreeEntry[] = [
       { path: "node_modules/foo/index.ts", type: "blob", size: 100 },
-      { path: "dist/main.js", type: "blob", size: 100 },
-      { path: "build/out.js", type: "blob", size: 100 },
-      { path: ".git/HEAD", type: "blob", size: 50 },
+      { path: "dist/main.ts", type: "blob", size: 100 },
+      { path: "build/out.ts", type: "blob", size: 100 },
+      { path: ".git/config.toml", type: "blob", size: 50 },
       { path: "src/keep.ts", type: "blob", size: 100 },
     ]
     expect(walkIndexableFiles(entries)).toEqual([
@@ -91,12 +96,13 @@ describe("walkIndexableFiles", () => {
   })
 
   it("drops dotfile directories EXCEPT .github (CLI parity)", () => {
+    // CodeRabbit nit on PR #76: use an allowlisted extension on the
+    // dropped .vscode entry so this isolates the dotfile-dir filter.
     const entries: TreeEntry[] = [
-      { path: ".vscode/settings.json", type: "blob", size: 50 },
-      { path: ".github/workflows/ci.yml", type: "blob", size: 50 },
+      { path: ".vscode/settings.toml", type: "blob", size: 50 },
       { path: ".github/workflows/test.toml", type: "blob", size: 50 },
     ]
-    // .vscode dropped (not allowlisted), .github/.toml kept.
+    // .vscode dropped (dotfile dir), .github kept.
     expect(walkIndexableFiles(entries)).toEqual([
       { path: ".github/workflows/test.toml", size: 50 },
     ])

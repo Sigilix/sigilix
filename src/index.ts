@@ -1199,12 +1199,20 @@ async function handleGitHubWebhook(
           repositories,
           reason,
         })
-        // Codex v2 N5: when EVERY attempted send failed (e.g. the
-        // OPENCLAW_JOBS binding is broken), surface 503 so GitHub
-        // redelivers. Partial successes return 202 — the per-repo
-        // failures are already logged and the redelivery would
-        // double-enqueue the successful ones.
-        if (result.attempted > 0 && result.succeeded === 0) {
+        // Codex v2 N5: when EVERY non-sensitive enqueue failed (e.g.
+        // the OPENCLAW_JOBS binding is broken), surface 503 so GitHub
+        // redelivers. Partial successes return 202 — per-repo failures
+        // are already logged and redelivery would double-enqueue the
+        // successful ones.
+        //
+        // CodeRabbit catch on PR #76: subtract `sensitiveSkipped` from
+        // the denominator. An install where every repo is on the
+        // sensitive denylist has `attempted > 0 && succeeded === 0`
+        // but is NOT a fanout failure — it's a deliberate no-op, and
+        // 503'ing would trigger an infinite GitHub redelivery loop
+        // (each redelivery would hit the same denylist and 503 again).
+        const nonSensitiveAttempts = result.attempted - result.sensitiveSkipped
+        if (nonSensitiveAttempts > 0 && result.succeeded === 0) {
           console.error(JSON.stringify({
             event: "index-job-fanout-total-failure",
             installation_id: installationId,

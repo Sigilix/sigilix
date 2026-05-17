@@ -153,6 +153,10 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     const { env, sent, kv } = makeEnv()
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
+    // CodeRabbit nit on PR #76: a regression that skipped installation
+    // auth would still pass the rest of these asserts with these mocks.
+    // Pin the token call so the auth path is exercised end-to-end.
+    expect(mockGetInstallationToken).toHaveBeenCalledTimes(1)
     expect(mockGetRepoTree).toHaveBeenCalledTimes(1)
     expect(mockGetFileContent).toHaveBeenCalledTimes(2)
     expect(mockVectorizeUpsert).toHaveBeenCalled()
@@ -311,8 +315,10 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
       expect(parsed.fileCount).toBe(MAX_FILES_PER_JOB + 3)
-      // chunksDone (4242) + 3 chunks from the final slice.
-      expect(parsed.chunkCount).toBeGreaterThanOrEqual(4242)
+      // CodeRabbit nit on PR #76: assert exact. The mock returns a
+      // 2-line content per file → chunkFile emits exactly 1 chunk per
+      // file. Final shard's 3 files add 3 chunks. 4242 + 3 = 4245.
+      expect(parsed.chunkCount).toBe(4245)
       // shardCount derived from ceil(totalFiles / MAX_FILES_PER_JOB) = 2.
       expect(parsed.shardCount).toBe(2)
     }

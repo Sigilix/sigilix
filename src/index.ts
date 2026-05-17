@@ -60,6 +60,7 @@ import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   enqueueIndexJobsForRepos,
   isIndexerEnabled,
+  maybeEnqueuePushIndexJob,
   type IndexJobReason,
 } from "./lib/index-producer"
 import { handleIndexRepoJob } from "./lib/indexer"
@@ -374,7 +375,7 @@ export type JobMessage =
       owner: string
       repo: string
       installationId: number
-      reason: "install" | "install-repos-added" | "manual"
+      reason: "install" | "install-repos-added" | "manual" | "push"
       shard?: {
         /** Inclusive lower bound into the filtered indexable-file list. */
         lo: number
@@ -507,6 +508,13 @@ interface GitHubWebhookPayload {
   // same entry shape (we only consume `full_name`, formatted "owner/repo").
   repositories?: Array<{ name?: string; full_name?: string }>
   repositories_added?: Array<{ name?: string; full_name?: string }>
+  // ARC-237: `push` event fields. Default-branch pushes trigger
+  // incremental re-index via `maybeEnqueuePushIndexJob`. The handler
+  // ignores non-branch refs, branch deletes (`after === "000…"`), and
+  // pushes on non-default branches.
+  ref?: string
+  after?: string
+  before?: string
 }
 
 // Validation cache — Cloudflare Workers can't read `env` at module top
@@ -1460,6 +1468,38 @@ async function handleGitHubWebhook(
       surface: "review-comment",
       prNumber: payload.pull_request?.number,
     })
+  }
+
+  // ARC-237: push-driven re-index. Fires on every push to a branch
+  // ref; the producer helper filters to default-branch pushes on
+  // already-indexed repos (bootstrap stays install-driven). Push
+  // storm coalescing falls out of ARC-235's freshness check — 10
+  // pushes in 60s become 1 actual re-walk + 9 cheap skips.
+  if (event === "push") {
+    if (!isIndexerEnabled(env)) {
+      return new Response("push event ignored (indexer off)\n", { status: 200 })
+    }
+    const outcome = await maybeEnqueuePushIndexJob({
+      env,
+      owner,
+      repo,
+      installationId,
+      ref: typeof payload.ref === "string" ? payload.ref : undefined,
+      after: typeof payload.after === "string" ? payload.after : undefined,
+    })
+    if ("enqueued" in outcome && outcome.enqueued) {
+      return new Response("push indexed\n", { status: 202 })
+    }
+    if ("failed" in outcome) {
+      // Producer threw on OPENCLAW_JOBS.send (binding broken /
+      // backpressure). Surface 503 so GitHub redelivers — the
+      // enqueue is the only side-effect, idempotent on the consumer
+      // side because chunk ids are content-addressed.
+      return new Response("push enqueue failed\n", { status: 503 })
+    }
+    // Any other `{skipped: ...}` outcome is a deliberate no-op (the
+    // producer logged the specific reason).
+    return new Response("push skipped\n", { status: 200 })
   }
 
   return new Response("skipped\n", { status: 200 })

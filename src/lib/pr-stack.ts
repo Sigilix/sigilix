@@ -299,7 +299,7 @@ export function detectStack(args: {
   // The walk's telemetry still fires below so the operator can see
   // what happened.
   if (cycleDetectedDown || cappedDown) {
-    // eslint-disable-next-line no-console -- intentional telemetry
+
     console.warn(
       JSON.stringify({
         event: "pr-stack-down-walk-degraded",

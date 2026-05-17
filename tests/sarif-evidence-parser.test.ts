@@ -114,7 +114,7 @@ describe("parseSarif — happy paths", () => {
 
 describe("parseSarif — error paths", () => {
   it("rejects non-string input", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const r = parseSarif(123 as any)
     expect(r.ok).toBe(false)
   })

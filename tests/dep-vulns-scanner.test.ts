@@ -102,7 +102,7 @@ describe("runDepVulnScan — finding emission", () => {
   })
 
   it("suppresses a patched lodash version (base + head both at 4.17.21)", async () => {
-    const get = vi.fn(async (_o: string, _r: string, path: string, ref: string) => {
+    const get = vi.fn(async (_o: string, _r: string, path: string, _ref: string) => {
       if (path === "package.json") return minimalPkgJson({ lodash: "^4.17.0" })
       if (path === "package-lock.json") return v6Lock({ lodash: "4.17.21" })
       return null

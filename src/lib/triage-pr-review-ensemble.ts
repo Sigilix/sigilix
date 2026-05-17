@@ -2156,7 +2156,7 @@ export function truncateVerdictToTokens(
   maxTokens: number,
 ): PrReviewVerdictWithIds {
   const charBudget = maxTokens * 4
-  let working = { ...verdict, findings: [...verdict.findings] }
+  const working = { ...verdict, findings: [...verdict.findings] }
   // Sort findings by score DESC so we drop the lowest first.
   working.findings.sort((a, b) => b.score - a.score)
   while (JSON.stringify(working).length > charBudget && working.findings.length > 0) {

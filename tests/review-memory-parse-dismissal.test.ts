@@ -80,11 +80,11 @@ describe("parseDismissalSignal — degenerate / empty inputs", () => {
   })
 
   it("returns null for non-string input (defensive)", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(parseDismissalSignal(null as any)).toBeNull()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(parseDismissalSignal(undefined as any)).toBeNull()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(parseDismissalSignal(123 as any)).toBeNull()
   })
 })

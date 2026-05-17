@@ -66,10 +66,6 @@ function makeConfig(
   }
 }
 
-interface FakeClientShape {
-  getPullRequestReviewComment: ReturnType<typeof vi.fn>
-}
-
 function makeClient(parentBody: string | null): GitHubClient {
   const fn = vi.fn(async (_o: string, _r: string, _id: number) => {
     if (parentBody === null) return null

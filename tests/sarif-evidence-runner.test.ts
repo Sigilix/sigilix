@@ -4,7 +4,7 @@
 // Codex MINOR #5/7 + Kimi MAJOR #3: caps + stale boundary tests.
 // Kimi MINOR #4: SARIF level mapping.
 
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect } from "vitest"
 import { runSarifEvidence, type ResolvedSarifConfig } from "../src/lib/sarif-evidence/runner"
 import type { GitHubClient } from "../src/lib/github"
 import type { Env } from "../src/index"

@@ -60,13 +60,12 @@ function buildHarness(opts: { maxRetries?: number; mode?: "off" | "shadow" | "po
     id: { toString: () => `${OWNER}/${REPO}#${PR_NUMBER}`, name: `${OWNER}/${REPO}#${PR_NUMBER}` },
   } as unknown as DurableObjectState
 
-  // Forward declaration so the DO's env can reference the same DO
-  // namespace stub (round-trip): in real Cloudflare, the DO can call
-  // env.PR_REVIEW_RUN to fetch other instances. We don't exercise that
-  // here, but the binding must exist on the env.
-  // eslint-disable-next-line prefer-const
-  let env: Env
-
+  // The DO's env references the same DO namespace stub (round-trip):
+  // in real Cloudflare, the DO can call env.PR_REVIEW_RUN to fetch
+  // other instances. We don't exercise that here, but the binding
+  // must exist on the env. `stubFetch` closes over `doInstance` which
+  // is declared below; the closure is fine because JS hoists function
+  // bodies and `stubFetch` only fires after `doInstance` exists.
   const stubFetch = async (input: string | Request, init?: RequestInit): Promise<Response> => {
     const req = typeof input === "string"
       ? new Request(input, init as RequestInit)
@@ -77,7 +76,7 @@ function buildHarness(opts: { maxRetries?: number; mode?: "off" | "shadow" | "po
   const idFromName = (name: string) => ({ name }) as unknown as DurableObjectId
   const get = (() => stub) as unknown as DurableObjectNamespace["get"]
 
-  env = {
+  const env: Env = {
     OPENCLAW_JOBS: {
       send: async (message: JobMessage) => { queue.sent.push(message) },
     } as unknown as Queue<JobMessage>,

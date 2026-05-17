@@ -3,7 +3,6 @@ import {
   ChatDisabledError,
   chat,
   isChatDisabledError,
-  type ChatArgs,
 } from "../src/lib/ollama-chat"
 
 const FAKE_API_KEY = "test-key"

@@ -106,6 +106,14 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     const client = await buildClient(env, installationId)
     since("auth-ready")
 
+    // CodeRabbit catch round-2 on PR #81: track `listPullRequestFiles`
+    // failure explicitly. When this rejects, we can't compute per-file
+    // patch hashes → `missedFiles` ends up empty → the new all-hit
+    // short-circuit in `scopedDiffFromMisses` would emit the placeholder
+    // ("all served from cache") even though we have zero cache hits
+    // and a real diff is available. The fix: pass through `diff` as
+    // the prompt diff when file-list fetch failed.
+    let listFilesFailed = false
     const [meta, diff, commits, files] = await Promise.all([
       client.getPullRequest(owner, repo, prNumber),
       client.getPullRequestDiff(owner, repo, prNumber),
@@ -118,8 +126,11 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       // 300 (GitHub's hard cap for the /files endpoint is 3000;
       // 300 covers all realistic PRs while keeping per-page paging
       // fast). A failure here degrades to an empty array — review
-      // quality preserved; we just pay full Ollama cost.
+      // quality preserved; we fall back to the full diff (tracked
+      // via `listFilesFailed` so the scoped-diff helper isn't fooled
+      // into emitting the all-hit placeholder).
       client.listPullRequestFiles(owner, repo, prNumber, { maxFiles: 300 }).catch((err) => {
+        listFilesFailed = true
         console.warn(JSON.stringify({
           event: "pr-overview-list-files-failed",
           owner, repo, prNumber,
@@ -174,7 +185,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // context, but per-file token cost drops by the cache-hit ratio.
     // If we don't have per-file patches (older API path or list call
     // failed), fall back to the full diff so the review still runs.
-    const promptDiff = scopedDiffFromMisses(missedFiles, diff)
+    // When `listFilesFailed` is true we MUST use the full diff —
+    // `missedFiles=[]` would otherwise hit the all-hit placeholder
+    // path and the model would see no real diff context.
+    const promptDiff = listFilesFailed
+      ? diff
+      : scopedDiffFromMisses(missedFiles, diff)
 
     // Pre-Ollama marker scan. Used to pick the prompt's "first run vs
     // incremental" framing. The post-Ollama re-check below is the source

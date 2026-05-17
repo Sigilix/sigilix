@@ -241,6 +241,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
       env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-abc",
     })
 
     expect(result).toEqual({ enqueued: 2, scanned: 3 })
@@ -255,6 +256,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
       env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-abc",
     })
     expect(result).toEqual({ enqueued: 0, scanned: 0 })
     expect(sent).toHaveLength(0)
@@ -274,6 +276,7 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
       env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-abc",
     })
 
     expect(result).toEqual({ enqueued: 1, scanned: 2 })
@@ -289,8 +292,57 @@ describe("enqueueWarmupRerunsForIndex", () => {
     const client = new GitHubClient({ token: "t" })
     const result = await enqueueWarmupRerunsForIndex({
       env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-abc",
     })
     expect(result).toEqual({ enqueued: 0, scanned: 0 })
     expect(sent).toHaveLength(0)
+  })
+
+  // M4 (CodeRabbit PR #80): the index-repo consumer retries on
+  // transient failures; without a dedupe breadcrumb, a redelivered
+  // index-job would fan out a second batch of pr-review-rerun
+  // messages → every warmup PR would get a duplicate review.
+  it("dedupes against queue-retry redelivery via runId-keyed KV breadcrumb", async () => {
+    mockListOpenPullRequests.mockResolvedValue([{ number: 10 }])
+    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_MARKER }])
+    const { env, sent } = makeEnv()
+    const client = new GitHubClient({ token: "t" })
+
+    const first = await enqueueWarmupRerunsForIndex({
+      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "same-run-id",
+    })
+    expect(first).toEqual({ enqueued: 1, scanned: 1 })
+    expect(sent).toHaveLength(1)
+
+    // Simulated queue redelivery — same runId, same args.
+    const second = await enqueueWarmupRerunsForIndex({
+      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "same-run-id",
+    })
+    expect(second).toEqual({ enqueued: 0, scanned: 0, skipped: "already-fanned-out" })
+    // Critically: no second fan-out happened.
+    expect(sent).toHaveLength(1)
+    // And the breadcrumb did NOT block listOpenPullRequests on the first call.
+    expect(mockListOpenPullRequests).toHaveBeenCalledTimes(1)
+  })
+
+  it("re-fans-out when runId differs (genuine re-index → fresh dedupe key)", async () => {
+    mockListOpenPullRequests.mockResolvedValue([{ number: 10 }])
+    mockListIssueComments.mockResolvedValue([{ id: 1, body: WARMUP_MARKER }])
+    const { env, sent } = makeEnv()
+    const client = new GitHubClient({ token: "t" })
+
+    await enqueueWarmupRerunsForIndex({
+      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-one",
+    })
+    await enqueueWarmupRerunsForIndex({
+      env, client, owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      runId: "run-two",
+    })
+
+    // Two distinct runIds → two distinct breadcrumbs → both fan-outs fire.
+    expect(sent).toHaveLength(2)
   })
 })

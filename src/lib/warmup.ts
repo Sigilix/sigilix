@@ -223,8 +223,60 @@ export async function enqueueWarmupRerunsForIndex(args: {
   owner: string
   repo: string
   installationId: number
-}): Promise<{ enqueued: number; scanned: number }> {
-  const { env, client, owner, repo, installationId } = args
+  /** Stable per-run id from the indexer (matches the manifest's
+   *  runId). Used for the queue-retry dedupe breadcrumb so that a
+   *  redelivered `index-repo` message can't fan out reruns twice. */
+  runId: string
+}): Promise<{ enqueued: number; scanned: number; skipped?: "already-fanned-out" }> {
+  const { env, client, owner, repo, installationId, runId } = args
+
+  // code-reviewer M4 catch on PR #80: the index-repo queue handler
+  // retries on failure (max_retries=3). If `persistManifest` succeeded
+  // but a transient error caused redelivery, this fan-out would run
+  // a second time → every warmup PR would get a duplicate
+  // `pr-review-rerun` queued → duplicate review on the same head.
+  // KV breadcrumb keyed by `runId` makes the fan-out idempotent.
+  const ranKey = `warmup-fanout-ran:${owner.toLowerCase()}/${repo.toLowerCase()}:${runId}`
+  try {
+    const already = await env.OPENCLAW_STATE.get(ranKey)
+    if (already !== null) {
+      console.log(JSON.stringify({
+        event: "pr-review-warmup-rerun-fanout-already-ran",
+        owner, repo, installation_id: installationId, run_id: runId,
+      }))
+      return { enqueued: 0, scanned: 0, skipped: "already-fanned-out" }
+    }
+  } catch (err) {
+    // code-reviewer H1 catch on the M4 fix: indexer.ts treats this
+    // helper as best-effort. A KV read failure here must NOT throw
+    // up the stack (would fail the index-repo queue handler →
+    // retry → re-embed the entire repo). Log + continue with the
+    // fan-out; double-fanout on a transient KV blip is strictly
+    // less bad than re-embedding 1k files.
+    console.warn(JSON.stringify({
+      event: "pr-review-warmup-rerun-fanout-dedupe-read-failed",
+      owner, repo, installation_id: installationId, run_id: runId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+  // Write the breadcrumb BEFORE the fan-out so a fail-mid-fanout
+  // doesn't trigger a full re-fanout — the rerun handler is idempotent
+  // on its own (content-addressed dedupe via the existing pr-review
+  // path), and double-running a few enqueues on a retry is cheaper
+  // than the full N-PR double-review. KV put failure is non-fatal
+  // for the same reason as the read above.
+  try {
+    await env.OPENCLAW_STATE.put(ranKey, String(Date.now()), {
+      expirationTtl: 7 * 24 * 60 * 60, // 7 days — long enough to outlive queue retry budgets
+    })
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-warmup-rerun-fanout-dedupe-write-failed",
+      owner, repo, installation_id: installationId, run_id: runId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+
   let openPrs: Array<{ number: number }>
   try {
     openPrs = await client.listOpenPullRequests(owner, repo)
@@ -255,9 +307,15 @@ export async function enqueueWarmupRerunsForIndex(args: {
     }
     if (!hasSticky) continue
     try {
+      // code-reviewer M1 catch on PR #80: silent=true so the rerun
+      // handler skips the slash-command ack comment. The customer
+      // didn't type `/sigilix review` — these reruns are automatic
+      // post-indexing and shouldn't generate unsolicited noise on
+      // every open PR.
       const message: JobMessage = {
         type: "pr-review-rerun",
         owner, repo, prNumber: pr.number, installationId,
+        silent: true,
       }
       await env.OPENCLAW_JOBS.send(message)
       enqueued += 1

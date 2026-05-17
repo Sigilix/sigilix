@@ -435,8 +435,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // ARC-236: fan out reruns for PRs that warmed up. Best-effort —
   // failure to enqueue doesn't fail the index job (the indexing
   // itself succeeded; reruns are a customer-UX upgrade).
+  // M4 (CR PR #80): pass `runId` so the helper's KV breadcrumb
+  // dedupes against queue-retry redelivery of this index-repo job.
   await enqueueWarmupRerunsForIndex({
-    env, client, owner, repo, installationId,
+    env, client, owner, repo, installationId, runId,
   })
 }
 
@@ -558,8 +560,10 @@ async function handleShardJob(
     }))
     // ARC-236: fan out reruns on the final-shard path too. Multi-
     // shard repos benefit from the same warmup-rerun UX.
+    // M4 (CR PR #80): same runId-keyed dedupe as the single-shard
+    // path — guards against final-shard queue redelivery.
     await enqueueWarmupRerunsForIndex({
-      env, client, owner, repo, installationId,
+      env, client, owner, repo, installationId, runId: shard.runId,
     })
     return
   }

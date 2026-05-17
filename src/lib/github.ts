@@ -49,6 +49,11 @@ export class GitHubClient {
     return this.request<T>("PATCH", path, body, "json")
   }
 
+  /** Raw REST DELETE. 204 responses parse to undefined. */
+  async restDelete(path: string): Promise<void> {
+    await this.request<unknown>("DELETE", path, undefined, "json")
+  }
+
   /**
    * Fetch the unified diff for a PR. GitHub returns the diff body when
    * `Accept: application/vnd.github.v3.diff` is set; without it the
@@ -407,6 +412,52 @@ export class GitHubClient {
     return this.restPost<{ id: number; state: string }>(
       `/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
       review
+    )
+  }
+
+  /**
+   * ARC-258: create a PENDING (draft) review. GitHub's reviewer-list
+   * shows the bot with a "in progress" indicator until it's either
+   * submitted or deleted. Sigilix uses this as a status placeholder
+   * while specialists are running; on completion the placeholder is
+   * deleted and the real review is POSTed with inline comments.
+   *
+   * Omitting `event` is what makes the review draft/pending. Body is
+   * optional; we set a short status string so the PENDING entry has
+   * visible copy in the reviewer list.
+   */
+  async createPendingReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body?: string,
+  ): Promise<{ id: number }> {
+    const payload: { body?: string } = {}
+    if (body !== undefined && body.length > 0) payload.body = body
+    return this.restPost<{ id: number }>(
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+      payload,
+    )
+  }
+
+  /**
+   * ARC-258: delete a PENDING review. Only legal on reviews that
+   * haven't been submitted — once a review is in APPROVED /
+   * CHANGES_REQUESTED / COMMENTED state, this endpoint 422s.
+   *
+   * Called BEFORE submitting the real review (replaces the
+   * placeholder cleanly), and on the error path so a failed run
+   * doesn't leave a "Sigilix is reviewing..." placeholder
+   * dangling on the PR forever.
+   */
+  async deletePendingReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    reviewId: number,
+  ): Promise<void> {
+    await this.restDelete(
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
     )
   }
 

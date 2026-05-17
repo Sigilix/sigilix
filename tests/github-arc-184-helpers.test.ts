@@ -193,3 +193,70 @@ describe("getMergeBase", () => {
     expect(out).toBeNull()
   })
 })
+
+// ARC-258 — pending-review lifecycle for the in-progress reviewer
+// indicator. The bot creates a PENDING (draft) review at the head of
+// the ensemble pipeline so customers see "Sigilix is reviewing" in
+// the PR sidebar; on success the placeholder is deleted just before
+// the real review POSTs.
+
+describe("createPendingReview (ARC-258)", () => {
+  it("POSTs without an `event` field so GitHub creates a draft", async () => {
+    let captured: { url: string; body: unknown } | null = null
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (req, init) => {
+      const url = typeof req === "string" ? req : (req as Request).url
+      const body = init?.body ? JSON.parse(init.body as string) : null
+      captured = { url, body }
+      return jsonResp({ id: 7777 })
+    })
+    const c = newClient()
+    const result = await c.createPendingReview("o", "r", 99, "reviewing…")
+    expect(result).toEqual({ id: 7777 })
+    expect(captured!.url).toContain("/repos/o/r/pulls/99/reviews")
+    const body = captured!.body as Record<string, unknown>
+    expect(body.event).toBeUndefined()
+    expect(body.body).toBe("reviewing…")
+  })
+
+  it("omits the body field entirely when not provided", async () => {
+    let captured: { body: unknown } | null = null
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_req, init) => {
+      const body = init?.body ? JSON.parse(init.body as string) : null
+      captured = { body }
+      return jsonResp({ id: 1 })
+    })
+    const c = newClient()
+    await c.createPendingReview("o", "r", 1)
+    const body = captured!.body as Record<string, unknown>
+    expect(body.body).toBeUndefined()
+    expect(body.event).toBeUndefined()
+  })
+
+  it("rethrows on non-2xx", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(403, "forbidden"))
+    const c = newClient()
+    await expect(c.createPendingReview("o", "r", 1)).rejects.toThrow(/HTTP 403/)
+  })
+})
+
+describe("deletePendingReview (ARC-258)", () => {
+  it("DELETEs the review by id and resolves on 204", async () => {
+    let captured: { url: string; method: string } | null = null
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (req, init) => {
+      const url = typeof req === "string" ? req : (req as Request).url
+      const method = init?.method ?? "GET"
+      captured = { url, method }
+      return new Response(null, { status: 204 })
+    })
+    const c = newClient()
+    await c.deletePendingReview("o", "r", 99, 7777)
+    expect(captured!.method).toBe("DELETE")
+    expect(captured!.url).toContain("/repos/o/r/pulls/99/reviews/7777")
+  })
+
+  it("rethrows on 422 (review already submitted — caller logs + continues)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(422, "already submitted"))
+    const c = newClient()
+    await expect(c.deletePendingReview("o", "r", 99, 7777)).rejects.toThrow(/HTTP 422/)
+  })
+})

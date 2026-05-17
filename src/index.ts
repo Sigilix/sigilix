@@ -290,6 +290,13 @@ export type JobMessage =
       repo: string
       prNumber: number
       installationId: number
+      /**
+       * ARC-236: warmup-fired reruns skip the slash-command ack
+       * (the customer didn't type `/sigilix review`; the rerun is
+       * automatic post-indexing). Slash-command-driven reruns leave
+       * this unset/false and keep the existing ack behavior.
+       */
+      silent?: boolean
     }
   // ARC-179: `/sigilix improve` — single-shot LLM call producing
   // apply-able suggested-change comments. Independent of the
@@ -902,18 +909,26 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         }
         // Post ack comment so the user knows the request was received.
         // Best-effort: a failed ack doesn't block the re-review.
-        try {
-          await client.createIssueComment(
-            job.owner, job.repo, job.prNumber,
-            renderSlashCommandAck({ cmd: "review" }),
-          )
-        } catch (err) {
-          console.error(JSON.stringify({
-            event: "slash-command-ack-failed",
-            err: err instanceof Error ? err.message : String(err),
-            cmd: "review",
-            ...tag,
-          }))
+        //
+        // ARC-236 (code-reviewer M1 catch on PR #80): when the rerun
+        // is fired automatically by `enqueueWarmupRerunsForIndex`
+        // after indexing completes, the customer didn't type a slash
+        // command — the ack would be unsolicited noise on every
+        // open PR. Skip the ack when `silent` is set.
+        if (!job.silent) {
+          try {
+            await client.createIssueComment(
+              job.owner, job.repo, job.prNumber,
+              renderSlashCommandAck({ cmd: "review" }),
+            )
+          } catch (err) {
+            console.error(JSON.stringify({
+              event: "slash-command-ack-failed",
+              err: err instanceof Error ? err.message : String(err),
+              cmd: "review",
+              ...tag,
+            }))
+          }
         }
         // Clear the legacy single-shot dedupe lock so handlePrReview
         // doesn't no-op when invoked on the same head SHA. Without

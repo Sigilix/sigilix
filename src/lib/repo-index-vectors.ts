@@ -1,0 +1,265 @@
+// ARC-238 — KV bookkeeping for the per-repo Vectorize chunk-id list.
+//
+// One record per indexed repo, keyed `repo-index-vectors:<repo>`
+// (lowercased — same convention as `repo-index-manifest:<repo>` from
+// ARC-235). Without this record, `installation.deleted` and
+// `installation_repositories.removed` can't enumerate which IDs to
+// `deleteByIds` — the only Vectorize delete primitive on the binding.
+//
+// Schema includes `owner` so the uninstall delete fan-out can
+// double-check the same-named-repo cross-tenant case before calling
+// `deleteByIds`. Codex v1 catch on the design pass: gating only the
+// Vectorize delete on `manifest.owner === owner` was insufficient —
+// the vectors-record delete had to be guarded too, AND that guard
+// needs owner on the vectors record itself.
+//
+// Path-bucketed (`byPath: Record<string, string[]>`) so a future
+// ARC-237 incremental delete (currently out of scope; PR 3 commit 1
+// does full re-index on push) can target removed files by path.
+
+import type { Env } from "../index"
+
+const KV_KEY_PREFIX = "repo-index-vectors:"
+const TTL_SECONDS = 60 * 24 * 60 * 60 // 60 days; aligned with manifest
+
+// ---------------------------------------------------------------------
+// Schema
+// ---------------------------------------------------------------------
+
+export interface RepoIndexVectorsV1 {
+  v: 1
+  /** Lowercased repo name — matches the Vectorize namespace. */
+  repo: string
+  /**
+   * Owner at index time. The uninstall delete fan-out compares this
+   * against the removal context's owner and refuses to delete vectors
+   * (and the KV manifest + vectors records) on mismatch, so a
+   * same-named repo under a different owner doesn't get its data
+   * smashed by an unrelated uninstall.
+   */
+  owner: string
+  /** Stable per-run id (matches `repo-index-manifest:<repo>`'s runId). */
+  runId: string
+  /** Path → ordered list of chunk ids for that path. */
+  byPath: Record<string, string[]>
+}
+
+export type ReadResult =
+  | { kind: "ok"; vectors: RepoIndexVectorsV1 }
+  | { kind: "missing" }
+  | { kind: "invalid"; reason: "wrong-version" | "shape" | "json-parse" }
+
+// ---------------------------------------------------------------------
+// KV serdes
+// ---------------------------------------------------------------------
+
+export function repoIndexVectorsKey(repo: string): string {
+  return `${KV_KEY_PREFIX}${repo.toLowerCase()}`
+}
+
+function isRepoIndexVectorsV1(value: unknown): value is RepoIndexVectorsV1 {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const o = value as Record<string, unknown>
+  if (o.v !== 1) return false
+  if (typeof o.repo !== "string" || o.repo.length === 0) return false
+  if (typeof o.owner !== "string" || o.owner.length === 0) return false
+  if (typeof o.runId !== "string" || o.runId.length === 0) return false
+  if (!o.byPath || typeof o.byPath !== "object" || Array.isArray(o.byPath)) return false
+  for (const [path, ids] of Object.entries(o.byPath as Record<string, unknown>)) {
+    if (typeof path !== "string" || path.length === 0) return false
+    if (!Array.isArray(ids)) return false
+    for (const id of ids) {
+      if (typeof id !== "string" || id.length === 0) return false
+    }
+  }
+  return true
+}
+
+export async function readRepoIndexVectors(
+  env: Env,
+  repo: string,
+): Promise<ReadResult> {
+  const raw = await env.OPENCLAW_STATE.get(repoIndexVectorsKey(repo))
+  if (raw === null) return { kind: "missing" }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { kind: "invalid", reason: "json-parse" }
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { kind: "invalid", reason: "shape" }
+  }
+  if ((parsed as { v?: unknown }).v !== 1) {
+    return { kind: "invalid", reason: "wrong-version" }
+  }
+  if (!isRepoIndexVectorsV1(parsed)) {
+    return { kind: "invalid", reason: "shape" }
+  }
+  return { kind: "ok", vectors: parsed }
+}
+
+/**
+ * Write the vectors record. Codex v1 B3: this is NOT best-effort —
+ * the caller (indexer) must check the result and refuse to write a
+ * fresh manifest if the vectors write failed. Otherwise the manifest
+ * makes the repo look fully indexed while future uninstall can't
+ * locate the vectors to delete (silent retention bug).
+ */
+export async function writeRepoIndexVectors(
+  env: Env,
+  vectors: RepoIndexVectorsV1,
+): Promise<boolean> {
+  try {
+    await env.OPENCLAW_STATE.put(
+      repoIndexVectorsKey(vectors.repo),
+      JSON.stringify(vectors),
+      { expirationTtl: TTL_SECONDS },
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function deleteRepoIndexVectors(
+  env: Env,
+  repo: string,
+): Promise<void> {
+  await env.OPENCLAW_STATE.delete(repoIndexVectorsKey(repo))
+}
+
+// ---------------------------------------------------------------------
+// Run-aware merge
+// ---------------------------------------------------------------------
+
+export type MergeOutcome =
+  | { action: "created"; vectors: RepoIndexVectorsV1 }
+  | { action: "extended"; vectors: RepoIndexVectorsV1 }
+  | { action: "superseded"; vectors: RepoIndexVectorsV1 }
+  | { action: "stale-skip"; existingRunId: string }
+  | { action: "invalid-overwrite"; vectors: RepoIndexVectorsV1 }
+
+export interface MergeArgs {
+  existing: ReadResult
+  owner: string
+  repo: string
+  runId: string
+  idsByPathSlice: Record<string, string[]>
+  /**
+   * Codex v1 catch: pass the current manifest's runId so we can
+   * compare. If a stale run produces shard output AFTER a fresher
+   * run's manifest landed, we refuse to write — the fresh run is
+   * authoritative.
+   */
+  currentManifestRunId: string | null
+}
+
+/**
+ * Pure merge logic. Returns the new `RepoIndexVectorsV1` to write (or
+ * a stale-skip signal). Single-writer continuation chain semantics
+ * within one run, plus a tie-breaker against stale-run shards that
+ * arrive after the chain has been superseded.
+ *
+ * Decision table:
+ *   - existing missing                              → create
+ *   - existing ok, runId matches incoming           → set-union (extend)
+ *   - existing ok, runId differs, manifest is the
+ *     incoming run                                  → supersede (overwrite)
+ *   - existing ok, runId differs, manifest is the
+ *     OTHER run                                     → stale-skip
+ *   - existing invalid                              → overwrite
+ *     (treat as corrupt; we have to write something
+ *     so future deletes have an id list to walk)
+ */
+export function computeMerge(args: MergeArgs): MergeOutcome {
+  const { existing, owner, repo, runId, idsByPathSlice, currentManifestRunId } = args
+  const sliceByPath = normalizeByPath(idsByPathSlice)
+
+  if (existing.kind === "missing") {
+    return {
+      action: "created",
+      vectors: { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: sliceByPath },
+    }
+  }
+  if (existing.kind === "invalid") {
+    return {
+      action: "invalid-overwrite",
+      vectors: { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: sliceByPath },
+    }
+  }
+
+  // existing.kind === "ok"
+  const cur = existing.vectors
+  if (cur.runId === runId) {
+    // Same run — continuation shard extending the existing record.
+    return {
+      action: "extended",
+      vectors: {
+        v: 1,
+        owner,
+        repo: repo.toLowerCase(),
+        runId,
+        byPath: setUnion(cur.byPath, sliceByPath),
+      },
+    }
+  }
+
+  // Different run id. Manifest is the tiebreaker.
+  if (currentManifestRunId === runId) {
+    // This run is authoritative; the stored run is stale.
+    return {
+      action: "superseded",
+      vectors: { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: sliceByPath },
+    }
+  }
+  // Either the stored run is current, or the manifest doesn't know
+  // about either run yet. Either way this incoming slice is from a
+  // run that's NOT current → don't overwrite.
+  return { action: "stale-skip", existingRunId: cur.runId }
+}
+
+function normalizeByPath(input: Record<string, string[]>): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const [path, ids] of Object.entries(input)) {
+    if (ids.length === 0) continue
+    // Dedupe + preserve insertion order. Same chunk written twice in
+    // one slice is rare (would mean two identical chunkIds) but the
+    // dedupe is cheap.
+    out[path] = Array.from(new Set(ids))
+  }
+  return out
+}
+
+function setUnion(
+  a: Record<string, string[]>,
+  b: Record<string, string[]>,
+): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const [path, ids] of Object.entries(a)) {
+    out[path] = [...ids]
+  }
+  for (const [path, ids] of Object.entries(b)) {
+    if (out[path]) {
+      const merged = new Set(out[path])
+      for (const id of ids) merged.add(id)
+      out[path] = Array.from(merged)
+    } else {
+      out[path] = [...ids]
+    }
+  }
+  return out
+}
+
+/**
+ * Flatten a vectors record's `byPath` to a deduped array of chunk
+ * ids. Used by `deleteRepoIndex` to call `deleteByIds` in batches of
+ * up to 1000 (Cloudflare's documented Vectorize delete batch limit).
+ */
+export function flattenIds(vectors: RepoIndexVectorsV1): string[] {
+  const set = new Set<string>()
+  for (const ids of Object.values(vectors.byPath)) {
+    for (const id of ids) set.add(id)
+  }
+  return Array.from(set)
+}

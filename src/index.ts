@@ -60,9 +60,14 @@ import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   enqueueIndexJobsForRepos,
   isIndexerEnabled,
+  maybeEnqueuePushIndexJob,
   type IndexJobReason,
 } from "./lib/index-producer"
 import { handleIndexRepoJob } from "./lib/indexer"
+import {
+  handleInstallReposRemoved,
+  handleInstallationDeleted,
+} from "./lib/index-delete"
 import {
   handleGitHubAuthCallback,
   handleGitHubAuthKickoff,
@@ -374,7 +379,7 @@ export type JobMessage =
       owner: string
       repo: string
       installationId: number
-      reason: "install" | "install-repos-added" | "manual"
+      reason: "install" | "install-repos-added" | "manual" | "push"
       shard?: {
         /** Inclusive lower bound into the filtered indexable-file list. */
         lo: number
@@ -454,7 +459,12 @@ interface LinearWebhookPayload {
 
 interface GitHubWebhookPayload {
   action?: string
-  installation?: { id?: number }
+  installation?: {
+    id?: number
+    /** ARC-238: account.login is the owner identifier for the
+     *  `installation.deleted` repo-discovery scan. */
+    account?: { login?: string; type?: string }
+  }
   repository?: {
     name?: string
     owner?: { login?: string }
@@ -507,6 +517,18 @@ interface GitHubWebhookPayload {
   // same entry shape (we only consume `full_name`, formatted "owner/repo").
   repositories?: Array<{ name?: string; full_name?: string }>
   repositories_added?: Array<{ name?: string; full_name?: string }>
+  // ARC-238: `installation_repositories.removed` carries the delta;
+  // `installation.deleted` does NOT carry a repo list (repos are
+  // already gone) — the delete handler discovers affected repos by
+  // walking `repo-index-manifest:` records and filtering by owner.
+  repositories_removed?: Array<{ name?: string; full_name?: string }>
+  // ARC-237: `push` event fields. Default-branch pushes trigger
+  // incremental re-index via `maybeEnqueuePushIndexJob`. The handler
+  // ignores non-branch refs, branch deletes (`after === "000…"`), and
+  // pushes on non-default branches.
+  ref?: string
+  after?: string
+  before?: string
 }
 
 // Validation cache — Cloudflare Workers can't read `env` at module top
@@ -1170,16 +1192,101 @@ async function handleGitHubWebhook(
   // App-level events have no repository field. ARC-234 intercepts the
   // two install-onboarding events that drive the customer-ready
   // indexing pipeline (`installation.created` initial set +
-  // `installation_repositories.added` deltas). The rest stay dropped.
+  // `installation_repositories.added` deltas). ARC-238 intercepts the
+  // two deletion events. The rest stay dropped.
   if (
     event === "installation" ||
     event === "installation_repositories" ||
     event === "installation_target" ||
     event === "github_app_authorization"
   ) {
+    const installationId = payload.installation?.id
+    // ARC-238 (Codex v1 B6): uninstall + repos-removed delete fires
+    // REGARDLESS of `OPENCLAW_INDEXER_ENABLED`. If the operator turns
+    // the indexer off for cost reasons, prior customer data must
+    // still be deletable on uninstall (GDPR / SOC 2).
+    if (
+      event === "installation_repositories" &&
+      payload.action === "removed" &&
+      typeof installationId === "number"
+    ) {
+      const removed = payload.repositories_removed ?? []
+      try {
+        const { results, anyError } = await handleInstallReposRemoved({
+          env, installationId, repositories: removed,
+        })
+        if (anyError) {
+          console.error(JSON.stringify({
+            event: "index-delete-fanout-partial",
+            installation_id: installationId,
+            reason: "install-repos-removed",
+            count: results.length,
+          }))
+          return new Response("delete fanout partial\n", { status: 503 })
+        }
+        return new Response("repos-removed deleted\n", { status: 202 })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "index-delete-fanout-threw",
+          installation_id: installationId,
+          reason: "install-repos-removed",
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        return new Response("delete fanout threw\n", { status: 503 })
+      }
+    }
+    if (
+      event === "installation" &&
+      payload.action === "deleted" &&
+      typeof installationId === "number"
+    ) {
+      const ownerLogin = payload.installation?.account?.login
+      if (typeof ownerLogin !== "string" || ownerLogin.length === 0) {
+        // No account.login means we can't disambiguate which repos to
+        // delete. Log + return 200 so GitHub doesn't redeliver — there's
+        // no actionable retry from our side.
+        console.error(JSON.stringify({
+          event: "index-delete-missing-account-login",
+          installation_id: installationId,
+        }))
+        return new Response("missing account.login\n", { status: 200 })
+      }
+      try {
+        const { results, anyError } = await handleInstallationDeleted({
+          env, installationId, ownerLogin,
+          // code-reviewer HIGH-1: GitHub ships `repositories[]` on
+          // `installation.deleted`. Use it as the authoritative
+          // discovery source so we clean up indexer-disabled installs
+          // (no repo-index-manifest to find) too. KV scan still runs
+          // as a backup for orphans.
+          ...(Array.isArray(payload.repositories)
+            ? { repositoriesFromPayload: payload.repositories }
+            : {}),
+        })
+        if (anyError) {
+          console.error(JSON.stringify({
+            event: "index-delete-fanout-partial",
+            installation_id: installationId,
+            reason: "install-deleted",
+            count: results.length,
+          }))
+          return new Response("delete fanout partial\n", { status: 503 })
+        }
+        return new Response("installation deleted\n", { status: 202 })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "index-delete-fanout-threw",
+          installation_id: installationId,
+          reason: "install-deleted",
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        return new Response("delete fanout threw\n", { status: 503 })
+      }
+    }
+
     if (
       isIndexerEnabled(env) &&
-      typeof payload.installation?.id === "number" &&
+      typeof installationId === "number" &&
       (
         (event === "installation" && payload.action === "created") ||
         (event === "installation_repositories" && payload.action === "added")
@@ -1191,7 +1298,6 @@ async function handleGitHubWebhook(
           : payload.repositories_added ?? []
       const reason: IndexJobReason =
         event === "installation" ? "install" : "install-repos-added"
-      const installationId = payload.installation.id
       try {
         const result = await enqueueIndexJobsForRepos({
           env,
@@ -1460,6 +1566,38 @@ async function handleGitHubWebhook(
       surface: "review-comment",
       prNumber: payload.pull_request?.number,
     })
+  }
+
+  // ARC-237: push-driven re-index. Fires on every push to a branch
+  // ref; the producer helper filters to default-branch pushes on
+  // already-indexed repos (bootstrap stays install-driven). Push
+  // storm coalescing falls out of ARC-235's freshness check — 10
+  // pushes in 60s become 1 actual re-walk + 9 cheap skips.
+  if (event === "push") {
+    if (!isIndexerEnabled(env)) {
+      return new Response("push event ignored (indexer off)\n", { status: 200 })
+    }
+    const outcome = await maybeEnqueuePushIndexJob({
+      env,
+      owner,
+      repo,
+      installationId,
+      ref: typeof payload.ref === "string" ? payload.ref : undefined,
+      after: typeof payload.after === "string" ? payload.after : undefined,
+    })
+    if ("enqueued" in outcome && outcome.enqueued) {
+      return new Response("push indexed\n", { status: 202 })
+    }
+    if ("failed" in outcome) {
+      // Producer threw on OPENCLAW_JOBS.send (binding broken /
+      // backpressure). Surface 503 so GitHub redelivers — the
+      // enqueue is the only side-effect, idempotent on the consumer
+      // side because chunk ids are content-addressed.
+      return new Response("push enqueue failed\n", { status: 503 })
+    }
+    // Any other `{skipped: ...}` outcome is a deliberate no-op (the
+    // producer logged the specific reason).
+    return new Response("push skipped\n", { status: 200 })
   }
 
   return new Response("skipped\n", { status: 200 })

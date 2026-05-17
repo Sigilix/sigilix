@@ -402,9 +402,11 @@ describe("routeReview", () => {
 
   // ARC-232 (2026-05-16): `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
   // allowlist deleted. The two "fall through on allowlist miss" /
-  // "match case-insensitively" tests that lived here are gone — the
-  // ensemble routes by mode + daily budget only now, and the sensitive
-  // denylist gates upstream in dispatchJob before this routing fires.
+  // "match case-insensitively" tests that lived here are gone. The
+  // ensemble's remaining gates are sensitive-deny (first, at the top
+  // of `routeReview` via `isRepoSensitive`), then mode, then daily
+  // budget — see `triage-pr-review-ensemble.ts:routeReview` for the
+  // ordering.
 
   it("falls back to Phase 3 when daily budget exhausted", async () => {
     const env = {

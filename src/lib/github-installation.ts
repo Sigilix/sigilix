@@ -150,7 +150,13 @@ export async function listIndexedRepos(env: {
       break
     }
     for (const key of page.keys) {
-      const repo = key.name.slice(PREFIX.length)
+      // CR catch on PR #79: defensive `.toLowerCase()` on the
+      // extracted suffix. The canonical writer (`repoIndexManifestKey`
+      // in repo-index-manifest.ts) always lowercases on the way in,
+      // but a direct `OPENCLAW_STATE.put` bypass with a mixed-case
+      // key would otherwise leak casing into `availableRepos` and
+      // break the case-sensitive lookup downstream.
+      const repo = key.name.slice(PREFIX.length).toLowerCase()
       if (repo.length > 0) out.add(repo)
     }
     if (page.list_complete) break

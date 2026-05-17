@@ -60,6 +60,7 @@ import {
   readRepoIndexVectors,
   writeRepoIndexVectors,
 } from "./repo-index-vectors"
+import { enqueueWarmupRerunsForIndex } from "./warmup"
 
 // ---------------------------------------------------------------------
 // Constants (ported from scripts/index-repo.mjs — keep aligned)
@@ -431,6 +432,28 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     owner, repo, run_id: runId,
     file_count: sliceHi, chunk_count: chunkCount, shard_count: 1,
   }))
+  // ARC-236: fan out reruns for PRs that warmed up. Best-effort —
+  // failure to enqueue doesn't fail the index job (the indexing
+  // itself succeeded; reruns are a customer-UX upgrade).
+  // M4 (CR PR #80): pass `runId` so the helper's KV breadcrumb
+  // dedupes against queue-retry redelivery of this index-repo job.
+  // CR phase-end catch on commit 4: wrap in try/catch — internal KV
+  // calls are already best-effort, but a transport error from
+  // listOpenPullRequests is caught + swallowed by the helper, yet
+  // an unforeseen path could still throw. Belt-and-suspenders: any
+  // throw here must NOT fail the index job (which already
+  // succeeded) and trigger an indexer queue retry → full re-embed.
+  try {
+    await enqueueWarmupRerunsForIndex({
+      env, client, owner, repo, installationId, runId,
+    })
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "warmup-rerun-fanout-failed",
+      owner, repo, run_id: runId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
 }
 
 async function handleShardJob(
@@ -549,6 +572,24 @@ async function handleShardJob(
       chunk_count: cumulativeChunks,
       shard_count: shardCount,
     }))
+    // ARC-236: fan out reruns on the final-shard path too. Multi-
+    // shard repos benefit from the same warmup-rerun UX.
+    // M4 (CR PR #80): same runId-keyed dedupe as the single-shard
+    // path — guards against final-shard queue redelivery.
+    // CR phase-end catch on commit 4: same belt-and-suspenders
+    // try/catch as the bootstrap path. Best-effort applies here
+    // too — multi-shard repos already paid the indexing cost.
+    try {
+      await enqueueWarmupRerunsForIndex({
+        env, client, owner, repo, installationId, runId: shard.runId,
+      })
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "warmup-rerun-fanout-failed",
+        owner, repo, run_id: shard.runId,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
     return
   }
 

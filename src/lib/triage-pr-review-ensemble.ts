@@ -408,6 +408,14 @@ export async function handlePrReviewEnsemble(
   // stats into telemetry on every exit path (success, failure, throw).
   let cache: ReturnType<typeof createRetrievalCache> | null = null
 
+  // ARC-258: the in-progress check run is owned by `dispatchJob`,
+  // not by this orchestrator. Reason: when ensemble-post fails
+  // non-stale-head and the dispatcher falls back to Phase 3, the
+  // ensemble can't know whether to complete the check (a `failure`
+  // here would contradict a successful Phase 3 review). Lifecycle
+  // owned at the dispatcher level → single source of truth for the
+  // final outcome.
+
   // Telemetry skeleton — populated as we go so we can write a record
   // even on early failure paths.
   const telemetry: EnsembleTelemetry = {
@@ -1238,6 +1246,11 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
+      // ARC-258 follow-up: warmup "ready" signaling now lives in
+      // the unified pr-overview sticky. The rerun fan-out fires
+      // both pr-review-rerun and pr-overview after indexing
+      // completes, so the warmup callout drops organically once
+      // the manifest is present.
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     } catch (submitErr) {
@@ -1313,6 +1326,8 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
+      // ARC-258 follow-up: warmup "ready" signaling lives in the
+      // unified pr-overview sticky now; rerun fan-out re-renders it.
       await maybePostAstAutoInline()
       return finalize(telemetry, env, "posted", cache)
     }

@@ -158,6 +158,7 @@ new_classes = ["PrReviewRunDO"]
 #
 # Required GitHub App permissions:
 #   Repository → Actions: Read       (CI logs)
+#   Repository → Checks: Write       (ARC-258 in-progress reviewer check)
 #   Repository → Contents: Read      (file contents at a given ref)
 #   Repository → Issues: Write       (top-level PR comments)
 #   Repository → Pull requests: R/W  (PR diff, review comments, submit review)

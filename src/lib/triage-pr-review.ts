@@ -423,6 +423,13 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
     )
 
+    // ARC-258 follow-up: warmup "ready" signaling is no longer a
+    // separate sticky flip. The pr-overview comment carries the
+    // warmup callout when manifest is absent; the rerun fan-out at
+    // `enqueueWarmupRerunsForIndex` re-fires both pr-review and
+    // pr-overview after indexing completes, so the callout drops
+    // organically when the overview re-renders.
+
     // ARC-184: write the review manifest. Best-effort — never blocks
     // the review flow. Captures the inputs we reviewed against
     // (head/base/merge-base SHAs, file-list hash, prompt version,

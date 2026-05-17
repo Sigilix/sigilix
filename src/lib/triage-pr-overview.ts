@@ -13,6 +13,8 @@ import { GitHubClient, type PrCommit, type PullRequestMeta } from "./github"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_OVERVIEW_SCHEMA } from "./schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
+import { readRepoIndexManifest } from "./repo-index-manifest"
+import { LEGACY_WARMUP_MARKER, WARMUP_CALLOUT_MARKER } from "./warmup"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -95,7 +97,15 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // of truth for the POST-vs-PATCH decision (closes the race window
     // where a sibling Worker posts the marker while we're waiting on the
     // model).
-    const existingBeforeModel = await findExistingOverviewComment(client, owner, repo, prNumber)
+    //
+    // ARC-258 follow-up: the same scan also surfaces any legacy
+    // standalone `<!-- sigilix:warmup -->` sticky from before the
+    // unification. We delete it after the successful overview write
+    // — caching its id here avoids a third `listIssueComments` round
+    // trip that would otherwise contradict the race-test invariants.
+    const initialScan = await scanComments(client, owner, repo, prNumber)
+    const existingBeforeModel = initialScan.overviewId
+    let legacyWarmupId: number | null = initialScan.legacyWarmupId
     since("dedupe-checked")
 
     // For incremental runs we only show the most recent commits (matches the
@@ -143,7 +153,11 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // PrReviewRunDO) is tracked separately.
     let existingForWrite = existingBeforeModel
     if (existingForWrite == null) {
-      existingForWrite = await findExistingOverviewComment(client, owner, repo, prNumber)
+      const reScan = await scanComments(client, owner, repo, prNumber)
+      existingForWrite = reScan.overviewId
+      // Late scan may surface a legacy warmup we missed before (or
+      // confirm it's already gone). Update the cached id either way.
+      legacyWarmupId = reScan.legacyWarmupId
       if (existingForWrite != null) {
         console.log(JSON.stringify({
           event: "pr-overview-second-pass-dedupe-fired",
@@ -154,23 +168,58 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       }
     }
 
+    // ARC-258 follow-up: unify warmup + overview into a single sticky.
+    // Read the index manifest right before rendering the body — if
+    // it's absent, the warmup callout shows at the top of the overview.
+    // Once indexing completes, `enqueueWarmupRerunsForIndex` re-fires
+    // pr-overview, which re-runs through here with manifest present,
+    // edits the existing comment in place, and the callout disappears.
+    // Best-effort: a KV failure here defaults to `warmup: "none"` — we'd
+    // rather omit the callout on a transient KV blip than fail the
+    // overview post.
+    let warmup: "pending" | "none" = "none"
+    try {
+      const manifest = await readRepoIndexManifest(env, repo)
+      if (manifest.kind !== "ok") warmup = "pending"
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-overview-manifest-read-failed",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+
     // Build the body AFTER the late re-check so a late-discovered marker
     // renders as an incremental "— latest push" update, not a fresh
     // first-run summary.
-    const body = formatOverviewComment({ verdict, isFirstRun: existingForWrite == null })
+    const body = formatOverviewComment({
+      verdict,
+      isFirstRun: existingForWrite == null,
+      warmup,
+    })
 
     if (existingForWrite != null) {
       await client.updateIssueComment(owner, repo, existingForWrite, body)
       since("comment-updated")
       console.log(
-        `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files)`
+        `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
       )
     } else {
       const created = await client.createIssueComment(owner, repo, prNumber, body)
       since("comment-created")
       console.log(
-        `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files)`
+        `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
       )
+    }
+
+    // ARC-258 follow-up: one-way migration. Delete the legacy
+    // standalone `<!-- sigilix:warmup -->` sticky if our cached scan
+    // found one — its content is now inside the overview body.
+    // Reusing the cached id avoids another `listIssueComments`
+    // round-trip (also keeps the ARC-231 race tests happy — they
+    // assert specific call counts).
+    if (legacyWarmupId !== null) {
+      await deleteLegacyWarmupSticky(client, owner, repo, prNumber, legacyWarmupId)
     }
   } finally {
     // Always release the dedupe lock — even on failure — so the queue's
@@ -281,6 +330,10 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
 interface FormatArgs {
   verdict: PrOverviewVerdict
   isFirstRun: boolean
+  /** ARC-258 follow-up: `"pending"` renders a "warming up" callout
+   *  block at the top of the overview when the indexer hasn't
+   *  produced a manifest yet. `"none"` (default) omits the callout. */
+  warmup?: "pending" | "none"
 }
 
 /**
@@ -288,10 +341,24 @@ interface FormatArgs {
  * on line 1 is what `findExistingOverviewComment` greps for to decide
  * between POST-new and PATCH-in-place.
  */
-export function formatOverviewComment({ verdict, isFirstRun }: FormatArgs): string {
+export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
   lines.push("## Sigilix Overview")
   lines.push("")
+
+  // ARC-258 follow-up: warmup callout. Renders as a quoted "note"
+  // block at the very top of the overview so the customer sees it
+  // first. Dropped on next overview render once the manifest is
+  // present (the rerun fan-out fires after indexing completes).
+  if (warmup === "pending") {
+    // WARMUP_CALLOUT_MARKER is required: `enqueueWarmupRerunsForIndex`
+    // greps for it to find PRs that need the post-indexing rerun.
+    lines.push(`> [!NOTE] ${WARMUP_CALLOUT_MARKER}`)
+    lines.push("> **Sigilix is warming up its index for this repo.**")
+    lines.push("> This first review uses only the diff — cross-file context isn't available yet because indexing is still running. As soon as it completes, Sigilix will automatically re-review this PR with full codebase-aware retrieval.")
+    lines.push("")
+  }
+
   lines.push(`### Summary${isFirstRun ? "" : " — latest push"}`)
   lines.push("")
   lines.push(verdict.summary)
@@ -333,15 +400,65 @@ function escapeTableCell(value: string): string {
   return value.replace(/\|/g, "\\|").replace(/\n/g, " ")
 }
 
-async function findExistingOverviewComment(
+/**
+ * Single pass over PR comments looking for BOTH the overview sticky
+ * (so we can decide POST-vs-PATCH) AND the legacy standalone warmup
+ * sticky (so we can delete it after writing the overview).
+ *
+ * Returning both ids in one call means the overview helper doesn't
+ * need a separate `listIssueComments` round trip for migration
+ * cleanup — keeps the ARC-231 race-test call-count invariants intact
+ * and saves one GitHub API call per PR review on repos still
+ * carrying pre-unification stickies.
+ */
+async function scanComments(
   client: GitHubClient,
   owner: string,
   repo: string,
-  prNumber: number
-): Promise<number | null> {
+  prNumber: number,
+): Promise<{ overviewId: number | null; legacyWarmupId: number | null }> {
   const items = await client.listIssueComments(owner, repo, prNumber)
-  const hit = items.find((c) => typeof c.body === "string" && c.body.includes(OVERVIEW_MARKER))
-  return hit ? hit.id : null
+  let overviewId: number | null = null
+  let legacyWarmupId: number | null = null
+  for (const c of items) {
+    if (typeof c.body !== "string") continue
+    if (overviewId === null && c.body.includes(OVERVIEW_MARKER)) {
+      overviewId = c.id
+    }
+    if (legacyWarmupId === null && c.body.includes(LEGACY_WARMUP_MARKER)) {
+      legacyWarmupId = c.id
+    }
+    if (overviewId !== null && legacyWarmupId !== null) break
+  }
+  return { overviewId, legacyWarmupId }
+}
+
+/**
+ * ARC-258 follow-up: delete the legacy standalone warmup sticky by
+ * id. Caller resolved the id from `scanComments`. Best-effort: a
+ * 404 (someone else deleted it first) or 403 (App missing perms)
+ * logs + returns; never throws.
+ */
+async function deleteLegacyWarmupSticky(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  commentId: number,
+): Promise<void> {
+  try {
+    await client.deleteIssueComment(owner, repo, commentId)
+    console.log(JSON.stringify({
+      event: "pr-overview-legacy-warmup-deleted",
+      owner, repo, prNumber, comment_id: commentId,
+    }))
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-overview-legacy-warmup-delete-failed",
+      owner, repo, prNumber, comment_id: commentId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
 }
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {

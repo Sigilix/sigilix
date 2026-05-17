@@ -411,6 +411,119 @@ export class GitHubClient {
   }
 
   /**
+   * ARC-258: list all check runs on a given commit SHA. Used by the
+   * dispatcher to find stale Sigilix-named checks (from prior queue
+   * retries or rename-deploy switchovers) and cancel them before
+   * creating a fresh one.
+   *
+   * Returns `{ id, name, status }` per check run. We don't need the
+   * full check-run shape — the dispatcher only matches by name and
+   * looks at status to decide whether to cancel.
+   */
+  async listCheckRunsForRef(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): Promise<Array<{ id: number; name: string; status: string }>> {
+    type Resp = { check_runs?: Array<{ id: number; name: string; status: string }> }
+    const data = await this.request<Resp>(
+      "GET",
+      `/repos/${owner}/${repo}/commits/${ref}/check-runs?per_page=100`,
+      undefined,
+      "json",
+    )
+    return data.check_runs ?? []
+  }
+
+  /**
+   * ARC-258: create a Check Run in `in_progress` state. Renders in
+   * the PR's Checks tab as "Sigilix · In progress" with a
+   * spinner — the customer-visible "we're working on it" indicator.
+   * Completed with `updateCheckRun` once the real review POSTs.
+   *
+   * Sigilix's check is informational (`conclusion: neutral` on
+   * completion); we never block merges. Requires `checks: write`
+   * permission on the GitHub App — gating + error-handling is the
+   * caller's responsibility (we let 403 propagate so misconfigured
+   * installations surface visibly in logs).
+   *
+   * Notes on the payload shape:
+   *   - `head_sha` is the commit being reviewed (not the PR's base).
+   *   - `details_url` (optional) deep-links from the check to a
+   *     status page. Omitted for now — we don't host one.
+   *   - `output.title` / `output.summary` show in the check's
+   *     expanded view. Keep short; the real review is the substance.
+   */
+  async createCheckRun(
+    owner: string,
+    repo: string,
+    args: {
+      name: string
+      headSha: string
+      status?: "queued" | "in_progress" | "completed"
+      startedAt?: string
+      detailsUrl?: string
+      externalId?: string
+      output?: { title: string; summary: string }
+    },
+  ): Promise<{ id: number }> {
+    const payload: Record<string, unknown> = {
+      name: args.name,
+      head_sha: args.headSha,
+    }
+    if (args.status !== undefined) payload.status = args.status
+    if (args.startedAt !== undefined) payload.started_at = args.startedAt
+    if (args.detailsUrl !== undefined) payload.details_url = args.detailsUrl
+    if (args.externalId !== undefined) payload.external_id = args.externalId
+    if (args.output !== undefined) payload.output = args.output
+    return this.restPost<{ id: number }>(
+      `/repos/${owner}/${repo}/check-runs`,
+      payload,
+    )
+  }
+
+  /**
+   * ARC-258: update a Check Run created by `createCheckRun`. Used to
+   * transition from `in_progress` → `completed` with an appropriate
+   * `conclusion`. Conclusions used by Sigilix:
+   *
+   *   - `neutral`     — review posted successfully (default; we
+   *                     never block merges so this is the steady-
+   *                     state success outcome).
+   *   - `failure`     — orchestrator threw / synth failed / quorum
+   *                     missed. Customer sees a red X check so they
+   *                     know to look at logs / re-run.
+   *   - `skipped`     — stale-head short-circuit fired between
+   *                     check creation and submit. Rare but real
+   *                     (commit pushed mid-review). Customer-visible
+   *                     "skipped" beats a stuck in-progress check.
+   *
+   * Per GitHub's API, `conclusion` is REQUIRED when `status` is
+   * `completed`. We always set both.
+   */
+  async updateCheckRun(
+    owner: string,
+    repo: string,
+    checkRunId: number,
+    args: {
+      status?: "queued" | "in_progress" | "completed"
+      conclusion?: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required"
+      completedAt?: string
+      output?: { title: string; summary: string }
+    },
+  ): Promise<void> {
+    const payload: Record<string, unknown> = {}
+    if (args.status !== undefined) payload.status = args.status
+    if (args.conclusion !== undefined) payload.conclusion = args.conclusion
+    if (args.completedAt !== undefined) payload.completed_at = args.completedAt
+    if (args.output !== undefined) payload.output = args.output
+    await this.restPatch<unknown>(
+      `/repos/${owner}/${repo}/check-runs/${checkRunId}`,
+      payload,
+    )
+  }
+
+  /**
    * ARC-184: fully-paginated changed-file list for the per-PR review
    * manifest. Distinct from `listPullRequestFiles` (capped at 50 for
    * other call sites) — drains pages until exhausted, includes
@@ -612,6 +725,25 @@ export class GitHubClient {
     body: string
   ): Promise<void> {
     await this.restPatch<unknown>(`/repos/${owner}/${repo}/issues/comments/${commentId}`, { body })
+  }
+
+  /**
+   * Delete a top-level issue/PR-conversation comment. Used by the
+   * pr-overview helper's one-way migration to delete the legacy
+   * standalone warmup sticky once its content has been folded into
+   * the unified overview body (ARC-258 follow-up).
+   */
+  async deleteIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+  ): Promise<void> {
+    await this.request<unknown>(
+      "DELETE",
+      `/repos/${owner}/${repo}/issues/comments/${commentId}`,
+      undefined,
+      "json",
+    )
   }
 
   /**

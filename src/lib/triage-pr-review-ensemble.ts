@@ -80,10 +80,16 @@ import {
   loadSigilixConfig,
   passesLabelGate,
   resolveCostControlsConfig,
+  resolveDocsReviewConfig,
   resolveCommandConfig,
   resolveAstRulesConfig,
   type SigilixConfig,
 } from "./sigilix-config"
+import {
+  runDocsCoverageCheck,
+  renderDocsCoverageForPrompt,
+  type DocsCoverageHit,
+} from "./docs-coverage-check"
 import {
   splitDiffByFile,
   packFilesIntoBatches,
@@ -801,13 +807,42 @@ export async function handlePrReviewEnsemble(
           durationMs: sarifResult.telemetry.durationMs,
         }
 
+    // ARC-272: docs-coverage check. Zero-LLM, pure: takes the
+    // PR's changed-file list + operator config and returns a hit
+    // when architecture-impacting paths were touched without a
+    // matching docs update. Runs BEFORE the prompt is built so the
+    // hit becomes part of the authoritative-fact block fed to the
+    // specialists + synth.
+    //
+    // `splitFiles` is the pre-`pathFilters` changed-file set — we
+    // want every file the PR touched, not the post-filter subset
+    // (the filter drops noise like lockfiles, but docs-coverage
+    // wants to see architectural changes regardless of whether
+    // they're reviewed).
+    const docsReviewConfig = resolveDocsReviewConfig(sigilixConfig)
+    const docsCoverageHit: DocsCoverageHit | null = runDocsCoverageCheck(
+      splitFiles.map((f) => f.path),
+      docsReviewConfig,
+    )
+    if (docsCoverageHit !== null) {
+      console.log(JSON.stringify({
+        event: "pr-review-docs-coverage-hit",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        architecture_files: docsCoverageHit.architectureFiles,
+        doc_paths: [...docsCoverageHit.docPaths],
+      }))
+    }
+
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
+    const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
     // Combine all pre-LLM fact blocks. Order: secrets first
     // (highest severity), dep vulns, AST rules, SARIF (Trivy IaC +
-    // CVE + license), regex deterministic checks last.
-    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, sarifBlock, deterministicBlock]
+    // CVE + license), regex deterministic checks, then the
+    // informational docs-coverage signal last (low-severity nudge,
+    // not a blocker).
+    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, sarifBlock, deterministicBlock, docsCoverageBlock]
       .filter((s) => s.length > 0)
       .join("\n\n")
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring

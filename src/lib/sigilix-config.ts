@@ -227,6 +227,44 @@ export interface SigilixConfig {
     maxPatchLength?: number
     runOnLabels?: string[]
   }
+  /**
+   * ARC-272: zero-LLM documentation-coverage check. Runs in the
+   * pre-fanout deterministic-check pipeline alongside secret scan,
+   * dep-vuln, AST rules, SARIF, and regex deterministic checks. When
+   * a PR touches any file matching `architectureGlobs` but DOES NOT
+   * touch any file matching `docPaths`, the check emits an
+   * authoritative-fact line for the synthesizer + specialists:
+   * "PR touches architecture but adds no documentation update."
+   *
+   * Cheap, deterministic, no model spend. Zero false-positive
+   * tolerance is fine because the check is informational — it never
+   * blocks merges.
+   *
+   * Fields (all optional):
+   *   - `enabled`: master switch. Default `true`; explicit `false`
+   *     disables. Pairs with `architectureGlobs` below — when that
+   *     list is empty, the check is a no-op regardless of this
+   *     flag, so default-on is safe.
+   *   - `architectureGlobs`: glob patterns for architecture-impacting
+   *     paths. Default: **empty** — the check ships silent until
+   *     the operator opts in by configuring patterns. Avoids noisy
+   *     false-positives at scale on repos with non-standard layouts.
+   *   - `docPaths`: glob patterns for documentation paths. Default
+   *     covers `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/<gs>`,
+   *     `CHANGELOG.md`. Operator can override entirely.
+   *
+   * Example:
+   *   "docsReview": {
+   *     "enabled": true,
+   *     "architectureGlobs": ["src/lib/<gs>", "wrangler.toml", "package.json"],
+   *     "docPaths": ["README.md", "docs/<gs>"]
+   *   }
+   */
+  docsReview?: {
+    enabled?: boolean
+    architectureGlobs?: string[]
+    docPaths?: string[]
+  }
 }
 
 /**
@@ -722,6 +760,34 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (Object.keys(ccOut).length > 0) out.costControls = ccOut
   }
+  // ARC-272: docsReview parsing. Strict-bool `enabled`; string arrays
+  // with trim+dedupe for both glob lists.
+  if (obj.docsReview && typeof obj.docsReview === "object" && !Array.isArray(obj.docsReview)) {
+    const drIn = obj.docsReview as Record<string, unknown>
+    const drOut: NonNullable<SigilixConfig["docsReview"]> = {}
+    if (typeof drIn.enabled === "boolean") {
+      drOut.enabled = drIn.enabled
+    }
+    if (Array.isArray(drIn.architectureGlobs)) {
+      const globs = [...new Set(
+        drIn.architectureGlobs
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      if (globs.length > 0) drOut.architectureGlobs = globs
+    }
+    if (Array.isArray(drIn.docPaths)) {
+      const paths = [...new Set(
+        drIn.docPaths
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      if (paths.length > 0) drOut.docPaths = paths
+    }
+    if (Object.keys(drOut).length > 0) out.docsReview = drOut
+  }
   return { ok: true, config: out }
 }
 
@@ -779,6 +845,57 @@ export function passesLabelGate(
   if (runOnLabels.length === 0) return true
   const labelSet = new Set(labels.map((l) => l.toLowerCase()))
   return runOnLabels.some((g) => labelSet.has(g.toLowerCase()))
+}
+
+// ─── ARC-272: docs-coverage resolution ───────────────────────────────
+
+/**
+ * Default doc-paths recognized when an operator opts into the
+ * docs-coverage check without overriding `docPaths`. Covers the
+ * common conventions across most repos. Operator can replace by
+ * setting their own `docPaths`.
+ */
+const DEFAULT_DOCS_PATHS: readonly string[] = [
+  "README.md",
+  "AGENTS.md",
+  "CLAUDE.md",
+  "CHANGELOG.md",
+  "docs/**",
+  "doc/**",
+] as const
+
+export interface ResolvedDocsReview {
+  enabled: boolean
+  /** Architecture-impacting paths. Empty array means the check
+   *  is effectively a no-op (no patterns to flag). */
+  architectureGlobs: readonly string[]
+  /** Documentation paths the check looks for as "if any of these
+   *  were ALSO touched, the PR satisfies docs coverage." */
+  docPaths: readonly string[]
+}
+
+/**
+ * ARC-272: resolve docs-review config to a locked shape. Defaults:
+ *   - `enabled: true` (opt-OUT, but a no-op until `architectureGlobs`
+ *     is non-empty, so default-on doesn't surprise repos without
+ *     opt-in.)
+ *   - `architectureGlobs: []` (operator must list paths they
+ *     consider architecture-impacting; the check has no built-in
+ *     opinion to avoid noisy defaults.)
+ *   - `docPaths: DEFAULT_DOCS_PATHS` (sensible cross-repo defaults
+ *     unless operator overrides.)
+ *
+ * Pure; never throws.
+ */
+export function resolveDocsReviewConfig(
+  config: SigilixConfig | null,
+): ResolvedDocsReview {
+  const dr = config?.docsReview
+  return {
+    enabled: dr?.enabled !== false,
+    architectureGlobs: dr?.architectureGlobs ?? [],
+    docPaths: dr?.docPaths ?? DEFAULT_DOCS_PATHS,
+  }
 }
 
 /** Pure clamp helper for the reviewMemory numeric fields. */

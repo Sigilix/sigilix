@@ -956,3 +956,53 @@ describe("passesLabelGate", () => {
     expect(passesLabelGate(["needs-review"], ["needs-review", "sigilix:review"])).toBe(true)
   })
 })
+
+// ARC-272 — docsReview config parsing
+describe("parseSigilixConfig — docsReview", () => {
+  it("parses a fully-populated docsReview block", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({
+      docsReview: {
+        enabled: true,
+        architectureGlobs: ["src/lib/**", "wrangler.toml"],
+        docPaths: ["README.md", "docs/**"],
+      },
+    }))
+    expect(cfg?.docsReview?.enabled).toBe(true)
+    expect(cfg?.docsReview?.architectureGlobs).toEqual(["src/lib/**", "wrangler.toml"])
+    expect(cfg?.docsReview?.docPaths).toEqual(["README.md", "docs/**"])
+  })
+
+  it("strict-bool: only literal false disables", () => {
+    const cfg1 = parseSigilixConfig(JSON.stringify({ docsReview: { enabled: false } }))
+    expect(cfg1?.docsReview?.enabled).toBe(false)
+    const cfg2 = parseSigilixConfig(JSON.stringify({ docsReview: { enabled: "false" } }))
+    expect(cfg2?.docsReview?.enabled).toBeUndefined()
+  })
+
+  it("trims + dedupes glob entries", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({
+      docsReview: { architectureGlobs: ["src/**", "  src/**  ", "lib/**"] },
+    }))
+    expect(cfg?.docsReview?.architectureGlobs?.sort()).toEqual(["lib/**", "src/**"])
+  })
+
+  it("drops non-string glob entries", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({
+      docsReview: { architectureGlobs: ["src/**", 42, null, "lib/**"] },
+    }))
+    expect(cfg?.docsReview?.architectureGlobs?.sort()).toEqual(["lib/**", "src/**"])
+  })
+
+  it("drops docsReview entirely when nothing valid is present", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({
+      docsReview: { architectureGlobs: [], docPaths: [] },
+    }))
+    expect(cfg?.docsReview).toBeUndefined()
+  })
+
+  it("returns config (not null) on malformed docsReview (silent drop)", () => {
+    const cfg = parseSigilixConfig(JSON.stringify({ docsReview: "oops" }))
+    expect(cfg).not.toBeNull()
+    expect(cfg?.docsReview).toBeUndefined()
+  })
+})

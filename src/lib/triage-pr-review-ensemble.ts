@@ -1444,6 +1444,34 @@ export async function handlePrReviewEnsemble(
     })
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
+      // ARC-258 follow-up (PR #84 anomaly catch): GitHub's POST to
+      // `/pulls/{n}/reviews` occasionally returns 2xx with a valid-
+      // looking `{id, state}` payload but doesn't actually persist
+      // the review — observed once on PR #84 where the dispatcher
+      // reported `posted`, the Check Run completed as `success`
+      // with title "Review posted", but no review existed on the
+      // PR. Re-fetch the review by id immediately; if 404, mark
+      // the run as `errored` so the Check Run reflects reality
+      // (failure ≠ silent success) and the customer sees a
+      // signal that a real submit didn't happen.
+      const verified = await verifyReviewPersisted(
+        client, owner, repo, prNumber, submitted.id,
+      )
+      if (!verified) {
+        console.error(JSON.stringify({
+          event: "pr-review-submit-not-persisted",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          claimed_review_id: submitted.id,
+          submit_path: "inline-anchored",
+        }))
+        telemetry.fellBackReason = "submit_not_persisted"
+        // Telemetry consistency with other `errored` paths: signal
+        // that the dispatcher's `ensemble-post` fallback will route
+        // to Phase 3 next. Without this flag, `fellBackToPhase3`
+        // counters in shadow analysis would undercount this case.
+        telemetry.fellBackToPhase3 = mode === "post"
+        return finalize(telemetry, env, "errored", cache)
+      }
       telemetry.submitted = true
       // ARC-184: write review-provenance manifest. Best-effort.
       // ARC-271: also persist the per-finding snapshot so the next
@@ -1545,6 +1573,27 @@ export async function handlePrReviewEnsemble(
         ...(stack.isStacked ? { stack } : {}),
       })
       const submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
+      // ARC-258 follow-up (PR #84 anomaly catch): same post-submit
+      // verification as the primary path — catches the silent-
+      // success-but-no-persist case for the anchorless fallback.
+      const verifiedFallback = await verifyReviewPersisted(
+        client, owner, repo, prNumber, submittedFallback.id,
+      )
+      if (!verifiedFallback) {
+        console.error(JSON.stringify({
+          event: "pr-review-submit-not-persisted",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          claimed_review_id: submittedFallback.id,
+          submit_path: "anchorless-fallback",
+        }))
+        telemetry.fellBackReason = "submit_not_persisted"
+        // Telemetry consistency with other `errored` paths: signal
+        // that the dispatcher's `ensemble-post` fallback will route
+        // to Phase 3 next. Without this flag, `fellBackToPhase3`
+        // counters in shadow analysis would undercount this case.
+        telemetry.fellBackToPhase3 = mode === "post"
+        return finalize(telemetry, env, "errored", cache)
+      }
       telemetry.submitted = true
       // ARC-184: write manifest for the fallback path too. Same target
       // shape (kind: "review") because the fallback is still a GitHub
@@ -1768,6 +1817,46 @@ function countLines(diff: string): number {
     else if (line.startsWith("-") && !line.startsWith("---")) n++
   }
   return n
+}
+
+/**
+ * ARC-258 follow-up (PR #84 anomaly): immediately after
+ * `submitReview` reports success, re-fetch the review by id to
+ * confirm it was actually persisted on GitHub's side. The
+ * dispatcher's Check Run reflects whatever the ensemble returns —
+ * if `submitReview` returns a fake-looking 2xx but the review
+ * never persists, we MUST mark the run as errored so the customer
+ * sees a real-failure signal instead of a green check with a
+ * "Review posted" claim that doesn't match reality.
+ *
+ * Returns true when the review id resolves to a real review,
+ * false on 404. Any other error (network blip, transient 5xx,
+ * etc.) returns `true` defensively — a transient verification
+ * failure should NOT mark a successful submit as errored.
+ */
+async function verifyReviewPersisted(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  reviewId: number,
+): Promise<boolean> {
+  try {
+    const fetched = await client.getReview(owner, repo, prNumber, reviewId)
+    return fetched !== null
+  } catch (err) {
+    // Network blip / transient 5xx — we'd rather false-positive a
+    // posted review than false-negative one that actually exists.
+    // The Check Run's `success` conclusion stays; if the review
+    // genuinely didn't post, the customer will notice and we can
+    // grep telemetry for `pr-review-verify-error`.
+    console.warn(JSON.stringify({
+      event: "pr-review-verify-error",
+      owner, repo, prNumber, review_id: reviewId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return true
+  }
 }
 
 async function buildClient(env: Env, installationId: number): Promise<GitHubClient> {

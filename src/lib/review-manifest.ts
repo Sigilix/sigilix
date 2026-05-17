@@ -106,7 +106,12 @@ function isReviewManifestFinding(value: unknown): value is ReviewManifestFinding
   return (
     typeof o.key === "string" && o.key.length > 0 &&
     typeof o.path === "string" && o.path.length > 0 &&
-    typeof o.headline === "string" &&
+    // CodeRabbit phase-end catch: require non-empty headline. The
+    // delta key is `sha256(path | normalized-headline)`, so an
+    // empty headline collapses every same-path finding to the same
+    // key, breaking still-open/new classification. Also a semantic
+    // invariant — every finding should have a descriptive headline.
+    typeof o.headline === "string" && o.headline.length > 0 &&
     typeof o.score === "number" &&
     typeof o.consensus === "number"
   )

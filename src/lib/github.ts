@@ -412,7 +412,7 @@ export class GitHubClient {
 
   /**
    * ARC-258: create a Check Run in `in_progress` state. Renders in
-   * the PR's Checks tab as "Sigilix Review · In progress" with a
+   * the PR's Checks tab as "Sigilix · In progress" with a
    * spinner — the customer-visible "we're working on it" indicator.
    * Completed with `updateCheckRun` once the real review POSTs.
    *

@@ -1,4 +1,4 @@
-// ARC-258 — customer-visible "Sigilix Review · In progress" check
+// ARC-258 — customer-visible "Sigilix · In progress" check
 // run lifecycle. Lives at the dispatcher level (called from
 // `dispatchJob`'s `pr-review` case) because the ensemble-post path
 // can fall back to Phase 3 on quorum/synth/internal errors, and the
@@ -16,9 +16,12 @@ import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
 import type { Env } from "../index"
 
-/** Name used for the Check Run. Single string lets future code
- *  look up the in-progress check by name+head_sha if needed. */
-export const CHECK_RUN_NAME = "Sigilix Review"
+/** Name used for the Check Run — renders in the PR's Checks tab.
+ *  Kept short ("Sigilix") since the row already carries the
+ *  in_progress/completed status; "Sigilix Review" was redundant.
+ *  Single string lets future code look up the in-progress check
+ *  by name+head_sha if needed. */
+export const CHECK_RUN_NAME = "Sigilix"
 
 /** Conclusion subset Sigilix actually emits. Narrower than GitHub's
  *  full set so call sites can't accidentally pass `cancelled` or

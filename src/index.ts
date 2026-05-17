@@ -770,7 +770,7 @@ async function postSlashCommandAck(
 /**
  * ARC-258: map a Phase 3 result status to the right check-run
  * conclusion. Used by the `pr-review` dispatcher to finalize the
- * customer-visible "Sigilix Review" check.
+ * customer-visible "Sigilix" check.
  *
  *   - `posted`     → `neutral`. Review went out; we're non-blocking.
  *   - `stale_head` → `skipped`. New commit pushed before we reviewed
@@ -864,7 +864,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           }))
           return
         }
-        // ARC-258: customer-visible "Sigilix Review · In progress"
+        // ARC-258: customer-visible "Sigilix · In progress"
         // check run. Created here at the dispatcher level (not
         // inside the handlers) so a single owner can pick the right
         // final conclusion across ensemble + Phase 3 fallback

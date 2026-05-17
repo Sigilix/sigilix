@@ -64,6 +64,7 @@ import {
   type IndexJobReason,
 } from "./lib/index-producer"
 import { handleIndexRepoJob } from "./lib/indexer"
+import { postWarmupStickyIfUnindexed } from "./lib/warmup"
 import {
   handleInstallReposRemoved,
   handleInstallationDeleted,
@@ -790,6 +791,20 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           : {}),
       }
       return runPrReviewWithDoCallback(job, env, async () => {
+        // ARC-236: cold-start warmup UX. If `repo-index-manifest:<repo>`
+        // doesn't exist yet (PR fired before ARC-235's indexer wrote
+        // the manifest), post a sticky comment so the customer knows
+        // this first review is diff-only. Best-effort — the review
+        // still runs regardless. ARC-236 fires the rerun automatically
+        // from `handleIndexRepoJob`'s success path.
+        await postWarmupStickyIfUnindexed({
+          env,
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          installationId: job.installationId,
+        })
+
         // Phase 4 routing: ensemble (shadow/post), Phase 3 agentic, or
         // Phase 3 single-shot legacy. See triage-pr-review-ensemble.ts
         // for the full decision matrix.

@@ -33,6 +33,12 @@ vi.mock("../src/lib/triage-pr-review", async () => {
     handlePrReview: handlePrReviewMock,
   }
 })
+// ARC-236: dispatchJob now calls `postWarmupStickyIfUnindexed` before
+// `routeReview`. Mock it to a no-op so these tests don't have to
+// stub KV + GitHub installation-token machinery.
+vi.mock("../src/lib/warmup", () => ({
+  postWarmupStickyIfUnindexed: vi.fn(async () => ({ skipped: "already-indexed" })),
+}))
 
 import { dispatchJob } from "../src/index"
 import type { Env, JobMessage } from "../src/index"

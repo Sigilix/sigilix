@@ -60,6 +60,7 @@ import {
   readRepoIndexVectors,
   writeRepoIndexVectors,
 } from "./repo-index-vectors"
+import { enqueueWarmupRerunsForIndex } from "./warmup"
 
 // ---------------------------------------------------------------------
 // Constants (ported from scripts/index-repo.mjs — keep aligned)
@@ -431,6 +432,12 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     owner, repo, run_id: runId,
     file_count: sliceHi, chunk_count: chunkCount, shard_count: 1,
   }))
+  // ARC-236: fan out reruns for PRs that warmed up. Best-effort —
+  // failure to enqueue doesn't fail the index job (the indexing
+  // itself succeeded; reruns are a customer-UX upgrade).
+  await enqueueWarmupRerunsForIndex({
+    env, client, owner, repo, installationId,
+  })
 }
 
 async function handleShardJob(
@@ -549,6 +556,11 @@ async function handleShardJob(
       chunk_count: cumulativeChunks,
       shard_count: shardCount,
     }))
+    // ARC-236: fan out reruns on the final-shard path too. Multi-
+    // shard repos benefit from the same warmup-rerun UX.
+    await enqueueWarmupRerunsForIndex({
+      env, client, owner, repo, installationId,
+    })
     return
   }
 

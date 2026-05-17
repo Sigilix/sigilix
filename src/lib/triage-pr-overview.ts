@@ -46,13 +46,22 @@ export interface PrOverviewArgs {
   headSha: string
   installationId: number
   env: Env
+  /**
+   * ARC-258 follow-up: when set, the dedupe-key check below is
+   * skipped. Used by the pr-review success path to force a fresh
+   * overview render after a review completes — without this flag,
+   * the per-(PR, headSha) dedupe (set by the initial pr-overview
+   * run earlier in the same headSha) would suppress the refresh.
+   * Webhook-driven calls omit this flag and keep dedupe intact.
+   */
+  force?: boolean
 }
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
 
 export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env } = args
+  const { owner, repo, prNumber, headSha, installationId, env, force } = args
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-overview] ${label} +${Date.now() - t0}ms`, {
@@ -73,7 +82,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   // try/finally below — queue retries can re-attempt without being
   // blocked by a stale lock.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
-  if (await env.OPENCLAW_STATE.get(dedupeKey)) {
+  // ARC-258 follow-up: `force === true` bypasses the dedupe so the
+  // pr-review success path can refresh the overview within the
+  // same headSha (the initial run's 5-min lock would otherwise
+  // suppress the refresh). Webhook-driven enqueues omit `force`
+  // and keep the duplicate-comment guard intact.
+  if (!force && (await env.OPENCLAW_STATE.get(dedupeKey))) {
     console.log(JSON.stringify({
       event: "pr-overview-skipped",
       dedupe_system: "kv",
@@ -82,9 +96,11 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     }))
     return
   }
-  await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
-    expirationTtl: DEDUPE_TTL_SECONDS,
-  })
+  if (!force) {
+    await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
+      expirationTtl: DEDUPE_TTL_SECONDS,
+    })
+  }
 
   try {
     const client = await buildClient(env, installationId)
@@ -327,7 +343,12 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // Always release the dedupe lock — even on failure — so the queue's
     // retry can attempt again. Without this, the first failure leaves
     // a 5-min lock that blocks every retry until it expires.
-    await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+    //
+    // Force-mode runs don't set the lock (see above), so don't release
+    // it either — we'd risk stomping a sibling non-force run's lock.
+    if (!force) {
+      await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+    }
   }
 }
 

@@ -254,6 +254,16 @@ export type JobMessage =
       prNumber: number
       headSha: string
       installationId: number
+      /**
+       * ARC-258 follow-up: when set, the pr-overview handler skips
+       * its per-(PR, headSha) dedupe check and re-runs unconditionally.
+       * Used by the pr-review success path to refresh the overview
+       * after a review completes — without `force`, the per-headSha
+       * dedupe (5-min TTL set by the initial run on this headSha)
+       * would suppress the refresh. Webhook-driven enqueues omit
+       * this flag and keep the dedupe semantics intact.
+       */
+      force?: boolean
     }
   | {
       // ARC-265: auto-label picker. Fires per `pull_request` webhook
@@ -821,6 +831,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
+        ...(job.force ? { force: true } : {}),
       })
     case "pr-labels":
       // ARC-265: auto-label picker. Short-circuits if

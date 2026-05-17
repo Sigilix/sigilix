@@ -197,4 +197,46 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
     expect(mockUpdateIssueComment.mock.calls[0]![2]).toBe(555)
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
   })
+
+  // ARC-258 follow-up: the pr-review success path enqueues a forced
+  // pr-overview refresh to clear any stale warmup-callout marker. The
+  // refresh must bypass the per-(PR, headSha) dedupe (set by the
+  // initial pr-overview run earlier in the same headSha) — without
+  // bypass, the refresh would be silently suppressed for 5 min.
+  it("force: true bypasses the dedupe lock so a refresh runs within the same headSha", async () => {
+    const { kv, store } = makeKvStub()
+    // Seed the dedupe key from a prior pr-overview run on this headSha.
+    store.set(`pr-overview:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`, String(Date.now()))
+    mockListIssueComments.mockResolvedValue([])
+
+    await handlePrOverview({ ...args, env: makeEnv(kv), force: true })
+
+    // Despite the dedupe key being present, the run proceeded: it
+    // hit Ollama (one call) and posted the comment.
+    expect(mockGenerate).toHaveBeenCalledOnce()
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+
+  it("force: true does NOT release the dedupe lock (avoids stomping a sibling non-force run)", async () => {
+    const { kv, store } = makeKvStub()
+    const dedupeKey = `pr-overview:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
+    store.set(dedupeKey, "sibling-marker")
+    mockListIssueComments.mockResolvedValue([])
+
+    await handlePrOverview({ ...args, env: makeEnv(kv), force: true })
+
+    // The dedupe key the SIBLING set is still present after the force run.
+    expect(store.get(dedupeKey)).toBe("sibling-marker")
+  })
+
+  it("force: undefined (default) still honors the dedupe lock", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(`pr-overview:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`, String(Date.now()))
+    mockListIssueComments.mockResolvedValue([])
+
+    await handlePrOverview({ ...args, env: makeEnv(kv) })
+
+    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+  })
 })

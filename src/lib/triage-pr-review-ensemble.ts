@@ -373,11 +373,10 @@ export async function routeReview(args: {
       : { primary: "phase3-singleshot-legacy" }
   }
 
-  if (!isRepoAllowed(env.OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS, owner, repo)) {
-    return env.OPENCLAW_AGENTIC_GITHUB_MODE === "on"
-      ? { primary: "phase3-agentic" }
-      : { primary: "phase3-singleshot-legacy" }
-  }
+  // ARC-232 (2026-05-16): the `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
+  // allowlist was deleted. The remaining ensemble gates are mode
+  // (above) + daily-budget (below) + sensitive-deny (handled inside
+  // the consumer dispatch in src/index.ts before this routing fires).
 
   if (!(await dailyBudgetAvailable(env))) {
     return env.OPENCLAW_AGENTIC_GITHUB_MODE === "on"
@@ -1415,18 +1414,6 @@ function parseMode(raw: string | undefined): EnsembleMode {
   if (raw === "shadow") return "shadow"
   if (raw === "post") return "post"
   return "off"
-}
-
-function isRepoAllowed(
-  allowedRaw: string | undefined,
-  owner: string,
-  repo: string,
-): boolean {
-  if (!allowedRaw || allowedRaw.trim().length === 0) return true  // unset = all allowed
-  const list = allowedRaw.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)
-  if (list.length === 0) return true
-  const target = `${owner}/${repo}`.toLowerCase()
-  return list.includes(target)
 }
 
 /**

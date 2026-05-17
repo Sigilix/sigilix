@@ -400,33 +400,11 @@ describe("routeReview", () => {
     expect(decision).toEqual({ primary: "ensemble-post" })
   })
 
-  it("falls through to Phase 3 when repo not in allowlist", async () => {
-    const decision = await routeReview({
-      env: {
-        ...baseEnv,
-        OPENCLAW_ENSEMBLE_REVIEW_MODE: "shadow",
-        OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS: "Arc-and-Anchor/other-repo",
-        OPENCLAW_AGENTIC_GITHUB_MODE: "on",
-      },
-      owner: "Arc-and-Anchor",
-      repo: "openclaw-worker",
-    })
-    expect(decision).toEqual({ primary: "phase3-agentic" })
-  })
-
-  it("matches repo allowlist case-insensitively", async () => {
-    const decision = await routeReview({
-      env: {
-        ...baseEnv,
-        OPENCLAW_ENSEMBLE_REVIEW_MODE: "shadow",
-        OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS: "ARC-AND-ANCHOR/OPENCLAW-WORKER",
-        OPENCLAW_AGENTIC_GITHUB_MODE: "on",
-      },
-      owner: "Arc-and-Anchor",
-      repo: "openclaw-worker",
-    })
-    expect(decision.primary).toBe("ensemble-shadow")
-  })
+  // ARC-232 (2026-05-16): `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
+  // allowlist deleted. The two "fall through on allowlist miss" /
+  // "match case-insensitively" tests that lived here are gone — the
+  // ensemble routes by mode + daily budget only now, and the sensitive
+  // denylist gates upstream in dispatchJob before this routing fires.
 
   it("falls back to Phase 3 when daily budget exhausted", async () => {
     const env = {

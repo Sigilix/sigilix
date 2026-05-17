@@ -152,10 +152,6 @@ export interface Env {
   // as customer-facing review AND runs ensemble in parallel for
   // telemetry only. "post" submits ensemble verdict to GitHub.
   OPENCLAW_ENSEMBLE_REVIEW_MODE?: string
-  // Comma-separated owner/repo allowlist. When set, ensemble only
-  // fires on these repos. Empty/unset = all repos eligible (use with
-  // care during rollout).
-  OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS?: string
   // ARC-183: comma-separated owner/repo DENYlist. When a repo is
   // listed here, Sigilix never fetches its diff or sends content to
   // any LLM. Use for compliance / customer-data / secrets-heavy

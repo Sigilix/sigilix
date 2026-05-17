@@ -51,6 +51,7 @@ import {
   renderStackContextSummary,
 } from "../prompts/pr-stack-prompt"
 import { handleStaleHead } from "./stale-head"
+import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -451,6 +452,15 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
     console.log(
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
     )
+
+    // ARC-258 follow-up: dismiss prior Sigilix reviews on this PR
+    // so the Reviews tab reflects only the current head. Same
+    // body-marker-match logic as the ensemble path; safe to leave
+    // other reviewers' reviews untouched.
+    await dismissPriorSigilixReviews({
+      client, owner, repo, prNumber,
+      currentReviewId: submitted.id,
+    })
 
     // ARC-258 follow-up: warmup "ready" signaling is no longer a
     // separate sticky flip. The pr-overview comment carries the

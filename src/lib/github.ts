@@ -594,6 +594,73 @@ export class GitHubClient {
   }
 
   /**
+   * ARC-258 follow-up: list all reviews on a PR with author + state
+   * info — used by the dispatcher to find prior Sigilix reviews from
+   * earlier commits and dismiss them so the Reviews tab reflects the
+   * current head. Returns the shape we need (id + state + user.login
+   * + body) without dragging in GitHub's full review payload.
+   *
+   * Caps at 100 reviews (paginated at per_page=100, single page) —
+   * realistic PRs have far fewer reviews than that, and the per-PR
+   * cap matches `listPullFilesForManifest` shape.
+   */
+  async listPullRequestReviews(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<Array<{ id: number; state: string; user: { login: string } | null; body: string }>> {
+    type Raw = Array<{
+      id?: number
+      state?: string
+      user?: { login?: string } | null
+      body?: string | null
+    }>
+    const items = await this.restGet<Raw>(
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
+    )
+    if (!Array.isArray(items)) return []
+    const out: Array<{ id: number; state: string; user: { login: string } | null; body: string }> = []
+    for (const it of items) {
+      if (typeof it.id !== "number" || typeof it.state !== "string") continue
+      out.push({
+        id: it.id,
+        state: it.state,
+        user: it.user?.login ? { login: it.user.login } : null,
+        body: typeof it.body === "string" ? it.body : "",
+      })
+    }
+    return out
+  }
+
+  /**
+   * ARC-258 follow-up: dismiss a prior review. GitHub requires the
+   * review to be in `APPROVED` or `CHANGES_REQUESTED` state (not
+   * `COMMENTED` or `PENDING`); attempting to dismiss a comment-only
+   * review returns 422.
+   *
+   * Used to clear a stale Sigilix approval/changes-requested when a
+   * new commit lands — without this, the Reviews tab keeps showing
+   * "approved a while ago" against an outdated commit.
+   *
+   * Caller passes a short `message` that GitHub surfaces in the
+   * Reviews tab as the dismissal reason.
+   */
+  async dismissReview(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    reviewId: number,
+    message: string,
+  ): Promise<void> {
+    await this.request<unknown>(
+      "PUT",
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}/dismissals`,
+      { message, event: "DISMISS" },
+      "json",
+    )
+  }
+
+  /**
    * ARC-184: fetch a single PR review's body for stale-marker
    * insertion. Returns null on 404 (review deleted) — caller exits
    * cleanly via `review-stale-target-missing` telemetry.

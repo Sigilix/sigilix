@@ -121,6 +121,7 @@ import {
   type ReviewManifestFinding,
   type ReviewManifestV1,
 } from "./review-manifest"
+import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
@@ -1473,6 +1474,17 @@ export async function handlePrReviewEnsemble(
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
+      // ARC-258 follow-up: dismiss any stale Sigilix reviews from
+      // earlier commits on this PR so the Reviews tab reflects only
+      // the current head. Without this, customers see "Sigilix
+      // approved a while ago" pointing at an outdated commit even
+      // after Sigilix has re-reviewed the new head. Body-marker
+      // match ensures we only ever dismiss our own reviews — never
+      // touch another reviewer's. Best-effort; never blocks.
+      await dismissPriorSigilixReviews({
+        client, owner, repo, prNumber,
+        currentReviewId: submitted.id,
+      })
       // ARC-184: write review-provenance manifest. Best-effort.
       // ARC-271: also persist the per-finding snapshot so the next
       // push's review can compute a new/still-open/likely-fixed
@@ -1595,6 +1607,14 @@ export async function handlePrReviewEnsemble(
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
+      // ARC-258 follow-up: same prior-review dismissal as the primary
+      // submit path. The fallback is also a real Sigilix review that
+      // would otherwise leave the earlier commit's approval as the
+      // visible state in the Reviews tab.
+      await dismissPriorSigilixReviews({
+        client, owner, repo, prNumber,
+        currentReviewId: submittedFallback.id,
+      })
       // ARC-184: write manifest for the fallback path too. Same target
       // shape (kind: "review") because the fallback is still a GitHub
       // review (just anchorless body). ARC-271: same per-finding

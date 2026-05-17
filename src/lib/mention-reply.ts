@@ -146,7 +146,10 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     // hard enforcement can't drift (CR PR #30 caught the gap where
     // the prompt advertised the universe but the tool didn't enforce
     // it — the model could still query unindexed namespaces).
-    const availableRepos = listIndexedRepos(env)
+    // ARC-239: `listIndexedRepos` is now KV-backed (reads
+    // `repo-index-manifest:*` keys). The agent loop already runs in
+    // an async context so the new `await` adds no surface cost.
+    const availableRepos = await listIndexedRepos(env)
     const loopResult = await runAgentLoop({
       model,
       apiKey: env.OLLAMA_API_KEY,

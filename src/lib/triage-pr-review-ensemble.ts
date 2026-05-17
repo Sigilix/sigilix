@@ -374,9 +374,11 @@ export async function routeReview(args: {
   }
 
   // ARC-232 (2026-05-16): the `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
-  // allowlist was deleted. The remaining ensemble gates are mode
-  // (above) + daily-budget (below) + sensitive-deny (handled inside
-  // the consumer dispatch in src/index.ts before this routing fires).
+  // allowlist was deleted. The remaining ensemble gates, in the
+  // order they fire inside this routing decision:
+  //   1. sensitive-deny (line 364, runs first — returns "skipped-sensitive")
+  //   2. mode (above — "off" routes to Phase 3)
+  //   3. daily-budget (below — exhausted budget routes to Phase 3)
 
   if (!(await dailyBudgetAvailable(env))) {
     return env.OPENCLAW_AGENTIC_GITHUB_MODE === "on"

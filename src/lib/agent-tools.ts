@@ -49,8 +49,11 @@ export interface AgentToolsContext {
    *   - `undefined`: no restriction (back-compat for callers that
    *     don't pass it, e.g. github-mention surface).
    *   - `[]`: explicit lock to none — every call gets the recoverable
-   *     rejection. Matches `listIndexedRepos`'s presence semantics so
-   *     `OPENCLAW_INDEXED_REPOS=""` actually locks the agent down.
+   *     rejection. ARC-239 (2026-05-16): empty signals "no repos
+   *     indexed yet" because `listIndexedRepos` is KV-backed and an
+   *     empty `repo-index-manifest:*` prefix returns `[]`. The agent
+   *     correctly degrades to "no retrieval available" rather than
+   *     soft-failing to zero results from an unindexed namespace.
    *   - non-empty: repo must be in the set (case-insensitive match). */
   allowedRepos?: string[]
 }
@@ -113,10 +116,10 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       // an unindexed namespace, retrieveChunks would soft-fail to [],
       // and the model gets no hint that its choice was invalid.
       //
-      // Presence-based — `[]` means "lock to none," matching
-      // listIndexedRepos's semantics so OPENCLAW_INDEXED_REPOS=""
-      // actually locks the agent down (CR PR #30 round-2 catch:
-      // empty-as-allow-all silently undid the operator's lockout).
+      // Presence-based — `[]` means "lock to none." ARC-239
+      // (2026-05-16): `listIndexedRepos` is KV-backed and returns
+      // `[]` when no `repo-index-manifest:*` records exist; this
+      // gate cleanly rejects retrieval against unindexed namespaces.
       if (ctx.allowedRepos !== undefined) {
         const lower = repo.trim().toLowerCase()
         const allowed = new Set(ctx.allowedRepos.map((r) => r.toLowerCase()))

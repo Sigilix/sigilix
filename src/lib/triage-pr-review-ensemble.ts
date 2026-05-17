@@ -1236,13 +1236,25 @@ export async function handlePrReviewEnsemble(
     // body simply doesn't show the Δ line. The current findings
     // are persisted on the success path regardless so subsequent
     // pushes can compute deltas against them.
+    // CodeRabbit MAJOR catch on PR #83: the review body includes
+    // BOTH `consensusVerdict.findings` (inline-anchored) AND
+    // `validated.unanchoredFindings` (body-only). The manifest
+    // snapshot must capture both — otherwise a still-open unanchored
+    // finding silently disappears from the delta and re-appears as
+    // `new` on the next push. Unanchored findings never went through
+    // consensus ranking (they were filtered for failing line
+    // validity, not for consensus), so their consensus defaults to 1.
+    const snapshotInputs = [
+      ...consensusVerdict.findings.map((f, i) => ({ f, consensus: consensusByIndex[i] ?? 1 })),
+      ...validated.unanchoredFindings.map((f) => ({ f, consensus: 1 })),
+    ]
     const currentFindingsForManifest: ReviewManifestFinding[] = await Promise.all(
-      consensusVerdict.findings.map(async (f, i) => ({
+      snapshotInputs.map(async ({ f, consensus }) => ({
         key: await computeFindingKey(f.path, f.headline),
         path: f.path,
         headline: f.headline,
         score: f.score,
-        consensus: consensusByIndex[i] ?? 1,
+        consensus,
       })),
     )
     const currentKeySet = new Set(currentFindingsForManifest.map((f) => f.key))
@@ -1541,7 +1553,12 @@ async function writeReviewManifestForEnsemble(args: {
       modelId,
       target: { kind: "review", reviewId },
       reviewedAt: Date.now(),
-      ...(findings && findings.length > 0 ? { findings } : {}),
+      // CodeRabbit MAJOR catch on PR #83: include `findings` whenever
+      // the caller passed an array (even empty), so "previous review
+      // had zero findings" is distinguishable from "no ARC-271
+      // snapshot exists". The next push reads the empty array and
+      // correctly classifies all current findings as `new`.
+      ...(findings !== undefined ? { findings } : {}),
     }
     const ok = await writeReviewManifest(env, owner, repo, prNumber, manifest)
     if (ok) {

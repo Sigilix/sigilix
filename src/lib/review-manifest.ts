@@ -111,7 +111,7 @@ function isReviewManifestFinding(value: unknown): value is ReviewManifestFinding
     // empty headline collapses every same-path finding to the same
     // key, breaking still-open/new classification. Also a semantic
     // invariant — every finding should have a descriptive headline.
-    typeof o.headline === "string" && o.headline.length > 0 &&
+    typeof o.headline === "string" && o.headline.trim().length > 0 &&
     typeof o.score === "number" &&
     typeof o.consensus === "number"
   )

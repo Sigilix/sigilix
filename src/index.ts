@@ -58,6 +58,11 @@ import { enqueuePrReviewJob } from "./do/webhook-enqueue"
 import { postSlashCommandEyesAck } from "./lib/slash-command-eyes-ack"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
+  enqueueIndexJobsForRepos,
+  isIndexerEnabled,
+  type IndexJobReason,
+} from "./lib/index-producer"
+import {
   handleGitHubAuthCallback,
   handleGitHubAuthKickoff,
   handleLogout,
@@ -216,6 +221,14 @@ export interface Env {
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT?: string
+
+  // ARC-234: customer-ready indexing pipeline feature flag. Default
+  // "off" preserves the legacy `app-level event ignored` drop so the
+  // producer ships dark. Operator flips to "on" via
+  // `wrangler secret put OPENCLAW_INDEXER_ENABLED on` AFTER both the
+  // producer (ARC-234) AND consumer (ARC-235) deploy. Any other value
+  // (including unset) keeps indexing disabled.
+  OPENCLAW_INDEXER_ENABLED?: string
 }
 
 /**
@@ -349,6 +362,37 @@ export type JobMessage =
       commentId: number
       threadRootId?: number
     }
+  // ARC-234 + ARC-235: customer-ready indexing pipeline. Bootstrap jobs
+  // (from the install / repos-added webhook) carry only the {owner,
+  // repo, installationId, reason} producer payload. The ARC-235
+  // consumer walks the tree, processes up to MAX_FILES_PER_JOB files,
+  // then enqueues the next continuation-token shard with the `shard`
+  // field populated. Strict single-writer chain; no fan-out parallelism.
+  | {
+      type: "index-repo"
+      owner: string
+      repo: string
+      installationId: number
+      reason: "install" | "install-repos-added" | "manual"
+      shard?: {
+        /** Inclusive lower bound into the filtered indexable-file list. */
+        lo: number
+        /** Exclusive upper bound. */
+        hi: number
+        /** Commit SHA — Contents-API fetches, freshness check, runId. */
+        headSha: string
+        /** Tree SHA — `getRepoTree` argument. Distinct from headSha per Codex v2 B1. */
+        treeSha: string
+        /** Total filtered indexable file count from the bootstrap walk. */
+        totalFiles: number
+        /** Accumulated count of files processed so far in this run (chain). */
+        filesDone: number
+        /** Accumulated count of chunks upserted so far in this run. */
+        chunksDone: number
+        /** Stable run id: sha256(owner|repo|headSha|modelId|chunkerVersion).slice(0,16). */
+        runId: string
+      }
+    }
 
 /**
  * Pure decision: given a `pull_request` webhook action + draft flag,
@@ -455,6 +499,13 @@ interface GitHubWebhookPayload {
     number?: number
     pull_request?: { url?: string } | null
   }
+  // ARC-234: installation-scoped events carry no repository field;
+  // instead they ship one or both of these arrays. `repositories[]`
+  // is the initial set on `installation.created`. `repositories_added[]`
+  // is the delta on `installation_repositories.added`. Both share the
+  // same entry shape (we only consume `full_name`, formatted "owner/repo").
+  repositories?: Array<{ name?: string; full_name?: string }>
+  repositories_added?: Array<{ name?: string; full_name?: string }>
 }
 
 // Validation cache — Cloudflare Workers can't read `env` at module top
@@ -979,6 +1030,27 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         ...(job.threadRootId !== undefined ? { threadRootId: job.threadRootId } : {}),
         env,
       })
+    case "index-repo": {
+      // ARC-234 (this commit) ships the webhook producer with the
+      // feature flag OFF, so no `index-repo` messages should enter the
+      // queue until ARC-235 (next commit) ships the real consumer and
+      // the operator flips `OPENCLAW_INDEXER_ENABLED=on`. If a message
+      // does arrive here (developer manually sent one; flag flipped
+      // prematurely), throw so it surfaces in telemetry and gets
+      // retried per the queue's `max_retries` budget before drop —
+      // silent ack would hide the misconfiguration.
+      console.error(JSON.stringify({
+        event: "index-repo-consumer-not-implemented",
+        owner: job.owner,
+        repo: job.repo,
+        installation_id: job.installationId,
+        reason: job.reason,
+        shard: job.shard !== undefined,
+      }))
+      throw new Error(
+        "index-repo consumer not yet implemented (ARC-235); commit 1 only ships the webhook producer with the feature flag off",
+      )
+    }
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at
@@ -1108,13 +1180,74 @@ async function handleGitHubWebhook(
     return new Response("pong\n", { status: 200 })
   }
 
-  // App-level events have no repository field. Ignore with 200.
+  // App-level events have no repository field. ARC-234 intercepts the
+  // two install-onboarding events that drive the customer-ready
+  // indexing pipeline (`installation.created` initial set +
+  // `installation_repositories.added` deltas). The rest stay dropped.
   if (
     event === "installation" ||
     event === "installation_repositories" ||
     event === "installation_target" ||
     event === "github_app_authorization"
   ) {
+    if (
+      isIndexerEnabled(env) &&
+      typeof payload.installation?.id === "number" &&
+      (
+        (event === "installation" && payload.action === "created") ||
+        (event === "installation_repositories" && payload.action === "added")
+      )
+    ) {
+      const repositories =
+        event === "installation"
+          ? payload.repositories ?? []
+          : payload.repositories_added ?? []
+      const reason: IndexJobReason =
+        event === "installation" ? "install" : "install-repos-added"
+      const installationId = payload.installation.id
+      try {
+        const result = await enqueueIndexJobsForRepos({
+          env,
+          installationId,
+          repositories,
+          reason,
+        })
+        // Codex v2 N5: when EVERY attempted send failed (e.g. the
+        // OPENCLAW_JOBS binding is broken), surface 503 so GitHub
+        // redelivers. Partial successes return 202 — the per-repo
+        // failures are already logged and the redelivery would
+        // double-enqueue the successful ones.
+        if (result.attempted > 0 && result.succeeded === 0) {
+          console.error(JSON.stringify({
+            event: "index-job-fanout-total-failure",
+            installation_id: installationId,
+            attempted: result.attempted,
+            per_repo_failed: result.perRepoFailed,
+            sensitive_skipped: result.sensitiveSkipped,
+            reason,
+          }))
+          return new Response("index fanout failed\n", { status: 503 })
+        }
+        console.log(JSON.stringify({
+          event: "index-job-fanout-done",
+          installation_id: installationId,
+          reason,
+          ...result,
+        }))
+        return new Response("indexed\n", { status: 202 })
+      } catch (err) {
+        // Defensive: enqueueIndexJobsForRepos has per-repo try/catch
+        // internally so this branch is for unexpected throws (env
+        // shape mismatch, etc.). Surface 503 so GitHub redelivers.
+        console.error(JSON.stringify({
+          event: "index-job-fanout-threw",
+          installation_id: installationId,
+          reason,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        return new Response("index fanout threw\n", { status: 503 })
+      }
+    }
     return new Response("app-level event ignored\n", { status: 200 })
   }
 

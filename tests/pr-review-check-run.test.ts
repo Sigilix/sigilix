@@ -3,7 +3,7 @@
 //   - `startInProgressCheckRun`: creates the in_progress check;
 //     returns a handle, or `null` on creds-missing / 403 / failure.
 //   - `completeCheckRun`: transitions a handle to completed with
-//     `neutral` | `failure` | `skipped`. No-op when handle is null.
+//     `success` | `failure` | `skipped`. No-op when handle is null.
 //
 // All behavior is best-effort — these helpers must NOT throw out of
 // the dispatcher even on permission misconfigurations.
@@ -194,17 +194,17 @@ describe("startInProgressCheckRun", () => {
 
 describe("completeCheckRun", () => {
   it("no-ops when handle is null (creation was skipped or failed)", async () => {
-    await completeCheckRun({ handle: null, conclusion: "neutral" })
+    await completeCheckRun({ handle: null, conclusion: "success" })
     expect(mockUpdateCheckRun).not.toHaveBeenCalled()
   })
 
-  it("transitions to completed with `neutral` and customer-facing output copy", async () => {
+  it("transitions to completed with `success` and customer-facing output copy", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
     const handle = await startInProgressCheckRun({ env, ...baseArgs })
 
-    await completeCheckRun({ handle, conclusion: "neutral" })
+    await completeCheckRun({ handle, conclusion: "success" })
 
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1)
     const [owner, repo, checkRunId, payload] = mockUpdateCheckRun.mock.calls[0]!
@@ -213,7 +213,7 @@ describe("completeCheckRun", () => {
     expect(checkRunId).toBe(7777)
     const p = payload as { status: string; conclusion: string; output: { title: string; summary: string } }
     expect(p.status).toBe("completed")
-    expect(p.conclusion).toBe("neutral")
+    expect(p.conclusion).toBe("success")
     expect(p.output.title).toBe("Review posted")
   })
 
@@ -254,6 +254,6 @@ describe("completeCheckRun", () => {
     // Should NOT throw — the underlying review has already posted
     // (or failed) by this point and a check-update failure shouldn't
     // bubble up and corrupt the dispatcher.
-    await expect(completeCheckRun({ handle, conclusion: "neutral" })).resolves.toBeUndefined()
+    await expect(completeCheckRun({ handle, conclusion: "success" })).resolves.toBeUndefined()
   })
 })

@@ -35,8 +35,14 @@ const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set([
 /** Conclusion subset Sigilix actually emits. Narrower than GitHub's
  *  full set so call sites can't accidentally pass `cancelled` or
  *  `timed_out` (which we don't use). The REST primitive in
- *  `github.ts` keeps the wide union for forward compatibility. */
-export type SigilixCheckConclusion = "neutral" | "failure" | "skipped"
+ *  `github.ts` keeps the wide union for forward compatibility.
+ *
+ *  Founder preference (PR #80 follow-up): `success` for posted
+ *  reviews instead of `neutral`. Sigilix's check is still
+ *  informational (we don't block merges), but green ✓ in the
+ *  Checks tab reads as "Sigilix is happy / done" to customers,
+ *  whereas the `neutral` grey-circle looks like "didn't run". */
+export type SigilixCheckConclusion = "success" | "failure" | "skipped"
 
 interface InProgressCheckRun {
   id: number
@@ -217,7 +223,7 @@ async function cancelStaleInProgressChecks(args: {
 
 function renderOutputForConclusion(conclusion: SigilixCheckConclusion): { title: string; summary: string } {
   switch (conclusion) {
-    case "neutral":
+    case "success":
       return {
         title: "Review posted",
         summary: "Sigilix posted a review on this PR. Open the conversation tab to view inline findings.",

@@ -10,12 +10,12 @@
 // results.
 //
 // Matrix covered:
-//   - ensemble-post posted → neutral
+//   - ensemble-post posted → success
 //   - ensemble-post stale_head → skipped, NO Phase 3 fallback
-//   - ensemble-post errored, Phase 3 posted → neutral (H1 fix)
+//   - ensemble-post errored, Phase 3 posted → success (H1 fix)
 //   - ensemble-post errored, Phase 3 stale_head → skipped
-//   - ensemble-shadow posted → neutral
-//   - Phase 3 only path: posted → neutral
+//   - ensemble-shadow posted → success
+//   - Phase 3 only path: posted → success
 //   - sensitive-repo skip → no check created
 //   - throw mid-pipeline → failure
 
@@ -84,7 +84,7 @@ beforeEach(() => {
 })
 
 describe("dispatchJob — ARC-258 check-run lifecycle", () => {
-  it("ensemble-post posted → completeCheckRun(neutral)", async () => {
+  it("ensemble-post posted → completeCheckRun(success)", async () => {
     routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
     handlePrReviewEnsembleMock.mockResolvedValue({ status: "posted", telemetry: {} })
 
@@ -92,7 +92,7 @@ describe("dispatchJob — ARC-258 check-run lifecycle", () => {
 
     expect(startInProgressCheckRunMock).toHaveBeenCalledTimes(1)
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "neutral",
+      handle: HANDLE, conclusion: "success",
     })
     expect(handlePrReviewMock).not.toHaveBeenCalled()
   })
@@ -113,7 +113,7 @@ describe("dispatchJob — ARC-258 check-run lifecycle", () => {
   // check completed as `failure` here, which contradicted Phase 3's
   // successful review post. The dispatcher-owned lifecycle picks
   // the conclusion AFTER Phase 3 runs.
-  it("ensemble-post errored + Phase 3 posted → neutral (H1 fix)", async () => {
+  it("ensemble-post errored + Phase 3 posted → success (H1 fix)", async () => {
     routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
     handlePrReviewEnsembleMock.mockResolvedValue({ status: "errored", telemetry: {} })
     handlePrReviewMock.mockResolvedValue({ status: "posted" })
@@ -122,7 +122,7 @@ describe("dispatchJob — ARC-258 check-run lifecycle", () => {
 
     expect(handlePrReviewMock).toHaveBeenCalledTimes(1)
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "neutral",
+      handle: HANDLE, conclusion: "success",
     })
   })
 
@@ -138,7 +138,7 @@ describe("dispatchJob — ARC-258 check-run lifecycle", () => {
     })
   })
 
-  it("ensemble-shadow Phase-3-posted → neutral", async () => {
+  it("ensemble-shadow Phase-3-posted → success", async () => {
     routeReviewMock.mockResolvedValue({ primary: "ensemble-shadow" })
     handlePrReviewMock.mockResolvedValue({ status: "posted" })
     handlePrReviewEnsembleMock.mockResolvedValue({ status: "posted", telemetry: {} })
@@ -146,25 +146,25 @@ describe("dispatchJob — ARC-258 check-run lifecycle", () => {
     await dispatchJob(job, makeEnv())
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "neutral",
+      handle: HANDLE, conclusion: "success",
     })
   })
 
-  it("Phase 3 only (agentic/singleshot) posted → neutral", async () => {
+  it("Phase 3 only (agentic/singleshot) posted → success", async () => {
     routeReviewMock.mockResolvedValue({ primary: "phase3-agentic" })
     handlePrReviewMock.mockResolvedValue({ status: "posted" })
 
     await dispatchJob(job, makeEnv())
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "neutral",
+      handle: HANDLE, conclusion: "success",
     })
   })
 
-  it("Phase 3 only skipped (dedupe-hit on same head) → neutral, NOT skipped", async () => {
+  it("Phase 3 only skipped (dedupe-hit on same head) → success, NOT skipped", async () => {
     // Phase 3 returns `skipped` when a prior run already reviewed
     // this exact head SHA. From the customer's perspective the
-    // review IS done (the earlier run posted it), so `neutral`
+    // review IS done (the earlier run posted it), so `success`
     // beats `skipped` (which would imply nothing was reviewed).
     routeReviewMock.mockResolvedValue({ primary: "phase3-singleshot-legacy" })
     handlePrReviewMock.mockResolvedValue({ status: "skipped" })
@@ -172,7 +172,7 @@ describe("dispatchJob — ARC-258 check-run lifecycle", () => {
     await dispatchJob(job, makeEnv())
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "neutral",
+      handle: HANDLE, conclusion: "success",
     })
   })
 
@@ -204,7 +204,7 @@ describe("dispatchJob — ARC-258 check-run lifecycle", () => {
     await dispatchJob(job, makeEnv())
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: null, conclusion: "neutral",
+      handle: null, conclusion: "success",
     })
   })
 })

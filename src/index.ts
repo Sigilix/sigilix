@@ -772,10 +772,10 @@ async function postSlashCommandAck(
  * conclusion. Used by the `pr-review` dispatcher to finalize the
  * customer-visible "Sigilix" check.
  *
- *   - `posted`     → `neutral`. Review went out; we're non-blocking.
+ *   - `posted`     → `success`. Review went out (green ✓ in Checks).
  *   - `stale_head` → `skipped`. New commit pushed before we reviewed
  *                    the old one; re-review will fire for the new SHA.
- *   - `skipped`    → `neutral`. The skip here is a dedupe-hit on the
+ *   - `skipped`    → `success`. The skip here is a dedupe-hit on the
  *                    per-(PR, headSha) lock — a prior run already
  *                    posted a review for this exact head, so from
  *                    the customer's perspective the review IS done.
@@ -787,9 +787,9 @@ function mapPhase3StatusToCheckConclusion(
 ): SigilixCheckConclusion {
   switch (status) {
     case "posted":
-      return "neutral"
+      return "success"
     case "skipped":
-      return "neutral"
+      return "success"
     case "stale_head":
       return "skipped"
   }
@@ -914,7 +914,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             // internal error) still benefit from the Phase 3 attempt.
             const result = await handlePrReviewEnsemble(baseArgs, "post")
             if (result.status === "posted") {
-              conclusion = "neutral"
+              conclusion = "success"
               return
             }
             if (result.status === "stale_head") {
@@ -923,7 +923,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             }
             // Fallback to Phase 3: the ensemble outcome doesn't bind
             // the check run yet — Phase 3 will. If Phase 3 posts the
-            // check goes to `neutral` regardless of why the ensemble
+            // check goes to `success` regardless of why the ensemble
             // bailed (router_no_specialists, quorum, synth, internal).
             const phase3Result = await handlePrReview(baseArgs)
             conclusion = mapPhase3StatusToCheckConclusion(phase3Result.status)

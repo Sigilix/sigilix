@@ -212,7 +212,15 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     expect(sent).toHaveLength(0)
   })
 
-  it("skips on getRepository transient error (degrades gracefully)", async () => {
+  it("ENQUEUES on getRepository transient error — does NOT silently drop the push (CR Major #3)", async () => {
+    // CR Major #3 on PR #77: GitHub does NOT auto-redeliver failed
+    // webhooks (no automatic retry — manual redelivery via REST API
+    // is the only path). Treating a transient `getRepository` error
+    // as a skip would permanently lose the push. The default-branch
+    // check here is purely an optimization (the ARC-235 consumer
+    // always revalidates), so a lookup failure falls through to
+    // enqueue + lets the consumer's freshness gate handle non-default
+    // branches cheaply.
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
     mockGetRepository.mockRejectedValue(new Error("HTTP 502 Bad Gateway"))
@@ -221,8 +229,8 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
       ref: "refs/heads/main",
       after: "b".repeat(40),
     })
-    expect(outcome).toEqual({ skipped: "missing-default-branch" })
-    expect(sent).toHaveLength(0)
+    expect(outcome).toEqual({ enqueued: true, reason: "push" })
+    expect(sent).toHaveLength(1)
   })
 
   it("skips when push is on a non-default branch", async () => {

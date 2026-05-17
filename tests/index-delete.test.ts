@@ -247,7 +247,13 @@ describe("deleteRepoIndex — no state", () => {
 // ─── deleteRepoIndex — partial failure ─────────────────────────────────
 
 describe("deleteRepoIndex — partial failure", () => {
-  it("returns status=partial when Vectorize.deleteByIds throws on a batch", async () => {
+  it("returns status=partial AND keeps id-list + manifest until Vectorize succeeds (CR Critical #2)", async () => {
+    // CR Critical #2 on PR #77: a partial Vectorize delete that
+    // proceeds to wipe the id-list + manifest leaves orphans
+    // unrecoverable on redelivery. The redelivery has no chunk ids
+    // to retry. New behavior: keep BOTH KV records intact until all
+    // Vectorize batches succeed, so GitHub redelivery (driven by
+    // the webhook 503) can finish the job idempotently.
     const { kv, store } = makeKvStub()
     store.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
     store.set(repoIndexVectorsKey("sigilix"), JSON.stringify(vectors()))
@@ -266,9 +272,68 @@ describe("deleteRepoIndex — partial failure", () => {
     expect(result.status).toBe("partial")
     expect(result.errors.length).toBe(1)
     expect(result.errors[0]).toContain("vectorize.deleteByIds")
-    // The KV deletes still happen even though Vectorize batch failed.
-    expect(result.vectorsKvDeleted).toBe(true)
-    expect(result.manifestDeleted).toBe(true)
+    // Critical: id list + manifest survive so redelivery can retry.
+    expect(result.vectorsKvDeleted).toBe(false)
+    expect(result.manifestDeleted).toBe(false)
+    expect(store.has(repoIndexVectorsKey("sigilix"))).toBe(true)
+    expect(store.has(repoIndexManifestKey("sigilix"))).toBe(true)
+  })
+})
+
+// ─── deleteRepoIndex — Sigilix HIGH + CR Critical #1 on PR #77 ─────────
+
+describe("deleteRepoIndex — vectors owner mismatch (Sigilix HIGH / CR Critical #1)", () => {
+  it("manifest owner MATCHES but vectors record owner does NOT → skip ALL repo-only deletes", async () => {
+    // Sigilix HIGH: prior code skipped Vectorize.deleteByIds correctly
+    // but still wiped `repo-index-vectors:<repo>`, orphaning the
+    // mismatched-owner tenant's Vectorize IDs forever (no id list
+    // left to enumerate them). Fix gates EVERY repo-only delete on
+    // the combined ownership of manifest + vectors records.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest()))
+    // Vectors record belongs to a DIFFERENT owner.
+    store.set(repoIndexVectorsKey("sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+    store.set("pr-review-manifest:Arc-and-Anchor/sigilix#10", "{}")
+
+    const { env, deletedBatches } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("owner-mismatch-skip")
+    expect(result.vectorIds).toBe(0)
+    expect(deletedBatches).toHaveLength(0)
+    // ALL repo-only state survives.
+    expect(store.has(repoIndexManifestKey("sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("sigilix"))).toBe(true)
+    // Owner-qualified record still deleted (those don't share the
+    // cross-tenant collision problem).
+    expect(store.has("pr-review-manifest:Arc-and-Anchor/sigilix#10")).toBe(false)
+    expect(result.prReviewManifests).toBe(1)
+  })
+
+  it("manifest MISSING + vectors record belongs to another owner → skip ALL repo-only deletes (CR Critical #1)", async () => {
+    // CR Critical #1: edge case where there's no manifest at all
+    // (e.g., a previous incomplete uninstall already wiped it), but
+    // a vectors record exists under a DIFFERENT owner. The previous
+    // structure defaulted `ownerMatchesForRepoOnly = true` since the
+    // manifest check passed (no manifest, no mismatch), so the
+    // vectors KV record + manifest KV got wiped anyway.
+    const { kv, store } = makeKvStub()
+    // No manifest.
+    store.set(repoIndexVectorsKey("sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+
+    const { env, deletedBatches } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("owner-mismatch-skip")
+    expect(deletedBatches).toHaveLength(0)
+    // Vectors record survives — it belongs to someone else.
+    expect(store.has(repoIndexVectorsKey("sigilix"))).toBe(true)
   })
 })
 

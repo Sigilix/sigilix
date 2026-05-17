@@ -97,83 +97,70 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
 
   // Cross-tenant guard. Two same-named repos under different owners
   // share the Vectorize namespace + repo-only KV records under the
-  // existing retrieval contract. If the manifest's owner doesn't
-  // match the removal context, ALL repo-only deletes are skipped to
-  // avoid smashing someone else's vectors. The owner-qualified
-  // `pr-review-manifest:<owner>/<repo>#*` and `pr-review:<owner>/<repo>#*`
-  // keys ARE safe to delete because they're already disambiguated.
-  let ownerMatchesForRepoOnly = true
+  // existing retrieval contract. EVERY destructive op on the repo-
+  // only state must check that the stored owner matches `owner`. The
+  // owner-qualified `pr-review-manifest:<owner>/<repo>#*` and
+  // `pr-review:<owner>/<repo>#*` keys ARE safe to delete without this
+  // gate because their KEY itself is disambiguated.
+  //
+  // Sigilix HIGH + CR Critical #1 on PR #77: the previous structure
+  // had two separate ownership checks (manifest then vectors-record)
+  // that didn't compose — if manifest was missing/invalid OR the two
+  // records disagreed, the KV-delete arms still fired and clobbered
+  // another tenant's data. Consolidated below into one
+  // `safeToTouchRepoOnlyState` gate that requires every record we
+  // CAN read to agree on `owner`.
   const manifestRead = await readRepoIndexManifest(env, repo)
-  if (manifestRead.kind === "ok" && manifestRead.manifest.owner !== owner) {
-    ownerMatchesForRepoOnly = false
+  const vectorsRead = await readRepoIndexVectors(env, repo)
+  const manifestOwnerMismatch =
+    manifestRead.kind === "ok" && manifestRead.manifest.owner !== owner
+  const vectorsOwnerMismatch =
+    vectorsRead.kind === "ok" && vectorsRead.vectors.owner !== owner
+  const safeToTouchRepoOnlyState = !manifestOwnerMismatch && !vectorsOwnerMismatch
+
+  if (!safeToTouchRepoOnlyState) {
     console.warn(JSON.stringify({
       event: "index-delete-owner-mismatch-skip-repo-only",
       owner, repo, reason,
-      manifest_owner: manifestRead.manifest.owner,
+      manifest_owner:
+        manifestRead.kind === "ok" ? manifestRead.manifest.owner : null,
+      vectors_owner:
+        vectorsRead.kind === "ok" ? vectorsRead.vectors.owner : null,
     }))
   }
 
-  if (ownerMatchesForRepoOnly) {
-    // Step 1+3: Vectorize vectors + repo-index-vectors KV.
-    const vectorsRead = await readRepoIndexVectors(env, repo)
+  if (safeToTouchRepoOnlyState) {
+    // Step 1: Vectorize vectors via deleteByIds. Track failure
+    // separately so the KV deletes below can be gated on success —
+    // CR Critical #2 on PR #77: a partial Vectorize delete that
+    // proceeds to wipe the KV id-list + manifest leaves orphaned
+    // embeddings unrecoverable on redelivery.
+    let vectorizeDeleteFailed = false
     if (vectorsRead.kind === "ok") {
-      if (vectorsRead.vectors.owner !== owner) {
-        // Defensive: vectors record's owner mismatches even though
-        // manifest matched (shouldn't happen, but the schema lets it).
-        console.warn(JSON.stringify({
-          event: "index-delete-owner-mismatch-skip-vectors",
-          owner, repo, reason,
-          vectors_owner: vectorsRead.vectors.owner,
-        }))
-      } else {
-        const ids = flattenIds(vectorsRead.vectors)
-        // Codex v1 N2: dedup before batched delete.
-        const uniq = Array.from(new Set(ids))
-        for (let i = 0; i < uniq.length; i += VECTORIZE_DELETE_BATCH) {
-          const batch = uniq.slice(i, i + VECTORIZE_DELETE_BATCH)
-          try {
-            await env.OPENCLAW_CODE_INDEX.deleteByIds(batch)
-            result.vectorIds += batch.length
-          } catch (err) {
-            const message = err instanceof Error ? err.message : String(err)
-            result.errors.push(`vectorize.deleteByIds: ${message}`)
-            console.error(JSON.stringify({
-              event: "index-delete-vectorize-batch-failed",
-              owner, repo, batch_start: i, batch_size: batch.length,
-              err: message,
-            }))
-          }
+      const ids = flattenIds(vectorsRead.vectors)
+      // Codex v1 N2: dedup before batched delete.
+      const uniq = Array.from(new Set(ids))
+      for (let i = 0; i < uniq.length; i += VECTORIZE_DELETE_BATCH) {
+        const batch = uniq.slice(i, i + VECTORIZE_DELETE_BATCH)
+        try {
+          await env.OPENCLAW_CODE_INDEX.deleteByIds(batch)
+          result.vectorIds += batch.length
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          result.errors.push(`vectorize.deleteByIds: ${message}`)
+          vectorizeDeleteFailed = true
+          console.error(JSON.stringify({
+            event: "index-delete-vectorize-batch-failed",
+            owner, repo, batch_start: i, batch_size: batch.length,
+            err: message,
+          }))
         }
       }
-
-      // Always delete the vectors KV record if it existed (and we
-      // owned it). On a re-delivery, the second pass finds it
-      // already missing and no-ops.
-      try {
-        await deleteRepoIndexVectors(env, repo)
-        result.vectorsKvDeleted = true
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        result.errors.push(`kv.delete(repo-index-vectors): ${message}`)
-        console.error(JSON.stringify({
-          event: "index-delete-kv-vectors-failed",
-          owner, repo, err: message,
-        }))
-      }
     } else if (vectorsRead.kind === "invalid") {
-      // Best-effort: log + delete the KV record (we can't enumerate
-      // vectors but we can at least clean up the KV side).
       console.warn(JSON.stringify({
         event: "index-delete-vectors-kv-invalid",
         owner, repo, reason, kv_reason: vectorsRead.reason,
       }))
-      try {
-        await deleteRepoIndexVectors(env, repo)
-        result.vectorsKvDeleted = true
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        result.errors.push(`kv.delete(repo-index-vectors): ${message}`)
-      }
     } else {
       // missing: pre-PR3 indexes have no vectors record. Vector data
       // leaks until natural re-index churn populates the record.
@@ -185,17 +172,42 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
       }))
     }
 
-    // Step 4: manifest KV.
-    try {
-      await env.OPENCLAW_STATE.delete(repoIndexManifestKey(repo))
-      result.manifestDeleted = true
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      result.errors.push(`kv.delete(repo-index-manifest): ${message}`)
-      console.error(JSON.stringify({
-        event: "index-delete-kv-manifest-failed",
-        owner, repo, err: message,
+    // Steps 2 + 3: KV deletes for repo-index-vectors:* and
+    // repo-index-manifest:*. CR Critical #2 fix: keep the id list +
+    // manifest until ALL Vectorize batches succeed. A redelivery on
+    // partial failure must find the id list intact so it can retry
+    // the leaked batches. Idempotency holds because deleteByIds is
+    // idempotent.
+    if (vectorizeDeleteFailed) {
+      console.warn(JSON.stringify({
+        event: "index-delete-kv-cleanup-deferred-pending-vectorize-retry",
+        owner, repo, reason,
       }))
+    } else {
+      if (vectorsRead.kind === "ok" || vectorsRead.kind === "invalid") {
+        try {
+          await deleteRepoIndexVectors(env, repo)
+          result.vectorsKvDeleted = true
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          result.errors.push(`kv.delete(repo-index-vectors): ${message}`)
+          console.error(JSON.stringify({
+            event: "index-delete-kv-vectors-failed",
+            owner, repo, err: message,
+          }))
+        }
+      }
+      try {
+        await env.OPENCLAW_STATE.delete(repoIndexManifestKey(repo))
+        result.manifestDeleted = true
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        result.errors.push(`kv.delete(repo-index-manifest): ${message}`)
+        console.error(JSON.stringify({
+          event: "index-delete-kv-manifest-failed",
+          owner, repo, err: message,
+        }))
+      }
     }
   }
 
@@ -214,7 +226,7 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     "pr-review-dedupe",
   )
 
-  if (!ownerMatchesForRepoOnly) {
+  if (!safeToTouchRepoOnlyState) {
     result.status = "owner-mismatch-skip"
   } else if (result.errors.length > 0) {
     result.status = "partial"

@@ -245,7 +245,19 @@ export async function maybeEnqueuePushIndexJob(
   // ARC-235 consumer always uses the current default branch, so a
   // push to a non-default branch would just trigger a no-op
   // freshness skip — but we save a queue message + a getRepository
-  // call by short-circuiting at the producer.
+  // call by short-circuiting at the producer when the lookup is
+  // available.
+  //
+  // CR Major #3 on PR #77: GitHub does NOT auto-redeliver failed
+  // webhooks. The previous version converted `getInstallationToken`
+  // / `getRepository` errors into `skipped: "missing-default-branch"`
+  // which permanently lost the push on a transient failure. Since
+  // the default-branch check here is purely an optimization (the
+  // consumer revalidates on every job per ARC-235's freshness gate),
+  // a lookup failure should fall through to enqueue rather than skip
+  // — the consumer will resolve the current default branch itself
+  // and short-circuit if the push wasn't on it.
+  const branchName = ref.slice(BRANCH_REF_PREFIX.length)
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
     console.error(JSON.stringify({
       event: "index-push-skip-missing-creds",
@@ -253,7 +265,7 @@ export async function maybeEnqueuePushIndexJob(
     }))
     return { skipped: "missing-creds" }
   }
-  let defaultBranch: string
+  let defaultBranch: string | null = null
   try {
     const token = await getInstallationToken({
       kv: env.OPENCLAW_STATE,
@@ -263,29 +275,32 @@ export async function maybeEnqueuePushIndexJob(
     })
     const client = new GitHubClient({ token })
     const repoMeta = await client.getRepository(owner, repo)
-    if (!repoMeta) {
+    if (repoMeta) {
+      defaultBranch = repoMeta.default_branch
+    } else {
+      // 404 → repo gone. Don't enqueue; the consumer would fail too
+      // and the push doesn't represent live state worth indexing.
       console.warn(JSON.stringify({
         event: "index-push-skip-missing-default-branch",
         owner, repo, installation_id: installationId,
       }))
       return { skipped: "missing-default-branch" }
     }
-    defaultBranch = repoMeta.default_branch
   } catch (err) {
-    console.error(JSON.stringify({
+    // Transient lookup failure (auth, rate limit, GH 5xx). Fall
+    // through to enqueue — the consumer's freshness check is
+    // authoritative; if the push wasn't on the default branch,
+    // ARC-235's `index-job-skip-fresh` covers the no-op cheaply.
+    // Better than silently dropping a real push.
+    console.warn(JSON.stringify({
       event: "index-push-default-branch-lookup-failed",
       owner, repo, installation_id: installationId,
       err: err instanceof Error ? err.message : String(err),
+      note: "falling through to enqueue; consumer will revalidate",
     }))
-    // Treat lookup failure as "skip" rather than "fail" — the webhook
-    // handler returns 200; GitHub redelivers on its own backoff if
-    // the source of failure persists, but we don't want a transient
-    // 5xx loop on bad GH cache.
-    return { skipped: "missing-default-branch" }
   }
 
-  const branchName = ref.slice(BRANCH_REF_PREFIX.length)
-  if (branchName !== defaultBranch) {
+  if (defaultBranch !== null && branchName !== defaultBranch) {
     console.log(JSON.stringify({
       event: "index-push-skip-non-default-branch",
       owner, repo, installation_id: installationId,

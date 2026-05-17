@@ -65,12 +65,9 @@ function makeConfig(): ResolvedReviewMemoryConfig {
 describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injection", () => {
   it("captures 3 performance-class dismissals on tests/utils.ts → 4th PR lookup returns 1 active path-scope finding → render emits [REVIEW MEMORY] block", async () => {
     const path = "tests/utils.ts"
-    const env = makeEnv(makeKvStub().kv)
-    const fixedEnv = makeEnv(makeKvStub().kv)
     // Use a single shared store across all 4 PRs.
     const shared = makeKvStub()
     const sharedEnv = makeEnv(shared.kv)
-    void env  // suppress unused-var warning for the throwaway envs above
 
     // ── Phase 1: pre-build the parent comment body each PR will reply to.
     // Each PR's parent has a distinct fid (different path/line/headline)

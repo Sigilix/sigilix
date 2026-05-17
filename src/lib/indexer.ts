@@ -590,7 +590,7 @@ export interface ProcessSliceResult {
 async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult> {
   const { client, env, owner, repo, namespace, headSha, files } = args
   let chunkBuffer: Chunk[] = []
-  let vectorBuffer: VectorizeRecord[] = []
+  const vectorBuffer: VectorizeRecord[] = []
   let totalChunks = 0
   const idsByPath: Record<string, string[]> = {}
 

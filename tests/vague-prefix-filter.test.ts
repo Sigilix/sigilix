@@ -195,7 +195,7 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal shape for test
+
     const specialistVerdicts = makeSpecialistVerdicts() as any
     const result = validateForSubmission({
       synthOutput,
@@ -232,7 +232,7 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const specialistVerdicts = makeSpecialistVerdicts() as any
     const result = validateForSubmission({
       synthOutput,
@@ -267,7 +267,7 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const specialistVerdicts = makeSpecialistVerdicts() as any
     const result = validateForSubmission({
       synthOutput,
@@ -302,7 +302,7 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const specialistVerdicts = makeSpecialistVerdicts() as any
     const result = validateForSubmission({
       synthOutput,
@@ -333,7 +333,7 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const specialistVerdicts = makeSpecialistVerdicts() as any
     const result = validateForSubmission({
       synthOutput,

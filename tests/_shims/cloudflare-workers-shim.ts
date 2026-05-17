@@ -20,7 +20,7 @@ export class DurableObject<EnvT = unknown> {
   // Subclasses override this. Default implementation 404s so a stray
   // construct-without-override surfaces in tests instead of silently
   // returning undefined.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
   async fetch(_request: Request): Promise<Response> {
     return new Response("not implemented in shim", { status: 501 })
   }

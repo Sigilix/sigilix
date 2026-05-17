@@ -1465,6 +1465,11 @@ export async function handlePrReviewEnsemble(
           submit_path: "inline-anchored",
         }))
         telemetry.fellBackReason = "submit_not_persisted"
+        // Telemetry consistency with other `errored` paths: signal
+        // that the dispatcher's `ensemble-post` fallback will route
+        // to Phase 3 next. Without this flag, `fellBackToPhase3`
+        // counters in shadow analysis would undercount this case.
+        telemetry.fellBackToPhase3 = mode === "post"
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
@@ -1582,6 +1587,11 @@ export async function handlePrReviewEnsemble(
           submit_path: "anchorless-fallback",
         }))
         telemetry.fellBackReason = "submit_not_persisted"
+        // Telemetry consistency with other `errored` paths: signal
+        // that the dispatcher's `ensemble-post` fallback will route
+        // to Phase 3 next. Without this flag, `fellBackToPhase3`
+        // counters in shadow analysis would undercount this case.
+        telemetry.fellBackToPhase3 = mode === "post"
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true

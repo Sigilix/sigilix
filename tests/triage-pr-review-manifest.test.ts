@@ -12,6 +12,10 @@ const mockGetInstallationToken = vi.fn(async () => "test-token")
 const mockGetPullRequest = vi.fn()
 const mockGetPullRequestDiff = vi.fn(async () => "fake diff")
 const mockSubmitReview = vi.fn()
+// ARC-258 follow-up: post-submitReview verification. Default to
+// "review exists" so existing tests don't have to set it explicitly;
+// the verify-not-persisted tests override per-test.
+const mockGetReview = vi.fn(async () => ({ body: "" }))
 const mockListPullFilesForManifest = vi.fn()
 const mockGetMergeBase = vi.fn()
 const mockGenerate = vi.fn()
@@ -35,6 +39,7 @@ vi.mock("../src/lib/github", async () => {
       getPullRequest: (...args: unknown[]) => mockGetPullRequest(...args),
       getPullRequestDiff: (...args: unknown[]) => mockGetPullRequestDiff(...args),
       submitReview: (...args: unknown[]) => mockSubmitReview(...args),
+      getReview: (...args: unknown[]) => mockGetReview(...args),
       listPullFilesForManifest: (...args: unknown[]) => mockListPullFilesForManifest(...args),
       getMergeBase: (...args: unknown[]) => mockGetMergeBase(...args),
       listOpenPullRequests: (...args: unknown[]) => mockListOpenPullRequests(...args),
@@ -86,6 +91,7 @@ beforeEach(() => {
   mockGetPullRequest.mockClear()
   mockGetPullRequestDiff.mockClear()
   mockSubmitReview.mockClear()
+  mockGetReview.mockReset().mockResolvedValue({ body: "" })
   mockListPullFilesForManifest.mockClear()
   mockGetMergeBase.mockClear()
   mockGenerate.mockClear()
@@ -217,5 +223,122 @@ describe("handlePrReview — review manifest", () => {
     expect(mockSubmitReview).toHaveBeenCalledOnce()
     const failed = consoleErrors.find((l) => l.includes("review-manifest-write-failed"))
     expect(failed).toBeDefined()
+  })
+})
+
+// ARC-258 follow-up (PR #84 anomaly) — post-submitReview verification.
+//
+// GitHub occasionally returns a valid-looking 2xx from
+// `POST /pulls/{n}/reviews` without actually persisting the review.
+// Observed once on PR #84 where the Check Run claimed "Review posted"
+// (success) but no review existed on the PR. The fix re-fetches the
+// review by id immediately after submit; a 404 marks the run as
+// `skipped` so the Check Run reflects reality.
+describe("handlePrReview — submitReview verification", () => {
+  const goodMeta = {
+    number: 7,
+    title: "feat: x",
+    body: "",
+    user: { login: "alice" },
+    head: { sha: "h".repeat(40) },
+    base: { sha: "b".repeat(40), ref: "main" },
+  }
+  const goodVerdict = JSON.stringify({
+    summary: "Looks good.",
+    confidence: 5,
+    confidenceReason: "Mechanical change.",
+    findings: [],
+  })
+
+  it("returns skipped + emits the not-persisted error when getReview returns null (404)", async () => {
+    mockGetPullRequest.mockResolvedValue(goodMeta)
+    mockGenerate.mockResolvedValue(goodVerdict)
+    mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
+    // GitHub claimed success but the review doesn't actually exist.
+    mockGetReview.mockResolvedValue(null)
+
+    const consoleErrors: string[] = []
+    const origErr = console.error
+    console.error = (msg: string) => consoleErrors.push(typeof msg === "string" ? msg : JSON.stringify(msg))
+
+    const { kv } = makeKvStub()
+    let result: { status: string } | undefined
+    try {
+      result = await handlePrReview({
+        owner: "acme", repo: "site", prNumber: 7,
+        headSha: "h".repeat(40),
+        installationId: 1,
+        env: makeEnv(kv),
+      })
+    } finally {
+      console.error = origErr
+    }
+
+    expect(mockSubmitReview).toHaveBeenCalledOnce()
+    expect(mockGetReview).toHaveBeenCalledWith("acme", "site", 7, 4242)
+    expect(result?.status).toBe("skipped")
+    const errLine = consoleErrors.find((l) => l.includes("pr-review-submit-not-persisted"))
+    expect(errLine).toBeDefined()
+    expect(errLine).toContain('"claimed_review_id":4242')
+    expect(errLine).toContain('"submit_path":"phase3"')
+    // Manifest must NOT be written for a non-persisted review.
+    const result2 = await readReviewManifest(makeEnv(makeKvStub().kv), "acme", "site", 7)
+    expect(result2.kind).toBe("missing")
+  })
+
+  it("treats getReview throws as 'review verified' (transient blip; don't false-negative a real submit)", async () => {
+    mockGetPullRequest.mockResolvedValue(goodMeta)
+    mockGenerate.mockResolvedValue(goodVerdict)
+    mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
+    // Transient 5xx / network blip — verify can't determine.
+    mockGetReview.mockRejectedValue(new Error("HTTP 503 Service Unavailable"))
+    mockListPullFilesForManifest.mockResolvedValue({ overflow: false, entries: [] })
+    mockGetMergeBase.mockResolvedValue(null)
+
+    const consoleWarns: string[] = []
+    const origWarn = console.warn
+    console.warn = (msg: string) => consoleWarns.push(typeof msg === "string" ? msg : JSON.stringify(msg))
+
+    const { kv } = makeKvStub()
+    let result: { status: string } | undefined
+    try {
+      result = await handlePrReview({
+        owner: "acme", repo: "site", prNumber: 7,
+        headSha: "h".repeat(40),
+        installationId: 1,
+        env: makeEnv(kv),
+      })
+    } finally {
+      console.warn = origWarn
+    }
+
+    // Submit proceeds (best-effort verify): the manifest gets written,
+    // the call returns `posted`, the verify-error gets logged.
+    expect(result?.status).toBe("posted")
+    const warnLine = consoleWarns.find((l) => l.includes("pr-review-verify-error"))
+    expect(warnLine).toBeDefined()
+  })
+
+  it("happy path: verify returns the review → posted + manifest written", async () => {
+    mockGetPullRequest.mockResolvedValue(goodMeta)
+    mockGenerate.mockResolvedValue(goodVerdict)
+    mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
+    mockGetReview.mockResolvedValue({ body: "" })
+    mockListPullFilesForManifest.mockResolvedValue({ overflow: false, entries: [] })
+    mockGetMergeBase.mockResolvedValue(null)
+
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    const result = await handlePrReview({
+      owner: "acme", repo: "site", prNumber: 7,
+      headSha: "h".repeat(40),
+      installationId: 1,
+      env,
+    })
+
+    expect(result.status).toBe("posted")
+    expect(mockGetReview).toHaveBeenCalledOnce()
+    const manifest = await readReviewManifest(env, "acme", "site", 7)
+    expect(manifest.kind).toBe("ok")
   })
 })

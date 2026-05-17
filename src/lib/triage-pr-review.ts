@@ -417,6 +417,35 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
     })
 
     const submitted = await client.submitReview(owner, repo, prNumber, reviewBody)
+    // ARC-258 follow-up (PR #84 anomaly catch): GitHub occasionally
+    // returns a valid-looking 2xx from `POST /pulls/{n}/reviews` but
+    // the review doesn't actually persist (observed once on PR #84
+    // where the Check Run claimed "Review posted" but no review
+    // existed). Re-fetch by id; if 404 it didn't persist — leave
+    // `posted = false` so the caller reports `skipped` (not a fake
+    // success). Best-effort verify: a transient blip on the GET
+    // path defaults to assuming the submit worked.
+    let verified = true
+    try {
+      const re = await client.getReview(owner, repo, prNumber, submitted.id)
+      verified = re !== null
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-review-verify-error",
+        owner, repo, prNumber, review_id: submitted.id,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+    if (!verified) {
+      console.error(JSON.stringify({
+        event: "pr-review-submit-not-persisted",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        claimed_review_id: submitted.id,
+        submit_path: "phase3",
+      }))
+      since("review-submit-not-persisted")
+      return { status: "skipped" }
+    }
     posted = true
     since(`review-submitted-${submitted.state}`)
     console.log(

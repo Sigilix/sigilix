@@ -14,10 +14,12 @@ const {
   mockGetInstallationToken,
   mockCreateCheckRun,
   mockUpdateCheckRun,
+  mockListCheckRunsForRef,
 } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockCreateCheckRun: vi.fn(),
   mockUpdateCheckRun: vi.fn(),
+  mockListCheckRunsForRef: vi.fn(),
 }))
 
 vi.mock("../src/lib/github-app", () => ({
@@ -32,6 +34,9 @@ vi.mock("../src/lib/github", async () => {
     }
     async updateCheckRun(...args: unknown[]): Promise<unknown> {
       return mockUpdateCheckRun(...args)
+    }
+    async listCheckRunsForRef(...args: unknown[]): Promise<unknown> {
+      return mockListCheckRunsForRef(...args)
     }
   }
   return { ...actual, GitHubClient: GitHubClientMock }
@@ -68,6 +73,7 @@ beforeEach(() => {
   mockGetInstallationToken.mockClear()
   mockCreateCheckRun.mockReset()
   mockUpdateCheckRun.mockReset()
+  mockListCheckRunsForRef.mockReset().mockResolvedValue([]) // default: no stale checks
   vi.spyOn(console, "log").mockImplementation(() => undefined)
   vi.spyOn(console, "warn").mockImplementation(() => undefined)
   vi.spyOn(console, "error").mockImplementation(() => undefined)
@@ -117,6 +123,72 @@ describe("startInProgressCheckRun", () => {
     const handle = await startInProgressCheckRun({ env, ...baseArgs })
 
     expect(handle).toBeNull()
+  })
+
+  // Founder caught this on PR #80: two in-progress checks showed up
+  // on the same head_sha after a rename-deploy ("Sigilix Review"
+  // from old code + "Sigilix" from new code). Going forward we
+  // self-clean: list existing Sigilix-named in-progress checks on
+  // this head_sha and cancel them before creating the new one.
+  // Handles both rename-switchovers AND queue-retry duplicates.
+  it("cancels stale in-progress Sigilix checks on the same head_sha before creating a new one", async () => {
+    mockListCheckRunsForRef.mockResolvedValue([
+      { id: 111, name: "Sigilix Review", status: "in_progress" }, // legacy name
+      { id: 222, name: "Sigilix", status: "queued" },              // current name, queued
+      { id: 333, name: "Sigilix", status: "completed" },           // current name, completed → no cancel
+      { id: 444, name: "Workers Builds: sigilix", status: "in_progress" }, // unrelated → no cancel
+    ])
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 999 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    // 2 stale checks cancelled, 1 new check created.
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    const cancelledIds = mockUpdateCheckRun.mock.calls.map((c) => c[2])
+    expect(cancelledIds.sort()).toEqual([111, 222])
+    for (const call of mockUpdateCheckRun.mock.calls) {
+      expect((call[3] as { status: string }).status).toBe("completed")
+      expect((call[3] as { conclusion: string }).conclusion).toBe("cancelled")
+    }
+    expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
+    expect(handle!.id).toBe(999)
+  })
+
+  it("skips cleanup early when no stale Sigilix checks are present (no PATCHes issued)", async () => {
+    mockListCheckRunsForRef.mockResolvedValue([
+      { id: 444, name: "Workers Builds: sigilix", status: "in_progress" },
+      { id: 555, name: "Some other check", status: "in_progress" },
+    ])
+    mockCreateCheckRun.mockResolvedValue({ id: 999 })
+    const env = makeEnv()
+    await startInProgressCheckRun({ env, ...baseArgs })
+
+    expect(mockUpdateCheckRun).not.toHaveBeenCalled()
+    expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
+  })
+
+  it("proceeds with create even if the list call fails (best-effort cleanup)", async () => {
+    mockListCheckRunsForRef.mockRejectedValue(new Error("HTTP 502"))
+    mockCreateCheckRun.mockResolvedValue({ id: 999 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    expect(handle!.id).toBe(999)
+    expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
+  })
+
+  it("proceeds with create even if a per-check cancel PATCH fails (isolated retry would orphan, but cleanup is best-effort)", async () => {
+    mockListCheckRunsForRef.mockResolvedValue([
+      { id: 111, name: "Sigilix Review", status: "in_progress" },
+    ])
+    mockUpdateCheckRun.mockRejectedValue(new Error("HTTP 422 Validation Failed"))
+    mockCreateCheckRun.mockResolvedValue({ id: 999 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    expect(handle!.id).toBe(999)
+    expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
   })
 })
 

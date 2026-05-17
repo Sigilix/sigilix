@@ -411,6 +411,31 @@ export class GitHubClient {
   }
 
   /**
+   * ARC-258: list all check runs on a given commit SHA. Used by the
+   * dispatcher to find stale Sigilix-named checks (from prior queue
+   * retries or rename-deploy switchovers) and cancel them before
+   * creating a fresh one.
+   *
+   * Returns `{ id, name, status }` per check run. We don't need the
+   * full check-run shape — the dispatcher only matches by name and
+   * looks at status to decide whether to cancel.
+   */
+  async listCheckRunsForRef(
+    owner: string,
+    repo: string,
+    ref: string,
+  ): Promise<Array<{ id: number; name: string; status: string }>> {
+    type Resp = { check_runs?: Array<{ id: number; name: string; status: string }> }
+    const data = await this.request<Resp>(
+      "GET",
+      `/repos/${owner}/${repo}/commits/${ref}/check-runs?per_page=100`,
+      undefined,
+      "json",
+    )
+    return data.check_runs ?? []
+  }
+
+  /**
    * ARC-258: create a Check Run in `in_progress` state. Renders in
    * the PR's Checks tab as "Sigilix · In progress" with a
    * spinner — the customer-visible "we're working on it" indicator.

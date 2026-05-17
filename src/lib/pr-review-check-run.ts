@@ -23,6 +23,15 @@ import type { Env } from "../index"
  *  by name+head_sha if needed. */
 export const CHECK_RUN_NAME = "Sigilix"
 
+/** Names that have ever been used for the in-progress check, current
+ *  + historical. Used at create time to find and cancel stale
+ *  in-progress checks left over from rename deploys or queue
+ *  retries — see `cancelStaleInProgressChecks`. */
+const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set([
+  CHECK_RUN_NAME,
+  "Sigilix Review", // legacy (commit 4 of PR #80, briefly deployed before rename)
+])
+
 /** Conclusion subset Sigilix actually emits. Narrower than GitHub's
  *  full set so call sites can't accidentally pass `cancelled` or
  *  `timed_out` (which we don't use). The REST primitive in
@@ -70,6 +79,18 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
       installationId,
     })
     const client = new GitHubClient({ token })
+
+    // Cancel stale Sigilix-named in-progress checks before creating
+    // the new one. Two scenarios this handles:
+    //   1. Rename-deploy switchovers (founder caught this on PR #80
+    //      — "Sigilix Review" check from the prior deploy stayed
+    //      in-progress alongside the new "Sigilix" check).
+    //   2. Queue retries that re-enter dispatchJob for the same
+    //      (PR, headSha) — first run's check is still in_progress
+    //      when the retry tries to create another.
+    // Best-effort: a failure here logs + continues to the create.
+    await cancelStaleInProgressChecks({ client, owner, repo, headSha })
+
     const created = await client.createCheckRun(owner, repo, {
       name: CHECK_RUN_NAME,
       headSha,
@@ -130,6 +151,67 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
       check_run_id: handle.id, conclusion,
       err: err instanceof Error ? err.message : String(err),
     }))
+  }
+}
+
+/**
+ * ARC-258: cancel any Sigilix-named in-progress check runs on this
+ * head_sha BEFORE creating a new one. Idempotent — safe to call on
+ * every dispatcher entry; returns 0-cancellation early if no stale
+ * checks are found. Best-effort throughout: list/PATCH failures
+ * log + return without touching the underlying review pipeline.
+ *
+ * GitHub's Check Runs API does NOT dedupe by name — each
+ * `POST /check-runs` creates a new row. Without this cleanup, every
+ * queue retry + every name-rename deploy + every concurrent
+ * dispatcher run would stack another in-progress row on the PR.
+ */
+async function cancelStaleInProgressChecks(args: {
+  client: GitHubClient
+  owner: string
+  repo: string
+  headSha: string
+}): Promise<void> {
+  const { client, owner, repo, headSha } = args
+  let existing: Array<{ id: number; name: string; status: string }>
+  try {
+    existing = await client.listCheckRunsForRef(owner, repo, headSha)
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-list-failed",
+      owner, repo, head_sha: headSha,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return
+  }
+  const stale = existing.filter((r) =>
+    KNOWN_CHECK_NAMES.has(r.name) && (r.status === "in_progress" || r.status === "queued"),
+  )
+  if (stale.length === 0) return
+  for (const run of stale) {
+    try {
+      await client.updateCheckRun(owner, repo, run.id, {
+        status: "completed",
+        conclusion: "cancelled",
+        completedAt: new Date().toISOString(),
+        output: {
+          title: "Cancelled (superseded)",
+          summary: "A newer Sigilix review run started for this commit and replaced this check.",
+        },
+      })
+      console.log(JSON.stringify({
+        event: "pr-review-check-run-cancelled-stale",
+        owner, repo, head_sha: headSha,
+        check_run_id: run.id, name: run.name,
+      }))
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-review-check-run-cancel-stale-failed",
+        owner, repo, head_sha: headSha,
+        check_run_id: run.id, name: run.name,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
   }
 }
 

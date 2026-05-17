@@ -261,14 +261,19 @@ describe("handlePrReview — submitReview verification", () => {
     const origErr = console.error
     console.error = (msg: string) => consoleErrors.push(typeof msg === "string" ? msg : JSON.stringify(msg))
 
+    // CodeRabbit MAJOR catch on this PR: read the manifest from the
+    // SAME KV the handler wrote to — `makeKvStub()` on its own
+    // returns a fresh empty store, which would make the assertion
+    // pass vacuously even if the handler wrote a manifest.
     const { kv } = makeKvStub()
+    const env = makeEnv(kv)
     let result: { status: string } | undefined
     try {
       result = await handlePrReview({
         owner: "acme", repo: "site", prNumber: 7,
         headSha: "h".repeat(40),
         installationId: 1,
-        env: makeEnv(kv),
+        env,
       })
     } finally {
       console.error = origErr
@@ -282,7 +287,7 @@ describe("handlePrReview — submitReview verification", () => {
     expect(errLine).toContain('"claimed_review_id":4242')
     expect(errLine).toContain('"submit_path":"phase3"')
     // Manifest must NOT be written for a non-persisted review.
-    const result2 = await readReviewManifest(makeEnv(makeKvStub().kv), "acme", "site", 7)
+    const result2 = await readReviewManifest(env, "acme", "site", 7)
     expect(result2.kind).toBe("missing")
   })
 

@@ -49,11 +49,6 @@ export class GitHubClient {
     return this.request<T>("PATCH", path, body, "json")
   }
 
-  /** Raw REST DELETE. 204 responses parse to undefined. */
-  async restDelete(path: string): Promise<void> {
-    await this.request<unknown>("DELETE", path, undefined, "json")
-  }
-
   /**
    * Fetch the unified diff for a PR. GitHub returns the diff body when
    * `Accept: application/vnd.github.v3.diff` is set; without it the
@@ -416,48 +411,90 @@ export class GitHubClient {
   }
 
   /**
-   * ARC-258: create a PENDING (draft) review. GitHub's reviewer-list
-   * shows the bot with a "in progress" indicator until it's either
-   * submitted or deleted. Sigilix uses this as a status placeholder
-   * while specialists are running; on completion the placeholder is
-   * deleted and the real review is POSTed with inline comments.
+   * ARC-258: create a Check Run in `in_progress` state. Renders in
+   * the PR's Checks tab as "Sigilix Review · In progress" with a
+   * spinner — the customer-visible "we're working on it" indicator.
+   * Completed with `updateCheckRun` once the real review POSTs.
    *
-   * Omitting `event` is what makes the review draft/pending. Body is
-   * optional; we set a short status string so the PENDING entry has
-   * visible copy in the reviewer list.
+   * Sigilix's check is informational (`conclusion: neutral` on
+   * completion); we never block merges. Requires `checks: write`
+   * permission on the GitHub App — gating + error-handling is the
+   * caller's responsibility (we let 403 propagate so misconfigured
+   * installations surface visibly in logs).
+   *
+   * Notes on the payload shape:
+   *   - `head_sha` is the commit being reviewed (not the PR's base).
+   *   - `details_url` (optional) deep-links from the check to a
+   *     status page. Omitted for now — we don't host one.
+   *   - `output.title` / `output.summary` show in the check's
+   *     expanded view. Keep short; the real review is the substance.
    */
-  async createPendingReview(
+  async createCheckRun(
     owner: string,
     repo: string,
-    prNumber: number,
-    body?: string,
+    args: {
+      name: string
+      headSha: string
+      status?: "queued" | "in_progress" | "completed"
+      startedAt?: string
+      detailsUrl?: string
+      externalId?: string
+      output?: { title: string; summary: string }
+    },
   ): Promise<{ id: number }> {
-    const payload: { body?: string } = {}
-    if (body !== undefined && body.length > 0) payload.body = body
+    const payload: Record<string, unknown> = {
+      name: args.name,
+      head_sha: args.headSha,
+    }
+    if (args.status !== undefined) payload.status = args.status
+    if (args.startedAt !== undefined) payload.started_at = args.startedAt
+    if (args.detailsUrl !== undefined) payload.details_url = args.detailsUrl
+    if (args.externalId !== undefined) payload.external_id = args.externalId
+    if (args.output !== undefined) payload.output = args.output
     return this.restPost<{ id: number }>(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+      `/repos/${owner}/${repo}/check-runs`,
       payload,
     )
   }
 
   /**
-   * ARC-258: delete a PENDING review. Only legal on reviews that
-   * haven't been submitted — once a review is in APPROVED /
-   * CHANGES_REQUESTED / COMMENTED state, this endpoint 422s.
+   * ARC-258: update a Check Run created by `createCheckRun`. Used to
+   * transition from `in_progress` → `completed` with an appropriate
+   * `conclusion`. Conclusions used by Sigilix:
    *
-   * Called BEFORE submitting the real review (replaces the
-   * placeholder cleanly), and on the error path so a failed run
-   * doesn't leave a "Sigilix is reviewing..." placeholder
-   * dangling on the PR forever.
+   *   - `neutral`     — review posted successfully (default; we
+   *                     never block merges so this is the steady-
+   *                     state success outcome).
+   *   - `failure`     — orchestrator threw / synth failed / quorum
+   *                     missed. Customer sees a red X check so they
+   *                     know to look at logs / re-run.
+   *   - `skipped`     — stale-head short-circuit fired between
+   *                     check creation and submit. Rare but real
+   *                     (commit pushed mid-review). Customer-visible
+   *                     "skipped" beats a stuck in-progress check.
+   *
+   * Per GitHub's API, `conclusion` is REQUIRED when `status` is
+   * `completed`. We always set both.
    */
-  async deletePendingReview(
+  async updateCheckRun(
     owner: string,
     repo: string,
-    prNumber: number,
-    reviewId: number,
+    checkRunId: number,
+    args: {
+      status?: "queued" | "in_progress" | "completed"
+      conclusion?: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required"
+      completedAt?: string
+      output?: { title: string; summary: string }
+    },
   ): Promise<void> {
-    await this.restDelete(
-      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews/${reviewId}`,
+    const payload: Record<string, unknown> = {}
+    if (args.status !== undefined) payload.status = args.status
+    if (args.conclusion !== undefined) payload.conclusion = args.conclusion
+    if (args.completedAt !== undefined) payload.completed_at = args.completedAt
+    if (args.output !== undefined) payload.output = args.output
+    await this.restPatch<unknown>(
+      `/repos/${owner}/${repo}/check-runs/${checkRunId}`,
+      payload,
     )
   }
 

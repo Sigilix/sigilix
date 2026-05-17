@@ -39,6 +39,13 @@ vi.mock("../src/lib/triage-pr-review", async () => {
 vi.mock("../src/lib/warmup", () => ({
   postWarmupStickyIfUnindexed: vi.fn(async () => ({ skipped: "already-indexed" })),
 }))
+// ARC-258: dispatchJob now also creates a Check Run before routing
+// and completes it after. Mock both helpers so these short-circuit
+// tests stay focused on the routing branch decisions.
+vi.mock("../src/lib/pr-review-check-run", () => ({
+  startInProgressCheckRun: vi.fn(async () => null),
+  completeCheckRun: vi.fn(async () => undefined),
+}))
 
 import { dispatchJob } from "../src/index"
 import type { Env, JobMessage } from "../src/index"

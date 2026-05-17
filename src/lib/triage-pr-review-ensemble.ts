@@ -409,17 +409,13 @@ export async function handlePrReviewEnsemble(
   // stats into telemetry on every exit path (success, failure, throw).
   let cache: ReturnType<typeof createRetrievalCache> | null = null
 
-  // ARC-258: in-progress reviewer indicator. The pending review is
-  // created right after the stale-head guard (so we don't show
-  // "Sigilix is reviewing" on a job that's about to skip). On the
-  // success paths we delete it just before posting the real review,
-  // setting `pendingReviewConsumed = true` so the finally cleanup
-  // doesn't double-delete. On any failure / early-return / throw
-  // path, the finally fires `deletePendingReview` as a best-effort
-  // cleanup so a stuck placeholder doesn't linger on the PR.
-  let pendingReviewId: number | null = null
-  let pendingReviewConsumed = false
-  let pendingReviewClient: import("./github").GitHubClient | null = null
+  // ARC-258: the in-progress check run is owned by `dispatchJob`,
+  // not by this orchestrator. Reason: when ensemble-post fails
+  // non-stale-head and the dispatcher falls back to Phase 3, the
+  // ensemble can't know whether to complete the check (a `failure`
+  // here would contradict a successful Phase 3 review). Lifecycle
+  // owned at the dispatcher level → single source of truth for the
+  // final outcome.
 
   // Telemetry skeleton — populated as we go so we can write a record
   // even on early failure paths.
@@ -466,38 +462,6 @@ export async function handlePrReviewEnsemble(
         source: "ensemble-before-fanout",
       })
       return finalize(telemetry, env, "stale_head", cache)
-    }
-
-    // ARC-258: register Sigilix in the PR's reviewer list with a
-    // PENDING (draft) review. Visible to the customer as "Sigilix is
-    // reviewing" until we delete + replace it with the real review
-    // at submit time. Best-effort — a failure here doesn't block the
-    // review; the customer just doesn't get the in-progress
-    // indicator on this run.
-    //
-    // code-reviewer H1 catch: gated on `mode === "post"`. Shadow
-    // mode is observation-only and intentionally invisible to the
-    // customer (see wrangler.toml); creating a pending review would
-    // flash "Sigilix is reviewing" in the sidebar on every shadow run.
-    if (mode === "post") {
-      try {
-        const pending = await client.createPendingReview(
-          owner, repo, prNumber,
-          "Sigilix is reviewing this PR.",
-        )
-        pendingReviewId = pending.id
-        pendingReviewClient = client
-        console.log(JSON.stringify({
-          event: "pr-review-pending-created",
-          owner, repo, prNumber, review_id: pendingReviewId,
-        }))
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-review-pending-create-failed",
-          owner, repo, prNumber,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
     }
 
     // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
@@ -1254,26 +1218,6 @@ export async function handlePrReviewEnsemble(
       ...(stack.isStacked ? { stack } : {}),
     })
     try {
-      // ARC-258: delete the in-progress placeholder before posting
-      // the real review so the reviewer list cleanly transitions
-      // from "Sigilix is reviewing" to the final state. On delete
-      // failure we let the finally fall through to retry — better a
-      // double-delete attempt than leaving a stuck "in progress"
-      // placeholder if the real submit also throws after this.
-      if (pendingReviewId !== null && pendingReviewClient !== null) {
-        try {
-          await pendingReviewClient.deletePendingReview(
-            owner, repo, prNumber, pendingReviewId,
-          )
-          pendingReviewConsumed = true
-        } catch (err) {
-          console.warn(JSON.stringify({
-            event: "pr-review-pending-delete-failed",
-            owner, repo, prNumber, review_id: pendingReviewId,
-            err: err instanceof Error ? err.message : String(err),
-          }))
-        }
-      }
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
       telemetry.submitted = true
       // ARC-184: write review-provenance manifest. Best-effort.
@@ -1401,32 +1345,6 @@ export async function handlePrReviewEnsemble(
     return finalize(telemetry, env, "errored", cache)
   } finally {
     clearTimeout(orchTimer)
-    // ARC-258: clean up the pending review on any non-success path
-    // — internal errors, early returns (router/quorum/synth), and
-    // any throw between create-pending and submit. Best-effort; if
-    // the placeholder was already consumed by the submit path, this
-    // is a no-op (`pendingReviewConsumed` is true).
-    if (
-      pendingReviewId !== null &&
-      !pendingReviewConsumed &&
-      pendingReviewClient !== null
-    ) {
-      try {
-        await pendingReviewClient.deletePendingReview(
-          owner, repo, prNumber, pendingReviewId,
-        )
-        console.log(JSON.stringify({
-          event: "pr-review-pending-cleaned-up",
-          owner, repo, prNumber, review_id: pendingReviewId,
-        }))
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-review-pending-cleanup-failed",
-          owner, repo, prNumber, review_id: pendingReviewId,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
-    }
   }
 }
 

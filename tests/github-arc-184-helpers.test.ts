@@ -194,31 +194,49 @@ describe("getMergeBase", () => {
   })
 })
 
-// ARC-258 — pending-review lifecycle for the in-progress reviewer
-// indicator. The bot creates a PENDING (draft) review at the head of
-// the ensemble pipeline so customers see "Sigilix is reviewing" in
-// the PR sidebar; on success the placeholder is deleted just before
-// the real review POSTs.
+// ARC-258 — Check Run lifecycle for the customer-visible in-progress
+// reviewer indicator. The bot creates a Check Run in `in_progress`
+// state at the head of the ensemble pipeline so customers see
+// "Sigilix Review · In progress" in the PR's Checks tab; on success
+// it's completed with `conclusion: neutral` (review posted; non-
+// blocking), on failure with `conclusion: failure`, on stale-head
+// with `conclusion: skipped`.
+//
+// Prior history: PR #80's first ARC-258 attempt used PENDING reviews,
+// which are invisible to anyone except the bot that authored them
+// (verified empirically on PR #80 — the placeholder never rendered).
+// We replaced that with the Checks API in commit 4.
 
-describe("createPendingReview (ARC-258)", () => {
-  it("POSTs without an `event` field so GitHub creates a draft", async () => {
-    let captured: { url: string; body: unknown } | null = null
+describe("createCheckRun (ARC-258)", () => {
+  it("POSTs to /check-runs with name + head_sha + status fields", async () => {
+    let captured: { url: string; method: string; body: unknown } | null = null
     vi.spyOn(globalThis, "fetch").mockImplementation(async (req, init) => {
       const url = typeof req === "string" ? req : (req as Request).url
+      const method = init?.method ?? "GET"
       const body = init?.body ? JSON.parse(init.body as string) : null
-      captured = { url, body }
-      return jsonResp({ id: 7777 })
+      captured = { url, method, body }
+      return jsonResp({ id: 555 })
     })
     const c = newClient()
-    const result = await c.createPendingReview("o", "r", 99, "reviewing…")
-    expect(result).toEqual({ id: 7777 })
-    expect(captured!.url).toContain("/repos/o/r/pulls/99/reviews")
+    const result = await c.createCheckRun("o", "r", {
+      name: "Sigilix Review",
+      headSha: "abc123",
+      status: "in_progress",
+      startedAt: "2026-05-17T00:00:00Z",
+      output: { title: "Reviewing…", summary: "Sigilix is analyzing." },
+    })
+    expect(result).toEqual({ id: 555 })
+    expect(captured!.method).toBe("POST")
+    expect(captured!.url).toContain("/repos/o/r/check-runs")
     const body = captured!.body as Record<string, unknown>
-    expect(body.event).toBeUndefined()
-    expect(body.body).toBe("reviewing…")
+    expect(body.name).toBe("Sigilix Review")
+    expect(body.head_sha).toBe("abc123")
+    expect(body.status).toBe("in_progress")
+    expect(body.started_at).toBe("2026-05-17T00:00:00Z")
+    expect(body.output).toEqual({ title: "Reviewing…", summary: "Sigilix is analyzing." })
   })
 
-  it("omits the body field entirely when not provided", async () => {
+  it("omits optional fields entirely when not provided", async () => {
     let captured: { body: unknown } | null = null
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_req, init) => {
       const body = init?.body ? JSON.parse(init.body as string) : null
@@ -226,37 +244,69 @@ describe("createPendingReview (ARC-258)", () => {
       return jsonResp({ id: 1 })
     })
     const c = newClient()
-    await c.createPendingReview("o", "r", 1)
+    await c.createCheckRun("o", "r", { name: "x", headSha: "deadbeef" })
     const body = captured!.body as Record<string, unknown>
-    expect(body.body).toBeUndefined()
-    expect(body.event).toBeUndefined()
+    expect(body.name).toBe("x")
+    expect(body.head_sha).toBe("deadbeef")
+    expect(body.status).toBeUndefined()
+    expect(body.started_at).toBeUndefined()
+    expect(body.details_url).toBeUndefined()
+    expect(body.external_id).toBeUndefined()
+    expect(body.output).toBeUndefined()
   })
 
-  it("rethrows on non-2xx", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(403, "forbidden"))
+  it("rethrows on 403 (App missing `checks: write` permission)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(403, "Resource not accessible by integration"))
     const c = newClient()
-    await expect(c.createPendingReview("o", "r", 1)).rejects.toThrow(/HTTP 403/)
+    await expect(c.createCheckRun("o", "r", { name: "x", headSha: "h" })).rejects.toThrow(/HTTP 403/)
   })
 })
 
-describe("deletePendingReview (ARC-258)", () => {
-  it("DELETEs the review by id and resolves on 204", async () => {
-    let captured: { url: string; method: string } | null = null
+describe("updateCheckRun (ARC-258)", () => {
+  it("PATCHes the check-run by id with status + conclusion + output", async () => {
+    let captured: { url: string; method: string; body: unknown } | null = null
     vi.spyOn(globalThis, "fetch").mockImplementation(async (req, init) => {
       const url = typeof req === "string" ? req : (req as Request).url
       const method = init?.method ?? "GET"
-      captured = { url, method }
-      return new Response(null, { status: 204 })
+      const body = init?.body ? JSON.parse(init.body as string) : null
+      captured = { url, method, body }
+      return jsonResp({ id: 555 })
     })
     const c = newClient()
-    await c.deletePendingReview("o", "r", 99, 7777)
-    expect(captured!.method).toBe("DELETE")
-    expect(captured!.url).toContain("/repos/o/r/pulls/99/reviews/7777")
+    await c.updateCheckRun("o", "r", 555, {
+      status: "completed",
+      conclusion: "neutral",
+      completedAt: "2026-05-17T00:01:00Z",
+      output: { title: "Review posted", summary: "Sigilix posted a review." },
+    })
+    expect(captured!.method).toBe("PATCH")
+    expect(captured!.url).toContain("/repos/o/r/check-runs/555")
+    const body = captured!.body as Record<string, unknown>
+    expect(body.status).toBe("completed")
+    expect(body.conclusion).toBe("neutral")
+    expect(body.completed_at).toBe("2026-05-17T00:01:00Z")
+    expect(body.output).toEqual({ title: "Review posted", summary: "Sigilix posted a review." })
   })
 
-  it("rethrows on 422 (review already submitted — caller logs + continues)", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(422, "already submitted"))
+  it("omits fields entirely when not provided (partial updates allowed)", async () => {
+    let captured: { body: unknown } | null = null
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_req, init) => {
+      const body = init?.body ? JSON.parse(init.body as string) : null
+      captured = { body }
+      return jsonResp({ id: 1 })
+    })
     const c = newClient()
-    await expect(c.deletePendingReview("o", "r", 99, 7777)).rejects.toThrow(/HTTP 422/)
+    await c.updateCheckRun("o", "r", 555, { conclusion: "skipped" })
+    const body = captured!.body as Record<string, unknown>
+    expect(body.conclusion).toBe("skipped")
+    expect(body.status).toBeUndefined()
+    expect(body.completed_at).toBeUndefined()
+    expect(body.output).toBeUndefined()
+  })
+
+  it("rethrows on 404 (caller logs and continues — finally is best-effort)", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => errResp(404, "Not found"))
+    const c = newClient()
+    await expect(c.updateCheckRun("o", "r", 555, { conclusion: "neutral" })).rejects.toThrow(/HTTP 404/)
   })
 })

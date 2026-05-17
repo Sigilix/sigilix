@@ -108,7 +108,9 @@ import {
 import { isRepoSensitive } from "./repo-policy"
 import {
   computeFileListHash,
+  readReviewManifest,
   writeReviewManifest,
+  type ReviewManifestFinding,
   type ReviewManifestV1,
 } from "./review-manifest"
 import { PROMPT_VERSION } from "../prompts/pr-review"
@@ -1223,6 +1225,73 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
+    // ARC-271 — finding delta vs the prior review.
+    //
+    // For each current finding compute a stable key and look it up
+    // in the prior manifest. The result is a {new, still-open,
+    // likely-fixed, carried-over} count surfaced in the review body.
+    //
+    // Best-effort: manifest read failures (KV outage, malformed
+    // record, never-written) degrade to "no delta" — the review
+    // body simply doesn't show the Δ line. The current findings
+    // are persisted on the success path regardless so subsequent
+    // pushes can compute deltas against them.
+    const currentFindingsForManifest: ReviewManifestFinding[] = await Promise.all(
+      consensusVerdict.findings.map(async (f, i) => ({
+        key: await computeFindingKey(f.path, f.headline),
+        path: f.path,
+        headline: f.headline,
+        score: f.score,
+        consensus: consensusByIndex[i] ?? 1,
+      })),
+    )
+    const currentKeySet = new Set(currentFindingsForManifest.map((f) => f.key))
+    let deltaHeader: string | null = null
+    try {
+      const priorRead = await readReviewManifest(env, owner, repo, prNumber)
+      if (priorRead.kind === "ok" && priorRead.manifest.findings) {
+        // Codex spec warning: a finding's path NOT in the current PR's
+        // changed-file set means specialists never looked at it on
+        // this run (incremental review only sends changed-file
+        // diffs). Don't claim "fixed" in that case — classify as
+        // `carried-over` instead.
+        //
+        // `reviewable.keys()` is our changed-paths source of truth:
+        // it's parsed from the diff that the specialists actually
+        // saw, so every path with at least one reviewable position
+        // is a file we have fresh signal on. Pure-rename or empty
+        // diffs without reviewable positions correctly fall out
+        // (we had no signal on them).
+        const changedPaths = new Set(reviewable.keys())
+        const delta = computeFindingDelta(
+          currentKeySet,
+          priorRead.manifest.findings,
+          changedPaths,
+        )
+        deltaHeader = renderDeltaHeader(delta)
+        if (deltaHeader !== null) {
+          console.log(JSON.stringify({
+            event: "pr-review-delta-computed",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            ...delta,
+          }))
+        }
+      }
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-review-delta-read-failed",
+        owner, repo, prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+
+    // Prepend the delta header to the summary if we have one. Goes
+    // BEFORE the summary text so a reviewer skimming the top of the
+    // sticky sees the delta first.
+    if (deltaHeader !== null) {
+      renderableVerdict.summary = `${deltaHeader}\n\n${renderableVerdict.summary}`
+    }
+
     // ARC-189: pre-compute the per-finding sigilix marker BEFORE
     // calling buildReviewSubmission so marker construction (async via
     // crypto.subtle) doesn't force the whole renderer async. Markers
@@ -1271,12 +1340,16 @@ export async function handlePrReviewEnsemble(
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
       telemetry.submitted = true
       // ARC-184: write review-provenance manifest. Best-effort.
+      // ARC-271: also persist the per-finding snapshot so the next
+      // push's review can compute a new/still-open/likely-fixed
+      // delta against this run.
       await writeReviewManifestForEnsemble({
         env, client, owner, repo, prNumber,
         headSha,
         baseSha: meta.base?.sha ?? "",
         modelId: "ensemble-synth",
         reviewId: submitted.id,
+        findings: currentFindingsForManifest,
       })
       // ARC-194 (moved here in ARC-250): record `lastReviewedSha`
       // only after a confirmed GitHub submit. Previously this fired
@@ -1369,13 +1442,15 @@ export async function handlePrReviewEnsemble(
       telemetry.submitted = true
       // ARC-184: write manifest for the fallback path too. Same target
       // shape (kind: "review") because the fallback is still a GitHub
-      // review (just anchorless body).
+      // review (just anchorless body). ARC-271: same per-finding
+      // snapshot as the primary path.
       await writeReviewManifestForEnsemble({
         env, client, owner, repo, prNumber,
         headSha,
         baseSha: meta.base?.sha ?? "",
         modelId: "ensemble-synth",
         reviewId: submittedFallback.id,
+        findings: currentFindingsForManifest,
       })
       // ARC-194 (moved here in ARC-250): mirror the primary submit
       // path — only mark `lastReviewedSha` after a confirmed GitHub
@@ -1441,8 +1516,13 @@ async function writeReviewManifestForEnsemble(args: {
   baseSha: string
   modelId: string
   reviewId: number
+  /** ARC-271: per-finding snapshot for the next push's delta
+   *  computation. Optional — when absent or empty, the manifest
+   *  omits the `findings` field and the next review surfaces no
+   *  delta (e.g., the review had zero findings to record). */
+  findings?: ReviewManifestFinding[]
 }): Promise<void> {
-  const { env, client, owner, repo, prNumber, headSha, baseSha, modelId, reviewId } = args
+  const { env, client, owner, repo, prNumber, headSha, baseSha, modelId, reviewId, findings } = args
   if (env.OPENCLAW_REVIEW_MANIFEST_ENABLED === "off") return
   try {
     const [files, mergeBaseSha] = await Promise.all([
@@ -1461,6 +1541,7 @@ async function writeReviewManifestForEnsemble(args: {
       modelId,
       target: { kind: "review", reviewId },
       reviewedAt: Date.now(),
+      ...(findings && findings.length > 0 ? { findings } : {}),
     }
     const ok = await writeReviewManifest(env, owner, repo, prNumber, manifest)
     if (ok) {
@@ -2309,6 +2390,123 @@ export function annotateWithConsensus(
     ? `${annotation}\n\n${finding.body}`
     : annotation
   return { ...finding, body }
+}
+
+// ─── ARC-271 — finding deltas across pushes ──────────────────────────
+
+/**
+ * Normalize a headline for stable-key derivation: lowercase, collapse
+ * whitespace runs, strip trailing punctuation. Tolerates minor LLM
+ * rephrasing across pushes (different casing, extra spaces, optional
+ * trailing period). Major rephrasing produces a new key — accepted
+ * v1 trade-off (over-report new is safer than silent drop).
+ */
+function normalizeHeadline(headline: string): string {
+  return headline
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.!?,;:]+$/, "")
+}
+
+/**
+ * ARC-271 — compute a stable finding key from `(path, headline)`.
+ * Pure SHA-256 → first 16 hex chars (64 bits — enough to avoid
+ * collisions within a single PR's finding set, which is bounded to
+ * MAX_SYNTH_FINDINGS).
+ *
+ * Exported for unit tests.
+ */
+export async function computeFindingKey(path: string, headline: string): Promise<string> {
+  const input = `${path.toLowerCase()}|${normalizeHeadline(headline)}`
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input))
+  const bytes = new Uint8Array(buf)
+  let hex = ""
+  for (let i = 0; i < 8; i++) hex += bytes[i]!.toString(16).padStart(2, "0")
+  return hex
+}
+
+/**
+ * ARC-271 — delta classification result.
+ *
+ * - `new` — finding has no matching key in the prior manifest.
+ * - `stillOpen` — finding's key was also in the prior manifest.
+ * - `likelyFixed` — prior finding's key is NOT in current AND the
+ *   prior finding's path is in the current PR's changed-file set.
+ *   (Path-in-diff implies the file was edited; finding gone → likely
+ *   resolved by the edit.)
+ * - `carriedOver` — prior finding's key is NOT in current AND the
+ *   prior finding's path is NOT in the current PR's changed-file set.
+ *   (File untouched since prior review — incremental review didn't
+ *   look at it. Finding may still apply but we have no fresh signal.)
+ *
+ * Codex spec warning: NEVER classify a non-touched-file finding as
+ * `fixed`. Incremental review only sends changed-file diffs to
+ * specialists, so an old finding for an unchanged file would not
+ * reappear in the new run for reasons orthogonal to whether the
+ * code was fixed.
+ */
+export interface FindingDelta {
+  newCount: number
+  stillOpenCount: number
+  likelyFixedCount: number
+  carriedOverCount: number
+}
+
+/**
+ * Compute the delta against the prior manifest's findings. Pure;
+ * exported for unit tests.
+ */
+export function computeFindingDelta(
+  currentKeys: ReadonlySet<string>,
+  priorFindings: ReadonlyArray<{ key: string; path: string }>,
+  changedPaths: ReadonlySet<string>,
+): FindingDelta {
+  const priorKeys = new Set(priorFindings.map((f) => f.key))
+  let newCount = 0
+  for (const k of currentKeys) {
+    if (!priorKeys.has(k)) newCount += 1
+  }
+  const stillOpenCount = [...currentKeys].filter((k) => priorKeys.has(k)).length
+  // code-reviewer HIGH catch: `computeFindingKey` lowercases path for
+  // key derivation (so case-renamed files don't drift). The
+  // changed-path lookup must use the same normalization or a prior
+  // finding stored as `Src/Foo.ts` won't match `changedPaths`
+  // entries like `src/foo.ts` from the diff — falsely landing in
+  // `carried-over`. Lowercase both sides of the comparison.
+  const changedPathsLower = new Set<string>()
+  for (const p of changedPaths) changedPathsLower.add(p.toLowerCase())
+  let likelyFixedCount = 0
+  let carriedOverCount = 0
+  for (const p of priorFindings) {
+    if (currentKeys.has(p.key)) continue
+    if (changedPathsLower.has(p.path.toLowerCase())) likelyFixedCount += 1
+    else carriedOverCount += 1
+  }
+  return { newCount, stillOpenCount, likelyFixedCount, carriedOverCount }
+}
+
+/**
+ * Render a one-line delta header for the review body. Returns null
+ * when there's nothing meaningful to show (no prior findings, no
+ * deltas across categories).
+ *
+ * Pure; exported for unit tests.
+ */
+export function renderDeltaHeader(delta: FindingDelta): string | null {
+  const { newCount, stillOpenCount, likelyFixedCount, carriedOverCount } = delta
+  // Skip the header entirely when there's no prior context AND no
+  // current findings to report against — the customer's first review
+  // doesn't need a "+0 new" line.
+  const anySignal =
+    newCount > 0 || stillOpenCount > 0 || likelyFixedCount > 0 || carriedOverCount > 0
+  if (!anySignal) return null
+  const parts: string[] = []
+  if (newCount > 0) parts.push(`+${newCount} new`)
+  if (stillOpenCount > 0) parts.push(`${stillOpenCount} still-open`)
+  if (likelyFixedCount > 0) parts.push(`${likelyFixedCount} likely-fixed`)
+  if (carriedOverCount > 0) parts.push(`${carriedOverCount} carried-over`)
+  return `**Δ since last review:** ${parts.join(" · ")}`
 }
 
 export function checkQuorum(

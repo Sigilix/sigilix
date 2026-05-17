@@ -10,6 +10,9 @@ import {
   assignStableFindingIds,
   checkQuorum,
   computeConsensusRanking,
+  computeFindingDelta,
+  computeFindingKey,
+  renderDeltaHeader,
   truncateVerdictToTokens,
   validateForSubmission,
   routeReview,
@@ -918,5 +921,144 @@ describe("annotateWithConsensus", () => {
     const empty = { ...baseFinding, body: "" }
     const out = annotateWithConsensus(empty, 2)
     expect(out.body).toBe("_Flagged by 2 specialists._")
+  })
+})
+
+// ARC-271 — finding deltas across pushes
+describe("computeFindingKey", () => {
+  it("returns the same key for identical (path, headline)", async () => {
+    const a = await computeFindingKey("src/foo.ts", "off-by-one in clampIndex")
+    const b = await computeFindingKey("src/foo.ts", "off-by-one in clampIndex")
+    expect(a).toBe(b)
+  })
+
+  it("normalizes case + whitespace + trailing punctuation", async () => {
+    const a = await computeFindingKey("Src/Foo.TS", "  Off-by-one in clampIndex.  ")
+    const b = await computeFindingKey("src/foo.ts", "off-by-one in clampIndex")
+    expect(a).toBe(b)
+  })
+
+  it("produces different keys for different paths", async () => {
+    const a = await computeFindingKey("src/a.ts", "guard missing")
+    const b = await computeFindingKey("src/b.ts", "guard missing")
+    expect(a).not.toBe(b)
+  })
+
+  it("produces different keys for different headlines", async () => {
+    const a = await computeFindingKey("src/a.ts", "headline one")
+    const b = await computeFindingKey("src/a.ts", "headline two")
+    expect(a).not.toBe(b)
+  })
+
+  it("returns a 16-char hex string", async () => {
+    const k = await computeFindingKey("src/a.ts", "x")
+    expect(k).toMatch(/^[0-9a-f]{16}$/)
+  })
+})
+
+describe("computeFindingDelta", () => {
+  const prior = (key: string, path: string) => ({ key, path })
+
+  it("classifies every prior finding correctly across all 4 buckets", () => {
+    const currentKeys = new Set(["k-still", "k-new"])
+    const priorFindings = [
+      prior("k-still", "src/touched.ts"),  // → still-open
+      prior("k-gone-touched", "src/touched.ts"),  // → likely-fixed
+      prior("k-gone-untouched", "src/untouched.ts"),  // → carried-over
+    ]
+    const changedPaths = new Set(["src/touched.ts"])
+
+    const delta = computeFindingDelta(currentKeys, priorFindings, changedPaths)
+
+    expect(delta.newCount).toBe(1)
+    expect(delta.stillOpenCount).toBe(1)
+    expect(delta.likelyFixedCount).toBe(1)
+    expect(delta.carriedOverCount).toBe(1)
+  })
+
+  it("never claims a finding is fixed when its path isn't in the changed set (incremental-review safety)", () => {
+    const currentKeys = new Set(["k1"])
+    const priorFindings = [prior("k-gone", "src/untouched.ts")]
+    const changedPaths = new Set(["src/other.ts"]) // touched some other file, not the prior finding's
+
+    const delta = computeFindingDelta(currentKeys, priorFindings, changedPaths)
+
+    expect(delta.likelyFixedCount).toBe(0)
+    expect(delta.carriedOverCount).toBe(1)
+  })
+
+  it("returns all zeros when prior had no findings and current is also empty", () => {
+    const delta = computeFindingDelta(new Set(), [], new Set())
+    expect(delta).toEqual({ newCount: 0, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0 })
+  })
+
+  it("treats first-run (no prior findings) as 'all new'", () => {
+    const currentKeys = new Set(["k1", "k2", "k3"])
+    const delta = computeFindingDelta(currentKeys, [], new Set(["src/foo.ts"]))
+    expect(delta.newCount).toBe(3)
+    expect(delta.stillOpenCount).toBe(0)
+  })
+
+  // code-reviewer HIGH catch on commit 2: `computeFindingKey`
+  // lowercases path before hashing, so a prior finding stored with
+  // raw casing (e.g. `Src/Foo.ts`) must still match diff-derived
+  // changed-paths (typically lowercased / unix style).
+  it("matches paths case-insensitively (changedPaths set may be in different case)", () => {
+    const currentKeys = new Set<string>()
+    const priorFindings = [{ key: "k-gone", path: "Src/Foo.TS" }] // raw upper case
+    const changedPaths = new Set(["src/foo.ts"]) // lowercased from diff
+
+    const delta = computeFindingDelta(currentKeys, priorFindings, changedPaths)
+
+    expect(delta.likelyFixedCount).toBe(1)
+    expect(delta.carriedOverCount).toBe(0)
+  })
+
+  it("renders a header when prior had findings but current has none (all fixed/carried-over)", () => {
+    const currentKeys = new Set<string>()
+    const priorFindings = [
+      { key: "k1", path: "src/touched.ts" },
+      { key: "k2", path: "src/untouched.ts" },
+    ]
+    const changedPaths = new Set(["src/touched.ts"])
+
+    const delta = computeFindingDelta(currentKeys, priorFindings, changedPaths)
+    const header = renderDeltaHeader(delta)
+
+    expect(header).not.toBeNull()
+    expect(header).toContain("1 likely-fixed")
+    expect(header).toContain("1 carried-over")
+    expect(header).not.toContain("new")
+  })
+
+  it("renders a +N new header when prior manifest had findings: [] (clean PR last time)", () => {
+    // First-time finding state: prior manifest existed but its
+    // findings array was empty (zero findings on the last review).
+    // computeFindingDelta should report all current as `new`.
+    const currentKeys = new Set(["k1", "k2"])
+    const delta = computeFindingDelta(currentKeys, [], new Set())
+    const header = renderDeltaHeader(delta)
+    expect(header).toBe("**Δ since last review:** +2 new")
+  })
+})
+
+describe("renderDeltaHeader", () => {
+  it("returns null when there's no signal across all four counts", () => {
+    expect(renderDeltaHeader({ newCount: 0, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0 })).toBeNull()
+  })
+
+  it("renders a complete header with all four counts", () => {
+    const out = renderDeltaHeader({ newCount: 1, stillOpenCount: 2, likelyFixedCount: 3, carriedOverCount: 4 })
+    expect(out).toBe("**Δ since last review:** +1 new · 2 still-open · 3 likely-fixed · 4 carried-over")
+  })
+
+  it("omits zero-count buckets", () => {
+    const out = renderDeltaHeader({ newCount: 2, stillOpenCount: 0, likelyFixedCount: 1, carriedOverCount: 0 })
+    expect(out).toBe("**Δ since last review:** +2 new · 1 likely-fixed")
+  })
+
+  it("renders just one bucket when only one is non-zero", () => {
+    const out = renderDeltaHeader({ newCount: 5, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0 })
+    expect(out).toBe("**Δ since last review:** +5 new")
   })
 })

@@ -29,6 +29,29 @@ export type ReviewTarget =
   | { kind: "review"; reviewId: number }
   | { kind: "issue-comment"; commentId: number }
 
+/**
+ * ARC-271: per-finding record persisted in the review manifest so the
+ * next push's review can classify each new finding as `new`,
+ * `still-open`, or `likely-fixed` against the prior run.
+ *
+ * `key` is a stable identifier computed from `(lowercased-path,
+ * normalized-headline)` — see `computeFindingKey` in
+ * `triage-pr-review-ensemble.ts`. Normalization (lowercase + collapse
+ * whitespace + strip trailing punctuation) tolerates minor LLM
+ * rephrasing across pushes; major rephrasing will produce a new key
+ * and surface as `new` (false positive accepted in v1 — better to
+ * over-report new than to silently drop signal).
+ */
+export interface ReviewManifestFinding {
+  key: string
+  path: string
+  headline: string
+  score: number
+  /** ARC-270 consensus count at the time of the prior review. Carried
+   *  forward for telemetry / future "consensus drift" surfaces. */
+  consensus: number
+}
+
 export interface ReviewManifestV1 {
   v: 1
   prNumber: number
@@ -46,6 +69,14 @@ export interface ReviewManifestV1 {
   modelId: string
   target: ReviewTarget
   reviewedAt: number
+  /**
+   * ARC-271: snapshot of the findings posted on this review. Used by
+   * the next push's review to compute the new/still-open/likely-fixed
+   * delta. Optional — older manifests written before this field was
+   * added omit it; readers treat absent as "no prior findings to
+   * diff against" (the next review surfaces no delta).
+   */
+  findings?: ReviewManifestFinding[]
 }
 
 export type ReadResult =
@@ -69,6 +100,18 @@ function isReviewTarget(t: unknown): t is ReviewTarget {
   return false
 }
 
+function isReviewManifestFinding(value: unknown): value is ReviewManifestFinding {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const o = value as Record<string, unknown>
+  return (
+    typeof o.key === "string" && o.key.length > 0 &&
+    typeof o.path === "string" && o.path.length > 0 &&
+    typeof o.headline === "string" &&
+    typeof o.score === "number" &&
+    typeof o.consensus === "number"
+  )
+}
+
 function isReviewManifestV1(value: unknown): value is ReviewManifestV1 {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const o = value as Record<string, unknown>
@@ -82,6 +125,14 @@ function isReviewManifestV1(value: unknown): value is ReviewManifestV1 {
   if (typeof o.modelId !== "string" || o.modelId.length === 0) return false
   if (!isReviewTarget(o.target)) return false
   if (typeof o.reviewedAt !== "number") return false
+  // ARC-271: `findings` is optional and bounded — older manifests omit
+  // it. When present, every entry must be well-formed; a malformed
+  // entry invalidates the whole manifest so we don't read partially
+  // corrupt delta state.
+  if (o.findings !== undefined) {
+    if (!Array.isArray(o.findings)) return false
+    if (!o.findings.every(isReviewManifestFinding)) return false
+  }
   return true
 }
 

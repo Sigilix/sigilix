@@ -24,6 +24,7 @@ import {
   ORCHESTRATOR_TIMEOUT_MS,
   RESERVED_HEADROOM_MS,
   RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+  SYNTH_RETRY_FINALIZE_RESERVE_MS,
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
   MAX_CALLS_PER_ENSEMBLE_RUN,
@@ -452,11 +453,14 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // + finalize must all fit inside the headroom envelope. Pre-flight
     // runs INSIDE the orchestrator timer (orchTimer starts before
     // preflightRetrieval), so its budget has to come out of headroom.
-    const FINALIZE_RESERVE_MS = 20_000
+    //
+    // ARC-288: import `SYNTH_RETRY_FINALIZE_RESERVE_MS` from source so
+    // a future budget bump can't drift the test loose from the
+    // runtime guard (per the PR #94 orphan finding).
     expect(
       RETRIEVAL_PREFLIGHT_TIMEOUT_MS +
         SYNTHESIZER_RETRY_TIMEOUT_MS +
-        FINALIZE_RESERVE_MS,
+        SYNTH_RETRY_FINALIZE_RESERVE_MS,
     ).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
     // Queue consumer ceiling — ORCHESTRATOR must stay strictly under
     // Cloudflare Queues' 900s consumer wall. Phase B (DO-alarm-driven
@@ -1233,10 +1237,12 @@ describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278 + ARC-283)", ()
     // Module-load guard verifies this; the test pins the constraint
     // so a future "raise retry timeout" change can't silently push
     // past the headroom envelope without updating the orch timeout.
-    // ARC-283 bumped FINALIZE_RESERVE_MS from 5s → 20s (production
-    // finalize is slower when synth produced a large finding set).
-    const FINALIZE_RESERVE_MS = 20_000
-    expect(SYNTHESIZER_RETRY_TIMEOUT_MS + FINALIZE_RESERVE_MS).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
+    // ARC-283 bumped finalize from 5s → 20s (production finalize is
+    // slower when synth produces a large finding set). ARC-288:
+    // import the constant from source so a future bump can't drift
+    // the test loose.
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS)
+      .toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
   })
 
   it("SPECIALIST + SYNTHESIZER + HEADROOM still ≤ ORCHESTRATOR (the primary invariant)", () => {

@@ -113,12 +113,18 @@ new_classes = ["PrReviewRunDO"]
 # put` instead — `[vars]` is for values that are safe to commit and
 # need a default at deploy time.
 [vars]
-# ARC-283 Phase B1b: default OFF everywhere. To enable shadow locally
-# or in a preview deploy, change this CSV (e.g. "synth" → start with
-# the highest-impact role per docs/ops/shadow-bakeoff.md rollout
-# order). For production, prefer `wrangler secret put SHADOW_BAKEOFF_ROLES`
-# so the value isn't checked into source.
-SHADOW_BAKEOFF_ROLES = ""
+# ARC-283 Phase B1b: enabled for `synth` role on 2026-05-18 — highest
+# customer-impact role per Codex ARC-292 analysis (PR #97 demo). Shadow
+# verdicts are NEVER posted; comparison telemetry lives in CF Logs via
+# the `shadow-verdict-comparison` event. Per-role rollout order per
+# docs/ops/shadow-bakeoff.md acceptance criteria:
+#   1. synth (active)
+#   2. security,tests (queued)
+#   3. performance fallback (queued)
+#   4. logic fallback (queued)
+# Flip back to "" to disable; flip to "synth,security" etc. to enable
+# additional roles per the rollout plan.
+SHADOW_BAKEOFF_ROLES = "synth"
 
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to

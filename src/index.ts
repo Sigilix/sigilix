@@ -905,19 +905,20 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             conclusion = "skipped"
             return
           }
-          // ARC-280: `skipped` / `errored` no longer fall back to a
-          // separate single-shot reviewer. The ensemble's
-          // comment-fallback (ARC-279) already handles the "synth
-          // ran but submit didn't persist" case. The remaining
-          // skipped/errored statuses are:
+          // ARC-280 + follow-up: ARC-279 handles "synth ran but
+          // submit didn't persist" via comment-fallback. The
+          // remaining `skipped`/`errored` paths split into:
           //   - sensitive-repo: handled above, never reaches here
-          //   - label gate: legitimate user-config skip
-          //   - daily budget: telemetry-only skip
-          //   - all specialists failed: synth had nothing to merge
-          //   - synth retry exhausted: covered by ARC-279 if synth
-          //     produced anything at all
-          //   - internal_error: real failure (catch below)
+          //   - label gate: legitimate user-config skip → success
+          //   - errored + skip-notice posted (router_no_specialists,
+          //     specialists_all_failed, synth retry exhausted,
+          //     internal_error): map to failure + thread reviewMeta
+          //     so the Check Run title says "Couldn't review — see
+          //     PR comment"
+          //   - errored without skip-notice (rare; the helper
+          //     itself failed to post): generic "Review failed"
           conclusion = result.status === "errored" ? "failure" : "success"
+          reviewMeta = result.reviewMeta
         } catch (err) {
           conclusion = "failure"
           throw err

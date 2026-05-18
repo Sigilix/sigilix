@@ -46,7 +46,7 @@ import {
   buildFallbackSubmission,
   chooseReviewEvent,
 } from "./triage-pr-review"
-import { postReviewCommentFallback } from "./review-comment-fallback"
+import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
   ALL_SPECIALISTS,
@@ -430,6 +430,23 @@ export async function handlePrReviewEnsemble(
   try {
     const client = await buildClient(env, installationId)
 
+    // ARC-280 follow-up: bail with a customer-visible skip-notice
+    // comment + an `errored` result + reviewMeta.surface=skip-notice.
+    // Used by the silent-skip paths that used to fall through to
+    // Phase 3 (router_no_specialists, specialists_all_failed,
+    // synth retry exhausted, internal_error). The dispatcher
+    // already maps `errored` to a `failure` Check Run; the
+    // reviewMeta.surface signal flips the title to "Couldn't
+    // review — see PR comment."
+    const bailWithSkipNotice = async (reason: SkipNoticeReason): Promise<EnsembleResult> => {
+      await postReviewSkipNotice({ env, client, owner, repo, prNumber, headSha, reason })
+      return finalize(telemetry, env, "errored", cache, {
+        event: "REQUEST_CHANGES",
+        findingsCount: 0,
+        surface: "skip-notice",
+      })
+    }
+
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
     if (meta.head?.sha && meta.head.sha !== headSha) {
@@ -652,12 +669,12 @@ export async function handlePrReviewEnsemble(
 
     if (router.specialists.length === 0) {
       // Router said "no specialists for this PR." Skip ensemble entirely.
-      // Phase 3 has already submitted (in shadow mode) or will be
-      // delegated to (in post mode — but ensemble-post with empty
-      // router is a degenerate case; fall back to Phase 3).
-      telemetry.fellBackToPhase3 = mode === "post"
+      // Pre-ARC-280 this fell through to Phase 3; post-ARC-280 the
+      // skip-notice helper posts a customer-visible "couldn't review"
+      // comment so the path isn't silent.
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
-      return finalize(telemetry, env, "skipped", cache)
+      return bailWithSkipNotice("router_no_specialists")
     }
 
     // ─── Pre-flight retrieval snapshot ─────────────────────────
@@ -972,9 +989,9 @@ export async function handlePrReviewEnsemble(
     //     change, no degraded-coverage telemetry.
     const succeeded = specialistVerdicts.filter((v) => v.verdict !== null)
     if (succeeded.length === 0) {
-      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "specialists_all_failed"
-      return finalize(telemetry, env, "skipped", cache)
+      return bailWithSkipNotice("specialists_all_failed")
     }
     const degradedCoverage = succeeded.length < router.specialists.length
       ? computeDegradedCoverage(router.specialists, succeeded.map((v) => v.role))
@@ -1224,9 +1241,9 @@ export async function handlePrReviewEnsemble(
         failureReason: "synth_timeout",
       }
       telemetry.synthRetry = { used: synthRetryUsed, outcome: synthRetryOutcome }
-      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "synth_timeout"
-      return finalize(telemetry, env, "skipped", cache)
+      return bailWithSkipNotice("synth_timeout")
     }
 
     // ARC-278: persist the retry telemetry regardless of which path
@@ -1257,9 +1274,9 @@ export async function handlePrReviewEnsemble(
         timedOut: true,
         failureReason: "synth_timeout",
       }
-      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "synth_timeout"
-      return finalize(telemetry, env, "skipped", cache)
+      return bailWithSkipNotice("synth_timeout")
     }
 
     // Phase 4a.2: withComposedTimeout no longer throws when its own
@@ -1293,13 +1310,14 @@ export async function handlePrReviewEnsemble(
     telemetry.synthesizer = synthEntry
 
     if (!synthOutput.verdict || !synthOutput.provenance) {
-      telemetry.fellBackToPhase3 = mode === "post"
-      telemetry.fellBackReason = synthAborted
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
+      const synthFailReason: SkipNoticeReason = synthAborted
         ? "synth_timeout"
         : synthOutput.failureReason === "synth_invalid_provenance"
           ? "synth_invalid_provenance"
           : "synth_failed_parse"
-      return finalize(telemetry, env, "skipped", cache)
+      telemetry.fellBackReason = synthFailReason
+      return bailWithSkipNotice(synthFailReason)
     }
 
     // ─── Post-synthesis validation ─────────────────────────────
@@ -1874,9 +1892,16 @@ export async function handlePrReviewEnsemble(
       })
     }
   } catch (e) {
-    telemetry.fellBackToPhase3 = mode === "post"
+    telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
     telemetry.fellBackReason = "internal_error"
     telemetry.internalError = e instanceof Error ? e.message : String(e)
+    // ARC-280 follow-up: the internal_error path doesn't post a
+    // skip-notice because the catch may have fired BEFORE the
+    // client/auth was built (so the `bailWithSkipNotice` closure
+    // isn't reachable from here). The dispatcher's `errored` →
+    // `failure` Check Run mapping renders a generic "Review
+    // failed" title, which is accurate for this case — the on-
+    // call team needs to look at telemetry to know what failed.
     return finalize(telemetry, env, "errored", cache)
   } finally {
     clearTimeout(orchTimer)
@@ -3518,28 +3543,38 @@ type EnsembleResultStatus =
  * ARC-276: signal the customer-visible verdict + findings count back
  * to the dispatcher so the Sigilix Check Run title can reflect the
  * actual review outcome (`Approved — no issues found` vs `N findings
- * posted`). Only populated on the `posted` status; absent on every
- * other path (stale_head / errored / skipped / shadow_recorded).
+ * posted`).
  *
  * ARC-279: `surface` distinguishes a real GitHub review from the
  * fallback PR comment that fires when the formal submit silently
  * rejects. The dispatcher uses `surface === "comment"` to map the
  * Check Run to `failure` with a "see PR comment" title instead of
- * the normal `success` outcome — the customer needs to know the
- * normal review pipeline didn't run.
+ * the normal `success` outcome.
+ *
+ * ARC-280 follow-up: `surface === "skip-notice"` signals that the
+ * ensemble couldn't even generate a verdict (router_no_specialists,
+ * specialists_all_failed, synth retry exhausted, internal_error)
+ * and posted a minimal "Sigilix couldn't review" comment instead.
+ * Set on `status === "errored"` so the dispatcher's existing
+ * errored → failure mapping kicks in; the Check Run renderer then
+ * branches on `surface === "skip-notice"` to show a "couldn't
+ * review — see PR comment" title. `event` + `findingsCount` are
+ * required by the type but ignored on this branch (we don't have
+ * a verdict to count).
  */
 export interface ReviewMeta {
   event: "APPROVE" | "REQUEST_CHANGES"
   findingsCount: number
   /** Default behavior when omitted is `"review"` (back-compat with
    *  Phase 3's `PrReviewMeta` shape). */
-  surface?: "review" | "comment"
+  surface?: "review" | "comment" | "skip-notice"
 }
 
 export interface EnsembleResult {
   status: EnsembleResultStatus
   telemetry: EnsembleTelemetry
-  /** ARC-276: only set on `status === "posted"`. */
+  /** ARC-276/279/280: set on `posted` (real review or comment
+   *  fallback) AND on `errored` when a skip-notice was posted. */
   reviewMeta?: ReviewMeta
 }
 

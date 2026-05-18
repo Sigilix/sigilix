@@ -147,6 +147,33 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     })
   })
 
+  // ARC-280 follow-up: when the ensemble couldn't generate a verdict
+  // and posted a skip-notice instead (specialists_all_failed,
+  // synth retry exhausted, etc.), the dispatcher threads
+  // reviewMeta.surface=skip-notice so the Check Run renderer shows
+  // "Couldn't review — see PR comment" instead of the generic
+  // "Review failed" title.
+  it("ensemble errored with surface=skip-notice → completeCheckRun(failure) with reviewMeta", async () => {
+    const reviewMeta = {
+      event: "REQUEST_CHANGES" as const,
+      findingsCount: 0,
+      surface: "skip-notice" as const,
+    }
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "errored",
+      telemetry: {},
+      reviewMeta,
+    })
+
+    await dispatchJob(job, makeEnv())
+
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: HANDLE,
+      conclusion: "failure",
+      reviewMeta,
+    })
+  })
+
   // Legitimate skip path (label gate, specialists_all_failed, etc.):
   // success conclusion (nothing reviewed because user-config or
   // unreviewable input).

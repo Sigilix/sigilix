@@ -219,3 +219,157 @@ export async function postReviewCommentFallback(
     return { ok: false, reason: "post-failed", error: errStr }
   }
 }
+
+// ARC-280 follow-up (PR #92 review): the ensemble has paths that
+// historically fell through to Phase 3 (router_no_specialists,
+// specialists_all_failed, synth retry exhausted, internal_error).
+// With Phase 3 deleted, those paths returned `skipped` / `errored`
+// with NO review body — recreating the silent-skip pattern ARC-275
+// was meant to eliminate.
+//
+// `postReviewSkipNotice` posts a minimal "Sigilix couldn't generate
+// a review for this PR" comment on those paths so the user sees
+// what happened. Distinct KV key family from
+// `postReviewCommentFallback` (which fires when we HAVE a synth
+// body but submit silently rejected) so a "couldn't generate"
+// notice + a later successful review on the same head don't
+// collide.
+
+/** Customer-facing reason name surfaced in the skip-notice header. */
+export type SkipNoticeReason =
+  | "router_no_specialists"
+  | "specialists_all_failed"
+  | "synth_timeout"
+  | "synth_failed_parse"
+  | "synth_invalid_provenance"
+  | "internal_error"
+
+function dedupeKeyForSkipNotice(args: {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+}): string {
+  return `pr-review-skip-notice:${args.owner}/${args.repo}#${args.prNumber}@${args.headSha}`
+}
+
+/** Pure: render the body for a "Sigilix couldn't review" comment.
+ *  Carries the existing `openclaw:pr-review` marker so dismiss-prior
+ *  / review-memory pipelines treat it as a Sigilix review surface,
+ *  plus a dedicated `sigilix:review-skip-notice` marker so a future
+ *  cleanup pass can tell skip-notices apart from real reviews +
+ *  ARC-279 comment-fallbacks. */
+export function renderReviewSkipNotice(args: {
+  reason: SkipNoticeReason
+  headSha: string
+}): string {
+  const { reason, headSha } = args
+  const sha7 = headSha.slice(0, 7)
+  const explanation: Record<SkipNoticeReason, string> = {
+    router_no_specialists:
+      "The diff didn't match any specialist's domain (logic / security / performance / tests), so no specialist could run.",
+    specialists_all_failed:
+      "Every specialist (logic / security / performance / tests) failed to return a verdict (model timeout / rate-limit / parse-fail). Synth had no input to work with.",
+    synth_timeout:
+      "The synth call timed out twice (primary + retry). Specialist verdicts were produced but couldn't be merged.",
+    synth_failed_parse:
+      "The synth model returned output that couldn't be parsed as JSON, even after a retry with a tightened prompt.",
+    synth_invalid_provenance:
+      "The synth model produced a verdict whose provenance couldn't be validated against the specialist inputs, even after a retry.",
+    internal_error:
+      "An unexpected internal error fired during the ensemble run. The on-call team has a telemetry record.",
+  }
+  return [
+    "<!-- openclaw:pr-review -->",
+    "<!-- sigilix:review-skip-notice -->",
+    "",
+    "> [!WARNING]",
+    "> **Sigilix couldn't generate a review for this PR.**",
+    ">",
+    `> Reason: \`${reason}\` — ${explanation[reason]}`,
+    ">",
+    `> Re-run \`/sigilix review\` to try again. Run on \`${sha7}\`.`,
+  ].join("\n")
+}
+
+export interface PostReviewSkipNoticeArgs {
+  env: Env
+  client: GitHubClient
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  reason: SkipNoticeReason
+}
+
+export type PostReviewSkipNoticeResult =
+  | { ok: true; reason: "posted"; commentId?: number }
+  | { ok: true; reason: "dedupe-hit" }
+  | { ok: false; reason: "post-failed"; error: string }
+
+/**
+ * Best-effort skip-notice poster. KV-deduped per (PR, headSha) with
+ * a 7-day TTL so retry storms produce one notice per head. KV-read
+ * failure proceeds with the post (better one extra comment than
+ * zero); KV-write failure on success is non-fatal.
+ *
+ * Never throws — every failure path returns a structured result.
+ */
+export async function postReviewSkipNotice(
+  args: PostReviewSkipNoticeArgs,
+): Promise<PostReviewSkipNoticeResult> {
+  const { env, client, owner, repo, prNumber, headSha, reason } = args
+  const tag = { owner, repo, prNumber, headSha, skip_reason: reason }
+  const key = dedupeKeyForSkipNotice({ owner, repo, prNumber, headSha })
+
+  try {
+    const existing = await env.OPENCLAW_STATE.get(key)
+    if (existing) {
+      console.log(JSON.stringify({
+        event: "pr-review-skip-notice-dedupe-hit",
+        ...tag,
+      }))
+      return { ok: true, reason: "dedupe-hit" }
+    }
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-skip-notice-dedupe-read-failed",
+      err: err instanceof Error ? err.message : String(err),
+      ...tag,
+    }))
+  }
+
+  const body = renderReviewSkipNotice({ reason, headSha })
+
+  try {
+    const result = await client.createIssueComment(owner, repo, prNumber, body)
+    await env.OPENCLAW_STATE.put(key, String(Date.now()), {
+      expirationTtl: 7 * 24 * 60 * 60,
+    }).catch((err) => {
+      console.warn(JSON.stringify({
+        event: "pr-review-skip-notice-dedupe-write-failed",
+        err: err instanceof Error ? err.message : String(err),
+        ...tag,
+      }))
+    })
+    const commentId = typeof result === "object" && result !== null && "id" in result
+      ? Number(result.id)
+      : undefined
+    console.log(JSON.stringify({
+      event: "pr-review-skip-notice-posted",
+      ...tag,
+      ...(commentId !== undefined ? { comment_id: commentId } : {}),
+    }))
+    return commentId !== undefined
+      ? { ok: true, reason: "posted", commentId }
+      : { ok: true, reason: "posted" }
+  } catch (err) {
+    const errStr = err instanceof Error ? err.message : String(err)
+    console.error(JSON.stringify({
+      event: "pr-review-skip-notice-post-failed",
+      err: errStr,
+      ...tag,
+    }))
+    return { ok: false, reason: "post-failed", error: errStr }
+  }
+}

@@ -338,3 +338,153 @@ describe("postReviewCommentFallback — telemetry shape", () => {
     expect(dedupeLog).toContain('"submit_path":"inline-anchored"')
   })
 })
+
+// ARC-280 follow-up — postReviewSkipNotice (silent-skip path elimination)
+
+import {
+  postReviewSkipNotice,
+  renderReviewSkipNotice,
+} from "../src/lib/review-comment-fallback"
+
+describe("renderReviewSkipNotice", () => {
+  it("renders the skip-notice header with reason + sha + retry hint", () => {
+    const out = renderReviewSkipNotice({
+      reason: "specialists_all_failed",
+      headSha: "abc1234567890",
+    })
+    expect(out).toContain("<!-- openclaw:pr-review -->")
+    expect(out).toContain("<!-- sigilix:review-skip-notice -->")
+    expect(out).toContain("[!WARNING]")
+    expect(out).toContain("Sigilix couldn't generate a review for this PR")
+    expect(out).toContain("`specialists_all_failed`")
+    expect(out).toContain("Every specialist")
+    expect(out).toContain("`abc1234`")
+    expect(out).toContain("/sigilix review")
+  })
+
+  it("renders distinct explanation text per reason", () => {
+    const reasons = [
+      "router_no_specialists",
+      "specialists_all_failed",
+      "synth_timeout",
+      "synth_failed_parse",
+      "synth_invalid_provenance",
+      "internal_error",
+    ] as const
+    const bodies = reasons.map((r) => renderReviewSkipNotice({ reason: r, headSha: "abc1234" }))
+    // Every body mentions its reason name in a backticked code span.
+    for (let i = 0; i < reasons.length; i++) {
+      expect(bodies[i]).toContain(`\`${reasons[i]}\``)
+    }
+    // All explanations distinct from each other.
+    const explanations = new Set(bodies)
+    expect(explanations.size).toBe(reasons.length)
+  })
+})
+
+describe("postReviewSkipNotice — happy path", () => {
+  const baseArgs = {
+    owner: "Arc-and-Anchor",
+    repo: "sigilix",
+    prNumber: 92,
+    headSha: "abc1234567890abcdef",
+    reason: "specialists_all_failed" as const,
+  }
+
+  it("posts the wrapped notice, sets a distinct dedupe key, returns ok=posted with comment id", async () => {
+    mockCreateIssueComment.mockResolvedValueOnce({ id: 555_000 })
+    const { kv, writes } = makeKvStub()
+    const client = new GitHubClient({ token: "t" })
+
+    const out = await postReviewSkipNotice({
+      env: { OPENCLAW_STATE: kv } as unknown as Env,
+      client, ...baseArgs,
+    })
+
+    expect(out).toEqual({ ok: true, reason: "posted", commentId: 555_000 })
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    const [, , , body] = mockCreateIssueComment.mock.calls[0]!
+    expect(body).toContain("sigilix:review-skip-notice")
+    expect(body).toContain("specialists_all_failed")
+    // Distinct dedupe-key family from postReviewCommentFallback so
+    // skip-notice + comment-fallback can coexist on the same head.
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.key).toBe(
+      "pr-review-skip-notice:Arc-and-Anchor/sigilix#92@abc1234567890abcdef",
+    )
+    const opts = writes[0]!.opts as { expirationTtl: number } | undefined
+    expect(opts?.expirationTtl).toBe(7 * 24 * 60 * 60)
+  })
+})
+
+describe("postReviewSkipNotice — dedupe", () => {
+  it("returns dedupe-hit + skips the post when the per-(PR, headSha) key is already set", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(
+      "pr-review-skip-notice:acme/site#42@aaaaaaaaaaaaaaaaaaaa",
+      String(Date.now()),
+    )
+    const client = new GitHubClient({ token: "t" })
+
+    const out = await postReviewSkipNotice({
+      env: { OPENCLAW_STATE: kv } as unknown as Env,
+      client,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      headSha: "aaaaaaaaaaaaaaaaaaaa",
+      reason: "synth_timeout",
+    })
+
+    expect(out).toEqual({ ok: true, reason: "dedupe-hit" })
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+  })
+
+  it("uses a DIFFERENT dedupe-key family than postReviewCommentFallback", async () => {
+    // Confirm a comment-fallback dedupe on the same (PR, headSha)
+    // does NOT block a skip-notice on the same head.
+    const { kv, store } = makeKvStub()
+    store.set(
+      "pr-review-comment-fallback:acme/site#42@aaaaaaaaaaaaaaaaaaaa",
+      String(Date.now()),
+    )
+    mockCreateIssueComment.mockResolvedValueOnce({ id: 1 })
+    const client = new GitHubClient({ token: "t" })
+
+    const out = await postReviewSkipNotice({
+      env: { OPENCLAW_STATE: kv } as unknown as Env,
+      client,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      headSha: "aaaaaaaaaaaaaaaaaaaa",
+      reason: "internal_error",
+    })
+
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.reason).toBe("posted")
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+})
+
+describe("postReviewSkipNotice — post failure", () => {
+  it("returns ok=false with the error message when createIssueComment throws (no dedupe key written)", async () => {
+    mockCreateIssueComment.mockRejectedValueOnce(new Error("HTTP 403 Forbidden"))
+    const { kv, writes } = makeKvStub()
+    const client = new GitHubClient({ token: "t" })
+
+    const out = await postReviewSkipNotice({
+      env: { OPENCLAW_STATE: kv } as unknown as Env,
+      client,
+      owner: "acme",
+      repo: "site",
+      prNumber: 42,
+      headSha: "aaaaaaaaaaaaaaaaaaaa",
+      reason: "router_no_specialists",
+    })
+
+    expect(out).toEqual({ ok: false, reason: "post-failed", error: "HTTP 403 Forbidden" })
+    // Dedupe key NOT written — a future retry should be allowed.
+    expect(writes).toEqual([])
+  })
+})

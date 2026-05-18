@@ -292,7 +292,13 @@ if (SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS > ORCH
 // Pre-ARC-283 finalize was budgeted at 5s; ARC-283 bumped to 20s to
 // defend against slower telemetry writes / daily-budget increments /
 // cache writes when synth produces a large finding set.
-const SYNTH_RETRY_FINALIZE_RESERVE_MS = 20_000
+//
+// Exported per Sigilix's PR #94 follow-up finding (orphaned on the
+// merged PR, picked up here as ARC-288): the test that pins the
+// synth-retry budget invariant must import the same constant the
+// runtime guard uses, not a hardcoded duplicate that can drift the
+// next time the budget changes.
+export const SYNTH_RETRY_FINALIZE_RESERVE_MS = 20_000
 if (SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS > RESERVED_HEADROOM_MS) {
   throw new Error(
     `[ensemble] synth-retry budget invariant violated: ` +
@@ -1792,6 +1798,17 @@ export async function handlePrReviewEnsemble(
     // ARC-284: wrap the submit so a slow GitHub roundtrip shows up in
     // the trace. Covers BOTH the success path and the 422-fallback
     // path that the catch block dispatches to.
+    //
+    // ARC-286 follow-up: this is the call site that needs the pre-
+    // submit `is-PR-merged?` guard so the merge-timing race stops
+    // posting reviews to merged PRs. Both submit paths below
+    // (inline-anchored + anchorless-fallback) need the same check.
+    //
+    // ARC-287 follow-up: the order of submitReview + dismissPriorSigilix
+    // should flip — dismiss FIRST, then post — so the GitHub timeline
+    // renders cleanup-above-current-review instead of the current
+    // reverse-chronology footgun. Safe because ARC-279's comment
+    // fallback covers the "dismiss succeeded, submit failed" case.
     const submitStartMs = Date.now()
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)

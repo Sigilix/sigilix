@@ -111,7 +111,12 @@ export async function dismissPriorSigilixReviews(
     try {
       await client.dismissReview(
         owner, repo, prNumber, r.id,
-        "Superseded by a newer Sigilix review on the latest commit.",
+        // Plain-English message that GitHub displays as the dismissal
+        // reason — the UI wraps it in "Suspended by a newer review,"
+        // which is confusing on its own without context. The text
+        // here explains exactly what happened + where to find the
+        // current review.
+        "This Sigilix review was for an older commit on this PR. Sigilix has re-reviewed the latest commit — see the most recent review in this Reviews tab for the current verdict.",
       )
       dismissed += 1
     } catch (err) {

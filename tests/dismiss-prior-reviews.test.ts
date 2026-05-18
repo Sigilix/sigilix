@@ -215,7 +215,12 @@ describe("dismissPriorSigilixReviews", () => {
 
     const message = mockDismissReview.mock.calls[0]?.[4]
     expect(typeof message).toBe("string")
-    expect(message).toMatch(/Superseded|newer|Sigilix/i)
+    // ARC-258 follow-up (PR #92): the dismissal message needs to be
+    // plain-English so GitHub's "Suspended by a newer review" UI
+    // header reads as obvious to the customer. Anchor the assertion
+    // on the customer-actionable phrases.
+    expect(message).toMatch(/older commit|re-reviewed|latest commit|Reviews tab/i)
+    expect(message).toMatch(/Sigilix/i)
   })
 
   // code-reviewer M2 catch: warn when the list-call hits the 100-cap

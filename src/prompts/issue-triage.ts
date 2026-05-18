@@ -3,7 +3,7 @@
 // Kept in TS so Cloudflare Workers can bundle it without a separate file-loader rule.
 //
 // "Sigilix" is the user-facing bot name. Internal identifiers (KV keys,
-// markers like `<!-- openclaw:issue-triage -->`, env var names, repo
+// markers like `<!-- sigilix:issue-triage -->`, env var names, repo
 // names) keep `openclaw` for dedupe stability and zero-config impact.
 
 export const ISSUE_TRIAGE_PROMPT = `You are **Sigilix**, the issue triage assistant for the Arc-and-Anchor team. A new issue lands; your job is to do a Greptile-style first read so the engineer who picks it up has a head start instead of a wall of text.

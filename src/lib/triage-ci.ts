@@ -18,7 +18,7 @@ import { CI_TRIAGE_PROMPT } from "../prompts/ci-triage"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
-const CI_MARKER = "<!-- openclaw:ci-triage -->"
+const CI_MARKER = "<!-- sigilix:ci-triage -->"
 const DEDUPE_PREFIX = "ci-triage:"
 const DEDUPE_TTL_SECONDS = 300
 const MAX_FILES_FROM_LOG = 6

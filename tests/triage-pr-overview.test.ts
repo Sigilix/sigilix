@@ -110,7 +110,7 @@ describe("formatOverviewComment", () => {
 
   it("starts with the dedupe marker on line 1", () => {
     const md = formatOverviewComment({ verdict, isFirstRun: true })
-    expect(md.split("\n")[0]).toBe("<!-- openclaw:pr-overview -->")
+    expect(md.split("\n")[0]).toBe("<!-- sigilix:pr-overview -->")
   })
 
   it("renders the summary heading + content", () => {

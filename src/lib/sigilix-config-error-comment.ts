@@ -8,7 +8,7 @@
 // Dedupe strategy (defense in depth):
 //   1. KV fast-path (1-day TTL) — `config-error-posted:<owner>/<repo>#<n>:<headSha>`.
 //   2. GitHub-side authoritative — list issue comments, search for the
-//      head-SHA-keyed marker substring `<!-- openclaw:config-error:<sha7> -->`.
+//      head-SHA-keyed marker substring `<!-- sigilix:config-error:<sha7> -->`.
 //      Found → KV is warmed and the post is skipped.
 //
 // New head SHA → new marker → new comment (correctly).
@@ -21,7 +21,7 @@ const RAW_SNIPPET_MAX = 500
 const KV_TTL_SECONDS = 24 * 60 * 60 // 1 day
 
 function buildMarker(headSha: string): string {
-  return `<!-- openclaw:config-error:${headSha.slice(0, 7)} -->`
+  return `<!-- sigilix:config-error:${headSha.slice(0, 7)} -->`
 }
 
 function buildKvKey(owner: string, repo: string, prNumber: number, headSha: string): string {

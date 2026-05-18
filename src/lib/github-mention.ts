@@ -30,7 +30,7 @@ import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const KV_PREFIX = "gh-mention"
-const REPLY_MARKER = "<!-- openclaw:gh-mention-reply -->"
+const REPLY_MARKER = "<!-- sigilix:gh-mention-reply -->"
 
 const LIMITS = {
   prDiff: 18_000,

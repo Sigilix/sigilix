@@ -6,7 +6,7 @@
 //   1. `<!-- sigilix:warmup -->` standalone "warming up" sticky from
 //      `postWarmupStickyIfUnindexed` (called at the head of every
 //      `pr-review` dispatch).
-//   2. `<!-- openclaw:pr-overview -->` overview sticky from
+//   2. `<!-- sigilix:pr-overview -->` overview sticky from
 //      `handlePrOverview` (called on PR opened/synchronize).
 //
 // Founder caught the redundancy on PR #80: two stickies stacked at

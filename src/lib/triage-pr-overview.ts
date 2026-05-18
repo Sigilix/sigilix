@@ -23,7 +23,7 @@ import {
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
-const OVERVIEW_MARKER = "<!-- openclaw:pr-overview -->"
+const OVERVIEW_MARKER = "<!-- sigilix:pr-overview -->"
 
 const LIMITS = {
   prDiff: 28_000,

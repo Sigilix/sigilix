@@ -57,7 +57,7 @@ describe("postConfigErrorComment", () => {
     expect(result.commentId).toBe(100)
     expect(create).toHaveBeenCalledOnce()
     const body = create.mock.calls[0][3] as string
-    expect(body).toContain(`<!-- openclaw:config-error:${args.headSha.slice(0, 7)} -->`)
+    expect(body).toContain(`<!-- sigilix:config-error:${args.headSha.slice(0, 7)} -->`)
     expect(body).toContain("Sigilix config parse error")
     expect(body).toContain("JSON parse failed: unexpected token")
     expect(body).toContain("{not json")
@@ -80,9 +80,9 @@ describe("postConfigErrorComment", () => {
     const create = vi.fn(async () => ({ id: 999 }))
     const list = vi.fn(async () => [
       // Decoy: marker for a DIFFERENT head SHA
-      { id: 50, body: "<!-- openclaw:config-error:zzzzzzz -->\nold" } as any,
+      { id: 50, body: "<!-- sigilix:config-error:zzzzzzz -->\nold" } as any,
       // Match: marker for THIS head SHA
-      { id: 60, body: `<!-- openclaw:config-error:${args.headSha.slice(0, 7)} -->\nlanded` } as any,
+      { id: 60, body: `<!-- sigilix:config-error:${args.headSha.slice(0, 7)} -->\nlanded` } as any,
     ])
     const client = fakeClient({ listIssueComments: list, createIssueComment: create })
     const { stub, store } = fakeKV()
@@ -97,7 +97,7 @@ describe("postConfigErrorComment", () => {
     const create = vi.fn(async () => ({ id: 200 }))
     const list = vi.fn(async () => [
       // Old comment is for "abc1234" — different from THIS head's marker
-      { id: 50, body: "<!-- openclaw:config-error:abc1234 -->\nold" } as any,
+      { id: 50, body: "<!-- sigilix:config-error:abc1234 -->\nold" } as any,
     ])
     const client = fakeClient({ listIssueComments: list, createIssueComment: create })
     const { stub } = fakeKV()

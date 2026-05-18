@@ -36,6 +36,7 @@ import {
   isAuthorAllowedForSlashCommand,
   type SlashCommand,
 } from "./lib/slash-commands"
+import { shouldQueueReviewThreadReply } from "./lib/review-thread-reply"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
@@ -2008,9 +2009,53 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
 
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
   const hasMention = bodyMentionsBot(body, triggers)
-  const isReviewCommentReply =
-    surface === "review-comment" && typeof comment.in_reply_to_id === "number"
-  if (!hasMention && !isReviewCommentReply) {
+
+  // ARC-269: gate the implicit-thread-reply path. An explicit
+  // @-mention always queues (the user typed our handle, intent is
+  // clear). An inline review-comment reply WITHOUT a mention only
+  // queues when the body looks like a real ask — empty / single-
+  // ack / no-signal bodies were burning queue + LLM budget on
+  // "fixed" / "thanks" / 👍 replies. The shape gate lives in
+  // `shouldQueueReviewThreadReply`; the thread-root-owner gate
+  // (was the root authored by Sigilix?) is the consumer's job.
+  //
+  // Note: this branch fires on ALL review-comment-without-mention
+  // payloads, including top-level review comments. The gate's
+  // `not-a-reply` reason filters those out. Prior to ARC-269 those
+  // returned 200 "no mention"; they now return 200 "skip review-
+  // reply: not-a-reply" with a structured telemetry event. Net
+  // queue count is unchanged.
+  const isReviewCommentWithoutMention = surface === "review-comment" && !hasMention
+  // Pre-compute these so both the skip event and the dispatch
+  // event carry the same payload-shape facts for post-rollout
+  // tuning (code-review M4 catch).
+  const bodyLength = body.length
+  const bodyEndsWithQ = body.trim().endsWith("?")
+  const hadInReplyToId = typeof comment.in_reply_to_id === "number"
+  if (isReviewCommentWithoutMention) {
+    const gate = shouldQueueReviewThreadReply({
+      body,
+      authorLogin: comment.user?.login ?? null,
+      inReplyToId: comment.in_reply_to_id ?? null,
+    })
+    if (!gate.ok) {
+      console.log(JSON.stringify({
+        event: "review-reply-skipped",
+        reason: gate.reason,
+        owner, repo, prNumber,
+        comment_id: comment.id,
+        body_length: bodyLength,
+        body_ends_with_q: bodyEndsWithQ,
+        had_in_reply_to_id: hadInReplyToId,
+      }))
+      // 200 not 202: we explicitly chose not to queue. The webhook
+      // is acknowledged but no work is created.
+      return new Response(`skip review-reply: ${gate.reason}\n`, { status: 200 })
+    }
+  } else if (!hasMention) {
+    // Non-review-comment surface (issue comment) with no mention:
+    // existing behavior, just drop. The implicit-thread path
+    // doesn't apply here.
     return new Response("no mention\n", { status: 200 })
   }
 
@@ -2027,6 +2072,17 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
       : {}),
   }
   await env.OPENCLAW_JOBS.send(message)
+  console.log(JSON.stringify({
+    event: isReviewCommentWithoutMention ? "review-reply-dispatched" : "github-mention-dispatched",
+    surface,
+    owner, repo, prNumber,
+    comment_id: comment.id,
+    has_mention: hasMention,
+    is_review_thread_reply: isReviewCommentWithoutMention,
+    body_length: bodyLength,
+    body_ends_with_q: bodyEndsWithQ,
+    had_in_reply_to_id: hadInReplyToId,
+  }))
   return new Response("queued\n", { status: 202 })
 }
 

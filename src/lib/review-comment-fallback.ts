@@ -45,6 +45,12 @@ import type { Env } from "../index"
  *  real review. */
 const SIGILIX_REVIEW_BODY_MARKER = "<!-- sigilix:pr-review -->"
 
+// SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
+// markers so the existing-comment lookup finds legacy stickies and
+// edits them in place instead of creating duplicates. Drop the legacy
+// half once all pre-2026-05-18 PRs close.
+const LEGACY_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
+
 /** Per-(PR, headSha) dedupe key for the comment-fallback path.
  *  Distinct key family from the regular pr-review dedupe so a
  *  comment-fallback record doesn't suppress a future successful
@@ -154,7 +160,15 @@ export function renderReviewCommentFallback(args: {
   // adjacent at the top. The synth body's first line is always
   // `<!-- sigilix:pr-review -->`; tolerant of variation by just
   // checking for the marker substring.
-  if (body.includes(SIGILIX_REVIEW_BODY_MARKER)) {
+  //
+  // SIG-85: bilingual matcher — also recognize legacy
+  // `<!-- openclaw:pr-review -->` so a synth body still in the
+  // pre-rebrand shape doesn't get a duplicate marker injected by the
+  // defensive branch below.
+  if (
+    body.includes(SIGILIX_REVIEW_BODY_MARKER) ||
+    body.includes(LEGACY_REVIEW_BODY_MARKER)
+  ) {
     return `${header}${body}`
   }
   // Defensive: if the synth body somehow lacks the marker, inject

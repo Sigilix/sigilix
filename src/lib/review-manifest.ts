@@ -306,7 +306,6 @@ export async function computeFileListHash(list: PrFileList): Promise<string> {
 
 const MARKER_START = "<!-- sigilix:stale-marker:start -->"
 const MARKER_END = "<!-- sigilix:stale-marker:end -->"
-const SIGILIX_HEAD = "<!-- sigilix:pr-review -->"
 
 const GH_BODY_LIMIT = 65000
 
@@ -319,7 +318,12 @@ const STALE_BLOCK_RE = new RegExp(
   "m",
 )
 
-const SIGILIX_HEAD_RE = new RegExp(`^(${escapeRegex(SIGILIX_HEAD)}\\n)`)
+// SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
+// markers so a stale-block insertion targets the legacy review head
+// (and updates it in place) instead of falling through to the
+// top-of-body fallback. Drop the legacy half once all pre-2026-05-18
+// PRs close.
+const SIGILIX_HEAD_RE = /^(<!-- (?:openclaw|sigilix):pr-review -->\n)/
 
 /**
  * Render the bracketed stale-notice block. Block content is

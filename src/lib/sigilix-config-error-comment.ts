@@ -24,6 +24,16 @@ function buildMarker(headSha: string): string {
   return `<!-- sigilix:config-error:${headSha.slice(0, 7)} -->`
 }
 
+// SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
+// markers so a config-error comment posted pre-rebrand against the
+// same head SHA still dedupes the post and warms the KV fast path
+// instead of creating a duplicate. Writes still emit the new
+// `sigilix:*` form via `buildMarker`. Drop the legacy half once all
+// pre-2026-05-18 PRs close.
+function buildLegacyMarker(headSha: string): string {
+  return `<!-- openclaw:config-error:${headSha.slice(0, 7)} -->`
+}
+
 function buildKvKey(owner: string, repo: string, prNumber: number, headSha: string): string {
   return `config-error-posted:${owner}/${repo}#${prNumber}:${headSha.slice(0, 7)}`
 }
@@ -87,6 +97,10 @@ export async function postConfigErrorComment(
   }
 
   const marker = buildMarker(headSha)
+  // SIG-85: bilingual matcher — also recognize the legacy
+  // `<!-- openclaw:config-error:<sha7> -->` marker on the GitHub-side
+  // dedupe scan below.
+  const legacyMarker = buildLegacyMarker(headSha)
   const kvKey = buildKvKey(owner, repo, prNumber, headSha)
 
   // KV fast-path dedupe.
@@ -108,7 +122,11 @@ export async function postConfigErrorComment(
   // the marker substring. Catches the cold-KV case after TTL expiry.
   try {
     const comments = await client.listIssueComments(owner, repo, prNumber)
-    const existing = comments.find((c) => typeof c.body === "string" && c.body.includes(marker))
+    const existing = comments.find(
+      (c) =>
+        typeof c.body === "string" &&
+        (c.body.includes(marker) || c.body.includes(legacyMarker)),
+    )
     if (existing) {
       // Warm the KV fast path so the next webhook short-circuits.
       try {

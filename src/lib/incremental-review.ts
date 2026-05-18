@@ -1,24 +1,26 @@
-// ARC-194: incremental review on synchronize.
+// ARC-194: incremental review on synchronize — last-reviewed SHA
+// tracking (KV-backed) + the diff-selection helper that historically
+// chose between full + incremental compare diffs.
 //
-// Currently every push to a PR re-reviews the entire diff. CodeRabbit
-// stores the last-reviewed commit SHA in the sticky comment marker,
-// fetches `lastReviewedSha...currentHeadSha` on synchronize, and
-// reviews only the new commits. Saves model spend ~50% on
-// iteration-heavy PRs.
+// SIG-10 (2026-05-18): the incremental compare-diff path is disabled.
+// The diff fed to specialists + synth is now always the cumulative
+// full PR diff (PR.base.sha..headSha). The push-delta variant
+// produced a false-positive class on multi-commit PRs where the
+// prompt context (PR body, file lists, retrieval) describes the
+// cumulative state but the diff only showed the latest push, so
+// specialists flagged references to symbols introduced in an earlier
+// commit as "undefined" / missing. See `selectDiff` below for the
+// full rationale.
 //
-// v1 takes a simpler shape: store last-reviewed SHA in KV
-// (`OPENCLAW_STATE`), keyed by `{owner, repo, prNumber}`. On entry,
-// the orchestrator looks up the previous SHA. If it exists AND
-// differs from the current head, fetch the compare diff and use that
-// instead of the full PR diff. After a successful review (regardless
-// of mode), the new head SHA gets written.
+// The KV last-reviewed marker still gets read + written for
+// telemetry (so we can correlate runs across pushes) and for the
+// review-overview "first run vs subsequent run" rendering — only the
+// diff-selection step changed.
 //
-// Fail-safe contract: if the compare fetch fails, the diff is empty,
-// or the compare diff is suspiciously larger than the full diff
-// (force-push to unrelated commit), fall back to the full diff. We
-// never review LESS than the full PR by accident.
-//
-// Telemetry: `incrementalReview: { previousSha, mode: "incremental"|"full"|"first-review", reason? }`
+// Telemetry: `incrementalReview: { previousSha, mode: "full"|"first-review", reason? }`
+// (`mode: "incremental"` is no longer emitted but is preserved on the
+// `DiffMode` union in case the incremental path is re-introduced
+// behind a guard later.)
 
 import type { Env } from "../index"
 
@@ -92,18 +94,28 @@ export async function writeLastReviewedSha(
 }
 
 /**
- * Decide whether incremental diff is safe. Pure function — caller
- * provides the diff strings. Picks the incremental diff when it
- * meets these conditions:
- *   - Different from headSha (otherwise incremental diff would be
- *     empty or stale)
- *   - Compare diff is non-empty (prevents bizarre case where the
- *     compare endpoint returns nothing)
- *   - Compare diff is reasonably smaller than the full diff (cap at
- *     0.9× to detect the force-push-to-unrelated-commit case where
- *     the compare diff is BIGGER than the full diff)
+ * Return the diff text to feed to specialists + synth.
  *
- * Otherwise falls back to full.
+ * SIG-10 (2026-05-18): always returns the cumulative full PR diff
+ * (PR.base.sha..headSha). Previously this picked the incremental
+ * `previousSha..headSha` compare diff when one was available — a
+ * model-spend savings on iteration-heavy PRs — but that produced a
+ * false-positive class on multi-commit PRs: the prompt context
+ * (PR title/body, file listing, retrieval) describes the cumulative
+ * state of the whole PR, while the incremental diff only covers the
+ * push delta. Specialists then flagged references to symbols that
+ * exist in an earlier commit but aren't in the latest-commit diff
+ * (e.g. "undefined export" findings on symbols introduced in commit
+ * 1 of an N-commit PR).
+ *
+ * The per-push dispatch trigger is unchanged; only the diff CONTENT
+ * is forced cumulative. `mode` / `previousSha` / `reason` remain
+ * populated for telemetry observability so operators can correlate
+ * "we knew about a prior review" with the diff we actually shipped.
+ *
+ * The `compareDiff` argument is retained for telemetry shape (and
+ * future re-introduction behind a guard); its content is no longer
+ * consumed.
  */
 export type DiffMode = "incremental" | "full" | "first-review"
 
@@ -120,30 +132,19 @@ export function selectDiff(args: {
   previousSha: string | null
   currentHeadSha: string
 }): DiffSelection {
-  const { fullDiff, compareDiff, previousSha, currentHeadSha } = args
+  const { fullDiff, previousSha } = args
   if (previousSha === null) {
     return { diff: fullDiff, mode: "first-review" }
   }
-  const sel: DiffSelection = { diff: fullDiff, mode: "full", previousSha }
-  if (previousSha === currentHeadSha) {
-    sel.reason = "same_sha"
-    return sel
+  // SIG-10: always cumulative. Mode is reported as `full` (we have a
+  // prior-review record but deliberately did NOT take the incremental
+  // path) with reason `cumulative_diff_required` so logs make the
+  // intentional choice obvious vs. the legacy "tried but bailed"
+  // reasons (`same_sha`, `compare_fetch_failed`, etc.).
+  return {
+    diff: fullDiff,
+    mode: "full",
+    previousSha,
+    reason: "cumulative_diff_required",
   }
-  if (compareDiff === null) {
-    sel.reason = "compare_fetch_failed"
-    return sel
-  }
-  if (compareDiff.length === 0) {
-    sel.reason = "compare_empty"
-    return sel
-  }
-  // Sanity check: incremental should be SMALLER than full. If GitHub
-  // returned a compare bigger than the full diff, something weird
-  // happened (e.g., previousSha is on a branch that diverged hard
-  // from the PR's current base). Fall back to full diff.
-  if (compareDiff.length > fullDiff.length * 0.9) {
-    sel.reason = "compare_not_smaller"
-    return sel
-  }
-  return { diff: compareDiff, mode: "incremental", previousSha }
 }

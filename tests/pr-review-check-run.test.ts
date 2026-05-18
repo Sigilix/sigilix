@@ -328,4 +328,42 @@ describe("completeCheckRun", () => {
     const p = payload as { output: { title: string } }
     expect(p.output.title).toBe("Review posted")
   })
+
+  // ARC-279: when the ensemble's comment-fallback fires, the
+  // dispatcher maps `posted` + `surface: "comment"` to conclusion
+  // `"failure"` with the reviewMeta still carrying surface info.
+  // The Check Run title points the user at the PR comment instead
+  // of saying the bot was silent.
+  it("renders 'Couldn't post review — see PR comment' on failure when reviewMeta.surface === 'comment'", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "failure",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 2, surface: "comment" },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { conclusion: string; output: { title: string; summary: string } }
+    expect(p.conclusion).toBe("failure")
+    expect(p.output.title).toBe("Couldn't post review — see PR comment")
+    expect(p.output.summary).toContain("GitHub silently rejected")
+    expect(p.output.summary).toContain("PR comment")
+  })
+
+  it("renders the generic 'Review failed' title on failure when reviewMeta is omitted", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({ handle, conclusion: "failure" })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { title: string } }
+    expect(p.output.title).toBe("Review failed")
+  })
 })

@@ -46,6 +46,7 @@ import {
   buildFallbackSubmission,
   chooseReviewEvent,
 } from "./triage-pr-review"
+import { postReviewCommentFallback } from "./review-comment-fallback"
 import {
   decideSpecialists,
   ALL_SPECIALISTS,
@@ -1648,11 +1649,35 @@ export async function handlePrReviewEnsemble(
           submit_path: "inline-anchored",
         }))
         telemetry.fellBackReason = "submit_not_persisted"
-        // Telemetry consistency with other `errored` paths: signal
-        // that the dispatcher's `ensemble-post` fallback will route
-        // to Phase 3 next. Without this flag, `fellBackToPhase3`
-        // counters in shadow analysis would undercount this case.
-        telemetry.fellBackToPhase3 = mode === "post"
+        telemetry.fellBackToPhase3 = false
+        // ARC-279: GitHub silently dropped the formal review. Post
+        // the synth body as a regular PR comment so the review
+        // signal isn't lost. Dispatcher sees `posted` + surface=
+        // "comment" → maps the Check Run to `failure` with a "see
+        // PR comment" title so the customer knows the normal
+        // review pipeline didn't run.
+        //
+        // submission.body already carries the `openclaw:pr-review`
+        // marker (built by `buildReviewSubmission` → `formatReviewBody`)
+        // so dismiss-prior + review-memory pipelines still find it.
+        const fallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          // SubmitReviewBody.body is typed optional but the formal
+          // path always populates it (formatReviewBody emits at
+          // least the marker + summary). Default to a one-liner
+          // for the unreachable-but-typed case.
+          body: submission.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "inline-anchored",
+        })
+        if (fallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
+        // Comment fallback ALSO failed — `errored` is the truth.
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
@@ -1807,11 +1832,28 @@ export async function handlePrReviewEnsemble(
           submit_path: "anchorless-fallback",
         }))
         telemetry.fellBackReason = "submit_not_persisted"
-        // Telemetry consistency with other `errored` paths: signal
-        // that the dispatcher's `ensemble-post` fallback will route
-        // to Phase 3 next. Without this flag, `fellBackToPhase3`
-        // counters in shadow analysis would undercount this case.
-        telemetry.fellBackToPhase3 = mode === "post"
+        telemetry.fellBackToPhase3 = false
+        // ARC-279: same comment-fallback as the inline-anchored
+        // verify-fail path. By this point we've tried inline,
+        // 422'd, anchorless, and silent-rejected. The synth body
+        // is real signal the reviewer would benefit from — post
+        // it as a regular comment instead of dropping it.
+        const commentFallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          // Same defensive default as the inline-anchored path:
+          // `fallback.body` is typed optional but the anchorless
+          // path always emits it (buildFallbackBody + the marker).
+          body: fallback.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "anchorless-fallback",
+        })
+        if (commentFallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
@@ -3539,10 +3581,20 @@ type EnsembleResultStatus =
  * actual review outcome (`Approved — no issues found` vs `N findings
  * posted`). Only populated on the `posted` status; absent on every
  * other path (stale_head / errored / skipped / shadow_recorded).
+ *
+ * ARC-279: `surface` distinguishes a real GitHub review from the
+ * fallback PR comment that fires when the formal submit silently
+ * rejects. The dispatcher uses `surface === "comment"` to map the
+ * Check Run to `failure` with a "see PR comment" title instead of
+ * the normal `success` outcome — the customer needs to know the
+ * normal review pipeline didn't run.
  */
 export interface ReviewMeta {
   event: "APPROVE" | "REQUEST_CHANGES"
   findingsCount: number
+  /** Default behavior when omitted is `"review"` (back-compat with
+   *  Phase 3's `PrReviewMeta` shape). */
+  surface?: "review" | "comment"
 }
 
 export interface EnsembleResult {

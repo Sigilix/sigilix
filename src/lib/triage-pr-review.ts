@@ -278,7 +278,7 @@ export function renderStackParenthetical(stack: StackContext | undefined): strin
   return `_(Stacked on #${stack.parent.number})_`
 }
 
-const SIGILIX_REVIEW_MARKER = "<!-- openclaw:pr-review -->"
+const SIGILIX_REVIEW_MARKER = "<!-- sigilix:pr-review -->"
 
 const DISMISSAL_HINT =
   "To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread."
@@ -536,7 +536,7 @@ interface BuildFallbackArgs {
  *      no longer matters — these still describe real concerns.
  *
  * Both lists are merged, grouped by `path`, and rendered as a Markdown
- * `### Findings` section. The dedupe marker `<!-- openclaw:pr-review -->`
+ * `### Findings` section. The dedupe marker `<!-- sigilix:pr-review -->`
  * is preserved at the top so existing dedupe-by-marker logic still
  * recognizes the comment.
  *
@@ -672,44 +672,40 @@ export interface RenderBodyArgs {
 /**
  * ARC-281: APPROVE-posture body renderer per Kimi K2.6's spec.
  *
- * Shape:
+ * Shape (ARC-293 minimal — marker only):
  *   ```
- *   <!-- openclaw:pr-review -->
- *
- *   ## Sigilix: Approved
- *
- *   **Coverage:** logic · security · performance · tests
- *
- *   No issues found.
- *
- *   _Reviewed against `dbe9b8c` at 2026-05-18T06:32:58.000Z._
+ *   <!-- sigilix:pr-review -->
  *   ```
  *
- * When coverage is degraded, the "No issues found." line becomes
- * "No issues found in covered areas." — the affirmation only covers
- * what the surviving specialists actually examined. When coverage
- * is absent (back-compat callers), the **Coverage:** line is
- * omitted entirely.
+ * Degraded-coverage variant adds one ASCII warning line:
+ *   ```
+ *   <!-- sigilix:pr-review -->
  *
- * APPROVE bodies intentionally omit the dismissal hint (there's
- * nothing to dismiss on an approval) and the Δ badge (an APPROVE
- * after prior REQUEST_CHANGES is implicitly "all clear" — the delta
- * counts collapse to noise).
+ *   Approved on partial coverage.
+ *   ```
  *
  * Pure — exported for tests.
  */
 export function renderApproveBody(args: RenderBodyArgs): string {
-  const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
-  lines.push("## Sigilix: Approved")
-  const coverageLine = args.coverage ? renderCoverageLine(args.coverage) : null
+  // ARC-293: APPROVE bodies render as MARKER-ONLY by default.
+  // GitHub's native "approved these changes" line carries all the
+  // signal; the prior verbose card (heading + coverage + "No issues
+  // found" + provenance footer) was timeline noise.
+  //
+  // We keep the dedupe marker so dismiss-prior-reviews can find this
+  // review on the next push. Degraded coverage adds ONE plain-text
+  // warning line (no emoji per existing approve-body conventions).
+  //
+  // The provenance footer is intentionally dropped — `capForGitHub`
+  // appends it unconditionally, so this renderer skips that helper
+  // and returns the body directly. GitHub's commit attribution on the
+  // approve event ("approved these changes via <commit>") already
+  // tells the reader which SHA was evaluated.
   const degraded = !!(args.coverage && args.coverage.succeeded.length < args.coverage.dispatched.length)
-  if (coverageLine) {
-    lines.push("")
-    lines.push(coverageLine)
+  if (!degraded) {
+    return `${SIGILIX_REVIEW_MARKER}\n`
   }
-  lines.push("")
-  lines.push(degraded ? "No issues found in covered areas." : "No issues found.")
-  return capForGitHub(lines.join("\n"), args.prov)
+  return `${SIGILIX_REVIEW_MARKER}\n\nApproved on partial coverage.\n`
 }
 
 /**
@@ -718,7 +714,7 @@ export function renderApproveBody(args: RenderBodyArgs): string {
  *
  * Shape (delta variant — Kimi sample 2b):
  *   ```
- *   <!-- openclaw:pr-review -->
+ *   <!-- sigilix:pr-review -->
  *
  *   ## Sigilix: 2 findings · Δ since last review
  *
@@ -948,7 +944,7 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * any \`\`\`suggestion block flow underneath verbatim.
  */
 function formatFindingComment(finding: PrReviewFinding): string {
-  const lines: string[] = ["<!-- openclaw:pr-review-finding -->"]
+  const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
   lines.push(`**${finding.category}:** ${finding.headline}`)
   lines.push("")
   lines.push(finding.body)

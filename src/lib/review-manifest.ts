@@ -306,7 +306,7 @@ export async function computeFileListHash(list: PrFileList): Promise<string> {
 
 const MARKER_START = "<!-- sigilix:stale-marker:start -->"
 const MARKER_END = "<!-- sigilix:stale-marker:end -->"
-const OPENCLAW_HEAD = "<!-- openclaw:pr-review -->"
+const SIGILIX_HEAD = "<!-- sigilix:pr-review -->"
 
 const GH_BODY_LIMIT = 65000
 
@@ -319,7 +319,7 @@ const STALE_BLOCK_RE = new RegExp(
   "m",
 )
 
-const OPENCLAW_HEAD_RE = new RegExp(`^(${escapeRegex(OPENCLAW_HEAD)}\\n)`)
+const SIGILIX_HEAD_RE = new RegExp(`^(${escapeRegex(SIGILIX_HEAD)}\\n)`)
 
 /**
  * Render the bracketed stale-notice block. Block content is
@@ -361,15 +361,15 @@ export function applyStaleBlock(body: string, block: string): string {
     // body retains identical structure across re-applications
     // (idempotent length).
     next = body.replace(STALE_BLOCK_RE, `${block}\n`)
-  } else if (OPENCLAW_HEAD_RE.test(body)) {
-    next = body.replace(OPENCLAW_HEAD_RE, `$1\n${block}\n`)
+  } else if (SIGILIX_HEAD_RE.test(body)) {
+    next = body.replace(SIGILIX_HEAD_RE, `$1\n${block}\n`)
   } else {
     next = `${block}\n\n${body}`
   }
   if (next.length <= GH_BODY_LIMIT) return next
 
   // Truncate the original body to fit, preserving the full block + a
-  // pointer marker. The block sits after the openclaw head when
+  // pointer marker. The block sits after the sigilix head when
   // present; otherwise at the very top.
   const TRUNCATED_NOTICE = "\n\n_[review body truncated to fit stale notice; full review in PR review history]_\n"
   const overrun = next.length - GH_BODY_LIMIT + TRUNCATED_NOTICE.length

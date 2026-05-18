@@ -16,16 +16,7 @@
 // independently here so a broken shadow lineup gets caught BEFORE
 // prod is touched.
 
-// TODO(arc-283-task-4): replace local interface with
-// `import type { ModelConfig } from "./triage-pr-review-ensemble"`
-// once Task 4 exports the type from the orchestrator module.
-interface ModelConfig {
-  primary: string
-  /** Number of retry attempts on the primary BEFORE falling back. 0 = no retry. */
-  retries: number
-  /** Cross-provider fallback model. null = fail without fallback. */
-  fallback: string | null
-}
+import type { ModelConfig } from "./triage-pr-review-ensemble"
 
 export type ShadowRole = "logic" | "security" | "performance" | "tests" | "synth"
 

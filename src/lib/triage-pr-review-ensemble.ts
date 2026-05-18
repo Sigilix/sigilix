@@ -33,6 +33,10 @@
 // the ensemble verdict gets posted to GitHub.
 
 import { chat, type ChatMessage } from "./ollama-chat"
+// ARC-283 Phase B1b: re-export ChatMessage so the shadow runner can
+// type its `runWithRetryAndFallback` calls without reaching past
+// this module into ./ollama-chat.
+export type { ChatMessage }
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
@@ -152,6 +156,7 @@ import {
   type EnsembleRunCtx,
   type SynthSummary,
   computeSpecialistFanoutSummary,
+  emitModelAttempt,
   emitPhaseCompleted,
   emitSpecialistFanoutSummary,
   emitSynthSummary,
@@ -377,7 +382,7 @@ if (ORCHESTRATOR_TIMEOUT_MS >= CF_QUEUE_CONSUMER_CEILING_MS) {
  *   - Retries enabled per-role, sized by criticality (logic gets 2,
  *     others 1, synth 1; user constraint "logic cannot fail").
  */
-interface ModelConfig {
+export interface ModelConfig {
   primary: string
   /** Number of retry attempts on the primary BEFORE falling back. 0 = no retry. */
   retries: number
@@ -1121,6 +1126,11 @@ export async function handlePrReviewEnsemble(
             initialMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
             chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
             signal,
+            // ARC-283 Phase B1b: thread the orchestrator's perfCtx
+            // through so per-attempt `model-attempt-completed` events
+            // share correlation fields with the surrounding ensemble
+            // telemetry.
+            perfCtx,
           }),
           SPECIALIST_TIMEOUT_MS,
           orchCtrl.signal,
@@ -1362,6 +1372,9 @@ export async function handlePrReviewEnsemble(
               userMessage,
               chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
               signal,
+              // ARC-283 Phase B1b: same correlation context as the
+              // specialist fan-out above.
+              perfCtx,
               ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
             }),
             timeoutMs,
@@ -2564,13 +2577,22 @@ async function buildClient(env: Env, installationId: number): Promise<GitHubClie
 
 // ─── specialist runner ────────────────────────────────────────────────
 
-interface SpecialistRunArgs {
+export interface SpecialistRunArgs {
   role: SpecialistRole
   apiKey: string | undefined
   systemPrompt: string
   initialMessage: string
   chatEnabled: "on" | "off"
   signal: AbortSignal
+  /**
+   * ARC-283 Phase B1b: correlation context for emitting
+   * `model-attempt-completed` per retry/fallback attempt. Threaded
+   * through from the orchestrator's `perfCtx` so the per-attempt
+   * event carries the same {owner, repo, prNumber, headSha} as the
+   * surrounding `phase-completed` + `specialist-fanout-summary`
+   * events for downstream correlation.
+   */
+  perfCtx: EnsembleRunCtx
 }
 
 interface SpecialistRunResult {
@@ -2585,7 +2607,7 @@ interface SpecialistRunResult {
   attemptsUsed: number
 }
 
-async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
+export async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
   const t0 = Date.now()
   if (!args.apiKey) {
     return {
@@ -2611,6 +2633,40 @@ async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResu
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "specialist_did_not_parse",
     startedAt: t0,
+    // ARC-283 Phase B1b: emit `model-attempt-completed` per attempt.
+    // Bucket attempts into primary/retry/fallback by attemptIndex:
+    //   1                  → primary
+    //   2..(retries + 1)   → retry
+    //   (retries + 2)      → fallback (only fires when config.fallback
+    //                         is set; runWithRetryAndFallback skips it
+    //                         when fallback is null).
+    onAttempt: (info) => {
+      const attemptKind = info.attemptIndex === 1
+        ? "primary"
+        : info.attemptIndex <= config.retries + 1
+          ? "retry"
+          : "fallback"
+      const outcome = info.verdictOk
+        ? "ok"
+        : (info.failureReason ?? "").includes("timeout")
+          ? "timeout"
+          : (info.failureReason ?? "").toLowerCase().includes("abort")
+            ? "aborted"
+            : "failed"
+      emitModelAttempt(args.perfCtx, {
+        phase: "specialist",
+        role: args.role,
+        attemptKind,
+        attemptIndex: info.attemptIndex,
+        model: info.model,
+        timeoutMs: info.timeoutMs,
+        startedAtMs: info.startedAtMs,
+        endedAtMs: info.endedAtMs,
+        elapsedMs: info.endedAtMs - info.startedAtMs,
+        outcome,
+        ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+      })
+    },
   })
 }
 
@@ -2632,6 +2688,21 @@ async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResu
  * problem, not a capacity problem; retrying the same prompt at
  * temperature 0 will yield the same bad output.
  */
+export interface AttemptCallbackInfo {
+  /** 1-indexed across the entire retry+fallback chain (primary
+   *  attempt 1, retry attempts 2..N+1, fallback attempt N+2). */
+  attemptIndex: number
+  model: string
+  timeoutMs: number
+  startedAtMs: number
+  endedAtMs: number
+  verdictOk: boolean
+  /** Present when verdictOk=false. Same free-form string
+   *  `runWithRetryAndFallback` returns as its top-level
+   *  `failureReason` for the final outcome. */
+  failureReason?: string
+}
+
 export async function runWithRetryAndFallback<T>(args: {
   config: ModelConfig
   apiKey: string
@@ -2650,6 +2721,17 @@ export async function runWithRetryAndFallback<T>(args: {
    * value to exercise the abort path without real-time waits.
    */
   perAttemptTimeoutMs?: number
+  /**
+   * ARC-283 Phase B1b: optional per-attempt observer. Fires AFTER
+   * each settled attempt (primary, retry, OR fallback), on BOTH
+   * success and failure branches, BEFORE the next iteration. The
+   * shadow runner uses this to emit `shadow-model-attempt-completed`;
+   * the prod path uses it (wired in `runSpecialist`/`runSynthesizer`)
+   * to emit `model-attempt-completed`. NOT wrapped in try/catch —
+   * if the callback throws, that's a real bug we want to surface in
+   * CF Logs, not paper over with silent telemetry loss.
+   */
+  onAttempt?: (info: AttemptCallbackInfo) => void
 }): Promise<{
   verdict: T | null
   failureReason?: string
@@ -2679,6 +2761,11 @@ export async function runWithRetryAndFallback<T>(args: {
       }
     }
     attemptsUsed++
+    // ARC-283 (B1b): mark per-attempt wall-clock start BEFORE the
+    // composed-timeout wrapper so the onAttempt observer gets the
+    // true span (including any time spent inside attemptChat's
+    // setup, not just chat()'s round-trip).
+    const attemptStartMs = Date.now()
     // Phase 4a.4: per-attempt cap. attemptChat already returns a
     // structured failure on AbortError (its inner try/catch catches
     // chat()'s thrown abort), so withComposedTimeout's grace path
@@ -2692,6 +2779,18 @@ export async function runWithRetryAndFallback<T>(args: {
       perAttemptCap,
       signal,
     )
+    // ARC-283 (B1b): emit onAttempt on BOTH success and failure
+    // branches of the primary/retry loop. Fires before the early
+    // `return` below so the observer sees every settled call.
+    args.onAttempt?.({
+      attemptIndex: attemptsUsed,
+      model: config.primary,
+      timeoutMs: perAttemptCap,
+      startedAtMs: attemptStartMs,
+      endedAtMs: Date.now(),
+      verdictOk: outcome.verdict !== null,
+      ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+    })
     if (outcome.verdict !== null) {
       return {
         verdict: outcome.verdict,
@@ -2727,6 +2826,10 @@ export async function runWithRetryAndFallback<T>(args: {
   if (config.fallback && !signal.aborted) {
     const fallbackModel = config.fallback
     attemptsUsed++
+    // ARC-283 (B1b): mirror the primary-loop start mark so the
+    // fallback attempt also gets a true wall-clock span on the
+    // onAttempt observer.
+    const attemptStartMs = Date.now()
     // Phase 4a.4: same per-attempt cap on the fallback. The fallback
     // gets one shot — capped — so even if the cross-provider model is
     // also slow, the overall specialist run finishes within budget.
@@ -2738,6 +2841,17 @@ export async function runWithRetryAndFallback<T>(args: {
       perAttemptCap,
       signal,
     )
+    // ARC-283 (B1b): emit onAttempt for the fallback as well, on
+    // BOTH success and failure branches.
+    args.onAttempt?.({
+      attemptIndex: attemptsUsed,
+      model: fallbackModel,
+      timeoutMs: perAttemptCap,
+      startedAtMs: attemptStartMs,
+      endedAtMs: Date.now(),
+      verdictOk: outcome.verdict !== null,
+      ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+    })
     if (outcome.verdict !== null) {
       return {
         verdict: outcome.verdict,
@@ -2882,7 +2996,7 @@ async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
 
 // ─── synthesizer runner ───────────────────────────────────────────────
 
-interface SynthesizerRunArgs {
+export interface SynthesizerRunArgs {
   apiKey: string | undefined
   systemPrompt: string
   userMessage: string
@@ -2901,6 +3015,12 @@ interface SynthesizerRunArgs {
    * but the runtime drops the tail. Telemetry records the count.
    */
   configOverride?: ModelConfig
+  /**
+   * ARC-283 Phase B1b: correlation context for emitting
+   * `model-attempt-completed` per retry/fallback attempt. Same
+   * shape + purpose as `SpecialistRunArgs.perfCtx`.
+   */
+  perfCtx: EnsembleRunCtx
 }
 
 interface SynthesizerRunOutput {
@@ -2953,7 +3073,7 @@ interface SynthParsedOutput {
   provenance: SynthesizerProvenance
 }
 
-function parseSynthAnswer(content: string): SynthParsedOutput | null {
+export function parseSynthAnswer(content: string): SynthParsedOutput | null {
   // Expect `{verdict: PrReviewVerdict, provenance: {...}}`.
   const parsed = parseFirstJsonObject(content)
   if (!parsed) return null
@@ -2963,7 +3083,7 @@ function parseSynthAnswer(content: string): SynthParsedOutput | null {
   return { verdict, provenance: parsed.provenance }
 }
 
-async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
+export async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
   const t0 = Date.now()
   const effectiveConfig: ModelConfig = args.configOverride ?? SYNTHESIZER_CONFIG
   if (!args.apiKey) {
@@ -2995,6 +3115,37 @@ async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunO
     parseAnswer: parseSynthAnswer,
     parseFailureLabel: "synth_failed_parse",
     startedAt: t0,
+    // ARC-283 Phase B1b: emit `model-attempt-completed` per attempt.
+    // Same attemptKind/outcome bucketing as the specialist path; role
+    // is the literal "synth" string (matches the `ModelAttemptPhase`
+    // type definition in `ensemble-perf-telemetry.ts`).
+    onAttempt: (info) => {
+      const attemptKind = info.attemptIndex === 1
+        ? "primary"
+        : info.attemptIndex <= effectiveConfig.retries + 1
+          ? "retry"
+          : "fallback"
+      const outcomeLabel = info.verdictOk
+        ? "ok"
+        : (info.failureReason ?? "").includes("timeout")
+          ? "timeout"
+          : (info.failureReason ?? "").toLowerCase().includes("abort")
+            ? "aborted"
+            : "failed"
+      emitModelAttempt(args.perfCtx, {
+        phase: "synth",
+        role: "synth",
+        attemptKind,
+        attemptIndex: info.attemptIndex,
+        model: info.model,
+        timeoutMs: info.timeoutMs,
+        startedAtMs: info.startedAtMs,
+        endedAtMs: info.endedAtMs,
+        elapsedMs: info.endedAtMs - info.startedAtMs,
+        outcome: outcomeLabel,
+        ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+      })
+    },
   })
 
   if (outcome.verdict) {

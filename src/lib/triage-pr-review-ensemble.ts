@@ -1813,7 +1813,17 @@ export async function handlePrReviewEnsemble(
     // already-merged PR). Fetch fresh PR state and bail to "skipped"
     // if the PR is now merged. The synth verdict is still telemetered
     // for audit, but no review hits GitHub.
-    {
+    //
+    // Sigilix PR #97 catch (Critical): the `getPullRequest` call must
+    // be wrapped in try/catch. A transient GitHub 5xx / rate-limit /
+    // network blip would otherwise throw, bubble to the outer catch,
+    // and DISCARD a fully synthesized review after minutes of
+    // specialist + synth work. The guard is best-effort: on error
+    // we log and proceed with the submit. Worst case: we post a
+    // review to a merged PR (the ARC-286 quirks we were trying to
+    // avoid) — but that's strictly better than losing the review
+    // entirely.
+    try {
       const preMeta = await client.getPullRequest(owner, repo, prNumber)
       if (preMeta.merged_at !== null && preMeta.merged_at !== undefined) {
         const mergedAtMs = new Date(preMeta.merged_at).getTime()
@@ -1828,6 +1838,14 @@ export async function handlePrReviewEnsemble(
         }))
         return finalize(telemetry, env, "skipped", cache)
       }
+    } catch (err) {
+      // Best-effort — log and proceed. The submit phase below will
+      // surface whatever GitHub eventually says (422, 403, etc).
+      console.warn(JSON.stringify({
+        event: "pr-review-merged-guard-failed",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }))
     }
 
     // ARC-287: dismiss prior Sigilix reviews BEFORE posting the new
@@ -2010,23 +2028,60 @@ export async function handlePrReviewEnsemble(
         findingsCount: inlineFindings,
       })
     } catch (submitErr) {
-      // Narrow the fallback to GitHub HTTP 422 (Unprocessable Entity)
-      // — that's the specific status GitHub returns when an inline
-      // anchor is invalid. CR PR #38 round-2 catch: the original
-      // catch-all retry was unsafe because `POST /pulls/{n}/reviews`
-      // is non-idempotent. A timeout / network error after GitHub
-      // accepted the first submission would have produced a duplicate
-      // review on retry. Rethrow anything that isn't a 422 so the
-      // outer try/catch records it as `internal_error` (the original
-      // pre-fallback behaviour for those failure modes).
-      //
-      // I originally chose "catch any error" via the dispatch Q&A
-      // because it sounded more defensive. Round-2 review showed the
-      // opposite — the broader catch creates a worse failure mode.
-      if (
-        !(submitErr instanceof GitHubHttpError) ||
-        submitErr.status !== 422
-      ) {
+      // Narrow the anchorless-retry fallback to GitHub HTTP 422 — that's
+      // the specific status GitHub returns when an inline anchor is
+      // invalid. CR PR #38 round-2 catch: the original catch-all retry
+      // was unsafe because `POST /pulls/{n}/reviews` is non-idempotent.
+      // A timeout / network error after GitHub accepted the first
+      // submission would have produced a duplicate review on retry.
+      // So: 422 → re-render anchorless + retry submitReview;
+      //     non-422 → don't retry submit, but DO post the comment
+      //     fallback (CR PR #97 catch — see below).
+      const is422 =
+        submitErr instanceof GitHubHttpError && submitErr.status === 422
+      if (!is422) {
+        // CR PR #97 catch (Major): pre-ARC-287, a non-422 submit
+        // failure rethrew and the prior review stayed intact — the
+        // customer saw a stale-but-existing signal. Post-ARC-287,
+        // the prior is ALREADY DISMISSED (the pre-submit dismiss
+        // fired before submit), so rethrowing here would leave the
+        // customer with NO Sigilix signal at all.
+        //
+        // Restore the "customer always sees Sigilix" guarantee by
+        // posting the comment fallback (ARC-279's helper, normally
+        // used on verify-fail) on every non-422 submit error too.
+        // The synth verdict still hits the PR — just as a regular
+        // comment instead of a formal review.
+        console.warn(JSON.stringify({
+          event: "pr-review-submit-non-422-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: submitErr instanceof Error ? submitErr.message : String(submitErr),
+        }))
+        const fallbackBodyOnly = buildFallbackSubmission({
+          verdict: renderableVerdict,
+          unanchored: renderableUnanchored,
+          prAuthor: meta.user?.login ?? null,
+          headSha,
+          ...(stack.isStacked ? { stack } : {}),
+          coverage,
+          delta: deltaCounts,
+        })
+        const commentFallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          body: fallbackBodyOnly.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "inline-anchored-error",
+        })
+        if (commentFallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
+        // Both inline submit AND comment fallback failed — rethrow
+        // so the outer catch records `internal_error` and the
+        // Check Run reflects the failure.
         throw submitErr
       }
       const fallbackReason = `HTTP 422 ${submitErr.message}`

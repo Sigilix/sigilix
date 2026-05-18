@@ -60,9 +60,21 @@ function dedupeKeyForCommentFallback(args: {
 
 /** The submit path that failed verify. Surfaced in the header so the
  *  customer (and on-call) can correlate the comment with the kind of
- *  failure that produced it. */
+ *  failure that produced it.
+ *
+ *  - `inline-anchored` — verify-fail on the primary inline-anchored
+ *    submit (the most common case ARC-279 was built for).
+ *  - `anchorless-fallback` — verify-fail on the 422-fallback path.
+ *  - `phase3` — legacy single-shot reviewer (ARC-280 deleted the
+ *    code path, retained for historical telemetry).
+ *  - `inline-anchored-error` — ARC-287 follow-up: non-422 errors
+ *    thrown by the inline-anchored submitReview call. Pre-ARC-287
+ *    these rethrew and the prior review stayed visible; post-ARC-287
+ *    the prior is already dismissed, so we ALWAYS post the synth
+ *    body as a comment to preserve the customer signal. */
 export type CommentFallbackSubmitPath =
   | "inline-anchored"
+  | "inline-anchored-error"
   | "anchorless-fallback"
   | "phase3"
 

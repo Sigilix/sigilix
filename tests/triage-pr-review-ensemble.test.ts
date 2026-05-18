@@ -25,6 +25,7 @@ import {
   RESERVED_HEADROOM_MS,
   RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
   SYNTH_RETRY_FINALIZE_RESERVE_MS,
+  PER_ATTEMPT_TIMEOUT_MS,
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
   MAX_CALLS_PER_ENSEMBLE_RUN,
@@ -446,6 +447,11 @@ describe("Phase 4a.3 — timeout schedule", () => {
     expect(RESERVED_HEADROOM_MS).toBe(195_000)
     expect(ORCHESTRATOR_TIMEOUT_MS).toBe(895_000)
     expect(RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBe(15_000)
+    // ARC-283 B1a: PER_ATTEMPT cap tightened 85s → 60s based on real-
+    // run telemetry from PR #96 (healthy logic specialist took 28-57s
+    // — 60s leaves margin while cutting retry-chain stacking by 25s
+    // per failed attempt).
+    expect(PER_ATTEMPT_TIMEOUT_MS).toBe(60_000)
     // Static invariant 1 — same shape as the module-load check.
     expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
       .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)

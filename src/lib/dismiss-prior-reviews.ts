@@ -47,17 +47,19 @@ export interface DismissPriorArgs {
   owner: string
   repo: string
   prNumber: number
-  /** The review we JUST posted. Excluded from dismissal so we
-   *  don't undo our own fresh review. */
-  currentReviewId: number
-  /** The SHA of the new head Sigilix just reviewed. Used to name
-   *  the new commit in the dismissal message so readers don't have
-   *  to scroll/search for which review is the current one. The
-   *  GitHub timeline places the "dismissed their stale review"
-   *  banner BELOW the new review, so the message can't point
-   *  directionally ("see the most recent review") — it has to be
-   *  self-contained. Optional for backwards compatibility with
-   *  callers that don't yet plumb the head SHA through. */
+  /** The review we JUST posted, excluded from dismissal so we don't
+   *  undo our own fresh review.
+   *
+   *  ARC-287: `null` is the new sentinel for "dismiss-then-post" —
+   *  the helper fires BEFORE submitReview, so there's no current
+   *  review yet to exclude. The filter dismisses ALL matching prior
+   *  reviews in that case. A numeric ID retains the post-then-dismiss
+   *  semantics for any caller that hasn't migrated to the new order. */
+  currentReviewId: number | null
+  /** The SHA of the new head Sigilix is about to review (ARC-287) or
+   *  just reviewed (legacy post-then-dismiss). Named in the dismissal
+   *  message so readers can correlate the old vs new commits without
+   *  scrolling. Optional for backwards compatibility. */
   headSha?: string
 }
 
@@ -102,6 +104,12 @@ export async function dismissPriorSigilixReviews(
   // impersonated (a human pasting the HTML comment into their review
   // body would bypass our identity check). Require BOTH the marker
   // AND a `sigilix[bot]` author login — defense in depth.
+  //
+  // ARC-287: when `currentReviewId === null`, the helper fires BEFORE
+  // the new submitReview, so there's no current review yet — every
+  // matching prior review gets dismissed. The `r.id !== null` check
+  // is structurally always true in that case (review IDs are always
+  // numeric), so the filter naturally skips the exclude.
   const targets = reviews.filter((r) =>
     r.id !== currentReviewId &&
     DISMISSIBLE_STATES.has(r.state) &&

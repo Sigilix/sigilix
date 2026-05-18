@@ -249,12 +249,23 @@ export const RETRIEVAL_PREFLIGHT_TIMEOUT_MS = 15_000
 // stalling for the full 270s on a single attempt with `attempts=1` —
 // the budget extension just gave the primary more rope.
 //
-// Math under this cap: 2 × 85s primary + ~1s backoff + 85s fallback
-// = ~256s, fits within the 270s SPECIALIST budget. Sized to leave
-// each attempt enough room for v4-pro reasoning on real PRs (median
-// successful logic latency was 78s on healthy runs) while still
-// guaranteeing the fallback gets its slot.
-export const PER_ATTEMPT_TIMEOUT_MS = 85_000
+// ARC-283 B1a: tightened 85s → 60s based on real-run telemetry from
+// PR #96 (the B0 dogfood capture). Observed healthy logic specialist
+// latency on two clean runs was 28s and 57s — the 85s cap was way
+// above the natural distribution. Tightening to 60s:
+//
+//   - Gives healthy attempts (28-57s observed) ~3-30s of margin —
+//     still completes successfully.
+//   - Cuts each failed-primary attempt's wasted wall-clock by 25s.
+//     Worst-case retry-chain compresses from 256s → 181s per role.
+//   - The 9-min P99 outliers on PR #94 came from a specialist's
+//     retry chain hitting the full 85s × 3 attempts. At 60s the
+//     same chain would take 181s — saving ~75s per offending role.
+//
+// Math under the new cap: 2 × 60s primary + ~1s backoff + 60s
+// fallback = ~181s, fits comfortably within the 270s SPECIALIST
+// budget (89s slack).
+export const PER_ATTEMPT_TIMEOUT_MS = 60_000
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
 
@@ -1795,20 +1806,65 @@ export async function handlePrReviewEnsemble(
       coverage,
       delta: deltaCounts,
     })
+    // ARC-286: pre-submit "is PR still open" guard. The ensemble has
+    // been running for 30s-9min by this point; the PR could have
+    // merged underneath us (PR #94 demonstrated this race — synth
+    // finished 9 min after merge, posted CHANGES_REQUESTED to an
+    // already-merged PR). Fetch fresh PR state and bail to "skipped"
+    // if the PR is now merged. The synth verdict is still telemetered
+    // for audit, but no review hits GitHub.
+    {
+      const preMeta = await client.getPullRequest(owner, repo, prNumber)
+      if (preMeta.merged_at !== null && preMeta.merged_at !== undefined) {
+        const mergedAtMs = new Date(preMeta.merged_at).getTime()
+        const findingCount = renderableVerdict.findings.length + renderableUnanchored.length
+        console.log(JSON.stringify({
+          event: "pr-review-skipped-merged",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          review_elapsed_ms: Date.now() - startMs,
+          merged_at_ms: mergedAtMs,
+          merged_during_review_ms: mergedAtMs - startMs,
+          finding_count: findingCount,
+        }))
+        return finalize(telemetry, env, "skipped", cache)
+      }
+    }
+
+    // ARC-287: dismiss prior Sigilix reviews BEFORE posting the new
+    // one, so the GitHub timeline renders cleanup-above-current-review
+    // (oldest-at-top). Pre-ARC-287 the dismiss fired AFTER the submit,
+    // producing a footgun where the dismissal banner showed BELOW the
+    // new review chronologically (PR #95's `8ad306a` review
+    // demonstrated this — see ARC-287).
+    //
+    // Safe to dismiss first because ARC-279's comment-fallback covers
+    // the "dismiss succeeded + submit failed" failure mode: the synth
+    // body still posts as a PR comment, the customer still sees the
+    // review signal. `currentReviewId: null` is the ARC-287 sentinel
+    // meaning "dismiss every matching prior review — there's no
+    // current one to exclude yet."
+    //
+    // Best-effort try/catch — same defense-in-depth as the post-submit
+    // version had: a missed dismissal just leaves the stale prior
+    // visible until the next push.
+    try {
+      await dismissPriorSigilixReviews({
+        client, owner, repo, prNumber,
+        currentReviewId: null,
+        headSha,
+      })
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "pr-review-dismiss-prior-failed",
+        owner, repo, prNumber,
+        submit_path: "pre-submit",
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+
     // ARC-284: wrap the submit so a slow GitHub roundtrip shows up in
     // the trace. Covers BOTH the success path and the 422-fallback
     // path that the catch block dispatches to.
-    //
-    // ARC-286 follow-up: this is the call site that needs the pre-
-    // submit `is-PR-merged?` guard so the merge-timing race stops
-    // posting reviews to merged PRs. Both submit paths below
-    // (inline-anchored + anchorless-fallback) need the same check.
-    //
-    // ARC-287 follow-up: the order of submitReview + dismissPriorSigilix
-    // should flip — dismiss FIRST, then post — so the GitHub timeline
-    // renders cleanup-above-current-review instead of the current
-    // reverse-chronology footgun. Safe because ARC-279's comment
-    // fallback covers the "dismiss succeeded, submit failed" case.
     const submitStartMs = Date.now()
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
@@ -1888,27 +1944,12 @@ export async function handlePrReviewEnsemble(
       // match ensures we only ever dismiss our own reviews — never
       // touch another reviewer's.
       //
-      // Best-effort: `dismissPriorSigilixReviews` is designed never
-      // to throw, but defense-in-depth try/catch ensures a future
-      // refactor that introduces a throw (or an out-of-band runtime
-      // error like a JSON.stringify on a circular ref) cannot turn
-      // a successfully-posted review into `errored`. The submit has
-      // already been verified above; a missed dismissal just leaves
-      // the stale approval visible until the next push.
-      try {
-        await dismissPriorSigilixReviews({
-          client, owner, repo, prNumber,
-          currentReviewId: submitted.id,
-          headSha,
-        })
-      } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-dismiss-prior-failed",
-          owner, repo, prNumber, review_id: submitted.id,
-          submit_path: "inline-anchored",
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // ARC-287: post-submit dismissPriorSigilixReviews call removed.
+      // Dismissal now fires BEFORE submitReview (see the pre-submit
+      // block above) so the GitHub timeline renders dismissal-above-
+      // current-review chronologically. ARC-279's comment-fallback
+      // covers the "dismiss succeeded + submit failed" failure mode.
+
       // ARC-184: write review-provenance manifest. Best-effort.
       // ARC-271: also persist the per-finding snapshot so the next
       // push's review can compute a new/still-open/likely-fixed
@@ -2062,25 +2103,11 @@ export async function handlePrReviewEnsemble(
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
-      // ARC-258 follow-up: same prior-review dismissal as the primary
-      // submit path. The fallback is also a real Sigilix review that
-      // would otherwise leave the earlier commit's approval as the
-      // visible state in the Reviews tab. Same defense-in-depth
-      // try/catch as the inline-anchored path above.
-      try {
-        await dismissPriorSigilixReviews({
-          client, owner, repo, prNumber,
-          currentReviewId: submittedFallback.id,
-          headSha,
-        })
-      } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-dismiss-prior-failed",
-          owner, repo, prNumber, review_id: submittedFallback.id,
-          submit_path: "anchorless-fallback",
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // ARC-287: post-submit dismissPriorSigilixReviews call removed
+      // (was the anchorless-fallback's parallel of the inline-anchored
+      // helper). Both submit paths now rely on the single pre-submit
+      // dismissal at the top of this submit block.
+
       // ARC-184: write manifest for the fallback path too. Same target
       // shape (kind: "review") because the fallback is still a GitHub
       // review (just anchorless body). ARC-271: same per-finding

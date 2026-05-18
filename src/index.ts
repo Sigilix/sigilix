@@ -824,6 +824,31 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env,
       })
     case "pr-review": {
+      // ARC-289 diagnostic logging — emit on EVERY queue-handler entry
+      // into the pr-review case so we can correlate duplicate
+      // dispatches (PR #96 saw 2× ensemble runs against the same
+      // commit `8ad306a`, 51s apart, no commits between). The fields
+      // surface which dispatch path produced the message:
+      //   - `runId` present → DO-routed (the dedupe path)
+      //   - `runId` absent → legacy direct-path
+      //   - `staleHeadRequeueDepth > 0` → ARC-251 requeue
+      // If duplicates have a common (runId, headSha) tuple, hypothesis
+      // is queue redelivery (DO should have deduped); if distinct
+      // runIds, hypothesis is webhook double-fire OR warmup-induced
+      // re-review. The `queue.attempts` counter lives at the queue
+      // handler level (not dispatchJob's scope) so add it back here
+      // in a follow-up if duplicates persist after the obvious causes
+      // are ruled out.
+      console.log(JSON.stringify({
+        event: "pr-review-dispatch-received",
+        owner: job.owner,
+        repo: job.repo,
+        prNumber: job.prNumber,
+        headSha: job.headSha.slice(0, 7),
+        runId: typeof job.runId === "string" ? job.runId : null,
+        staleHeadRequeueDepth: job.staleHeadRequeueDepth ?? 0,
+        dispatchedAt: Date.now(),
+      }))
       // ARC-190 Task 7: when the message carries a string `runId`, the
       // DO is the dedupe + retry source-of-truth. The wrapper posts
       // /pickup → runs the work → posts /run-result. Legacy direct-path

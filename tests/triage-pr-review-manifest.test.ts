@@ -12,10 +12,22 @@ const mockGetInstallationToken = vi.fn(async () => "test-token")
 const mockGetPullRequest = vi.fn()
 const mockGetPullRequestDiff = vi.fn(async () => "fake diff")
 const mockSubmitReview = vi.fn()
-// ARC-258 follow-up: post-submitReview verification. Default to
-// "review exists" so existing tests don't have to set it explicitly;
-// the verify-not-persisted tests override per-test.
+// ARC-258 follow-up: post-submitReview verification. Originally
+// verified via `getReview(id)`; PR #86 changed verify to use
+// `listPullRequestReviews` so we catch PENDING-state silent
+// rejects too. `mockGetReview` is kept for any test that exercises
+// the stale-mark / manifest-read path (unrelated to verify).
 const mockGetReview = vi.fn(async () => ({ body: "" }))
+// Default to "review present + APPROVED" so existing happy-path
+// tests don't have to wire it explicitly; per-test overrides set
+// the empty/PENDING cases.
+const mockListPullRequestReviews = vi.fn(async () => [
+  { id: 4242, state: "APPROVED", user: { login: "sigilix[bot]" }, body: "" },
+])
+// PR #86: `dismissPriorSigilixReviews` runs after each successful
+// submit. The manifest tests don't care about its side-effects;
+// stub `dismissReview` so no per-test wiring is needed.
+const mockDismissReview = vi.fn(async () => undefined)
 const mockListPullFilesForManifest = vi.fn()
 const mockGetMergeBase = vi.fn()
 const mockGenerate = vi.fn()
@@ -40,6 +52,8 @@ vi.mock("../src/lib/github", async () => {
       getPullRequestDiff: (...args: unknown[]) => mockGetPullRequestDiff(...args),
       submitReview: (...args: unknown[]) => mockSubmitReview(...args),
       getReview: (...args: unknown[]) => mockGetReview(...args),
+      listPullRequestReviews: (...args: unknown[]) => mockListPullRequestReviews(...args),
+      dismissReview: (...args: unknown[]) => mockDismissReview(...args),
       listPullFilesForManifest: (...args: unknown[]) => mockListPullFilesForManifest(...args),
       getMergeBase: (...args: unknown[]) => mockGetMergeBase(...args),
       listOpenPullRequests: (...args: unknown[]) => mockListOpenPullRequests(...args),
@@ -92,6 +106,10 @@ beforeEach(() => {
   mockGetPullRequestDiff.mockClear()
   mockSubmitReview.mockClear()
   mockGetReview.mockReset().mockResolvedValue({ body: "" })
+  mockListPullRequestReviews.mockReset().mockResolvedValue([
+    { id: 4242, state: "APPROVED", user: { login: "sigilix[bot]" }, body: "" },
+  ])
+  mockDismissReview.mockReset().mockResolvedValue(undefined)
   mockListPullFilesForManifest.mockClear()
   mockGetMergeBase.mockClear()
   mockGenerate.mockClear()
@@ -226,14 +244,23 @@ describe("handlePrReview — review manifest", () => {
   })
 })
 
-// ARC-258 follow-up (PR #84 anomaly) — post-submitReview verification.
+// ARC-258 follow-up (PR #84 anomaly, refined PR #86) —
+// post-submitReview verification.
 //
 // GitHub occasionally returns a valid-looking 2xx from
-// `POST /pulls/{n}/reviews` without actually persisting the review.
-// Observed once on PR #84 where the Check Run claimed "Review posted"
-// (success) but no review existed on the PR. The fix re-fetches the
-// review by id immediately after submit; a 404 marks the run as
-// `skipped` so the Check Run reflects reality.
+// `POST /pulls/{n}/reviews` without making the review publicly
+// visible. Two failure modes seen:
+//   1. (PR #84) the review id 404s on follow-up GET — never
+//      persisted server-side at all.
+//   2. (PR #86) the review id resolves via `getReview(id)` but is
+//      in `PENDING` (draft) state, invisible to anyone but the
+//      authoring App. The Reviews tab stays empty even though the
+//      submit returned 2xx and the Check Run claimed "Review
+//      posted".
+//
+// Both modes are caught by verifying against
+// `listPullRequestReviews` (the public list excludes PENDING) and
+// requiring the row to be present + in a non-PENDING state.
 describe("handlePrReview — submitReview verification", () => {
   const goodMeta = {
     number: 7,
@@ -250,15 +277,19 @@ describe("handlePrReview — submitReview verification", () => {
     findings: [],
   })
 
-  it("returns skipped + emits the not-persisted error when getReview returns null (404)", async () => {
+  it("returns skipped + emits the not-persisted error when the review is absent from listPullRequestReviews (silent reject)", async () => {
     mockGetPullRequest.mockResolvedValue(goodMeta)
     mockGenerate.mockResolvedValue(goodVerdict)
     mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
-    // GitHub claimed success but the review doesn't actually exist.
-    mockGetReview.mockResolvedValue(null)
+    // GitHub claimed success but the review id never shows up in
+    // the public Reviews tab.
+    mockListPullRequestReviews.mockResolvedValue([])
 
+    const consoleWarns: string[] = []
     const consoleErrors: string[] = []
+    const origWarn = console.warn
     const origErr = console.error
+    console.warn = (msg: string) => consoleWarns.push(typeof msg === "string" ? msg : JSON.stringify(msg))
     console.error = (msg: string) => consoleErrors.push(typeof msg === "string" ? msg : JSON.stringify(msg))
 
     // CodeRabbit MAJOR catch on this PR: read the manifest from the
@@ -276,12 +307,18 @@ describe("handlePrReview — submitReview verification", () => {
         env,
       })
     } finally {
+      console.warn = origWarn
       console.error = origErr
     }
 
     expect(mockSubmitReview).toHaveBeenCalledOnce()
-    expect(mockGetReview).toHaveBeenCalledWith("acme", "site", 7, 4242)
+    expect(mockListPullRequestReviews).toHaveBeenCalledWith("acme", "site", 7)
     expect(result?.status).toBe("skipped")
+    const missingWarn = consoleWarns.find((l) => l.includes("pr-review-verify-missing"))
+    expect(missingWarn).toBeDefined()
+    expect(missingWarn).toContain('"submit_path":"phase3"')
+    expect(missingWarn).toContain('"submitted_state":"APPROVED"')
+    expect(missingWarn).toContain('"list_size":0')
     const errLine = consoleErrors.find((l) => l.includes("pr-review-submit-not-persisted"))
     expect(errLine).toBeDefined()
     expect(errLine).toContain('"claimed_review_id":4242')
@@ -291,12 +328,60 @@ describe("handlePrReview — submitReview verification", () => {
     expect(result2.kind).toBe("missing")
   })
 
-  it("treats getReview throws as 'review verified' (transient blip; don't false-negative a real submit)", async () => {
+  // PR #86 reproduced this case: the just-submitted review is
+  // present in `listPullRequestReviews` but in `PENDING` (draft)
+  // state — invisible publicly. We must treat this the same as a
+  // missing review.
+  it("returns skipped when the just-submitted review is present but in PENDING state (silent draft)", async () => {
+    mockGetPullRequest.mockResolvedValue(goodMeta)
+    mockGenerate.mockResolvedValue(goodVerdict)
+    mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
+    mockListPullRequestReviews.mockResolvedValue([
+      { id: 4242, state: "PENDING", user: { login: "sigilix[bot]" }, body: "" },
+    ])
+
+    const consoleWarns: string[] = []
+    const consoleErrors: string[] = []
+    const origWarn = console.warn
+    const origErr = console.error
+    console.warn = (msg: string) => consoleWarns.push(typeof msg === "string" ? msg : JSON.stringify(msg))
+    console.error = (msg: string) => consoleErrors.push(typeof msg === "string" ? msg : JSON.stringify(msg))
+
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    let result: { status: string } | undefined
+    try {
+      result = await handlePrReview({
+        owner: "acme", repo: "site", prNumber: 7,
+        headSha: "h".repeat(40),
+        installationId: 1,
+        env,
+      })
+    } finally {
+      console.warn = origWarn
+      console.error = origErr
+    }
+
+    expect(result?.status).toBe("skipped")
+    const pendingWarn = consoleWarns.find((l) => l.includes("pr-review-verify-pending"))
+    expect(pendingWarn).toBeDefined()
+    expect(pendingWarn).toContain('"submit_path":"phase3"')
+    // `submitted_state` is the state the POST returned ("APPROVED"
+    // here) — the smoking-gun shape is POST=APPROVED + list=PENDING.
+    expect(pendingWarn).toContain('"submitted_state":"APPROVED"')
+    const errLine = consoleErrors.find((l) => l.includes("pr-review-submit-not-persisted"))
+    expect(errLine).toBeDefined()
+    // Manifest must NOT be written for a draft-only review.
+    const manifest = await readReviewManifest(env, "acme", "site", 7)
+    expect(manifest.kind).toBe("missing")
+  })
+
+  it("treats listPullRequestReviews throws as 'review verified' (transient blip; don't false-negative a real submit)", async () => {
     mockGetPullRequest.mockResolvedValue(goodMeta)
     mockGenerate.mockResolvedValue(goodVerdict)
     mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
     // Transient 5xx / network blip — verify can't determine.
-    mockGetReview.mockRejectedValue(new Error("HTTP 503 Service Unavailable"))
+    mockListPullRequestReviews.mockRejectedValue(new Error("HTTP 503 Service Unavailable"))
     mockListPullFilesForManifest.mockResolvedValue({ overflow: false, entries: [] })
     mockGetMergeBase.mockResolvedValue(null)
 
@@ -305,13 +390,14 @@ describe("handlePrReview — submitReview verification", () => {
     console.warn = (msg: string) => consoleWarns.push(typeof msg === "string" ? msg : JSON.stringify(msg))
 
     const { kv } = makeKvStub()
+    const env = makeEnv(kv)
     let result: { status: string } | undefined
     try {
       result = await handlePrReview({
         owner: "acme", repo: "site", prNumber: 7,
         headSha: "h".repeat(40),
         installationId: 1,
-        env: makeEnv(kv),
+        env,
       })
     } finally {
       console.warn = origWarn
@@ -322,13 +408,76 @@ describe("handlePrReview — submitReview verification", () => {
     expect(result?.status).toBe("posted")
     const warnLine = consoleWarns.find((l) => l.includes("pr-review-verify-error"))
     expect(warnLine).toBeDefined()
+    expect(warnLine).toContain('"submit_path":"phase3"')
+    // L4: pin the behavioral contract — the manifest IS written on
+    // the transient-blip path, proving verify defaulted to true.
+    const manifest = await readReviewManifest(env, "acme", "site", 7)
+    expect(manifest.kind).toBe("ok")
   })
 
-  it("happy path: verify returns the review → posted + manifest written", async () => {
+  // Code-review on this PR (H2): the list endpoint returns reviews
+  // ASC with `per_page=100` single-page. On a PR that has
+  // accumulated >=100 prior reviews, our just-submitted review
+  // sits on page 2+ and is missing from page 1. Verify must NOT
+  // flip the submit to skipped in that case — instead, treat the
+  // cap as inconclusive (assume persisted) and emit a distinct
+  // `pr-review-verify-list-capped` event.
+  it("treats page-cap (>=100 results without the new review) as inconclusive and assumes verified=true", async () => {
+    mockGetPullRequest.mockResolvedValue(goodMeta)
+    mockGenerate.mockResolvedValue(goodVerdict)
+    mockSubmitReview.mockResolvedValue({ id: 9999, state: "APPROVED" })
+    // 100 prior reviews on this PR; the just-submitted id (9999) is
+    // not among them — production behavior is "on page 2".
+    mockListPullRequestReviews.mockResolvedValue(
+      Array.from({ length: 100 }, (_, i) => ({
+        id: 1000 + i,
+        state: "APPROVED",
+        user: { login: "sigilix[bot]" },
+        body: "",
+      })),
+    )
+    mockListPullFilesForManifest.mockResolvedValue({ overflow: false, entries: [] })
+    mockGetMergeBase.mockResolvedValue(null)
+
+    const consoleWarns: string[] = []
+    const origWarn = console.warn
+    console.warn = (msg: string) => consoleWarns.push(typeof msg === "string" ? msg : JSON.stringify(msg))
+
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    let result: { status: string } | undefined
+    try {
+      result = await handlePrReview({
+        owner: "acme", repo: "site", prNumber: 7,
+        headSha: "h".repeat(40),
+        installationId: 1,
+        env,
+      })
+    } finally {
+      console.warn = origWarn
+    }
+
+    // Verify defaulted to true → submit reported as posted.
+    expect(result?.status).toBe("posted")
+    const cappedWarn = consoleWarns.find((l) => l.includes("pr-review-verify-list-capped"))
+    expect(cappedWarn).toBeDefined()
+    expect(cappedWarn).toContain('"submit_path":"phase3"')
+    // The verify-missing event must NOT fire (otherwise we're
+    // still classifying the cap as a hard miss).
+    const missingWarn = consoleWarns.find((l) => l.includes("pr-review-verify-missing"))
+    expect(missingWarn).toBeUndefined()
+    // Manifest IS written — proves verified stayed true.
+    const manifest = await readReviewManifest(env, "acme", "site", 7)
+    expect(manifest.kind).toBe("ok")
+  })
+
+  it("happy path: verify finds review in the public list with non-PENDING state → posted + manifest written", async () => {
     mockGetPullRequest.mockResolvedValue(goodMeta)
     mockGenerate.mockResolvedValue(goodVerdict)
     mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
-    mockGetReview.mockResolvedValue({ body: "" })
+    mockListPullRequestReviews.mockResolvedValue([
+      { id: 4242, state: "APPROVED", user: { login: "sigilix[bot]" }, body: "" },
+    ])
     mockListPullFilesForManifest.mockResolvedValue({ overflow: false, entries: [] })
     mockGetMergeBase.mockResolvedValue(null)
 
@@ -342,7 +491,10 @@ describe("handlePrReview — submitReview verification", () => {
     })
 
     expect(result.status).toBe("posted")
-    expect(mockGetReview).toHaveBeenCalledOnce()
+    // `listPullRequestReviews` is called twice on the happy path:
+    // once by `verifyReviewPersisted` and once by
+    // `dismissPriorSigilixReviews`. Both reads are expected.
+    expect(mockListPullRequestReviews).toHaveBeenCalledTimes(2)
     const manifest = await readReviewManifest(env, "acme", "site", 7)
     expect(manifest.kind).toBe("ok")
   })

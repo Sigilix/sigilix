@@ -51,6 +51,7 @@ import {
   renderStackContextSummary,
 } from "../prompts/pr-stack-prompt"
 import { handleStaleHead } from "./stale-head"
+import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -417,22 +418,67 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
     })
 
     const submitted = await client.submitReview(owner, repo, prNumber, reviewBody)
-    // ARC-258 follow-up (PR #84 anomaly catch): GitHub occasionally
-    // returns a valid-looking 2xx from `POST /pulls/{n}/reviews` but
-    // the review doesn't actually persist (observed once on PR #84
-    // where the Check Run claimed "Review posted" but no review
-    // existed). Re-fetch by id; if 404 it didn't persist — leave
-    // `posted = false` so the caller reports `skipped` (not a fake
-    // success). Best-effort verify: a transient blip on the GET
-    // path defaults to assuming the submit worked.
+    // ARC-258 follow-up (PR #84 anomaly catch, refined after PR
+    // #86): GitHub occasionally returns a valid-looking 2xx from
+    // `POST /pulls/{n}/reviews` but the review never becomes
+    // publicly visible — it stays in `PENDING` (draft) state.
+    // PR #86 reproduced this: the Check Run said "Review posted"
+    // and `getReview(id)` returned a non-null object, but
+    // `listPullRequestReviews` showed nothing. `getReview(id)`
+    // surfaces drafts to the authoring App; the public Reviews
+    // tab only shows non-`PENDING` rows. Use the public list to
+    // verify so the Check Run reflects reality.
+    //
+    // Cap handling (code-review on PR #86): the list endpoint
+    // returns reviews ASC with `per_page=100` single-page, so a
+    // PR with >=100 prior reviews pushes our just-submitted
+    // review off page 1. When the list returns the page cap and
+    // the row isn't on it, default to verified (inconclusive →
+    // don't flip a legitimate submit to skipped). Emit
+    // `pr-review-verify-list-capped` so we notice when this
+    // actually fires.
+    //
+    // Best-effort verify: a transient blip on the list GET path
+    // also defaults to assuming the submit worked.
     let verified = true
     try {
-      const re = await client.getReview(owner, repo, prNumber, submitted.id)
-      verified = re !== null
+      const list = await client.listPullRequestReviews(owner, repo, prNumber)
+      const found = list.find((r) => r.id === submitted.id)
+      if (found) {
+        if (found.state === "PENDING") {
+          console.warn(JSON.stringify({
+            event: "pr-review-verify-pending",
+            owner, repo, prNumber, review_id: submitted.id,
+            submit_path: "phase3",
+            submitted_state: submitted.state,
+          }))
+          verified = false
+        }
+      } else if (list.length >= 100) {
+        // Page cap hit — can't tell missing-from-everywhere apart
+        // from on-a-later-page. Inconclusive → assume verified.
+        console.warn(JSON.stringify({
+          event: "pr-review-verify-list-capped",
+          owner, repo, prNumber, review_id: submitted.id,
+          submit_path: "phase3",
+          list_size: list.length,
+          note: "listPullRequestReviews returned page cap; cannot confirm review present, defaulting to verified=true.",
+        }))
+      } else {
+        console.warn(JSON.stringify({
+          event: "pr-review-verify-missing",
+          owner, repo, prNumber, review_id: submitted.id,
+          submit_path: "phase3",
+          submitted_state: submitted.state,
+          list_size: list.length,
+        }))
+        verified = false
+      }
     } catch (err) {
       console.warn(JSON.stringify({
         event: "pr-review-verify-error",
         owner, repo, prNumber, review_id: submitted.id,
+        submit_path: "phase3",
         err: err instanceof Error ? err.message : String(err),
       }))
     }
@@ -451,6 +497,30 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
     console.log(
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
     )
+
+    // ARC-258 follow-up: dismiss prior Sigilix reviews on this PR
+    // so the Reviews tab reflects only the current head. Same
+    // body-marker-match logic as the ensemble path; safe to leave
+    // other reviewers' reviews untouched.
+    //
+    // Best-effort: `dismissPriorSigilixReviews` is designed never
+    // to throw, but defense-in-depth try/catch ensures a future
+    // refactor (or an out-of-band runtime error) can't turn a
+    // successfully-posted review into `errored`. A missed dismissal
+    // just leaves the stale approval visible until the next push.
+    try {
+      await dismissPriorSigilixReviews({
+        client, owner, repo, prNumber,
+        currentReviewId: submitted.id,
+      })
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "pr-review-dismiss-prior-failed",
+        owner, repo, prNumber, review_id: submitted.id,
+        submit_path: "phase3",
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
 
     // ARC-258 follow-up: warmup "ready" signaling is no longer a
     // separate sticky flip. The pr-overview comment carries the

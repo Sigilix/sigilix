@@ -48,7 +48,7 @@ const baseVerdict: PrReviewVerdict = {
 describe("buildFallbackBody", () => {
   it("preserves the dedupe marker so existing comment-marker logic still finds it", () => {
     const body = buildFallbackBody(baseVerdict, [])
-    expect(body.startsWith("<!-- openclaw:pr-review -->")).toBe(true)
+    expect(body.startsWith("<!-- sigilix:pr-review -->")).toBe(true)
   })
 
   it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
@@ -64,20 +64,19 @@ describe("buildFallbackBody", () => {
     expect(body).not.toContain("### Sigilix Summary")
   })
 
-  it("ARC-281: APPROVE path renders 'No issues found.' + omits findings section", () => {
+  it("ARC-293: APPROVE path is MARKER-ONLY (no findings sections, no heading, no provenance)", () => {
     const body = buildFallbackBody(
       { ...baseVerdict, findings: [] },
       []
     )
-    // No findings list of any kind.
+    // ARC-293: APPROVE bodies render as just the marker + newline.
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
+    // None of the legacy / verbose strings survive.
     expect(body).not.toContain("### Findings")
     expect(body).not.toContain("### Additional findings")
     expect(body).not.toContain("### Fix Plan")
-    // ARC-281 APPROVE shell.
-    expect(body).toContain("<!-- openclaw:pr-review -->")
-    expect(body).toContain("## Sigilix: Approved")
-    expect(body).toContain("No issues found.")
-    // Legacy strings stay out.
+    expect(body).not.toContain("## Sigilix: Approved")
+    expect(body).not.toContain("No issues found")
     expect(body).not.toContain("### Sigilix Summary")
   })
 

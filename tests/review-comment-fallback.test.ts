@@ -69,7 +69,7 @@ function makeKvStub(): KvStub {
   return { kv, store, reads, writes }
 }
 
-const SYNTH_BODY = "<!-- openclaw:pr-review -->\n\n### Sigilix Summary\n\nLooks fine."
+const SYNTH_BODY = "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks fine."
 
 describe("renderReviewCommentFallback", () => {
   it("prepends the fallback marker + warning header above the synth body", () => {
@@ -89,17 +89,17 @@ describe("renderReviewCommentFallback", () => {
     expect(out).toContain("Looks fine.")
   })
 
-  it("preserves the `openclaw:pr-review` marker that ships with the synth body (dismiss-prior + review-memory find it)", () => {
+  it("preserves the `sigilix:pr-review` marker that ships with the synth body (dismiss-prior + review-memory find it)", () => {
     const out = renderReviewCommentFallback({
       body: SYNTH_BODY,
       submitPath: "anchorless-fallback",
       headSha: "deadbeef",
     })
-    expect(out).toContain("<!-- openclaw:pr-review -->")
-    expect(out.match(/<!-- openclaw:pr-review -->/g)?.length).toBe(1)
+    expect(out).toContain("<!-- sigilix:pr-review -->")
+    expect(out.match(/<!-- sigilix:pr-review -->/g)?.length).toBe(1)
   })
 
-  it("injects the `openclaw:pr-review` marker if the synth body is missing it (defensive)", () => {
+  it("injects the `sigilix:pr-review` marker if the synth body is missing it (defensive)", () => {
     // Should not happen in practice — every formatReviewBody output
     // includes the marker — but if a future path forgets, the
     // fallback re-injects so downstream pipelines still work.
@@ -108,7 +108,7 @@ describe("renderReviewCommentFallback", () => {
       submitPath: "phase3",
       headSha: "abc1234",
     })
-    expect(out).toContain("<!-- openclaw:pr-review -->")
+    expect(out).toContain("<!-- sigilix:pr-review -->")
     expect(out).toContain("Summary text only, no marker.")
   })
 
@@ -399,7 +399,7 @@ describe("renderReviewSkipNotice", () => {
       reason: "specialists_all_failed",
       headSha: "abc1234567890",
     })
-    expect(out).toContain("<!-- openclaw:pr-review -->")
+    expect(out).toContain("<!-- sigilix:pr-review -->")
     expect(out).toContain("<!-- sigilix:review-skip-notice -->")
     expect(out).toContain("[!WARNING]")
     expect(out).toContain("Sigilix couldn't generate a review for this PR")

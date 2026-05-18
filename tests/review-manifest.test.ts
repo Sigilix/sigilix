@@ -355,15 +355,15 @@ describe("renderStaleBlock + applyStaleBlock", () => {
   })
 
   it("applyStaleBlock inserts after the leading openclaw marker when no prior block exists", () => {
-    const body = "<!-- openclaw:pr-review -->\n\n### Sigilix Summary\n\nLooks good."
+    const body = "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks good."
     const block = renderStaleBlock(m, current)
     const out = applyStaleBlock(body, block)
-    expect(out.indexOf("<!-- openclaw:pr-review -->")).toBeLessThan(out.indexOf("sigilix:stale-marker:start"))
+    expect(out.indexOf("<!-- sigilix:pr-review -->")).toBeLessThan(out.indexOf("sigilix:stale-marker:start"))
     expect(out.indexOf("sigilix:stale-marker:start")).toBeLessThan(out.indexOf("### Sigilix Summary"))
   })
 
   it("applyStaleBlock IS IDEMPOTENT — running twice = same body length", () => {
-    const body = "<!-- openclaw:pr-review -->\n\n### Sigilix Summary\n\nLooks good."
+    const body = "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks good."
     const block = renderStaleBlock(m, current)
     const once = applyStaleBlock(body, block)
     const twice = applyStaleBlock(once, block)
@@ -371,7 +371,7 @@ describe("renderStaleBlock + applyStaleBlock", () => {
   })
 
   it("applyStaleBlock with a NEW block replaces an existing one (no accumulation)", () => {
-    const body = "<!-- openclaw:pr-review -->\n\n### Sigilix Summary\n\nLooks good."
+    const body = "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks good."
     const blockA = renderStaleBlock(m, current)
     const after = applyStaleBlock(body, blockA)
     const newCurrent = { ...current, headSha: "z".repeat(40) }
@@ -392,7 +392,7 @@ describe("renderStaleBlock + applyStaleBlock", () => {
   })
 
   it("applyStaleBlock truncates the original body when the result would exceed 65000 chars", () => {
-    const huge = "<!-- openclaw:pr-review -->\n\n" + "x".repeat(64900)
+    const huge = "<!-- sigilix:pr-review -->\n\n" + "x".repeat(64900)
     const block = renderStaleBlock(m, current)
     const out = applyStaleBlock(huge, block)
     expect(out.length).toBeLessThanOrEqual(65000)
@@ -401,7 +401,7 @@ describe("renderStaleBlock + applyStaleBlock", () => {
 
   it("does NOT match accidental marker-like prose inside a code block (literal markers required)", () => {
     const body = [
-      "<!-- openclaw:pr-review -->",
+      "<!-- sigilix:pr-review -->",
       "",
       "### Sigilix Summary",
       "",

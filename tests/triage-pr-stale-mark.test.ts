@@ -195,7 +195,7 @@ describe("handlePrStaleMark — review-target PATCH", () => {
       overflow: false,
       entries: [{ filename: "src/foo.ts", previous_filename: null, status: "modified" }],
     })
-    mockGetReview.mockResolvedValue({ body: "<!-- openclaw:pr-review -->\n\n### Sigilix Summary\n\nLooks good." })
+    mockGetReview.mockResolvedValue({ body: "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks good." })
 
     await handlePrStaleMark(baseArgs(env, m))
 
@@ -214,7 +214,7 @@ describe("handlePrStaleMark — review-target PATCH", () => {
       overflow: false,
       entries: [{ filename: "x.ts", previous_filename: null, status: "modified" }],
     })
-    mockGetReview.mockResolvedValue({ body: "<!-- openclaw:pr-review -->\n\nbody" })
+    mockGetReview.mockResolvedValue({ body: "<!-- sigilix:pr-review -->\n\nbody" })
 
     const logs: string[] = []
     const orig = console.log
@@ -263,7 +263,7 @@ describe("handlePrStaleMark — issue-comment-target PATCH", () => {
       overflow: false,
       entries: [{ filename: "x.ts", previous_filename: null, status: "modified" }],
     })
-    mockGetIssueComment.mockResolvedValue({ body: "<!-- openclaw:pr-review -->\n\n### Sigilix\nbody" })
+    mockGetIssueComment.mockResolvedValue({ body: "<!-- sigilix:pr-review -->\n\n### Sigilix\nbody" })
 
     await handlePrStaleMark(baseArgs(env, m))
 
@@ -304,7 +304,7 @@ describe("handlePrStaleMark — failures + retries", () => {
       overflow: false,
       entries: [{ filename: "x.ts", previous_filename: null, status: "modified" }],
     })
-    mockGetReview.mockResolvedValue({ body: "<!-- openclaw:pr-review -->\n\nbody" })
+    mockGetReview.mockResolvedValue({ body: "<!-- sigilix:pr-review -->\n\nbody" })
     mockUpdateReviewBody.mockRejectedValue(new GitHubHttpError(503, "Service Unavailable"))
 
     await expect(handlePrStaleMark(baseArgs(env, baseManifest()))).rejects.toBeInstanceOf(GitHubHttpError)
@@ -318,7 +318,7 @@ describe("handlePrStaleMark — failures + retries", () => {
       overflow: false,
       entries: [{ filename: "x.ts", previous_filename: null, status: "modified" }],
     })
-    mockGetReview.mockResolvedValue({ body: "<!-- openclaw:pr-review -->\n\nbody" })
+    mockGetReview.mockResolvedValue({ body: "<!-- sigilix:pr-review -->\n\nbody" })
     mockUpdateReviewBody.mockRejectedValue(new GitHubHttpError(403, "Forbidden"))
 
     const errs: string[] = []
@@ -367,7 +367,7 @@ describe("handlePrStaleMark — failures + retries", () => {
       entries: [{ filename: "x.ts", previous_filename: null, status: "modified" }],
     })
     const priorBody = [
-      "<!-- openclaw:pr-review -->",
+      "<!-- sigilix:pr-review -->",
       "",
       "<!-- sigilix:stale-marker:start -->",
       "> [!WARNING]",

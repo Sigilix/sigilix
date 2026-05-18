@@ -176,10 +176,11 @@ describe("buildReviewSubmission", () => {
     expect(out.comments).toBeUndefined()
   })
 
-  // ARC-276: APPROVE bodies now lead with an affirmative headline +
-  // a one-line ensemble statement so the user sees a clear "passed"
-  // signal at the top, not just the model's summary.
-  it("renders the ARC-281 APPROVE heading + 'No issues found.' on empty findings", () => {
+  // ARC-293: APPROVE bodies render as MARKER-ONLY. The GitHub-native
+  // "approved these changes" line carries the signal; the prior
+  // verbose card (heading + coverage + "No issues found" + provenance
+  // footer) was timeline noise.
+  it("renders the ARC-293 marker-only APPROVE body on empty findings", () => {
     const empty: PrReviewVerdict = {
       summary: "Looks clean — nothing CR missed.",
       confidence: 5,
@@ -187,12 +188,8 @@ describe("buildReviewSubmission", () => {
       findings: [],
     }
     const out = buildReviewSubmission({ verdict: empty, prAuthor: "alice", headSha: "abc" })
-    // Kimi's APPROVE template: status heading + flat "No issues
-    // found." statement. The model's summary is intentionally NOT
-    // rendered on APPROVE bodies — the redesign treats a no-findings
-    // verdict as fully self-explanatory.
-    expect(out.body).toContain("## Sigilix: Approved")
-    expect(out.body).toContain("No issues found.")
+    // ARC-293 minimal: just the marker.
+    expect(out.body).toBe("<!-- sigilix:pr-review -->\n")
     // Pre-ARC-281 strings must not survive the redesign.
     expect(out.body).not.toContain("✅ Sigilix reviewed this PR — no issues found")
     expect(out.body).not.toContain("nothing worth flagging")
@@ -203,15 +200,16 @@ describe("buildReviewSubmission", () => {
     expect(out.body).not.toContain("To dismiss this review")
   })
 
-  it("does NOT add the APPROVE heading when findings exist (REQUEST_CHANGES path)", () => {
+  it("does NOT render REQUEST_CHANGES heading on an empty-findings APPROVE body", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
-    expect(out.body).not.toContain("## Sigilix: Approved")
-    expect(out.body).not.toContain("No issues found.")
+    // The REQUEST_CHANGES path on `verdict` (which has findings) MUST
+    // emit the count heading, not the marker-only APPROVE body.
+    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
   })
 
   it("ARC-281: REQUEST_CHANGES body has the new heading + dropped legacy strings", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
-    expect(out.body).toContain("<!-- openclaw:pr-review -->")
+    expect(out.body).toContain("<!-- sigilix:pr-review -->")
     // New status heading replaces "### Sigilix Summary" entirely.
     expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
     // Summary still appears — but as its own paragraph, not under a
@@ -326,7 +324,7 @@ describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", (
     )
   })
 
-  it("preserves the existing openclaw:pr-review-finding marker AND appends sigilix marker", () => {
+  it("preserves the existing sigilix:pr-review-finding marker AND appends sigilix marker", () => {
     const out = buildReviewSubmission({
       verdict,
       prAuthor: "alice",
@@ -337,7 +335,7 @@ describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", (
       ],
     })
     const body = out.comments?.[0]?.body ?? ""
-    expect(body).toContain("<!-- openclaw:pr-review-finding -->")
+    expect(body).toContain("<!-- sigilix:pr-review-finding -->")
     expect(body).toContain("<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->")
   })
 
@@ -386,17 +384,43 @@ describe("provenance footer (ARC-184)", () => {
   const HEAD = "abc1234567890abcdef1234567890abcdef1234"
   const NOW = 1733494200000 // 2024-12-06T13:30:00.000Z
 
-  it("formatReviewBody (via buildReviewSubmission) ends with the provenance footer", () => {
+  // ARC-293: APPROVE bodies are marker-only and intentionally bypass
+  // the provenance-footer helper (`capForGitHub`). GitHub's commit
+  // attribution on the approve event carries the SHA. The footer
+  // assertions below pin the REQUEST_CHANGES path instead — that's
+  // where the footer still lives.
+  const verdictWithFinding: PrReviewVerdict = {
+    summary: "Solid.",
+    confidence: 5,
+    confidenceReason: "All passing.",
+    findings: [baseFinding],
+  }
+
+  it("APPROVE body (empty findings) is marker-only and bypasses the provenance footer (ARC-293)", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
+    const body = out.body ?? ""
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
+    expect(body).not.toContain("_Reviewed against")
+  })
+
+  it("REQUEST_CHANGES body still ends with the provenance footer (ARC-184 invariant)", () => {
+    const out = buildReviewSubmission({
+      verdict: verdictWithFinding, prAuthor: "alice", headSha: HEAD, nowMs: NOW,
+    })
     const body = out.body ?? ""
     expect(body).toMatch(
       /_Reviewed against `abc1234` at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\._\s*$/,
     )
   })
 
-  it("buildFallbackBody also ends with the provenance footer", () => {
-    const expected = `_Reviewed against \`abc1234\` at ${new Date(NOW).toISOString()}._`
+  it("buildFallbackBody APPROVE path is marker-only (ARC-293)", () => {
     const out = buildFallbackBody(verdict, [], { headSha: HEAD, nowMs: NOW })
+    expect(out).toBe("<!-- sigilix:pr-review -->\n")
+  })
+
+  it("buildFallbackBody REQUEST_CHANGES path still ends with the provenance footer", () => {
+    const expected = `_Reviewed against \`abc1234\` at ${new Date(NOW).toISOString()}._`
+    const out = buildFallbackBody(verdictWithFinding, [], { headSha: HEAD, nowMs: NOW })
     expect(out.trimEnd().endsWith(expected)).toBe(true)
   })
 

@@ -2118,7 +2118,43 @@ export async function handlePrReviewEnsemble(
         coverage,
         delta: deltaCounts,
       })
-      const submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
+      // CR PR #97 round-4 catch: the anchorless-fallback submit
+      // can also throw (merge race after the guard, transient
+      // GitHub 5xx, connection drop). With ARC-287's pre-submit
+      // dismiss already done, an un-caught throw here would leave
+      // the customer with NO Sigilix signal (prior dismissed, no
+      // review posted, no comment). Symmetric to the inline-anchored
+      // catch above — post the synth body as a regular PR comment
+      // tagged `anchorless-fallback-error` so on-call can correlate.
+      let submittedFallback: Awaited<ReturnType<typeof client.submitReview>>
+      try {
+        submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
+      } catch (fallbackSubmitErr) {
+        console.warn(JSON.stringify({
+          event: "pr-review-fallback-submit-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: fallbackSubmitErr instanceof Error
+            ? fallbackSubmitErr.message
+            : String(fallbackSubmitErr),
+        }))
+        const commentFallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          body: fallback.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "anchorless-fallback-error",
+        })
+        if (commentFallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
+        // Both anchorless submit AND comment fallback failed — rethrow
+        // so the outer catch records `internal_error` and the
+        // Check Run reflects the failure.
+        throw fallbackSubmitErr
+      }
       // ARC-258 follow-up (PR #84 anomaly catch, refined PR #86):
       // same post-submit verification as the primary path — catches
       // both the 404-on-id and the PENDING-state silent-success

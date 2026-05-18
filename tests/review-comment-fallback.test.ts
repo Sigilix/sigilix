@@ -117,11 +117,28 @@ describe("renderReviewCommentFallback", () => {
       "inline-anchored",
       "inline-anchored-error",
       "anchorless-fallback",
+      "anchorless-fallback-error",
       "phase3",
     ] as const) {
       const out = renderReviewCommentFallback({ body: SYNTH_BODY, submitPath: path, headSha: "abc1234" })
       expect(out).toContain(`\`${path}\``)
     }
+  })
+
+  it("CR PR #97 round-4 catch: anchorless-fallback-error uses the 'transient error' copy (symmetric with inline-anchored-error)", () => {
+    // Both *-error variants describe thrown-from-submit failures.
+    // The verify-fail variants (`inline-anchored`, `anchorless-fallback`,
+    // `phase3`) describe 2xx-but-not-persisted failures. The two
+    // failure modes deserve distinct copy so customers know what to
+    // expect on retry.
+    const anchorlessErr = renderReviewCommentFallback({
+      body: SYNTH_BODY,
+      submitPath: "anchorless-fallback-error",
+      headSha: "abc1234",
+    })
+    expect(anchorlessErr).toContain("`anchorless-fallback-error`")
+    expect(anchorlessErr).toContain("transient GitHub error")
+    expect(anchorlessErr).not.toContain("returned 2xx")
   })
 
   it("ARC-287 inline-anchored-error variant uses the 'transient error' reason copy (not 'returned 2xx')", () => {

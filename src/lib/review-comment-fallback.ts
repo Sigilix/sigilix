@@ -71,11 +71,17 @@ function dedupeKeyForCommentFallback(args: {
  *    thrown by the inline-anchored submitReview call. Pre-ARC-287
  *    these rethrew and the prior review stayed visible; post-ARC-287
  *    the prior is already dismissed, so we ALWAYS post the synth
- *    body as a comment to preserve the customer signal. */
+ *    body as a comment to preserve the customer signal.
+ *  - `anchorless-fallback-error` — CR PR #97 round-4 catch: same
+ *    failure-mode as inline-anchored-error, but on the 422-fallback
+ *    path's submit. A non-2xx thrown error during the anchorless
+ *    submit would otherwise leave the customer with no signal
+ *    (prior already dismissed, no review posted). */
 export type CommentFallbackSubmitPath =
   | "inline-anchored"
   | "inline-anchored-error"
   | "anchorless-fallback"
+  | "anchorless-fallback-error"
   | "phase3"
 
 /**
@@ -120,6 +126,7 @@ export function renderReviewCommentFallback(args: {
   const reason: string = (() => {
     switch (submitPath) {
       case "inline-anchored-error":
+      case "anchorless-fallback-error":
         return `> The \`${submitPath}\` submit failed with a transient GitHub error (timeout, 5xx, rate limit, etc). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`
       case "inline-anchored":
       case "anchorless-fallback":

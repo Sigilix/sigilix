@@ -112,11 +112,58 @@ describe("renderReviewCommentFallback", () => {
     expect(out).toContain("Summary text only, no marker.")
   })
 
-  it("renders the submit path name in the header (inline-anchored / anchorless-fallback / phase3)", () => {
-    for (const path of ["inline-anchored", "anchorless-fallback", "phase3"] as const) {
+  it("renders the submit path name in the header (all CommentFallbackSubmitPath variants)", () => {
+    for (const path of [
+      "inline-anchored",
+      "inline-anchored-error",
+      "anchorless-fallback",
+      "anchorless-fallback-error",
+      "phase3",
+    ] as const) {
       const out = renderReviewCommentFallback({ body: SYNTH_BODY, submitPath: path, headSha: "abc1234" })
       expect(out).toContain(`\`${path}\``)
     }
+  })
+
+  it("CR PR #97 round-4 catch: anchorless-fallback-error uses the 'transient error' copy (symmetric with inline-anchored-error)", () => {
+    // Both *-error variants describe thrown-from-submit failures.
+    // The verify-fail variants (`inline-anchored`, `anchorless-fallback`,
+    // `phase3`) describe 2xx-but-not-persisted failures. The two
+    // failure modes deserve distinct copy so customers know what to
+    // expect on retry.
+    const anchorlessErr = renderReviewCommentFallback({
+      body: SYNTH_BODY,
+      submitPath: "anchorless-fallback-error",
+      headSha: "abc1234",
+    })
+    expect(anchorlessErr).toContain("`anchorless-fallback-error`")
+    expect(anchorlessErr).toContain("transient GitHub error")
+    expect(anchorlessErr).not.toContain("returned 2xx")
+  })
+
+  it("ARC-287 inline-anchored-error variant uses the 'transient error' reason copy (not 'returned 2xx')", () => {
+    // Sigilix PR #97 round-2 catch: the original reason text was
+    // accurate for the verify-fail paths (`inline-anchored`,
+    // `anchorless-fallback`) but wrong for the new error-thrown
+    // path. Pin the distinct copy here so a future renderer change
+    // can't accidentally collapse the two.
+    const errOut = renderReviewCommentFallback({
+      body: SYNTH_BODY,
+      submitPath: "inline-anchored-error",
+      headSha: "abc1234",
+    })
+    expect(errOut).toContain("`inline-anchored-error`")
+    expect(errOut).toContain("transient GitHub error")
+    expect(errOut).not.toContain("returned 2xx")
+
+    // Sanity check the verify-fail variants still use the 2xx copy.
+    const okOut = renderReviewCommentFallback({
+      body: SYNTH_BODY,
+      submitPath: "inline-anchored",
+      headSha: "abc1234",
+    })
+    expect(okOut).toContain("returned 2xx")
+    expect(okOut).not.toContain("transient GitHub error")
   })
 
   it("renders a 7-char SHA suffix so the user can correlate the comment with the commit", () => {

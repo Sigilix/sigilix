@@ -147,6 +147,7 @@ import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
+import { checkIsPrMerged } from "./merge-guard"
 import {
   type EnsembleRunCtx,
   type SynthSummary,
@@ -249,12 +250,23 @@ export const RETRIEVAL_PREFLIGHT_TIMEOUT_MS = 15_000
 // stalling for the full 270s on a single attempt with `attempts=1` —
 // the budget extension just gave the primary more rope.
 //
-// Math under this cap: 2 × 85s primary + ~1s backoff + 85s fallback
-// = ~256s, fits within the 270s SPECIALIST budget. Sized to leave
-// each attempt enough room for v4-pro reasoning on real PRs (median
-// successful logic latency was 78s on healthy runs) while still
-// guaranteeing the fallback gets its slot.
-export const PER_ATTEMPT_TIMEOUT_MS = 85_000
+// ARC-283 B1a: tightened 85s → 60s based on real-run telemetry from
+// PR #96 (the B0 dogfood capture). Observed healthy logic specialist
+// latency on two clean runs was 28s and 57s — the 85s cap was way
+// above the natural distribution. Tightening to 60s:
+//
+//   - Gives healthy attempts (28-57s observed) ~3-30s of margin —
+//     still completes successfully.
+//   - Cuts each failed-primary attempt's wasted wall-clock by 25s.
+//     Worst-case retry-chain compresses from 256s → 181s per role.
+//   - The 9-min P99 outliers on PR #94 came from a specialist's
+//     retry chain hitting the full 85s × 3 attempts. At 60s the
+//     same chain would take 181s — saving ~75s per offending role.
+//
+// Math under the new cap: 2 × 60s primary + ~1s backoff + 60s
+// fallback = ~181s, fits comfortably within the 270s SPECIALIST
+// budget (89s slack).
+export const PER_ATTEMPT_TIMEOUT_MS = 60_000
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
 
@@ -430,7 +442,31 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
 export const SYNTHESIZER_CONFIG: ModelConfig = {
   primary: "kimi-k2.6:cloud",
   retries: 1,
-  fallback: "kimi-k2.5:cloud",
+  // ARC-291 (PR #97 hot-fix): swap fallback from kimi-k2.5 → DeepSeek
+  // family. Pre-this-fix the fallback was kimi-k2.5:cloud — SAME
+  // PROVIDER as primary (both Moonshot). When Moonshot had a bad few
+  // minutes, primary + retry + fallback all hit the same wall, the
+  // ARC-278 retry doubled the burn, and synth_timeout fired even
+  // though specialist verdicts were ready to merge.
+  //
+  // Sigilix's own review of PR #97 demoed this: 6m 16s wall-clock
+  // burned, both attemptSynth calls timed out twice, customer saw
+  // "Couldn't review — see PR comment." Brand-fatal UX.
+  //
+  // Every OTHER ModelConfig in this file has cross-provider
+  // fallback. Synth was the only outlier. DeepSeek-v4-flash is the
+  // proven lighter DeepSeek variant (already primary on security +
+  // tests specialists). DIFFERENT provider from Moonshot — fails
+  // INDEPENDENTLY, which is the whole point of fallback.
+  //
+  // Worst-case math with cross-provider fallback:
+  //   Primary attempt:  60s (PER_ATTEMPT cap)  — Moonshot slow → null
+  //   Retry attempt:    60s + 1s backoff       — Moonshot slow → null
+  //   Fallback attempt: 60s                    — DeepSeek likely OK
+  //   Total:           ~121s if Moonshot is slow but DeepSeek is fine
+  // vs the pre-fix:
+  //   Total:           ~362s (180s × 2 outer attempts) → skip-notice
+  fallback: "deepseek-v4-flash:cloud",
 }
 
 /** @deprecated kept for telemetry compatibility — derive from SPECIALIST_CONFIGS instead */
@@ -1795,20 +1831,60 @@ export async function handlePrReviewEnsemble(
       coverage,
       delta: deltaCounts,
     })
+    // ARC-286 (extracted to `merge-guard.ts` per Sigilix PR #97
+    // round-2 pushback so the three branches — open / merged /
+    // API-error — are unit-testable). The orchestrator just calls
+    // the helper and emits its own `pr-review-skipped-merged` event
+    // on the merged branch.
+    const mergeGuard = await checkIsPrMerged({ client, owner, repo, prNumber, headSha })
+    if (mergeGuard.shouldSkip) {
+      const findingCount = renderableVerdict.findings.length + renderableUnanchored.length
+      console.log(JSON.stringify({
+        event: "pr-review-skipped-merged",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        review_elapsed_ms: Date.now() - startMs,
+        merged_at_ms: mergeGuard.mergedAtMs,
+        merged_during_review_ms: mergeGuard.mergedAtMs - startMs,
+        finding_count: findingCount,
+      }))
+      return finalize(telemetry, env, "skipped", cache)
+    }
+
+    // ARC-287: dismiss prior Sigilix reviews BEFORE posting the new
+    // one, so the GitHub timeline renders cleanup-above-current-review
+    // (oldest-at-top). Pre-ARC-287 the dismiss fired AFTER the submit,
+    // producing a footgun where the dismissal banner showed BELOW the
+    // new review chronologically (PR #95's `8ad306a` review
+    // demonstrated this — see ARC-287).
+    //
+    // Safe to dismiss first because ARC-279's comment-fallback covers
+    // the "dismiss succeeded + submit failed" failure mode: the synth
+    // body still posts as a PR comment, the customer still sees the
+    // review signal. `currentReviewId: null` is the ARC-287 sentinel
+    // meaning "dismiss every matching prior review — there's no
+    // current one to exclude yet."
+    //
+    // Best-effort try/catch — same defense-in-depth as the post-submit
+    // version had: a missed dismissal just leaves the stale prior
+    // visible until the next push.
+    try {
+      await dismissPriorSigilixReviews({
+        client, owner, repo, prNumber,
+        currentReviewId: null,
+        headSha,
+      })
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "pr-review-dismiss-prior-failed",
+        owner, repo, prNumber,
+        submit_path: "pre-submit",
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+
     // ARC-284: wrap the submit so a slow GitHub roundtrip shows up in
     // the trace. Covers BOTH the success path and the 422-fallback
     // path that the catch block dispatches to.
-    //
-    // ARC-286 follow-up: this is the call site that needs the pre-
-    // submit `is-PR-merged?` guard so the merge-timing race stops
-    // posting reviews to merged PRs. Both submit paths below
-    // (inline-anchored + anchorless-fallback) need the same check.
-    //
-    // ARC-287 follow-up: the order of submitReview + dismissPriorSigilix
-    // should flip — dismiss FIRST, then post — so the GitHub timeline
-    // renders cleanup-above-current-review instead of the current
-    // reverse-chronology footgun. Safe because ARC-279's comment
-    // fallback covers the "dismiss succeeded, submit failed" case.
     const submitStartMs = Date.now()
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
@@ -1888,27 +1964,12 @@ export async function handlePrReviewEnsemble(
       // match ensures we only ever dismiss our own reviews — never
       // touch another reviewer's.
       //
-      // Best-effort: `dismissPriorSigilixReviews` is designed never
-      // to throw, but defense-in-depth try/catch ensures a future
-      // refactor that introduces a throw (or an out-of-band runtime
-      // error like a JSON.stringify on a circular ref) cannot turn
-      // a successfully-posted review into `errored`. The submit has
-      // already been verified above; a missed dismissal just leaves
-      // the stale approval visible until the next push.
-      try {
-        await dismissPriorSigilixReviews({
-          client, owner, repo, prNumber,
-          currentReviewId: submitted.id,
-          headSha,
-        })
-      } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-dismiss-prior-failed",
-          owner, repo, prNumber, review_id: submitted.id,
-          submit_path: "inline-anchored",
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // ARC-287: post-submit dismissPriorSigilixReviews call removed.
+      // Dismissal now fires BEFORE submitReview (see the pre-submit
+      // block above) so the GitHub timeline renders dismissal-above-
+      // current-review chronologically. ARC-279's comment-fallback
+      // covers the "dismiss succeeded + submit failed" failure mode.
+
       // ARC-184: write review-provenance manifest. Best-effort.
       // ARC-271: also persist the per-finding snapshot so the next
       // push's review can compute a new/still-open/likely-fixed
@@ -1969,23 +2030,60 @@ export async function handlePrReviewEnsemble(
         findingsCount: inlineFindings,
       })
     } catch (submitErr) {
-      // Narrow the fallback to GitHub HTTP 422 (Unprocessable Entity)
-      // — that's the specific status GitHub returns when an inline
-      // anchor is invalid. CR PR #38 round-2 catch: the original
-      // catch-all retry was unsafe because `POST /pulls/{n}/reviews`
-      // is non-idempotent. A timeout / network error after GitHub
-      // accepted the first submission would have produced a duplicate
-      // review on retry. Rethrow anything that isn't a 422 so the
-      // outer try/catch records it as `internal_error` (the original
-      // pre-fallback behaviour for those failure modes).
-      //
-      // I originally chose "catch any error" via the dispatch Q&A
-      // because it sounded more defensive. Round-2 review showed the
-      // opposite — the broader catch creates a worse failure mode.
-      if (
-        !(submitErr instanceof GitHubHttpError) ||
-        submitErr.status !== 422
-      ) {
+      // Narrow the anchorless-retry fallback to GitHub HTTP 422 — that's
+      // the specific status GitHub returns when an inline anchor is
+      // invalid. CR PR #38 round-2 catch: the original catch-all retry
+      // was unsafe because `POST /pulls/{n}/reviews` is non-idempotent.
+      // A timeout / network error after GitHub accepted the first
+      // submission would have produced a duplicate review on retry.
+      // So: 422 → re-render anchorless + retry submitReview;
+      //     non-422 → don't retry submit, but DO post the comment
+      //     fallback (CR PR #97 catch — see below).
+      const is422 =
+        submitErr instanceof GitHubHttpError && submitErr.status === 422
+      if (!is422) {
+        // CR PR #97 catch (Major): pre-ARC-287, a non-422 submit
+        // failure rethrew and the prior review stayed intact — the
+        // customer saw a stale-but-existing signal. Post-ARC-287,
+        // the prior is ALREADY DISMISSED (the pre-submit dismiss
+        // fired before submit), so rethrowing here would leave the
+        // customer with NO Sigilix signal at all.
+        //
+        // Restore the "customer always sees Sigilix" guarantee by
+        // posting the comment fallback (ARC-279's helper, normally
+        // used on verify-fail) on every non-422 submit error too.
+        // The synth verdict still hits the PR — just as a regular
+        // comment instead of a formal review.
+        console.warn(JSON.stringify({
+          event: "pr-review-submit-non-422-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: submitErr instanceof Error ? submitErr.message : String(submitErr),
+        }))
+        const fallbackBodyOnly = buildFallbackSubmission({
+          verdict: renderableVerdict,
+          unanchored: renderableUnanchored,
+          prAuthor: meta.user?.login ?? null,
+          headSha,
+          ...(stack.isStacked ? { stack } : {}),
+          coverage,
+          delta: deltaCounts,
+        })
+        const commentFallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          body: fallbackBodyOnly.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "inline-anchored-error",
+        })
+        if (commentFallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
+        // Both inline submit AND comment fallback failed — rethrow
+        // so the outer catch records `internal_error` and the
+        // Check Run reflects the failure.
         throw submitErr
       }
       const fallbackReason = `HTTP 422 ${submitErr.message}`
@@ -2020,7 +2118,43 @@ export async function handlePrReviewEnsemble(
         coverage,
         delta: deltaCounts,
       })
-      const submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
+      // CR PR #97 round-4 catch: the anchorless-fallback submit
+      // can also throw (merge race after the guard, transient
+      // GitHub 5xx, connection drop). With ARC-287's pre-submit
+      // dismiss already done, an un-caught throw here would leave
+      // the customer with NO Sigilix signal (prior dismissed, no
+      // review posted, no comment). Symmetric to the inline-anchored
+      // catch above — post the synth body as a regular PR comment
+      // tagged `anchorless-fallback-error` so on-call can correlate.
+      let submittedFallback: Awaited<ReturnType<typeof client.submitReview>>
+      try {
+        submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
+      } catch (fallbackSubmitErr) {
+        console.warn(JSON.stringify({
+          event: "pr-review-fallback-submit-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: fallbackSubmitErr instanceof Error
+            ? fallbackSubmitErr.message
+            : String(fallbackSubmitErr),
+        }))
+        const commentFallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          body: fallback.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "anchorless-fallback-error",
+        })
+        if (commentFallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
+        // Both anchorless submit AND comment fallback failed — rethrow
+        // so the outer catch records `internal_error` and the
+        // Check Run reflects the failure.
+        throw fallbackSubmitErr
+      }
       // ARC-258 follow-up (PR #84 anomaly catch, refined PR #86):
       // same post-submit verification as the primary path — catches
       // both the 404-on-id and the PENDING-state silent-success
@@ -2062,25 +2196,11 @@ export async function handlePrReviewEnsemble(
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
-      // ARC-258 follow-up: same prior-review dismissal as the primary
-      // submit path. The fallback is also a real Sigilix review that
-      // would otherwise leave the earlier commit's approval as the
-      // visible state in the Reviews tab. Same defense-in-depth
-      // try/catch as the inline-anchored path above.
-      try {
-        await dismissPriorSigilixReviews({
-          client, owner, repo, prNumber,
-          currentReviewId: submittedFallback.id,
-          headSha,
-        })
-      } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-dismiss-prior-failed",
-          owner, repo, prNumber, review_id: submittedFallback.id,
-          submit_path: "anchorless-fallback",
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // ARC-287: post-submit dismissPriorSigilixReviews call removed
+      // (was the anchorless-fallback's parallel of the inline-anchored
+      // helper). Both submit paths now rely on the single pre-submit
+      // dismissal at the top of this submit block.
+
       // ARC-184: write manifest for the fallback path too. Same target
       // shape (kind: "review") because the fallback is still a GitHub
       // review (just anchorless body). ARC-271: same per-finding

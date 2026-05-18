@@ -60,10 +60,28 @@ function dedupeKeyForCommentFallback(args: {
 
 /** The submit path that failed verify. Surfaced in the header so the
  *  customer (and on-call) can correlate the comment with the kind of
- *  failure that produced it. */
+ *  failure that produced it.
+ *
+ *  - `inline-anchored` — verify-fail on the primary inline-anchored
+ *    submit (the most common case ARC-279 was built for).
+ *  - `anchorless-fallback` — verify-fail on the 422-fallback path.
+ *  - `phase3` — legacy single-shot reviewer (ARC-280 deleted the
+ *    code path, retained for historical telemetry).
+ *  - `inline-anchored-error` — ARC-287 follow-up: non-422 errors
+ *    thrown by the inline-anchored submitReview call. Pre-ARC-287
+ *    these rethrew and the prior review stayed visible; post-ARC-287
+ *    the prior is already dismissed, so we ALWAYS post the synth
+ *    body as a comment to preserve the customer signal.
+ *  - `anchorless-fallback-error` — CR PR #97 round-4 catch: same
+ *    failure-mode as inline-anchored-error, but on the 422-fallback
+ *    path's submit. A non-2xx thrown error during the anchorless
+ *    submit would otherwise leave the customer with no signal
+ *    (prior already dismissed, no review posted). */
 export type CommentFallbackSubmitPath =
   | "inline-anchored"
+  | "inline-anchored-error"
   | "anchorless-fallback"
+  | "anchorless-fallback-error"
   | "phase3"
 
 /**
@@ -90,13 +108,41 @@ export function renderReviewCommentFallback(args: {
 }): string {
   const { body, submitPath, headSha } = args
   const sha7 = headSha.slice(0, 7)
+  // The reason line varies by submit-path. ARC-279's original two
+  // paths (`inline-anchored` + `anchorless-fallback`) hit this code
+  // when submitReview returned 2xx but the review never persisted
+  // — describe that. ARC-287 added `inline-anchored-error`: the
+  // submit actually threw (timeout, 5xx, rate limit), not silently
+  // failed. The two failure modes deserve distinct copy so the
+  // customer reading the comment knows what to expect on retry.
+  //
+  // Sigilix PR #97 round-3 catch: NO `default` case below — let
+  // TypeScript exhaustiveness flag any future `CommentFallbackSubmitPath`
+  // variant that's missing here. Adding a new variant without a
+  // matching case will fail the `exhaustive: never` check at compile
+  // time. The pre-round-3 `default` swallowed unknown variants by
+  // falling through to the "returned 2xx" copy — that's exactly the
+  // foot-gun this guards against.
+  const reason: string = (() => {
+    switch (submitPath) {
+      case "inline-anchored-error":
+      case "anchorless-fallback-error":
+        return `> The \`${submitPath}\` submit failed with a transient GitHub error (timeout, 5xx, rate limit, etc). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`
+      case "inline-anchored":
+      case "anchorless-fallback":
+      case "phase3":
+        return `> The \`${submitPath}\` submit returned 2xx but the review never became publicly visible (PENDING / silent reject). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`
+    }
+    const exhaustive: never = submitPath
+    throw new Error(`unhandled submitPath: ${String(exhaustive)}`)
+  })()
   const header = [
     "<!-- sigilix:review-comment-fallback -->",
     "",
     "> [!WARNING]",
     "> **Sigilix couldn't post this as a formal review on GitHub.**",
     ">",
-    `> The \`${submitPath}\` submit returned 2xx but the review never became publicly visible (PENDING / silent reject). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`,
+    reason,
     ">",
     `> Re-run \`/sigilix review\` to try posting the formal review again. Run on \`${sha7}\`.`,
     "",

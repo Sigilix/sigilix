@@ -92,6 +92,31 @@ describe("dismissPriorSigilixReviews", () => {
     expect(ids.sort()).toEqual([100, 200])
   })
 
+  it("ARC-287: currentReviewId=null dismisses ALL matching priors (dismiss-then-post sentinel)", async () => {
+    // ARC-287 sentinel: when the helper fires BEFORE submitReview
+    // (the new order), there's no current review yet to exclude.
+    // `currentReviewId: null` should dismiss every matching prior
+    // Sigilix review without the per-id filter kicking in.
+    mockListPullRequestReviews.mockResolvedValue([
+      priorReview({ id: 100, state: "APPROVED" }),
+      priorReview({ id: 200, state: "CHANGES_REQUESTED" }),
+      priorReview({ id: 300, state: "APPROVED" }),
+    ])
+    const client = new GitHubClient({ token: "t" })
+
+    const out = await dismissPriorSigilixReviews({
+      ...baseArgs,
+      currentReviewId: null,
+      client,
+    })
+
+    // All three matching priors get dismissed — no exclusion.
+    expect(out).toEqual({ dismissed: 3, failed: 0 })
+    expect(mockDismissReview).toHaveBeenCalledTimes(3)
+    const ids = mockDismissReview.mock.calls.map((c) => c[3])
+    expect(ids.sort()).toEqual([100, 200, 300])
+  })
+
   it("never dismisses the just-posted review (currentReviewId is excluded)", async () => {
     mockListPullRequestReviews.mockResolvedValue([
       priorReview({ id: baseArgs.currentReviewId, state: "APPROVED" }), // our own fresh review

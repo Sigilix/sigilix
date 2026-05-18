@@ -1690,6 +1690,7 @@ export async function handlePrReviewEnsemble(
         await dismissPriorSigilixReviews({
           client, owner, repo, prNumber,
           currentReviewId: submitted.id,
+          headSha,
         })
       } catch (err) {
         console.error(JSON.stringify({
@@ -1856,6 +1857,7 @@ export async function handlePrReviewEnsemble(
         await dismissPriorSigilixReviews({
           client, owner, repo, prNumber,
           currentReviewId: submittedFallback.id,
+          headSha,
         })
       } catch (err) {
         console.error(JSON.stringify({

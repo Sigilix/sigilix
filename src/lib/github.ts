@@ -608,18 +608,35 @@ export class GitHubClient {
     owner: string,
     repo: string,
     prNumber: number,
-  ): Promise<Array<{ id: number; state: string; user: { login: string } | null; body: string }>> {
+  ): Promise<Array<{
+    id: number
+    state: string
+    user: { login: string } | null
+    body: string
+    /** SHA the review was associated with (REST returns this). Null
+     *  if the upstream payload omits or invalidates the field. Used by
+     *  the dismissal helper to name the stale commit in the dismissal
+     *  message so readers can verify which commit was dismissed. */
+    commitId: string | null
+  }>> {
     type Raw = Array<{
       id?: number
       state?: string
       user?: { login?: string } | null
       body?: string | null
+      commit_id?: string | null
     }>
     const items = await this.restGet<Raw>(
       `/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`,
     )
     if (!Array.isArray(items)) return []
-    const out: Array<{ id: number; state: string; user: { login: string } | null; body: string }> = []
+    const out: Array<{
+      id: number
+      state: string
+      user: { login: string } | null
+      body: string
+      commitId: string | null
+    }> = []
     for (const it of items) {
       if (typeof it.id !== "number" || typeof it.state !== "string") continue
       out.push({
@@ -627,6 +644,7 @@ export class GitHubClient {
         state: it.state,
         user: it.user?.login ? { login: it.user.login } : null,
         body: typeof it.body === "string" ? it.body : "",
+        commitId: typeof it.commit_id === "string" && it.commit_id.length > 0 ? it.commit_id : null,
       })
     }
     return out

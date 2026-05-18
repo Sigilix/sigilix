@@ -6,9 +6,12 @@
 // is instructed to infer language / framework / test runner from the
 // log + diff itself rather than from the prompt.
 //
-// "Sigilix" is the user-facing bot name. Internal identifiers (KV keys,
-// markers, env var names, repo names) keep `openclaw` for dedupe
-// stability and zero-config impact.
+// "Sigilix" is the user-facing bot name. HTML-comment markers (e.g.
+// `<!-- sigilix:ci-triage -->`) were rebranded from `openclaw:*` in
+// SIG-83. Internal infrastructure identifiers (KV keys, env var names,
+// queue/DO bindings, log event names) still carry the `openclaw` prefix
+// for dedupe stability and to avoid touching external dependencies in
+// the rebrand pass.
 
 export const CI_TRIAGE_PROMPT = `You are **Sigilix**, a CI failure triage assistant. Your job is to read a failing CI workflow log on a pull request and post **one** concise diagnosis comment.
 

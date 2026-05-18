@@ -87,17 +87,31 @@ describe("wrapInlineHtmlTags", () => {
 })
 
 describe("buildReviewSubmission applies wrapInlineHtmlTags to verdict prose", () => {
+  // ARC-281: APPROVE bodies no longer carry the model's summary
+  // (the renderer prints "No issues found." instead), so the
+  // body-side wrap assertion has to exercise the REQUEST_CHANGES
+  // path where the summary IS in the body. Every fixture here
+  // includes one dummy finding so the body lands in
+  // `renderRequestChangesBody` and the summary is rendered.
+  const dummyFinding: PrReviewFinding = {
+    path: "src/dummy.ts",
+    line: 1,
+    score: 2,
+    category: "style",
+    headline: "dummy",
+    body: "dummy",
+  }
   function makeVerdict(): PrReviewVerdict {
     return {
       summary:
-        "PR redesigns cmdk shortcuts with per-key <kbd> boxes plus in-input chord capture.",
+        "PR redesigns cmdk shortcuts with per-key <kbd> boxes plus in-input chord capture. Uses Next.js <Link> correctly.",
       confidence: 5,
-      confidenceReason: "All changes are clean; uses Next.js <Link> correctly.",
-      findings: [],
+      confidenceReason: "Clean.",
+      findings: [dummyFinding],
     }
   }
 
-  it("wraps un-backticked tags in the rendered body summary + confidenceReason", () => {
+  it("wraps un-backticked tags in the rendered body summary", () => {
     const submission = buildReviewSubmission({
       verdict: makeVerdict(),
       prAuthor: "daniel",
@@ -115,7 +129,7 @@ describe("buildReviewSubmission applies wrapInlineHtmlTags to verdict prose", ()
       summary: "PR uses `<Link>` from next/link.",
       confidence: 5,
       confidenceReason: "Clean.",
-      findings: [],
+      findings: [dummyFinding],
     }
     const submission = buildReviewSubmission({
       verdict,

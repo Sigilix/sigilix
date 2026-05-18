@@ -41,6 +41,8 @@ import { PR_REVIEW_SCHEMA } from "./schemas"
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
+  type CoverageRoles,
+  type DeltaBadgeCounts,
   parsePrReviewResponse,
   buildReviewSubmission,
   buildFallbackSubmission,
@@ -1517,7 +1519,11 @@ export async function handlePrReviewEnsemble(
       })),
     )
     const currentKeySet = new Set(currentFindingsForManifest.map((f) => f.key))
-    let deltaHeader: string | null = null
+    // ARC-281: pass the delta counts straight into the renderer
+    // (it draws the `**Δ:**` badge under the heading) instead of
+    // prepending a "**Δ since last review:** …" string into the
+    // summary. `null` = no prior manifest / no signal.
+    let deltaCounts: DeltaBadgeCounts | null = null
     try {
       const priorRead = await readReviewManifest(env, owner, repo, prNumber)
       if (priorRead.kind === "ok" && priorRead.manifest.findings) {
@@ -1539,8 +1545,22 @@ export async function handlePrReviewEnsemble(
           priorRead.manifest.findings,
           changedPaths,
         )
-        deltaHeader = renderDeltaHeader(delta)
-        if (deltaHeader !== null) {
+        // Promote to the renderer-facing shape. We still gate the
+        // observability log on the same "any signal" predicate as
+        // `renderDeltaBadge` so a no-change second review doesn't
+        // log a "+0 new" line.
+        const anySignal =
+          delta.newCount > 0 ||
+          delta.stillOpenCount > 0 ||
+          delta.likelyFixedCount > 0 ||
+          delta.carriedOverCount > 0
+        if (anySignal) {
+          deltaCounts = {
+            newCount: delta.newCount,
+            stillOpenCount: delta.stillOpenCount,
+            likelyFixedCount: delta.likelyFixedCount,
+            carriedOverCount: delta.carriedOverCount,
+          }
           console.log(JSON.stringify({
             event: "pr-review-delta-computed",
             owner, repo, prNumber, headSha: headSha.slice(0, 7),
@@ -1556,11 +1576,13 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    // Prepend the delta header to the summary if we have one. Goes
-    // BEFORE the summary text so a reviewer skimming the top of the
-    // sticky sees the delta first.
-    if (deltaHeader !== null) {
-      renderableVerdict.summary = `${deltaHeader}\n\n${renderableVerdict.summary}`
+    // ARC-281: specialist coverage roster for the renderer. The
+    // `**Coverage:**` line uses the dispatched/succeeded split
+    // directly — `degradedCoverage` upstream already drove prompt
+    // logic; this is purely display.
+    const coverage: CoverageRoles = {
+      dispatched: router.specialists,
+      succeeded: succeeded.map((v) => v.role),
     }
 
     // ARC-189: pre-compute the per-finding sigilix marker BEFORE
@@ -1600,12 +1622,16 @@ export async function handlePrReviewEnsemble(
       headSha,
       unanchored: renderableUnanchored,
       findingMarkers,
-      // ARC-182 (code-review C1): thread stack so the "### Stack
-      // context" sticky-summary block actually renders on ensemble
-      // reviews. Without this the block only appears on single-model
-      // path (handlePrReview) — which is the dev/legacy path. Most
-      // production reviews go through this ensemble entry point.
+      // ARC-182 (code-review C1): thread stack so the renderer can
+      // append the `_(Stacked on #N)_` parenthetical to the summary
+      // (post-ARC-281 — used to be a multi-line "### Stack context"
+      // block). Without this the parenthetical only appears on the
+      // single-model path, which is now dead.
       ...(stack.isStacked ? { stack } : {}),
+      // ARC-281: thread specialist coverage + delta counts through
+      // to the new renderer.
+      coverage,
+      delta: deltaCounts,
     })
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
@@ -1653,6 +1679,12 @@ export async function handlePrReviewEnsemble(
           prAuthor: meta.user?.login ?? null,
           headSha,
           ...(stack.isStacked ? { stack } : {}),
+          // ARC-281: keep coverage + delta consistent between the
+          // primary submit and the comment-fallback body — otherwise
+          // a customer who only sees the comment-fallback loses the
+          // coverage signal that ARC-277 surfaces on the main path.
+          coverage,
+          delta: deltaCounts,
         })
         const fallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
@@ -1802,9 +1834,14 @@ export async function handlePrReviewEnsemble(
         prAuthor: meta.user?.login ?? null,
         headSha,
         // ARC-182 (code-review C1): thread stack to the anchorless
-        // fallback as well — the stack-context block belongs in the
+        // fallback as well — the stack parenthetical belongs in the
         // body regardless of whether inline anchoring succeeded.
         ...(stack.isStacked ? { stack } : {}),
+        // ARC-281: coverage + delta survive the anchorless-fallback
+        // too, so a 422-driven body-only review reads the same way
+        // as the inline-anchored primary.
+        coverage,
+        delta: deltaCounts,
       })
       const submittedFallback = await client.submitReview(owner, repo, prNumber, fallback)
       // ARC-258 follow-up (PR #84 anomaly catch, refined PR #86):
@@ -3033,29 +3070,6 @@ export function computeFindingDelta(
     else carriedOverCount += 1
   }
   return { newCount, stillOpenCount, likelyFixedCount, carriedOverCount }
-}
-
-/**
- * Render a one-line delta header for the review body. Returns null
- * when there's nothing meaningful to show (no prior findings, no
- * deltas across categories).
- *
- * Pure; exported for unit tests.
- */
-export function renderDeltaHeader(delta: FindingDelta): string | null {
-  const { newCount, stillOpenCount, likelyFixedCount, carriedOverCount } = delta
-  // Skip the header entirely when there's no prior context AND no
-  // current findings to report against — the customer's first review
-  // doesn't need a "+0 new" line.
-  const anySignal =
-    newCount > 0 || stillOpenCount > 0 || likelyFixedCount > 0 || carriedOverCount > 0
-  if (!anySignal) return null
-  const parts: string[] = []
-  if (newCount > 0) parts.push(`+${newCount} new`)
-  if (stillOpenCount > 0) parts.push(`${stillOpenCount} still-open`)
-  if (likelyFixedCount > 0) parts.push(`${likelyFixedCount} likely-fixed`)
-  if (carriedOverCount > 0) parts.push(`${carriedOverCount} carried-over`)
-  return `**Δ since last review:** ${parts.join(" · ")}`
 }
 
 /**

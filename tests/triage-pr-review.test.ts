@@ -179,7 +179,7 @@ describe("buildReviewSubmission", () => {
   // ARC-276: APPROVE bodies now lead with an affirmative headline +
   // a one-line ensemble statement so the user sees a clear "passed"
   // signal at the top, not just the model's summary.
-  it("renders the affirmative APPROVE headline on empty findings", () => {
+  it("renders the ARC-281 APPROVE heading + 'No issues found.' on empty findings", () => {
     const empty: PrReviewVerdict = {
       summary: "Looks clean — nothing CR missed.",
       confidence: 5,
@@ -187,37 +187,48 @@ describe("buildReviewSubmission", () => {
       findings: [],
     }
     const out = buildReviewSubmission({ verdict: empty, prAuthor: "alice", headSha: "abc" })
-    expect(out.body).toContain("✅ Sigilix reviewed this PR — no issues found")
-    // CodeRabbit PR #88 catch: the line beneath the headline must
-    // be path-agnostic — formatReviewBody is shared with the Phase
-    // 3 single-shot reviewer, so an ensemble-specific claim would
-    // be factually wrong on that path.
-    expect(out.body).toContain("Sigilix reviewed the current head and found nothing worth flagging.")
-    expect(out.body).not.toContain("Four-specialist ensemble")
-    // The model's summary still appears under the affirmative lead.
-    expect(out.body).toContain("Looks clean — nothing CR missed.")
-  })
-
-  it("does NOT add the affirmative APPROVE headline when findings exist (REQUEST_CHANGES path)", () => {
-    // The REQUEST_CHANGES body uses the existing "Sigilix Summary"
-    // header — the affirmative headline is exclusive to APPROVE.
-    const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
+    // Kimi's APPROVE template: status heading + flat "No issues
+    // found." statement. The model's summary is intentionally NOT
+    // rendered on APPROVE bodies — the redesign treats a no-findings
+    // verdict as fully self-explanatory.
+    expect(out.body).toContain("## Sigilix: Approved")
+    expect(out.body).toContain("No issues found.")
+    // Pre-ARC-281 strings must not survive the redesign.
     expect(out.body).not.toContain("✅ Sigilix reviewed this PR — no issues found")
-    expect(out.body).not.toContain("Sigilix reviewed the current head and found nothing worth flagging.")
+    expect(out.body).not.toContain("nothing worth flagging")
+    expect(out.body).not.toContain("Four-specialist ensemble")
+    expect(out.body).not.toContain("### Sigilix Summary")
+    // ARC-281 explicitly drops the dismissal hint on APPROVE bodies
+    // (no review to dismiss).
+    expect(out.body).not.toContain("To dismiss this review")
   })
 
-  it("renders the dedupe marker, summary header, and confidence reason in the body", () => {
+  it("does NOT add the APPROVE heading when findings exist (REQUEST_CHANGES path)", () => {
+    const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
+    expect(out.body).not.toContain("## Sigilix: Approved")
+    expect(out.body).not.toContain("No issues found.")
+  })
+
+  it("ARC-281: REQUEST_CHANGES body has the new heading + dropped legacy strings", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("<!-- openclaw:pr-review -->")
-    expect(out.body).toContain("### Sigilix Summary")
+    // New status heading replaces "### Sigilix Summary" entirely.
+    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
+    // Summary still appears — but as its own paragraph, not under a
+    // header.
     expect(out.body).toContain(verdict.summary)
-    expect(out.body).toContain(verdict.confidenceReason)
-    // Greptile-style format: no numerical confidence score in the body,
-    // no `[BLOCKER]` / `[READY]` tag, no "Findings: N (max score N)"
-    // footer. Findings live as inline comments below.
+    // confidenceReason is intentionally dropped from the body. The
+    // field stays on the type for inline-comment rendering, but the
+    // body no longer echoes it.
+    expect(out.body).not.toContain(verdict.confidenceReason)
+    expect(out.body).not.toContain("### Sigilix Summary")
+    // Old format markers also gone.
     expect(out.body).not.toContain("[BLOCKER]")
     expect(out.body).not.toContain("**Confidence:**")
     expect(out.body).not.toContain("max score")
+    // Dismissal hint is now required on REQUEST_CHANGES.
+    expect(out.body).toContain("To dismiss this review")
+    expect(out.body).toContain("@sigilix dismiss")
   })
 
   it("body is prose-only — no hardcoded author dialogue", () => {
@@ -231,12 +242,18 @@ describe("buildReviewSubmission", () => {
     expect(out.body).not.toMatch(/Approving\.$/m)
   })
 
-  it("renders the finding-count pointer when there are findings", () => {
+  it("ARC-281: the legacy '_N findings inline below._' pointer is removed entirely", () => {
+    // Pre-ARC-281, REQUEST_CHANGES bodies carried a redundant
+    // "_1 finding inline below._" line. Kimi's redesign drops it
+    // (the heading "## Sigilix: 1 finding" already states the
+    // count). This guards against re-adding it.
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
-    expect(out.body).toMatch(/1 finding inline below/i)
+    expect(out.body).not.toMatch(/inline below/i)
+    // The count IS in the heading though.
+    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
   })
 
-  it("omits the finding-count pointer when there are zero findings", () => {
+  it("omits the count + Fix Plan + dismissal hint when there are zero findings (APPROVE path)", () => {
     const empty: PrReviewVerdict = {
       summary: "Looks clean.",
       confidence: 5,
@@ -245,6 +262,8 @@ describe("buildReviewSubmission", () => {
     }
     const out = buildReviewSubmission({ verdict: empty, prAuthor: "alice", headSha: "abc" })
     expect(out.body).not.toMatch(/inline below/)
+    expect(out.body).not.toContain("### Fix Plan")
+    expect(out.body).not.toContain("To dismiss this review")
   })
 
   it("does not @-mention bot authors", () => {
@@ -387,11 +406,28 @@ describe("provenance footer (ARC-184)", () => {
   })
 
   it("WRITER-SIDE 65k CAP: when summary is huge, summary truncates but footer stays intact", () => {
+    // ARC-281: APPROVE bodies no longer render the model's summary
+    // (the renderer prints "No issues found." instead), so the cap
+    // test has to exercise the REQUEST_CHANGES path where the
+    // summary IS in the body. Use a fixture with one finding so the
+    // body goes through `renderRequestChangesBody`. Bump summary to
+    // > 65k since confidenceReason is no longer rendered and the
+    // (former) 64k summary + 2k confidenceReason combo now fits
+    // under the cap.
     const huge: PrReviewVerdict = {
-      summary: "x".repeat(64000),
+      summary: "x".repeat(66000),
       confidence: 5,
       confidenceReason: "y".repeat(2000),
-      findings: [],
+      findings: [
+        {
+          path: "src/foo.ts",
+          line: 10,
+          headline: "headline",
+          body: "body",
+          score: 3,
+          category: "logic",
+        },
+      ],
     }
     const out = buildReviewSubmission({ verdict: huge, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
     const body = out.body ?? ""

@@ -51,23 +51,34 @@ describe("buildFallbackBody", () => {
     expect(body.startsWith("<!-- openclaw:pr-review -->")).toBe(true)
   })
 
-  it("renders summary + confidenceReason in the prose section", () => {
+  it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
     const body = buildFallbackBody(baseVerdict, [])
-    expect(body).toContain("### Sigilix Summary")
+    // New status heading replaces "### Sigilix Summary".
+    expect(body).toMatch(/^## Sigilix: \d+ finding/m)
+    // Summary survives — Kimi keeps it as a flat paragraph under
+    // the heading.
     expect(body).toContain("One real bug.")
-    expect(body).toContain("Clear off-by-one.")
+    // confidenceReason is no longer rendered in the body per Kimi's
+    // redesign (it routinely echoes the summary).
+    expect(body).not.toContain("Clear off-by-one.")
+    expect(body).not.toContain("### Sigilix Summary")
   })
 
-  it("falls back to standard prose body when there are zero findings", () => {
+  it("ARC-281: APPROVE path renders 'No issues found.' + omits findings section", () => {
     const body = buildFallbackBody(
       { ...baseVerdict, findings: [] },
       []
     )
-    // No `### Findings (N)` header when nothing to render.
+    // No findings list of any kind.
     expect(body).not.toContain("### Findings")
-    // Still wraps the marker + summary.
+    expect(body).not.toContain("### Additional findings")
+    expect(body).not.toContain("### Fix Plan")
+    // ARC-281 APPROVE shell.
     expect(body).toContain("<!-- openclaw:pr-review -->")
-    expect(body).toContain("### Sigilix Summary")
+    expect(body).toContain("## Sigilix: Approved")
+    expect(body).toContain("No issues found.")
+    // Legacy strings stay out.
+    expect(body).not.toContain("### Sigilix Summary")
   })
 
   it("groups findings by file, sorts paths alphabetically", () => {
@@ -113,7 +124,13 @@ describe("buildFallbackBody", () => {
     )
     expect(body).toContain("anchored-finding")
     expect(body).toContain("unanchored-finding")
-    expect(body).toContain("### Findings (2)")
+    // ARC-281: the anchorless-fallback path now pours everything
+    // into the "Additional findings" section (since none of the
+    // findings landed as inline comments). Heading count is in the
+    // top-of-body status heading, not on the section.
+    expect(body).toContain("### Additional findings (could not anchor to diff)")
+    expect(body).toMatch(/^## Sigilix: 2 findings/m)
+    expect(body).not.toContain("### Findings (2)")
   })
 
   it("renders a multi-line range when startLine differs from line", () => {
@@ -151,16 +168,18 @@ describe("buildFallbackBody", () => {
     expect(body).toContain("  second line")
   })
 
-  it("omits confidenceReason line when empty", () => {
-    const body = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
-    // confidenceReason is the only non-summary content above ### Findings;
-    // when blank, the layout should not include an empty line for it.
-    const lines = body.split("\n")
-    const summaryIdx = lines.findIndex((l) => l === "One real bug.")
-    expect(summaryIdx).toBeGreaterThan(-1)
-    // The line after summary should be blank, then ### Findings.
-    expect(lines[summaryIdx + 1]).toBe("")
-    expect(lines[summaryIdx + 2]).toBe("### Findings (1)")
+  it("ARC-281: confidenceReason is never rendered in the body, even when populated", () => {
+    // Pre-ARC-281 the renderer emitted `verdict.confidenceReason`
+    // as a second paragraph; Kimi's redesign drops it (it
+    // routinely echoes the summary). Whether the field is empty or
+    // populated, the body must not contain it.
+    const populated = buildFallbackBody(baseVerdict, [])
+    expect(populated).not.toContain("Clear off-by-one.")
+    const blank = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
+    // Summary still renders; layout flows directly into the
+    // additional-findings section per Kimi's spec.
+    expect(blank).toContain("One real bug.")
+    expect(blank).toContain("### Additional findings (could not anchor to diff)")
   })
 })
 
@@ -295,16 +314,19 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     expect(submission.event).toBe("APPROVE")
   })
 
-  it("body unchanged on the common path when unanchored is empty / omitted", () => {
-    // Default `unanchored = []` keeps the prior behaviour: body has no
-    // "Additional findings" section, just the inline-count pointer.
+  it("ARC-281: common path (empty unanchored) renders heading + summary + Fix Plan, no Additional findings section", () => {
+    // With no unanchored findings, the body skips the
+    // "Additional findings" section entirely. The inline-count
+    // pointer ("_N findings inline below._") was removed in
+    // ARC-281 — the heading already states the count.
     const submission = buildReviewSubmission({
       verdict: baseVerdict,
       prAuthor: null,
       headSha: "deadbeef",
     })
     expect(submission.body).not.toContain("Additional findings")
-    expect(submission.body).toContain("1 finding inline below")
+    expect(submission.body).not.toMatch(/inline below/i)
+    expect(submission.body).toMatch(/^## Sigilix: 1 finding/m)
   })
 })
 

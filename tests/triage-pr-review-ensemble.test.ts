@@ -431,25 +431,37 @@ describe("Phase 4a.3 — timeout schedule", () => {
       .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
   })
 
-  it("uses the post-ARC-283 timeouts (synth no-timeout Phase A)", () => {
+  it("uses the post-ARC-283 timeouts (synth no-timeout Phase A, Sigilix-PR-#94 fix-up)", () => {
     // ARC-283 Phase A: synth + retry + headroom bumped after PR #93's
     // own review timed out at 180s on a 900-line diff. Sigilix's
     // product positioning is "yes cost more time for BETTER reviews"
     // — timing out when specialists already returned cleanly is a
-    // non-starter. New budget chain stays under Cloudflare's 900s
-    // queue-consumer ceiling.
+    // non-starter. Sigilix's own PR #94 self-review caught a 5s
+    // overshoot (pre-flight not budgeted into headroom); these
+    // values are the post-catch corrected set.
     expect(SPECIALIST_TIMEOUT_MS).toBe(270_000)
     expect(SYNTHESIZER_TIMEOUT_MS).toBe(420_000)
-    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBe(170_000)
-    expect(RESERVED_HEADROOM_MS).toBe(190_000)
-    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(890_000)
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBe(160_000)
+    expect(RESERVED_HEADROOM_MS).toBe(195_000)
+    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(895_000)
     expect(RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBe(15_000)
-    // Static invariant — same shape as the module-load check.
+    // Static invariant 1 — same shape as the module-load check.
     expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
       .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
+    // Static invariant 2 — Sigilix's PR #94 catch: pre-flight + retry
+    // + finalize must all fit inside the headroom envelope. Pre-flight
+    // runs INSIDE the orchestrator timer (orchTimer starts before
+    // preflightRetrieval), so its budget has to come out of headroom.
+    const FINALIZE_RESERVE_MS = 20_000
+    expect(
+      RETRIEVAL_PREFLIGHT_TIMEOUT_MS +
+        SYNTHESIZER_RETRY_TIMEOUT_MS +
+        FINALIZE_RESERVE_MS,
+    ).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
     // Queue consumer ceiling — ORCHESTRATOR must stay strictly under
     // Cloudflare Queues' 900s consumer wall. Phase B (DO-alarm-driven
-    // synth) lifts this ceiling entirely; until then, 890 is the cap.
+    // synth) lifts this ceiling entirely; until then, the orchestrator
+    // is the constraint.
     expect(ORCHESTRATOR_TIMEOUT_MS).toBeLessThan(900_000)
   })
 

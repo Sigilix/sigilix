@@ -193,36 +193,42 @@ export const SYNTHESIZER_TIMEOUT_MS = 420_000
 // cleanly) but useless when primary timed out on actual model
 // latency — the retry would just timeout again in 30s.
 //
-// Post-ARC-283: 170s. A retry that fires after a primary timeout
+// Post-ARC-283: 160s. A retry that fires after a primary timeout
 // now has a real shot at completing; a retry that fires after a
 // parse/provenance failure still completes fast (those don't need
-// the full budget).
+// the full budget). Trimmed from 170s → 160s on Sigilix's own
+// PR #94 review catch to make room for pre-flight retrieval in
+// the headroom envelope (see invariant block below).
 //
-// Budget math:
-//   SPECIALIST (270) + SYNTHESIZER (420) + RESERVED_HEADROOM (190) = 880
-//   Inside the 190s headroom: retry (170) + finalize reserve (20).
-//   So `RESERVED_HEADROOM_MS` is NOT spent in addition to the retry —
-//   the retry is carved out of it. The second module-load invariant
-//   below verifies retry + finalize ≤ headroom.
-export const SYNTHESIZER_RETRY_TIMEOUT_MS = 170_000
+// Budget math (post-Sigilix-PR-#94-catch):
+//   SPECIALIST (270) + SYNTHESIZER (420) + RESERVED_HEADROOM (195) = 885
+//   Inside the 195s headroom: pre-flight (15) + retry (160) + finalize (20).
+//   So `RESERVED_HEADROOM_MS` is NOT spent in addition to retry —
+//   pre-flight, retry, AND finalize all carve out of it. The second
+//   module-load invariant below verifies that arithmetic.
+export const SYNTHESIZER_RETRY_TIMEOUT_MS = 160_000
 // Reserved for pre-flight retrieval + diff parse + stale-head guards +
 // telemetry write — AND, post-ARC-278, for the synth retry call when
 // it fires. The orchestrator must always have at least this much
 // headroom beyond (specialist + synth) so a slow Vectorize round-trip
 // doesn't eat into the synth budget.
 //
-// ARC-283: bumped 40s → 190s to give the 170s synth retry real room
-// inside the headroom envelope. The pre-flight overhead (retrieval,
-// diff parse, stale-head, telemetry) sits in the remaining ~20s.
-export const RESERVED_HEADROOM_MS = 190_000
-// ARC-283: 270 + 420 + 190 = 880, with 10s slack inside the
+// ARC-283 + Sigilix PR #94 catch: bumped 40s → 195s. The 195s budget
+// breakdown: pre-flight retrieval (15s, see RETRIEVAL_PREFLIGHT_TIMEOUT_MS) +
+// synth retry (160s) + finalize reserve (20s). Pre-Sigilix-catch
+// version was 190s — short by exactly the 15s pre-flight, which
+// caused worst-case wall-clock to overshoot the orchestrator by 5s
+// and abort the run during finalize (reintroducing the very failure
+// mode ARC-283 was meant to eliminate).
+export const RESERVED_HEADROOM_MS = 195_000
+// ARC-283: 270 + 420 + 195 = 885, with 10s slack inside the
 // orchestrator. Cloudflare queue consumer ceiling is 900s, so the
-// new 890s budget stays just inside the platform limit while
-// extending the per-review wall-clock from 8.2 min → 14.8 min.
+// new 895s budget stays just inside the platform limit while
+// extending the per-review wall-clock from 8.2 min → 14.9 min.
 // Phase B (DO-alarm-driven synth) lifts the queue ceiling entirely;
-// tracked in ARC-283. For now, 890s comfortably absorbs the diffs
+// tracked in ARC-283. For now, 895s comfortably absorbs the diffs
 // that pre-ARC-283 was burning out on.
-export const ORCHESTRATOR_TIMEOUT_MS = 890_000
+export const ORCHESTRATOR_TIMEOUT_MS = 895_000
 // Cap the pre-flight Vectorize round-trip so a slow retrieval can't
 // silently consume the synth budget. Failed pre-flight is non-fatal
 // per v3.1 §8 — specialists fall back to empty snapshot.
@@ -256,14 +262,27 @@ if (SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS > ORCH
       `must be ≤ ORCHESTRATOR_TIMEOUT_MS (${ORCHESTRATOR_TIMEOUT_MS}).`,
   )
 }
-// ARC-278 + ARC-283 retry budget invariant — the synth retry takes
-// its time out of RESERVED_HEADROOM_MS (NOT a new budget line).
-// Verify that even if retry + finalize both use their fair share,
-// we don't blow the headroom envelope. Pre-ARC-283 finalize was
-// budgeted at 5s; bumped to 20s to defend against slower telemetry
-// writes / daily-budget increments / cache writes when synth
-// produced a large finding set (the same kind of run that pushed
-// us into ARC-283 territory in the first place).
+// ARC-278 + ARC-283 retry budget invariant — pre-flight retrieval +
+// synth retry + finalize ALL share the RESERVED_HEADROOM_MS envelope.
+// The orchestrator's wall-clock budget is laid out as:
+//
+//   [ pre-flight ] [ specialists (parallel) ] [ synth primary ]
+//                                              [ synth retry  ]
+//                                              [ finalize     ]
+//
+// Pre-flight runs INSIDE the orchestrator timer (orchTimer starts
+// BEFORE preflightRetrieval — verified by tracing the orchCtrl
+// usage). It does NOT extend specialist/synth — but it DOES consume
+// orchestrator wall-clock, so it has to be charged against headroom.
+//
+// Sigilix's PR #94 self-review caught the pre-ARC-283-fix-up version
+// (HEADROOM=190) missing the 15s pre-flight allowance — worst-case
+// wall-clock was 895s vs 890s orchestrator, aborting the run during
+// finalize. The third invariant below regression-guards that math.
+//
+// Pre-ARC-283 finalize was budgeted at 5s; ARC-283 bumped to 20s to
+// defend against slower telemetry writes / daily-budget increments /
+// cache writes when synth produces a large finding set.
 const SYNTH_RETRY_FINALIZE_RESERVE_MS = 20_000
 if (SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS > RESERVED_HEADROOM_MS) {
   throw new Error(
@@ -271,6 +290,39 @@ if (SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS > RESERVED_HE
       `SYNTHESIZER_RETRY_TIMEOUT_MS (${SYNTHESIZER_RETRY_TIMEOUT_MS}) + ` +
       `SYNTH_RETRY_FINALIZE_RESERVE_MS (${SYNTH_RETRY_FINALIZE_RESERVE_MS}) ` +
       `must be ≤ RESERVED_HEADROOM_MS (${RESERVED_HEADROOM_MS}).`,
+  )
+}
+// Sigilix's PR #94 self-review catch — pre-flight is the third
+// consumer of RESERVED_HEADROOM_MS alongside retry + finalize.
+// Without this invariant, a worst-case run can blow the orchestrator
+// budget by exactly RETRIEVAL_PREFLIGHT_TIMEOUT_MS, aborting the
+// review during finalize.
+if (
+  RETRIEVAL_PREFLIGHT_TIMEOUT_MS +
+    SYNTHESIZER_RETRY_TIMEOUT_MS +
+    SYNTH_RETRY_FINALIZE_RESERVE_MS >
+  RESERVED_HEADROOM_MS
+) {
+  throw new Error(
+    `[ensemble] headroom-envelope invariant violated: ` +
+      `RETRIEVAL_PREFLIGHT_TIMEOUT_MS (${RETRIEVAL_PREFLIGHT_TIMEOUT_MS}) + ` +
+      `SYNTHESIZER_RETRY_TIMEOUT_MS (${SYNTHESIZER_RETRY_TIMEOUT_MS}) + ` +
+      `SYNTH_RETRY_FINALIZE_RESERVE_MS (${SYNTH_RETRY_FINALIZE_RESERVE_MS}) ` +
+      `must be ≤ RESERVED_HEADROOM_MS (${RESERVED_HEADROOM_MS}).`,
+  )
+}
+// Cloudflare Queues consumer wall — the entire orchestrator runs
+// inside the queue consumer's request handler, which the platform
+// caps at 900s. Tracked separately from the orchestrator invariant
+// because a future bump that ignores the platform ceiling would
+// silently lose every review on production.
+const CF_QUEUE_CONSUMER_CEILING_MS = 900_000
+if (ORCHESTRATOR_TIMEOUT_MS >= CF_QUEUE_CONSUMER_CEILING_MS) {
+  throw new Error(
+    `[ensemble] queue-ceiling invariant violated: ` +
+      `ORCHESTRATOR_TIMEOUT_MS (${ORCHESTRATOR_TIMEOUT_MS}) ` +
+      `must be < CF_QUEUE_CONSUMER_CEILING_MS (${CF_QUEUE_CONSUMER_CEILING_MS}). ` +
+      `Phase B (DO-alarm-driven synth, tracked in ARC-283) lifts this ceiling entirely.`,
   )
 }
 

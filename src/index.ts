@@ -808,9 +808,18 @@ async function postSlashCommandAck(
  *                    the customer's perspective the review IS done.
  *                    A `skipped` conclusion would mislead them into
  *                    thinking nothing was reviewed.
+ *   - `errored`    → `failure`. Phase 3 reached submit + verify and
+ *                    the verify-after-submit caught a silent reject
+ *                    (PENDING / missing from the public list).
+ *                    Previously this case returned `skipped` and
+ *                    therefore showed `success` "Review posted" with
+ *                    no review behind it — the silent-success bug
+ *                    reproduced on PRs #84 / #86 / #87. The
+ *                    distinct `errored` status now lets the Check
+ *                    Run reflect the truth.
  */
 function mapPhase3StatusToCheckConclusion(
-  status: "posted" | "skipped" | "stale_head",
+  status: "posted" | "skipped" | "stale_head" | "errored",
 ): SigilixCheckConclusion {
   switch (status) {
     case "posted":
@@ -819,6 +828,8 @@ function mapPhase3StatusToCheckConclusion(
       return "success"
     case "stale_head":
       return "skipped"
+    case "errored":
+      return "failure"
   }
 }
 

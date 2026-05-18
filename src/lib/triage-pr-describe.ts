@@ -25,7 +25,7 @@ import { parseFirstJsonObject } from "./json-extract"
 import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
-import { GitHubClient } from "./github"
+import { GitHubClient, GitHubHttpError } from "./github"
 import {
   loadSigilixConfig,
   loadSigilixConfigRaw,
@@ -779,12 +779,28 @@ async function buildClient(env: Env, installationId: number): Promise<GitHubClie
 
 /**
  * Best-effort extraction of a numeric HTTP status from an error.
- * Mirrors triage-pr-improve's helper (the GitHubClient throws plain
- * Errors with the status embedded in the message string).
+ *
+ * CodeRabbit catch on PR #87: the prior regex `/\b(\d{3})\b/` would
+ * grab the first 3-digit token anywhere in the error message,
+ * including digits embedded in URL paths (e.g.
+ * `"GET /repos/foo/bar/pulls/422 → 503"` could be classified as
+ * `422` and silently routed to the 4xx no-retry branch).
+ *
+ * Two-tier extraction:
+ *   1. If the error is a typed `GitHubHttpError`, trust its `status`
+ *      field directly. This covers every call site that funnels
+ *      through `GitHubClient.request`.
+ *   2. Else fall back to a regex anchored on the literal `HTTP`
+ *      prefix the client writes into thrown-error messages, so the
+ *      number we extract was meant to be a status, not part of a
+ *      path.
+ *
+ * Returns null when neither extraction succeeds.
  */
 function readHttpStatus(err: unknown): number | null {
+  if (err instanceof GitHubHttpError) return err.status
   if (!(err instanceof Error)) return null
-  const m = err.message.match(/\b(\d{3})\b/)
+  const m = err.message.match(/\bHTTP\s+(\d{3})\b/)
   if (!m) return null
   const n = Number(m[1])
   return Number.isFinite(n) ? n : null

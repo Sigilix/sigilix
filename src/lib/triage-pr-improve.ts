@@ -20,6 +20,7 @@ import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import {
   GitHubClient,
+  GitHubHttpError,
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
@@ -336,8 +337,15 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
  * pattern and tolerates other shapes.
  */
 function readHttpStatus(err: unknown): number | null {
+  // CodeRabbit catch on PR #87: prefer the typed `GitHubHttpError.status`
+  // field over regex-matching the message string. The previous regex
+  // `/\b(\d{3})\b/` could match digits from a URL path
+  // (e.g. `/repos/.../pulls/422`) and silently misclassify a 5xx as
+  // 4xx (or vice versa). Falling back to a `HTTP <NNN>`-anchored regex
+  // keeps the fallback narrow enough to avoid URL-path false matches.
+  if (err instanceof GitHubHttpError) return err.status
   if (!(err instanceof Error)) return null
-  const m = err.message.match(/\b(\d{3})\b/)
+  const m = err.message.match(/\bHTTP\s+(\d{3})\b/)
   if (!m) return null
   const n = Number(m[1])
   return Number.isFinite(n) ? n : null

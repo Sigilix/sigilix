@@ -43,6 +43,7 @@ vi.mock("../src/lib/sigilix-config", async () => {
   }
 })
 
+import { GitHubHttpError } from "../src/lib/github"
 import {
   renderDescribeComment,
   renderDisabledComment,
@@ -654,7 +655,7 @@ describe("handlePrDescribe — failure paths", () => {
     mockGenerate.mockResolvedValue(JSON.stringify({
       summary: "x".repeat(20), body: "y".repeat(100),
     }))
-    mockCreateIssueComment.mockRejectedValueOnce(new Error("GitHub: 502 Bad Gateway"))
+    mockCreateIssueComment.mockRejectedValueOnce(new GitHubHttpError(502, "HTTP 502 Bad Gateway"))
     const { kv } = makeKvStub()
     await expect(handlePrDescribe({
       owner: "acme", repo: "site", prNumber: 42, installationId: 1,
@@ -668,7 +669,7 @@ describe("handlePrDescribe — failure paths", () => {
     mockGenerate.mockResolvedValue(JSON.stringify({
       summary: "x".repeat(20), body: "y".repeat(100),
     }))
-    mockCreateIssueComment.mockRejectedValueOnce(new Error("GitHub: 422 Unprocessable"))
+    mockCreateIssueComment.mockRejectedValueOnce(new GitHubHttpError(422, "HTTP 422 Unprocessable"))
     const { kv } = makeKvStub()
     await expect(handlePrDescribe({
       owner: "acme", repo: "site", prNumber: 42, installationId: 1,
@@ -680,7 +681,7 @@ describe("handlePrDescribe — failure paths", () => {
 
   it("swallows failure-comment post errors (no nested error spiral)", async () => {
     mockGenerate.mockResolvedValue("garbage")
-    mockCreateIssueComment.mockRejectedValueOnce(new Error("GitHub: 503"))
+    mockCreateIssueComment.mockRejectedValueOnce(new GitHubHttpError(503, "HTTP 503"))
     const { kv } = makeKvStub()
     await expect(handlePrDescribe({
       owner: "acme", repo: "site", prNumber: 42, installationId: 1,
@@ -854,7 +855,7 @@ describe("handlePrDescribe — disclosure boundary (external mode adversarial, s
 describe("handlePrDescribe — best-effort post telemetry carries mode (Codex spec catch)", () => {
   it("logs pr-describe-best-effort-post-failed with mode dimension when failure-comment post fails", async () => {
     mockGenerate.mockResolvedValue("garbage")
-    mockCreateIssueComment.mockRejectedValueOnce(new Error("GitHub: 503"))
+    mockCreateIssueComment.mockRejectedValueOnce(new GitHubHttpError(503, "HTTP 503"))
     const logSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     const { kv } = makeKvStub()
     await handlePrDescribe({
@@ -1101,7 +1102,7 @@ describe("handlePrDescribe — apply: true failure paths (ARC-264)", () => {
       summary: "x".repeat(20),
       body: "y".repeat(100),
     }))
-    mockUpdatePullRequestBody.mockRejectedValueOnce(new Error("GitHub: 502 Bad Gateway"))
+    mockUpdatePullRequestBody.mockRejectedValueOnce(new GitHubHttpError(502, "HTTP 502 Bad Gateway"))
     const { kv } = makeKvStub()
     await expect(handlePrDescribe({
       owner: "acme", repo: "site", prNumber: 42, installationId: 1,
@@ -1116,7 +1117,7 @@ describe("handlePrDescribe — apply: true failure paths (ARC-264)", () => {
       summary: "x".repeat(20),
       body: "y".repeat(100),
     }))
-    mockUpdatePullRequestBody.mockRejectedValueOnce(new Error("GitHub: 422 Unprocessable"))
+    mockUpdatePullRequestBody.mockRejectedValueOnce(new GitHubHttpError(422, "HTTP 422 Unprocessable"))
     const { kv } = makeKvStub()
     await expect(handlePrDescribe({
       owner: "acme", repo: "site", prNumber: 42, installationId: 1,
@@ -1230,7 +1231,7 @@ describe("handlePrDescribe — apply: true failure paths (ARC-264)", () => {
       title: "Add widget",
       body: "Stale meta body.",
     })
-    mockGetPullRequest.mockRejectedValueOnce(new Error("GitHub: 503"))
+    mockGetPullRequest.mockRejectedValueOnce(new GitHubHttpError(503, "HTTP 503"))
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
     const { kv } = makeKvStub()
     await handlePrDescribe({

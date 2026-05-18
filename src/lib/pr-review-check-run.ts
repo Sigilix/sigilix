@@ -123,21 +123,36 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
   }
 }
 
+/**
+ * ARC-276: payload threaded from the dispatcher's posted-path so the
+ * Check Run title can render the customer-visible verdict (Approved
+ * vs N findings). Only meaningful when `conclusion === "success"`
+ * and a review was actually posted; ignored otherwise.
+ */
+export interface ReviewCheckMeta {
+  event: "APPROVE" | "REQUEST_CHANGES"
+  findingsCount: number
+}
+
 interface CompleteArgs {
   handle: InProgressCheckRun | null
   conclusion: SigilixCheckConclusion
+  /** ARC-276: optional; populated by the dispatcher on posted runs. */
+  reviewMeta?: ReviewCheckMeta
 }
 
 /**
  * Transition the check run from `in_progress` to `completed` with
  * the given conclusion. No-op when handle is null (creation failed
- * or was skipped). Output copy is derived from the conclusion so
- * the customer-visible title/summary stays consistent.
+ * or was skipped). Output copy is derived from the conclusion +
+ * (when present) the review verdict, so the customer-visible
+ * title differentiates "Approved — no issues found" from "3
+ * findings posted" rather than a generic "Review posted."
  */
 export async function completeCheckRun(args: CompleteArgs): Promise<void> {
-  const { handle, conclusion } = args
+  const { handle, conclusion, reviewMeta } = args
   if (handle === null) return
-  const output = renderOutputForConclusion(conclusion)
+  const output = renderOutputForConclusion(conclusion, reviewMeta)
   try {
     await handle.client.updateCheckRun(handle.owner, handle.repo, handle.id, {
       status: "completed",
@@ -221,9 +236,35 @@ async function cancelStaleInProgressChecks(args: {
   }
 }
 
-function renderOutputForConclusion(conclusion: SigilixCheckConclusion): { title: string; summary: string } {
+/**
+ * Exported for direct unit tests of the title/summary mapping.
+ * The dispatcher calls `completeCheckRun` which wraps this, but the
+ * pure mapping is the contract that ARC-276 codifies.
+ */
+export function renderOutputForConclusion(
+  conclusion: SigilixCheckConclusion,
+  reviewMeta?: ReviewCheckMeta,
+): { title: string; summary: string } {
   switch (conclusion) {
     case "success":
+      // ARC-276: when the dispatcher threads `reviewMeta`, the Check
+      // Run title reflects the verdict directly. Without it (e.g.,
+      // legacy callers + dedupe-hit skip paths), the generic
+      // "Review posted" copy still applies.
+      if (reviewMeta) {
+        if (reviewMeta.event === "APPROVE") {
+          return {
+            title: "Approved — no issues found",
+            summary: "Sigilix reviewed this PR with the four-specialist ensemble and posted an APPROVE review. Open the conversation tab to read the summary.",
+          }
+        }
+        const n = reviewMeta.findingsCount
+        const noun = n === 1 ? "finding" : "findings"
+        return {
+          title: `${n} ${noun} — changes requested`,
+          summary: `Sigilix reviewed this PR and posted a REQUEST_CHANGES review with ${n} ${noun}. Open the conversation tab to view inline comments.`,
+        }
+      }
       return {
         title: "Review posted",
         summary: "Sigilix posted a review on this PR. Open the conversation tab to view inline findings.",

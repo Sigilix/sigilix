@@ -1,54 +1,50 @@
-// ARC-258 — dispatcher-level check-run lifecycle test.
+// ARC-258 + ARC-280 — dispatcher-level check-run lifecycle test.
 //
 // Validates that `dispatchJob`'s `pr-review` case picks the right
-// final conclusion across the routing matrix. This is the load-
-// bearing piece of ARC-258 because the prior PENDING-review
-// approach was customer-invisible and the in-ensemble Check Run
-// approach contradicted Phase 3 fallback outcomes (CodeRabbit H1
-// catch on commit 4). The fix moves the lifecycle to the
-// dispatcher so a single owner can reconcile ensemble + Phase 3
-// results.
+// final conclusion from the ensemble's result. ARC-280 simplified
+// this dramatically: Phase 3 (`handlePrReview`) is gone, and the
+// `routeReview` decision layer collapsed to an inline sensitive-
+// repo skip check. The dispatcher now reads exactly one outcome —
+// the ensemble's — and maps it to the Check Run conclusion.
 //
 // Matrix covered:
-//   - ensemble-post posted → success
-//   - ensemble-post stale_head → skipped, NO Phase 3 fallback
-//   - ensemble-post errored, Phase 3 posted → success (H1 fix)
-//   - ensemble-post errored, Phase 3 stale_head → skipped
-//   - ensemble-shadow posted → success
-//   - Phase 3 only path: posted → success
+//   - ensemble posted (real review) → success
+//   - ensemble posted with reviewMeta.surface=comment → failure
+//     (ARC-279: comment fallback fired; customer sees a comment
+//     instead of a formal review)
+//   - ensemble stale_head → skipped
+//   - ensemble errored → failure
+//   - ensemble skipped (legitimate, e.g., label gate) → success
 //   - sensitive-repo skip → no check created
 //   - throw mid-pipeline → failure
+//   - null handle (createCheckRun failed/skipped) → completeCheckRun
+//     still called and no-ops
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const {
-  routeReviewMock,
   handlePrReviewEnsembleMock,
-  handlePrReviewMock,
   startInProgressCheckRunMock,
   completeCheckRunMock,
+  isRepoSensitiveMock,
 } = vi.hoisted(() => ({
-  routeReviewMock: vi.fn(),
   handlePrReviewEnsembleMock: vi.fn(),
-  handlePrReviewMock: vi.fn(),
   startInProgressCheckRunMock: vi.fn(),
   completeCheckRunMock: vi.fn(),
+  isRepoSensitiveMock: vi.fn(() => false),
 }))
 
 vi.mock("../src/lib/triage-pr-review-ensemble", () => ({
-  routeReview: routeReviewMock,
   handlePrReviewEnsemble: handlePrReviewEnsembleMock,
 }))
-vi.mock("../src/lib/triage-pr-review", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/triage-pr-review")>("../src/lib/triage-pr-review")
-  return { ...actual, handlePrReview: handlePrReviewMock }
-})
-// ARC-258 follow-up: dispatchJob no longer imports a warmup helper
-// for pr-review (the warmup callout now lives inside pr-overview).
 vi.mock("../src/lib/pr-review-check-run", () => ({
   startInProgressCheckRun: startInProgressCheckRunMock,
   completeCheckRun: completeCheckRunMock,
 }))
+vi.mock("../src/lib/repo-policy", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/repo-policy")>("../src/lib/repo-policy")
+  return { ...actual, isRepoSensitive: isRepoSensitiveMock }
+})
 
 import { dispatchJob } from "../src/index"
 import type { Env, JobMessage } from "../src/index"
@@ -72,138 +68,134 @@ const job: JobMessage = {
 const HANDLE = { id: 7777 } as never
 
 beforeEach(() => {
-  routeReviewMock.mockReset()
   handlePrReviewEnsembleMock.mockReset()
-  handlePrReviewMock.mockReset()
   startInProgressCheckRunMock.mockReset().mockResolvedValue(HANDLE)
   completeCheckRunMock.mockReset().mockResolvedValue(undefined)
+  isRepoSensitiveMock.mockReset().mockReturnValue(false)
   vi.spyOn(console, "log").mockImplementation(() => undefined)
   vi.spyOn(console, "warn").mockImplementation(() => undefined)
   vi.spyOn(console, "error").mockImplementation(() => undefined)
 })
 
-describe("dispatchJob — ARC-258 check-run lifecycle", () => {
-  it("ensemble-post posted → completeCheckRun(success)", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
-    handlePrReviewEnsembleMock.mockResolvedValue({ status: "posted", telemetry: {} })
+describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
+  it("ensemble posted (real review) → completeCheckRun(success) with reviewMeta", async () => {
+    const reviewMeta = { event: "APPROVE" as const, findingsCount: 0 }
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta,
+    })
 
     await dispatchJob(job, makeEnv())
 
     expect(startInProgressCheckRunMock).toHaveBeenCalledTimes(1)
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "success",
+      handle: HANDLE,
+      conclusion: "success",
+      reviewMeta,
     })
-    expect(handlePrReviewMock).not.toHaveBeenCalled()
   })
 
-  it("ensemble-post stale_head → completeCheckRun(skipped), NO Phase 3", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
+  // ARC-279: when the ensemble had to use the comment fallback
+  // (formal review submit silently rejected), the Check Run reflects
+  // that the normal pipeline didn't run — even though synth's body
+  // posted as a PR comment. `failure` + reviewMeta.surface="comment"
+  // routes to the "see PR comment" title.
+  it("ensemble posted with surface=comment → completeCheckRun(failure) with reviewMeta", async () => {
+    const reviewMeta = {
+      event: "REQUEST_CHANGES" as const,
+      findingsCount: 3,
+      surface: "comment" as const,
+    }
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta,
+    })
+
+    await dispatchJob(job, makeEnv())
+
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: HANDLE,
+      conclusion: "failure",
+      reviewMeta,
+    })
+  })
+
+  it("ensemble stale_head → completeCheckRun(skipped)", async () => {
     handlePrReviewEnsembleMock.mockResolvedValue({ status: "stale_head", telemetry: {} })
 
     await dispatchJob(job, makeEnv())
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "skipped",
+      handle: HANDLE,
+      conclusion: "skipped",
     })
-    expect(handlePrReviewMock).not.toHaveBeenCalled()
   })
 
-  // CodeRabbit H1 catch on commit 4: previously the in-ensemble
-  // check completed as `failure` here, which contradicted Phase 3's
-  // successful review post. The dispatcher-owned lifecycle picks
-  // the conclusion AFTER Phase 3 runs.
-  it("ensemble-post errored + Phase 3 posted → success (H1 fix)", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
+  // ARC-258: synth produced output but the submit silently rejected
+  // AND the comment fallback ALSO failed. `errored` → failure so the
+  // customer sees the truth.
+  it("ensemble errored → completeCheckRun(failure)", async () => {
     handlePrReviewEnsembleMock.mockResolvedValue({ status: "errored", telemetry: {} })
-    handlePrReviewMock.mockResolvedValue({ status: "posted" })
 
     await dispatchJob(job, makeEnv())
 
-    expect(handlePrReviewMock).toHaveBeenCalledTimes(1)
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "success",
+      handle: HANDLE,
+      conclusion: "failure",
     })
   })
 
-  it("ensemble-post errored + Phase 3 stale_head → skipped", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
-    handlePrReviewEnsembleMock.mockResolvedValue({ status: "errored", telemetry: {} })
-    handlePrReviewMock.mockResolvedValue({ status: "stale_head" })
+  // Legitimate skip path (label gate, specialists_all_failed, etc.):
+  // success conclusion (nothing reviewed because user-config or
+  // unreviewable input).
+  it("ensemble skipped → completeCheckRun(success) (legitimate skip)", async () => {
+    handlePrReviewEnsembleMock.mockResolvedValue({ status: "skipped", telemetry: {} })
 
     await dispatchJob(job, makeEnv())
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "skipped",
-    })
-  })
-
-  it("ensemble-shadow Phase-3-posted → success", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "ensemble-shadow" })
-    handlePrReviewMock.mockResolvedValue({ status: "posted" })
-    handlePrReviewEnsembleMock.mockResolvedValue({ status: "posted", telemetry: {} })
-
-    await dispatchJob(job, makeEnv())
-
-    expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "success",
-    })
-  })
-
-  it("Phase 3 only (agentic/singleshot) posted → success", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "phase3-agentic" })
-    handlePrReviewMock.mockResolvedValue({ status: "posted" })
-
-    await dispatchJob(job, makeEnv())
-
-    expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "success",
-    })
-  })
-
-  it("Phase 3 only skipped (dedupe-hit on same head) → success, NOT skipped", async () => {
-    // Phase 3 returns `skipped` when a prior run already reviewed
-    // this exact head SHA. From the customer's perspective the
-    // review IS done (the earlier run posted it), so `success`
-    // beats `skipped` (which would imply nothing was reviewed).
-    routeReviewMock.mockResolvedValue({ primary: "phase3-singleshot-legacy" })
-    handlePrReviewMock.mockResolvedValue({ status: "skipped" })
-
-    await dispatchJob(job, makeEnv())
-
-    expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "success",
+      handle: HANDLE,
+      conclusion: "success",
     })
   })
 
   it("sensitive-repo skip → NO check created (we early-return before start)", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "skipped-sensitive", reason: "denylisted" })
+    isRepoSensitiveMock.mockReturnValue(true)
 
     await dispatchJob(job, makeEnv())
 
     expect(startInProgressCheckRunMock).not.toHaveBeenCalled()
     expect(completeCheckRunMock).not.toHaveBeenCalled()
+    expect(handlePrReviewEnsembleMock).not.toHaveBeenCalled()
   })
 
   it("throw mid-pipeline → completeCheckRun(failure) AND error re-throws", async () => {
-    routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
     handlePrReviewEnsembleMock.mockRejectedValue(new Error("network blew up"))
 
     await expect(dispatchJob(job, makeEnv())).rejects.toThrow(/network blew up/)
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: HANDLE, conclusion: "failure",
+      handle: HANDLE,
+      conclusion: "failure",
     })
   })
 
-  it("null handle (createCheckRun failed/skipped) → completeCheckRun still called and no-ops", async () => {
+  it("null handle (createCheckRun failed/skipped) → completeCheckRun still called", async () => {
     startInProgressCheckRunMock.mockResolvedValue(null)
-    routeReviewMock.mockResolvedValue({ primary: "ensemble-post" })
-    handlePrReviewEnsembleMock.mockResolvedValue({ status: "posted", telemetry: {} })
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta: { event: "APPROVE", findingsCount: 0 },
+    })
 
     await dispatchJob(job, makeEnv())
 
     expect(completeCheckRunMock).toHaveBeenCalledWith({
-      handle: null, conclusion: "success",
+      handle: null,
+      conclusion: "success",
+      reviewMeta: { event: "APPROVE", findingsCount: 0 },
     })
   })
 })

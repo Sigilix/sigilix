@@ -44,13 +44,13 @@ import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handlePrLabels } from "./lib/triage-pr-labels"
 import { handleCiTriage } from "./lib/triage-ci"
-import { handlePrReview, buildPrReviewDedupeKey } from "./lib/triage-pr-review"
 import { handlePrImprove } from "./lib/triage-pr-improve"
 import { handlePrDescribe } from "./lib/triage-pr-describe"
 import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
 import { PROMPT_VERSION } from "./prompts/pr-review"
-import { handlePrReviewEnsemble, routeReview } from "./lib/triage-pr-review-ensemble"
+import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
+import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
 import { loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
@@ -142,6 +142,11 @@ export interface Env {
   // Phase 3 — agent loop (tool-using) per-surface flags + provider
   // kill-switch. All "on"|"off" strings (case-sensitive); unset or
   // anything other than "on" defaults to off.
+  //
+  // ARC-280: `OPENCLAW_AGENTIC_GITHUB_MODE` only gates the @-mention
+  // reply agent loop now (`github-mention.ts`). The Phase 3 PR
+  // reviewer that used to read this flag was deleted. Kept on the
+  // Env type so the mention path still type-checks.
   OPENCLAW_AGENTIC_LINEAR_MODE?: string
   OPENCLAW_AGENTIC_GITHUB_MODE?: string
   // Provider kill-switch for the /api/chat path. Independent of the
@@ -150,14 +155,10 @@ export interface Env {
   // callers honor it.
   OLLAMA_CHAT_ENABLE?: string
 
-  // Phase 4 — multi-agent ensemble PR review (kill-switched off by
-  // default). See .claude/handoff/arc-phase4-spec-v3.1-LOCKED.md.
-  //
-  // Mode gate: "off" | "shadow" | "post". When "off" (default), Phase
-  // 3 single-agent path remains in production. "shadow" runs Phase 3
-  // as customer-facing review AND runs ensemble in parallel for
-  // telemetry only. "post" submits ensemble verdict to GitHub.
-  OPENCLAW_ENSEMBLE_REVIEW_MODE?: string
+  // ARC-280: `OPENCLAW_ENSEMBLE_REVIEW_MODE` deleted. The ensemble is
+  // the only review pipeline now; the shadow / post / off
+  // discriminator served the dual-path era and has no remaining
+  // routing role.
   // ARC-183: comma-separated owner/repo DENYlist. When a repo is
   // listed here, Sigilix never fetches its diff or sends content to
   // any LLM. Use for compliance / customer-data / secrets-heavy
@@ -794,45 +795,6 @@ async function postSlashCommandAck(
   )
 }
 
-/**
- * ARC-258: map a Phase 3 result status to the right check-run
- * conclusion. Used by the `pr-review` dispatcher to finalize the
- * customer-visible "Sigilix" check.
- *
- *   - `posted`     → `success`. Review went out (green ✓ in Checks).
- *   - `stale_head` → `skipped`. New commit pushed before we reviewed
- *                    the old one; re-review will fire for the new SHA.
- *   - `skipped`    → `success`. The skip here is a dedupe-hit on the
- *                    per-(PR, headSha) lock — a prior run already
- *                    posted a review for this exact head, so from
- *                    the customer's perspective the review IS done.
- *                    A `skipped` conclusion would mislead them into
- *                    thinking nothing was reviewed.
- *   - `errored`    → `failure`. Phase 3 reached submit + verify and
- *                    the verify-after-submit caught a silent reject
- *                    (PENDING / missing from the public list).
- *                    Previously this case returned `skipped` and
- *                    therefore showed `success` "Review posted" with
- *                    no review behind it — the silent-success bug
- *                    reproduced on PRs #84 / #86 / #87. The
- *                    distinct `errored` status now lets the Check
- *                    Run reflect the truth.
- */
-function mapPhase3StatusToCheckConclusion(
-  status: "posted" | "skipped" | "stale_head" | "errored",
-): SigilixCheckConclusion {
-  switch (status) {
-    case "posted":
-      return "success"
-    case "skipped":
-      return "success"
-    case "stale_head":
-      return "skipped"
-    case "errored":
-      return "failure"
-  }
-}
-
 export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
@@ -889,32 +851,30 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // warmup comment. See `src/lib/triage-pr-overview.ts` and
         // `src/lib/warmup.ts::enqueueWarmupRerunsForIndex`.
 
-        // Phase 4 routing: ensemble (shadow/post), Phase 3 agentic, or
-        // Phase 3 single-shot legacy. See triage-pr-review-ensemble.ts
-        // for the full decision matrix.
-        const decision = await routeReview({ env, owner: job.owner, repo: job.repo })
-        // ARC-183: sensitive-repo gate. Skip ALL review pipelines —
-        // Sigilix never fetches the diff or sends content to any LLM
-        // for repos on the OPENCLAW_SENSITIVE_REPOS denylist. Audit log
-        // entry contains owner/repo/prNumber/reason but no code or
-        // diff content (we never fetched it).
-        if (decision.primary === "skipped-sensitive") {
+        // ARC-280: routing collapsed. The pre-ARC-275 decision matrix
+        // (ensemble-shadow vs ensemble-post vs phase3-agentic vs
+        // phase3-singleshot-legacy) is gone — there's exactly one
+        // review pipeline now (`handlePrReviewEnsemble`) plus the
+        // intentional sensitive-repo skip. Phase 3 single-shot
+        // reviewer + the `routeReview` decision layer are deleted in
+        // this ticket; the ensemble owns submit, verify, retry, and
+        // comment-fallback end-to-end (ARC-277 / ARC-278 / ARC-279).
+        if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, job.owner, job.repo)) {
           console.log(JSON.stringify({
             event: "pr-review-skipped",
-            reason: decision.reason,
+            reason: "repo_in_sensitive_denylist",
             owner: job.owner,
             repo: job.repo,
             prNumber: job.prNumber,
           }))
           return
         }
-        // ARC-258: customer-visible "Sigilix · In progress"
-        // check run. Created here at the dispatcher level (not
-        // inside the handlers) so a single owner can pick the right
-        // final conclusion across ensemble + Phase 3 fallback
-        // combinations. Best-effort: a null handle means no check
-        // was created (creds missing, 403 from missing perms, etc.)
-        // and the completion calls below become no-ops.
+        // ARC-258: customer-visible "Sigilix · In progress" check run.
+        // Created here at the dispatcher level (not inside the
+        // handler) so the lifecycle is uniform across all ensemble
+        // outcomes. Best-effort: a null handle means no check was
+        // created (creds missing, 403 from missing perms, etc.) and
+        // the completion call below becomes a no-op.
         const checkRun = await startInProgressCheckRun({
           env,
           owner: job.owner,
@@ -927,74 +887,37 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // findings count on the posted path so the Check Run title
         // can reflect `Approved — no issues found` vs `N findings
         // posted`. Threaded out via `completeCheckRun`.
-        let reviewMeta: import("./lib/triage-pr-review").PrReviewMeta | undefined = undefined
+        let reviewMeta: import("./lib/triage-pr-review-ensemble").ReviewMeta | undefined = undefined
         try {
-          if (decision.primary === "ensemble-shadow") {
-            // Shadow: Phase 3 posts the customer-facing review FIRST,
-            // ensemble runs after for telemetry only. Serial per v3.1
-            // catch — simpler pairing invariant.
-            //
-            // ARC-250 (Codex MAJOR on the design review): when Phase 3
-            // returns `stale_head` we MUST skip the shadow ensemble run.
-            // Otherwise the ensemble's own stale-head guard fires too and
-            // we double-handle the same job — duplicate telemetry, and in
-            // commit 2 (ARC-251) duplicate auto-requeues. Note: `skipped`
-            // (Phase 3 dedupe-hit) still runs the shadow ensemble for
-            // telemetry continuity — shadow is observation-only, so a
-            // double-skip there is harmless and preserves the paired-run
-            // invariant that Phase 4b's shadow analysis depends on.
-            const phase3Result = await handlePrReview(baseArgs)
-            conclusion = mapPhase3StatusToCheckConclusion(phase3Result.status)
-            reviewMeta = phase3Result.reviewMeta
-            if (phase3Result.status === "stale_head") return
-            await handlePrReviewEnsemble(baseArgs, "shadow")
+          const result = await handlePrReviewEnsemble(baseArgs)
+          if (result.status === "posted") {
+            // ARC-279: when the ensemble used the comment fallback
+            // (formal review submit was silently rejected), the
+            // Check Run should reflect that the normal pipeline
+            // didn't run — even though the synth body posted as a
+            // PR comment. `failure` + reviewMeta.surface === "comment"
+            // routes to the "see PR comment" title.
+            conclusion = result.reviewMeta?.surface === "comment" ? "failure" : "success"
+            reviewMeta = result.reviewMeta
             return
           }
-          if (decision.primary === "ensemble-post") {
-            // CR PR #35 catch: ensemble-post can return "skipped"/"errored"
-            // for quorum, synth-parse, and internal-error paths. Without
-            // this fallback the PR gets no customer-facing review at all.
-            // Fall through to Phase 3 single-agent on those non-successes.
-            //
-            // ARC-250: `stale_head` is the lone exception. Phase 3 would
-            // also stale-head, and `handleStaleHead` already emitted the
-            // user-visible sticky + telemetry, so the fallback must
-            // short-circuit. Other non-posted statuses (router_no_specialists,
-            // quorum failure, synth timeout/parse/provenance failure,
-            // internal error) still benefit from the Phase 3 attempt.
-            const result = await handlePrReviewEnsemble(baseArgs, "post")
-            if (result.status === "posted") {
-              // ARC-279: when the ensemble had to use the comment
-              // fallback (formal review submit was silently rejected),
-              // the Check Run should reflect that the normal review
-              // pipeline didn't run — even though the synth body is
-              // up as a PR comment. `failure` conclusion + a "see PR
-              // comment" title (rendered by `renderOutputForConclusion`
-              // via the threaded reviewMeta) gives the customer a
-              // clear signal without dropping the review signal.
-              conclusion = result.reviewMeta?.surface === "comment" ? "failure" : "success"
-              reviewMeta = result.reviewMeta
-              return
-            }
-            if (result.status === "stale_head") {
-              conclusion = "skipped"
-              return
-            }
-            // Fallback to Phase 3: the ensemble outcome doesn't bind
-            // the check run yet — Phase 3 will. If Phase 3 posts the
-            // check goes to `success` regardless of why the ensemble
-            // bailed (router_no_specialists, quorum, synth, internal).
-            const phase3Result = await handlePrReview(baseArgs)
-            conclusion = mapPhase3StatusToCheckConclusion(phase3Result.status)
-            reviewMeta = phase3Result.reviewMeta
+          if (result.status === "stale_head") {
+            conclusion = "skipped"
             return
           }
-          // Phase 3 paths (agentic or singleshot-legacy) both go through
-          // handlePrReview — the agentic toggle is gated inside that
-          // function via OPENCLAW_AGENTIC_GITHUB_MODE.
-          const phase3Result = await handlePrReview(baseArgs)
-          conclusion = mapPhase3StatusToCheckConclusion(phase3Result.status)
-          reviewMeta = phase3Result.reviewMeta
+          // ARC-280: `skipped` / `errored` no longer fall back to a
+          // separate single-shot reviewer. The ensemble's
+          // comment-fallback (ARC-279) already handles the "synth
+          // ran but submit didn't persist" case. The remaining
+          // skipped/errored statuses are:
+          //   - sensitive-repo: handled above, never reaches here
+          //   - label gate: legitimate user-config skip
+          //   - daily budget: telemetry-only skip
+          //   - all specialists failed: synth had nothing to merge
+          //   - synth retry exhausted: covered by ARC-279 if synth
+          //     produced anything at all
+          //   - internal_error: real failure (catch below)
+          conclusion = result.status === "errored" ? "failure" : "success"
         } catch (err) {
           conclusion = "failure"
           throw err
@@ -1067,15 +990,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             }))
           }
         }
-        // Clear the legacy single-shot dedupe lock so handlePrReview
-        // doesn't no-op when invoked on the same head SHA. Without
-        // this, the slash command's whole purpose (re-run after a
-        // prior review already posted) would be silently swallowed
-        // by the 7-day TTL set in triage-pr-review.ts.
-        const dedupeKey = buildPrReviewDedupeKey({
-          owner: job.owner, repo: job.repo, prNumber: job.prNumber, headSha,
-        })
-        await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
+        // ARC-280: Phase 3's legacy single-shot dedupe lock is gone
+        // (handlePrReview deleted). The ensemble uses its own per-
+        // (PR, headSha) coalesce + lastReviewedSha guard inside
+        // `handlePrReviewEnsemble`; the slash command's rerun
+        // intent is preserved by the ensemble's own re-run logic
+        // (the user-triggered enqueue bypasses the per-headSha
+        // dedupe because each rerun is treated as a fresh job).
 
         const reviewMessage: JobMessage = {
           type: "pr-review",

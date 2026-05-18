@@ -18,7 +18,6 @@ import {
   renderDeltaHeader,
   truncateVerdictToTokens,
   validateForSubmission,
-  routeReview,
   isPermanentFailure,
   SPECIALIST_TIMEOUT_MS,
   SYNTHESIZER_TIMEOUT_MS,
@@ -33,7 +32,6 @@ import {
 } from "../src/lib/triage-pr-review-ensemble"
 import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
-import type { Env } from "../src/index"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
 const baseFinding: PrReviewFinding = {
@@ -366,78 +364,6 @@ describe("validateForSubmission — hallucination guard + line validity + score-
   })
 })
 
-describe("routeReview", () => {
-  const baseEnv: Env = {
-    OPENCLAW_STATE: { get: async () => null, put: async () => {} } as unknown as KVNamespace,
-  } as unknown as Env
-
-  it("returns phase3-singleshot-legacy when mode=off and agentic mode off", async () => {
-    const decision = await routeReview({
-      env: { ...baseEnv, OPENCLAW_ENSEMBLE_REVIEW_MODE: "off" },
-      owner: "Arc-and-Anchor",
-      repo: "openclaw-worker",
-    })
-    expect(decision).toEqual({ primary: "phase3-singleshot-legacy" })
-  })
-
-  it("returns phase3-agentic when mode=off and agentic mode on", async () => {
-    const decision = await routeReview({
-      env: { ...baseEnv, OPENCLAW_ENSEMBLE_REVIEW_MODE: "off", OPENCLAW_AGENTIC_GITHUB_MODE: "on" },
-      owner: "Arc-and-Anchor",
-      repo: "openclaw-worker",
-    })
-    expect(decision).toEqual({ primary: "phase3-agentic" })
-  })
-
-  it("returns ensemble-shadow + phase3-agentic secondary in shadow mode", async () => {
-    const decision = await routeReview({
-      env: {
-        ...baseEnv,
-        OPENCLAW_ENSEMBLE_REVIEW_MODE: "shadow",
-        OPENCLAW_AGENTIC_GITHUB_MODE: "on",
-      },
-      owner: "Arc-and-Anchor",
-      repo: "openclaw-worker",
-    })
-    expect(decision).toEqual({ primary: "ensemble-shadow", secondary: "phase3-agentic" })
-  })
-
-  it("returns ensemble-post in post mode", async () => {
-    const decision = await routeReview({
-      env: { ...baseEnv, OPENCLAW_ENSEMBLE_REVIEW_MODE: "post" },
-      owner: "Arc-and-Anchor",
-      repo: "openclaw-worker",
-    })
-    expect(decision).toEqual({ primary: "ensemble-post" })
-  })
-
-  // ARC-232 (2026-05-16): `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
-  // allowlist deleted. The two "fall through on allowlist miss" /
-  // "match case-insensitively" tests that lived here are gone. The
-  // ensemble's remaining gates are sensitive-deny (first, at the top
-  // of `routeReview` via `isRepoSensitive`), then mode, then daily
-  // budget — see `triage-pr-review-ensemble.ts:routeReview` for the
-  // ordering.
-
-  it("falls back to Phase 3 when daily budget exhausted", async () => {
-    const env = {
-      ...baseEnv,
-      OPENCLAW_ENSEMBLE_REVIEW_MODE: "shadow",
-      OPENCLAW_AGENTIC_GITHUB_MODE: "on",
-      OPENCLAW_ENSEMBLE_DAILY_BUDGET: "5",
-      OPENCLAW_STATE: {
-        get: async () => "5",  // already at cap
-        put: async () => {},
-      } as unknown as KVNamespace,
-    } as unknown as Env
-    const decision = await routeReview({
-      env,
-      owner: "Arc-and-Anchor",
-      repo: "openclaw-worker",
-    })
-    expect(decision.primary).toBe("phase3-agentic")
-  })
-})
 
 describe("isPermanentFailure", () => {
   // CR PR #37 catch — permanent failures should fast-fail; transient

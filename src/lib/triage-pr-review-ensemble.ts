@@ -115,7 +115,6 @@ import {
   selectDiff,
   type DiffMode,
 } from "./incremental-review"
-import { isRepoSensitive } from "./repo-policy"
 import {
   computeFileListHash,
   readReviewManifest,
@@ -156,7 +155,6 @@ import type { Env } from "../index"
 // 4b when the synthesizer's optional retrieve_codebase tool path is
 // fully wired.
 const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
-const DEFAULT_DAILY_BUDGET = 200
 
 // Phase 4a.3 timeout schedule (rebalanced 2026-05-06 after Phase 4a.2
 // telemetry validation, ARC-171). The Phase 4a.1 sizing (180s) was
@@ -359,8 +357,6 @@ const RETRY_BACKOFF_MS = [800, 2500]
 
 // ─── public types ──────────────────────────────────────────────────────
 
-export type EnsembleMode = "off" | "shadow" | "post"
-
 export interface EnsembleHandlerArgs {
   owner: string
   repo: string
@@ -376,70 +372,24 @@ export interface EnsembleHandlerArgs {
   staleHeadRequeueDepth?: number
 }
 
-export type RouteDecision =
-  | { primary: "ensemble-shadow"; secondary: "phase3-agentic" }
-  | { primary: "ensemble-post" }
-  | { primary: "phase3-agentic" }
-  | { primary: "phase3-singleshot-legacy" }
-  // ARC-183: sensitive repo — skip ALL review pipelines. Sigilix
-  // never fetches the diff or sends content to any LLM. Caller logs
-  // the skip + reason for audit but performs no GitHub API call.
-  | { primary: "skipped-sensitive"; reason: "repo_in_sensitive_denylist" }
-
-/**
- * Top-level routing: given env + repo + budget state, decide which
- * review pipeline runs. Pure-ish (does check the daily-budget KV
- * counter, which is async — but called from the queue handler, not
- * inside any tight loop).
- */
-export async function routeReview(args: {
-  env: Env
-  owner: string
-  repo: string
-}): Promise<RouteDecision> {
-  const { env, owner, repo } = args
-
-  // ARC-183: sensitive-repo gate runs FIRST, before any other
-  // routing logic. Even Phase 3 is blocked — the policy is "no LLM
-  // ever sees this repo's content," not "use a different review
-  // path." Match is case-insensitive on `owner/repo`.
-  if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
-    return { primary: "skipped-sensitive", reason: "repo_in_sensitive_denylist" }
-  }
-
-  const mode = parseMode(env.OPENCLAW_ENSEMBLE_REVIEW_MODE)
-
-  if (mode === "off") {
-    return env.OPENCLAW_AGENTIC_GITHUB_MODE === "on"
-      ? { primary: "phase3-agentic" }
-      : { primary: "phase3-singleshot-legacy" }
-  }
-
-  // ARC-232 (2026-05-16): the `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
-  // allowlist was deleted. The remaining ensemble gates, in the
-  // order they fire inside this routing decision:
-  //   1. sensitive-deny (line 364, runs first — returns "skipped-sensitive")
-  //   2. mode (above — "off" routes to Phase 3)
-  //   3. daily-budget (below — exhausted budget routes to Phase 3)
-
-  if (!(await dailyBudgetAvailable(env))) {
-    return env.OPENCLAW_AGENTIC_GITHUB_MODE === "on"
-      ? { primary: "phase3-agentic" }
-      : { primary: "phase3-singleshot-legacy" }
-  }
-
-  if (mode === "shadow") {
-    return { primary: "ensemble-shadow", secondary: "phase3-agentic" }
-  }
-  return { primary: "ensemble-post" }
-}
+// ARC-280: `routeReview` + `RouteDecision` + the shadow/post/off
+// mode-routing layer were deleted. The dispatcher now performs an
+// inline sensitive-repo skip check and otherwise calls
+// `handlePrReviewEnsemble` directly. Daily-budget exhaustion is
+// handled inside the ensemble itself (an early `skipped` return
+// with `fellBackReason: "daily_budget_exhausted"` once it lands).
 
 // ─── orchestrator ──────────────────────────────────────────────────────
 
 export async function handlePrReviewEnsemble(
   args: EnsembleHandlerArgs,
-  mode: "shadow" | "post",
 ): Promise<EnsembleResult> {
+  // ARC-280: `mode` parameter removed. The pre-ARC-275 dual-mode
+  // routing (shadow vs post) is gone; this handler is the only
+  // production review path. The `EnsembleTelemetry.mode` field is
+  // pinned to `"post"` for back-compat with downstream analytics
+  // queries that may filter on it.
+  const mode = "post" as const
   const { owner, repo, prNumber, headSha, installationId, env } = args
   const staleHeadRequeueDepth = args.staleHeadRequeueDepth ?? 0
   const startMs = Date.now()
@@ -1388,23 +1338,11 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    if (mode === "shadow") {
-      // Shadow: telemetry only, no GitHub submission. Deliberately
-      // do NOT write the last-reviewed SHA — shadow runs don't post
-      // findings, so a later real review must still see the full
-      // base..head diff to surface them. Recording the shadow SHA
-      // would cause subsequent post-mode runs to incrementally
-      // review only `shadowSha..head` and miss everything before
-      // (sigilix-bot dogfood catch on PR #53).
-      // ARC-270 (code-reviewer catch): shadow dogfooding is the
-      // exact channel we use to validate consensus reordering
-      // before flipping to post mode. Capture the consensus-ranked
-      // verdict so the new ordering is visible in telemetry; the
-      // raw post-validation verdict is reconstructible from the
-      // `postValidation` counters + specialist verdicts.
-      telemetry.shadowVerdict = consensusVerdict
-      return finalize(telemetry, env, "shadow_recorded", cache)
-    }
+    // ARC-280: shadow-mode branch deleted. The dual-mode routing
+    // (shadow vs post) is gone — post is the only mode. The
+    // shadow-only `telemetry.shadowVerdict` field stays in the
+    // interface for back-compat with stored telemetry rows but is
+    // never written from this handler again.
 
     // ─── Stale-head guard #2 ───────────────────────────────────
     //
@@ -2042,12 +1980,6 @@ function appendRoleRule(
   return `${baseMessage}\n\n[REPO RULES — ${role.toUpperCase()} (from sigilix.json)]\n${rule}`
 }
 
-function parseMode(raw: string | undefined): EnsembleMode {
-  if (raw === "shadow") return "shadow"
-  if (raw === "post") return "post"
-  return "off"
-}
-
 /**
  * Max model invocations one ensemble run can possibly consume.
  * Derived from SPECIALIST_CONFIGS + SYNTHESIZER_CONFIG (CR PR #37
@@ -2077,20 +2009,13 @@ export const MAX_CALLS_PER_ENSEMBLE_RUN = (
   + (2 * maxAttempts(SYNTHESIZER_CONFIG))
 )
 
-async function dailyBudgetAvailable(env: Env): Promise<boolean> {
-  const cap = parseIntEnv(env.OPENCLAW_ENSEMBLE_DAILY_BUDGET, DEFAULT_DAILY_BUDGET)
-  if (cap <= 0) return false
-  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD UTC
-  const key = `ensemble-budget:${today}`
-  const raw = await env.OPENCLAW_STATE.get(key)
-  const used = raw ? Number.parseInt(raw, 10) : 0
-  // CR catch: previously checked `used < cap`, which could admit a PR
-  // when only 1 call of headroom remained, then finalize would charge 5.
-  // Now require room for a FULL ensemble run before admitting. Best-
-  // effort under concurrent webhooks (KV race window 1-2 calls,
-  // documented in v3.1 spec) but no longer per-PR overshoot by 5.
-  return used + MAX_CALLS_PER_ENSEMBLE_RUN <= cap
-}
+// ARC-280: `dailyBudgetAvailable` was the budget-gate `routeReview`
+// called before admitting a PR; with `routeReview` deleted and the
+// dispatcher calling `handlePrReviewEnsemble` directly, the
+// admission check no longer fires. `incrementDailyBudget` still
+// runs in `finalize()` so the per-day cumulative count is recorded
+// for telemetry / future-policy use. A hard cap that bails the
+// ensemble early on budget exhaustion is a separate follow-up.
 
 async function incrementDailyBudget(env: Env, by: number): Promise<void> {
   const today = new Date().toISOString().slice(0, 10)

@@ -973,14 +973,44 @@ export async function handlePrReviewEnsemble(
       telemetry,
     )
 
-    // ─── Quorum check ──────────────────────────────────────────
+    // ─── Coverage check (ARC-277) ──────────────────────────────
+    //
+    // Pre-ARC-277, this was a quorum gate that bailed to `skipped`
+    // whenever fewer than min(2, dispatched.length) specialists
+    // returned. The fall-back to Phase 3 plus the silent-success
+    // bug chain that ARC-258 / ARC-275 chased made that gate the
+    // single biggest contributor to "Sigilix went silent" reports.
+    //
+    // New contract:
+    //   - 0/N succeeded: still bail to `skipped` (synth has
+    //     nothing to merge from; will revisit in ARC-278 once
+    //     synth retry + comment fallback land).
+    //   - 1 ≤ succeeded < dispatched: continue to synth with a
+    //     `[DEGRADED COVERAGE]` prompt block + structured
+    //     telemetry. `checkQuorum` is no longer the gate.
+    //   - succeeded === dispatched: full coverage, no prompt
+    //     change, no degraded-coverage telemetry.
     const succeeded = specialistVerdicts.filter((v) => v.verdict !== null)
-    if (!checkQuorum(succeeded, mode, router.specialists)) {
+    if (succeeded.length === 0) {
       telemetry.fellBackToPhase3 = mode === "post"
-      telemetry.fellBackReason = succeeded.length <= 1
-        ? "specialists_failed"
-        : "specialists_quorum_missing"
+      telemetry.fellBackReason = "specialists_all_failed"
       return finalize(telemetry, env, "skipped", cache)
+    }
+    const degradedCoverage = succeeded.length < router.specialists.length
+      ? computeDegradedCoverage(router.specialists, succeeded.map((v) => v.role))
+      : null
+    if (degradedCoverage) {
+      // Record the partial-coverage telemetry but DON'T bail. Synth
+      // runs on the partial input + a degraded-coverage block in
+      // the prompt.
+      telemetry.fellBackReason = "specialists_degraded"
+      telemetry.degradedCoverage = degradedCoverage
+      console.log(JSON.stringify({
+        event: "ensemble-specialists-degraded",
+        owner, repo, prNumber,
+        roles_returned: degradedCoverage.rolesReturned,
+        roles_missing: degradedCoverage.rolesMissing,
+      }))
     }
 
     // ─── Synthesizer ───────────────────────────────────────────
@@ -995,6 +1025,10 @@ export async function handlePrReviewEnsemble(
       specialistVerdictsBlock: synthVerdictBlock,
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
+      // ARC-277: when one or more specialists didn't return, tell
+      // synth which roles it's missing so it can constrain its
+      // output and acknowledge the gap in `summary`.
+      ...(degradedCoverage ? { degradedCoverage } : {}),
     })
 
     // ARC-181 Task 8: thread structured AST findings into the synth
@@ -2845,6 +2879,26 @@ export function renderDeltaHeader(delta: FindingDelta): string | null {
   return `**Δ since last review:** ${parts.join(" · ")}`
 }
 
+/**
+ * ARC-277: pure helper. Given the roles the router DISPATCHED and the
+ * roles that actually RETURNED a verdict, compute the symmetric pair
+ * the synth prompt block needs. Stable ordering follows
+ * `ALL_SPECIALISTS` (logic, security, performance, tests) so two PRs
+ * with the same coverage gap produce identical prompt text — easier
+ * to grep telemetry by exact prompt-shape hash.
+ */
+export function computeDegradedCoverage(
+  dispatched: readonly SpecialistRole[],
+  returned: readonly SpecialistRole[],
+): { rolesReturned: SpecialistRole[]; rolesMissing: SpecialistRole[] } {
+  const returnedSet = new Set(returned)
+  const stable = ALL_SPECIALISTS.filter((r) => dispatched.includes(r))
+  return {
+    rolesReturned: stable.filter((r) => returnedSet.has(r)),
+    rolesMissing: stable.filter((r) => !returnedSet.has(r)),
+  }
+}
+
 export function checkQuorum(
   succeeded: CollectedVerdict[],
   mode: "shadow" | "post",
@@ -3083,6 +3137,17 @@ interface EnsembleTelemetry {
   fellBackReason?: string
   internalError?: string
   routerDecision: RouterDecision | null
+  /**
+   * ARC-277: populated when 1 ≤ specialist-success-count < dispatched-count.
+   * Records which roles came back and which didn't so post-rollout
+   * telemetry analysis can compute degraded-vs-full-coverage rates
+   * per specialist + per repo. Absent when full coverage (synth ran
+   * with everything) AND when fully empty (synth never ran).
+   */
+  degradedCoverage?: {
+    rolesReturned: SpecialistRole[]
+    rolesMissing: SpecialistRole[]
+  }
   specialistVerdicts: Array<{
     role: SpecialistRole
     /** Configured primary model. Kept for backward telemetry compat. */

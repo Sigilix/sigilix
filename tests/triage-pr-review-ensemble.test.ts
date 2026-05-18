@@ -15,7 +15,6 @@ import {
   computeDegradedCoverage,
   computeFindingDelta,
   computeFindingKey,
-  renderDeltaHeader,
   truncateVerdictToTokens,
   validateForSubmission,
   isPermanentFailure,
@@ -948,7 +947,12 @@ describe("computeFindingDelta", () => {
     expect(delta.carriedOverCount).toBe(0)
   })
 
-  it("renders a header when prior had findings but current has none (all fixed/carried-over)", () => {
+  it("counts likely-fixed/carried-over correctly when prior had findings but current has none", () => {
+    // ARC-281: pure-data delta test. The renderer-side header has
+    // moved to `renderDeltaBadge` in triage-pr-review.ts (see
+    // tests/triage-pr-review-body.test.ts). This test now asserts
+    // the delta counts directly without going through a render
+    // step.
     const currentKeys = new Set<string>()
     const priorFindings = [
       { key: "k1", path: "src/touched.ts" },
@@ -957,43 +961,21 @@ describe("computeFindingDelta", () => {
     const changedPaths = new Set(["src/touched.ts"])
 
     const delta = computeFindingDelta(currentKeys, priorFindings, changedPaths)
-    const header = renderDeltaHeader(delta)
-
-    expect(header).not.toBeNull()
-    expect(header).toContain("1 likely-fixed")
-    expect(header).toContain("1 carried-over")
-    expect(header).not.toContain("new")
+    expect(delta).toEqual({
+      newCount: 0,
+      stillOpenCount: 0,
+      likelyFixedCount: 1,
+      carriedOverCount: 1,
+    })
   })
 
-  it("renders a +N new header when prior manifest had findings: [] (clean PR last time)", () => {
+  it("counts +N new when prior manifest had findings: [] (clean PR last time)", () => {
     // First-time finding state: prior manifest existed but its
-    // findings array was empty (zero findings on the last review).
-    // computeFindingDelta should report all current as `new`.
+    // findings array was empty. Every current finding counts as
+    // `new`.
     const currentKeys = new Set(["k1", "k2"])
     const delta = computeFindingDelta(currentKeys, [], new Set())
-    const header = renderDeltaHeader(delta)
-    expect(header).toBe("**Δ since last review:** +2 new")
-  })
-})
-
-describe("renderDeltaHeader", () => {
-  it("returns null when there's no signal across all four counts", () => {
-    expect(renderDeltaHeader({ newCount: 0, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0 })).toBeNull()
-  })
-
-  it("renders a complete header with all four counts", () => {
-    const out = renderDeltaHeader({ newCount: 1, stillOpenCount: 2, likelyFixedCount: 3, carriedOverCount: 4 })
-    expect(out).toBe("**Δ since last review:** +1 new · 2 still-open · 3 likely-fixed · 4 carried-over")
-  })
-
-  it("omits zero-count buckets", () => {
-    const out = renderDeltaHeader({ newCount: 2, stillOpenCount: 0, likelyFixedCount: 1, carriedOverCount: 0 })
-    expect(out).toBe("**Δ since last review:** +2 new · 1 likely-fixed")
-  })
-
-  it("renders just one bucket when only one is non-zero", () => {
-    const out = renderDeltaHeader({ newCount: 5, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0 })
-    expect(out).toBe("**Δ since last review:** +5 new")
+    expect(delta.newCount).toBe(2)
   })
 })
 

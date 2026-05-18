@@ -26,7 +26,8 @@
 
 // ARC-280: pure-helper-only module. Imports trimmed to the
 // surface still used by `buildReviewSubmission`,
-// `buildFallbackSubmission`, `formatReviewBody`,
+// `buildFallbackSubmission`, the ARC-281 body renderers
+// (`renderApproveBody` / `renderRequestChangesBody`),
 // `parsePrReviewResponse`, and the related sanitizers.
 import {
   type SubmitReviewBody,
@@ -34,15 +35,23 @@ import {
 } from "./github"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
-import { renderStackContextSummary } from "../prompts/pr-stack-prompt"
+// `renderStackContextSummary` is no longer used here — ARC-281
+// replaced the multi-line stack block with a one-line parenthetical
+// rendered by `renderStackParenthetical`. The original helper still
+// lives in `pr-stack-prompt.ts` for any non-review-body callers that
+// may still want the verbose form.
 
 // ARC-280: `handlePrReview` (Phase 3 single-shot reviewer) deleted.
+// ARC-281: `formatReviewBody` deleted — `renderApproveBody` and
+// `renderRequestChangesBody` are the new body entry points.
+//
 // This file now exports ONLY the pure helpers the ensemble still
 // uses — `buildReviewSubmission`, `buildFallbackSubmission`,
-// `formatReviewBody`, `chooseReviewEvent`, `parsePrReviewResponse`,
-// `wrapInlineHtmlTags`, `renderFixPlan` — plus the shared types
-// (`PrReviewFinding`, `PrReviewVerdict`, `FindingCategory`,
-// `StackOrigin`, `ProvenanceCtx`). The `buildPrReviewDedupeKey`
+// `renderApproveBody`, `renderRequestChangesBody`, `chooseReviewEvent`,
+// `parsePrReviewResponse`, `wrapInlineHtmlTags`, `renderFixPlan` —
+// plus the shared types (`PrReviewFinding`, `PrReviewVerdict`,
+// `FindingCategory`, `StackOrigin`, `ProvenanceCtx`, `CoverageRoles`,
+// `DeltaBadgeCounts`, `RenderBodyArgs`). The `buildPrReviewDedupeKey`
 // helper + the `pr-review:` dedupe-key family are gone with
 // Phase 3 — the ensemble has its own coalesce.
 
@@ -168,6 +177,112 @@ export interface PrReviewVerdict {
   findings: PrReviewFinding[]
 }
 
+/**
+ * ARC-281: specialist coverage signal injected into the review body
+ * so customers can see which dimensions Sigilix actually ran. When
+ * `dispatched ⊃ succeeded`, the body renders a degraded-coverage
+ * notice listing the unavailable roles.
+ *
+ * `dispatched` is what the router asked for (subset of {logic,
+ * security, performance, tests}); `succeeded` is what returned a
+ * verdict. The renderer treats the role order verbatim — supply
+ * them in the canonical order you want displayed.
+ */
+export interface CoverageRoles {
+  readonly dispatched: readonly string[]
+  readonly succeeded: readonly string[]
+}
+
+/**
+ * ARC-281: per-Kimi spec the body now carries an explicit "**Δ:** +N
+ * new · M likely-fixed" badge line under the heading instead of
+ * prepending a `**Δ since last review:**` string into the summary.
+ * Caller computes a `FindingDelta` via the existing
+ * `computeFindingDelta` helper and passes the four counts through;
+ * `renderDeltaBadge` formats them. Pure — exported for tests.
+ *
+ * Returns `null` when no signal is worth surfacing (all counts
+ * zero), so the renderer can skip the line entirely rather than
+ * print "**Δ:**".
+ */
+export interface DeltaBadgeCounts {
+  newCount: number
+  stillOpenCount: number
+  likelyFixedCount: number
+  carriedOverCount: number
+}
+
+export function renderDeltaBadge(counts: DeltaBadgeCounts): string | null {
+  const { newCount, stillOpenCount, likelyFixedCount, carriedOverCount } = counts
+  const any =
+    newCount > 0 || stillOpenCount > 0 || likelyFixedCount > 0 || carriedOverCount > 0
+  if (!any) return null
+  const parts: string[] = []
+  if (newCount > 0) parts.push(`+${newCount} new`)
+  if (stillOpenCount > 0) parts.push(`${stillOpenCount} still-open`)
+  if (likelyFixedCount > 0) parts.push(`${likelyFixedCount} likely-fixed`)
+  if (carriedOverCount > 0) parts.push(`${carriedOverCount} carried-over`)
+  return `**Δ:** ${parts.join(" · ")}`
+}
+
+/**
+ * ARC-281: build the **Coverage:** line per Kimi's spec. Three
+ * shapes:
+ *
+ *   - Full coverage (`succeeded == dispatched`):
+ *       "**Coverage:** logic · security · performance · tests"
+ *
+ *   - 1–2 roles missing (`dispatched - succeeded` is 1 or 2):
+ *       "**Coverage:** logic · security · tests — _performance specialist unavailable_"
+ *       "**Coverage:** logic · tests — _security, performance specialists unavailable_"
+ *
+ *   - 3+ roles missing OR unknown failure mode: caller renders a
+ *     <details> block instead (see `renderCoverageDetails`).
+ *
+ * Returns `null` when `dispatched.length === 0` — no specialists
+ * means no coverage signal to render (the bail-with-skip-notice
+ * path runs).
+ */
+export function renderCoverageLine(roles: CoverageRoles): string | null {
+  if (roles.dispatched.length === 0) return null
+  const succeededSet = new Set(roles.succeeded)
+  const succeeded = roles.dispatched.filter((r) => succeededSet.has(r))
+  const missing = roles.dispatched.filter((r) => !succeededSet.has(r))
+  const succeededLine = succeeded.length > 0 ? succeeded.join(" · ") : "_none_"
+  if (missing.length === 0) {
+    return `**Coverage:** ${succeededLine}`
+  }
+  if (missing.length <= 2) {
+    const noun = missing.length === 1 ? "specialist" : "specialists"
+    return `**Coverage:** ${succeededLine} — _${missing.join(", ")} ${noun} unavailable_`
+  }
+  // 3+ missing — the caller renders a <details> block instead of
+  // this inline form per Kimi's spec.
+  return `**Coverage:** ${succeededLine} — _${missing.length} specialists unavailable_`
+}
+
+/**
+ * ARC-281: compress a `StackContext` into a one-line parenthetical
+ * per Kimi's spec. Returns `null` when the PR isn't stacked OR the
+ * parent walk degraded (no parent number to print).
+ *
+ *   `_(Stacked on #87)_`
+ *
+ * Multi-line stack-context blocks (current `renderStackContextSummary`
+ * output) are deprecated by this redesign; the parenthetical replaces
+ * them.
+ */
+export function renderStackParenthetical(stack: StackContext | undefined): string | null {
+  if (!stack || !stack.isStacked) return null
+  if (!stack.parent) return null
+  return `_(Stacked on #${stack.parent.number})_`
+}
+
+const SIGILIX_REVIEW_MARKER = "<!-- openclaw:pr-review -->"
+
+const DISMISSAL_HINT =
+  "To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread."
+
 
 
 /**
@@ -291,11 +406,27 @@ interface BuildReviewArgs {
   findingMarkers?: ReadonlyArray<string | null>
   /**
    * ARC-182: optional stack context. When the PR is part of a
-   * Graphite-style stack, a "### Stack context" block is injected
-   * into the sticky-summary body so a human reviewer sees the stack
-   * picture at a glance. Absent on unstacked PRs (renderer no-ops).
+   * Graphite-style stack, the post-ARC-281 renderer appends a
+   * `_(Stacked on #N)_` parenthetical to the summary paragraph.
+   * Absent on unstacked PRs (renderer no-ops).
    */
   stack?: StackContext
+  /**
+   * ARC-281: specialist coverage roster. When supplied, the body
+   * renders a `**Coverage:**` line under the heading; when
+   * `dispatched ⊃ succeeded`, the line includes the unavailable
+   * roles. Omitted when the caller hasn't plumbed this through yet
+   * (back-compat).
+   */
+  coverage?: CoverageRoles
+  /**
+   * ARC-281: finding-delta counts vs the prior review. When non-
+   * null, the REQUEST_CHANGES body renders a `**Δ:**` badge under
+   * the heading and appends ` · Δ since last review` to the
+   * heading. APPROVE bodies ignore delta (an approval is implicitly
+   * "all clear"). `null` or omitted = no delta signal.
+   */
+  delta?: DeltaBadgeCounts | null
 }
 
 /**
@@ -315,12 +446,17 @@ interface BuildReviewArgs {
  */
 export function buildReviewSubmission({
   verdict: rawVerdict,
-  prAuthor,
+  // `prAuthor` is still part of the public args shape (older
+  // call sites pass it) but ARC-281's renderers don't take it —
+  // the Kimi redesign dropped per-author dialogue from the body.
+  prAuthor: _prAuthor,
   headSha,
   unanchored: rawUnanchored = [],
   nowMs,
   findingMarkers,
   stack,
+  coverage,
+  delta,
 }: BuildReviewArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize every prose field for GitHub
   // rendering BEFORE downstream renderers see the verdict. Wraps
@@ -333,7 +469,16 @@ export function buildReviewSubmission({
   // (CR + Sigilix PR #38 catch).
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
-  const body = formatReviewBody(verdict, prAuthor, event, unanchored, prov, stack)
+  // ARC-281: dispatch directly to the new renderers instead of
+  // routing through the legacy `formatReviewBody`. Posture is set by
+  // `chooseReviewEvent` above.
+  const renderArgs: RenderBodyArgs = { verdict, unanchored, prov }
+  if (stack !== undefined) renderArgs.stack = stack
+  if (coverage) renderArgs.coverage = coverage
+  if (delta !== undefined) renderArgs.delta = delta
+  const body = event === "APPROVE"
+    ? renderApproveBody(renderArgs)
+    : renderRequestChangesBody(renderArgs)
   const comments: SubmitReviewComment[] = verdict.findings.map((f, i) => {
     // ARC-189: append per-finding sigilix marker on its own line so
     // the cross-PR review-memory capture pipeline can correlate
@@ -371,6 +516,10 @@ interface BuildFallbackArgs {
   headSha: string
   /** ARC-182: optional stack context, forwarded to buildFallbackBody. */
   stack?: StackContext
+  /** ARC-281: specialist coverage roster (forwarded to renderer). */
+  coverage?: CoverageRoles
+  /** ARC-281: finding-delta counts (forwarded to renderer). */
+  delta?: DeltaBadgeCounts | null
 }
 
 /**
@@ -398,6 +547,8 @@ export function buildFallbackSubmission({
   unanchored: rawUnanchored,
   headSha,
   stack,
+  coverage,
+  delta,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
@@ -409,7 +560,7 @@ export function buildFallbackSubmission({
   // blocking findings are unanchored would post APPROVE while the
   // body lists blockers (CR + Sigilix PR #38 catch).
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
-  const body = buildFallbackBody(verdict, unanchored, undefined, stack)
+  const body = buildFallbackBody(verdict, unanchored, undefined, stack, coverage, delta)
   return {
     event,
     body,
@@ -430,43 +581,36 @@ export function buildFallbackBody(
   unanchored: PrReviewFinding[],
   prov?: ProvenanceCtx,
   stack?: StackContext,
+  coverage?: CoverageRoles,
+  delta?: DeltaBadgeCounts | null,
 ): string {
+  // ARC-281: the anchorless-fallback path means GitHub silently
+  // dropped the inline anchors, so the body must carry every
+  // finding. Pour both `verdict.findings` and `unanchored` into the
+  // single `unanchored` bucket of the new renderer — they render as
+  // the "Additional findings (could not anchor to diff)" section
+  // grouped by file, which is exactly the right place when none of
+  // them landed inline. The Fix Plan (high/critical only) still
+  // renders on top as a prioritized teaser.
   const all = [...verdict.findings, ...unanchored]
-  if (all.length === 0) {
-    // No inline findings to relocate; the standard prose body is fine.
-    // Still flow through formatReviewBody to keep the marker + summary.
-    return formatReviewBody(verdict, null, chooseReviewEvent(verdict.findings), [], prov, stack)
+  const event = chooseReviewEvent(all)
+  if (event === "APPROVE") {
+    const args: RenderBodyArgs = { verdict, unanchored: [] }
+    if (stack !== undefined) args.stack = stack
+    if (prov !== undefined) args.prov = prov
+    if (coverage) args.coverage = coverage
+    if (delta !== undefined) args.delta = delta
+    return renderApproveBody(args)
   }
-
-  const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
-  lines.push("### Sigilix Summary")
-  lines.push("")
-  lines.push(verdict.summary)
-  if (verdict.confidenceReason) {
-    lines.push("")
-    lines.push(verdict.confidenceReason)
+  const args: RenderBodyArgs = {
+    verdict: { ...verdict, findings: [] },
+    unanchored: all,
   }
-  // ARC-182: inject "### Stack context" between the summary and the
-  // findings list (mirrors placement in formatReviewBody). No-op when
-  // stack is absent or unstacked.
-  if (stack && stack.isStacked) {
-    const stackBlock = renderStackContextSummary(stack)
-    if (stackBlock.length > 0) {
-      lines.push("")
-      lines.push(stackBlock)
-    }
-  }
-  // ARC-180 deliberately does NOT add a Fix Plan section here — the
-  // fallback already renders every finding grouped by file (a few
-  // lines below), so a severity-prioritized header above the same
-  // data would duplicate content. The inline-anchor path uses Fix
-  // Plan because findings live BELOW the body as separate inline
-  // comments, not in the body itself.
-  lines.push("")
-  lines.push(`### Findings (${all.length})`)
-  lines.push(...renderFindingsByFile(all))
-
-  return capForGitHub(lines.join("\n"), prov)
+  if (stack !== undefined) args.stack = stack
+  if (prov !== undefined) args.prov = prov
+  if (coverage) args.coverage = coverage
+  if (delta !== undefined) args.delta = delta
+  return renderRequestChangesBody(args)
 }
 
 export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
@@ -486,103 +630,175 @@ export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
 }
 
 /**
- * Greptile-style review body. Prose-first with structured headers and
- * NO mechanical "Findings: N (max score N)" footer or numerical
- * confidence score in the body. The model's confidenceReason becomes
- * the lead, the summary is sub-text, and findings live as inline
- * comments below — so the body itself reads like a senior reviewer's
- * one-paragraph take, not a structured report.
+ * ARC-281: shared args for both `renderApproveBody` and
+ * `renderRequestChangesBody`. Mirrors the historical
+ * `formatReviewBody` signature but adds two fields surfaced by
+ * Kimi K2.6's spec:
  *
- * Reference shape (per Codex's audit of greptile-apps output):
- *   ### Arc Summary
- *   <prose paragraph>
+ *   - `coverage` — which specialists were dispatched vs returned;
+ *     drives the new `**Coverage:**` line (full or degraded).
+ *   - `delta` — finding delta vs the prior review's manifest;
+ *     drives the `**Δ:** +N new · M likely-fixed` badge under the
+ *     heading. `null` means no prior review or no signal.
  *
- *   <optional approval note when applicable>
- *
- *   <optional `### Important Files Changed` section, only when useful>
- *
- *   <"See N findings inline below" pointer when findings exist>
+ * The new renderers do NOT consume `verdict.confidenceReason` —
+ * Kimi flagged it as redundant with the summary (it routinely
+ * echoes the same content) so the redesign drops it from the
+ * customer-facing body. Per-finding inline comments still use it
+ * via `formatFindingComment` (ARC-282 will revisit).
  */
-function formatReviewBody(
-  verdict: PrReviewVerdict,
-  _prAuthor: string | null,
-  event: ReviewEvent,
-  unanchored: PrReviewFinding[] = [],
-  prov?: ProvenanceCtx,
-  stack?: StackContext,
-): string {
-  // Body is greptile-styled and prose-only. The structure is fixed
-  // (marker, header, model's summary, model's confidence reason,
-  // finding count pointer) but every word inside is the model's. No
-  // hardcoded author notes ("@author — items below are non-blocking,
-  // approving") because canned dialogue feels mechanical when it
-  // recurs across PRs. The model's summary already addresses the
-  // engineer reviewing the PR — that's the message.
-  //
-  // ARC-276: when the event is `APPROVE` (no findings) the body opens
-  // with an affirmative headline + a one-line statement of what
-  // Sigilix did. Without this, a no-findings APPROVE body would
-  // just be "### Sigilix Summary\n<summary>" with no clear pass
-  // signal at the top — the engineer reviewing the PR would have to
-  // read the model's prose to know whether anything was flagged.
-  //
-  // When `unanchored` is non-empty, an "Additional findings" section
-  // is appended so findings whose lines fell outside the diff still
-  // get surfaced (rather than silently dropped on the success path).
-  const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
-  const totalFindings = verdict.findings.length + unanchored.length
-  if (event === "APPROVE" && totalFindings === 0) {
-    // CodeRabbit catch on PR #88: this renderer is shared between
-    // the ensemble path (4 specialists + synth) AND the Phase 3
-    // single-shot path. Claiming "Four-specialist ensemble ran"
-    // here would be factually wrong on the Phase 3 path. Use
-    // path-agnostic copy until ARC-280 deletes Phase 3 (or
-    // ARC-281's formatting redesign supersedes this lead entirely).
-    lines.push("## ✅ Sigilix reviewed this PR — no issues found")
+export interface RenderBodyArgs {
+  verdict: PrReviewVerdict
+  /** Findings that passed the hallucination guard but couldn't be
+   *  anchored to a diff line. Surfaced via the "Additional findings"
+   *  section. Default `[]`. */
+  unanchored?: PrReviewFinding[]
+  /** Specialist dispatch/success roster. When absent, the coverage
+   *  line is omitted (back-compat shim for call sites that haven't
+   *  plumbed coverage through yet — ensemble will always supply). */
+  coverage?: CoverageRoles
+  /** Per-Kimi delta badge counts (already computed). `null` skips. */
+  delta?: DeltaBadgeCounts | null
+  /** Stack context. When `stack.isStacked === true && stack.parent`,
+   *  a `_(Stacked on #N)_` parenthetical appends to the summary
+   *  paragraph. */
+  stack?: StackContext
+  /** Provenance footer context (head SHA + nowMs override). When
+   *  supplied, `capForGitHub` appends the `_Reviewed against
+   *  \`{sha7}\` at {iso8601}._` footer. */
+  prov?: ProvenanceCtx
+}
+
+/**
+ * ARC-281: APPROVE-posture body renderer per Kimi K2.6's spec.
+ *
+ * Shape:
+ *   ```
+ *   <!-- openclaw:pr-review -->
+ *
+ *   ## Sigilix: Approved
+ *
+ *   **Coverage:** logic · security · performance · tests
+ *
+ *   No issues found.
+ *
+ *   _Reviewed against `dbe9b8c` at 2026-05-18T06:32:58.000Z._
+ *   ```
+ *
+ * When coverage is degraded, the "No issues found." line becomes
+ * "No issues found in covered areas." — the affirmation only covers
+ * what the surviving specialists actually examined. When coverage
+ * is absent (back-compat callers), the **Coverage:** line is
+ * omitted entirely.
+ *
+ * APPROVE bodies intentionally omit the dismissal hint (there's
+ * nothing to dismiss on an approval) and the Δ badge (an APPROVE
+ * after prior REQUEST_CHANGES is implicitly "all clear" — the delta
+ * counts collapse to noise).
+ *
+ * Pure — exported for tests.
+ */
+export function renderApproveBody(args: RenderBodyArgs): string {
+  const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
+  lines.push("## Sigilix: Approved")
+  const coverageLine = args.coverage ? renderCoverageLine(args.coverage) : null
+  const degraded = !!(args.coverage && args.coverage.succeeded.length < args.coverage.dispatched.length)
+  if (coverageLine) {
     lines.push("")
-    lines.push("Sigilix reviewed the current head and found nothing worth flagging.")
-    lines.push("")
+    lines.push(coverageLine)
   }
-  lines.push("### Sigilix Summary")
   lines.push("")
-  lines.push(verdict.summary)
-  if (verdict.confidenceReason) {
+  lines.push(degraded ? "No issues found in covered areas." : "No issues found.")
+  return capForGitHub(lines.join("\n"), args.prov)
+}
+
+/**
+ * ARC-281: REQUEST_CHANGES-posture body renderer per Kimi K2.6's
+ * spec.
+ *
+ * Shape (delta variant — Kimi sample 2b):
+ *   ```
+ *   <!-- openclaw:pr-review -->
+ *
+ *   ## Sigilix: 2 findings · Δ since last review
+ *
+ *   **Δ:** +2 new · 3 likely-fixed
+ *
+ *   **Coverage:** logic · security · performance · tests
+ *
+ *   <verdict.summary paragraph> _(Stacked on #87)_
+ *
+ *   ### Fix Plan
+ *   ...
+ *
+ *   ### Additional findings (could not anchor to diff)
+ *   ...
+ *
+ *   To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread.
+ *
+ *   _Reviewed against `c6fdc29` at 2026-05-18T05:41:45.506Z._
+ *   ```
+ *
+ * Pure — exported for tests.
+ */
+export function renderRequestChangesBody(args: RenderBodyArgs): string {
+  const unanchored = args.unanchored ?? []
+  const totalFindings = args.verdict.findings.length + unanchored.length
+
+  const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
+
+  // Heading: "## Sigilix: N finding[s][ · Δ since last review]".
+  const findingNoun = totalFindings === 1 ? "finding" : "findings"
+  const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
+  const deltaSuffix = deltaBadge ? " · Δ since last review" : ""
+  lines.push(`## Sigilix: ${totalFindings} ${findingNoun}${deltaSuffix}`)
+
+  // Δ badge line — directly under heading, before coverage and
+  // summary. Only present when delta has signal.
+  if (deltaBadge) {
     lines.push("")
-    lines.push(verdict.confidenceReason)
+    lines.push(deltaBadge)
   }
-  // ARC-182: inject "### Stack context" between Sigilix Summary and
-  // either the finding-count pointer or the Fix Plan. No-op when
-  // stack is absent or unstacked (`renderStackContextSummary` returns
-  // empty string in that case).
-  if (stack && stack.isStacked) {
-    const stackBlock = renderStackContextSummary(stack)
-    if (stackBlock.length > 0) {
-      lines.push("")
-      lines.push(stackBlock)
-    }
-  }
-  if (verdict.findings.length > 0) {
+
+  // Coverage line — full or degraded variant; absent when no
+  // coverage args supplied (back-compat).
+  const coverageLine = args.coverage ? renderCoverageLine(args.coverage) : null
+  if (coverageLine) {
     lines.push("")
-    lines.push(
-      `_${verdict.findings.length} ${verdict.findings.length === 1 ? "finding" : "findings"} inline below._`
-    )
+    lines.push(coverageLine)
   }
-  // ARC-180: Fix Plan — surface high/critical findings (score >= 4)
-  // as a prioritized repair queue at the top of the review. Anchored
-  // and unanchored findings both contribute, since the prioritization
-  // is severity-based and a blocker is a blocker regardless of
-  // whether the inline comment landed cleanly.
-  const fixPlan = renderFixPlan([...verdict.findings, ...unanchored])
+
+  // Summary paragraph (with optional stack-context parenthetical
+  // appended to the LAST paragraph so it visually attaches to the
+  // text rather than floating on its own line).
+  const stackParen = renderStackParenthetical(args.stack)
+  const summary = stackParen
+    ? `${args.verdict.summary.trimEnd()} ${stackParen}`
+    : args.verdict.summary
+  lines.push("")
+  lines.push(summary)
+
+  // Fix Plan — high/critical findings (anchored + unanchored both
+  // contribute since severity is the gate, not anchoring).
+  const fixPlan = renderFixPlan([...args.verdict.findings, ...unanchored])
   if (fixPlan) {
     lines.push("")
     lines.push(fixPlan)
   }
+
+  // Additional findings — unanchored set, grouped by file.
   if (unanchored.length > 0) {
     lines.push("")
-    lines.push(`### Additional findings (could not anchor to diff)`)
+    lines.push("### Additional findings (could not anchor to diff)")
     lines.push(...renderFindingsByFile(unanchored))
   }
-  return capForGitHub(lines.join("\n"), prov)
+
+  // Dismissal hint — REQUEST_CHANGES only, before the provenance
+  // footer.
+  lines.push("")
+  lines.push(DISMISSAL_HINT)
+
+  return capForGitHub(lines.join("\n"), args.prov)
 }
 
 // ARC-184: provenance footer + writer-side 65k cap.

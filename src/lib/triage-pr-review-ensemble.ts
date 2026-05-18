@@ -179,24 +179,25 @@ export const SPECIALIST_TIMEOUT_MS = 270_000
 // unchanged in 4a.3 — observed margin is fine, and a tighter synth
 // budget would mix concerns with the specialist rebalance.
 export const SYNTHESIZER_TIMEOUT_MS = 180_000
-// ARC-278: cap for the one-shot synth RETRY budget. Lives inside the
+// ARC-278: cap for the one-shot synth RETRY budget. Lives INSIDE the
 // reserved headroom — the retry is "use what's left in the headroom
 // envelope, don't extend the orchestrator wall." 30s is enough for
 // parse/provenance retries (the model already produced output, just
 // needs to re-emit cleanly) and gives any retry a fair-but-bounded
 // shot at success.
 //
-// Math: SPECIALIST (270) + SYNTHESIZER (180) + SYNTHESIZER_RETRY (30)
-//     + HEADROOM_FOR_FINALIZE (10) = 490 = ORCHESTRATOR_TIMEOUT_MS.
-//
-// The static invariant below adds the retry to the budget check so a
-// future "raise synth retry" change can't silently push the
-// orchestrator past 490s.
+// Budget math (Sigilix's own PR #91 review catch):
+//   SPECIALIST (270) + SYNTHESIZER (180) + RESERVED_HEADROOM (40) = 490
+//   Inside the 40s headroom: retry (30) + finalize reserve (5) + margin (5).
+//   So `RESERVED_HEADROOM_MS` is NOT spent in addition to the retry —
+//   the retry is carved out of it. The second module-load invariant
+//   below verifies retry + finalize ≤ headroom.
 export const SYNTHESIZER_RETRY_TIMEOUT_MS = 30_000
 // Reserved for pre-flight retrieval + diff parse + stale-head guards +
-// telemetry write. The orchestrator must always have at least this much
-// headroom beyond (specialist + synth + synth-retry) so a slow
-// Vectorize round-trip doesn't eat into the synth budget.
+// telemetry write — AND, post-ARC-278, for the synth retry call when
+// it fires. The orchestrator must always have at least this much
+// headroom beyond (specialist + synth) so a slow Vectorize round-trip
+// doesn't eat into the synth budget.
 export const RESERVED_HEADROOM_MS = 40_000
 // 270 + 180 + 40 = 490. Cloudflare queue ceiling is 900s. The 90s
 // orch bump (Phase 4a.3) is well under any user-perceptible review
@@ -1657,16 +1658,24 @@ export async function handlePrReviewEnsemble(
         // PR comment" title so the customer knows the normal
         // review pipeline didn't run.
         //
-        // submission.body already carries the `openclaw:pr-review`
-        // marker (built by `buildReviewSubmission` → `formatReviewBody`)
-        // so dismiss-prior + review-memory pipelines still find it.
+        // CodeRabbit catch on PR #91: on the inline-anchored path,
+        // `submission.body` is ONLY the formal review body — the
+        // actual findings live separately in `submission.comments`
+        // because they're meant to anchor as inline review comments.
+        // Posting `submission.body` as a top-level comment would
+        // drop every finding. Re-render via `buildFallbackSubmission`
+        // (the anchorless body-only renderer) so findings move into
+        // the body and survive the channel switch.
+        const fallbackCommentSubmission = buildFallbackSubmission({
+          verdict: renderableVerdict,
+          unanchored: renderableUnanchored,
+          prAuthor: meta.user?.login ?? null,
+          headSha,
+          ...(stack.isStacked ? { stack } : {}),
+        })
         const fallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
-          // SubmitReviewBody.body is typed optional but the formal
-          // path always populates it (formatReviewBody emits at
-          // least the marker + summary). Default to a one-liner
-          // for the unreachable-but-typed case.
-          body: submission.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          body: fallbackCommentSubmission.body ?? "<!-- openclaw:pr-review -->\n(no body)",
           submitPath: "inline-anchored",
         })
         if (fallback.ok) {
@@ -2060,7 +2069,12 @@ export const MAX_CALLS_PER_ENSEMBLE_RUN = (
   + maxAttempts(SPECIALIST_CONFIGS.security)
   + maxAttempts(SPECIALIST_CONFIGS.performance)
   + maxAttempts(SPECIALIST_CONFIGS.tests)
-  + maxAttempts(SYNTHESIZER_CONFIG)
+  // ARC-278 (CR catch on PR #91): reserve TWO synth budgets, not
+  // one. The retry path can fire a second `runSynthesizer` call
+  // (itself primary + retry + cross-provider fallback). Without
+  // this, a worst-case PR can spend up to N + maxAttempts(SYNTH)
+  // extra and overshoot the daily cap.
+  + (2 * maxAttempts(SYNTHESIZER_CONFIG))
 )
 
 async function dailyBudgetAvailable(env: Env): Promise<boolean> {

@@ -22,7 +22,7 @@
 //    Wraps the synth's formal-review body with a clear header
 //    ("Sigilix couldn't post this as a formal review on GitHub —
 //    posting as a comment instead") so the customer knows the
-//    channel changed. The body still carries the `openclaw:pr-review`
+//    channel changed. The body still carries the `sigilix:pr-review`
 //    marker family so cross-PR memory and dismiss-prior helpers can
 //    find it later.
 //
@@ -43,7 +43,7 @@ import type { Env } from "../index"
  *  `triage-pr-review.ts`) so dismissPriorSigilixReviews + review-memory
  *  pipelines can find a comment-fallback the same way they find a
  *  real review. */
-const SIGILIX_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
+const SIGILIX_REVIEW_BODY_MARKER = "<!-- sigilix:pr-review -->"
 
 /** Per-(PR, headSha) dedupe key for the comment-fallback path.
  *  Distinct key family from the regular pr-review dedupe so a
@@ -95,7 +95,7 @@ export type CommentFallbackSubmitPath =
  *   - which submit path was tried
  *   - what they can do (`/sigilix review` to retry)
  *
- * Body marker — `<!-- openclaw:pr-review -->` already lives in the
+ * Body marker — `<!-- sigilix:pr-review -->` already lives in the
  * synth body that gets passed in (every formal-review body emits it
  * via `formatReviewBody`); the wrapper adds a SECOND comment marker
  * for the fallback path itself so a future ARC-280-era refactor can
@@ -149,10 +149,10 @@ export function renderReviewCommentFallback(args: {
     "---",
     "",
   ].join("\n")
-  // Pull the openclaw:pr-review marker that lives at the top of the
+  // Pull the sigilix:pr-review marker that lives at the top of the
   // synth's body out so the two markers (fallback + review) stay
   // adjacent at the top. The synth body's first line is always
-  // `<!-- openclaw:pr-review -->`; tolerant of variation by just
+  // `<!-- sigilix:pr-review -->`; tolerant of variation by just
   // checking for the marker substring.
   if (body.includes(SIGILIX_REVIEW_BODY_MARKER)) {
     return `${header}${body}`
@@ -300,7 +300,7 @@ function dedupeKeyForSkipNotice(args: {
 }
 
 /** Pure: render the body for a "Sigilix couldn't review" comment.
- *  Carries the existing `openclaw:pr-review` marker so dismiss-prior
+ *  Carries the existing `sigilix:pr-review` marker so dismiss-prior
  *  / review-memory pipelines treat it as a Sigilix review surface,
  *  plus a dedicated `sigilix:review-skip-notice` marker so a future
  *  cleanup pass can tell skip-notices apart from real reviews +
@@ -334,7 +334,7 @@ export function renderReviewSkipNotice(args: {
       "An unexpected internal error fired during the ensemble run. The on-call team has a telemetry record.",
   }
   return [
-    "<!-- openclaw:pr-review -->",
+    "<!-- sigilix:pr-review -->",
     "<!-- sigilix:review-skip-notice -->",
     "",
     "> [!WARNING]",

@@ -13,11 +13,16 @@
 // current head.
 //
 // Identity: prior Sigilix reviews are identified by BOTH the
-// `<!-- openclaw:pr-review -->` marker in the body AND the
+// `<!-- sigilix:pr-review -->` marker in the body AND the
 // reviewer's `user.login === "sigilix[bot]"`. Defense in depth:
 // the marker alone could be impersonated by a human pasting the
 // HTML comment into their own review body; the login check
 // guarantees we only ever dismiss our own App's reviews.
+//
+// ARC-293 hard cutover from openclaw:* to sigilix:*. Old reviews
+// under the legacy marker stop being auto-dismissed; GitHub's
+// repo-level stale-dismissal handles them as a one-time migration
+// cost.
 //
 // Best-effort: any dismissal failure (4xx / 5xx / network) logs and
 // continues. The new review is already posted; a missed dismissal
@@ -29,7 +34,7 @@ import { GitHubClient } from "./github"
  *  `buildReviewSubmission` / `buildFallbackSubmission` in
  *  triage-pr-review.ts. Match-by-marker is the FIRST half of the
  *  dismissal gate; the user-login check below is the second. */
-export const SIGILIX_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
+export const SIGILIX_REVIEW_BODY_MARKER = "<!-- sigilix:pr-review -->"
 
 /** The bot login under which the Sigilix App posts reviews. Pair
  *  with the body marker to defend against any review whose body
@@ -138,26 +143,13 @@ export async function dismissPriorSigilixReviews(
   let failed = 0
   for (const r of targets) {
     try {
-      // The dismissal banner GitHub renders is shaped:
-      //
-      //   "sigilix [Bot] dismissed their stale review N minutes ago"
-      //                                  ^^^^^^^^^^^^
-      //                                  links to THIS review
-      //   ┌────────────────────────────────────────────────────────┐
-      //   │  <our message goes here>                                │
-      //   └────────────────────────────────────────────────────────┘
-      //
-      // It appears in the timeline BELOW the new active review (the
-      // dismiss API fires after the submit), so directional language
-      // like "see the most recent review above" is wrong-direction
-      // and "see below" is also wrong because nothing else follows.
-      // We name both commits instead: the one this review was for
-      // (so the reader can confirm it's stale) and the one Sigilix
-      // re-reviewed (so they can find the active review by SHA).
-      const oldSha = short(r.commitId)
-      const oldClause = oldSha ? ` (commit \`${oldSha}\`)` : ""
-      const newClause = newHead ? ` Sigilix has re-reviewed the new head (commit \`${newHead}\`).` : ""
-      const message = `This Sigilix review was posted against an earlier commit${oldClause} and is no longer current.${newClause}`
+      // ARC-293: the dismissal banner GitHub renders already says
+      // "sigilix [Bot] dismissed their stale review" with a link to
+      // the dismissed review. Our message lives in the expansion box
+      // below that line and only needs to carry one bit of extra
+      // signal: which SHA Sigilix re-reviewed at. The lightweight
+      // GitHub-native one-liner does the rest.
+      const message = newHead ? `Stale. Re-reviewed at \`${newHead}\`.` : "Stale."
       await client.dismissReview(owner, repo, prNumber, r.id, message)
       dismissed += 1
     } catch (err) {

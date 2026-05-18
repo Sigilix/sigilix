@@ -2314,7 +2314,7 @@ export async function handlePrReviewEnsemble(
         })
         const fallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
-          body: fallbackCommentSubmission.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          body: fallbackCommentSubmission.body ?? "<!-- sigilix:pr-review -->\n(no body)",
           submitPath: "inline-anchored",
         })
         if (fallback.ok) {
@@ -2443,7 +2443,7 @@ export async function handlePrReviewEnsemble(
         })
         const commentFallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
-          body: fallbackBodyOnly.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          body: fallbackBodyOnly.body ?? "<!-- sigilix:pr-review -->\n(no body)",
           submitPath: "inline-anchored-error",
         })
         if (commentFallback.ok) {
@@ -2512,7 +2512,7 @@ export async function handlePrReviewEnsemble(
         }))
         const commentFallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
-          body: fallback.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          body: fallback.body ?? "<!-- sigilix:pr-review -->\n(no body)",
           submitPath: "anchorless-fallback-error",
         })
         if (commentFallback.ok) {
@@ -2555,7 +2555,7 @@ export async function handlePrReviewEnsemble(
           // Same defensive default as the inline-anchored path:
           // `fallback.body` is typed optional but the anchorless
           // path always emits it (buildFallbackBody + the marker).
-          body: fallback.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          body: fallback.body ?? "<!-- sigilix:pr-review -->\n(no body)",
           submitPath: "anchorless-fallback",
         })
         if (commentFallback.ok) {

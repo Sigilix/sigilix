@@ -182,42 +182,32 @@ describe("renderStackParenthetical (ARC-281)", () => {
 
 // ─── renderApproveBody ────────────────────────────────────────────────
 
-describe("renderApproveBody (ARC-281)", () => {
-  it("Variant A — APPROVE, full coverage", () => {
+describe("renderApproveBody (ARC-293)", () => {
+  it("Variant A — APPROVE, full coverage = marker only", () => {
+    // ARC-293: APPROVE bodies are MARKER-ONLY by default. GitHub's
+    // native "approved these changes" line carries all the signal;
+    // the prior heading + coverage + 'No issues found' + provenance
+    // footer was timeline noise.
     const body = renderApproveBody({
       verdict: verdict(),
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toBe([
-      "<!-- openclaw:pr-review -->",
-      "",
-      "## Sigilix: Approved",
-      "",
-      "**Coverage:** logic · security · performance · tests",
-      "",
-      "No issues found.",
-      "",
-      "_Reviewed against `abcdef1` at 2025-05-18T05:48:38.000Z._",
-      "",
-    ].join("\n"))
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
-  it("Variant B — APPROVE, degraded coverage uses 'in covered areas'", () => {
+  it("Variant B — APPROVE, degraded coverage adds one ASCII warning line", () => {
     const body = renderApproveBody({
       verdict: verdict(),
       coverage: ONE_MISSING,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toContain("**Coverage:** logic · security · tests — _performance specialist unavailable_")
-    expect(body).toContain("No issues found in covered areas.")
-    expect(body).not.toContain("No issues found.\n") // no plain variant
+    expect(body).toBe("<!-- sigilix:pr-review -->\n\nApproved on partial coverage.\n")
   })
 
-  it("Variant C — APPROVE without coverage args (back-compat) omits the line entirely", () => {
+  it("Variant C — APPROVE without coverage args (back-compat) = marker only", () => {
     const body = renderApproveBody({ verdict: verdict() })
-    expect(body).not.toMatch(/^\*\*Coverage:/m)
-    expect(body).toContain("No issues found.")
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
   it("APPROVE body never carries the dismissal hint (nothing to dismiss)", () => {
@@ -232,13 +222,24 @@ describe("renderApproveBody (ARC-281)", () => {
   it("APPROVE body never carries emoji (cross-renderer consistency)", () => {
     const body = renderApproveBody({
       verdict: verdict(),
-      coverage: FULL,
+      coverage: ONE_MISSING,
     })
     // CR-quote-free check: no Unicode emoji from the BMP supplementary
     // ranges or common control symbols Sigilix shipped pre-redesign.
-    // We are NOT trying to be exhaustive — just guard the specific
-    // emoji Kimi explicitly told us to drop.
     expect(body).not.toMatch(/✅|🎉|🤖|🪄/)
+  })
+
+  it("APPROVE body bypasses the provenance footer (ARC-293)", () => {
+    // capForGitHub appends `_Reviewed against...` unconditionally —
+    // the new renderer skips it. GitHub's commit attribution on the
+    // approve event ("approved these changes via <commit>") carries
+    // the SHA signal already.
+    const body = renderApproveBody({
+      verdict: verdict(),
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).not.toContain("_Reviewed against")
   })
 })
 
@@ -252,7 +253,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       prov: { headSha: HEAD, nowMs: NOW },
     })
     expect(body).toBe([
-      "<!-- openclaw:pr-review -->",
+      "<!-- sigilix:pr-review -->",
       "",
       "## Sigilix: 1 finding",
       "",
@@ -372,7 +373,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       verdict: verdict({ findings: [finding()] }),
       coverage: FULL,
     })
-    expect(body.startsWith("<!-- openclaw:pr-review -->\n")).toBe(true)
+    expect(body.startsWith("<!-- sigilix:pr-review -->\n")).toBe(true)
     expect(body).not.toMatch(/^\s+<!--/)
   })
 

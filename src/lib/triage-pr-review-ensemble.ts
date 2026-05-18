@@ -906,26 +906,19 @@ export async function handlePrReviewEnsemble(
       }),
     ])
 
-    // ARC-194: incremental review. If we've reviewed this PR before
-    // and the current head SHA differs from the recorded one, fetch
-    // the compare diff and use that — saves model spend on
-    // iteration-heavy PRs where most pushes only touch a small subset
-    // of files. Fail-safe: any error / suspicious shape falls back to
-    // full diff so we never review LESS than what's open.
+    // ARC-194 / SIG-10: read prior-review marker for telemetry only.
+    // The diff fed to specialists + synth is always the cumulative
+    // full PR diff (PR.base.sha..headSha) — SIG-10 removed the
+    // incremental compare-diff path because on multi-commit PRs the
+    // push-delta diff produced false-positive "undefined export"-class
+    // findings against symbols introduced in an earlier commit. See
+    // `selectDiff` in incremental-review.ts for the full rationale.
+    // The compareDiff fetch is gone too: its result is no longer
+    // consumed, so spending the round-trip would be pure waste.
     const lastReviewed = await readLastReviewedSha(env, owner, repo, prNumber)
-    let compareDiff: string | null = null
-    if (lastReviewed !== null && lastReviewed.reviewedSha !== headSha) {
-      try {
-        compareDiff = await client.getCompareDiff(
-          owner, repo, lastReviewed.reviewedSha, headSha,
-        )
-      } catch {
-        compareDiff = null
-      }
-    }
     const diffSelection = selectDiff({
       fullDiff: fullPrDiff,
-      compareDiff,
+      compareDiff: null,
       previousSha: lastReviewed?.reviewedSha ?? null,
       currentHeadSha: headSha,
     })

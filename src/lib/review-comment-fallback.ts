@@ -102,13 +102,31 @@ export function renderReviewCommentFallback(args: {
 }): string {
   const { body, submitPath, headSha } = args
   const sha7 = headSha.slice(0, 7)
+  // The reason line varies by submit-path. ARC-279's original two
+  // paths (`inline-anchored` + `anchorless-fallback`) hit this code
+  // when submitReview returned 2xx but the review never persisted
+  // — describe that. ARC-287 added `inline-anchored-error`: the
+  // submit actually threw (timeout, 5xx, rate limit), not silently
+  // failed. The two failure modes deserve distinct copy so the
+  // customer reading the comment knows what to expect on retry.
+  const reason: string = (() => {
+    switch (submitPath) {
+      case "inline-anchored-error":
+        return `> The \`${submitPath}\` submit failed with a transient GitHub error (timeout, 5xx, rate limit, etc). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`
+      case "inline-anchored":
+      case "anchorless-fallback":
+      case "phase3":
+      default:
+        return `> The \`${submitPath}\` submit returned 2xx but the review never became publicly visible (PENDING / silent reject). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`
+    }
+  })()
   const header = [
     "<!-- sigilix:review-comment-fallback -->",
     "",
     "> [!WARNING]",
     "> **Sigilix couldn't post this as a formal review on GitHub.**",
     ">",
-    `> The \`${submitPath}\` submit returned 2xx but the review never became publicly visible (PENDING / silent reject). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`,
+    reason,
     ">",
     `> Re-run \`/sigilix review\` to try posting the formal review again. Run on \`${sha7}\`.`,
     "",

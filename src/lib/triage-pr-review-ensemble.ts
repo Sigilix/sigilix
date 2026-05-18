@@ -2641,31 +2641,50 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     //                         is set; runWithRetryAndFallback skips it
     //                         when fallback is null).
     onAttempt: (info) => {
-      const attemptKind = info.attemptIndex === 1
-        ? "primary"
-        : info.attemptIndex <= config.retries + 1
-          ? "retry"
-          : "fallback"
-      const outcome = info.verdictOk
-        ? "ok"
-        : (info.failureReason ?? "").includes("timeout")
-          ? "timeout"
-          : (info.failureReason ?? "").toLowerCase().includes("abort")
-            ? "aborted"
-            : "failed"
-      emitModelAttempt(args.perfCtx, {
-        phase: "specialist",
-        role: args.role,
-        attemptKind,
-        attemptIndex: info.attemptIndex,
-        model: info.model,
-        timeoutMs: info.timeoutMs,
-        startedAtMs: info.startedAtMs,
-        endedAtMs: info.endedAtMs,
-        elapsedMs: info.endedAtMs - info.startedAtMs,
-        outcome,
-        ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
-      })
+      try {
+        const attemptKind = info.attemptIndex === 1
+          ? "primary"
+          : info.attemptIndex <= config.retries + 1
+            ? "retry"
+            : "fallback"
+        const outcome = info.verdictOk
+          ? "ok"
+          : (info.failureReason ?? "").includes("timeout")
+            ? "timeout"
+            : (info.failureReason ?? "").toLowerCase().includes("abort")
+              ? "aborted"
+              : "failed"
+        emitModelAttempt(args.perfCtx, {
+          phase: "specialist",
+          role: args.role,
+          attemptKind,
+          attemptIndex: info.attemptIndex,
+          model: info.model,
+          timeoutMs: info.timeoutMs,
+          startedAtMs: info.startedAtMs,
+          endedAtMs: info.endedAtMs,
+          elapsedMs: info.endedAtMs - info.startedAtMs,
+          outcome,
+          ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+        })
+      } catch (err) {
+        // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
+        // must not corrupt the verdict path. `runSpecialist` runs inside
+        // Promise.allSettled — an uncaught throw here converts a valid
+        // specialist verdict into a rejected entry, dropping coverage.
+        // Surface the failure as a structured event for CF Logs; don't
+        // re-throw.
+        console.log(JSON.stringify({
+          event: "model-attempt-emit-error",
+          owner: args.perfCtx.owner,
+          repo: args.perfCtx.repo,
+          prNumber: args.perfCtx.prNumber,
+          headSha: args.perfCtx.headSha.slice(0, 7),
+          phase: "specialist",
+          role: args.role,
+          message: err instanceof Error ? err.message : String(err),
+        }))
+      }
     },
   })
 }
@@ -2727,9 +2746,16 @@ export async function runWithRetryAndFallback<T>(args: {
    * success and failure branches, BEFORE the next iteration. The
    * shadow runner uses this to emit `shadow-model-attempt-completed`;
    * the prod path uses it (wired in `runSpecialist`/`runSynthesizer`)
-   * to emit `model-attempt-completed`. NOT wrapped in try/catch —
-   * if the callback throws, that's a real bug we want to surface in
-   * CF Logs, not paper over with silent telemetry loss.
+   * to emit `model-attempt-completed`.
+   *
+   * `runWithRetryAndFallback` itself does NOT wrap the callback in
+   * try/catch — callers own that decision. The prod-path callers
+   * (`runSpecialist`/`runSynthesizer`) DO wrap because their
+   * runSpecialist/runSynthesizer call is inside `Promise.allSettled`
+   * (or `attemptSynth`'s catch) where an emit-throw would silently
+   * discard a valid verdict. The shadow runner deliberately leaves
+   * its callback bare — shadow-mode telemetry failures should be
+   * loud, not papered over.
    */
   onAttempt?: (info: AttemptCallbackInfo) => void
 }): Promise<{
@@ -3120,31 +3146,51 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
     // is the literal "synth" string (matches the `ModelAttemptPhase`
     // type definition in `ensemble-perf-telemetry.ts`).
     onAttempt: (info) => {
-      const attemptKind = info.attemptIndex === 1
-        ? "primary"
-        : info.attemptIndex <= effectiveConfig.retries + 1
-          ? "retry"
-          : "fallback"
-      const outcomeLabel = info.verdictOk
-        ? "ok"
-        : (info.failureReason ?? "").includes("timeout")
-          ? "timeout"
-          : (info.failureReason ?? "").toLowerCase().includes("abort")
-            ? "aborted"
-            : "failed"
-      emitModelAttempt(args.perfCtx, {
-        phase: "synth",
-        role: "synth",
-        attemptKind,
-        attemptIndex: info.attemptIndex,
-        model: info.model,
-        timeoutMs: info.timeoutMs,
-        startedAtMs: info.startedAtMs,
-        endedAtMs: info.endedAtMs,
-        elapsedMs: info.endedAtMs - info.startedAtMs,
-        outcome: outcomeLabel,
-        ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
-      })
+      try {
+        const attemptKind = info.attemptIndex === 1
+          ? "primary"
+          : info.attemptIndex <= effectiveConfig.retries + 1
+            ? "retry"
+            : "fallback"
+        const outcomeLabel = info.verdictOk
+          ? "ok"
+          : (info.failureReason ?? "").includes("timeout")
+            ? "timeout"
+            : (info.failureReason ?? "").toLowerCase().includes("abort")
+              ? "aborted"
+              : "failed"
+        emitModelAttempt(args.perfCtx, {
+          phase: "synth",
+          role: "synth",
+          attemptKind,
+          attemptIndex: info.attemptIndex,
+          model: info.model,
+          timeoutMs: info.timeoutMs,
+          startedAtMs: info.startedAtMs,
+          endedAtMs: info.endedAtMs,
+          elapsedMs: info.endedAtMs - info.startedAtMs,
+          outcome: outcomeLabel,
+          ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+        })
+      } catch (err) {
+        // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
+        // must not corrupt the verdict path. `runSynthesizer` is invoked
+        // by `attemptSynth` in the orchestrator (which catches throws +
+        // returns null → fires the ARC-278 retry → if THAT also throws,
+        // synth_timeout skip-notice fires for a valid synth output).
+        // Surface the failure as a structured event for CF Logs; don't
+        // re-throw.
+        console.log(JSON.stringify({
+          event: "model-attempt-emit-error",
+          owner: args.perfCtx.owner,
+          repo: args.perfCtx.repo,
+          prNumber: args.perfCtx.prNumber,
+          headSha: args.perfCtx.headSha.slice(0, 7),
+          phase: "synth",
+          role: "synth",
+          message: err instanceof Error ? err.message : String(err),
+        }))
+      }
     },
   })
 

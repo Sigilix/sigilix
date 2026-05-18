@@ -255,6 +255,31 @@ describe("dismissPriorSigilixReviews", () => {
     expect(message).not.toMatch(/re-reviewed/i)
   })
 
+  it("dismissal message drops both clauses when the SHAs are shorter than 7 chars (short() <7 branch)", async () => {
+    // Sigilix found this gap: `short()` returns null when sha.length
+    // < 7. All other tests use 40-char SHAs so the <7 branch is
+    // never exercised. Cover both inputs being short — message must
+    // still be coherent (no "commit `null`" / "commit ``" / empty
+    // parens).
+    mockListPullRequestReviews.mockResolvedValue([
+      priorReview({ id: 100, state: "APPROVED", commitId: "abc123" }), // 6 chars — under threshold
+    ])
+    const client = new GitHubClient({ token: "t" })
+
+    await dismissPriorSigilixReviews({
+      ...baseArgs,
+      client,
+      headSha: "def456", // 6 chars — under threshold
+    })
+
+    const message = mockDismissReview.mock.calls[0]?.[4] as string
+    expect(message).toMatch(/earlier commit/i)
+    // No parenthetical, no quoted-empty, no literal "null".
+    expect(message).not.toMatch(/commit `\w*`|commit `null`|\(\)/i)
+    // No new-head clause either.
+    expect(message).not.toMatch(/re-reviewed/i)
+  })
+
   it("dismissal message omits the stale-commit clause when listPullRequestReviews returns no commit_id", async () => {
     mockListPullRequestReviews.mockResolvedValue([
       priorReview({ id: 100, state: "APPROVED", commitId: null }),

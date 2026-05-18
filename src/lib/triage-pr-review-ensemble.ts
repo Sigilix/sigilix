@@ -3580,14 +3580,17 @@ type EnsembleResultStatus =
  *
  * ARC-280 follow-up: `surface === "skip-notice"` signals that the
  * ensemble couldn't even generate a verdict (router_no_specialists,
- * specialists_all_failed, synth retry exhausted, internal_error)
- * and posted a minimal "Sigilix couldn't review" comment instead.
- * Set on `status === "errored"` so the dispatcher's existing
- * errored → failure mapping kicks in; the Check Run renderer then
- * branches on `surface === "skip-notice"` to show a "couldn't
- * review — see PR comment" title. `event` + `findingsCount` are
- * required by the type but ignored on this branch (we don't have
- * a verdict to count).
+ * specialists_all_failed, synth retry exhausted) and posted a
+ * minimal "Sigilix couldn't review" comment instead. The catch-all
+ * `internal_error` path is intentionally NOT in this list — it
+ * returns a generic `errored` result with no `surface`, because the
+ * catch may fire before the client/auth is built (so the
+ * `bailWithSkipNotice` closure isn't reachable). Set on `status ===
+ * "errored"` so the dispatcher's existing errored → failure mapping
+ * kicks in; the Check Run renderer then branches on `surface ===
+ * "skip-notice"` to show a "couldn't review — see PR comment"
+ * title. `event` + `findingsCount` are required by the type but
+ * ignored on this branch (we don't have a verdict to count).
  */
 export interface ReviewMeta {
   event: "APPROVE" | "REQUEST_CHANGES"

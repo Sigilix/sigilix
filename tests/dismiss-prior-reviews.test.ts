@@ -51,6 +51,9 @@ const baseArgs = {
   repo: "sigilix",
   prNumber: 42,
   currentReviewId: 1000,
+  // 40-char SHA — short(headSha) will trim to the first 7 chars
+  // (`abcdef1`) for display in the dismissal message.
+  headSha: "abcdef1234567890abcdef1234567890abcdef12",
 } as const
 
 function priorReview(opts: {
@@ -58,12 +61,18 @@ function priorReview(opts: {
   state: string
   body?: string
   user?: { login: string } | null
-}): { id: number; state: string; user: { login: string } | null; body: string } {
+  commitId?: string | null
+}): { id: number; state: string; user: { login: string } | null; body: string; commitId: string | null } {
   return {
     id: opts.id,
     state: opts.state,
     body: opts.body ?? `${SIGILIX_REVIEW_BODY_MARKER}\nfoo`,
     user: opts.user === undefined ? { login: "sigilix[bot]" } : opts.user,
+    // Default to a non-overlapping 40-char SHA so prior-review SHAs
+    // don't collide with `headSha` in the dismissal-message tests.
+    commitId: opts.commitId === undefined
+      ? "0000111122223333444455556666777788889999"
+      : opts.commitId,
   }
 }
 
@@ -205,7 +214,7 @@ describe("dismissPriorSigilixReviews", () => {
     expect(mockDismissReview).not.toHaveBeenCalled()
   })
 
-  it("passes a descriptive dismissal message GitHub will surface in the Reviews tab", async () => {
+  it("dismissal message names both the stale commit and the new head SHA (self-contained, no directional pointer)", async () => {
     mockListPullRequestReviews.mockResolvedValue([
       priorReview({ id: 100, state: "APPROVED" }),
     ])
@@ -213,9 +222,79 @@ describe("dismissPriorSigilixReviews", () => {
 
     await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    const message = mockDismissReview.mock.calls[0]?.[4]
+    const message = mockDismissReview.mock.calls[0]?.[4] as string
     expect(typeof message).toBe("string")
-    expect(message).toMatch(/Superseded|newer|Sigilix/i)
+    // ARC-258 follow-up (PR #92, second round): GitHub renders the
+    // dismissal banner BELOW the new active review in the timeline,
+    // so directional language like "see the most recent review" is
+    // ambiguous. The message must be self-contained:
+    //   - names the STALE commit (short SHA of the dismissed review)
+    //   - names the NEW HEAD (short SHA the headSha arg points at)
+    //   - says "Sigilix" so the reader knows which bot they're reading
+    //   - does NOT tell the reader to "see" some other review
+    expect(message).toMatch(/0000111/) // short SHA of the dismissed review
+    expect(message).toMatch(/abcdef1/) // short SHA of the new head
+    expect(message).toMatch(/Sigilix/)
+    expect(message).not.toMatch(/see the/i)
+  })
+
+  it("dismissal message omits the new-head clause when headSha is not provided (backwards compat)", async () => {
+    mockListPullRequestReviews.mockResolvedValue([
+      priorReview({ id: 100, state: "APPROVED" }),
+    ])
+    const client = new GitHubClient({ token: "t" })
+
+    // Call without headSha (legacy callers).
+    const { headSha: _unused, ...argsWithoutHead } = baseArgs
+    await dismissPriorSigilixReviews({ ...argsWithoutHead, client })
+
+    const message = mockDismissReview.mock.calls[0]?.[4] as string
+    // Old commit is still named, but we drop the "re-reviewed (commit
+    // {sha})" clause so we never print "commit `null`" or similar.
+    expect(message).toMatch(/0000111/)
+    expect(message).not.toMatch(/re-reviewed/i)
+  })
+
+  it("dismissal message drops both clauses when the SHAs are shorter than 7 chars (short() <7 branch)", async () => {
+    // Sigilix found this gap: `short()` returns null when sha.length
+    // < 7. All other tests use 40-char SHAs so the <7 branch is
+    // never exercised. Cover both inputs being short — message must
+    // still be coherent (no "commit `null`" / "commit ``" / empty
+    // parens).
+    mockListPullRequestReviews.mockResolvedValue([
+      priorReview({ id: 100, state: "APPROVED", commitId: "abc123" }), // 6 chars — under threshold
+    ])
+    const client = new GitHubClient({ token: "t" })
+
+    await dismissPriorSigilixReviews({
+      ...baseArgs,
+      client,
+      headSha: "def456", // 6 chars — under threshold
+    })
+
+    const message = mockDismissReview.mock.calls[0]?.[4] as string
+    expect(message).toMatch(/earlier commit/i)
+    // No parenthetical, no quoted-empty, no literal "null".
+    expect(message).not.toMatch(/commit `\w*`|commit `null`|\(\)/i)
+    // No new-head clause either.
+    expect(message).not.toMatch(/re-reviewed/i)
+  })
+
+  it("dismissal message omits the stale-commit clause when listPullRequestReviews returns no commit_id", async () => {
+    mockListPullRequestReviews.mockResolvedValue([
+      priorReview({ id: 100, state: "APPROVED", commitId: null }),
+    ])
+    const client = new GitHubClient({ token: "t" })
+
+    await dismissPriorSigilixReviews({ ...baseArgs, client })
+
+    const message = mockDismissReview.mock.calls[0]?.[4] as string
+    // No stale SHA available — message still has to be coherent. We
+    // fall through to "an earlier commit" with no parenthetical.
+    expect(message).toMatch(/earlier commit/i)
+    expect(message).not.toMatch(/commit `null`|commit ``/i)
+    // New head SHA still rendered because headSha is provided.
+    expect(message).toMatch(/abcdef1/)
   })
 
   // code-reviewer M2 catch: warn when the list-call hits the 100-cap

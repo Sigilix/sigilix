@@ -135,11 +135,20 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
  * maps that to a `failure` conclusion + a "see PR comment" title
  * so the customer knows the normal review pipeline didn't run even
  * though they have a comment to read.
+ *
+ * ARC-280 follow-up: `surface === "skip-notice"` is set when the
+ * ensemble couldn't generate a verdict (router_no_specialists /
+ * specialists_all_failed / synth retry exhausted / internal_error)
+ * and posted a minimal "Sigilix couldn't review" comment. The
+ * dispatcher maps `errored + surface=skip-notice` to `failure`
+ * with a distinct "Couldn't review — see PR comment" title so the
+ * customer knows the review didn't run AND can find the explanation
+ * comment.
  */
 export interface ReviewCheckMeta {
   event: "APPROVE" | "REQUEST_CHANGES"
   findingsCount: number
-  surface?: "review" | "comment"
+  surface?: "review" | "comment" | "skip-notice"
 }
 
 interface CompleteArgs {
@@ -292,6 +301,17 @@ export function renderOutputForConclusion(
         return {
           title: "Couldn't post review — see PR comment",
           summary: "GitHub silently rejected Sigilix's formal review submit. Sigilix posted the review content as a regular PR comment instead so the signal isn't lost. Re-run `/sigilix review` to try the formal review again.",
+        }
+      }
+      // ARC-280 follow-up: `surface === "skip-notice"` means the
+      // ensemble couldn't even generate a verdict (no specialist
+      // ran or synth fully failed after retry) and posted a
+      // minimal "couldn't review" comment instead. Different
+      // title so log analysis can distinguish.
+      if (reviewMeta?.surface === "skip-notice") {
+        return {
+          title: "Couldn't review — see PR comment",
+          summary: "Sigilix couldn't generate a review for this PR (specialists failed, synth couldn't run, or an internal error fired). A short PR comment explains which path bailed. Re-run `/sigilix review` to try again.",
         }
       }
       return {

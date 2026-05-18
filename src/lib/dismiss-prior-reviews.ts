@@ -50,6 +50,15 @@ export interface DismissPriorArgs {
   /** The review we JUST posted. Excluded from dismissal so we
    *  don't undo our own fresh review. */
   currentReviewId: number
+  /** The SHA of the new head Sigilix just reviewed. Used to name
+   *  the new commit in the dismissal message so readers don't have
+   *  to scroll/search for which review is the current one. The
+   *  GitHub timeline places the "dismissed their stale review"
+   *  banner BELOW the new review, so the message can't point
+   *  directionally ("see the most recent review") — it has to be
+   *  self-contained. Optional for backwards compatibility with
+   *  callers that don't yet plumb the head SHA through. */
+  headSha?: string
 }
 
 export interface DismissPriorResult {
@@ -71,8 +80,14 @@ export interface DismissPriorResult {
 export async function dismissPriorSigilixReviews(
   args: DismissPriorArgs,
 ): Promise<DismissPriorResult> {
-  const { client, owner, repo, prNumber, currentReviewId } = args
-  let reviews: Array<{ id: number; state: string; user: { login: string } | null; body: string }>
+  const { client, owner, repo, prNumber, currentReviewId, headSha } = args
+  let reviews: Array<{
+    id: number
+    state: string
+    user: { login: string } | null
+    body: string
+    commitId: string | null
+  }>
   try {
     reviews = await client.listPullRequestReviews(owner, repo, prNumber)
   } catch (err) {
@@ -105,14 +120,37 @@ export async function dismissPriorSigilixReviews(
     }))
   }
   if (targets.length === 0) return { dismissed: 0, failed: 0 }
+  // Short-SHA helper for the human-readable dismissal message. 7
+  // chars matches `git log --oneline` / GitHub's default permalink
+  // truncation, which is what most readers visually recognize.
+  const short = (sha: string | null | undefined): string | null =>
+    typeof sha === "string" && sha.length >= 7 ? sha.slice(0, 7) : null
+  const newHead = short(headSha ?? null)
   let dismissed = 0
   let failed = 0
   for (const r of targets) {
     try {
-      await client.dismissReview(
-        owner, repo, prNumber, r.id,
-        "Superseded by a newer Sigilix review on the latest commit.",
-      )
+      // The dismissal banner GitHub renders is shaped:
+      //
+      //   "sigilix [Bot] dismissed their stale review N minutes ago"
+      //                                  ^^^^^^^^^^^^
+      //                                  links to THIS review
+      //   ┌────────────────────────────────────────────────────────┐
+      //   │  <our message goes here>                                │
+      //   └────────────────────────────────────────────────────────┘
+      //
+      // It appears in the timeline BELOW the new active review (the
+      // dismiss API fires after the submit), so directional language
+      // like "see the most recent review above" is wrong-direction
+      // and "see below" is also wrong because nothing else follows.
+      // We name both commits instead: the one this review was for
+      // (so the reader can confirm it's stale) and the one Sigilix
+      // re-reviewed (so they can find the active review by SHA).
+      const oldSha = short(r.commitId)
+      const oldClause = oldSha ? ` (commit \`${oldSha}\`)` : ""
+      const newClause = newHead ? ` Sigilix has re-reviewed the new head (commit \`${newHead}\`).` : ""
+      const message = `This Sigilix review was posted against an earlier commit${oldClause} and is no longer current.${newClause}`
+      await client.dismissReview(owner, repo, prNumber, r.id, message)
       dismissed += 1
     } catch (err) {
       failed += 1

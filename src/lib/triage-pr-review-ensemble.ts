@@ -46,7 +46,7 @@ import {
   buildFallbackSubmission,
   chooseReviewEvent,
 } from "./triage-pr-review"
-import { postReviewCommentFallback } from "./review-comment-fallback"
+import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
   ALL_SPECIALISTS,
@@ -115,7 +115,6 @@ import {
   selectDiff,
   type DiffMode,
 } from "./incremental-review"
-import { isRepoSensitive } from "./repo-policy"
 import {
   computeFileListHash,
   readReviewManifest,
@@ -156,7 +155,6 @@ import type { Env } from "../index"
 // 4b when the synthesizer's optional retrieve_codebase tool path is
 // fully wired.
 const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
-const DEFAULT_DAILY_BUDGET = 200
 
 // Phase 4a.3 timeout schedule (rebalanced 2026-05-06 after Phase 4a.2
 // telemetry validation, ARC-171). The Phase 4a.1 sizing (180s) was
@@ -359,8 +357,6 @@ const RETRY_BACKOFF_MS = [800, 2500]
 
 // ─── public types ──────────────────────────────────────────────────────
 
-export type EnsembleMode = "off" | "shadow" | "post"
-
 export interface EnsembleHandlerArgs {
   owner: string
   repo: string
@@ -376,70 +372,24 @@ export interface EnsembleHandlerArgs {
   staleHeadRequeueDepth?: number
 }
 
-export type RouteDecision =
-  | { primary: "ensemble-shadow"; secondary: "phase3-agentic" }
-  | { primary: "ensemble-post" }
-  | { primary: "phase3-agentic" }
-  | { primary: "phase3-singleshot-legacy" }
-  // ARC-183: sensitive repo — skip ALL review pipelines. Sigilix
-  // never fetches the diff or sends content to any LLM. Caller logs
-  // the skip + reason for audit but performs no GitHub API call.
-  | { primary: "skipped-sensitive"; reason: "repo_in_sensitive_denylist" }
-
-/**
- * Top-level routing: given env + repo + budget state, decide which
- * review pipeline runs. Pure-ish (does check the daily-budget KV
- * counter, which is async — but called from the queue handler, not
- * inside any tight loop).
- */
-export async function routeReview(args: {
-  env: Env
-  owner: string
-  repo: string
-}): Promise<RouteDecision> {
-  const { env, owner, repo } = args
-
-  // ARC-183: sensitive-repo gate runs FIRST, before any other
-  // routing logic. Even Phase 3 is blocked — the policy is "no LLM
-  // ever sees this repo's content," not "use a different review
-  // path." Match is case-insensitive on `owner/repo`.
-  if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
-    return { primary: "skipped-sensitive", reason: "repo_in_sensitive_denylist" }
-  }
-
-  const mode = parseMode(env.OPENCLAW_ENSEMBLE_REVIEW_MODE)
-
-  if (mode === "off") {
-    return env.OPENCLAW_AGENTIC_GITHUB_MODE === "on"
-      ? { primary: "phase3-agentic" }
-      : { primary: "phase3-singleshot-legacy" }
-  }
-
-  // ARC-232 (2026-05-16): the `OPENCLAW_ENSEMBLE_REVIEW_ALLOWED_REPOS`
-  // allowlist was deleted. The remaining ensemble gates, in the
-  // order they fire inside this routing decision:
-  //   1. sensitive-deny (line 364, runs first — returns "skipped-sensitive")
-  //   2. mode (above — "off" routes to Phase 3)
-  //   3. daily-budget (below — exhausted budget routes to Phase 3)
-
-  if (!(await dailyBudgetAvailable(env))) {
-    return env.OPENCLAW_AGENTIC_GITHUB_MODE === "on"
-      ? { primary: "phase3-agentic" }
-      : { primary: "phase3-singleshot-legacy" }
-  }
-
-  if (mode === "shadow") {
-    return { primary: "ensemble-shadow", secondary: "phase3-agentic" }
-  }
-  return { primary: "ensemble-post" }
-}
+// ARC-280: `routeReview` + `RouteDecision` + the shadow/post/off
+// mode-routing layer were deleted. The dispatcher now performs an
+// inline sensitive-repo skip check and otherwise calls
+// `handlePrReviewEnsemble` directly. Daily-budget exhaustion is
+// handled inside the ensemble itself (an early `skipped` return
+// with `fellBackReason: "daily_budget_exhausted"` once it lands).
 
 // ─── orchestrator ──────────────────────────────────────────────────────
 
 export async function handlePrReviewEnsemble(
   args: EnsembleHandlerArgs,
-  mode: "shadow" | "post",
 ): Promise<EnsembleResult> {
+  // ARC-280: `mode` parameter removed. The pre-ARC-275 dual-mode
+  // routing (shadow vs post) is gone; this handler is the only
+  // production review path. The `EnsembleTelemetry.mode` field is
+  // pinned to `"post"` for back-compat with downstream analytics
+  // queries that may filter on it.
+  const mode = "post" as const
   const { owner, repo, prNumber, headSha, installationId, env } = args
   const staleHeadRequeueDepth = args.staleHeadRequeueDepth ?? 0
   const startMs = Date.now()
@@ -479,6 +429,43 @@ export async function handlePrReviewEnsemble(
 
   try {
     const client = await buildClient(env, installationId)
+
+    // ARC-280 follow-up: bail with a customer-visible skip-notice
+    // comment + an `errored` result. Used by the silent-skip paths
+    // that used to fall through to Phase 3 (router_no_specialists,
+    // specialists_all_failed, synth retry exhausted). The
+    // dispatcher already maps `errored` to a `failure` Check Run;
+    // the reviewMeta.surface signal flips the title to "Couldn't
+    // review — see PR comment."
+    //
+    // CR Major / Sigilix Logic catch on PR #92: gate the
+    // `surface: "skip-notice"` reviewMeta on the post actually
+    // succeeding. If `postReviewSkipNotice` returned !ok (or
+    // dedupe-hit'd with no comment), we have no comment to point
+    // the user at — the Check Run should render the generic
+    // "Review failed" title instead of the misleading
+    // "Couldn't review — see PR comment" one.
+    const bailWithSkipNotice = async (
+      reason: SkipNoticeReason,
+      opts?: { dispatchedRoles?: readonly string[] },
+    ): Promise<EnsembleResult> => {
+      const out = await postReviewSkipNotice({
+        env, client, owner, repo, prNumber, headSha, reason,
+        ...(opts?.dispatchedRoles !== undefined ? { dispatchedRoles: opts.dispatchedRoles } : {}),
+      })
+      // `ok && reason === "posted"` → a fresh comment is on the PR.
+      // `ok && reason === "dedupe-hit"` → a prior run already
+      //   posted one for this head; safe to claim "see PR comment".
+      // `!ok` → no comment; don't lie to the customer.
+      if (out.ok) {
+        return finalize(telemetry, env, "errored", cache, {
+          event: "REQUEST_CHANGES",
+          findingsCount: 0,
+          surface: "skip-notice",
+        })
+      }
+      return finalize(telemetry, env, "errored", cache)
+    }
 
     // ─── Stale-head guard #1 ───────────────────────────────────
     const meta = await client.getPullRequest(owner, repo, prNumber)
@@ -702,12 +689,12 @@ export async function handlePrReviewEnsemble(
 
     if (router.specialists.length === 0) {
       // Router said "no specialists for this PR." Skip ensemble entirely.
-      // Phase 3 has already submitted (in shadow mode) or will be
-      // delegated to (in post mode — but ensemble-post with empty
-      // router is a degenerate case; fall back to Phase 3).
-      telemetry.fellBackToPhase3 = mode === "post"
+      // Pre-ARC-280 this fell through to Phase 3; post-ARC-280 the
+      // skip-notice helper posts a customer-visible "couldn't review"
+      // comment so the path isn't silent.
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
-      return finalize(telemetry, env, "skipped", cache)
+      return bailWithSkipNotice("router_no_specialists")
     }
 
     // ─── Pre-flight retrieval snapshot ─────────────────────────
@@ -1022,9 +1009,14 @@ export async function handlePrReviewEnsemble(
     //     change, no degraded-coverage telemetry.
     const succeeded = specialistVerdicts.filter((v) => v.verdict !== null)
     if (succeeded.length === 0) {
-      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "specialists_all_failed"
-      return finalize(telemetry, env, "skipped", cache)
+      // CR Minor catch on PR #92: name the roles the router
+      // actually dispatched, since `specialists_all_failed` fires
+      // whether 4/4 or 1/1 specialists failed.
+      return bailWithSkipNotice("specialists_all_failed", {
+        dispatchedRoles: router.specialists,
+      })
     }
     const degradedCoverage = succeeded.length < router.specialists.length
       ? computeDegradedCoverage(router.specialists, succeeded.map((v) => v.role))
@@ -1274,9 +1266,9 @@ export async function handlePrReviewEnsemble(
         failureReason: "synth_timeout",
       }
       telemetry.synthRetry = { used: synthRetryUsed, outcome: synthRetryOutcome }
-      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "synth_timeout"
-      return finalize(telemetry, env, "skipped", cache)
+      return bailWithSkipNotice("synth_timeout")
     }
 
     // ARC-278: persist the retry telemetry regardless of which path
@@ -1307,9 +1299,9 @@ export async function handlePrReviewEnsemble(
         timedOut: true,
         failureReason: "synth_timeout",
       }
-      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "synth_timeout"
-      return finalize(telemetry, env, "skipped", cache)
+      return bailWithSkipNotice("synth_timeout")
     }
 
     // Phase 4a.2: withComposedTimeout no longer throws when its own
@@ -1343,13 +1335,14 @@ export async function handlePrReviewEnsemble(
     telemetry.synthesizer = synthEntry
 
     if (!synthOutput.verdict || !synthOutput.provenance) {
-      telemetry.fellBackToPhase3 = mode === "post"
-      telemetry.fellBackReason = synthAborted
+      telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
+      const synthFailReason: SkipNoticeReason = synthAborted
         ? "synth_timeout"
         : synthOutput.failureReason === "synth_invalid_provenance"
           ? "synth_invalid_provenance"
           : "synth_failed_parse"
-      return finalize(telemetry, env, "skipped", cache)
+      telemetry.fellBackReason = synthFailReason
+      return bailWithSkipNotice(synthFailReason)
     }
 
     // ─── Post-synthesis validation ─────────────────────────────
@@ -1388,23 +1381,11 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    if (mode === "shadow") {
-      // Shadow: telemetry only, no GitHub submission. Deliberately
-      // do NOT write the last-reviewed SHA — shadow runs don't post
-      // findings, so a later real review must still see the full
-      // base..head diff to surface them. Recording the shadow SHA
-      // would cause subsequent post-mode runs to incrementally
-      // review only `shadowSha..head` and miss everything before
-      // (sigilix-bot dogfood catch on PR #53).
-      // ARC-270 (code-reviewer catch): shadow dogfooding is the
-      // exact channel we use to validate consensus reordering
-      // before flipping to post mode. Capture the consensus-ranked
-      // verdict so the new ordering is visible in telemetry; the
-      // raw post-validation verdict is reconstructible from the
-      // `postValidation` counters + specialist verdicts.
-      telemetry.shadowVerdict = consensusVerdict
-      return finalize(telemetry, env, "shadow_recorded", cache)
-    }
+    // ARC-280: shadow-mode branch deleted. The dual-mode routing
+    // (shadow vs post) is gone — post is the only mode. The
+    // shadow-only `telemetry.shadowVerdict` field stays in the
+    // interface for back-compat with stored telemetry rows but is
+    // never written from this handler again.
 
     // ─── Stale-head guard #2 ───────────────────────────────────
     //
@@ -1709,6 +1690,7 @@ export async function handlePrReviewEnsemble(
         await dismissPriorSigilixReviews({
           client, owner, repo, prNumber,
           currentReviewId: submitted.id,
+          headSha,
         })
       } catch (err) {
         console.error(JSON.stringify({
@@ -1875,6 +1857,7 @@ export async function handlePrReviewEnsemble(
         await dismissPriorSigilixReviews({
           client, owner, repo, prNumber,
           currentReviewId: submittedFallback.id,
+          headSha,
         })
       } catch (err) {
         console.error(JSON.stringify({
@@ -1936,9 +1919,16 @@ export async function handlePrReviewEnsemble(
       })
     }
   } catch (e) {
-    telemetry.fellBackToPhase3 = mode === "post"
+    telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
     telemetry.fellBackReason = "internal_error"
     telemetry.internalError = e instanceof Error ? e.message : String(e)
+    // ARC-280 follow-up: the internal_error path doesn't post a
+    // skip-notice because the catch may have fired BEFORE the
+    // client/auth was built (so the `bailWithSkipNotice` closure
+    // isn't reachable from here). The dispatcher's `errored` →
+    // `failure` Check Run mapping renders a generic "Review
+    // failed" title, which is accurate for this case — the on-
+    // call team needs to look at telemetry to know what failed.
     return finalize(telemetry, env, "errored", cache)
   } finally {
     clearTimeout(orchTimer)
@@ -2042,12 +2032,6 @@ function appendRoleRule(
   return `${baseMessage}\n\n[REPO RULES — ${role.toUpperCase()} (from sigilix.json)]\n${rule}`
 }
 
-function parseMode(raw: string | undefined): EnsembleMode {
-  if (raw === "shadow") return "shadow"
-  if (raw === "post") return "post"
-  return "off"
-}
-
 /**
  * Max model invocations one ensemble run can possibly consume.
  * Derived from SPECIALIST_CONFIGS + SYNTHESIZER_CONFIG (CR PR #37
@@ -2077,20 +2061,13 @@ export const MAX_CALLS_PER_ENSEMBLE_RUN = (
   + (2 * maxAttempts(SYNTHESIZER_CONFIG))
 )
 
-async function dailyBudgetAvailable(env: Env): Promise<boolean> {
-  const cap = parseIntEnv(env.OPENCLAW_ENSEMBLE_DAILY_BUDGET, DEFAULT_DAILY_BUDGET)
-  if (cap <= 0) return false
-  const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD UTC
-  const key = `ensemble-budget:${today}`
-  const raw = await env.OPENCLAW_STATE.get(key)
-  const used = raw ? Number.parseInt(raw, 10) : 0
-  // CR catch: previously checked `used < cap`, which could admit a PR
-  // when only 1 call of headroom remained, then finalize would charge 5.
-  // Now require room for a FULL ensemble run before admitting. Best-
-  // effort under concurrent webhooks (KV race window 1-2 calls,
-  // documented in v3.1 spec) but no longer per-PR overshoot by 5.
-  return used + MAX_CALLS_PER_ENSEMBLE_RUN <= cap
-}
+// ARC-280: `dailyBudgetAvailable` was the budget-gate `routeReview`
+// called before admitting a PR; with `routeReview` deleted and the
+// dispatcher calling `handlePrReviewEnsemble` directly, the
+// admission check no longer fires. `incrementDailyBudget` still
+// runs in `finalize()` so the per-day cumulative count is recorded
+// for telemetry / future-policy use. A hard cap that bails the
+// ensemble early on budget exhaustion is a separate follow-up.
 
 async function incrementDailyBudget(env: Env, by: number): Promise<void> {
   const today = new Date().toISOString().slice(0, 10)
@@ -3593,28 +3570,41 @@ type EnsembleResultStatus =
  * ARC-276: signal the customer-visible verdict + findings count back
  * to the dispatcher so the Sigilix Check Run title can reflect the
  * actual review outcome (`Approved — no issues found` vs `N findings
- * posted`). Only populated on the `posted` status; absent on every
- * other path (stale_head / errored / skipped / shadow_recorded).
+ * posted`).
  *
  * ARC-279: `surface` distinguishes a real GitHub review from the
  * fallback PR comment that fires when the formal submit silently
  * rejects. The dispatcher uses `surface === "comment"` to map the
  * Check Run to `failure` with a "see PR comment" title instead of
- * the normal `success` outcome — the customer needs to know the
- * normal review pipeline didn't run.
+ * the normal `success` outcome.
+ *
+ * ARC-280 follow-up: `surface === "skip-notice"` signals that the
+ * ensemble couldn't even generate a verdict (router_no_specialists,
+ * specialists_all_failed, synth retry exhausted) and posted a
+ * minimal "Sigilix couldn't review" comment instead. The catch-all
+ * `internal_error` path is intentionally NOT in this list — it
+ * returns a generic `errored` result with no `surface`, because the
+ * catch may fire before the client/auth is built (so the
+ * `bailWithSkipNotice` closure isn't reachable). Set on `status ===
+ * "errored"` so the dispatcher's existing errored → failure mapping
+ * kicks in; the Check Run renderer then branches on `surface ===
+ * "skip-notice"` to show a "couldn't review — see PR comment"
+ * title. `event` + `findingsCount` are required by the type but
+ * ignored on this branch (we don't have a verdict to count).
  */
 export interface ReviewMeta {
   event: "APPROVE" | "REQUEST_CHANGES"
   findingsCount: number
   /** Default behavior when omitted is `"review"` (back-compat with
    *  Phase 3's `PrReviewMeta` shape). */
-  surface?: "review" | "comment"
+  surface?: "review" | "comment" | "skip-notice"
 }
 
 export interface EnsembleResult {
   status: EnsembleResultStatus
   telemetry: EnsembleTelemetry
-  /** ARC-276: only set on `status === "posted"`. */
+  /** ARC-276/279/280: set on `posted` (real review or comment
+   *  fallback) AND on `errored` when a skip-notice was posted. */
   reviewMeta?: ReviewMeta
 }
 

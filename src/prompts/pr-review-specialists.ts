@@ -404,6 +404,28 @@ export interface SynthesizerInitialMessageCtx {
    * — synth defaults to "current-pr" when in doubt).
    */
   stackBlock?: string
+  /**
+   * ARC-277: when one or more specialists failed to return a verdict
+   * (timeout / rate-limit / parse-fail), synth still runs but on
+   * degraded input. The roles that DID return are in `rolesReturned`;
+   * the roles that DIDN'T are in `rolesMissing`. Synth sees this
+   * block in the prompt so it can:
+   *   - skip findings that would have required a missing role
+   *     (e.g. don't fabricate security findings if the security
+   *      specialist didn't run)
+   *   - acknowledge the gap in its `summary` field so the human
+   *     reader sees "tests specialist didn't return; coverage was
+   *     limited to logic + security + performance"
+   *
+   * Absent when all dispatched specialists returned (full coverage)
+   * AND when zero specialists returned (the ensemble bails before
+   * synth in the 0/N case in v1; that case will become a synth
+   * stub-input in ARC-278).
+   */
+  degradedCoverage?: {
+    rolesReturned: readonly SpecialistRole[]
+    rolesMissing: readonly SpecialistRole[]
+  }
 }
 
 export function buildSynthesizerInitialMessage(
@@ -421,6 +443,25 @@ export function buildSynthesizerInitialMessage(
   if (ctx.stackBlock && ctx.stackBlock.length > 0) {
     lines.push(ctx.stackBlock)
     lines.push("")
+  }
+  // ARC-277: degraded-coverage block before [DIFF] so synth sees the
+  // gap context up front and applies the constraints (no fabricating
+  // findings in a missing role's domain, acknowledge the gap in
+  // summary) to its full reasoning, not just at the tail end.
+  if (ctx.degradedCoverage && ctx.degradedCoverage.rolesMissing.length > 0) {
+    const returned = ctx.degradedCoverage.rolesReturned.join(", ")
+    const missing = ctx.degradedCoverage.rolesMissing.join(", ")
+    lines.push(
+      "[DEGRADED COVERAGE]",
+      `Specialists returned: ${returned}`,
+      `Specialists MISSING (did not return — timeout / rate-limit / parse-fail): ${missing}`,
+      "",
+      "Constraints:",
+      `- Do NOT fabricate findings that would have required a MISSING specialist's domain. If the \`security\` specialist is missing, do not surface security findings unless they appear in another specialist's output too.`,
+      `- Add a one-sentence acknowledgement to your \`summary\` field that names the missing specialist roles, so the human reviewer knows coverage was reduced for this PR.`,
+      `- Set \`confidence\` no higher than 3/5 when at least one role is missing — partial coverage means lower certainty.`,
+      "",
+    )
   }
   lines.push(
     `[PR] #${ctx.prNumber}`,

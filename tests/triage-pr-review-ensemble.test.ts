@@ -10,6 +10,7 @@ import {
   assignStableFindingIds,
   checkQuorum,
   computeConsensusRanking,
+  computeDegradedCoverage,
   computeFindingDelta,
   computeFindingKey,
   renderDeltaHeader,
@@ -27,6 +28,7 @@ import {
   MAX_CALLS_PER_ENSEMBLE_RUN,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
+import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { Env } from "../src/index"
 import type { ReviewableMap } from "../src/lib/diff-positions"
@@ -1060,5 +1062,135 @@ describe("renderDeltaHeader", () => {
   it("renders just one bucket when only one is non-zero", () => {
     const out = renderDeltaHeader({ newCount: 5, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0 })
     expect(out).toBe("**Δ since last review:** +5 new")
+  })
+})
+
+// ARC-277: drop the specialist quorum gate. Synth now runs on any
+// non-empty subset of returning specialists; the prompt is augmented
+// with a [DEGRADED COVERAGE] block when one or more specialists
+// didn't return.
+describe("computeDegradedCoverage (ARC-277)", () => {
+  it("returns all dispatched roles as `rolesReturned` when every specialist returned", () => {
+    const out = computeDegradedCoverage(
+      ["logic", "security", "performance", "tests"],
+      ["logic", "security", "performance", "tests"],
+    )
+    expect(out.rolesReturned).toEqual(["logic", "security", "performance", "tests"])
+    expect(out.rolesMissing).toEqual([])
+  })
+
+  it("splits returned vs missing when some specialists didn't return", () => {
+    const out = computeDegradedCoverage(
+      ["logic", "security", "performance", "tests"],
+      ["logic", "performance"],
+    )
+    expect(out.rolesReturned).toEqual(["logic", "performance"])
+    expect(out.rolesMissing).toEqual(["security", "tests"])
+  })
+
+  it("returns stable order (logic, security, performance, tests) regardless of input order", () => {
+    // Helper renders the prompt — `[DEGRADED COVERAGE]` text must be
+    // deterministic for any (dispatched, returned) pair so two runs
+    // with the same coverage gap produce identical prompt-shape
+    // hashes for telemetry.
+    const a = computeDegradedCoverage(
+      ["tests", "logic", "performance", "security"],
+      ["performance", "logic"],
+    )
+    const b = computeDegradedCoverage(
+      ["logic", "security", "performance", "tests"],
+      ["logic", "performance"],
+    )
+    expect(a).toEqual(b)
+  })
+
+  it("does NOT include roles that weren't dispatched", () => {
+    // Router may dispatch a subset (e.g. CSS-only → ["performance"]).
+    // A role that was never dispatched should not appear in either
+    // returned or missing.
+    const out = computeDegradedCoverage(
+      ["performance"],
+      ["performance"],
+    )
+    expect(out.rolesReturned).toEqual(["performance"])
+    expect(out.rolesMissing).toEqual([])
+  })
+
+  it("treats `dispatched but none returned` as fully missing (used by the 0/N bail in the orchestrator)", () => {
+    const out = computeDegradedCoverage(
+      ["logic", "security"],
+      [],
+    )
+    expect(out.rolesReturned).toEqual([])
+    expect(out.rolesMissing).toEqual(["logic", "security"])
+  })
+})
+
+describe("buildSynthesizerInitialMessage [DEGRADED COVERAGE] block (ARC-277)", () => {
+  const baseCtx = {
+    prNumber: 42,
+    diff: "diff --git a/foo.ts ...",
+    specialistVerdictsBlock: "=== LOGIC ===\n{}",
+  }
+
+  it("omits the [DEGRADED COVERAGE] block when full coverage (no degradedCoverage field)", () => {
+    const out = buildSynthesizerInitialMessage(baseCtx)
+    expect(out).not.toContain("[DEGRADED COVERAGE]")
+    expect(out).not.toContain("Specialists MISSING")
+  })
+
+  it("omits the block when degradedCoverage is set but rolesMissing is empty (defensive — caller should not pass that)", () => {
+    const out = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      degradedCoverage: { rolesReturned: ["logic", "security", "performance", "tests"], rolesMissing: [] },
+    })
+    expect(out).not.toContain("[DEGRADED COVERAGE]")
+  })
+
+  it("renders the [DEGRADED COVERAGE] block when rolesMissing is non-empty", () => {
+    const out = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      degradedCoverage: {
+        rolesReturned: ["logic", "performance"],
+        rolesMissing: ["security", "tests"],
+      },
+    })
+    expect(out).toContain("[DEGRADED COVERAGE]")
+    expect(out).toContain("Specialists returned: logic, performance")
+    expect(out).toContain("Specialists MISSING (did not return — timeout / rate-limit / parse-fail): security, tests")
+    // Constraint text must include all three: no-fabricate, summary-ack, confidence-cap.
+    expect(out).toContain("Do NOT fabricate findings")
+    expect(out).toContain("Add a one-sentence acknowledgement")
+    expect(out).toContain("confidence` no higher than 3/5")
+  })
+
+  it("places the [DEGRADED COVERAGE] block BEFORE [DIFF] (so synth sees it up front, not at the tail)", () => {
+    const out = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      degradedCoverage: {
+        rolesReturned: ["logic"],
+        rolesMissing: ["security", "performance", "tests"],
+      },
+    })
+    const degradedIdx = out.indexOf("[DEGRADED COVERAGE]")
+    const diffIdx = out.indexOf("[DIFF]")
+    expect(degradedIdx).toBeGreaterThan(-1)
+    expect(diffIdx).toBeGreaterThan(-1)
+    expect(degradedIdx).toBeLessThan(diffIdx)
+  })
+
+  it("places [DEGRADED COVERAGE] AFTER stackBlock when both are present (stack comes first per ARC-182 contract)", () => {
+    const out = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      stackBlock: "[STACK CONTEXT]\nparent: #41",
+      degradedCoverage: {
+        rolesReturned: ["logic"],
+        rolesMissing: ["security"],
+      },
+    })
+    const stackIdx = out.indexOf("[STACK CONTEXT]")
+    const degradedIdx = out.indexOf("[DEGRADED COVERAGE]")
+    expect(stackIdx).toBeGreaterThan(-1)
+    expect(degradedIdx).toBeGreaterThan(stackIdx)
   })
 })

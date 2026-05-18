@@ -581,7 +581,7 @@ describe("Phase 4a.1 — model lineup", () => {
     expect(SYNTHESIZER_CONFIG.retries).toBe(1)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (15)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (18 after ARC-278/279 retry reservation)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves
     // before admitting a PR, so the regression must assert against it
     // directly — not against a hand-calc that would silently drift if
@@ -595,21 +595,24 @@ describe("Phase 4a.1 — model lineup", () => {
     //   security:    primary + 1 retry + fallback = 3
     //   performance: primary + 1 retry + fallback = 3
     //   tests:       primary + 1 retry + fallback = 3
-    //   synth:       primary + 1 retry + fallback = 3
-    //   total: 15 (Phase 4a.1).  Was 16 pre-Phase-4a.1 with logic
-    //   retries=2 (4 logic + 3×4 + 3 synth = 19? no — 4+3+3+3+3 = 16).
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(15)
+    //   synth:       primary + 1 retry + fallback = 3 (attempt 1)
+    //   synth retry: primary + 1 retry + fallback = 3 (ARC-278 retry path,
+    //                fires when attempt 1 fails timeout/parse/provenance)
+    //   total: 18.  Pre-ARC-278 was 15; the extra 3 reserves the
+    //   ARC-278 retry path so the daily budget can't overshoot when
+    //   the retry kicks in.
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(18)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
-    // across all 5 model-using roles.
+    // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).
+    const perRole = (c: { retries: number; fallback?: string }) =>
+      1 + c.retries + (c.fallback ? 1 : 0)
     const expected =
-      [
-        SPECIALIST_CONFIGS.logic,
-        SPECIALIST_CONFIGS.security,
-        SPECIALIST_CONFIGS.performance,
-        SPECIALIST_CONFIGS.tests,
-        SYNTHESIZER_CONFIG,
-      ].reduce((acc, c) => acc + 1 + c.retries + (c.fallback ? 1 : 0), 0)
+      perRole(SPECIALIST_CONFIGS.logic)
+      + perRole(SPECIALIST_CONFIGS.security)
+      + perRole(SPECIALIST_CONFIGS.performance)
+      + perRole(SPECIALIST_CONFIGS.tests)
+      + 2 * perRole(SYNTHESIZER_CONFIG) // ARC-278: synth attempt + retry
     expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(expected)
   })
 })

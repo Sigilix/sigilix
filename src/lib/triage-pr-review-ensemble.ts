@@ -46,6 +46,7 @@ import {
   buildFallbackSubmission,
   chooseReviewEvent,
 } from "./triage-pr-review"
+import { postReviewCommentFallback } from "./review-comment-fallback"
 import {
   decideSpecialists,
   ALL_SPECIALISTS,
@@ -178,24 +179,25 @@ export const SPECIALIST_TIMEOUT_MS = 270_000
 // unchanged in 4a.3 — observed margin is fine, and a tighter synth
 // budget would mix concerns with the specialist rebalance.
 export const SYNTHESIZER_TIMEOUT_MS = 180_000
-// ARC-278: cap for the one-shot synth RETRY budget. Lives inside the
+// ARC-278: cap for the one-shot synth RETRY budget. Lives INSIDE the
 // reserved headroom — the retry is "use what's left in the headroom
 // envelope, don't extend the orchestrator wall." 30s is enough for
 // parse/provenance retries (the model already produced output, just
 // needs to re-emit cleanly) and gives any retry a fair-but-bounded
 // shot at success.
 //
-// Math: SPECIALIST (270) + SYNTHESIZER (180) + SYNTHESIZER_RETRY (30)
-//     + HEADROOM_FOR_FINALIZE (10) = 490 = ORCHESTRATOR_TIMEOUT_MS.
-//
-// The static invariant below adds the retry to the budget check so a
-// future "raise synth retry" change can't silently push the
-// orchestrator past 490s.
+// Budget math (Sigilix's own PR #91 review catch):
+//   SPECIALIST (270) + SYNTHESIZER (180) + RESERVED_HEADROOM (40) = 490
+//   Inside the 40s headroom: retry (30) + finalize reserve (5) + margin (5).
+//   So `RESERVED_HEADROOM_MS` is NOT spent in addition to the retry —
+//   the retry is carved out of it. The second module-load invariant
+//   below verifies retry + finalize ≤ headroom.
 export const SYNTHESIZER_RETRY_TIMEOUT_MS = 30_000
 // Reserved for pre-flight retrieval + diff parse + stale-head guards +
-// telemetry write. The orchestrator must always have at least this much
-// headroom beyond (specialist + synth + synth-retry) so a slow
-// Vectorize round-trip doesn't eat into the synth budget.
+// telemetry write — AND, post-ARC-278, for the synth retry call when
+// it fires. The orchestrator must always have at least this much
+// headroom beyond (specialist + synth) so a slow Vectorize round-trip
+// doesn't eat into the synth budget.
 export const RESERVED_HEADROOM_MS = 40_000
 // 270 + 180 + 40 = 490. Cloudflare queue ceiling is 900s. The 90s
 // orch bump (Phase 4a.3) is well under any user-perceptible review
@@ -1648,11 +1650,43 @@ export async function handlePrReviewEnsemble(
           submit_path: "inline-anchored",
         }))
         telemetry.fellBackReason = "submit_not_persisted"
-        // Telemetry consistency with other `errored` paths: signal
-        // that the dispatcher's `ensemble-post` fallback will route
-        // to Phase 3 next. Without this flag, `fellBackToPhase3`
-        // counters in shadow analysis would undercount this case.
-        telemetry.fellBackToPhase3 = mode === "post"
+        telemetry.fellBackToPhase3 = false
+        // ARC-279: GitHub silently dropped the formal review. Post
+        // the synth body as a regular PR comment so the review
+        // signal isn't lost. Dispatcher sees `posted` + surface=
+        // "comment" → maps the Check Run to `failure` with a "see
+        // PR comment" title so the customer knows the normal
+        // review pipeline didn't run.
+        //
+        // CodeRabbit catch on PR #91: on the inline-anchored path,
+        // `submission.body` is ONLY the formal review body — the
+        // actual findings live separately in `submission.comments`
+        // because they're meant to anchor as inline review comments.
+        // Posting `submission.body` as a top-level comment would
+        // drop every finding. Re-render via `buildFallbackSubmission`
+        // (the anchorless body-only renderer) so findings move into
+        // the body and survive the channel switch.
+        const fallbackCommentSubmission = buildFallbackSubmission({
+          verdict: renderableVerdict,
+          unanchored: renderableUnanchored,
+          prAuthor: meta.user?.login ?? null,
+          headSha,
+          ...(stack.isStacked ? { stack } : {}),
+        })
+        const fallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          body: fallbackCommentSubmission.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "inline-anchored",
+        })
+        if (fallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
+        // Comment fallback ALSO failed — `errored` is the truth.
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
@@ -1807,11 +1841,28 @@ export async function handlePrReviewEnsemble(
           submit_path: "anchorless-fallback",
         }))
         telemetry.fellBackReason = "submit_not_persisted"
-        // Telemetry consistency with other `errored` paths: signal
-        // that the dispatcher's `ensemble-post` fallback will route
-        // to Phase 3 next. Without this flag, `fellBackToPhase3`
-        // counters in shadow analysis would undercount this case.
-        telemetry.fellBackToPhase3 = mode === "post"
+        telemetry.fellBackToPhase3 = false
+        // ARC-279: same comment-fallback as the inline-anchored
+        // verify-fail path. By this point we've tried inline,
+        // 422'd, anchorless, and silent-rejected. The synth body
+        // is real signal the reviewer would benefit from — post
+        // it as a regular comment instead of dropping it.
+        const commentFallback = await postReviewCommentFallback({
+          env, client, owner, repo, prNumber, headSha,
+          // Same defensive default as the inline-anchored path:
+          // `fallback.body` is typed optional but the anchorless
+          // path always emits it (buildFallbackBody + the marker).
+          body: fallback.body ?? "<!-- openclaw:pr-review -->\n(no body)",
+          submitPath: "anchorless-fallback",
+        })
+        if (commentFallback.ok) {
+          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          return finalize(telemetry, env, "posted", cache, {
+            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            findingsCount,
+            surface: "comment",
+          })
+        }
         return finalize(telemetry, env, "errored", cache)
       }
       telemetry.submitted = true
@@ -2018,7 +2069,12 @@ export const MAX_CALLS_PER_ENSEMBLE_RUN = (
   + maxAttempts(SPECIALIST_CONFIGS.security)
   + maxAttempts(SPECIALIST_CONFIGS.performance)
   + maxAttempts(SPECIALIST_CONFIGS.tests)
-  + maxAttempts(SYNTHESIZER_CONFIG)
+  // ARC-278 (CR catch on PR #91): reserve TWO synth budgets, not
+  // one. The retry path can fire a second `runSynthesizer` call
+  // (itself primary + retry + cross-provider fallback). Without
+  // this, a worst-case PR can spend up to N + maxAttempts(SYNTH)
+  // extra and overshoot the daily cap.
+  + (2 * maxAttempts(SYNTHESIZER_CONFIG))
 )
 
 async function dailyBudgetAvailable(env: Env): Promise<boolean> {
@@ -3539,10 +3595,20 @@ type EnsembleResultStatus =
  * actual review outcome (`Approved — no issues found` vs `N findings
  * posted`). Only populated on the `posted` status; absent on every
  * other path (stale_head / errored / skipped / shadow_recorded).
+ *
+ * ARC-279: `surface` distinguishes a real GitHub review from the
+ * fallback PR comment that fires when the formal submit silently
+ * rejects. The dispatcher uses `surface === "comment"` to map the
+ * Check Run to `failure` with a "see PR comment" title instead of
+ * the normal `success` outcome — the customer needs to know the
+ * normal review pipeline didn't run.
  */
 export interface ReviewMeta {
   event: "APPROVE" | "REQUEST_CHANGES"
   findingsCount: number
+  /** Default behavior when omitted is `"review"` (back-compat with
+   *  Phase 3's `PrReviewMeta` shape). */
+  surface?: "review" | "comment"
 }
 
 export interface EnsembleResult {

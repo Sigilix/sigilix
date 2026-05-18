@@ -127,11 +127,19 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
  * ARC-276: payload threaded from the dispatcher's posted-path so the
  * Check Run title can render the customer-visible verdict (Approved
  * vs N findings). Only meaningful when `conclusion === "success"`
- * and a review was actually posted; ignored otherwise.
+ * and a review was actually posted.
+ *
+ * ARC-279: `surface` is set to `"comment"` when the ensemble had to
+ * route through the synth-body-as-PR-comment fallback (the formal
+ * review submit was silently rejected by GitHub). The dispatcher
+ * maps that to a `failure` conclusion + a "see PR comment" title
+ * so the customer knows the normal review pipeline didn't run even
+ * though they have a comment to read.
  */
 export interface ReviewCheckMeta {
   event: "APPROVE" | "REQUEST_CHANGES"
   findingsCount: number
+  surface?: "review" | "comment"
 }
 
 interface CompleteArgs {
@@ -275,6 +283,17 @@ export function renderOutputForConclusion(
         summary: "A newer commit was pushed before this review finished. Sigilix will re-review the latest head automatically.",
       }
     case "failure":
+      // ARC-279: the dispatcher maps `surface === "comment"` to
+      // `failure` so the customer sees that the normal review
+      // pipeline didn't run — but the comment fallback DID post
+      // synth's body. Title points them at the PR comment so they
+      // don't think the bot was entirely silent.
+      if (reviewMeta?.surface === "comment") {
+        return {
+          title: "Couldn't post review — see PR comment",
+          summary: "GitHub silently rejected Sigilix's formal review submit. Sigilix posted the review content as a regular PR comment instead so the signal isn't lost. Re-run `/sigilix review` to try the formal review again.",
+        }
+      }
       return {
         title: "Review failed",
         summary: "Sigilix encountered an error while reviewing this PR. Re-trigger with `/sigilix review` or contact support.",

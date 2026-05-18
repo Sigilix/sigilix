@@ -249,10 +249,17 @@ export type PrReviewStatus = "posted" | "skipped" | "stale_head" | "errored"
  * Defined here (not imported from the ensemble) to keep
  * triage-pr-review.ts free of ensemble imports — Phase 3 must stay
  * usable as a standalone reviewer until ARC-280 deletes it.
+ *
+ * ARC-279: `surface` matches the ensemble shape; Phase 3 always
+ * posts a real review (no comment-fallback path yet), so this is
+ * always `undefined` from Phase 3 today. Kept for type alignment
+ * with `ReviewMeta` so the dispatcher can read `.surface` off
+ * either source uniformly.
  */
 export interface PrReviewMeta {
   event: ReviewEvent
   findingsCount: number
+  surface?: "review" | "comment"
 }
 
 export interface PrReviewResult {

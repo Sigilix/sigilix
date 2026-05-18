@@ -964,7 +964,15 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             // internal error) still benefit from the Phase 3 attempt.
             const result = await handlePrReviewEnsemble(baseArgs, "post")
             if (result.status === "posted") {
-              conclusion = "success"
+              // ARC-279: when the ensemble had to use the comment
+              // fallback (formal review submit was silently rejected),
+              // the Check Run should reflect that the normal review
+              // pipeline didn't run — even though the synth body is
+              // up as a PR comment. `failure` conclusion + a "see PR
+              // comment" title (rendered by `renderOutputForConclusion`
+              // via the threaded reviewMeta) gives the customer a
+              // clear signal without dropping the review signal.
+              conclusion = result.reviewMeta?.surface === "comment" ? "failure" : "success"
               reviewMeta = result.reviewMeta
               return
             }

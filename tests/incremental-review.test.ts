@@ -122,23 +122,43 @@ describe("selectDiff — first review", () => {
   })
 })
 
-describe("selectDiff — incremental path", () => {
-  it("returns compare diff when smaller than full and SHA differs", () => {
+describe("selectDiff — SIG-10 cumulative diff contract", () => {
+  // SIG-10 forces the diff to always be cumulative (PR.base..headSha).
+  // The incremental compare-diff path was removed because on
+  // multi-commit PRs the push-delta diff produced false-positive
+  // "undefined export"-class findings against symbols introduced in an
+  // earlier commit. These tests pin the contract: regardless of what
+  // `compareDiff` is supplied, the returned `diff` is the full diff.
+
+  it("returns full diff (not compare) when previous SHA differs from head", () => {
     const result = selectDiff({
       fullDiff: "x".repeat(1000),
       compareDiff: "x".repeat(100),
       previousSha: "old",
       currentHeadSha: "new",
     })
-    expect(result.mode).toBe("incremental")
+    expect(result.mode).toBe("full")
     expect(result.previousSha).toBe("old")
-    expect(result.diff.length).toBe(100)
-    expect(result.reason).toBeUndefined()
+    expect(result.diff.length).toBe(1000)
+    expect(result.reason).toBe("cumulative_diff_required")
   })
-})
 
-describe("selectDiff — fall-back paths", () => {
-  it("falls back to full when previous SHA == current", () => {
+  it("returns full diff when compareDiff is null (fetch failed)", () => {
+    const result = selectDiff({
+      fullDiff: "full",
+      compareDiff: null,
+      previousSha: "old",
+      currentHeadSha: "new",
+    })
+    expect(result.mode).toBe("full")
+    expect(result.diff).toBe("full")
+    expect(result.reason).toBe("cumulative_diff_required")
+  })
+
+  it("returns full diff even when previous SHA equals current head", () => {
+    // The 2nd-review-with-no-new-pushes case. Previously this returned
+    // the full diff with reason `same_sha`; SIG-10 lumps it into the
+    // single `cumulative_diff_required` rationale.
     const result = selectDiff({
       fullDiff: "full",
       compareDiff: "compare",
@@ -147,40 +167,41 @@ describe("selectDiff — fall-back paths", () => {
     })
     expect(result.mode).toBe("full")
     expect(result.diff).toBe("full")
-    expect(result.reason).toBe("same_sha")
+    expect(result.reason).toBe("cumulative_diff_required")
   })
 
-  it("falls back to full when compareDiff is null (fetch failed)", () => {
-    const result = selectDiff({
-      fullDiff: "full",
-      compareDiff: null,
-      previousSha: "old",
-      currentHeadSha: "new",
-    })
-    expect(result.mode).toBe("full")
-    expect(result.reason).toBe("compare_fetch_failed")
-  })
+  it("multi-commit PR: 2nd-commit review still sees earlier-commit content", () => {
+    // SIG-10 behavioral pin. Imagine a 2-commit PR:
+    //   commit 1: adds `export const foo = 1` in src/foo.ts
+    //   commit 2: adds `import { foo } from "./foo"` in src/bar.ts
+    // After commit 1 was reviewed, the per-push delta for commit 2
+    // (lastReviewedSha..head) would only contain bar.ts — the
+    // `export const foo` line is NOT in that diff. A specialist would
+    // then flag the `import { foo }` as "undefined export" because
+    // grep'ing the diff text doesn't find `foo`'s declaration.
+    //
+    // With SIG-10's cumulative contract, the diff fed to specialists
+    // is the full PR diff (base..head) and contains BOTH commits, so
+    // the `foo` export is visible alongside the `bar.ts` import.
+    const commit1Diff =
+      "diff --git a/src/foo.ts b/src/foo.ts\n" +
+      "+export const foo = 1\n"
+    const commit2Diff =
+      "diff --git a/src/bar.ts b/src/bar.ts\n" +
+      '+import { foo } from "./foo"\n'
+    const fullPrDiff = commit1Diff + commit2Diff
 
-  it("falls back to full when compareDiff is empty", () => {
     const result = selectDiff({
-      fullDiff: "full",
-      compareDiff: "",
-      previousSha: "old",
-      currentHeadSha: "new",
+      fullDiff: fullPrDiff,
+      compareDiff: commit2Diff,                 // per-push delta only
+      previousSha: "commit1sha",
+      currentHeadSha: "commit2sha",
     })
-    expect(result.mode).toBe("full")
-    expect(result.reason).toBe("compare_empty")
-  })
 
-  it("falls back to full when compare is too large (force-push case)", () => {
-    // Compare diff > 0.9 × full → suspicious. Use full.
-    const result = selectDiff({
-      fullDiff: "x".repeat(100),
-      compareDiff: "x".repeat(95),
-      previousSha: "old",
-      currentHeadSha: "new",
-    })
+    expect(result.diff).toBe(fullPrDiff)
+    expect(result.diff).toContain("export const foo = 1")
+    expect(result.diff).toContain('import { foo } from "./foo"')
     expect(result.mode).toBe("full")
-    expect(result.reason).toBe("compare_not_smaller")
+    expect(result.reason).toBe("cumulative_diff_required")
   })
 })

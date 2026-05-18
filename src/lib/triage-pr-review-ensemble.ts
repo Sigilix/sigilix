@@ -147,6 +147,7 @@ import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
+import { checkIsPrMerged } from "./merge-guard"
 import {
   type EnsembleRunCtx,
   type SynthSummary,
@@ -1806,46 +1807,23 @@ export async function handlePrReviewEnsemble(
       coverage,
       delta: deltaCounts,
     })
-    // ARC-286: pre-submit "is PR still open" guard. The ensemble has
-    // been running for 30s-9min by this point; the PR could have
-    // merged underneath us (PR #94 demonstrated this race — synth
-    // finished 9 min after merge, posted CHANGES_REQUESTED to an
-    // already-merged PR). Fetch fresh PR state and bail to "skipped"
-    // if the PR is now merged. The synth verdict is still telemetered
-    // for audit, but no review hits GitHub.
-    //
-    // Sigilix PR #97 catch (Critical): the `getPullRequest` call must
-    // be wrapped in try/catch. A transient GitHub 5xx / rate-limit /
-    // network blip would otherwise throw, bubble to the outer catch,
-    // and DISCARD a fully synthesized review after minutes of
-    // specialist + synth work. The guard is best-effort: on error
-    // we log and proceed with the submit. Worst case: we post a
-    // review to a merged PR (the ARC-286 quirks we were trying to
-    // avoid) — but that's strictly better than losing the review
-    // entirely.
-    try {
-      const preMeta = await client.getPullRequest(owner, repo, prNumber)
-      if (preMeta.merged_at !== null && preMeta.merged_at !== undefined) {
-        const mergedAtMs = new Date(preMeta.merged_at).getTime()
-        const findingCount = renderableVerdict.findings.length + renderableUnanchored.length
-        console.log(JSON.stringify({
-          event: "pr-review-skipped-merged",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          review_elapsed_ms: Date.now() - startMs,
-          merged_at_ms: mergedAtMs,
-          merged_during_review_ms: mergedAtMs - startMs,
-          finding_count: findingCount,
-        }))
-        return finalize(telemetry, env, "skipped", cache)
-      }
-    } catch (err) {
-      // Best-effort — log and proceed. The submit phase below will
-      // surface whatever GitHub eventually says (422, 403, etc).
-      console.warn(JSON.stringify({
-        event: "pr-review-merged-guard-failed",
+    // ARC-286 (extracted to `merge-guard.ts` per Sigilix PR #97
+    // round-2 pushback so the three branches — open / merged /
+    // API-error — are unit-testable). The orchestrator just calls
+    // the helper and emits its own `pr-review-skipped-merged` event
+    // on the merged branch.
+    const mergeGuard = await checkIsPrMerged({ client, owner, repo, prNumber, headSha })
+    if (mergeGuard.shouldSkip) {
+      const findingCount = renderableVerdict.findings.length + renderableUnanchored.length
+      console.log(JSON.stringify({
+        event: "pr-review-skipped-merged",
         owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        err: err instanceof Error ? err.message : String(err),
+        review_elapsed_ms: Date.now() - startMs,
+        merged_at_ms: mergeGuard.mergedAtMs,
+        merged_during_review_ms: mergeGuard.mergedAtMs - startMs,
+        finding_count: findingCount,
       }))
+      return finalize(telemetry, env, "skipped", cache)
     }
 
     // ARC-287: dismiss prior Sigilix reviews BEFORE posting the new

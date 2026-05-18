@@ -109,6 +109,14 @@ export function renderReviewCommentFallback(args: {
   // submit actually threw (timeout, 5xx, rate limit), not silently
   // failed. The two failure modes deserve distinct copy so the
   // customer reading the comment knows what to expect on retry.
+  //
+  // Sigilix PR #97 round-3 catch: NO `default` case below — let
+  // TypeScript exhaustiveness flag any future `CommentFallbackSubmitPath`
+  // variant that's missing here. Adding a new variant without a
+  // matching case will fail the `exhaustive: never` check at compile
+  // time. The pre-round-3 `default` swallowed unknown variants by
+  // falling through to the "returned 2xx" copy — that's exactly the
+  // foot-gun this guards against.
   const reason: string = (() => {
     switch (submitPath) {
       case "inline-anchored-error":
@@ -116,9 +124,10 @@ export function renderReviewCommentFallback(args: {
       case "inline-anchored":
       case "anchorless-fallback":
       case "phase3":
-      default:
         return `> The \`${submitPath}\` submit returned 2xx but the review never became publicly visible (PENDING / silent reject). Posting the synth output as a regular PR comment instead so the review signal isn't lost.`
     }
+    const exhaustive: never = submitPath
+    throw new Error(`unhandled submitPath: ${String(exhaustive)}`)
   })()
   const header = [
     "<!-- sigilix:review-comment-fallback -->",

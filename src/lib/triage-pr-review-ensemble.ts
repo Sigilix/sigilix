@@ -33,6 +33,10 @@
 // the ensemble verdict gets posted to GitHub.
 
 import { chat, type ChatMessage } from "./ollama-chat"
+// ARC-283 Phase B1b: re-export ChatMessage so the shadow runner can
+// type its `runWithRetryAndFallback` calls without reaching past
+// this module into ./ollama-chat.
+export type { ChatMessage }
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
@@ -152,11 +156,32 @@ import {
   type EnsembleRunCtx,
   type SynthSummary,
   computeSpecialistFanoutSummary,
+  emitModelAttempt,
   emitPhaseCompleted,
   emitSpecialistFanoutSummary,
   emitSynthSummary,
   narrowSynthRetryOutcome,
 } from "./ensemble-perf-telemetry"
+// ARC-283 Phase B1b — shadow-mode bake-off harness. Imports are
+// no-ops when `env.SHADOW_BAKEOFF_ROLES` is unset/empty (the only
+// code path that fires is `parseShadowEnabledRoles("")` → empty
+// Set → every `resolveShadowConfig` returns null → no fan-out).
+import {
+  parseShadowEnabledRoles,
+  resolveShadowConfig,
+} from "./shadow-bakeoff-config"
+import {
+  buildShadowVerdictComparison,
+  emitShadowCutShort,
+  emitShadowRunFailed,
+  emitShadowVerdictComparison,
+  type FindingForOverlap,
+} from "./shadow-bakeoff-telemetry"
+import {
+  runShadowSpecialist,
+  runShadowSynth,
+  type ShadowRunResult,
+} from "./shadow-bakeoff-runner"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -353,6 +378,207 @@ if (ORCHESTRATOR_TIMEOUT_MS >= CF_QUEUE_CONSUMER_CEILING_MS) {
   )
 }
 
+// ARC-283 Phase B1b review pass — shadow tail grace cap.
+//
+// The orchestrator's `finally` block awaits any in-flight shadow
+// promises so it can emit `shadow-verdict-comparison` telemetry on
+// every exit path. Pre-grace, those awaits cleared the `orchTimer`
+// FIRST, which meant `orchCtrl.signal` no longer autonomously fired
+// — a pathologically slow shadow could run for up to ~180s
+// (60s per-attempt × (retries + 1) + fallback) AFTER prod returned.
+//
+// Worst case math: prod returns at the orchestrator-timeout edge
+// (895s) and the shadow happens to be in the middle of its
+// fallback attempt. Without a tail cap, the queue consumer would
+// have to wait the full 180s for shadow to finalize, blowing past
+// the 900s CF Queues consumer ceiling → worker hard-killed mid-
+// await → message re-delivered → duplicate review.
+//
+// The cap is RELATIVE to when the finally block STARTS, not
+// absolute from handler start. Value chosen as the maximum we can
+// afford without violating the CF ceiling:
+//
+//   CF_QUEUE_CONSUMER_CEILING_MS - ORCHESTRATOR_TIMEOUT_MS
+//   = 900_000 - 895_000
+//   = 5_000ms
+//
+// At 5s a healthy shadow that's milliseconds-from-settling still
+// emits its comparison; a pathological one gets cut short with a
+// `shadow-cut-short` event and the prod return is unaffected.
+// Total worst-case wall-clock = 895s + 5s = 900s, exactly at the
+// CF ceiling but not over it.
+//
+// Exported so the helper's unit test can race against the same
+// budget the runtime guard uses, mirroring the
+// `SYNTH_RETRY_FINALIZE_RESERVE_MS` convention earlier in this file.
+export const SHADOW_FINALIZE_GRACE_MS = 5_000
+if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILING_MS) {
+  throw new Error(
+    `[ensemble] shadow-grace invariant violated: ` +
+      `SHADOW_FINALIZE_GRACE_MS (${SHADOW_FINALIZE_GRACE_MS}) + ` +
+      `ORCHESTRATOR_TIMEOUT_MS (${ORCHESTRATOR_TIMEOUT_MS}) ` +
+      `must be ≤ CF_QUEUE_CONSUMER_CEILING_MS (${CF_QUEUE_CONSUMER_CEILING_MS}). ` +
+      `A pathologically slow shadow tail can otherwise push the queue ` +
+      `consumer past the 900s ceiling → worker hard-killed → message re-delivered.`,
+  )
+}
+
+/**
+ * Sentinels returned by `raceWithShadowGrace`.
+ *
+ *  - `SHADOW_GRACE_EXPIRED` — the wall-clock grace deadline fired OR the
+ *    parent `orchCtrl.signal` aborted before the shadow promise settled.
+ *    Caller emits `shadow-cut-short` with the reason it detected.
+ *  - `SHADOW_RUN_FAILED`    — the shadow promise itself REJECTED. The
+ *    shadow runners catch every internal failure and return a structured
+ *    `{verdictOk:false, ...}` shape, so a rejection means the runner
+ *    threw outside its own try/catch (programming bug, OOM, runtime
+ *    tear-down). Caller emits the dedicated `shadow-run-failed` event so
+ *    dashboards don't mis-attribute a real crash to a benign timeout.
+ *
+ * Both are unique symbols so callers can discriminate via `===` and
+ * TypeScript narrows the underlying `T` correctly. Exported so unit
+ * tests assert without re-declaring the sentinel.
+ */
+export const SHADOW_GRACE_EXPIRED = Symbol("shadow_grace_expired")
+export const SHADOW_RUN_FAILED = Symbol("shadow_run_failed")
+
+/**
+ * ARC-283 Phase B1b CR-2: compose multiple `AbortSignal`s into one
+ * that aborts as soon as ANY input aborts. Used at each shadow
+ * dispatch site so the finally block can cancel an in-flight shadow
+ * request (per-shadow controller) WITHOUT giving up the existing
+ * "orch timeout also kills shadow" behavior (orchCtrl).
+ *
+ * Returns a fresh `AbortSignal` from an internal `AbortController`.
+ * The reason of the FIRST signal to fire is forwarded onto the
+ * composed signal so listeners can see WHY it aborted (grace_deadline,
+ * orch_aborted, run_failed, ...). Pre-aborted inputs are honored
+ * synchronously — the returned signal will already be aborted.
+ *
+ * No-op when no signals are provided — returns a never-aborting
+ * signal (the AbortController is GC'd alongside the signal it owns).
+ */
+export function composeSignals(...signals: readonly AbortSignal[]): AbortSignal {
+  const ctrl = new AbortController()
+  for (const s of signals) {
+    if (s.aborted) {
+      ctrl.abort(s.reason)
+      return ctrl.signal
+    }
+    s.addEventListener(
+      "abort",
+      () => {
+        if (!ctrl.signal.aborted) ctrl.abort(s.reason)
+      },
+      { once: true },
+    )
+  }
+  return ctrl.signal
+}
+
+/**
+ * Wrapper around the rejection from a shadow promise so the caller
+ * can emit a `shadow-run-failed` event with the underlying message.
+ * Carries the failure message alongside the sentinel; using a tagged
+ * shape instead of throwing keeps `raceWithShadowGrace` resolve-only
+ * and preserves the prod return path.
+ *
+ * The discriminator field is named `__shadowRunFailed` (mangled,
+ * starting with underscores) so the type-guard `isShadowRunFailed`
+ * narrows reliably even when `T` itself happens to be an object. We
+ * can't use plain `"kind" in shadow` because `T = ShadowRunResult`
+ * is a structurally-typed object too and TypeScript can't prove the
+ * tag is unique to the failure variant.
+ */
+export interface ShadowRunFailedOutcome {
+  readonly __shadowRunFailed: typeof SHADOW_RUN_FAILED
+  readonly message: string
+}
+
+/** Type-guard for the run-failed sentinel-wrapper. */
+export function isShadowRunFailed(value: unknown): value is ShadowRunFailedOutcome {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "__shadowRunFailed" in value &&
+    (value as { __shadowRunFailed: unknown }).__shadowRunFailed === SHADOW_RUN_FAILED
+  )
+}
+
+/**
+ * Races `promise` against an absolute wall-clock `deadline` (ms since
+ * epoch). Used by the `handlePrReviewEnsemble` finally block to cap
+ * the shadow tail at `SHADOW_FINALIZE_GRACE_MS` so prod return +
+ * shadow comparison stay inside the 900s CF Queues consumer ceiling.
+ *
+ * Resolution table:
+ *   - promise resolves first → its value
+ *   - promise rejects first  → `{kind: SHADOW_RUN_FAILED, message}`
+ *   - deadline fires first   → `SHADOW_GRACE_EXPIRED`
+ *   - signal aborted first   → `SHADOW_GRACE_EXPIRED`
+ *
+ * Never rejects. CR-1: the rejection branch used to resolve with
+ * `SHADOW_GRACE_EXPIRED`, which caused the finally block to emit
+ * `shadow-cut-short` on a runner crash — misclassifying real failure
+ * signal as a timeout. Splitting the two sentinels keeps each event
+ * accurate.
+ */
+export function raceWithShadowGrace<T>(
+  promise: Promise<T>,
+  deadline: number,
+  signal: AbortSignal,
+): Promise<T | typeof SHADOW_GRACE_EXPIRED | ShadowRunFailedOutcome> {
+  if (signal.aborted) return Promise.resolve(SHADOW_GRACE_EXPIRED)
+  const remaining = Math.max(0, deadline - Date.now())
+  return new Promise<T | typeof SHADOW_GRACE_EXPIRED | ShadowRunFailedOutcome>((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(SHADOW_GRACE_EXPIRED)
+    }, remaining)
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      // Orchestrator was torn down — treat the same as a grace
+      // expiry from the comparison's perspective (we can no longer
+      // wait for the shadow). The finally consumer reads
+      // `orchCtrl.signal.aborted` to label the reason on the
+      // emitted `shadow-cut-short` event.
+      resolve(SHADOW_GRACE_EXPIRED)
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      (err: unknown) => {
+        // Shadow runners catch internally and return structured
+        // failure — a rejection here means something exploded outside
+        // the runner's own catch. Surface as the FAILED sentinel so
+        // the finally consumer can emit `shadow-run-failed`, not
+        // `shadow-cut-short`. Pre-CR-1 we incorrectly mapped this to
+        // `SHADOW_GRACE_EXPIRED`, hiding runner crashes in the
+        // cut-short bucket.
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal.removeEventListener("abort", onAbort)
+        resolve({
+          __shadowRunFailed: SHADOW_RUN_FAILED,
+          message: err instanceof Error ? err.message : String(err),
+        })
+      },
+    )
+  })
+}
+
 /**
  * Per-role model lineup with retry/fallback config (v3.1 LOCKED spec
  * amendment, post-shadow-mode telemetry from PR #35-36 dogfooding).
@@ -377,7 +603,7 @@ if (ORCHESTRATOR_TIMEOUT_MS >= CF_QUEUE_CONSUMER_CEILING_MS) {
  *   - Retries enabled per-role, sized by criticality (logic gets 2,
  *     others 1, synth 1; user constraint "logic cannot fail").
  */
-interface ModelConfig {
+export interface ModelConfig {
   primary: string
   /** Number of retry attempts on the primary BEFORE falling back. 0 = no retry. */
   retries: number
@@ -539,6 +765,42 @@ export async function handlePrReviewEnsemble(
   // here would contradict a successful Phase 3 review). Lifecycle
   // owned at the dispatcher level → single source of truth for the
   // final outcome.
+
+  // ARC-283 Phase B1b — shadow-mode bake-off state. Lifted out of
+  // the try block so the `finally` cleanup can settle every shadow
+  // promise + emit comparison telemetry regardless of which return
+  // path the prod orchestrator took (success, bail-with-skip-notice,
+  // outer-catch). When `SHADOW_BAKEOFF_ROLES` is unset/empty the
+  // maps stay empty, the synth promise stays null, and the finally
+  // block runs a zero-cost no-op.
+  //
+  // Snapshots are written as soon as the corresponding prod outcome
+  // settles — by the time `finally` runs, each entry is either:
+  //   - present (prod settled → shadow comparison can fire)
+  //   - absent (prod errored before settle → shadow still emits with
+  //     a synthetic "prod did not run" prod outcome)
+  // The shadow promise itself never throws — `runShadowSpecialist` /
+  // `runShadowSynth` catch + return structured failure on every path.
+  type ProdSpecialistSnapshot = {
+    verdictOk: boolean
+    modelUsed: string
+    attemptsUsed: number
+    elapsedMs: number
+    findings: readonly FindingForOverlap[]
+  }
+  const shadowSpecialistPromises = new Map<SpecialistRole, Promise<ShadowRunResult>>()
+  const prodSpecialistSnapshots = new Map<SpecialistRole, ProdSpecialistSnapshot>()
+  let shadowSynthPromise: Promise<ShadowRunResult> | null = null
+  // ARC-283 Phase B1b CR-2: per-shadow AbortController so the finally
+  // block can `.abort(reason)` any shadow request that didn't settle
+  // before the grace deadline / orch tear-down. Pre-CR-2 we emitted
+  // `shadow-cut-short` but left the in-flight HTTP request alive,
+  // silently doubling provider rate-limit pressure past the cut.
+  //
+  // Keyed by the role the controller belongs to; `"synth"` is used
+  // for the single shadow synth controller. Map cleared as each entry
+  // settles so the finally loop only sees still-pending shadows.
+  const shadowAbortControllers = new Map<SpecialistRole | "synth", AbortController>()
 
   // Telemetry skeleton — populated as we go so we can write a record
   // even on early failure paths.
@@ -1098,6 +1360,48 @@ export async function handlePrReviewEnsemble(
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
     })
 
+    // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
+    // prod Promise.allSettled below so both lineups run in parallel
+    // (NOT serially). Shadow shares prod's `orchCtrl.signal` — when
+    // the outer orchestrator times out, shadow aborts with it. No
+    // new wall-clock budget. The shadow promise never throws (the
+    // runner catches + structures every failure path) but the
+    // `finally`-block consumer still wraps the await in try/catch
+    // to defend the prod return path.
+    const shadowEnabledRoles = parseShadowEnabledRoles(env.SHADOW_BAKEOFF_ROLES)
+    for (const role of router.specialists) {
+      const shadowConfig = resolveShadowConfig(role, shadowEnabledRoles)
+      if (shadowConfig === null) continue
+      // ARC-283 Phase B1b CR-2: per-shadow AbortController, composed
+      // with orchCtrl. Either source can abort the in-flight HTTP
+      // request: orchCtrl when the outer 895s wall fires, the
+      // per-shadow controller when the finally block decides the
+      // shadow is past its grace cap. Without the per-shadow
+      // controller, the cut-short emit was a pure log line and the
+      // request kept consuming provider capacity.
+      const shadowCtrl = new AbortController()
+      shadowAbortControllers.set(role, shadowCtrl)
+      const composedSignal = composeSignals(orchCtrl.signal, shadowCtrl.signal)
+      const shadowPromise = runShadowSpecialist({
+        role,
+        shadowConfig,
+        apiKey: env.OLLAMA_API_KEY,
+        systemPrompt: SPECIALIST_PROMPTS[role],
+        userMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
+        chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+        signal: composedSignal,
+        perfCtx,
+      }).finally(() => {
+        // Settled (success OR runner-caught failure) — clear the
+        // controller so the finally block's still-pending sweep
+        // doesn't re-abort an already-finished call. Doesn't drop
+        // the promise itself; the finally block still awaits to
+        // emit comparison telemetry.
+        shadowAbortControllers.delete(role)
+      })
+      shadowSpecialistPromises.set(role, shadowPromise)
+    }
+
     // ARC-284: track per-specialist start time so the fanout summary
     // can name the slowest role. The Promise.allSettled below waits
     // for ALL to settle, so we measure each role's elapsed independent
@@ -1121,6 +1425,11 @@ export async function handlePrReviewEnsemble(
             initialMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
             chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
             signal,
+            // ARC-283 Phase B1b: thread the orchestrator's perfCtx
+            // through so per-attempt `model-attempt-completed` events
+            // share correlation fields with the surrounding ensemble
+            // telemetry.
+            perfCtx,
           }),
           SPECIALIST_TIMEOUT_MS,
           orchCtrl.signal,
@@ -1136,6 +1445,33 @@ export async function handlePrReviewEnsemble(
       specialistResults,
       telemetry,
     )
+
+    // ARC-283 Phase B1b — snapshot per-role prod outcomes for the
+    // shadow comparison emit in `finally`. Only writes for roles
+    // that have a shadow promise queued; for everyone else we'd
+    // never emit a comparison anyway. Reading from `specialistVerdicts`
+    // (not `specialistResults`) so we get the same shape downstream
+    // telemetry sees (stable-id-assigned verdict, dedupe-corrected
+    // modelUsed). Findings are projected to the overlap-helper's
+    // shape so the `finally` block stays a thin wrapper.
+    for (const v of specialistVerdicts) {
+      if (!shadowSpecialistPromises.has(v.role)) continue
+      const findings: FindingForOverlap[] = v.verdict
+        ? v.verdict.findings.map((f) => ({
+            path: f.path,
+            line: f.line,
+            category: f.category,
+            score: f.score,
+          }))
+        : []
+      prodSpecialistSnapshots.set(v.role, {
+        verdictOk: v.verdict !== null,
+        modelUsed: v.modelUsed ?? SPECIALIST_CONFIGS[v.role].primary,
+        attemptsUsed: v.attemptsUsed ?? 0,
+        elapsedMs: v.elapsedMs,
+        findings,
+      })
+    }
 
     // ARC-284 (Sigilix PR #95 catch): specialist-fanout-summary
     // computation moved into `computeSpecialistFanoutSummary` so the
@@ -1338,6 +1674,40 @@ export async function handlePrReviewEnsemble(
             : 0,
         }))
       }
+
+      // ARC-283 Phase B1b — shadow synth kick-off. Fires BEFORE
+      // `attempt1` so both lineups run in parallel; the shadow
+      // promise is captured at the outer scope so `finally` can
+      // settle it even when prod synth bails to skip-notice.
+      // Same `synthSystemPrompt` + `synthMessageWithMemory` the prod
+      // path uses, so the comparison is apples-to-apples on input.
+      // Shadow shares `orchCtrl.signal` — aborts with the outer
+      // orchestrator timer. The shadow synth is allowed to take
+      // longer than the prod synth's 420s budget; what bounds it
+      // is the 895s outer orchestrator wall.
+      const shadowSynthConfig = resolveShadowConfig("synth", shadowEnabledRoles)
+      if (shadowSynthConfig !== null) {
+        // ARC-283 Phase B1b CR-2: per-shadow synth AbortController,
+        // same pattern as the specialist fan-out above. Lets the
+        // finally block cancel an in-flight synth shadow when the
+        // grace deadline fires instead of leaving the request to
+        // burn provider capacity invisibly.
+        const shadowSynthCtrl = new AbortController()
+        shadowAbortControllers.set("synth", shadowSynthCtrl)
+        const composedSynthSignal = composeSignals(orchCtrl.signal, shadowSynthCtrl.signal)
+        shadowSynthPromise = runShadowSynth({
+          shadowConfig: shadowSynthConfig,
+          apiKey: env.OLLAMA_API_KEY,
+          systemPrompt: synthSystemPrompt,
+          userMessage: synthMessageWithMemory,
+          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+          signal: composedSynthSignal,
+          perfCtx,
+        }).finally(() => {
+          shadowAbortControllers.delete("synth")
+        })
+      }
+
       // ARC-278: extract the attempt-runner so we can call it twice
       // (primary + at most one retry). The closure captures every
       // input that's stable between attempts (system prompt, config
@@ -1362,6 +1732,9 @@ export async function handlePrReviewEnsemble(
               userMessage,
               chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
               signal,
+              // ARC-283 Phase B1b: same correlation context as the
+              // specialist fan-out above.
+              perfCtx,
               ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
             }),
             timeoutMs,
@@ -2273,6 +2646,186 @@ export async function handlePrReviewEnsemble(
     return finalize(telemetry, env, "errored", cache)
   } finally {
     clearTimeout(orchTimer)
+    // ARC-283 Phase B1b — shadow comparison emit. Runs on EVERY
+    // return path (success, skip-notice bail, outer-catch
+    // internal_error). When shadow was disabled the maps stay empty
+    // and this block is a zero-cost no-op. Each await is individually
+    // try/wrap'd — a shadow-side crash MUST NOT take down the prod
+    // return value the function already produced.
+    //
+    // ARC-283 review pass: a pathologically slow shadow can no longer
+    // hold the queue consumer past the 900s CF Queues ceiling. Each
+    // shadow await is raced against `shadowDeadline` (finally-start +
+    // SHADOW_FINALIZE_GRACE_MS). On grace expiry we emit
+    // `shadow-cut-short` and skip the comparison emit for that role.
+    const finallyStartMs = Date.now()
+    const shadowDeadline = finallyStartMs + SHADOW_FINALIZE_GRACE_MS
+    if (shadowSpecialistPromises.size > 0) {
+      for (const [role, shadowPromise] of shadowSpecialistPromises) {
+        try {
+          // eslint-disable-next-line no-await-in-loop -- shadow
+          // comparison is per-role + must serialize on the same
+          // wall-clock; each await independently catches its own
+          // failure so an early role error can't poison the rest.
+          // The grace race shares one absolute deadline across all
+          // roles, so a slow first role can't starve the others.
+          const shadow = await raceWithShadowGrace(
+            shadowPromise,
+            shadowDeadline,
+            orchCtrl.signal,
+          )
+          if (shadow === SHADOW_GRACE_EXPIRED) {
+            // ARC-283 Phase B1b CR-2: abort the in-flight shadow
+            // request BEFORE emitting the telemetry, so the underlying
+            // HTTP call actually stops consuming provider capacity.
+            // The controller is only present when the runner hasn't
+            // settled yet (the .finally() in the dispatch site clears
+            // it on settle).
+            const reason: "grace_deadline" | "orch_aborted" =
+              orchCtrl.signal.aborted ? "orch_aborted" : "grace_deadline"
+            const ctrl = shadowAbortControllers.get(role)
+            if (ctrl && !ctrl.signal.aborted) ctrl.abort(reason)
+            emitShadowCutShort(perfCtx, {
+              role,
+              elapsedAtCutMs: Date.now() - finallyStartMs,
+              reason,
+            })
+            continue
+          }
+          if (isShadowRunFailed(shadow)) {
+            // ARC-283 Phase B1b CR-1: shadow runner crashed outside
+            // its own catch. Emit the dedicated `shadow-run-failed`
+            // event so dashboards distinguish a runner crash from a
+            // grace-deadline cut. Abort any controller that's still
+            // around (defensive — the .finally() should have cleared
+            // it already since the promise settled).
+            const ctrl = shadowAbortControllers.get(role)
+            if (ctrl && !ctrl.signal.aborted) ctrl.abort("run_failed")
+            emitShadowRunFailed(perfCtx, { role, message: shadow.message })
+            continue
+          }
+          const prodSnapshot = prodSpecialistSnapshots.get(role)
+          // When the prod path errored before the fan-out settled
+          // (orchestrator caught an exception inside try{} before
+          // `collectSpecialistVerdicts` ran), there's no prod
+          // snapshot. Build a synthetic "prod did not run" entry so
+          // the comparison still emits — operators can pivot on
+          // `prodVerdictOk === false && prodAttemptsUsed === 0` to
+          // filter these out of the bake-off analysis.
+          const prod = prodSnapshot ?? {
+            verdictOk: false,
+            modelUsed: SPECIALIST_CONFIGS[role].primary,
+            attemptsUsed: 0,
+            elapsedMs: 0,
+            findings: [] as readonly FindingForOverlap[],
+          }
+          const comparison = buildShadowVerdictComparison({
+            role,
+            prodModelDefault: SPECIALIST_CONFIGS[role].primary,
+            prod,
+            shadow: {
+              verdictOk: shadow.verdictOk,
+              modelUsed: shadow.modelUsed,
+              attemptsUsed: shadow.attemptsUsed,
+              elapsedMs: shadow.elapsedMs,
+              findings: shadow.findings,
+              ...(shadow.failureReason !== undefined
+                ? { failureReason: shadow.failureReason }
+                : {}),
+            },
+          })
+          emitShadowVerdictComparison(perfCtx, comparison)
+        } catch (err) {
+          // Defensive: a shadow-side crash (shouldn't happen — the
+          // runner catches every failure path internally) must NOT
+          // corrupt the prod return value the function already
+          // produced. Surface as a structured event for CF Logs
+          // mirroring the Task-4 `model-attempt-emit-error` shape.
+          console.warn(JSON.stringify({
+            event: "shadow-specialist-emit-error",
+            owner, repo, prNumber,
+            headSha: headSha.slice(0, 7),
+            role,
+            message: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
+    }
+    if (shadowSynthPromise !== null) {
+      try {
+        const shadow = await raceWithShadowGrace(
+          shadowSynthPromise,
+          shadowDeadline,
+          orchCtrl.signal,
+        )
+        if (shadow === SHADOW_GRACE_EXPIRED) {
+          // ARC-283 Phase B1b CR-2: cancel in-flight synth before
+          // emitting telemetry so the HTTP request actually stops.
+          const reason: "grace_deadline" | "orch_aborted" =
+            orchCtrl.signal.aborted ? "orch_aborted" : "grace_deadline"
+          const ctrl = shadowAbortControllers.get("synth")
+          if (ctrl && !ctrl.signal.aborted) ctrl.abort(reason)
+          emitShadowCutShort(perfCtx, {
+            role: "synth",
+            elapsedAtCutMs: Date.now() - finallyStartMs,
+            reason,
+          })
+        } else if (isShadowRunFailed(shadow)) {
+          // ARC-283 Phase B1b CR-1: shadow synth runner crashed.
+          // Emit the dedicated `shadow-run-failed` event.
+          const ctrl = shadowAbortControllers.get("synth")
+          if (ctrl && !ctrl.signal.aborted) ctrl.abort("run_failed")
+          emitShadowRunFailed(perfCtx, { role: "synth", message: shadow.message })
+        } else {
+          // Build the prod synth snapshot from telemetry.synthesizer.
+          // Every exit path that runs the synth populates this field;
+          // the only case where it's null is the outer-catch path that
+          // fired BEFORE the inner synth try ran. In that case prod
+          // never produced any synth output — same synthetic "prod
+          // did not run" shape as the specialist branch above.
+          const prodSynthTel = telemetry.synthesizer
+          const prodSynthFindings: FindingForOverlap[] = prodSynthTel?.verdict
+            ? prodSynthTel.verdict.findings.map((f) => ({
+                path: f.path,
+                line: f.line,
+                category: f.category,
+                score: f.score,
+              }))
+            : []
+          const prod: ProdSpecialistSnapshot = {
+            verdictOk: prodSynthTel?.verdict != null,
+            modelUsed: prodSynthTel?.modelUsed ?? SYNTHESIZER_CONFIG.primary,
+            attemptsUsed: prodSynthTel?.attemptsUsed ?? 0,
+            elapsedMs: prodSynthTel?.elapsedMs ?? 0,
+            findings: prodSynthFindings,
+          }
+          const comparison = buildShadowVerdictComparison({
+            role: "synth",
+            prodModelDefault: SYNTHESIZER_CONFIG.primary,
+            prod,
+            shadow: {
+              verdictOk: shadow.verdictOk,
+              modelUsed: shadow.modelUsed,
+              attemptsUsed: shadow.attemptsUsed,
+              elapsedMs: shadow.elapsedMs,
+              findings: shadow.findings,
+              ...(shadow.failureReason !== undefined
+                ? { failureReason: shadow.failureReason }
+                : {}),
+            },
+          })
+          emitShadowVerdictComparison(perfCtx, comparison)
+        }
+      } catch (err) {
+        // Same defensive shape as the specialist branch above.
+        console.warn(JSON.stringify({
+          event: "shadow-synth-emit-error",
+          owner, repo, prNumber,
+          headSha: headSha.slice(0, 7),
+          message: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
   }
 }
 
@@ -2564,13 +3117,27 @@ async function buildClient(env: Env, installationId: number): Promise<GitHubClie
 
 // ─── specialist runner ────────────────────────────────────────────────
 
-interface SpecialistRunArgs {
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
+export interface SpecialistRunArgs {
   role: SpecialistRole
   apiKey: string | undefined
   systemPrompt: string
   initialMessage: string
   chatEnabled: "on" | "off"
   signal: AbortSignal
+  /**
+   * ARC-283 Phase B1b: correlation context for emitting
+   * `model-attempt-completed` per retry/fallback attempt. Threaded
+   * through from the orchestrator's `perfCtx` so the per-attempt
+   * event carries the same {owner, repo, prNumber, headSha} as the
+   * surrounding `phase-completed` + `specialist-fanout-summary`
+   * events for downstream correlation.
+   */
+  perfCtx: EnsembleRunCtx
 }
 
 interface SpecialistRunResult {
@@ -2585,7 +3152,12 @@ interface SpecialistRunResult {
   attemptsUsed: number
 }
 
-async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
+export async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
   const t0 = Date.now()
   if (!args.apiKey) {
     return {
@@ -2611,6 +3183,59 @@ async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResu
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "specialist_did_not_parse",
     startedAt: t0,
+    // ARC-283 Phase B1b: emit `model-attempt-completed` per attempt.
+    // Bucket attempts into primary/retry/fallback by attemptIndex:
+    //   1                  → primary
+    //   2..(retries + 1)   → retry
+    //   (retries + 2)      → fallback (only fires when config.fallback
+    //                         is set; runWithRetryAndFallback skips it
+    //                         when fallback is null).
+    onAttempt: (info) => {
+      try {
+        const attemptKind = info.attemptIndex === 1
+          ? "primary"
+          : info.attemptIndex <= config.retries + 1
+            ? "retry"
+            : "fallback"
+        const outcome = info.verdictOk
+          ? "ok"
+          : (info.failureReason ?? "").includes("timeout")
+            ? "timeout"
+            : (info.failureReason ?? "").toLowerCase().includes("abort")
+              ? "aborted"
+              : "failed"
+        emitModelAttempt(args.perfCtx, {
+          phase: "specialist",
+          role: args.role,
+          attemptKind,
+          attemptIndex: info.attemptIndex,
+          model: info.model,
+          timeoutMs: info.timeoutMs,
+          startedAtMs: info.startedAtMs,
+          endedAtMs: info.endedAtMs,
+          elapsedMs: info.endedAtMs - info.startedAtMs,
+          outcome,
+          ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+        })
+      } catch (err) {
+        // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
+        // must not corrupt the verdict path. `runSpecialist` runs inside
+        // Promise.allSettled — an uncaught throw here converts a valid
+        // specialist verdict into a rejected entry, dropping coverage.
+        // Surface the failure as a structured event for CF Logs; don't
+        // re-throw.
+        console.log(JSON.stringify({
+          event: "model-attempt-emit-error",
+          owner: args.perfCtx.owner,
+          repo: args.perfCtx.repo,
+          prNumber: args.perfCtx.prNumber,
+          headSha: args.perfCtx.headSha.slice(0, 7),
+          phase: "specialist",
+          role: args.role,
+          message: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    },
   })
 }
 
@@ -2632,6 +3257,21 @@ async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResu
  * problem, not a capacity problem; retrying the same prompt at
  * temperature 0 will yield the same bad output.
  */
+export interface AttemptCallbackInfo {
+  /** 1-indexed across the entire retry+fallback chain (primary
+   *  attempt 1, retry attempts 2..N+1, fallback attempt N+2). */
+  attemptIndex: number
+  model: string
+  timeoutMs: number
+  startedAtMs: number
+  endedAtMs: number
+  verdictOk: boolean
+  /** Present when verdictOk=false. Same free-form string
+   *  `runWithRetryAndFallback` returns as its top-level
+   *  `failureReason` for the final outcome. */
+  failureReason?: string
+}
+
 export async function runWithRetryAndFallback<T>(args: {
   config: ModelConfig
   apiKey: string
@@ -2650,6 +3290,24 @@ export async function runWithRetryAndFallback<T>(args: {
    * value to exercise the abort path without real-time waits.
    */
   perAttemptTimeoutMs?: number
+  /**
+   * ARC-283 Phase B1b: optional per-attempt observer. Fires AFTER
+   * each settled attempt (primary, retry, OR fallback), on BOTH
+   * success and failure branches, BEFORE the next iteration. The
+   * shadow runner uses this to emit `shadow-model-attempt-completed`;
+   * the prod path uses it (wired in `runSpecialist`/`runSynthesizer`)
+   * to emit `model-attempt-completed`.
+   *
+   * `runWithRetryAndFallback` itself does NOT wrap the callback in
+   * try/catch — callers own that decision. The prod-path callers
+   * (`runSpecialist`/`runSynthesizer`) DO wrap because their
+   * runSpecialist/runSynthesizer call is inside `Promise.allSettled`
+   * (or `attemptSynth`'s catch) where an emit-throw would silently
+   * discard a valid verdict. The shadow runner deliberately leaves
+   * its callback bare — shadow-mode telemetry failures should be
+   * loud, not papered over.
+   */
+  onAttempt?: (info: AttemptCallbackInfo) => void
 }): Promise<{
   verdict: T | null
   failureReason?: string
@@ -2679,6 +3337,11 @@ export async function runWithRetryAndFallback<T>(args: {
       }
     }
     attemptsUsed++
+    // ARC-283 (B1b): mark per-attempt wall-clock start BEFORE the
+    // composed-timeout wrapper so the onAttempt observer gets the
+    // true span (including any time spent inside attemptChat's
+    // setup, not just chat()'s round-trip).
+    const attemptStartMs = Date.now()
     // Phase 4a.4: per-attempt cap. attemptChat already returns a
     // structured failure on AbortError (its inner try/catch catches
     // chat()'s thrown abort), so withComposedTimeout's grace path
@@ -2692,6 +3355,18 @@ export async function runWithRetryAndFallback<T>(args: {
       perAttemptCap,
       signal,
     )
+    // ARC-283 (B1b): emit onAttempt on BOTH success and failure
+    // branches of the primary/retry loop. Fires before the early
+    // `return` below so the observer sees every settled call.
+    args.onAttempt?.({
+      attemptIndex: attemptsUsed,
+      model: config.primary,
+      timeoutMs: perAttemptCap,
+      startedAtMs: attemptStartMs,
+      endedAtMs: Date.now(),
+      verdictOk: outcome.verdict !== null,
+      ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+    })
     if (outcome.verdict !== null) {
       return {
         verdict: outcome.verdict,
@@ -2727,6 +3402,10 @@ export async function runWithRetryAndFallback<T>(args: {
   if (config.fallback && !signal.aborted) {
     const fallbackModel = config.fallback
     attemptsUsed++
+    // ARC-283 (B1b): mirror the primary-loop start mark so the
+    // fallback attempt also gets a true wall-clock span on the
+    // onAttempt observer.
+    const attemptStartMs = Date.now()
     // Phase 4a.4: same per-attempt cap on the fallback. The fallback
     // gets one shot — capped — so even if the cross-provider model is
     // also slow, the overall specialist run finishes within budget.
@@ -2738,6 +3417,17 @@ export async function runWithRetryAndFallback<T>(args: {
       perAttemptCap,
       signal,
     )
+    // ARC-283 (B1b): emit onAttempt for the fallback as well, on
+    // BOTH success and failure branches.
+    args.onAttempt?.({
+      attemptIndex: attemptsUsed,
+      model: fallbackModel,
+      timeoutMs: perAttemptCap,
+      startedAtMs: attemptStartMs,
+      endedAtMs: Date.now(),
+      verdictOk: outcome.verdict !== null,
+      ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+    })
     if (outcome.verdict !== null) {
       return {
         verdict: outcome.verdict,
@@ -2882,7 +3572,12 @@ async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
 
 // ─── synthesizer runner ───────────────────────────────────────────────
 
-interface SynthesizerRunArgs {
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
+export interface SynthesizerRunArgs {
   apiKey: string | undefined
   systemPrompt: string
   userMessage: string
@@ -2901,6 +3596,12 @@ interface SynthesizerRunArgs {
    * but the runtime drops the tail. Telemetry records the count.
    */
   configOverride?: ModelConfig
+  /**
+   * ARC-283 Phase B1b: correlation context for emitting
+   * `model-attempt-completed` per retry/fallback attempt. Same
+   * shape + purpose as `SpecialistRunArgs.perfCtx`.
+   */
+  perfCtx: EnsembleRunCtx
 }
 
 interface SynthesizerRunOutput {
@@ -2953,7 +3654,7 @@ interface SynthParsedOutput {
   provenance: SynthesizerProvenance
 }
 
-function parseSynthAnswer(content: string): SynthParsedOutput | null {
+export function parseSynthAnswer(content: string): SynthParsedOutput | null {
   // Expect `{verdict: PrReviewVerdict, provenance: {...}}`.
   const parsed = parseFirstJsonObject(content)
   if (!parsed) return null
@@ -2963,7 +3664,12 @@ function parseSynthAnswer(content: string): SynthParsedOutput | null {
   return { verdict, provenance: parsed.provenance }
 }
 
-async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
+export async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
   const t0 = Date.now()
   const effectiveConfig: ModelConfig = args.configOverride ?? SYNTHESIZER_CONFIG
   if (!args.apiKey) {
@@ -2995,6 +3701,57 @@ async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunO
     parseAnswer: parseSynthAnswer,
     parseFailureLabel: "synth_failed_parse",
     startedAt: t0,
+    // ARC-283 Phase B1b: emit `model-attempt-completed` per attempt.
+    // Same attemptKind/outcome bucketing as the specialist path; role
+    // is the literal "synth" string (matches the `ModelAttemptPhase`
+    // type definition in `ensemble-perf-telemetry.ts`).
+    onAttempt: (info) => {
+      try {
+        const attemptKind = info.attemptIndex === 1
+          ? "primary"
+          : info.attemptIndex <= effectiveConfig.retries + 1
+            ? "retry"
+            : "fallback"
+        const outcomeLabel = info.verdictOk
+          ? "ok"
+          : (info.failureReason ?? "").includes("timeout")
+            ? "timeout"
+            : (info.failureReason ?? "").toLowerCase().includes("abort")
+              ? "aborted"
+              : "failed"
+        emitModelAttempt(args.perfCtx, {
+          phase: "synth",
+          role: "synth",
+          attemptKind,
+          attemptIndex: info.attemptIndex,
+          model: info.model,
+          timeoutMs: info.timeoutMs,
+          startedAtMs: info.startedAtMs,
+          endedAtMs: info.endedAtMs,
+          elapsedMs: info.endedAtMs - info.startedAtMs,
+          outcome: outcomeLabel,
+          ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+        })
+      } catch (err) {
+        // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
+        // must not corrupt the verdict path. `runSynthesizer` is invoked
+        // by `attemptSynth` in the orchestrator (which catches throws +
+        // returns null → fires the ARC-278 retry → if THAT also throws,
+        // synth_timeout skip-notice fires for a valid synth output).
+        // Surface the failure as a structured event for CF Logs; don't
+        // re-throw.
+        console.log(JSON.stringify({
+          event: "model-attempt-emit-error",
+          owner: args.perfCtx.owner,
+          repo: args.perfCtx.repo,
+          prNumber: args.perfCtx.prNumber,
+          headSha: args.perfCtx.headSha.slice(0, 7),
+          phase: "synth",
+          role: "synth",
+          message: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    },
   })
 
   if (outcome.verdict) {

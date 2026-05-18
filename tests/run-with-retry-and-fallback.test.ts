@@ -23,7 +23,16 @@ vi.mock("../src/lib/ollama-chat", async () => {
   }
 })
 
-import { runWithRetryAndFallback } from "../src/lib/triage-pr-review-ensemble"
+import {
+  runWithRetryAndFallback,
+  runSpecialist,
+  runSynthesizer,
+  SPECIALIST_CONFIGS,
+  SYNTHESIZER_CONFIG,
+  type AttemptCallbackInfo,
+} from "../src/lib/triage-pr-review-ensemble"
+import { parsePrReviewResponse } from "../src/lib/triage-pr-review"
+import { ALL_SPECIALISTS } from "../src/lib/ensemble-router"
 
 beforeEach(() => {
   mockChat.mockReset()
@@ -304,5 +313,214 @@ describe("runWithRetryAndFallback — Phase 4a.4 budget invariant", () => {
     const retryBackoffMs = 1_000
     const worstCase = 2 * PER_ATTEMPT_TIMEOUT_MS + retryBackoffMs + PER_ATTEMPT_TIMEOUT_MS
     expect(worstCase).toBeLessThanOrEqual(SPECIALIST_TIMEOUT_MS)
+  })
+})
+
+// ─── ARC-283 Phase B1b: onAttempt callback ──────────────────────────
+
+// Minimal PR-review verdict the production `parsePrReviewResponse`
+// accepts. Used by the onAttempt tests so the parser path mirrors
+// the real specialist runner instead of the parseStub above.
+const VALID_VERDICT_JSON = JSON.stringify({
+  summary: "looks fine",
+  confidence: 3,
+  findings: [],
+})
+
+describe("runWithRetryAndFallback onAttempt callback (ARC-283 B1b)", () => {
+  it("invokes onAttempt once per attempted call with verdictOk + failureReason + timing", async () => {
+    // Primary 503 → fallback parses → 2 emits expected (primary
+    // failure first, fallback success second).
+    mockChat
+      .mockRejectedValueOnce(new Error("Ollama HTTP 503: overloaded"))
+      .mockResolvedValueOnce(ok(VALID_VERDICT_JSON))
+    const attempts: AttemptCallbackInfo[] = []
+    const result = await runWithRetryAndFallback({
+      config: { primary: "p:cloud", retries: 0, fallback: "f:cloud" },
+      apiKey: "k",
+      messages: [{ role: "user", content: "hi" }],
+      signal: new AbortController().signal,
+      chatEnabled: "on",
+      format: undefined,
+      parseAnswer: parsePrReviewResponse,
+      parseFailureLabel: "did_not_parse",
+      startedAt: Date.now(),
+      onAttempt: (info) => { attempts.push(info) },
+    })
+    expect(attempts).toHaveLength(2)
+    expect(attempts[0]?.model).toBe("p:cloud")
+    expect(attempts[0]?.verdictOk).toBe(false)
+    expect(attempts[0]?.failureReason).toBeTruthy()
+    expect(attempts[0]?.attemptIndex).toBe(1)
+    expect(attempts[1]?.model).toBe("f:cloud")
+    expect(attempts[1]?.verdictOk).toBe(true)
+    expect(attempts[1]?.attemptIndex).toBe(2)
+    expect(attempts[1]?.failureReason).toBeUndefined()
+    // Timing sanity — endedAtMs >= startedAtMs on both.
+    expect(attempts[0]?.endedAtMs).toBeGreaterThanOrEqual(attempts[0]?.startedAtMs ?? 0)
+    expect(attempts[1]?.endedAtMs).toBeGreaterThanOrEqual(attempts[1]?.startedAtMs ?? 0)
+    expect(result.verdict).not.toBeNull()
+  })
+
+  it("does not invoke onAttempt when signal is already aborted (no attempt happened)", async () => {
+    const ac = new AbortController()
+    ac.abort()
+    const attempts: AttemptCallbackInfo[] = []
+    const result = await runWithRetryAndFallback({
+      config: { primary: "p:cloud", retries: 0, fallback: null },
+      apiKey: "k",
+      messages: [{ role: "user", content: "hi" }],
+      signal: ac.signal,
+      chatEnabled: "on",
+      format: undefined,
+      parseAnswer: parsePrReviewResponse,
+      parseFailureLabel: "did_not_parse",
+      startedAt: Date.now(),
+      onAttempt: (info) => { attempts.push(info) },
+    })
+    expect(attempts).toHaveLength(0)
+    expect(result.verdict).toBeNull()
+  })
+})
+
+// ─── ARC-283 Phase B1b: model-attempt-completed prod-path wire-up ──
+
+describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
+  // Synthesizer requires both `verdict` AND `provenance` per
+  // `parseSynthAnswer` + `isValidProvenance`. Minimal valid shape.
+  const VALID_SYNTH_JSON = JSON.stringify({
+    verdict: { summary: "synthesized", confidence: 3, findings: [] },
+    provenance: { findings: [], dropped: [], retrievalCallsUsed: 0 },
+  })
+  const perfCtx = {
+    owner: "Arc-and-Anchor",
+    repo: "sigilix",
+    prNumber: 1,
+    headSha: "a".repeat(40),
+  }
+
+  it("emits exactly 5 model-attempt-completed events on the happy path (4 specialists + 1 synth)", async () => {
+    // Five sequential happy-path calls: one per specialist role plus
+    // one synth call. Pinning EXACTLY 5 (not ≥5) catches accidental
+    // double-emits or stray ARC-278 retry firings on a path that
+    // shouldn't trigger them.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    try {
+      // 4 specialists' happy paths.
+      for (const role of ALL_SPECIALISTS) {
+        mockChat.mockResolvedValueOnce(ok(JSON.stringify({
+          summary: `verdict from ${role}`,
+          confidence: 3,
+          findings: [],
+        })))
+        const result = await runSpecialist({
+          role,
+          apiKey: "test-key",
+          systemPrompt: "system",
+          initialMessage: "user",
+          chatEnabled: "on",
+          signal: new AbortController().signal,
+          perfCtx,
+        })
+        expect(result.verdict).not.toBeNull()
+      }
+      // 1 synthesizer happy path.
+      mockChat.mockResolvedValueOnce(ok(VALID_SYNTH_JSON))
+      const synthResult = await runSynthesizer({
+        apiKey: "test-key",
+        systemPrompt: "system",
+        userMessage: "user",
+        chatEnabled: "on",
+        signal: new AbortController().signal,
+        perfCtx,
+      })
+      expect(synthResult.verdict).not.toBeNull()
+
+      const events = logSpy.mock.calls
+        .map((c) => {
+          try { return JSON.parse(c[0] as string) as Record<string, unknown> }
+          catch { return null }
+        })
+        .filter((e): e is Record<string, unknown> => e !== null && e["event"] === "model-attempt-completed")
+      // 4 specialists + 1 synth = exactly 5 attempts on the happy path.
+      expect(events.length).toBe(5)
+      // Per-role: each specialist must have a primary/index=1/ok event
+      // pinned to its declared primary model in SPECIALIST_CONFIGS.
+      for (const role of ALL_SPECIALISTS) {
+        const event = events.find(
+          (e) => e["phase"] === "specialist" && e["role"] === role,
+        )
+        expect(event, `missing specialist event for role=${role}`).toBeDefined()
+        expect(event?.["attemptKind"]).toBe("primary")
+        expect(event?.["attemptIndex"]).toBe(1)
+        expect(event?.["outcome"]).toBe("ok")
+        expect(event?.["model"]).toBe(SPECIALIST_CONFIGS[role].primary)
+      }
+      // Synth: exactly one primary/index=1/ok event pinned to
+      // SYNTHESIZER_CONFIG.primary.
+      const synthEvents = events.filter((e) => e["phase"] === "synth")
+      expect(synthEvents).toHaveLength(1)
+      expect(synthEvents[0]?.["role"]).toBe("synth")
+      expect(synthEvents[0]?.["attemptKind"]).toBe("primary")
+      expect(synthEvents[0]?.["attemptIndex"]).toBe(1)
+      expect(synthEvents[0]?.["outcome"]).toBe("ok")
+      expect(synthEvents[0]?.["model"]).toBe(SYNTHESIZER_CONFIG.primary)
+    } finally {
+      logSpy.mockRestore()
+    }
+  })
+
+  it("emits primary/retry/fallback sequence on logic specialist when primary + retry both 503", async () => {
+    // SPECIALIST_CONFIGS.logic = { primary: "deepseek-v4-pro:cloud",
+    // retries: 1, fallback: "kimi-k2.5:cloud" } — three mocked chat
+    // calls (primary 503, retry 503, fallback OK) → three emits:
+    // primary/failed, retry/failed, fallback/ok. Pins both the
+    // attemptKind sequence AND the model identity per attempt
+    // (retry stays on primary model; fallback swaps).
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    try {
+      mockChat
+        .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
+        .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
+        .mockResolvedValueOnce(ok(JSON.stringify({
+          summary: "logic verdict",
+          confidence: 3,
+          findings: [],
+        })))
+      const result = await runSpecialist({
+        role: "logic",
+        apiKey: "test-key",
+        systemPrompt: "system",
+        initialMessage: "user",
+        chatEnabled: "on",
+        signal: new AbortController().signal,
+        perfCtx,
+      })
+      expect(result.verdict).not.toBeNull()
+      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.logic.fallback)
+
+      const events = logSpy.mock.calls
+        .map((c) => {
+          try { return JSON.parse(c[0] as string) as Record<string, unknown> }
+          catch { return null }
+        })
+        .filter((e): e is Record<string, unknown> =>
+          e !== null
+          && e["event"] === "model-attempt-completed"
+          && e["role"] === "logic",
+        )
+      expect(events).toHaveLength(3)
+      expect(events[0]?.["attemptKind"]).toBe("primary")
+      expect(events[0]?.["outcome"]).toBe("failed")
+      expect(events[0]?.["model"]).toBe(SPECIALIST_CONFIGS.logic.primary)
+      expect(events[1]?.["attemptKind"]).toBe("retry")
+      expect(events[1]?.["outcome"]).toBe("failed")
+      expect(events[1]?.["model"]).toBe(SPECIALIST_CONFIGS.logic.primary)
+      expect(events[2]?.["attemptKind"]).toBe("fallback")
+      expect(events[2]?.["outcome"]).toBe("ok")
+      expect(events[2]?.["model"]).toBe(SPECIALIST_CONFIGS.logic.fallback)
+    } finally {
+      logSpy.mockRestore()
+    }
   })
 })

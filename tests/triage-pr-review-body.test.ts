@@ -375,4 +375,112 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body.startsWith("<!-- openclaw:pr-review -->\n")).toBe(true)
     expect(body).not.toMatch(/^\s+<!--/)
   })
+
+  // Founder-mandated invariant (2026-05-18): the verdict summary MUST
+  // appear before the Fix Plan / Additional findings sections in every
+  // body variant. A review that leads with the diff before saying what
+  // the diff is about is the CodeRabbit failure mode the founder
+  // explicitly called out — Sigilix must never replicate it. The
+  // existing exact-match fixture at "Variant D" pins this for ONE
+  // happy path; this block pins it across every variant combination.
+  describe("summary-before-findings ordering invariant", () => {
+    const SUMMARY_PARAGRAPH = "The PR adds a feature flag and a test."
+    const FIX_PLAN_HEADING = "### Fix Plan"
+    const ADDITIONAL_HEADING = "### Additional findings"
+
+    function assertSummaryFirst(body: string, label: string): void {
+      const summaryIdx = body.indexOf(SUMMARY_PARAGRAPH)
+      expect(summaryIdx, `${label}: summary paragraph must appear in body`).toBeGreaterThan(-1)
+      const fixPlanIdx = body.indexOf(FIX_PLAN_HEADING)
+      if (fixPlanIdx !== -1) {
+        expect(summaryIdx, `${label}: summary must precede Fix Plan`).toBeLessThan(fixPlanIdx)
+      }
+      const additionalIdx = body.indexOf(ADDITIONAL_HEADING)
+      if (additionalIdx !== -1) {
+        expect(summaryIdx, `${label}: summary must precede Additional findings`).toBeLessThan(additionalIdx)
+      }
+    }
+
+    it("summary precedes Fix Plan on the minimal happy path", () => {
+      const body = renderRequestChangesBody({
+        verdict: verdict({ findings: [finding({ score: 5 })] }),
+        coverage: FULL,
+        prov: { headSha: HEAD, nowMs: NOW },
+      })
+      assertSummaryFirst(body, "minimal")
+    })
+
+    it("summary precedes Fix Plan with delta badge present", () => {
+      const delta: DeltaBadgeCounts = {
+        newCount: 2, stillOpenCount: 0, likelyFixedCount: 3, carriedOverCount: 0,
+      }
+      const body = renderRequestChangesBody({
+        verdict: verdict({ findings: [finding({ score: 5 }), finding({ line: 99, score: 4 })] }),
+        coverage: FULL,
+        delta,
+        prov: { headSha: HEAD, nowMs: NOW },
+      })
+      assertSummaryFirst(body, "with delta")
+    })
+
+    it("summary precedes Fix Plan with degraded coverage", () => {
+      const body = renderRequestChangesBody({
+        verdict: verdict({ findings: [finding({ score: 5 })] }),
+        coverage: ONE_MISSING,
+        prov: { headSha: HEAD, nowMs: NOW },
+      })
+      assertSummaryFirst(body, "degraded coverage")
+    })
+
+    it("summary (with stack parenthetical) precedes Fix Plan when stacked", () => {
+      const body = renderRequestChangesBody({
+        verdict: verdict({ findings: [finding({ score: 5 })] }),
+        coverage: FULL,
+        stack: stack(87),
+        prov: { headSha: HEAD, nowMs: NOW },
+      })
+      assertSummaryFirst(body, "stacked")
+      expect(body).toContain("_(Stacked on #87)_")
+    })
+
+    it("summary precedes BOTH Fix Plan AND Additional findings when unanchored present", () => {
+      const body = renderRequestChangesBody({
+        verdict: verdict({ findings: [finding({ score: 5 })] }),
+        unanchored: [finding({ path: "src/bar.ts", line: 99, score: 3 })],
+        coverage: FULL,
+        prov: { headSha: HEAD, nowMs: NOW },
+      })
+      assertSummaryFirst(body, "with unanchored")
+      // Fix Plan must also precede Additional findings — diff context
+      // (anchored, severity-gated) outranks unanchored noise.
+      expect(body.indexOf(FIX_PLAN_HEADING)).toBeLessThan(body.indexOf(ADDITIONAL_HEADING))
+    })
+
+    it("summary precedes Additional findings even when Fix Plan is absent (low-severity only)", () => {
+      const body = renderRequestChangesBody({
+        verdict: verdict({ findings: [finding({ score: 2 })] }),
+        unanchored: [finding({ path: "src/bar.ts", line: 99, score: 3 })],
+        coverage: FULL,
+        prov: { headSha: HEAD, nowMs: NOW },
+      })
+      // Fix Plan header MUST be absent when no score >= 4 finding exists.
+      expect(body).not.toContain(FIX_PLAN_HEADING)
+      assertSummaryFirst(body, "low-severity only")
+    })
+
+    it("summary precedes Fix Plan with all four variants combined", () => {
+      const delta: DeltaBadgeCounts = {
+        newCount: 1, stillOpenCount: 1, likelyFixedCount: 0, carriedOverCount: 0,
+      }
+      const body = renderRequestChangesBody({
+        verdict: verdict({ findings: [finding({ score: 5 })] }),
+        unanchored: [finding({ path: "src/bar.ts", line: 99, score: 3 })],
+        coverage: ONE_MISSING,
+        delta,
+        stack: stack(87),
+        prov: { headSha: HEAD, nowMs: NOW },
+      })
+      assertSummaryFirst(body, "all variants")
+    })
+  })
 })

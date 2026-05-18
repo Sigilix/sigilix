@@ -238,6 +238,17 @@ export interface Env {
   // producer (ARC-234) AND consumer (ARC-235) deploy. Any other value
   // (including unset) keeps indexing disabled.
   OPENCLAW_INDEXER_ENABLED?: string
+
+  // ARC-283 Phase B1b — shadow-mode model bake-off. CSV of role names
+  // whose CANDIDATE lineup (per `SHADOW_BAKEOFF_LINEUP` in
+  // `lib/shadow-bakeoff-config.ts`) should fire in parallel with prod
+  // on every PR review. Unset/empty = shadow off everywhere (the prod
+  // path takes ZERO added code branches). Shadow verdicts are NEVER
+  // posted; comparison telemetry emits via `shadow-verdict-comparison`
+  // events. Valid roles: logic, security, performance, tests, synth.
+  // Recommended rollout order: "synth" first, then "security,tests",
+  // then "performance", then "logic". See docs/ops/shadow-bakeoff.md.
+  SHADOW_BAKEOFF_ROLES?: string
 }
 
 /**

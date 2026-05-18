@@ -36,6 +36,7 @@ import {
   isAuthorAllowedForSlashCommand,
   type SlashCommand,
 } from "./lib/slash-commands"
+import { shouldQueueReviewThreadReply } from "./lib/review-thread-reply"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
@@ -348,10 +349,13 @@ export type JobMessage =
       prNumber: number
       installationId: number
     }
-  // ARC-191: `/sigilix describe` — single-shot LLM draft of a PR
-  // description / internal changelog / external changelog. Mode is
-  // resolved at parse time (one of three canonical names).
-  // headSha is resolved at handler time (same rationale as pr-improve).
+  // ARC-191 / ARC-264: `/sigilix describe [apply] [mode]` — single-
+  // shot LLM draft of a PR description / internal changelog /
+  // external changelog. Mode is resolved at parse time (one of three
+  // canonical names). headSha is resolved at handler time (same
+  // rationale as pr-improve). `apply: true` writes the draft into
+  // the PR body in place between marker fences; `apply: false`
+  // posts as a top-level comment.
   | {
       type: "pr-describe"
       owner: string
@@ -359,6 +363,7 @@ export type JobMessage =
       prNumber: number
       installationId: number
       mode: import("./lib/slash-commands").DescribeMode
+      apply: boolean
     }
   // ARC-184: review provenance + stale markers. Enqueued from the
   // webhook handler alongside `pr-review` on `synchronize` / `edited`
@@ -803,9 +808,18 @@ async function postSlashCommandAck(
  *                    the customer's perspective the review IS done.
  *                    A `skipped` conclusion would mislead them into
  *                    thinking nothing was reviewed.
+ *   - `errored`    → `failure`. Phase 3 reached submit + verify and
+ *                    the verify-after-submit caught a silent reject
+ *                    (PENDING / missing from the public list).
+ *                    Previously this case returned `skipped` and
+ *                    therefore showed `success` "Review posted" with
+ *                    no review behind it — the silent-success bug
+ *                    reproduced on PRs #84 / #86 / #87. The
+ *                    distinct `errored` status now lets the Check
+ *                    Run reflect the truth.
  */
 function mapPhase3StatusToCheckConclusion(
-  status: "posted" | "skipped" | "stale_head",
+  status: "posted" | "skipped" | "stale_head" | "errored",
 ): SigilixCheckConclusion {
   switch (status) {
     case "posted":
@@ -814,6 +828,8 @@ function mapPhase3StatusToCheckConclusion(
       return "success"
     case "stale_head":
       return "skipped"
+    case "errored":
+      return "failure"
   }
 }
 
@@ -1106,13 +1122,16 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       return
     }
     case "pr-describe":
-      // ARC-191: `/sigilix describe`. Single-shot LLM call producing
-      // a PR description / changelog draft posted as a top-level
-      // comment with marker-wrapped body + hidden meta line for
-      // future apply parsing. Independent of the ensemble; does
-      // NOT consume the ensemble daily budget.
+      // ARC-191 / ARC-264: `/sigilix describe [apply] [mode]`.
+      // Single-shot LLM call producing a PR description / changelog
+      // draft. With `apply: false` (default) it posts a top-level
+      // comment with marker-wrapped body. With `apply: true` it
+      // writes the same draft into the PR body in place. Both paths
+      // share the same model call + verdict; only the post step
+      // differs. Independent of the ensemble; does NOT consume the
+      // ensemble daily budget.
       try {
-        await postSlashCommandAck(env, { cmd: "describe", mode: job.mode }, {
+        await postSlashCommandAck(env, { cmd: "describe", mode: job.mode, apply: job.apply }, {
           owner: job.owner, repo: job.repo, prNumber: job.prNumber,
           installationId: job.installationId,
         })
@@ -1123,6 +1142,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           owner: job.owner, repo: job.repo, prNumber: job.prNumber,
           cmd: "describe",
           mode: job.mode,
+          apply: job.apply,
         }))
       }
       return handlePrDescribe({
@@ -1131,6 +1151,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         prNumber: job.prNumber,
         installationId: job.installationId,
         mode: job.mode,
+        apply: job.apply,
         env,
       })
     case "pr-stale-mark":
@@ -1911,11 +1932,14 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
     // accidentally suppress each other.
     // Coalesce key: mode-keyed for describe so `internal` and
     // `external` on the same PR don't suppress each other within
-    // the 60s window. Other commands keep the existing key shape.
-    // (The `unknown` describe variant returned via the fast path
-    // above, so here describe.mode is always a canonical DescribeMode.)
+    // the 60s window. ARC-264: also apply-keyed so a `describe pr`
+    // and `describe apply pr` on the same PR can both run — one
+    // posts a comment, the other writes the body. Other commands
+    // keep the existing key shape. (The `unknown` describe variant
+    // returned via the fast path above, so here describe.mode is
+    // always a canonical DescribeMode.)
     const coalesceKey = slashCmd.cmd === "describe"
-      ? `slash-cmd:describe:${slashCmd.mode}:${owner}/${repo}#${prNumber}`
+      ? `slash-cmd:describe:${slashCmd.mode}${slashCmd.apply ? ":apply" : ""}:${owner}/${repo}#${prNumber}`
       : `slash-cmd:${slashCmd.cmd}:${owner}/${repo}#${prNumber}`
     const existing = await env.OPENCLAW_STATE.get(coalesceKey)
     if (existing) {
@@ -1970,6 +1994,10 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
           type: "pr-describe",
           owner, repo, prNumber, installationId,
           mode: slashCmd.mode,
+          // ARC-264: thread the apply flag through to the queue
+          // consumer. False (post a comment) is the describe v1
+          // behavior; true (write the PR body) is the new path.
+          apply: slashCmd.apply,
         }
         break
       default: {
@@ -1992,9 +2020,53 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
 
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
   const hasMention = bodyMentionsBot(body, triggers)
-  const isReviewCommentReply =
-    surface === "review-comment" && typeof comment.in_reply_to_id === "number"
-  if (!hasMention && !isReviewCommentReply) {
+
+  // ARC-269: gate the implicit-thread-reply path. An explicit
+  // @-mention always queues (the user typed our handle, intent is
+  // clear). An inline review-comment reply WITHOUT a mention only
+  // queues when the body looks like a real ask — empty / single-
+  // ack / no-signal bodies were burning queue + LLM budget on
+  // "fixed" / "thanks" / 👍 replies. The shape gate lives in
+  // `shouldQueueReviewThreadReply`; the thread-root-owner gate
+  // (was the root authored by Sigilix?) is the consumer's job.
+  //
+  // Note: this branch fires on ALL review-comment-without-mention
+  // payloads, including top-level review comments. The gate's
+  // `not-a-reply` reason filters those out. Prior to ARC-269 those
+  // returned 200 "no mention"; they now return 200 "skip review-
+  // reply: not-a-reply" with a structured telemetry event. Net
+  // queue count is unchanged.
+  const isReviewCommentWithoutMention = surface === "review-comment" && !hasMention
+  // Pre-compute these so both the skip event and the dispatch
+  // event carry the same payload-shape facts for post-rollout
+  // tuning (code-review M4 catch).
+  const bodyLength = body.length
+  const bodyEndsWithQ = body.trim().endsWith("?")
+  const hadInReplyToId = typeof comment.in_reply_to_id === "number"
+  if (isReviewCommentWithoutMention) {
+    const gate = shouldQueueReviewThreadReply({
+      body,
+      authorLogin: comment.user?.login ?? null,
+      inReplyToId: comment.in_reply_to_id ?? null,
+    })
+    if (!gate.ok) {
+      console.log(JSON.stringify({
+        event: "review-reply-skipped",
+        reason: gate.reason,
+        owner, repo, prNumber,
+        comment_id: comment.id,
+        body_length: bodyLength,
+        body_ends_with_q: bodyEndsWithQ,
+        had_in_reply_to_id: hadInReplyToId,
+      }))
+      // 200 not 202: we explicitly chose not to queue. The webhook
+      // is acknowledged but no work is created.
+      return new Response(`skip review-reply: ${gate.reason}\n`, { status: 200 })
+    }
+  } else if (!hasMention) {
+    // Non-review-comment surface (issue comment) with no mention:
+    // existing behavior, just drop. The implicit-thread path
+    // doesn't apply here.
     return new Response("no mention\n", { status: 200 })
   }
 
@@ -2011,6 +2083,17 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
       : {}),
   }
   await env.OPENCLAW_JOBS.send(message)
+  console.log(JSON.stringify({
+    event: isReviewCommentWithoutMention ? "review-reply-dispatched" : "github-mention-dispatched",
+    surface,
+    owner, repo, prNumber,
+    comment_id: comment.id,
+    has_mention: hasMention,
+    is_review_thread_reply: isReviewCommentWithoutMention,
+    body_length: bodyLength,
+    body_ends_with_q: bodyEndsWithQ,
+    had_in_reply_to_id: hadInReplyToId,
+  }))
   return new Response("queued\n", { status: 202 })
 }
 

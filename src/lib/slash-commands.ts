@@ -2,10 +2,16 @@
 // comments.
 //
 // Live commands:
-//   - `/sigilix review`              → re-trigger the ensemble (ARC-178)
-//   - `/sigilix improve`             → suggested-change patches (ARC-179)
-//   - `/sigilix describe [mode]`     → draft PR description / changelog (ARC-191)
-//   - `/sigilix help`                → post a list of supported commands inline
+//   - `/sigilix review`                     → re-trigger the ensemble (ARC-178)
+//   - `/sigilix improve`                    → suggested-change patches (ARC-179)
+//   - `/sigilix describe [mode]`            → draft PR description / changelog
+//                                             posted as a comment (ARC-191)
+//   - `/sigilix describe apply [mode]`      → same draft, but written back to
+//                                             the PR body between markers
+//                                             (ARC-264). Preserves user-
+//                                             authored content outside the
+//                                             marker fences across re-runs.
+//   - `/sigilix help`                       → post a list of supported commands inline
 //
 // Deferred to follow-up issues:
 //   - `/sigilix ask <q>`  — Q&A using PR context + RAG
@@ -28,8 +34,13 @@ export type SlashCommand =
   | { cmd: "review" }
   | { cmd: "improve" }
   | { cmd: "help" }
-  | { cmd: "describe"; mode: DescribeMode }
-  | { cmd: "describe"; mode: "unknown"; rawArg: string }
+  // ARC-191 + ARC-264: `apply` controls where the draft lands.
+  // `apply: false` → post as a top-level comment (default; describe v1
+  //                 behavior). `apply: true` → write back into the PR
+  //                 body between marker fences, preserving content
+  //                 outside the fences.
+  | { cmd: "describe"; mode: DescribeMode; apply: boolean }
+  | { cmd: "describe"; mode: "unknown"; rawArg: string; apply: boolean }
   // Reserved shape (parser doesn't return this yet — adding the
   // type when handlers exist will surface missed dispatch cases via
   // the exhaustive switch in renderSlashCommandAck):
@@ -92,12 +103,45 @@ export function parseSlashCommand(body: string): SlashCommand | null {
       return { cmd: "help" }
     }
     if (head === "describe") {
-      const argRaw = after.slice(head.length).trim().split(/\s+/)[0]
-      const mode = parseDescribeMode(argRaw)
-      if (mode.mode === "unknown") {
-        return { cmd: "describe", mode: "unknown", rawArg: mode.rawArg }
+      // ARC-264: `apply` is the first positional after `describe`.
+      // Forms accepted:
+      //   /sigilix describe                  → mode default, apply=false
+      //   /sigilix describe <mode>           → mode parsed, apply=false
+      //   /sigilix describe apply            → mode default, apply=true
+      //   /sigilix describe apply <mode>     → mode parsed, apply=true
+      //   /sigilix describe apply <bad-mode> → apply=true, mode=unknown
+      //
+      // `apply` itself is NOT a describe mode, so the mode parser
+      // never sees the literal word "apply".
+      //
+      // Typo guard (code-review M4 catch): `/sigilix describe <mode>
+      // apply` (apply after the mode) used to silently demote to
+      // `apply=false`, giving the user a comment-mode draft when
+      // they wanted apply-mode. Now treated as `mode=unknown` so
+      // the usage comment surfaces the intended `apply <mode>`
+      // shape instead of silently doing the wrong thing.
+      const tokens = after.slice(head.length).trim().split(/\s+/).filter((t) => t.length > 0)
+      let apply = false
+      let modeRaw: string | undefined = tokens[0]
+      if (modeRaw !== undefined && modeRaw.toLowerCase() === "apply") {
+        apply = true
+        modeRaw = tokens[1]
+      } else if (tokens[1]?.toLowerCase() === "apply") {
+        // Operator likely meant `apply <mode>` but typed `<mode>
+        // apply`. Surface the usage error instead of silently
+        // demoting to comment-mode.
+        return {
+          cmd: "describe",
+          mode: "unknown",
+          rawArg: `${tokens[0]} apply`,
+          apply: false,
+        }
       }
-      return { cmd: "describe", mode: mode.mode }
+      const mode = parseDescribeMode(modeRaw)
+      if (mode.mode === "unknown") {
+        return { cmd: "describe", mode: "unknown", rawArg: mode.rawArg, apply }
+      }
+      return { cmd: "describe", mode: mode.mode, apply }
     }
     // Recognized prefix (`/sigilix ...`) but unsupported subcommand.
     // Continue scanning later lines — a comment that opens with an
@@ -138,6 +182,12 @@ export function renderSlashCommandAck(cmd: SlashCommand): string {
       if (cmd.mode === "unknown") {
         return `**Sigilix describe** — unknown mode \`${cmd.rawArg}\`. Try \`pr\`, \`internal\`, or \`external\`.`
       }
+      // ARC-264: `apply: true` writes back to the PR body in place.
+      // Copy chosen so it reads correctly on both first run (no
+      // pre-existing markers) and re-runs (code-review L9 catch).
+      if (cmd.apply) {
+        return `Generating ${describeModeFriendlyName(cmd.mode)} draft via \`/sigilix describe apply\` and writing it to the PR body between marker fences. Existing PR-body content outside the marker fences will be preserved across re-runs.`
+      }
       return `Generating ${describeModeFriendlyName(cmd.mode)} draft via \`/sigilix describe\`. Output will appear inline shortly.`
     default: {
       const _exhaustive: never = cmd
@@ -177,10 +227,13 @@ export function renderHelpBody(): string {
     "|---|---|",
     "| `/sigilix review` | Re-run the ensemble review against the PR's current head SHA. |",
     "| `/sigilix improve` | Generate apply-able GitHub suggested-change comments (single-shot, narrow scope). |",
-    "| `/sigilix describe` | Draft a PR description or internal / external changelog. Posted as an inline comment with markers — body never auto-edited. |",
+    "| `/sigilix describe` | Draft a PR description or internal / external changelog. Posted as an inline comment with markers — body is not edited. |",
+    "| `/sigilix describe apply` | Same draft, but written back to the PR body in place between marker fences. Content outside the markers is preserved across re-runs. |",
     "| `/sigilix help` | Show this list. |",
     "",
     "`/sigilix describe` accepts an optional mode arg: `pr` (default), `internal`, or `external`. Example: `/sigilix describe internal`.",
+    "",
+    "`/sigilix describe apply` accepts the same mode arg after `apply`. Example: `/sigilix describe apply external`. The first run writes a new marker-fenced block at the end of the PR body; subsequent runs replace only the content between the matching markers, leaving anything you've written outside untouched.",
     "",
     "Slash commands are gated to `OWNER`, `MEMBER`, and `COLLABORATOR` authors. Match must be at the start of a line; commands inside fenced code blocks or markdown blockquotes are ignored.",
     "",

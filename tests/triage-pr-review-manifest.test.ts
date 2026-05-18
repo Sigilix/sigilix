@@ -277,7 +277,7 @@ describe("handlePrReview — submitReview verification", () => {
     findings: [],
   })
 
-  it("returns skipped + emits the not-persisted error when the review is absent from listPullRequestReviews (silent reject)", async () => {
+  it("returns errored + emits the not-persisted error when the review is absent from listPullRequestReviews (silent reject)", async () => {
     mockGetPullRequest.mockResolvedValue(goodMeta)
     mockGenerate.mockResolvedValue(goodVerdict)
     mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
@@ -313,7 +313,7 @@ describe("handlePrReview — submitReview verification", () => {
 
     expect(mockSubmitReview).toHaveBeenCalledOnce()
     expect(mockListPullRequestReviews).toHaveBeenCalledWith("acme", "site", 7)
-    expect(result?.status).toBe("skipped")
+    expect(result?.status).toBe("errored")
     const missingWarn = consoleWarns.find((l) => l.includes("pr-review-verify-missing"))
     expect(missingWarn).toBeDefined()
     expect(missingWarn).toContain('"submit_path":"phase3"')
@@ -332,7 +332,7 @@ describe("handlePrReview — submitReview verification", () => {
   // present in `listPullRequestReviews` but in `PENDING` (draft)
   // state — invisible publicly. We must treat this the same as a
   // missing review.
-  it("returns skipped when the just-submitted review is present but in PENDING state (silent draft)", async () => {
+  it("returns errored when the just-submitted review is present but in PENDING state (silent draft)", async () => {
     mockGetPullRequest.mockResolvedValue(goodMeta)
     mockGenerate.mockResolvedValue(goodVerdict)
     mockSubmitReview.mockResolvedValue({ id: 4242, state: "APPROVED" })
@@ -362,7 +362,7 @@ describe("handlePrReview — submitReview verification", () => {
       console.error = origErr
     }
 
-    expect(result?.status).toBe("skipped")
+    expect(result?.status).toBe("errored")
     const pendingWarn = consoleWarns.find((l) => l.includes("pr-review-verify-pending"))
     expect(pendingWarn).toBeDefined()
     expect(pendingWarn).toContain('"submit_path":"phase3"')

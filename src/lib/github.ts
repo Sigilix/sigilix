@@ -701,6 +701,25 @@ export class GitHubClient {
   }
 
   /**
+   * ARC-264: PATCH the pull request body in place. Used by
+   * `/sigilix describe apply` to write the generated draft into the
+   * PR body between marker fences. GitHub's update-pull-request
+   * endpoint accepts a partial payload; we send only `body` so the
+   * title, state, base, and other fields are untouched.
+   */
+  async updatePullRequestBody(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string,
+  ): Promise<void> {
+    await this.restPatch<unknown>(
+      `/repos/${owner}/${repo}/pulls/${prNumber}`,
+      { body },
+    )
+  }
+
+  /**
    * ARC-184: fetch a single issue comment's body. Used as the
    * counterpart to `getReview` when the prior review fell back to an
    * issue comment (422-on-submit). Returns null on 404.

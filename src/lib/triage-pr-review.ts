@@ -231,8 +231,16 @@ export interface TriagePrReviewArgs {
  * - `stale_head` — the PR head SHA moved between queue-time and
  *   process-time. ARC-250: caller (dispatcher) MUST NOT fall back to
  *   another path, since that path would also stale-head.
+ * - `errored` — Phase 3 reached the submit step and the post-submit
+ *   verify caught a silent reject (the submit returned 2xx but the
+ *   review never became publicly visible — PENDING / missing from
+ *   `listPullRequestReviews`). Distinct from `skipped` because the
+ *   Check Run dispatcher maps `skipped` to `success` (legitimate
+ *   no-op); `errored` maps to `failure` so the customer sees the
+ *   truth instead of a green "Review posted" with no review behind
+ *   it. Caught the silent-success bug on PRs #84 / #86 / #87.
  */
-export type PrReviewStatus = "posted" | "skipped" | "stale_head"
+export type PrReviewStatus = "posted" | "skipped" | "stale_head" | "errored"
 
 export interface PrReviewResult {
   status: PrReviewStatus
@@ -490,7 +498,14 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
         submit_path: "phase3",
       }))
       since("review-submit-not-persisted")
-      return { status: "skipped" }
+      // Phase 3 verify-fail: the submit returned 2xx but the review
+      // never became publicly visible (PENDING / missing from list).
+      // Returning `skipped` here would map to the `success` Check
+      // Run conclusion via `mapPhase3StatusToCheckConclusion`, since
+      // that mapping conflates "legitimately no work to do" with
+      // "submit didn't persist." Return `errored` so the dispatcher
+      // marks the Check Run as `failure` — the truth.
+      return { status: "errored" }
     }
     posted = true
     since(`review-submitted-${submitted.state}`)

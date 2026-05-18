@@ -488,3 +488,42 @@ describe("postReviewSkipNotice — post failure", () => {
     expect(writes).toEqual([])
   })
 })
+
+describe("renderReviewSkipNotice — dispatchedRoles parameterization (CR catch on PR #92)", () => {
+  it("names the router-dispatched roles when reason is specialists_all_failed", () => {
+    const out = renderReviewSkipNotice({
+      reason: "specialists_all_failed",
+      headSha: "abc1234",
+      dispatchedRoles: ["logic", "performance"], // only 2 dispatched
+    })
+    expect(out).toContain("Every specialist the router dispatched (logic, performance) failed")
+    // Must NOT claim "logic / security / performance / tests" — that
+    // would lie about which specialists actually ran.
+    expect(out).not.toContain("logic, security, performance, tests")
+  })
+
+  it("falls back to the canonical four-specialist list when dispatchedRoles is omitted", () => {
+    // Defensive: callers other than the ensemble (e.g., future
+    // direct usage from a different path) might not have a router
+    // result handy. The canonical list reads as a reasonable
+    // default.
+    const out = renderReviewSkipNotice({
+      reason: "specialists_all_failed",
+      headSha: "abc1234",
+    })
+    expect(out).toContain("logic, security, performance, tests")
+  })
+
+  it("dispatchedRoles is ignored for non-specialists reasons", () => {
+    // The skip-notice for router_no_specialists / synth_* doesn't
+    // talk about dispatched roles, so passing the list shouldn't
+    // affect the rendered body. Pin that behavior.
+    const out = renderReviewSkipNotice({
+      reason: "synth_timeout",
+      headSha: "abc1234",
+      dispatchedRoles: ["logic"],
+    })
+    expect(out).toContain("The synth call timed out twice")
+    expect(out).not.toContain("dispatched")
+  })
+})

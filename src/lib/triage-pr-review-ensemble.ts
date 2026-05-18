@@ -431,20 +431,40 @@ export async function handlePrReviewEnsemble(
     const client = await buildClient(env, installationId)
 
     // ARC-280 follow-up: bail with a customer-visible skip-notice
-    // comment + an `errored` result + reviewMeta.surface=skip-notice.
-    // Used by the silent-skip paths that used to fall through to
-    // Phase 3 (router_no_specialists, specialists_all_failed,
-    // synth retry exhausted, internal_error). The dispatcher
-    // already maps `errored` to a `failure` Check Run; the
-    // reviewMeta.surface signal flips the title to "Couldn't
+    // comment + an `errored` result. Used by the silent-skip paths
+    // that used to fall through to Phase 3 (router_no_specialists,
+    // specialists_all_failed, synth retry exhausted). The
+    // dispatcher already maps `errored` to a `failure` Check Run;
+    // the reviewMeta.surface signal flips the title to "Couldn't
     // review — see PR comment."
-    const bailWithSkipNotice = async (reason: SkipNoticeReason): Promise<EnsembleResult> => {
-      await postReviewSkipNotice({ env, client, owner, repo, prNumber, headSha, reason })
-      return finalize(telemetry, env, "errored", cache, {
-        event: "REQUEST_CHANGES",
-        findingsCount: 0,
-        surface: "skip-notice",
+    //
+    // CR Major / Sigilix Logic catch on PR #92: gate the
+    // `surface: "skip-notice"` reviewMeta on the post actually
+    // succeeding. If `postReviewSkipNotice` returned !ok (or
+    // dedupe-hit'd with no comment), we have no comment to point
+    // the user at — the Check Run should render the generic
+    // "Review failed" title instead of the misleading
+    // "Couldn't review — see PR comment" one.
+    const bailWithSkipNotice = async (
+      reason: SkipNoticeReason,
+      opts?: { dispatchedRoles?: readonly string[] },
+    ): Promise<EnsembleResult> => {
+      const out = await postReviewSkipNotice({
+        env, client, owner, repo, prNumber, headSha, reason,
+        ...(opts?.dispatchedRoles !== undefined ? { dispatchedRoles: opts.dispatchedRoles } : {}),
       })
+      // `ok && reason === "posted"` → a fresh comment is on the PR.
+      // `ok && reason === "dedupe-hit"` → a prior run already
+      //   posted one for this head; safe to claim "see PR comment".
+      // `!ok` → no comment; don't lie to the customer.
+      if (out.ok) {
+        return finalize(telemetry, env, "errored", cache, {
+          event: "REQUEST_CHANGES",
+          findingsCount: 0,
+          surface: "skip-notice",
+        })
+      }
+      return finalize(telemetry, env, "errored", cache)
     }
 
     // ─── Stale-head guard #1 ───────────────────────────────────
@@ -991,7 +1011,12 @@ export async function handlePrReviewEnsemble(
     if (succeeded.length === 0) {
       telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "specialists_all_failed"
-      return bailWithSkipNotice("specialists_all_failed")
+      // CR Minor catch on PR #92: name the roles the router
+      // actually dispatched, since `specialists_all_failed` fires
+      // whether 4/4 or 1/1 specialists failed.
+      return bailWithSkipNotice("specialists_all_failed", {
+        dispatchedRoles: router.specialists,
+      })
     }
     const degradedCoverage = succeeded.length < router.specialists.length
       ? computeDegradedCoverage(router.specialists, succeeded.map((v) => v.role))

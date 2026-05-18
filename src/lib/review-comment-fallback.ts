@@ -262,14 +262,22 @@ function dedupeKeyForSkipNotice(args: {
 export function renderReviewSkipNotice(args: {
   reason: SkipNoticeReason
   headSha: string
+  /** ARC-280 (CR catch on PR #92): when reason is
+   *  `specialists_all_failed`, name the roles the router actually
+   *  dispatched. Otherwise the message claimed "all four
+   *  specialists" even when the router only ran 1–3. */
+  dispatchedRoles?: readonly string[]
 }): string {
-  const { reason, headSha } = args
+  const { reason, headSha, dispatchedRoles } = args
   const sha7 = headSha.slice(0, 7)
+  const roles = dispatchedRoles && dispatchedRoles.length > 0
+    ? dispatchedRoles.join(", ")
+    : "logic, security, performance, tests"
   const explanation: Record<SkipNoticeReason, string> = {
     router_no_specialists:
       "The diff didn't match any specialist's domain (logic / security / performance / tests), so no specialist could run.",
     specialists_all_failed:
-      "Every specialist (logic / security / performance / tests) failed to return a verdict (model timeout / rate-limit / parse-fail). Synth had no input to work with.",
+      `Every specialist the router dispatched (${roles}) failed to return a verdict (model timeout / rate-limit / parse-fail). Synth had no input to work with.`,
     synth_timeout:
       "The synth call timed out twice (primary + retry). Specialist verdicts were produced but couldn't be merged.",
     synth_failed_parse:
@@ -300,6 +308,11 @@ export interface PostReviewSkipNoticeArgs {
   prNumber: number
   headSha: string
   reason: SkipNoticeReason
+  /** ARC-280 (CR catch on PR #92): roles the router actually
+   *  dispatched. Only meaningful for `specialists_all_failed`;
+   *  passed through to `renderReviewSkipNotice` so the message
+   *  names the right set instead of asserting "all four." */
+  dispatchedRoles?: readonly string[]
 }
 
 export type PostReviewSkipNoticeResult =
@@ -318,7 +331,7 @@ export type PostReviewSkipNoticeResult =
 export async function postReviewSkipNotice(
   args: PostReviewSkipNoticeArgs,
 ): Promise<PostReviewSkipNoticeResult> {
-  const { env, client, owner, repo, prNumber, headSha, reason } = args
+  const { env, client, owner, repo, prNumber, headSha, reason, dispatchedRoles } = args
   const tag = { owner, repo, prNumber, headSha, skip_reason: reason }
   const key = dedupeKeyForSkipNotice({ owner, repo, prNumber, headSha })
 
@@ -339,7 +352,11 @@ export async function postReviewSkipNotice(
     }))
   }
 
-  const body = renderReviewSkipNotice({ reason, headSha })
+  const body = renderReviewSkipNotice({
+    reason,
+    headSha,
+    ...(dispatchedRoles !== undefined ? { dispatchedRoles } : {}),
+  })
 
   try {
     const result = await client.createIssueComment(owner, repo, prNumber, body)

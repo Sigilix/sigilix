@@ -187,6 +187,85 @@ export function emitSpecialistFanoutSummary(
   }))
 }
 
+/** Per-role outcome used by `computeSpecialistFanoutSummary`. Mirrors
+ *  the relevant fields of the orchestrator's `CollectedVerdict` but
+ *  decoupled — the helper doesn't need to know about
+ *  `PrReviewVerdictWithIds` or `SPECIALIST_CONFIGS`. */
+export interface SpecialistFanoutInput {
+  role: string
+  verdictOk: boolean
+  attemptsUsed: number | undefined
+  modelUsed: string | undefined
+  /** Cross-provider fallback model for this role, used to count
+   *  `fallbacksUsed`. `null` means no fallback configured. */
+  fallbackModel: string | null
+}
+
+/**
+ * Sigilix PR #95 catch — pure helper extracted from the inline block
+ * in `handlePrReviewEnsemble` so the slowestRole / totalAttemptsUsed /
+ * fallbacksUsed computation is unit-testable. The orchestrator just
+ * maps its `CollectedVerdict[]` into `SpecialistFanoutInput[]` and
+ * calls this.
+ *
+ * Per-role end time defaults to `fanoutEndMs` when the specialist
+ * aborted on the outer signal before its `finally(() => set end)`
+ * could fire — that specialist's elapsed becomes "from start to
+ * fanout end," which is an over-estimate but never an under-estimate.
+ * Over-estimate is the right bias for "slowest role" reporting: if a
+ * role aborted on the outer wall, it was at least as slow as the
+ * fanout wall-clock.
+ *
+ * Pure — exported for tests.
+ */
+export function computeSpecialistFanoutSummary(args: {
+  dispatchedRoles: readonly string[]
+  inputs: readonly SpecialistFanoutInput[]
+  perRoleStartMs: ReadonlyMap<string, number>
+  perRoleEndMs: ReadonlyMap<string, number>
+  fanoutStartMs: number
+  fanoutEndMs: number
+}): SpecialistFanoutSummary {
+  const succeededRoles = args.inputs.filter((v) => v.verdictOk).map((v) => v.role)
+  const failedRoles = args.inputs.filter((v) => !v.verdictOk).map((v) => v.role)
+  let slowestRole: string | null = null
+  let slowestElapsedMs = 0
+  for (const role of args.dispatchedRoles) {
+    const startedAt = args.perRoleStartMs.get(role)
+    const endedAt = args.perRoleEndMs.get(role)
+    const ended = endedAt ?? args.fanoutEndMs
+    const elapsed = startedAt !== undefined ? ended - startedAt : 0
+    if (elapsed > slowestElapsedMs) {
+      slowestElapsedMs = elapsed
+      slowestRole = role
+    }
+  }
+  const totalAttemptsUsed = args.inputs.reduce(
+    (sum, v) => sum + (v.attemptsUsed ?? 1),
+    0,
+  )
+  const fallbacksUsed = args.inputs.reduce(
+    (sum, v) =>
+      sum +
+      (v.modelUsed !== undefined &&
+      v.fallbackModel !== null &&
+      v.modelUsed === v.fallbackModel
+        ? 1
+        : 0),
+    0,
+  )
+  return {
+    dispatchedRoles: args.dispatchedRoles,
+    succeededRoles,
+    failedRoles,
+    fanoutElapsedMs: args.fanoutEndMs - args.fanoutStartMs,
+    slowestRole,
+    slowestElapsedMs,
+    totalAttemptsUsed,
+    fallbacksUsed,
+  }
+}
+
 // ─── synth-summary ──────────────────────────────────────────────────
 
 export interface SynthSummary {
@@ -211,6 +290,54 @@ export function emitSynthSummary(ctx: EnsembleRunCtx, summary: SynthSummary): vo
     ...correlationFields(ctx),
     ...summary,
   }))
+}
+
+/** Internal outcome union used by the orchestrator's `synthRetryOutcome`
+ *  tracker. Wider than `SynthSummary["retryOutcome"]` — includes the
+ *  `"n/a"` sentinel for "retry didn't fire" and `"exhausted-budget"`
+ *  for synth-internal budget exhaustion. The narrowing helper below
+ *  collapses both to `null` for the telemetry surface. */
+export type SynthRetryOutcomeInput =
+  | "n/a"
+  | "ok"
+  | "timeout"
+  | "parse"
+  | "provenance"
+  | "exhausted-budget"
+
+/**
+ * Sigilix PR #95 catch — coerce the orchestrator-internal
+ * `synthRetryOutcome` (wider union) into the narrower
+ * `SynthSummary["retryOutcome"]` shape that downstream log analyzers
+ * rely on. Three behaviors:
+ *
+ *   - `retryUsed === false`               → `null` (retry didn't fire)
+ *   - outcome === `"n/a"`                  → `null` (defensive: should
+ *                                            be unreachable when
+ *                                            retryUsed === true)
+ *   - outcome === `"exhausted-budget"`     → `null` (synth-internal
+ *                                            sentinel, not a model
+ *                                            outcome)
+ *   - outcome ∈ {ok,timeout,parse,provenance} → passthrough
+ *
+ * Extracted from the inline ternary in `handlePrReviewEnsemble` so
+ * the coercion is unit-testable. Pure — exported for tests.
+ */
+export function narrowSynthRetryOutcome(
+  retryUsed: boolean,
+  outcome: SynthRetryOutcomeInput,
+): SynthSummary["retryOutcome"] {
+  if (!retryUsed) return null
+  if (outcome === "n/a") return null
+  if (
+    outcome === "ok" ||
+    outcome === "timeout" ||
+    outcome === "parse" ||
+    outcome === "provenance"
+  ) {
+    return outcome
+  }
+  return null
 }
 
 // ─── do-review-run-timing ───────────────────────────────────────────

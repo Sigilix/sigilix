@@ -16,6 +16,8 @@ import {
   emitSpecialistFanoutSummary,
   emitSynthSummary,
   emitDoReviewRunTiming,
+  computeSpecialistFanoutSummary,
+  narrowSynthRetryOutcome,
 } from "../src/lib/ensemble-perf-telemetry"
 
 const CTX: EnsembleRunCtx = {
@@ -123,7 +125,7 @@ describe("emitModelAttempt", () => {
     expect(lastLogged()["failureReason"]).toBe("HTTP 503")
   })
 
-  it("stamps the event name + correlation fields", () => {
+  it("stamps every field on the ModelAttemptEvent (CR PR #95 catch — pin full shape)", () => {
     emitModelAttempt(CTX, {
       phase: "synth",
       role: "synth",
@@ -137,11 +139,24 @@ describe("emitModelAttempt", () => {
       outcome: "ok",
     })
     const event = lastLogged()
+    // Per CR's PR #95 nit: assert ALL ModelAttemptEvent fields so a
+    // future rename / drop breaks here, not silently in downstream
+    // log analyzers.
     expect(event["event"]).toBe("model-attempt-completed")
     expect(event["phase"]).toBe("synth")
     expect(event["role"]).toBe("synth")
     expect(event["attemptKind"]).toBe("retry")
     expect(event["attemptIndex"]).toBe(2)
+    expect(event["model"]).toBe("kimi-k2.6:cloud")
+    expect(event["timeoutMs"]).toBe(160_000)
+    expect(event["startedAtMs"]).toBe(1_000)
+    expect(event["endedAtMs"]).toBe(1_120)
+    expect(event["elapsedMs"]).toBe(120)
+    expect(event["outcome"]).toBe("ok")
+    // Correlation fields.
+    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["repo"]).toBe("sigilix")
+    expect(event["prNumber"]).toBe(94)
     expect(event["headSha"]).toBe("abcdef1")
   })
 })
@@ -232,7 +247,7 @@ describe("emitSynthSummary", () => {
 // ─── do-review-run-timing ───────────────────────────────────────────
 
 describe("emitDoReviewRunTiming", () => {
-  it("emits the wall-clock breakdown around the ensemble run", () => {
+  it("emits every field on the DoReviewRunTiming event (CR PR #95 catch — pin timestamps too)", () => {
     const timing: DoReviewRunTiming = {
       runId: "run-uuid-here",
       pickedUpAtMs: 1_700_000_000_000,
@@ -242,9 +257,179 @@ describe("emitDoReviewRunTiming", () => {
     }
     emitDoReviewRunTiming(CTX, timing)
     const event = lastLogged()
+    // Per CR's PR #95 nit: the test creates timestamps as input but
+    // didn't assert them in the emitted event. Pin all timestamps so
+    // downstream log analyzers can rely on them.
     expect(event["event"]).toBe("do-review-run-timing")
     expect(event["runId"]).toBe("run-uuid-here")
+    expect(event["pickedUpAtMs"]).toBe(1_700_000_000_000)
+    expect(event["finishedAtMs"]).toBe(1_700_000_566_000)
     expect(event["consumerWallMs"]).toBe(566_000)
     expect(event["finalState"]).toBe("completed")
+  })
+})
+
+// ─── narrowSynthRetryOutcome ───────────────────────────────────────
+
+describe("narrowSynthRetryOutcome (Sigilix PR #95 catch)", () => {
+  it("returns null when retry never fired (retryUsed === false)", () => {
+    // Retry outcome is meaningless when no retry happened — even a
+    // bogus value here must coerce to null.
+    expect(narrowSynthRetryOutcome(false, "n/a")).toBeNull()
+    expect(narrowSynthRetryOutcome(false, "ok")).toBeNull()
+    expect(narrowSynthRetryOutcome(false, "exhausted-budget")).toBeNull()
+  })
+
+  it("returns null on the `n/a` sentinel (defensive — should be unreachable when retryUsed===true)", () => {
+    expect(narrowSynthRetryOutcome(true, "n/a")).toBeNull()
+  })
+
+  it("returns null on the `exhausted-budget` sentinel (orchestrator-internal, not a model outcome)", () => {
+    expect(narrowSynthRetryOutcome(true, "exhausted-budget")).toBeNull()
+  })
+
+  it("passes through every real model outcome unchanged", () => {
+    expect(narrowSynthRetryOutcome(true, "ok")).toBe("ok")
+    expect(narrowSynthRetryOutcome(true, "timeout")).toBe("timeout")
+    expect(narrowSynthRetryOutcome(true, "parse")).toBe("parse")
+    expect(narrowSynthRetryOutcome(true, "provenance")).toBe("provenance")
+  })
+})
+
+// ─── computeSpecialistFanoutSummary ────────────────────────────────
+
+describe("computeSpecialistFanoutSummary (Sigilix PR #95 catch)", () => {
+  // Sample model lineup mirrors the production shape: each role has
+  // a fallback model that's different from its primary. Tests use
+  // synthetic model names so the helper's behavior is independent of
+  // the real SPECIALIST_CONFIGS lineup.
+  const inputs = [
+    { role: "logic", verdictOk: true, attemptsUsed: 1, modelUsed: "logic-primary", fallbackModel: "logic-fallback" },
+    { role: "security", verdictOk: true, attemptsUsed: 2, modelUsed: "security-fallback", fallbackModel: "security-fallback" }, // hit fallback
+    { role: "performance", verdictOk: false, attemptsUsed: 3, modelUsed: "performance-fallback", fallbackModel: "performance-fallback" }, // hit fallback + failed
+    { role: "tests", verdictOk: true, attemptsUsed: 1, modelUsed: "tests-primary", fallbackModel: "tests-fallback" },
+  ]
+  const dispatched = ["logic", "security", "performance", "tests"]
+  const FANOUT_START = 1_000_000
+  const FANOUT_END = 1_269_500
+
+  it("identifies the slowest role by per-role elapsed", () => {
+    const starts = new Map([
+      ["logic", 1_000_500],
+      ["security", 1_001_000],
+      ["performance", 1_000_100],
+      ["tests", 1_000_200],
+    ])
+    const ends = new Map([
+      ["logic", 1_269_400],  // ~269s — slowest
+      ["security", 1_120_000], // ~119s
+      ["performance", 1_180_000], // ~180s
+      ["tests", 1_050_000],  // ~50s
+    ])
+    const summary = computeSpecialistFanoutSummary({
+      dispatchedRoles: dispatched,
+      inputs,
+      perRoleStartMs: starts,
+      perRoleEndMs: ends,
+      fanoutStartMs: FANOUT_START,
+      fanoutEndMs: FANOUT_END,
+    })
+    expect(summary.slowestRole).toBe("logic")
+    expect(summary.slowestElapsedMs).toBe(268_900)
+  })
+
+  it("falls back to fanoutEndMs when a role aborted before recording its end", () => {
+    // `logic` got aborted on the outer signal — no end recorded. The
+    // helper treats that as "ended at the fanout end" so the role's
+    // elapsed is an over-estimate, never an under-estimate.
+    const starts = new Map([["logic", 1_000_500], ["tests", 1_000_200]])
+    const ends = new Map([["tests", 1_050_000]])
+    const summary = computeSpecialistFanoutSummary({
+      dispatchedRoles: ["logic", "tests"],
+      inputs: [
+        { role: "logic", verdictOk: false, attemptsUsed: 1, modelUsed: undefined, fallbackModel: null },
+        { role: "tests", verdictOk: true, attemptsUsed: 1, modelUsed: "tests-primary", fallbackModel: "tests-fallback" },
+      ],
+      perRoleStartMs: starts,
+      perRoleEndMs: ends,
+      fanoutStartMs: FANOUT_START,
+      fanoutEndMs: FANOUT_END,
+    })
+    // logic: fanout_end - logic_start = 1_269_500 - 1_000_500 = 269_000
+    // tests: 1_050_000 - 1_000_200 = 49_800
+    expect(summary.slowestRole).toBe("logic")
+    expect(summary.slowestElapsedMs).toBe(269_000)
+  })
+
+  it("counts totalAttemptsUsed across all dispatched roles, defaulting to 1 when undefined", () => {
+    const starts = new Map(dispatched.map((r) => [r, FANOUT_START]))
+    const ends = new Map(dispatched.map((r) => [r, FANOUT_END]))
+    const summary = computeSpecialistFanoutSummary({
+      dispatchedRoles: dispatched,
+      inputs,
+      perRoleStartMs: starts,
+      perRoleEndMs: ends,
+      fanoutStartMs: FANOUT_START,
+      fanoutEndMs: FANOUT_END,
+    })
+    // 1 + 2 + 3 + 1 = 7
+    expect(summary.totalAttemptsUsed).toBe(7)
+  })
+
+  it("counts fallbacksUsed as the number of roles whose modelUsed === fallbackModel", () => {
+    const starts = new Map(dispatched.map((r) => [r, FANOUT_START]))
+    const ends = new Map(dispatched.map((r) => [r, FANOUT_END]))
+    const summary = computeSpecialistFanoutSummary({
+      dispatchedRoles: dispatched,
+      inputs,
+      perRoleStartMs: starts,
+      perRoleEndMs: ends,
+      fanoutStartMs: FANOUT_START,
+      fanoutEndMs: FANOUT_END,
+    })
+    // security + performance both hit fallback.
+    expect(summary.fallbacksUsed).toBe(2)
+  })
+
+  it("splits roles into succeededRoles / failedRoles by verdictOk", () => {
+    const starts = new Map(dispatched.map((r) => [r, FANOUT_START]))
+    const ends = new Map(dispatched.map((r) => [r, FANOUT_END]))
+    const summary = computeSpecialistFanoutSummary({
+      dispatchedRoles: dispatched,
+      inputs,
+      perRoleStartMs: starts,
+      perRoleEndMs: ends,
+      fanoutStartMs: FANOUT_START,
+      fanoutEndMs: FANOUT_END,
+    })
+    expect(summary.succeededRoles).toEqual(["logic", "security", "tests"])
+    expect(summary.failedRoles).toEqual(["performance"])
+  })
+
+  it("returns slowestRole=null when no roles were dispatched", () => {
+    const summary = computeSpecialistFanoutSummary({
+      dispatchedRoles: [],
+      inputs: [],
+      perRoleStartMs: new Map(),
+      perRoleEndMs: new Map(),
+      fanoutStartMs: 0,
+      fanoutEndMs: 0,
+    })
+    expect(summary.slowestRole).toBeNull()
+    expect(summary.slowestElapsedMs).toBe(0)
+    expect(summary.totalAttemptsUsed).toBe(0)
+    expect(summary.fallbacksUsed).toBe(0)
+  })
+
+  it("does not count a role as a fallback when modelUsed matches but fallbackModel is null", () => {
+    const summary = computeSpecialistFanoutSummary({
+      dispatchedRoles: ["logic"],
+      inputs: [{ role: "logic", verdictOk: true, attemptsUsed: 1, modelUsed: "logic-primary", fallbackModel: null }],
+      perRoleStartMs: new Map([["logic", 0]]),
+      perRoleEndMs: new Map([["logic", 100]]),
+      fanoutStartMs: 0,
+      fanoutEndMs: 100,
+    })
+    expect(summary.fallbacksUsed).toBe(0)
   })
 })

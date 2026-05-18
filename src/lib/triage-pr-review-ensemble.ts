@@ -149,11 +149,12 @@ import type { ReviewMemorySkipReason } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
 import {
   type EnsembleRunCtx,
-  type SpecialistFanoutSummary,
   type SynthSummary,
+  computeSpecialistFanoutSummary,
   emitPhaseCompleted,
   emitSpecialistFanoutSummary,
   emitSynthSummary,
+  narrowSynthRetryOutcome,
 } from "./ensemble-perf-telemetry"
 import type { Env } from "../index"
 
@@ -1094,56 +1095,29 @@ export async function handlePrReviewEnsemble(
       telemetry,
     )
 
-    // ARC-284: specialist-fanout-summary — captures slowest role +
-    // total attempts used. Emitted BEFORE the coverage / quorum gate
-    // below so the event fires even on the "all specialists failed"
-    // bail path. `succeeded` is computed in the next block; we mirror
-    // it locally here so emission doesn't depend on later code.
+    // ARC-284 (Sigilix PR #95 catch): specialist-fanout-summary
+    // computation moved into `computeSpecialistFanoutSummary` so the
+    // slowestRole / fallbacksUsed / totalAttemptsUsed logic is unit-
+    // testable. The orchestrator just maps its CollectedVerdict[] +
+    // per-role timing into the helper's input shape.
+    //
+    // Emitted BEFORE the coverage / quorum gate below so the event
+    // fires even on the "all specialists failed" bail path.
     {
-      const succeededRoles = specialistVerdicts
-        .filter((v) => v.verdict !== null)
-        .map((v) => v.role)
-      const failedRoles = specialistVerdicts
-        .filter((v) => v.verdict === null)
-        .map((v) => v.role)
-      let slowestRole: string | null = null
-      let slowestElapsedMs = 0
-      for (const role of router.specialists) {
-        const startedAt = perSpecialistStart.get(role)
-        const endedAt = perSpecialistEnd.get(role)
-        // A specialist that aborted on the outer signal may not have
-        // recorded an end timestamp — fall back to the fanout end
-        // (it can't have taken longer than the fanout itself).
-        const ended = endedAt ?? fanoutEndMs
-        const elapsed = startedAt !== undefined ? ended - startedAt : 0
-        if (elapsed > slowestElapsedMs) {
-          slowestElapsedMs = elapsed
-          slowestRole = role
-        }
-      }
-      const totalAttemptsUsed = specialistVerdicts.reduce(
-        (sum, v) => sum + (v.attemptsUsed ?? 1),
-        0,
-      )
-      const fallbacksUsed = specialistVerdicts.reduce(
-        (sum, v) =>
-          sum +
-          (v.modelUsed !== undefined &&
-          v.modelUsed === SPECIALIST_CONFIGS[v.role].fallback
-            ? 1
-            : 0),
-        0,
-      )
-      const summary: SpecialistFanoutSummary = {
+      const summary = computeSpecialistFanoutSummary({
         dispatchedRoles: router.specialists,
-        succeededRoles,
-        failedRoles,
-        fanoutElapsedMs: fanoutEndMs - fanoutStartMs,
-        slowestRole,
-        slowestElapsedMs,
-        totalAttemptsUsed,
-        fallbacksUsed,
-      }
+        inputs: specialistVerdicts.map((v) => ({
+          role: v.role,
+          verdictOk: v.verdict !== null,
+          attemptsUsed: v.attemptsUsed,
+          modelUsed: v.modelUsed,
+          fallbackModel: SPECIALIST_CONFIGS[v.role].fallback,
+        })),
+        perRoleStartMs: perSpecialistStart,
+        perRoleEndMs: perSpecialistEnd,
+        fanoutStartMs,
+        fanoutEndMs,
+      })
       emitSpecialistFanoutSummary(perfCtx, summary)
     }
 
@@ -1516,20 +1490,11 @@ export async function handlePrReviewEnsemble(
         elapsedMs: Date.now() - synthStartMs,
         attemptsUsed: synthAttemptsUsed > 0 ? synthAttemptsUsed : synthOutput.attemptsUsed,
         retryUsed: synthRetryUsed,
-        // synthRetryOutcome is a union with `"n/a"` (set when retry
-        // didn't fire) and `"exhausted-budget"` (synth-internal
-        // budget exhaustion). The telemetry contract narrows to
-        // {ok, timeout, parse, provenance}; coerce non-matching
-        // values to null so post-hoc analysis can rely on the
-        // narrower shape.
-        retryOutcome: synthRetryUsed && synthRetryOutcome !== "n/a"
-          ? (synthRetryOutcome === "ok" ||
-             synthRetryOutcome === "timeout" ||
-             synthRetryOutcome === "parse" ||
-             synthRetryOutcome === "provenance"
-              ? synthRetryOutcome
-              : null)
-          : null,
+        // ARC-284 Sigilix-PR-#95 catch: coercion extracted to
+        // `narrowSynthRetryOutcome` for unit-testability. Collapses
+        // the orchestrator-internal `"n/a"` and `"exhausted-budget"`
+        // sentinels to `null` for the telemetry contract.
+        retryOutcome: narrowSynthRetryOutcome(synthRetryUsed, synthRetryOutcome),
         inputSpecialistCount: succeeded.length,
         inputFindingCount,
         outputFindingCount: synthOutput.verdict.findings.length,

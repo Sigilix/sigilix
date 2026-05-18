@@ -147,6 +147,14 @@ import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
+import {
+  type EnsembleRunCtx,
+  type SpecialistFanoutSummary,
+  type SynthSummary,
+  emitPhaseCompleted,
+  emitSpecialistFanoutSummary,
+  emitSynthSummary,
+} from "./ensemble-perf-telemetry"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -472,6 +480,10 @@ export async function handlePrReviewEnsemble(
   const startMs = Date.now()
   const orchCtrl = new AbortController()
   const orchTimer = setTimeout(() => orchCtrl.abort(), ORCHESTRATOR_TIMEOUT_MS)
+  // ARC-284: correlation fields for the perf-telemetry events emitted
+  // throughout this handler. headSha is truncated at log time inside
+  // the helper. Stamped here once so every emit gets the same shape.
+  const perfCtx: EnsembleRunCtx = { owner, repo, prNumber, headSha }
 
   // Lifted out of the try block so the finally cleanup can read cache
   // stats into telemetry on every exit path (success, failure, throw).
@@ -787,6 +799,9 @@ export async function handlePrReviewEnsemble(
     // Capture cache locally so the lambda below sees a non-null narrowing.
     const preflightCache = cache
     let preflightChunks: Awaited<ReturnType<typeof preflightCache.cachedRetrieve>>["chunks"] = null
+    // ARC-284: phase-completed event always emits (even on the catch
+    // path) so a 15s pre-flight cap-hit shows up in the trace.
+    const preflightStartMs = Date.now()
     try {
       const preflight = await withComposedTimeout(
         () => preflightCache.cachedRetrieve({
@@ -811,6 +826,8 @@ export async function handlePrReviewEnsemble(
       // post-hoc analysis distinguish "we gave up at 15s" from "fetcher
       // threw a hard error".
       preflightChunks = null
+    } finally {
+      emitPhaseCompleted(perfCtx, "preflight_retrieval", preflightStartMs)
     }
     const retrievalSnapshot = preflightChunks
       ? formatChunksForPrompt(preflightChunks) ?? ""
@@ -1038,6 +1055,14 @@ export async function handlePrReviewEnsemble(
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
     })
 
+    // ARC-284: track per-specialist start time so the fanout summary
+    // can name the slowest role. The Promise.allSettled below waits
+    // for ALL to settle, so we measure each role's elapsed independent
+    // of the gating slowest one.
+    const fanoutStartMs = Date.now()
+    const perSpecialistStart = new Map<string, number>()
+    const perSpecialistEnd = new Map<string, number>()
+    for (const role of router.specialists) perSpecialistStart.set(role, Date.now())
     const specialistResults = await Promise.allSettled(
       router.specialists.map((role) =>
         withComposedTimeout(
@@ -1056,9 +1081,11 @@ export async function handlePrReviewEnsemble(
           }),
           SPECIALIST_TIMEOUT_MS,
           orchCtrl.signal,
-        ),
+        ).finally(() => perSpecialistEnd.set(role, Date.now())),
       ),
     )
+    const fanoutEndMs = Date.now()
+    emitPhaseCompleted(perfCtx, "specialist_fanout", fanoutStartMs, fanoutEndMs)
 
     // Collect specialist verdicts (with stable IDs assigned).
     const specialistVerdicts = collectSpecialistVerdicts(
@@ -1066,6 +1093,59 @@ export async function handlePrReviewEnsemble(
       specialistResults,
       telemetry,
     )
+
+    // ARC-284: specialist-fanout-summary — captures slowest role +
+    // total attempts used. Emitted BEFORE the coverage / quorum gate
+    // below so the event fires even on the "all specialists failed"
+    // bail path. `succeeded` is computed in the next block; we mirror
+    // it locally here so emission doesn't depend on later code.
+    {
+      const succeededRoles = specialistVerdicts
+        .filter((v) => v.verdict !== null)
+        .map((v) => v.role)
+      const failedRoles = specialistVerdicts
+        .filter((v) => v.verdict === null)
+        .map((v) => v.role)
+      let slowestRole: string | null = null
+      let slowestElapsedMs = 0
+      for (const role of router.specialists) {
+        const startedAt = perSpecialistStart.get(role)
+        const endedAt = perSpecialistEnd.get(role)
+        // A specialist that aborted on the outer signal may not have
+        // recorded an end timestamp — fall back to the fanout end
+        // (it can't have taken longer than the fanout itself).
+        const ended = endedAt ?? fanoutEndMs
+        const elapsed = startedAt !== undefined ? ended - startedAt : 0
+        if (elapsed > slowestElapsedMs) {
+          slowestElapsedMs = elapsed
+          slowestRole = role
+        }
+      }
+      const totalAttemptsUsed = specialistVerdicts.reduce(
+        (sum, v) => sum + (v.attemptsUsed ?? 1),
+        0,
+      )
+      const fallbacksUsed = specialistVerdicts.reduce(
+        (sum, v) =>
+          sum +
+          (v.modelUsed !== undefined &&
+          v.modelUsed === SPECIALIST_CONFIGS[v.role].fallback
+            ? 1
+            : 0),
+        0,
+      )
+      const summary: SpecialistFanoutSummary = {
+        dispatchedRoles: router.specialists,
+        succeededRoles,
+        failedRoles,
+        fanoutElapsedMs: fanoutEndMs - fanoutStartMs,
+        slowestRole,
+        slowestElapsedMs,
+        totalAttemptsUsed,
+        fallbacksUsed,
+      }
+      emitSpecialistFanoutSummary(perfCtx, summary)
+    }
 
     // ─── Coverage check (ARC-277) ──────────────────────────────
     //
@@ -1422,6 +1502,42 @@ export async function handlePrReviewEnsemble(
       return bailWithSkipNotice(synthFailReason)
     }
 
+    // ARC-284: phase + synth summary fire on the SUCCESS join. Failure
+    // paths above (`return bailWithSkipNotice(...)`) skip these — the
+    // skip-notice event captures the bail reason; synth-summary is
+    // scoped to "synth produced a usable verdict."
+    emitPhaseCompleted(perfCtx, "synth", synthStartMs)
+    {
+      const inputFindingCount = succeeded.reduce(
+        (sum, v) => sum + (v.verdict?.findings.length ?? 0),
+        0,
+      )
+      const summary: SynthSummary = {
+        elapsedMs: Date.now() - synthStartMs,
+        attemptsUsed: synthAttemptsUsed > 0 ? synthAttemptsUsed : synthOutput.attemptsUsed,
+        retryUsed: synthRetryUsed,
+        // synthRetryOutcome is a union with `"n/a"` (set when retry
+        // didn't fire) and `"exhausted-budget"` (synth-internal
+        // budget exhaustion). The telemetry contract narrows to
+        // {ok, timeout, parse, provenance}; coerce non-matching
+        // values to null so post-hoc analysis can rely on the
+        // narrower shape.
+        retryOutcome: synthRetryUsed && synthRetryOutcome !== "n/a"
+          ? (synthRetryOutcome === "ok" ||
+             synthRetryOutcome === "timeout" ||
+             synthRetryOutcome === "parse" ||
+             synthRetryOutcome === "provenance"
+              ? synthRetryOutcome
+              : null)
+          : null,
+        inputSpecialistCount: succeeded.length,
+        inputFindingCount,
+        outputFindingCount: synthOutput.verdict.findings.length,
+        modelUsed: synthOutput.modelUsed,
+      }
+      emitSynthSummary(perfCtx, summary)
+    }
+
     // ─── Post-synthesis validation ─────────────────────────────
     const validated = validateForSubmission({
       synthOutput: { verdict: synthOutput.verdict, provenance: synthOutput.provenance },
@@ -1708,6 +1824,10 @@ export async function handlePrReviewEnsemble(
       coverage,
       delta: deltaCounts,
     })
+    // ARC-284: wrap the submit so a slow GitHub roundtrip shows up in
+    // the trace. Covers BOTH the success path and the 422-fallback
+    // path that the catch block dispatches to.
+    const submitStartMs = Date.now()
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)
       // ARC-258 follow-up (PR #84 anomaly catch, refined PR #86):
@@ -2029,6 +2149,13 @@ export async function handlePrReviewEnsemble(
         event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
         findingsCount: fallbackFindings,
       })
+    } finally {
+      // ARC-284: fire the submit phase event on every exit path —
+      // inline-anchored success, inline-anchored verify-fail (comment
+      // fallback), 422 → anchorless fallback success, 422 → fallback
+      // verify-fail. Catches the GitHub roundtrip + verify time
+      // independently of the synth latency above.
+      emitPhaseCompleted(perfCtx, "submit", submitStartMs)
     }
   } catch (e) {
     telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
@@ -2853,6 +2980,12 @@ interface CollectedVerdict {
   failureReason?: string
   failureRawAnswer?: string
   elapsedMs: number
+  /** ARC-284: per-specialist accounting threaded through for the
+   *  `specialist-fanout-summary` telemetry event. Undefined when the
+   *  Promise.allSettled wrapper rejected before runSpecialist could
+   *  emit (e.g. orchestrator-signal abort BEFORE the first attempt). */
+  attemptsUsed?: number
+  modelUsed?: string
 }
 
 interface PrReviewVerdictWithIds extends PrReviewVerdict {
@@ -2889,7 +3022,13 @@ function collectSpecialistVerdicts(
     }
     const value = settled.value
     if (!value.verdict) {
-      const collected: CollectedVerdict = { role, verdict: null, elapsedMs: value.elapsedMs }
+      const collected: CollectedVerdict = {
+        role,
+        verdict: null,
+        elapsedMs: value.elapsedMs,
+        attemptsUsed: value.attemptsUsed,
+        modelUsed: value.modelUsed,
+      }
       if (value.failureReason) collected.failureReason = value.failureReason
       if (value.failureRawAnswer) collected.failureRawAnswer = value.failureRawAnswer
       out.push(collected)
@@ -2920,7 +3059,13 @@ function collectSpecialistVerdicts(
       continue
     }
     const withIds = assignStableFindingIds(role, value.verdict)
-    out.push({ role, verdict: withIds, elapsedMs: value.elapsedMs })
+    out.push({
+      role,
+      verdict: withIds,
+      elapsedMs: value.elapsedMs,
+      attemptsUsed: value.attemptsUsed,
+      modelUsed: value.modelUsed,
+    })
     telemetry.specialistVerdicts.push({
       role,
       model: SPECIALIST_MODELS[role],

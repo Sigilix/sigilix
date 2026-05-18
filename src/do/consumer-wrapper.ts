@@ -71,6 +71,11 @@ export async function runPrReviewWithDoCallback(
   const consumerId = crypto.randomUUID()
   const id = env.PR_REVIEW_RUN.idFromName(instanceName(job.owner, job.repo, job.prNumber))
   const stub = env.PR_REVIEW_RUN.get(id)
+  // ARC-284: queue → DO → ensemble → result wall-clock. Captured here
+  // so we can correlate the orchestrator's `startMs` with the queue
+  // consumer's pickup time (queueLagMs = pickup - queue arrival is
+  // not knowable from inside the consumer, but pickup-to-finish IS).
+  const pickedUpAtMs = Date.now()
 
   const pickup = await postPickup(stub, runId, consumerId)
   if (pickup.kind === "blocked") {
@@ -98,6 +103,29 @@ export async function runPrReviewWithDoCallback(
 
   const payload = buildRunResultPayload(runId, consumerId, caught)
   await postRunResult(stub, payload, job)
+
+  // ARC-284: do-review-run-timing. Emit AFTER /run-result resolves so
+  // the wall-clock includes the round-trip back to the DO. Final
+  // state is derived from `caught` since we don't have a structured
+  // return from runEnsemble — it's the queue-handler closure that
+  // owns the EnsembleResult.
+  const finishedAtMs = Date.now()
+  console.log(JSON.stringify({
+    event: "do-review-run-timing",
+    // ARC-190 contract: every DO-emitted log line carries
+    // dedupe_system=do so the acceptance test can filter all DO
+    // surface output by tag.
+    dedupe_system: "do",
+    owner: job.owner,
+    repo: job.repo,
+    prNumber: job.prNumber,
+    headSha: job.headSha.slice(0, 7),
+    runId,
+    pickedUpAtMs,
+    finishedAtMs,
+    consumerWallMs: finishedAtMs - pickedUpAtMs,
+    finalState: caught !== undefined ? "errored" : "completed",
+  }))
 }
 
 async function postPickup(

@@ -530,10 +530,31 @@ describe("Phase 4a.1 — model lineup", () => {
     expect(SPECIALIST_CONFIGS.tests.fallback).toBe("qwen3-coder-next:cloud")
   })
 
-  it("synthesizer keeps kimi-k2.6 primary + kimi-k2.5 fallback", () => {
+  it("synthesizer uses kimi-k2.6 primary + DeepSeek-flash cross-provider fallback (ARC-291)", () => {
+    // ARC-291 (PR #97 hot-fix): synth fallback was kimi-k2.5:cloud
+    // (same Moonshot provider as primary). When Moonshot had a bad
+    // few minutes, both primary AND fallback failed identically →
+    // synth_timeout. Sigilix's review of PR #97 demoed this with a
+    // 6m 16s wall-clock burn and a customer-visible skip-notice.
+    //
+    // Cross-provider fallback is the whole point of the fallback
+    // mechanic. Every other ModelConfig in this file had it; synth
+    // was the outlier. Switched to deepseek-v4-flash (proven primary
+    // on security + tests specialists, different provider, fails
+    // independently from Moonshot).
     expect(SYNTHESIZER_CONFIG.primary).toBe("kimi-k2.6:cloud")
-    expect(SYNTHESIZER_CONFIG.fallback).toBe("kimi-k2.5:cloud")
+    expect(SYNTHESIZER_CONFIG.fallback).toBe("deepseek-v4-flash:cloud")
     expect(SYNTHESIZER_CONFIG.retries).toBe(1)
+    // Cross-provider invariant: synth primary and fallback MUST NOT
+    // share the same provider prefix. If a future bump ever picks
+    // a same-provider fallback again, this assertion catches it at
+    // CI time. The check is intentionally generous on what counts
+    // as "different provider" — any model name that doesn't share
+    // primary's family prefix (everything before the first hyphen)
+    // satisfies the cross-provider requirement.
+    const primaryFamily = SYNTHESIZER_CONFIG.primary.split("-")[0]
+    const fallbackFamily = SYNTHESIZER_CONFIG.fallback?.split("-")[0]
+    expect(fallbackFamily).not.toBe(primaryFamily)
   })
 
   it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (18 after ARC-278/279 retry reservation)", () => {

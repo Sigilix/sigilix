@@ -442,7 +442,31 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
 export const SYNTHESIZER_CONFIG: ModelConfig = {
   primary: "kimi-k2.6:cloud",
   retries: 1,
-  fallback: "kimi-k2.5:cloud",
+  // ARC-291 (PR #97 hot-fix): swap fallback from kimi-k2.5 → DeepSeek
+  // family. Pre-this-fix the fallback was kimi-k2.5:cloud — SAME
+  // PROVIDER as primary (both Moonshot). When Moonshot had a bad few
+  // minutes, primary + retry + fallback all hit the same wall, the
+  // ARC-278 retry doubled the burn, and synth_timeout fired even
+  // though specialist verdicts were ready to merge.
+  //
+  // Sigilix's own review of PR #97 demoed this: 6m 16s wall-clock
+  // burned, both attemptSynth calls timed out twice, customer saw
+  // "Couldn't review — see PR comment." Brand-fatal UX.
+  //
+  // Every OTHER ModelConfig in this file has cross-provider
+  // fallback. Synth was the only outlier. DeepSeek-v4-flash is the
+  // proven lighter DeepSeek variant (already primary on security +
+  // tests specialists). DIFFERENT provider from Moonshot — fails
+  // INDEPENDENTLY, which is the whole point of fallback.
+  //
+  // Worst-case math with cross-provider fallback:
+  //   Primary attempt:  60s (PER_ATTEMPT cap)  — Moonshot slow → null
+  //   Retry attempt:    60s + 1s backoff       — Moonshot slow → null
+  //   Fallback attempt: 60s                    — DeepSeek likely OK
+  //   Total:           ~121s if Moonshot is slow but DeepSeek is fine
+  // vs the pre-fix:
+  //   Total:           ~362s (180s × 2 outer attempts) → skip-notice
+  fallback: "deepseek-v4-flash:cloud",
 }
 
 /** @deprecated kept for telemetry compatibility — derive from SPECIALIST_CONFIGS instead */

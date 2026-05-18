@@ -178,10 +178,24 @@ export const SPECIALIST_TIMEOUT_MS = 270_000
 // unchanged in 4a.3 — observed margin is fine, and a tighter synth
 // budget would mix concerns with the specialist rebalance.
 export const SYNTHESIZER_TIMEOUT_MS = 180_000
+// ARC-278: cap for the one-shot synth RETRY budget. Lives inside the
+// reserved headroom — the retry is "use what's left in the headroom
+// envelope, don't extend the orchestrator wall." 30s is enough for
+// parse/provenance retries (the model already produced output, just
+// needs to re-emit cleanly) and gives any retry a fair-but-bounded
+// shot at success.
+//
+// Math: SPECIALIST (270) + SYNTHESIZER (180) + SYNTHESIZER_RETRY (30)
+//     + HEADROOM_FOR_FINALIZE (10) = 490 = ORCHESTRATOR_TIMEOUT_MS.
+//
+// The static invariant below adds the retry to the budget check so a
+// future "raise synth retry" change can't silently push the
+// orchestrator past 490s.
+export const SYNTHESIZER_RETRY_TIMEOUT_MS = 30_000
 // Reserved for pre-flight retrieval + diff parse + stale-head guards +
 // telemetry write. The orchestrator must always have at least this much
-// headroom beyond (specialist + synth) so a slow Vectorize round-trip
-// doesn't eat into the synth budget.
+// headroom beyond (specialist + synth + synth-retry) so a slow
+// Vectorize round-trip doesn't eat into the synth budget.
 export const RESERVED_HEADROOM_MS = 40_000
 // 270 + 180 + 40 = 490. Cloudflare queue ceiling is 900s. The 90s
 // orch bump (Phase 4a.3) is well under any user-perceptible review
@@ -218,6 +232,20 @@ if (SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS > ORCH
       `SYNTHESIZER_TIMEOUT_MS (${SYNTHESIZER_TIMEOUT_MS}) + ` +
       `RESERVED_HEADROOM_MS (${RESERVED_HEADROOM_MS}) ` +
       `must be ≤ ORCHESTRATOR_TIMEOUT_MS (${ORCHESTRATOR_TIMEOUT_MS}).`,
+  )
+}
+// ARC-278 retry budget invariant — the synth retry takes its time out
+// of RESERVED_HEADROOM_MS (NOT a new budget line). Verify that even if
+// retry + finalize both use their fair share, we don't blow the
+// headroom envelope. Finalize needs ~5s for the telemetry write +
+// daily-budget increment + cache write.
+const SYNTH_RETRY_FINALIZE_RESERVE_MS = 5_000
+if (SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS > RESERVED_HEADROOM_MS) {
+  throw new Error(
+    `[ensemble] synth-retry budget invariant violated: ` +
+      `SYNTHESIZER_RETRY_TIMEOUT_MS (${SYNTHESIZER_RETRY_TIMEOUT_MS}) + ` +
+      `SYNTH_RETRY_FINALIZE_RESERVE_MS (${SYNTH_RETRY_FINALIZE_RESERVE_MS}) ` +
+      `must be ≤ RESERVED_HEADROOM_MS (${RESERVED_HEADROOM_MS}).`,
   )
 }
 
@@ -1091,6 +1119,20 @@ export async function handlePrReviewEnsemble(
     // the spec promised `synthesizer.timedOut: true` for this case.
     let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
     const synthStartMs = Date.now()
+    // ARC-278: track whether we ran the retry attempt + how it went,
+    // for post-rollout telemetry analysis. `n/a` means the first
+    // attempt succeeded; the other values record the retry's outcome.
+    let synthRetryUsed = false
+    let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
+    // ARC-278 (CR catch on PR #90): runSynthesizer wraps
+    // runWithRetryAndFallback, which already does its own internal
+    // primary+retry+fallback. So `attempt.attemptsUsed` from a single
+    // outer call can be 1, 2, or 3+. Accumulate the real count across
+    // BOTH attempts (and across a local timeout, where the outer call
+    // never returned attemptsUsed at all — treat as 1).
+    // This feeds `finalize()`'s daily-budget charge; under-counting
+    // here would under-charge the budget and over-count head-room.
+    let synthAttemptsUsed = 0
     try {
       // ARC-185: per-PR commands.review.{prompt.addendum, model.{primary,
       // fallbacks}} override. Specialists left untouched on the v3.1
@@ -1129,35 +1171,133 @@ export async function handlePrReviewEnsemble(
             : 0,
         }))
       }
-      synthOutput = await withComposedTimeout(
-        // Use the composed signal so a synth-only 180s timeout actually
-        // cancels the underlying model call. Passing `orchCtrl.signal`
-        // directly only rejects this await; the in-flight model fetch
-        // would keep running until the outer 490s orch wall fires
-        // (CR catch on PR #42).
-        (signal) => runSynthesizer({
-          apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: synthSystemPrompt,
-          userMessage: synthMessageWithMemory,
-          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-          signal,
-          ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
-        }),
-        SYNTHESIZER_TIMEOUT_MS,
-        orchCtrl.signal,
-      )
+      // ARC-278: extract the attempt-runner so we can call it twice
+      // (primary + at most one retry). The closure captures every
+      // input that's stable between attempts (system prompt, config
+      // override, env, orchCtrl); only `userMessage` and `timeoutMs`
+      // vary per call. Returns null on local timeout (so callers
+      // don't have to discriminate between catch and `failureReason:
+      // "aborted"` shapes). Re-throws on orchestrator-wall abort.
+      const attemptSynth = async (
+        userMessage: string,
+        timeoutMs: number,
+      ): Promise<Awaited<ReturnType<typeof runSynthesizer>> | null> => {
+        try {
+          return await withComposedTimeout(
+            // Use the composed signal so a synth-only timeout actually
+            // cancels the underlying model call. Passing `orchCtrl.signal`
+            // directly only rejects this await; the in-flight model fetch
+            // would keep running until the outer 490s orch wall fires
+            // (CR catch on PR #42).
+            (signal) => runSynthesizer({
+              apiKey: env.OLLAMA_API_KEY,
+              systemPrompt: synthSystemPrompt,
+              userMessage,
+              chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+              signal,
+              ...(synthConfigOverride ? { configOverride: synthConfigOverride } : {}),
+            }),
+            timeoutMs,
+            orchCtrl.signal,
+          )
+        } catch (err) {
+          // Orchestrator-wall abort propagates — that's the
+          // internal_error path. Synth-local timer is a local
+          // failure: return null so the retry path can run.
+          if (orchCtrl.signal.aborted) throw err
+          return null
+        }
+      }
+
+      const attempt1 = await attemptSynth(synthMessageWithMemory, SYNTHESIZER_TIMEOUT_MS)
+      synthOutput = attempt1 ?? undefined
+      // attempt1 === null → local timeout, runSynthesizer never returned
+      // anything; charge 1 for the in-flight call. attempt1 !== null →
+      // trust the inner retry/fallback count.
+      synthAttemptsUsed += attempt1?.attemptsUsed ?? 1
+      const attempt1Outcome = classifySynthOutcome(synthOutput, attempt1 === null)
+
+      // ARC-278: if the primary attempt failed in a way we can
+      // retry, run one more attempt with a tightened prompt hint.
+      // Retry budget is bounded by SYNTHESIZER_RETRY_TIMEOUT_MS
+      // (which fits inside RESERVED_HEADROOM_MS, per the static
+      // invariant at module load). On retry success → telemetry
+      // logs which path recovered; on retry failure → existing
+      // failure-handling code below still fires.
+      if (attempt1Outcome !== "ok") {
+        synthRetryUsed = true
+        const retryUserMessage = buildSynthRetryMessage(synthMessageWithMemory, attempt1Outcome)
+        console.log(JSON.stringify({
+          event: "synth-retry-dispatched",
+          owner, repo, prNumber,
+          attempt1_outcome: attempt1Outcome,
+        }))
+        const attempt2 = await attemptSynth(retryUserMessage, SYNTHESIZER_RETRY_TIMEOUT_MS)
+        synthOutput = attempt2 ?? undefined
+        // Same attempts-accounting rationale as attempt1 above.
+        synthAttemptsUsed += attempt2?.attemptsUsed ?? 1
+        const attempt2Outcome = classifySynthOutcome(synthOutput, attempt2 === null)
+        synthRetryOutcome = attempt2Outcome
+        console.log(JSON.stringify({
+          event: "synth-retry-completed",
+          owner, repo, prNumber,
+          attempt1_outcome: attempt1Outcome,
+          retry_outcome: attempt2Outcome,
+          recovered: attempt2Outcome === "ok",
+        }))
+      }
     } catch (err) {
       // If the orchestrator's outer signal aborted, propagate — outer
       // timeout is a genuine internal_error and lands in the top-level
       // catch as before.
       if (orchCtrl.signal.aborted) throw err
-      // Synth-local timeout. Record as a structured synth failure and
-      // short-circuit through the failure path. Quorum already passed
-      // so this is a synth-only fall-back.
+      // Defensive: any other unexpected throw from the attempt-runner
+      // gets recorded as a synth-local timeout (same shape as the
+      // pre-ARC-278 behavior). Should be unreachable since
+      // attemptSynth handles its own catch — but kept as a safety
+      // net so a future refactor that surfaces a thrown exception
+      // doesn't crash the dispatcher.
       telemetry.synthesizer = {
         model: SYNTHESIZER_MODEL,
         modelUsed: SYNTHESIZER_MODEL,
-        attemptsUsed: 1,
+        // Defensive catch-block — `synthAttemptsUsed` may or may not
+        // have been incremented depending on which await threw.
+        // Fall back to a minimum of 1 if accounting got skipped.
+        attemptsUsed: Math.max(1, synthAttemptsUsed),
+        verdict: null,
+        provenance: null,
+        retrievalCallsUsed: 0,
+        elapsedMs: Date.now() - synthStartMs,
+        timedOut: true,
+        failureReason: "synth_timeout",
+      }
+      telemetry.synthRetry = { used: synthRetryUsed, outcome: synthRetryOutcome }
+      telemetry.fellBackToPhase3 = mode === "post"
+      telemetry.fellBackReason = "synth_timeout"
+      return finalize(telemetry, env, "skipped", cache)
+    }
+
+    // ARC-278: persist the retry telemetry regardless of which path
+    // wins below. Done BEFORE the post-call processing so even
+    // happy-path success carries `synthRetry: { used: false,
+    // outcome: "n/a" }` for stable rollout analysis.
+    telemetry.synthRetry = { used: synthRetryUsed, outcome: synthRetryOutcome }
+
+    // ARC-278: if both attempts locally timed out, synthOutput is
+    // undefined here. Synthesize a stub entry that matches the
+    // pre-ARC-278 "synth-local timeout caught in the outer catch"
+    // shape so the failure-handling code below stays uniform.
+    if (synthOutput === undefined) {
+      telemetry.synthesizer = {
+        model: SYNTHESIZER_MODEL,
+        modelUsed: SYNTHESIZER_MODEL,
+        // CR catch on PR #90: trust the accumulated count from
+        // attempt1.attemptsUsed (+ attempt2.attemptsUsed if retry
+        // ran). Local-timeout branches charge 1 per missed
+        // returned-attempt count, so the minimum is correctly 1 for
+        // a single-attempt timeout, 2 for primary-then-retry both
+        // locally timing out.
+        attemptsUsed: Math.max(1, synthAttemptsUsed),
         verdict: null,
         provenance: null,
         retrievalCallsUsed: 0,
@@ -1183,11 +1323,17 @@ export async function handlePrReviewEnsemble(
     const synthEntry: NonNullable<EnsembleTelemetry["synthesizer"]> = {
       model: SYNTHESIZER_MODEL,
       modelUsed: synthOutput.modelUsed,
-      attemptsUsed: synthOutput.attemptsUsed,
+      // ARC-278 (CR catch on PR #90): use the accumulated count.
+      // `synthAttemptsUsed` sums each outer-attempt's inner
+      // attemptsUsed (where each is itself
+      // primary+retry+cross-provider-fallback inside
+      // runWithRetryAndFallback). The previous `+ 1` undercounted
+      // whenever the inner retry/fallback fired.
+      attemptsUsed: synthAttemptsUsed > 0 ? synthAttemptsUsed : synthOutput.attemptsUsed,
       verdict: synthOutput.verdict,
       provenance: synthOutput.provenance,
       retrievalCallsUsed: 0,  // Phase 4a synth doesn't use retrieve; reserved for Phase 4b
-      elapsedMs: synthOutput.elapsedMs,
+      elapsedMs: Date.now() - synthStartMs,
       timedOut: synthAborted,
     }
     if (synthOutput.failureReason) synthEntry.failureReason = synthOutput.failureReason
@@ -2880,6 +3026,64 @@ export function renderDeltaHeader(delta: FindingDelta): string | null {
 }
 
 /**
+ * ARC-278: classified outcome of one synth attempt. `ok` means we
+ * have a usable verdict + provenance; the three failure shapes line
+ * up with the three skip gates the pre-ARC-278 code bailed on
+ * (timeout / parse / invalid-provenance).
+ */
+export type SynthAttemptOutcome = "ok" | "timeout" | "parse" | "provenance"
+
+/**
+ * ARC-278: pure helper. Classify the result of one
+ * `runSynthesizer(...)` call (or the `null` we substitute for
+ * synth-local timeout) into one of four outcomes. Encapsulates the
+ * subtle Phase 4a.2 abort-rather-than-throw shape — without this,
+ * three call sites duplicated the `/abort|timeout/i.test(failureReason)`
+ * regex match.
+ */
+export function classifySynthOutcome(
+  output: Awaited<ReturnType<typeof runSynthesizer>> | null | undefined,
+  localTimeout: boolean,
+): SynthAttemptOutcome {
+  if (localTimeout) return "timeout"
+  if (!output) return "timeout" // defensive — caller's null/undefined → treat as timeout
+  const reason = output.failureReason ?? ""
+  if (/abort/i.test(reason) || /timeout/i.test(reason)) return "timeout"
+  if (output.verdict && output.provenance) return "ok"
+  return output.failureReason === "synth_invalid_provenance" ? "provenance" : "parse"
+}
+
+/**
+ * ARC-278: prepend a per-outcome retry hint to the original synth
+ * user message. Pure — exposed for unit tests that pin the prompt
+ * text (which feeds the model's recovery behavior on retry).
+ *
+ * For `timeout`: a terse "be prompter and more concise" hint, since
+ * the model already had the full schema + verdict block on attempt
+ * 1 and timeout suggests either it stalled mid-generation OR the
+ * retry-side environment was overloaded. Hint is short to avoid
+ * burning tokens on retry overhead.
+ *
+ * For `parse` / `provenance`: a constraint reminder pointed at the
+ * specific failure mode. The retry runs at the smaller
+ * SYNTHESIZER_RETRY_TIMEOUT_MS budget, so the model only has time
+ * for one tight re-emission — we tell it exactly what to fix.
+ */
+export function buildSynthRetryMessage(
+  originalMessage: string,
+  outcome: SynthAttemptOutcome,
+): string {
+  if (outcome === "ok") return originalMessage
+  const hint =
+    outcome === "parse"
+      ? "RETRY: Your previous response could not be parsed as JSON. Re-emit ONLY a single JSON object matching the schema. No prose. No markdown fence. No leading or trailing text."
+      : outcome === "provenance"
+      ? "RETRY: Your previous response's `provenance` field was malformed. Re-emit with a valid `provenance` object: `{ findings: [...], dropped: [...], retrievalCallsUsed: number }`. Each `provenance.findings[i]` must reference real source specialist finding IDs from the [SPECIALIST VERDICTS] block."
+      : "RETRY: Your previous response did not arrive within the time budget. Re-emit promptly and concisely; the schema and inputs above are unchanged."
+  return `${originalMessage}\n\n${hint}`
+}
+
+/**
  * ARC-277: pure helper. Given the roles the router DISPATCHED and the
  * roles that actually RETURNED a verdict, compute the symmetric pair
  * the synth prompt block needs. Stable ordering follows
@@ -3147,6 +3351,24 @@ interface EnsembleTelemetry {
   degradedCoverage?: {
     rolesReturned: SpecialistRole[]
     rolesMissing: SpecialistRole[]
+  }
+  /**
+   * ARC-278: did we run the one-shot synth retry, and if so how did
+   * it land? Populated on EVERY ensemble run that gets as far as
+   * the synth call (so the field is present whether or not the
+   * retry ran). Outcomes:
+   *   - `n/a`     — first attempt succeeded, retry not triggered
+   *   - `ok`      — retry recovered the failed first attempt
+   *   - `timeout` — retry also locally timed out
+   *   - `parse`   — retry also failed JSON parse
+   *   - `provenance` — retry also produced invalid provenance
+   *   - `exhausted-budget` — first attempt failed but no retry
+   *     budget left (reserved for ARC-278.future; current code
+   *     always runs the retry within the static budget).
+   */
+  synthRetry?: {
+    used: boolean
+    outcome: SynthAttemptOutcome | "n/a" | "exhausted-budget"
   }
   specialistVerdicts: Array<{
     role: SpecialistRole

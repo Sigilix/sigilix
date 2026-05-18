@@ -174,35 +174,55 @@ const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 // regression-guards this so a future "tighten for headroom" change
 // can't silently re-break the fallback firing.
 export const SPECIALIST_TIMEOUT_MS = 270_000
-// Synth on 4× 8K-token verdicts observed at 22-100s post-4a.2; 180s
-// gives p99 headroom for cross-specialist disagreement cases. Kept
-// unchanged in 4a.3 — observed margin is fine, and a tighter synth
-// budget would mix concerns with the specialist rebalance.
-export const SYNTHESIZER_TIMEOUT_MS = 180_000
-// ARC-278: cap for the one-shot synth RETRY budget. Lives INSIDE the
-// reserved headroom — the retry is "use what's left in the headroom
-// envelope, don't extend the orchestrator wall." 30s is enough for
-// parse/provenance retries (the model already produced output, just
-// needs to re-emit cleanly) and gives any retry a fair-but-bounded
-// shot at success.
+// ARC-283: synth budget bumped from 180s → 420s after PR #93's own
+// review timed out at 180s on a 900-line diff + 27 new tests.
+// Sigilix's product positioning is "yes cost more time for BETTER,
+// more THOUGHT-OUT reviews" — timing out is a non-starter when
+// specialists already returned cleanly and the merge step just
+// needed more time. 420s comfortably handles 3-4× the diff size
+// that timed out at 180s. Pre-ARC-283 telemetry showed synth at
+// 22-100s on small/medium PRs; the 420s ceiling matches the
+// product brand without leaving runaway resource budgets open.
+export const SYNTHESIZER_TIMEOUT_MS = 420_000
+// ARC-278 + ARC-283: cap for the one-shot synth RETRY budget. Lives
+// INSIDE the reserved headroom — the retry is "use what's left in
+// the headroom envelope, don't extend the orchestrator wall."
 //
-// Budget math (Sigilix's own PR #91 review catch):
-//   SPECIALIST (270) + SYNTHESIZER (180) + RESERVED_HEADROOM (40) = 490
-//   Inside the 40s headroom: retry (30) + finalize reserve (5) + margin (5).
+// Pre-ARC-283: 30s. That was enough for parse/provenance retries
+// (the model already produced output, just needed to re-emit
+// cleanly) but useless when primary timed out on actual model
+// latency — the retry would just timeout again in 30s.
+//
+// Post-ARC-283: 170s. A retry that fires after a primary timeout
+// now has a real shot at completing; a retry that fires after a
+// parse/provenance failure still completes fast (those don't need
+// the full budget).
+//
+// Budget math:
+//   SPECIALIST (270) + SYNTHESIZER (420) + RESERVED_HEADROOM (190) = 880
+//   Inside the 190s headroom: retry (170) + finalize reserve (20).
 //   So `RESERVED_HEADROOM_MS` is NOT spent in addition to the retry —
 //   the retry is carved out of it. The second module-load invariant
 //   below verifies retry + finalize ≤ headroom.
-export const SYNTHESIZER_RETRY_TIMEOUT_MS = 30_000
+export const SYNTHESIZER_RETRY_TIMEOUT_MS = 170_000
 // Reserved for pre-flight retrieval + diff parse + stale-head guards +
 // telemetry write — AND, post-ARC-278, for the synth retry call when
 // it fires. The orchestrator must always have at least this much
 // headroom beyond (specialist + synth) so a slow Vectorize round-trip
 // doesn't eat into the synth budget.
-export const RESERVED_HEADROOM_MS = 40_000
-// 270 + 180 + 40 = 490. Cloudflare queue ceiling is 900s. The 90s
-// orch bump (Phase 4a.3) is well under any user-perceptible review
-// latency budget for background PR triage.
-export const ORCHESTRATOR_TIMEOUT_MS = 490_000
+//
+// ARC-283: bumped 40s → 190s to give the 170s synth retry real room
+// inside the headroom envelope. The pre-flight overhead (retrieval,
+// diff parse, stale-head, telemetry) sits in the remaining ~20s.
+export const RESERVED_HEADROOM_MS = 190_000
+// ARC-283: 270 + 420 + 190 = 880, with 10s slack inside the
+// orchestrator. Cloudflare queue consumer ceiling is 900s, so the
+// new 890s budget stays just inside the platform limit while
+// extending the per-review wall-clock from 8.2 min → 14.8 min.
+// Phase B (DO-alarm-driven synth) lifts the queue ceiling entirely;
+// tracked in ARC-283. For now, 890s comfortably absorbs the diffs
+// that pre-ARC-283 was burning out on.
+export const ORCHESTRATOR_TIMEOUT_MS = 890_000
 // Cap the pre-flight Vectorize round-trip so a slow retrieval can't
 // silently consume the synth budget. Failed pre-flight is non-fatal
 // per v3.1 §8 — specialists fall back to empty snapshot.
@@ -236,12 +256,15 @@ if (SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS > ORCH
       `must be ≤ ORCHESTRATOR_TIMEOUT_MS (${ORCHESTRATOR_TIMEOUT_MS}).`,
   )
 }
-// ARC-278 retry budget invariant — the synth retry takes its time out
-// of RESERVED_HEADROOM_MS (NOT a new budget line). Verify that even if
-// retry + finalize both use their fair share, we don't blow the
-// headroom envelope. Finalize needs ~5s for the telemetry write +
-// daily-budget increment + cache write.
-const SYNTH_RETRY_FINALIZE_RESERVE_MS = 5_000
+// ARC-278 + ARC-283 retry budget invariant — the synth retry takes
+// its time out of RESERVED_HEADROOM_MS (NOT a new budget line).
+// Verify that even if retry + finalize both use their fair share,
+// we don't blow the headroom envelope. Pre-ARC-283 finalize was
+// budgeted at 5s; bumped to 20s to defend against slower telemetry
+// writes / daily-budget increments / cache writes when synth
+// produced a large finding set (the same kind of run that pushed
+// us into ARC-283 territory in the first place).
+const SYNTH_RETRY_FINALIZE_RESERVE_MS = 20_000
 if (SYNTHESIZER_RETRY_TIMEOUT_MS + SYNTH_RETRY_FINALIZE_RESERVE_MS > RESERVED_HEADROOM_MS) {
   throw new Error(
     `[ensemble] synth-retry budget invariant violated: ` +

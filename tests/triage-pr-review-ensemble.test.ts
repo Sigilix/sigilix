@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest"
 import {
   annotateWithConsensus,
   assignStableFindingIds,
+  buildSynthRetryMessage,
   checkQuorum,
+  classifySynthOutcome,
   computeConsensusRanking,
   computeDegradedCoverage,
   computeFindingDelta,
@@ -20,6 +22,7 @@ import {
   isPermanentFailure,
   SPECIALIST_TIMEOUT_MS,
   SYNTHESIZER_TIMEOUT_MS,
+  SYNTHESIZER_RETRY_TIMEOUT_MS,
   ORCHESTRATOR_TIMEOUT_MS,
   RESERVED_HEADROOM_MS,
   RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
@@ -1192,5 +1195,127 @@ describe("buildSynthesizerInitialMessage [DEGRADED COVERAGE] block (ARC-277)", (
     const degradedIdx = out.indexOf("[DEGRADED COVERAGE]")
     expect(stackIdx).toBeGreaterThan(-1)
     expect(degradedIdx).toBeGreaterThan(stackIdx)
+  })
+})
+
+// ARC-278: synth retry on timeout / parse / provenance. Two pure
+// helpers (`classifySynthOutcome`, `buildSynthRetryMessage`) plus a
+// constant-budget invariant.
+describe("classifySynthOutcome (ARC-278)", () => {
+  const okSynth = {
+    modelUsed: "glm-5.1:cloud",
+    attemptsUsed: 1,
+    verdict: { summary: "x".repeat(20), confidence: 4, confidenceReason: "y", findings: [] },
+    provenance: { findings: [], dropped: [], retrievalCallsUsed: 0 },
+    elapsedMs: 100,
+  } as const
+
+  it("returns `ok` when output has verdict + provenance and no failure reason", () => {
+    expect(classifySynthOutcome(okSynth, false)).toBe("ok")
+  })
+
+  it("returns `timeout` when localTimeout is true (caller substituted null for output)", () => {
+    expect(classifySynthOutcome(null, true)).toBe("timeout")
+  })
+
+  it("returns `timeout` defensively when output is null even without localTimeout flag", () => {
+    expect(classifySynthOutcome(null, false)).toBe("timeout")
+    expect(classifySynthOutcome(undefined, false)).toBe("timeout")
+  })
+
+  it("returns `timeout` when output carries an abort-shaped failureReason (Phase 4a.2 path)", () => {
+    expect(classifySynthOutcome(
+      { ...okSynth, verdict: null, provenance: null, failureReason: "Operation aborted" },
+      false,
+    )).toBe("timeout")
+    expect(classifySynthOutcome(
+      { ...okSynth, verdict: null, provenance: null, failureReason: "timeout exceeded" },
+      false,
+    )).toBe("timeout")
+  })
+
+  it("returns `provenance` when output has invalid-provenance failureReason and missing verdict/provenance", () => {
+    expect(classifySynthOutcome(
+      { ...okSynth, verdict: null, provenance: null, failureReason: "synth_invalid_provenance" },
+      false,
+    )).toBe("provenance")
+  })
+
+  it("returns `parse` for other non-abort failure shapes (catch-all bucket)", () => {
+    expect(classifySynthOutcome(
+      { ...okSynth, verdict: null, provenance: null, failureReason: "synth_failed_parse" },
+      false,
+    )).toBe("parse")
+    // No failureReason but missing verdict/provenance still routes to parse.
+    expect(classifySynthOutcome(
+      { ...okSynth, verdict: null, provenance: null },
+      false,
+    )).toBe("parse")
+  })
+})
+
+describe("buildSynthRetryMessage (ARC-278)", () => {
+  const original = "[PR] #42\n\n[DIFF]\n+const x = 1\n"
+
+  it("returns the original message unchanged when outcome is `ok` (caller should not call us)", () => {
+    expect(buildSynthRetryMessage(original, "ok")).toBe(original)
+  })
+
+  it("appends a JSON-shape hint on parse failure", () => {
+    const out = buildSynthRetryMessage(original, "parse")
+    expect(out.startsWith(original)).toBe(true)
+    expect(out).toContain("RETRY: Your previous response could not be parsed as JSON")
+    expect(out).toContain("Re-emit ONLY a single JSON object")
+    expect(out).toContain("No prose")
+  })
+
+  it("appends a provenance-specific hint on provenance failure", () => {
+    const out = buildSynthRetryMessage(original, "provenance")
+    expect(out).toContain("RETRY: Your previous response's `provenance` field was malformed")
+    expect(out).toContain("SPECIALIST VERDICTS")
+  })
+
+  it("appends a be-prompter hint on timeout failure", () => {
+    const out = buildSynthRetryMessage(original, "timeout")
+    expect(out).toContain("RETRY: Your previous response did not arrive within the time budget")
+    expect(out).toContain("schema and inputs above are unchanged")
+  })
+
+  it("does NOT duplicate the original message when called repeatedly with different outcomes", () => {
+    // Caller is expected to pass the *original* message each time, not
+    // the already-augmented one. Verify the hint replaces (semantically)
+    // by appearing only once when we re-augment.
+    const once = buildSynthRetryMessage(original, "parse")
+    // If a caller incorrectly passed `once` back as original, we'd see
+    // the RETRY hint twice. This test pins that the helper itself is
+    // pure / non-cumulative — it always appends one hint.
+    const naiveCallerOutput = buildSynthRetryMessage(once, "timeout")
+    expect(naiveCallerOutput.match(/RETRY:/g)?.length).toBe(2)
+    // (Production code in handlePrReviewEnsemble always passes the
+    // ORIGINAL message, not the augmented one. The test documents
+    // the contract.)
+  })
+})
+
+describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278)", () => {
+  it("retry budget + finalize reserve fits inside RESERVED_HEADROOM_MS", () => {
+    // Module-load guard verifies this; the test pins the constraint
+    // so a future "raise retry timeout" change can't silently push
+    // past the headroom envelope without updating the orch timeout.
+    const FINALIZE_RESERVE_MS = 5_000
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS + FINALIZE_RESERVE_MS).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
+  })
+
+  it("SPECIALIST + SYNTHESIZER + HEADROOM still ≤ ORCHESTRATOR (the primary invariant)", () => {
+    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
+      .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
+  })
+
+  it("the retry budget is meaningfully smaller than the primary synth budget", () => {
+    // Retry is supposed to be a fast re-emission (the model has all
+    // its inputs and just needs to fix the failure mode). If the
+    // retry budget approached SYNTHESIZER_TIMEOUT_MS, it'd risk
+    // blowing the headroom envelope.
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBeLessThan(SYNTHESIZER_TIMEOUT_MS / 4)
   })
 })

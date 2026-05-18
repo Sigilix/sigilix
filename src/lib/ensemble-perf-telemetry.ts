@@ -1,0 +1,373 @@
+// ARC-284 (Phase B0) — pure-observability telemetry for the ensemble
+// review path. Every event in this module is `console.log`-only; no
+// behavior change, no branches in the production hot path.
+//
+// The goal is to answer Codex's PR #94 latency analysis with hard
+// numbers instead of inference. Once these events are emitting on
+// production traffic, the next architectural change (ARC-286 Phase
+// B1: fast path + skip-synth + dynamic dispatch) can be driven by
+// data rather than estimates.
+//
+// Why a separate module?
+//   - Keeps `triage-pr-review-ensemble.ts` from growing further
+//     (already ~4 KLOC).
+//   - Centralizes event shape so tests can pin the field set in one
+//     place and future B0-style additions don't drift schemas.
+//   - Makes the import surface obvious: any file that wants to
+//     contribute timing telemetry imports from here.
+//
+// Event taxonomy (Codex spec from `arc-283-perf-research-codex-response.md`):
+//   - `ensemble-phase-completed` — one per coarse-grained phase
+//     (github_preload, diff_pack, preflight_retrieval, …, finalize)
+//   - `model-attempt-completed`  — one per LLM call inside the
+//     ensemble (specialist primary, retry, fallback, synth primary,
+//     synth retry)
+//   - `specialist-fanout-summary` — once per ensemble run, after the
+//     Promise.allSettled() on the specialist fan-out resolves
+//   - `synth-summary` — once per ensemble run, after synth lands
+//     (success or skip-notice)
+//   - `do-review-run-timing` — once per DO-routed run, from
+//     `runPrReviewWithDoCallback`
+
+/** Common correlation fields stamped on every event. `headSha` is
+ *  truncated to 7 chars at log time to match the rest of the codebase's
+ *  log surface (full SHA still available via the PR number).
+ */
+export interface EnsembleRunCtx {
+  owner: string
+  repo: string
+  prNumber: number
+  /** Full 40-char SHA. The emitter truncates to 7 chars for the log
+   *  field; keeping it full here makes the type unambiguous + lets
+   *  future emitters opt out of truncation if needed. */
+  headSha: string
+}
+
+function correlationFields(ctx: EnsembleRunCtx): Record<string, string | number> {
+  return {
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.prNumber,
+    headSha: ctx.headSha.slice(0, 7),
+  }
+}
+
+// ─── ensemble-phase-completed ───────────────────────────────────────
+
+/** Phases recognized by `ensemble-phase-completed`. Exhaustive at
+ *  the ARC-284 milestone — new phases are added here so the test
+ *  surface catches accidental typos in call sites. */
+export type EnsemblePhase =
+  | "github_preload"
+  | "diff_pack"
+  | "preflight_retrieval"
+  | "deterministic_scans"
+  | "stack_context"
+  | "specialist_fanout"
+  | "review_memory"
+  | "synth"
+  | "post_validation"
+  | "submit"
+  | "finalize"
+
+export function emitPhaseCompleted(
+  ctx: EnsembleRunCtx,
+  phase: EnsemblePhase,
+  startedAtMs: number,
+  endedAtMs: number = Date.now(),
+): void {
+  console.log(JSON.stringify({
+    event: "ensemble-phase-completed",
+    ...correlationFields(ctx),
+    phase,
+    startedAtMs,
+    endedAtMs,
+    durationMs: endedAtMs - startedAtMs,
+  }))
+}
+
+/** `try { ... } finally { emitPhaseCompleted(...) }` shorthand. The
+ *  phase event fires even when the body throws, so a failed phase
+ *  shows up with a real duration instead of dropping silently from
+ *  the trace. Re-throws the original error so caller behaviour is
+ *  unchanged. */
+export async function recordPhase<T>(
+  ctx: EnsembleRunCtx,
+  phase: EnsemblePhase,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const startedAtMs = Date.now()
+  try {
+    return await fn()
+  } finally {
+    emitPhaseCompleted(ctx, phase, startedAtMs)
+  }
+}
+
+// ─── model-attempt-completed ────────────────────────────────────────
+
+/** Phase of the ensemble that owns this attempt. `specialist` covers
+ *  all four roles (logic / security / performance / tests); `synth`
+ *  covers both the primary synth call and the ARC-278 one-shot retry.
+ */
+export type ModelAttemptPhase = "specialist" | "synth"
+
+/** Where this attempt sits within `runWithRetryAndFallback`'s retry
+ *  matrix. */
+export type ModelAttemptKind = "primary" | "retry" | "fallback"
+
+export type ModelAttemptOutcome = "ok" | "failed" | "aborted" | "timeout"
+
+export interface ModelAttemptEvent {
+  /** Specialist | synth. */
+  phase: ModelAttemptPhase
+  /** For specialists, the role name (`logic`/`security`/...). For
+   *  synth, the literal string `"synth"`. */
+  role: string
+  /** Which retry/fallback bucket this attempt belongs to. */
+  attemptKind: ModelAttemptKind
+  /** 1-indexed attempt counter across the entire
+   *  `runWithRetryAndFallback` call (primary retries → fallback in
+   *  order). Useful for correlating with `attemptsUsed`. */
+  attemptIndex: number
+  /** Model identifier (e.g. `deepseek-v4-pro:cloud`). */
+  model: string
+  /** Per-attempt timeout cap (`PER_ATTEMPT_TIMEOUT_MS` or the synth
+   *  attempt cap). */
+  timeoutMs: number
+  startedAtMs: number
+  endedAtMs: number
+  elapsedMs: number
+  outcome: ModelAttemptOutcome
+  /** Present when outcome ≠ ok. Free-form reason (HTTP status,
+   *  parse-failure label, etc.) — same string `runWithRetryAndFallback`
+   *  surfaces in its `failureReason` return. */
+  failureReason?: string
+}
+
+export function emitModelAttempt(ctx: EnsembleRunCtx, info: ModelAttemptEvent): void {
+  const { failureReason, ...rest } = info
+  const payload: Record<string, unknown> = {
+    event: "model-attempt-completed",
+    ...correlationFields(ctx),
+    ...rest,
+  }
+  if (failureReason !== undefined) payload["failureReason"] = failureReason
+  console.log(JSON.stringify(payload))
+}
+
+// ─── specialist-fanout-summary ──────────────────────────────────────
+
+export interface SpecialistFanoutSummary {
+  dispatchedRoles: readonly string[]
+  succeededRoles: readonly string[]
+  failedRoles: readonly string[]
+  fanoutElapsedMs: number
+  /** Role that took the longest among DISPATCHED roles (whether it
+   *  succeeded or failed). `null` when no roles were dispatched. */
+  slowestRole: string | null
+  slowestElapsedMs: number
+  /** Sum of `attemptsUsed` across every specialist's
+   *  `runWithRetryAndFallback` outcome. Counts primary + retries +
+   *  fallback as one each. */
+  totalAttemptsUsed: number
+  /** How many specialists landed on their cross-provider fallback
+   *  (i.e. `modelUsed === config.fallback`). */
+  fallbacksUsed: number
+}
+
+export function emitSpecialistFanoutSummary(
+  ctx: EnsembleRunCtx,
+  summary: SpecialistFanoutSummary,
+): void {
+  console.log(JSON.stringify({
+    event: "specialist-fanout-summary",
+    ...correlationFields(ctx),
+    ...summary,
+  }))
+}
+
+/** Per-role outcome used by `computeSpecialistFanoutSummary`. Mirrors
+ *  the relevant fields of the orchestrator's `CollectedVerdict` but
+ *  decoupled — the helper doesn't need to know about
+ *  `PrReviewVerdictWithIds` or `SPECIALIST_CONFIGS`. */
+export interface SpecialistFanoutInput {
+  role: string
+  verdictOk: boolean
+  attemptsUsed: number | undefined
+  modelUsed: string | undefined
+  /** Cross-provider fallback model for this role, used to count
+   *  `fallbacksUsed`. `null` means no fallback configured. */
+  fallbackModel: string | null
+}
+
+/**
+ * Sigilix PR #95 catch — pure helper extracted from the inline block
+ * in `handlePrReviewEnsemble` so the slowestRole / totalAttemptsUsed /
+ * fallbacksUsed computation is unit-testable. The orchestrator just
+ * maps its `CollectedVerdict[]` into `SpecialistFanoutInput[]` and
+ * calls this.
+ *
+ * Per-role end time defaults to `fanoutEndMs` when the specialist
+ * aborted on the outer signal before its `finally(() => set end)`
+ * could fire — that specialist's elapsed becomes "from start to
+ * fanout end," which is an over-estimate but never an under-estimate.
+ * Over-estimate is the right bias for "slowest role" reporting: if a
+ * role aborted on the outer wall, it was at least as slow as the
+ * fanout wall-clock.
+ *
+ * Pure — exported for tests.
+ */
+export function computeSpecialistFanoutSummary(args: {
+  dispatchedRoles: readonly string[]
+  inputs: readonly SpecialistFanoutInput[]
+  perRoleStartMs: ReadonlyMap<string, number>
+  perRoleEndMs: ReadonlyMap<string, number>
+  fanoutStartMs: number
+  fanoutEndMs: number
+}): SpecialistFanoutSummary {
+  const succeededRoles = args.inputs.filter((v) => v.verdictOk).map((v) => v.role)
+  const failedRoles = args.inputs.filter((v) => !v.verdictOk).map((v) => v.role)
+  let slowestRole: string | null = null
+  let slowestElapsedMs = 0
+  for (const role of args.dispatchedRoles) {
+    const startedAt = args.perRoleStartMs.get(role)
+    const endedAt = args.perRoleEndMs.get(role)
+    const ended = endedAt ?? args.fanoutEndMs
+    const elapsed = startedAt !== undefined ? ended - startedAt : 0
+    if (elapsed > slowestElapsedMs) {
+      slowestElapsedMs = elapsed
+      slowestRole = role
+    }
+  }
+  const totalAttemptsUsed = args.inputs.reduce(
+    (sum, v) => sum + (v.attemptsUsed ?? 1),
+    0,
+  )
+  const fallbacksUsed = args.inputs.reduce(
+    (sum, v) =>
+      sum +
+      (v.modelUsed !== undefined &&
+      v.fallbackModel !== null &&
+      v.modelUsed === v.fallbackModel
+        ? 1
+        : 0),
+    0,
+  )
+  return {
+    dispatchedRoles: args.dispatchedRoles,
+    succeededRoles,
+    failedRoles,
+    fanoutElapsedMs: args.fanoutEndMs - args.fanoutStartMs,
+    slowestRole,
+    slowestElapsedMs,
+    totalAttemptsUsed,
+    fallbacksUsed,
+  }
+}
+
+// ─── synth-summary ──────────────────────────────────────────────────
+
+export interface SynthSummary {
+  elapsedMs: number
+  attemptsUsed: number
+  retryUsed: boolean
+  /** Present when `retryUsed === true`. `null` when retry didn't
+   *  fire. The four-way outcome mirrors `SynthAttemptOutcome` in
+   *  `triage-pr-review-ensemble.ts`. */
+  retryOutcome: "ok" | "timeout" | "parse" | "provenance" | null
+  inputSpecialistCount: number
+  inputFindingCount: number
+  outputFindingCount: number
+  /** Final model that produced the verdict, or the one that failed
+   *  on the last attempt when synth bailed. */
+  modelUsed: string
+}
+
+export function emitSynthSummary(ctx: EnsembleRunCtx, summary: SynthSummary): void {
+  console.log(JSON.stringify({
+    event: "synth-summary",
+    ...correlationFields(ctx),
+    ...summary,
+  }))
+}
+
+/** Internal outcome union used by the orchestrator's `synthRetryOutcome`
+ *  tracker. Wider than `SynthSummary["retryOutcome"]` — includes the
+ *  `"n/a"` sentinel for "retry didn't fire" and `"exhausted-budget"`
+ *  for synth-internal budget exhaustion. The narrowing helper below
+ *  collapses both to `null` for the telemetry surface. */
+export type SynthRetryOutcomeInput =
+  | "n/a"
+  | "ok"
+  | "timeout"
+  | "parse"
+  | "provenance"
+  | "exhausted-budget"
+
+/**
+ * Sigilix PR #95 catch — coerce the orchestrator-internal
+ * `synthRetryOutcome` (wider union) into the narrower
+ * `SynthSummary["retryOutcome"]` shape that downstream log analyzers
+ * rely on. Three behaviors:
+ *
+ *   - `retryUsed === false`               → `null` (retry didn't fire)
+ *   - outcome === `"n/a"`                  → `null` (defensive: should
+ *                                            be unreachable when
+ *                                            retryUsed === true)
+ *   - outcome === `"exhausted-budget"`     → `null` (synth-internal
+ *                                            sentinel, not a model
+ *                                            outcome)
+ *   - outcome ∈ {ok,timeout,parse,provenance} → passthrough
+ *
+ * Extracted from the inline ternary in `handlePrReviewEnsemble` so
+ * the coercion is unit-testable. Pure — exported for tests.
+ */
+export function narrowSynthRetryOutcome(
+  retryUsed: boolean,
+  outcome: SynthRetryOutcomeInput,
+): SynthSummary["retryOutcome"] {
+  if (!retryUsed) return null
+  if (outcome === "n/a") return null
+  if (
+    outcome === "ok" ||
+    outcome === "timeout" ||
+    outcome === "parse" ||
+    outcome === "provenance"
+  ) {
+    return outcome
+  }
+  return null
+}
+
+// ─── do-review-run-timing ───────────────────────────────────────────
+
+/** Emitted by `runPrReviewWithDoCallback` after the run-result post
+ *  resolves. Captures the queue → DO → ensemble → result path so
+ *  end-to-end latency includes the parts BEFORE the orchestrator
+ *  starts. */
+export interface DoReviewRunTiming {
+  /** DO run-id assigned by the dispatcher. */
+  runId: string
+  /** Wall-clock the queue consumer entered. */
+  pickedUpAtMs: number
+  /** Wall-clock the run-result post resolved. */
+  finishedAtMs: number
+  /** End-to-end consumer time. Includes the ensemble run but also DO
+   *  /pickup + /run-result roundtrips. */
+  consumerWallMs: number
+  /** `posted` / `errored` / `skipped`, mirrors the ensemble's
+   *  `EnsembleResult.status`. */
+  finalState: string
+}
+
+export function emitDoReviewRunTiming(
+  ctx: EnsembleRunCtx,
+  timing: DoReviewRunTiming,
+): void {
+  console.log(JSON.stringify({
+    event: "do-review-run-timing",
+    ...correlationFields(ctx),
+    ...timing,
+  }))
+}

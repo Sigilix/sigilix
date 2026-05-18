@@ -354,7 +354,7 @@ describe("renderStaleBlock + applyStaleBlock", () => {
     expect(block).toContain("/sigilix review")
   })
 
-  it("applyStaleBlock inserts after the leading openclaw marker when no prior block exists", () => {
+  it("applyStaleBlock inserts after the leading sigilix marker when no prior block exists", () => {
     const body = "<!-- sigilix:pr-review -->\n\n### Sigilix Summary\n\nLooks good."
     const block = renderStaleBlock(m, current)
     const out = applyStaleBlock(body, block)
@@ -384,7 +384,7 @@ describe("renderStaleBlock + applyStaleBlock", () => {
     expect(matches.length).toBe(1)
   })
 
-  it("applyStaleBlock prepends if no openclaw marker is present", () => {
+  it("applyStaleBlock prepends if no sigilix marker is present", () => {
     const body = "Some other body without our marker.\n"
     const block = renderStaleBlock(m, current)
     const out = applyStaleBlock(body, block)

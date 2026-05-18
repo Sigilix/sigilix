@@ -26,6 +26,7 @@ import {
   type ChatMessage,
 } from "./triage-pr-review-ensemble"
 import { parsePrReviewResponse } from "./triage-pr-review"
+import { PR_REVIEW_SCHEMA } from "./schemas"
 import {
   emitShadowAttempt,
   type ShadowAttemptKind,
@@ -117,7 +118,13 @@ export async function runShadowSpecialist(args: SpecialistShadowArgs): Promise<S
     messages,
     signal: args.signal,
     chatEnabled: args.chatEnabled,
-    format: undefined,
+    // ARC-283 Phase B1b review pass: shadow specialists MUST pass the
+    // same structured-output schema as prod (see runSpecialist in
+    // triage-pr-review-ensemble.ts). Without it, candidate models run
+    // free-form while prod runs constrained — parse-failure rate,
+    // latency, and output shape get skewed, and the bake-off
+    // comparison stops being apples-to-apples.
+    format: PR_REVIEW_SCHEMA as unknown as Record<string, unknown>,
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "shadow_specialist_did_not_parse",
     startedAt: t0,
@@ -186,6 +193,10 @@ export async function runShadowSynth(args: SynthShadowArgs): Promise<ShadowRunRe
     messages,
     signal: args.signal,
     chatEnabled: args.chatEnabled,
+    // Synth uses the `{verdict, provenance}` envelope which doesn't
+    // match PR_REVIEW_SCHEMA — prod's `runSynthesizer` also passes
+    // `format: undefined` for the same reason. Apples-to-apples here
+    // means BOTH paths run free-form, so leave this as-is.
     format: undefined,
     parseAnswer: parseSynthAnswer,
     parseFailureLabel: "shadow_synth_did_not_parse",

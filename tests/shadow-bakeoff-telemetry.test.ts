@@ -5,6 +5,7 @@ import type { EnsembleRunCtx } from "../src/lib/ensemble-perf-telemetry"
 import {
   buildShadowVerdictComparison,
   emitShadowAttempt,
+  emitShadowCutShort,
   emitShadowVerdictComparison,
   computeFindingsOverlap,
   type ProdOutcomeForComparison,
@@ -70,6 +71,20 @@ describe("emitShadowAttempt", () => {
     const event = lastLogged()
     expect(event["outcome"]).toBe("timeout")
     expect(event["failureReason"]).toBe("per_attempt_timeout")
+  })
+})
+
+describe("emitShadowCutShort", () => {
+  it("emits a shadow-cut-short event with role + elapsedAtCutMs + correlation fields", () => {
+    emitShadowCutShort(CTX, { role: "synth", elapsedAtCutMs: 5_000 })
+    const event = lastLogged()
+    expect(event["event"]).toBe("shadow-cut-short")
+    expect(event["role"]).toBe("synth")
+    expect(event["elapsedAtCutMs"]).toBe(5_000)
+    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["repo"]).toBe("sigilix")
+    expect(event["prNumber"]).toBe(99)
+    expect(event["headSha"]).toBe("feedfac")
   })
 })
 

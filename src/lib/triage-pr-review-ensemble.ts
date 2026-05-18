@@ -172,6 +172,7 @@ import {
 } from "./shadow-bakeoff-config"
 import {
   buildShadowVerdictComparison,
+  emitShadowCutShort,
   emitShadowVerdictComparison,
   type FindingForOverlap,
 } from "./shadow-bakeoff-telemetry"
@@ -374,6 +375,112 @@ if (ORCHESTRATOR_TIMEOUT_MS >= CF_QUEUE_CONSUMER_CEILING_MS) {
       `must be < CF_QUEUE_CONSUMER_CEILING_MS (${CF_QUEUE_CONSUMER_CEILING_MS}). ` +
       `Phase B (DO-alarm-driven synth, tracked in ARC-283) lifts this ceiling entirely.`,
   )
+}
+
+// ARC-283 Phase B1b review pass — shadow tail grace cap.
+//
+// The orchestrator's `finally` block awaits any in-flight shadow
+// promises so it can emit `shadow-verdict-comparison` telemetry on
+// every exit path. Pre-grace, those awaits cleared the `orchTimer`
+// FIRST, which meant `orchCtrl.signal` no longer autonomously fired
+// — a pathologically slow shadow could run for up to ~180s
+// (60s per-attempt × (retries + 1) + fallback) AFTER prod returned.
+//
+// Worst case math: prod returns at the orchestrator-timeout edge
+// (895s) and the shadow happens to be in the middle of its
+// fallback attempt. Without a tail cap, the queue consumer would
+// have to wait the full 180s for shadow to finalize, blowing past
+// the 900s CF Queues consumer ceiling → worker hard-killed mid-
+// await → message re-delivered → duplicate review.
+//
+// The cap is RELATIVE to when the finally block STARTS, not
+// absolute from handler start. Value chosen as the maximum we can
+// afford without violating the CF ceiling:
+//
+//   CF_QUEUE_CONSUMER_CEILING_MS - ORCHESTRATOR_TIMEOUT_MS
+//   = 900_000 - 895_000
+//   = 5_000ms
+//
+// At 5s a healthy shadow that's milliseconds-from-settling still
+// emits its comparison; a pathological one gets cut short with a
+// `shadow-cut-short` event and the prod return is unaffected.
+// Total worst-case wall-clock = 895s + 5s = 900s, exactly at the
+// CF ceiling but not over it.
+//
+// Exported so the helper's unit test can race against the same
+// budget the runtime guard uses, mirroring the
+// `SYNTH_RETRY_FINALIZE_RESERVE_MS` convention earlier in this file.
+export const SHADOW_FINALIZE_GRACE_MS = 5_000
+if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILING_MS) {
+  throw new Error(
+    `[ensemble] shadow-grace invariant violated: ` +
+      `SHADOW_FINALIZE_GRACE_MS (${SHADOW_FINALIZE_GRACE_MS}) + ` +
+      `ORCHESTRATOR_TIMEOUT_MS (${ORCHESTRATOR_TIMEOUT_MS}) ` +
+      `must be ≤ CF_QUEUE_CONSUMER_CEILING_MS (${CF_QUEUE_CONSUMER_CEILING_MS}). ` +
+      `A pathologically slow shadow tail can otherwise push the queue ` +
+      `consumer past the 900s ceiling → worker hard-killed → message re-delivered.`,
+  )
+}
+
+/**
+ * Sentinel returned by `raceWithShadowGrace` when the deadline (or an
+ * already-aborted signal) wins the race. Using a unique symbol avoids
+ * any accidental collision with a real shadow result. Exported so the
+ * unit test can assert on grace-expiry without re-declaring the
+ * sentinel and ending up with a value mismatch on import.
+ */
+export const SHADOW_GRACE_EXPIRED = Symbol("shadow_grace_expired")
+
+/**
+ * Races `promise` against an absolute wall-clock `deadline` (ms since
+ * epoch). If `signal` is already aborted (or aborts during the race),
+ * the race resolves to the expired sentinel immediately. Used by the
+ * `handlePrReviewEnsemble` finally block to cap the shadow tail at
+ * `SHADOW_FINALIZE_GRACE_MS` so prod return + shadow comparison stay
+ * inside the 900s CF Queues consumer ceiling.
+ */
+export function raceWithShadowGrace<T>(
+  promise: Promise<T>,
+  deadline: number,
+  signal: AbortSignal,
+): Promise<T | typeof SHADOW_GRACE_EXPIRED> {
+  if (signal.aborted) return Promise.resolve(SHADOW_GRACE_EXPIRED)
+  const remaining = Math.max(0, deadline - Date.now())
+  return new Promise<T | typeof SHADOW_GRACE_EXPIRED>((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(SHADOW_GRACE_EXPIRED)
+    }, remaining)
+    const onAbort = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(SHADOW_GRACE_EXPIRED)
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+    promise.then(
+      (value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal.removeEventListener("abort", onAbort)
+        resolve(value)
+      },
+      () => {
+        // Shadow runners catch internally and return structured
+        // failure — a rejection here means something exploded outside
+        // the runner's own catch. Treat as expired so the comparison
+        // emit is skipped; the outer try/catch in finally logs.
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal.removeEventListener("abort", onAbort)
+        resolve(SHADOW_GRACE_EXPIRED)
+      },
+    )
+  })
 }
 
 /**
@@ -2414,6 +2521,14 @@ export async function handlePrReviewEnsemble(
     // and this block is a zero-cost no-op. Each await is individually
     // try/wrap'd — a shadow-side crash MUST NOT take down the prod
     // return value the function already produced.
+    //
+    // ARC-283 review pass: a pathologically slow shadow can no longer
+    // hold the queue consumer past the 900s CF Queues ceiling. Each
+    // shadow await is raced against `shadowDeadline` (finally-start +
+    // SHADOW_FINALIZE_GRACE_MS). On grace expiry we emit
+    // `shadow-cut-short` and skip the comparison emit for that role.
+    const finallyStartMs = Date.now()
+    const shadowDeadline = finallyStartMs + SHADOW_FINALIZE_GRACE_MS
     if (shadowSpecialistPromises.size > 0) {
       for (const [role, shadowPromise] of shadowSpecialistPromises) {
         try {
@@ -2421,7 +2536,20 @@ export async function handlePrReviewEnsemble(
           // comparison is per-role + must serialize on the same
           // wall-clock; each await independently catches its own
           // failure so an early role error can't poison the rest.
-          const shadow = await shadowPromise
+          // The grace race shares one absolute deadline across all
+          // roles, so a slow first role can't starve the others.
+          const shadow = await raceWithShadowGrace(
+            shadowPromise,
+            shadowDeadline,
+            orchCtrl.signal,
+          )
+          if (shadow === SHADOW_GRACE_EXPIRED) {
+            emitShadowCutShort(perfCtx, {
+              role,
+              elapsedAtCutMs: Date.now() - finallyStartMs,
+            })
+            continue
+          }
           const prodSnapshot = prodSpecialistSnapshots.get(role)
           // When the prod path errored before the fan-out settled
           // (orchestrator caught an exception inside try{} before
@@ -2471,45 +2599,56 @@ export async function handlePrReviewEnsemble(
     }
     if (shadowSynthPromise !== null) {
       try {
-        const shadow = await shadowSynthPromise
-        // Build the prod synth snapshot from telemetry.synthesizer.
-        // Every exit path that runs the synth populates this field;
-        // the only case where it's null is the outer-catch path that
-        // fired BEFORE the inner synth try ran. In that case prod
-        // never produced any synth output — same synthetic "prod
-        // did not run" shape as the specialist branch above.
-        const prodSynthTel = telemetry.synthesizer
-        const prodSynthFindings: FindingForOverlap[] = prodSynthTel?.verdict
-          ? prodSynthTel.verdict.findings.map((f) => ({
-              path: f.path,
-              line: f.line,
-              category: f.category,
-              score: f.score,
-            }))
-          : []
-        const prod: ProdSpecialistSnapshot = {
-          verdictOk: prodSynthTel?.verdict != null,
-          modelUsed: prodSynthTel?.modelUsed ?? SYNTHESIZER_CONFIG.primary,
-          attemptsUsed: prodSynthTel?.attemptsUsed ?? 0,
-          elapsedMs: prodSynthTel?.elapsedMs ?? 0,
-          findings: prodSynthFindings,
+        const shadow = await raceWithShadowGrace(
+          shadowSynthPromise,
+          shadowDeadline,
+          orchCtrl.signal,
+        )
+        if (shadow === SHADOW_GRACE_EXPIRED) {
+          emitShadowCutShort(perfCtx, {
+            role: "synth",
+            elapsedAtCutMs: Date.now() - finallyStartMs,
+          })
+        } else {
+          // Build the prod synth snapshot from telemetry.synthesizer.
+          // Every exit path that runs the synth populates this field;
+          // the only case where it's null is the outer-catch path that
+          // fired BEFORE the inner synth try ran. In that case prod
+          // never produced any synth output — same synthetic "prod
+          // did not run" shape as the specialist branch above.
+          const prodSynthTel = telemetry.synthesizer
+          const prodSynthFindings: FindingForOverlap[] = prodSynthTel?.verdict
+            ? prodSynthTel.verdict.findings.map((f) => ({
+                path: f.path,
+                line: f.line,
+                category: f.category,
+                score: f.score,
+              }))
+            : []
+          const prod: ProdSpecialistSnapshot = {
+            verdictOk: prodSynthTel?.verdict != null,
+            modelUsed: prodSynthTel?.modelUsed ?? SYNTHESIZER_CONFIG.primary,
+            attemptsUsed: prodSynthTel?.attemptsUsed ?? 0,
+            elapsedMs: prodSynthTel?.elapsedMs ?? 0,
+            findings: prodSynthFindings,
+          }
+          const comparison = buildShadowVerdictComparison({
+            role: "synth",
+            prodModelDefault: SYNTHESIZER_CONFIG.primary,
+            prod,
+            shadow: {
+              verdictOk: shadow.verdictOk,
+              modelUsed: shadow.modelUsed,
+              attemptsUsed: shadow.attemptsUsed,
+              elapsedMs: shadow.elapsedMs,
+              findings: shadow.findings,
+              ...(shadow.failureReason !== undefined
+                ? { failureReason: shadow.failureReason }
+                : {}),
+            },
+          })
+          emitShadowVerdictComparison(perfCtx, comparison)
         }
-        const comparison = buildShadowVerdictComparison({
-          role: "synth",
-          prodModelDefault: SYNTHESIZER_CONFIG.primary,
-          prod,
-          shadow: {
-            verdictOk: shadow.verdictOk,
-            modelUsed: shadow.modelUsed,
-            attemptsUsed: shadow.attemptsUsed,
-            elapsedMs: shadow.elapsedMs,
-            findings: shadow.findings,
-            ...(shadow.failureReason !== undefined
-              ? { failureReason: shadow.failureReason }
-              : {}),
-          },
-        })
-        emitShadowVerdictComparison(perfCtx, comparison)
       } catch (err) {
         // Same defensive shape as the specialist branch above.
         console.warn(JSON.stringify({

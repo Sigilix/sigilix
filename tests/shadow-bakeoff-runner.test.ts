@@ -166,6 +166,44 @@ describe("runShadowSpecialist", () => {
   })
 })
 
+describe("apples-to-apples format constraint", () => {
+  it("passes PR_REVIEW_SCHEMA to chat for specialists + undefined for synth", async () => {
+    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_VERDICT_JSON } })
+    await runShadowSpecialist({
+      role: "logic",
+      shadowConfig: { primary: "deepseek-v4-pro:cloud", retries: 0, fallback: null },
+      apiKey: "fake",
+      systemPrompt: "sys",
+      userMessage: "usr",
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      perfCtx: CTX,
+    })
+    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_SYNTH_JSON } })
+    await runShadowSynth({
+      shadowConfig: { primary: "deepseek-v4-flash:cloud", retries: 0, fallback: null },
+      apiKey: "fake",
+      systemPrompt: "sys",
+      userMessage: "usr",
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      perfCtx: CTX,
+    })
+    // Specialist call — format must be a non-undefined object (the
+    // structured-output schema) so candidate models run with the SAME
+    // constraint prod uses.
+    const specialistCallArgs = vi.mocked(chat).mock.calls[0]?.[0]
+    expect(specialistCallArgs).toBeDefined()
+    expect(specialistCallArgs?.format).toBeDefined()
+    expect(typeof specialistCallArgs?.format).toBe("object")
+    // Synth call — format must be undefined; the synth envelope
+    // doesn't match PR_REVIEW_SCHEMA and prod runs synth free-form.
+    const synthCallArgs = vi.mocked(chat).mock.calls[1]?.[0]
+    expect(synthCallArgs).toBeDefined()
+    expect(synthCallArgs?.format).toBeUndefined()
+  })
+})
+
 describe("runShadowSynth", () => {
   it("returns verdict + findings on synth success", async () => {
     vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_SYNTH_JSON } })

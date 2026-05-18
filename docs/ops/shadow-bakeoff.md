@@ -15,10 +15,22 @@ unaffected.
 
 ## Enabling shadow
 
-Set the env var in `wrangler.toml` (or via `wrangler secret`):
-```toml
-SHADOW_BAKEOFF_ROLES = "synth"
-```
+`SHADOW_BAKEOFF_ROLES` is declared with an empty default in the
+`[vars]` block of `wrangler.toml`. To enable shadow:
+
+- **Local dev / preview deploys** — edit `[vars]` in `wrangler.toml`:
+  ```toml
+  [vars]
+  SHADOW_BAKEOFF_ROLES = "synth"
+  ```
+  Commits the value into source — fine for non-prod environments.
+
+- **Production** — use `wrangler secret put SHADOW_BAKEOFF_ROLES` (or
+  the Cloudflare dashboard under Workers & Pages → sigilix → Settings
+  → Variables → Add encrypted variable). Secrets override the `[vars]`
+  default per-environment, so prod can flip shadow on without a code
+  change.
+
 Empty string / unset = shadow off everywhere (default).
 
 Recommended rollout order (per Codex ARC-292):

@@ -102,6 +102,32 @@ export function emitShadowVerdictComparison(
   }))
 }
 
+/**
+ * ARC-283 Phase B1b review pass — emitted when a shadow promise was
+ * still in flight when the `handlePrReviewEnsemble` finally block hit
+ * its grace cap. The shadow run is abandoned (no comparison emit),
+ * and the prod return value is unaffected.
+ *
+ * `role` is one of the five shadow roles. `elapsedAtCutMs` is the wall-
+ * clock spent inside the finally block before the cut (always ≤
+ * SHADOW_FINALIZE_GRACE_MS).
+ */
+export interface ShadowCutShortEvent {
+  role: "logic" | "security" | "performance" | "tests" | "synth"
+  elapsedAtCutMs: number
+}
+
+export function emitShadowCutShort(
+  ctx: EnsembleRunCtx,
+  info: ShadowCutShortEvent,
+): void {
+  console.log(JSON.stringify({
+    event: "shadow-cut-short",
+    ...correlationFields(ctx),
+    ...info,
+  }))
+}
+
 // ─── findings overlap + histogram (pure helper) ───────────────────
 
 /** Minimum shape we need to compare findings. Both

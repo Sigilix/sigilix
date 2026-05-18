@@ -1066,11 +1066,15 @@ function formatReviewBody(
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
   const totalFindings = verdict.findings.length + unanchored.length
   if (event === "APPROVE" && totalFindings === 0) {
+    // CodeRabbit catch on PR #88: this renderer is shared between
+    // the ensemble path (4 specialists + synth) AND the Phase 3
+    // single-shot path. Claiming "Four-specialist ensemble ran"
+    // here would be factually wrong on the Phase 3 path. Use
+    // path-agnostic copy until ARC-280 deletes Phase 3 (or
+    // ARC-281's formatting redesign supersedes this lead entirely).
     lines.push("## ✅ Sigilix reviewed this PR — no issues found")
     lines.push("")
-    lines.push(
-      "Four-specialist ensemble (logic, security, performance, tests) ran against the current head; synth saw nothing worth flagging.",
-    )
+    lines.push("Sigilix reviewed the current head and found nothing worth flagging.")
     lines.push("")
   }
   lines.push("### Sigilix Summary")

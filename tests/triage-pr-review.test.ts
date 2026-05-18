@@ -188,7 +188,12 @@ describe("buildReviewSubmission", () => {
     }
     const out = buildReviewSubmission({ verdict: empty, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("✅ Sigilix reviewed this PR — no issues found")
-    expect(out.body).toContain("Four-specialist ensemble")
+    // CodeRabbit PR #88 catch: the line beneath the headline must
+    // be path-agnostic — formatReviewBody is shared with the Phase
+    // 3 single-shot reviewer, so an ensemble-specific claim would
+    // be factually wrong on that path.
+    expect(out.body).toContain("Sigilix reviewed the current head and found nothing worth flagging.")
+    expect(out.body).not.toContain("Four-specialist ensemble")
     // The model's summary still appears under the affirmative lead.
     expect(out.body).toContain("Looks clean — nothing CR missed.")
   })
@@ -198,7 +203,7 @@ describe("buildReviewSubmission", () => {
     // header — the affirmative headline is exclusive to APPROVE.
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).not.toContain("✅ Sigilix reviewed this PR — no issues found")
-    expect(out.body).not.toContain("Four-specialist ensemble")
+    expect(out.body).not.toContain("Sigilix reviewed the current head and found nothing worth flagging.")
   })
 
   it("renders the dedupe marker, summary header, and confidence reason in the body", () => {

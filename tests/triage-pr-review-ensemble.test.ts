@@ -431,18 +431,38 @@ describe("Phase 4a.3 — timeout schedule", () => {
       .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
   })
 
-  it("uses the Phase 4a.3 timeouts", () => {
-    // Phase 4a.3 (ARC-171): SPECIALIST 180→270, ORCH 400→490. Synth +
-    // headroom unchanged. The bump funds the cross-provider fallback
-    // which Phase 4a.2 telemetry showed was being killed by the old
-    // 180s wall before it could fire on deepseek-v4-pro:cloud logic
-    // runs. Sized to fit 2×90s primary + ~1s backoff + 80s fallback
-    // = 261s rounded to 270s for slack.
+  it("uses the post-ARC-283 timeouts (synth no-timeout Phase A, Sigilix-PR-#94 fix-up)", () => {
+    // ARC-283 Phase A: synth + retry + headroom bumped after PR #93's
+    // own review timed out at 180s on a 900-line diff. Sigilix's
+    // product positioning is "yes cost more time for BETTER reviews"
+    // — timing out when specialists already returned cleanly is a
+    // non-starter. Sigilix's own PR #94 self-review caught a 5s
+    // overshoot (pre-flight not budgeted into headroom); these
+    // values are the post-catch corrected set.
     expect(SPECIALIST_TIMEOUT_MS).toBe(270_000)
-    expect(SYNTHESIZER_TIMEOUT_MS).toBe(180_000)
-    expect(RESERVED_HEADROOM_MS).toBe(40_000)
-    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(490_000)
+    expect(SYNTHESIZER_TIMEOUT_MS).toBe(420_000)
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBe(160_000)
+    expect(RESERVED_HEADROOM_MS).toBe(195_000)
+    expect(ORCHESTRATOR_TIMEOUT_MS).toBe(895_000)
     expect(RETRIEVAL_PREFLIGHT_TIMEOUT_MS).toBe(15_000)
+    // Static invariant 1 — same shape as the module-load check.
+    expect(SPECIALIST_TIMEOUT_MS + SYNTHESIZER_TIMEOUT_MS + RESERVED_HEADROOM_MS)
+      .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
+    // Static invariant 2 — Sigilix's PR #94 catch: pre-flight + retry
+    // + finalize must all fit inside the headroom envelope. Pre-flight
+    // runs INSIDE the orchestrator timer (orchTimer starts before
+    // preflightRetrieval), so its budget has to come out of headroom.
+    const FINALIZE_RESERVE_MS = 20_000
+    expect(
+      RETRIEVAL_PREFLIGHT_TIMEOUT_MS +
+        SYNTHESIZER_RETRY_TIMEOUT_MS +
+        FINALIZE_RESERVE_MS,
+    ).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
+    // Queue consumer ceiling — ORCHESTRATOR must stay strictly under
+    // Cloudflare Queues' 900s consumer wall. Phase B (DO-alarm-driven
+    // synth) lifts this ceiling entirely; until then, the orchestrator
+    // is the constraint.
+    expect(ORCHESTRATOR_TIMEOUT_MS).toBeLessThan(900_000)
   })
 
   it("specialist budget accommodates 2 primary attempts + 1 fallback at observed latencies", () => {
@@ -1208,12 +1228,14 @@ describe("buildSynthRetryMessage (ARC-278)", () => {
   })
 })
 
-describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278)", () => {
+describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278 + ARC-283)", () => {
   it("retry budget + finalize reserve fits inside RESERVED_HEADROOM_MS", () => {
     // Module-load guard verifies this; the test pins the constraint
     // so a future "raise retry timeout" change can't silently push
     // past the headroom envelope without updating the orch timeout.
-    const FINALIZE_RESERVE_MS = 5_000
+    // ARC-283 bumped FINALIZE_RESERVE_MS from 5s → 20s (production
+    // finalize is slower when synth produced a large finding set).
+    const FINALIZE_RESERVE_MS = 20_000
     expect(SYNTHESIZER_RETRY_TIMEOUT_MS + FINALIZE_RESERVE_MS).toBeLessThanOrEqual(RESERVED_HEADROOM_MS)
   })
 
@@ -1222,11 +1244,15 @@ describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278)", () => {
       .toBeLessThanOrEqual(ORCHESTRATOR_TIMEOUT_MS)
   })
 
-  it("the retry budget is meaningfully smaller than the primary synth budget", () => {
-    // Retry is supposed to be a fast re-emission (the model has all
-    // its inputs and just needs to fix the failure mode). If the
-    // retry budget approached SYNTHESIZER_TIMEOUT_MS, it'd risk
-    // blowing the headroom envelope.
-    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBeLessThan(SYNTHESIZER_TIMEOUT_MS / 4)
+  it("retry budget is generous enough to actually complete after a primary timeout (ARC-283)", () => {
+    // Pre-ARC-283 retry was 30s — useful only for parse/provenance
+    // re-emissions, useless when primary timed out on real model
+    // latency. Post-ARC-283 retry is sized to be a genuine second
+    // attempt at the same work: at least 30% of the primary budget.
+    // This breaks the pre-ARC-283 invariant that retry << primary
+    // (intentional — that invariant was the cause of ARC-283).
+    expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBeGreaterThanOrEqual(
+      Math.floor(SYNTHESIZER_TIMEOUT_MS * 0.3),
+    )
   })
 })

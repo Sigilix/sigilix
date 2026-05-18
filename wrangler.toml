@@ -98,6 +98,15 @@ new_classes = ["PrReviewRunDO"]
 #   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES    # numeric; clamped [1, 10], default 3
 #   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS    # numeric; clamped [60000, 1800000] ms, default 1200000 (20 min)
 #   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT  # numeric; clamped [1, 100], default 10
+#
+# ARC-283 Phase B1b — shadow-mode model bake-off:
+#   SHADOW_BAKEOFF_ROLES                 # CSV of "logic"|"security"|"performance"|"tests"|"synth"
+#                                        # (default "" — shadow off everywhere). When set, the
+#                                        # candidate lineup defined in lib/shadow-bakeoff-config.ts
+#                                        # fires in parallel with prod on every PR review and emits
+#                                        # `shadow-verdict-comparison` telemetry. Shadow output is
+#                                        # NEVER posted to GitHub. Set via `wrangler secret put`.
+#                                        # See docs/ops/shadow-bakeoff.md for rollout guidance.
 
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to

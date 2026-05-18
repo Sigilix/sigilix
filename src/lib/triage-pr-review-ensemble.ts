@@ -162,6 +162,24 @@ import {
   emitSynthSummary,
   narrowSynthRetryOutcome,
 } from "./ensemble-perf-telemetry"
+// ARC-283 Phase B1b — shadow-mode bake-off harness. Imports are
+// no-ops when `env.SHADOW_BAKEOFF_ROLES` is unset/empty (the only
+// code path that fires is `parseShadowEnabledRoles("")` → empty
+// Set → every `resolveShadowConfig` returns null → no fan-out).
+import {
+  parseShadowEnabledRoles,
+  resolveShadowConfig,
+} from "./shadow-bakeoff-config"
+import {
+  buildShadowVerdictComparison,
+  emitShadowVerdictComparison,
+  type FindingForOverlap,
+} from "./shadow-bakeoff-telemetry"
+import {
+  runShadowSpecialist,
+  runShadowSynth,
+  type ShadowRunResult,
+} from "./shadow-bakeoff-runner"
 import type { Env } from "../index"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
@@ -544,6 +562,32 @@ export async function handlePrReviewEnsemble(
   // here would contradict a successful Phase 3 review). Lifecycle
   // owned at the dispatcher level → single source of truth for the
   // final outcome.
+
+  // ARC-283 Phase B1b — shadow-mode bake-off state. Lifted out of
+  // the try block so the `finally` cleanup can settle every shadow
+  // promise + emit comparison telemetry regardless of which return
+  // path the prod orchestrator took (success, bail-with-skip-notice,
+  // outer-catch). When `SHADOW_BAKEOFF_ROLES` is unset/empty the
+  // maps stay empty, the synth promise stays null, and the finally
+  // block runs a zero-cost no-op.
+  //
+  // Snapshots are written as soon as the corresponding prod outcome
+  // settles — by the time `finally` runs, each entry is either:
+  //   - present (prod settled → shadow comparison can fire)
+  //   - absent (prod errored before settle → shadow still emits with
+  //     a synthetic "prod did not run" prod outcome)
+  // The shadow promise itself never throws — `runShadowSpecialist` /
+  // `runShadowSynth` catch + return structured failure on every path.
+  type ProdSpecialistSnapshot = {
+    verdictOk: boolean
+    modelUsed: string
+    attemptsUsed: number
+    elapsedMs: number
+    findings: readonly FindingForOverlap[]
+  }
+  const shadowSpecialistPromises = new Map<SpecialistRole, Promise<ShadowRunResult>>()
+  const prodSpecialistSnapshots = new Map<SpecialistRole, ProdSpecialistSnapshot>()
+  let shadowSynthPromise: Promise<ShadowRunResult> | null = null
 
   // Telemetry skeleton — populated as we go so we can write a record
   // even on early failure paths.
@@ -1103,6 +1147,33 @@ export async function handlePrReviewEnsemble(
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
     })
 
+    // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
+    // prod Promise.allSettled below so both lineups run in parallel
+    // (NOT serially). Shadow shares prod's `orchCtrl.signal` — when
+    // the outer orchestrator times out, shadow aborts with it. No
+    // new wall-clock budget. The shadow promise never throws (the
+    // runner catches + structures every failure path) but the
+    // `finally`-block consumer still wraps the await in try/catch
+    // to defend the prod return path.
+    const shadowEnabledRoles = parseShadowEnabledRoles(env.SHADOW_BAKEOFF_ROLES)
+    for (const role of router.specialists) {
+      const shadowConfig = resolveShadowConfig(role, shadowEnabledRoles)
+      if (shadowConfig === null) continue
+      shadowSpecialistPromises.set(
+        role,
+        runShadowSpecialist({
+          role,
+          shadowConfig,
+          apiKey: env.OLLAMA_API_KEY,
+          systemPrompt: SPECIALIST_PROMPTS[role],
+          userMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
+          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+          signal: orchCtrl.signal,
+          perfCtx,
+        }),
+      )
+    }
+
     // ARC-284: track per-specialist start time so the fanout summary
     // can name the slowest role. The Promise.allSettled below waits
     // for ALL to settle, so we measure each role's elapsed independent
@@ -1146,6 +1217,33 @@ export async function handlePrReviewEnsemble(
       specialistResults,
       telemetry,
     )
+
+    // ARC-283 Phase B1b — snapshot per-role prod outcomes for the
+    // shadow comparison emit in `finally`. Only writes for roles
+    // that have a shadow promise queued; for everyone else we'd
+    // never emit a comparison anyway. Reading from `specialistVerdicts`
+    // (not `specialistResults`) so we get the same shape downstream
+    // telemetry sees (stable-id-assigned verdict, dedupe-corrected
+    // modelUsed). Findings are projected to the overlap-helper's
+    // shape so the `finally` block stays a thin wrapper.
+    for (const v of specialistVerdicts) {
+      if (!shadowSpecialistPromises.has(v.role)) continue
+      const findings: FindingForOverlap[] = v.verdict
+        ? v.verdict.findings.map((f) => ({
+            path: f.path,
+            line: f.line,
+            category: f.category,
+            score: f.score,
+          }))
+        : []
+      prodSpecialistSnapshots.set(v.role, {
+        verdictOk: v.verdict !== null,
+        modelUsed: v.modelUsed ?? SPECIALIST_CONFIGS[v.role].primary,
+        attemptsUsed: v.attemptsUsed ?? 0,
+        elapsedMs: v.elapsedMs,
+        findings,
+      })
+    }
 
     // ARC-284 (Sigilix PR #95 catch): specialist-fanout-summary
     // computation moved into `computeSpecialistFanoutSummary` so the
@@ -1348,6 +1446,30 @@ export async function handlePrReviewEnsemble(
             : 0,
         }))
       }
+
+      // ARC-283 Phase B1b — shadow synth kick-off. Fires BEFORE
+      // `attempt1` so both lineups run in parallel; the shadow
+      // promise is captured at the outer scope so `finally` can
+      // settle it even when prod synth bails to skip-notice.
+      // Same `synthSystemPrompt` + `synthMessageWithMemory` the prod
+      // path uses, so the comparison is apples-to-apples on input.
+      // Shadow shares `orchCtrl.signal` — aborts with the outer
+      // orchestrator timer. The shadow synth is allowed to take
+      // longer than the prod synth's 420s budget; what bounds it
+      // is the 895s outer orchestrator wall.
+      const shadowSynthConfig = resolveShadowConfig("synth", shadowEnabledRoles)
+      if (shadowSynthConfig !== null) {
+        shadowSynthPromise = runShadowSynth({
+          shadowConfig: shadowSynthConfig,
+          apiKey: env.OLLAMA_API_KEY,
+          systemPrompt: synthSystemPrompt,
+          userMessage: synthMessageWithMemory,
+          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+          signal: orchCtrl.signal,
+          perfCtx,
+        })
+      }
+
       // ARC-278: extract the attempt-runner so we can call it twice
       // (primary + at most one retry). The closure captures every
       // input that's stable between attempts (system prompt, config
@@ -2286,6 +2408,118 @@ export async function handlePrReviewEnsemble(
     return finalize(telemetry, env, "errored", cache)
   } finally {
     clearTimeout(orchTimer)
+    // ARC-283 Phase B1b — shadow comparison emit. Runs on EVERY
+    // return path (success, skip-notice bail, outer-catch
+    // internal_error). When shadow was disabled the maps stay empty
+    // and this block is a zero-cost no-op. Each await is individually
+    // try/wrap'd — a shadow-side crash MUST NOT take down the prod
+    // return value the function already produced.
+    if (shadowSpecialistPromises.size > 0) {
+      for (const [role, shadowPromise] of shadowSpecialistPromises) {
+        try {
+          // eslint-disable-next-line no-await-in-loop -- shadow
+          // comparison is per-role + must serialize on the same
+          // wall-clock; each await independently catches its own
+          // failure so an early role error can't poison the rest.
+          const shadow = await shadowPromise
+          const prodSnapshot = prodSpecialistSnapshots.get(role)
+          // When the prod path errored before the fan-out settled
+          // (orchestrator caught an exception inside try{} before
+          // `collectSpecialistVerdicts` ran), there's no prod
+          // snapshot. Build a synthetic "prod did not run" entry so
+          // the comparison still emits — operators can pivot on
+          // `prodVerdictOk === false && prodAttemptsUsed === 0` to
+          // filter these out of the bake-off analysis.
+          const prod = prodSnapshot ?? {
+            verdictOk: false,
+            modelUsed: SPECIALIST_CONFIGS[role].primary,
+            attemptsUsed: 0,
+            elapsedMs: 0,
+            findings: [] as readonly FindingForOverlap[],
+          }
+          const comparison = buildShadowVerdictComparison({
+            role,
+            prodModelDefault: SPECIALIST_CONFIGS[role].primary,
+            prod,
+            shadow: {
+              verdictOk: shadow.verdictOk,
+              modelUsed: shadow.modelUsed,
+              attemptsUsed: shadow.attemptsUsed,
+              elapsedMs: shadow.elapsedMs,
+              findings: shadow.findings,
+              ...(shadow.failureReason !== undefined
+                ? { failureReason: shadow.failureReason }
+                : {}),
+            },
+          })
+          emitShadowVerdictComparison(perfCtx, comparison)
+        } catch (err) {
+          // Defensive: a shadow-side crash (shouldn't happen — the
+          // runner catches every failure path internally) must NOT
+          // corrupt the prod return value the function already
+          // produced. Surface as a structured event for CF Logs
+          // mirroring the Task-4 `model-attempt-emit-error` shape.
+          console.warn(JSON.stringify({
+            event: "shadow-specialist-emit-error",
+            owner, repo, prNumber,
+            headSha: headSha.slice(0, 7),
+            role,
+            message: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
+    }
+    if (shadowSynthPromise !== null) {
+      try {
+        const shadow = await shadowSynthPromise
+        // Build the prod synth snapshot from telemetry.synthesizer.
+        // Every exit path that runs the synth populates this field;
+        // the only case where it's null is the outer-catch path that
+        // fired BEFORE the inner synth try ran. In that case prod
+        // never produced any synth output — same synthetic "prod
+        // did not run" shape as the specialist branch above.
+        const prodSynthTel = telemetry.synthesizer
+        const prodSynthFindings: FindingForOverlap[] = prodSynthTel?.verdict
+          ? prodSynthTel.verdict.findings.map((f) => ({
+              path: f.path,
+              line: f.line,
+              category: f.category,
+              score: f.score,
+            }))
+          : []
+        const prod: ProdSpecialistSnapshot = {
+          verdictOk: prodSynthTel?.verdict != null,
+          modelUsed: prodSynthTel?.modelUsed ?? SYNTHESIZER_CONFIG.primary,
+          attemptsUsed: prodSynthTel?.attemptsUsed ?? 0,
+          elapsedMs: prodSynthTel?.elapsedMs ?? 0,
+          findings: prodSynthFindings,
+        }
+        const comparison = buildShadowVerdictComparison({
+          role: "synth",
+          prodModelDefault: SYNTHESIZER_CONFIG.primary,
+          prod,
+          shadow: {
+            verdictOk: shadow.verdictOk,
+            modelUsed: shadow.modelUsed,
+            attemptsUsed: shadow.attemptsUsed,
+            elapsedMs: shadow.elapsedMs,
+            findings: shadow.findings,
+            ...(shadow.failureReason !== undefined
+              ? { failureReason: shadow.failureReason }
+              : {}),
+          },
+        })
+        emitShadowVerdictComparison(perfCtx, comparison)
+      } catch (err) {
+        // Same defensive shape as the specialist branch above.
+        console.warn(JSON.stringify({
+          event: "shadow-synth-emit-error",
+          owner, repo, prNumber,
+          headSha: headSha.slice(0, 7),
+          message: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
   }
 }
 
@@ -2577,6 +2811,11 @@ async function buildClient(env: Env, installationId: number): Promise<GitHubClie
 
 // ─── specialist runner ────────────────────────────────────────────────
 
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
 export interface SpecialistRunArgs {
   role: SpecialistRole
   apiKey: string | undefined
@@ -2607,6 +2846,11 @@ interface SpecialistRunResult {
   attemptsUsed: number
 }
 
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
 export async function runSpecialist(args: SpecialistRunArgs): Promise<SpecialistRunResult> {
   const t0 = Date.now()
   if (!args.apiKey) {
@@ -3022,6 +3266,11 @@ async function sleepWithSignal(ms: number, signal: AbortSignal): Promise<void> {
 
 // ─── synthesizer runner ───────────────────────────────────────────────
 
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
 export interface SynthesizerRunArgs {
   apiKey: string | undefined
   systemPrompt: string
@@ -3109,6 +3358,11 @@ export function parseSynthAnswer(content: string): SynthParsedOutput | null {
   return { verdict, provenance: parsed.provenance }
 }
 
+/**
+ * @internal Exported for ARC-283 tests + shadow runner only. Do not
+ * call from prod code paths other than `handlePrReviewEnsemble` and
+ * `src/lib/shadow-bakeoff-runner.ts`.
+ */
 export async function runSynthesizer(args: SynthesizerRunArgs): Promise<SynthesizerRunOutput> {
   const t0 = Date.now()
   const effectiveConfig: ModelConfig = args.configOverride ?? SYNTHESIZER_CONFIG

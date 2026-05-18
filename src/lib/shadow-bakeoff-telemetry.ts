@@ -166,3 +166,103 @@ export function computeFindingsOverlap(
     shadowScoreHistogram: buildHistogram(shadow),
   }
 }
+
+// ─── pure helper: build the comparison payload ────────────────────
+//
+// Extracted so the orchestrator's hot path stays a thin caller and
+// the diff-shape logic gets unit-tested in isolation. Same fields the
+// orchestrator used to populate inline against `prod*` / `shadow*`
+// locals — no behavior change.
+
+/** Minimum prod-side outcome the comparison needs. Mirrors the
+ *  subset of `SpecialistRunResult` / `SynthesizerRunOutput` that
+ *  the orchestrator already collects pre-shadow. */
+export interface ProdOutcomeForComparison {
+  /** Did the prod model produce a parseable verdict? */
+  verdictOk: boolean
+  /** Final model that produced the verdict (or last-attempted on
+   *  failure). Differs from the role's `primary` when fallback fired. */
+  modelUsed: string
+  /** Total prod attempts across primary retries + cross-provider
+   *  fallback. */
+  attemptsUsed: number
+  /** Wall-clock elapsed for the prod call. */
+  elapsedMs: number
+  /** Findings extracted from the prod verdict (empty when verdictOk
+   *  is false). Same `(path, line, category, score)` projection the
+   *  shadow runner already returns so `computeFindingsOverlap` can
+   *  consume both sides uniformly. */
+  findings: readonly FindingForOverlap[]
+}
+
+/** Minimum shadow-side outcome the comparison needs. Matches the
+ *  shape `runShadowSpecialist` / `runShadowSynth` already return —
+ *  this re-declared type avoids a cyclic import from the orchestrator
+ *  module without restating the runner's fuller `ShadowRunResult`. */
+export interface ShadowOutcomeForComparison {
+  verdictOk: boolean
+  modelUsed: string
+  attemptsUsed: number
+  elapsedMs: number
+  findings: readonly FindingForOverlap[]
+  /** Free-form failure reason from `runWithRetryAndFallback`, or
+   *  undefined on success. */
+  failureReason?: string
+}
+
+export interface BuildShadowVerdictComparisonArgs {
+  /** Role being compared (`logic`/`security`/`performance`/`tests`
+   *  on the specialist path, `synth` on the synth path). Stamped on
+   *  the emitted event so log-analyzers can pivot. */
+  role: string
+  /** Default prod model for the role (the config's primary). Used
+   *  when prod failed before `modelUsed` could be set. */
+  prodModelDefault: string
+  prod: ProdOutcomeForComparison
+  shadow: ShadowOutcomeForComparison
+}
+
+/**
+ * Build the `ShadowVerdictComparison` payload from the prod + shadow
+ * outcomes. Pure: no I/O, no telemetry, no environment lookups.
+ *
+ * Contract:
+ *   - When prod produced no verdict, fall back to `prodModelDefault`
+ *     for `prodModel` so the event still names the configured primary
+ *     (not an empty string).
+ *   - `prodAttemptsUsed` / `prodElapsedMs` are pass-through —
+ *     callers are expected to fill the same values they would log to
+ *     `EnsembleTelemetry`.
+ *   - `shadowFailureReason` is `null` on shadow success, the shadow
+ *     runner's `failureReason` string on failure, or the literal
+ *     "unknown" sentinel when shadow failed without a reason
+ *     (defensive — `runWithRetryAndFallback` always populates one
+ *     today, but the helper stays robust to future shape drift).
+ */
+export function buildShadowVerdictComparison(
+  args: BuildShadowVerdictComparisonArgs,
+): ShadowVerdictComparison {
+  const { role, prodModelDefault, prod, shadow } = args
+  const overlap = computeFindingsOverlap(prod.findings, shadow.findings)
+  return {
+    role,
+    prodModel: prod.verdictOk ? prod.modelUsed : (prod.modelUsed || prodModelDefault),
+    shadowModel: shadow.modelUsed,
+    prodVerdictOk: prod.verdictOk,
+    shadowVerdictOk: shadow.verdictOk,
+    prodElapsedMs: prod.elapsedMs,
+    shadowElapsedMs: shadow.elapsedMs,
+    prodAttemptsUsed: prod.attemptsUsed,
+    shadowAttemptsUsed: shadow.attemptsUsed,
+    prodFindingsCount: prod.findings.length,
+    shadowFindingsCount: shadow.findings.length,
+    overlapCount: overlap.overlapCount,
+    prodOnlyCount: overlap.prodOnlyCount,
+    shadowOnlyCount: overlap.shadowOnlyCount,
+    prodScoreHistogram: overlap.prodScoreHistogram,
+    shadowScoreHistogram: overlap.shadowScoreHistogram,
+    shadowFailureReason: shadow.verdictOk
+      ? null
+      : (shadow.failureReason ?? "unknown"),
+  }
+}

@@ -502,10 +502,25 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
     // so the Reviews tab reflects only the current head. Same
     // body-marker-match logic as the ensemble path; safe to leave
     // other reviewers' reviews untouched.
-    await dismissPriorSigilixReviews({
-      client, owner, repo, prNumber,
-      currentReviewId: submitted.id,
-    })
+    //
+    // Best-effort: `dismissPriorSigilixReviews` is designed never
+    // to throw, but defense-in-depth try/catch ensures a future
+    // refactor (or an out-of-band runtime error) can't turn a
+    // successfully-posted review into `errored`. A missed dismissal
+    // just leaves the stale approval visible until the next push.
+    try {
+      await dismissPriorSigilixReviews({
+        client, owner, repo, prNumber,
+        currentReviewId: submitted.id,
+      })
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "pr-review-dismiss-prior-failed",
+        owner, repo, prNumber, review_id: submitted.id,
+        submit_path: "phase3",
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
 
     // ARC-258 follow-up: warmup "ready" signaling is no longer a
     // separate sticky flip. The pr-overview comment carries the

@@ -1481,11 +1481,28 @@ export async function handlePrReviewEnsemble(
       // approved a while ago" pointing at an outdated commit even
       // after Sigilix has re-reviewed the new head. Body-marker
       // match ensures we only ever dismiss our own reviews — never
-      // touch another reviewer's. Best-effort; never blocks.
-      await dismissPriorSigilixReviews({
-        client, owner, repo, prNumber,
-        currentReviewId: submitted.id,
-      })
+      // touch another reviewer's.
+      //
+      // Best-effort: `dismissPriorSigilixReviews` is designed never
+      // to throw, but defense-in-depth try/catch ensures a future
+      // refactor that introduces a throw (or an out-of-band runtime
+      // error like a JSON.stringify on a circular ref) cannot turn
+      // a successfully-posted review into `errored`. The submit has
+      // already been verified above; a missed dismissal just leaves
+      // the stale approval visible until the next push.
+      try {
+        await dismissPriorSigilixReviews({
+          client, owner, repo, prNumber,
+          currentReviewId: submitted.id,
+        })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-dismiss-prior-failed",
+          owner, repo, prNumber, review_id: submitted.id,
+          submit_path: "inline-anchored",
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       // ARC-184: write review-provenance manifest. Best-effort.
       // ARC-271: also persist the per-finding snapshot so the next
       // push's review can compute a new/still-open/likely-fixed
@@ -1613,11 +1630,21 @@ export async function handlePrReviewEnsemble(
       // ARC-258 follow-up: same prior-review dismissal as the primary
       // submit path. The fallback is also a real Sigilix review that
       // would otherwise leave the earlier commit's approval as the
-      // visible state in the Reviews tab.
-      await dismissPriorSigilixReviews({
-        client, owner, repo, prNumber,
-        currentReviewId: submittedFallback.id,
-      })
+      // visible state in the Reviews tab. Same defense-in-depth
+      // try/catch as the inline-anchored path above.
+      try {
+        await dismissPriorSigilixReviews({
+          client, owner, repo, prNumber,
+          currentReviewId: submittedFallback.id,
+        })
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-dismiss-prior-failed",
+          owner, repo, prNumber, review_id: submittedFallback.id,
+          submit_path: "anchorless-fallback",
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
       // ARC-184: write manifest for the fallback path too. Same target
       // shape (kind: "review") because the fallback is still a GitHub
       // review (just anchorless body). ARC-271: same per-finding

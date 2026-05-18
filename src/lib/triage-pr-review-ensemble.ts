@@ -2223,23 +2223,26 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "skipped", cache)
     }
 
-    // ARC-287: dismiss prior Sigilix reviews BEFORE posting the new
-    // one, so the GitHub timeline renders cleanup-above-current-review
-    // (oldest-at-top). Pre-ARC-287 the dismiss fired AFTER the submit,
-    // producing a footgun where the dismissal banner showed BELOW the
-    // new review chronologically (PR #95's `8ad306a` review
-    // demonstrated this — see ARC-287).
+    // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE
+    // posting the new one, so the GitHub timeline renders cleanup-
+    // above-current-review (oldest-at-top). Pre-ARC-287 the dismiss
+    // fired AFTER the submit, producing a footgun where the dismissal
+    // banner showed BELOW the new review chronologically (PR #95's
+    // `8ad306a` review demonstrated this — see ARC-287).
     //
-    // Safe to dismiss first because ARC-279's comment-fallback covers
-    // the "dismiss succeeded + submit failed" failure mode: the synth
-    // body still posts as a PR comment, the customer still sees the
-    // review signal. `currentReviewId: null` is the ARC-287 sentinel
-    // meaning "dismiss every matching prior review — there's no
-    // current one to exclude yet."
+    // SIG-85 (2026-05-18): `dismissPriorSigilixReviews` no longer
+    // dismisses — it emits `pr-review-stale-detected` telemetry per
+    // matching prior. Customers enable GitHub's repo-level "Dismiss
+    // stale pull request approvals when new commits are pushed"
+    // branch-protection setting; GitHub then handles the dismissal
+    // natively and attributes it to the commit pusher. See
+    // docs/setup/customer-onboarding.md. The call stays here for the
+    // telemetry signal; arguments unchanged so callers don't need
+    // updating.
     //
-    // Best-effort try/catch — same defense-in-depth as the post-submit
-    // version had: a missed dismissal just leaves the stale prior
-    // visible until the next push.
+    // Best-effort try/catch — the helper never throws in practice,
+    // but defense in depth keeps a hypothetical bug from breaking the
+    // submit path.
     try {
       await dismissPriorSigilixReviews({
         client, owner, repo, prNumber,

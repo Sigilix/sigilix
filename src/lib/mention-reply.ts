@@ -33,7 +33,7 @@ const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
 // `<!-- ... -->` as visible plain text in comment bodies (unlike
 // GitHub which hides them), so leaking a marker shows up as
-// `<!-- openclaw:mention-reply src=abc -->` at the bottom of every
+// `<!-- sigilix:mention-reply src=abc -->` at the bottom of every
 // reply. KV (`mention-reply:<commentId>`) is the authoritative dedupe.
 const KV_PREFIX = "mention-reply"
 

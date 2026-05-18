@@ -68,7 +68,7 @@ describe("formatReply", () => {
       confidence: 5,
       abstain: false,
     })
-    expect(out.startsWith("<!-- openclaw:gh-mention-reply -->")).toBe(true)
+    expect(out.startsWith("<!-- sigilix:gh-mention-reply -->")).toBe(true)
     expect(out).toContain("Fixed — guard now uses")
   })
 

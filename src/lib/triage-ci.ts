@@ -18,7 +18,12 @@ import { CI_TRIAGE_PROMPT } from "../prompts/ci-triage"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
-const CI_MARKER = "<!-- openclaw:ci-triage -->"
+const CI_MARKER = "<!-- sigilix:ci-triage -->"
+// SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
+// markers so the existing-comment lookup finds legacy stickies and
+// edits them in place instead of creating duplicates. Drop the legacy
+// half once all pre-2026-05-18 PRs close.
+const LEGACY_CI_MARKER = "<!-- openclaw:ci-triage -->"
 const DEDUPE_PREFIX = "ci-triage:"
 const DEDUPE_TTL_SECONDS = 300
 const MAX_FILES_FROM_LOG = 6
@@ -378,7 +383,14 @@ async function findExistingCiComment(
   prNumber: number
 ): Promise<number | null> {
   const items = await client.listIssueComments(owner, repo, prNumber)
-  const hit = items.find((c) => typeof c.body === "string" && c.body.includes(CI_MARKER))
+  // SIG-85: bilingual matcher — pick up both `<!-- sigilix:ci-triage -->`
+  // and the legacy `<!-- openclaw:ci-triage -->` stickies so legacy
+  // stickies get edited in place instead of duplicated.
+  const hit = items.find(
+    (c) =>
+      typeof c.body === "string" &&
+      (c.body.includes(CI_MARKER) || c.body.includes(LEGACY_CI_MARKER)),
+  )
   return hit ? hit.id : null
 }
 

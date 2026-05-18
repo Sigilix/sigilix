@@ -1,40 +1,38 @@
-// ARC-258 follow-up — dismiss stale prior Sigilix reviews on each
+// ARC-258 / SIG-85 — detect stale prior Sigilix reviews on each
 // new submit.
 //
-// Without this, GitHub's Reviews tab keeps showing "Sigilix approved
-// a while ago" against an earlier commit even after Sigilix has
-// re-reviewed the new head. Per-commit Check Runs handle the
-// in-progress signal correctly, but the Reviews tab is per-PR and
-// doesn't auto-dismiss prior approvals when new commits land.
+// SIG-85 (2026-05-18): bot-initiated dismissal removed. GitHub's
+// repo-level "Dismiss stale pull request approvals when new commits
+// are pushed" branch-protection setting handles staleness natively
+// and attributes the dismissal to the commit pusher (instead of
+// `sigilix[bot] dismissed their stale review`). Customers must enable
+// the setting; see docs/setup/customer-onboarding.md. This module now
+// only LISTS + FILTERS prior reviews and emits a telemetry event per
+// stale prior — useful for observability + future dismissal-pathway
+// decisions.
 //
-// The dispatcher calls `dismissPriorSigilixReviews` immediately after
-// a successful `submitReview` (+ verify) so the customer always sees
-// exactly ONE Sigilix review on the PR — the one matching the
-// current head.
-//
-// Identity: prior Sigilix reviews are identified by BOTH the
-// `<!-- sigilix:pr-review -->` marker in the body AND the
-// reviewer's `user.login === "sigilix[bot]"`. Defense in depth:
-// the marker alone could be impersonated by a human pasting the
-// HTML comment into their own review body; the login check
-// guarantees we only ever dismiss our own App's reviews.
-//
-// ARC-293 hard cutover from openclaw:* to sigilix:*. Old reviews
-// under the legacy marker stop being auto-dismissed; GitHub's
-// repo-level stale-dismissal handles them as a one-time migration
-// cost.
-//
-// Best-effort: any dismissal failure (4xx / 5xx / network) logs and
-// continues. The new review is already posted; a missed dismissal
-// just leaves the stale approval visible until the next push.
+// Identity: prior Sigilix reviews are identified by BOTH a Sigilix
+// review-body marker (`<!-- sigilix:pr-review -->` OR the legacy
+// `<!-- openclaw:pr-review -->` — SIG-85 bilingual matcher) AND the
+// reviewer's `user.login === "sigilix[bot]"`. Defense in depth: the
+// marker alone could be impersonated by a human pasting the HTML
+// comment into their own review body; the login check guarantees we
+// only ever count our own App's reviews.
 
 import { GitHubClient } from "./github"
 
 /** The marker every Sigilix review body starts with — see
  *  `buildReviewSubmission` / `buildFallbackSubmission` in
  *  triage-pr-review.ts. Match-by-marker is the FIRST half of the
- *  dismissal gate; the user-login check below is the second. */
+ *  stale-detector identity gate; the user-login check below is the
+ *  second. */
 export const SIGILIX_REVIEW_BODY_MARKER = "<!-- sigilix:pr-review -->"
+
+// SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
+// markers so the existing-comment lookup finds legacy stickies and
+// edits them in place instead of creating duplicates. Drop the legacy
+// half once all pre-2026-05-18 PRs close.
+export const LEGACY_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
 
 /** The bot login under which the Sigilix App posts reviews. Pair
  *  with the body marker to defend against any review whose body
@@ -42,9 +40,11 @@ export const SIGILIX_REVIEW_BODY_MARKER = "<!-- sigilix:pr-review -->"
  *  another bot. If the App's slug ever changes, update here. */
 const SIGILIX_BOT_LOGIN = "sigilix[bot]"
 
-/** States that GitHub allows `POST /dismissals` to operate on.
- *  COMMENTED and PENDING are rejected with 422; DISMISSED is a
- *  no-op (already dismissed). */
+/** States we treat as actionable for the stale-detector. Same set as
+ *  the pre-SIG-85 dismissible states — COMMENTED + PENDING were never
+ *  dismissible via the API (422), DISMISSED is already terminal — so
+ *  the filter still matches "review states a reviewer would consider
+ *  current." */
 const DISMISSIBLE_STATES = new Set(["APPROVED", "CHANGES_REQUESTED"])
 
 export interface DismissPriorArgs {
@@ -52,42 +52,54 @@ export interface DismissPriorArgs {
   owner: string
   repo: string
   prNumber: number
-  /** The review we JUST posted, excluded from dismissal so we don't
-   *  undo our own fresh review.
+  /** The review we JUST posted, excluded from the stale-detector so
+   *  we don't flag our own fresh review.
    *
    *  ARC-287: `null` is the new sentinel for "dismiss-then-post" —
    *  the helper fires BEFORE submitReview, so there's no current
-   *  review yet to exclude. The filter dismisses ALL matching prior
+   *  review yet to exclude. The filter flags ALL matching prior
    *  reviews in that case. A numeric ID retains the post-then-dismiss
    *  semantics for any caller that hasn't migrated to the new order. */
   currentReviewId: number | null
-  /** The SHA of the new head Sigilix is about to review (ARC-287) or
-   *  just reviewed (legacy post-then-dismiss). Named in the dismissal
-   *  message so readers can correlate the old vs new commits without
-   *  scrolling. Optional for backwards compatibility. */
+  /** SIG-85: retained for caller back-compat. Pre-SIG-85 this was
+   *  inlined into the dismissal message; bot-initiated dismissal has
+   *  since been removed, so the field is accepted and ignored. */
   headSha?: string
 }
 
 export interface DismissPriorResult {
-  /** Number of prior Sigilix reviews dismissed. */
+  /**
+   * SIG-85: always 0. Kept in the return shape so callers don't need
+   * to be updated when bot-initiated dismissal was removed. GitHub's
+   * branch-protection "Dismiss stale pull request approvals when new
+   * commits are pushed" setting now does the actual dismissal.
+   */
   dismissed: number
-  /** Number we tried to dismiss but failed (e.g. 422 race, network blip). */
+  /**
+   * SIG-85: always 0. Kept in the return shape for caller back-compat.
+   */
   failed: number
 }
 
 /**
- * List the PR's reviews; for each one that:
+ * List the PR's reviews; for each prior Sigilix review that:
  *   - has a different id than `currentReviewId`,
  *   - is in an APPROVED or CHANGES_REQUESTED state,
- *   - and carries the Sigilix marker in its body,
- * issue a dismissal. Per-review failures are isolated.
+ *   - is authored by `sigilix[bot]`,
+ *   - and carries a Sigilix review-body marker (current or legacy),
+ * emit a `pr-review-stale-detected` telemetry event.
+ *
+ * SIG-85: bot-initiated `dismissReview` removed. Customers enable the
+ * repo-level "Dismiss stale pull request approvals when new commits
+ * are pushed" branch-protection setting; GitHub then handles the
+ * dismissal natively and attributes it to the commit pusher.
  *
  * Pure-effect; never throws. List-call failure returns zeros.
  */
 export async function dismissPriorSigilixReviews(
   args: DismissPriorArgs,
 ): Promise<DismissPriorResult> {
-  const { client, owner, repo, prNumber, currentReviewId, headSha } = args
+  const { client, owner, repo, prNumber, currentReviewId } = args
   let reviews: Array<{
     id: number
     state: string
@@ -110,16 +122,21 @@ export async function dismissPriorSigilixReviews(
   // body would bypass our identity check). Require BOTH the marker
   // AND a `sigilix[bot]` author login — defense in depth.
   //
+  // SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read
+  // both markers so legacy stickies are still recognized as Sigilix
+  // reviews. Drop the legacy half once all pre-2026-05-18 PRs close.
+  //
   // ARC-287: when `currentReviewId === null`, the helper fires BEFORE
   // the new submitReview, so there's no current review yet — every
-  // matching prior review gets dismissed. The `r.id !== null` check
+  // matching prior review counts as stale. The `r.id !== null` check
   // is structurally always true in that case (review IDs are always
   // numeric), so the filter naturally skips the exclude.
   const targets = reviews.filter((r) =>
     r.id !== currentReviewId &&
     DISMISSIBLE_STATES.has(r.state) &&
     r.user?.login === SIGILIX_BOT_LOGIN &&
-    r.body.includes(SIGILIX_REVIEW_BODY_MARKER),
+    (r.body.includes(SIGILIX_REVIEW_BODY_MARKER) ||
+      r.body.includes(LEGACY_REVIEW_BODY_MARKER)),
   )
   // code-reviewer M2 catch: when the list returns the 100-item cap,
   // we may be missing older Sigilix reviews. Log a warning so we
@@ -129,43 +146,22 @@ export async function dismissPriorSigilixReviews(
       event: "pr-review-dismiss-list-capped",
       owner, repo, prNumber,
       review_count: reviews.length,
-      note: "listPullRequestReviews returned >=100 items; older Sigilix reviews may not be dismissed in this run.",
+      note: "listPullRequestReviews returned >=100 items; older Sigilix reviews may not be detected in this run.",
     }))
   }
-  if (targets.length === 0) return { dismissed: 0, failed: 0 }
-  // Short-SHA helper for the human-readable dismissal message. 7
-  // chars matches `git log --oneline` / GitHub's default permalink
-  // truncation, which is what most readers visually recognize.
-  const short = (sha: string | null | undefined): string | null =>
-    typeof sha === "string" && sha.length >= 7 ? sha.slice(0, 7) : null
-  const newHead = short(headSha ?? null)
-  let dismissed = 0
-  let failed = 0
   for (const r of targets) {
-    try {
-      // ARC-293: the dismissal banner GitHub renders already says
-      // "sigilix [Bot] dismissed their stale review" with a link to
-      // the dismissed review. Our message lives in the expansion box
-      // below that line and only needs to carry one bit of extra
-      // signal: which SHA Sigilix re-reviewed at. The lightweight
-      // GitHub-native one-liner does the rest.
-      const message = newHead ? `Stale. Re-reviewed at \`${newHead}\`.` : "Stale."
-      await client.dismissReview(owner, repo, prNumber, r.id, message)
-      dismissed += 1
-    } catch (err) {
-      failed += 1
-      console.warn(JSON.stringify({
-        event: "pr-review-dismiss-failed",
-        owner, repo, prNumber, review_id: r.id, prior_state: r.state,
-        err: err instanceof Error ? err.message : String(err),
-      }))
-    }
+    // SIG-85: bot-initiated dismissal removed. GitHub's repo-level
+    // "Dismiss stale pull request approvals when new commits are
+    // pushed" setting handles staleness natively and attributes the
+    // dismissal to the commit pusher (instead of sigilix[bot]).
+    // Customers must enable this setting; see
+    // docs/setup/customer-onboarding.md.
+    console.log(JSON.stringify({
+      event: "pr-review-stale-detected",
+      owner, repo, prNumber, review_id: r.id, prior_state: r.state,
+      commit_id: r.commitId ?? null,
+    }))
   }
-  console.log(JSON.stringify({
-    event: "pr-review-dismissed-stale",
-    owner, repo, prNumber,
-    dismissed, failed,
-    current_review_id: currentReviewId,
-  }))
-  return { dismissed, failed }
+  // `dismissed` always 0; return shape kept for caller back-compat.
+  return { dismissed: 0, failed: 0 }
 }

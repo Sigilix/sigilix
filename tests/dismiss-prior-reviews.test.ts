@@ -1,4 +1,20 @@
-// ARC-258 follow-up — tests for the prior-review dismissal helper.
+// SIG-85 — tests for the prior-review stale-detector helper.
+//
+// Pre-SIG-85 this helper called `client.dismissReview` directly,
+// producing "sigilix [Bot] dismissed their stale review" timeline
+// entries. SIG-85 removed the bot-initiated dismissal; the helper now
+// LISTS + FILTERS prior reviews and emits a `pr-review-stale-detected`
+// telemetry event per match. Customers enable GitHub's repo-level
+// "Dismiss stale pull request approvals when new commits are pushed"
+// branch-protection setting to get native dismissal with the commit
+// pusher as the attributor.
+//
+// These tests assert the new (non-dismissing) behavior:
+//   - `client.dismissReview` is NEVER called.
+//   - The listing + filtering logic still picks the same set of
+//     prior Sigilix reviews that pre-SIG-85 would have dismissed.
+//   - The bilingual matcher (SIG-85) finds legacy `openclaw:pr-review`
+//     stickies as well as the current `sigilix:pr-review` form.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -23,6 +39,7 @@ vi.mock("../src/lib/github", async () => {
 import {
   dismissPriorSigilixReviews,
   SIGILIX_REVIEW_BODY_MARKER,
+  LEGACY_REVIEW_BODY_MARKER,
 } from "../src/lib/dismiss-prior-reviews"
 import { GitHubClient } from "../src/lib/github"
 
@@ -51,8 +68,9 @@ const baseArgs = {
   repo: "sigilix",
   prNumber: 42,
   currentReviewId: 1000,
-  // 40-char SHA — short(headSha) will trim to the first 7 chars
-  // (`abcdef1`) for display in the dismissal message.
+  // 40-char SHA — retained for back-compat with callers that still
+  // pass headSha. SIG-85 no longer uses it (no dismissal message
+  // built), but the helper accepts and ignores it.
   headSha: "abcdef1234567890abcdef1234567890abcdef12",
 } as const
 
@@ -69,15 +87,22 @@ function priorReview(opts: {
     body: opts.body ?? `${SIGILIX_REVIEW_BODY_MARKER}\nfoo`,
     user: opts.user === undefined ? { login: "sigilix[bot]" } : opts.user,
     // Default to a non-overlapping 40-char SHA so prior-review SHAs
-    // don't collide with `headSha` in the dismissal-message tests.
+    // don't collide with `headSha` in tests.
     commitId: opts.commitId === undefined
       ? "0000111122223333444455556666777788889999"
       : opts.commitId,
   }
 }
 
+function staleDetectedCount(spy: ReturnType<typeof vi.spyOn>): number {
+  return spy.mock.calls.filter((call) => {
+    const arg = call[0]
+    return typeof arg === "string" && arg.includes("pr-review-stale-detected")
+  }).length
+}
+
 describe("dismissPriorSigilixReviews", () => {
-  it("dismisses prior Sigilix APPROVED + CHANGES_REQUESTED reviews", async () => {
+  it("SIG-85: never calls client.dismissReview, even for matching prior Sigilix reviews", async () => {
     mockListPullRequestReviews.mockResolvedValue([
       priorReview({ id: 100, state: "APPROVED" }),
       priorReview({ id: 200, state: "CHANGES_REQUESTED" }),
@@ -86,16 +111,17 @@ describe("dismissPriorSigilixReviews", () => {
 
     const out = await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    expect(out).toEqual({ dismissed: 2, failed: 0 })
-    expect(mockDismissReview).toHaveBeenCalledTimes(2)
-    const ids = mockDismissReview.mock.calls.map((c) => c[3])
-    expect(ids.sort()).toEqual([100, 200])
+    // SIG-85: bot-initiated dismissal removed. Both prior reviews
+    // get a `pr-review-stale-detected` event instead.
+    expect(out).toEqual({ dismissed: 0, failed: 0 })
+    expect(mockDismissReview).not.toHaveBeenCalled()
+    expect(staleDetectedCount(logSpy)).toBe(2)
   })
 
-  it("ARC-287: currentReviewId=null dismisses ALL matching priors (dismiss-then-post sentinel)", async () => {
+  it("ARC-287: currentReviewId=null still filters every matching prior (no exclusion)", async () => {
     // ARC-287 sentinel: when the helper fires BEFORE submitReview
     // (the new order), there's no current review yet to exclude.
-    // `currentReviewId: null` should dismiss every matching prior
+    // `currentReviewId: null` should detect every matching prior
     // Sigilix review without the per-id filter kicking in.
     mockListPullRequestReviews.mockResolvedValue([
       priorReview({ id: 100, state: "APPROVED" }),
@@ -110,29 +136,31 @@ describe("dismissPriorSigilixReviews", () => {
       client,
     })
 
-    // All three matching priors get dismissed — no exclusion.
-    expect(out).toEqual({ dismissed: 3, failed: 0 })
-    expect(mockDismissReview).toHaveBeenCalledTimes(3)
-    const ids = mockDismissReview.mock.calls.map((c) => c[3])
-    expect(ids.sort()).toEqual([100, 200, 300])
+    expect(out).toEqual({ dismissed: 0, failed: 0 })
+    expect(mockDismissReview).not.toHaveBeenCalled()
+    // All three matching priors get a stale-detected event.
+    expect(staleDetectedCount(logSpy)).toBe(3)
   })
 
-  it("never dismisses the just-posted review (currentReviewId is excluded)", async () => {
+  it("excludes the just-posted review (currentReviewId is filtered out)", async () => {
     mockListPullRequestReviews.mockResolvedValue([
       priorReview({ id: baseArgs.currentReviewId, state: "APPROVED" }), // our own fresh review
       priorReview({ id: 200, state: "APPROVED" }),
     ])
     const client = new GitHubClient({ token: "t" })
 
-    const out = await dismissPriorSigilixReviews({ ...baseArgs, client })
+    await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    expect(out.dismissed).toBe(1)
-    expect(mockDismissReview).toHaveBeenCalledWith(
-      "Arc-and-Anchor", "sigilix", 42, 200, expect.any(String),
-    )
-    expect(mockDismissReview).not.toHaveBeenCalledWith(
-      "Arc-and-Anchor", "sigilix", 42, baseArgs.currentReviewId, expect.any(String),
-    )
+    expect(mockDismissReview).not.toHaveBeenCalled()
+    expect(staleDetectedCount(logSpy)).toBe(1)
+    // Stale-detected event references the OTHER review, not our fresh one.
+    const staleCall = logSpy.mock.calls.find((call) => {
+      const arg = call[0]
+      return typeof arg === "string" && arg.includes("pr-review-stale-detected")
+    })
+    expect(typeof staleCall?.[0]).toBe("string")
+    expect(staleCall?.[0] as string).toContain("\"review_id\":200")
+    expect(staleCall?.[0] as string).not.toContain(`"review_id":${baseArgs.currentReviewId}`)
   })
 
   it("never touches reviews from other reviewers (body lacks the Sigilix marker)", async () => {
@@ -143,19 +171,18 @@ describe("dismissPriorSigilixReviews", () => {
     ])
     const client = new GitHubClient({ token: "t" })
 
-    const out = await dismissPriorSigilixReviews({ ...baseArgs, client })
+    await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    expect(out.dismissed).toBe(1)
-    expect(mockDismissReview).toHaveBeenCalledTimes(1)
-    expect(mockDismissReview.mock.calls[0]?.[3]).toBe(300)
+    expect(mockDismissReview).not.toHaveBeenCalled()
+    expect(staleDetectedCount(logSpy)).toBe(1)
   })
 
   // code-reviewer H1 catch on PR review: defense-in-depth against a
   // human (or another bot) impersonating Sigilix by pasting the
   // `<!-- sigilix:pr-review -->` marker into their own review body.
   // The user-login check guarantees only `sigilix[bot]`-authored
-  // reviews are dismissed even when the body marker matches.
-  it("does NOT dismiss reviews where the body marker matches but author is NOT sigilix[bot]", async () => {
+  // reviews are flagged stale even when the body marker matches.
+  it("does NOT flag reviews where the body marker matches but author is NOT sigilix[bot]", async () => {
     mockListPullRequestReviews.mockResolvedValue([
       // Sneaky human pasted the marker into their body.
       priorReview({ id: 100, state: "APPROVED", user: { login: "sneaky-human" } }),
@@ -166,23 +193,22 @@ describe("dismissPriorSigilixReviews", () => {
     ])
     const client = new GitHubClient({ token: "t" })
 
-    const out = await dismissPriorSigilixReviews({ ...baseArgs, client })
+    await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    expect(out.dismissed).toBe(1)
-    expect(mockDismissReview).toHaveBeenCalledTimes(1)
-    expect(mockDismissReview.mock.calls[0]?.[3]).toBe(300)
+    expect(mockDismissReview).not.toHaveBeenCalled()
+    expect(staleDetectedCount(logSpy)).toBe(1)
   })
 
-  it("does NOT dismiss reviews with a null user (defensive — shouldn't happen in practice)", async () => {
+  it("does NOT flag reviews with a null user (defensive — shouldn't happen in practice)", async () => {
     mockListPullRequestReviews.mockResolvedValue([
       priorReview({ id: 100, state: "APPROVED", user: null }),
     ])
     const client = new GitHubClient({ token: "t" })
 
-    const out = await dismissPriorSigilixReviews({ ...baseArgs, client })
+    await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    expect(out.dismissed).toBe(0)
     expect(mockDismissReview).not.toHaveBeenCalled()
+    expect(staleDetectedCount(logSpy)).toBe(0)
   })
 
   it("skips reviews in non-dismissible states (COMMENTED / PENDING / DISMISSED)", async () => {
@@ -190,14 +216,14 @@ describe("dismissPriorSigilixReviews", () => {
       priorReview({ id: 100, state: "COMMENTED" }),  // body has marker but state isn't dismissible
       priorReview({ id: 200, state: "PENDING" }),
       priorReview({ id: 300, state: "DISMISSED" }),
-      priorReview({ id: 400, state: "APPROVED" }),    // this one IS dismissible
+      priorReview({ id: 400, state: "APPROVED" }),    // this one IS flag-worthy
     ])
     const client = new GitHubClient({ token: "t" })
 
-    const out = await dismissPriorSigilixReviews({ ...baseArgs, client })
+    await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    expect(out.dismissed).toBe(1)
-    expect(mockDismissReview.mock.calls[0]?.[3]).toBe(400)
+    expect(mockDismissReview).not.toHaveBeenCalled()
+    expect(staleDetectedCount(logSpy)).toBe(1)
   })
 
   it("returns zero counts when listPullRequestReviews fails", async () => {
@@ -210,25 +236,6 @@ describe("dismissPriorSigilixReviews", () => {
     expect(mockDismissReview).not.toHaveBeenCalled()
   })
 
-  it("isolates per-review dismissal failures (some succeed, some fail)", async () => {
-    mockListPullRequestReviews.mockResolvedValue([
-      priorReview({ id: 100, state: "APPROVED" }),
-      priorReview({ id: 200, state: "APPROVED" }),
-      priorReview({ id: 300, state: "APPROVED" }),
-    ])
-    let n = 0
-    mockDismissReview.mockImplementation(async () => {
-      n += 1
-      if (n === 2) throw new Error("HTTP 422 already dismissed")
-      return undefined
-    })
-    const client = new GitHubClient({ token: "t" })
-
-    const out = await dismissPriorSigilixReviews({ ...baseArgs, client })
-
-    expect(out).toEqual({ dismissed: 2, failed: 1 })
-  })
-
   it("handles empty review list", async () => {
     mockListPullRequestReviews.mockResolvedValue([])
     const client = new GitHubClient({ token: "t" })
@@ -237,60 +244,34 @@ describe("dismissPriorSigilixReviews", () => {
 
     expect(out).toEqual({ dismissed: 0, failed: 0 })
     expect(mockDismissReview).not.toHaveBeenCalled()
+    expect(staleDetectedCount(logSpy)).toBe(0)
   })
 
-  it("dismissal message starts with 'Stale' and names the new head SHA when provided (ARC-293 minimal)", async () => {
+  // SIG-85: bilingual marker matcher. Prior reviews posted under the
+  // legacy `<!-- openclaw:pr-review -->` marker must still be
+  // recognized as Sigilix reviews so the stale-detector counts them.
+  it("SIG-85: bilingual marker — finds prior reviews under the legacy openclaw:pr-review marker", async () => {
     mockListPullRequestReviews.mockResolvedValue([
-      priorReview({ id: 100, state: "APPROVED" }),
+      // Legacy openclaw marker (pre-rebrand sticky).
+      priorReview({
+        id: 100,
+        state: "APPROVED",
+        body: `${LEGACY_REVIEW_BODY_MARKER}\nlegacy body`,
+      }),
+      // Current sigilix marker (post-rebrand sticky).
+      priorReview({
+        id: 200,
+        state: "CHANGES_REQUESTED",
+        body: `${SIGILIX_REVIEW_BODY_MARKER}\ncurrent body`,
+      }),
     ])
     const client = new GitHubClient({ token: "t" })
 
     await dismissPriorSigilixReviews({ ...baseArgs, client })
 
-    const message = mockDismissReview.mock.calls[0]?.[4] as string
-    expect(typeof message).toBe("string")
-    // ARC-293: the dismissal banner GitHub renders already says
-    // "sigilix [Bot] dismissed their stale review" with a link to the
-    // dismissed review, so our expansion-box message only needs to
-    // carry the one extra bit — which SHA Sigilix re-reviewed at.
-    expect(message).toMatch(/^Stale/)
-    expect(message).toContain("abcdef1") // 7-char SHA of the new head
-  })
-
-  it("dismissal message omits the new-head clause when headSha is not provided (backwards compat)", async () => {
-    mockListPullRequestReviews.mockResolvedValue([
-      priorReview({ id: 100, state: "APPROVED" }),
-    ])
-    const client = new GitHubClient({ token: "t" })
-
-    // Call without headSha (legacy callers).
-    const { headSha: _unused, ...argsWithoutHead } = baseArgs
-    await dismissPriorSigilixReviews({ ...argsWithoutHead, client })
-
-    const message = mockDismissReview.mock.calls[0]?.[4] as string
-    expect(message).toMatch(/^Stale/)
-    expect(message).not.toMatch(/Re-reviewed/i)
-  })
-
-  it("dismissal message drops the new-head clause when headSha is shorter than 7 chars (short() <7 branch)", async () => {
-    // `short()` returns null when sha.length < 7. The dismissal
-    // message must still be coherent — no empty backticks or stray
-    // "Re-reviewed at ``" suffix.
-    mockListPullRequestReviews.mockResolvedValue([
-      priorReview({ id: 100, state: "APPROVED", commitId: "abc123" }),
-    ])
-    const client = new GitHubClient({ token: "t" })
-
-    await dismissPriorSigilixReviews({
-      ...baseArgs,
-      client,
-      headSha: "def456", // 6 chars — under threshold
-    })
-
-    const message = mockDismissReview.mock.calls[0]?.[4] as string
-    expect(message).toMatch(/^Stale/)
-    expect(message).not.toMatch(/Re-reviewed/i)
-    expect(message).not.toMatch(/`\s*`/) // no empty backticks
+    expect(mockDismissReview).not.toHaveBeenCalled()
+    // Both legacy + current markers count as targets.
+    expect(staleDetectedCount(logSpy)).toBe(2)
   })
 
   // code-reviewer M2 catch: warn when the list-call hits the 100-cap

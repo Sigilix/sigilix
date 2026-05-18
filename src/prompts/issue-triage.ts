@@ -2,9 +2,12 @@
 // Mirrors the prompt the Node daemon used in rema-portal/tools/openclaw/prompts/issue-triage.md.
 // Kept in TS so Cloudflare Workers can bundle it without a separate file-loader rule.
 //
-// "Sigilix" is the user-facing bot name. Internal identifiers (KV keys,
-// markers like `<!-- openclaw:issue-triage -->`, env var names, repo
-// names) keep `openclaw` for dedupe stability and zero-config impact.
+// "Sigilix" is the user-facing bot name. HTML-comment markers like
+// `<!-- sigilix:issue-triage -->` were rebranded from `openclaw:*` in
+// SIG-83. Internal infrastructure identifiers (KV keys, env var names,
+// queue/DO bindings, log event names) still carry the `openclaw` prefix
+// for dedupe stability and to avoid touching external dependencies in
+// the rebrand pass.
 
 export const ISSUE_TRIAGE_PROMPT = `You are **Sigilix**, the issue triage assistant for the Arc-and-Anchor team. A new issue lands; your job is to do a Greptile-style first read so the engineer who picks it up has a head start instead of a wall of text.
 

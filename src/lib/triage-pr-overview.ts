@@ -23,7 +23,12 @@ import {
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
-const OVERVIEW_MARKER = "<!-- openclaw:pr-overview -->"
+const OVERVIEW_MARKER = "<!-- sigilix:pr-overview -->"
+// SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
+// markers so the existing-comment lookup finds legacy stickies and
+// edits them in place instead of creating duplicates. Drop the legacy
+// half once all pre-2026-05-18 PRs close.
+const LEGACY_OVERVIEW_MARKER = "<!-- openclaw:pr-overview -->"
 
 const LIMITS = {
   prDiff: 28_000,
@@ -640,7 +645,14 @@ async function scanComments(
   let legacyWarmupId: number | null = null
   for (const c of items) {
     if (typeof c.body !== "string") continue
-    if (overviewId === null && c.body.includes(OVERVIEW_MARKER)) {
+    // SIG-85: bilingual matcher — pick up both `<!-- sigilix:pr-overview -->`
+    // and the legacy `<!-- openclaw:pr-overview -->` stickies. Without
+    // this, a PR that received its overview pre-rebrand gets a brand
+    // new (duplicate) overview comment instead of an in-place edit.
+    if (
+      overviewId === null &&
+      (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER))
+    ) {
       overviewId = c.id
     }
     if (legacyWarmupId === null && c.body.includes(LEGACY_WARMUP_MARKER)) {

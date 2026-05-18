@@ -123,7 +123,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
     mockListIssueComments
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
-        { id: 999, body: "<!-- openclaw:pr-overview -->\n## Sigilix Overview\nold" },
+        { id: 999, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\nold" },
       ])
     const { kv } = makeKvStub()
 
@@ -140,7 +140,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
     mockListIssueComments
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
-        { id: 777, body: "<!-- openclaw:pr-overview -->\nbody" },
+        { id: 777, body: "<!-- sigilix:pr-overview -->\nbody" },
       ])
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     const { kv } = makeKvStub()
@@ -163,7 +163,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
     mockListIssueComments
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([
-        { id: 999, body: "<!-- openclaw:pr-overview -->\nold" },
+        { id: 999, body: "<!-- sigilix:pr-overview -->\nold" },
       ])
     const { kv } = makeKvStub()
 
@@ -186,7 +186,7 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
 
   it("skips the late re-check when the first scan already found a marker (PATCH on existing)", async () => {
     mockListIssueComments.mockResolvedValueOnce([
-      { id: 555, body: "<!-- openclaw:pr-overview -->\nprior" },
+      { id: 555, body: "<!-- sigilix:pr-overview -->\nprior" },
     ])
     const { kv } = makeKvStub()
 

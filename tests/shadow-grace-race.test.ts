@@ -112,6 +112,76 @@ describe("composeSignals", () => {
     const composed = composeSignals(a.signal, b.signal)
     expect(composed.aborted).toBe(true)
   })
+
+  // Sigilix tests-specialist catch (PR #98): the previous "aborts when
+  // any input signal aborts" test asserted `composed.aborted` but never
+  // checked `composed.reason`. A regression that dropped or mangled the
+  // reason (e.g. swapping orch_aborted vs grace_deadline) would have
+  // shipped silently and broken downstream dashboards that pivot on
+  // the reason. Pin the reason explicitly.
+  it("forwards the abort reason from the input signal that aborts first", () => {
+    const a = new AbortController()
+    const b = new AbortController()
+    const composed = composeSignals(a.signal, b.signal)
+    a.abort("orch_aborted")
+    expect(composed.aborted).toBe(true)
+    expect(composed.reason).toBe("orch_aborted")
+  })
+
+  // Sigilix tests-specialist catch (PR #98): double-abort idempotency.
+  // The finally block calls `.abort(reason)` on every still-pending
+  // shadow controller in sequence; a subsequent `.abort()` on a
+  // sibling input must not flip the composed signal's reason or fire
+  // a second abort event. Pin first-reason-wins.
+  it("first-reason-wins under double-abort (idempotent across multiple inputs)", () => {
+    const a = new AbortController()
+    const b = new AbortController()
+    const composed = composeSignals(a.signal, b.signal)
+    a.abort("first")
+    expect(composed.aborted).toBe(true)
+    expect(composed.reason).toBe("first")
+    b.abort("second")
+    expect(composed.aborted).toBe(true)
+    // Reason MUST still be the first one — composeSignals semantics are
+    // "first wins" because AbortSignal can't transition twice.
+    expect(composed.reason).toBe("first")
+  })
+})
+
+// Sigilix tests-specialist catch (PR #98): the type guard is the only
+// runtime mechanism that distinguishes a shadow runner crash from a
+// grace expiry. It MUST reject non-discriminator values defensively —
+// a refactor that breaks the discriminator (e.g. renames the field)
+// would silently misclassify every shadow crash as a cut-short and
+// hide the failure signal in the cut-short bucket on dashboards.
+describe("isShadowRunFailed type guard", () => {
+  it("returns false for non-object inputs (null, undefined, primitives)", () => {
+    expect(isShadowRunFailed(null)).toBe(false)
+    expect(isShadowRunFailed(undefined)).toBe(false)
+    expect(isShadowRunFailed("string")).toBe(false)
+    expect(isShadowRunFailed(42)).toBe(false)
+    expect(isShadowRunFailed(true)).toBe(false)
+    expect(isShadowRunFailed(Symbol("x"))).toBe(false)
+  })
+
+  it("returns false for an object missing the __shadowRunFailed key", () => {
+    expect(isShadowRunFailed({})).toBe(false)
+    expect(isShadowRunFailed({ message: "fail" })).toBe(false)
+    expect(isShadowRunFailed({ kind: "run_failed", message: "fail" })).toBe(false)
+  })
+
+  it("returns false when __shadowRunFailed is present but NOT the SHADOW_RUN_FAILED sentinel", () => {
+    expect(isShadowRunFailed({ __shadowRunFailed: "shadow_run_failed" })).toBe(false)
+    expect(isShadowRunFailed({ __shadowRunFailed: Symbol("shadow_run_failed") })).toBe(false)
+    expect(isShadowRunFailed({ __shadowRunFailed: undefined })).toBe(false)
+    expect(isShadowRunFailed({ __shadowRunFailed: null })).toBe(false)
+  })
+
+  it("returns true ONLY when __shadowRunFailed === SHADOW_RUN_FAILED exactly", () => {
+    expect(isShadowRunFailed({ __shadowRunFailed: SHADOW_RUN_FAILED, message: "x" })).toBe(true)
+    // Extra fields are fine — the guard only checks the discriminator.
+    expect(isShadowRunFailed({ __shadowRunFailed: SHADOW_RUN_FAILED })).toBe(true)
+  })
 })
 
 describe("ARC-283 Phase B1b CR-2: aborting in-flight shadows when the grace expires", () => {
@@ -119,7 +189,7 @@ describe("ARC-283 Phase B1b CR-2: aborting in-flight shadows when the grace expi
   // finally block detects SHADOW_GRACE_EXPIRED and calls .abort(reason)
   // on the controller; we assert the call lands so the underlying HTTP
   // request stops consuming provider capacity.
-  it("calling .abort('grace_deadline') on the per-shadow controller fires the composed signal", async () => {
+  it("calling .abort('grace_deadline') on the per-shadow controller fires the composed signal", () => {
     const orchCtrl = new AbortController()
     const shadowCtrl = new AbortController()
     const composed = composeSignals(orchCtrl.signal, shadowCtrl.signal)

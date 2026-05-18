@@ -242,8 +242,23 @@ export interface TriagePrReviewArgs {
  */
 export type PrReviewStatus = "posted" | "skipped" | "stale_head" | "errored"
 
+/**
+ * ARC-276: same shape as `EnsembleResult.reviewMeta` — when Phase 3
+ * posts a review, signal the verdict + findings count so the
+ * dispatcher's Check Run can render an event-specific title.
+ * Defined here (not imported from the ensemble) to keep
+ * triage-pr-review.ts free of ensemble imports — Phase 3 must stay
+ * usable as a standalone reviewer until ARC-280 deletes it.
+ */
+export interface PrReviewMeta {
+  event: ReviewEvent
+  findingsCount: number
+}
+
 export interface PrReviewResult {
   status: PrReviewStatus
+  /** Only set on `status === "posted"`. */
+  reviewMeta?: PrReviewMeta
 }
 
 export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReviewResult> {
@@ -275,6 +290,11 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
   })
 
   let posted = false
+  // ARC-276: capture the verdict's event + findings count on the
+  // posted path so the dispatcher can render an event-specific
+  // Check Run title (Approved vs N findings). Populated only when
+  // `posted = true`.
+  let postedReviewMeta: PrReviewMeta | undefined = undefined
   try {
     const client = await buildClient(env, installationId)
     since("auth-ready")
@@ -508,6 +528,10 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
       return { status: "errored" }
     }
     posted = true
+    postedReviewMeta = {
+      event: chooseReviewEvent(verdict.findings),
+      findingsCount: verdict.findings.length,
+    }
     since(`review-submitted-${submitted.state}`)
     console.log(
       `pr-review submitted on ${owner}/${repo}#${prNumber}: ${submitted.state} (confidence=${verdict.confidence}/5, ${verdict.findings.length} findings)`
@@ -631,7 +655,9 @@ export async function handlePrReview(args: TriagePrReviewArgs): Promise<PrReview
       }))
     }
   }
-  return { status: posted ? "posted" : "skipped" }
+  return posted && postedReviewMeta
+    ? { status: "posted", reviewMeta: postedReviewMeta }
+    : { status: posted ? "posted" : "skipped" }
 }
 
 interface PromptCtx {
@@ -983,6 +1009,13 @@ export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
   // sorts/severity-tags the findings but doesn't decide the gate.
   // Closed loop comes from synchronize-driven re-reviews (PR #28):
   // user pushes fixes → arc re-reviews → empty findings → APPROVE.
+  //
+  // ARC-276: the APPROVE event is a real GitHub review-approval that
+  // counts toward branch-protection's required-reviewer count on
+  // repos that don't exclude bot reviewers. This is the
+  // "rubber-stamp" trade-off documented in the README; the founder's
+  // call is that always-vocal Sigilix beats silent skips even at the
+  // cost of bot-approval-counts-as-reviewer.
   return findings.length === 0 ? "APPROVE" : "REQUEST_CHANGES"
 }
 
@@ -1007,7 +1040,7 @@ export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
 function formatReviewBody(
   verdict: PrReviewVerdict,
   _prAuthor: string | null,
-  _event: ReviewEvent,
+  event: ReviewEvent,
   unanchored: PrReviewFinding[] = [],
   prov?: ProvenanceCtx,
   stack?: StackContext,
@@ -1020,10 +1053,30 @@ function formatReviewBody(
   // recurs across PRs. The model's summary already addresses the
   // engineer reviewing the PR — that's the message.
   //
+  // ARC-276: when the event is `APPROVE` (no findings) the body opens
+  // with an affirmative headline + a one-line statement of what
+  // Sigilix did. Without this, a no-findings APPROVE body would
+  // just be "### Sigilix Summary\n<summary>" with no clear pass
+  // signal at the top — the engineer reviewing the PR would have to
+  // read the model's prose to know whether anything was flagged.
+  //
   // When `unanchored` is non-empty, an "Additional findings" section
   // is appended so findings whose lines fell outside the diff still
   // get surfaced (rather than silently dropped on the success path).
   const lines: string[] = ["<!-- openclaw:pr-review -->", ""]
+  const totalFindings = verdict.findings.length + unanchored.length
+  if (event === "APPROVE" && totalFindings === 0) {
+    // CodeRabbit catch on PR #88: this renderer is shared between
+    // the ensemble path (4 specialists + synth) AND the Phase 3
+    // single-shot path. Claiming "Four-specialist ensemble ran"
+    // here would be factually wrong on the Phase 3 path. Use
+    // path-agnostic copy until ARC-280 deletes Phase 3 (or
+    // ARC-281's formatting redesign supersedes this lead entirely).
+    lines.push("## ✅ Sigilix reviewed this PR — no issues found")
+    lines.push("")
+    lines.push("Sigilix reviewed the current head and found nothing worth flagging.")
+    lines.push("")
+  }
   lines.push("### Sigilix Summary")
   lines.push("")
   lines.push(verdict.summary)

@@ -593,7 +593,13 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
       return
     }
 
-    const truncatedBody = truncateForGitHub(verdict.body, COMMENT_BODY_CAP)
+    // Comment-mode cap (60k) is sized for GitHub's ~65,536-char issue-
+    // comment ceiling. PR bodies (apply mode) allow ~262,144 chars —
+    // CodeRabbit caught on PR #87 that inheriting the comment cap was
+    // clipping valid content. The apply path now uses the full verdict
+    // body and relies on `PR_BODY_HARD_CAP` (the post-merge guard
+    // below) as the only size check.
+    const commentBodyCapped = truncateForGitHub(verdict.body, COMMENT_BODY_CAP)
 
     if (apply) {
       // ARC-264 path: write the generated draft into the PR body
@@ -630,7 +636,10 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
         mode,
         sectionContent: renderDescribeBlockContent({
           headSha,
-          body: truncatedBody,
+          // Pass full verdict body — apply mode is bounded by
+          // PR_BODY_HARD_CAP via the post-merge length guard, not by
+          // the comment-mode cap.
+          body: verdict.body,
         }),
       })
 
@@ -670,7 +679,12 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
           console.log(JSON.stringify({
             event: "pr-describe-applied",
             headSha,
-            truncated: truncatedBody.length < verdict.body.length,
+            // Apply path uses the full verdict body, so post-merge
+            // truncation only fires when the merged body would
+            // exceed `PR_BODY_HARD_CAP` (and the cap guard short-
+            // circuits BEFORE this branch). Stays `false` for any
+            // success that reaches this log line.
+            truncated: false,
             existing_markers: hadExistingMarkers,
             next_body_length: nextBody.length,
             ...tag,
@@ -700,7 +714,7 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
         mode,
         headSha,
         summary: verdict.summary,
-        body: truncatedBody,
+        body: commentBodyCapped,
       })
 
       try {
@@ -709,7 +723,7 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
         console.log(JSON.stringify({
           event: "pr-describe-posted",
           headSha,
-          truncated: truncatedBody.length < verdict.body.length,
+          truncated: commentBodyCapped.length < verdict.body.length,
           ...tag,
         }))
       } catch (err) {

@@ -176,6 +176,36 @@ describe("buildReviewSubmission", () => {
     expect(out.comments).toBeUndefined()
   })
 
+  // ARC-276: APPROVE bodies now lead with an affirmative headline +
+  // a one-line ensemble statement so the user sees a clear "passed"
+  // signal at the top, not just the model's summary.
+  it("renders the affirmative APPROVE headline on empty findings", () => {
+    const empty: PrReviewVerdict = {
+      summary: "Looks clean — nothing CR missed.",
+      confidence: 5,
+      confidenceReason: "Mechanical change.",
+      findings: [],
+    }
+    const out = buildReviewSubmission({ verdict: empty, prAuthor: "alice", headSha: "abc" })
+    expect(out.body).toContain("✅ Sigilix reviewed this PR — no issues found")
+    // CodeRabbit PR #88 catch: the line beneath the headline must
+    // be path-agnostic — formatReviewBody is shared with the Phase
+    // 3 single-shot reviewer, so an ensemble-specific claim would
+    // be factually wrong on that path.
+    expect(out.body).toContain("Sigilix reviewed the current head and found nothing worth flagging.")
+    expect(out.body).not.toContain("Four-specialist ensemble")
+    // The model's summary still appears under the affirmative lead.
+    expect(out.body).toContain("Looks clean — nothing CR missed.")
+  })
+
+  it("does NOT add the affirmative APPROVE headline when findings exist (REQUEST_CHANGES path)", () => {
+    // The REQUEST_CHANGES body uses the existing "Sigilix Summary"
+    // header — the affirmative headline is exclusive to APPROVE.
+    const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
+    expect(out.body).not.toContain("✅ Sigilix reviewed this PR — no issues found")
+    expect(out.body).not.toContain("Sigilix reviewed the current head and found nothing worth flagging.")
+  })
+
   it("renders the dedupe marker, summary header, and confidence reason in the body", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("<!-- openclaw:pr-review -->")

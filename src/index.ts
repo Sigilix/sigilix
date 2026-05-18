@@ -923,6 +923,11 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           installationId: job.installationId,
         })
         let conclusion: SigilixCheckConclusion | null = null
+        // ARC-276: capture the customer-visible review verdict +
+        // findings count on the posted path so the Check Run title
+        // can reflect `Approved — no issues found` vs `N findings
+        // posted`. Threaded out via `completeCheckRun`.
+        let reviewMeta: import("./lib/triage-pr-review").PrReviewMeta | undefined = undefined
         try {
           if (decision.primary === "ensemble-shadow") {
             // Shadow: Phase 3 posts the customer-facing review FIRST,
@@ -940,6 +945,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             // invariant that Phase 4b's shadow analysis depends on.
             const phase3Result = await handlePrReview(baseArgs)
             conclusion = mapPhase3StatusToCheckConclusion(phase3Result.status)
+            reviewMeta = phase3Result.reviewMeta
             if (phase3Result.status === "stale_head") return
             await handlePrReviewEnsemble(baseArgs, "shadow")
             return
@@ -959,6 +965,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             const result = await handlePrReviewEnsemble(baseArgs, "post")
             if (result.status === "posted") {
               conclusion = "success"
+              reviewMeta = result.reviewMeta
               return
             }
             if (result.status === "stale_head") {
@@ -971,6 +978,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             // bailed (router_no_specialists, quorum, synth, internal).
             const phase3Result = await handlePrReview(baseArgs)
             conclusion = mapPhase3StatusToCheckConclusion(phase3Result.status)
+            reviewMeta = phase3Result.reviewMeta
             return
           }
           // Phase 3 paths (agentic or singleshot-legacy) both go through
@@ -978,6 +986,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // function via OPENCLAW_AGENTIC_GITHUB_MODE.
           const phase3Result = await handlePrReview(baseArgs)
           conclusion = mapPhase3StatusToCheckConclusion(phase3Result.status)
+          reviewMeta = phase3Result.reviewMeta
         } catch (err) {
           conclusion = "failure"
           throw err
@@ -989,6 +998,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           await completeCheckRun({
             handle: checkRun,
             conclusion: conclusion ?? "failure",
+            ...(reviewMeta !== undefined ? { reviewMeta } : {}),
           })
         }
       })

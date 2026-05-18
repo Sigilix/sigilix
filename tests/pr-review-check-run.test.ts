@@ -256,4 +256,76 @@ describe("completeCheckRun", () => {
     // bubble up and corrupt the dispatcher.
     await expect(completeCheckRun({ handle, conclusion: "success" })).resolves.toBeUndefined()
   })
+
+  // ARC-276: when the dispatcher threads `reviewMeta`, the Check Run
+  // title reflects the verdict directly.
+  it("renders the APPROVE title when reviewMeta says APPROVE + 0 findings", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "APPROVE", findingsCount: 0 },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { title: string; summary: string } }
+    expect(p.output.title).toBe("Approved — no issues found")
+    expect(p.output.summary).toContain("APPROVE")
+  })
+
+  it("renders the REQUEST_CHANGES title with findings count when reviewMeta says REQUEST_CHANGES", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3 },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { title: string; summary: string } }
+    expect(p.output.title).toBe("3 findings — changes requested")
+    expect(p.output.summary).toContain("REQUEST_CHANGES")
+    expect(p.output.summary).toContain("3 findings")
+  })
+
+  it("singularizes the title when REQUEST_CHANGES has exactly 1 finding", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 1 },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { title: string } }
+    expect(p.output.title).toBe("1 finding — changes requested")
+  })
+
+  it("falls back to the generic 'Review posted' title when reviewMeta is omitted on success", async () => {
+    // Legacy callers + dedupe-hit skip paths don't carry reviewMeta.
+    // The generic copy is the right surface for "we don't know what
+    // the review verdict was, but the check needs to complete."
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({ handle, conclusion: "success" })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { title: string } }
+    expect(p.output.title).toBe("Review posted")
+  })
 })

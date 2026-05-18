@@ -44,6 +44,7 @@ import {
   parsePrReviewResponse,
   buildReviewSubmission,
   buildFallbackSubmission,
+  chooseReviewEvent,
 } from "./triage-pr-review"
 import {
   decideSpecialists,
@@ -1554,7 +1555,14 @@ export async function handlePrReviewEnsemble(
         }))
       }
       await maybePostAstAutoInline()
-      return finalize(telemetry, env, "posted", cache)
+      // ARC-276: signal the customer-visible verdict back to the
+      // dispatcher so the Sigilix Check Run title can render
+      // "Approved — no issues found" vs "N findings posted".
+      const inlineFindings = renderableVerdict.findings.length + renderableUnanchored.length
+      return finalize(telemetry, env, "posted", cache, {
+        event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+        findingsCount: inlineFindings,
+      })
     } catch (submitErr) {
       // Narrow the fallback to GitHub HTTP 422 (Unprocessable Entity)
       // — that's the specific status GitHub returns when an inline
@@ -1688,7 +1696,13 @@ export async function handlePrReviewEnsemble(
         }))
       }
       await maybePostAstAutoInline()
-      return finalize(telemetry, env, "posted", cache)
+      // ARC-276: same reviewMeta plumbing as the inline-anchored
+      // path — the anchorless fallback is still a posted review.
+      const fallbackFindings = renderableVerdict.findings.length + renderableUnanchored.length
+      return finalize(telemetry, env, "posted", cache, {
+        event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+        findingsCount: fallbackFindings,
+      })
     }
   } catch (e) {
     telemetry.fellBackToPhase3 = mode === "post"
@@ -3232,9 +3246,23 @@ type EnsembleResultStatus =
   | "stale_head"
   | "errored"
 
+/**
+ * ARC-276: signal the customer-visible verdict + findings count back
+ * to the dispatcher so the Sigilix Check Run title can reflect the
+ * actual review outcome (`Approved — no issues found` vs `N findings
+ * posted`). Only populated on the `posted` status; absent on every
+ * other path (stale_head / errored / skipped / shadow_recorded).
+ */
+export interface ReviewMeta {
+  event: "APPROVE" | "REQUEST_CHANGES"
+  findingsCount: number
+}
+
 export interface EnsembleResult {
   status: EnsembleResultStatus
   telemetry: EnsembleTelemetry
+  /** ARC-276: only set on `status === "posted"`. */
+  reviewMeta?: ReviewMeta
 }
 
 async function finalize(
@@ -3242,6 +3270,7 @@ async function finalize(
   env: Env,
   status: EnsembleResultStatus,
   cache: ReturnType<typeof createRetrievalCache> | null,
+  reviewMeta?: ReviewMeta,
 ): Promise<EnsembleResult> {
   telemetry.totalMs = Date.now() - telemetry.startMs
   // Capture retrieval cache stats BEFORE the KV write so telemetry
@@ -3266,7 +3295,7 @@ async function finalize(
   await incrementDailyBudget(env, callsUsed).catch(() => {})
   // Best-effort telemetry write.
   await writeTelemetry(env, telemetry).catch(() => {})
-  return { status, telemetry }
+  return reviewMeta !== undefined ? { status, telemetry, reviewMeta } : { status, telemetry }
 }
 
 async function writeTelemetry(env: Env, telemetry: EnsembleTelemetry): Promise<void> {

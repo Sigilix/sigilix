@@ -65,6 +65,24 @@ Fields: `role`, `prodModel`, `shadowModel`, `prodVerdictOk`,
 Findings overlap matches on `(path, line, category)` tuple — same
 line different category is NOT a match.
 
+### `shadow-cut-short`
+Emitted when a shadow promise didn't settle within
+`SHADOW_FINALIZE_GRACE_MS` (5s) of prod returning. Caps the worst-case
+consumer-wall extension so a pathologically slow shadow can't push
+the worker past the 900s CF Queues ceiling. The shadow's
+`shadow-verdict-comparison` event does NOT emit for this role.
+
+Fields: `role` (specialist role or `"synth"`), `elapsedAtCutMs`,
+`reason` (`"grace_deadline"` or `"orch_aborted"`).
+
+### `shadow-specialist-emit-error` / `shadow-synth-emit-error`
+Defensive: emitted only when the shadow comparison emit itself
+throws (shadow runners catch internally, so these should be rare).
+Customer-visible prod review is unaffected — these are pure
+telemetry diagnostics.
+
+Fields: `role` (specialist only), `message`.
+
 ## Decision criteria
 
 Codex's acceptance bar (per ARC-292):

@@ -1124,6 +1124,15 @@ export async function handlePrReviewEnsemble(
     // attempt succeeded; the other values record the retry's outcome.
     let synthRetryUsed = false
     let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
+    // ARC-278 (CR catch on PR #90): runSynthesizer wraps
+    // runWithRetryAndFallback, which already does its own internal
+    // primary+retry+fallback. So `attempt.attemptsUsed` from a single
+    // outer call can be 1, 2, or 3+. Accumulate the real count across
+    // BOTH attempts (and across a local timeout, where the outer call
+    // never returned attemptsUsed at all — treat as 1).
+    // This feeds `finalize()`'s daily-budget charge; under-counting
+    // here would under-charge the budget and over-count head-room.
+    let synthAttemptsUsed = 0
     try {
       // ARC-185: per-PR commands.review.{prompt.addendum, model.{primary,
       // fallbacks}} override. Specialists left untouched on the v3.1
@@ -1202,6 +1211,10 @@ export async function handlePrReviewEnsemble(
 
       const attempt1 = await attemptSynth(synthMessageWithMemory, SYNTHESIZER_TIMEOUT_MS)
       synthOutput = attempt1 ?? undefined
+      // attempt1 === null → local timeout, runSynthesizer never returned
+      // anything; charge 1 for the in-flight call. attempt1 !== null →
+      // trust the inner retry/fallback count.
+      synthAttemptsUsed += attempt1?.attemptsUsed ?? 1
       const attempt1Outcome = classifySynthOutcome(synthOutput, attempt1 === null)
 
       // ARC-278: if the primary attempt failed in a way we can
@@ -1221,6 +1234,8 @@ export async function handlePrReviewEnsemble(
         }))
         const attempt2 = await attemptSynth(retryUserMessage, SYNTHESIZER_RETRY_TIMEOUT_MS)
         synthOutput = attempt2 ?? undefined
+        // Same attempts-accounting rationale as attempt1 above.
+        synthAttemptsUsed += attempt2?.attemptsUsed ?? 1
         const attempt2Outcome = classifySynthOutcome(synthOutput, attempt2 === null)
         synthRetryOutcome = attempt2Outcome
         console.log(JSON.stringify({
@@ -1245,7 +1260,10 @@ export async function handlePrReviewEnsemble(
       telemetry.synthesizer = {
         model: SYNTHESIZER_MODEL,
         modelUsed: SYNTHESIZER_MODEL,
-        attemptsUsed: 1,
+        // Defensive catch-block — `synthAttemptsUsed` may or may not
+        // have been incremented depending on which await threw.
+        // Fall back to a minimum of 1 if accounting got skipped.
+        attemptsUsed: Math.max(1, synthAttemptsUsed),
         verdict: null,
         provenance: null,
         retrievalCallsUsed: 0,
@@ -1273,7 +1291,13 @@ export async function handlePrReviewEnsemble(
       telemetry.synthesizer = {
         model: SYNTHESIZER_MODEL,
         modelUsed: SYNTHESIZER_MODEL,
-        attemptsUsed: synthRetryUsed ? 2 : 1,
+        // CR catch on PR #90: trust the accumulated count from
+        // attempt1.attemptsUsed (+ attempt2.attemptsUsed if retry
+        // ran). Local-timeout branches charge 1 per missed
+        // returned-attempt count, so the minimum is correctly 1 for
+        // a single-attempt timeout, 2 for primary-then-retry both
+        // locally timing out.
+        attemptsUsed: Math.max(1, synthAttemptsUsed),
         verdict: null,
         provenance: null,
         retrievalCallsUsed: 0,
@@ -1299,11 +1323,13 @@ export async function handlePrReviewEnsemble(
     const synthEntry: NonNullable<EnsembleTelemetry["synthesizer"]> = {
       model: SYNTHESIZER_MODEL,
       modelUsed: synthOutput.modelUsed,
-      // ARC-278: when retry ran, attemptsUsed reflects total (primary
-      // + retry). When retry was skipped, the underlying runSynthesizer's
-      // own attemptsUsed (cross-provider fallback inside the runner)
-      // is the correct count.
-      attemptsUsed: synthRetryUsed ? synthOutput.attemptsUsed + 1 : synthOutput.attemptsUsed,
+      // ARC-278 (CR catch on PR #90): use the accumulated count.
+      // `synthAttemptsUsed` sums each outer-attempt's inner
+      // attemptsUsed (where each is itself
+      // primary+retry+cross-provider-fallback inside
+      // runWithRetryAndFallback). The previous `+ 1` undercounted
+      // whenever the inner retry/fallback fired.
+      attemptsUsed: synthAttemptsUsed > 0 ? synthAttemptsUsed : synthOutput.attemptsUsed,
       verdict: synthOutput.verdict,
       provenance: synthOutput.provenance,
       retrievalCallsUsed: 0,  // Phase 4a synth doesn't use retrieve; reserved for Phase 4b

@@ -1798,6 +1798,17 @@ export async function handlePrReviewEnsemble(
     // ARC-284: wrap the submit so a slow GitHub roundtrip shows up in
     // the trace. Covers BOTH the success path and the 422-fallback
     // path that the catch block dispatches to.
+    //
+    // ARC-286 follow-up: this is the call site that needs the pre-
+    // submit `is-PR-merged?` guard so the merge-timing race stops
+    // posting reviews to merged PRs. Both submit paths below
+    // (inline-anchored + anchorless-fallback) need the same check.
+    //
+    // ARC-287 follow-up: the order of submitReview + dismissPriorSigilix
+    // should flip — dismiss FIRST, then post — so the GitHub timeline
+    // renders cleanup-above-current-review instead of the current
+    // reverse-chronology footgun. Safe because ARC-279's comment
+    // fallback covers the "dismiss succeeded, submit failed" case.
     const submitStartMs = Date.now()
     try {
       const submitted = await client.submitReview(owner, repo, prNumber, submission)

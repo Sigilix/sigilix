@@ -20,6 +20,7 @@
 
 import type { DescribeMode } from "./slash-commands"
 import { describeModeFriendlyName } from "./slash-commands"
+import { applyDescribeToBody } from "./describe-apply"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
 import { generate } from "./ollama"
@@ -44,6 +45,13 @@ export interface TriagePrDescribeArgs {
   prNumber: number
   installationId: number
   mode: DescribeMode
+  /** ARC-264: when true, write the generated draft into the PR body
+   *  between marker fences (`<!-- sigilix:describe:<mode>:start/end -->`)
+   *  via PATCH. When false (default), post a top-level comment as in
+   *  describe v1. The dedupe key includes this flag so
+   *  `describe <mode>` and `describe apply <mode>` don't suppress
+   *  each other within the per-hour window. */
+  apply: boolean
   env: Env
 }
 
@@ -53,6 +61,13 @@ export const LIMITS = {
 }
 
 export const COMMENT_BODY_CAP = 60_000
+
+/** ARC-264 soft cap for the merged PR-body length. GitHub's hard
+ *  cap is ~262144; we cap at 250000 to leave a 12k margin for
+ *  multi-byte characters and any future format changes that might
+ *  add prefix/suffix bytes. Going over this triggers a clear-error
+ *  comment instead of letting GitHub return a generic 422. */
+export const PR_BODY_HARD_CAP = 250_000
 
 interface BuildPromptArgs {
   mode: DescribeMode
@@ -181,6 +196,13 @@ export function renderDescribeComment(args: {
     schema: 1,
     source: "comment-draft",
   })
+  // Choose the short-token form so the suggested command matches
+  // what the user would type. `pr` / `internal` / `external`.
+  const shortToken: Record<DescribeMode, string> = {
+    "pr-description": "pr",
+    "internal-changelog": "internal",
+    "external-changelog": "external",
+  }
   return [
     `**Sigilix describe** — \`${friendly}\` draft`,
     "",
@@ -190,7 +212,9 @@ export function renderDescribeComment(args: {
     body,
     `<!-- sigilix:describe:${mode}:end -->`,
     "",
-    `<sub>Run on \`${sha7}\`. Copy the section between markers into the PR description / changelog. \`/sigilix describe apply\` (auto-write) coming in a follow-up.</sub>`,
+    // ARC-264 update: apply shipped. Point users at it instead of
+    // promising a follow-up that already exists.
+    `<sub>Run on \`${sha7}\`. Copy the section between markers into the PR description / changelog, or run \`/sigilix describe apply ${shortToken[mode]}\` to write it into the PR body in place.</sub>`,
     "",
     `<!-- sigilix-meta: ${meta} -->`,
   ].join("\n")
@@ -258,6 +282,74 @@ export function renderFailureComment(mode: DescribeMode): string {
 }
 
 /**
+ * ARC-264: fallback comment posted when `apply` mode generates a
+ * valid draft but the PR-body PATCH fails with a 4xx. We don't
+ * re-throw on 4xx (not queue-retriable), so this comment is the
+ * only signal the user gets. Includes the short mode token so the
+ * user can re-run with the same arg shape, and the headSha so the
+ * user can correlate the failure with their working tree (code-
+ * review L7 catch).
+ */
+export function renderApplyFailureComment(mode: DescribeMode, headSha?: string): string {
+  const shortToken: Record<DescribeMode, string> = {
+    "pr-description": "pr",
+    "internal-changelog": "internal",
+    "external-changelog": "external",
+  }
+  const shaSuffix = typeof headSha === "string" && headSha.length > 0
+    ? ` (run on \`${headSha.slice(0, 7)}\`)`
+    : ""
+  return `**Sigilix describe apply** — generated the \`${mode}\` draft but could not write it to the PR body${shaSuffix} (GitHub PATCH refused). Re-run \`/sigilix describe apply ${shortToken[mode]}\` to retry, or run \`/sigilix describe ${shortToken[mode]}\` to get the draft as a comment instead.`
+}
+
+/**
+ * ARC-264 (code-review M1): emitted when the merged PR body would
+ * exceed `PR_BODY_HARD_CAP`. GitHub would otherwise return a
+ * generic 422; this comment tells the user exactly what hit the
+ * limit and offers the comment-mode draft as the workaround.
+ */
+export function renderApplyTooLargeComment(
+  mode: DescribeMode,
+  currentLength: number,
+  mergedLength: number,
+): string {
+  const shortToken: Record<DescribeMode, string> = {
+    "pr-description": "pr",
+    "internal-changelog": "internal",
+    "external-changelog": "external",
+  }
+  return [
+    `**Sigilix describe apply** — generated the \`${mode}\` draft but the merged PR body (${mergedLength.toLocaleString()} chars) would exceed GitHub's size cap (${PR_BODY_HARD_CAP.toLocaleString()} chars).`,
+    "",
+    `Current body: ${currentLength.toLocaleString()} chars. Shorten the manual portion of the description, or run \`/sigilix describe ${shortToken[mode]}\` to get the draft as a top-level comment instead.`,
+  ].join("\n")
+}
+
+/**
+ * ARC-264 (code-review M2): inner content written between the
+ * marker fences in apply mode. Adds a machine-readable provenance
+ * line ahead of the rendered body so a future freshness check
+ * can detect "this fenced block was generated against SHA X" and
+ * invalidate stale auto-content when base diverges. The whole
+ * block (including this line) is replaced on every re-run, so the
+ * provenance always reflects the latest generation.
+ *
+ * Pure — exposed for tests.
+ */
+export function renderDescribeBlockContent(args: {
+  headSha: string
+  body: string
+}): string {
+  const { headSha, body } = args
+  const meta = JSON.stringify({
+    kind: "describe-apply",
+    headSha,
+    schema: 1,
+  })
+  return `<!-- sigilix-meta: ${meta} -->\n${body}`
+}
+
+/**
  * No-diff branch. Posted when the PR is closed/merged with no
  * fetchable diff, or the diff fetch returned empty. Avoids an
  * LLM call on input the model can't usefully process.
@@ -289,8 +381,8 @@ export function renderNoChangesComment(prNumber: number): string {
  *     set it — `finally` releases the key so the user can re-run.
  */
 export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void> {
-  const { owner, repo, prNumber, installationId, mode, env } = args
-  const tag = { owner, repo, prNumber, mode }
+  const { owner, repo, prNumber, installationId, mode, apply, env } = args
+  const tag = { owner, repo, prNumber, mode, apply }
 
   // Sensitive-repo gate (BEFORE any auth or LLM call). Posts a denial
   // comment unlike improve's silent drop — describe is invoked by an
@@ -368,12 +460,15 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
     return
   }
 
-  // Per-(PR, headSha, mode) dedupe lock. Mode-keyed so `internal`
-  // and `external` on the same head can both run within the hour.
-  // Released in `finally` if successPosted is false, so failed runs
-  // (parse failure, generate rejection, 4xx post) leave the lock
-  // open for a manual re-run via `/sigilix describe <mode>`.
-  const dedupeKey = `pr-describe:${owner}/${repo}#${prNumber}@${headSha}:${mode}`
+  // Per-(PR, headSha, mode, apply) dedupe lock. Mode-keyed so
+  // `internal` and `external` on the same head can both run within
+  // the hour. Apply-keyed so `/sigilix describe pr` and
+  // `/sigilix describe apply pr` (ARC-264) don't suppress each other
+  // — one posts a comment, the other writes the PR body. Released
+  // in `finally` if successPosted is false, so failed runs leave
+  // the lock open for a manual re-run.
+  const applySuffix = apply ? ":apply" : ""
+  const dedupeKey = `pr-describe:${owner}/${repo}#${prNumber}@${headSha}:${mode}${applySuffix}`
   const seen = await env.OPENCLAW_STATE.get(dedupeKey)
   if (seen) {
     console.log(JSON.stringify({
@@ -499,39 +594,142 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
     }
 
     const truncatedBody = truncateForGitHub(verdict.body, COMMENT_BODY_CAP)
-    const commentBody = renderDescribeComment({
-      mode,
-      headSha,
-      summary: verdict.summary,
-      body: truncatedBody,
-    })
 
-    try {
-      await client.createIssueComment(owner, repo, prNumber, commentBody)
-      successPosted = true
-      console.log(JSON.stringify({
-        event: "pr-describe-posted",
-        headSha,
-        truncated: truncatedBody.length < verdict.body.length,
-        ...tag,
-      }))
-    } catch (err) {
-      const status = readHttpStatus(err)
-      if (status !== null && status >= 500) {
-        // 5xx posting the success draft: re-throw → queue retry.
-        // User has not seen any output yet (only the ack), so a
-        // single retry is the right behavior. Dedupe key released
-        // in `finally` so retry can re-run from scratch.
-        throw err
+    if (apply) {
+      // ARC-264 path: write the generated draft into the PR body
+      // between marker fences instead of posting a comment. Content
+      // outside the markers (user-authored prose, links, screenshots)
+      // is preserved across re-runs.
+      //
+      // Re-fetch the PR body immediately before the PATCH (code-
+      // reviewer H2 catch). The LLM call takes ~5s; another bot
+      // (Linear sync, walkthrough comment, parallel `/sigilix
+      // describe apply` for a different mode) could have edited
+      // the body in that window. Reading fresh narrows the race
+      // window to the GET→PATCH gap, which is unavoidable without
+      // ETag support on the pulls endpoint.
+      let currentBody: string
+      try {
+        const fresh = await client.getPullRequest(owner, repo, prNumber)
+        currentBody = fresh.body ?? ""
+      } catch (err) {
+        // GET failure: fall back to the stale `meta.body` snapshot
+        // rather than abort. We'd rather PATCH with a slightly-
+        // stale view than fail the apply outright.
+        console.warn(JSON.stringify({
+          event: "pr-describe-apply-prefetch-failed",
+          err: err instanceof Error ? err.message : String(err),
+          headSha,
+          ...tag,
+        }))
+        currentBody = meta.body ?? ""
       }
-      // 4xx: log + return (4xx isn't queue-retriable).
-      console.error(JSON.stringify({
-        event: "pr-describe-post-failed",
-        status,
-        err: err instanceof Error ? err.message : String(err),
+      const hadExistingMarkers = currentBody.includes(`<!-- sigilix:describe:${mode}:start -->`)
+      const nextBody = applyDescribeToBody({
+        currentBody,
+        mode,
+        sectionContent: renderDescribeBlockContent({
+          headSha,
+          body: truncatedBody,
+        }),
+      })
+
+      // H3: no-op when the merged body matches the existing body
+      // byte-for-byte. Avoids body-churn entries in GitHub's PR
+      // history on a re-run with identical content (idempotent
+      // re-apply should not show up in audit history).
+      if (nextBody === currentBody) {
+        successPosted = true
+        console.log(JSON.stringify({
+          event: "pr-describe-applied-noop",
+          headSha,
+          existing_markers: hadExistingMarkers,
+          ...tag,
+        }))
+      } else if (nextBody.length > PR_BODY_HARD_CAP) {
+        // M1: GitHub caps PR bodies at ~262144 chars. If the merged
+        // body would exceed our soft cap (well below GitHub's hard
+        // cap), surface a clear error to the user rather than let
+        // GitHub return a generic 422.
+        console.error(JSON.stringify({
+          event: "pr-describe-apply-too-large",
+          headSha,
+          next_body_length: nextBody.length,
+          cap: PR_BODY_HARD_CAP,
+          existing_markers: hadExistingMarkers,
+          ...tag,
+        }))
+        await tryPostComment(
+          env, args, mode,
+          renderApplyTooLargeComment(mode, currentBody.length, nextBody.length),
+        )
+      } else {
+        try {
+          await client.updatePullRequestBody(owner, repo, prNumber, nextBody)
+          successPosted = true
+          console.log(JSON.stringify({
+            event: "pr-describe-applied",
+            headSha,
+            truncated: truncatedBody.length < verdict.body.length,
+            existing_markers: hadExistingMarkers,
+            next_body_length: nextBody.length,
+            ...tag,
+          }))
+        } catch (err) {
+          const status = readHttpStatus(err)
+          if (status !== null && status >= 500) {
+            // 5xx PATCHing the PR body: re-throw → queue retry. Same
+            // rationale as the comment-post path; user has not seen
+            // any output yet (only the ack).
+            throw err
+          }
+          console.error(JSON.stringify({
+            event: "pr-describe-apply-failed",
+            status,
+            err: err instanceof Error ? err.message : String(err),
+            headSha,
+            ...tag,
+          }))
+          // 4xx: post a fallback failure comment so the user knows
+          // the apply path didn't land. Best-effort; no re-throw.
+          await tryPostComment(env, args, mode, renderApplyFailureComment(mode, headSha))
+        }
+      }
+    } else {
+      const commentBody = renderDescribeComment({
+        mode,
         headSha,
-        ...tag,
-      }))
+        summary: verdict.summary,
+        body: truncatedBody,
+      })
+
+      try {
+        await client.createIssueComment(owner, repo, prNumber, commentBody)
+        successPosted = true
+        console.log(JSON.stringify({
+          event: "pr-describe-posted",
+          headSha,
+          truncated: truncatedBody.length < verdict.body.length,
+          ...tag,
+        }))
+      } catch (err) {
+        const status = readHttpStatus(err)
+        if (status !== null && status >= 500) {
+          // 5xx posting the success draft: re-throw → queue retry.
+          // User has not seen any output yet (only the ack), so a
+          // single retry is the right behavior. Dedupe key released
+          // in `finally` so retry can re-run from scratch.
+          throw err
+        }
+        // 4xx: log + return (4xx isn't queue-retriable).
+        console.error(JSON.stringify({
+          event: "pr-describe-post-failed",
+          status,
+          err: err instanceof Error ? err.message : String(err),
+          headSha,
+          ...tag,
+        }))
+      }
     }
   } finally {
     if (!successPosted) {

@@ -130,6 +130,7 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
     expect(parseSlashCommand("/sigilix describe")).toEqual({
       cmd: "describe",
       mode: "pr-description",
+      apply: false,
     })
   })
 
@@ -137,6 +138,7 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
     expect(parseSlashCommand("/sigilix describe pr")).toEqual({
       cmd: "describe",
       mode: "pr-description",
+      apply: false,
     })
   })
 
@@ -144,6 +146,7 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
     expect(parseSlashCommand("/sigilix describe internal")).toEqual({
       cmd: "describe",
       mode: "internal-changelog",
+      apply: false,
     })
   })
 
@@ -151,6 +154,7 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
     expect(parseSlashCommand("/sigilix describe external")).toEqual({
       cmd: "describe",
       mode: "external-changelog",
+      apply: false,
     })
   })
 
@@ -159,6 +163,7 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
       cmd: "describe",
       mode: "unknown",
       rawArg: "foo",
+      apply: false,
     })
   })
 
@@ -166,6 +171,7 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
     expect(parseSlashCommand("/Sigilix DESCRIBE Internal")).toEqual({
       cmd: "describe",
       mode: "internal-changelog",
+      apply: false,
     })
   })
 
@@ -173,6 +179,7 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
     expect(parseSlashCommand("/sigilix describe internal please now")).toEqual({
       cmd: "describe",
       mode: "internal-changelog",
+      apply: false,
     })
   })
 
@@ -180,6 +187,99 @@ describe("parseSlashCommand — `/sigilix describe` (ARC-191)", () => {
     expect(parseSlashCommand("/sigilix describe   ")).toEqual({
       cmd: "describe",
       mode: "pr-description",
+      apply: false,
+    })
+  })
+})
+
+describe("parseSlashCommand — `/sigilix describe apply` (ARC-264)", () => {
+  it("recognizes bare `/sigilix describe apply` → apply=true + default mode", () => {
+    expect(parseSlashCommand("/sigilix describe apply")).toEqual({
+      cmd: "describe",
+      mode: "pr-description",
+      apply: true,
+    })
+  })
+
+  it("recognizes `/sigilix describe apply pr` → apply=true + pr-description", () => {
+    expect(parseSlashCommand("/sigilix describe apply pr")).toEqual({
+      cmd: "describe",
+      mode: "pr-description",
+      apply: true,
+    })
+  })
+
+  it("recognizes `/sigilix describe apply internal` → apply=true + internal-changelog", () => {
+    expect(parseSlashCommand("/sigilix describe apply internal")).toEqual({
+      cmd: "describe",
+      mode: "internal-changelog",
+      apply: true,
+    })
+  })
+
+  it("recognizes `/sigilix describe apply external` → apply=true + external-changelog", () => {
+    expect(parseSlashCommand("/sigilix describe apply external")).toEqual({
+      cmd: "describe",
+      mode: "external-changelog",
+      apply: true,
+    })
+  })
+
+  it("is case-insensitive on the `apply` token and the mode arg", () => {
+    expect(parseSlashCommand("/Sigilix DESCRIBE APPLY Internal")).toEqual({
+      cmd: "describe",
+      mode: "internal-changelog",
+      apply: true,
+    })
+  })
+
+  it("returns mode=unknown + apply=true for `/sigilix describe apply <bad-mode>` (NOT silent fallback)", () => {
+    expect(parseSlashCommand("/sigilix describe apply bogus")).toEqual({
+      cmd: "describe",
+      mode: "unknown",
+      rawArg: "bogus",
+      apply: true,
+    })
+  })
+
+  it("ignores trailing tokens after the mode arg in apply form", () => {
+    expect(parseSlashCommand("/sigilix describe apply external please now")).toEqual({
+      cmd: "describe",
+      mode: "external-changelog",
+      apply: true,
+    })
+  })
+
+  it("surfaces a usage error when `apply` appears AFTER the mode (typo guard)", () => {
+    // Code-review M4 catch: `/sigilix describe pr apply` used to
+    // silently demote to apply=false, giving the user a comment-mode
+    // draft when they meant apply-mode. Now treated as an unknown
+    // shape so the synchronous usage comment surfaces the intended
+    // `apply <mode>` form.
+    expect(parseSlashCommand("/sigilix describe pr apply")).toEqual({
+      cmd: "describe",
+      mode: "unknown",
+      rawArg: "pr apply",
+      apply: false,
+    })
+    expect(parseSlashCommand("/sigilix describe internal apply")).toEqual({
+      cmd: "describe",
+      mode: "unknown",
+      rawArg: "internal apply",
+      apply: false,
+    })
+  })
+
+  it("returns apply=false for plain `/sigilix describe <mode>` (no regression on ARC-191 shape)", () => {
+    expect(parseSlashCommand("/sigilix describe pr")).toEqual({
+      cmd: "describe",
+      mode: "pr-description",
+      apply: false,
+    })
+    expect(parseSlashCommand("/sigilix describe internal")).toEqual({
+      cmd: "describe",
+      mode: "internal-changelog",
+      apply: false,
     })
   })
 })
@@ -246,11 +346,18 @@ describe("renderSlashCommandAck", () => {
   })
 
   it("renders an ack for `describe` (mode-aware)", () => {
-    const out = renderSlashCommandAck({ cmd: "describe", mode: "pr-description" })
+    const out = renderSlashCommandAck({ cmd: "describe", mode: "pr-description", apply: false })
     expect(typeof out).toBe("string")
     expect(out.length).toBeGreaterThan(0)
     expect(out.toLowerCase()).toContain("describe")
     expect(out.toLowerCase()).toContain("pr description")
+  })
+
+  it("renders an apply-aware ack mentioning the marker fences (ARC-264)", () => {
+    const out = renderSlashCommandAck({ cmd: "describe", mode: "external-changelog", apply: true })
+    expect(out.toLowerCase()).toContain("external changelog")
+    expect(out.toLowerCase()).toContain("pr body")
+    expect(out.toLowerCase()).toMatch(/marker|fence/)
   })
 
   it("renders a usage comment for unknown describe arg (NOT a generic ack)", () => {
@@ -258,6 +365,7 @@ describe("renderSlashCommandAck", () => {
       cmd: "describe",
       mode: "unknown",
       rawArg: "foo",
+      apply: false,
     })
     expect(out).toContain("`foo`")
     expect(out).toMatch(/`pr`/)
@@ -269,10 +377,11 @@ describe("renderSlashCommandAck", () => {
 describe("renderHelpBody", () => {
   const body = renderHelpBody()
 
-  it("lists every currently-live command (including describe, ARC-191)", () => {
+  it("lists every currently-live command (including describe + apply, ARC-191 + ARC-264)", () => {
     expect(body).toContain("`/sigilix review`")
     expect(body).toContain("`/sigilix improve`")
     expect(body).toContain("`/sigilix describe`")
+    expect(body).toContain("`/sigilix describe apply`")
     expect(body).toContain("`/sigilix help`")
   })
 
@@ -280,6 +389,12 @@ describe("renderHelpBody", () => {
     expect(body).toContain("`pr`")
     expect(body).toContain("`internal`")
     expect(body).toContain("`external`")
+  })
+
+  it("explains apply's marker-preserving behavior so users know it's safe (ARC-264)", () => {
+    const lower = body.toLowerCase()
+    expect(lower).toContain("marker")
+    expect(lower).toMatch(/preserve|untouched|outside/)
   })
 
   it("documents the ACL gate", () => {

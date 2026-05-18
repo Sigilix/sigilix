@@ -173,6 +173,7 @@ import {
 import {
   buildShadowVerdictComparison,
   emitShadowCutShort,
+  emitShadowRunFailed,
   emitShadowVerdictComparison,
   type FindingForOverlap,
 } from "./shadow-bakeoff-telemetry"
@@ -423,30 +424,114 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
 }
 
 /**
- * Sentinel returned by `raceWithShadowGrace` when the deadline (or an
- * already-aborted signal) wins the race. Using a unique symbol avoids
- * any accidental collision with a real shadow result. Exported so the
- * unit test can assert on grace-expiry without re-declaring the
- * sentinel and ending up with a value mismatch on import.
+ * Sentinels returned by `raceWithShadowGrace`.
+ *
+ *  - `SHADOW_GRACE_EXPIRED` — the wall-clock grace deadline fired OR the
+ *    parent `orchCtrl.signal` aborted before the shadow promise settled.
+ *    Caller emits `shadow-cut-short` with the reason it detected.
+ *  - `SHADOW_RUN_FAILED`    — the shadow promise itself REJECTED. The
+ *    shadow runners catch every internal failure and return a structured
+ *    `{verdictOk:false, ...}` shape, so a rejection means the runner
+ *    threw outside its own try/catch (programming bug, OOM, runtime
+ *    tear-down). Caller emits the dedicated `shadow-run-failed` event so
+ *    dashboards don't mis-attribute a real crash to a benign timeout.
+ *
+ * Both are unique symbols so callers can discriminate via `===` and
+ * TypeScript narrows the underlying `T` correctly. Exported so unit
+ * tests assert without re-declaring the sentinel.
  */
 export const SHADOW_GRACE_EXPIRED = Symbol("shadow_grace_expired")
+export const SHADOW_RUN_FAILED = Symbol("shadow_run_failed")
+
+/**
+ * ARC-283 Phase B1b CR-2: compose multiple `AbortSignal`s into one
+ * that aborts as soon as ANY input aborts. Used at each shadow
+ * dispatch site so the finally block can cancel an in-flight shadow
+ * request (per-shadow controller) WITHOUT giving up the existing
+ * "orch timeout also kills shadow" behavior (orchCtrl).
+ *
+ * Returns a fresh `AbortSignal` from an internal `AbortController`.
+ * The reason of the FIRST signal to fire is forwarded onto the
+ * composed signal so listeners can see WHY it aborted (grace_deadline,
+ * orch_aborted, run_failed, ...). Pre-aborted inputs are honored
+ * synchronously — the returned signal will already be aborted.
+ *
+ * No-op when no signals are provided — returns a never-aborting
+ * signal (the AbortController is GC'd alongside the signal it owns).
+ */
+export function composeSignals(...signals: readonly AbortSignal[]): AbortSignal {
+  const ctrl = new AbortController()
+  for (const s of signals) {
+    if (s.aborted) {
+      ctrl.abort(s.reason)
+      return ctrl.signal
+    }
+    s.addEventListener(
+      "abort",
+      () => {
+        if (!ctrl.signal.aborted) ctrl.abort(s.reason)
+      },
+      { once: true },
+    )
+  }
+  return ctrl.signal
+}
+
+/**
+ * Wrapper around the rejection from a shadow promise so the caller
+ * can emit a `shadow-run-failed` event with the underlying message.
+ * Carries the failure message alongside the sentinel; using a tagged
+ * shape instead of throwing keeps `raceWithShadowGrace` resolve-only
+ * and preserves the prod return path.
+ *
+ * The discriminator field is named `__shadowRunFailed` (mangled,
+ * starting with underscores) so the type-guard `isShadowRunFailed`
+ * narrows reliably even when `T` itself happens to be an object. We
+ * can't use plain `"kind" in shadow` because `T = ShadowRunResult`
+ * is a structurally-typed object too and TypeScript can't prove the
+ * tag is unique to the failure variant.
+ */
+export interface ShadowRunFailedOutcome {
+  readonly __shadowRunFailed: typeof SHADOW_RUN_FAILED
+  readonly message: string
+}
+
+/** Type-guard for the run-failed sentinel-wrapper. */
+export function isShadowRunFailed(value: unknown): value is ShadowRunFailedOutcome {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "__shadowRunFailed" in value &&
+    (value as { __shadowRunFailed: unknown }).__shadowRunFailed === SHADOW_RUN_FAILED
+  )
+}
 
 /**
  * Races `promise` against an absolute wall-clock `deadline` (ms since
- * epoch). If `signal` is already aborted (or aborts during the race),
- * the race resolves to the expired sentinel immediately. Used by the
- * `handlePrReviewEnsemble` finally block to cap the shadow tail at
- * `SHADOW_FINALIZE_GRACE_MS` so prod return + shadow comparison stay
- * inside the 900s CF Queues consumer ceiling.
+ * epoch). Used by the `handlePrReviewEnsemble` finally block to cap
+ * the shadow tail at `SHADOW_FINALIZE_GRACE_MS` so prod return +
+ * shadow comparison stay inside the 900s CF Queues consumer ceiling.
+ *
+ * Resolution table:
+ *   - promise resolves first → its value
+ *   - promise rejects first  → `{kind: SHADOW_RUN_FAILED, message}`
+ *   - deadline fires first   → `SHADOW_GRACE_EXPIRED`
+ *   - signal aborted first   → `SHADOW_GRACE_EXPIRED`
+ *
+ * Never rejects. CR-1: the rejection branch used to resolve with
+ * `SHADOW_GRACE_EXPIRED`, which caused the finally block to emit
+ * `shadow-cut-short` on a runner crash — misclassifying real failure
+ * signal as a timeout. Splitting the two sentinels keeps each event
+ * accurate.
  */
 export function raceWithShadowGrace<T>(
   promise: Promise<T>,
   deadline: number,
   signal: AbortSignal,
-): Promise<T | typeof SHADOW_GRACE_EXPIRED> {
+): Promise<T | typeof SHADOW_GRACE_EXPIRED | ShadowRunFailedOutcome> {
   if (signal.aborted) return Promise.resolve(SHADOW_GRACE_EXPIRED)
   const remaining = Math.max(0, deadline - Date.now())
-  return new Promise<T | typeof SHADOW_GRACE_EXPIRED>((resolve) => {
+  return new Promise<T | typeof SHADOW_GRACE_EXPIRED | ShadowRunFailedOutcome>((resolve) => {
     let settled = false
     const timer = setTimeout(() => {
       if (settled) return
@@ -457,6 +542,11 @@ export function raceWithShadowGrace<T>(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      // Orchestrator was torn down — treat the same as a grace
+      // expiry from the comparison's perspective (we can no longer
+      // wait for the shadow). The finally consumer reads
+      // `orchCtrl.signal.aborted` to label the reason on the
+      // emitted `shadow-cut-short` event.
       resolve(SHADOW_GRACE_EXPIRED)
     }
     signal.addEventListener("abort", onAbort, { once: true })
@@ -468,16 +558,22 @@ export function raceWithShadowGrace<T>(
         signal.removeEventListener("abort", onAbort)
         resolve(value)
       },
-      () => {
+      (err: unknown) => {
         // Shadow runners catch internally and return structured
         // failure — a rejection here means something exploded outside
-        // the runner's own catch. Treat as expired so the comparison
-        // emit is skipped; the outer try/catch in finally logs.
+        // the runner's own catch. Surface as the FAILED sentinel so
+        // the finally consumer can emit `shadow-run-failed`, not
+        // `shadow-cut-short`. Pre-CR-1 we incorrectly mapped this to
+        // `SHADOW_GRACE_EXPIRED`, hiding runner crashes in the
+        // cut-short bucket.
         if (settled) return
         settled = true
         clearTimeout(timer)
         signal.removeEventListener("abort", onAbort)
-        resolve(SHADOW_GRACE_EXPIRED)
+        resolve({
+          __shadowRunFailed: SHADOW_RUN_FAILED,
+          message: err instanceof Error ? err.message : String(err),
+        })
       },
     )
   })
@@ -695,6 +791,16 @@ export async function handlePrReviewEnsemble(
   const shadowSpecialistPromises = new Map<SpecialistRole, Promise<ShadowRunResult>>()
   const prodSpecialistSnapshots = new Map<SpecialistRole, ProdSpecialistSnapshot>()
   let shadowSynthPromise: Promise<ShadowRunResult> | null = null
+  // ARC-283 Phase B1b CR-2: per-shadow AbortController so the finally
+  // block can `.abort(reason)` any shadow request that didn't settle
+  // before the grace deadline / orch tear-down. Pre-CR-2 we emitted
+  // `shadow-cut-short` but left the in-flight HTTP request alive,
+  // silently doubling provider rate-limit pressure past the cut.
+  //
+  // Keyed by the role the controller belongs to; `"synth"` is used
+  // for the single shadow synth controller. Map cleared as each entry
+  // settles so the finally loop only sees still-pending shadows.
+  const shadowAbortControllers = new Map<SpecialistRole | "synth", AbortController>()
 
   // Telemetry skeleton — populated as we go so we can write a record
   // even on early failure paths.
@@ -1266,19 +1372,34 @@ export async function handlePrReviewEnsemble(
     for (const role of router.specialists) {
       const shadowConfig = resolveShadowConfig(role, shadowEnabledRoles)
       if (shadowConfig === null) continue
-      shadowSpecialistPromises.set(
+      // ARC-283 Phase B1b CR-2: per-shadow AbortController, composed
+      // with orchCtrl. Either source can abort the in-flight HTTP
+      // request: orchCtrl when the outer 895s wall fires, the
+      // per-shadow controller when the finally block decides the
+      // shadow is past its grace cap. Without the per-shadow
+      // controller, the cut-short emit was a pure log line and the
+      // request kept consuming provider capacity.
+      const shadowCtrl = new AbortController()
+      shadowAbortControllers.set(role, shadowCtrl)
+      const composedSignal = composeSignals(orchCtrl.signal, shadowCtrl.signal)
+      const shadowPromise = runShadowSpecialist({
         role,
-        runShadowSpecialist({
-          role,
-          shadowConfig,
-          apiKey: env.OLLAMA_API_KEY,
-          systemPrompt: SPECIALIST_PROMPTS[role],
-          userMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
-          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-          signal: orchCtrl.signal,
-          perfCtx,
-        }),
-      )
+        shadowConfig,
+        apiKey: env.OLLAMA_API_KEY,
+        systemPrompt: SPECIALIST_PROMPTS[role],
+        userMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
+        chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+        signal: composedSignal,
+        perfCtx,
+      }).finally(() => {
+        // Settled (success OR runner-caught failure) — clear the
+        // controller so the finally block's still-pending sweep
+        // doesn't re-abort an already-finished call. Doesn't drop
+        // the promise itself; the finally block still awaits to
+        // emit comparison telemetry.
+        shadowAbortControllers.delete(role)
+      })
+      shadowSpecialistPromises.set(role, shadowPromise)
     }
 
     // ARC-284: track per-specialist start time so the fanout summary
@@ -1566,14 +1687,24 @@ export async function handlePrReviewEnsemble(
       // is the 895s outer orchestrator wall.
       const shadowSynthConfig = resolveShadowConfig("synth", shadowEnabledRoles)
       if (shadowSynthConfig !== null) {
+        // ARC-283 Phase B1b CR-2: per-shadow synth AbortController,
+        // same pattern as the specialist fan-out above. Lets the
+        // finally block cancel an in-flight synth shadow when the
+        // grace deadline fires instead of leaving the request to
+        // burn provider capacity invisibly.
+        const shadowSynthCtrl = new AbortController()
+        shadowAbortControllers.set("synth", shadowSynthCtrl)
+        const composedSynthSignal = composeSignals(orchCtrl.signal, shadowSynthCtrl.signal)
         shadowSynthPromise = runShadowSynth({
           shadowConfig: shadowSynthConfig,
           apiKey: env.OLLAMA_API_KEY,
           systemPrompt: synthSystemPrompt,
           userMessage: synthMessageWithMemory,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-          signal: orchCtrl.signal,
+          signal: composedSynthSignal,
           perfCtx,
+        }).finally(() => {
+          shadowAbortControllers.delete("synth")
         })
       }
 
@@ -2544,10 +2675,33 @@ export async function handlePrReviewEnsemble(
             orchCtrl.signal,
           )
           if (shadow === SHADOW_GRACE_EXPIRED) {
+            // ARC-283 Phase B1b CR-2: abort the in-flight shadow
+            // request BEFORE emitting the telemetry, so the underlying
+            // HTTP call actually stops consuming provider capacity.
+            // The controller is only present when the runner hasn't
+            // settled yet (the .finally() in the dispatch site clears
+            // it on settle).
+            const reason: "grace_deadline" | "orch_aborted" =
+              orchCtrl.signal.aborted ? "orch_aborted" : "grace_deadline"
+            const ctrl = shadowAbortControllers.get(role)
+            if (ctrl && !ctrl.signal.aborted) ctrl.abort(reason)
             emitShadowCutShort(perfCtx, {
               role,
               elapsedAtCutMs: Date.now() - finallyStartMs,
+              reason,
             })
+            continue
+          }
+          if (isShadowRunFailed(shadow)) {
+            // ARC-283 Phase B1b CR-1: shadow runner crashed outside
+            // its own catch. Emit the dedicated `shadow-run-failed`
+            // event so dashboards distinguish a runner crash from a
+            // grace-deadline cut. Abort any controller that's still
+            // around (defensive — the .finally() should have cleared
+            // it already since the promise settled).
+            const ctrl = shadowAbortControllers.get(role)
+            if (ctrl && !ctrl.signal.aborted) ctrl.abort("run_failed")
+            emitShadowRunFailed(perfCtx, { role, message: shadow.message })
             continue
           }
           const prodSnapshot = prodSpecialistSnapshots.get(role)
@@ -2605,10 +2759,23 @@ export async function handlePrReviewEnsemble(
           orchCtrl.signal,
         )
         if (shadow === SHADOW_GRACE_EXPIRED) {
+          // ARC-283 Phase B1b CR-2: cancel in-flight synth before
+          // emitting telemetry so the HTTP request actually stops.
+          const reason: "grace_deadline" | "orch_aborted" =
+            orchCtrl.signal.aborted ? "orch_aborted" : "grace_deadline"
+          const ctrl = shadowAbortControllers.get("synth")
+          if (ctrl && !ctrl.signal.aborted) ctrl.abort(reason)
           emitShadowCutShort(perfCtx, {
             role: "synth",
             elapsedAtCutMs: Date.now() - finallyStartMs,
+            reason,
           })
+        } else if (isShadowRunFailed(shadow)) {
+          // ARC-283 Phase B1b CR-1: shadow synth runner crashed.
+          // Emit the dedicated `shadow-run-failed` event.
+          const ctrl = shadowAbortControllers.get("synth")
+          if (ctrl && !ctrl.signal.aborted) ctrl.abort("run_failed")
+          emitShadowRunFailed(perfCtx, { role: "synth", message: shadow.message })
         } else {
           // Build the prod synth snapshot from telemetry.synthesizer.
           // Every exit path that runs the synth populates this field;

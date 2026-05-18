@@ -110,11 +110,25 @@ export function emitShadowVerdictComparison(
  *
  * `role` is one of the five shadow roles. `elapsedAtCutMs` is the wall-
  * clock spent inside the finally block before the cut (always ≤
- * SHADOW_FINALIZE_GRACE_MS).
+ * SHADOW_FINALIZE_GRACE_MS). `reason` distinguishes the two grace
+ * paths:
+ *   - `grace_deadline` — the 5s wall-clock cap fired while the shadow
+ *     promise was still pending.
+ *   - `orch_aborted`   — the outer orchestrator (orchCtrl) aborted
+ *     before the shadow promise settled (e.g. the 895s orchestrator
+ *     wall fired, or the worker is being torn down).
+ *
+ * NOTE: a shadow runner _crash_ (the promise rejected) is a separate
+ * event — see `shadow-run-failed` / `emitShadowRunFailed` below. Don't
+ * collapse those two into one event: confusing a runner crash for a
+ * time expiry hides real failure signal in dashboards.
  */
+export type ShadowCutShortReason = "grace_deadline" | "orch_aborted"
+
 export interface ShadowCutShortEvent {
   role: "logic" | "security" | "performance" | "tests" | "synth"
   elapsedAtCutMs: number
+  reason: ShadowCutShortReason
 }
 
 export function emitShadowCutShort(
@@ -123,6 +137,37 @@ export function emitShadowCutShort(
 ): void {
   console.log(JSON.stringify({
     event: "shadow-cut-short",
+    ...correlationFields(ctx),
+    ...info,
+  }))
+}
+
+/**
+ * ARC-283 Phase B1b CR-1: emitted when a shadow promise _rejected_
+ * (the shadow runner itself threw, distinct from the grace deadline
+ * expiring on a still-pending shadow). The shadow runners catch every
+ * internal failure and return a structured `{verdictOk:false, ...}`
+ * shape, so the only way the promise can reject is a programming bug
+ * or a host-environment failure (memory limit, runtime tear-down).
+ *
+ * Surfacing this as a separate event makes the difference visible in
+ * dashboards: `shadow-cut-short` = "we ran out of time", whereas
+ * `shadow-run-failed` = "the shadow code path itself broke and needs
+ * an on-call look". Before this split, both paths emitted
+ * `shadow-cut-short`, masking real runner crashes as benign timeouts.
+ */
+export interface ShadowRunFailedEvent {
+  role: "logic" | "security" | "performance" | "tests" | "synth"
+  /** Error.message (or String(err)) from the rejected shadow promise. */
+  message: string
+}
+
+export function emitShadowRunFailed(
+  ctx: EnsembleRunCtx,
+  info: ShadowRunFailedEvent,
+): void {
+  console.log(JSON.stringify({
+    event: "shadow-run-failed",
     ...correlationFields(ctx),
     ...info,
   }))

@@ -6,6 +6,7 @@ import {
   buildShadowVerdictComparison,
   emitShadowAttempt,
   emitShadowCutShort,
+  emitShadowRunFailed,
   emitShadowVerdictComparison,
   computeFindingsOverlap,
   type ProdOutcomeForComparison,
@@ -75,16 +76,50 @@ describe("emitShadowAttempt", () => {
 })
 
 describe("emitShadowCutShort", () => {
-  it("emits a shadow-cut-short event with role + elapsedAtCutMs + correlation fields", () => {
-    emitShadowCutShort(CTX, { role: "synth", elapsedAtCutMs: 5_000 })
+  it("emits a shadow-cut-short event with role + elapsedAtCutMs + reason + correlation fields", () => {
+    emitShadowCutShort(CTX, { role: "synth", elapsedAtCutMs: 5_000, reason: "grace_deadline" })
     const event = lastLogged()
     expect(event["event"]).toBe("shadow-cut-short")
     expect(event["role"]).toBe("synth")
     expect(event["elapsedAtCutMs"]).toBe(5_000)
+    expect(event["reason"]).toBe("grace_deadline")
     expect(event["owner"]).toBe("Arc-and-Anchor")
     expect(event["repo"]).toBe("sigilix")
     expect(event["prNumber"]).toBe(99)
     expect(event["headSha"]).toBe("feedfac")
+  })
+
+  it("emits reason='orch_aborted' when the outer orchestrator aborted before grace fired", () => {
+    emitShadowCutShort(CTX, { role: "logic", elapsedAtCutMs: 2_500, reason: "orch_aborted" })
+    const event = lastLogged()
+    expect(event["reason"]).toBe("orch_aborted")
+  })
+})
+
+describe("emitShadowRunFailed", () => {
+  // ARC-283 Phase B1b CR-1: split from emitShadowCutShort so a real
+  // runner crash is visible in dashboards instead of being hidden in
+  // the cut-short bucket.
+  it("emits a shadow-run-failed event with role + message + correlation fields", () => {
+    emitShadowRunFailed(CTX, { role: "synth", message: "TypeError: cannot read 'foo' of undefined" })
+    const event = lastLogged()
+    expect(event["event"]).toBe("shadow-run-failed")
+    expect(event["role"]).toBe("synth")
+    expect(event["message"]).toBe("TypeError: cannot read 'foo' of undefined")
+    expect(event["owner"]).toBe("Arc-and-Anchor")
+    expect(event["repo"]).toBe("sigilix")
+    expect(event["prNumber"]).toBe(99)
+    // headSha truncated to 7 chars (correlation-field invariant).
+    expect(event["headSha"]).toBe("feedfac")
+  })
+
+  it("truncates headSha to 7 chars (correlation-field invariant)", () => {
+    emitShadowRunFailed(
+      { owner: "o", repo: "r", prNumber: 1, headSha: "0123456789abcdef" },
+      { role: "logic", message: "boom" },
+    )
+    const event = lastLogged()
+    expect(event["headSha"]).toBe("0123456")
   })
 })
 

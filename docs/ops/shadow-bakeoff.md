@@ -67,13 +67,35 @@ line different category is NOT a match.
 
 ### `shadow-cut-short`
 Emitted when a shadow promise didn't settle within
-`SHADOW_FINALIZE_GRACE_MS` (5s) of prod returning. Caps the worst-case
-consumer-wall extension so a pathologically slow shadow can't push
-the worker past the 900s CF Queues ceiling. The shadow's
+`SHADOW_FINALIZE_GRACE_MS` (5s) of prod returning, OR when the outer
+orchestrator aborted before the shadow could settle. Caps the
+worst-case consumer-wall extension so a pathologically slow shadow
+can't push the worker past the 900s CF Queues ceiling. The shadow's
 `shadow-verdict-comparison` event does NOT emit for this role.
+
+In addition to logging, the orchestrator now `.abort()`s the per-shadow
+`AbortController` on every cut, so the in-flight provider request
+actually stops (pre-CR-2, the request kept consuming rate-limit + wall-
+clock capacity past the cut).
 
 Fields: `role` (specialist role or `"synth"`), `elapsedAtCutMs`,
 `reason` (`"grace_deadline"` or `"orch_aborted"`).
+
+### `shadow-run-failed`
+Emitted when the shadow runner promise itself rejects (the runner
+threw outside its own try/catch). The shadow runners catch every
+internal failure into a structured `{verdictOk:false, ...}` result,
+so this event indicates either a programming bug or a host-environment
+failure (memory limit, runtime tear-down). Distinct from
+`shadow-cut-short` so dashboards can distinguish a runner crash from
+a benign time-expiry — pre-CR-1 both paths emitted `shadow-cut-short`
+and hid real failure signal in the cut-short bucket.
+
+The per-shadow `AbortController` is `.abort("run_failed")`'d
+defensively (the runner's own `.finally()` should have cleared it
+already since the promise settled).
+
+Fields: `role` (specialist role or `"synth"`), `message`.
 
 ### `shadow-specialist-emit-error` / `shadow-synth-emit-error`
 Defensive: emitted only when the shadow comparison emit itself
@@ -108,6 +130,22 @@ JSON/provenance bar OR shows timeout-rate regression, revert
   after shadow data signs off.
 - Does NOT fine-tune. ARC-292 explicitly defers fine-tuning until
   20-50 customers or 1000 labeled outcomes.
+
+## Provider-overlap cost
+
+When `SHADOW_BAKEOFF_ROLES` enables a role whose candidate lineup shares a provider with the prod lineup (e.g., shadow logic primary `deepseek-v4-pro:cloud` matches prod's `deepseek-v4-pro:cloud`), the role doubles that provider's rate-limit pressure on every review. This is the explicit bake-off cost — there is no way to evaluate "keep this primary" without paying the call.
+
+Roles where shadow and prod share at least one model (as of the lineup at `SHADOW_BAKEOFF_LINEUP`):
+
+| Role         | Overlap                                                    |
+|--------------|------------------------------------------------------------|
+| logic        | primary `deepseek-v4-pro:cloud` (same as prod)             |
+| performance  | primary `glm-5.1:cloud` (same as prod)                     |
+| security     | candidate primary = prod fallback (`qwen3-coder-next`)     |
+| tests        | candidate primary = prod fallback (`qwen3-coder-next`)     |
+| synth        | candidate primary = prod fallback (`deepseek-v4-flash`)    |
+
+If you observe new rate-limit 429s on a candidate's provider after enabling shadow, disable the role until the candidate provider's capacity has been confirmed for the doubled load.
 
 ## Safety net
 

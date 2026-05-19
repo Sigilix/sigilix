@@ -127,6 +127,7 @@ import {
   selectDiff,
   type DiffMode,
 } from "./incremental-review"
+import { recordReviewedDiffHash } from "./noop-merge-detect"
 import {
   computeFileListHash,
   readReviewManifest,
@@ -936,6 +937,12 @@ export async function handlePrReviewEnsemble(
       // (we have no comment to point the customer at, and the PR is
       // already merged so a skip-notice is pointless).
       return finalize(telemetry, env, "errored", cache)
+      // SIG-89 note: this merged-on-approve short-circuit intentionally
+      // does NOT write a noop-merge diff hash. `fullPrDiff` isn't
+      // fetched on this path (the diff fetch lives below at the start
+      // of the normal pipeline), and the PR is already merged — no
+      // future `synchronize` webhook is expected, so there's nothing
+      // a noop-merge skip would help with anyway.
     }
 
     // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
@@ -2459,6 +2466,12 @@ export async function handlePrReviewEnsemble(
         })
         if (fallback.ok) {
           const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          // SIG-89 note: comment-fallback paths intentionally do NOT
+          // write a noop-merge diff hash. The surface is degraded
+          // already (we couldn't post a formal review), and the next
+          // push should re-attempt the formal review rather than skip
+          // dispatch. Same rationale at all four `surface: "comment"`
+          // return sites below.
           return finalize(telemetry, env, "posted", cache, {
             event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
             findingsCount,
@@ -2514,6 +2527,14 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
+      // SIG-89: stash the diff hash so the next synchronize push can
+      // detect no-op merges (Update-branch button, rebase-no-op force
+      // push, empty commit) and skip dispatch. Same best-effort
+      // semantics as writeLastReviewedSha — the customer-facing
+      // review already shipped; KV failure only means the next push
+      // falls back to dispatch instead of skipping. The helper
+      // swallows internally.
+      await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
       // ARC-258 follow-up: enqueue a forced pr-overview refresh so
       // any stale warmup-callout marker in the sticky body gets
       // cleared. `force: true` bypasses the per-headSha dedupe so
@@ -2740,6 +2761,10 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
       }
+      // SIG-89: mirror the primary path — stash the diff hash for
+      // noop-merge skip on the next synchronize. Same best-effort
+      // semantics as the lastReviewedSha write above.
+      await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
       // ARC-258 follow-up: forced pr-overview refresh on the 422
       // fallback success path too — same rationale as the primary
       // submit (clear any stale warmup callout in the sticky body).

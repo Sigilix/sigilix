@@ -75,7 +75,7 @@ const STUB_KV_TTL_SECONDS = 5 * 60
 //
 // Coordination: the FIRST delivery to reach the create path writes
 // this tombstone with a short TTL. Later deliveries observe the
-// tombstone, poll the final flag for ~3s, and short-circuit to
+// tombstone, poll the final flag for ~1.5s, and short-circuit to
 // `kv-hit` when the leader's create completes.
 //
 // Best-effort by design: KV is eventually consistent, so two truly-
@@ -291,8 +291,8 @@ export async function postPrOverviewStubIfNeeded(
   // ── 1.5. SIG-92 concurrent-delivery short-circuit ────────────────
   // If a prior delivery for the same (owner, repo, prNumber, headSha)
   // is already in flight (or wrote+expired+missed the final KV write),
-  // its tombstone is still visible. Poll the final flag for ~3s — the
-  // leader's create typically finishes in well under a second. On
+  // its tombstone is still visible. Poll the final flag for ~1.5s —
+  // the leader's create typically finishes in well under a second. On
   // success: return `kv-hit` with the leader's commentId. On poll
   // timeout: fall through (the leader may have failed; we'll attempt).
   //

@@ -144,6 +144,12 @@ export type PostStubOutcome =
   // webhook handler still returns 202 promptly; review-side falls
   // through its 2s wait fallback per the SIG-84 contract.
   | { kind: "timeout"; phase: "create" | "update" }
+  // Round-5 CR Major catch: the marker-scan path found a prior sticky
+  // but `updateIssueComment` threw (race-to-delete, permission
+  // revocation, 5xx, etc.). We do NOT write the KV flag and we do NOT
+  // advertise the stub as ready — review-side falls through to the 2s
+  // wait fallback. The `commentId` is still surfaced for telemetry.
+  | { kind: "update-failed"; commentId: number }
 
 /**
  * SIG-84: post (or reuse) the pr-overview stub sticky on the PR.
@@ -276,6 +282,16 @@ export async function postPrOverviewStubIfNeeded(
     // timeout — the review-side wait should fall through to the 2s
     // fallback rather than be told "stub exists" when we can't confirm
     // GitHub accepted the body.
+    //
+    // Round-5 CR Major catch: the same gating applies to a thrown
+    // `updateIssueComment` (race-to-delete, permission revocation, 5xx).
+    // We previously wrote the KV flag and returned `marker-scan-hit`
+    // regardless — that advertised a stub the helper couldn't confirm
+    // was writable. Now we emit telemetry and return `update-failed`
+    // without writing the flag; the review-side 2s wait fallback
+    // covers the gap. Net effect: that one push's review may submit
+    // before the (broken) overview, same degraded mode as a stub-post
+    // failure.
     try {
       const raced = await raceWithTimeout(
         client.updateIssueComment(owner, repo, existingCommentId, STUB_BODY),
@@ -298,11 +314,12 @@ export async function postPrOverviewStubIfNeeded(
         comment_id: existingCommentId,
         err: err instanceof Error ? err.message : String(err),
       }))
-      // Even if the update failed we still write the flag — there IS a
-      // comment on the PR carrying the marker, which is all the review
-      // handler's wait gate cares about (it waits for the FLAG, and the
-      // flag's contract is "a stub exists"). Trade-off: customer might
-      // see a stale walkthrough briefly until the real overview lands.
+      // Do NOT write the KV flag and do NOT return `marker-scan-hit` —
+      // we can't confirm the stub body is on the timeline. Surface
+      // `update-failed` so callers (and tests) can distinguish this
+      // from the success path; the review-side wait will fall through
+      // to its 2s ceiling per the SIG-84 contract.
+      return { kind: "update-failed", commentId: existingCommentId }
     }
     await safeWriteFlag(env, flagKey, existingCommentId, owner, repo, prNumber, headSha)
     return { kind: "marker-scan-hit", commentId: existingCommentId }

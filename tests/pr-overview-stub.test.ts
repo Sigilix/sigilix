@@ -226,17 +226,40 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
     expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
   })
 
-  it("still records KV flag if the update call fails (the comment exists; flag tracks 'a stub exists')", async () => {
+  // Round-5 CR Major catch: when `updateIssueComment` throws on the
+  // marker-scan branch (race-to-delete, permission revocation, 5xx),
+  // we MUST NOT write the KV flag and MUST NOT return `marker-scan-hit`
+  // — we can't confirm the stub body is on the timeline. The previous
+  // contract advertised a stub regardless; the new contract surfaces
+  // `update-failed` so review-side falls through to the 2s wait
+  // fallback per the SIG-84 contract.
+  it("returns update-failed and does NOT write KV flag when updateIssueComment throws (round-5 CR Major)", async () => {
     const { kv, store } = makeKvStub()
     mockListIssueCommentsPage.mockResolvedValueOnce([
       { id: 777, body: "<!-- sigilix:pr-overview -->\nold" },
     ])
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
     mockUpdateIssueComment.mockRejectedValueOnce(new Error("403 perm denied"))
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
-    expect(out).toEqual({ kind: "marker-scan-hit", commentId: 777 })
-    expect(store.get(stubFlagKey(args))).toBe("777")
+    expect(out).toEqual({ kind: "update-failed", commentId: 777 })
+    // KV flag MUST NOT be written — we couldn't confirm GitHub accepted
+    // the stub body, so review-side wait should fall through to 2s.
+    expect(store.has(stubFlagKey(args))).toBe(false)
+    // Telemetry event emitted so we can observe these in prod logs.
+    const emittedUpdateFailed = warnSpy.mock.calls.some((call) => {
+      const first = call[0]
+      if (typeof first !== "string") return false
+      try {
+        const parsed = JSON.parse(first) as { event?: string }
+        return parsed.event === "pr-overview-stub-update-failed"
+      } catch {
+        return false
+      }
+    })
+    expect(emittedUpdateFailed).toBe(true)
+    warnSpy.mockRestore()
   })
 })
 

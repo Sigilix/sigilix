@@ -19,4 +19,5 @@ Note: the Sigilix GitHub App requires `members: read` permission for
 GitHub to include Sigilix's reviews in the auto-dismiss evaluator
 (SIG-95). Customers don't need to do anything for this — it's set on
 the App side. Mentioned here for support-debugging purposes only.
-Verified empirically on PR #107 (smoke test, 2026-05-19).
+Verified empirically on PR #107 (smoke test, 2026-05-19) — retest after
+adding `statuses: write`.

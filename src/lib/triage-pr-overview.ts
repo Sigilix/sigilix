@@ -15,6 +15,12 @@ import { PR_OVERVIEW_SCHEMA } from "./schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import { LEGACY_WARMUP_MARKER, WARMUP_CALLOUT_MARKER } from "./warmup"
+import { loadSigilixConfig, resolvePreMergeGatesConfig } from "./sigilix-config"
+import {
+  runPreMergeGates,
+  renderPreMergeGatesSection,
+  type GateResult,
+} from "./pre-merge-gates"
 import {
   batchReadFileCache,
   batchWriteFileCache,
@@ -174,6 +180,41 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       }),
     ])
     since("pr-fetched")
+
+    // SIG-100: run deterministic pre-merge quality gates (no model).
+    // Inputs come from `meta` + `commits`, both already in scope.
+    // Loaded config can be EMPTY_CONFIG (no sigilix.json on the PR)
+    // — `resolvePreMergeGatesConfig` fills in the locked defaults.
+    // Best-effort: a config-load failure falls through to default
+    // gate behavior; we don't block the overview render on it.
+    let gateResults: GateResult[] = []
+    try {
+      const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+      const gatesConfig = resolvePreMergeGatesConfig(sigilixConfig.preMergeGates)
+      gateResults = runPreMergeGates(
+        {
+          prTitle: meta.title ?? "",
+          prBody: meta.body ?? "",
+          commitMessages: commits.map((c) => c.message),
+        },
+        gatesConfig,
+      )
+      for (const r of gateResults) {
+        console.log(JSON.stringify({
+          event: "pr-overview-pre-merge-gate-result",
+          gate: r.id,
+          passed: r.passed,
+          severity: r.severity,
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        }))
+      }
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-overview-pre-merge-gates-failed",
+        err: err instanceof Error ? err.message : String(err),
+        owner, repo, prNumber,
+      }))
+    }
 
     // ─── SIG-84: stale-head guard #1 (pre-Ollama) ───────────────────
     //
@@ -365,6 +406,10 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       verdict: verdictForDisplay,
       isFirstRun: existingForWrite == null,
       warmup,
+      // SIG-100: thread gate results through to the renderer. Always
+      // pass — the formatter checks for an empty array internally and
+      // skips the section.
+      gateResults,
     })
 
     // ─── SIG-84: stale-head guard #2 (pre-write) ────────────────────
@@ -704,6 +749,12 @@ interface FormatArgs {
    *  block at the top of the overview when the indexer hasn't
    *  produced a manifest yet. `"none"` (default) omits the callout. */
   warmup?: "pending" | "none"
+  /**
+   * SIG-100: deterministic pre-merge gate results. Rendered as a
+   * "Quality gates" checklist near the top of the body (just after
+   * the effort badge). Empty array / missing → no section.
+   */
+  gateResults?: readonly GateResult[]
 }
 
 /**
@@ -711,7 +762,12 @@ interface FormatArgs {
  * on line 1 is what `findExistingOverviewComment` greps for to decide
  * between POST-new and PATCH-in-place.
  */
-export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: FormatArgs): string {
+export function formatOverviewComment({
+  verdict,
+  isFirstRun,
+  warmup = "none",
+  gateResults = [],
+}: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
   lines.push("## Sigilix Overview")
   lines.push("")
@@ -735,6 +791,16 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
   // hierarchy without competing with the `### Summary` heading.
   if (typeof verdict.reviewEffort === "number") {
     lines.push(`**Effort:** ${verdict.reviewEffort}/5 ${effortLabel(verdict.reviewEffort)}`)
+    lines.push("")
+  }
+
+  // SIG-100: pre-merge quality gates section. Placed BEFORE the
+  // summary so a reviewer sees blocking-or-actionable gate results
+  // first. Renders as a checklist with ✅ / ❌ / ⚠️ / ℹ️ glyphs per
+  // gate severity. Skipped entirely when no gates ran.
+  const gatesSection = renderPreMergeGatesSection(gateResults)
+  if (gatesSection !== null) {
+    lines.push(gatesSection)
     lines.push("")
   }
 

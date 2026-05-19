@@ -218,9 +218,19 @@ summary that surfaces the verdict badges + per-metric reasons.
 
 ### When to call it `pass`
 
-A role is `pass` when EVERY machine-verifiable metric is `pass` AND
-the manual-review metric (`netUniqueUsefulFindings`) has been
-explicitly signed off by the founder. The CLI's exit code does NOT
-gate on the manual-review metric — the report flags it as
-`inconclusive_pending_manual_review` and the operator inspects the
-prod-vs-shadow score-4+ findings sample before ratifying.
+The aggregator emits one of four role-level verdicts:
+
+- `fail` — any metric failed. The CLI exits 1; pager-worthy.
+- `inconclusive` — sample size too low OR a metric's CI genuinely
+  straddles the bar. Collect more data.
+- `pass_pending_manual_review` — every machine-verifiable metric
+  passed; the manual `netUniqueUsefulFindings` is still
+  `inconclusive_pending_manual_review`. The bake-off is green on the
+  bars the aggregator can compute — the operator inspects the
+  shadow-only score-4+ samples and ratifies.
+- `pass` — every metric passed including the manual-review one. Only
+  reachable once the founder-label pipeline is wired (post-v1).
+
+The CLI exits 1 only on `fail`. `pass_pending_manual_review` and
+`inconclusive` exit 0 — the operator reads the Markdown summary for
+context.

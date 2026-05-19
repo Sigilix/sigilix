@@ -34,6 +34,7 @@ import {
   renderDecisionReportMarkdown,
   type ShadowEvent,
 } from "../src/lib/bakeoff-report.ts"
+import { unwrapLogpushEnvelope } from "../src/lib/bakeoff-logpush-unwrap.ts"
 
 const KNOWN_EVENTS = new Set([
   "shadow-verdict-comparison",
@@ -190,51 +191,6 @@ async function loadEvents(inputPath: string): Promise<{ events: ShadowEvent[]; s
     }
   }
   return { events, stats }
-}
-
-/**
- * CF Logpush wraps each entry in an envelope:
- *   { "Outcome": "...", "Logs": [{ "Message": "<original JSON>" }] }
- *
- * For inline `console.log(JSON.stringify(...))` events from the worker,
- * Logpush typically writes one envelope per console call with the
- * inner JSON inside `Logs[0].Message` as a string. We unwrap it here
- * so the rest of the pipeline sees plain event objects regardless of
- * whether the operator pre-flattened the dump.
- *
- * If the input is already a flat `{ event: "...", ... }` object, this
- * passes through unchanged.
- */
-function unwrapLogpushEnvelope(parsed: unknown): unknown {
-  if (parsed === null || typeof parsed !== "object") return null
-  const o = parsed as Record<string, unknown>
-  if (typeof o.event === "string") return o
-  // Try the Logs[].Message path. Logpush specifically uses these keys.
-  const logs = o.Logs ?? o.logs
-  if (!Array.isArray(logs) || logs.length === 0) return null
-  // Concatenate every Message we can parse; most envelopes contain one.
-  for (const entry of logs) {
-    if (entry === null || typeof entry !== "object") continue
-    const msg = (entry as Record<string, unknown>).Message ?? (entry as Record<string, unknown>).message
-    if (typeof msg !== "string") continue
-    try {
-      const inner = JSON.parse(msg)
-      if (inner !== null && typeof inner === "object" && typeof (inner as { event?: unknown }).event === "string") {
-        // Copy the envelope's timestamp onto the inner object if missing.
-        const ts = o.EventTimestampMs ?? o.Timestamp ?? o.timestamp
-        if (typeof (inner as { ts?: unknown }).ts !== "string" && typeof ts === "string") {
-          ;(inner as { ts: string }).ts = ts
-        }
-        if (typeof (inner as { ts?: unknown }).ts !== "string" && typeof ts === "number") {
-          ;(inner as { ts: string }).ts = new Date(ts).toISOString()
-        }
-        return inner
-      }
-    } catch {
-      // ignore — fall through and keep scanning
-    }
-  }
-  return null
 }
 
 async function main(): Promise<void> {

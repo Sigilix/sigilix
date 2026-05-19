@@ -180,6 +180,20 @@ export type MetricVerdict =
   | "inconclusive"
   | "inconclusive_pending_manual_review"
 
+/**
+ * Role-level verdict. Adds `pass_pending_manual_review` on top of the
+ * metric verdicts: a role with every machine-verifiable metric `pass`
+ * but `netUniqueUsefulFindings` still `inconclusive_pending_manual_review`
+ * (always true in v1) resolves to `pass_pending_manual_review` — an
+ * actionable signal for the operator ("bars all green, go inspect the
+ * sample") instead of getting collapsed into noisy "inconclusive".
+ *
+ * Code-reviewer M2 on PR review: without this third tier every
+ * happy-path role would be permanently `inconclusive` even when the
+ * data is unambiguously good.
+ */
+export type RoleVerdict = MetricVerdict | "pass_pending_manual_review"
+
 export interface MetricResult {
   verdict: MetricVerdict
   /** One-line human-readable explanation. The Markdown renderer
@@ -230,7 +244,7 @@ export interface RoleReport {
     cutShortRate: MetricResult
     runFailedRate: MetricResult
   }
-  overallVerdict: MetricVerdict
+  overallVerdict: RoleVerdict
 }
 
 export interface DecisionReport {
@@ -305,8 +319,16 @@ function buildRoleReport(
   )
 
   const sampleSize = comparisons.length
-  const prodModel = comparisons[0]?.prodModel ?? null
-  const shadowModel = comparisons[0]?.shadowModel ?? null
+  // Code-reviewer M1 on PR review: pick the most-recently emitted
+  // model name rather than `comparisons[0]` (file-order, not
+  // chronological). A backfilled or replayed event with a stale name
+  // would otherwise poison the role's report metadata.
+  const latestComparison =
+    comparisons.length === 0
+      ? null
+      : [...comparisons].sort((a, b) => (a.ts > b.ts ? -1 : a.ts < b.ts ? 1 : 0))[0]!
+  const prodModel = latestComparison?.prodModel ?? null
+  const shadowModel = latestComparison?.shadowModel ?? null
 
   const metrics = {
     validVerdictRate: computeValidVerdictRate(comparisons, sampleSize, config),
@@ -540,24 +562,39 @@ function countReasons(events: readonly ShadowCutShortEvent[]): Record<string, nu
   return out
 }
 
-/** Combine per-metric verdicts into the role-level summary. Worst
- *  wins: any `fail` → fail; else any `inconclusive*` → inconclusive;
- *  else `pass`. */
-function combineVerdicts(verdicts: readonly MetricVerdict[]): MetricVerdict {
+/**
+ * Combine per-metric verdicts into the role-level summary.
+ *
+ * Priority order (any one of these wins, top to bottom):
+ *   1. any `fail`                                          → `fail`
+ *   2. any `inconclusive` (NOT pending-manual-review)      → `inconclusive`
+ *   3. every machine metric `pass` AND at least one
+ *      `inconclusive_pending_manual_review`                → `pass_pending_manual_review`
+ *   4. every metric `pass`                                 → `pass`
+ *
+ * Step 3 is what code-reviewer M2 asked for: when the bars-machine-can-
+ * verify are all green, the role shouldn't be collapsed into
+ * "inconclusive" just because v1 doesn't automate
+ * `netUniqueUsefulFindings` yet — the operator gets a positive signal
+ * that all they have to do is sign off on the manual sample.
+ */
+function combineVerdicts(verdicts: readonly MetricVerdict[]): RoleVerdict {
   if (verdicts.includes("fail")) return "fail"
-  if (verdicts.some((v) => v === "inconclusive" || v === "inconclusive_pending_manual_review")) {
-    return "inconclusive"
+  if (verdicts.includes("inconclusive")) return "inconclusive"
+  if (verdicts.includes("inconclusive_pending_manual_review")) {
+    return "pass_pending_manual_review"
   }
   return "pass"
 }
 
 // ─── Markdown rendering ────────────────────────────────────────────
 
-const VERDICT_BADGE: Record<MetricVerdict, string> = {
+const VERDICT_BADGE: Record<RoleVerdict, string> = {
   pass: "✅ PASS",
   fail: "❌ FAIL",
   inconclusive: "⚠️ INCONCLUSIVE",
   inconclusive_pending_manual_review: "🟡 INCONCLUSIVE (manual review pending)",
+  pass_pending_manual_review: "🟢 PASS (manual review pending)",
 }
 
 /**

@@ -187,22 +187,31 @@ means the shadow code path itself crashed — page the on-call.
 ## Overall-verdict combinator
 
 ```ts
-function combineVerdicts(verdicts: MetricVerdict[]): MetricVerdict {
+type RoleVerdict = MetricVerdict | "pass_pending_manual_review"
+
+function combineVerdicts(verdicts: MetricVerdict[]): RoleVerdict {
   if (verdicts.includes("fail")) return "fail"
-  if (verdicts.some((v) =>
-    v === "inconclusive" || v === "inconclusive_pending_manual_review"
-  )) {
-    return "inconclusive"
+  if (verdicts.includes("inconclusive")) return "inconclusive"
+  if (verdicts.includes("inconclusive_pending_manual_review")) {
+    return "pass_pending_manual_review"
   }
   return "pass"
 }
 ```
 
-Strict: any single metric `fail` poisons the role. The CLI exits 1 if
-any role's `overallVerdict` is `fail` so cron callers can pager-alert
-on the exit code.
+Priority (top wins):
+1. **`fail`** — any single metric `fail` poisons the role.
+2. **`inconclusive`** — any genuine inconclusive (sample-size floor,
+   schema-gating, statistical straddle).
+3. **`pass_pending_manual_review`** — every machine-verifiable metric
+   passes, AND `netUniqueUsefulFindings` is
+   `inconclusive_pending_manual_review` (the v1 always-manual case).
+   Operator-actionable signal: "bars all green, go inspect the
+   shadow-only score-4+ samples and ratify."
+4. **`pass`** — every metric passes including the manual-review one
+   (only reachable once the founder-label pipeline is wired).
 
-A role that's `inconclusive` (typically because
-`netUniqueUsefulFindings` is `inconclusive_pending_manual_review`)
-requires the founder to inspect the shadow-only score-4+ samples
-and flip the manual-review verdict before the swap is ratified.
+The CLI exits 1 only if any role's `overallVerdict` is `fail` —
+cron callers can pager on the exit code. `pass_pending_manual_review`
+and `inconclusive` both exit 0; the operator's expected to read the
+Markdown summary for actionable verdicts.

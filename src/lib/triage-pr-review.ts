@@ -722,42 +722,22 @@ export interface RenderBodyArgs {
 }
 
 /**
- * ARC-281: APPROVE-posture body renderer per Kimi K2.6's spec.
+ * ARC-281 / ARC-293 / SIG-94: APPROVE-posture body renderer.
  *
- * Shape (ARC-293 minimal — marker only):
+ * Shape (SIG-94 marker-only on every APPROVE):
  *   ```
  *   <!-- sigilix:pr-review -->
- *   ```
- *
- * Degraded-coverage variant adds one ASCII warning line:
- *   ```
- *   <!-- sigilix:pr-review -->
- *
- *   Approved on partial coverage.
  *   ```
  *
  * Pure — exported for tests.
  */
-export function renderApproveBody(args: RenderBodyArgs): string {
-  // ARC-293: APPROVE bodies render as MARKER-ONLY by default.
-  // GitHub's native "approved these changes" line carries all the
-  // signal; the prior verbose card (heading + coverage + "No issues
-  // found" + provenance footer) was timeline noise.
-  //
-  // We keep the dedupe marker so dismiss-prior-reviews can find this
-  // review on the next push. Degraded coverage adds ONE plain-text
-  // warning line (no emoji per existing approve-body conventions).
-  //
-  // The provenance footer is intentionally dropped — `capForGitHub`
-  // appends it unconditionally, so this renderer skips that helper
-  // and returns the body directly. GitHub's commit attribution on the
-  // approve event ("approved these changes via <commit>") already
-  // tells the reader which SHA was evaluated.
-  const degraded = !!(args.coverage && args.coverage.succeeded.length < args.coverage.dispatched.length)
-  if (!degraded) {
-    return `${SIGILIX_REVIEW_MARKER}\n`
-  }
-  return `${SIGILIX_REVIEW_MARKER}\n\nApproved on partial coverage.\n`
+export function renderApproveBody(_args: RenderBodyArgs): string {
+  // SIG-94: marker-only on every APPROVE, regardless of coverage state.
+  // GitHub's native "approved these changes" line is the entire
+  // customer-visible signal. Degraded-coverage state remains observable
+  // via the existing `ensemble-specialists-degraded` log event for
+  // operators; customers do NOT need to see it on the PR.
+  return `${SIGILIX_REVIEW_MARKER}\n`
 }
 
 /**

@@ -182,12 +182,12 @@ describe("renderStackParenthetical (ARC-281)", () => {
 
 // ─── renderApproveBody ────────────────────────────────────────────────
 
-describe("renderApproveBody (ARC-293)", () => {
+describe("renderApproveBody (ARC-293 / SIG-94)", () => {
   it("Variant A — APPROVE, full coverage = marker only", () => {
-    // ARC-293: APPROVE bodies are MARKER-ONLY by default. GitHub's
-    // native "approved these changes" line carries all the signal;
-    // the prior heading + coverage + 'No issues found' + provenance
-    // footer was timeline noise.
+    // ARC-293 + SIG-94: APPROVE bodies are MARKER-ONLY on every
+    // APPROVE. GitHub's native "approved these changes" line carries
+    // all the signal; the prior heading + coverage + 'No issues found'
+    // + provenance footer was timeline noise.
     const body = renderApproveBody({
       verdict: verdict(),
       coverage: FULL,
@@ -196,13 +196,17 @@ describe("renderApproveBody (ARC-293)", () => {
     expect(body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
-  it("Variant B — APPROVE, degraded coverage adds one ASCII warning line", () => {
+  it("Variant B — APPROVE, degraded coverage is ALSO marker only (SIG-94)", () => {
+    // SIG-94: the "Approved on partial coverage." compromise line that
+    // survived SIG-87 is gone. Degraded coverage no longer surfaces on
+    // the PR body — operators still see it via the
+    // `ensemble-specialists-degraded` log event.
     const body = renderApproveBody({
       verdict: verdict(),
       coverage: ONE_MISSING,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toBe("<!-- sigilix:pr-review -->\n\nApproved on partial coverage.\n")
+    expect(body).toBe("<!-- sigilix:pr-review -->\n")
   })
 
   it("Variant C — APPROVE without coverage args (back-compat) = marker only", () => {

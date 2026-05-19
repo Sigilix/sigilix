@@ -1049,15 +1049,54 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // (the user-triggered enqueue bypasses the per-headSha
         // dedupe because each rerun is treated as a fresh job).
 
-        const reviewMessage: JobMessage = {
-          type: "pr-review",
-          owner: job.owner,
-          repo: job.repo,
-          prNumber: job.prNumber,
-          headSha,
-          installationId: job.installationId,
+        // SIG-11: silent reruns (warmup fan-out from
+        // `enqueueWarmupRerunsForIndex`) MUST route through
+        // `enqueuePrReviewJob` so DO `/enqueue` dedup catches the
+        // case where a normal webhook-driven review just ran on the
+        // same headSha. Before this, the raw `OPENCLAW_JOBS.send`
+        // bypassed both the DO and the consumer-wrapper's runId
+        // check (consumer-wrapper.ts:66-68 short-circuits when
+        // runId is absent), producing a duplicate full-ensemble run
+        // — evidenced on PR #96 (`8ad306a` ran twice, ~46s + ~115s).
+        //
+        // Slash-command reruns (silent !== true) keep the raw send:
+        // a user who typed `/sigilix review` is explicitly asking
+        // for a fresh review, and the existing comment above
+        // documents that intentional bypass.
+        if (job.silent === true) {
+          const enq = await enqueuePrReviewJob(env, {
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            headSha,
+            baseSha: meta.base?.sha ?? null,
+            installationId: job.installationId,
+            // No webhook delivery — this is queue-internal.
+            deliveryId: null,
+          })
+          if (!enq.ok) {
+            console.error(JSON.stringify({
+              event: "pr-review-rerun-enqueue-failed",
+              reason: `do-${enq.reason}`,
+              ...tag,
+            }))
+            // Surface the DO transport failure so the queue retry
+            // mechanism kicks in (matches the webhook handler's 503
+            // behavior at src/index.ts where post-mode DO failures
+            // bubble up).
+            throw new Error(`pr-review-rerun DO enqueue failed: ${enq.reason}`)
+          }
+        } else {
+          const reviewMessage: JobMessage = {
+            type: "pr-review",
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            headSha,
+            installationId: job.installationId,
+          }
+          await env.OPENCLAW_JOBS.send(reviewMessage)
         }
-        await env.OPENCLAW_JOBS.send(reviewMessage)
       } catch (err) {
         console.error(JSON.stringify({
           event: "pr-review-rerun-error",

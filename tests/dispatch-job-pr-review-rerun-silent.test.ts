@@ -15,7 +15,10 @@ const {
 } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockCreateIssueComment: vi.fn(async () => undefined),
-  mockGetPullRequest: vi.fn(async () => ({ head: { sha: "a".repeat(40) } })),
+  mockGetPullRequest: vi.fn(async () => ({
+    head: { sha: "a".repeat(40) },
+    base: { sha: "b".repeat(40) },
+  })),
 }))
 
 vi.mock("../src/lib/github-app", () => ({
@@ -130,6 +133,171 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
     await dispatchJob(job, env)
 
     expect(mockCreateIssueComment).toHaveBeenCalledTimes(1)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.type).toBe("pr-review")
+  })
+})
+
+// SIG-11 — silent (warmup) reruns must route through enqueuePrReviewJob
+// so DO `/enqueue` dedup catches the case where a normal webhook-driven
+// review already ran on the same headSha. Pre-fix used a raw
+// `OPENCLAW_JOBS.send` that bypassed both the DO and the consumer-
+// wrapper's runId check, producing duplicate ensemble runs (PR #96).
+
+function makeEnvWithDo(args: {
+  mode: "off" | "shadow" | "post"
+  doResponse?: { deduped: boolean; runId: string; action: string }
+}): { env: Env; sent: JobMessage[]; doCalls: Array<{ url: string; body: unknown }> } {
+  const sent: JobMessage[] = []
+  const doCalls: Array<{ url: string; body: unknown }> = []
+  const stub = {
+    fetch: vi.fn(async (input: string | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.url
+      const body = init?.body && typeof init.body === "string" ? JSON.parse(init.body) : undefined
+      doCalls.push({ url, body })
+      return new Response(
+        JSON.stringify(args.doResponse ?? { deduped: false, runId: "rid", action: "create" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )
+    }),
+  } as unknown as DurableObjectStub
+  const env = {
+    OPENCLAW_STATE: {
+      get: async () => null,
+      put: async () => {},
+      delete: async () => {},
+    } as unknown as KVNamespace,
+    OPENCLAW_JOBS: {
+      send: async (m: JobMessage) => { sent.push(m) },
+    } as unknown as Queue<unknown>,
+    PR_REVIEW_RUN: {
+      idFromName: vi.fn((name: string) => ({ name }) as unknown as DurableObjectId),
+      get: vi.fn(() => stub) as unknown as DurableObjectNamespace["get"],
+    } as unknown as DurableObjectNamespace,
+    OPENCLAW_PR_REVIEW_MODE: args.mode,
+    GITHUB_APP_ID: "12345",
+    GITHUB_PRIVATE_KEY: "fake-key",
+  } as unknown as Env
+  return { env, sent, doCalls }
+}
+
+describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
+  it("silent=true routes through DO /enqueue in post mode (no legacy queue send when DO is authoritative)", async () => {
+    const { env, sent, doCalls } = makeEnvWithDo({ mode: "post" })
+    const job: JobMessage = {
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      installationId: 99,
+      silent: true,
+    }
+    await dispatchJob(job, env)
+
+    // DO /enqueue was hit with the current headSha — the DO owns
+    // dedup against any active or terminal run on the same SHA.
+    expect(doCalls).toHaveLength(1)
+    expect(doCalls[0]?.url).toContain("/enqueue")
+    expect(doCalls[0]?.body).toMatchObject({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      mode: "post",
+    })
+    // post mode: legacy OPENCLAW_JOBS.send is NOT called by the
+    // webhook — the DO's /enqueue handler emits the queue message
+    // itself with runId populated.
+    expect(sent).toHaveLength(0)
+  })
+
+  it("silent=true + DO dedup-terminal response: no second ensemble run is dispatched", async () => {
+    // The scenario from PR #96: 8ad306a already had a completed
+    // ensemble run; the warmup rerun arriving moments later must
+    // observe the dedup-terminal and skip.
+    const { env, sent, doCalls } = makeEnvWithDo({
+      mode: "post",
+      doResponse: { deduped: true, runId: "prior-run-id", action: "dedupe-terminal" },
+    })
+    const job: JobMessage = {
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      installationId: 99,
+      silent: true,
+    }
+    await dispatchJob(job, env)
+
+    // DO /enqueue called and returned dedup-terminal (200, deduped:true).
+    expect(doCalls).toHaveLength(1)
+    // No queue message sent in either direction — DO refuses to
+    // re-emit because the run already terminated.
+    expect(sent).toHaveLength(0)
+  })
+
+  it("silent=false (slash-command rerun) STILL uses raw queue send (intentional bypass per ARC-280)", async () => {
+    // Slash-command-driven reruns intentionally bypass per-headSha
+    // dedup — the user explicitly typed `/sigilix review` and wants
+    // a fresh run. Preserve that contract; SIG-11 only changes the
+    // silent (warmup) path.
+    const { env, sent, doCalls } = makeEnvWithDo({ mode: "post" })
+    const job: JobMessage = {
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      installationId: 99,
+      // silent omitted — slash-command path
+    }
+    await dispatchJob(job, env)
+
+    // No DO call — went straight to legacy queue send.
+    expect(doCalls).toHaveLength(0)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.type).toBe("pr-review")
+  })
+
+  it("silent=true in shadow mode: DO observes, legacy send still fires (mode contract)", async () => {
+    // Shadow mode keeps both paths so we don't lose the review while
+    // validating DO behavior. SIG-11 routing through
+    // `enqueuePrReviewJob` preserves this contract — same as the
+    // webhook path uses today.
+    const { env, sent, doCalls } = makeEnvWithDo({ mode: "shadow" })
+    const job: JobMessage = {
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      installationId: 99,
+      silent: true,
+    }
+    await dispatchJob(job, env)
+
+    expect(doCalls).toHaveLength(1)
+    expect(doCalls[0]?.url).toContain("/enqueue")
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.type).toBe("pr-review")
+  })
+
+  it("silent=true in off mode: still works (no DO, raw queue send via enqueuePrReviewJob)", async () => {
+    // Off mode means DO is dormant — `enqueuePrReviewJob` falls
+    // straight to OPENCLAW_JOBS.send. SIG-11 fix gains no immediate
+    // dedup benefit in off mode but doesn't regress either; the dedup
+    // engages automatically once the deploy flips to shadow/post.
+    const { env, sent, doCalls } = makeEnvWithDo({ mode: "off" })
+    const job: JobMessage = {
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      installationId: 99,
+      silent: true,
+    }
+    await dispatchJob(job, env)
+
+    expect(doCalls).toHaveLength(0)
     expect(sent).toHaveLength(1)
     expect(sent[0]?.type).toBe("pr-review")
   })

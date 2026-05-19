@@ -1521,7 +1521,14 @@ async function handleGitHubWebhook(
     // ONLY needs the overview flag, and (b) the second load happens
     // ~30s later in a separate queue consumer (sharing state across
     // those would require a KV roundtrip per webhook anyway).
+    //
+    // Sigilix #5 follow-up: build ONE GitHubClient here, reuse it for
+    // both `loadSigilixConfig` AND `postPrOverviewStubIfNeeded`. The
+    // installation token has TTL ~1h so reuse within a single webhook
+    // invocation is safe. Saves one `getInstallationToken` round-trip
+    // per delivery.
     let webhookSigilixConfig: Awaited<ReturnType<typeof loadSigilixConfig>> | null = null
+    let webhookClient: GitHubClient | null = null
     if (decision.overview || decision.review) {
       try {
         const token = await getInstallationToken({
@@ -1530,8 +1537,8 @@ async function handleGitHubWebhook(
           privateKey: env.GITHUB_PRIVATE_KEY,
           installationId,
         })
-        const client = new GitHubClient({ token })
-        webhookSigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+        webhookClient = new GitHubClient({ token })
+        webhookSigilixConfig = await loadSigilixConfig(webhookClient, owner, repo, headSha)
       } catch (err) {
         // Auth + config-load failures here mean we can't gate. Default
         // to current behavior (overview enabled) so a transient blip
@@ -1559,9 +1566,24 @@ async function handleGitHubWebhook(
       // delivery; the review-side 2s wait covers transient KV write
       // delays, and GitHub redelivery would re-enter the idempotent
       // path. Net: no regression on the failure mode.
-      await postPrOverviewStubIfNeeded({
-        env, owner, repo, prNumber, headSha, installationId,
-      })
+      //
+      // Sigilix #5 follow-up: pass the already-built `webhookClient`
+      // so the helper doesn't re-call `getInstallationToken` inside
+      // itself. The client is null only if the config-load block
+      // above hit an auth failure; in that case the stub-post is
+      // skipped (the review-side wait will time out at 2s — same
+      // degraded mode as a stub-post failure).
+      if (webhookClient !== null) {
+        await postPrOverviewStubIfNeeded({
+          env, owner, repo, prNumber, headSha, installationId,
+          client: webhookClient,
+        })
+      } else {
+        console.warn(JSON.stringify({
+          event: "pr-overview-stub-skipped-no-client",
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        }))
+      }
 
       await env.OPENCLAW_JOBS.send({
         type: "pr-overview",
@@ -1571,10 +1593,28 @@ async function handleGitHubWebhook(
         headSha,
         installationId,
       })
-      // ARC-265: auto-label picker fires alongside pr-overview (same
-      // webhook events: opened / synchronize / reopened / ready_for_review).
-      // The handler short-circuits if `sigilix.json::customLabels` is
-      // empty/absent, so this is free for repos without label config.
+    } else if (decision.overview && !overviewEnabled) {
+      // SIG-84: customer opted out of pr-overview via
+      // `sigilix.overview.enabled = false`. Skip BOTH the stub-post
+      // and the pr-overview queue enqueue — leaving the queue send in
+      // would cost an Ollama call for a comment we'd never post.
+      //
+      // SIG-90: pr-labels is now ENQUEUED INDEPENDENTLY below
+      // (founder direction "labels should exist"). It is NOT gated
+      // by overview.enabled.
+      console.log(JSON.stringify({
+        event: "pr-overview-skipped-disabled",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+      }))
+    }
+    // ARC-265 + SIG-90: auto-label picker fires alongside pr-overview
+    // (same webhook events: opened / synchronize / reopened /
+    // ready_for_review). Independent of `overview.enabled` per
+    // founder direction — labels are a separate product capability
+    // and should be available even when overview is opted out.
+    // The handler short-circuits if `sigilix.json::customLabels` is
+    // empty/absent, so this is free for repos without label config.
+    if (decision.overview) {
       await env.OPENCLAW_JOBS.send({
         type: "pr-labels",
         owner,
@@ -1583,17 +1623,6 @@ async function handleGitHubWebhook(
         headSha,
         installationId,
       })
-    } else if (decision.overview && !overviewEnabled) {
-      // SIG-84: customer opted out of pr-overview via
-      // `sigilix.overview.enabled = false`. Skip BOTH the stub-post
-      // and the queue enqueue — leaving the queue send in would
-      // cost an Ollama call for a comment we'd never post. Labels
-      // are scoped to overview's lifecycle today, so they ride
-      // along with the same toggle.
-      console.log(JSON.stringify({
-        event: "pr-overview-skipped-disabled",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      }))
     }
     // pr-review fires on `opened`, `ready_for_review`, AND `synchronize`
     // so the bot keeps verifying after each fix push (and can flip to

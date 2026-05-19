@@ -147,14 +147,22 @@ describe("handlePrOverview — stale-head guard #1 (pre-Ollama, SIG-84)", () => 
     logSpy.mockRestore()
   })
 
-  it("force: true bypasses guard #1 (post-review refresh path)", async () => {
+  it("force: true bypasses guard #1 (post-review refresh path) AND guard #2 (no pre-write recheck)", async () => {
+    // CR #2 tightening (PR #104): assert force-mode actually SKIPS
+    // the guard #2 pre-write `getPullRequest` round-trip, not just
+    // that it "proceeds through". We do this by counting calls:
+    //   - Non-force runs the parallel call (guard #1) + the pre-write
+    //     recheck (guard #2) = 2 getPullRequest calls.
+    //   - Force runs only the parallel call (guard #1's data is still
+    //     loaded for metadata, but the abort branch is bypassed) +
+    //     SKIPS the pre-write recheck = 1 getPullRequest call.
+    // Difference confirms force actually skips the second guard's
+    // round-trip and doesn't just ignore its return value.
     mockGetPullRequest.mockResolvedValueOnce({
       head: { sha: NEW_HEAD },
       title: "T",
       body: "B",
     })
-    // For the post-write recheck (NOT bypassed by force, but force does
-    // bypass guard #2 too — confirm both).
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...baseArgs, env: makeEnv(kv), force: true })
@@ -162,6 +170,10 @@ describe("handlePrOverview — stale-head guard #1 (pre-Ollama, SIG-84)", () => 
     // Force path proceeds through Ollama + posts the comment.
     expect(mockGenerate).toHaveBeenCalledOnce()
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    // CR #2: only the parallel guard-#1 call happened; guard #2's
+    // pre-write recheck was skipped (force-mode does NOT make a
+    // second getPullRequest round-trip).
+    expect(mockGetPullRequest).toHaveBeenCalledTimes(1)
   })
 
   it("does NOT abort when head matches (happy path runs the full pipeline)", async () => {
@@ -212,7 +224,13 @@ describe("handlePrOverview — stale-head guard #2 (pre-write, SIG-84)", () => {
     logSpy.mockRestore()
   })
 
-  it("falls through to the write when the re-check throws (best-effort, don't drop a good overview)", async () => {
+  it("aborts (fail-closed) when the pre-write re-check throws — does NOT write on uncertain head state", async () => {
+    // CR #1 fix (PR #104, Major): the catch branch now fails CLOSED.
+    // A re-check error means we can't confirm we're still on the
+    // live head; writing here would risk overwriting a newer head's
+    // stub or walkthrough with the older head's content. Aborting
+    // costs at most one missed render — redelivery / next push will
+    // re-enter on the live head.
     mockGetPullRequest
       .mockResolvedValueOnce({ head: { sha: QUEUED_HEAD }, title: "T", body: "B" })
       .mockRejectedValueOnce(new Error("503"))
@@ -220,7 +238,25 @@ describe("handlePrOverview — stale-head guard #2 (pre-write, SIG-84)", () => {
 
     await handlePrOverview({ ...baseArgs, env: makeEnv(kv) })
 
+    // Ollama ran (post-guard-#1) but we did NOT write the comment.
     expect(mockGenerate).toHaveBeenCalledOnce()
-    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
+  })
+
+  it("emits pr-overview-stale-recheck-failed-aborted telemetry on the fail-closed path", async () => {
+    mockGetPullRequest
+      .mockResolvedValueOnce({ head: { sha: QUEUED_HEAD }, title: "T", body: "B" })
+      .mockRejectedValueOnce(new Error("503"))
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...baseArgs, env: makeEnv(kv) })
+
+    const matched = warnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("pr-overview-stale-recheck-failed-aborted"))
+    expect(matched).toBeDefined()
+    warnSpy.mockRestore()
   })
 })

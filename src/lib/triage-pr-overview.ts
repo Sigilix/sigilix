@@ -368,14 +368,23 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
           return
         }
       } catch (err) {
-        // Best-effort: a failed re-check shouldn't drop a successful
-        // overview render. Log + continue with the write — the
-        // pre-Ollama guard already caught the obvious stale case.
+        // CodeRabbit #1 (PR #104, Major): fail CLOSED on a re-check
+        // error. Previously this catch fell through to the write —
+        // but that opens a race where the head DID move during
+        // Ollama and we can't confirm because GitHub is flaky.
+        // Writing on uncertain head state is exactly what the guard
+        // is meant to prevent (we'd overwrite the newer head's stub /
+        // walkthrough with the older head's content). Aborting here
+        // costs us one missed overview render at most — GitHub
+        // redelivery / next push will re-enter and produce a fresh
+        // overview on the live head.
         console.warn(JSON.stringify({
-          event: "pr-overview-stale-head-recheck-failed",
+          event: "pr-overview-stale-recheck-failed-aborted",
           owner, repo, prNumber,
+          queued_head_sha: headSha.slice(0, 7),
           err: err instanceof Error ? err.message : String(err),
         }))
+        return
       }
     }
 

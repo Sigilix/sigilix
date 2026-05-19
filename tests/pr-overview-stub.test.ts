@@ -117,6 +117,78 @@ describe("postPrOverviewStubIfNeeded — KV fast path (Codex Q2)", () => {
     expect(out.kind).toBe("posted")
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
   })
+
+  // ─── Sigilix #3 (PR #104 review): malformed KV value coverage ─────
+  // The KV value MUST parse as a positive finite integer to be
+  // honored as a "stub already posted" hit. These tests pin the
+  // defensive parsing in `postPrOverviewStubIfNeeded`.
+
+  it("falls through when KV returns null (no flag yet); marker-scan then create", async () => {
+    const { kv } = makeKvStub() // store is empty → get(...) returns null
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out.kind).toBe("posted")
+    expect(mockListIssueComments).toHaveBeenCalledOnce()
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+
+  it("falls through when KV returns an empty string (Number('') = 0 → not > 0)", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(stubFlagKey(args), "")
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out.kind).toBe("posted")
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+
+  it("falls through when KV returns '0' (a comment id of 0 is not valid)", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(stubFlagKey(args), "0")
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out.kind).toBe("posted")
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+
+  it("falls through when KV returns a negative number", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(stubFlagKey(args), "-12")
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out.kind).toBe("posted")
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+
+  it("falls through when KV returns Infinity / NaN markers (non-finite)", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(stubFlagKey(args), "Infinity")
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out.kind).toBe("posted")
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+
+  it("honors a valid stale comment id from KV WITHOUT validating existence (kv-hit is authoritative)", async () => {
+    // The helper does NOT round-trip to GitHub to verify the comment
+    // still exists — kv-hit is treated as authoritative (the review-
+    // side wait only needs to know "a stub WAS posted"). If the
+    // comment was deleted, the overview handler downstream will
+    // detect that and recreate via its own marker-scan path; the
+    // stub-post helper stays cheap.
+    const { kv, store } = makeKvStub()
+    store.set(stubFlagKey(args), "777")
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out).toEqual({ kind: "kv-hit", commentId: 777 })
+    expect(mockListIssueComments).not.toHaveBeenCalled()
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+  })
 })
 
 describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () => {
@@ -262,25 +334,46 @@ describe("waitForPrOverviewStub — review-side wait gate (Codex Q1)", () => {
     expect(out.waitedMs).toBe(0)
   })
 
-  it("returns stub-present when the flag arrives mid-poll", async () => {
-    const { kv, getMock } = makeKvStub()
-    let calls = 0
-    getMock.mockImplementation(async () => {
-      calls += 1
-      // Flag appears on the 3rd KV read (1 fast-first + 2 polls).
-      if (calls >= 3) return "abc"
-      return null
+  it("returns stub-present when the flag arrives mid-poll (Sigilix #6: injected Map state)", async () => {
+    // Sigilix #6 fix (PR #104 review): replace mutable counter with
+    // an explicit `Map`-backed KV mock + deterministic `sleep` shim
+    // that flips the map between polls. The previous test used a
+    // `calls >= 3` counter that coupled the test to the helper's
+    // call cadence; this version models the real-world arrival
+    // event: "after the second sleep, the stub has been written".
+    const { kv, store } = makeKvStub()
+    const key = stubFlagKey(args)
+
+    let sleepCalls = 0
+    const sleep = vi.fn(async () => {
+      sleepCalls += 1
+      // After the second sleep, the producer (webhook handler) has
+      // written the stub. Mutate the injected state directly — no
+      // counters, no off-by-one ambiguity.
+      if (sleepCalls === 2) {
+        store.set(key, "1234")
+      }
     })
-    const sleep = vi.fn(async () => {})
-    const nowSeq = [0, 100, 200, 300, 400]
-    let nowIdx = 0
-    const now = (): number => nowSeq[Math.min(nowIdx++, nowSeq.length - 1)]!
+    // Monotonic clock: advances by pollMs each call. With pollMs=100
+    // and the stub arriving after the 2nd sleep, total waited <= 300ms.
+    let clock = 0
+    const now = (): number => {
+      const t = clock
+      clock += 100
+      return t
+    }
 
     const out = await waitForPrOverviewStub({
       ...args, env: makeEnv(kv), now, sleep, maxMs: 2_000, pollMs: 100,
     })
 
     expect(out.kind).toBe("stub-present")
+    if (out.kind === "stub-present") {
+      // Bounded — stub arrived in <500ms, well inside the 2s ceiling.
+      expect(out.waitedMs).toBeLessThan(500)
+    }
+    // Producer wrote the value exactly once, on the 2nd sleep.
+    expect(store.get(key)).toBe("1234")
   })
 
   it("returns stub-absent when the wait ceiling elapses with no flag", async () => {

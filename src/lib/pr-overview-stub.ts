@@ -87,6 +87,16 @@ export interface PostStubArgs {
   prNumber: number
   headSha: string
   installationId: number
+  /**
+   * Optional pre-built GitHubClient from the caller.
+   *
+   * Sigilix #5 fix (PR #104 review): when the webhook handler has
+   * already minted an installation token to load `sigilix.json`, pass
+   * the same client through so this helper doesn't duplicate the
+   * `getInstallationToken` round-trip. Falls back to minting its own
+   * token when omitted (legacy / standalone callers).
+   */
+  client?: GitHubClient
 }
 
 export type PostStubOutcome =
@@ -160,23 +170,31 @@ export async function postPrOverviewStubIfNeeded(
     }))
   }
 
-  // ── Build a GitHub client (auth gates all remaining work) ───────
+  // ── Build (or reuse) a GitHub client ─────────────────────────────
+  // Sigilix #5 fix: if the caller passed in a pre-built client (the
+  // webhook handler does this), reuse it. Otherwise mint a fresh
+  // installation token. Auth gates all remaining work — a failure
+  // here returns `failed` and no comment is posted.
   let client: GitHubClient
-  try {
-    const token = await getInstallationToken({
-      kv: env.OPENCLAW_STATE,
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_PRIVATE_KEY,
-      installationId,
-    })
-    client = new GitHubClient({ token })
-  } catch (err) {
-    console.error(JSON.stringify({
-      event: "pr-overview-stub-auth-failed",
-      owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-      err: err instanceof Error ? err.message : String(err),
-    }))
-    return { kind: "failed", reason: "auth-failed" }
+  if (args.client) {
+    client = args.client
+  } else {
+    try {
+      const token = await getInstallationToken({
+        kv: env.OPENCLAW_STATE,
+        appId: env.GITHUB_APP_ID,
+        privateKey: env.GITHUB_PRIVATE_KEY,
+        installationId,
+      })
+      client = new GitHubClient({ token })
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "pr-overview-stub-auth-failed",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      return { kind: "failed", reason: "auth-failed" }
+    }
   }
 
   // ── 2. Marker scan fallback ──────────────────────────────────────

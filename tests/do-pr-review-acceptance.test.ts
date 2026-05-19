@@ -85,6 +85,15 @@ function buildHarness(opts: { maxRetries?: number; mode?: "off" | "shadow" | "po
     OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: String(opts.maxRetries ?? 3),
     OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "1200000",
     OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "10",
+    // SIG-98: pause/ignore gate reads from KV at the top of
+    // `enqueuePrReviewJob`. Returning null from both keys keeps the
+    // gate inert so these DO acceptance tests still exercise the
+    // post-gate flow they were written for.
+    OPENCLAW_STATE: {
+      get: async (): Promise<string | null> => null,
+      put: async () => {},
+      delete: async () => {},
+    } as unknown as KVNamespace,
   } as unknown as Env
 
   const doInstance = new PrReviewRunDO(ctx, env)

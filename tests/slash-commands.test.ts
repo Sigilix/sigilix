@@ -374,6 +374,89 @@ describe("renderSlashCommandAck", () => {
   })
 })
 
+describe("parseSlashCommand — SIG-98 lifecycle commands", () => {
+  it("recognizes `/sigilix pause`", () => {
+    expect(parseSlashCommand("/sigilix pause")).toEqual({ cmd: "pause" })
+    expect(parseSlashCommand("/Sigilix PAUSE")).toEqual({ cmd: "pause" })
+    expect(parseSlashCommand("/sigilix pause please")).toEqual({ cmd: "pause" })
+  })
+
+  it("recognizes `/sigilix resume`", () => {
+    expect(parseSlashCommand("/sigilix resume")).toEqual({ cmd: "resume" })
+    expect(parseSlashCommand("/SIGILIX RESUME")).toEqual({ cmd: "resume" })
+  })
+
+  it("recognizes `/sigilix ignore`", () => {
+    expect(parseSlashCommand("/sigilix ignore")).toEqual({ cmd: "ignore" })
+    expect(parseSlashCommand("/sigilix Ignore")).toEqual({ cmd: "ignore" })
+  })
+
+  it("recognizes `/sigilix resolve`", () => {
+    expect(parseSlashCommand("/sigilix resolve")).toEqual({ cmd: "resolve" })
+    expect(parseSlashCommand("/Sigilix RESOLVE")).toEqual({ cmd: "resolve" })
+  })
+
+  it("recognizes the two-word `/sigilix full review`", () => {
+    expect(parseSlashCommand("/sigilix full review")).toEqual({ cmd: "full-review" })
+    expect(parseSlashCommand("/Sigilix FULL Review")).toEqual({ cmd: "full-review" })
+    expect(parseSlashCommand("/sigilix full review please")).toEqual({ cmd: "full-review" })
+  })
+
+  it("returns null for `/sigilix full` without `review` token", () => {
+    expect(parseSlashCommand("/sigilix full")).toBeNull()
+    expect(parseSlashCommand("/sigilix full nonsense")).toBeNull()
+  })
+
+  it("doesn't let `/sigilix full nonsense` suppress a real command on a later line", () => {
+    // The "unsupported earlier line suppresses later one" regression
+    // from PR #58 also has to be guarded against the new two-token
+    // `full` path. An unrecognized second token after `full` should
+    // continue scanning later lines.
+    const body = [
+      "/sigilix full nonsense",
+      "/sigilix review",
+    ].join("\n")
+    expect(parseSlashCommand(body)).toEqual({ cmd: "review" })
+  })
+
+  it("matches all five new commands within mixed bodies (line-start required)", () => {
+    expect(parseSlashCommand("ack the bot\n\n/sigilix pause\n")).toEqual({ cmd: "pause" })
+    expect(parseSlashCommand("/sigilix resume\nthanks")).toEqual({ cmd: "resume" })
+    expect(parseSlashCommand("Hey /sigilix pause")).toBeNull()
+  })
+})
+
+describe("renderSlashCommandAck — SIG-98 lifecycle commands", () => {
+  it("renders a pause ack mentioning the 24h window + resume CTA", () => {
+    const out = renderSlashCommandAck({ cmd: "pause" })
+    expect(out.toLowerCase()).toContain("pause")
+    expect(out).toMatch(/24h|24 hour/i)
+    expect(out).toContain("`/sigilix resume`")
+  })
+
+  it("renders a resume ack", () => {
+    const out = renderSlashCommandAck({ cmd: "resume" })
+    expect(out.toLowerCase()).toMatch(/re-?enabled|resumed/)
+  })
+
+  it("renders an ignore ack mentioning permanence + resume CTA", () => {
+    const out = renderSlashCommandAck({ cmd: "ignore" })
+    expect(out.toLowerCase()).toMatch(/permanent|disabled/)
+    expect(out).toContain("`/sigilix resume`")
+  })
+
+  it("renders a full-review ack mentioning dedup bypass", () => {
+    const out = renderSlashCommandAck({ cmd: "full-review" })
+    expect(out.toLowerCase()).toMatch(/bypass|dedup|re-run/)
+  })
+
+  it("renders a resolve ack mentioning Sigilix-authored threads", () => {
+    const out = renderSlashCommandAck({ cmd: "resolve" })
+    expect(out.toLowerCase()).toContain("resolve")
+    expect(out.toLowerCase()).toMatch(/sigilix-authored|sigilix/)
+  })
+})
+
 describe("renderHelpBody", () => {
   const body = renderHelpBody()
 
@@ -383,6 +466,14 @@ describe("renderHelpBody", () => {
     expect(body).toContain("`/sigilix describe`")
     expect(body).toContain("`/sigilix describe apply`")
     expect(body).toContain("`/sigilix help`")
+  })
+
+  it("documents the SIG-98 lifecycle commands", () => {
+    expect(body).toContain("`/sigilix pause`")
+    expect(body).toContain("`/sigilix resume`")
+    expect(body).toContain("`/sigilix ignore`")
+    expect(body).toContain("`/sigilix full review`")
+    expect(body).toContain("`/sigilix resolve`")
   })
 
   it("documents the describe mode tokens", () => {

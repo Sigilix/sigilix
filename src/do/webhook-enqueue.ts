@@ -17,6 +17,7 @@
 import type { Env } from "../index"
 import { resolveDoConfig } from "./config"
 import type { EnqueueRequest, PrReviewMode } from "./types"
+import { buildPausedKey, buildIgnoredKey } from "../lib/pr-lifecycle-commands"
 
 const DO_BASE_URL = "https://do.internal"
 
@@ -36,10 +37,22 @@ export interface PrReviewEnqueueArgs {
    * helper sets `prevDepth + 1` when re-enqueuing.
    */
   staleHeadRequeueDepth?: number
+  /**
+   * SIG-98: skip the pause/ignore KV gate. The slash-command `/sigilix
+   * review` and `/sigilix full review` handlers set this so an
+   * explicit user request always re-runs even on a paused PR — the
+   * gate is for automatic (webhook-driven) triggers only.
+   *
+   * Webhook + warmup + stale-head callers omit this (defaults to
+   * false → gate applies).
+   */
+  bypassPauseGate?: boolean
 }
 
 export type PrReviewEnqueueResult =
   | { ok: true; mode: PrReviewMode }
+  | { ok: true; mode: "skipped-paused" }
+  | { ok: true; mode: "skipped-ignored" }
   | {
       ok: false
       mode: "post"
@@ -62,6 +75,39 @@ export async function enqueuePrReviewJob(
   env: Env,
   args: PrReviewEnqueueArgs,
 ): Promise<PrReviewEnqueueResult> {
+  // SIG-98 — pause/ignore gate. Skip the enqueue entirely when a
+  // per-PR pause (24h TTL) or ignore (no TTL) flag is set in KV.
+  // The bypass flag exists for explicit user re-runs (`/sigilix
+  // review` / `/sigilix full review`) — automatic webhook triggers
+  // honor the gate.
+  //
+  // Read both keys in parallel: KV.get is cheap, this is webhook-hot
+  // path, and we always want to log which flag won.
+  if (!args.bypassPauseGate) {
+    const [pausedAt, ignoredAt] = await Promise.all([
+      env.OPENCLAW_STATE.get(buildPausedKey(args.owner, args.repo, args.prNumber)),
+      env.OPENCLAW_STATE.get(buildIgnoredKey(args.owner, args.repo, args.prNumber)),
+    ])
+    if (ignoredAt !== null) {
+      console.log(JSON.stringify({
+        event: "pr-review-skipped",
+        reason: "ignored",
+        owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+        ignoredAt,
+      }))
+      return { ok: true, mode: "skipped-ignored" }
+    }
+    if (pausedAt !== null) {
+      console.log(JSON.stringify({
+        event: "pr-review-skipped",
+        reason: "paused",
+        owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+        pausedAt,
+      }))
+      return { ok: true, mode: "skipped-paused" }
+    }
+  }
+
   const { mode } = resolveDoConfig(env)
 
   // Phase 1 — DO /enqueue (post + shadow). The entire DO phase

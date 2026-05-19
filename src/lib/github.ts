@@ -1000,6 +1000,83 @@ export class GitHubClient {
   }
 
   /**
+   * SIG-98 — list every review thread on a PR with each thread's id,
+   * isResolved state, and the login of the FIRST (root) comment's
+   * author. Used by `/sigilix resolve` to identify Sigilix-rooted
+   * threads without touching threads from human reviewers.
+   *
+   * Pages through `reviewThreads` up to a defensive 5-page cap (500
+   * threads) — sufficient for any practical PR, prevents an attacker
+   * from making us walk infinite pages on a malicious payload.
+   */
+  async listPullRequestReviewThreads(
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<Array<{ id: string; isResolved: boolean; firstCommentLogin: string | null }>> {
+    const out: Array<{ id: string; isResolved: boolean; firstCommentLogin: string | null }> = []
+    let cursor: string | null = null
+    const MAX_PAGES = 5
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const data: GraphQLReviewThreadsPage = await this.graphql<GraphQLReviewThreadsPage>(
+        `query ListReviewThreads(
+          $owner: String!,
+          $name: String!,
+          $number: Int!,
+          $first: Int!,
+          $after: String
+        ) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviewThreads(first: $first, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  isResolved
+                  comments(first: 1) {
+                    nodes { author { login } }
+                  }
+                }
+              }
+            }
+          }
+        }`,
+        { owner, name: repo, number: prNumber, first: 100, after: cursor },
+      )
+      const pageData = data?.repository?.pullRequest?.reviewThreads
+      if (!pageData) break
+      for (const node of pageData.nodes ?? []) {
+        const firstCommentLogin = node.comments?.nodes?.[0]?.author?.login ?? null
+        out.push({
+          id: node.id,
+          isResolved: Boolean(node.isResolved),
+          firstCommentLogin,
+        })
+      }
+      if (!pageData.pageInfo?.hasNextPage) break
+      cursor = pageData.pageInfo.endCursor ?? null
+      if (!cursor) break
+    }
+    return out
+  }
+
+  /**
+   * SIG-98 — resolve a single review thread by its GraphQL node id.
+   * The GraphQL mutation is idempotent server-side (already-resolved
+   * threads return the same shape), so callers are free to retry.
+   */
+  async resolveReviewThread(threadId: string): Promise<void> {
+    await this.graphql<{ resolveReviewThread: { thread: { id: string; isResolved: boolean } } }>(
+      `mutation ResolveReviewThread($threadId: ID!) {
+        resolveReviewThread(input: { threadId: $threadId }) {
+          thread { id isResolved }
+        }
+      }`,
+      { threadId },
+    )
+  }
+
+  /**
    * Run a GraphQL query/mutation. Used by triage-cr for the
    * resolveReviewThread mutation, which has no REST equivalent.
    */
@@ -1136,6 +1213,28 @@ export interface ListOpenPullsItem {
   head: { ref: string; sha: string; repo: { full_name: string } | null }
   base: { ref: string; sha: string; repo: { full_name: string } | null }
   updated_at: string | null
+}
+
+/**
+ * SIG-98 — GraphQL response shape for `listPullRequestReviewThreads`.
+ * Kept internal — callers consume the flat array returned by the
+ * client method instead of the nested GraphQL envelope.
+ */
+interface GraphQLReviewThreadsPage {
+  repository?: {
+    pullRequest?: {
+      reviewThreads?: {
+        pageInfo?: { hasNextPage?: boolean; endCursor?: string | null }
+        nodes?: Array<{
+          id: string
+          isResolved?: boolean
+          comments?: {
+            nodes?: Array<{ author?: { login?: string } | null }>
+          }
+        }>
+      }
+    }
+  }
 }
 
 interface RawListOpenPullsItem {

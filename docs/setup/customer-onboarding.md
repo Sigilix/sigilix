@@ -14,3 +14,8 @@ reviews and attributes the dismissal to the commit pusher (e.g.
 `<user> dismissed sigilix[bot]'s stale review via <sha>`). Without
 this setting, prior Sigilix reviews stay as "Changes Requested" until
 you manually dismiss them.
+
+Note: the Sigilix GitHub App requires `members: read` permission for
+GitHub to include Sigilix's reviews in the auto-dismiss evaluator
+(SIG-95). Customers don't need to do anything for this — it's set on
+the App side. Mentioned here for support-debugging purposes only.

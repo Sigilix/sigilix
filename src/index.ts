@@ -46,6 +46,12 @@ import { handlePrLabels } from "./lib/triage-pr-labels"
 import { handleCiTriage } from "./lib/triage-ci"
 import { handlePrImprove } from "./lib/triage-pr-improve"
 import { handlePrDescribe } from "./lib/triage-pr-describe"
+import {
+  handlePrPause,
+  handlePrResume,
+  handlePrIgnore,
+  handlePrResolveThreads,
+} from "./lib/pr-lifecycle-commands"
 import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
 import { PROMPT_VERSION } from "./prompts/pr-review"
@@ -351,6 +357,47 @@ export type JobMessage =
        * this unset/false and keep the existing ack behavior.
        */
       silent?: boolean
+      /**
+       * SIG-98: `/sigilix full review` sets this. Functionally
+       * equivalent to `/sigilix review` today (both bypass the
+       * webhook-side noop-merge cumulative-diff guard because they
+       * route through the rerun path, not the webhook
+       * `synchronize` path). Kept as a distinct flag so a future
+       * dedup layer that DOES apply to rerun jobs has an obvious
+       * bypass switch + so telemetry can distinguish the two CTAs.
+       */
+      forceFresh?: boolean
+    }
+  // SIG-98 — per-PR lifecycle commands. Each is a thin handler that
+  // flips a KV flag (pause/ignore) or walks the PR's review threads
+  // (resolve), then posts an ack comment. No LLM call, no diff fetch.
+  | {
+      type: "pr-pause"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
+  | {
+      type: "pr-resume"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
+  | {
+      type: "pr-ignore"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
+  | {
+      type: "pr-resolve-threads"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
     }
   // ARC-179: `/sigilix improve` — single-shot LLM call producing
   // apply-able suggested-change comments. Independent of the
@@ -1027,16 +1074,25 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // command — the ack would be unsolicited noise on every
         // open PR. Skip the ack when `silent` is set.
         if (!job.silent) {
+          // SIG-98 (CodeRabbit catch on PR #110): use the
+          // `full-review` ack text when the rerun originated from a
+          // `/sigilix full review` slash command (forceFresh: true).
+          // The two acks differ — "...with cumulative-diff dedup
+          // bypass..." vs the plain rerun copy — and rendering the
+          // wrong one on the dedup-bypass path was misleading.
+          const ackCmd: SlashCommand = job.forceFresh === true
+            ? { cmd: "full-review" }
+            : { cmd: "review" }
           try {
             await client.createIssueComment(
               job.owner, job.repo, job.prNumber,
-              renderSlashCommandAck({ cmd: "review" }),
+              renderSlashCommandAck(ackCmd),
             )
           } catch (err) {
             console.error(JSON.stringify({
               event: "slash-command-ack-failed",
               err: err instanceof Error ? err.message : String(err),
-              cmd: "review",
+              cmd: ackCmd.cmd,
               ...tag,
             }))
           }
@@ -1117,6 +1173,17 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             installationId: job.installationId,
           }
           await env.OPENCLAW_JOBS.send(reviewMessage)
+          // SIG-98 — telemetry so we can tell `/sigilix review` apart
+          // from `/sigilix full review` in the future. Both paths
+          // already bypass the noop-merge cumulative-diff guard (which
+          // only runs on the webhook `synchronize` path); `forceFresh`
+          // is the explicit bypass switch for any future dedup layer
+          // that DOES apply to rerun jobs.
+          console.log(JSON.stringify({
+            event: "pr-review-rerun-dispatched",
+            forceFresh: job.forceFresh === true,
+            ...tag,
+          }))
         }
       } catch (err) {
         console.error(JSON.stringify({
@@ -1259,6 +1326,31 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // continuation tokens. See src/lib/indexer.ts for the full
       // state machine.
       return handleIndexRepoJob({ job, env })
+    case "pr-pause":
+      // SIG-98: `/sigilix pause` — 24h auto-review pause.
+      return handlePrPause({
+        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        installationId: job.installationId,
+      })
+    case "pr-resume":
+      // SIG-98: `/sigilix resume` — clears pause + ignore flags.
+      return handlePrResume({
+        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        installationId: job.installationId,
+      })
+    case "pr-ignore":
+      // SIG-98: `/sigilix ignore` — permanent auto-review opt-out.
+      return handlePrIgnore({
+        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        installationId: job.installationId,
+      })
+    case "pr-resolve-threads":
+      // SIG-98: `/sigilix resolve` — mark Sigilix-rooted threads
+      // resolved via the GraphQL `resolveReviewThread` mutation.
+      return handlePrResolveThreads({
+        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        installationId: job.installationId,
+      })
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at
@@ -2183,6 +2275,16 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
           owner, repo, prNumber, installationId,
         }
         break
+      case "full-review":
+        // SIG-98: same handler as `review`, with a `forceFresh` flag
+        // attached so future dedup layers on the rerun path have an
+        // explicit bypass + telemetry can distinguish the two CTAs.
+        message = {
+          type: "pr-review-rerun",
+          owner, repo, prNumber, installationId,
+          forceFresh: true,
+        }
+        break
       case "improve":
         message = {
           type: "pr-improve",
@@ -2208,6 +2310,18 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
           // behavior; true (write the PR body) is the new path.
           apply: slashCmd.apply,
         }
+        break
+      case "pause":
+        message = { type: "pr-pause", owner, repo, prNumber, installationId }
+        break
+      case "resume":
+        message = { type: "pr-resume", owner, repo, prNumber, installationId }
+        break
+      case "ignore":
+        message = { type: "pr-ignore", owner, repo, prNumber, installationId }
+        break
+      case "resolve":
+        message = { type: "pr-resolve-threads", owner, repo, prNumber, installationId }
         break
       default: {
         const _exhaustive: never = slashCmd

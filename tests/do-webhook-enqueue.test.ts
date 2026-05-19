@@ -28,6 +28,12 @@ interface MakeEnvArgs {
     | { kind: "200"; body?: unknown }
     | { kind: "non-ok"; status: number }
     | { kind: "throw" }
+  /**
+   * SIG-98: pre-seeded KV state for the pause/ignore gate. Any key
+   * present here will be returned by `OPENCLAW_STATE.get`; unset
+   * keys return null (gate falls through to the existing path).
+   */
+  kvState?: Record<string, string>
 }
 
 function makeEnv(args: MakeEnvArgs = {}): {
@@ -35,6 +41,7 @@ function makeEnv(args: MakeEnvArgs = {}): {
   doCalls: DoCall[]
   queueSend: ReturnType<typeof vi.fn>
   idFromName: ReturnType<typeof vi.fn>
+  kv: Map<string, string>
 } {
   const doCalls: DoCall[] = []
   const fetchMock = vi.fn(async (input: string | Request, init?: RequestInit) => {
@@ -64,12 +71,21 @@ function makeEnv(args: MakeEnvArgs = {}): {
   const idFromName = vi.fn((name: string) => ({ name }) as unknown as DurableObjectId)
   const get = vi.fn(() => stub) as unknown as DurableObjectNamespace["get"]
   const queueSend = vi.fn(async (_message: unknown) => {})
+  // SIG-98: KV mock supporting the pause/ignore gate at the top of
+  // `enqueuePrReviewJob`. Most tests leave it empty (gate falls through);
+  // SIG-98 tests pre-seed `kvState`.
+  const kv = new Map<string, string>(Object.entries(args.kvState ?? {}))
   const env = {
     PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
     OPENCLAW_JOBS: { send: queueSend } as unknown as Queue<unknown>,
     OPENCLAW_PR_REVIEW_MODE: args.mode,
+    OPENCLAW_STATE: {
+      get: async (key: string): Promise<string | null> => kv.get(key) ?? null,
+      put: async (key: string, value: string) => { kv.set(key, value) },
+      delete: async (key: string) => { kv.delete(key) },
+    } as unknown as KVNamespace,
   } as unknown as Env
-  return { env, doCalls, queueSend, idFromName }
+  return { env, doCalls, queueSend, idFromName, kv }
 }
 
 const baseArgs = {
@@ -156,6 +172,15 @@ describe("enqueuePrReviewJob — mode=shadow", () => {
       PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
       OPENCLAW_JOBS: { send: queueSend } as unknown as Queue<unknown>,
       OPENCLAW_PR_REVIEW_MODE: "shadow",
+      // SIG-98: pause/ignore gate reads from KV at the top of
+      // `enqueuePrReviewJob`. Returning null from both keys keeps
+      // the gate inert so this DO-failure regression test still
+      // exercises the post-gate flow.
+      OPENCLAW_STATE: {
+        get: async (): Promise<string | null> => null,
+        put: async () => {},
+        delete: async () => {},
+      } as unknown as KVNamespace,
     } as unknown as Env
     const result = await enqueuePrReviewJob(env, baseArgs)
     expect(result.ok).toBe(true)
@@ -177,6 +202,11 @@ describe("enqueuePrReviewJob — post-mode idFromName / get throws → 503", () 
       PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
       OPENCLAW_JOBS: { send: queueSend } as unknown as Queue<unknown>,
       OPENCLAW_PR_REVIEW_MODE: "post",
+      OPENCLAW_STATE: {
+        get: async (): Promise<string | null> => null,
+        put: async () => {},
+        delete: async () => {},
+      } as unknown as KVNamespace,
     } as unknown as Env
     const result = await enqueuePrReviewJob(env, baseArgs)
     expect(result.ok).toBe(false)
@@ -273,5 +303,63 @@ describe("enqueuePrReviewJob — DO request payload", () => {
     const { env, idFromName } = makeEnv({ mode: "post" })
     await enqueuePrReviewJob(env, baseArgs)
     expect(idFromName).toHaveBeenCalledWith("Arc-and-Anchor/sigilix#7")
+  })
+})
+
+describe("enqueuePrReviewJob — SIG-98 pause/ignore gate", () => {
+  it("returns skipped-paused when pr-paused KV flag is set; no DO call, no queue send", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const { env, doCalls, queueSend, idFromName } = makeEnv({
+      mode: "post",
+      kvState: { "pr-paused:Arc-and-Anchor/sigilix#7": "1700000000000" },
+    })
+    const result = await enqueuePrReviewJob(env, baseArgs)
+    expect(result).toEqual({ ok: true, mode: "skipped-paused" })
+    expect(doCalls).toHaveLength(0)
+    expect(queueSend).not.toHaveBeenCalled()
+    expect(idFromName).not.toHaveBeenCalled()
+    expect(logSpy).toHaveBeenCalled()
+    logSpy.mockRestore()
+  })
+
+  it("returns skipped-ignored when pr-ignored KV flag is set", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const { env, doCalls, queueSend } = makeEnv({
+      mode: "off",
+      kvState: { "pr-ignored:Arc-and-Anchor/sigilix#7": "1700000000000" },
+    })
+    const result = await enqueuePrReviewJob(env, baseArgs)
+    expect(result).toEqual({ ok: true, mode: "skipped-ignored" })
+    expect(doCalls).toHaveLength(0)
+    expect(queueSend).not.toHaveBeenCalled()
+    logSpy.mockRestore()
+  })
+
+  it("ignore wins over pause when BOTH flags are present", async () => {
+    // Defensive: if a PR somehow has both flags (e.g., user paused
+    // then ignored without resuming), ignore is the stronger signal
+    // → the skip reason should reflect that.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const { env, queueSend } = makeEnv({
+      mode: "off",
+      kvState: {
+        "pr-paused:Arc-and-Anchor/sigilix#7": "1700000000000",
+        "pr-ignored:Arc-and-Anchor/sigilix#7": "1700000000000",
+      },
+    })
+    const result = await enqueuePrReviewJob(env, baseArgs)
+    expect(result.ok).toBe(true)
+    expect(result.mode).toBe("skipped-ignored")
+    expect(queueSend).not.toHaveBeenCalled()
+    logSpy.mockRestore()
+  })
+
+  it("falls through to the existing flow when neither flag is set", async () => {
+    // Regression guard: the empty-KV default must not change the
+    // pre-SIG-98 behavior.
+    const { env, queueSend } = makeEnv({ mode: "off" })
+    const result = await enqueuePrReviewJob(env, baseArgs)
+    expect(result).toEqual({ ok: true, mode: "off" })
+    expect(queueSend).toHaveBeenCalledOnce()
   })
 })

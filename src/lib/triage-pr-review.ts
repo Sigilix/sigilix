@@ -169,6 +169,17 @@ export interface PrReviewFinding {
    * Schema-bypass paths with an unknown value normalize to "current-pr".
    */
   stackOrigin?: StackOrigin
+  /**
+   * SIG-101: per-finding model confidence on a 1-5 scale (distinct from
+   * `score`, which is severity). The synth specialist may emit a
+   * per-finding confidence; when absent, callers default to the
+   * verdict-level `confidence` field via `resolveFindingConfidence`
+   * so every finding has a value downstream. `formatFindingComment`
+   * renders the suffix `_confidence: N/5_` and wraps low-confidence
+   * (≤2) bodies in a collapsed `<details>` block so noisy findings
+   * de-emphasize.
+   */
+  confidence?: number
 }
 
 export interface PrReviewVerdict {
@@ -354,6 +365,14 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     }
     if (validStartLine != null) finalFinding.startLine = validStartLine
     if (stackOrigin) finalFinding.stackOrigin = stackOrigin
+    // SIG-101: read per-finding confidence when the model supplies it.
+    // Clamped to 1-5. Absent → leave undefined; downstream renderers
+    // call `resolveFindingConfidence` which falls back to the
+    // verdict-level `confidence` so every finding has a number.
+    const confidenceRawF = Number(finding.confidence)
+    if (Number.isFinite(confidenceRawF) && confidenceRawF >= 1 && confidenceRawF <= 5) {
+      finalFinding.confidence = Math.round(confidenceRawF)
+    }
     findings.push(finalFinding)
     if (findings.length >= 8) break
   }
@@ -428,6 +447,16 @@ interface BuildReviewArgs {
    * "all clear"). `null` or omitted = no delta signal.
    */
   delta?: DeltaBadgeCounts | null
+  /**
+   * SIG-101: forwarded to the renderer's `reviewCounter` field. See
+   * `RenderBodyArgs.reviewCounter`.
+   */
+  reviewCounter?: number
+  /**
+   * SIG-101: forwarded to the renderer's `retriggerUrl` field. See
+   * `RenderBodyArgs.retriggerUrl`.
+   */
+  retriggerUrl?: string
 }
 
 /**
@@ -458,6 +487,8 @@ export function buildReviewSubmission({
   stack,
   coverage,
   delta,
+  reviewCounter,
+  retriggerUrl,
 }: BuildReviewArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize every prose field for GitHub
   // rendering BEFORE downstream renderers see the verdict. Wraps
@@ -477,6 +508,11 @@ export function buildReviewSubmission({
   if (stack !== undefined) renderArgs.stack = stack
   if (coverage) renderArgs.coverage = coverage
   if (delta !== undefined) renderArgs.delta = delta
+  // SIG-101: thread counter + retrigger URL through to the renderer.
+  // APPROVE bodies stay marker-only (per SIG-94) and ignore these
+  // fields, but it's cheaper / clearer to forward them unconditionally.
+  if (typeof reviewCounter === "number") renderArgs.reviewCounter = reviewCounter
+  if (retriggerUrl) renderArgs.retriggerUrl = retriggerUrl
   const body = event === "APPROVE"
     ? renderApproveBody(renderArgs)
     : renderRequestChangesBody(renderArgs)
@@ -487,7 +523,11 @@ export function buildReviewSubmission({
     // Marker is hidden HTML — invisible in rendered Markdown but
     // visible to the marker extractor. Sparse: nullish entries skip.
     const marker = findingMarkers?.[i]
-    const baseBody = formatFindingComment(f)
+    // SIG-101: resolve per-finding confidence (verdict-level fallback)
+    // and pass to the formatter so the inline comment carries the
+    // P0/P1/P2 badge + `confidence: N/5` suffix.
+    const confidence = resolveFindingConfidence(f, verdict.confidence)
+    const baseBody = formatFindingComment(f, confidence)
     const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
     const c: SubmitReviewComment = {
       path: f.path,
@@ -521,6 +561,9 @@ interface BuildFallbackArgs {
   coverage?: CoverageRoles
   /** ARC-281: finding-delta counts (forwarded to renderer). */
   delta?: DeltaBadgeCounts | null
+  /** SIG-101: forwarded review counter + retrigger URL. */
+  reviewCounter?: number
+  retriggerUrl?: string
 }
 
 /**
@@ -550,6 +593,8 @@ export function buildFallbackSubmission({
   stack,
   coverage,
   delta,
+  reviewCounter,
+  retriggerUrl,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
@@ -561,7 +606,9 @@ export function buildFallbackSubmission({
   // blocking findings are unanchored would post APPROVE while the
   // body lists blockers (CR + Sigilix PR #38 catch).
   const event = chooseReviewEvent([...verdict.findings, ...unanchored])
-  const body = buildFallbackBody(verdict, unanchored, undefined, stack, coverage, delta)
+  const body = buildFallbackBody(
+    verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl,
+  )
   return {
     event,
     body,
@@ -584,6 +631,8 @@ export function buildFallbackBody(
   stack?: StackContext,
   coverage?: CoverageRoles,
   delta?: DeltaBadgeCounts | null,
+  reviewCounter?: number,
+  retriggerUrl?: string,
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
   // dropped the inline anchors, so the body must carry every
@@ -611,6 +660,8 @@ export function buildFallbackBody(
   if (prov !== undefined) args.prov = prov
   if (coverage) args.coverage = coverage
   if (delta !== undefined) args.delta = delta
+  if (typeof reviewCounter === "number") args.reviewCounter = reviewCounter
+  if (retriggerUrl) args.retriggerUrl = retriggerUrl
   return renderRequestChangesBody(args)
 }
 
@@ -719,6 +770,23 @@ export interface RenderBodyArgs {
    *  supplied, `capForGitHub` appends the `_Reviewed against
    *  \`{sha7}\` at {iso8601}._` footer. */
   prov?: ProvenanceCtx
+  /**
+   * SIG-101: 1-indexed sequence number for the per-PR review counter.
+   * When supplied, `renderRequestChangesBody` appends a
+   * `_Sigilix · Review #N for this PR · last rendered <iso>._`
+   * footer line. APPROVE bodies stay marker-only (per SIG-94) and
+   * ignore this field. Omitted → counter line not rendered.
+   */
+  reviewCounter?: number
+  /**
+   * SIG-101: URL to the PR (used as the click target of the
+   * `[🔄 Re-run review](URL)` retrigger link). GitHub doesn't
+   * support pre-filled comment bodies on existing PRs, so the
+   * link lands the user on the PR page; an accompanying sub-line
+   * tells them to comment `/sigilix review` to re-run. Omitted →
+   * retrigger CTA not rendered.
+   */
+  retriggerUrl?: string
 }
 
 /**
@@ -825,6 +893,32 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
   // footer.
   lines.push("")
   lines.push(DISMISSAL_HINT)
+
+  // SIG-101: retrigger hint. The original Greptile-style
+  // `[🔄 Re-run review](URL)` button was dropped on founder feedback
+  // 2026-05-19 — it read as visual noise inside the request-changes
+  // body. The `<sub>` hint line remains as the discoverability
+  // affordance: it tells the reader that re-running is a thing they
+  // can do, without occupying header-weight real estate. GitHub
+  // doesn't support pre-filled comment bodies on existing PRs, so a
+  // URL-link wouldn't have actually triggered the rerun anyway.
+  if (args.retriggerUrl) {
+    lines.push("")
+    lines.push("<sub>Comment `/sigilix review` on this PR to re-run on the current head.</sub>")
+  }
+
+  // SIG-101: per-PR review counter footer. 1-indexed (first review
+  // is `#1`). The `last rendered` timestamp is the SAME wall-clock
+  // value `renderProvenanceFooter` uses, so the two footers stay in
+  // sync. APPROVE bodies render marker-only per SIG-94 and skip
+  // this; only REQUEST_CHANGES bodies surface the counter.
+  if (typeof args.reviewCounter === "number" && args.reviewCounter > 0) {
+    const counterTs = new Date(args.prov?.nowMs ?? Date.now()).toISOString()
+    lines.push("")
+    lines.push(
+      `_Sigilix · Review #${args.reviewCounter} for this PR · last rendered ${counterTs}._`,
+    )
+  }
 
   return capForGitHub(lines.join("\n"), args.prov)
 }
@@ -968,18 +1062,87 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
 }
 
 /**
+ * SIG-101: severity badge prefix on inline finding comments. Scores
+ * map to Greptile-style P0/P1/P2 priority tags so a reviewer scanning
+ * a thread sees severity at a glance instead of having to follow the
+ * link to the Fix Plan or read the score field. Score 1-2 is
+ * informational — no badge, the category prefix is signal enough.
+ *
+ * Pure — exported for tests.
+ */
+export function severityBadgeForScore(score: number): string | null {
+  if (score >= 5) return "🔴 P0"
+  if (score >= 4) return "🟠 P1"
+  if (score >= 3) return "🟡 P2"
+  return null
+}
+
+/**
+ * SIG-101: resolve a finding's per-finding confidence, falling back to
+ * the verdict-level value when the model didn't supply one. The
+ * fallback is deliberate — the renderer always wants a number to
+ * print, and "as confident as the verdict overall" is the most
+ * defensible default when the model gives one score for everything.
+ *
+ * Pure — exported for tests.
+ */
+export function resolveFindingConfidence(
+  finding: PrReviewFinding,
+  verdictConfidence: number,
+): number {
+  if (typeof finding.confidence === "number" &&
+      Number.isFinite(finding.confidence) &&
+      finding.confidence >= 1 &&
+      finding.confidence <= 5) {
+    return finding.confidence
+  }
+  // Clamp the fallback defensively in case a caller passes a bad
+  // verdict-confidence value.
+  return Math.max(1, Math.min(5, Math.round(verdictConfidence)))
+}
+
+/**
  * Inline finding comment, greptile-style. The category leads as
  * \`**category:**\` (logic, style, security, performance, etc.) so
  * a reviewer can scan a thread and immediately see what kind of
- * concern it is. Severity is implicit in the body / approval state,
- * not in the inline tag — that's how greptile-apps does it. Body and
- * any \`\`\`suggestion block flow underneath verbatim.
+ * concern it is. Body and any \`\`\`suggestion block flow underneath
+ * verbatim.
+ *
+ * SIG-101: prefixed with a P0/P1/P2 severity badge (suppressed for
+ * score 1-2), suffixed with `· _confidence: N/5_`. When confidence
+ * ≤ 2, the body is collapsed inside a `<details>` block so noisy
+ * low-confidence findings de-emphasize visually but the headline
+ * (with its severity badge) stays visible.
+ *
+ * Pure — exported for tests. The `confidence` arg is the
+ * already-resolved per-finding confidence (see
+ * `resolveFindingConfidence`), passed in explicitly so the function
+ * stays pure and snapshot-testable.
  */
-function formatFindingComment(finding: PrReviewFinding): string {
+export function formatFindingComment(
+  finding: PrReviewFinding,
+  confidence: number,
+): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
-  lines.push(`**${finding.category}:** ${finding.headline}`)
+  const badge = severityBadgeForScore(finding.score)
+  const heading = badge !== null
+    ? `${badge} · **${finding.category}:** ${finding.headline} · _confidence: ${confidence}/5_`
+    : `**${finding.category}:** ${finding.headline} · _confidence: ${confidence}/5_`
+  lines.push(heading)
   lines.push("")
-  lines.push(finding.body)
+  if (confidence <= 2) {
+    // Low-confidence findings collapse the body so the thread skims
+    // cleanly. The headline + severity badge + confidence suffix stay
+    // visible so a reviewer can still triage without expanding.
+    lines.push("<details>")
+    lines.push("<summary>Low-confidence finding — expand to read</summary>")
+    lines.push("")
+    lines.push(finding.body)
+    lines.push("")
+    lines.push("</details>")
+  } else {
+    lines.push(finding.body)
+  }
   return lines.join("\n")
 }
 

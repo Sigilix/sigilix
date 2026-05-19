@@ -7,8 +7,12 @@ import {
   buildReviewSubmission,
   chooseReviewEvent,
   filterToSigilixAuthored,
+  formatFindingComment,
   parsePrReviewResponse,
   renderFixPlan,
+  renderRequestChangesBody,
+  resolveFindingConfidence,
+  severityBadgeForScore,
   type AuthoredItem,
   type PrReviewFinding,
   type PrReviewVerdict,
@@ -666,5 +670,226 @@ describe("renderFixPlan (ARC-180)", () => {
       fnd({ score: 4, path: "b.ts", line: 1, headline: "h2" }),
     ])!
     expect(out).toMatch(/High \(score 4\)\*\*\s*—\s*2 findings\b/)
+  })
+})
+
+// ─── SIG-101 — severity badges, confidence, retrigger, counter ─────
+
+describe("severityBadgeForScore (SIG-101)", () => {
+  it("returns 🔴 P0 for score 5", () => {
+    expect(severityBadgeForScore(5)).toBe("🔴 P0")
+  })
+  it("returns 🟠 P1 for score 4", () => {
+    expect(severityBadgeForScore(4)).toBe("🟠 P1")
+  })
+  it("returns 🟡 P2 for score 3", () => {
+    expect(severityBadgeForScore(3)).toBe("🟡 P2")
+  })
+  it("returns null for score 2 (informational)", () => {
+    expect(severityBadgeForScore(2)).toBeNull()
+  })
+  it("returns null for score 1 (informational)", () => {
+    expect(severityBadgeForScore(1)).toBeNull()
+  })
+  it("treats super-high scores as P0 (defensive clamp)", () => {
+    expect(severityBadgeForScore(6)).toBe("🔴 P0")
+    expect(severityBadgeForScore(99)).toBe("🔴 P0")
+  })
+})
+
+describe("resolveFindingConfidence (SIG-101)", () => {
+  const fnd = (overrides: Partial<PrReviewFinding>): PrReviewFinding => ({
+    ...baseFinding,
+    ...overrides,
+  })
+
+  it("returns the per-finding confidence when present + in range", () => {
+    expect(resolveFindingConfidence(fnd({ confidence: 4 }), 2)).toBe(4)
+    expect(resolveFindingConfidence(fnd({ confidence: 1 }), 5)).toBe(1)
+  })
+
+  it("falls back to the verdict-level confidence when finding lacks one", () => {
+    expect(resolveFindingConfidence(fnd({}), 3)).toBe(3)
+  })
+
+  it("clamps the verdict-level fallback into 1-5 defensively", () => {
+    expect(resolveFindingConfidence(fnd({}), 0)).toBe(1)
+    expect(resolveFindingConfidence(fnd({}), 99)).toBe(5)
+  })
+
+  it("ignores out-of-range per-finding confidence and falls back", () => {
+    expect(resolveFindingConfidence(fnd({ confidence: 0 }), 3)).toBe(3)
+    expect(resolveFindingConfidence(fnd({ confidence: 6 }), 3)).toBe(3)
+    expect(resolveFindingConfidence(fnd({ confidence: NaN }), 3)).toBe(3)
+  })
+})
+
+describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", () => {
+  // Local fnd helper that ensures `category` is populated (the
+  // file-level `baseFinding` predates the strict category field).
+  const fnd = (overrides: Partial<PrReviewFinding>): PrReviewFinding => ({
+    ...baseFinding,
+    category: "logic",
+    ...overrides,
+  })
+
+  it("prefixes 🔴 P0 on score-5 findings", () => {
+    const out = formatFindingComment(fnd({ score: 5, headline: "deref crash" }), 5)
+    expect(out).toContain("🔴 P0")
+    expect(out).toContain("**logic:** deref crash")
+  })
+
+  it("prefixes 🟠 P1 on score-4 findings", () => {
+    const out = formatFindingComment(fnd({ score: 4 }), 4)
+    expect(out).toContain("🟠 P1")
+  })
+
+  it("prefixes 🟡 P2 on score-3 findings", () => {
+    const out = formatFindingComment(fnd({ score: 3 }), 4)
+    expect(out).toContain("🟡 P2")
+  })
+
+  it("omits the badge on score 1-2 (informational, no severity prefix)", () => {
+    const out = formatFindingComment(fnd({ score: 2 }), 4)
+    expect(out).not.toContain("🔴")
+    expect(out).not.toContain("🟠")
+    expect(out).not.toContain("🟡")
+    expect(out).not.toContain("P0")
+    expect(out).not.toContain("P1")
+    expect(out).not.toContain("P2")
+  })
+
+  it("appends `_confidence: N/5_` suffix on every finding regardless of score", () => {
+    expect(formatFindingComment(fnd({ score: 5 }), 5)).toContain("_confidence: 5/5_")
+    expect(formatFindingComment(fnd({ score: 2 }), 4)).toContain("_confidence: 4/5_")
+    expect(formatFindingComment(fnd({ score: 3 }), 1)).toContain("_confidence: 1/5_")
+  })
+
+  it("collapses body inside a <details> block when confidence ≤ 2", () => {
+    const out = formatFindingComment(fnd({ score: 3 }), 2)
+    expect(out).toContain("<details>")
+    expect(out).toContain("<summary>Low-confidence finding")
+    expect(out).toContain("</details>")
+    // The headline + badge + confidence suffix stay OUTSIDE the
+    // details block so a reviewer skimming can still triage.
+    const headIdx = out.indexOf("**logic:**")
+    const detailsIdx = out.indexOf("<details>")
+    expect(headIdx).toBeGreaterThan(-1)
+    expect(detailsIdx).toBeGreaterThan(headIdx)
+  })
+
+  it("does NOT collapse on confidence ≥ 3", () => {
+    const out = formatFindingComment(fnd({ score: 3 }), 3)
+    expect(out).not.toContain("<details>")
+    expect(out).not.toContain("<summary>")
+  })
+
+  it("preserves the inline-finding marker as the first line", () => {
+    const out = formatFindingComment(fnd({ score: 4 }), 4)
+    expect(out.split("\n")[0]).toBe("<!-- sigilix:pr-review-finding -->")
+  })
+})
+
+describe("parsePrReviewResponse — SIG-101 per-finding confidence", () => {
+  const valid: PrReviewVerdict = {
+    summary: "Safe; one nit.",
+    confidence: 4,
+    confidenceReason: "Narrow surface.",
+    findings: [],
+  }
+
+  it("reads `finding.confidence` when present and in range", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic", confidence: 5 }] }),
+    )
+    expect(out?.findings[0]?.confidence).toBe(5)
+  })
+
+  it("drops out-of-range confidence (leaves the field undefined)", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic", confidence: 0 }] }),
+    )
+    expect(out?.findings[0]?.confidence).toBeUndefined()
+  })
+
+  it("clamps fractional confidence to nearest integer", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic", confidence: 3.7 }] }),
+    )
+    expect(out?.findings[0]?.confidence).toBe(4)
+  })
+
+  it("absent confidence stays undefined (caller defaults to verdict-level)", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, category: "logic" }] }),
+    )
+    expect(out?.findings[0]?.confidence).toBeUndefined()
+  })
+})
+
+describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () => {
+  const verdict: PrReviewVerdict = {
+    summary: "Has issues.",
+    confidence: 3,
+    confidenceReason: "ok",
+    findings: [{ ...baseFinding, score: 4, category: "logic" }],
+  }
+
+  it("renders the retrigger sub-text hint when retriggerUrl is supplied (founder pulled the visible button 2026-05-19)", () => {
+    const body = renderRequestChangesBody({
+      verdict,
+      retriggerUrl: "https://github.com/owner/repo/pull/42",
+    })
+    expect(body).toContain("Comment `/sigilix review`")
+    // The Greptile-style `[🔄 Re-run review](URL)` button was dropped
+    // on founder feedback — visual noise inside the body.
+    expect(body).not.toContain("[🔄 Re-run review]")
+    expect(body).not.toContain("🔄 Re-run review")
+  })
+
+  it("renders the counter footer line when reviewCounter is supplied", () => {
+    const body = renderRequestChangesBody({
+      verdict,
+      reviewCounter: 3,
+      prov: { headSha: "abc1234", nowMs: 1747547318000 },
+    })
+    expect(body).toMatch(/_Sigilix · Review #3 for this PR · last rendered 2025-05-18T05:48:38\.000Z\._/)
+  })
+
+  it("renders BOTH retrigger hint + counter when both are supplied", () => {
+    const body = renderRequestChangesBody({
+      verdict,
+      retriggerUrl: "https://github.com/owner/repo/pull/42",
+      reviewCounter: 1,
+      prov: { headSha: "abc1234", nowMs: 1747547318000 },
+    })
+    expect(body).toContain("Comment `/sigilix review`")
+    expect(body).toContain("Review #1 for this PR")
+  })
+
+  it("omits both when neither field is supplied (back-compat)", () => {
+    const body = renderRequestChangesBody({ verdict })
+    expect(body).not.toContain("Comment `/sigilix review`")
+    expect(body).not.toContain("Review #")
+  })
+
+  it("orders retrigger hint before counter; counter sits above the provenance footer", () => {
+    const body = renderRequestChangesBody({
+      verdict,
+      retriggerUrl: "https://github.com/owner/repo/pull/42",
+      reviewCounter: 7,
+      prov: { headSha: "deadbeef0000", nowMs: 1747547318000 },
+    })
+    const hintIdx = body.indexOf("Comment `/sigilix review`")
+    const counterIdx = body.indexOf("Review #7")
+    const provIdx = body.indexOf("_Reviewed against")
+    expect(hintIdx).toBeGreaterThan(-1)
+    expect(counterIdx).toBeGreaterThan(hintIdx)
+    expect(provIdx).toBeGreaterThan(counterIdx)
+  })
+
+  it("ignores reviewCounter <= 0 (defensive — counter should always be >= 1)", () => {
+    const body = renderRequestChangesBody({ verdict, reviewCounter: 0 })
+    expect(body).not.toContain("Review #")
   })
 })

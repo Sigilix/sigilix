@@ -17,6 +17,7 @@
 import type { Env } from "../index"
 import { resolveDoConfig } from "./config"
 import type { EnqueueRequest, PrReviewMode } from "./types"
+import { buildPausedKey, buildIgnoredKey } from "../lib/pr-lifecycle-commands"
 
 const DO_BASE_URL = "https://do.internal"
 
@@ -38,8 +39,26 @@ export interface PrReviewEnqueueArgs {
   staleHeadRequeueDepth?: number
 }
 
+// SIG-98 note on slash-command reruns + the pause/ignore gate:
+//
+// The non-silent `/sigilix review` and `/sigilix full review` reruns
+// dispatched from `dispatchJob/pr-review-rerun` post their queue
+// message via a raw `env.OPENCLAW_JOBS.send` (see `src/index.ts`
+// around the `pr-review-rerun` case) instead of routing through
+// `enqueuePrReviewJob`. That raw-send path intentionally bypasses
+// BOTH (a) the DO per-(PR, headSha) dedup AND (b) the pause/ignore
+// gate below — a user typing `/sigilix review` is an explicit ask
+// for a fresh review, regardless of pause state.
+//
+// All AUTOMATIC enqueue paths (webhook `synchronize`, warmup-fired
+// silent reruns, stale-head requeues) DO call `enqueuePrReviewJob`
+// and therefore honor the gate. That's the only behavior split:
+// automatic = gated, user-typed = not gated.
+
 export type PrReviewEnqueueResult =
   | { ok: true; mode: PrReviewMode }
+  | { ok: true; mode: "skipped-paused" }
+  | { ok: true; mode: "skipped-ignored" }
   | {
       ok: false
       mode: "post"
@@ -62,6 +81,39 @@ export async function enqueuePrReviewJob(
   env: Env,
   args: PrReviewEnqueueArgs,
 ): Promise<PrReviewEnqueueResult> {
+  // SIG-98 — pause/ignore gate. Skip the enqueue entirely when a
+  // per-PR pause (24h TTL) or ignore (no TTL) flag is set in KV.
+  // Every caller of this function is an AUTOMATIC trigger (webhook
+  // synchronize, warmup-fired silent rerun, stale-head requeue) and
+  // honors the gate uniformly. User-typed slash-command reruns
+  // bypass naturally because they raw-send to `OPENCLAW_JOBS` and
+  // never reach this function — see the comment block above.
+  //
+  // Read both keys in parallel: KV.get is cheap, this is webhook-hot
+  // path, and we always want to log which flag won.
+  const [pausedAt, ignoredAt] = await Promise.all([
+    env.OPENCLAW_STATE.get(buildPausedKey(args.owner, args.repo, args.prNumber)),
+    env.OPENCLAW_STATE.get(buildIgnoredKey(args.owner, args.repo, args.prNumber)),
+  ])
+  if (ignoredAt !== null) {
+    console.log(JSON.stringify({
+      event: "pr-review-skipped",
+      reason: "ignored",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+      ignoredAt,
+    }))
+    return { ok: true, mode: "skipped-ignored" }
+  }
+  if (pausedAt !== null) {
+    console.log(JSON.stringify({
+      event: "pr-review-skipped",
+      reason: "paused",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+      pausedAt,
+    }))
+    return { ok: true, mode: "skipped-paused" }
+  }
+
   const { mode } = resolveDoConfig(env)
 
   // Phase 1 — DO /enqueue (post + shadow). The entire DO phase

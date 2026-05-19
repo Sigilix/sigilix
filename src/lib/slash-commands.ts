@@ -12,6 +12,11 @@
 //                                             authored content outside the
 //                                             marker fences across re-runs.
 //   - `/sigilix help`                       → post a list of supported commands inline
+//   - `/sigilix pause`                      → pause auto-review on this PR for 24h (SIG-98)
+//   - `/sigilix resume`                     → clear pause/ignore flags (SIG-98)
+//   - `/sigilix ignore`                     → permanently opt this PR out of auto-review (SIG-98)
+//   - `/sigilix full review`                → re-review bypassing cumulative-diff dedup (SIG-98)
+//   - `/sigilix resolve`                    → mark every Sigilix-rooted review thread as resolved (SIG-98)
 //
 // Deferred to follow-up issues:
 //   - `/sigilix ask <q>`  — Q&A using PR context + RAG
@@ -41,6 +46,15 @@ export type SlashCommand =
   //                 outside the fences.
   | { cmd: "describe"; mode: DescribeMode; apply: boolean }
   | { cmd: "describe"; mode: "unknown"; rawArg: string; apply: boolean }
+  // SIG-98 — competitive parity with CodeRabbit + PR-Agent. The five
+  // tokens below all flip a per-PR review-lifecycle flag or kick a
+  // dedup-bypassing review; each is its own ack + its own queue job
+  // so the existing ACL gate + coalesce window apply uniformly.
+  | { cmd: "pause" }
+  | { cmd: "resume" }
+  | { cmd: "ignore" }
+  | { cmd: "full-review" } // parsed from the literal two-word "full review"
+  | { cmd: "resolve" }
   // Reserved shape (parser doesn't return this yet — adding the
   // type when handlers exist will surface missed dispatch cases via
   // the exhaustive switch in renderSlashCommandAck):
@@ -101,6 +115,33 @@ export function parseSlashCommand(body: string): SlashCommand | null {
     }
     if (head === "help") {
       return { cmd: "help" }
+    }
+    // SIG-98: pause/resume/ignore/resolve are single-token; `full` is
+    // a two-token command (`full review`). Anything else after the
+    // single-token commands is ignored, matching the long-standing
+    // "extra args after the command word are ignored" rule for
+    // `/sigilix review` etc.
+    if (head === "pause") {
+      return { cmd: "pause" }
+    }
+    if (head === "resume") {
+      return { cmd: "resume" }
+    }
+    if (head === "ignore") {
+      return { cmd: "ignore" }
+    }
+    if (head === "resolve") {
+      return { cmd: "resolve" }
+    }
+    if (head === "full") {
+      // SIG-98 — second token MUST be "review". Without it, `/sigilix
+      // full` is meaningless; fall through to the "unsupported earlier
+      // line" branch so a valid command on a later line still wins.
+      const second = after.split(/\s+/)[1]?.toLowerCase() ?? ""
+      if (second === "review") {
+        return { cmd: "full-review" }
+      }
+      continue
     }
     if (head === "describe") {
       // ARC-264: `apply` is the first positional after `describe`.
@@ -189,6 +230,16 @@ export function renderSlashCommandAck(cmd: SlashCommand): string {
         return `Generating ${describeModeFriendlyName(cmd.mode)} draft via \`/sigilix describe apply\` and writing it to the PR body between marker fences. Existing PR-body content outside the marker fences will be preserved across re-runs.`
       }
       return `Generating ${describeModeFriendlyName(cmd.mode)} draft via \`/sigilix describe\`. Output will appear inline shortly.`
+    case "pause":
+      return "Sigilix auto-review paused on this PR for 24h. Comment `/sigilix resume` to re-enable sooner."
+    case "resume":
+      return "Sigilix auto-review re-enabled on this PR."
+    case "ignore":
+      return "Sigilix auto-review permanently disabled on this PR. Comment `/sigilix resume` to re-enable."
+    case "full-review":
+      return "Re-running ensemble review with cumulative-diff dedup bypass on the current head. Standard sticky comment will update when complete."
+    case "resolve":
+      return "Marking every Sigilix-authored review thread on this PR as resolved."
     default: {
       const _exhaustive: never = cmd
       return _exhaustive
@@ -226,9 +277,14 @@ export function renderHelpBody(): string {
     "| Command | Effect |",
     "|---|---|",
     "| `/sigilix review` | Re-run the ensemble review against the PR's current head SHA. |",
+    "| `/sigilix full review` | Re-run the ensemble review and bypass the cumulative-diff dedup gate (use when a re-run is suppressed because the diff hasn't changed). |",
     "| `/sigilix improve` | Generate apply-able GitHub suggested-change comments (single-shot, narrow scope). |",
     "| `/sigilix describe` | Draft a PR description or internal / external changelog. Posted as an inline comment with markers — body is not edited. |",
     "| `/sigilix describe apply` | Same draft, but written back to the PR body in place between marker fences. Content outside the markers is preserved across re-runs. |",
+    "| `/sigilix pause` | Pause auto-review on this PR for 24 hours. New pushes skip the ensemble until the window expires or `/sigilix resume` runs. |",
+    "| `/sigilix resume` | Re-enable auto-review on this PR (clears both pause and ignore flags). |",
+    "| `/sigilix ignore` | Permanently opt this PR out of auto-review. Reversible via `/sigilix resume`. |",
+    "| `/sigilix resolve` | Mark every Sigilix-authored review thread on this PR as resolved. |",
     "| `/sigilix help` | Show this list. |",
     "",
     "`/sigilix describe` accepts an optional mode arg: `pr` (default), `internal`, or `external`. Example: `/sigilix describe internal`.",

@@ -170,6 +170,70 @@ describe("bakeoff-report CLI — end-to-end", () => {
     expect(stderr).toMatch(/is after --until/)
   })
 
+  it("skips non-matching extensions, malformed lines, and non-shadow events (parsing-stats coverage)", () => {
+    // Sigilix testing-specialist on PR review: the bot wanted unit
+    // tests for `collectFiles` (non-matching extensions),
+    // `loadEvents` (malformed lines + non-shadow events). All three
+    // exercised here via fixture content + stderr-count assertions.
+    const dir = mkdtempSync(join(tmpDir, "mixed-"))
+    writeFileSync(
+      join(dir, "events.ndjson"),
+      [
+        // 1. Valid shadow event (counted as parsed).
+        JSON.stringify({
+          event: "shadow-verdict-comparison",
+          ts: "2026-05-15T10:00:00Z",
+          role: "synth",
+          prodModel: "kimi",
+          shadowModel: "deepseek",
+          prodVerdictOk: true,
+          shadowVerdictOk: true,
+          prodElapsedMs: 1,
+          shadowElapsedMs: 1,
+          prodFindingsCount: 0,
+          shadowFindingsCount: 0,
+          score4PlusOverlapCount: 0,
+          score4PlusProdOnlyCount: 0,
+          score4PlusShadowOnlyCount: 0,
+          shadowFailureReason: null,
+        }),
+        // 2. Non-shadow event (counted as skippedNonShadowEvents).
+        JSON.stringify({ event: "some-other-event", ts: "2026-05-15T10:00:00Z" }),
+        // 3. Malformed line (counted as badLines).
+        "{not valid json",
+        // 4. Blank line (skipped silently, not counted).
+        "",
+        // 5. JSON object without `event` key (counted as skippedNonShadowEvents).
+        JSON.stringify({ ts: "2026-05-15T10:00:00Z", role: "synth" }),
+      ].join("\n") + "\n",
+    )
+    // Non-matching extension — collectFiles must NOT pick this up.
+    writeFileSync(join(dir, "README.md"), "# notes about the dump\n")
+    writeFileSync(join(dir, "random.txt"), "should not be loaded\n")
+
+    const { code, stderr } = runCli([
+      "--input",
+      dir,
+      "--since",
+      "2026-05-01T00:00:00Z",
+      "--until",
+      "2026-05-31T00:00:00Z",
+      "--print-only",
+    ])
+
+    expect(code).toBe(0)
+    // Exact stats: 1 file (README.md + random.txt skipped by
+    // extension filter), 4 non-empty lines, 1 parsed shadow event,
+    // 1 non-shadow skipped (`some-other-event` has a string `event`
+    // outside KNOWN_EVENTS), 2 bad lines (the malformed JSON + the
+    // no-`event`-field object, which unwrap rejects as malformed).
+    expect(stderr).toMatch(/parsed 1 shadow events/)
+    expect(stderr).toMatch(/1 files/)
+    expect(stderr).toMatch(/4 lines/)
+    expect(stderr).toMatch(/1 non-shadow skipped/)
+    expect(stderr).toMatch(/2 bad lines/)
+  })
+
   it("loads all .ndjson files from an --input directory and groups by role", () => {
     const dir = mkdtempSync(join(tmpDir, "multi-"))
     writeFileSync(

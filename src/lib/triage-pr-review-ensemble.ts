@@ -127,10 +127,7 @@ import {
   selectDiff,
   type DiffMode,
 } from "./incremental-review"
-import {
-  computeDiffHash,
-  writePriorReviewDiffHash,
-} from "./noop-merge-detect"
+import { recordReviewedDiffHash } from "./noop-merge-detect"
 import {
   computeFileListHash,
   readReviewManifest,
@@ -2536,17 +2533,8 @@ export async function handlePrReviewEnsemble(
       // semantics as writeLastReviewedSha — the customer-facing
       // review already shipped; KV failure only means the next push
       // falls back to dispatch instead of skipping. The helper
-      // swallows internally, but we still wrap the hash compute.
-      try {
-        const diffHash = await computeDiffHash(fullPrDiff)
-        await writePriorReviewDiffHash(env, owner, repo, prNumber, diffHash, headSha)
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-review-diff-hash-write-failed",
-          owner, repo, prNumber, headSha,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // swallows internally.
+      await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
       // ARC-258 follow-up: enqueue a forced pr-overview refresh so
       // any stale warmup-callout marker in the sticky body gets
       // cleared. `force: true` bypasses the per-headSha dedupe so
@@ -2776,16 +2764,7 @@ export async function handlePrReviewEnsemble(
       // SIG-89: mirror the primary path — stash the diff hash for
       // noop-merge skip on the next synchronize. Same best-effort
       // semantics as the lastReviewedSha write above.
-      try {
-        const diffHash = await computeDiffHash(fullPrDiff)
-        await writePriorReviewDiffHash(env, owner, repo, prNumber, diffHash, headSha)
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-review-diff-hash-write-failed",
-          owner, repo, prNumber, headSha,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
       // ARC-258 follow-up: forced pr-overview refresh on the 422
       // fallback success path too — same rationale as the primary
       // submit (clear any stale warmup callout in the sticky body).

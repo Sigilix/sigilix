@@ -1669,6 +1669,11 @@ async function handleGitHubWebhook(
       // decision.overview or decision.review is true and auth
       // succeeded above (line 1531-1552); we check it here so the
       // fall-through-on-auth-failure path stays safe.
+      //
+      // Diff fetch is capped at 2s via `AbortSignal.timeout(2000)`
+      // so a slow GitHub response can't stall the webhook past
+      // GitHub's ~10s redelivery threshold. On timeout/abort the
+      // catch falls through to the normal dispatch path (fail-open).
       let skipNoopMerge = false
       if (
         env.OPENCLAW_NOOP_MERGE_SKIP_ENABLED !== "off" &&
@@ -1678,7 +1683,10 @@ async function handleGitHubWebhook(
         try {
           const prior = await readPriorReviewDiffHash(env, owner, repo, prNumber)
           if (prior !== null) {
-            const currentDiff = await webhookClient.getPullRequestDiff(owner, repo, prNumber)
+            const currentDiff = await webhookClient.getPullRequestDiff(
+              owner, repo, prNumber,
+              { signal: AbortSignal.timeout(2000) },
+            )
             const currentHash = await computeDiffHash(currentDiff)
             if (currentHash === prior.diffHash) {
               skipNoopMerge = true

@@ -116,3 +116,35 @@ export async function writePriorReviewDiffHash(
     // following successful review.
   }
 }
+
+/**
+ * Compute the hash of the just-reviewed diff and stash it for the
+ * next synchronize webhook's noop-merge compare. Single entry point
+ * called from every post-submit-success site in
+ * `triage-pr-review-ensemble.ts` so the contract is directly testable
+ * (the inline compute+write pair would only be exercised through the
+ * full ensemble handler, which is too heavy to set up in tests).
+ *
+ * Catches all errors internally — same swallow-and-log semantics as
+ * the underlying `writePriorReviewDiffHash`, so callers don't need
+ * their own try/catch and a KV miss can't bubble out as `errored`.
+ */
+export async function recordReviewedDiffHash(
+  env: Env,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  fullPrDiff: string,
+  reviewedHeadSha: string,
+): Promise<void> {
+  try {
+    const diffHash = await computeDiffHash(fullPrDiff)
+    await writePriorReviewDiffHash(env, owner, repo, prNumber, diffHash, reviewedHeadSha)
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-diff-hash-record-failed",
+      owner, repo, prNumber, reviewedHeadSha,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+}

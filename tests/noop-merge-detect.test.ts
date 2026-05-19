@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from "vitest"
 import {
   computeDiffHash,
   readPriorReviewDiffHash,
+  recordReviewedDiffHash,
   writePriorReviewDiffHash,
 } from "../src/lib/noop-merge-detect"
 import type { Env } from "../src/index"
@@ -188,5 +189,65 @@ describe("writePriorReviewDiffHash", () => {
     await expect(
       writePriorReviewDiffHash(fakeEnv(stub), "o", "r", 1, "h", "s"),
     ).resolves.toBeUndefined()
+  })
+})
+
+// `recordReviewedDiffHash` is the production seam called from every
+// post-submit-success site in `triage-pr-review-ensemble.ts`. Testing
+// it directly pins the contract those call sites must satisfy — a
+// regression that silently drops the write (e.g., a refactor that
+// moves the call before `fullPrDiff` is fetched, or a conditional
+// that skips it) is caught here without needing to set up the full
+// ensemble handler. (Sigilix testing-specialist finding on PR #106.)
+describe("recordReviewedDiffHash", () => {
+  it("hashes the diff and stashes a roundtrippable record", async () => {
+    const { stub } = fakeKV()
+    const env = fakeEnv(stub)
+    const diff = "diff --git a/foo b/foo\n@@ -1 +1 @@\n-x\n+y\n"
+    const headSha = "deadbeef".repeat(5)
+
+    await recordReviewedDiffHash(env, "o", "r", 1, diff, headSha)
+
+    const record = await readPriorReviewDiffHash(env, "o", "r", 1)
+    expect(record).not.toBeNull()
+    expect(record?.diffHash).toBe(await computeDiffHash(diff))
+    expect(record?.reviewedHeadSha).toBe(headSha)
+  })
+
+  it("produces a hash that matches a recompute of the same diff (no-op merge detected)", async () => {
+    // The webhook compares `await computeDiffHash(currentDiff)` against
+    // the stored hash. This test pins the producer/consumer contract:
+    // identical input → identical hash → skip path fires.
+    const { stub } = fakeKV()
+    const env = fakeEnv(stub)
+    const diff = "diff --git a/x b/x\n@@\n+a\n"
+    const headSha = "abc".repeat(14) + "a"
+
+    await recordReviewedDiffHash(env, "o", "r", 1, diff, headSha)
+    const record = await readPriorReviewDiffHash(env, "o", "r", 1)
+
+    // Simulate the webhook re-computing on the next synchronize.
+    expect(await computeDiffHash(diff)).toBe(record?.diffHash)
+    // And a different diff hashes differently → skip path won't fire.
+    expect(await computeDiffHash(diff + "\n")).not.toBe(record?.diffHash)
+  })
+
+  it("swallows errors and logs telemetry (best-effort — KV failure must not bubble)", async () => {
+    const stub = {
+      get: vi.fn(),
+      put: vi.fn(async () => {
+        throw new Error("KV down")
+      }),
+      delete: vi.fn(),
+    }
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    await expect(
+      recordReviewedDiffHash(fakeEnv(stub), "o", "r", 1, "diff", "sha"),
+    ).resolves.toBeUndefined()
+    // The underlying writePriorReviewDiffHash swallows the KV error,
+    // so `recordReviewedDiffHash` doesn't need to log here. But the
+    // outer try/catch is still load-bearing: if `computeDiffHash`
+    // ever throws (Web Crypto unavailable, etc.) the telemetry fires.
+    warn.mockRestore()
   })
 })

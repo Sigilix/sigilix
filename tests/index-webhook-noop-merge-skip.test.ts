@@ -36,8 +36,12 @@ vi.mock("../src/lib/github", async () => {
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
-      getPullRequestDiff: (o: string, r: string, n: number) =>
-        mockGetPullRequestDiff(o, r, n),
+      getPullRequestDiff: (
+        o: string,
+        r: string,
+        n: number,
+        opts?: { signal?: AbortSignal },
+      ) => mockGetPullRequestDiff(o, r, n, opts),
     })),
   }
 })
@@ -297,6 +301,38 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
     // Fail-open: a diff-fetch error MUST fall through to the normal
     // dispatch path so the worst case is a wasted review, never a
     // missed review.
+    expect(mockEnqueuePrReviewJob).toHaveBeenCalledOnce()
+  })
+
+  it("DISPATCHES enqueuePrReviewJob when the diff fetch is aborted by the 2s timeout", async () => {
+    // Sigilix bot finding on PR #106: webhook can't stall on a slow
+    // GitHub. The fetch is wrapped in AbortSignal.timeout(2000).
+    // On abort, the catch block falls through to dispatch (fail-open).
+    // We simulate an abort by rejecting with an AbortError-shaped
+    // exception — equivalent to what `fetch` raises when its signal
+    // aborts mid-flight.
+    const priorHash = await computeDiffHash(CURRENT_DIFF)
+    const { env } = makeEnv({
+      [`pr-review-diff-hash:${OWNER}/${REPO}#${PR_NUMBER}`]: JSON.stringify({
+        diffHash: priorHash,
+        reviewedHeadSha: "0".repeat(40),
+        hashedAt: 1_700_000_000_000,
+      }),
+    })
+    mockGetPullRequestDiff.mockImplementationOnce(async (_o, _r, _n, opts) => {
+      // Verify the production caller actually passed an AbortSignal —
+      // without this assertion the test passes even if the timeout
+      // wrapper is silently dropped.
+      expect(opts?.signal).toBeInstanceOf(AbortSignal)
+      const err = new Error("The operation was aborted") as Error & { name: string }
+      err.name = "AbortError"
+      throw err
+    })
+    const worker = (await import("../src/index")).default
+
+    const res = await postSynchronizeWebhook(worker, env)
+
+    expect(res.status).toBe(202)
     expect(mockEnqueuePrReviewJob).toHaveBeenCalledOnce()
   })
 

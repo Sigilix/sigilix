@@ -95,7 +95,7 @@ export interface MergeApproveSubmitClient {
 export type MergedOnApproveStage = "pre-fanout" | "pre-submit"
 
 export type SubmitMergedOnApproveResult =
-  | { ok: true; reviewId: number }
+  | { ok: true; reviewId: number; state: string }
   | { ok: false; error: string }
 
 /**
@@ -164,6 +164,13 @@ export async function submitMergedOnApprove(args: {
     const submitted = await args.client.submitReview(
       args.owner, args.repo, args.prNumber, submission,
     )
+    // CR PR #104 Minor catch: clamp at 0 — on `pre-fanout` runs the merge
+    // can have happened BEFORE this ensemble started (webhook queued during
+    // a long delay), so `mergedAtMs - startMs` would otherwise report a
+    // negative duration on telemetry. `pre-submit` always positive in
+    // practice (merge happened during fan-out → after startMs), but the
+    // clamp is cheap and keeps the field's semantic ("how long into the
+    // review did the merge land") honest across both stages.
     console.log(JSON.stringify({
       event: "pr-review-approved-on-merge",
       owner: args.owner,
@@ -172,11 +179,11 @@ export async function submitMergedOnApprove(args: {
       headSha: args.headSha.slice(0, 7),
       stage: args.stage,
       merged_at_ms: args.mergedAtMs,
-      merged_during_review_ms: args.mergedAtMs - args.startMs,
+      merged_during_review_ms: Math.max(0, args.mergedAtMs - args.startMs),
       review_elapsed_ms: Date.now() - args.startMs,
       review_id: submitted.id,
     }))
-    return { ok: true, reviewId: submitted.id }
+    return { ok: true, reviewId: submitted.id, state: submitted.state }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(JSON.stringify({

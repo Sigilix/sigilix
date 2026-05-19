@@ -912,6 +912,17 @@ export async function handlePrReviewEnsemble(
         startMs,
       })
       if (out.ok) {
+        // CR PR #104 Major catch: mirror the standard ensemble flow's
+        // post-submit verification so a silently-rejected merged-on-
+        // approve POST gets the same diagnostic surface (`pr-review-
+        // verify-missing` / `-pending` / `-error` telemetry) as the
+        // primary path. The verify is best-effort — on inconclusive
+        // results we still claim `posted` (matches the standard
+        // path's semantics on capped/error returns).
+        await verifyReviewPersisted(
+          client, owner, repo, prNumber, out.reviewId,
+          "merged-on-approve-pre-fanout", out.state,
+        )
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
           findingsCount: 0,
@@ -2291,6 +2302,12 @@ export async function handlePrReviewEnsemble(
         startMs,
       })
       if (out.ok) {
+        // CR PR #104 Major catch: same post-submit verification as the
+        // pre-fanout branch above. See that block for the rationale.
+        await verifyReviewPersisted(
+          client, owner, repo, prNumber, out.reviewId,
+          "merged-on-approve-pre-submit", out.state,
+        )
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
           findingsCount: 0,

@@ -158,7 +158,7 @@ describe("submitMergedOnApprove (SIG-88)", () => {
       stage: "pre-fanout",
     })
 
-    expect(out).toEqual({ ok: true, reviewId: 99_001 })
+    expect(out).toEqual({ ok: true, reviewId: 99_001, state: "APPROVED" })
     expect(submitFn).toHaveBeenCalledTimes(1)
     expect(submitFn).toHaveBeenCalledWith(
       SUBMIT_BASE.owner,
@@ -240,6 +240,28 @@ describe("submitMergedOnApprove (SIG-88)", () => {
     expect(out).toEqual({ ok: false, error: "raw string rejection" })
     const parsed = JSON.parse(warnSpy.mock.calls[0]?.[0] as string)
     expect(parsed["err"]).toBe("raw string rejection")
+  })
+
+  // CR PR #104 Minor: pre-fanout runs can have a `mergedAtMs` that
+  // precedes `startMs` (webhook queued long after the merge happened).
+  // Without the clamp, telemetry would report a negative
+  // `merged_during_review_ms`, which downstream dashboards can't
+  // pivot on cleanly. Pin the clamp at 0.
+  it("clamps `merged_during_review_ms` at 0 when merge happened BEFORE the ensemble started (pre-fanout case)", async () => {
+    const client = mockSubmitClient(async () => ({ id: 4, state: "APPROVED" }))
+    // merge happened 30s BEFORE startMs (webhook delay scenario)
+    const mergedAtMs = new Date("2026-05-18T17:59:00Z").getTime()
+    const startMs = new Date("2026-05-18T17:59:30Z").getTime()
+    await submitMergedOnApprove({
+      ...SUBMIT_BASE,
+      mergedAtMs,
+      startMs,
+      client,
+      stage: "pre-fanout",
+    })
+    const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string)
+    // Raw diff would be -30_000; the clamp pins it at 0.
+    expect(parsed["merged_during_review_ms"]).toBe(0)
   })
 
   it("commit_id pins the headSha so the APPROVE attaches to the right commit", async () => {

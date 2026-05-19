@@ -43,6 +43,7 @@ import {
   STUB_BODY,
   STUB_GITHUB_API_TIMEOUT_MS,
   stubFlagKey,
+  stubInflightKey,
   waitForPrOverviewStub,
 } from "../src/lib/pr-overview-stub"
 import type { Env } from "../src/index"
@@ -593,5 +594,97 @@ describe("postPrOverviewStubIfNeeded — GitHub API timeouts (Sigilix round-4)",
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("postPrOverviewStubIfNeeded — SIG-92 concurrent-delivery short-circuit", () => {
+  it("returns kv-hit when an inflight tombstone is present and the leader's flag lands during the poll", async () => {
+    vi.useFakeTimers()
+    try {
+      const { kv, store } = makeKvStub()
+      // Simulate a concurrent leader: its tombstone is already in KV,
+      // but the final flag hasn't landed yet.
+      store.set(stubInflightKey(args), "leader-uuid-abc")
+
+      const promise = postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+      // Advance one poll tick; flag isn't there yet → keep polling.
+      await vi.advanceTimersByTimeAsync(300)
+      // Leader finishes its create + writes the final flag.
+      store.set(stubFlagKey(args), "12345")
+      // Next poll tick — should observe the flag and return.
+      await vi.advanceTimersByTimeAsync(300)
+
+      const out = await promise
+      expect(out).toEqual({ kind: "kv-hit", commentId: 12345 })
+      // Loser must NOT have created its own comment.
+      expect(mockCreateIssueComment).not.toHaveBeenCalled()
+      expect(mockUpdateIssueComment).not.toHaveBeenCalled()
+      // Loser must NOT have run a marker scan (short-circuited before).
+      expect(mockListIssueCommentsPage).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("falls through to create when the poll times out (~3s) without seeing the leader's flag", async () => {
+    vi.useFakeTimers()
+    try {
+      const { kv, store } = makeKvStub()
+      store.set(stubInflightKey(args), "leader-uuid-stuck")
+
+      const promise = postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+      // 10 attempts × 300ms = 3000ms. Advance past the ceiling.
+      await vi.advanceTimersByTimeAsync(3500)
+
+      const out = await promise
+      // Leader stalled / failed → loser falls through and creates.
+      expect(out).toEqual({ kind: "posted", commentId: 999 })
+      expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+      // Loser also wrote the final flag so any third delivery sees it.
+      expect(store.get(stubFlagKey(args))).toBe("999")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("writes its own inflight tombstone before proceeding (no prior leader)", async () => {
+    const { kv, store, putMock } = makeKvStub()
+    // No prior inflight, no prior flag → normal create path.
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out).toEqual({ kind: "posted", commentId: 999 })
+    // Tombstone written before create — a later delivery would see it.
+    expect(store.has(stubInflightKey(args))).toBe(true)
+    // The tombstone put was called with a TTL of 60s.
+    const tombstonePut = putMock.mock.calls.find(
+      (c) => c[0] === stubInflightKey(args),
+    )
+    expect(tombstonePut).toBeDefined()
+    expect(tombstonePut?.[2]).toEqual(
+      expect.objectContaining({ expirationTtl: 60 }),
+    )
+  })
+
+  it("swallows a KV read failure on the inflight key and proceeds normally", async () => {
+    // Custom KV stub that throws on the inflight key read only.
+    const store = new Map<string, string>()
+    const kv = {
+      get: vi.fn(async (key: string): Promise<string | null> => {
+        if (key.startsWith("pr-overview-stub-inflight:")) {
+          throw new Error("KV down")
+        }
+        return store.get(key) ?? null
+      }),
+      put: vi.fn(async (key: string, value: string): Promise<void> => {
+        store.set(key, value)
+      }),
+      delete: vi.fn(async (key: string): Promise<void> => {
+        store.delete(key)
+      }),
+    } as unknown as Env["OPENCLAW_STATE"]
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+    expect(out).toEqual({ kind: "posted", commentId: 999 })
   })
 })

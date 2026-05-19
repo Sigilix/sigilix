@@ -6,8 +6,10 @@ import {
   buildFallbackBody,
   buildReviewSubmission,
   chooseReviewEvent,
+  filterToSigilixAuthored,
   parsePrReviewResponse,
   renderFixPlan,
+  type AuthoredItem,
   type PrReviewFinding,
   type PrReviewVerdict,
 } from "../src/lib/triage-pr-review"
@@ -123,6 +125,121 @@ describe("chooseReviewEvent", () => {
   it("REQUEST_CHANGES on a mix regardless of max score", () => {
     expect(chooseReviewEvent([f(1), f(2), f(2)])).toBe("REQUEST_CHANGES")
     expect(chooseReviewEvent([f(2), f(5), f(3)])).toBe("REQUEST_CHANGES")
+  })
+
+  // SIG-37 — when the caller passes in a list of open PR threads /
+  // review comments / blocking items via the optional `openItems`
+  // arg, Sigilix's APPROVE decision must only consider items it
+  // itself authored. CodeRabbit / Greptile / other-bot / human-
+  // reviewer items must NOT influence the gate.
+  //
+  // Establishes the clean Sigilix-only signal needed for the
+  // head-to-head measurement framework (SIG-200, separately tracked).
+  describe("SIG-37 — Sigilix-only gating of openItems", () => {
+    const crThread: AuthoredItem = { user: { login: "coderabbitai[bot]" } }
+    const greptileThread: AuthoredItem = { user: { login: "greptile-apps[bot]" } }
+    const humanThread: AuthoredItem = { user: { login: "alice" } }
+    const sigilixThread: AuthoredItem = { user: { login: "sigilix[bot]" } }
+
+    it("APPROVE despite an unresolved CodeRabbit thread (zero Sigilix threads)", () => {
+      // SIG-37 fixture 1: Sigilix has nothing to flag, CodeRabbit
+      // has one unresolved thread. Pre-fix, an approval gate that
+      // counted all open threads would withhold APPROVE; post-fix
+      // the CR thread is filtered out and Sigilix posts APPROVE.
+      expect(chooseReviewEvent([], [crThread])).toBe("APPROVE")
+    })
+
+    it("REQUEST_CHANGES when Sigilix has an unresolved thread (zero CR threads)", () => {
+      // SIG-37 fixture 2: the Sigilix-authored open thread must
+      // still block APPROVE. This is the half of the gate that
+      // didn't change — Sigilix-only signal in, Sigilix-only signal
+      // out.
+      expect(chooseReviewEvent([], [sigilixThread])).toBe("REQUEST_CHANGES")
+    })
+
+    it("APPROVE when ALL open threads are non-Sigilix (CR + Greptile + human)", () => {
+      // Mixed-bag of other-actor threads — none of which Sigilix
+      // owns. Filter strips everything; gate sees an empty list +
+      // empty findings → APPROVE.
+      expect(
+        chooseReviewEvent([], [crThread, greptileThread, humanThread]),
+      ).toBe("APPROVE")
+    })
+
+    it("REQUEST_CHANGES when mixed open threads include at least one Sigilix-authored", () => {
+      // Even with other-actor noise in the same list, a single
+      // Sigilix-authored open thread is enough to withhold APPROVE.
+      expect(
+        chooseReviewEvent([], [crThread, sigilixThread, humanThread]),
+      ).toBe("REQUEST_CHANGES")
+    })
+
+    it("REQUEST_CHANGES when the synth has its own findings, regardless of openItems mix", () => {
+      // Findings short-circuit the gate (existing semantics). The
+      // `openItems` arg is a secondary signal — never overrides a
+      // non-empty findings list.
+      expect(chooseReviewEvent([f(3)], [crThread])).toBe("REQUEST_CHANGES")
+      expect(chooseReviewEvent([f(3)], [sigilixThread])).toBe("REQUEST_CHANGES")
+      expect(chooseReviewEvent([f(3)], [])).toBe("REQUEST_CHANGES")
+    })
+
+    it("defaults openItems to [] so existing call sites are unaffected", () => {
+      // Defensive: every existing caller passes only the synth
+      // verdict's findings; they must keep producing APPROVE on
+      // empty findings without needing to thread an openItems arg
+      // through.
+      expect(chooseReviewEvent([])).toBe("APPROVE")
+      expect(chooseReviewEvent([f(2)])).toBe("REQUEST_CHANGES")
+    })
+
+    it("handles items with null user (deleted-author rows from GitHub) by dropping them", () => {
+      // GitHub returns `user: null` for comments whose author has
+      // been deleted. The filter treats those as non-Sigilix and
+      // drops them — they shouldn't block APPROVE on the Sigilix-
+      // only signal.
+      const deletedAuthor: AuthoredItem = { user: null }
+      expect(chooseReviewEvent([], [deletedAuthor])).toBe("APPROVE")
+    })
+  })
+})
+
+describe("filterToSigilixAuthored (SIG-37)", () => {
+  // Pure predicate exposed for any future call site that wants to
+  // count Sigilix-authored open threads separately from other-actor
+  // threads (e.g. SIG-200's head-to-head measurement framework).
+  // Same identity rule as `chooseReviewEvent`'s internal filter:
+  // `user.login === "sigilix[bot]"`.
+
+  const sig: AuthoredItem = { user: { login: "sigilix[bot]" } }
+  const cr: AuthoredItem = { user: { login: "coderabbitai[bot]" } }
+  const human: AuthoredItem = { user: { login: "alice" } }
+  const nullUser: AuthoredItem = { user: null }
+  const nullLogin: AuthoredItem = { user: { login: null } }
+
+  it("keeps Sigilix-authored items", () => {
+    expect(filterToSigilixAuthored([sig])).toEqual([sig])
+  })
+
+  it("drops CodeRabbit / human / null-user / null-login items", () => {
+    expect(filterToSigilixAuthored([cr, human, nullUser, nullLogin])).toEqual([])
+  })
+
+  it("preserves order of the surviving items", () => {
+    const a: AuthoredItem = { user: { login: "sigilix[bot]" } }
+    const b: AuthoredItem = { user: { login: "sigilix[bot]" } }
+    expect(filterToSigilixAuthored([cr, a, human, b, nullUser])).toEqual([a, b])
+  })
+
+  it("returns an empty list for an empty input", () => {
+    expect(filterToSigilixAuthored([])).toEqual([])
+  })
+
+  it("is case-sensitive (legacy / off-brand casings do NOT match)", () => {
+    // GitHub's bot login is the exact App slug; case-sensitive match
+    // avoids accidentally counting a hypothetical human handle that
+    // happens to differ only by case (`SIGILIX[bot]`) as Sigilix.
+    const upper: AuthoredItem = { user: { login: "SIGILIX[bot]" } }
+    expect(filterToSigilixAuthored([upper])).toEqual([])
   })
 })
 

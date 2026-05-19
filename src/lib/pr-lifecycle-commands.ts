@@ -109,13 +109,22 @@ export async function handlePrPause(args: LifecycleHandlerArgs): Promise<void> {
  * `/sigilix resume` — clear BOTH the paused and ignored keys (resume is
  * a single reversal CTA per the ticket spec) and post ack. KV
  * `delete` is idempotent, so the no-flag case is a no-op for both.
+ *
+ * CodeRabbit catch on PR #110: do NOT swallow KV delete errors. Pre-
+ * fix the handler had `.catch(() => {})` per delete, so a KV outage
+ * could leave pause/ignore set while the user got a green "resumed"
+ * ack and assumed auto-review was re-enabled. The fix lets the
+ * delete error bubble out of the handler so the queue retries the
+ * message; the deletes + ack post are all idempotent under retry
+ * (KV.delete on an absent key is a no-op; duplicate ack comments are
+ * cheap and visible to the user).
  */
 export async function handlePrResume(args: LifecycleHandlerArgs): Promise<void> {
   const pausedKey = buildPausedKey(args.owner, args.repo, args.prNumber)
   const ignoredKey = buildIgnoredKey(args.owner, args.repo, args.prNumber)
   await Promise.all([
-    args.env.OPENCLAW_STATE.delete(pausedKey).catch(() => {}),
-    args.env.OPENCLAW_STATE.delete(ignoredKey).catch(() => {}),
+    args.env.OPENCLAW_STATE.delete(pausedKey),
+    args.env.OPENCLAW_STATE.delete(ignoredKey),
   ])
   console.log(JSON.stringify({
     event: "pr-review-resumed",

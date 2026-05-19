@@ -894,15 +894,16 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
   lines.push("")
   lines.push(DISMISSAL_HINT)
 
-  // SIG-101: retrigger CTA. GitHub doesn't support pre-filled
-  // comment bodies on PRs, so the link target is just the PR URL
-  // and the `<sub>` line documents how to actually re-run. The
-  // button still helps because it's a visible affordance — Greptile
-  // v4 ship notes credit the same UX move with addressed-comments
-  // per PR up 74% / author-addressed up 43%.
+  // SIG-101: retrigger hint. The original Greptile-style
+  // `[🔄 Re-run review](URL)` button was dropped on founder feedback
+  // 2026-05-19 — it read as visual noise inside the request-changes
+  // body. The `<sub>` hint line remains as the discoverability
+  // affordance: it tells the reader that re-running is a thing they
+  // can do, without occupying header-weight real estate. GitHub
+  // doesn't support pre-filled comment bodies on existing PRs, so a
+  // URL-link wouldn't have actually triggered the rerun anyway.
   if (args.retriggerUrl) {
     lines.push("")
-    lines.push(`[🔄 Re-run review](${args.retriggerUrl})`)
     lines.push("<sub>Comment `/sigilix review` on this PR to re-run on the current head.</sub>")
   }
 

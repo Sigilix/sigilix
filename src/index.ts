@@ -1074,16 +1074,25 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // command — the ack would be unsolicited noise on every
         // open PR. Skip the ack when `silent` is set.
         if (!job.silent) {
+          // SIG-98 (CodeRabbit catch on PR #110): use the
+          // `full-review` ack text when the rerun originated from a
+          // `/sigilix full review` slash command (forceFresh: true).
+          // The two acks differ — "...with cumulative-diff dedup
+          // bypass..." vs the plain rerun copy — and rendering the
+          // wrong one on the dedup-bypass path was misleading.
+          const ackCmd: SlashCommand = job.forceFresh === true
+            ? { cmd: "full-review" }
+            : { cmd: "review" }
           try {
             await client.createIssueComment(
               job.owner, job.repo, job.prNumber,
-              renderSlashCommandAck({ cmd: "review" }),
+              renderSlashCommandAck(ackCmd),
             )
           } catch (err) {
             console.error(JSON.stringify({
               event: "slash-command-ack-failed",
               err: err instanceof Error ? err.message : String(err),
-              cmd: "review",
+              cmd: ackCmd.cmd,
               ...tag,
             }))
           }

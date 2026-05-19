@@ -835,13 +835,16 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
     findings: [{ ...baseFinding, score: 4, category: "logic" }],
   }
 
-  it("renders the retrigger button + sub-text when retriggerUrl is supplied", () => {
+  it("renders the retrigger sub-text hint when retriggerUrl is supplied (founder pulled the visible button 2026-05-19)", () => {
     const body = renderRequestChangesBody({
       verdict,
       retriggerUrl: "https://github.com/owner/repo/pull/42",
     })
-    expect(body).toContain("[🔄 Re-run review](https://github.com/owner/repo/pull/42)")
     expect(body).toContain("Comment `/sigilix review`")
+    // The Greptile-style `[🔄 Re-run review](URL)` button was dropped
+    // on founder feedback — visual noise inside the body.
+    expect(body).not.toContain("[🔄 Re-run review]")
+    expect(body).not.toContain("🔄 Re-run review")
   })
 
   it("renders the counter footer line when reviewCounter is supplied", () => {
@@ -853,35 +856,35 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
     expect(body).toMatch(/_Sigilix · Review #3 for this PR · last rendered 2025-05-18T05:48:38\.000Z\._/)
   })
 
-  it("renders BOTH retrigger + counter when both are supplied", () => {
+  it("renders BOTH retrigger hint + counter when both are supplied", () => {
     const body = renderRequestChangesBody({
       verdict,
       retriggerUrl: "https://github.com/owner/repo/pull/42",
       reviewCounter: 1,
       prov: { headSha: "abc1234", nowMs: 1747547318000 },
     })
-    expect(body).toContain("[🔄 Re-run review]")
+    expect(body).toContain("Comment `/sigilix review`")
     expect(body).toContain("Review #1 for this PR")
   })
 
   it("omits both when neither field is supplied (back-compat)", () => {
     const body = renderRequestChangesBody({ verdict })
-    expect(body).not.toContain("🔄 Re-run review")
+    expect(body).not.toContain("Comment `/sigilix review`")
     expect(body).not.toContain("Review #")
   })
 
-  it("orders retrigger before counter; counter sits above the provenance footer", () => {
+  it("orders retrigger hint before counter; counter sits above the provenance footer", () => {
     const body = renderRequestChangesBody({
       verdict,
       retriggerUrl: "https://github.com/owner/repo/pull/42",
       reviewCounter: 7,
       prov: { headSha: "deadbeef0000", nowMs: 1747547318000 },
     })
-    const retriggerIdx = body.indexOf("🔄 Re-run review")
+    const hintIdx = body.indexOf("Comment `/sigilix review`")
     const counterIdx = body.indexOf("Review #7")
     const provIdx = body.indexOf("_Reviewed against")
-    expect(retriggerIdx).toBeGreaterThan(-1)
-    expect(counterIdx).toBeGreaterThan(retriggerIdx)
+    expect(hintIdx).toBeGreaterThan(-1)
+    expect(counterIdx).toBeGreaterThan(hintIdx)
     expect(provIdx).toBeGreaterThan(counterIdx)
   })
 

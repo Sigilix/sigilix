@@ -1,6 +1,13 @@
 // SIG-101 — per-PR review counter helper tests.
 
-import { describe, it, expect, vi } from "vitest"
+import { describe, it, expect, vi, afterEach } from "vitest"
+
+// CodeRabbit catch on PR #110: centralized spy cleanup so a failing
+// assertion can't leak a `console.warn` spy into a subsequent test.
+// Replaces per-test `warnSpy.mockRestore()` calls.
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 import {
   bumpPrReviewCounter,
   buildReviewCounterKey,
@@ -71,22 +78,26 @@ describe("bumpPrReviewCounter", () => {
   })
 
   it("returns 1 when KV.get throws (best-effort fallback)", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    const putMock = vi.fn(async () => {})
     const env = {
       OPENCLAW_STATE: {
         get: async () => { throw new Error("KV get boom") },
-        put: async () => {},
+        put: putMock,
         delete: async () => {},
       } as unknown as KVNamespace,
     } as unknown as Env
     const next = await bumpPrReviewCounter(env, OWNER, REPO, PR)
     expect(next).toBe(1)
-    expect(warnSpy).toHaveBeenCalled()
-    warnSpy.mockRestore()
+    expect(console.warn).toHaveBeenCalled()
+    // CodeRabbit catch on PR #110: when the read fails, the
+    // bump must NOT write the synthetic `1` back — that would
+    // clobber the real persisted counter once KV recovers.
+    expect(putMock).not.toHaveBeenCalled()
   })
 
   it("returns the bumped value even when KV.put throws (best-effort persistence)", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    vi.spyOn(console, "warn").mockImplementation(() => {})
     const env = {
       OPENCLAW_STATE: {
         get: async () => "9",
@@ -96,8 +107,7 @@ describe("bumpPrReviewCounter", () => {
     } as unknown as Env
     const next = await bumpPrReviewCounter(env, OWNER, REPO, PR)
     expect(next).toBe(10)
-    expect(warnSpy).toHaveBeenCalled()
-    warnSpy.mockRestore()
+    expect(console.warn).toHaveBeenCalled()
   })
 
   it("two sequential bumps produce N → N+1 → N+2", async () => {

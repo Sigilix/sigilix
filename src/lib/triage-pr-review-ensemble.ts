@@ -2315,54 +2315,16 @@ export async function handlePrReviewEnsemble(
       }),
     )
 
-    // SIG-101 — bump the per-PR review counter + build the retrigger
-    // URL once, then thread BOTH through every renderer call site
-    // (primary buildReviewSubmission + the three buildFallbackSubmission
-    // paths below).
-    //
-    // CodeRabbit catch (phase-end PR review): gate the bump on the
-    // REQUEST_CHANGES verdict. APPROVE bodies render marker-only per
-    // SIG-94 (no counter line visible to the customer); bumping on
-    // APPROVE would silently advance the displayed `Review #N`
-    // sequence between request-changes reviews. Tying the bump to
-    // the request-changes branch keeps the user-visible sequence
-    // tight (#1 → #2 → #3 in the same body the customer reads).
-    const intendedEvent = chooseReviewEvent([
-      ...renderableVerdict.findings,
-      ...renderableUnanchored,
-    ])
-    const reviewCounter = intendedEvent === "REQUEST_CHANGES"
-      ? await bumpPrReviewCounter(env, owner, repo, prNumber)
-      : undefined
-    const retriggerUrl = intendedEvent === "REQUEST_CHANGES"
-      ? buildPrUrl(owner, repo, prNumber)
-      : undefined
-
-    const submission = buildReviewSubmission({
-      verdict: renderableVerdict,
-      prAuthor: meta.user?.login ?? null,
-      headSha,
-      unanchored: renderableUnanchored,
-      findingMarkers,
-      // ARC-182 (code-review C1): thread stack so the renderer can
-      // append the `_(Stacked on #N)_` parenthetical to the summary
-      // (post-ARC-281 — used to be a multi-line "### Stack context"
-      // block). Without this the parenthetical only appears on the
-      // single-model path, which is now dead.
-      ...(stack.isStacked ? { stack } : {}),
-      // ARC-281: thread specialist coverage + delta counts through
-      // to the new renderer.
-      coverage,
-      delta: deltaCounts,
-      // SIG-101: retrigger button + per-PR counter footer (only on
-      // REQUEST_CHANGES — APPROVE bodies stay marker-only).
-      ...(reviewCounter !== undefined ? { reviewCounter } : {}),
-      ...(retriggerUrl !== undefined ? { retriggerUrl } : {}),
-    })
-    // ARC-286 (extracted to `merge-guard.ts` per Sigilix PR #97
-    // round-2 pushback so the three branches — open / merged /
-    // API-error — are unit-testable). The orchestrator just calls
-    // the helper.
+    // ARC-286 / SIG-88 — merge-guard runs BEFORE we bump the
+    // SIG-101 counter or render the body so a PR that merged mid-
+    // review takes the marker-only APPROVE path without ghost-
+    // advancing the per-PR review counter. CodeRabbit catch on
+    // PR #110: pre-fix the bump ran before the guard, so a
+    // `merged-during-review` short-circuit incremented the counter
+    // even though nothing user-visible rendered. The reorder
+    // doesn't change any other behavior — `checkIsPrMerged` is a
+    // pure read against the GitHub API and only needs (client,
+    // owner, repo, prNumber, headSha), all available here.
     //
     // SIG-88 (2026-05-18): on the merged branch, we now submit a
     // marker-only APPROVE instead of bailing to a skip-notice. Posting
@@ -2395,6 +2357,51 @@ export async function handlePrReviewEnsemble(
       }
       return finalize(telemetry, env, "errored", cache)
     }
+
+    // SIG-101 — bump the per-PR review counter + build the retrigger
+    // URL once, then thread BOTH through every renderer call site
+    // (primary buildReviewSubmission + the three buildFallbackSubmission
+    // paths below). Gated on the REQUEST_CHANGES verdict per the
+    // CodeRabbit phase-end fix (commit `17671f0`) — APPROVE bodies
+    // render marker-only per SIG-94 and would silently advance the
+    // user-visible `Review #N` sequence between request-changes
+    // reviews if we bumped on APPROVE.
+    //
+    // The bump runs AFTER the merge-guard above so a PR that merged
+    // mid-review doesn't ghost-advance the counter on the marker-
+    // only APPROVE short-circuit (CodeRabbit catch on PR #110).
+    const intendedEvent = chooseReviewEvent([
+      ...renderableVerdict.findings,
+      ...renderableUnanchored,
+    ])
+    const reviewCounter = intendedEvent === "REQUEST_CHANGES"
+      ? await bumpPrReviewCounter(env, owner, repo, prNumber)
+      : undefined
+    const retriggerUrl = intendedEvent === "REQUEST_CHANGES"
+      ? buildPrUrl(owner, repo, prNumber)
+      : undefined
+
+    const submission = buildReviewSubmission({
+      verdict: renderableVerdict,
+      prAuthor: meta.user?.login ?? null,
+      headSha,
+      unanchored: renderableUnanchored,
+      findingMarkers,
+      // ARC-182 (code-review C1): thread stack so the renderer can
+      // append the `_(Stacked on #N)_` parenthetical to the summary
+      // (post-ARC-281 — used to be a multi-line "### Stack context"
+      // block). Without this the parenthetical only appears on the
+      // single-model path, which is now dead.
+      ...(stack.isStacked ? { stack } : {}),
+      // ARC-281: thread specialist coverage + delta counts through
+      // to the new renderer.
+      coverage,
+      delta: deltaCounts,
+      // SIG-101: retrigger hint + per-PR counter footer (only on
+      // REQUEST_CHANGES — APPROVE bodies stay marker-only).
+      ...(reviewCounter !== undefined ? { reviewCounter } : {}),
+      ...(retriggerUrl !== undefined ? { retriggerUrl } : {}),
+    })
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE
     // posting the new one, so the GitHub timeline renders cleanup-

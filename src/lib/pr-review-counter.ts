@@ -36,6 +36,17 @@ export function buildReviewCounterKey(
  * Read the current counter (or 0 if absent), increment to N, persist
  * N, and return N. Best-effort — KV failures fall back to a synthetic
  * counter of 1 so the renderer always has something to print.
+ *
+ * CodeRabbit catch on PR #110: when the initial KV `get` throws (KV
+ * transport outage, not a missing key), we previously fell through
+ * with `current = 0` and then attempted to write `"1"`. If the put
+ * succeeded, that would CLOBBER a real persisted counter (e.g., 7)
+ * with 1, regressing the user-visible sequence. The fix tracks the
+ * read outcome in `readSucceeded` and skips the put-back when the
+ * read failed, so the persisted counter stays untouched. The
+ * synthetic 1 still surfaces to the renderer this run, which is the
+ * documented "best effort, may go off-by-one under failure"
+ * semantics.
  */
 export async function bumpPrReviewCounter(
   env: Env,
@@ -45,8 +56,10 @@ export async function bumpPrReviewCounter(
 ): Promise<number> {
   const key = buildReviewCounterKey(owner, repo, prNumber)
   let current = 0
+  let readSucceeded = false
   try {
     const raw = await env.OPENCLAW_STATE.get(key)
+    readSucceeded = true
     if (raw !== null) {
       const parsed = parseInt(raw, 10)
       if (Number.isFinite(parsed) && parsed >= 0) {
@@ -61,6 +74,12 @@ export async function bumpPrReviewCounter(
     }))
   }
   const next = current + 1
+  if (!readSucceeded) {
+    // Read failed → `current` is the synthetic 0, not a verified
+    // value. Writing `next` (= 1) here would clobber whatever real
+    // counter was persisted before the outage. Skip the put-back.
+    return next
+  }
   try {
     await env.OPENCLAW_STATE.put(key, String(next))
   } catch (err) {

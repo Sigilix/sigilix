@@ -104,6 +104,10 @@ import {
   batchToDiff,
   estimateTokens,
 } from "./diff-packing"
+import {
+  classifyDiffFiles,
+  renderDiffFileClassificationBlock,
+} from "./diff-file-classify"
 import { shouldReview } from "./path-glob"
 import {
   runDeterministicChecks,
@@ -1340,6 +1344,45 @@ export async function handlePrReviewEnsemble(
       overlapCurrentOnly: stackOverlap?.currentOnlyCount ?? null,
     }))
 
+    // SIG-91: classify the diff's file list (source / test / docs /
+    // config / other) and resolve source ↔ test sibling pairs. The
+    // tests specialist was firing false-positive "module ships without
+    // tests" findings on PRs that DO add sibling tests (PRs #98, #100,
+    // #104) because the prompt biased it to look for "no test files
+    // changed" without grounding it on what's actually in the diff.
+    // We render the classification as an authoritative block injected
+    // before the diff so the model can't miss the pairing.
+    //
+    // Source list = the files that survived path filtering + batch
+    // packing — i.e., the exact set the specialists actually see in
+    // [DIFF]. Reporting classification on files dropped from [DIFF]
+    // would mislead the model about what's available.
+    const classifiedDiffFiles = classifyDiffFiles(reviewedFiles.map((f) => f.path))
+    const diffFileClassificationBlock = renderDiffFileClassificationBlock(classifiedDiffFiles)
+
+    // SIG-91 telemetry — lets us verify post-deploy that sibling pairs
+    // are being identified before each tests-specialist run on real
+    // customer PRs.
+    {
+      const sourceFilesInDiff: string[] = []
+      const testFilesInDiff: string[] = []
+      const siblingMappingsDetected: Array<{ source: string; test: string }> = []
+      for (const c of classifiedDiffFiles) {
+        if (c.kind === "source") sourceFilesInDiff.push(c.path)
+        if (c.kind === "test") testFilesInDiff.push(c.path)
+        if (c.kind === "source" && c.testsSibling) {
+          siblingMappingsDetected.push({ source: c.path, test: c.testsSibling })
+        }
+      }
+      console.log(JSON.stringify({
+        event: "tests-specialist-input-files",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        sourceFilesInDiff,
+        testFilesInDiff,
+        siblingMappingsDetected,
+      }))
+    }
+
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -1351,6 +1394,7 @@ export async function handlePrReviewEnsemble(
       ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
       ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
+      ...(diffFileClassificationBlock.length > 0 ? { diffFileClassificationBlock } : {}),
     })
 
     // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the

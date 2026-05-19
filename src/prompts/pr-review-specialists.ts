@@ -183,15 +183,26 @@ You are the **TESTS specialist** in a code review ensemble. Three other speciali
 
 Your lens: **missing tests, fragile tests, untested branches, regression risk.**
 
-Find testing gaps and risks:
-- missing tests on a non-trivial branch the PR added (new conditional, new error path, new state transition)
+**SIG-91 — RECOGNIZE SIBLING TEST FILES BEFORE FIRING "MISSING TESTS".**
+
+The user message includes a \`[DIFF FILE CLASSIFICATION]\` block (when the diff contains source or test files) that lists every source file and every test file in this PR, with their sibling pairing already computed. CONSULT THAT BLOCK FIRST. If a source file's classification line says \`covered by test file in this diff: <path>\`, that source is tested in this PR — do NOT flag it as "module ships without tests" or any close variant.
+
+A "missing tests" finding (any phrasing — "ships without tests", "no test coverage", "untested module", "lacks test file", etc.) is ONLY admissible when ALL of:
+  (a) the source file is new or substantially changed in this diff, AND
+  (b) the \`[DIFF FILE CLASSIFICATION]\` block shows it has \`no sibling test file in this diff\`, AND
+  (c) no test file elsewhere in the diff plausibly covers it.
+
+When the \`[DIFF FILE CLASSIFICATION]\` block is ABSENT from the user message, the diff contains no source or test files (docs/config-only PR) — no "missing tests" finding is applicable in that case either.
+
+Find testing gaps and risks (subject to the rule above):
+- missing tests on a non-trivial branch the PR added (new conditional, new error path, new state transition) — but only when the source's sibling test in this diff does not cover that branch
 - asserts that don't actually verify the claim (a test that passes whether or not the bug exists)
 - flaky-prone patterns (timing-dependent, ordering-dependent, environment-dependent, network-dependent without mocking)
 - naming / intent mismatch (test name says "rejects invalid input" but doesn't actually exercise the rejection)
 - regression risk (PR removed test coverage by deleting tests; PR replaces a tested behavior with untested behavior)
 - coverage holes the diff visibly creates (new exported function with no test; new public API surface with no contract test)
 
-CRITICAL: This lens fires HARDEST on PRs that *should* have added tests but didn't. Do not assume "no test files changed" means "no testing concerns" — the highest-value finding is "this risky logic landed without coverage."
+CRITICAL: This lens still fires HARDEST on PRs that *should* have added tests but didn't — but "didn't" is determined by the classification block, not by your independent skim of the diff. The highest-value finding remains "this risky logic landed without coverage", but it must satisfy (a)+(b)+(c) above.
 
 When scoring:
 - 5: critical untested logic shipping (security boundary, payment flow, data loss recovery — anything where the production failure has real cost)
@@ -334,6 +345,23 @@ export interface SpecialistInitialMessageCtx {
    * `renderStackPromptBlock(stack, overlap)` from `pr-stack-prompt.ts`.
    */
   stackBlock?: string
+  /**
+   * SIG-91: pre-rendered diff file classification block (source/test
+   * sibling mapping). Injected BEFORE the diff so the tests specialist
+   * sees an authoritative `<source> ↔ <test>` mapping computed
+   * deterministically from the diff file list — eliminating the false-
+   * positive "module ships without tests" class on PRs that DO add
+   * sibling test files. Logic/security/performance specialists also
+   * see it (cheap context that primes test-relevance for them too).
+   *
+   * Empty/absent = the diff contains no source AND no test files
+   * (e.g. docs-only PR); the classifier returns "" in that case so
+   * the prompt stays lean.
+   *
+   * Caller is `handlePrReviewEnsemble`, which builds this string via
+   * `renderDiffFileClassificationBlock` over the diff's file list.
+   */
+  diffFileClassificationBlock?: string
 }
 
 export function buildSpecialistInitialMessage(
@@ -364,6 +392,15 @@ export function buildSpecialistInitialMessage(
   // before the diff.
   if (ctx.stackBlock && ctx.stackBlock.length > 0) {
     lines.push(ctx.stackBlock)
+    lines.push("")
+  }
+  // SIG-91: diff file classification (source ↔ test sibling map) goes
+  // right before [PR] so the tests specialist sees the authoritative
+  // pairing as the LAST thing before the diff. Empty string = no
+  // source/test files in this diff; skip the block to keep the prompt
+  // lean.
+  if (ctx.diffFileClassificationBlock && ctx.diffFileClassificationBlock.length > 0) {
+    lines.push(ctx.diffFileClassificationBlock)
     lines.push("")
   }
   lines.push(

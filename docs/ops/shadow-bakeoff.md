@@ -60,10 +60,20 @@ Fields: `role`, `prodModel`, `shadowModel`, `prodVerdictOk`,
 `prodAttemptsUsed`, `shadowAttemptsUsed`, `prodFindingsCount`,
 `shadowFindingsCount`, `overlapCount`, `prodOnlyCount`,
 `shadowOnlyCount`, `prodScoreHistogram`, `shadowScoreHistogram`,
-`shadowFailureReason`.
+`score4PlusOverlapCount`, `score4PlusProdOnlyCount`,
+`score4PlusShadowOnlyCount`, `score4PlusProdFindingsCount`,
+`score4PlusShadowFindingsCount`, `shadowFailureReason`.
 
 Findings overlap matches on `(path, line, category)` tuple — same
 line different category is NOT a match.
+
+The `score4Plus*` fields (SIG-86) are derived counts on the score-4+
+filtered subset of findings — the aggregator computes the canonical
+overlap-with-prod ratio as
+`score4PlusOverlapCount / (score4PlusOverlapCount + score4PlusProdOnlyCount)`
+because score histograms alone lose the tuple identity needed to
+filter-then-overlap. Older events emitted before SIG-86 omit these
+fields; the aggregator surfaces them as `inconclusive`.
 
 ### `shadow-cut-short`
 Emitted when a shadow promise didn't settle within
@@ -153,3 +163,64 @@ Shadow code paths are wrapped in defensive try/catch so a shadow
 crash CANNOT take down the prod return. If you see
 `shadow-synth-emit-error` events, file the failure but assume prod
 is fine — the customer review still posted.
+
+## Running the decision-report aggregator (SIG-86 / Phase B1c)
+
+The aggregator at `src/lib/bakeoff-report.ts` consumes the events
+documented above and produces a `pass | fail | inconclusive` verdict
+per metric, per role, against the bars in the table above. The
+operator CLI wraps it for on-demand runs.
+
+### Inputs
+
+The aggregator reads Logpush NDJSON (one event per line — the
+standard CF Logs export shape). For the v1 MVP, the operator
+materializes the log files locally:
+
+```sh
+# One-time setup: configure CF Logpush to write to R2 hourly.
+# See https://developers.cloudflare.com/logs/logpush/ for the binding.
+
+# Per-run: pull recent objects to a local dir.
+wrangler r2 object get <bucket>/<key> --file events.ndjson
+```
+
+A future PR will land an `--r2` flag that streams directly from the
+bucket; until then, the operator-pull flow above is the contract.
+
+### Running the report
+
+```sh
+npm run bakeoff-report -- \
+  --input ./events.ndjson \
+  --since 2026-04-19T00:00:00Z \
+  --until 2026-05-19T00:00:00Z
+```
+
+Defaults:
+- `--since` → 30 days before `--until`
+- `--until` → now (UTC)
+- `--out`   → `docs/bakeoff-reports/`
+
+The CLI writes `docs/bakeoff-reports/bakeoff-report-<YYYY-MM-DD>.json`
++ `.md`. Exit code is non-zero if any role's overall verdict is
+`fail` — so a cron caller can wire pager alerts to the exit code
+without parsing JSON.
+
+Pass `--print-only` to skip file writes and dump both artifacts to
+stdout (useful for piping into another tool or for one-off inspection).
+
+### Decision report shape
+
+The full schema lives at `docs/ops/bakeoff-report-schema.md`. The
+canonical artifact is the JSON; the Markdown is a human-friendly
+summary that surfaces the verdict badges + per-metric reasons.
+
+### When to call it `pass`
+
+A role is `pass` when EVERY machine-verifiable metric is `pass` AND
+the manual-review metric (`netUniqueUsefulFindings`) has been
+explicitly signed off by the founder. The CLI's exit code does NOT
+gate on the manual-review metric — the report flags it as
+`inconclusive_pending_manual_review` and the operator inspects the
+prod-vs-shadow score-4+ findings sample before ratifying.

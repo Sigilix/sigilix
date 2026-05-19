@@ -3,6 +3,11 @@
 // dogfooding — too much network mocking surface for unit tests, and
 // Phase 4a ships off-by-default so production-traffic risk is zero
 // until OPENCLAW_ENSEMBLE_REVIEW_MODE is flipped.
+//
+// CR PR #104 round-3 (SIG-88): narrow integration tests for the
+// merged-on-approve short-circuit paths live in a sibling file
+// (`tests/triage-pr-review-ensemble-merge-shortcut.test.ts`) so the
+// `vi.mock` calls there don't bleed into these pure-helper tests.
 
 import { describe, expect, it } from "vitest"
 import {

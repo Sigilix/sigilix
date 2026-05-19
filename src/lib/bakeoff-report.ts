@@ -385,13 +385,14 @@ function computeValidVerdictRate(
     prodRate: prodOk / sampleSize,
     deltaCi: ci,
   }
+  const ciLabel = ciLabelFor(config.confidence)
   if (ci.lower >= 0) {
-    return { verdict: "pass", reason: `shadow ≥ prod (95% CI lower bound = ${ci.lower.toFixed(3)})`, value }
+    return { verdict: "pass", reason: `shadow ≥ prod (${ciLabel} lower bound = ${ci.lower.toFixed(3)})`, value }
   }
   if (ci.upper < 0) {
-    return { verdict: "fail", reason: `shadow < prod (95% CI upper bound = ${ci.upper.toFixed(3)})`, value }
+    return { verdict: "fail", reason: `shadow < prod (${ciLabel} upper bound = ${ci.upper.toFixed(3)})`, value }
   }
-  return { verdict: "inconclusive", reason: `prod/shadow CI straddles 0 (${ci.lower.toFixed(3)}..${ci.upper.toFixed(3)})`, value }
+  return { verdict: "inconclusive", reason: `prod/shadow ${ciLabel} straddles 0 (${ci.lower.toFixed(3)}..${ci.upper.toFixed(3)})`, value }
 }
 
 function computeP95Latency(
@@ -453,13 +454,14 @@ function computeTransientFailureRate(
     prodRate: prodFailures / sampleSize,
     deltaCi: ci,
   }
+  const ciLabel = ciLabelFor(config.confidence)
   if (ci.upper <= 0) {
-    return { verdict: "pass", reason: `shadow ≤ prod failures (95% CI upper bound = ${ci.upper.toFixed(3)})`, value }
+    return { verdict: "pass", reason: `shadow ≤ prod failures (${ciLabel} upper bound = ${ci.upper.toFixed(3)})`, value }
   }
   if (ci.lower > 0) {
-    return { verdict: "fail", reason: `shadow > prod failures (95% CI lower bound = ${ci.lower.toFixed(3)})`, value }
+    return { verdict: "fail", reason: `shadow > prod failures (${ciLabel} lower bound = ${ci.lower.toFixed(3)})`, value }
   }
-  return { verdict: "inconclusive", reason: `prod/shadow failure CI straddles 0`, value }
+  return { verdict: "inconclusive", reason: `prod/shadow failure ${ciLabel} straddles 0`, value }
 }
 
 function computeOverlapScore4Plus(
@@ -499,25 +501,33 @@ function computeOverlapScore4Plus(
   // bound ≥ bar, FAIL if upper bound < bar.
   const ci = wilsonInterval(totalOverlap, denominator, config.confidence)
   const value = { overlap: totalOverlap, prodOnly: totalProdOnly, ratio, ci, bar: config.overlapBar }
+  const ciLabel = ciLabelFor(config.confidence)
   if (ci.lower >= config.overlapBar) {
     return {
       verdict: "pass",
-      reason: `score-4+ overlap ${(ratio * 100).toFixed(1)}% ≥ ${(config.overlapBar * 100).toFixed(0)}% (95% CI lower bound = ${(ci.lower * 100).toFixed(1)}%)`,
+      reason: `score-4+ overlap ${(ratio * 100).toFixed(1)}% ≥ ${(config.overlapBar * 100).toFixed(0)}% (${ciLabel} lower bound = ${(ci.lower * 100).toFixed(1)}%)`,
       value,
     }
   }
   if (ci.upper < config.overlapBar) {
     return {
       verdict: "fail",
-      reason: `score-4+ overlap ${(ratio * 100).toFixed(1)}% < ${(config.overlapBar * 100).toFixed(0)}% (95% CI upper bound = ${(ci.upper * 100).toFixed(1)}%)`,
+      reason: `score-4+ overlap ${(ratio * 100).toFixed(1)}% < ${(config.overlapBar * 100).toFixed(0)}% (${ciLabel} upper bound = ${(ci.upper * 100).toFixed(1)}%)`,
       value,
     }
   }
   return {
     verdict: "inconclusive",
-    reason: `score-4+ overlap CI ${(ci.lower * 100).toFixed(1)}%..${(ci.upper * 100).toFixed(1)}% straddles ${(config.overlapBar * 100).toFixed(0)}% bar`,
+    reason: `score-4+ overlap ${ciLabel} ${(ci.lower * 100).toFixed(1)}%..${(ci.upper * 100).toFixed(1)}% straddles ${(config.overlapBar * 100).toFixed(0)}% bar`,
     value,
   }
+}
+
+/** CodeRabbit MINOR on PR review: render the confidence level in
+ *  metric-reason strings instead of hardcoded "95% CI" — so reports
+ *  that pass `config.confidence: 0.99` aren't misleadingly labeled. */
+function ciLabelFor(confidence: 0.95 | 0.99): string {
+  return `${Math.round(confidence * 100)}% CI`
 }
 
 function computeCutShortRate(

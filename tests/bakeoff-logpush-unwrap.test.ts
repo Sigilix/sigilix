@@ -124,14 +124,31 @@ describe("unwrapLogpushEnvelope", () => {
     expect(inner.event).toBe("shadow-cut-short")
   })
 
-  it("concatenates multi-element Message arrays with a space (multi-arg console.log)", () => {
-    // `console.log("label", JSON.stringify(...))` produces a 2-element
-    // Message array. The current heuristic concatenates with " " so
-    // the JSON payload becomes parseable after we lop off the label.
-    // For the v1 emitter (`console.log(JSON.stringify(...))`) this
-    // case isn't hit, but the contract should be future-proof.
-    const innerJson = JSON.stringify({ event: "shadow-cut-short", role: "synth", ts: "2026-05-15T12:00:00Z" })
-    const envelope = { Logs: [{ Message: [innerJson] }] }
+  it("recovers the JSON payload from a TRUE multi-element Message array (label + JSON)", () => {
+    // CR Major catch on the original fixture: my v1 joined `Message[]`
+    // with a space, which broke `console.log("label", JSON.stringify(...))`
+    // payloads (the joined "label {...}" is invalid JSON and every line
+    // got dropped). The new heuristic tries each element individually
+    // BEFORE falling back to the joined string, so the JSON in
+    // element[1] is recovered cleanly.
+    const innerJson = JSON.stringify({
+      event: "shadow-cut-short",
+      role: "synth",
+      ts: "2026-05-15T12:00:00Z",
+    })
+    const envelope = { Logs: [{ Message: ["[shadow-runner]", innerJson] }] }
+    const inner = unwrapLogpushEnvelope(envelope) as Record<string, unknown>
+    expect(inner.event).toBe("shadow-cut-short")
+    expect(inner.role).toBe("synth")
+  })
+
+  it("recovers when the JSON payload is the first element of the Message array", () => {
+    const innerJson = JSON.stringify({
+      event: "shadow-cut-short",
+      role: "synth",
+      ts: "2026-05-15T12:00:00Z",
+    })
+    const envelope = { Logs: [{ Message: [innerJson, "trailing-debug-info"] }] }
     const inner = unwrapLogpushEnvelope(envelope) as Record<string, unknown>
     expect(inner.event).toBe("shadow-cut-short")
   })

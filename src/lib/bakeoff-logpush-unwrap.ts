@@ -62,20 +62,58 @@ export function unwrapLogpushEnvelope(parsed: unknown): unknown {
 /**
  * Try to recover an event from a single `Logs[]` entry. Handles
  * `Message` as either a string or an array of strings (Workers
- * Logpush emits the latter), and recurses once on a double-encoded
- * string payload before giving up.
+ * Logpush emits the latter — one element per console.log argument),
+ * and recurses once on a double-encoded string payload before giving
+ * up.
+ *
+ * CodeRabbit Major on PR review: when `Message` is a multi-element
+ * array (e.g. `console.log("label", JSON.stringify(...))`), joining
+ * with a space and JSON-parsing the result fails because the joined
+ * string isn't valid JSON. Try parsing each element individually
+ * before falling back to the joined-string path — recovers the
+ * payload from `["label", "{...}"]`-shaped logs.
  */
 function tryExtractEventFromLogEntry(entry: Record<string, unknown>): Record<string, unknown> | null {
   const raw = entry.Message ?? entry.message
-  const text = coerceToText(raw)
-  if (text === null) return null
+  for (const candidate of textCandidates(raw)) {
+    const event = tryParseEventFromString(candidate)
+    if (event !== null) return event
+  }
+  return null
+}
+
+/** Try each plausible textual interpretation of the `Message` field,
+ *  yielding the most-specific candidates first (per-element parsing
+ *  beats joined-string parsing). The caller short-circuits on the
+ *  first parse that yields an event object. */
+function* textCandidates(value: unknown): IterableIterator<string> {
+  if (typeof value === "string") {
+    yield value
+    return
+  }
+  if (Array.isArray(value)) {
+    // First pass: each string element on its own — handles
+    // `console.log("label", JSON.stringify(...))` payloads where the
+    // JSON-stringified arg lives in element[1].
+    for (const v of value) {
+      if (typeof v === "string") yield v
+    }
+    // Fallback: joined on a space. Preserves the v1 contract for the
+    // unusual case where the JSON is split across multiple elements.
+    const joined = value.filter((v): v is string => typeof v === "string").join(" ")
+    if (joined.length > 0) yield joined
+  }
+}
+
+/** Parse a string to an event object, recursing ONCE on a
+ *  double-encoded payload (Logpush re-stringifies in some pipelines). */
+function tryParseEventFromString(text: string): Record<string, unknown> | null {
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
   } catch {
     return null
   }
-  // Double-encoded case: first parse yields a string, recurse once.
   if (typeof parsed === "string") {
     try {
       parsed = JSON.parse(parsed)
@@ -87,25 +125,6 @@ function tryExtractEventFromLogEntry(entry: Record<string, unknown>): Record<str
   const inner = parsed as Record<string, unknown>
   if (typeof inner.event !== "string") return null
   return inner
-}
-
-/**
- * Coerce the `Message` field to a single string. CF Workers Logpush
- * emits an ARRAY of strings (one per argument to `console.log`), not
- * a single string — concatenate on a space so a future multi-arg log
- * (`console.log(label, JSON.stringify(...))`) still parses.
- */
-function coerceToText(value: unknown): string | null {
-  if (typeof value === "string") return value
-  if (Array.isArray(value)) {
-    const parts: string[] = []
-    for (const v of value) {
-      if (typeof v === "string") parts.push(v)
-    }
-    if (parts.length === 0) return null
-    return parts.length === 1 ? parts[0]! : parts.join(" ")
-  }
-  return null
 }
 
 function stampEnvelopeTimestamp(inner: Record<string, unknown>, envelope: Record<string, unknown>): void {

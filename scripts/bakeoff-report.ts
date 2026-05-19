@@ -81,6 +81,24 @@ function parseArgs(argv: readonly string[]): CliArgs {
   }
   const until = args.until ?? new Date().toISOString()
   const since = args.since ?? thirtyDaysBefore(until)
+  // CR Major on PR review: explicit ISO strings weren't validated, so
+  // a malformed `--until 2026-13-99` or an inverted `--since > --until`
+  // window would silently produce a misleading report. Validate both
+  // bounds here.
+  const sinceMs = Date.parse(since)
+  if (!Number.isFinite(sinceMs)) {
+    console.error(`bad --since: ${since} is not a valid ISO date`)
+    process.exit(2)
+  }
+  const untilMs = Date.parse(until)
+  if (!Number.isFinite(untilMs)) {
+    console.error(`bad --until: ${until} is not a valid ISO date`)
+    process.exit(2)
+  }
+  if (sinceMs > untilMs) {
+    console.error(`--since (${since}) is after --until (${until})`)
+    process.exit(2)
+  }
   return {
     input: args.input,
     since,
@@ -219,20 +237,21 @@ async function main(): Promise<void> {
     process.stdout.write(json + "\n")
     process.stdout.write("\n---\n\n")
     process.stdout.write(md)
-    return
+  } else {
+    const stamp = new Date().toISOString().slice(0, 10)
+    const outDir = resolve(args.out)
+    await mkdir(outDir, { recursive: true })
+    const jsonPath = join(outDir, `bakeoff-report-${stamp}.json`)
+    const mdPath = join(outDir, `bakeoff-report-${stamp}.md`)
+    await writeFile(jsonPath, json + "\n")
+    await writeFile(mdPath, md)
+    console.error(`[bakeoff-report] wrote ${basename(jsonPath)} + ${basename(mdPath)} to ${outDir}`)
   }
-
-  const stamp = new Date().toISOString().slice(0, 10)
-  const outDir = resolve(args.out)
-  await mkdir(outDir, { recursive: true })
-  const jsonPath = join(outDir, `bakeoff-report-${stamp}.json`)
-  const mdPath = join(outDir, `bakeoff-report-${stamp}.md`)
-  await writeFile(jsonPath, json + "\n")
-  await writeFile(mdPath, md)
-  console.error(`[bakeoff-report] wrote ${basename(jsonPath)} + ${basename(mdPath)} to ${outDir}`)
 
   // Exit non-zero on any role overall verdict of `fail` so CI / cron
   // callers can detect regression-flag conditions without parsing JSON.
+  // Runs after both write modes so --print-only doesn't accidentally
+  // swallow the fail signal when piped through another tool.
   const anyFail = report.roles.some((r) => r.overallVerdict === "fail")
   if (anyFail) {
     console.error(`[bakeoff-report] EXIT 1: at least one role overall verdict is FAIL`)

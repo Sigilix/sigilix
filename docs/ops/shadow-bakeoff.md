@@ -167,9 +167,12 @@ is fine — the customer review still posted.
 ## Running the decision-report aggregator (SIG-86 / Phase B1c)
 
 The aggregator at `src/lib/bakeoff-report.ts` consumes the events
-documented above and produces a `pass | fail | inconclusive` verdict
-per metric, per role, against the bars in the table above. The
-operator CLI wraps it for on-demand runs.
+documented above and produces a per-metric verdict in
+`pass | fail | inconclusive | inconclusive_pending_manual_review`
+against the bars in the table above. The
+`inconclusive_pending_manual_review` tier is reserved for
+`netUniqueUsefulFindings` in v1 (founder-eyeballed metric). The
+operator CLI wraps the aggregator for on-demand runs.
 
 ### Inputs
 

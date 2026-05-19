@@ -302,3 +302,57 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     expect(sent[0]?.type).toBe("pr-review")
   })
 })
+
+// SIG-98 — slash-command-driven (non-silent) reruns must run on a
+// paused PR. The pause/ignore KV gate lives inside
+// `enqueuePrReviewJob`; the non-silent rerun bypasses that helper
+// entirely via a raw `OPENCLAW_JOBS.send`. This pair of tests locks
+// the bypass behavior so a future refactor that routes the rerun
+// path through `enqueuePrReviewJob` can't silently suppress
+// user-typed re-runs on paused PRs.
+describe("dispatchJob — pr-review-rerun SIG-98 pause gate bypass", () => {
+  it("user-typed /sigilix review still runs when the PR is paused", async () => {
+    const { env, sent, kv } = makeEnv()
+    // Pre-seed both pause and ignore flags. Slash-command re-run
+    // should still go through.
+    kv.set("pr-paused:Arc-and-Anchor/sigilix#237", String(Date.now()))
+    kv.set("pr-ignored:Arc-and-Anchor/sigilix#237", String(Date.now()))
+    const job: JobMessage = {
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      installationId: 99,
+      // silent omitted → user-typed slash command path
+    }
+    await dispatchJob(job, env)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.type).toBe("pr-review")
+  })
+
+  it("silent (warmup) reruns DO honor the pause gate via enqueuePrReviewJob", async () => {
+    const { env, sent, doCalls } = makeEnvWithDo({ mode: "off" })
+    // Reach into the env's KV (makeEnvWithDo's KV always returns
+    // null) and replace it with a stub that returns a pause flag.
+    const kv = new Map<string, string>([
+      ["pr-paused:Arc-and-Anchor/sigilix#237", String(Date.now())],
+    ])
+    ;(env as { OPENCLAW_STATE: KVNamespace }).OPENCLAW_STATE = {
+      get: async (k: string) => kv.get(k) ?? null,
+      put: async (k: string, v: string) => { kv.set(k, v) },
+      delete: async (k: string) => { kv.delete(k) },
+    } as unknown as KVNamespace
+    const job: JobMessage = {
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 237,
+      installationId: 99,
+      silent: true,
+    }
+    await dispatchJob(job, env)
+    // Gate skipped the enqueue → no queue send, no DO call.
+    expect(sent).toHaveLength(0)
+    expect(doCalls).toHaveLength(0)
+  })
+})

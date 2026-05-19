@@ -1053,8 +1053,23 @@ export class GitHubClient {
           firstCommentLogin,
         })
       }
-      if (!pageData.pageInfo?.hasNextPage) break
-      cursor = pageData.pageInfo.endCursor ?? null
+      const hasMore = Boolean(pageData.pageInfo?.hasNextPage)
+      // SIG-98 (code-reviewer H5): when we're about to bail because
+      // we've used every page in our 5-page (500-thread) cap AND
+      // GitHub still has more, log a structured warning so the
+      // truncation isn't silent. Sigilix-rooted threads on pages
+      // 6+ won't be resolved on this run; the user can retry once
+      // some are resolved on subsequent reviews.
+      if (page === MAX_PAGES - 1 && hasMore) {
+        console.warn(JSON.stringify({
+          event: "pr-resolve-threads-page-cap-hit",
+          owner, repo, prNumber,
+          maxPages: MAX_PAGES,
+          threadsSeen: out.length,
+        }))
+      }
+      if (!hasMore) break
+      cursor = pageData.pageInfo?.endCursor ?? null
       if (!cursor) break
     }
     return out

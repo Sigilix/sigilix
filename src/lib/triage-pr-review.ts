@@ -173,11 +173,11 @@ export interface PrReviewFinding {
    * SIG-101: per-finding model confidence on a 1-5 scale (distinct from
    * `score`, which is severity). The synth specialist may emit a
    * per-finding confidence; when absent, callers default to the
-   * verdict-level `confidence` field via
-   * `applyFindingConfidenceDefault` so every finding has a value
-   * downstream. `formatFindingComment` renders the suffix `_confidence:
-   * N/5_` and wraps low-confidence (≤2) bodies in a collapsed
-   * `<details>` block so noisy findings de-emphasize.
+   * verdict-level `confidence` field via `resolveFindingConfidence`
+   * so every finding has a value downstream. `formatFindingComment`
+   * renders the suffix `_confidence: N/5_` and wraps low-confidence
+   * (≤2) bodies in a collapsed `<details>` block so noisy findings
+   * de-emphasize.
    */
   confidence?: number
 }
@@ -366,9 +366,9 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (validStartLine != null) finalFinding.startLine = validStartLine
     if (stackOrigin) finalFinding.stackOrigin = stackOrigin
     // SIG-101: read per-finding confidence when the model supplies it.
-    // Clamped to 1-5. Absent → leave undefined; the orchestrator's
-    // `applyFindingConfidenceDefault` fills in the verdict-level
-    // confidence so downstream renderers always see a number.
+    // Clamped to 1-5. Absent → leave undefined; downstream renderers
+    // call `resolveFindingConfidence` which falls back to the
+    // verdict-level `confidence` so every finding has a number.
     const confidenceRawF = Number(finding.confidence)
     if (Number.isFinite(confidenceRawF) && confidenceRawF >= 1 && confidenceRawF <= 5) {
       finalFinding.confidence = Math.round(confidenceRawF)

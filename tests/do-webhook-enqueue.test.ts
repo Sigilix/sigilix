@@ -354,21 +354,6 @@ describe("enqueuePrReviewJob — SIG-98 pause/ignore gate", () => {
     logSpy.mockRestore()
   })
 
-  it("bypasses the gate when bypassPauseGate: true (slash-command rerun path)", async () => {
-    // Explicit user re-runs (`/sigilix review`, `/sigilix full review`)
-    // skip the pause gate so a paused PR still runs the review when
-    // the customer explicitly asks for it.
-    const { env, queueSend, doCalls } = makeEnv({
-      mode: "off",
-      kvState: { "pr-paused:Arc-and-Anchor/sigilix#7": "1700000000000" },
-    })
-    const result = await enqueuePrReviewJob(env, { ...baseArgs, bypassPauseGate: true })
-    expect(result.ok).toBe(true)
-    expect(result.mode).toBe("off")
-    expect(doCalls).toHaveLength(0) // off-mode: no DO call
-    expect(queueSend).toHaveBeenCalledOnce()
-  })
-
   it("falls through to the existing flow when neither flag is set", async () => {
     // Regression guard: the empty-KV default must not change the
     // pre-SIG-98 behavior.

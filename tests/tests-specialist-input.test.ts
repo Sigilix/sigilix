@@ -110,6 +110,51 @@ describe("classifyDiffFiles", () => {
     expect(test?.sourceSibling).toBe("src/lib/foo.ts")
   })
 
+  it("recognizes root-level __tests__/<name>.test.ts → src/<name>.ts (no parent dir)", () => {
+    // CR Major catch on PR #105: the regex required a parent
+    // directory, so `__tests__/foo.test.ts` at repo root never
+    // resolved to its source sibling. Pin both shapes (bare-root
+    // source + src/-rooted source) so the optional-parent branch
+    // can't regress.
+    const bareRoot = classifyDiffFiles([
+      "foo.ts",
+      "__tests__/foo.test.ts",
+    ])
+    expect(bareRoot.find((r) => r.path === "foo.ts")?.testsSibling).toBe(
+      "__tests__/foo.test.ts",
+    )
+    expect(
+      bareRoot.find((r) => r.path === "__tests__/foo.test.ts")?.sourceSibling,
+    ).toBe("foo.ts")
+
+    const srcRoot = classifyDiffFiles([
+      "src/foo.ts",
+      "__tests__/foo.test.ts",
+    ])
+    expect(srcRoot.find((r) => r.path === "src/foo.ts")?.testsSibling).toBe(
+      "__tests__/foo.test.ts",
+    )
+    expect(
+      srcRoot.find((r) => r.path === "__tests__/foo.test.ts")?.sourceSibling,
+    ).toBe("src/foo.ts")
+
+    const srcLibRoot = classifyDiffFiles([
+      "src/lib/foo.ts",
+      "__tests__/foo.test.ts",
+    ])
+    expect(srcLibRoot.find((r) => r.path === "src/lib/foo.ts")?.testsSibling).toBe(
+      "__tests__/foo.test.ts",
+    )
+
+    const libRoot = classifyDiffFiles([
+      "lib/foo.ts",
+      "__tests__/foo.test.ts",
+    ])
+    expect(libRoot.find((r) => r.path === "lib/foo.ts")?.testsSibling).toBe(
+      "__tests__/foo.test.ts",
+    )
+  })
+
   it("recognizes co-located .spec.ts sibling", () => {
     const result = classifyDiffFiles([
       "src/lib/foo.ts",

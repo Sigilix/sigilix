@@ -125,9 +125,24 @@ function candidateSources(testPath: string): string[] {
   }
 
   // `<dir>/__tests__/<name>.ts` → `<dir>/<name>.ts`
-  const dunderTests = stripped.match(/^(.*)\/__tests__\/([^/]+)$/)
-  if (dunderTests && dunderTests[1] !== undefined && dunderTests[2]) {
-    candidates.push(`${dunderTests[1]}/${dunderTests[2]}`)
+  // AND `__tests__/<name>.ts` (root-level) → `<name>.ts`, `src/<name>.ts`, …
+  // The parent-directory capture is optional so root-level `__tests__/`
+  // also resolves to a sibling source — was missing pre-fix, causing
+  // `__tests__/foo.test.ts` to never pair with any in-diff source.
+  const dunderTests = stripped.match(/^(?:(.+)\/)?__tests__\/([^/]+)$/)
+  if (dunderTests && dunderTests[2]) {
+    const parent = dunderTests[1]
+    const name = dunderTests[2]
+    if (parent !== undefined) {
+      candidates.push(`${parent}/${name}`)
+    } else {
+      // Root-level: expand across typical source roots, mirroring the
+      // `tests/<rest>` branch above.
+      candidates.push(name)
+      for (const sourceRoot of ["src", "src/lib", "app", "lib", "workers"]) {
+        candidates.push(`${sourceRoot}/${name}`)
+      }
+    }
   }
 
   // De-dup while preserving order.

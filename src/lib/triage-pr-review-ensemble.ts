@@ -153,7 +153,7 @@ import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
-import { checkIsPrMerged } from "./merge-guard"
+import { checkIsPrMerged, submitMergedOnApprove } from "./merge-guard"
 import {
   type EnsembleRunCtx,
   type SynthSummary,
@@ -886,6 +886,41 @@ export async function handlePrReviewEnsemble(
         source: "ensemble-before-fanout",
       })
       return finalize(telemetry, env, "stale_head", cache)
+    }
+
+    // ─── SIG-88: pre-fanout merged-on-approve short-circuit ────
+    //
+    // When the PR is already merged at fan-out time (e.g. the webhook
+    // was queued after a long delay and the human merged in the
+    // meantime), short-circuit to a marker-only APPROVE. CodeRabbit's
+    // behavior: GitHub's native "approved these changes" one-liner
+    // stands in for a review on already-merged code instead of running
+    // the full ensemble + posting REQUEST_CHANGES on a merged PR.
+    //
+    // We reuse the `meta.merged_at` value we already fetched for the
+    // stale-head guard above — no extra GET round-trip. The pre-submit
+    // guard further down (post-synth) still calls `checkIsPrMerged`
+    // because by then the cached `meta` is ~30-60s old and the merge
+    // may have happened during fan-out.
+    if (meta.merged_at !== null && meta.merged_at !== undefined) {
+      const mergedAtMs = new Date(meta.merged_at).getTime()
+      telemetry.fellBackReason = "merged_before_fanout"
+      const out = await submitMergedOnApprove({
+        client, owner, repo, prNumber, headSha,
+        stage: "pre-fanout",
+        mergedAtMs,
+        startMs,
+      })
+      if (out.ok) {
+        return finalize(telemetry, env, "posted", cache, {
+          event: "APPROVE",
+          findingsCount: 0,
+        })
+      }
+      // Submit failed — fall through to `errored` without a surface
+      // (we have no comment to point the customer at, and the PR is
+      // already merged so a skip-notice is pointless).
+      return finalize(telemetry, env, "errored", cache)
     }
 
     // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
@@ -2243,20 +2278,32 @@ export async function handlePrReviewEnsemble(
     // ARC-286 (extracted to `merge-guard.ts` per Sigilix PR #97
     // round-2 pushback so the three branches — open / merged /
     // API-error — are unit-testable). The orchestrator just calls
-    // the helper and emits its own `pr-review-skipped-merged` event
-    // on the merged branch.
+    // the helper.
+    //
+    // SIG-88 (2026-05-18): on the merged branch, we now submit a
+    // marker-only APPROVE instead of bailing to a skip-notice. Posting
+    // REQUEST_CHANGES on already-merged code is noise (and was the
+    // pre-ARC-286 behavior that ARC-286 fixed by bailing); CodeRabbit
+    // posts a lightweight APPROVE here so the GitHub Checks UI shows
+    // a clean "passed" state instead of an empty skip. The ensemble
+    // verdict we just computed is discarded — submitting it as
+    // REQUEST_CHANGES would compete with the merge.
     const mergeGuard = await checkIsPrMerged({ client, owner, repo, prNumber, headSha })
     if (mergeGuard.shouldSkip) {
-      const findingCount = renderableVerdict.findings.length + renderableUnanchored.length
-      console.log(JSON.stringify({
-        event: "pr-review-skipped-merged",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        review_elapsed_ms: Date.now() - startMs,
-        merged_at_ms: mergeGuard.mergedAtMs,
-        merged_during_review_ms: mergeGuard.mergedAtMs - startMs,
-        finding_count: findingCount,
-      }))
-      return finalize(telemetry, env, "skipped", cache)
+      telemetry.fellBackReason = "merged_during_review"
+      const out = await submitMergedOnApprove({
+        client, owner, repo, prNumber, headSha,
+        stage: "pre-submit",
+        mergedAtMs: mergeGuard.mergedAtMs,
+        startMs,
+      })
+      if (out.ok) {
+        return finalize(telemetry, env, "posted", cache, {
+          event: "APPROVE",
+          findingsCount: 0,
+        })
+      }
+      return finalize(telemetry, env, "errored", cache)
     }
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE

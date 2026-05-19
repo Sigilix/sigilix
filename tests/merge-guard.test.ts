@@ -2,13 +2,20 @@
 // pushback: testing the merge guard's three branches takes 1-2 mocks,
 // not the ~20 mocks I claimed when arguing for deferral. Sigilix was
 // right; this file is the correction.
+//
+// SIG-88 — added `submitMergedOnApprove` tests at the bottom. Same
+// 1-2-mock pattern: stub a `submitReview` client, assert the submit
+// payload + telemetry event shape + the `{ok}`/`{!ok}` return.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   checkIsPrMerged,
+  submitMergedOnApprove,
+  type MergeApproveSubmitClient,
   type MergeGuardClient,
 } from "../src/lib/merge-guard"
+import type { SubmitReviewBody } from "../src/lib/github"
 
 const BASE = {
   owner: "Arc-and-Anchor",
@@ -97,5 +104,158 @@ describe("checkIsPrMerged (ARC-286)", () => {
     const fn = vi.fn(async () => ({ merged_at: null }))
     await checkIsPrMerged({ ...BASE, client: { getPullRequest: fn } })
     expect(fn).toHaveBeenCalledWith(BASE.owner, BASE.repo, BASE.prNumber)
+  })
+})
+
+// ─── SIG-88: submitMergedOnApprove ─────────────────────────────────────
+
+const SUBMIT_BASE = {
+  owner: "Arc-and-Anchor",
+  repo: "sigilix",
+  prNumber: 104,
+  headSha: "deadbeef1234567890abcdef1234567890abcdef",
+  mergedAtMs: new Date("2026-05-18T18:00:00Z").getTime(),
+  // 30s before merge → simulates "merge happened 30s into the review"
+  startMs: new Date("2026-05-18T17:59:30Z").getTime(),
+} as const
+
+function mockSubmitClient(
+  impl: () => Promise<{ id: number; state: string }>,
+): MergeApproveSubmitClient {
+  return { submitReview: vi.fn(impl) }
+}
+
+describe("submitMergedOnApprove (SIG-88)", () => {
+  let logSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+  })
+
+  afterEach(() => {
+    logSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it("submits a marker-only APPROVE on success and returns {ok: true, reviewId}", async () => {
+    let captured: SubmitReviewBody | undefined
+    const submitFn = vi.fn(async (
+      _owner: string,
+      _repo: string,
+      _prNumber: number,
+      review: SubmitReviewBody,
+    ) => {
+      captured = review
+      return { id: 99_001, state: "APPROVED" }
+    })
+    const client: MergeApproveSubmitClient = { submitReview: submitFn }
+
+    const out = await submitMergedOnApprove({
+      ...SUBMIT_BASE,
+      client,
+      stage: "pre-fanout",
+    })
+
+    expect(out).toEqual({ ok: true, reviewId: 99_001 })
+    expect(submitFn).toHaveBeenCalledTimes(1)
+    expect(submitFn).toHaveBeenCalledWith(
+      SUBMIT_BASE.owner,
+      SUBMIT_BASE.repo,
+      SUBMIT_BASE.prNumber,
+      expect.any(Object),
+    )
+    // Marker-only body: just the dedupe marker (post-ARC-293 + SIG-87).
+    expect(captured?.event).toBe("APPROVE")
+    expect(captured?.body).toBe("<!-- sigilix:pr-review -->\n")
+    expect(captured?.commit_id).toBe(SUBMIT_BASE.headSha)
+    // No inline comments — the marker-only body IS the review.
+    expect(captured?.comments).toBeUndefined()
+  })
+
+  it("emits `pr-review-approved-on-merge` telemetry with `stage: pre-fanout`", async () => {
+    const client = mockSubmitClient(async () => ({ id: 1, state: "APPROVED" }))
+    await submitMergedOnApprove({ ...SUBMIT_BASE, client, stage: "pre-fanout" })
+
+    expect(logSpy).toHaveBeenCalledTimes(1)
+    const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string)
+    expect(parsed["event"]).toBe("pr-review-approved-on-merge")
+    expect(parsed["owner"]).toBe(SUBMIT_BASE.owner)
+    expect(parsed["repo"]).toBe(SUBMIT_BASE.repo)
+    expect(parsed["prNumber"]).toBe(SUBMIT_BASE.prNumber)
+    expect(parsed["headSha"]).toBe("deadbee") // 7-char truncation
+    expect(parsed["stage"]).toBe("pre-fanout")
+    expect(parsed["merged_at_ms"]).toBe(SUBMIT_BASE.mergedAtMs)
+    // mergedAtMs - startMs = 30s in this fixture.
+    expect(parsed["merged_during_review_ms"]).toBe(30_000)
+    expect(parsed["review_id"]).toBe(1)
+    expect(warnSpy).not.toHaveBeenCalled()
+  })
+
+  it("emits `pr-review-approved-on-merge` telemetry with `stage: pre-submit`", async () => {
+    const client = mockSubmitClient(async () => ({ id: 2, state: "APPROVED" }))
+    await submitMergedOnApprove({ ...SUBMIT_BASE, client, stage: "pre-submit" })
+
+    const parsed = JSON.parse(logSpy.mock.calls[0]?.[0] as string)
+    expect(parsed["stage"]).toBe("pre-submit")
+    // Different stage, but everything else identical — confirms stage
+    // is the only thing distinguishing the two call sites' telemetry.
+    expect(parsed["event"]).toBe("pr-review-approved-on-merge")
+  })
+
+  it("on submit failure: returns {ok: false, error} + emits a failure warn", async () => {
+    const client: MergeApproveSubmitClient = {
+      submitReview: vi.fn(async () => {
+        throw new Error("HTTP 502 Bad Gateway")
+      }),
+    }
+
+    const out = await submitMergedOnApprove({
+      ...SUBMIT_BASE,
+      client,
+      stage: "pre-submit",
+    })
+
+    expect(out).toEqual({ ok: false, error: "HTTP 502 Bad Gateway" })
+    // No success log; one warn log.
+    expect(logSpy).not.toHaveBeenCalled()
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    const parsed = JSON.parse(warnSpy.mock.calls[0]?.[0] as string)
+    expect(parsed["event"]).toBe("pr-review-approved-on-merge-failed")
+    expect(parsed["stage"]).toBe("pre-submit")
+    expect(parsed["err"]).toBe("HTTP 502 Bad Gateway")
+  })
+
+  it("on non-Error reject: stringifies the rejection for the warn payload", async () => {
+    // Defensive — matches the `checkIsPrMerged` pattern.
+    const client: MergeApproveSubmitClient = {
+      submitReview: () => Promise.reject("raw string rejection"),
+    }
+    const out = await submitMergedOnApprove({
+      ...SUBMIT_BASE,
+      client,
+      stage: "pre-fanout",
+    })
+    expect(out).toEqual({ ok: false, error: "raw string rejection" })
+    const parsed = JSON.parse(warnSpy.mock.calls[0]?.[0] as string)
+    expect(parsed["err"]).toBe("raw string rejection")
+  })
+
+  it("commit_id pins the headSha so the APPROVE attaches to the right commit", async () => {
+    let captured: SubmitReviewBody | undefined
+    const client: MergeApproveSubmitClient = {
+      submitReview: vi.fn(async (_o, _r, _p, review) => {
+        captured = review
+        return { id: 3, state: "APPROVED" }
+      }),
+    }
+    await submitMergedOnApprove({
+      ...SUBMIT_BASE,
+      client,
+      stage: "pre-submit",
+      headSha: "cafef00d1234567890abcdef1234567890abcdef",
+    })
+    expect(captured?.commit_id).toBe("cafef00d1234567890abcdef1234567890abcdef")
   })
 })

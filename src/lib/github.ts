@@ -1057,7 +1057,7 @@ export class GitHubClient {
       accept,
       authorization: `token ${this.token}`,
       "x-github-api-version": "2022-11-28",
-      "user-agent": "openclaw-worker",
+      "user-agent": "sigilix-worker",
     }
     if (hasBody) h["content-type"] = "application/json"
     return h

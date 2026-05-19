@@ -10,9 +10,9 @@ Four specialists (logic, security, performance, tests) review every PR in parall
 
 The product was previously named **Arc** (2026-04 to 2026-05), and before that **OpenClaw** (initial daemon, ported from `rema-portal/tools/openclaw/`).
 
-Internal infrastructure — Cloudflare KV namespace, Vectorize index, Queue, env var prefixes, dedupe markers (`<!-- openclaw:* -->`) — all keep the legacy `OPENCLAW_*` / `openclaw` names for stability and zero-config impact. Renaming those is deferred to a separate operational migration, since they're internal and not user-visible.
+Internal infrastructure — Cloudflare KV namespace, Vectorize index, Queue, env var prefixes — all keep the legacy `OPENCLAW_*` / `openclaw` names for stability and zero-config impact. Renaming those is deferred to a separate operational migration, since they're internal and not visible to API consumers.
 
-The user-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sigilix`, bot login `sigilix[bot]`, repository, deploy domain, comment headings, footers) are all rebranded to **Sigilix**. Mention triggers continue to accept legacy `@arc`, `@arc-copilot`, and `@openclaw` for back-compat with historical PR threads.
+User-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sigilix`, bot login `sigilix[bot]`, repository, deploy domain, comment headings, footers, HTTP `user-agent`) are all rebranded to **Sigilix**. SIG-83 / SIG-85 / SIG-36: dedupe markers in PR comment bodies write as `<!-- sigilix:* -->`; bilingual read-side matchers still recognize the legacy `<!-- openclaw:* -->` form so back-compat with pre-rebrand comments on still-open PRs survives. Drop the bilingual matchers once those PRs close. Mention triggers continue to accept legacy `@arc`, `@arc-copilot`, and `@openclaw`.
 
 **Linear side** — issue triage and @-mention replies on Linear webhooks.
 **GitHub side** — PR overview, CI failure triage, and proactive primary review on GitHub App webhooks.
@@ -35,13 +35,13 @@ The user-facing surfaces (Cloudflare Worker name `sigilix`, GitHub App name `sig
 **GitHub: PR overview** (`pull_request.opened/synchronize/reopened/ready_for_review`)
 1. Fetches PR title + body + diff + recent commits.
 2. Asks the model for a structured overview: 1–5 confidence, per-file priority scores, bullets to scrutinize.
-3. Posts (or PATCHes in place) a single sticky top-level comment with the dedupe marker `<!-- openclaw:pr-overview -->`.
+3. Posts (or PATCHes in place) a single sticky top-level comment with the dedupe marker `<!-- sigilix:pr-overview -->`.
 
 **GitHub: CI failure triage** (`workflow_run.completed` with `conclusion=failure`)
 1. Lists failed jobs on the run, fetches each job's plain-text log, concatenates them.
 2. Pulls PR diff + file contents the failure log mentions (Contents API at the PR head SHA) + Vectorize chunks.
 3. Asks the model for a Greptile-shaped diagnosis (root cause / likely fix / failure excerpt / confidence).
-4. Posts only when confidence is `high` or `medium`; updates in place via the `<!-- openclaw:ci-triage -->` marker.
+4. Posts only when confidence is `high` or `medium`; updates in place via the `<!-- sigilix:ci-triage -->` marker.
 
 **GitHub: Proactive primary review** (`pull_request.opened/synchronize/reopened/ready_for_review`)
 1. Fetches PR diff and reviews it in isolation — no awareness of other reviewers.
@@ -427,7 +427,7 @@ Each slash command (`review`, `improve`, `describe`, `ask`) can declare its own 
 - `addendum` > 4000 code points → parse error.
 - `fallbacks` > 4 entries → parse error.
 
-**Parse-error PR comment:** when a slash-command-driven handler runs (`/sigilix improve`, `/sigilix describe`) and the config fails strict parse, Sigilix posts a top-level PR comment with the parse reason and a snippet of the raw config. Idempotent per head SHA (marker `<!-- openclaw:config-error:<sha7> -->`); a fresh config on the next push replaces the comment by virtue of the new head SHA producing a new marker. Sigilix continues to operate in default-config mode in the meantime.
+**Parse-error PR comment:** when a slash-command-driven handler runs (`/sigilix improve`, `/sigilix describe`) and the config fails strict parse, Sigilix posts a top-level PR comment with the parse reason and a snippet of the raw config. Idempotent per head SHA (marker `<!-- sigilix:config-error:<sha7> -->`); a fresh config on the next push replaces the comment by virtue of the new head SHA producing a new marker. Sigilix continues to operate in default-config mode in the meantime.
 
 **Telemetry:** `command-config-resolved`, `command-config-parse-error`, `command-config-error-comment-posted`, `command-config-error-comment-suppressed-dedupe`, `command-config-error-comment-failed`.
 
@@ -542,7 +542,7 @@ When a `synchronize` or `edited` webhook arrives and a manifest exists, Sigilix 
 <!-- sigilix:stale-marker:end -->
 ```
 
-Idempotent on re-application — re-running on a body that already has a stale block replaces in place. The block sits between the leading `<!-- openclaw:pr-review -->` marker and the original review body; the rest is untouched.
+Idempotent on re-application — re-running on a body that already has a stale block replaces in place. The block sits between the leading `<!-- sigilix:pr-review -->` marker and the original review body; the rest is untouched.
 
 **Sticky summary footer:** every review body now ends with `_Reviewed against \`<sha7>\` at <ISO timestamp>._` so a reader can see at a glance which head SHA the verdict applies to (without reading the markers).
 
@@ -867,4 +867,4 @@ Sigilix/
 
 **Triage comment is wrong / hallucinated**: the model output didn't parse cleanly and got fabricated content. Check the raw response in logs, then iterate on the prompt at `src/prompts/issue-triage.ts`.
 
-**Same comment posted twice**: KV is empty (cold cache) and the comment-body marker scan also missed the existing one. Check that the marker `<!-- openclaw:issue-triage -->` appears in your existing triage comments.
+**Same comment posted twice**: KV is empty (cold cache) and the comment-body marker scan also missed the existing one. Check that the `<!-- sigilix:issue-triage -->` marker (or its legacy `<!-- openclaw:issue-triage -->` form on pre-rebrand comments) appears in your existing triage comments.

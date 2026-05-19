@@ -85,6 +85,7 @@ import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
 import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
+  isPrOverviewEnabled,
   loadSigilixConfig,
   passesLabelGate,
   resolveCostControlsConfig,
@@ -93,6 +94,7 @@ import {
   resolveAstRulesConfig,
   type SigilixConfig,
 } from "./sigilix-config"
+import { waitForPrOverviewStub } from "./pr-overview-stub"
 import {
   runDocsCoverageCheck,
   renderDocsCoverageForPrompt,
@@ -151,7 +153,7 @@ import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type { ReviewMemorySkipReason } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
-import { checkIsPrMerged } from "./merge-guard"
+import { checkIsPrMerged, submitMergedOnApprove } from "./merge-guard"
 import {
   type EnsembleRunCtx,
   type SynthSummary,
@@ -884,6 +886,52 @@ export async function handlePrReviewEnsemble(
         source: "ensemble-before-fanout",
       })
       return finalize(telemetry, env, "stale_head", cache)
+    }
+
+    // ─── SIG-88: pre-fanout merged-on-approve short-circuit ────
+    //
+    // When the PR is already merged at fan-out time (e.g. the webhook
+    // was queued after a long delay and the human merged in the
+    // meantime), short-circuit to a marker-only APPROVE. CodeRabbit's
+    // behavior: GitHub's native "approved these changes" one-liner
+    // stands in for a review on already-merged code instead of running
+    // the full ensemble + posting REQUEST_CHANGES on a merged PR.
+    //
+    // We reuse the `meta.merged_at` value we already fetched for the
+    // stale-head guard above — no extra GET round-trip. The pre-submit
+    // guard further down (post-synth) still calls `checkIsPrMerged`
+    // because by then the cached `meta` is ~30-60s old and the merge
+    // may have happened during fan-out.
+    if (meta.merged_at !== null && meta.merged_at !== undefined) {
+      const mergedAtMs = new Date(meta.merged_at).getTime()
+      telemetry.fellBackReason = "merged_before_fanout"
+      const out = await submitMergedOnApprove({
+        client, owner, repo, prNumber, headSha,
+        stage: "pre-fanout",
+        mergedAtMs,
+        startMs,
+      })
+      if (out.ok) {
+        // CR PR #104 Major catch: mirror the standard ensemble flow's
+        // post-submit verification so a silently-rejected merged-on-
+        // approve POST gets the same diagnostic surface (`pr-review-
+        // verify-missing` / `-pending` / `-error` telemetry) as the
+        // primary path. The verify is best-effort — on inconclusive
+        // results we still claim `posted` (matches the standard
+        // path's semantics on capped/error returns).
+        await verifyReviewPersisted(
+          client, owner, repo, prNumber, out.reviewId,
+          "merged-on-approve-pre-fanout", out.state,
+        )
+        return finalize(telemetry, env, "posted", cache, {
+          event: "APPROVE",
+          findingsCount: 0,
+        })
+      }
+      // Submit failed — fall through to `errored` without a surface
+      // (we have no comment to point the customer at, and the PR is
+      // already merged so a skip-notice is pointless).
+      return finalize(telemetry, env, "errored", cache)
     }
 
     // ARC-182: fetch open PRs in parallel with the full PR diff. Stack
@@ -1981,6 +2029,40 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "stale_head", cache)
     }
 
+    // ─── SIG-84: wait for the pr-overview stub ─────────────────
+    //
+    // The webhook handler posts a "Reviewing…" stub for the
+    // pr-overview sticky synchronously BEFORE enqueueing this review
+    // job (see `postPrOverviewStubIfNeeded` in pr-overview-stub.ts).
+    // Polling for the KV flag here means the overview comment id is
+    // guaranteed to be on the PR timeline before we call
+    // `submitReview` below — fixes the founder-flagged backwards
+    // ordering (review approves first, overview lands ~30s later).
+    //
+    // 2s ceiling per Codex Q1 sign-off — covers the worst-case
+    // cross-region KV propagation delay without meaningfully slowing
+    // the review pipeline (overall review budget is 60s+). On the
+    // happy path the flag is already present from a fast-first-read,
+    // so the wait is ~0ms.
+    //
+    // Codex Q5 tweak: skip the wait entirely when the customer has
+    // opted OUT of pr-overview — there's no stub to wait for, and
+    // burning up to 2s of review time on a non-existent comment
+    // would be pure latency for no UX gain.
+    if (isPrOverviewEnabled(sigilixConfig)) {
+      const stubWaitStartMs = Date.now()
+      const stubOutcome = await waitForPrOverviewStub({
+        env, owner, repo, prNumber, headSha,
+      })
+      console.log(JSON.stringify({
+        event: "pr-review-overview-stub-wait",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        outcome: stubOutcome.kind,
+        waited_ms: stubOutcome.waitedMs,
+        elapsed_ms: Date.now() - stubWaitStartMs,
+      }))
+    }
+
     // ─── Submit ────────────────────────────────────────────────
     // GitHub validates every inline anchor and rejects the entire review
     // on a single bad position (typical 422). When that happens the
@@ -2200,20 +2282,38 @@ export async function handlePrReviewEnsemble(
     // ARC-286 (extracted to `merge-guard.ts` per Sigilix PR #97
     // round-2 pushback so the three branches — open / merged /
     // API-error — are unit-testable). The orchestrator just calls
-    // the helper and emits its own `pr-review-skipped-merged` event
-    // on the merged branch.
+    // the helper.
+    //
+    // SIG-88 (2026-05-18): on the merged branch, we now submit a
+    // marker-only APPROVE instead of bailing to a skip-notice. Posting
+    // REQUEST_CHANGES on already-merged code is noise (and was the
+    // pre-ARC-286 behavior that ARC-286 fixed by bailing); CodeRabbit
+    // posts a lightweight APPROVE here so the GitHub Checks UI shows
+    // a clean "passed" state instead of an empty skip. The ensemble
+    // verdict we just computed is discarded — submitting it as
+    // REQUEST_CHANGES would compete with the merge.
     const mergeGuard = await checkIsPrMerged({ client, owner, repo, prNumber, headSha })
     if (mergeGuard.shouldSkip) {
-      const findingCount = renderableVerdict.findings.length + renderableUnanchored.length
-      console.log(JSON.stringify({
-        event: "pr-review-skipped-merged",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        review_elapsed_ms: Date.now() - startMs,
-        merged_at_ms: mergeGuard.mergedAtMs,
-        merged_during_review_ms: mergeGuard.mergedAtMs - startMs,
-        finding_count: findingCount,
-      }))
-      return finalize(telemetry, env, "skipped", cache)
+      telemetry.fellBackReason = "merged_during_review"
+      const out = await submitMergedOnApprove({
+        client, owner, repo, prNumber, headSha,
+        stage: "pre-submit",
+        mergedAtMs: mergeGuard.mergedAtMs,
+        startMs,
+      })
+      if (out.ok) {
+        // CR PR #104 Major catch: same post-submit verification as the
+        // pre-fanout branch above. See that block for the rationale.
+        await verifyReviewPersisted(
+          client, owner, repo, prNumber, out.reviewId,
+          "merged-on-approve-pre-submit", out.state,
+        )
+        return finalize(telemetry, env, "posted", cache, {
+          event: "APPROVE",
+          findingsCount: 0,
+        })
+      }
+      return finalize(telemetry, env, "errored", cache)
     }
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE

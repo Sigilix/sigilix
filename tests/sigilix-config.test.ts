@@ -8,6 +8,7 @@
 import { describe, it, expect, vi } from "vitest"
 
 import {
+  isPrOverviewEnabled,
   parseSigilixConfig,
   parseSigilixConfigDetailed,
   passesLabelGate,
@@ -314,6 +315,72 @@ describe("buildSynthesizerInitialMessage — sigilix.json guidance injection", (
     expect(msg).toContain("[REPO GUIDANCE (from sigilix.json)]")
     expect(msg).toContain("Always promote security findings to score=5.")
     expect(msg.indexOf("REPO GUIDANCE")).toBeLessThan(msg.indexOf("[PR]"))
+  })
+})
+
+describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
+  it("parses overview.enabled === true", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      overview: { enabled: true },
+    }))
+    expect(result).toEqual({ overview: { enabled: true } })
+  })
+
+  it("parses overview.enabled === false", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      overview: { enabled: false },
+    }))
+    expect(result).toEqual({ overview: { enabled: false } })
+  })
+
+  it('strips a string `"false"` (strict boolean — no JS truthy nonsense)', () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      overview: { enabled: "false" },
+    }))
+    expect(result).toEqual({})
+  })
+
+  it("strips a number 0 (strict boolean)", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      overview: { enabled: 0 },
+    }))
+    expect(result).toEqual({})
+  })
+
+  it("strips a top-level overview value that isn't an object", () => {
+    expect(parseSigilixConfig(JSON.stringify({ overview: "yes" }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ overview: true }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ overview: [] }))).toEqual({})
+  })
+
+  it("ignores unknown subfields under overview (forward-compat)", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      overview: { enabled: false, profile: "future-field" },
+    }))
+    expect(result).toEqual({ overview: { enabled: false } })
+  })
+
+  describe("isPrOverviewEnabled resolver — defaults to ENABLED (opt-OUT polarity)", () => {
+    it("missing config → enabled", () => {
+      expect(isPrOverviewEnabled(null)).toBe(true)
+      expect(isPrOverviewEnabled({})).toBe(true)
+    })
+
+    it("config without `overview` field → enabled", () => {
+      expect(isPrOverviewEnabled({ guidance: "x" })).toBe(true)
+    })
+
+    it("overview with no `enabled` flag → enabled (default)", () => {
+      expect(isPrOverviewEnabled({ overview: {} })).toBe(true)
+    })
+
+    it("overview.enabled === true → enabled", () => {
+      expect(isPrOverviewEnabled({ overview: { enabled: true } })).toBe(true)
+    })
+
+    it("overview.enabled === false → disabled", () => {
+      expect(isPrOverviewEnabled({ overview: { enabled: false } })).toBe(false)
+    })
   })
 })
 

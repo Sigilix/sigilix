@@ -94,6 +94,28 @@ export interface SigilixConfig {
     enabled?: boolean
   }
   /**
+   * SIG-84: per-repo opt-OUT for the pr-overview sticky comment.
+   * Default (missing field) = enabled. Only literal `false` disables;
+   * anything else (string, number, undefined) is dropped at parse
+   * time and treated as missing → enabled.
+   *
+   * When disabled:
+   *   - the webhook handler skips both the stub-post + the
+   *     `pr-overview` queue send.
+   *   - the pr-review submit path skips the KV-flag wait (it's there
+   *     to guarantee the stub posts BEFORE the review; with no stub
+   *     there's nothing to wait for).
+   *
+   * NOT routed through `commands.overview` because the `commands`
+   * schema is closed to the four slash-command names
+   * (`review`/`improve`/`describe`/`ask`); adding `overview` there
+   * would conflate "slash command toggle" with "automatic-feature
+   * toggle". Top-level mirrors the polarity of `describe.enabled`.
+   */
+  overview?: {
+    enabled?: boolean
+  }
+  /**
    * ARC-185: per-command prompt addendum + model overrides. Each
    * command (`review`, `improve`, `describe`, `ask`) can declare its
    * own `prompt.addendum` (string ≤ 4000 code points appended to the
@@ -461,6 +483,20 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     const describeIn = obj.describe as Record<string, unknown>
     if (typeof describeIn.enabled === "boolean") {
       out.describe = { enabled: describeIn.enabled }
+    }
+  }
+  // SIG-84: overview.enabled — strict boolean parsing, same shape as
+  // describe.enabled. Forward-compat: unknown subfields under
+  // `overview` are ignored so future additions (overview.maxFiles,
+  // overview.profile, etc.) can ship without breaking older configs.
+  if (
+    obj.overview &&
+    typeof obj.overview === "object" &&
+    !Array.isArray(obj.overview)
+  ) {
+    const overviewIn = obj.overview as Record<string, unknown>
+    if (typeof overviewIn.enabled === "boolean") {
+      out.overview = { enabled: overviewIn.enabled }
     }
   }
   // ARC-185: commands.<cmd>.{prompt.addendum, model.{primary, fallbacks}}
@@ -896,6 +932,24 @@ export function resolveDocsReviewConfig(
     architectureGlobs: dr?.architectureGlobs ?? [],
     docPaths: dr?.docPaths ?? DEFAULT_DOCS_PATHS,
   }
+}
+
+// ─── SIG-84: pr-overview enablement resolution ──────────────────────
+
+/**
+ * SIG-84: resolve the per-repo `overview.enabled` flag to a locked
+ * boolean. Default-on (opt-OUT): only an explicit literal `false`
+ * disables. Pure; never throws.
+ *
+ * Consumers:
+ *   - webhook handler: gates the stub-post + the `pr-overview`
+ *     queue enqueue.
+ *   - pr-review submit path: gates the KV-flag wait (disabled
+ *     customers shouldn't pay the up-to-2s wait for a stub that
+ *     was never posted).
+ */
+export function isPrOverviewEnabled(config: SigilixConfig | null): boolean {
+  return config?.overview?.enabled !== false
 }
 
 /** Pure clamp helper for the reviewMemory numeric fields. */

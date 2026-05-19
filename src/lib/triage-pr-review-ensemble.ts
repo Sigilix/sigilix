@@ -52,6 +52,7 @@ import {
   buildFallbackSubmission,
   chooseReviewEvent,
 } from "./triage-pr-review"
+import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -2313,6 +2314,17 @@ export async function handlePrReviewEnsemble(
         })
       }),
     )
+
+    // SIG-101 — bump the per-PR review counter + build the retrigger
+    // URL once, then thread BOTH through every renderer call site
+    // (primary buildReviewSubmission + the three buildFallbackSubmission
+    // paths below). The bump runs even when the eventual submit
+    // posture is APPROVE (renderApproveBody ignores both fields per
+    // SIG-94), so the counter accurately reflects total review
+    // attempts on the PR, not just request-changes attempts.
+    const reviewCounter = await bumpPrReviewCounter(env, owner, repo, prNumber)
+    const retriggerUrl = buildPrUrl(owner, repo, prNumber)
+
     const submission = buildReviewSubmission({
       verdict: renderableVerdict,
       prAuthor: meta.user?.login ?? null,
@@ -2329,6 +2341,9 @@ export async function handlePrReviewEnsemble(
       // to the new renderer.
       coverage,
       delta: deltaCounts,
+      // SIG-101: retrigger button + per-PR counter footer.
+      reviewCounter,
+      retriggerUrl,
     })
     // ARC-286 (extracted to `merge-guard.ts` per Sigilix PR #97
     // round-2 pushback so the three branches — open / merged /
@@ -2458,6 +2473,11 @@ export async function handlePrReviewEnsemble(
           // coverage signal that ARC-277 surfaces on the main path.
           coverage,
           delta: deltaCounts,
+          // SIG-101: retrigger button + counter survive every
+          // fallback path so the customer sees the same footer
+          // regardless of which submit channel succeeded.
+          reviewCounter,
+          retriggerUrl,
         })
         const fallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
@@ -2601,6 +2621,8 @@ export async function handlePrReviewEnsemble(
           ...(stack.isStacked ? { stack } : {}),
           coverage,
           delta: deltaCounts,
+          reviewCounter,
+          retriggerUrl,
         })
         const commentFallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
@@ -2651,6 +2673,8 @@ export async function handlePrReviewEnsemble(
         // as the inline-anchored primary.
         coverage,
         delta: deltaCounts,
+        reviewCounter,
+        retriggerUrl,
       })
       // CR PR #97 round-4 catch: the anchorless-fallback submit
       // can also throw (merge race after the guard, transient

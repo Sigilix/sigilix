@@ -45,6 +45,32 @@ export interface PrOverviewVerdict {
   confidence: number
   confidenceReason: string
   bullets: string[]
+  /**
+   * SIG-99 polish fields — all optional + back-compat. The parser
+   * clamps each independently; renderer omits the section when
+   * absent. Models trained against the older prompt that don't know
+   * these fields simply leave them undefined.
+   *
+   * - `reviewEffort` (1-5): drives a `**Effort:** N/5` badge under the
+   *   heading. Independent of `confidence` — a safe-to-merge change
+   *   can still demand careful reading.
+   * - `suggestedLabels`: 0-3 GitHub label names. Renders as a
+   *   `\`label1\` \`label2\`` line. Hooks into `customLabels` config
+   *   (SIG-90) when the operator wants filtering.
+   * - `suggestedReviewers`: 0-2 GitHub usernames. Rendered as
+   *   `@user1, @user2` so GitHub notifies them.
+   * - `relatedPrUrls`: 0-3 URLs. Stays empty until SIG-44 (multi-
+   *   corpus retrieval) feeds prior-PR context into the prompt;
+   *   shipped now so the schema + renderer are in place for the
+   *   retrieval-side enablement.
+   * - `mermaidDiagram`: an inline Mermaid `sequenceDiagram` block.
+   *   GitHub renders fenced ```mermaid blocks natively.
+   */
+  reviewEffort?: number
+  suggestedLabels?: string[]
+  suggestedReviewers?: string[]
+  relatedPrUrls?: string[]
+  mermaidDiagram?: string
 }
 
 export interface PrOverviewArgs {
@@ -542,13 +568,57 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
   const confidenceReason =
     typeof obj.confidenceReason === "string" ? obj.confidenceReason.trim() : ""
 
-  return {
+  // SIG-99: optional polish fields. Each is independently clamped /
+  // filtered; nothing fails the parse if any is malformed. Absent
+  // fields stay undefined → renderer skips the section.
+  const verdict: PrOverviewVerdict = {
     summary,
     files,
     confidence: Math.round(confidence),
     confidenceReason,
     bullets,
   }
+  const effortRaw = Number(obj.reviewEffort)
+  if (Number.isFinite(effortRaw) && effortRaw >= 1 && effortRaw <= 5) {
+    verdict.reviewEffort = Math.round(effortRaw)
+  }
+  if (Array.isArray(obj.suggestedLabels)) {
+    const labels = obj.suggestedLabels
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim())
+      .slice(0, 3)
+    if (labels.length > 0) verdict.suggestedLabels = labels
+  }
+  if (Array.isArray(obj.suggestedReviewers)) {
+    const reviewers = obj.suggestedReviewers
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      // Strip a leading `@` if the model adds one — the renderer
+      // adds it back uniformly.
+      .map((s) => s.trim().replace(/^@/, ""))
+      .filter((s) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(s))
+      .slice(0, 2)
+    if (reviewers.length > 0) verdict.suggestedReviewers = reviewers
+  }
+  if (Array.isArray(obj.relatedPrUrls)) {
+    const urls = obj.relatedPrUrls
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim())
+      // Defensive — only accept https GitHub URLs to avoid the model
+      // smuggling arbitrary links into the rendered comment.
+      .filter((s) => /^https:\/\/github\.com\/[^\s)]+\/pull\/\d+/.test(s))
+      .slice(0, 3)
+    if (urls.length > 0) verdict.relatedPrUrls = urls
+  }
+  if (typeof obj.mermaidDiagram === "string") {
+    const m = obj.mermaidDiagram.trim()
+    // Defensive: only accept blocks that LOOK like Mermaid (start with
+    // a known diagram-kind keyword). Prevents the model from injecting
+    // arbitrary markdown that would render outside a code fence.
+    if (m.length > 0 && /^(?:sequenceDiagram|flowchart|graph|stateDiagram)/u.test(m)) {
+      verdict.mermaidDiagram = m
+    }
+  }
+  return verdict
 }
 
 /**
@@ -659,6 +729,15 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
     lines.push("")
   }
 
+  // SIG-99: review-effort badge under the heading. Independent of
+  // confidence — see PrOverviewVerdict.reviewEffort docs. Rendered as
+  // a single bold-prefixed line so it picks up GitHub's normal weight
+  // hierarchy without competing with the `### Summary` heading.
+  if (typeof verdict.reviewEffort === "number") {
+    lines.push(`**Effort:** ${verdict.reviewEffort}/5 ${effortLabel(verdict.reviewEffort)}`)
+    lines.push("")
+  }
+
   lines.push(`### Summary${isFirstRun ? "" : " — latest push"}`)
   lines.push("")
   lines.push(verdict.summary)
@@ -679,6 +758,18 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
     }
   }
 
+  // SIG-99: Mermaid sequence diagram. Placed AFTER the file table so
+  // a reviewer scans (summary → files → flow); GitHub renders fenced
+  // ```mermaid blocks natively.
+  if (verdict.mermaidDiagram) {
+    lines.push("")
+    lines.push("### Sequence diagram")
+    lines.push("")
+    lines.push("```mermaid")
+    lines.push(verdict.mermaidDiagram)
+    lines.push("```")
+  }
+
   lines.push("")
   lines.push(`### Confidence: ${verdict.confidence}/5`)
   if (verdict.confidenceReason) {
@@ -693,7 +784,43 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
     }
   }
 
+  // SIG-99: footer trio (labels / reviewers / related). All optional;
+  // rendered as compact one-liners so they don't compete with the
+  // file table or summary. Placed at the bottom so a reviewer who's
+  // already digested the body sees the metadata last (matches
+  // CodeRabbit's information order).
+  if (verdict.suggestedLabels && verdict.suggestedLabels.length > 0) {
+    lines.push("")
+    lines.push(`**Suggested labels:** ${verdict.suggestedLabels.map((l) => `\`${l}\``).join(" ")}`)
+  }
+  if (verdict.suggestedReviewers && verdict.suggestedReviewers.length > 0) {
+    lines.push("")
+    lines.push(`**Suggested reviewers:** ${verdict.suggestedReviewers.map((u) => `@${u}`).join(", ")}`)
+  }
+  if (verdict.relatedPrUrls && verdict.relatedPrUrls.length > 0) {
+    lines.push("")
+    lines.push("**Related context:**")
+    for (const url of verdict.relatedPrUrls) {
+      lines.push(`- ${url}`)
+    }
+  }
+
   return lines.join("\n")
+}
+
+/**
+ * SIG-99: human-readable label for a review-effort score. Mirrors the
+ * anchor in the prompt's `## Field guidelines` section. Pure.
+ */
+function effortLabel(effort: number): string {
+  switch (effort) {
+    case 1: return "_(trivial)_"
+    case 2: return "_(small)_"
+    case 3: return "_(medium)_"
+    case 4: return "_(large)_"
+    case 5: return "_(needs deep review)_"
+    default: return ""
+  }
 }
 
 function escapeTableCell(value: string): string {

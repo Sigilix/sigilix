@@ -631,6 +631,12 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
     const labels = obj.suggestedLabels
       .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
       .map((s) => s.trim())
+      // code-reviewer HIGH/MEDIUM catch (pre-PR): label strings are
+      // rendered inline as `` `${label}` `` with no escape. A label
+      // containing a backtick / newline / pipe would break out of the
+      // inline-code span and inject raw markdown. Drop anything with
+      // markdown metacharacters.
+      .filter((s) => !/[`\n\r|]/u.test(s))
       .slice(0, 3)
     if (labels.length > 0) verdict.suggestedLabels = labels
   }
@@ -648,9 +654,14 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
     const urls = obj.relatedPrUrls
       .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
       .map((s) => s.trim())
-      // Defensive — only accept https GitHub URLs to avoid the model
-      // smuggling arbitrary links into the rendered comment.
-      .filter((s) => /^https:\/\/github\.com\/[^\s)]+\/pull\/\d+/.test(s))
+      // code-reviewer MEDIUM catch (pre-PR): tighten path-character
+      // class to URL-legal characters only AND anchor with `$`. The
+      // previous `[^\s)]+` allowed backticks, brackets, and quotes,
+      // letting the model smuggle markdown-meta characters into the
+      // rendered list. The new pattern accepts only the GitHub PR
+      // URL alphabet (owner/repo charset is conservative + `pull/N`
+      // is digits + optional `?query` / `#fragment` tail).
+      .filter((s) => /^https:\/\/github\.com\/[A-Za-z0-9_.\-/]+\/pull\/\d+(?:[#?][^\s)`'"]*)?$/.test(s))
       .slice(0, 3)
     if (urls.length > 0) verdict.relatedPrUrls = urls
   }
@@ -659,7 +670,19 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
     // Defensive: only accept blocks that LOOK like Mermaid (start with
     // a known diagram-kind keyword). Prevents the model from injecting
     // arbitrary markdown that would render outside a code fence.
-    if (m.length > 0 && /^(?:sequenceDiagram|flowchart|graph|stateDiagram)/u.test(m)) {
+    //
+    // code-reviewer HIGH catch (pre-PR): the prefix-keyword guard
+    // alone isn't enough. A payload like
+    //   "sequenceDiagram\n```\n# pwned"
+    // passes the prefix check but the embedded triple-backtick closes
+    // the renderer's mermaid fence early, letting the trailing prose
+    // render as top-level markdown. Reject any value containing
+    // triple-backtick so the fence stays intact.
+    if (
+      m.length > 0 &&
+      /^(?:sequenceDiagram|flowchart|graph|stateDiagram)/u.test(m) &&
+      !m.includes("```")
+    ) {
       verdict.mermaidDiagram = m
     }
   }

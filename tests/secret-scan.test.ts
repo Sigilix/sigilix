@@ -130,6 +130,62 @@ describe("runSecretScan — generic high-entropy catch-all", () => {
   })
 })
 
+describe("runSecretScan — SIG-93 path-shape false-positive gate", () => {
+  it("does NOT flag a kebab-case docs path in a comment (PR #98 evidence)", () => {
+    // From PR #98: comment in src/lib/shadow-bakeoff-config.ts
+    // referenced `claude/handoff/arc-292-model-lineup-codex-response.md`.
+    // The generic regex matched the 50-char `claude/handoff/arc-292-…-codex-response`
+    // body and the `.md` extension sat just outside the match.
+    const hits = runSecretScan(mkDiff("src/lib/shadow-bakeoff-config.ts", [
+      "// See claude/handoff/arc-292-model-lineup-codex-response.md for context.",
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag path-list literal members in a test fixture (PR #105 evidence)", () => {
+    // From PR #105: test fixture array in tests/tests-specialist-input.test.ts
+    // contained the path `tests/triage-pr-review-ensemble-merge-shortcut.test.ts`
+    // as a string-array member. Should be suppressed.
+    const hits = runSecretScan(mkDiff("tests/tests-specialist-input.test.ts", [
+      'const FIXTURES = ["tests/triage-pr-review-ensemble-merge-shortcut.test.ts"]',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("still flags a real high-entropy secret with NO path shape", () => {
+    // Sanity: gate is conservative — a 40+-char token without `/` or
+    // a file extension after still flags.
+    const hits = runSecretScan(mkDiff("config.ts", [
+      'const KEY = "QzM4xT9YpA2RnE7vK0sH4uIoLcG6dF1jW8bV5kHrNm2QpZ"',
+    ]))
+    expect(hits[0]?.ruleId).toBe("generic-high-entropy-token")
+  })
+
+  it("still flags a leaked AWS-style secret that contains `/` (no file extension after it)", () => {
+    // AWS secret access keys can contain `/`. Gate requires BOTH `/`
+    // in match AND a `.<ext>` immediately after — so an AWS secret
+    // assigned to a string literal still flags.
+    const hits = runSecretScan(mkDiff("aws-config.ts", [
+      'const AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"',
+    ]))
+    expect(hits[0]?.ruleId).toBe("generic-high-entropy-token")
+  })
+
+  it("does NOT flag a multi-segment path with a code extension in an import-like line", () => {
+    const hits = runSecretScan(mkDiff("src/lib/x.ts", [
+      'import { foo } from "./some/deeply/nested/path/inside/the/source/tree/module.ts"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a path tail like `.json` after a multi-segment match", () => {
+    const hits = runSecretScan(mkDiff("scripts/seed.ts", [
+      '  const fixturePath = "data/fixtures/large-corpus-with-many-segments-and-stuff.json"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+})
+
 describe("runSecretScan — diff parsing semantics", () => {
   it("scans only added (+) lines, not deletions", () => {
     const diff = [

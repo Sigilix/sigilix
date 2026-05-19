@@ -118,17 +118,67 @@ const RULES: readonly SecretRule[] = [
  * positive noise, suppress generic matches that look like one of:
  *   - Hex-only strings ≥40 chars (looks like a hash, not a secret)
  *   - URLs the natural way (already-prefixed http / https)
- *   - File paths (have / or \ in middle)
+ *   - File paths (have `/` and end with a known code/text extension)
  * The PROVIDER-specific rules above are not subject to this filter.
  */
-function genericFalsePositive(match: string, contextLine: string): boolean {
+function genericFalsePositive(match: string, contextLine: string, matchOffset: number): boolean {
   // Hex-only ≥ 32 chars → almost certainly a hash, not a secret
   if (/^[a-f0-9]{32,}$/i.test(match)) return true
   // Heuristic: if the line contains a URL/path-like pattern around
   // the match, it's probably not a secret. Cheap proxy: any "/" in
   // the match itself (URL component) or `://` in the surrounding line.
   if (/:\/\//.test(contextLine)) return true
+  // SIG-93: long kebab-case file paths repeatedly tripped the generic
+  // catch-all on PR #98 + PR #105 (handoff doc filenames + test fixture
+  // path arrays). The generic regex char class includes `/` but not
+  // `.`, so a 50-char path like `claude/handoff/arc-292-model-foo`
+  // matches and the `.md` suffix sits just outside the match boundary.
+  // Gate: match contains `/` AND is immediately followed by a known
+  // code/text extension in the surrounding line. AWS secret access
+  // keys (which can contain `/`) won't have a file extension after
+  // them, so this doesn't suppress legit credentials.
+  if (looksLikeFilePath(match, contextLine, matchOffset)) return true
   return false
+}
+
+// Extensions covered by the path-shape gate. Conservative — only
+// shapes that show up as literal file paths in source / tests / docs.
+// The optional `(test|spec|d|stories|module|config)\.` prefix covers
+// compound extensions like `.test.ts`, `.spec.ts`, `.d.ts`,
+// `.stories.tsx`, `.module.css`, `.config.js`. Adding more is safe
+// (it only widens false-positive suppression); the risk is a real
+// secret happening to be followed by `.<one-of-these>`, which is
+// vanishingly unlikely for 40+-char tokens.
+//
+// Code-reviewer NIT on PR review: `.env` and `.lock` deliberately
+// EXCLUDED — `.env` is the most common credential file extension
+// (raw `KEY=VAL` lines pasted into source would have an `.env` tail
+// in the path), and `.lock` is similar for credential dumps.
+const PATH_TAIL_RE = /^\.(?:test\.|spec\.|d\.|stories\.|module\.|config\.)?(?:ts|tsx|js|jsx|mjs|cjs|md|mdx|json|jsonc|yml|yaml|toml|sh|bash|zsh|py|go|rs|java|kt|swift|c|cc|cpp|h|hh|hpp|cs|rb|php|css|scss|sass|less|html|htm|xml|svg|sql|txt|csv|tsv|ini|cfg|conf|log|map)\b/i
+
+/**
+ * SIG-93: returns true when `match` looks like a file path inside
+ * `contextLine`. The 40+-char generic-token regex matches the path
+ * body (`/`-separated segments) but stops at the `.` before the
+ * extension — so the `.<ext>` suffix sits in the trailing context.
+ *
+ * Conservative on purpose: requires BOTH `/` in match AND a code
+ * extension in the trailing context. A 40+-char base64 secret that
+ * happens to land before `.json` in unrelated text is suppressed, but
+ * that collision is acceptable (ARC-187 treats generic-token as a
+ * noisy warn-only signal).
+ *
+ * Code-reviewer MAJOR on PR review: takes `matchOffset` (`match.index`
+ * from the caller) instead of `contextLine.indexOf(match)`. If the
+ * same token appears twice on one line (e.g., a fixture array with
+ * duplicate paths), `indexOf` would always read trailing context from
+ * the first occurrence — false suppression / leak risk on the second.
+ */
+function looksLikeFilePath(match: string, contextLine: string, matchOffset: number): boolean {
+  if (!match.includes("/")) return false
+  if (matchOffset < 0) return false
+  const trailing = contextLine.slice(matchOffset + match.length, matchOffset + match.length + 20)
+  return PATH_TAIL_RE.test(trailing)
 }
 
 export interface SecretHit {
@@ -227,7 +277,7 @@ export function runSecretScan(diff: string): SecretHit[] {
         // (interval intersection: !(a.end <= b.start || b.end <= a.start)).
         const overlaps = claimedSpans.some((s) => !(end <= s.start || s.end <= start))
         if (overlaps) continue
-        if (rule.id === "generic-high-entropy-token" && genericFalsePositive(matched, content)) continue
+        if (rule.id === "generic-high-entropy-token" && genericFalsePositive(matched, content, start)) continue
         const redacted = redact(matched)
         const fingerprint = `${rule.id}:${currentPath}:${newLine}:${redacted}`
         // Defense-in-depth: also dedupe identical fingerprints (same

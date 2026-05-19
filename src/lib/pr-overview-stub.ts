@@ -67,6 +67,31 @@ _Reviewing…_`
 const STUB_KV_PREFIX = "pr-overview-stub-posted:"
 const STUB_KV_TTL_SECONDS = 5 * 60
 
+// SIG-92: in-flight tombstone for concurrent webhook deliveries.
+// GitHub redelivers slow 202 responses and occasionally fires the same
+// `(owner, repo, prNumber, headSha)` event twice within ~1s. The
+// existing KV-flag + marker-scan flow races: both deliveries can
+// observe an empty KV + empty marker-scan and both create comments.
+//
+// Coordination: the FIRST delivery to reach the create path writes
+// this tombstone with a short TTL. Later deliveries observe the
+// tombstone, poll the final flag for ~1.5s, and short-circuit to
+// `kv-hit` when the leader's create completes.
+//
+// Best-effort by design: KV is eventually consistent, so two truly-
+// simultaneous deliveries can both observe an empty tombstone +
+// proceed. The marker-scan fallback still narrows that window — the
+// remaining failure mode is rare and self-corrects on the next push.
+const STUB_INFLIGHT_KV_PREFIX = "pr-overview-stub-inflight:"
+const STUB_INFLIGHT_TTL_SECONDS = 60
+const STUB_CONCURRENT_POLL_INTERVAL_MS = 300
+// Code-reviewer MAJOR on PR review: was 10 attempts (~3s). The webhook
+// path already adds up to 10s for the create call (STUB_GITHUB_API_TIMEOUT_MS);
+// stacking 3s of poll on top risked tripping GitHub's ~10s redelivery
+// threshold on the follower. 5 attempts × 300ms = 1.5s ceiling — the
+// leader's create typically finishes well under 1s.
+const STUB_CONCURRENT_POLL_MAX_ATTEMPTS = 5 // ~1.5s ceiling
+
 // SIG-91 follow-up: hard timeout on GitHub API calls in the webhook
 // path. 10s is generous for createIssueComment / updateIssueComment
 // (typical p95 < 1s). On timeout, we return a structured failure and
@@ -102,6 +127,40 @@ async function raceWithTimeout<T>(
 }
 
 /**
+ * SIG-92: poll the final stub flag for up to
+ * `STUB_CONCURRENT_POLL_MAX_ATTEMPTS * STUB_CONCURRENT_POLL_INTERVAL_MS`.
+ * Returns the parsed commentId on the first attempt that observes a
+ * valid value, or `null` after all attempts. Each iteration swallows
+ * KV-read errors and continues — a transient KV blip during polling
+ * shouldn't abort the wait.
+ *
+ * Code-reviewer MINOR on PR review: read FIRST, sleep on subsequent
+ * iterations. The leader's create may have completed between the
+ * caller's tombstone read and the call into this function — checking
+ * once before sleeping saves up to STUB_CONCURRENT_POLL_INTERVAL_MS
+ * on the happy path where the leader was already done.
+ */
+async function pollForFinalFlag(env: Env, flagKey: string): Promise<number | null> {
+  for (let attempt = 0; attempt < STUB_CONCURRENT_POLL_MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, STUB_CONCURRENT_POLL_INTERVAL_MS),
+      )
+    }
+    try {
+      const existing = await env.OPENCLAW_STATE.get(flagKey)
+      if (existing !== null) {
+        const parsed = Number(existing)
+        if (Number.isFinite(parsed) && parsed > 0) return parsed
+      }
+    } catch {
+      // Keep polling — transient KV failures aren't a reason to abort.
+    }
+  }
+  return null
+}
+
+/**
  * Compute the KV flag key used to dedupe stub posts across webhook
  * deliveries. Exposed for tests.
  */
@@ -112,6 +171,20 @@ export function stubFlagKey(args: {
   headSha: string
 }): string {
   return `${STUB_KV_PREFIX}${args.owner}/${args.repo}#${args.prNumber}:${args.headSha}`
+}
+
+/**
+ * SIG-92: KV key for the concurrent-delivery tombstone. Exposed for
+ * tests + so the webhook handler (or future operator tooling) can
+ * read it for telemetry correlation.
+ */
+export function stubInflightKey(args: {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+}): string {
+  return `${STUB_INFLIGHT_KV_PREFIX}${args.owner}/${args.repo}#${args.prNumber}:${args.headSha}`
 }
 
 export interface PostStubArgs {
@@ -213,6 +286,59 @@ export async function postPrOverviewStubIfNeeded(
       owner, repo, prNumber, head_sha: headSha.slice(0, 7),
       err: err instanceof Error ? err.message : String(err),
     }))
+  }
+
+  // ── 1.5. SIG-92 concurrent-delivery short-circuit ────────────────
+  // If a prior delivery for the same (owner, repo, prNumber, headSha)
+  // is already in flight (or wrote+expired+missed the final KV write),
+  // its tombstone is still visible. Poll the final flag for ~1.5s —
+  // the leader's create typically finishes in well under a second. On
+  // success: return `kv-hit` with the leader's commentId. On poll
+  // timeout: fall through (the leader may have failed; we'll attempt).
+  //
+  // The tombstone-write below happens regardless of whether we found a
+  // peer — so the third delivery (if any) shortcuts on EITHER our
+  // tombstone OR the leader's tombstone, whichever it sees first.
+  const inflightKey = stubInflightKey({ owner, repo, prNumber, headSha })
+  let priorInflight: string | null = null
+  try {
+    priorInflight = await env.OPENCLAW_STATE.get(inflightKey)
+  } catch {
+    // Best-effort: swallow + fall through. Either we'll see no peer
+    // and post normally, or the marker scan + KV fast path on a later
+    // delivery will catch us.
+  }
+  if (priorInflight !== null) {
+    const polled = await pollForFinalFlag(env, flagKey)
+    if (polled !== null) {
+      console.log(JSON.stringify({
+        event: "pr-overview-stub-concurrent-detected",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        comment_id: polled,
+        prior_inflight: priorInflight.slice(0, 8),
+        mode: "polled-win",
+      }))
+      return { kind: "kv-hit", commentId: polled }
+    }
+    console.warn(JSON.stringify({
+      event: "pr-overview-stub-concurrent-poll-timeout",
+      owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+      prior_inflight: priorInflight.slice(0, 8),
+    }))
+  }
+  // Write our own tombstone so any LATER delivery that arrives during
+  // our create round-trip can poll instead of racing us. Best-effort —
+  // a KV put failure here just degrades us to the pre-SIG-92 behavior
+  // (marker-scan catches most races; the rare double-post self-corrects
+  // on the next push).
+  try {
+    await env.OPENCLAW_STATE.put(
+      inflightKey,
+      crypto.randomUUID(),
+      { expirationTtl: STUB_INFLIGHT_TTL_SECONDS },
+    )
+  } catch {
+    // Swallow.
   }
 
   // ── Build (or reuse) a GitHub client ─────────────────────────────

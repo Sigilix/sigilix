@@ -58,6 +58,10 @@ import { postPrOverviewStubIfNeeded } from "./lib/pr-overview-stub"
 import { handleReviewStatusRoute } from "./do/status-route"
 import { runPrReviewWithDoCallback } from "./do/consumer-wrapper"
 import { enqueuePrReviewJob } from "./do/webhook-enqueue"
+import {
+  computeDiffHash,
+  readPriorReviewDiffHash,
+} from "./lib/noop-merge-detect"
 import { postSlashCommandEyesAck } from "./lib/slash-command-eyes-ack"
 import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
@@ -200,6 +204,15 @@ export interface Env {
   // enqueues short-circuit. Default (unset / any other value) = on.
   // Single-flag rollback if a bug surfaces post-deploy.
   OPENCLAW_REVIEW_MANIFEST_ENABLED?: string
+
+  // SIG-89 kill-switch for the no-op-merge skip on `synchronize`.
+  // When set to "off", the webhook skips the diff-hash compare and
+  // always dispatches the ensemble (the prior behavior). Default
+  // (unset / any other value) = on. Lets us disable without redeploy
+  // if the diff-fetch latency tax or a false-skip regression
+  // surfaces. The KV writes at submit time continue regardless; the
+  // skip-on-read is the only thing the kill-switch gates.
+  OPENCLAW_NOOP_MERGE_SKIP_ENABLED?: string
 
   // ARC-189 cross-PR review-memory feature gates (default OFF for
   // both — opposite polarity from every other scanner). Retrieval
@@ -1633,6 +1646,62 @@ async function handleGitHubWebhook(
     // `opened`. See decidePullRequestJobs() for the gating contract.
     if (decision.review) {
       const baseSha: string | null = pr.base?.sha ?? null
+      // SIG-89: skip pr-review dispatch on byte-identical `synchronize`
+      // pushes (Update-branch button, rebase-on-main no-op force push,
+      // empty commit, merge-from-main without resolution drift). The
+      // prior review still applies — re-running the ensemble would
+      // burn budget + post a redundant timeline entry. CodeRabbit
+      // demonstrates this UX; SIG-89 brings Sigilix to parity.
+      //
+      // First-review pushes (no prior hash stashed) and `opened` /
+      // `reopened` / `ready_for_review` actions are unaffected — only
+      // `synchronize` triggers the diff-hash compare. The pr-overview
+      // path above is intentionally unaffected.
+      //
+      // Best-effort: any failure (KV miss, diff-fetch error, hash
+      // mismatch) falls through to the existing dispatch path so the
+      // worst case is a wasted review run, never a missed review.
+      //
+      // Kill-switch: set `OPENCLAW_NOOP_MERGE_SKIP_ENABLED=off` to
+      // disable the entire compare path without redeploying — useful
+      // if the diff-fetch latency tax or a false-skip regression
+      // surfaces in prod. `webhookClient` is non-null whenever
+      // decision.overview or decision.review is true and auth
+      // succeeded above (line 1531-1552); we check it here so the
+      // fall-through-on-auth-failure path stays safe.
+      let skipNoopMerge = false
+      if (
+        env.OPENCLAW_NOOP_MERGE_SKIP_ENABLED !== "off" &&
+        action === "synchronize" &&
+        webhookClient !== null
+      ) {
+        try {
+          const prior = await readPriorReviewDiffHash(env, owner, repo, prNumber)
+          if (prior !== null) {
+            const currentDiff = await webhookClient.getPullRequestDiff(owner, repo, prNumber)
+            const currentHash = await computeDiffHash(currentDiff)
+            if (currentHash === prior.diffHash) {
+              skipNoopMerge = true
+              console.log(JSON.stringify({
+                event: "pr-review-skipped-noop-merge",
+                owner, repo, prNumber,
+                priorHeadSha: prior.reviewedHeadSha.slice(0, 7),
+                newHeadSha: headSha.slice(0, 7),
+                diffHashSha7: currentHash.slice(0, 7),
+              }))
+            }
+          }
+        } catch (err) {
+          console.warn(JSON.stringify({
+            event: "pr-review-noop-merge-detect-failed",
+            owner, repo, prNumber,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
+      if (skipNoopMerge) {
+        return new Response("queued\n", { status: 202 })
+      }
       // ARC-190 Task 8: gate the pr-review enqueue on
       // OPENCLAW_PR_REVIEW_MODE. Off = legacy queue send only; shadow
       // = DO observation + legacy send; post = DO only (DO emits the

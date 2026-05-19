@@ -85,6 +85,7 @@ import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
 import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
+  isPrOverviewEnabled,
   loadSigilixConfig,
   passesLabelGate,
   resolveCostControlsConfig,
@@ -93,6 +94,7 @@ import {
   resolveAstRulesConfig,
   type SigilixConfig,
 } from "./sigilix-config"
+import { waitForPrOverviewStub } from "./pr-overview-stub"
 import {
   runDocsCoverageCheck,
   renderDocsCoverageForPrompt,
@@ -1986,6 +1988,40 @@ export async function handlePrReviewEnsemble(
         source: "ensemble-after-review",
       })
       return finalize(telemetry, env, "stale_head", cache)
+    }
+
+    // ─── SIG-84: wait for the pr-overview stub ─────────────────
+    //
+    // The webhook handler posts a "Reviewing…" stub for the
+    // pr-overview sticky synchronously BEFORE enqueueing this review
+    // job (see `postPrOverviewStubIfNeeded` in pr-overview-stub.ts).
+    // Polling for the KV flag here means the overview comment id is
+    // guaranteed to be on the PR timeline before we call
+    // `submitReview` below — fixes the founder-flagged backwards
+    // ordering (review approves first, overview lands ~30s later).
+    //
+    // 2s ceiling per Codex Q1 sign-off — covers the worst-case
+    // cross-region KV propagation delay without meaningfully slowing
+    // the review pipeline (overall review budget is 60s+). On the
+    // happy path the flag is already present from a fast-first-read,
+    // so the wait is ~0ms.
+    //
+    // Codex Q5 tweak: skip the wait entirely when the customer has
+    // opted OUT of pr-overview — there's no stub to wait for, and
+    // burning up to 2s of review time on a non-existent comment
+    // would be pure latency for no UX gain.
+    if (isPrOverviewEnabled(sigilixConfig)) {
+      const stubWaitStartMs = Date.now()
+      const stubOutcome = await waitForPrOverviewStub({
+        env, owner, repo, prNumber, headSha,
+      })
+      console.log(JSON.stringify({
+        event: "pr-review-overview-stub-wait",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        outcome: stubOutcome.kind,
+        waited_ms: stubOutcome.waitedMs,
+        elapsed_ms: Date.now() - stubWaitStartMs,
+      }))
     }
 
     // ─── Submit ────────────────────────────────────────────────

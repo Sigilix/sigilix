@@ -23,12 +23,15 @@ import {
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
-const OVERVIEW_MARKER = "<!-- sigilix:pr-overview -->"
+// SIG-84: exported so the stub-post helper (`pr-overview-stub.ts`) can
+// reuse the SAME marker the handler greps for — preventing the stub +
+// handler from diverging on what makes a comment "the sticky".
+export const OVERVIEW_MARKER = "<!-- sigilix:pr-overview -->"
 // SIG-85: bilingual matcher for the openclaw→sigilix rebrand. Read both
 // markers so the existing-comment lookup finds legacy stickies and
 // edits them in place instead of creating duplicates. Drop the legacy
 // half once all pre-2026-05-18 PRs close.
-const LEGACY_OVERVIEW_MARKER = "<!-- openclaw:pr-overview -->"
+export const LEGACY_OVERVIEW_MARKER = "<!-- openclaw:pr-overview -->"
 
 const LIMITS = {
   prDiff: 28_000,
@@ -145,6 +148,33 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       }),
     ])
     since("pr-fetched")
+
+    // ─── SIG-84: stale-head guard #1 (pre-Ollama) ───────────────────
+    //
+    // The pr-overview job carries the headSha that fired the webhook.
+    // If a NEW commit landed while this job sat in the queue (or
+    // during the `getPullRequest` round-trip), the LIVE PR head differs
+    // from `headSha`. Letting this run continue would:
+    //   1. burn ~30s of Ollama time on a snapshot the user has already
+    //      superseded,
+    //   2. then OVERWRITE the new head's stub `_Reviewing…_` body back
+    //      to the OLD head's walkthrough — exactly what SIG-84 is
+    //      trying to prevent (the overview comment moving backwards).
+    //
+    // Mirrors the pattern at `triage-pr-review-ensemble.ts:864`.
+    // `force === true` callers (post-review refresh) bypass: that
+    // path is fired by the review SUCCESS handler with the live head
+    // SHA already in hand, and the goal there is to drop the stale
+    // warmup callout from the most-recent overview.
+    if (!force && meta.head?.sha && meta.head.sha !== headSha) {
+      console.log(JSON.stringify({
+        event: "pr-overview-stale-head-before-ollama",
+        owner, repo, prNumber,
+        queued_head_sha: headSha.slice(0, 7),
+        current_head_sha: meta.head.sha.slice(0, 7),
+      }))
+      return
+    }
 
     // ARC-263: walkthrough cache lookup. For each changed file, look
     // up `(filename, patch-sha256)` in KV. Hits reuse the cached
@@ -310,6 +340,44 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       isFirstRun: existingForWrite == null,
       warmup,
     })
+
+    // ─── SIG-84: stale-head guard #2 (pre-write) ────────────────────
+    //
+    // Re-check the PR head right before the write. The Ollama call took
+    // 10-30s; a new commit may have landed in that window. Without this,
+    // the OLD head's walkthrough would overwrite either:
+    //   (a) the NEW head's `_Reviewing…_` stub (just posted at webhook
+    //       time by `postPrOverviewStubIfNeeded`), or
+    //   (b) the NEW head's already-rendered walkthrough (if the new
+    //       head's overview happened to complete first).
+    // Either way the comment moves backwards from the customer's
+    // perspective. Cheap (one extra `getPullRequest` round-trip) and
+    // bounded to the path that actually writes — `force`-mode callers
+    // bypass since they're invoked by the review SUCCESS path on the
+    // live head.
+    if (!force) {
+      try {
+        const metaCheck = await client.getPullRequest(owner, repo, prNumber)
+        if (metaCheck.head?.sha && metaCheck.head.sha !== headSha) {
+          console.log(JSON.stringify({
+            event: "pr-overview-stale-head-before-write",
+            owner, repo, prNumber,
+            queued_head_sha: headSha.slice(0, 7),
+            current_head_sha: metaCheck.head.sha.slice(0, 7),
+          }))
+          return
+        }
+      } catch (err) {
+        // Best-effort: a failed re-check shouldn't drop a successful
+        // overview render. Log + continue with the write — the
+        // pre-Ollama guard already caught the obvious stale case.
+        console.warn(JSON.stringify({
+          event: "pr-overview-stale-head-recheck-failed",
+          owner, repo, prNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
 
     if (existingForWrite != null) {
       await client.updateIssueComment(owner, repo, existingForWrite, body)
@@ -661,6 +729,28 @@ async function scanComments(
     if (overviewId !== null && legacyWarmupId !== null) break
   }
   return { overviewId, legacyWarmupId }
+}
+
+/**
+ * SIG-84: smaller marker-scan used by the stub-post fallback when the
+ * KV `pr-overview-stub-posted` flag is missing (delivery retry,
+ * cross-region KV propagation delay). Returns the overview comment id
+ * if any exists on the PR — bilingual matcher covers both the
+ * current `sigilix:pr-overview` marker and the legacy
+ * `openclaw:pr-overview` marker.
+ *
+ * Exposed (and named distinctly from the private `scanComments`) so
+ * the stub helper doesn't depend on the full warmup-id tuple it
+ * doesn't need; keeps the call sites focused.
+ */
+export async function findExistingOverviewCommentId(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<number | null> {
+  const result = await scanComments(client, owner, repo, prNumber)
+  return result.overviewId
 }
 
 /**

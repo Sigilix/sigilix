@@ -37,8 +37,15 @@ export const LEGACY_REVIEW_BODY_MARKER = "<!-- openclaw:pr-review -->"
 /** The bot login under which the Sigilix App posts reviews. Pair
  *  with the body marker to defend against any review whose body
  *  happens to contain the marker but was authored by a human or
- *  another bot. If the App's slug ever changes, update here. */
-const SIGILIX_BOT_LOGIN = "sigilix[bot]"
+ *  another bot. If the App's slug ever changes, update here.
+ *
+ *  SIG-37: exported so the approval-gate helpers in `triage-pr-review.ts`
+ *  can reference the same canonical login when filtering open items
+ *  (review comments / threads / blocking findings) down to the
+ *  Sigilix-authored subset. Sigilix's APPROVE decision must only
+ *  consider its own findings — entries from CodeRabbit / Greptile /
+ *  other bots / human reviewers must NOT influence the gate. */
+export const SIGILIX_BOT_LOGIN = "sigilix[bot]"
 
 /** States we treat as actionable for the stale-detector. Same set as
  *  the pre-SIG-85 dismissible states — COMMENTED + PENDING were never

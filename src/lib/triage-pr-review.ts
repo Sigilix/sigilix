@@ -33,6 +33,7 @@ import {
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
+import { SIGILIX_BOT_LOGIN } from "./dismiss-prior-reviews"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
 // `renderStackContextSummary` is no longer used here — ARC-281
@@ -613,7 +614,10 @@ export function buildFallbackBody(
   return renderRequestChangesBody(args)
 }
 
-export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
+export function chooseReviewEvent(
+  findings: PrReviewFinding[],
+  openItems: ReadonlyArray<AuthoredItem> = [],
+): ReviewEvent {
   // Strict: any inline finding the model surfaces is a blocker. The
   // verdict is two-state (APPROVE | REQUEST_CHANGES) — score still
   // sorts/severity-tags the findings but doesn't decide the gate.
@@ -626,7 +630,55 @@ export function chooseReviewEvent(findings: PrReviewFinding[]): ReviewEvent {
   // "rubber-stamp" trade-off documented in the README; the founder's
   // call is that always-vocal Sigilix beats silent skips even at the
   // cost of bot-approval-counts-as-reviewer.
-  return findings.length === 0 ? "APPROVE" : "REQUEST_CHANGES"
+  //
+  // SIG-37: `openItems` is an optional list of open PR threads /
+  // review comments / blocking items that a caller wants to factor
+  // into the gate. Items NOT authored by `sigilix[bot]` (i.e.
+  // CodeRabbit, Greptile, other bots, human reviewers) are filtered
+  // out BEFORE the gate runs. Only Sigilix-authored open items count
+  // — establishes the clean Sigilix-only signal needed for the
+  // head-to-head measurement framework (SIG-200, separately tracked).
+  //
+  // Defaults to `[]` so existing call sites (which pass only the
+  // synth verdict's own findings) are unaffected — those findings
+  // are Sigilix-authored by construction.
+  if (findings.length > 0) return "REQUEST_CHANGES"
+  const sigilixOpenItems = filterToSigilixAuthored(openItems)
+  return sigilixOpenItems.length === 0 ? "APPROVE" : "REQUEST_CHANGES"
+}
+
+/**
+ * SIG-37 — minimal shape for items that carry a GitHub-style author
+ * login. Wide enough to cover review comments, review threads' root
+ * comments, and PR-review records (`listPullRequestReviews` rows) —
+ * every shape Sigilix might want to gate on in the future. `user`
+ * may be `null` (GitHub returns `null` for deleted authors); a
+ * missing `user` deterministically falls out of the Sigilix-only
+ * filter, never the other way.
+ */
+export interface AuthoredItem {
+  user: { login: string | null } | null
+}
+
+/**
+ * SIG-37 — filter any list of authored items down to those Sigilix
+ * itself authored. The canonical predicate for the approval-gate
+ * decision; any new call site that lists open items should run them
+ * through this before checking `length === 0` for an APPROVE intent.
+ *
+ * Pure — `user.login === SIGILIX_BOT_LOGIN`. Items with a missing /
+ * null user object, or a non-matching login, are dropped. The match
+ * is case-sensitive because GitHub's bot logins always lowercase the
+ * slug (`sigilix[bot]` is the exact App-emitted form).
+ *
+ * Exported so non-`chooseReviewEvent` callers (e.g. observability
+ * code that wants to count "Sigilix-authored unresolved threads vs
+ * other-actor threads" separately) reuse the same predicate.
+ */
+export function filterToSigilixAuthored<T extends AuthoredItem>(
+  items: ReadonlyArray<T>,
+): T[] {
+  return items.filter((item) => item.user?.login === SIGILIX_BOT_LOGIN)
 }
 
 /**

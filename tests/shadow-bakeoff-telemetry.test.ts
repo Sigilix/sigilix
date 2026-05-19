@@ -167,11 +167,22 @@ describe("computeFindingsOverlap", () => {
       overlapCount: 0, prodOnlyCount: 0, shadowOnlyCount: 1,
       prodScoreHistogram: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
       shadowScoreHistogram: { 1: 0, 2: 0, 3: 1, 4: 0, 5: 0 },
+      // SIG-86: score-3 finding doesn't contribute to score-4+ counts.
+      score4PlusOverlapCount: 0,
+      score4PlusProdOnlyCount: 0,
+      score4PlusShadowOnlyCount: 0,
+      score4PlusProdFindingsCount: 0,
+      score4PlusShadowFindingsCount: 0,
     })
     expect(computeFindingsOverlap([f("a.ts", 1, "logic", 3)], [])).toEqual({
       overlapCount: 0, prodOnlyCount: 1, shadowOnlyCount: 0,
       prodScoreHistogram: { 1: 0, 2: 0, 3: 1, 4: 0, 5: 0 },
       shadowScoreHistogram: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+      score4PlusOverlapCount: 0,
+      score4PlusProdOnlyCount: 0,
+      score4PlusShadowOnlyCount: 0,
+      score4PlusProdFindingsCount: 0,
+      score4PlusShadowFindingsCount: 0,
     })
   })
 
@@ -203,6 +214,72 @@ describe("computeFindingsOverlap", () => {
     )
     expect(result.prodScoreHistogram).toEqual({ 1: 0, 2: 1, 3: 0, 4: 0, 5: 2 })
     expect(result.shadowScoreHistogram).toEqual({ 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 })
+  })
+
+  // SIG-86 (Codex Q4): score-4+ filtered overlap. The B1c aggregator's
+  // main overlap-with-prod ratio is computed on score-4+ findings only.
+  describe("SIG-86 score-4+ filtered overlap", () => {
+    it("counts only score-4-and-above findings; ignores score 1-3", () => {
+      const result = computeFindingsOverlap(
+        [f("a.ts", 1, "logic", 5), f("a.ts", 2, "logic", 3), f("a.ts", 3, "logic", 4)],
+        [f("a.ts", 1, "logic", 5), f("a.ts", 4, "logic", 2), f("a.ts", 5, "logic", 4)],
+      )
+      // Overall overlap: a.ts:1:logic (prod 5 / shadow 5) → 1.
+      expect(result.overlapCount).toBe(1)
+      // Score-4+ prod set: a.ts:1, a.ts:3. Score-4+ shadow set: a.ts:1, a.ts:5.
+      // Overlap: a.ts:1 only → 1.
+      expect(result.score4PlusOverlapCount).toBe(1)
+      expect(result.score4PlusProdOnlyCount).toBe(1) // a.ts:3 in prod only
+      expect(result.score4PlusShadowOnlyCount).toBe(1) // a.ts:5 in shadow only
+      expect(result.score4PlusProdFindingsCount).toBe(2) // scores 5, 4
+      expect(result.score4PlusShadowFindingsCount).toBe(2) // scores 5, 4
+    })
+
+    it("emits 0/0/0/0/0 when neither side has any score-4+ findings", () => {
+      const result = computeFindingsOverlap(
+        [f("a.ts", 1, "logic", 2), f("b.ts", 1, "logic", 3)],
+        [f("c.ts", 1, "security", 1)],
+      )
+      // Main overlap still computed.
+      expect(result.overlapCount).toBe(0)
+      expect(result.prodOnlyCount).toBe(2)
+      expect(result.shadowOnlyCount).toBe(1)
+      // Score-4+ counts all zero — aggregator treats this PR as
+      // "no decision-weight findings on this comparison".
+      expect(result.score4PlusOverlapCount).toBe(0)
+      expect(result.score4PlusProdOnlyCount).toBe(0)
+      expect(result.score4PlusShadowOnlyCount).toBe(0)
+      expect(result.score4PlusProdFindingsCount).toBe(0)
+      expect(result.score4PlusShadowFindingsCount).toBe(0)
+    })
+
+    it("dedupes by tuple within the score-4+ subset (same line + category + 2 high scores → 1 entry)", () => {
+      const result = computeFindingsOverlap(
+        // Same tuple appears twice at score 4 and 5 — dedup to 1 set entry.
+        [f("a.ts", 10, "logic", 4), f("a.ts", 10, "logic", 5)],
+        [f("a.ts", 10, "logic", 4)],
+      )
+      expect(result.score4PlusOverlapCount).toBe(1)
+      expect(result.score4PlusProdOnlyCount).toBe(0)
+      expect(result.score4PlusShadowOnlyCount).toBe(0)
+      // Findings-count is BEFORE tuple dedup — preserves "this model
+      // is spammy on the same tuple" signal.
+      expect(result.score4PlusProdFindingsCount).toBe(2)
+      expect(result.score4PlusShadowFindingsCount).toBe(1)
+    })
+
+    it("score 4 finding in prod + score 3 finding in shadow on the same tuple is prod-only at score-4+", () => {
+      const result = computeFindingsOverlap(
+        [f("x.ts", 1, "logic", 4)],
+        [f("x.ts", 1, "logic", 3)],
+      )
+      // Overall: same (path, line, category) → 1 overlap.
+      expect(result.overlapCount).toBe(1)
+      // Score-4+: prod side has it, shadow side does NOT.
+      expect(result.score4PlusOverlapCount).toBe(0)
+      expect(result.score4PlusProdOnlyCount).toBe(1)
+      expect(result.score4PlusShadowOnlyCount).toBe(0)
+    })
   })
 })
 

@@ -41,7 +41,7 @@ import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
 import {
   OVERVIEW_MARKER,
-  findExistingOverviewCommentId,
+  findExistingOverviewComment,
 } from "./triage-pr-overview"
 
 /**
@@ -63,6 +63,28 @@ export const STUB_BODY = `${OVERVIEW_MARKER}
 ## Sigilix Overview
 
 _Reviewing…_`
+
+/**
+ * SIG-96: detect whether an existing overview-sticky body is the stub
+ * (`_Reviewing…_` placeholder) vs a completed summary. Used to skip
+ * the reset-to-stub edit on subsequent pushes when the prior summary
+ * is still visible — keeps the reviewer informed during the rerender
+ * window instead of erasing context.
+ *
+ * The stub is the ONLY body shape that contains the `_Reviewing…_`
+ * placeholder; every other rendered body has `## Summary` + file
+ * tables + confidence + bullets and never includes the placeholder.
+ * The regex tolerates the ellipsis variants (`…` vs `...`) since the
+ * source has changed once and could change again.
+ *
+ * Pure — exported for tests.
+ */
+const STUB_REVIEWING_PLACEHOLDER_RE = /_Reviewing(?:…|\.\.\.)_/u
+
+export function isStubBody(body: string | null | undefined): boolean {
+  if (typeof body !== "string") return true
+  return STUB_REVIEWING_PLACEHOLDER_RE.test(body)
+}
 
 const STUB_KV_PREFIX = "pr-overview-stub-posted:"
 const STUB_KV_TTL_SECONDS = 5 * 60
@@ -372,9 +394,15 @@ export async function postPrOverviewStubIfNeeded(
   // KV missed (delivery retry, cross-region replication delay, or
   // initial post happening on a different colo). Scan PR comments
   // and look for an existing sigilix-overview marker.
-  let existingCommentId: number | null = null
+  //
+  // SIG-96: fetch BODY alongside id so we can distinguish a stale
+  // stub from a completed summary on subsequent pushes. Pre-fix the
+  // helper returned only the id and the caller unconditionally reset
+  // the body to `_Reviewing…_`, clobbering prior summaries on every
+  // push.
+  let existingComment: { id: number; body: string } | null = null
   try {
-    existingCommentId = await findExistingOverviewCommentId(
+    existingComment = await findExistingOverviewComment(
       client, owner, repo, prNumber,
     )
   } catch (err) {
@@ -388,20 +416,40 @@ export async function postPrOverviewStubIfNeeded(
     // failure on a fresh PR shouldn't block the stub.
   }
 
-  if (existingCommentId !== null) {
-    // ── New-push reset path ───────────────────────────────────────
-    // We have an existing sticky from a PRIOR head (no KV hit means
-    // it wasn't from THIS head). Edit its body back to `_Reviewing…_`
-    // so the overview handler can re-render it in place. The same
-    // comment id stays — the GitHub timeline keeps the original
-    // position; only the body morphs through states (matches
-    // CodeRabbit's UX).
+  if (existingComment !== null) {
+    const existingCommentId = existingComment.id
+
+    // SIG-96: if the existing sticky already carries a completed
+    // summary (anything other than the `_Reviewing…_` stub), do NOT
+    // overwrite it. The overview handler will PATCH it atomically when
+    // the fresh render finishes; in the meantime a reviewer landing
+    // mid-rerender sees the prior head's summary instead of an empty
+    // placeholder. This is the regression fix — pre-fix every push
+    // erased the prior summary for the ~30-90s rerender window.
+    if (!isStubBody(existingComment.body)) {
+      console.log(JSON.stringify({
+        event: "pr-overview-stub-skipped-existing-summary",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        comment_id: existingCommentId,
+      }))
+      await safeWriteFlag(env, flagKey, existingCommentId, owner, repo, prNumber, headSha)
+      return { kind: "marker-scan-hit", commentId: existingCommentId }
+    }
+
+    // ── New-push reset path (existing body IS the stub) ───────────
+    // Rare race: cross-region KV miss for the current head's stub, or
+    // the legacy openclaw-marker stub from a pre-rebrand sticky. The
+    // re-update is idempotent (same body in, same body out) but keeps
+    // the SIG-91 timeout-cap path exercised. Same code below as the
+    // pre-SIG-96 behavior — only the gate above is new.
     //
     // For a duplicate webhook delivery for the SAME head the KV fast
     // path would have caught us above. Reaching this branch means
     // either (a) cross-region KV miss for the current head [edit-back-
-    // to-self, harmless] or (b) new head landed [reset prior head's
-    // body to placeholder, correct].
+    // to-self, harmless] or (b) the prior body was itself a stub
+    // (e.g., a previous webhook timed out before the overview
+    // handler rendered the summary — the stub is what's on the
+    // timeline and the reset is a no-op).
     // SIG-91 follow-up: cap the update at STUB_GITHUB_API_TIMEOUT_MS.
     // On timeout we emit telemetry and return `{kind: "timeout"}` so
     // the webhook returns 202 promptly. We do NOT write the KV flag on

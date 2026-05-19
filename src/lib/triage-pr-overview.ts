@@ -803,6 +803,43 @@ export async function findExistingOverviewCommentId(
 }
 
 /**
+ * SIG-96: richer variant of `findExistingOverviewCommentId` that returns
+ * the comment BODY alongside the id. The stub-helper uses the body to
+ * decide whether the sticky already carries a completed summary (do
+ * NOT clobber with `_Reviewing…_`) or is itself a stub from an earlier
+ * push (idempotent re-write is fine).
+ *
+ * Same bilingual matcher + same `MAX_COMMENT_SCAN_PAGES` cap as
+ * `findExistingOverviewCommentId`. Short-circuits on the first marker
+ * hit; the body field is whatever GitHub returned for that comment.
+ */
+export async function findExistingOverviewComment(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<{ id: number; body: string } | null> {
+  for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
+    const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
+    if (items.length === 0) return null
+    for (const c of items) {
+      if (typeof c.body !== "string") continue
+      if (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER)) {
+        return { id: c.id, body: c.body }
+      }
+    }
+    if (items.length < 100) return null
+  }
+  console.warn(JSON.stringify({
+    event: "pr-overview-comment-scan-capped",
+    owner, repo, prNumber,
+    max_pages: MAX_COMMENT_SCAN_PAGES,
+    helper: "findExistingOverviewComment",
+  }))
+  return null
+}
+
+/**
  * ARC-258 follow-up: delete the legacy standalone warmup sticky by
  * id. Caller resolved the id from `scanComments`. Best-effort: a
  * 404 (someone else deleted it first) or 403 (App missing perms)

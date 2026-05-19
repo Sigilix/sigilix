@@ -82,6 +82,29 @@ const OWNER = "acme"
 const REPO = "site"
 const PR_NUMBER = 73
 
+// Minimal valid review-manifest V1 record. The webhook reads this in
+// the `pr-stale-mark` enqueue block (src/index.ts ~1731) — without it
+// `readReviewManifest` returns `{kind:"not-found"}` and the enqueue is
+// skipped silently, which would make the "no pr-stale-mark" assertion
+// vacuous. Schema mirrors `src/lib/review-manifest.ts::ReviewManifestV1`.
+function manifestKv(): { key: string; value: string } {
+  return {
+    key: `pr-review-manifest:${OWNER}/${REPO}#${PR_NUMBER}`,
+    value: JSON.stringify({
+      v: 1,
+      prNumber: PR_NUMBER,
+      baseSha: "b".repeat(40),
+      headSha: "0".repeat(40),
+      mergeBaseSha: null,
+      fileListHash: "abc",
+      promptVersion: "1",
+      modelId: "ensemble-synth",
+      target: { kind: "review", reviewId: 12345 },
+      reviewedAt: 1_700_000_000_000,
+    }),
+  }
+}
+
 function synchronizePayload(): unknown {
   return {
     action: "synchronize",
@@ -100,7 +123,10 @@ function synchronizePayload(): unknown {
   }
 }
 
-function makeEnv(initialKv: Record<string, string> = {}): {
+function makeEnv(
+  initialKv: Record<string, string> = {},
+  opts: { reviewManifestEnabled?: string } = {},
+): {
   env: Record<string, unknown>
   sentJobs: Array<{ type: string; [k: string]: unknown }>
   kvStore: Record<string, string>
@@ -112,7 +138,7 @@ function makeEnv(initialKv: Record<string, string> = {}): {
     GITHUB_PRIVATE_KEY: "fake-key",
     GITHUB_WEBHOOK_SECRET: SECRET,
     OPENCLAW_PR_REVIEW_MODE: "off",
-    OPENCLAW_REVIEW_MANIFEST_ENABLED: "off",
+    OPENCLAW_REVIEW_MANIFEST_ENABLED: opts.reviewManifestEnabled ?? "off",
     OPENCLAW_JOBS: {
       send: async (msg: { type: string; [k: string]: unknown }) => {
         sentJobs.push(msg)
@@ -166,24 +192,60 @@ beforeEach(() => {
 })
 
 describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
-  it("SKIPS enqueuePrReviewJob when the diff hash matches the prior reviewed hash", async () => {
+  it("SKIPS enqueuePrReviewJob + pr-stale-mark when the diff hash matches the prior reviewed hash", async () => {
+    // Manifest path enabled + a valid manifest stashed in KV — this is
+    // the setup where pr-stale-mark WOULD normally fire on a
+    // synchronize push (see "control" test below). The SIG-89 skip
+    // must suppress both `enqueuePrReviewJob` AND `pr-stale-mark`.
     const priorHash = await computeDiffHash(CURRENT_DIFF)
-    const { env, sentJobs } = makeEnv({
-      [`pr-review-diff-hash:${OWNER}/${REPO}#${PR_NUMBER}`]: JSON.stringify({
-        diffHash: priorHash,
-        reviewedHeadSha: "0".repeat(40),
-        hashedAt: 1_700_000_000_000,
-      }),
-    })
+    const manifest = manifestKv()
+    const { env, sentJobs } = makeEnv(
+      {
+        [`pr-review-diff-hash:${OWNER}/${REPO}#${PR_NUMBER}`]: JSON.stringify({
+          diffHash: priorHash,
+          reviewedHeadSha: "0".repeat(40),
+          hashedAt: 1_700_000_000_000,
+        }),
+        [manifest.key]: manifest.value,
+      },
+      { reviewManifestEnabled: "on" },
+    )
     const worker = (await import("../src/index")).default
 
     const res = await postSynchronizeWebhook(worker, env)
 
     expect(res.status).toBe(202)
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
-    // pr-stale-mark MUST NOT fire either — the prior review stays
-    // authoritative, nothing to dismiss.
+    // The prior review stays authoritative — nothing to mark stale.
     expect(sentJobs.map((j) => j.type)).not.toContain("pr-stale-mark")
+  })
+
+  it("CONTROL: pr-stale-mark DOES fire on a real-content-change synchronize (proves the skip-suppresses assertion has bite)", async () => {
+    // Same KV state as the skip test, but with a non-matching hash so
+    // SIG-89 falls through to the normal dispatch path. With manifest
+    // enabled + manifest stashed, pr-stale-mark MUST be in sentJobs.
+    // This anchors the assertion in the previous test: it now means
+    // "SIG-89 suppressed something that would otherwise fire",
+    // not just "nothing happens to fire here".
+    const manifest = manifestKv()
+    const { env, sentJobs } = makeEnv(
+      {
+        [`pr-review-diff-hash:${OWNER}/${REPO}#${PR_NUMBER}`]: JSON.stringify({
+          diffHash: "deadbeef".repeat(8),
+          reviewedHeadSha: "0".repeat(40),
+          hashedAt: 1_700_000_000_000,
+        }),
+        [manifest.key]: manifest.value,
+      },
+      { reviewManifestEnabled: "on" },
+    )
+    const worker = (await import("../src/index")).default
+
+    const res = await postSynchronizeWebhook(worker, env)
+
+    expect(res.status).toBe(202)
+    expect(mockEnqueuePrReviewJob).toHaveBeenCalledOnce()
+    expect(sentJobs.map((j) => j.type)).toContain("pr-stale-mark")
   })
 
   it("DISPATCHES enqueuePrReviewJob when the diff hash differs (real content change)", async () => {

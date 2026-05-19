@@ -1685,8 +1685,8 @@ async function handleGitHubWebhook(
               console.log(JSON.stringify({
                 event: "pr-review-skipped-noop-merge",
                 owner, repo, prNumber,
-                priorHeadSha: prior.reviewedHeadSha.slice(0, 7),
-                newHeadSha: headSha.slice(0, 7),
+                priorHeadSha: prior.reviewedHeadSha,
+                newHeadSha: headSha,
                 diffHashSha7: currentHash.slice(0, 7),
               }))
             }

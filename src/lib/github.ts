@@ -813,6 +813,26 @@ export class GitHubClient {
     return out
   }
 
+  /**
+   * SIG-91 follow-up: single-page fetch of top-level issue comments
+   * on a PR. Callers driving cap-bounded incremental scans
+   * (`findExistingOverviewCommentId`) need page-at-a-time control so
+   * they can short-circuit on the first marker hit AND stop after a
+   * hard page cap on pathological PRs (1000+ comments). `page` is
+   * 1-based to mirror GitHub's REST convention.
+   */
+  async listIssueCommentsPage(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    page: number,
+  ): Promise<IssueComment[]> {
+    const items = await this.restGet<IssueComment[]>(
+      `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=100&page=${page}`
+    )
+    return Array.isArray(items) ? items : []
+  }
+
   async createIssueComment(
     owner: string,
     repo: string,

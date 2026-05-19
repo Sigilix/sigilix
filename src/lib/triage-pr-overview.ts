@@ -741,6 +741,16 @@ async function scanComments(
 }
 
 /**
+ * SIG-91 follow-up: hard cap on pages scanned by
+ * `findExistingOverviewCommentId`. 5 pages × 100 comments = 500
+ * comments — far above the ~50-comment ceiling on a typical Sigilix
+ * self-PR. Beyond this cap we emit `pr-overview-comment-scan-capped`
+ * and treat the PR as "no existing comment found" (the stub create
+ * path runs). Constant exported for tests.
+ */
+export const MAX_COMMENT_SCAN_PAGES = 5
+
+/**
  * SIG-84: smaller marker-scan used by the stub-post fallback when the
  * KV `pr-overview-stub-posted` flag is missing (delivery retry,
  * cross-region KV propagation delay). Returns the overview comment id
@@ -751,6 +761,12 @@ async function scanComments(
  * Exposed (and named distinctly from the private `scanComments`) so
  * the stub helper doesn't depend on the full warmup-id tuple it
  * doesn't need; keeps the call sites focused.
+ *
+ * SIG-91 follow-up: paginates a page at a time, SHORT-CIRCUITS on
+ * the first bilingual marker hit (sticky comment is typically near
+ * the top of the PR — posted on first webhook), and CAPS the scan at
+ * `MAX_COMMENT_SCAN_PAGES` pages. Prevents pathological scan cost on
+ * busy PRs without losing correctness on the realistic case.
  */
 export async function findExistingOverviewCommentId(
   client: GitHubClient,
@@ -758,8 +774,32 @@ export async function findExistingOverviewCommentId(
   repo: string,
   prNumber: number,
 ): Promise<number | null> {
-  const result = await scanComments(client, owner, repo, prNumber)
-  return result.overviewId
+  for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
+    const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
+    if (items.length === 0) return null
+    for (const c of items) {
+      if (typeof c.body !== "string") continue
+      // Bilingual matcher — matches both `<!-- sigilix:pr-overview -->`
+      // and the legacy `<!-- openclaw:pr-overview -->` from before
+      // the SIG-85 rebrand. First hit wins (short-circuit).
+      if (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER)) {
+        return c.id
+      }
+    }
+    // GitHub returns < per_page when there are no more pages; stop
+    // before issuing another round trip we know will be empty.
+    if (items.length < 100) return null
+  }
+  // Hard cap hit — pathological PR with >500 comments and no marker
+  // in the first 500. Treat as "not found" so the stub create path
+  // runs; subsequent webhooks for the SAME head will hit the KV fast
+  // path and skip this scan entirely.
+  console.warn(JSON.stringify({
+    event: "pr-overview-comment-scan-capped",
+    owner, repo, prNumber,
+    max_pages: MAX_COMMENT_SCAN_PAGES,
+  }))
+  return null
 }
 
 /**

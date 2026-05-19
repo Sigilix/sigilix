@@ -14,7 +14,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const mockGetInstallationToken = vi.fn(async () => "fake-token")
-const mockListIssueComments = vi.fn()
+// SIG-91 follow-up: findExistingOverviewCommentId now paginates via
+// listIssueCommentsPage so it can short-circuit on first marker hit
+// and cap at MAX_COMMENT_SCAN_PAGES. Default mock returns an empty
+// page for any page request (= "no comments on PR").
+const mockListIssueCommentsPage = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 
@@ -27,7 +31,7 @@ vi.mock("../src/lib/github", async () => {
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({
-      listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
+      listIssueCommentsPage: (...args: unknown[]) => mockListIssueCommentsPage(...args),
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
     })),
@@ -37,6 +41,7 @@ vi.mock("../src/lib/github", async () => {
 import {
   postPrOverviewStubIfNeeded,
   STUB_BODY,
+  STUB_GITHUB_API_TIMEOUT_MS,
   stubFlagKey,
   waitForPrOverviewStub,
 } from "../src/lib/pr-overview-stub"
@@ -77,10 +82,11 @@ const args = {
 
 beforeEach(() => {
   mockGetInstallationToken.mockClear()
-  mockListIssueComments.mockClear()
+  mockListIssueCommentsPage.mockClear()
   mockCreateIssueComment.mockClear()
   mockUpdateIssueComment.mockClear()
-  mockListIssueComments.mockResolvedValue([])
+  // Default: every page returns empty (= no comments on the PR).
+  mockListIssueCommentsPage.mockResolvedValue([])
   mockCreateIssueComment.mockResolvedValue({ id: 999 })
   mockUpdateIssueComment.mockResolvedValue({})
 })
@@ -93,7 +99,7 @@ describe("postPrOverviewStubIfNeeded — KV fast path (Codex Q2)", () => {
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     expect(out).toEqual({ kind: "kv-hit", commentId: 555 })
-    expect(mockListIssueComments).not.toHaveBeenCalled()
+    expect(mockListIssueCommentsPage).not.toHaveBeenCalled()
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
     expect(mockUpdateIssueComment).not.toHaveBeenCalled()
   })
@@ -129,7 +135,7 @@ describe("postPrOverviewStubIfNeeded — KV fast path (Codex Q2)", () => {
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     expect(out.kind).toBe("posted")
-    expect(mockListIssueComments).toHaveBeenCalledOnce()
+    expect(mockListIssueCommentsPage).toHaveBeenCalledOnce()
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
   })
 
@@ -186,7 +192,7 @@ describe("postPrOverviewStubIfNeeded — KV fast path (Codex Q2)", () => {
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     expect(out).toEqual({ kind: "kv-hit", commentId: 777 })
-    expect(mockListIssueComments).not.toHaveBeenCalled()
+    expect(mockListIssueCommentsPage).not.toHaveBeenCalled()
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
   })
 })
@@ -194,7 +200,7 @@ describe("postPrOverviewStubIfNeeded — KV fast path (Codex Q2)", () => {
 describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () => {
   it("reuses an existing sigilix marker; resets body to placeholder; writes KV flag", async () => {
     const { kv, store } = makeKvStub()
-    mockListIssueComments.mockResolvedValueOnce([
+    mockListIssueCommentsPage.mockResolvedValueOnce([
       { id: 12345, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\nold walkthrough" },
     ])
 
@@ -210,7 +216,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
 
   it("matches legacy `openclaw:pr-overview` marker (cross-rebrand bilingual)", async () => {
     const { kv } = makeKvStub()
-    mockListIssueComments.mockResolvedValueOnce([
+    mockListIssueCommentsPage.mockResolvedValueOnce([
       { id: 4242, body: "<!-- openclaw:pr-overview -->\nlegacy walkthrough" },
     ])
 
@@ -222,7 +228,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
 
   it("still records KV flag if the update call fails (the comment exists; flag tracks 'a stub exists')", async () => {
     const { kv, store } = makeKvStub()
-    mockListIssueComments.mockResolvedValueOnce([
+    mockListIssueCommentsPage.mockResolvedValueOnce([
       { id: 777, body: "<!-- sigilix:pr-overview -->\nold" },
     ])
     mockUpdateIssueComment.mockRejectedValueOnce(new Error("403 perm denied"))
@@ -237,7 +243,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
 describe("postPrOverviewStubIfNeeded — create path", () => {
   it("creates a new stub comment with STUB_BODY when no marker exists; writes KV flag", async () => {
     const { kv, store } = makeKvStub()
-    mockListIssueComments.mockResolvedValueOnce([])
+    mockListIssueCommentsPage.mockResolvedValueOnce([])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
@@ -249,7 +255,7 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
 
   it("returns failed when create throws; does NOT write KV flag", async () => {
     const { kv, store } = makeKvStub()
-    mockListIssueComments.mockResolvedValueOnce([])
+    mockListIssueCommentsPage.mockResolvedValueOnce([])
     mockCreateIssueComment.mockRejectedValueOnce(new Error("5xx"))
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
@@ -265,7 +271,7 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
 
   it("falls back to creating when the marker-scan throws (best-effort)", async () => {
     const { kv } = makeKvStub()
-    mockListIssueComments.mockRejectedValueOnce(new Error("503"))
+    mockListIssueCommentsPage.mockRejectedValueOnce(new Error("503"))
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
@@ -289,7 +295,7 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
 describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
   it("two deliveries for the SAME (prNumber, headSha) produce exactly one comment", async () => {
     const { kv } = makeKvStub()
-    mockListIssueComments.mockResolvedValueOnce([])
+    mockListIssueCommentsPage.mockResolvedValueOnce([])
 
     const first = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
     const second = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
@@ -302,14 +308,14 @@ describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
   it("a NEW headSha hits the marker-scan path and resets the prior stub", async () => {
     const { kv } = makeKvStub()
     // First push: creates comment id 100.
-    mockListIssueComments.mockResolvedValueOnce([])
+    mockListIssueCommentsPage.mockResolvedValueOnce([])
     mockCreateIssueComment.mockResolvedValueOnce({ id: 100 })
     await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     // Second push (new head SHA): KV miss for new key, marker scan
     // finds the prior stub, resets its body to placeholder, writes
     // the new key.
-    mockListIssueComments.mockResolvedValueOnce([
+    mockListIssueCommentsPage.mockResolvedValueOnce([
       { id: 100, body: "<!-- sigilix:pr-overview -->\nold walkthrough" },
     ])
     const newHeadArgs = { ...args, headSha: "n".repeat(40) }
@@ -403,5 +409,166 @@ describe("waitForPrOverviewStub — review-side wait gate (Codex Q1)", () => {
 
     expect(out.kind).toBe("stub-kv-error")
     expect(sleep).not.toHaveBeenCalled()
+  })
+})
+
+// ─── SIG-91 follow-up: comment-scan short-circuit + cap ─────────────
+//
+// `findExistingOverviewCommentId` now paginates one page at a time so
+// it can short-circuit on the first bilingual marker hit AND cap at
+// MAX_COMMENT_SCAN_PAGES pages on pathological PRs (>500 comments).
+
+describe("postPrOverviewStubIfNeeded — marker scan short-circuit + cap (Sigilix round-4)", () => {
+  it("short-circuits on the first page when the marker is found (no further page fetches)", async () => {
+    const { kv } = makeKvStub()
+    // Page 1 is a FULL page (100 items) — without short-circuit the
+    // helper would request page 2. With short-circuit it returns
+    // after finding the marker on the first item.
+    const fullFirstPage = [
+      { id: 9001, body: "<!-- sigilix:pr-overview -->\nold walkthrough" },
+      ...Array.from({ length: 99 }, (_, i) => ({
+        id: 1000 + i,
+        body: `some other comment ${i}`,
+      })),
+    ]
+    mockListIssueCommentsPage.mockResolvedValueOnce(fullFirstPage)
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out).toEqual({ kind: "marker-scan-hit", commentId: 9001 })
+    // Exactly ONE page-fetch — no second-page round trip even though
+    // the first page was full (100 items).
+    expect(mockListIssueCommentsPage).toHaveBeenCalledOnce()
+    expect(mockListIssueCommentsPage.mock.calls[0]![3]).toBe(1)
+  })
+
+  it("caps the scan at MAX_COMMENT_SCAN_PAGES pages on a pathological busy PR", async () => {
+    const { kv } = makeKvStub()
+    // Every page returns 100 unrelated comments (no marker anywhere).
+    // The cap MUST stop the scan at MAX_COMMENT_SCAN_PAGES (= 5) so we
+    // don't burn an unbounded number of GitHub API round trips.
+    const unrelatedPage = Array.from({ length: 100 }, (_, i) => ({
+      id: 5000 + i,
+      body: `unrelated comment ${i}`,
+    }))
+    mockListIssueCommentsPage.mockResolvedValue(unrelatedPage)
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    // Treated as "no existing comment" — stub create path runs.
+    expect(out.kind).toBe("posted")
+    // Exactly 5 page-fetches (the cap); not 6, not 50.
+    expect(mockListIssueCommentsPage).toHaveBeenCalledTimes(5)
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+
+  it("stops paginating early when a page returns fewer than 100 comments (no marker)", async () => {
+    const { kv } = makeKvStub()
+    // Page 1 has 50 items — GitHub signals "no more pages" via the
+    // partial page. Helper should NOT request page 2.
+    const partialPage = Array.from({ length: 50 }, (_, i) => ({
+      id: 6000 + i,
+      body: `comment ${i}`,
+    }))
+    mockListIssueCommentsPage.mockResolvedValueOnce(partialPage)
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out.kind).toBe("posted")
+    expect(mockListIssueCommentsPage).toHaveBeenCalledOnce()
+  })
+
+  it("finds a marker on a later page when earlier pages don't have it", async () => {
+    const { kv } = makeKvStub()
+    // Page 1: 100 unrelated comments. Page 2: marker on first item.
+    const page1 = Array.from({ length: 100 }, (_, i) => ({
+      id: 7000 + i,
+      body: `noise ${i}`,
+    }))
+    const page2 = [
+      { id: 8001, body: "<!-- sigilix:pr-overview -->\nold walkthrough" },
+    ]
+    mockListIssueCommentsPage
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page2)
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out).toEqual({ kind: "marker-scan-hit", commentId: 8001 })
+    expect(mockListIssueCommentsPage).toHaveBeenCalledTimes(2)
+    expect(mockListIssueCommentsPage.mock.calls[1]![3]).toBe(2)
+  })
+})
+
+// ─── SIG-91 follow-up: GitHub API timeouts ──────────────────────────
+//
+// The webhook handler awaits `postPrOverviewStubIfNeeded` synchronously.
+// If a GitHub API call hangs (createIssueComment / updateIssueComment),
+// the webhook would block indefinitely. These tests pin the 10s
+// AbortSignal timeout behavior with fake timers.
+
+describe("postPrOverviewStubIfNeeded — GitHub API timeouts (Sigilix round-4)", () => {
+  it("returns {kind: 'timeout', phase: 'create'} when createIssueComment hangs past STUB_GITHUB_API_TIMEOUT_MS", async () => {
+    vi.useFakeTimers()
+    try {
+      const { kv, store } = makeKvStub()
+      // Create call hangs forever (resolved promise never fires).
+      mockCreateIssueComment.mockImplementationOnce(() => new Promise(() => {}))
+
+      const p = postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+      // Advance past the 10s timer that races against the hung promise.
+      await vi.advanceTimersByTimeAsync(STUB_GITHUB_API_TIMEOUT_MS + 100)
+      const out = await p
+
+      expect(out).toEqual({ kind: "timeout", phase: "create" })
+      // KV flag MUST NOT be written on timeout — review-side wait
+      // should fall through to its 2s fallback rather than be told
+      // "stub exists" when we can't confirm GitHub accepted the body.
+      expect(store.has(stubFlagKey(args))).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("returns {kind: 'timeout', phase: 'update'} when updateIssueComment hangs past STUB_GITHUB_API_TIMEOUT_MS", async () => {
+    vi.useFakeTimers()
+    try {
+      const { kv, store } = makeKvStub()
+      // Existing sticky from a prior head → reset path → update call hangs.
+      mockListIssueCommentsPage.mockResolvedValueOnce([
+        { id: 4321, body: "<!-- sigilix:pr-overview -->\nprior walkthrough" },
+      ])
+      mockUpdateIssueComment.mockImplementationOnce(() => new Promise(() => {}))
+
+      const p = postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+      await vi.advanceTimersByTimeAsync(STUB_GITHUB_API_TIMEOUT_MS + 100)
+      const out = await p
+
+      expect(out).toEqual({ kind: "timeout", phase: "update" })
+      // KV flag NOT written on update timeout either — same rationale.
+      expect(store.has(stubFlagKey(args))).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does NOT trigger the timeout when the create completes well under STUB_GITHUB_API_TIMEOUT_MS", async () => {
+    vi.useFakeTimers()
+    try {
+      const { kv, store } = makeKvStub()
+      // Resolve under 1s — well inside the 10s budget.
+      mockCreateIssueComment.mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(() => resolve({ id: 555 }), 500)),
+      )
+
+      const p = postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+      await vi.advanceTimersByTimeAsync(600)
+      const out = await p
+
+      expect(out).toEqual({ kind: "posted", commentId: 555 })
+      expect(store.get(stubFlagKey(args))).toBe("555")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

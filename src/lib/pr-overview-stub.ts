@@ -67,6 +67,40 @@ _Reviewing…_`
 const STUB_KV_PREFIX = "pr-overview-stub-posted:"
 const STUB_KV_TTL_SECONDS = 5 * 60
 
+// SIG-91 follow-up: hard timeout on GitHub API calls in the webhook
+// path. 10s is generous for createIssueComment / updateIssueComment
+// (typical p95 < 1s). On timeout, we return a structured failure and
+// let the webhook return 202 without the stub; review-side then falls
+// through its 2s wait fallback (per SIG-84 contract).
+export const STUB_GITHUB_API_TIMEOUT_MS = 10_000
+
+/**
+ * Race `p` against a `ms` timeout. Resolves to `{ kind: "ok", value }`
+ * on success, `{ kind: "timeout" }` if the timer fires first. The
+ * original promise keeps running (orphaned) — we don't propagate
+ * cancellation into `fetch` here because GitHubClient's createIssueComment
+ * / updateIssueComment don't accept signals; the orphaned request will
+ * complete server-side regardless. Timeout semantics are about
+ * UNBLOCKING the webhook handler, not about cancelling GitHub work.
+ */
+async function raceWithTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+): Promise<{ kind: "ok"; value: T } | { kind: "timeout" }> {
+  let timerId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
+    timerId = setTimeout(() => resolve({ kind: "timeout" }), ms)
+  })
+  try {
+    return await Promise.race([
+      p.then((value) => ({ kind: "ok" as const, value })),
+      timeoutPromise,
+    ])
+  } finally {
+    if (timerId !== undefined) clearTimeout(timerId)
+  }
+}
+
 /**
  * Compute the KV flag key used to dedupe stub posts across webhook
  * deliveries. Exposed for tests.
@@ -105,6 +139,11 @@ export type PostStubOutcome =
   | { kind: "marker-scan-hit"; commentId: number }
   | { kind: "skipped-disabled" }
   | { kind: "failed"; reason: string }
+  // SIG-91 follow-up: a GitHub API call (createIssueComment /
+  // updateIssueComment) exceeded `STUB_GITHUB_API_TIMEOUT_MS`. The
+  // webhook handler still returns 202 promptly; review-side falls
+  // through its 2s wait fallback per the SIG-84 contract.
+  | { kind: "timeout"; phase: "create" | "update" }
 
 /**
  * SIG-84: post (or reuse) the pr-overview stub sticky on the PR.
@@ -231,8 +270,27 @@ export async function postPrOverviewStubIfNeeded(
     // either (a) cross-region KV miss for the current head [edit-back-
     // to-self, harmless] or (b) new head landed [reset prior head's
     // body to placeholder, correct].
+    // SIG-91 follow-up: cap the update at STUB_GITHUB_API_TIMEOUT_MS.
+    // On timeout we emit telemetry and return `{kind: "timeout"}` so
+    // the webhook returns 202 promptly. We do NOT write the KV flag on
+    // timeout — the review-side wait should fall through to the 2s
+    // fallback rather than be told "stub exists" when we can't confirm
+    // GitHub accepted the body.
     try {
-      await client.updateIssueComment(owner, repo, existingCommentId, STUB_BODY)
+      const raced = await raceWithTimeout(
+        client.updateIssueComment(owner, repo, existingCommentId, STUB_BODY),
+        STUB_GITHUB_API_TIMEOUT_MS,
+      )
+      if (raced.kind === "timeout") {
+        console.warn(JSON.stringify({
+          event: "pr-overview-stub-post-timeout",
+          phase: "update",
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+          comment_id: existingCommentId,
+          timeout_ms: STUB_GITHUB_API_TIMEOUT_MS,
+        }))
+        return { kind: "timeout", phase: "update" }
+      }
     } catch (err) {
       console.warn(JSON.stringify({
         event: "pr-overview-stub-update-failed",
@@ -251,9 +309,26 @@ export async function postPrOverviewStubIfNeeded(
   }
 
   // ── 3. Create path ───────────────────────────────────────────────
+  // SIG-91 follow-up: cap the create at STUB_GITHUB_API_TIMEOUT_MS too.
+  // Same rationale as the update branch — webhook must not block on a
+  // hung GitHub API. On timeout, return `{kind: "timeout"}` and DON'T
+  // write the KV flag.
   let created: { id: number }
   try {
-    created = await client.createIssueComment(owner, repo, prNumber, STUB_BODY)
+    const raced = await raceWithTimeout(
+      client.createIssueComment(owner, repo, prNumber, STUB_BODY),
+      STUB_GITHUB_API_TIMEOUT_MS,
+    )
+    if (raced.kind === "timeout") {
+      console.warn(JSON.stringify({
+        event: "pr-overview-stub-post-timeout",
+        phase: "create",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        timeout_ms: STUB_GITHUB_API_TIMEOUT_MS,
+      }))
+      return { kind: "timeout", phase: "create" }
+    }
+    created = raced.value
   } catch (err) {
     console.error(JSON.stringify({
       event: "pr-overview-stub-create-failed",

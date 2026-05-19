@@ -53,9 +53,10 @@ interface RoleReport {
     cutShortRate: MetricResult
     runFailedRate: MetricResult
   }
-  /** Worst-of-per-metric: any fail → fail; else any inconclusive* →
-   *  inconclusive; else pass. */
-  overallVerdict: MetricVerdict
+  /** See "Overall-verdict combinator" section below. Includes the
+   *  extra `pass_pending_manual_review` value that role-level
+   *  combinator emits but per-metric `MetricVerdict` does not. */
+  overallVerdict: RoleVerdict
 }
 ```
 

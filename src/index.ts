@@ -1059,6 +1059,14 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         // runId is absent), producing a duplicate full-ensemble run
         // — evidenced on PR #96 (`8ad306a` ran twice, ~46s + ~115s).
         //
+        // Note (code-reviewer MINOR on PR review): DO's
+        // `decideEnqueueAction` returns `dedupe-terminal` for
+        // `done | failed | idle` runs. Warmup reruns after a FAILED
+        // prior run will silently no-op too — intentional. Warmup is
+        // opportunistic post-indexing fan-out; a real failure won't
+        // be fixed by an automatic retry, and the customer can
+        // always `/sigilix review` to force a fresh run.
+        //
         // Slash-command reruns (silent !== true) keep the raw send:
         // a user who typed `/sigilix review` is explicitly asking
         // for a fresh review, and the existing comment above
@@ -1075,16 +1083,29 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             deliveryId: null,
           })
           if (!enq.ok) {
+            // Codex MEDIUM on PR review: silent warmup reruns are
+            // best-effort optimization, NOT customer-facing. The
+            // surrounding try/catch swallows + logs the throw and
+            // returns — so re-throwing here would NOT trigger a
+            // queue retry. Log explicitly and continue.
             console.error(JSON.stringify({
               event: "pr-review-rerun-enqueue-failed",
               reason: `do-${enq.reason}`,
+              silent: true,
               ...tag,
             }))
-            // Surface the DO transport failure so the queue retry
-            // mechanism kicks in (matches the webhook handler's 503
-            // behavior at src/index.ts where post-mode DO failures
-            // bubble up).
-            throw new Error(`pr-review-rerun DO enqueue failed: ${enq.reason}`)
+          } else {
+            // Codex LOW on PR review: emit rerun-context telemetry
+            // so we can count how often warmup reruns are being
+            // suppressed by DO dedup vs newly enqueued. The DO's
+            // own `do-review-deduped` log carries (owner, repo,
+            // prNumber, runId, action) — correlate by timestamp +
+            // (owner, repo, prNumber).
+            console.log(JSON.stringify({
+              event: "pr-review-rerun-silent-routed",
+              mode: enq.mode,
+              ...tag,
+            }))
           }
         } else {
           const reviewMessage: JobMessage = {

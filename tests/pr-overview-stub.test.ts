@@ -634,8 +634,10 @@ describe("postPrOverviewStubIfNeeded — SIG-92 concurrent-delivery short-circui
       store.set(stubInflightKey(args), "leader-uuid-stuck")
 
       const promise = postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
-      // 10 attempts × 300ms = 3000ms. Advance past the ceiling.
-      await vi.advanceTimersByTimeAsync(3500)
+      // 5 attempts × 300ms = 1500ms ceiling (tightened post-PR-review
+      // to stay under GitHub's ~10s webhook redelivery budget when
+      // stacked on top of the 10s create-call timeout). Advance past it.
+      await vi.advanceTimersByTimeAsync(2000)
 
       const out = await promise
       // Leader stalled / failed → loser falls through and creates.

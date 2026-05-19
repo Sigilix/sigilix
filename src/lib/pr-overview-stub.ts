@@ -85,7 +85,12 @@ const STUB_KV_TTL_SECONDS = 5 * 60
 const STUB_INFLIGHT_KV_PREFIX = "pr-overview-stub-inflight:"
 const STUB_INFLIGHT_TTL_SECONDS = 60
 const STUB_CONCURRENT_POLL_INTERVAL_MS = 300
-const STUB_CONCURRENT_POLL_MAX_ATTEMPTS = 10 // ~3s ceiling
+// Code-reviewer MAJOR on PR review: was 10 attempts (~3s). The webhook
+// path already adds up to 10s for the create call (STUB_GITHUB_API_TIMEOUT_MS);
+// stacking 3s of poll on top risked tripping GitHub's ~10s redelivery
+// threshold on the follower. 5 attempts × 300ms = 1.5s ceiling — the
+// leader's create typically finishes well under 1s.
+const STUB_CONCURRENT_POLL_MAX_ATTEMPTS = 5 // ~1.5s ceiling
 
 // SIG-91 follow-up: hard timeout on GitHub API calls in the webhook
 // path. 10s is generous for createIssueComment / updateIssueComment
@@ -128,12 +133,20 @@ async function raceWithTimeout<T>(
  * valid value, or `null` after all attempts. Each iteration swallows
  * KV-read errors and continues — a transient KV blip during polling
  * shouldn't abort the wait.
+ *
+ * Code-reviewer MINOR on PR review: read FIRST, sleep on subsequent
+ * iterations. The leader's create may have completed between the
+ * caller's tombstone read and the call into this function — checking
+ * once before sleeping saves up to STUB_CONCURRENT_POLL_INTERVAL_MS
+ * on the happy path where the leader was already done.
  */
 async function pollForFinalFlag(env: Env, flagKey: string): Promise<number | null> {
   for (let attempt = 0; attempt < STUB_CONCURRENT_POLL_MAX_ATTEMPTS; attempt++) {
-    await new Promise<void>((resolve) =>
-      setTimeout(resolve, STUB_CONCURRENT_POLL_INTERVAL_MS),
-    )
+    if (attempt > 0) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, STUB_CONCURRENT_POLL_INTERVAL_MS),
+      )
+    }
     try {
       const existing = await env.OPENCLAW_STATE.get(flagKey)
       if (existing !== null) {

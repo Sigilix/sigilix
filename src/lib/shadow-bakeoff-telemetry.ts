@@ -87,6 +87,20 @@ export interface ShadowVerdictComparison {
   shadowOnlyCount: number
   prodScoreHistogram: ScoreHistogram
   shadowScoreHistogram: ScoreHistogram
+  /**
+   * SIG-86 (Codex Q4): score-filtered overlap counts. The B1c
+   * aggregator needs `score4PlusOverlapCount / (score4PlusOverlapCount
+   * + score4PlusProdOnlyCount)` as the main overlap-with-prod ratio
+   * (only score-4+ findings carry decision weight in the bake-off
+   * bars). Computed here while raw findings are in memory — historical
+   * events without these fields surface as `inconclusive` to the
+   * aggregator rather than being approximated from histograms.
+   */
+  score4PlusOverlapCount: number
+  score4PlusProdOnlyCount: number
+  score4PlusShadowOnlyCount: number
+  score4PlusProdFindingsCount: number
+  score4PlusShadowFindingsCount: number
   /** Set when shadow failed (no verdict). null on shadow success. */
   shadowFailureReason: string | null
 }
@@ -191,6 +205,18 @@ export interface FindingsOverlapResult {
   shadowOnlyCount: number
   prodScoreHistogram: ScoreHistogram
   shadowScoreHistogram: ScoreHistogram
+  /**
+   * SIG-86 (Codex Q4): score-4+ filtered overlap. The aggregator's
+   * pass/fail bar is "≥50% overlap at score 4+" — derived metrics
+   * have to be computed here, while the raw findings are still in
+   * memory. Recomputing from histograms alone is impossible because
+   * histograms lose tuple identity.
+   */
+  score4PlusOverlapCount: number
+  score4PlusProdOnlyCount: number
+  score4PlusShadowOnlyCount: number
+  score4PlusProdFindingsCount: number
+  score4PlusShadowFindingsCount: number
 }
 
 function key(f: FindingForOverlap): string {
@@ -220,6 +246,11 @@ function buildHistogram(findings: readonly FindingForOverlap[]): ScoreHistogram 
  *
  * Histograms are taken from the ORIGINAL (un-deduped) findings array
  * to preserve "this model is spammy on score-1" signal.
+ *
+ * SIG-86 (Codex Q4): also computes the score-4+ filtered overlap +
+ * per-side counts. Filtering happens on the RAW findings (before tuple
+ * dedup) so a single (path, line, category) that appears at scores
+ * 3 and 5 in the same array still contributes to the score-4+ side.
  */
 export function computeFindingsOverlap(
   prod: readonly FindingForOverlap[],
@@ -229,12 +260,30 @@ export function computeFindingsOverlap(
   const shadowKeys = new Set(shadow.map(key))
   let overlap = 0
   for (const k of prodKeys) if (shadowKeys.has(k)) overlap++
+
+  // Score-4+ filtered overlap. Build keys from findings whose score is
+  // 4 or 5 only; the dedup-by-tuple semantics match the main overlap
+  // calculation above.
+  const prodScore4Plus = prod.filter((f) => f.score >= 4)
+  const shadowScore4Plus = shadow.filter((f) => f.score >= 4)
+  const prodScore4PlusKeys = new Set(prodScore4Plus.map(key))
+  const shadowScore4PlusKeys = new Set(shadowScore4Plus.map(key))
+  let score4PlusOverlap = 0
+  for (const k of prodScore4PlusKeys) {
+    if (shadowScore4PlusKeys.has(k)) score4PlusOverlap++
+  }
+
   return {
     overlapCount: overlap,
     prodOnlyCount: prodKeys.size - overlap,
     shadowOnlyCount: shadowKeys.size - overlap,
     prodScoreHistogram: buildHistogram(prod),
     shadowScoreHistogram: buildHistogram(shadow),
+    score4PlusOverlapCount: score4PlusOverlap,
+    score4PlusProdOnlyCount: prodScore4PlusKeys.size - score4PlusOverlap,
+    score4PlusShadowOnlyCount: shadowScore4PlusKeys.size - score4PlusOverlap,
+    score4PlusProdFindingsCount: prodScore4Plus.length,
+    score4PlusShadowFindingsCount: shadowScore4Plus.length,
   }
 }
 
@@ -332,6 +381,11 @@ export function buildShadowVerdictComparison(
     shadowOnlyCount: overlap.shadowOnlyCount,
     prodScoreHistogram: overlap.prodScoreHistogram,
     shadowScoreHistogram: overlap.shadowScoreHistogram,
+    score4PlusOverlapCount: overlap.score4PlusOverlapCount,
+    score4PlusProdOnlyCount: overlap.score4PlusProdOnlyCount,
+    score4PlusShadowOnlyCount: overlap.score4PlusShadowOnlyCount,
+    score4PlusProdFindingsCount: overlap.score4PlusProdFindingsCount,
+    score4PlusShadowFindingsCount: overlap.score4PlusShadowFindingsCount,
     shadowFailureReason: shadow.verdictOk
       ? null
       : (shadow.failureReason ?? "unknown"),

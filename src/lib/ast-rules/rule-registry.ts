@@ -17,6 +17,15 @@ import { noThrowLiteral } from "./rules/no-throw-literal"
 import { noAwaitInLoop } from "./rules/no-await-in-loop"
 import { noFloatingPromiseCallKnownAsync } from "./rules/no-floating-promise-call-known-async"
 import { noProcessEnvMutation } from "./rules/no-process-env-mutation"
+// SIG-109: logic-specialist correctness rules.
+import { noDupeSwitchCase } from "./rules/no-dupe-switch-case"
+import { noDupeObjectKeys } from "./rules/no-dupe-object-keys"
+import { noReturnInFinally } from "./rules/no-return-in-finally"
+import { noUnreachableAfterJump } from "./rules/no-unreachable-after-jump"
+import { noSelfAssignment } from "./rules/no-self-assignment"
+import { noConstantBinaryCondition } from "./rules/no-constant-binary-condition"
+import { noInvalidTypeofCompare } from "./rules/no-invalid-typeof-compare"
+import { noUnsafeNegation } from "./rules/no-unsafe-negation"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -36,6 +45,15 @@ export const ALL_RULES: readonly AstRule[] = [
   noAwaitInLoop,
   noFloatingPromiseCallKnownAsync,
   noProcessEnvMutation,
+  // SIG-109: logic-specialist correctness rules (severity: warning).
+  noDupeSwitchCase,
+  noDupeObjectKeys,
+  noReturnInFinally,
+  noUnreachableAfterJump,
+  noSelfAssignment,
+  noConstantBinaryCondition,
+  noInvalidTypeofCompare,
+  noUnsafeNegation,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

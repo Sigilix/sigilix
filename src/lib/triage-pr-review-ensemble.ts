@@ -61,6 +61,9 @@ import {
   type TestingEvidencePack,
   type InspectedTestFileFetchResult,
 } from "./testing-evidence-pack"
+import {
+  buildSecurityFactManifest,
+} from "./security-evidence-manifest"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -1337,7 +1340,20 @@ export async function handlePrReviewEnsemble(
     //             classification / testing-evidence block)
     const joinFacts = (blocks: string[]): string =>
       blocks.filter((s) => s.length > 0).join("\n\n")
-    const securityFactsBlock = joinFacts([secretScanBlock, depVulnBlock, astSecurityBlock, sarifBlock])
+    // SIG-108: security fact manifest — assigns each deterministic
+    // security fact a hard-to-fabricate `evidenceId` (`tool:rule-id:
+    // hash:line`). The render() block is APPENDED to securityFactsBlock
+    // so the security specialist sees the citable ids; the manifest Map
+    // is threaded to validateForSubmission so the citation gate can
+    // cross-check each cited id against the real fact's path/line.
+    const securityManifest = await buildSecurityFactManifest({
+      secretHits,
+      depVulnFindings,
+      sarifFindings,
+      astSecurityFindings: astResult.findings.filter((f) => f.roleHint === "security"),
+    })
+    const securityManifestBlock = securityManifest.render()
+    const securityFactsBlock = joinFacts([secretScanBlock, depVulnBlock, astSecurityBlock, sarifBlock, securityManifestBlock])
     const logicFactsBlock = joinFacts([astLogicBlock, deterministicBlock])
     const perfFactsBlock = joinFacts([astPerfBlock])
     const testsFactsBlock = joinFacts([docsCoverageBlock])

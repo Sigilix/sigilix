@@ -184,7 +184,10 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
   })
 
-  it("DROPS a vague finding whose lone branch keyword sits inside a 'needs more tests' nudge", () => {
+  // Review fix (HIGH): a concretely-NAMED branch keeps even alongside a
+  // "needs more tests" call-to-action. "Error path" is the concrete
+  // target; the old vague-veto wrongly dropped this real finding.
+  it("KEEPS an insufficient-test finding naming a concrete branch even with 'needs more tests' phrasing", () => {
     const r = evaluateTestFinding(
       finding({
         headline: "Error path needs more tests",
@@ -194,8 +197,25 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
       }),
       pack({ inspectedTestFiles: ["tests/retry.test.ts"] }),
     )
-    expect(r.keep).toBe(false)
-    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+    expect(r.keep).toBe(true)
+  })
+
+  // Codex review (HIGH): a concrete insufficient-test finding may cite a
+  // COVERED `->tests/...` mapping (the existing test it read) and no
+  // inspectedTestFiles. The old class detection treated ANY siblingMapping
+  // ref as missing-coverage and dropped it as uncited-missing-coverage.
+  // Now only `->NONE` is missing-class, so this falls to ambiguous → keep.
+  it("KEEPS an insufficient-test finding citing a COVERED ->tests mapping (not misclassified as missing)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        headline: "Existing `parse` test misses the `null` branch",
+        body: "tests/foo.test.ts covers the happy path but not the null guard added here.",
+        evidenceRefs: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({ siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }] }),
+    )
+    expect(r.keep).toBe(true)
   })
 
   // ── ambiguity → keep (FP-safe crux) ───────────────────────────────

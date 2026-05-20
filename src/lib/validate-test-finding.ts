@@ -71,15 +71,6 @@ export type TestDropReason =
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
 
 /**
- * Minimum combined headline+body length for an insufficient-test claim
- * to count as "specific". A one-liner like "needs more tests" can't
- * name a concrete source/API/branch; this is a cheap floor BELOW the
- * keyword/identifier checks (which do the real specificity work). Kept
- * low so it never out-votes a genuinely concrete short finding.
- */
-const INSUFFICIENT_MIN_CHARS = 40
-
-/**
  * Parse a `siblingMapping:<source>-><test|NONE>` evidenceRef into its
  * source + arrow value. Mirrors the SIG-113 citation-gate ref parsing
  * (`evaluateTestingFindingCitation`) so the two gates agree on what a
@@ -131,14 +122,16 @@ function citesRealMissingCoverage(finding: PrReviewFinding, pack: TestingEvidenc
   for (const m of pack.siblingMappings) {
     realMappingBySource.set(m.source, m.test ?? "NONE")
   }
+  const findingPath = typeof finding.path === "string" ? finding.path.trim() : ""
   for (const ref of finding.evidenceRefs) {
     if (typeof ref !== "string") continue
     const parsed = parseSiblingMappingRef(ref)
     if (!parsed) continue
     // Relevance: the cited mapping must be ABOUT the file the finding
     // targets (mirrors SIG-113 — citing an unrelated file's mapping is
-    // not a citation for THIS finding).
-    if (parsed.source !== finding.path) continue
+    // not a citation for THIS finding). Trim defensively so the helper
+    // doesn't rely on the parser having trimmed `path`.
+    if (parsed.source !== findingPath) continue
     // The pack must carry this source as genuinely untested (->NONE).
     if (realMappingBySource.get(parsed.source) === "NONE" && parsed.arrowValue === "NONE") {
       return true
@@ -184,9 +177,18 @@ function citesRealInspectedTest(finding: PrReviewFinding, pack: TestingEvidenceP
  */
 function citesSiblingMappingClass(finding: PrReviewFinding): boolean {
   if (!Array.isArray(finding.evidenceRefs)) return false
-  return finding.evidenceRefs.some(
-    (ref) => typeof ref === "string" && parseSiblingMappingRef(ref) !== null,
-  )
+  // Codex review (HIGH): ONLY a `->NONE` mapping is a missing-coverage
+  // claim. SIG-113 also accepts `siblingMapping:<source>-><test>` (a
+  // COVERED mapping) — a concrete insufficient-test finding may cite that
+  // to point at the existing test it read. Treating a `->test` ref as
+  // missing-coverage would misclassify such a finding and drop it as
+  // `uncited-missing-coverage`. A `->test` ref leaves the finding in the
+  // ambiguous-keep bucket (unless it ALSO cites an inspected test).
+  return finding.evidenceRefs.some((ref) => {
+    if (typeof ref !== "string") return false
+    const parsed = parseSiblingMappingRef(ref)
+    return parsed !== null && parsed.arrowValue === "NONE"
+  })
 }
 
 /**
@@ -212,40 +214,38 @@ function citesInspectedClass(finding: PrReviewFinding): boolean {
 }
 
 /**
- * Bare "needs more tests"-style phrasing. Used to veto signal-3 keyword
- * matches inside otherwise-vague findings (see `namesConcreteTarget`).
- * A finding matching this with NO backticked/code identifier is the
- * over-flagging FP shape this gate exists to catch.
- */
-const VAGUE_INSUFFICIENT_PATTERN = /\b(more tests|additional tests|better coverage|increase coverage|insufficient coverage|needs (?:a |an |more )?tests?)\b/i
-
-/**
  * Does the finding's headline/body name something concrete — a code
- * identifier, a file path, or a branch/case keyword — beyond a generic
- * "needs more tests"? FP-safe: we look for ANY of several specificity
- * signals; presence of one is enough to keep. The bar is deliberately
- * low (we'd rather keep a borderline-specific finding than drop a real
- * one). Signals 1+2 (a real identifier / path) are the strongest; a
- * lone branch/case keyword (signal 3) only counts when the finding
- * isn't ALSO a bare "needs more tests" nudge, so an incidental "null"
- * in a vague sentence doesn't rescue it.
+ * identifier, a file path, or a branch/case keyword? FP-safe: ANY of the
+ * specificity signals is enough to keep; we'd rather keep a borderline-
+ * specific finding than drop a real one. Signal order is keep-biased and
+ * length-independent (review fix): a backticked `parse` is concrete even
+ * in a terse finding, so signals are checked with no length floor in
+ * front of them.
+ *
+ * KNOWN GAP (code-review MEDIUM, accepted behind shadow): a finding
+ * concrete only in PROSE — naming a behavior in plain English with no
+ * backtick, no code-ish identifier, and no keyword from the list (e.g.
+ * "the cancellation case is never exercised") — returns false and would
+ * drop in enforce. The prompt instructs the model to backtick
+ * identifiers, so most concrete findings hit signal 1; the shadow
+ * telemetry quantifies this would-drop bucket before any enforce flip.
  */
 function namesConcreteTarget(finding: PrReviewFinding): boolean {
   const text = `${finding.headline} ${finding.body}`
-  if (text.trim().length < INSUFFICIENT_MIN_CHARS) return false
   // Signal 1: a backticked identifier / path (the prompt instructs the
   // model to backtick identifiers — a concrete finding names one).
   if (/`[^`]+`/.test(text)) return true
   // Signal 2: a code-ish identifier (camelCase / snake_case / dotted /
   // a path segment with an extension) appearing bare in the text.
   if (/[A-Za-z_$][A-Za-z0-9_$]*(?:[.(/][A-Za-z0-9_$./-]+)+/.test(text)) return true
-  // Signal 3: names a specific branch/case/path class to test — but
-  // NOT when the finding is otherwise a bare "needs more tests" nudge
-  // (the vague-pattern guard below catches "the error path needs more
-  // tests" without any concrete identifier).
+  // Signal 3: names a specific branch/case/path class to test. A
+  // branch/case keyword IS itself a concrete target (review fix: the old
+  // "needs more tests" veto was demoting concretely-named branches like
+  // "the timeout branch needs more tests" to a drop — a false negative
+  // contradicting the keep-biased contract). So the keyword counts even
+  // alongside vague call-to-action phrasing.
   if (
-    /\b(branch|error path|edge case|null|undefined|throw|reject|exception|boundary|overflow|race|timeout|retry|fallback)\b/i.test(text) &&
-    !VAGUE_INSUFFICIENT_PATTERN.test(text)
+    /\b(branch|error path|edge case|null|undefined|throw|reject|exception|boundary|overflow|race|timeout|retry|fallback)\b/i.test(text)
   ) {
     return true
   }

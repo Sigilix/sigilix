@@ -28,6 +28,7 @@ const baseInputs = {
   docsCoverageBlock: "[DOCS COVERAGE] missing doc",
   coverageGapBlock: "[COVERAGE GAPS] uncovered lines",
   securityManifestBlock: "[SECURITY EVIDENCE MANIFEST] - id: secret:a:b:1",
+  perfBudgetBlock: "[PERF BUDGETS] declared hot path touched",
   astFindings: [] as AstFinding[],
 }
 
@@ -66,6 +67,14 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     expect(f.performance).not.toContain("[COVERAGE GAPS]")
   })
 
+  it("routes the perf-budgets block ONLY to performance", () => {
+    const f = buildFactsByRole(baseInputs)
+    expect(f.performance).toContain("[PERF BUDGETS]")
+    expect(f.security).not.toContain("[PERF BUDGETS]")
+    expect(f.logic).not.toContain("[PERF BUDGETS]")
+    expect(f.tests).not.toContain("[PERF BUDGETS]")
+  })
+
   it("splits AST findings by roleHint into the matching role", () => {
     const f = buildFactsByRole({
       ...baseInputs,
@@ -96,6 +105,7 @@ describe("buildFactsByRole — no cross-domain leak", () => {
       docsCoverageBlock: "",
       coverageGapBlock: "",
       securityManifestBlock: "",
+      perfBudgetBlock: "",
       astFindings: [],
     })
     expect(f.security).toBe("")

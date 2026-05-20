@@ -134,8 +134,14 @@ import {
   resolveCommandConfig,
   resolveAstRulesConfig,
   resolveCoverageConfig,
+  resolvePerfBudgetsConfig,
   type SigilixConfig,
 } from "./sigilix-config"
+import {
+  runPerfBudgetsCheck,
+  renderPerfBudgetsForPrompt,
+  type PerfBudgetsHit,
+} from "./perf-budgets"
 import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
 import { waitForPrOverviewStub } from "./pr-overview-stub"
 import {
@@ -1348,6 +1354,28 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
+    // ─── SIG-110: perf-budgets hot-path check ──────────────────
+    // Opt-in (no-op until the operator declares `perfBudgets.hotPaths`).
+    // Matched against the REVIEWABLE file set (post path-filter) so the
+    // resulting `performance`-scoped fact only ever names files that are
+    // actually in this review — a hot-path fact for a file absent from
+    // the prompt diff would invite an inline finding that later fails
+    // line validation. The hit primes the perf specialist; it does NOT
+    // add a verdict finding here.
+    const perfBudgetsConfig = resolvePerfBudgetsConfig(sigilixConfig)
+    const perfBudgetsHit: PerfBudgetsHit | null = runPerfBudgetsCheck(
+      filePaths,
+      perfBudgetsConfig,
+    )
+    if (perfBudgetsHit !== null) {
+      console.log(JSON.stringify({
+        event: "pr-review-perf-budgets-hit",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        hot_path_files: perfBudgetsHit.hotPathFiles,
+        matched_hot_paths: perfBudgetsHit.matchedHotPaths,
+      }))
+    }
+
     // ─── SIG-118: coverage-diff ingestion ──────────────────────
     // GATED OFF by default (`coverage.source: "off"`) — production is
     // unaffected until an operator opts in. When enabled, fetch the LCOV
@@ -1391,6 +1419,7 @@ export async function handlePrReviewEnsemble(
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
     const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
+    const perfBudgetBlock = renderPerfBudgetsForPrompt(perfBudgetsHit)
     const coverageGapBlock = renderCoverageGapBlock(coverageResult?.coverageGaps ?? [])
     // SIG-108: security fact manifest — assigns each deterministic
     // security fact a hard-to-fabricate `evidenceId` (`tool:rule-id:
@@ -1419,6 +1448,7 @@ export async function handlePrReviewEnsemble(
       docsCoverageBlock,
       coverageGapBlock,
       securityManifestBlock: securityManifest.render(),
+      perfBudgetBlock,
       astFindings: astResult.findings,
     })
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring

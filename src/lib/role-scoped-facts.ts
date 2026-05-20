@@ -37,6 +37,8 @@ export interface RoleScopedFactInputs {
   coverageGapBlock: string
   /** SIG-108 security evidence manifest render (security). */
   securityManifestBlock: string
+  /** SIG-110 perf-budgets hot-path block (performance). */
+  perfBudgetBlock: string
   /** ARC-181 AST findings, split here by `roleHint`. */
   astFindings: readonly AstFinding[]
 }
@@ -60,7 +62,7 @@ export function buildFactsByRole(inputs: RoleScopedFactInputs): Record<Specialis
       inputs.securityManifestBlock,
     ]),
     logic: join([astBlock("logic"), inputs.deterministicBlock]),
-    performance: join([astBlock("performance")]),
+    performance: join([astBlock("performance"), inputs.perfBudgetBlock]),
     tests: join([inputs.docsCoverageBlock, inputs.coverageGapBlock]),
   }
 }

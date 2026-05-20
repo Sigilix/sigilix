@@ -21,6 +21,7 @@
 
 import type { SpecialistRole } from "../lib/ensemble-router"
 import testsExamples from "./tests-examples.json"
+import logicExamples from "./logic-examples.json"
 
 /**
  * SIG-111: render the tests-specialist few-shot exemplars
@@ -46,6 +47,33 @@ function renderTestsExamplesBlock(): string {
 }
 
 const TESTS_EXAMPLES_BLOCK = renderTestsExamplesBlock()
+
+/**
+ * SIG-109: render the logic-specialist few-shot exemplars
+ * (`logic-examples.json`) into a compact prompt block. Wired into the
+ * LOGIC role prompt ONLY (NOT `SHARED_OUTPUT_INSTRUCTIONS`) so the
+ * other specialists don't pay the token cost. Balanced good/bad
+ * examples — the GOOD set shows that a CONCRETELY ANCHORED bug with no
+ * deterministic backing is still worth emitting (the high-value core of
+ * this lens); the BAD set is the unanchored / vague / style-as-logic FP
+ * shapes the SIG-109 validator drops. Each line is an (EMIT|SKIP) +
+ * situation + why triple; full JSON findings are summarized to keep
+ * prompt size reasonable.
+ */
+function renderLogicExamplesBlock(): string {
+  const lines: string[] = [
+    "[LOGIC FEW-SHOT EXEMPLARS — calibrate what to flag vs. skip; do NOT copy verbatim]",
+    "",
+  ]
+  for (const ex of logicExamples.examples) {
+    const verb = ex.emit ? "EMIT" : "SKIP"
+    lines.push(`- ${verb}: ${ex.situation}`)
+    lines.push(`  why: ${ex.why}`)
+  }
+  return lines.join("\n").trim()
+}
+
+const LOGIC_EXAMPLES_BLOCK = renderLogicExamplesBlock()
 
 /**
  * ARC-156 (Greptile port A2): negative-constraint specialist prompts.
@@ -157,6 +185,8 @@ When scoring:
 - 3: maintainability issue with bounded impact (unclear invariant, magic constant in critical path)
 - 2: minor improvement (clearer naming, small refactor opportunity)
 - 1: nit (rarely emit; usually noise)
+
+${LOGIC_EXAMPLES_BLOCK}
 
 ${SHARED_OUTPUT_INSTRUCTIONS}`,
 

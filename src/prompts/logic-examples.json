@@ -1,0 +1,187 @@
+{
+  "_comment": "SIG-109: few-shot exemplars for the LOGIC specialist ONLY. Wired into the logic role prompt via pr-review-specialists.ts (NOT the shared block). Balanced on purpose. The GOOD examples cover the shapes the logic lens should fire on: AST-rule-backed correctness bugs (the no-dupe-switch-case / no-unsafe-negation / etc. pack), AND — critically — bugs that have NO deterministic backing at all (off-by-one, broken invariant, wrong operator, swapped arguments) but are CONCRETELY ANCHORED to a changed symbol on an added line. Those LLM-only findings are the high-value core of this lens; the SIG-109 validator KEEPS them on the concrete-token anchor, so the exemplars must read as clearly KEEP-worthy. The BAD examples are the FP shapes the validator drops: vague unanchored 'this could be buggy', a logic claim with no concrete code token, taste/style dressed as logic, and a finding anchored to a file the PR did not change. Each example is a (situation, emit_or_not, why) triple — compact, not full JSON, to keep prompt size reasonable.",
+  "examples": [
+    {
+      "id": "good-off-by-one-anchored",
+      "situation": "An added line changes a loop bound to `for (let i = 0; i <= arr.length; i++)` and indexes `arr[i]` inside the body.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/scan.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "`<= arr.length` reads one past the end of `arr`",
+        "body": "The loop guard uses `<=`, so the final iteration accesses `arr[arr.length]` which is `undefined`. Use `<` to stop at the last valid index."
+      },
+      "why": "No deterministic scanner emits this — it's an LLM-only correctness call. But it's CONCRETELY ANCHORED: it names `arr.length` and the `<=` token, both on the added line, on a changed path. This is the high-value core of the logic lens and must read as a clear KEEP."
+    },
+    {
+      "id": "good-swapped-arguments-anchored",
+      "situation": "An added line calls `clamp(max, min, value)` but the helper's signature is `clamp(value, min, max)`.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/geometry.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "`clamp` arguments are passed in the wrong order",
+        "body": "`clamp(max, min, value)` swaps the value and bounds — `clamp` expects `(value, min, max)`, so the result is clamped against the wrong range. Reorder to `clamp(value, min, max)`."
+      },
+      "why": "A real bug with no deterministic backing, anchored to the `clamp` call on a changed line. Names the exact symbol and the argument order. KEEP — this is exactly what the logic lens exists to catch."
+    },
+    {
+      "id": "good-broken-invariant-anchored",
+      "situation": "A diff changes `getUser` to return `null` when the cache misses, but a caller on a nearby added line does `getUser(id).name` without a null check.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/profile.ts",
+        "category": "logic",
+        "score": 5,
+        "headline": "`getUser(id).name` dereferences a now-nullable return",
+        "body": "This PR makes `getUser` return `null` on a cache miss, but `getUser(id).name` assumes a user object and will throw on the miss path. Guard the result before reading `.name`."
+      },
+      "why": "Invariant break the diff introduced — no scanner detects it. Anchored to the `getUser(id).name` expression and the `.name` access on a changed line. KEEP."
+    },
+    {
+      "id": "good-ast-backed-unsafe-negation",
+      "situation": "An added line writes `if (!key in allowed) { reject() }`. The [AST RULE FINDINGS] block carries an `ast/no-unsafe-negation` hit at this path/line.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/auth.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "`!key in allowed` negates `key` before the membership test",
+        "body": "`!` binds tighter than `in`, so this evaluates `(!key) in allowed` — testing whether the string `\"true\"`/`\"false\"` is a key, not whether `key` is absent. Use `!(key in allowed)`."
+      },
+      "why": "Concrete bug corroborated by a co-located deterministic AST hit (`no-unsafe-negation`). Anchored token (`!key in allowed`) on a changed line. KEEP — and the AST co-location makes it ironclad."
+    },
+    {
+      "id": "good-ast-backed-dupe-switch",
+      "situation": "A `switch` gains a second `case \"refunded\":` clause on an added line; the [AST RULE FINDINGS] block carries an `ast/no-dupe-switch-case` hit there.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/orders.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "Duplicate `case \"refunded\"` — the second clause is dead",
+        "body": "Two `case \"refunded\":` labels exist in this switch; the second can never run because the first matches first. Remove the duplicate or correct the intended status."
+      },
+      "why": "Deterministic AST hit plus a concrete anchored token (`case \"refunded\"`). KEEP."
+    },
+    {
+      "id": "good-wrong-operator-anchored",
+      "situation": "An added line guards a retry with `if (attempts = MAX)` instead of `===`.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/retry.ts",
+        "category": "logic",
+        "score": 5,
+        "headline": "`attempts = MAX` assigns instead of comparing",
+        "body": "The guard uses `=` (assignment) not `===`, so it always sets `attempts` to `MAX` and the branch is always truthy. Use `attempts === MAX`."
+      },
+      "why": "High-severity correctness bug, anchored to the `attempts = MAX` token on a changed line. No deterministic fact needed — the concrete-token anchor is enough. KEEP."
+    },
+    {
+      "id": "good-unhandled-empty-input-anchored",
+      "situation": "A new `average` function on added lines does `return sum / items.length` with no guard for an empty `items`.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/stats.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "`average` divides by zero on empty `items`",
+        "body": "`sum / items.length` returns `NaN` when `items` is empty, which then poisons downstream math. Return `0` (or guard) for the empty case."
+      },
+      "why": "Edge case the diff didn't handle — no scanner flags it. Anchored to `items.length` and the division on changed lines. KEEP."
+    },
+    {
+      "id": "good-race-toctou-anchored",
+      "situation": "Added lines check `if (!cache.has(key))` then later `cache.set(key, await fetch(key))` with an `await` between the check and the set.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/cache.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "TOCTOU between `cache.has(key)` check and `cache.set` after the await",
+        "body": "The `await fetch(key)` between the `has` check and the `set` lets a concurrent caller populate `key`, so two fetches race and the second overwrites the first. Re-check after the await or store an in-flight promise."
+      },
+      "why": "Concurrency bug, LLM-only, anchored to `cache.has(key)` / `cache.set` / the `await` on changed lines. KEEP."
+    },
+    {
+      "id": "bad-vague-might-be-buggy",
+      "situation": "A diff touches a parser; the finding says the change 'could introduce subtle bugs' without naming any symbol, line, or behavior.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/parser.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "This change could introduce subtle bugs",
+        "body": "The refactor here is risky and might break edge cases; the author should double-check the logic carefully."
+      },
+      "why": "No concrete code token, no named symbol, no specific behavior — a vague unanchored sev>=4 logic claim. The SIG-109 validator drops this as unanchored-logic-claim. State the exact bug or drop the finding."
+    },
+    {
+      "id": "bad-unanchored-on-unchanged-code",
+      "situation": "The finding describes a real-sounding off-by-one but anchors it to `src/lib/legacy.ts`, a file this PR does NOT change.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/legacy.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "Loop in `renderRows` is off-by-one",
+        "body": "The `renderRows` loop overruns by one element."
+      },
+      "why": "Pre-existing code the PR didn't touch — no anchor on a changed path. Findings must target lines this PR added or modified. The validator has no changed-path anchor here, so it drops it. Belongs on a separate ticket."
+    },
+    {
+      "id": "bad-style-as-logic",
+      "situation": "An added line renames a variable to a longer name; the finding objects to the naming choice and calls it a logic problem.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/util.ts",
+        "category": "logic",
+        "score": 3,
+        "headline": "`temporaryResultAccumulator` is too verbose",
+        "body": "This variable name is unnecessarily long; a shorter name would read better."
+      },
+      "why": "Taste-level naming disagreement, not a correctness bug. Naming is the author's call (see review discipline). The logic lens fires on broken behavior, not style preferences."
+    },
+    {
+      "id": "bad-prose-only-no-token",
+      "situation": "A finding asserts 'the ordering of the two operations is now wrong' but names no function, variable, or line and quotes no code.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/pipeline.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "The operations now run in the wrong order",
+        "body": "The two steps appear to be sequenced incorrectly after this change."
+      },
+      "why": "Plausible-sounding but names no concrete symbol and quotes no code token from the added lines. With nothing to anchor, the validator can't distinguish it from a hallucination — it drops as unanchored-logic-claim. Name the two operations and the correct order, or drop it."
+    },
+    {
+      "id": "bad-describe-the-change",
+      "situation": "A finding restates what the diff did ('this PR switches the map to a Set') and frames it as a concern without identifying any actual problem.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/dedupe.ts",
+        "category": "logic",
+        "score": 2,
+        "headline": "Switched the collection from a Map to a Set",
+        "body": "This change replaces the Map with a Set."
+      },
+      "why": "Describes the change rather than surfacing a problem — the author can see their own diff. Not a finding. (See review discipline: NEVER describe the change that was made.)"
+    },
+    {
+      "id": "good-low-sev-anchored-keep",
+      "situation": "An added line uses `==` to compare a number against a string-typed config value; behavior is correct today but the loose equality is fragile.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/config.ts",
+        "category": "logic",
+        "score": 3,
+        "headline": "Loose `==` between `port` (number) and `cfg.port` (string)",
+        "body": "`port == cfg.port` relies on coercion; if `cfg.port` becomes `\"08\"` or empty the comparison silently flips. Parse `cfg.port` and use `===`."
+      },
+      "why": "Concrete, anchored (`port`, `cfg.port`, the `==` token on a changed line) but lower severity (score 3, below the validator's sev>=4 bar so it always keeps). A good, specific finding — included to show the lens can fire below the gate threshold too."
+    }
+  ]
+}

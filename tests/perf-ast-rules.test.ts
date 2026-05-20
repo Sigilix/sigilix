@@ -50,6 +50,12 @@ describe("no-spread-accumulator-in-loop", () => {
   it("does NOT flag a same-named inner declaration (let shadow)", () => {
     expect(runRule(noSpreadAccumulatorInLoop, `let acc = []; for (const x of xs) { let acc = []; acc = [...acc, x] }`)).toHaveLength(0)
   })
+  it("does NOT flag a same-named DESTRUCTURED inner binding (object pattern shadow)", () => {
+    expect(runRule(noSpreadAccumulatorInLoop, `let acc = []; for (const x of xs) { const { acc } = x; acc = [...acc, x] }`)).toHaveLength(0)
+  })
+  it("does NOT flag a same-named DESTRUCTURED inner binding (array pattern shadow)", () => {
+    expect(runRule(noSpreadAccumulatorInLoop, `let acc = []; for (const x of xs) { const [acc] = x; acc = [...acc, x] }`)).toHaveLength(0)
+  })
   it("does NOT flag spread of a DIFFERENT identifier", () => {
     expect(runRule(noSpreadAccumulatorInLoop, `let acc = []; for (const x of xs) { acc = [...other, x] }`)).toHaveLength(0)
   })
@@ -98,6 +104,9 @@ describe("no-n-plus-one-call-in-loop", () => {
   it("flags awaited supabase chain in a loop", () => {
     expect(runRule(noNPlusOneCallInLoop, `async function f(){ for (const t of ts) { await supabase.from("t").select("*") } }`)).toHaveLength(1)
   })
+  it("flags an awaited knex builder chain in a loop", () => {
+    expect(runRule(noNPlusOneCallInLoop, `async function f(){ for (const id of ids) { await knex("users").where({ id }).first() } }`)).toHaveLength(1)
+  })
   it("does NOT flag a non-awaited (batched) call", () => {
     expect(runRule(noNPlusOneCallInLoop, `function f(){ const ps = []; for (const id of ids) { ps.push(db.query("x")) } }`)).toHaveLength(0)
   })
@@ -143,8 +152,14 @@ describe("no-sync-io-in-request-path", () => {
   it("does NOT flag sync I/O inside a nested function within the handler", () => {
     expect(runRule(noSyncIoInRequestPath, `import fs from "fs"; app.get("/x", (req, res) => { setInterval(() => { fs.readFileSync("f") }, 1000) })`)).toHaveLength(0)
   })
-  it("skips test/spec/migration/script files", () => {
-    expect(runRule(noSyncIoInRequestPath, `import fs from "fs"; app.get("/x", (req, res) => { fs.readFileSync("f") })`, "src/foo.test.ts")).toHaveLength(0)
+  it.each([
+    "src/foo.test.ts",
+    "src/foo.spec.ts",
+    "src/db/migrations/001_init.ts",
+    "scripts/seed.ts",
+    "src/app.config.ts",
+  ])("skips non-request-path file %s", (path) => {
+    expect(runRule(noSyncIoInRequestPath, `import fs from "fs"; app.get("/x", (req, res) => { fs.readFileSync("f") })`, path)).toHaveLength(0)
   })
   it("flags an ALIASED named sync import (readFileSync as read)", () => {
     expect(runRule(noSyncIoInRequestPath, `import { readFileSync as read } from "fs"; app.get("/x", (req, res) => { read("f") })`)).toHaveLength(1)

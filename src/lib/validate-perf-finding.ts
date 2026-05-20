@@ -103,9 +103,11 @@ function isChangedPath(path: string, evidence: PerfEvidence): boolean {
 }
 
 /** Does ANY anchor token (backticks + complexityEstimate + hotPathIdentifier)
- *  appear in the changed-line text of the finding's path? */
-function hasConcreteChangedToken(finding: PrReviewFinding, evidence: PerfEvidence): boolean {
-  const lines = evidence.changedLineTextByPath.get(finding.path)
+ *  appear in the changed-line text of the finding's path? `path` is the
+ *  normalized (trimmed) path so a padded `finding.path` can't pass the
+ *  changed-path gate and then miss here (CodeRabbit). */
+function hasConcreteChangedToken(finding: PrReviewFinding, evidence: PerfEvidence, path: string): boolean {
+  const lines = evidence.changedLineTextByPath.get(path)
   if (!lines || lines.length === 0) return false
   const tokens = [
     // >=3 chars (Codex/code-reviewer): a 2-char backtick token (`db`, `id`,
@@ -123,10 +125,11 @@ function hasConcreteChangedToken(finding: PrReviewFinding, evidence: PerfEvidenc
   return false
 }
 
-/** Co-located AST perf hit within +/-AST_COLOCATION_TOLERANCE lines. */
-function hasColocatedAstHit(finding: PrReviewFinding, evidence: PerfEvidence): boolean {
+/** Co-located AST perf hit within +/-AST_COLOCATION_TOLERANCE lines. `path`
+ *  is the normalized (trimmed) finding path. */
+function hasColocatedAstHit(finding: PrReviewFinding, evidence: PerfEvidence, path: string): boolean {
   for (const ast of evidence.astPerfFindings) {
-    if (ast.path !== finding.path) continue
+    if (ast.path !== path) continue
     const spanEnd = ast.endLine && ast.endLine >= ast.line ? ast.endLine : ast.line
     const start = ast.line - AST_COLOCATION_TOLERANCE
     const end = spanEnd + AST_COLOCATION_TOLERANCE
@@ -162,13 +165,13 @@ export function evaluatePerfFinding(
     return { keep: true }
   }
 
-  if (hasColocatedAstHit(finding, evidence)) return { keep: true }
+  if (hasColocatedAstHit(finding, evidence, path)) return { keep: true }
 
   if (!isChangedPath(path, evidence)) {
     return { keep: false, reason: "path-not-changed" }
   }
 
-  if (hasConcreteChangedToken(finding, evidence)) return { keep: true }
+  if (hasConcreteChangedToken(finding, evidence, path)) return { keep: true }
 
   return { keep: false, reason: "unanchored-perf-claim" }
 }

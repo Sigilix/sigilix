@@ -37,17 +37,46 @@ function sliceEvidence(source: string, node: AstNode): string {
   return slice.length > SLICE_MAX ? slice.slice(0, SLICE_MAX) + "…" : slice
 }
 
+/** Collect every identifier bound by a binding target — a plain Identifier
+ *  or a destructuring pattern (`{a, b: c}`, `[x, ...rest]`, defaults). This
+ *  is what makes the shadowing guard sound for destructured `let/const` and
+ *  catch bindings (CodeRabbit): `for (…) { const { acc } = x; acc = [...acc] }`
+ *  must NOT flag. */
+function collectPatternNames(node: AstNode | undefined, names: Set<string>): void {
+  if (!node || typeof node !== "object") return
+  switch (node.type) {
+    case "Identifier":
+      names.add(node.name as string)
+      return
+    case "ObjectPattern":
+      for (const p of (node.properties ?? []) as AstNode[]) {
+        if (p?.type === "RestElement") collectPatternNames(p.argument as AstNode, names)
+        else collectPatternNames(p?.value as AstNode, names) // Property.value is the binding target
+      }
+      return
+    case "ArrayPattern":
+      for (const el of (node.elements ?? []) as AstNode[]) collectPatternNames(el, names)
+      return
+    case "RestElement":
+      collectPatternNames(node.argument as AstNode, names)
+      return
+    case "AssignmentPattern": // `{ a = 1 }` / `[x = 0]`
+      collectPatternNames(node.left as AstNode, names)
+      return
+  }
+}
+
 /** Names bound by a declaration node, added into `names`. Does NOT recurse
  *  into function bodies (those are a different scope handled by the reset). */
 function collectDeclaredNames(node: AstNode, names: Set<string>): void {
   if (!node || typeof node !== "object") return
   const t = node.type
   if (typeof t === "string" && FUNCTION_BOUNDARY_TYPES.has(t)) return
-  if (t === "VariableDeclarator" && (node.id as AstNode)?.type === "Identifier") {
-    names.add((node.id as AstNode).name as string)
+  if (t === "VariableDeclarator") {
+    collectPatternNames(node.id as AstNode, names)
   }
-  if (t === "CatchClause" && (node.param as AstNode)?.type === "Identifier") {
-    names.add((node.param as AstNode).name as string)
+  if (t === "CatchClause" && node.param) {
+    collectPatternNames(node.param as AstNode, names)
   }
   // Inner loop variables: `for (const x of …)` / `for (let i = …)`.
   if ((t === "ForOfStatement" || t === "ForInStatement" || t === "ForStatement")) {

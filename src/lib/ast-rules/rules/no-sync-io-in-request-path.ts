@@ -50,7 +50,10 @@ const SYNC_FS_METHODS: ReadonlySet<string> = new Set([
 const CP_SYNC_FNS: ReadonlySet<string> = new Set(["execSync", "execFileSync", "spawnSync"])
 const FS_SPECIFIERS: ReadonlySet<string> = new Set(["fs", "node:fs"])
 const CP_SPECIFIERS: ReadonlySet<string> = new Set(["child_process", "node:child_process"])
-const SKIP_PATH = /(\.test\.|\.spec\.|\/__tests__\/|\/tests?\/|\/migrations?\/|\/scripts?\/|\.config\.)/
+// Skip files that aren't request paths. Directory names match at a path
+// boundary (start-of-string or after a slash) so a top-level `scripts/` or
+// `tests/` is skipped, not only nested ones.
+const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
 function sliceEvidence(source: string, node: AstNode): string {
   if (typeof node?.start !== "number" || typeof node?.end !== "number") return ""

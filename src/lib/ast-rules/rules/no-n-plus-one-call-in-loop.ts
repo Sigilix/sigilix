@@ -75,7 +75,6 @@ function isDataAccessCallee(callee: AstNode): boolean {
   if (objId === "axios" && AXIOS_METHODS.has(prop)) return true
   // db.query(…) / pool.query(…) / client.query(…) / connection.query(…)
   if (objId !== null && QUERY_ROOTS.has(objId) && prop === "query") return true
-  // knex(…) handled below as a bare call; knex query builders vary too much.
 
   // prisma.<model>.<method>(…) — obj is `prisma.<model>` (a MemberExpression
   // off the `prisma` identifier), method on the allowlist.
@@ -86,18 +85,39 @@ function isDataAccessCallee(callee: AstNode): boolean {
   // supabase chain: `supabase.from(…).select(…)` / `.insert(…)` / `.rpc(…)`.
   // The terminal method's object is a CallExpression rooted at supabase.
   if (SUPABASE_METHODS.has(prop) && obj?.type === "CallExpression") {
-    if (callRootIsSupabase(obj)) return true
+    if (callRootIsIdentifier(obj, "supabase")) return true
   }
+
+  // knex query builder: `knex("table").where(…).first()` — the chain is
+  // rooted at an INVOKED `knex(...)` call. Flag when the member spine
+  // bottoms out at a CallExpression whose callee is the `knex` identifier.
+  if (callSpineInvokesKnex(callee)) return true
+
   return false
 }
 
 /** Walk a member/call chain's left spine to see if it is rooted at the
- *  `supabase` identifier (e.g. `supabase.from("t")`). */
-function callRootIsSupabase(node: AstNode): boolean {
+ *  named identifier (e.g. `supabase` in `supabase.from("t")`). */
+function callRootIsIdentifier(node: AstNode, name: string): boolean {
   let cur: AstNode | undefined = node
   let guard = 0
   while (cur && guard++ < 12) {
-    if (idName(cur) === "supabase") return true
+    if (idName(cur) === name) return true
+    if (cur.type === "CallExpression") cur = cur.callee as AstNode
+    else if (cur.type === "MemberExpression") cur = cur.object as AstNode
+    else return false
+  }
+  return false
+}
+
+/** Does the callee's left spine include an invoked `knex(...)` call?
+ *  Matches `knex("t").where(...)`, `knex.raw(...)`, etc. */
+function callSpineInvokesKnex(node: AstNode): boolean {
+  let cur: AstNode | undefined = node
+  let guard = 0
+  while (cur && guard++ < 12) {
+    if (cur.type === "CallExpression" && idName(cur.callee as AstNode) === "knex") return true
+    if (idName(cur) === "knex") return true
     if (cur.type === "CallExpression") cur = cur.callee as AstNode
     else if (cur.type === "MemberExpression") cur = cur.object as AstNode
     else return false

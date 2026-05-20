@@ -111,6 +111,10 @@ describe("evaluatePerfFinding (pure FP-safe decision)", () => {
     const f = finding({ headline: "slow", body: "slow", complexityEstimate: undefined, hotPathIdentifier: "GET /api" })
     expect(evaluatePerfFinding(f, evidence())).toEqual({ keep: false, reason: "unanchored-perf-claim" })
   })
+  it("treats a whitespace-padded path as the same changed path for anchoring", () => {
+    const f = finding({ path: `  ${PATH}  `, complexityEstimate: "O(n^2) over `rows`" })
+    expect(evaluatePerfFinding(f, evidence())).toEqual({ keep: true })
+  })
   it("does NOT match a co-located AST hit on a DIFFERENT path", () => {
     const f = finding({ headline: "slow", body: "slow", complexityEstimate: undefined })
     expect(evaluatePerfFinding(f, evidence({ astPerfFindings: [astHit({ path: "src/lib/other.ts" })] }))).toEqual({ keep: false, reason: "unanchored-perf-claim" })

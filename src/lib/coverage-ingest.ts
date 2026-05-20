@@ -224,6 +224,12 @@ export function resolveToChangedFile(
   // Reject traversal / still-absolute shapes.
   if (normalizedSf.startsWith("/")) return null
   if (normalizedSf.split("/").some((seg) => seg === "..")) return null
+  // Defense-in-depth (Sigilix review): reject percent-encoded traversal /
+  // separators so an encoded `%2e%2e` / `%2f` can't slip past the literal
+  // `..` check above. (Impact is already bounded — the path is only used
+  // as a key matched against the changed-file set, never a filesystem
+  // read — but a real source path never contains these.)
+  if (/%2[ef]/i.test(normalizedSf)) return null
 
   if (changedPaths.has(normalizedSf)) return normalizedSf
 

@@ -137,6 +137,11 @@ describe("resolveToChangedFile", () => {
     expect(resolveToChangedFile("../../etc/passwd", changed)).toBeNull()
   })
 
+  it("returns null on percent-encoded traversal / separators (defense-in-depth)", () => {
+    expect(resolveToChangedFile("%2e%2e/etc/passwd", changed)).toBeNull()
+    expect(resolveToChangedFile("src%2Fa.ts", changed)).toBeNull()
+  })
+
   it("returns null on an absolute-shaped path", () => {
     expect(resolveToChangedFile("/abs/a.ts", changed)).toBeNull()
   })

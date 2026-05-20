@@ -186,14 +186,22 @@ function makeReviewable(path = "src/db.ts"): ReviewableMap {
   ])
 }
 
-function makeSpecialistVerdicts(): Array<{
-  role: "logic" | "security" | "performance" | "tests"
-  verdict: { findings: Array<{ id: string }> } | null
-}> {
+// The real param type, extracted from validateForSubmission's signature
+// (CollectedVerdict[] isn't exported). Referencing it here means an
+// incompatible change to the shape the validator actually reads
+// (`verdict.findings[].id`) surfaces at this single cast site rather
+// than being silently masked.
+type SpecialistVerdictsArg = Parameters<typeof validateForSubmission>[0]["specialistVerdicts"]
+
+// Minimal mock: validateForSubmission only reads `verdict.findings[].id`
+// from this param (to build the hallucination-guard valid-id set). One
+// localized `as unknown as` documents the minimal-mock intent instead of
+// scattering `as never` across every call site (CodeRabbit phase-end).
+function makeSpecialistVerdicts(): SpecialistVerdictsArg {
   return [
     { role: "security", verdict: { findings: [{ id: "security-0" }] } },
     { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
-  ]
+  ] as unknown as SpecialistVerdictsArg
 }
 
 function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
@@ -222,7 +230,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         provenance: securityProvenance(),
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact()),
       securityValidatorMode: "enforce",
       onSecurityFindingDropped: onDrop,
@@ -244,7 +252,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         provenance: securityProvenance(),
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact()),
       securityValidatorMode: "shadow",
       onSecurityFindingDropped: onDrop,
@@ -264,7 +272,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         provenance: securityProvenance(),
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact()),
     })
     expect(result.droppedForFailedValidation).toBe(1)
@@ -281,7 +289,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       // The finding is at line 20 — register it as reviewable so it
       // survives line validation after the gate keeps it.
       reviewable: new Map([["src/db.ts", [{ line: 20, side: "RIGHT" as const, position: 1 }]]]),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact({ line: 17, cwe: "CWE-89" })),
       securityValidatorMode: "enforce",
     })
@@ -305,7 +313,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         provenance: securityProvenance(),
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(),
       securityValidatorMode: "enforce",
     })
@@ -326,7 +334,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         },
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact()),
       securityValidatorMode: "enforce",
     })
@@ -348,7 +356,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         },
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact()),
       securityValidatorMode: "enforce",
     })
@@ -370,7 +378,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         },
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       securityManifest: manifestOf(fact()),
       securityValidatorMode: "enforce",
     })
@@ -388,7 +396,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         provenance: securityProvenance(),
       },
       reviewable: makeReviewable(),
-      specialistVerdicts: makeSpecialistVerdicts() as never,
+      specialistVerdicts: makeSpecialistVerdicts(),
       // securityManifest intentionally omitted
       securityValidatorMode: "enforce",
     })

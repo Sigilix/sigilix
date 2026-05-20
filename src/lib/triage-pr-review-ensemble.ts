@@ -61,6 +61,16 @@ import {
   type TestingEvidencePack,
   type InspectedTestFileFetchResult,
 } from "./testing-evidence-pack"
+import {
+  buildSecurityFactManifest,
+  type SecurityFact,
+} from "./security-evidence-manifest"
+import {
+  evaluateSecurityFinding,
+  parseSecurityValidatorMode,
+  type SecurityValidatorMode,
+  type SecurityDropReason,
+} from "./validate-security-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -148,7 +158,8 @@ import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
-import { renderAstFindingsForPrompt, renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
+import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
+import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
 import {
@@ -831,7 +842,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -1249,7 +1260,8 @@ export async function handlePrReviewEnsemble(
       config: astRulesConfig,
       ctx: { owner, repo, prNumber },
     })
-    const astBlock = renderAstFindingsForPrompt(astResult.findings)
+    // SIG-108: AST findings are split by roleHint inside buildFactsByRole
+    // (below) so each block reaches only its own specialist.
     telemetry.astRules = astResult.telemetry.scanned
       ? {
           scanned: true,
@@ -1316,14 +1328,34 @@ export async function handlePrReviewEnsemble(
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
     const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
-    // Combine all pre-LLM fact blocks. Order: secrets first
-    // (highest severity), dep vulns, AST rules, SARIF (Trivy IaC +
-    // CVE + license), regex deterministic checks, then the
-    // informational docs-coverage signal last (low-severity nudge,
-    // not a blocker).
-    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, sarifBlock, deterministicBlock, docsCoverageBlock]
-      .filter((s) => s.length > 0)
-      .join("\n\n")
+    // SIG-108: security fact manifest — assigns each deterministic
+    // security fact a hard-to-fabricate `evidenceId` (`tool:rule-id:
+    // hash:line`). The render() block is folded into the security role's
+    // facts (below) so the security specialist sees the citable ids; the
+    // manifest Map is threaded to validateForSubmission so the citation
+    // gate can cross-check each cited id against the real fact's path/line.
+    const securityManifest = await buildSecurityFactManifest({
+      secretHits,
+      depVulnFindings,
+      // M3 (review): scope SARIF to roleHint==="security" so the security
+      // manifest never carries a logic/perf SARIF fact. All current SARIF
+      // rules are security-domain, so this is a no-op today, but it makes
+      // the contract explicit + matches how the AST findings are split.
+      sarifFindings: sarifFindings.filter((f) => f.roleHint === "security"),
+      astSecurityFindings: astResult.findings.filter((f) => f.roleHint === "security"),
+    })
+    // SIG-108: route deterministic facts to their owning specialist — no
+    // cross-domain leak. Pure + unit-tested in role-scoped-facts.test.ts.
+    // The SIG-91 diff-classification + ARC-182 stack blocks stay shared.
+    const factsByRole = buildFactsByRole({
+      secretScanBlock,
+      depVulnBlock,
+      sarifBlock,
+      deterministicBlock,
+      docsCoverageBlock,
+      securityManifestBlock: securityManifest.render(),
+      astFindings: astResult.findings,
+    })
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
 
     // ARC-181 Task 9: auto-inline poster — gated behind
@@ -1532,40 +1564,38 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    // SIG-113: build TWO base messages — one for non-tests specialists
-    // (gets the original classification block) and one for the tests
-    // specialist (gets the stronger testing-evidence block). The
-    // dispatch loops below select per-role.
-    const baseInitialMessage = buildSpecialistInitialMessage({
-      prNumber,
-      title: meta.title,
-      body: meta.body ?? "",
-      diff,
-      retrievalSnapshot,
-      namespace,
-      ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
-      ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
-      ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
-      ...(stackBlock.length > 0 ? { stackBlock } : {}),
-      ...(diffFileClassificationBlock.length > 0 ? { diffFileClassificationBlock } : {}),
-    })
-    const testsSpecialistInitialMessage = testingEvidenceBlock.length > 0
-      ? buildSpecialistInitialMessage({
-          prNumber,
-          title: meta.title,
-          body: meta.body ?? "",
-          diff,
-          retrievalSnapshot,
-          namespace,
-          ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
-          ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
-          ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
-          ...(stackBlock.length > 0 ? { stackBlock } : {}),
-          testingEvidenceBlock,
-        })
-      : baseInitialMessage
-    const messageForRole = (role: string): string =>
-      role === "tests" ? testsSpecialistInitialMessage : baseInitialMessage
+    // SIG-108: build one message per role, injecting only that role's
+    // scoped facts block (no cross-domain leak). The tests specialist
+    // additionally gets the SIG-113 testing-evidence block (which
+    // REPLACES the shared classification block); every other role gets
+    // the shared SIG-91 classification block. guidance/profile/stack
+    // remain shared. Messages are cached per role since each fan-out
+    // path may request the same role's message more than once.
+    const specialistMessageCache = new Map<SpecialistRole, string>()
+    const messageForRole = (role: SpecialistRole): string => {
+      const cached = specialistMessageCache.get(role)
+      if (cached !== undefined) return cached
+      const roleFacts = factsByRole[role]
+      const message = buildSpecialistInitialMessage({
+        prNumber,
+        title: meta.title,
+        body: meta.body ?? "",
+        diff,
+        retrievalSnapshot,
+        namespace,
+        ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+        ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
+        ...(roleFacts.length > 0 ? { deterministicChecksBlock: roleFacts } : {}),
+        ...(stackBlock.length > 0 ? { stackBlock } : {}),
+        ...(role === "tests" && testingEvidenceBlock.length > 0
+          ? { testingEvidenceBlock }
+          : diffFileClassificationBlock.length > 0
+            ? { diffFileClassificationBlock }
+            : {}),
+      })
+      specialistMessageCache.set(role, message)
+      return message
+    }
 
     // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
     // prod Promise.allSettled below so both lineups run in parallel
@@ -2152,6 +2182,26 @@ export async function handlePrReviewEnsemble(
           evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
         }))
       },
+      // SIG-108: thread the security fact manifest + mode through so
+      // the evidence gate fires on sev>=4 security findings. Default
+      // `shadow` — the gate only counts/telemeters what WOULD drop
+      // until the operator flips OPENCLAW_SECURITY_VALIDATOR_MODE to
+      // "enforce".
+      securityManifest: securityManifest.manifest,
+      securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
+      onSecurityFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          cweId: finding.cweId ?? null,
+          evidenceId: finding.evidenceId ?? null,
+          category: finding.category,
+        }))
+      },
     })
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
@@ -2159,6 +2209,7 @@ export async function handlePrReviewEnsemble(
       demotedScore1: validated.demotedScore1,
       droppedForVaguePrefix: validated.droppedForVaguePrefix,
       droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
+      droppedForFailedValidation: validated.droppedForFailedValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4700,6 +4751,17 @@ export interface ValidatedOutput {
    */
   droppedForUncitedTestingEvidence: number
   /**
+   * SIG-108: count of security-applicable findings the security
+   * evidence gate flagged for drop (sev>=4 security finding with
+   * fabricated / non-linking / absent evidence that auto-enrich
+   * couldn't rescue). In `shadow` mode this counts what WOULD be
+   * dropped without actually dropping (the finding stays in
+   * `verdict.findings`); in `enforce` mode the finding is dropped.
+   * Surfaced to telemetry so the gate's would-drop rate is observable
+   * before enforcement is enabled.
+   */
+  droppedForFailedValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -4864,8 +4926,44 @@ export function validateForSubmission(args: {
    * increments and surfaces via `droppedForUncitedTestingEvidence`).
    */
   onTestingFindingDropped?: (finding: PrReviewFinding, reason: "no-citation") => void
+  /**
+   * SIG-108: security fact manifest (evidenceId → fact) built by the
+   * orchestrator via `buildSecurityFactManifest`. Used by
+   * `evaluateSecurityFinding` to cross-check sev>=4 security findings'
+   * evidence + auto-enrich corroborated findings. Absent → the gate
+   * no-ops (back-compat for callers not yet threading the manifest).
+   */
+  securityManifest?: Map<string, SecurityFact>
+  /**
+   * SIG-108: gate mode. `shadow` (default): the gate's verdict is
+   * counted + telemetered but the finding is NOT dropped. `enforce`:
+   * rejected findings are dropped. Read from
+   * `OPENCLAW_SECURITY_VALIDATOR_MODE` at the call site; defaults to
+   * `shadow` for the cautious staged rollout.
+   */
+  securityValidatorMode?: SecurityValidatorMode
+  /**
+   * SIG-108: optional telemetry callback fired once per security
+   * finding the gate flagged (whether or not it was actually dropped —
+   * the `dropped` arg distinguishes enforce from shadow). Lets the
+   * orchestrator log `pr-review-finding-rejected-validation` with full
+   * correlation fields without coupling the pure validator to a logger.
+   */
+  onSecurityFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: SecurityDropReason; dropped: boolean },
+  ) => void
 }): ValidatedOutput {
-  const { synthOutput, reviewable, specialistVerdicts, testingEvidence, onTestingFindingDropped } = args
+  const {
+    synthOutput,
+    reviewable,
+    specialistVerdicts,
+    testingEvidence,
+    onTestingFindingDropped,
+    securityManifest,
+    securityValidatorMode = "shadow",
+    onSecurityFindingDropped,
+  } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
@@ -4880,11 +4978,15 @@ export function validateForSubmission(args: {
   let demotedScore1 = 0
   let droppedForVaguePrefix = 0
   let droppedForUncitedTestingEvidence = 0
+  let droppedForFailedValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
   for (let i = 0; i < synthOutput.verdict.findings.length; i++) {
-    const f = synthOutput.verdict.findings[i]!
+    // `let` (not `const`): the SIG-108 auto-enrich path may swap `f` for
+    // an enriched CLONE so it never mutates the raw synth finding that
+    // telemetry.synthesizer.verdict aliases (CR-1 / CodeRabbit).
+    let f = synthOutput.verdict.findings[i]!
     const provenance = synthOutput.provenance.findings[i]
 
     // Hallucination guard. Defensive against malformed provenance
@@ -4927,6 +5029,44 @@ export function validateForSubmission(args: {
       droppedForUncitedTestingEvidence++
       onTestingFindingDropped?.(f, citationCheck.reason)
       continue
+    }
+
+    // SIG-108: security evidence gate. Applies ONLY to findings whose
+    // derived role set includes `security` (from provenance, NOT from
+    // `finding.category` alone — Codex #3: a merged security+logic
+    // finding must still satisfy the evidence rule). A sev>=4 security
+    // finding must carry a resolving evidenceId, be auto-enrichable
+    // from a manifest fact at the same path/+-10 lines, or — for the
+    // authz bucket — set evidenceId:"NONE" with a body justification.
+    // Runs AFTER the testing gate (disjoint domains) and BEFORE score-1
+    // demotion + line validation (Codex #3). Shadow-first: in `shadow`
+    // mode the verdict is counted + telemetered but the finding is NOT
+    // dropped; only `enforce` actually drops.
+    if (securityManifest && sourceRolesInclude(sourceIds, "security")) {
+      const decision = evaluateSecurityFinding(f, securityManifest)
+      if (decision.keep) {
+        // Auto-enrich: stamp the corroborating fact's evidenceId/cwe so
+        // downstream consumers (markers, body rendering) see the
+        // citation. CR-1 (CodeRabbit): clone rather than mutate — `f`
+        // aliases the raw synth finding held by telemetry.synthesizer
+        // .verdict; rewriting it would erase the distinction between
+        // "model cited it" and "validator backfilled it" in the shadow
+        // data. The enriched clone flows to the validated output; the
+        // recorded synth verdict keeps the model's original.
+        if (decision.enrich) {
+          f = {
+            ...f,
+            evidenceId: decision.enrich.evidenceId,
+            ...(decision.enrich.cweId && !f.cweId ? { cweId: decision.enrich.cweId } : {}),
+          }
+        }
+      } else {
+        const dropped = securityValidatorMode === "enforce"
+        droppedForFailedValidation++
+        onSecurityFindingDropped?.(f, { reason: decision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
     }
 
     // Score-1 advisory demotion
@@ -4973,8 +5113,35 @@ export function validateForSubmission(args: {
     demotedScore1,
     droppedForVaguePrefix,
     droppedForUncitedTestingEvidence,
+    droppedForFailedValidation,
     cleanFindingProvenance,
   }
+}
+
+/**
+ * SIG-108: derive whether a finding's source role set includes `role`.
+ * Uses BOTH the explicit `sourceSpecialists` array AND the prefix of
+ * each `sourceFindingId` (e.g. "security-0" → "security") — Codex #3:
+ * don't trust `sourceSpecialists` blindly; cross-derive from the
+ * validated finding ids too. A merged security+logic finding
+ * (sourceSpecialists: ["security","logic"]) still counts as security.
+ */
+function sourceRolesInclude(
+  sourceIds: readonly string[],
+  role: SpecialistRole,
+): boolean {
+  // Codex-M1 (review): the `<role>-<index>` finding-id prefixes are
+  // assigned deterministically (assignStableFindingIds) and are the
+  // authoritative provenance signal. `sourceSpecialists` is synth-
+  // reported and can be malformed — e.g. claim "security" while every
+  // sourceFindingId is "logic-N". Trusting it would security-gate (and,
+  // in enforce mode, DROP) a real logic finding for lacking security
+  // evidence. Derive scope from the validated id prefixes ONLY. Under-
+  // applying (a genuine security finding whose ids weren't populated)
+  // is the safe direction for an FP-reduction gate: it skips the check,
+  // never drops a real finding.
+  const prefix = `${role}-`
+  return sourceIds.some((id) => typeof id === "string" && id.startsWith(prefix))
 }
 
 // ─── telemetry ─────────────────────────────────────────────────────────
@@ -5060,6 +5227,9 @@ interface EnsembleTelemetry {
      * because the specialist failed to cite evidence (no
      * inspectedTestFiles AND no evidenceRefs:siblingMapping). */
     droppedForUncitedTestingEvidence: number
+    /** SIG-108: count of security findings the evidence gate flagged
+     * (would-drop in shadow mode, actual-drop in enforce mode). */
+    droppedForFailedValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

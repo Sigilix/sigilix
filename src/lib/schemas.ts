@@ -141,6 +141,20 @@ export const PR_REVIEW_SCHEMA = {
             type: "array",
             items: { type: "string" },
           },
+          // SIG-108: per-finding security-evidence fields, gated by
+          // `validateSecurityFinding` downstream. OPTIONAL (same staged-
+          // rollout reasoning as the SIG-113 fields above) so specialists
+          // not yet on the new prompt still decode.
+          //   cweId      — a CWE identifier (e.g. "CWE-89") backing a
+          //                security finding; required at score>=4 for
+          //                scanner-covered buckets (see the validator).
+          //   evidenceId — verbatim copy of a deterministic security
+          //                fact's id ("tool:rule-id:hash:line"), or the
+          //                literal "NONE" for access-control findings
+          //                that no scanner can detect (with body
+          //                justification).
+          cweId: { type: "string" },
+          evidenceId: { type: "string" },
         },
         required: ["path", "line", "score", "category", "headline", "body"],
       },

@@ -206,6 +206,22 @@ export interface PrReviewFinding {
    * citations on high-severity or absence-claiming findings.
    */
   evidenceRefs?: string[]
+  /**
+   * SIG-108: CWE identifier backing a security finding (e.g. "CWE-89").
+   * `validateSecurityFinding` requires it on score>=4 security findings
+   * in scanner-covered buckets; absent findings are auto-enriched from a
+   * matching deterministic fact when possible, else dropped. Absent on
+   * non-security findings and on specialists not yet on the new prompt.
+   */
+  cweId?: string
+  /**
+   * SIG-108: verbatim copy of a deterministic security fact's id
+   * ("tool:rule-id:hash:line"), or the literal "NONE" for access-control
+   * findings no scanner can detect (paired with a body justification).
+   * Cross-checked against the security fact manifest by
+   * `validateSecurityFinding`.
+   */
+  evidenceId?: string
 }
 
 export interface PrReviewVerdict {
@@ -417,6 +433,14 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
         .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
         .map((r) => r.trim())
       if (refs.length > 0) finalFinding.evidenceRefs = refs
+    }
+    // SIG-108: read cweId + evidenceId (scalar strings) when supplied.
+    // Both optional; the security validator handles absence.
+    if (typeof finding.cweId === "string" && finding.cweId.trim().length > 0) {
+      finalFinding.cweId = finding.cweId.trim()
+    }
+    if (typeof finding.evidenceId === "string" && finding.evidenceId.trim().length > 0) {
+      finalFinding.evidenceId = finding.evidenceId.trim()
     }
     findings.push(finalFinding)
     if (findings.length >= 8) break

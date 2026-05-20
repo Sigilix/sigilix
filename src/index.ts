@@ -251,6 +251,16 @@ export interface Env {
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT?: string
 
+  // SIG-108: security-finding evidence gate mode. "shadow" (default;
+  // any value other than "enforce") counts + telemeters what the gate
+  // WOULD drop without dropping; "enforce" actually drops sev>=4
+  // security findings whose evidence is fabricated / non-linking /
+  // absent (after auto-enrich fails). Default OFF-by-effect (shadow)
+  // so the gate ships dark and the drop rate is observable before
+  // enforcement. Operator flips via
+  // `wrangler secret put OPENCLAW_SECURITY_VALIDATOR_MODE enforce`.
+  OPENCLAW_SECURITY_VALIDATOR_MODE?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

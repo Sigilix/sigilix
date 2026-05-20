@@ -147,9 +147,10 @@ function hasColocatedAstHit(finding: PrReviewFinding, evidence: PerfEvidence, pa
  *   - score < 4 → keep (the evidence bar is sev>=4 only).
  *   - missing/empty `path` → `missing-path`.
  *   - no evidence wired at all → keep (back-compat / staged rollout).
- *   - co-located AST perf hit → keep (independent evidence channel).
- *   - path not changed → `path-not-changed`.
- *   - changed path AND an anchor token on a changed line → keep.
+ *   - no changed-line text wired → keep (can't evaluate path-change).
+ *   - path not changed → `path-not-changed` (enforced BEFORE AST
+ *     corroboration so an AST hit can't retain an unchanged-path finding).
+ *   - changed path AND (co-located AST hit OR anchor token) → keep.
  *   - changed path but neither → `unanchored-perf-claim`.
  */
 export function evaluatePerfFinding(
@@ -161,15 +162,20 @@ export function evaluatePerfFinding(
   const path = typeof finding.path === "string" ? finding.path.trim() : ""
   if (path.length === 0) return { keep: false, reason: "missing-path" }
 
-  if (evidence.changedLineTextByPath.size === 0 && evidence.astPerfFindings.length === 0) {
-    return { keep: true }
-  }
+  // No changed-line text wired (back-compat / AST-only caller): we can't
+  // evaluate path-change, so keep. AST perf findings are produced only on
+  // changed lines by the runner, so this cannot smuggle in an unchanged-path
+  // finding in the production pipeline.
+  if (evidence.changedLineTextByPath.size === 0) return { keep: true }
 
-  if (hasColocatedAstHit(finding, evidence, path)) return { keep: true }
-
+  // Changed-line text present → enforce the changed-path gate BEFORE crediting
+  // AST corroboration (CodeRabbit), so a co-located AST hit can never retain a
+  // finding whose path the PR didn't touch.
   if (!isChangedPath(path, evidence)) {
     return { keep: false, reason: "path-not-changed" }
   }
+
+  if (hasColocatedAstHit(finding, evidence, path)) return { keep: true }
 
   if (hasConcreteChangedToken(finding, evidence, path)) return { keep: true }
 

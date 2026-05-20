@@ -115,6 +115,11 @@ describe("evaluatePerfFinding (pure FP-safe decision)", () => {
     const f = finding({ path: `  ${PATH}  `, complexityEstimate: "O(n^2) over `rows`" })
     expect(evaluatePerfFinding(f, evidence())).toEqual({ keep: true })
   })
+  it("REJECTS path-not-changed even when an AST hit sits on that same unchanged path (changed-path gate runs first)", () => {
+    const other = "src/lib/other.ts"
+    const f = finding({ path: other, headline: "slow", body: "slow", complexityEstimate: undefined })
+    expect(evaluatePerfFinding(f, evidence({ astPerfFindings: [astHit({ path: other })] }))).toEqual({ keep: false, reason: "path-not-changed" })
+  })
   it("does NOT match a co-located AST hit on a DIFFERENT path", () => {
     const f = finding({ headline: "slow", body: "slow", complexityEstimate: undefined })
     expect(evaluatePerfFinding(f, evidence({ astPerfFindings: [astHit({ path: "src/lib/other.ts" })] }))).toEqual({ keep: false, reason: "unanchored-perf-claim" })

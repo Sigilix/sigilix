@@ -65,7 +65,16 @@ const BUCKET_CWES: Record<SecurityBucket, readonly number[]> = {
   deserialization: [502],
   ssrf: [918],
   "memory-safety": [787, 416, 125, 476, 190, 119],
-  "authn-access-control": [862, 863, 287, 352, 276],
+  // H1 (code review): include the canonical IDOR / broken-access-control
+  // CWEs beyond the CWE-25 core five. CWE-639 (Authorization Bypass
+  // Through User-Controlled Key) is THE IDOR CWE; CWE-285 (Improper
+  // Authorization), CWE-306 (Missing Authentication), CWE-638 (Not Using
+  // Complete Mediation), CWE-913 (Improper Control of Dynamically-Managed
+  // Resources), CWE-1220 (Insufficient Granularity of Access Control) are
+  // the other common authz weaknesses a security reviewer cites. Without
+  // these, a correctly-tagged IDOR (the exact class the NONE exemption
+  // protects) would map to no bucket and be dropped.
+  "authn-access-control": [862, 863, 287, 352, 276, 639, 285, 284, 306, 638, 913, 1220],
   "secrets-exposure": [798],
   "resource-exhaustion": [400, 770],
   "unrestricted-upload": [434],
@@ -187,17 +196,23 @@ export function evaluateSecurityFinding(
   // a non-trivial justification. For any other bucket, NONE is treated
   // as "no id" — fall through to auto-enrich / scanner-covered.
   if (rawEvidenceId === "NONE") {
-    if (bucket === AUTHZ_BUCKET && hasJustification(finding.body)) {
-      return { keep: true }
+    // `evidenceId:"NONE"` is the model's explicit declaration that this
+    // is an access-control/IDOR bug no scanner can detect. Treat NONE as
+    // authz intent for BOTH the authz bucket AND an unrecognized bucket
+    // (H2: bucket is null when the model omitted or mis-mapped the CWE —
+    // but the NONE declaration + justification is the real guard, and
+    // dropping these breaks the FP-safety parity the explicit-id path
+    // already has). A finding that explicitly maps to a SCANNER-COVERED
+    // bucket (injection/xss/secrets/etc.) but claims NONE is suspect —
+    // fall through to auto-enrich and reject if no real fact backs it.
+    const authzIntent = bucket === AUTHZ_BUCKET || bucket === null
+    if (authzIntent) {
+      return hasJustification(finding.body)
+        ? { keep: true }
+        : { keep: false, reason: "authz-none-without-justification" }
     }
-    // Non-authz NONE, or authz NONE without justification → treat as
-    // no evidence and let auto-enrich/scanner-covered decide. An authz
-    // bucket with NO justification is a hard reject (the exemption's
-    // sole guard).
-    if (bucket === AUTHZ_BUCKET) {
-      return { keep: false, reason: "authz-none-without-justification" }
-    }
-    // fall through with no usable id
+    // Scanner-covered bucket claiming NONE → fall through with no
+    // usable id; auto-enrich or reject below.
   } else if (rawEvidenceId.length > 0) {
     // ── explicit evidenceId — cross-check against the manifest ──────
     const fact = manifest.get(rawEvidenceId)
@@ -251,17 +266,35 @@ function factMatchesFinding(fact: SecurityFact, finding: PrReviewFinding): boole
 }
 
 /**
- * Scan the manifest for the first fact that corroborates the finding
- * (same path, within +/-10 lines). Used by the auto-enrich path.
+ * Scan the manifest for the fact that best corroborates the finding for
+ * the AUTO-ENRICH path (the model omitted the id). M1/Codex-M2 (review):
+ * auto-enrich is stricter than an explicit citation because the model
+ * didn't actually point at this fact —
+ *   - path-only facts (`line === null`, e.g. every dep-vuln on a
+ *     manifest file) are SKIPPED: otherwise any hallucinated finding on
+ *     that path would silently borrow a real id and look corroborated.
+ *     An explicit citation may still resolve to a path-only fact (the
+ *     model deliberately named it); auto-enrich may not.
+ *   - among line-bearing matches within +/-10, pick the CLOSEST line so
+ *     a finding doesn't grab an unrelated nearby fact's id when a better
+ *     match exists.
  */
 function findEnrichingFact(
   finding: PrReviewFinding,
   manifest: Map<string, SecurityFact>,
 ): SecurityFact | null {
+  let best: SecurityFact | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
   for (const fact of manifest.values()) {
-    if (factMatchesFinding(fact, finding)) return fact
+    if (fact.path !== finding.path) continue
+    if (fact.line === null) continue // skip path-only facts for auto-enrich
+    const distance = Math.abs(fact.line - finding.line)
+    if (distance <= EVIDENCE_LINE_TOLERANCE && distance < bestDistance) {
+      best = fact
+      bestDistance = distance
+    }
   }
-  return null
+  return best
 }
 
 /**

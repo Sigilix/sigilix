@@ -125,7 +125,9 @@ export async function buildSecurityFactManifest(args: {
       path: h.path,
       line: h.line,
       cwe: SECRET_CWE,
-      summary: `${h.category}/${h.ruleId} at ${h.path}:${h.line} (preview ${h.redactedPreview})`,
+      // L1 (code review): normalize so no embedded newline in an
+      // untrusted field can forge a `- \`fake-id\`` manifest line.
+      summary: normalizeSummary(`${h.category}/${h.ruleId} at ${h.path}:${h.line} (preview ${h.redactedPreview})`),
     })
   }
 
@@ -142,7 +144,7 @@ export async function buildSecurityFactManifest(args: {
       tool: "depvuln",
       path: f.source_path,
       line: null,
-      summary: `${f.advisory_id} in ${f.package_name}@${f.version} (${f.severity}): ${f.summary}`,
+      summary: normalizeSummary(`${f.advisory_id} in ${f.package_name}@${f.version} (${f.severity}): ${f.summary}`),
     })
   }
 
@@ -161,7 +163,7 @@ export async function buildSecurityFactManifest(args: {
       tool: "sarif",
       path: f.path,
       line,
-      summary: `${f.toolName}/${f.ruleId} (${f.category}) at ${f.path}${line === null ? "" : `:${line}`}: ${f.message}`,
+      summary: normalizeSummary(`${f.toolName}/${f.ruleId} (${f.category}) at ${f.path}${line === null ? "" : `:${line}`}: ${f.message}`),
     })
   }
 

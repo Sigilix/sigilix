@@ -396,3 +396,100 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     expect(result.verdict.findings).toHaveLength(1)
   })
 })
+
+describe("evaluateSecurityFinding — review fixes (H1 / H2 / auto-enrich)", () => {
+  // H1: a correctly-tagged IDOR (CWE-639) declaring NONE + a body
+  // justification must KEEP. Before the fix CWE-639 mapped to no bucket
+  // and the finding was dropped as unsupported-scanner-covered — the
+  // exact false-negative the exemption exists to prevent.
+  it("H1: CWE-639 IDOR + evidenceId NONE + justification → keep", () => {
+    expect(deriveSecurityBucket(finding({ cweId: "CWE-639" }))).toBe("authn-access-control")
+    const decision = evaluateSecurityFinding(
+      finding({
+        score: 5,
+        cweId: "CWE-639",
+        evidenceId: "NONE",
+        body: "Missing object-level authorization check on the order lookup; no static pattern detects this.",
+      }),
+      manifestOf(),
+    )
+    expect(decision.keep).toBe(true)
+  })
+
+  it("H1: CWE-284 (improper access control) maps to the authz bucket", () => {
+    expect(deriveSecurityBucket(finding({ cweId: "CWE-284" }))).toBe("authn-access-control")
+  })
+
+  // H2: an authz finding that declares NONE + a justification but omits
+  // (or mis-maps) the cweId — bucket null — must KEEP. The explicit NONE
+  // declaration is the authz-intent signal; dropping these broke the
+  // FP-safety parity the explicit-id path already had.
+  it("H2: evidenceId NONE + justification + no cweId (bucket null) → keep", () => {
+    const f = finding({ score: 5, cweId: undefined, evidenceId: "NONE" })
+    expect(deriveSecurityBucket(f)).toBeNull()
+    expect(evaluateSecurityFinding(f, manifestOf()).keep).toBe(true)
+  })
+
+  it("H2: evidenceId NONE + no justification (short body) + no cweId → reject", () => {
+    const decision = evaluateSecurityFinding(
+      finding({ score: 5, cweId: undefined, evidenceId: "NONE", body: "authz bug" }),
+      manifestOf(),
+    )
+    expect(decision).toEqual({ keep: false, reason: "authz-none-without-justification" })
+  })
+
+  // NONE is NOT a free pass for a scanner-covered bucket: an injection
+  // finding (CWE-89) claiming NONE falls through to auto-enrich and, with
+  // no backing fact, is rejected.
+  it("scanner-covered bucket (CWE-89) claiming NONE with no fact → reject", () => {
+    const decision = evaluateSecurityFinding(
+      finding({ score: 5, cweId: "CWE-89", evidenceId: "NONE" }),
+      manifestOf(),
+    )
+    expect(decision).toEqual({ keep: false, reason: "unsupported-scanner-covered" })
+  })
+
+  // Auto-enrich must SKIP path-only facts (line === null): otherwise a
+  // hallucinated finding anywhere in a file with a path-only fact (every
+  // dep-vuln on a manifest file) would silently borrow that fact's id.
+  it("auto-enrich skips path-only facts (no borrowed id for an uncited finding)", () => {
+    const pathOnly = fact({
+      evidenceId: "depvuln:CVE-2025-1:deadbeef0001",
+      tool: "depvuln",
+      path: "package-lock.json",
+      line: null,
+      cwe: undefined,
+    })
+    const decision = evaluateSecurityFinding(
+      finding({ score: 5, cweId: undefined, evidenceId: undefined, path: "package-lock.json", line: 999 }),
+      manifestOf(pathOnly),
+    )
+    expect(decision).toEqual({ keep: false, reason: "unsupported-scanner-covered" })
+  })
+
+  // A line-bearing fact within +/-10 still auto-enriches a finding the
+  // model forgot to cite.
+  it("auto-enrich keeps + stamps a line-bearing fact within +/-10", () => {
+    const decision = evaluateSecurityFinding(
+      finding({ score: 5, cweId: undefined, evidenceId: undefined, path: "src/db.ts", line: 20 }),
+      manifestOf(fact({ line: 17 })),
+    )
+    expect(decision.keep).toBe(true)
+    if (decision.keep) {
+      expect(decision.enrich?.evidenceId).toBe("sarif:sql-injection:abc123abc123:17")
+      expect(decision.enrich?.cweId).toBe("CWE-89")
+    }
+  })
+
+  // When multiple line-bearing facts match, the CLOSEST line wins.
+  it("auto-enrich picks the closest line among multiple matches", () => {
+    const near = fact({ evidenceId: "ast:rule:near", line: 19 })
+    const far = fact({ evidenceId: "ast:rule:far", line: 12 })
+    const decision = evaluateSecurityFinding(
+      finding({ score: 5, cweId: undefined, evidenceId: undefined, path: "src/db.ts", line: 20 }),
+      manifestOf(far, near),
+    )
+    expect(decision.keep).toBe(true)
+    if (decision.keep) expect(decision.enrich?.evidenceId).toBe("ast:rule:near")
+  })
+})

@@ -1356,7 +1356,11 @@ export async function handlePrReviewEnsemble(
     const securityManifest = await buildSecurityFactManifest({
       secretHits,
       depVulnFindings,
-      sarifFindings,
+      // M3 (review): scope SARIF to roleHint==="security" so the security
+      // manifest never carries a logic/perf SARIF fact. All current SARIF
+      // rules are security-domain, so this is a no-op today, but it makes
+      // the contract explicit + matches how the AST findings are split.
+      sarifFindings: sarifFindings.filter((f) => f.roleHint === "security"),
       astSecurityFindings: astResult.findings.filter((f) => f.roleHint === "security"),
     })
     const securityManifestBlock = securityManifest.render()
@@ -5053,7 +5057,7 @@ export function validateForSubmission(args: {
     // demotion + line validation (Codex #3). Shadow-first: in `shadow`
     // mode the verdict is counted + telemetered but the finding is NOT
     // dropped; only `enforce` actually drops.
-    if (securityManifest && sourceRolesInclude(provenance, sourceIds, "security")) {
+    if (securityManifest && sourceRolesInclude(sourceIds, "security")) {
       const decision = evaluateSecurityFinding(f, securityManifest)
       if (decision.keep) {
         // Auto-enrich: stamp the corroborating fact's evidenceId/cwe
@@ -5130,14 +5134,19 @@ export function validateForSubmission(args: {
  * (sourceSpecialists: ["security","logic"]) still counts as security.
  */
 function sourceRolesInclude(
-  provenance: SynthesizerProvenance["findings"][number] | undefined,
   sourceIds: readonly string[],
   role: SpecialistRole,
 ): boolean {
-  if (provenance && Array.isArray(provenance.sourceSpecialists)) {
-    if (provenance.sourceSpecialists.includes(role)) return true
-  }
-  // `sourceFindingIds` are shaped `<role>-<index>` (assignStableFindingIds).
+  // Codex-M1 (review): the `<role>-<index>` finding-id prefixes are
+  // assigned deterministically (assignStableFindingIds) and are the
+  // authoritative provenance signal. `sourceSpecialists` is synth-
+  // reported and can be malformed — e.g. claim "security" while every
+  // sourceFindingId is "logic-N". Trusting it would security-gate (and,
+  // in enforce mode, DROP) a real logic finding for lacking security
+  // evidence. Derive scope from the validated id prefixes ONLY. Under-
+  // applying (a genuine security finding whose ids weren't populated)
+  // is the safe direction for an FP-reduction gate: it skips the check,
+  // never drops a real finding.
   const prefix = `${role}-`
   return sourceIds.some((id) => typeof id === "string" && id.startsWith(prefix))
 }

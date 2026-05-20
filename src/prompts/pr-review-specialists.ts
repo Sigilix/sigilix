@@ -305,7 +305,9 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "headline": "...",
         "body": "...",
         "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
-        "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup"   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
+        "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
+        "cweId": "CWE-89",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from the source security specialist finding when it set one. A security finding's evidence gate runs AFTER you; dropping this field will get a valid finding rejected. OMIT only when the source finding had none.)
+        "evidenceId": "secret:...:42" | "NONE"   (SIG-108 — REQUIRED: PRESERVE VERBATIM from the source security specialist finding, including the literal "NONE". Do NOT invent, alter, or drop it. OMIT only when the source finding had none.)
       }
     ]
   },

@@ -32,7 +32,7 @@ function ruleById(id: string): AstRule {
 // ─── ALL_RULES registry contract (Codex MAJOR #3) ───────────────
 
 describe("ALL_RULES registry — v1 contract", () => {
-  it("exports exactly 18 rules in the canonical order", () => {
+  it("exports exactly 22 rules in the canonical order", () => {
     expect(ALL_RULES.map((r) => r.id)).toEqual([
       "no-eval-call",
       "no-new-function-constructor",
@@ -53,6 +53,11 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-constant-binary-condition",
       "no-invalid-typeof-compare",
       "no-unsafe-negation",
+      // SIG-110: performance-specialist rules.
+      "no-spread-accumulator-in-loop",
+      "no-allocation-in-loop",
+      "no-n-plus-one-call-in-loop",
+      "no-sync-io-in-request-path",
     ])
   })
 
@@ -76,6 +81,10 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-constant-binary-condition":          { severity: "warning", roleHint: "logic" },
       "no-invalid-typeof-compare":             { severity: "warning", roleHint: "logic" },
       "no-unsafe-negation":                    { severity: "warning", roleHint: "logic" },
+      "no-spread-accumulator-in-loop":         { severity: "warning", roleHint: "performance" },
+      "no-allocation-in-loop":                 { severity: "warning", roleHint: "performance" },
+      "no-n-plus-one-call-in-loop":            { severity: "warning", roleHint: "performance" },
+      "no-sync-io-in-request-path":            { severity: "warning", roleHint: "performance" },
     }
     for (const r of ALL_RULES) {
       expect({ severity: r.severity, roleHint: r.roleHint }).toEqual(expected[r.id])

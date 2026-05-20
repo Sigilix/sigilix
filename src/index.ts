@@ -284,6 +284,12 @@ export interface Env {
   // `wrangler secret put OPENCLAW_LOGIC_VALIDATOR_MODE enforce`.
   OPENCLAW_LOGIC_VALIDATOR_MODE?: string
 
+  // SIG-110: perf-finding evidence gate mode. "shadow" (default) counts +
+  // telemeters the would-drop; "enforce" drops unanchored sev>=4 perf
+  // findings. Operator flips via
+  // `wrangler secret put OPENCLAW_PERF_VALIDATOR_MODE enforce`.
+  OPENCLAW_PERF_VALIDATOR_MODE?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

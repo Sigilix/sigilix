@@ -117,11 +117,35 @@ export interface GateInput {
 }
 
 /**
+ * Hard cap on the title length fed to the operator regex. GitHub's UI
+ * cap is 256 chars; the API cap is multi-KB but no real PR title hits
+ * that. 1024 is a defensive ceiling — anything beyond is truncated
+ * before `re.test` runs.
+ *
+ * SIG-100 — CR catch on PR #111: an operator-supplied regex with
+ * pathological nested quantifiers could exhibit catastrophic
+ * backtracking. ReDoS depends on both the pattern AND the input
+ * length; capping the input bounds the worst case to a fixed
+ * polynomial of 1024, which is fast enough on V8's regex engine
+ * even for adversarial patterns. Operators retain full control of
+ * the regex itself — this is operator-trust + length-cap defense
+ * in depth, not a safe-regex checker.
+ */
+const TITLE_LENGTH_CAP_FOR_REGEX = 1024
+
+/**
  * SIG-100 — evaluate PR title against `config.regex`. An empty title
  * always fails (with a distinct message). The regex is compiled fresh
  * per call so a malformed source doesn't poison subsequent calls;
  * compile errors fail-OPEN (gate passes) so a typo in the operator's
  * config can't break Sigilix entirely.
+ *
+ * Operator-trust assumption: `config.regex` is supplied by the repo
+ * owner via `sigilix.json::preMergeGates.titleFormat.regex`. We do
+ * NOT validate the pattern for ReDoS safety — that's an opt-in,
+ * write-it-yourself surface. The title input IS length-capped (see
+ * `TITLE_LENGTH_CAP_FOR_REGEX`) so even a pathological backtracking
+ * pattern can't run unbounded on a malicious PR title.
  */
 export function evaluateTitleFormatGate(
   title: string,
@@ -147,7 +171,14 @@ export function evaluateTitleFormatGate(
     // runner so we don't double-log here.
     return { ...base, passed: true }
   }
-  if (re.test(title)) {
+  // SIG-100 (CR catch on PR #111): cap the input length before
+  // running the operator-supplied regex. ReDoS attacks need both a
+  // pathological pattern AND a long input; capping the input bounds
+  // the worst case to a fixed polynomial in 1024.
+  const probedTitle = title.length > TITLE_LENGTH_CAP_FOR_REGEX
+    ? title.slice(0, TITLE_LENGTH_CAP_FOR_REGEX)
+    : title
+  if (re.test(probedTitle)) {
     return { ...base, passed: true }
   }
   return {

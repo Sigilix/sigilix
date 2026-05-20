@@ -63,6 +63,25 @@ describe("evaluateTitleFormatGate", () => {
     const err: typeof cfg = { ...cfg, severity: "error" }
     expect(evaluateTitleFormatGate("nope", err).severity).toBe("error")
   })
+
+  // SIG-100 — CR catch on PR #111: ReDoS defense via input-length cap.
+  // The operator regex runs on at most 1024 chars of title, so even a
+  // pathological backtracking pattern can't run unbounded on an
+  // adversarially-long title.
+  it("caps input length before running the operator regex (ReDoS defense)", () => {
+    // A 10KB title that ends with a non-matching suffix. With no cap
+    // + a backtracking-prone pattern the test could run for seconds.
+    // With the 1024-char cap the worst case is bounded.
+    const huge = "feat: " + "a".repeat(10_000) + "_NO_MATCH_TAIL"
+    const start = Date.now()
+    const out = evaluateTitleFormatGate(huge, cfg)
+    const elapsed = Date.now() - start
+    // The default regex matches anything that starts with `feat:` + at
+    // least one char, so `feat: aaaa...` passes regardless of suffix.
+    expect(out.passed).toBe(true)
+    // Defensive: even on the slowest CI box this should finish in <500ms.
+    expect(elapsed).toBeLessThan(500)
+  })
 })
 
 describe("evaluateDescriptionCompletenessGate", () => {

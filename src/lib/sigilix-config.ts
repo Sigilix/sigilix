@@ -181,6 +181,27 @@ export interface SigilixConfig {
   }
 
   /**
+   * SIG-118: per-repo configuration for coverage-diff ingestion. Reads
+   * an LCOV coverage artifact from the PR head's GitHub Actions run,
+   * intersects uncovered lines with the PR's added lines, and feeds the
+   * resulting coverage-gap facts to the tests specialist.
+   *
+   * Default OFF (`source: "off"`) — opposite polarity from the
+   * always-on scanners. Production behavior is unchanged until an
+   * operator sets `source: "github-actions-artifact"`.
+   *   - source: "off" | "github-actions-artifact" (default "off")
+   *   - artifactName: the GitHub Actions artifact name (default
+   *     "coverage-lcov")
+   *   - entry: the LCOV file within the artifact ZIP (default
+   *     "lcov.info")
+   */
+  coverage?: {
+    source?: "github-actions-artifact" | "off"
+    artifactName?: string
+    entry?: string
+  }
+
+  /**
    * ARC-189: per-repo cross-PR review-memory configuration. Defaults
    * to OFF (opposite polarity from every other scanner) per the
    * ticket's "default off" requirement. Retrieval requires
@@ -356,6 +377,10 @@ const SARIF_FINDING_CATEGORIES: ReadonlySet<SarifFindingCategoryRef> = new Set([
 ])
 
 const DEFAULT_SARIF_PATH = ".sigilix/trivy.sarif.json"
+
+// SIG-118: coverage-diff ingestion defaults.
+const DEFAULT_COVERAGE_ARTIFACT_NAME = "coverage-lcov"
+const DEFAULT_COVERAGE_ENTRY = "lcov.info"
 
 export type SigilixCommandName = "review" | "improve" | "describe" | "ask"
 
@@ -747,6 +772,29 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (Object.keys(sarifOut).length > 0) {
       out.sarifEvidence = sarifOut
+    }
+  }
+  // SIG-118: coverage — coverage-diff ingestion (default OFF). Only the
+  // literal "github-actions-artifact" opts in; anything else (including
+  // the explicit "off") leaves the resolver on its default-OFF path.
+  if (
+    obj.coverage &&
+    typeof obj.coverage === "object" &&
+    !Array.isArray(obj.coverage)
+  ) {
+    const covIn = obj.coverage as Record<string, unknown>
+    const covOut: NonNullable<SigilixConfig["coverage"]> = {}
+    if (covIn.source === "github-actions-artifact" || covIn.source === "off") {
+      covOut.source = covIn.source
+    }
+    if (typeof covIn.artifactName === "string" && covIn.artifactName.trim().length > 0) {
+      covOut.artifactName = covIn.artifactName.trim()
+    }
+    if (typeof covIn.entry === "string" && covIn.entry.trim().length > 0) {
+      covOut.entry = covIn.entry.trim()
+    }
+    if (Object.keys(covOut).length > 0) {
+      out.coverage = covOut
     }
   }
   // ARC-189: reviewMemory — cross-PR review memory (default OFF).
@@ -1169,6 +1217,34 @@ export function resolveSarifEvidenceConfig(
     severityThreshold: cfg?.severityThreshold ?? "warning",
     disabledRules: cfg?.disabledRules ?? [],
     disabledCategories: cfg?.disabledCategories ?? [],
+  }
+}
+
+/**
+ * SIG-118: resolve the per-repo `coverage` config into a fully-locked
+ * shape with defaults filled in. Pure; never throws.
+ *
+ * Locked defaults (default OFF — coverage ingestion is opt-in):
+ *   - source: "off"
+ *   - artifactName: "coverage-lcov"
+ *   - entry: "lcov.info"
+ *
+ * Only `source: "github-actions-artifact"` opts in; a missing or
+ * explicit `"off"` source resolves to "off", so the orchestrator skips
+ * the entire ingestion path and production behavior is unchanged.
+ */
+export function resolveCoverageConfig(
+  config: SigilixConfig | null,
+): {
+  source: "off" | "github-actions-artifact"
+  artifactName: string
+  entry: string
+} {
+  const cfg = config?.coverage
+  return {
+    source: cfg?.source === "github-actions-artifact" ? "github-actions-artifact" : "off",
+    artifactName: cfg?.artifactName ?? DEFAULT_COVERAGE_ARTIFACT_NAME,
+    entry: cfg?.entry ?? DEFAULT_COVERAGE_ENTRY,
   }
 }
 

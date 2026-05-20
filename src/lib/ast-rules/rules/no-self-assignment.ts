@@ -1,6 +1,8 @@
-// SIG-109: no-self-assignment — flags `x = x` or `this.x = this.x`
-// (an assignment whose left and right sides are the identical simple
-// reference). A self-assignment is a no-op; it usually means the author
+// SIG-109: no-self-assignment — flags `x = x` (a bare-identifier
+// assignment whose left and right sides are the identical reference).
+// Member self-assignments (`this.x = this.x`) are intentionally NOT
+// flagged — see the note on `simplePath` below (accessor/Proxy side
+// effects). A self-assignment is a no-op; it usually means the author
 // meant to assign something else (a typo'd source, a forgotten
 // transform).
 //

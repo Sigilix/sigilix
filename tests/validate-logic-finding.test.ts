@@ -160,6 +160,16 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
     expect(r.keep).toBe(true)
   })
 
+  it("KEEPS an AST-corroborated finding even when changedLineTextByPath is EMPTY (AST-only caller)", () => {
+    // CodeRabbit: an AST-only evidence caller (no diff text wired) must
+    // NOT hard-drop as path-not-changed when a co-located AST hit exists.
+    const r = evaluateLogicFinding(
+      finding({ headline: "vague", body: "vague", line: 17 }),
+      { changedLineTextByPath: new Map(), astLogicFindings: [astHit({ line: 17 })] },
+    )
+    expect(r.keep).toBe(true)
+  })
+
   it("KEEPS a finding anchored by a multi-token backticked expression on an added line", () => {
     const r = evaluateLogicFinding(
       finding({
@@ -226,6 +236,14 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
     const r = evaluateLogicFinding(
       finding({ headline: "the `==` is loose", body: "should be `===` here" }),
       evidence({ changedLineTextByPath: new Map([[PATH, ["  if (a == b) {}"]]]) }),
+    )
+    expect(r.keep).toBe(false)
+  })
+
+  it("does NOT anchor on a numeric-only backticked token (CodeRabbit: `10` is not an identifier)", () => {
+    const r = evaluateLogicFinding(
+      finding({ headline: "magic number", body: "the literal `10` should be a constant" }),
+      evidence({ changedLineTextByPath: new Map([[PATH, ["  const limit = 10"]]]) }),
     )
     expect(r.keep).toBe(false)
   })

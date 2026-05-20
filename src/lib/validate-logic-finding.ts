@@ -204,7 +204,10 @@ function hasConcreteChangedToken(finding: PrReviewFinding, evidence: LogicEviden
   // backtick (`==`, `()`, `=>`) can't anchor on almost any line; a real
   // logic finding names a concrete identifier/member, not an operator.
   const tokens = backtickedTokens(finding).filter(
-    (t) => t.length >= 2 && /[A-Za-z0-9_$]/.test(t),
+    // Require a LETTER/_/$ (not just any identifier char) — a numeric
+    // literal (`10`, `0`) isn't a meaningful anchor and would otherwise
+    // satisfy the gate by matching a number on a changed line (CodeRabbit).
+    (t) => t.length >= 2 && /[A-Za-z_$]/.test(t),
   )
   if (tokens.length === 0) return false
   for (const tok of tokens) {
@@ -278,6 +281,12 @@ export function evaluateLogicFinding(
     return { keep: true }
   }
 
+  // A co-located deterministic AST hit is a strong anchor on its OWN —
+  // checked BEFORE the path-changed gate (CodeRabbit): the AST findings
+  // are an independent evidence channel, so an AST-only caller (empty
+  // changedLineTextByPath) must NOT be hard-dropped when a hit corroborates.
+  if (hasColocatedAstHit(finding, evidence)) return { keep: true }
+
   // The finding must live on a file this PR changed. A logic bug on an
   // unchanged path is the cross-file-impact shape (a change in file A
   // breaks an unchanged caller B). Per the signed-off "same-changed-path"
@@ -289,9 +298,8 @@ export function evaluateLogicFinding(
     return { keep: false, reason: "path-not-changed" }
   }
 
-  // Changed path. Keep on ANY anchor: a co-located deterministic AST hit
-  // OR a concrete backticked token that appears on an added line.
-  if (hasColocatedAstHit(finding, evidence)) return { keep: true }
+  // Changed path. Keep on a concrete backticked token that appears on a
+  // changed line.
   if (hasConcreteChangedToken(finding, evidence)) return { keep: true }
 
   // Changed path but no concrete anchor — a vague claim quoting no code

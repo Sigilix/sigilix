@@ -827,6 +827,110 @@ describe("parsePrReviewResponse — SIG-101 per-finding confidence", () => {
   })
 })
 
+describe("parsePrReviewResponse — SIG-113 evidence citation fields", () => {
+  const valid: PrReviewVerdict = {
+    summary: "Test",
+    confidence: 4,
+    confidenceReason: "Reason",
+    findings: [],
+  }
+
+  it("reads inspectedTestFiles when supplied (array of strings)", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          category: "testing",
+          inspectedTestFiles: ["tests/foo.test.ts", "tests/bar.test.ts"],
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.inspectedTestFiles).toEqual([
+      "tests/foo.test.ts",
+      "tests/bar.test.ts",
+    ])
+  })
+
+  it("reads evidenceRefs when supplied", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          category: "testing",
+          evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE"],
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.evidenceRefs).toEqual([
+      "siblingMapping:src/lib/foo.ts->NONE",
+    ])
+  })
+
+  it("trims whitespace + drops empty entries on both fields", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          category: "testing",
+          inspectedTestFiles: ["  tests/foo.test.ts  ", "", "  "],
+          evidenceRefs: ["", "siblingMapping:x->y", "  "],
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.inspectedTestFiles).toEqual(["tests/foo.test.ts"])
+    expect(out?.findings[0]?.evidenceRefs).toEqual(["siblingMapping:x->y"])
+  })
+
+  it("drops non-string entries (defensive against schema-bypass)", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          category: "testing",
+          inspectedTestFiles: ["tests/foo.test.ts", 42, null, "tests/bar.test.ts"],
+          evidenceRefs: [{ shape: "object" }, "valid:ref"],
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.inspectedTestFiles).toEqual([
+      "tests/foo.test.ts",
+      "tests/bar.test.ts",
+    ])
+    expect(out?.findings[0]?.evidenceRefs).toEqual(["valid:ref"])
+  })
+
+  it("absent fields stay undefined (back-compat for staged rollout)", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{ ...baseFinding, category: "testing" }],
+      }),
+    )
+    expect(out?.findings[0]?.inspectedTestFiles).toBeUndefined()
+    expect(out?.findings[0]?.evidenceRefs).toBeUndefined()
+  })
+
+  it("an empty array supplied also leaves the field undefined (less noise downstream)", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          category: "testing",
+          inspectedTestFiles: [],
+          evidenceRefs: [],
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.inspectedTestFiles).toBeUndefined()
+    expect(out?.findings[0]?.evidenceRefs).toBeUndefined()
+  })
+})
+
 describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () => {
   const verdict: PrReviewVerdict = {
     summary: "Has issues.",

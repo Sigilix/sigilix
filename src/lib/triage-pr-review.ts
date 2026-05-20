@@ -180,6 +180,32 @@ export interface PrReviewFinding {
    * de-emphasize.
    */
   confidence?: number
+  /**
+   * SIG-113: file paths the specialist inspected while forming the
+   * finding. Populated by the tests specialist from the
+   * [TESTING EVIDENCE] block's `inspectedTestFiles` list. Used by
+   * `validateTestingFindingEvidence` to drop "missing tests" findings
+   * where the specialist never actually looked at any test file
+   * (the PR #110 / PR #111 FP class).
+   *
+   * Absent on findings from specialists that don't yet emit this
+   * field — back-compat with the staged rollout. Other roles may
+   * adopt the same field for SIG-108 / SIG-109 / SIG-110.
+   */
+  inspectedTestFiles?: string[]
+  /**
+   * SIG-113: references into the role-scoped evidence block backing
+   * the finding. Format is `<kind>:<value>` — e.g.
+   *   "siblingMapping:src/lib/foo.ts->NONE"   (no test sibling exists)
+   *   "inspectedTestFile:tests/foo.test.ts"   (specialist read this file)
+   *   "secretScan:SCN-42"                     (security evidence ID)
+   *   "depVuln:CVE-2025-1234"                 (security evidence ID)
+   *
+   * Used by the per-role validators (SIG-113 for testing,
+   * SIG-108/109/110 for security/logic/perf) to require concrete
+   * citations on high-severity or absence-claiming findings.
+   */
+  evidenceRefs?: string[]
 }
 
 export interface PrReviewVerdict {
@@ -372,6 +398,25 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     const confidenceRawF = Number(finding.confidence)
     if (Number.isFinite(confidenceRawF) && confidenceRawF >= 1 && confidenceRawF <= 5) {
       finalFinding.confidence = Math.round(confidenceRawF)
+    }
+    // SIG-113: read inspectedTestFiles + evidenceRefs when the
+    // specialist supplies them. Both arrays are string-only;
+    // non-string entries and empty strings are dropped silently
+    // (defensive against schema-bypass paths). Both fields are
+    // optional — staged rollout means many specialists won't emit
+    // them yet, and that's fine; the validator handles the absence
+    // case by dropping unevidenced testing findings.
+    if (Array.isArray(finding.inspectedTestFiles)) {
+      const files = (finding.inspectedTestFiles as unknown[])
+        .filter((f): f is string => typeof f === "string" && f.trim().length > 0)
+        .map((f) => f.trim())
+      if (files.length > 0) finalFinding.inspectedTestFiles = files
+    }
+    if (Array.isArray(finding.evidenceRefs)) {
+      const refs = (finding.evidenceRefs as unknown[])
+        .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
+        .map((r) => r.trim())
+      if (refs.length > 0) finalFinding.evidenceRefs = refs
     }
     findings.push(finalFinding)
     if (findings.length >= 8) break

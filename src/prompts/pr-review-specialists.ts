@@ -306,10 +306,10 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "body": "...",
         "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
         "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
-        "cweId": "CWE-89",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from the source security specialist finding when it set one. A security finding's evidence gate runs AFTER you; dropping this field will get a valid finding rejected. OMIT only when the source finding had none.)
-        "evidenceId": "secret:...:42" | "NONE",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from the source security specialist finding, including the literal "NONE". Do NOT invent, alter, or drop it. OMIT only when the source finding had none.)
-        "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED: PRESERVE VERBATIM from the source TESTS specialist finding when present. A testing finding's citation gate runs AFTER you; dropping this gets a valid finding rejected. OMIT only when the source finding had none.)
-        "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"]   (SIG-113 — REQUIRED: PRESERVE VERBATIM from the source TESTS specialist finding when present. Do NOT invent, alter, or drop. OMIT only when the source finding had none.)
+        "cweId": "CWE-89",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "security" and the source set one. The evidence gate runs AFTER you, keyed on category; dropping this field gets a valid finding rejected. OMIT only when no kept source finding had one.)
+        "evidenceId": "secret:...:42" | "NONE",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "security", including the literal "NONE". Do NOT invent, alter, or drop it. OMIT only when no kept source finding had one.)
+        "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "testing" and the source set it. The citation gate runs AFTER you, keyed on category; dropping this gets a valid finding rejected. OMIT only when no kept source finding had it.)
+        "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"]   (SIG-113 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "testing" and the source set it. Do NOT invent, alter, or drop it. OMIT only when no kept source finding had it.)
       }
     ]
   },

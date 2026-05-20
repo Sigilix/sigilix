@@ -158,7 +158,8 @@ import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
-import { renderAstFindingsForPrompt, renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
+import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
+import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
 import {
@@ -1259,17 +1260,8 @@ export async function handlePrReviewEnsemble(
       config: astRulesConfig,
       ctx: { owner, repo, prNumber },
     })
-    // SIG-108: split AST findings by roleHint so each block reaches
-    // only its own specialist (security rules → security facts, etc.).
-    const astSecurityBlock = renderAstFindingsForPrompt(
-      astResult.findings.filter((f) => f.roleHint === "security"),
-    )
-    const astLogicBlock = renderAstFindingsForPrompt(
-      astResult.findings.filter((f) => f.roleHint === "logic"),
-    )
-    const astPerfBlock = renderAstFindingsForPrompt(
-      astResult.findings.filter((f) => f.roleHint === "performance"),
-    )
+    // SIG-108: AST findings are split by roleHint inside buildFactsByRole
+    // (below) so each block reaches only its own specialist.
     telemetry.astRules = astResult.telemetry.scanned
       ? {
           scanned: true,
@@ -1336,23 +1328,12 @@ export async function handlePrReviewEnsemble(
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
     const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
-    // SIG-108: role-scoped fact blocks — each specialist sees only its
-    // own domain's deterministic facts (no cross-domain leak). The
-    // SIG-91 diff-classification + ARC-182 stack blocks stay shared
-    // (diff topology / ambient context, not domain facts) per design.
-    //   security: secret-scan + dep-vuln + AST-security + SARIF
-    //   logic:    AST-correctness + regex deterministic-checks
-    //   perf:     AST-performance (placeholder until SIG-110)
-    //   tests:    docs-coverage (sibling-test map stays in the shared
-    //             classification / testing-evidence block)
-    const joinFacts = (blocks: string[]): string =>
-      blocks.filter((s) => s.length > 0).join("\n\n")
     // SIG-108: security fact manifest — assigns each deterministic
     // security fact a hard-to-fabricate `evidenceId` (`tool:rule-id:
-    // hash:line`). The render() block is APPENDED to securityFactsBlock
-    // so the security specialist sees the citable ids; the manifest Map
-    // is threaded to validateForSubmission so the citation gate can
-    // cross-check each cited id against the real fact's path/line.
+    // hash:line`). The render() block is folded into the security role's
+    // facts (below) so the security specialist sees the citable ids; the
+    // manifest Map is threaded to validateForSubmission so the citation
+    // gate can cross-check each cited id against the real fact's path/line.
     const securityManifest = await buildSecurityFactManifest({
       secretHits,
       depVulnFindings,
@@ -1363,17 +1344,18 @@ export async function handlePrReviewEnsemble(
       sarifFindings: sarifFindings.filter((f) => f.roleHint === "security"),
       astSecurityFindings: astResult.findings.filter((f) => f.roleHint === "security"),
     })
-    const securityManifestBlock = securityManifest.render()
-    const securityFactsBlock = joinFacts([secretScanBlock, depVulnBlock, astSecurityBlock, sarifBlock, securityManifestBlock])
-    const logicFactsBlock = joinFacts([astLogicBlock, deterministicBlock])
-    const perfFactsBlock = joinFacts([astPerfBlock])
-    const testsFactsBlock = joinFacts([docsCoverageBlock])
-    const factsByRole: Record<SpecialistRole, string> = {
-      security: securityFactsBlock,
-      logic: logicFactsBlock,
-      performance: perfFactsBlock,
-      tests: testsFactsBlock,
-    }
+    // SIG-108: route deterministic facts to their owning specialist — no
+    // cross-domain leak. Pure + unit-tested in role-scoped-facts.test.ts.
+    // The SIG-91 diff-classification + ARC-182 stack blocks stay shared.
+    const factsByRole = buildFactsByRole({
+      secretScanBlock,
+      depVulnBlock,
+      sarifBlock,
+      deterministicBlock,
+      docsCoverageBlock,
+      securityManifestBlock: securityManifest.render(),
+      astFindings: astResult.findings,
+    })
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
 
     // ARC-181 Task 9: auto-inline poster — gated behind

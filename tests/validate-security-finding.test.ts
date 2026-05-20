@@ -435,7 +435,15 @@ describe("evaluateSecurityFinding — review fixes (H1 / H2 / auto-enrich)", () 
   // genuine authz finding maps here via its CWE (see the CWE-639 case
   // above); an unbucketed NONE is more likely a hallucination.
   it("CR-2: NONE with no/unmapped cweId (bucket null) → reject (NONE is authz-only)", () => {
-    const f = finding({ score: 5, cweId: undefined, evidenceId: "NONE" })
+    // Explicit body (> the authz justification threshold) so the test
+    // pins the "NONE is authz-only" behavior even if finding()'s default
+    // body text changes (CodeRabbit nitpick).
+    const f = finding({
+      score: 5,
+      cweId: undefined,
+      evidenceId: "NONE",
+      body: "Missing object-level authorization check; no static pattern exists for this flow.",
+    })
     expect(deriveSecurityBucket(f)).toBeNull()
     expect(evaluateSecurityFinding(f, manifestOf())).toEqual({
       keep: false,

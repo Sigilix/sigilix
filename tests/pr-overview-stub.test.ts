@@ -752,16 +752,20 @@ describe("isStubBody (SIG-96)", () => {
     expect(isStubBody(STUB_BODY)).toBe(true)
   })
 
-  it("returns true for stub body with surrounding whitespace", () => {
+  it("returns true for stub body with surrounding whitespace (trim-tolerant)", () => {
     expect(isStubBody(`\n\n${STUB_BODY}\n\n`)).toBe(true)
   })
 
-  it("returns true for the legacy openclaw stub variant (placeholder still present)", () => {
+  it("returns true for the legacy openclaw stub variant", () => {
     expect(isStubBody("<!-- openclaw:pr-overview -->\n\n## Sigilix Overview\n\n_Reviewing…_")).toBe(true)
   })
 
   it("returns true for the ASCII fallback variant `_Reviewing..._`", () => {
     expect(isStubBody("<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\n_Reviewing..._")).toBe(true)
+  })
+
+  it("returns true for the legacy openclaw + ASCII ellipsis combination", () => {
+    expect(isStubBody("<!-- openclaw:pr-overview -->\n\n## Sigilix Overview\n\n_Reviewing..._")).toBe(true)
   })
 
   it("returns false for a real completed summary body", () => {
@@ -783,22 +787,44 @@ describe("isStubBody (SIG-96)", () => {
     expect(isStubBody(completed)).toBe(false)
   })
 
-  it("returns true for null / undefined / non-string (no-body counts as stub-equivalent)", () => {
-    expect(isStubBody(null)).toBe(true)
-    expect(isStubBody(undefined)).toBe(true)
-    // @ts-expect-error — runtime guard against non-string
-    expect(isStubBody(42)).toBe(true)
+  // CodeRabbit catch on PR #111 (Major): the previous substring match
+  // would classify a real summary that quotes `_Reviewing…_` (e.g.,
+  // a Sigilix-reviews-its-own-PR meta-block) as a stub, clobbering
+  // exactly the summary SIG-96 was meant to preserve. Whole-body
+  // match prevents this.
+  it("CR catch: returns false when a completed summary embeds the stub placeholder verbatim", () => {
+    const reviewingItself = [
+      "<!-- sigilix:pr-overview -->",
+      "",
+      "## Sigilix Overview",
+      "",
+      "### Summary",
+      "",
+      "This PR introduces the `_Reviewing…_` stub fix. Pre-fix, every push reset the body to `_Reviewing…_`.",
+    ].join("\n")
+    expect(isStubBody(reviewingItself)).toBe(false)
   })
 
-  it("returns false for an empty string (defensive — empty isn't a stub, missing entirely is)", () => {
+  it("returns false for null / undefined / non-string (semantics: 'this body is not the stub placeholder')", () => {
+    expect(isStubBody(null)).toBe(false)
+    expect(isStubBody(undefined)).toBe(false)
+    // @ts-expect-error — runtime guard against non-string
+    expect(isStubBody(42)).toBe(false)
+  })
+
+  it("returns false for an empty string", () => {
     expect(isStubBody("")).toBe(false)
   })
 
   it("returns false when the body mentions `Reviewing` outside the stub-pattern context", () => {
-    // The regex is tight to `_Reviewing…_` / `_Reviewing..._` exactly.
-    // A summary that mentions "Reviewing the auth changes" in prose
-    // must NOT be detected as a stub.
     const proseSummary = "<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\nReviewing the auth changes uncovered three risks."
     expect(isStubBody(proseSummary)).toBe(false)
+  })
+
+  it("returns false when the body has the stub format PLUS appended content (partial-render race)", () => {
+    // If the overview job rendered partial content before erroring,
+    // we should NOT treat that as a stub — preserve whatever is there.
+    const partialAppend = `${STUB_BODY}\n\n### Summary\n\nMid-render content.`
+    expect(isStubBody(partialAppend)).toBe(false)
   })
 })

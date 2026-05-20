@@ -41,6 +41,7 @@ import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
 import {
   OVERVIEW_MARKER,
+  LEGACY_OVERVIEW_MARKER,
   findExistingOverviewComment,
 } from "./triage-pr-overview"
 
@@ -66,24 +67,51 @@ _Reviewing…_`
 
 /**
  * SIG-96: detect whether an existing overview-sticky body is the stub
- * (`_Reviewing…_` placeholder) vs a completed summary. Used to skip
- * the reset-to-stub edit on subsequent pushes when the prior summary
- * is still visible — keeps the reviewer informed during the rerender
- * window instead of erasing context.
+ * (`_Reviewing…_` placeholder) vs a completed summary. Used by
+ * `postPrOverviewStubIfNeeded` to decide whether the reset-to-stub
+ * edit on a subsequent push is a no-op idempotent re-write (existing
+ * body IS the stub) or would clobber a real summary (existing body
+ * is something else, preserve it).
  *
- * The stub is the ONLY body shape that contains the `_Reviewing…_`
- * placeholder; every other rendered body has `## Summary` + file
- * tables + confidence + bullets and never includes the placeholder.
- * The regex tolerates the ellipsis variants (`…` vs `...`) since the
- * source has changed once and could change again.
+ * CodeRabbit catch on PR #111 (Major): the previous impl substring-
+ * matched `_Reviewing…_` anywhere in the body, so a completed
+ * summary that happened to quote the placeholder (e.g., a Sigilix-
+ * reviews-its-own-PR meta-block, or any future content that
+ * mentions the stub format verbatim) got misclassified as a stub
+ * and triggered the reset path — clobbering exactly the summary
+ * SIG-96 was meant to preserve. Tightened to a whole-body match
+ * against the four exact stub forms (current + legacy marker, Unicode
+ * ellipsis + ASCII fallback).
+ *
+ * Non-string input now returns `false`. Pre-fix it returned `true`
+ * (defensive "no body = treat as stub") but no real call site
+ * actually feeds non-string bodies — `findExistingOverviewComment`
+ * filters by `typeof c.body === "string"`. The new semantics
+ * (`false` = "this isn't a stub, don't clobber it") matches the
+ * function's literal name.
  *
  * Pure — exported for tests.
  */
-const STUB_REVIEWING_PLACEHOLDER_RE = /_Reviewing(?:…|\.\.\.)_/u
+function buildStubFormVariants(): readonly string[] {
+  // Both marker prefixes × both ellipsis flavors = 4 exact stub
+  // strings to whole-match against. Trimmed at compare time.
+  const HEADING_BLOCK = "\n\n## Sigilix Overview\n\n"
+  const PLACEHOLDER_UNICODE = "_Reviewing…_"
+  const PLACEHOLDER_ASCII = "_Reviewing..._"
+  return [
+    `${OVERVIEW_MARKER}${HEADING_BLOCK}${PLACEHOLDER_UNICODE}`,
+    `${OVERVIEW_MARKER}${HEADING_BLOCK}${PLACEHOLDER_ASCII}`,
+    `${LEGACY_OVERVIEW_MARKER}${HEADING_BLOCK}${PLACEHOLDER_UNICODE}`,
+    `${LEGACY_OVERVIEW_MARKER}${HEADING_BLOCK}${PLACEHOLDER_ASCII}`,
+  ].map((s) => s.trim())
+}
+
+const STUB_FORM_VARIANTS = buildStubFormVariants()
 
 export function isStubBody(body: string | null | undefined): boolean {
-  if (typeof body !== "string") return true
-  return STUB_REVIEWING_PLACEHOLDER_RE.test(body)
+  if (typeof body !== "string") return false
+  const trimmed = body.trim()
+  return STUB_FORM_VARIANTS.includes(trimmed)
 }
 
 const STUB_KV_PREFIX = "pr-overview-stub-posted:"

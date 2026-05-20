@@ -428,22 +428,19 @@ describe("evaluateSecurityFinding — review fixes (H1 / H2 / auto-enrich)", () 
     expect(deriveSecurityBucket(finding({ cweId: "CWE-284" }))).toBe("authn-access-control")
   })
 
-  // H2: an authz finding that declares NONE + a justification but omits
-  // (or mis-maps) the cweId — bucket null — must KEEP. The explicit NONE
-  // declaration is the authz-intent signal; dropping these broke the
-  // FP-safety parity the explicit-id path already had.
-  it("H2: evidenceId NONE + justification + no cweId (bucket null) → keep", () => {
+  // CR-2 (CodeRabbit): the NONE exemption is authz-bucket-ONLY. An
+  // unbucketed NONE (no/unmapped cweId) is NOT honored, even with a
+  // justification — otherwise any sev>=4 security finding with 40 chars
+  // of body could escape the gate. H1's expanded authz bucket means a
+  // genuine authz finding maps here via its CWE (see the CWE-639 case
+  // above); an unbucketed NONE is more likely a hallucination.
+  it("CR-2: NONE with no/unmapped cweId (bucket null) → reject (NONE is authz-only)", () => {
     const f = finding({ score: 5, cweId: undefined, evidenceId: "NONE" })
     expect(deriveSecurityBucket(f)).toBeNull()
-    expect(evaluateSecurityFinding(f, manifestOf()).keep).toBe(true)
-  })
-
-  it("H2: evidenceId NONE + no justification (short body) + no cweId → reject", () => {
-    const decision = evaluateSecurityFinding(
-      finding({ score: 5, cweId: undefined, evidenceId: "NONE", body: "authz bug" }),
-      manifestOf(),
-    )
-    expect(decision).toEqual({ keep: false, reason: "authz-none-without-justification" })
+    expect(evaluateSecurityFinding(f, manifestOf())).toEqual({
+      keep: false,
+      reason: "unsupported-scanner-covered",
+    })
   })
 
   // NONE is NOT a free pass for a scanner-covered bucket: an injection

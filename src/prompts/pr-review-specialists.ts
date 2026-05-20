@@ -162,13 +162,13 @@ CWE-Top-25 buckets (use the CWE id whose bucket fits):
   - Deserialization: CWE-502
   - SSRF: CWE-918
   - Memory Safety: CWE-787, CWE-416, CWE-125, CWE-476, CWE-190, CWE-119
-  - AuthN / Access Control: CWE-862, CWE-863, CWE-287, CWE-352, CWE-276
+  - AuthN / Access Control (incl. IDOR): CWE-862, CWE-863, CWE-287, CWE-352, CWE-276, CWE-284, CWE-639
   - Secrets Exposure: CWE-798
   - Resource Exhaustion: CWE-400, CWE-770
   - Unrestricted File Upload: CWE-434
   - Input Validation: CWE-20
 
-The orchestrator runs an \`evaluateSecurityFinding\` gate after synthesis. A sev>=4 security finding whose \`evidenceId\` is fabricated (not in the manifest) or points more than 10 lines from your finding is DROPPED. The ONE exception: an AuthN / Access-Control bug (CWE-862/863/287/352/276) that no scanner detects — for THAT, set \`evidenceId: "NONE"\` and explain in the body why no deterministic check exists (e.g. "missing object-level authorization check; no static pattern exists"). Do NOT use \`"NONE"\` for injection, XSS, secrets, or any other scanner-covered bucket — those must cite a manifest id.
+The orchestrator runs an \`evaluateSecurityFinding\` gate after synthesis. A sev>=4 security finding whose \`evidenceId\` is fabricated (not in the manifest) or points more than 10 lines from your finding is DROPPED. The ONE exception: an AuthN / Access-Control bug (CWE-862/863/287/352/276/284/639, incl. IDOR) that no scanner detects — for THAT, set \`evidenceId: "NONE"\` and explain in the body why no deterministic check exists (e.g. "missing object-level authorization check; no static pattern exists"). Do NOT use \`"NONE"\` for injection, XSS, secrets, or any other scanner-covered bucket — those must cite a manifest id.
 
 When scoring:
 - 5: exploitable today by a remote unauthenticated attacker (or trivially by an authenticated low-privilege user)
@@ -307,7 +307,9 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
         "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
         "cweId": "CWE-89",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from the source security specialist finding when it set one. A security finding's evidence gate runs AFTER you; dropping this field will get a valid finding rejected. OMIT only when the source finding had none.)
-        "evidenceId": "secret:...:42" | "NONE"   (SIG-108 — REQUIRED: PRESERVE VERBATIM from the source security specialist finding, including the literal "NONE". Do NOT invent, alter, or drop it. OMIT only when the source finding had none.)
+        "evidenceId": "secret:...:42" | "NONE",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from the source security specialist finding, including the literal "NONE". Do NOT invent, alter, or drop it. OMIT only when the source finding had none.)
+        "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED: PRESERVE VERBATIM from the source TESTS specialist finding when present. A testing finding's citation gate runs AFTER you; dropping this gets a valid finding rejected. OMIT only when the source finding had none.)
+        "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"]   (SIG-113 — REQUIRED: PRESERVE VERBATIM from the source TESTS specialist finding when present. Do NOT invent, alter, or drop. OMIT only when the source finding had none.)
       }
     ]
   },

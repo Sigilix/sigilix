@@ -5001,7 +5001,10 @@ export function validateForSubmission(args: {
 
   // Walk by INDEX (v3.1 catch — not by headline).
   for (let i = 0; i < synthOutput.verdict.findings.length; i++) {
-    const f = synthOutput.verdict.findings[i]!
+    // `let` (not `const`): the SIG-108 auto-enrich path may swap `f` for
+    // an enriched CLONE so it never mutates the raw synth finding that
+    // telemetry.synthesizer.verdict aliases (CR-1 / CodeRabbit).
+    let f = synthOutput.verdict.findings[i]!
     const provenance = synthOutput.provenance.findings[i]
 
     // Hallucination guard. Defensive against malformed provenance
@@ -5060,12 +5063,20 @@ export function validateForSubmission(args: {
     if (securityManifest && sourceRolesInclude(sourceIds, "security")) {
       const decision = evaluateSecurityFinding(f, securityManifest)
       if (decision.keep) {
-        // Auto-enrich: stamp the corroborating fact's evidenceId/cwe
-        // onto the finding when the model omitted them, so downstream
-        // consumers (markers, body rendering) see the citation.
+        // Auto-enrich: stamp the corroborating fact's evidenceId/cwe so
+        // downstream consumers (markers, body rendering) see the
+        // citation. CR-1 (CodeRabbit): clone rather than mutate — `f`
+        // aliases the raw synth finding held by telemetry.synthesizer
+        // .verdict; rewriting it would erase the distinction between
+        // "model cited it" and "validator backfilled it" in the shadow
+        // data. The enriched clone flows to the validated output; the
+        // recorded synth verdict keeps the model's original.
         if (decision.enrich) {
-          f.evidenceId = decision.enrich.evidenceId
-          if (decision.enrich.cweId && !f.cweId) f.cweId = decision.enrich.cweId
+          f = {
+            ...f,
+            evidenceId: decision.enrich.evidenceId,
+            ...(decision.enrich.cweId && !f.cweId ? { cweId: decision.enrich.cweId } : {}),
+          }
         }
       } else {
         const dropped = securityValidatorMode === "enforce"

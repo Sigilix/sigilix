@@ -196,23 +196,21 @@ export function evaluateSecurityFinding(
   // a non-trivial justification. For any other bucket, NONE is treated
   // as "no id" — fall through to auto-enrich / scanner-covered.
   if (rawEvidenceId === "NONE") {
-    // `evidenceId:"NONE"` is the model's explicit declaration that this
-    // is an access-control/IDOR bug no scanner can detect. Treat NONE as
-    // authz intent for BOTH the authz bucket AND an unrecognized bucket
-    // (H2: bucket is null when the model omitted or mis-mapped the CWE —
-    // but the NONE declaration + justification is the real guard, and
-    // dropping these breaks the FP-safety parity the explicit-id path
-    // already has). A finding that explicitly maps to a SCANNER-COVERED
-    // bucket (injection/xss/secrets/etc.) but claims NONE is suspect —
-    // fall through to auto-enrich and reject if no real fact backs it.
-    const authzIntent = bucket === AUTHZ_BUCKET || bucket === null
-    if (authzIntent) {
+    // `evidenceId:"NONE"` is the access-control/IDOR exemption: a bug no
+    // scanner can detect. CR-2 (CodeRabbit): restrict it to the CONFIRMED
+    // authz bucket. H1 expanded that bucket with the real IDOR/authz CWEs
+    // (639/285/284/306/...), and the prompt now lists them, so a genuine
+    // authz finding maps here via its CWE. An UNbucketed NONE (no/unmapped
+    // cweId) is therefore more likely a hallucination than a real IDOR —
+    // honoring it would widen the escape hatch to any sev>=4 security
+    // finding with 40 chars of body. So a non-authz (incl. unbucketed)
+    // NONE falls through to auto-enrich / scanner-covered below.
+    if (bucket === AUTHZ_BUCKET) {
       return hasJustification(finding.body)
         ? { keep: true }
         : { keep: false, reason: "authz-none-without-justification" }
     }
-    // Scanner-covered bucket claiming NONE → fall through with no
-    // usable id; auto-enrich or reject below.
+    // Non-authz / unbucketed NONE → treat as no usable id; fall through.
   } else if (rawEvidenceId.length > 0) {
     // ── explicit evidenceId — cross-check against the manifest ──────
     const fact = manifest.get(rawEvidenceId)

@@ -53,6 +53,14 @@ import {
   chooseReviewEvent,
 } from "./triage-pr-review"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
+import {
+  buildTestingEvidencePack,
+  applyTestFileContentCaps,
+  mergeInspectedTestFileContents,
+  renderTestingEvidenceBlock,
+  type TestingEvidencePack,
+  type InspectedTestFileFetchResult,
+} from "./testing-evidence-pack"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -823,7 +831,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -1416,9 +1424,79 @@ export async function handlePrReviewEnsemble(
     const classifiedDiffFiles = classifyDiffFiles(reviewedFiles.map((f) => f.path))
     const diffFileClassificationBlock = renderDiffFileClassificationBlock(classifiedDiffFiles)
 
-    // SIG-91 telemetry — lets us verify post-deploy that sibling pairs
-    // are being identified before each tests-specialist run on real
-    // customer PRs.
+    // SIG-113: build the testing-evidence pack from the FULL diff
+    // inventory (splitFiles, not reviewedFiles). Pre-SIG-113, the
+    // classification block above used `reviewedFiles` only — the
+    // first packed-diff batch — which produced 8 testing-completeness
+    // false positives across PR #110 + PR #111 when test files lived
+    // in later batches or were modified-not-added. The new pack uses
+    // `splitFiles`, embeds the FULL CONTENT of added/modified test
+    // files (subject to caps), and feeds the validator the
+    // `inspectedTestFiles` list so the post-LLM citation gate can
+    // drop unevidenced findings.
+    //
+    // Three-step build:
+    //   1. Pure pack (deterministic, no I/O)
+    //   2. Async fetch of test-file content via client.getFileContent
+    //      (mirrors the AST source fetch pattern at line ~1227)
+    //   3. Cap-application + merge → final pack with inspectedTestFiles
+    // code-reviewer M1 catch (pre-PR): build from `filesAfterFilter`
+    // (post-pathFilter, pre-batch) — NOT `splitFiles` (pre-filter).
+    // Using `splitFiles` would re-surface operator-excluded files
+    // (generated/, vendor/, etc.) in the evidence pack, inviting
+    // missing-tests findings on paths the operator chose not to
+    // review + wasting getFileContent fetches on them. The pack's
+    // JSDoc contract says "post-filter, pre-batch" — this aligns the
+    // call site with it. `filesAfterFilter` ⊇ `reviewedFiles` (the
+    // batcher subsets it), so `testFilesNotInPromptDiff` still
+    // correctly captures batch-dropped (not filter-dropped) tests.
+    const testingEvidencePackInitial: TestingEvidencePack = buildTestingEvidencePack({
+      splitFilePaths: filesAfterFilter.map((f) => f.path),
+      reviewedFilePaths: reviewedFiles.map((f) => f.path),
+    })
+    let testingEvidenceFetchResult: InspectedTestFileFetchResult = {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    }
+    if (testingEvidencePackInitial.testFilesChanged.length > 0) {
+      const rawByPath: Record<string, string> = {}
+      const failedPaths: string[] = []
+      const fetchResults = await Promise.allSettled(
+        testingEvidencePackInitial.testFilesChanged.map(async (p) => {
+          const src = await client.getFileContent(owner, repo, p, headSha)
+          return { p, src }
+        }),
+      )
+      for (let i = 0; i < fetchResults.length; i++) {
+        const path = testingEvidencePackInitial.testFilesChanged[i]
+        if (!path) continue
+        const r = fetchResults[i]
+        if (r && r.status === "fulfilled" && typeof r.value.src === "string") {
+          rawByPath[r.value.p] = r.value.src
+        } else {
+          failedPaths.push(path)
+        }
+      }
+      const capped = applyTestFileContentCaps(
+        rawByPath,
+        testingEvidencePackInitial.testFilesChanged,
+      )
+      testingEvidenceFetchResult = { ...capped, failedPaths }
+    }
+    const testingEvidencePack = mergeInspectedTestFileContents(
+      testingEvidencePackInitial,
+      testingEvidenceFetchResult,
+    )
+    const testingEvidenceBlock = renderTestingEvidenceBlock(
+      testingEvidencePack,
+      testingEvidenceFetchResult,
+    )
+
+    // SIG-91 + SIG-113 telemetry — lets us verify post-deploy that
+    // sibling pairs + the new evidence pack are being built from the
+    // full diff inventory (not just the first batch).
     {
       const sourceFilesInDiff: string[] = []
       const testFilesInDiff: string[] = []
@@ -1437,8 +1515,27 @@ export async function handlePrReviewEnsemble(
         testFilesInDiff,
         siblingMappingsDetected,
       }))
+      // SIG-113: separate event for the new evidence pack so we can
+      // monitor coverage of the full-inventory inspection independent
+      // of the SIG-91 first-batch classification.
+      console.log(JSON.stringify({
+        event: "pr-review-testing-evidence-built",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        sourceFilesChanged_count: testingEvidencePack.sourceFilesChanged.length,
+        testFilesChanged_count: testingEvidencePack.testFilesChanged.length,
+        testFilesInPromptDiff_count: testingEvidencePack.testFilesInPromptDiff.length,
+        testFilesNotInPromptDiff_count: testingEvidencePack.testFilesNotInPromptDiff.length,
+        inspectedTestFiles_count: testingEvidencePack.inspectedTestFiles.length,
+        contentTotalChars: testingEvidenceFetchResult.totalChars,
+        truncatedPaths_count: testingEvidenceFetchResult.truncatedPaths.length,
+        failedFetchPaths_count: testingEvidenceFetchResult.failedPaths.length,
+      }))
     }
 
+    // SIG-113: build TWO base messages — one for non-tests specialists
+    // (gets the original classification block) and one for the tests
+    // specialist (gets the stronger testing-evidence block). The
+    // dispatch loops below select per-role.
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -1452,6 +1549,23 @@ export async function handlePrReviewEnsemble(
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
       ...(diffFileClassificationBlock.length > 0 ? { diffFileClassificationBlock } : {}),
     })
+    const testsSpecialistInitialMessage = testingEvidenceBlock.length > 0
+      ? buildSpecialistInitialMessage({
+          prNumber,
+          title: meta.title,
+          body: meta.body ?? "",
+          diff,
+          retrievalSnapshot,
+          namespace,
+          ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+          ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
+          ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
+          ...(stackBlock.length > 0 ? { stackBlock } : {}),
+          testingEvidenceBlock,
+        })
+      : baseInitialMessage
+    const messageForRole = (role: string): string =>
+      role === "tests" ? testsSpecialistInitialMessage : baseInitialMessage
 
     // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
     // prod Promise.allSettled below so both lineups run in parallel
@@ -1480,7 +1594,10 @@ export async function handlePrReviewEnsemble(
         shadowConfig,
         apiKey: env.OLLAMA_API_KEY,
         systemPrompt: SPECIALIST_PROMPTS[role],
-        userMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
+        // SIG-113: pick per-role initial message — tests specialist
+        // gets the testing-evidence block, others get the
+        // classification block.
+        userMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
         chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
         signal: composedSignal,
         perfCtx,
@@ -1515,7 +1632,9 @@ export async function handlePrReviewEnsemble(
             role,
             apiKey: env.OLLAMA_API_KEY,
             systemPrompt: SPECIALIST_PROMPTS[role],
-            initialMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
+            // SIG-113: tests specialist gets the testing-evidence
+            // block; other specialists get the classification block.
+            initialMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
             chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
             signal,
             // ARC-283 Phase B1b: thread the orchestrator's perfCtx
@@ -2016,12 +2135,30 @@ export async function handlePrReviewEnsemble(
       synthOutput: { verdict: synthOutput.verdict, provenance: synthOutput.provenance },
       reviewable,
       specialistVerdicts: succeeded,
+      // SIG-113: thread the testing-evidence pack through so the
+      // citation gate fires on uncited `category: "testing"` findings.
+      // Empty pack (no source/test files) → gate no-ops via the
+      // pure helper's "pack undefined or empty" branch.
+      testingEvidence: testingEvidencePack,
+      onTestingFindingDropped: (finding, reason) => {
+        console.log(JSON.stringify({
+          event: "pr-review-testing-finding-dropped",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          dropReason: reason,
+          findingPath: finding.path,
+          findingLine: finding.line,
+          findingHeadline: finding.headline.slice(0, 120),
+          inspectedTestFiles_count: finding.inspectedTestFiles?.length ?? 0,
+          evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
+        }))
+      },
     })
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
       droppedForHallucination: validated.droppedForHallucination,
       demotedScore1: validated.demotedScore1,
       droppedForVaguePrefix: validated.droppedForVaguePrefix,
+      droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4554,6 +4691,15 @@ export interface ValidatedOutput {
    */
   droppedForVaguePrefix: number
   /**
+   * SIG-113: count of `category: "testing"` findings dropped because
+   * the specialist failed to cite evidence via `inspectedTestFiles`
+   * or `evidenceRefs`. Eliminates the PR #110 / PR #111 hallucination
+   * class where the specialist asserted "missing tests" without
+   * inspecting any test file. Surfaced to telemetry so the gate's
+   * hit rate is observable in the SIG-86 aggregator.
+   */
+  droppedForUncitedTestingEvidence: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -4564,12 +4710,162 @@ export interface ValidatedOutput {
   cleanFindingProvenance: SynthesizerProvenance["findings"]
 }
 
+/**
+ * SIG-113: gate per-finding evidence citation for `category: "testing"`
+ * findings. Drops uncited findings to suppress the PR #110/#111
+ * hallucination class (specialist asserts "missing tests" without
+ * having inspected any test file).
+ *
+ * Contract:
+ *   - Non-testing findings always pass (gate only applies to category="testing")
+ *   - When pack is undefined (orchestrator skipped the build — e.g. pure
+ *     docs PR with no source/test files in the diff), all findings pass
+ *     (no evidence to gate on; the SIG-91 prompt rule already covers
+ *     this case via "[TESTING EVIDENCE] block absent → no missing-tests
+ *     finding applicable")
+ *   - Finding cites an `inspectedTestFiles` path that EXISTS in the
+ *     pack's inspected set → keep (specialist read a file we actually
+ *     embedded in its prompt)
+ *   - Finding cites an `evidenceRefs` `siblingMapping:<source>-><test>`
+ *     that MATCHES a real mapping in the pack AND whose `<source>`
+ *     equals `finding.path` → keep (relevant + accurate absence claim)
+ *   - Finding cites `evidenceRefs` `inspectedTestFile:<path>` resolving
+ *     to a real inspected path → keep
+ *   - Finding cites `evidenceRefs` `testFileChanged:<path>` resolving
+ *     to a test file in the PR's changed set → keep (covers the
+ *     "removed/renamed test coverage" class where the deleted test
+ *     can't be fetched at headSha)
+ *   - Otherwise → drop
+ *
+ * CodeRabbit catch on PR #112 (Major): the citation MUST be validated
+ * against the actual pack, not just shape-checked. Pre-fix, any
+ * non-empty `inspectedTestFiles` array or any `evidenceRefs` string
+ * with the right prefix passed — letting a hallucinating model bypass
+ * the gate with an invented path (`tests/made-up.test.ts`) or a
+ * fabricated mapping. That reopens the "structurally valid but
+ * factually unsupported" hole the gate exists to close. Now every
+ * citation is cross-checked against `pack.inspectedTestFiles` /
+ * `pack.siblingMappings`.
+ *
+ * Pure — exported for tests.
+ */
+export function evaluateTestingFindingCitation(
+  finding: PrReviewFinding,
+  pack: TestingEvidencePack | undefined,
+): { keep: true } | { keep: false; reason: "no-citation" } {
+  if (finding.category !== "testing") return { keep: true }
+  // `buildTestingEvidencePack` always returns a pack object — even for
+  // a pure docs PR it returns one with empty source/test arrays. Treat
+  // an empty pack the same as an absent one: no evidence to gate on,
+  // so pass the finding through.
+  if (!pack || (pack.sourceFilesChanged.length === 0 && pack.testFilesChanged.length === 0)) {
+    return { keep: true }
+  }
+
+  // Build the sets of REAL evidence from the pack. A citation only
+  // counts if it names something the pack actually contains.
+  const realInspected = new Set(pack.inspectedTestFiles)
+  const realTestFilesChanged = new Set(pack.testFilesChanged)
+  // Real mapping source → arrow-value, so we can both (a) confirm the
+  // mapping exists AND (b) enforce relevance to `finding.path`.
+  const realMappingBySource = new Map<string, string>()
+  for (const m of pack.siblingMappings) {
+    realMappingBySource.set(m.source, m.test ?? "NONE")
+  }
+
+  // inspectedTestFiles: at least one cited path must be in the pack's
+  // real inspected set. An invented path doesn't count. No relevance-
+  // to-`finding.path` check here — a finding about a source file
+  // legitimately cites the (differently-named) test file it read.
+  if (Array.isArray(finding.inspectedTestFiles)) {
+    for (const p of finding.inspectedTestFiles) {
+      if (typeof p === "string" && realInspected.has(p.trim())) {
+        return { keep: true }
+      }
+    }
+  }
+
+  // evidenceRefs: validate each ref against the pack.
+  if (Array.isArray(finding.evidenceRefs)) {
+    for (const ref of finding.evidenceRefs) {
+      if (typeof ref !== "string") continue
+      const trimmed = ref.trim()
+
+      // `siblingMapping:<source>-><test|NONE>` — must match a REAL
+      // mapping AND be RELEVANT to this finding. CodeRabbit PR #112
+      // (Major): a finding about `foo.ts` could otherwise cite an
+      // unrelated real mapping (`bar.ts->NONE`) and bypass the gate.
+      // The mapping's source must equal the finding's target path.
+      if (trimmed.startsWith("siblingMapping:")) {
+        const payload = trimmed.slice("siblingMapping:".length)
+        const arrowIdx = payload.indexOf("->")
+        if (arrowIdx < 0) continue
+        const source = payload.slice(0, arrowIdx).trim()
+        const arrowValue = payload.slice(arrowIdx + 2).trim()
+        // Relevance: the cited mapping must be ABOUT the file the
+        // finding targets.
+        if (source !== finding.path) continue
+        // Existence + accuracy: the cited arrow value must match the
+        // pack's real mapping for that source (a `->NONE` claim for a
+        // source that actually has a sibling is rejected).
+        if (realMappingBySource.get(source) === arrowValue) {
+          return { keep: true }
+        }
+        continue
+      }
+
+      // `inspectedTestFile:<path>` — must be a real inspected path.
+      if (trimmed.startsWith("inspectedTestFile:")) {
+        const path = trimmed.slice("inspectedTestFile:".length).trim()
+        if (realInspected.has(path)) {
+          return { keep: true }
+        }
+        continue
+      }
+
+      // `testFileChanged:<path>` — CodeRabbit PR #112 (Major): a
+      // legitimate "PR removed/renamed test coverage" finding can't
+      // cite an inspected file (the deleted test fails to fetch at
+      // headSha) or a sibling mapping (no source). Accept a citation
+      // that names a test file present in the PR's CHANGED set, which
+      // includes deletions/renames.
+      if (trimmed.startsWith("testFileChanged:")) {
+        const path = trimmed.slice("testFileChanged:".length).trim()
+        if (realTestFilesChanged.has(path)) {
+          return { keep: true }
+        }
+        continue
+      }
+    }
+  }
+
+  return { keep: false, reason: "no-citation" }
+}
+
 export function validateForSubmission(args: {
   synthOutput: { verdict: PrReviewVerdict; provenance: SynthesizerProvenance }
   reviewable: ReviewableMap
   specialistVerdicts: CollectedVerdict[]
+  /**
+   * SIG-113: testing-evidence pack built by the orchestrator from
+   * the FULL diff inventory. Used by `evaluateTestingFindingCitation`
+   * to drop `category: "testing"` findings that don't cite evidence
+   * (the PR #110 / PR #111 hallucination class). Absent for callers
+   * that haven't wired the pack through — the gate then no-ops
+   * (back-compat for the staged rollout).
+   */
+  testingEvidence?: TestingEvidencePack
+  /**
+   * SIG-113: optional telemetry-emit callback fired once per dropped
+   * testing finding. Lets the orchestrator log
+   * `pr-review-testing-finding-dropped` with the full correlation
+   * fields (owner/repo/prNumber/headSha) without coupling the pure
+   * validator to a logger. Absent → silent drop (counter still
+   * increments and surfaces via `droppedForUncitedTestingEvidence`).
+   */
+  onTestingFindingDropped?: (finding: PrReviewFinding, reason: "no-citation") => void
 }): ValidatedOutput {
-  const { synthOutput, reviewable, specialistVerdicts } = args
+  const { synthOutput, reviewable, specialistVerdicts, testingEvidence, onTestingFindingDropped } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
@@ -4583,6 +4879,7 @@ export function validateForSubmission(args: {
   let droppedForHallucination = 0
   let demotedScore1 = 0
   let droppedForVaguePrefix = 0
+  let droppedForUncitedTestingEvidence = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -4614,6 +4911,21 @@ export function validateForSubmission(args: {
     // shouldn't have meaningful prefix content anyway).
     if (hasVaguePrefix(f)) {
       droppedForVaguePrefix++
+      continue
+    }
+
+    // SIG-113: testing-evidence citation gate. Drops
+    // `category: "testing"` findings that don't cite evidence —
+    // suppresses the PR #110 / PR #111 hallucination class where
+    // the specialist asserted "no tests exist" without inspecting
+    // any test file. Runs BEFORE score-1 demotion so an unevidenced
+    // nit also drops (no advisory bucket leak). Runs AFTER vague-
+    // prefix + hallucination guards so the counter attribution
+    // stays clean.
+    const citationCheck = evaluateTestingFindingCitation(f, testingEvidence)
+    if (!citationCheck.keep) {
+      droppedForUncitedTestingEvidence++
+      onTestingFindingDropped?.(f, citationCheck.reason)
       continue
     }
 
@@ -4660,6 +4972,7 @@ export function validateForSubmission(args: {
     droppedForHallucination,
     demotedScore1,
     droppedForVaguePrefix,
+    droppedForUncitedTestingEvidence,
     cleanFindingProvenance,
   }
 }
@@ -4743,6 +5056,10 @@ interface EnsembleTelemetry {
      * post-processing filter (headline or body starts with
      * Ensure/Verify/Validate/Consider/Review/Confirm). */
     droppedForVaguePrefix: number
+    /** SIG-113: count of `category: "testing"` findings dropped
+     * because the specialist failed to cite evidence (no
+     * inspectedTestFiles AND no evidenceRefs:siblingMapping). */
+    droppedForUncitedTestingEvidence: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

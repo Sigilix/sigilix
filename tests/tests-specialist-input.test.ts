@@ -443,15 +443,28 @@ describe("SIG-91 historical regression — false-positive PRs", () => {
 // ─── prompt-content sanity ───────────────────────────────────────────
 
 describe("SPECIALIST_PROMPTS.tests grounding", () => {
-  it("instructs the model to consult the DIFF FILE CLASSIFICATION block before firing 'missing tests'", () => {
-    expect(SPECIALIST_PROMPTS.tests).toContain("[DIFF FILE CLASSIFICATION]")
-    expect(SPECIALIST_PROMPTS.tests).toContain("CONSULT THAT BLOCK FIRST")
+  // SIG-113: the tests specialist now consults `[TESTING EVIDENCE]`
+  // (the stronger SIG-113 block built from splitFiles + full
+  // inspected-test content) instead of `[DIFF FILE CLASSIFICATION]`
+  // (the SIG-91 first-batch-only block). The SIG-91 rule + the
+  // ONLY-admissible guard are retained.
+  it("instructs the model to consult the TESTING EVIDENCE block before firing 'missing tests'", () => {
+    expect(SPECIALIST_PROMPTS.tests).toContain("[TESTING EVIDENCE]")
+    expect(SPECIALIST_PROMPTS.tests).toContain("CONSULT THE `[TESTING EVIDENCE]` BLOCK FIRST")
     expect(SPECIALIST_PROMPTS.tests).toContain("ONLY admissible")
   })
 
+  it("requires testing findings to cite evidenceRefs or inspectedTestFiles (SIG-113)", () => {
+    // The SIG-113 validator drops uncited testing findings; the
+    // prompt must instruct the model to cite or be dropped.
+    expect(SPECIALIST_PROMPTS.tests).toContain("evidenceRefs")
+    expect(SPECIALIST_PROMPTS.tests).toContain("inspectedTestFiles")
+    expect(SPECIALIST_PROMPTS.tests).toContain("DROPPED")
+  })
+
   it("retains the test-specialist primary model config (regression guard)", () => {
-    // Don't accidentally swap models in this PR; SIG-91 is a prompt +
-    // input fix, not a model change.
+    // Don't accidentally swap models in this PR; SIG-113 is a prompt +
+    // input + validator fix, not a model change.
     expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek-v4-flash:cloud")
   })
 })

@@ -119,6 +119,28 @@ export const PR_REVIEW_SCHEMA = {
             type: "string",
             enum: ["current-pr", "downstack-context", "upstack-followup"],
           },
+          // SIG-113: per-finding evidence-citation fields. The
+          // specialist cites which files it inspected + which
+          // evidence-block records back the finding. Both fields are
+          // OPTIONAL in the schema so the staged rollout (specialists
+          // not yet trained on the new prompt) doesn't fail schema-
+          // constrained decode. The orchestrator's
+          // `evaluateTestingFindingCitation` gate gates on
+          // these fields downstream and drops findings that fail to
+          // cite.
+          //   inspectedTestFiles — file paths the specialist actually
+          //                        read while forming the finding
+          //   evidenceRefs       — references into the [TESTING EVIDENCE]
+          //                        block (e.g. "siblingMapping:src/lib/foo.ts->NONE"
+          //                        or a path in inspectedTestFiles)
+          inspectedTestFiles: {
+            type: "array",
+            items: { type: "string" },
+          },
+          evidenceRefs: {
+            type: "array",
+            items: { type: "string" },
+          },
         },
         required: ["path", "line", "score", "category", "headline", "body"],
       },

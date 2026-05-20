@@ -63,7 +63,14 @@ import {
 } from "./testing-evidence-pack"
 import {
   buildSecurityFactManifest,
+  type SecurityFact,
 } from "./security-evidence-manifest"
+import {
+  evaluateSecurityFinding,
+  parseSecurityValidatorMode,
+  type SecurityValidatorMode,
+  type SecurityDropReason,
+} from "./validate-security-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -834,7 +841,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -2189,6 +2196,26 @@ export async function handlePrReviewEnsemble(
           evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
         }))
       },
+      // SIG-108: thread the security fact manifest + mode through so
+      // the evidence gate fires on sev>=4 security findings. Default
+      // `shadow` — the gate only counts/telemeters what WOULD drop
+      // until the operator flips OPENCLAW_SECURITY_VALIDATOR_MODE to
+      // "enforce".
+      securityManifest: securityManifest.manifest,
+      securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
+      onSecurityFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          cweId: finding.cweId ?? null,
+          evidenceId: finding.evidenceId ?? null,
+          category: finding.category,
+        }))
+      },
     })
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
@@ -2196,6 +2223,7 @@ export async function handlePrReviewEnsemble(
       demotedScore1: validated.demotedScore1,
       droppedForVaguePrefix: validated.droppedForVaguePrefix,
       droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
+      droppedForFailedValidation: validated.droppedForFailedValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4737,6 +4765,17 @@ export interface ValidatedOutput {
    */
   droppedForUncitedTestingEvidence: number
   /**
+   * SIG-108: count of security-applicable findings the security
+   * evidence gate flagged for drop (sev>=4 security finding with
+   * fabricated / non-linking / absent evidence that auto-enrich
+   * couldn't rescue). In `shadow` mode this counts what WOULD be
+   * dropped without actually dropping (the finding stays in
+   * `verdict.findings`); in `enforce` mode the finding is dropped.
+   * Surfaced to telemetry so the gate's would-drop rate is observable
+   * before enforcement is enabled.
+   */
+  droppedForFailedValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -4901,8 +4940,44 @@ export function validateForSubmission(args: {
    * increments and surfaces via `droppedForUncitedTestingEvidence`).
    */
   onTestingFindingDropped?: (finding: PrReviewFinding, reason: "no-citation") => void
+  /**
+   * SIG-108: security fact manifest (evidenceId → fact) built by the
+   * orchestrator via `buildSecurityFactManifest`. Used by
+   * `evaluateSecurityFinding` to cross-check sev>=4 security findings'
+   * evidence + auto-enrich corroborated findings. Absent → the gate
+   * no-ops (back-compat for callers not yet threading the manifest).
+   */
+  securityManifest?: Map<string, SecurityFact>
+  /**
+   * SIG-108: gate mode. `shadow` (default): the gate's verdict is
+   * counted + telemetered but the finding is NOT dropped. `enforce`:
+   * rejected findings are dropped. Read from
+   * `OPENCLAW_SECURITY_VALIDATOR_MODE` at the call site; defaults to
+   * `shadow` for the cautious staged rollout.
+   */
+  securityValidatorMode?: SecurityValidatorMode
+  /**
+   * SIG-108: optional telemetry callback fired once per security
+   * finding the gate flagged (whether or not it was actually dropped —
+   * the `dropped` arg distinguishes enforce from shadow). Lets the
+   * orchestrator log `pr-review-finding-rejected-validation` with full
+   * correlation fields without coupling the pure validator to a logger.
+   */
+  onSecurityFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: SecurityDropReason; dropped: boolean },
+  ) => void
 }): ValidatedOutput {
-  const { synthOutput, reviewable, specialistVerdicts, testingEvidence, onTestingFindingDropped } = args
+  const {
+    synthOutput,
+    reviewable,
+    specialistVerdicts,
+    testingEvidence,
+    onTestingFindingDropped,
+    securityManifest,
+    securityValidatorMode = "shadow",
+    onSecurityFindingDropped,
+  } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
@@ -4917,6 +4992,7 @@ export function validateForSubmission(args: {
   let demotedScore1 = 0
   let droppedForVaguePrefix = 0
   let droppedForUncitedTestingEvidence = 0
+  let droppedForFailedValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -4966,6 +5042,36 @@ export function validateForSubmission(args: {
       continue
     }
 
+    // SIG-108: security evidence gate. Applies ONLY to findings whose
+    // derived role set includes `security` (from provenance, NOT from
+    // `finding.category` alone — Codex #3: a merged security+logic
+    // finding must still satisfy the evidence rule). A sev>=4 security
+    // finding must carry a resolving evidenceId, be auto-enrichable
+    // from a manifest fact at the same path/+-10 lines, or — for the
+    // authz bucket — set evidenceId:"NONE" with a body justification.
+    // Runs AFTER the testing gate (disjoint domains) and BEFORE score-1
+    // demotion + line validation (Codex #3). Shadow-first: in `shadow`
+    // mode the verdict is counted + telemetered but the finding is NOT
+    // dropped; only `enforce` actually drops.
+    if (securityManifest && sourceRolesInclude(provenance, sourceIds, "security")) {
+      const decision = evaluateSecurityFinding(f, securityManifest)
+      if (decision.keep) {
+        // Auto-enrich: stamp the corroborating fact's evidenceId/cwe
+        // onto the finding when the model omitted them, so downstream
+        // consumers (markers, body rendering) see the citation.
+        if (decision.enrich) {
+          f.evidenceId = decision.enrich.evidenceId
+          if (decision.enrich.cweId && !f.cweId) f.cweId = decision.enrich.cweId
+        }
+      } else {
+        const dropped = securityValidatorMode === "enforce"
+        droppedForFailedValidation++
+        onSecurityFindingDropped?.(f, { reason: decision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
+    }
+
     // Score-1 advisory demotion
     if (f.score <= 1) {
       advisoryNits.push(f)
@@ -5010,8 +5116,30 @@ export function validateForSubmission(args: {
     demotedScore1,
     droppedForVaguePrefix,
     droppedForUncitedTestingEvidence,
+    droppedForFailedValidation,
     cleanFindingProvenance,
   }
+}
+
+/**
+ * SIG-108: derive whether a finding's source role set includes `role`.
+ * Uses BOTH the explicit `sourceSpecialists` array AND the prefix of
+ * each `sourceFindingId` (e.g. "security-0" → "security") — Codex #3:
+ * don't trust `sourceSpecialists` blindly; cross-derive from the
+ * validated finding ids too. A merged security+logic finding
+ * (sourceSpecialists: ["security","logic"]) still counts as security.
+ */
+function sourceRolesInclude(
+  provenance: SynthesizerProvenance["findings"][number] | undefined,
+  sourceIds: readonly string[],
+  role: SpecialistRole,
+): boolean {
+  if (provenance && Array.isArray(provenance.sourceSpecialists)) {
+    if (provenance.sourceSpecialists.includes(role)) return true
+  }
+  // `sourceFindingIds` are shaped `<role>-<index>` (assignStableFindingIds).
+  const prefix = `${role}-`
+  return sourceIds.some((id) => typeof id === "string" && id.startsWith(prefix))
 }
 
 // ─── telemetry ─────────────────────────────────────────────────────────
@@ -5097,6 +5225,9 @@ interface EnsembleTelemetry {
      * because the specialist failed to cite evidence (no
      * inspectedTestFiles AND no evidenceRefs:siblingMapping). */
     droppedForUncitedTestingEvidence: number
+    /** SIG-108: count of security findings the evidence gate flagged
+     * (would-drop in shadow mode, actual-drop in enforce mode). */
+    droppedForFailedValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

@@ -831,7 +831,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -2125,12 +2125,30 @@ export async function handlePrReviewEnsemble(
       synthOutput: { verdict: synthOutput.verdict, provenance: synthOutput.provenance },
       reviewable,
       specialistVerdicts: succeeded,
+      // SIG-113: thread the testing-evidence pack through so the
+      // citation gate fires on uncited `category: "testing"` findings.
+      // Empty pack (no source/test files) → gate no-ops via the
+      // pure helper's "pack undefined or empty" branch.
+      testingEvidence: testingEvidencePack,
+      onTestingFindingDropped: (finding, reason) => {
+        console.log(JSON.stringify({
+          event: "pr-review-testing-finding-dropped",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          dropReason: reason,
+          findingPath: finding.path,
+          findingLine: finding.line,
+          findingHeadline: finding.headline.slice(0, 120),
+          inspectedTestFiles_count: finding.inspectedTestFiles?.length ?? 0,
+          evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
+        }))
+      },
     })
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
       droppedForHallucination: validated.droppedForHallucination,
       demotedScore1: validated.demotedScore1,
       droppedForVaguePrefix: validated.droppedForVaguePrefix,
+      droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4663,6 +4681,15 @@ export interface ValidatedOutput {
    */
   droppedForVaguePrefix: number
   /**
+   * SIG-113: count of `category: "testing"` findings dropped because
+   * the specialist failed to cite evidence via `inspectedTestFiles`
+   * or `evidenceRefs`. Eliminates the PR #110 / PR #111 hallucination
+   * class where the specialist asserted "missing tests" without
+   * inspecting any test file. Surfaced to telemetry so the gate's
+   * hit rate is observable in the SIG-86 aggregator.
+   */
+  droppedForUncitedTestingEvidence: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -4673,12 +4700,85 @@ export interface ValidatedOutput {
   cleanFindingProvenance: SynthesizerProvenance["findings"]
 }
 
+/**
+ * SIG-113: gate per-finding evidence citation for `category: "testing"`
+ * findings. Drops uncited findings to suppress the PR #110/#111
+ * hallucination class (specialist asserts "missing tests" without
+ * having inspected any test file).
+ *
+ * Contract:
+ *   - Non-testing findings always pass (gate only applies to category="testing")
+ *   - When pack is undefined (orchestrator skipped the build — e.g. pure
+ *     docs PR with no source/test files in the diff), all findings pass
+ *     (no evidence to gate on; the SIG-91 prompt rule already covers
+ *     this case via "[TESTING EVIDENCE] block absent → no missing-tests
+ *     finding applicable")
+ *   - Finding has at least one `inspectedTestFiles` entry → keep (specialist
+ *     read test files while forming the finding)
+ *   - Finding has at least one `evidenceRefs` entry referencing a
+ *     `siblingMapping:` from the pack → keep (specialist cited the
+ *     deterministic mapping that backs the absence claim)
+ *   - Otherwise → drop with a structured reason
+ *
+ * Pure — exported for tests.
+ */
+export function evaluateTestingFindingCitation(
+  finding: PrReviewFinding,
+  pack: TestingEvidencePack | undefined,
+): { keep: true } | { keep: false; reason: "no-citation" } {
+  if (finding.category !== "testing") return { keep: true }
+  // No pack → orchestrator didn't build one (pure docs PR / no
+  // source/test files in diff). Skip the gate; the specialist's
+  // prompt-side rule already says "no missing-tests finding
+  // applicable" when the evidence block is absent.
+  if (!pack) return { keep: true }
+
+  const hasInspected = Array.isArray(finding.inspectedTestFiles) && finding.inspectedTestFiles.length > 0
+  if (hasInspected) return { keep: true }
+
+  // Accept an evidenceRefs entry whose prefix is `siblingMapping:`
+  // (deterministic backing for an absence claim) or
+  // `inspectedTestFile:` (specialist cited a file even though they
+  // didn't use the inspectedTestFiles array). Tolerate the looser
+  // shape so the validator doesn't drop legitimate citations on a
+  // schema technicality.
+  if (Array.isArray(finding.evidenceRefs)) {
+    for (const ref of finding.evidenceRefs) {
+      if (typeof ref !== "string") continue
+      const trimmed = ref.trim()
+      if (trimmed.startsWith("siblingMapping:") || trimmed.startsWith("inspectedTestFile:")) {
+        return { keep: true }
+      }
+    }
+  }
+
+  return { keep: false, reason: "no-citation" }
+}
+
 export function validateForSubmission(args: {
   synthOutput: { verdict: PrReviewVerdict; provenance: SynthesizerProvenance }
   reviewable: ReviewableMap
   specialistVerdicts: CollectedVerdict[]
+  /**
+   * SIG-113: testing-evidence pack built by the orchestrator from
+   * the FULL diff inventory. Used by `evaluateTestingFindingCitation`
+   * to drop `category: "testing"` findings that don't cite evidence
+   * (the PR #110 / PR #111 hallucination class). Absent for callers
+   * that haven't wired the pack through — the gate then no-ops
+   * (back-compat for the staged rollout).
+   */
+  testingEvidence?: TestingEvidencePack
+  /**
+   * SIG-113: optional telemetry-emit callback fired once per dropped
+   * testing finding. Lets the orchestrator log
+   * `pr-review-testing-finding-dropped` with the full correlation
+   * fields (owner/repo/prNumber/headSha) without coupling the pure
+   * validator to a logger. Absent → silent drop (counter still
+   * increments and surfaces via `droppedForUncitedTestingEvidence`).
+   */
+  onTestingFindingDropped?: (finding: PrReviewFinding, reason: "no-citation") => void
 }): ValidatedOutput {
-  const { synthOutput, reviewable, specialistVerdicts } = args
+  const { synthOutput, reviewable, specialistVerdicts, testingEvidence, onTestingFindingDropped } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
@@ -4692,6 +4792,7 @@ export function validateForSubmission(args: {
   let droppedForHallucination = 0
   let demotedScore1 = 0
   let droppedForVaguePrefix = 0
+  let droppedForUncitedTestingEvidence = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -4723,6 +4824,21 @@ export function validateForSubmission(args: {
     // shouldn't have meaningful prefix content anyway).
     if (hasVaguePrefix(f)) {
       droppedForVaguePrefix++
+      continue
+    }
+
+    // SIG-113: testing-evidence citation gate. Drops
+    // `category: "testing"` findings that don't cite evidence —
+    // suppresses the PR #110 / PR #111 hallucination class where
+    // the specialist asserted "no tests exist" without inspecting
+    // any test file. Runs BEFORE score-1 demotion so an unevidenced
+    // nit also drops (no advisory bucket leak). Runs AFTER vague-
+    // prefix + hallucination guards so the counter attribution
+    // stays clean.
+    const citationCheck = evaluateTestingFindingCitation(f, testingEvidence)
+    if (!citationCheck.keep) {
+      droppedForUncitedTestingEvidence++
+      onTestingFindingDropped?.(f, citationCheck.reason)
       continue
     }
 
@@ -4769,6 +4885,7 @@ export function validateForSubmission(args: {
     droppedForHallucination,
     demotedScore1,
     droppedForVaguePrefix,
+    droppedForUncitedTestingEvidence,
     cleanFindingProvenance,
   }
 }
@@ -4852,6 +4969,10 @@ interface EnsembleTelemetry {
      * post-processing filter (headline or body starts with
      * Ensure/Verify/Validate/Consider/Review/Confirm). */
     droppedForVaguePrefix: number
+    /** SIG-113: count of `category: "testing"` findings dropped
+     * because the specialist failed to cite evidence (no
+     * inspectedTestFiles AND no evidenceRefs:siblingMapping). */
+    droppedForUncitedTestingEvidence: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

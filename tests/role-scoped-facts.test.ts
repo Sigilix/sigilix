@@ -26,6 +26,7 @@ const baseInputs = {
   sarifBlock: "[SARIF] iac issue",
   deterministicBlock: "[DETERMINISTIC] regex hit",
   docsCoverageBlock: "[DOCS COVERAGE] missing doc",
+  coverageGapBlock: "[COVERAGE GAPS] uncovered lines",
   securityManifestBlock: "[SECURITY EVIDENCE MANIFEST] - id: secret:a:b:1",
   astFindings: [] as AstFinding[],
 }
@@ -57,6 +58,14 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     expect(f.performance).not.toContain("[DOCS COVERAGE]")
   })
 
+  it("routes the coverage-gap block ONLY to tests", () => {
+    const f = buildFactsByRole(baseInputs)
+    expect(f.tests).toContain("[COVERAGE GAPS]")
+    expect(f.security).not.toContain("[COVERAGE GAPS]")
+    expect(f.logic).not.toContain("[COVERAGE GAPS]")
+    expect(f.performance).not.toContain("[COVERAGE GAPS]")
+  })
+
   it("splits AST findings by roleHint into the matching role", () => {
     const f = buildFactsByRole({
       ...baseInputs,
@@ -85,6 +94,7 @@ describe("buildFactsByRole — no cross-domain leak", () => {
       sarifBlock: "",
       deterministicBlock: "",
       docsCoverageBlock: "",
+      coverageGapBlock: "",
       securityManifestBlock: "",
       astFindings: [],
     })

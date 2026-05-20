@@ -32,6 +32,8 @@ export interface RoleScopedFactInputs {
   deterministicBlock: string
   /** ARC-272 docs-coverage block (tests). */
   docsCoverageBlock: string
+  /** SIG-118 coverage-gap block from LCOV ingestion (tests). */
+  coverageGapBlock: string
   /** SIG-108 security evidence manifest render (security). */
   securityManifestBlock: string
   /** ARC-181 AST findings, split here by `roleHint`. */
@@ -58,6 +60,6 @@ export function buildFactsByRole(inputs: RoleScopedFactInputs): Record<Specialis
     ]),
     logic: join([astBlock("logic"), inputs.deterministicBlock]),
     performance: join([astBlock("performance")]),
-    tests: join([inputs.docsCoverageBlock]),
+    tests: join([inputs.docsCoverageBlock, inputs.coverageGapBlock]),
   }
 }

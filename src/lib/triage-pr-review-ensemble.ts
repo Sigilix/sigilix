@@ -81,7 +81,7 @@ import {
 import {
   evaluateLogicFinding,
   parseLogicValidatorMode,
-  buildAddedLineTextByPath,
+  buildChangedLineTextByPath,
   type LogicValidatorMode,
   type LogicDropReason,
   type LogicEvidence,
@@ -2294,7 +2294,7 @@ export async function handlePrReviewEnsemble(
       // "enforce". Reuses the `pr-review-finding-rejected-validation`
       // event with a `gate: "logic"` discriminator.
       logicEvidence: {
-        addedLineTextByPath: buildAddedLineTextByPath(fullPrDiff),
+        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
         astLogicFindings: astResult.findings.filter((f) => f.roleHint === "logic"),
       },
       logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),

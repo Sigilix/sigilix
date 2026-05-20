@@ -74,7 +74,8 @@ export type LogicFindingDecision =
 
 export type LogicDropReason =
   | "missing-path" // sev>=4 logic finding with no concrete path to anchor
-  | "unanchored-logic-claim" // sev>=4 logic on a non-changed path OR no concrete code token on added lines
+  | "path-not-changed" // sev>=4 logic on a path the PR didn't touch (cross-file impact — a known FN shape; tracked distinctly so shadow telemetry separates it from vague claims before enforce)
+  | "unanchored-logic-claim" // sev>=4 logic on a CHANGED path but quoting no concrete changed token + no co-located AST hit
 
 /**
  * Evidence inputs threaded by the orchestrator (PR-A-contained — NO
@@ -83,39 +84,55 @@ export type LogicDropReason =
  * rollout).
  */
 /**
- * Build the per-file ADDED-line text map from a unified diff: collect
- * the `+` lines (excluding the `+++ ` file header), strip the single
- * leading `+`, and key by the new-side path. Mirrors the path-parsing
- * of `buildChangedLines` (the line-NUMBER analogue) but captures TEXT
- * for the concrete-changed-token check. Pure + diff-only — NO symbol
- * retrieval (that's SIG-121). Defensive against a non-string input
- * (returns an empty map).
+ * Build the per-file CHANGED-line text map from a unified diff: collect
+ * BOTH `+` (added) AND `-` (removed) content lines, strip the single
+ * leading sign, and key by the file path. Captures TEXT for the
+ * concrete-changed-token check.
+ *
+ * Includes REMOVED lines (Codex review, HIGH): a finding about DELETED
+ * code — e.g. a PR that removed a guard `if (items.length === 0) return`
+ * — must still anchor on a token (`items.length`) it quotes from the
+ * removed line.
+ *
+ * Hunk-tracked (Codex review, MEDIUM): `+++`/`---` are parsed as file
+ * headers ONLY in the pre-hunk header section. Once inside a hunk (after
+ * `@@`), a line starting `+`/`-` is CONTENT — even content that itself
+ * begins `++ ` / `-- ` (which would otherwise be mis-read as a `+++ `/
+ * `--- ` header and corrupt the current path).
+ *
+ * Pure + diff-only — NO symbol retrieval (that's SIG-121). Defensive
+ * against a non-string input (returns an empty map).
  */
-export function buildAddedLineTextByPath(diff: string): Map<string, string[]> {
+export function buildChangedLineTextByPath(diff: string): Map<string, string[]> {
   const out = new Map<string, string[]>()
   if (!diff || typeof diff !== "string") return out
 
   let currentPath: string | null = null
+  let inHunk = false
   for (const raw of diff.split("\n")) {
     if (raw.startsWith("diff --git ")) {
       currentPath = null
+      inHunk = false
       continue
     }
-    if (raw.startsWith("+++ ")) {
-      const newPath = raw.slice(4).trim()
-      if (newPath === "/dev/null") {
-        currentPath = null
-      } else {
-        currentPath = newPath.startsWith("b/") ? newPath.slice(2) : newPath
-        if (!out.has(currentPath)) out.set(currentPath, [])
+    if (raw.startsWith("@@")) {
+      inHunk = true
+      continue
+    }
+    if (!inHunk) {
+      // File-header section — parse the new-side path from `+++ `; ignore
+      // `--- ` and everything else (index, mode, etc.).
+      if (raw.startsWith("+++ ")) {
+        const newPath = raw.slice(4).trim()
+        currentPath =
+          newPath === "/dev/null" ? null : newPath.startsWith("b/") ? newPath.slice(2) : newPath
+        if (currentPath !== null && !out.has(currentPath)) out.set(currentPath, [])
       }
       continue
     }
-    if (raw.startsWith("--- ")) continue
+    // Inside a hunk: a `+`/`-` line is added/removed CONTENT.
     if (currentPath === null) continue
-    // An added content line starts with a single `+` but is NOT the
-    // `+++ ` header (already handled above). Strip the leading `+`.
-    if (raw.startsWith("+")) {
+    if (raw.startsWith("+") || raw.startsWith("-")) {
       out.get(currentPath)!.push(raw.slice(1))
     }
   }
@@ -124,12 +141,13 @@ export function buildAddedLineTextByPath(diff: string): Map<string, string[]> {
 
 export interface LogicEvidence {
   /**
-   * Per-file ADDED-line text from the unified diff (the `+` lines with
-   * the leading `+` stripped). Used for the concrete-changed-token
-   * check: a backticked token in the finding must appear here. A path
-   * present here (even with no usable token) is the CHANGED-PATH anchor.
+   * Per-file CHANGED-line text from the unified diff (both `+` added and
+   * `-` removed content, leading sign stripped). Used for the concrete-
+   * changed-token check: a backticked token in the finding must appear
+   * here. A path present here (even with no usable token) is the
+   * CHANGED-PATH anchor.
    */
-  addedLineTextByPath: ReadonlyMap<string, readonly string[]>
+  changedLineTextByPath: ReadonlyMap<string, readonly string[]>
   /**
    * Deterministic AST findings already computed by the runner, filtered
    * to `roleHint === "logic"`. A finding co-located with one of these is
@@ -163,12 +181,12 @@ function backtickedTokens(finding: PrReviewFinding): string[] {
 
 /**
  * Does the finding's `path` appear in the changed-file set? An empty
- * `addedLineTextByPath` (gate not wired / docs-only PR) yields false for
+ * `changedLineTextByPath` (gate not wired / docs-only PR) yields false for
  * every path — but the caller scopes the gate so an empty evidence set
  * means "no evidence to gate on", handled in `evaluateLogicFinding`.
  */
 function isChangedPath(path: string, evidence: LogicEvidence): boolean {
-  return evidence.addedLineTextByPath.has(path)
+  return evidence.changedLineTextByPath.has(path)
 }
 
 /**
@@ -180,9 +198,14 @@ function isChangedPath(path: string, evidence: LogicEvidence): boolean {
  * single char (`x`, `+`) is too noisy to anchor on.
  */
 function hasConcreteChangedToken(finding: PrReviewFinding, evidence: LogicEvidence): boolean {
-  const lines = evidence.addedLineTextByPath.get(finding.path)
+  const lines = evidence.changedLineTextByPath.get(finding.path)
   if (!lines || lines.length === 0) return false
-  const tokens = backtickedTokens(finding).filter((t) => t.length >= 2)
+  // M4 (code review): require an identifier char so a pure-punctuation
+  // backtick (`==`, `()`, `=>`) can't anchor on almost any line; a real
+  // logic finding names a concrete identifier/member, not an operator.
+  const tokens = backtickedTokens(finding).filter(
+    (t) => t.length >= 2 && /[A-Za-z0-9_$]/.test(t),
+  )
   if (tokens.length === 0) return false
   for (const tok of tokens) {
     for (const line of lines) {
@@ -251,15 +274,19 @@ export function evaluateLogicFinding(
   // staged rollout / a caller that hasn't threaded the diff). An empty
   // map means we can't even tell whether the path changed, so dropping
   // would be an unjustified false negative.
-  if (evidence.addedLineTextByPath.size === 0 && evidence.astLogicFindings.length === 0) {
+  if (evidence.changedLineTextByPath.size === 0 && evidence.astLogicFindings.length === 0) {
     return { keep: true }
   }
 
   // The finding must live on a file this PR changed. A logic bug on an
-  // unchanged path is out of scope (belongs on a separate ticket) and is
-  // a clear FP shape for an LLM-anchored claim.
+  // unchanged path is the cross-file-impact shape (a change in file A
+  // breaks an unchanged caller B). Per the signed-off "same-changed-path"
+  // bar this is rejected — but with a DISTINCT reason (Codex/CR review)
+  // so the shadow telemetry can separate genuine cross-file findings from
+  // vague claims before any enforce flip. SIG-121 (symbol retrieval) will
+  // let a changed symbol referenced in an unchanged file anchor these.
   if (!isChangedPath(path, evidence)) {
-    return { keep: false, reason: "unanchored-logic-claim" }
+    return { keep: false, reason: "path-not-changed" }
   }
 
   // Changed path. Keep on ANY anchor: a co-located deterministic AST hit

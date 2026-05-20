@@ -35,14 +35,12 @@ function sliceEvidence(source: string, node: AstNode): string {
 function simplePath(node: AstNode): string | null {
   if (!node) return null
   if (node.type === "Identifier") return node.name as string
-  if (node.type === "ThisExpression") return "this"
-  if (node.type === "MemberExpression") {
-    if (node.computed) return null // a[i] — bail (i may not be stable)
-    if (node.property?.type !== "Identifier") return null
-    const base = simplePath(node.object)
-    if (base === null) return null
-    return `${base}.${node.property.name}`
-  }
+  // Review (both reviewers): member self-assignment (`this.x = this.x`,
+  // `obj.value = obj.value`) is NOT a guaranteed no-op — the property may
+  // be an accessor (getter/setter side effects) or a Proxy trap, which
+  // the AST can't see. Restrict to BARE identifiers (`x = x`), which are
+  // unambiguously no-ops. "Prefer a miss": we lose the rare member-path
+  // true-positive to eliminate the accessor false-positive.
   return null
 }
 

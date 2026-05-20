@@ -251,6 +251,11 @@ describe("no-return-in-finally", () => {
   it("does NOT flag return in try",   () => expect(runRule(r, `function f(){ try { return 1 } finally { cleanup() } }`).length).toBe(0))
   it("does NOT flag return in catch", () => expect(runRule(r, `function f(){ try { g() } catch(e) { return 1 } finally { cleanup() } }`).length).toBe(0))
   it("does NOT flag return in a fn declared inside finally (nested scope)", () => expect(runRule(r, `function f(){ try { g() } finally { const h = () => { return 1 } } }`).length).toBe(0))
+  // Review (HIGH): a break/continue LOCAL to a loop/switch inside the
+  // finally exits only that construct — it does NOT swallow the outcome.
+  it("does NOT flag break inside a loop within finally", () => expect(runRule(r, `function f(){ try { g() } finally { while (c) { if (d) break } cleanup() } }`).length).toBe(0))
+  it("does NOT flag continue inside a for-of within finally", () => expect(runRule(r, `function f(){ try { g() } finally { for (const x of y) { if (x) continue } } }`).length).toBe(0))
+  it("does NOT flag break inside a switch within finally", () => expect(runRule(r, `function f(){ try { g() } finally { switch (x) { case 1: break } } }`).length).toBe(0))
   it("does NOT flag try with no finally", () => expect(runRule(r, `function f(){ try { return 1 } catch(e) { return 2 } }`).length).toBe(0))
 })
 
@@ -264,6 +269,7 @@ describe("no-unreachable-after-jump", () => {
   it("flags statement after continue", () => expect(runRule(r, `function f(){ for(;;){ continue; doThing() } }`).length).toBe(1))
   it("does NOT flag return as last statement", () => expect(runRule(r, `function f(){ const x = 1; return x }`).length).toBe(0))
   it("does NOT flag a hoisted function decl after return", () => expect(runRule(r, `function f(){ return 1; function helper(){} }`).length).toBe(0))
+  it("does NOT flag a var declaration after return (binding hoisted)", () => expect(runRule(r, `function f(){ return 1; var x = 2 }`).length).toBe(0))
   it("does NOT cross into a nested block (same-block only)", () => expect(runRule(r, `function f(){ if (c) { return 1 } const x = 2 }`).length).toBe(0))
   it("does NOT flag code in switch-case consequent (out of scope)", () => expect(runRule(r, `function f(k){ switch(k){ case 1: return 1; doThing() } }`).length).toBe(0))
 })
@@ -273,8 +279,10 @@ describe("no-unreachable-after-jump", () => {
 describe("no-self-assignment", () => {
   const r = ruleById("no-self-assignment")
   it("flags x = x",            () => expect(runRule(r, `function f(x){ x = x }`).length).toBe(1))
-  it("flags this.x = this.x",  () => expect(runRule(r, `function f(){ this.x = this.x }`).length).toBe(1))
-  it("flags a.b.c = a.b.c",    () => expect(runRule(r, `function f(a){ a.b.c = a.b.c }`).length).toBe(1))
+  // Member self-assignments are NOT flagged (review): an accessor /
+  // Proxy trap means `this.x = this.x` can have side effects.
+  it("does NOT flag this.x = this.x (member — accessor-safe)", () => expect(runRule(r, `function f(){ this.x = this.x }`).length).toBe(0))
+  it("does NOT flag a.b.c = a.b.c (member)",                   () => expect(runRule(r, `function f(a){ a.b.c = a.b.c }`).length).toBe(0))
   it("does NOT flag x = y",            () => expect(runRule(r, `function f(x,y){ x = y }`).length).toBe(0))
   it("does NOT flag this.x = x",       () => expect(runRule(r, `function f(x){ this.x = x }`).length).toBe(0))
   it("does NOT flag compound x += x",  () => expect(runRule(r, `function f(x){ x += x }`).length).toBe(0))
@@ -286,10 +294,15 @@ describe("no-self-assignment", () => {
 
 describe("no-constant-binary-condition", () => {
   const r = ruleById("no-constant-binary-condition")
-  it("flags a || true",   () => expect(runRule(r, `if (a || true) {}`).length).toBe(1))
-  it("flags a && false",  () => expect(runRule(r, `if (a && false) {}`).length).toBe(1))
-  it("flags 1 || a",      () => expect(runRule(r, `const z = 1 || a`).length).toBe(1))
-  it("flags 0 && a",      () => expect(runRule(r, `const z = 0 && a`).length).toBe(1))
+  // Flag ONLY when a constant LEFT operand short-circuits → right is DEAD.
+  it("flags 1 || a (truthy left → right dead)",  () => expect(runRule(r, `const z = 1 || a`).length).toBe(1))
+  it("flags 0 && a (falsy left → right dead)",   () => expect(runRule(r, `const z = 0 && a`).length).toBe(1))
+  it("flags true || a",                          () => expect(runRule(r, `const z = true || a`).length).toBe(1))
+  it("flags false && a",                         () => expect(runRule(r, `const z = false && a`).length).toBe(1))
+  // RHS literal only fixes the result — common intentional override; NOT flagged (review).
+  it("does NOT flag a || true (RHS literal — intentional override)", () => expect(runRule(r, `const z = a || true`).length).toBe(0))
+  it("does NOT flag a && false (RHS literal)",   () => expect(runRule(r, `const z = a && false`).length).toBe(0))
+  it("does NOT flag env.PORT || 3000 (fallback)", () => expect(runRule(r, `const z = env.PORT || 3000`).length).toBe(0))
   it("does NOT flag a || b (no literal)", () => expect(runRule(r, `const z = a || b`).length).toBe(0))
   it("does NOT flag a || '' (legit fallback)", () => expect(runRule(r, `const z = a || ""`).length).toBe(0))
   it("does NOT flag a && true (truthy && — common no-op guard)", () => expect(runRule(r, `const z = a && true`).length).toBe(0))

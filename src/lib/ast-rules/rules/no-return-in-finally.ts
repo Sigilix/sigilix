@@ -22,41 +22,56 @@ function sliceEvidence(source: string, node: AstNode): string {
   return slice.length > SLICE_MAX ? slice.slice(0, SLICE_MAX) + "…" : slice
 }
 
-const JUMP_TYPES = new Set([
-  "ReturnStatement",
-  "BreakStatement",
-  "ContinueStatement",
-  "ThrowStatement",
-])
-
 const FUNCTION_TYPES = new Set([
   "FunctionDeclaration",
   "FunctionExpression",
   "ArrowFunctionExpression",
 ])
 
+// Review (both reviewers, HIGH): an unlabeled `break`/`continue` binds to
+// the nearest enclosing loop/switch. One written INSIDE a loop/switch
+// that is itself inside the finally is LOCAL — it exits that inner
+// construct, it does NOT swallow the try/catch outcome. So break/continue
+// is only finally-swallowing when there's no loop/switch between it and
+// the finalizer. `return`/`throw` always swallow regardless of nesting.
+const LOOP_OR_SWITCH = new Set([
+  "ForStatement",
+  "ForInStatement",
+  "ForOfStatement",
+  "WhileStatement",
+  "DoWhileStatement",
+  "SwitchStatement",
+])
+const ALWAYS_SWALLOW = new Set(["ReturnStatement", "ThrowStatement"])
+const LOOP_BOUND_JUMP = new Set(["BreakStatement", "ContinueStatement"])
+
 /**
- * Walk the `finalizer` block's body looking for a top-of-this-scope
- * control-flow jump. Recurses through nested statements/blocks BUT
- * stops at any function boundary — a jump there belongs to the nested
- * function. Returns the first offending node or null.
+ * Walk the `finalizer` block looking for a control-flow jump that
+ * actually swallows the try/catch outcome. Recurses through nested
+ * statements/blocks BUT stops at function boundaries (a jump there
+ * belongs to the nested function). `insideLoopOrSwitch` tracks whether
+ * we've descended into a loop/switch nested in the finally — once true,
+ * a `break`/`continue` is local and ignored; `return`/`throw` flag
+ * regardless. Returns the first offending node or null.
  */
-function findJumpInScope(node: AstNode): AstNode | null {
+function findJumpInScope(node: AstNode, insideLoopOrSwitch: boolean): AstNode | null {
   if (!node || typeof node !== "object") return null
   if (FUNCTION_TYPES.has(node.type)) return null // nested scope — not ours
-  if (JUMP_TYPES.has(node.type)) return node
+  if (ALWAYS_SWALLOW.has(node.type)) return node
+  if (LOOP_BOUND_JUMP.has(node.type)) return insideLoopOrSwitch ? null : node
+  const childInside = insideLoopOrSwitch || LOOP_OR_SWITCH.has(node.type)
   for (const k of Object.keys(node)) {
     if (k === "type" || k === "loc" || k === "start" || k === "end") continue
     const v = (node as Record<string, unknown>)[k]
     if (Array.isArray(v)) {
       for (const item of v) {
         if (item && typeof item === "object") {
-          const hit = findJumpInScope(item as AstNode)
+          const hit = findJumpInScope(item as AstNode, childInside)
           if (hit) return hit
         }
       }
     } else if (v && typeof v === "object") {
-      const hit = findJumpInScope(v as AstNode)
+      const hit = findJumpInScope(v as AstNode, childInside)
       if (hit) return hit
     }
   }
@@ -74,7 +89,7 @@ export const noReturnInFinally: AstRule = {
     if (!node || node.type !== "TryStatement") return null
     const finalizer = node.finalizer
     if (!finalizer || finalizer.type !== "BlockStatement") return null
-    const jump = findJumpInScope(finalizer)
+    const jump = findJumpInScope(finalizer, false)
     if (!jump) return null
     return {
       message: "Control-flow jump inside `finally` swallows the try/catch outcome — a pending return value is discarded and any in-flight exception is silently eaten. Move this out of `finally`.",

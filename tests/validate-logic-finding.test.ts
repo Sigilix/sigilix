@@ -13,7 +13,7 @@ import { describe, it, expect, vi } from "vitest"
 import {
   evaluateLogicFinding,
   parseLogicValidatorMode,
-  buildAddedLineTextByPath,
+  buildChangedLineTextByPath,
   type LogicEvidence,
 } from "../src/lib/validate-logic-finding"
 import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
@@ -38,7 +38,7 @@ function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
 
 function evidence(overrides: Partial<LogicEvidence> = {}): LogicEvidence {
   return {
-    addedLineTextByPath: new Map([
+    changedLineTextByPath: new Map([
       [PATH, ["  for (let i = 0; i <= arr.length; i++) {", "    total += arr[i]"]],
     ]),
     astLogicFindings: [],
@@ -73,8 +73,8 @@ describe("parseLogicValidatorMode", () => {
   })
 })
 
-describe("buildAddedLineTextByPath", () => {
-  it("collects added-line text per path, stripping the leading +", () => {
+describe("buildChangedLineTextByPath", () => {
+  it("collects BOTH added (+) and removed (-) content, stripping the leading sign", () => {
     const diff = [
       "diff --git a/src/a.ts b/src/a.ts",
       "--- a/src/a.ts",
@@ -85,8 +85,24 @@ describe("buildAddedLineTextByPath", () => {
       "-const z = 3",
       "+const w = 4",
     ].join("\n")
-    const m = buildAddedLineTextByPath(diff)
-    expect(m.get("src/a.ts")).toEqual(["const y = 2", "const w = 4"])
+    const m = buildChangedLineTextByPath(diff)
+    // Removed lines included (Codex review): a finding about deleted code
+    // must be able to anchor on a token from the removed line.
+    expect(m.get("src/a.ts")).toEqual(["const y = 2", "const z = 3", "const w = 4"])
+  })
+
+  it("treats a `++ `-prefixed content line as content, not a +++ header (hunk-tracked)", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1 +1,2 @@",
+      " ctx",
+      "++ nested diff marker in code",
+    ].join("\n")
+    // Inside the hunk, `++ ...` is an added line whose content starts
+    // `+ ...`; it must NOT corrupt currentPath.
+    expect(buildChangedLineTextByPath(diff).get("src/a.ts")).toEqual(["+ nested diff marker in code"])
   })
 
   it("does NOT capture the +++ header line as content", () => {
@@ -96,7 +112,7 @@ describe("buildAddedLineTextByPath", () => {
       "@@ -0,0 +1 @@",
       "+added",
     ].join("\n")
-    expect(buildAddedLineTextByPath(diff).get("src/a.ts")).toEqual(["added"])
+    expect(buildChangedLineTextByPath(diff).get("src/a.ts")).toEqual(["added"])
   })
 
   it("skips deleted files (/dev/null new side)", () => {
@@ -106,11 +122,11 @@ describe("buildAddedLineTextByPath", () => {
       "@@ -1 +0,0 @@",
       "-const x = 1",
     ].join("\n")
-    expect(buildAddedLineTextByPath(diff).size).toBe(0)
+    expect(buildChangedLineTextByPath(diff).size).toBe(0)
   })
 
   it("returns an empty map for a non-string input", () => {
-    expect(buildAddedLineTextByPath(undefined as unknown as string).size).toBe(0)
+    expect(buildChangedLineTextByPath(undefined as unknown as string).size).toBe(0)
   })
 })
 
@@ -120,7 +136,7 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
   })
 
   it("keeps when no evidence is wired (empty map + no AST findings)", () => {
-    const empty: LogicEvidence = { addedLineTextByPath: new Map(), astLogicFindings: [] }
+    const empty: LogicEvidence = { changedLineTextByPath: new Map(), astLogicFindings: [] }
     expect(evaluateLogicFinding(finding(), empty).keep).toBe(true)
   })
 
@@ -162,10 +178,12 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
     if (!r.keep) expect(r.reason).toBe("missing-path")
   })
 
-  it("REJECTS a sev>=4 logic finding on a NON-changed path (unanchored)", () => {
+  it("REJECTS a sev>=4 logic finding on a NON-changed path (path-not-changed)", () => {
     const r = evaluateLogicFinding(finding({ path: "src/lib/legacy.ts" }), evidence())
     expect(r.keep).toBe(false)
-    if (!r.keep) expect(r.reason).toBe("unanchored-logic-claim")
+    // Distinct reason (review) so shadow telemetry separates cross-file
+    // findings from vague claims before enforce.
+    if (!r.keep) expect(r.reason).toBe("path-not-changed")
   })
 
   it("REJECTS a sev>=4 vague claim on a changed path with no concrete token + no AST hit", () => {
@@ -196,7 +214,18 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
   it("does NOT anchor on a 1-char backticked token (too noisy)", () => {
     const r = evaluateLogicFinding(
       finding({ headline: "`i` is wrong", body: "The variable `i` is misused." }),
-      evidence({ addedLineTextByPath: new Map([[PATH, ["  i = i"]]]) }),
+      evidence({ changedLineTextByPath: new Map([[PATH, ["  i = i"]]]) }),
+    )
+    expect(r.keep).toBe(false)
+  })
+
+  it("does NOT anchor on a pure-punctuation backticked token (M4: `==`)", () => {
+    // An operator is not a concrete anchor (it appears on almost any
+    // line). Only identifier-bearing tokens count (review M4). Here the
+    // ONLY backticked tokens are operators, so there's no real anchor.
+    const r = evaluateLogicFinding(
+      finding({ headline: "the `==` is loose", body: "should be `===` here" }),
+      evidence({ changedLineTextByPath: new Map([[PATH, ["  if (a == b) {}"]]]) }),
     )
     expect(r.keep).toBe(false)
   })

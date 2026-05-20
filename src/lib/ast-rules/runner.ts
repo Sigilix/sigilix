@@ -237,6 +237,11 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
         roleHint: rule.roleHint,
         path,
         line: hit.line,
+        // Codex review (MEDIUM): carry endLine through to the finding —
+        // it was dropped here, collapsing multi-line AST findings to a
+        // single line in the diff-filter (the PR-67 fix) AND the SIG-109
+        // validator's co-location window.
+        ...(typeof hit.endLine === "number" ? { endLine: hit.endLine } : {}),
         column: hit.column,
         message: hit.message,
         evidence: redactEvidence(hit.evidence),

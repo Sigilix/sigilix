@@ -60,21 +60,23 @@ export const noConstantBinaryCondition: AstRule = {
     if (!node || node.type !== "LogicalExpression") return null
     if (node.operator !== "&&" && node.operator !== "||") return null
     const leftLit = literalTruthiness(node.left)
-    const rightLit = literalTruthiness(node.right)
-    if (leftLit === null && rightLit === null) return null
+    if (leftLit === null) return null
 
-    let offending = false
-    if (node.operator === "||") {
-      // A truthy literal on either side fixes the result to truthy.
-      offending = leftLit === true || rightLit === true
-    } else {
-      // `&&`: a falsy literal on either side fixes the result to falsy.
-      offending = leftLit === false || rightLit === false
-    }
+    // Review (both reviewers, HIGH): flag ONLY when a constant LEFT
+    // operand short-circuits the operator, making the RIGHT operand DEAD
+    // — the unambiguous bug. A constant on the RIGHT (`a || true`,
+    // `a && false`) only fixes the RESULT while the left still evaluates,
+    // and is a common intentional override / fallback (`env.PORT || 3000`,
+    // `userPref || true`) — flagging those is high-volume noise. The
+    // inert-guard forms (`true && x`, `false || x`) keep x live, so they
+    // also stay unflagged.
+    //   `||`: a TRUTHY left short-circuits → right is dead (`true || x`).
+    //   `&&`: a FALSY left short-circuits → right is dead (`false && x`).
+    const offending = node.operator === "||" ? leftLit === true : leftLit === false
     if (!offending) return null
 
     return {
-      message: `Constant operand in a \`${node.operator}\` expression fixes the result regardless of the other side, so the condition is degenerate. Remove the constant or fix the operator.`,
+      message: `Constant left operand in a \`${node.operator}\` expression short-circuits the right side, so it can never run. Remove the constant or fix the operator.`,
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       endLine: node.loc?.end?.line ?? node.loc?.start?.line ?? 1,

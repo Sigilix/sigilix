@@ -60,8 +60,15 @@ export const noUnreachableAfterJump: AstRule = {
       if (!stmt || !JUMP_TYPES.has(stmt.type)) continue
       // Find the next NON-hoisted, non-inert sibling. A trailing
       // function declaration / empty statement is reachable, so skip it.
+      // Review (code-reviewer M2): also skip a `var` declaration — its
+      // BINDING is hoisted (exists as `undefined`), so "this statement
+      // can never run" overstates; only the assignment is dead. `let`/
+      // `const` after a jump ARE genuinely unreachable (TDZ), so they are
+      // still flagged.
+      const skip = (s: AstNode): boolean =>
+        HOISTED_OR_INERT.has(s.type) || (s.type === "VariableDeclaration" && s.kind === "var")
       let j = i + 1
-      while (j < body.length && body[j] && HOISTED_OR_INERT.has(body[j].type)) j++
+      while (j < body.length && body[j] && skip(body[j])) j++
       if (j >= body.length) return null
       const dead = body[j]
       return {

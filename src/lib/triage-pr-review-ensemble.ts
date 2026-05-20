@@ -78,6 +78,14 @@ import {
   type TestsValidatorMode,
   type TestDropReason,
 } from "./validate-test-finding"
+import {
+  evaluateLogicFinding,
+  parseLogicValidatorMode,
+  buildChangedLineTextByPath,
+  type LogicValidatorMode,
+  type LogicDropReason,
+  type LogicEvidence,
+} from "./validate-logic-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -851,7 +859,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -2278,6 +2286,31 @@ export async function handlePrReviewEnsemble(
           category: finding.category,
         }))
       },
+      // SIG-109: thread the logic evidence + mode. Evidence is built
+      // PR-A-contained — added-line text from the FULL PR diff +
+      // roleHint:logic AST findings (NO symbol retrieval; that's SIG-121).
+      // Default `shadow` — the gate only counts/telemeters what WOULD
+      // drop until the operator flips OPENCLAW_LOGIC_VALIDATOR_MODE to
+      // "enforce". Reuses the `pr-review-finding-rejected-validation`
+      // event with a `gate: "logic"` discriminator.
+      logicEvidence: {
+        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        astLogicFindings: astResult.findings.filter((f) => f.roleHint === "logic"),
+      },
+      logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
+      onLogicFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "logic",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+      },
     })
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
@@ -2287,6 +2320,7 @@ export async function handlePrReviewEnsemble(
       droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
       droppedForFailedValidation: validated.droppedForFailedValidation,
       droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
+      droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4849,6 +4883,16 @@ export interface ValidatedOutput {
    */
   droppedForFailedTestValidation: number
   /**
+   * SIG-109: count of sev>=4 logic-sourced findings the evidence gate
+   * flagged for drop (unanchored claim — not on a changed path, or
+   * quoting no concrete code token on an added line and unbacked by any
+   * co-located AST hit; or missing path). In `shadow` mode this counts
+   * what WOULD be dropped without dropping; in `enforce` mode the finding
+   * is dropped. Surfaced to telemetry so the gate's would-drop rate is
+   * observable before enforcement is enabled.
+   */
+  droppedForFailedLogicValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -5096,6 +5140,35 @@ export function validateForSubmission(args: {
    * coverageGap refs (back-compat; default off).
    */
   coverageGaps?: ReadonlySet<string>
+  /**
+   * SIG-109: logic-finding evidence (added-line text per path + the
+   * roleHint:logic AST findings). Threaded so `evaluateLogicFinding` can
+   * anchor sev>=4 logic findings to the diff. Absent → the gate no-ops
+   * (back-compat for callers not yet threading the evidence).
+   */
+  logicEvidence?: LogicEvidence
+  /**
+   * SIG-109: logic-finding evidence gate mode. `shadow` (default): the
+   * gate's verdict is counted + telemetered but the finding is NOT
+   * dropped. `enforce`: rejected findings are dropped. Read from
+   * `OPENCLAW_LOGIC_VALIDATOR_MODE` at the call site; defaults to
+   * `shadow`. This gate is false-negative-sensitive (logic bugs are
+   * LLM-found with no deterministic backing) so it ships dark and biases
+   * hard toward keep.
+   */
+  logicValidatorMode?: LogicValidatorMode
+  /**
+   * SIG-109: optional telemetry callback fired once per logic finding the
+   * evidence gate flagged (whether or not it was actually dropped — the
+   * `dropped` arg distinguishes enforce from shadow). Lets the
+   * orchestrator log `pr-review-finding-rejected-validation` (the SIG-108
+   * event, reused with a `gate: "logic"` discriminator) without coupling
+   * the pure validator to a logger.
+   */
+  onLogicFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: LogicDropReason; dropped: boolean },
+  ) => void
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -5109,6 +5182,9 @@ export function validateForSubmission(args: {
     testsValidatorMode = "shadow",
     onTestFindingDropped,
     coverageGaps = new Set<string>(),
+    logicEvidence,
+    logicValidatorMode = "shadow",
+    onLogicFindingDropped,
   } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
@@ -5126,6 +5202,7 @@ export function validateForSubmission(args: {
   let droppedForUncitedTestingEvidence = 0
   let droppedForFailedValidation = 0
   let droppedForFailedTestValidation = 0
+  let droppedForFailedLogicValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -5238,6 +5315,29 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-109: logic evidence gate. Applies ONLY to findings whose
+    // derived role set includes `logic` (from the `logic-` sourceFindingId
+    // prefix, NOT `finding.category` alone — mirrors the SIG-108 security
+    // gate's provenance derivation). A sev>=4 logic finding must be
+    // anchored to the diff: on a changed path AND backed by a co-located
+    // AST hit OR a concrete backticked token on an added line; otherwise
+    // it's an unanchored claim. Runs AFTER the SIG-108 security gate
+    // (disjoint domains) and BEFORE score-1 demotion + line validation.
+    // Shadow-first: in `shadow` mode the verdict is counted + telemetered
+    // but the finding is NOT dropped; only `enforce` actually drops. This
+    // gate is false-negative-sensitive (logic bugs are LLM-found with no
+    // deterministic backing) so the pure helper biases hard toward keep.
+    if (logicEvidence && sourceRolesInclude(sourceIds, "logic")) {
+      const logicDecision = evaluateLogicFinding(f, logicEvidence)
+      if (!logicDecision.keep) {
+        const dropped = logicValidatorMode === "enforce"
+        droppedForFailedLogicValidation++
+        onLogicFindingDropped?.(f, { reason: logicDecision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
+    }
+
     // Score-1 advisory demotion
     if (f.score <= 1) {
       advisoryNits.push(f)
@@ -5284,6 +5384,7 @@ export function validateForSubmission(args: {
     droppedForUncitedTestingEvidence,
     droppedForFailedValidation,
     droppedForFailedTestValidation,
+    droppedForFailedLogicValidation,
     cleanFindingProvenance,
   }
 }
@@ -5404,6 +5505,9 @@ interface EnsembleTelemetry {
      * flagged (would-drop in shadow mode, actual-drop in enforce
      * mode). */
     droppedForFailedTestValidation: number
+    /** SIG-109: count of sev>=4 logic findings the evidence gate flagged
+     * (would-drop in shadow mode, actual-drop in enforce mode). */
+    droppedForFailedLogicValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

@@ -47,6 +47,29 @@ export const PR_OVERVIEW_SCHEMA = {
       type: "array",
       items: { type: "string" },
     },
+    // SIG-99: optional polish fields, all gated server-side by the
+    // parser (out-of-range / empty values drop silently). Models that
+    // don't know about them leave them out → renderer skips the
+    // section. Required-list intentionally NOT extended so the
+    // schema-constrained decoder doesn't reject responses from
+    // legacy prompt versions during a staged rollout.
+    reviewEffort: { type: "integer", minimum: 1, maximum: 5 },
+    suggestedLabels: {
+      type: "array",
+      maxItems: 3,
+      items: { type: "string" },
+    },
+    suggestedReviewers: {
+      type: "array",
+      maxItems: 2,
+      items: { type: "string" },
+    },
+    relatedPrUrls: {
+      type: "array",
+      maxItems: 3,
+      items: { type: "string" },
+    },
+    mermaidDiagram: { type: "string" },
   },
   required: ["summary", "confidence", "confidenceReason", "files", "bullets"],
 } as const

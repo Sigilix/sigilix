@@ -275,3 +275,298 @@ describe("mergeCachedAndFreshRows", () => {
     expect(out.bullets).toEqual(baseVerdict.bullets)
   })
 })
+
+// ─── SIG-99 polish: effort + labels + reviewers + related + mermaid ──
+
+describe("parseOverviewResponse — SIG-99 polish fields", () => {
+  const base = {
+    summary: "Adds X.",
+    confidence: 4,
+    confidenceReason: "Narrow surface.",
+    files: [{ path: "src/foo.ts", score: 3, overview: "ov", nextStep: "ns" }],
+    bullets: ["b1"],
+  }
+
+  it("reads reviewEffort when in range 1-5", () => {
+    const out = parseOverviewResponse(JSON.stringify({ ...base, reviewEffort: 4 }))
+    expect(out?.reviewEffort).toBe(4)
+  })
+
+  it("drops reviewEffort when out of range", () => {
+    expect(parseOverviewResponse(JSON.stringify({ ...base, reviewEffort: 0 }))?.reviewEffort).toBeUndefined()
+    expect(parseOverviewResponse(JSON.stringify({ ...base, reviewEffort: 6 }))?.reviewEffort).toBeUndefined()
+    expect(parseOverviewResponse(JSON.stringify({ ...base, reviewEffort: "three" }))?.reviewEffort).toBeUndefined()
+  })
+
+  it("clamps suggestedLabels to 3 entries", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({ ...base, suggestedLabels: ["bug", "perf", "docs", "extra"] }),
+    )
+    expect(out?.suggestedLabels).toEqual(["bug", "perf", "docs"])
+  })
+
+  it("filters out empty/whitespace labels and unwraps trim", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({ ...base, suggestedLabels: ["  bug  ", "", "  ", "perf"] }),
+    )
+    expect(out?.suggestedLabels).toEqual(["bug", "perf"])
+  })
+
+  it("drops labels containing markdown meta-characters (backtick/newline/pipe) — anti-injection", () => {
+    // code-reviewer pre-PR catch: labels render inline as `\${label}\`
+    // with no escape. A backtick in the label breaks out of the
+    // inline-code span. Same with newlines + pipes (table cells).
+    const out = parseOverviewResponse(
+      JSON.stringify({
+        ...base,
+        suggestedLabels: [
+          "good-label",
+          "back`tick",
+          "new\nline",
+          "pipe|injection",
+          "another-good",
+        ],
+      }),
+    )
+    expect(out?.suggestedLabels).toEqual(["good-label", "another-good"])
+  })
+
+  it("strips leading @ from reviewer handles and accepts valid GH usernames", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({ ...base, suggestedReviewers: ["@octocat", "monalisa"] }),
+    )
+    expect(out?.suggestedReviewers).toEqual(["octocat", "monalisa"])
+  })
+
+  it("drops reviewer entries that fail the GH username pattern", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({ ...base, suggestedReviewers: ["valid-user", "spaces in name", "user_with_underscore"] }),
+    )
+    // GitHub usernames disallow spaces + underscores; only `valid-user` survives.
+    expect(out?.suggestedReviewers).toEqual(["valid-user"])
+  })
+
+  it("clamps suggestedReviewers to 2 entries", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({ ...base, suggestedReviewers: ["a", "b", "c"] }),
+    )
+    expect(out?.suggestedReviewers).toEqual(["a", "b"])
+  })
+
+  it("accepts only https github.com PR URLs in relatedPrUrls (anti-injection)", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({
+        ...base,
+        relatedPrUrls: [
+          "https://github.com/owner/repo/pull/42",
+          "http://github.com/owner/repo/pull/43", // wrong scheme
+          "https://evil.com/pull/44", // wrong host
+          "https://github.com/owner/repo/issues/45", // not a PR URL
+          "https://github.com/owner/repo/pull/46?comment=1", // PR URL with query — accepted
+        ],
+      }),
+    )
+    expect(out?.relatedPrUrls).toEqual([
+      "https://github.com/owner/repo/pull/42",
+      "https://github.com/owner/repo/pull/46?comment=1",
+    ])
+  })
+
+  it("REJECTS related-PR URLs containing backticks / brackets / quotes — anti-markdown-injection", () => {
+    // code-reviewer pre-PR catch: the previous URL guard accepted any
+    // non-whitespace char after `pull/N`, letting the model smuggle
+    // backticks / brackets / quotes that break out of the rendered
+    // bullet. The tightened pattern is owner/repo-charset only with
+    // an optional `?query` or `#fragment` tail anchored to `$`.
+    const out = parseOverviewResponse(
+      JSON.stringify({
+        ...base,
+        relatedPrUrls: [
+          "https://github.com/owner/repo/pull/1",
+          "https://github.com/owner/`bold`/r/pull/2", // backticks in owner slug
+          "https://github.com/owner/repo/pull/3?q=`evil`", // backticks in query
+          "https://github.com/owner/repo/pull/4#'quote'", // quotes in fragment
+          "https://github.com/owner/repo/pull/5?q=[bracket]", // brackets in query — accepted (not markdown-meta in inline text)
+        ],
+      }),
+    )
+    // Only the clean URLs survive; bracket-in-query is fine because
+    // brackets aren't dangerous in this rendering context (no
+    // `]( ... )` shape can form).
+    expect(out?.relatedPrUrls).toContain("https://github.com/owner/repo/pull/1")
+    expect(out?.relatedPrUrls).not.toContain("https://github.com/owner/`bold`/r/pull/2")
+    expect(out?.relatedPrUrls).not.toContain("https://github.com/owner/repo/pull/3?q=`evil`")
+    expect(out?.relatedPrUrls).not.toContain("https://github.com/owner/repo/pull/4#'quote'")
+  })
+
+  it("clamps relatedPrUrls to 3 entries", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({
+        ...base,
+        relatedPrUrls: [
+          "https://github.com/o/r/pull/1",
+          "https://github.com/o/r/pull/2",
+          "https://github.com/o/r/pull/3",
+          "https://github.com/o/r/pull/4",
+        ],
+      }),
+    )
+    expect(out?.relatedPrUrls).toHaveLength(3)
+  })
+
+  it("accepts mermaid diagrams that start with a known diagram kind", () => {
+    const out = parseOverviewResponse(
+      JSON.stringify({ ...base, mermaidDiagram: "sequenceDiagram\n  A->>B: hello" }),
+    )
+    expect(out?.mermaidDiagram).toContain("sequenceDiagram")
+  })
+
+  it("rejects mermaid payloads that don't start with a known kind (anti-injection)", () => {
+    // Anything other than sequenceDiagram/flowchart/graph/stateDiagram
+    // gets dropped — the model can't smuggle arbitrary markdown.
+    const out = parseOverviewResponse(
+      JSON.stringify({ ...base, mermaidDiagram: "## fake heading\nrandom markdown" }),
+    )
+    expect(out?.mermaidDiagram).toBeUndefined()
+  })
+
+  it("REJECTS mermaid payloads containing triple-backtick — fence break-out guard", () => {
+    // code-reviewer pre-PR catch (HIGH): the prefix-keyword guard
+    // alone isn't enough. A payload like "sequenceDiagram\n```\n# pwned"
+    // passes the prefix check but the embedded triple-backtick closes
+    // the renderer's mermaid fence early, letting the trailing prose
+    // render as top-level markdown.
+    const out = parseOverviewResponse(
+      JSON.stringify({
+        ...base,
+        mermaidDiagram: "sequenceDiagram\n  A->>B: hi\n```\n# pwned heading\n",
+      }),
+    )
+    expect(out?.mermaidDiagram).toBeUndefined()
+  })
+
+  it("a verdict with NO polish fields parses cleanly (back-compat)", () => {
+    const out = parseOverviewResponse(JSON.stringify(base))
+    expect(out).not.toBeNull()
+    expect(out?.reviewEffort).toBeUndefined()
+    expect(out?.suggestedLabels).toBeUndefined()
+    expect(out?.suggestedReviewers).toBeUndefined()
+    expect(out?.relatedPrUrls).toBeUndefined()
+    expect(out?.mermaidDiagram).toBeUndefined()
+  })
+})
+
+describe("formatOverviewComment — SIG-99 polish rendering", () => {
+  const verdict: PrOverviewVerdict = {
+    summary: "Adds X.",
+    confidence: 4,
+    confidenceReason: "Narrow surface.",
+    files: [{ path: "src/foo.ts", score: 3, overview: "ov", nextStep: "ns" }],
+    bullets: ["b1"],
+  }
+
+  it("omits ALL polish sections when none of the fields are set (back-compat)", () => {
+    const body = formatOverviewComment({ verdict, isFirstRun: true })
+    expect(body).not.toContain("**Effort:**")
+    expect(body).not.toContain("Sequence diagram")
+    expect(body).not.toContain("Suggested labels")
+    expect(body).not.toContain("Suggested reviewers")
+    expect(body).not.toContain("Related context")
+  })
+
+  it("renders the effort badge under the heading when reviewEffort is set", () => {
+    const body = formatOverviewComment({
+      verdict: { ...verdict, reviewEffort: 3 },
+      isFirstRun: true,
+    })
+    expect(body).toContain("**Effort:** 3/5 _(medium)_")
+    // Badge sits BEFORE the Summary heading.
+    expect(body.indexOf("**Effort:**")).toBeLessThan(body.indexOf("### Summary"))
+  })
+
+  it("renders the suggested labels as backtick pills", () => {
+    const body = formatOverviewComment({
+      verdict: { ...verdict, suggestedLabels: ["bug", "perf"] },
+      isFirstRun: true,
+    })
+    expect(body).toContain("**Suggested labels:** `bug` `perf`")
+  })
+
+  it("renders suggested reviewers as @-mentions", () => {
+    const body = formatOverviewComment({
+      verdict: { ...verdict, suggestedReviewers: ["alice", "bob"] },
+      isFirstRun: true,
+    })
+    expect(body).toContain("**Suggested reviewers:** @alice, @bob")
+  })
+
+  it("renders the related-PR URLs as a bulleted list under Related context", () => {
+    const body = formatOverviewComment({
+      verdict: {
+        ...verdict,
+        relatedPrUrls: ["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/2"],
+      },
+      isFirstRun: true,
+    })
+    expect(body).toContain("**Related context:**")
+    expect(body).toContain("- https://github.com/o/r/pull/1")
+    expect(body).toContain("- https://github.com/o/r/pull/2")
+  })
+
+  it("renders the mermaid diagram inside a fenced ```mermaid block under a Sequence diagram heading", () => {
+    const body = formatOverviewComment({
+      verdict: {
+        ...verdict,
+        mermaidDiagram: "sequenceDiagram\n  A->>B: hello",
+      },
+      isFirstRun: true,
+    })
+    expect(body).toContain("### Sequence diagram")
+    expect(body).toContain("```mermaid\nsequenceDiagram\n  A->>B: hello\n```")
+  })
+
+  it("renders the polish sections in the documented order: effort → gates → summary → files → mermaid → confidence → bullets → labels → reviewers → related", () => {
+    // code-reviewer pre-PR catch: the original ordering test did NOT
+    // include gateResults so the SIG-100 "Quality gates" section's
+    // position between effort and summary was unprotected against
+    // regression. Extended here to pin the full ordering including
+    // gates.
+    const body = formatOverviewComment({
+      verdict: {
+        ...verdict,
+        reviewEffort: 4,
+        suggestedLabels: ["bug"],
+        suggestedReviewers: ["alice"],
+        relatedPrUrls: ["https://github.com/o/r/pull/1"],
+        mermaidDiagram: "sequenceDiagram\n  A->>B",
+      },
+      isFirstRun: true,
+      gateResults: [
+        {
+          id: "titleFormat",
+          label: "PR title follows convention",
+          passed: true,
+          severity: "warning",
+        },
+      ],
+    })
+    const effort = body.indexOf("**Effort:**")
+    const gates = body.indexOf("### Quality gates")
+    const summary = body.indexOf("### Summary")
+    const files = body.indexOf("### Important files")
+    const mermaid = body.indexOf("### Sequence diagram")
+    const confidence = body.indexOf("### Confidence:")
+    const labels = body.indexOf("**Suggested labels:**")
+    const reviewers = body.indexOf("**Suggested reviewers:**")
+    const related = body.indexOf("**Related context:**")
+    expect(effort).toBeGreaterThan(-1)
+    expect(gates).toBeGreaterThan(effort)
+    expect(summary).toBeGreaterThan(gates)
+    expect(files).toBeGreaterThan(summary)
+    expect(mermaid).toBeGreaterThan(files)
+    expect(confidence).toBeGreaterThan(mermaid)
+    expect(labels).toBeGreaterThan(confidence)
+    expect(reviewers).toBeGreaterThan(labels)
+    expect(related).toBeGreaterThan(reviewers)
+  })
+})

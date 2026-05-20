@@ -31,6 +31,10 @@
 import type { GitHubClient } from "./github"
 import type { SpecialistRole } from "./ensemble-router"
 import { parseDeterministicChecks, type DeterministicCheck } from "./deterministic-checks"
+import {
+  DEFAULT_PRE_MERGE_GATES_CONFIG,
+  type ResolvedPreMergeGatesConfig,
+} from "./pre-merge-gates"
 
 export const SIGILIX_CONFIG_PATH = "sigilix.json"
 
@@ -286,6 +290,39 @@ export interface SigilixConfig {
     enabled?: boolean
     architectureGlobs?: string[]
     docPaths?: string[]
+  }
+  /**
+   * SIG-100: deterministic pre-merge quality gates. All three sub-
+   * gates are enabled by default with the defaults in
+   * `DEFAULT_PRE_MERGE_GATES_CONFIG`. Operators can disable a single
+   * gate (e.g. `linkedIssue: { enabled: false }`) or override
+   * severity / regex / template per gate. Render in the overview
+   * sticky's "Quality gates" checklist; NEVER as inline review
+   * comments.
+   */
+  preMergeGates?: {
+    titleFormat?: {
+      enabled?: boolean
+      severity?: "info" | "warning" | "error"
+      /** JavaScript regex source (no flags). Compiled with the `u`
+       *  flag at gate-evaluation time. Malformed regex fails OPEN
+       *  (gate passes) so an operator typo doesn't break Sigilix. */
+      regex?: string
+    }
+    descriptionCompleteness?: {
+      enabled?: boolean
+      severity?: "info" | "warning" | "error"
+      /** Minimum non-whitespace character count for the description
+       *  to pass without satisfying the template. */
+      minLength?: number
+      /** Required section headings. Body passes when EVERY entry
+       *  appears as a line (case-insensitive trim compare). */
+      template?: string[]
+    }
+    linkedIssue?: {
+      enabled?: boolean
+      severity?: "info" | "warning" | "error"
+    }
   }
 }
 
@@ -824,7 +861,82 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (Object.keys(drOut).length > 0) out.docsReview = drOut
   }
+  // SIG-100: preMergeGates parsing. Each sub-gate independently
+  // validated; unknown fields dropped silently (matches the rest of
+  // the parser's "v1 forgiving-on-unknown" semantics). Severity is
+  // an enum; bad values fall through to the runtime default via
+  // `resolvePreMergeGatesConfig`.
+  if (obj.preMergeGates && typeof obj.preMergeGates === "object" && !Array.isArray(obj.preMergeGates)) {
+    const gatesIn = obj.preMergeGates as Record<string, unknown>
+    const gatesOut: NonNullable<SigilixConfig["preMergeGates"]> = {}
+    const validSeverity = (v: unknown): v is "info" | "warning" | "error" =>
+      v === "info" || v === "warning" || v === "error"
+    if (gatesIn.titleFormat && typeof gatesIn.titleFormat === "object" && !Array.isArray(gatesIn.titleFormat)) {
+      const tIn = gatesIn.titleFormat as Record<string, unknown>
+      const tOut: NonNullable<NonNullable<SigilixConfig["preMergeGates"]>["titleFormat"]> = {}
+      if (typeof tIn.enabled === "boolean") tOut.enabled = tIn.enabled
+      if (validSeverity(tIn.severity)) tOut.severity = tIn.severity
+      if (typeof tIn.regex === "string" && tIn.regex.length > 0) tOut.regex = tIn.regex
+      if (Object.keys(tOut).length > 0) gatesOut.titleFormat = tOut
+    }
+    if (gatesIn.descriptionCompleteness && typeof gatesIn.descriptionCompleteness === "object" && !Array.isArray(gatesIn.descriptionCompleteness)) {
+      const dIn = gatesIn.descriptionCompleteness as Record<string, unknown>
+      const dOut: NonNullable<NonNullable<SigilixConfig["preMergeGates"]>["descriptionCompleteness"]> = {}
+      if (typeof dIn.enabled === "boolean") dOut.enabled = dIn.enabled
+      if (validSeverity(dIn.severity)) dOut.severity = dIn.severity
+      if (typeof dIn.minLength === "number" && Number.isFinite(dIn.minLength) && dIn.minLength >= 0) {
+        dOut.minLength = Math.floor(dIn.minLength)
+      }
+      if (Array.isArray(dIn.template)) {
+        const sections = dIn.template
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0)
+        if (sections.length > 0) dOut.template = sections
+      }
+      if (Object.keys(dOut).length > 0) gatesOut.descriptionCompleteness = dOut
+    }
+    if (gatesIn.linkedIssue && typeof gatesIn.linkedIssue === "object" && !Array.isArray(gatesIn.linkedIssue)) {
+      const lIn = gatesIn.linkedIssue as Record<string, unknown>
+      const lOut: NonNullable<NonNullable<SigilixConfig["preMergeGates"]>["linkedIssue"]> = {}
+      if (typeof lIn.enabled === "boolean") lOut.enabled = lIn.enabled
+      if (validSeverity(lIn.severity)) lOut.severity = lIn.severity
+      if (Object.keys(lOut).length > 0) gatesOut.linkedIssue = lOut
+    }
+    if (Object.keys(gatesOut).length > 0) out.preMergeGates = gatesOut
+  }
   return { ok: true, config: out }
+}
+
+/**
+ * SIG-100: merge user-supplied `preMergeGates` config with the locked
+ * defaults from `DEFAULT_PRE_MERGE_GATES_CONFIG`. Returns a fully-
+ * resolved config every gate function can consume directly — no
+ * per-call defaulting at the gate level.
+ *
+ * Pure; exported for tests + for the overview handler at call time.
+ */
+export function resolvePreMergeGatesConfig(
+  partial: SigilixConfig["preMergeGates"] | undefined,
+): ResolvedPreMergeGatesConfig {
+  const d = DEFAULT_PRE_MERGE_GATES_CONFIG
+  return {
+    titleFormat: {
+      enabled: partial?.titleFormat?.enabled ?? d.titleFormat.enabled,
+      severity: partial?.titleFormat?.severity ?? d.titleFormat.severity,
+      regex: partial?.titleFormat?.regex ?? d.titleFormat.regex,
+    },
+    descriptionCompleteness: {
+      enabled: partial?.descriptionCompleteness?.enabled ?? d.descriptionCompleteness.enabled,
+      severity: partial?.descriptionCompleteness?.severity ?? d.descriptionCompleteness.severity,
+      minLength: partial?.descriptionCompleteness?.minLength ?? d.descriptionCompleteness.minLength,
+      template: partial?.descriptionCompleteness?.template ?? d.descriptionCompleteness.template,
+    },
+    linkedIssue: {
+      enabled: partial?.linkedIssue?.enabled ?? d.linkedIssue.enabled,
+      severity: partial?.linkedIssue?.severity ?? d.linkedIssue.severity,
+    },
+  }
 }
 
 // ─── ARC-273: cost control resolution ────────────────────────────────

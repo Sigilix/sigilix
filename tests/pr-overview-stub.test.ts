@@ -39,6 +39,7 @@ vi.mock("../src/lib/github", async () => {
 })
 
 import {
+  isStubBody,
   postPrOverviewStubIfNeeded,
   STUB_BODY,
   STUB_GITHUB_API_TIMEOUT_MS,
@@ -199,45 +200,73 @@ describe("postPrOverviewStubIfNeeded — KV fast path (Codex Q2)", () => {
 })
 
 describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () => {
-  it("reuses an existing sigilix marker; resets body to placeholder; writes KV flag", async () => {
+  // SIG-96 (regression fix): when the marker scan finds a sticky with a
+  // completed summary body (no `_Reviewing…_` placeholder), the helper
+  // MUST NOT overwrite the body with the stub. The overview job still
+  // runs and will PATCH atomically when it completes. Pre-fix every
+  // subsequent push erased the prior summary for the ~30-90s rerender
+  // window; reviewers landing mid-rerender saw nothing.
+  it("SIG-96: PRESERVES an existing completed summary; writes KV flag; does NOT call updateIssueComment", async () => {
     const { kv, store } = makeKvStub()
     mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 12345, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\nold walkthrough" },
+      { id: 12345, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\n\nA real summary from the prior head — file table + bullets + confidence." },
     ])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     expect(out).toEqual({ kind: "marker-scan-hit", commentId: 12345 })
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
-    expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
-    expect(mockUpdateIssueComment.mock.calls[0]![2]).toBe(12345)
-    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(STUB_BODY)
+    // SIG-96: the regression-causing update is NO LONGER called when the
+    // existing body is a completed summary. The overview handler will
+    // PATCH atomically when fresh render finishes.
+    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
+    // KV flag is still written so the overview-side wait can fast-path
+    // resolve the existing comment id.
     expect(store.get(stubFlagKey(args))).toBe("12345")
   })
 
-  it("matches legacy `openclaw:pr-overview` marker (cross-rebrand bilingual)", async () => {
-    const { kv } = makeKvStub()
+  it("SIG-96: PRESERVES a completed summary on the legacy openclaw marker too (bilingual)", async () => {
+    const { kv, store } = makeKvStub()
     mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 4242, body: "<!-- openclaw:pr-overview -->\nlegacy walkthrough" },
+      { id: 4242, body: "<!-- openclaw:pr-overview -->\n## Sigilix Overview\n\nReal pre-rebrand summary — must survive the push." },
     ])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     expect(out).toEqual({ kind: "marker-scan-hit", commentId: 4242 })
-    expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
+    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
+    expect(store.get(stubFlagKey(args))).toBe("4242")
   })
 
-  // Round-5 CR Major catch: when `updateIssueComment` throws on the
-  // marker-scan branch (race-to-delete, permission revocation, 5xx),
-  // we MUST NOT write the KV flag and MUST NOT return `marker-scan-hit`
-  // — we can't confirm the stub body is on the timeline. The previous
-  // contract advertised a stub regardless; the new contract surfaces
-  // `update-failed` so review-side falls through to the 2s wait
-  // fallback per the SIG-84 contract.
+  // SIG-96: when the existing body IS the stub (rare race — cross-region
+  // KV miss for current head's stub, or pre-rebrand legacy stub),
+  // idempotent re-update fires so the SIG-91 timeout-cap + the
+  // round-5 update-failure paths stay live. The new behavior gates
+  // ONLY completed summaries, not stubs.
+  it("SIG-96: still RESETS body when existing body IS the stub itself (idempotent re-write)", async () => {
+    const { kv, store } = makeKvStub()
+    mockListIssueCommentsPage.mockResolvedValueOnce([
+      { id: 555, body: STUB_BODY },
+    ])
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out).toEqual({ kind: "marker-scan-hit", commentId: 555 })
+    expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
+    expect(mockUpdateIssueComment.mock.calls[0]![2]).toBe(555)
+    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(STUB_BODY)
+    expect(store.get(stubFlagKey(args))).toBe("555")
+  })
+
+  // Round-5 CR Major catch (preserved through SIG-96): when `update`
+  // throws on the stub re-write branch (race-to-delete, perm revoke,
+  // 5xx), we MUST NOT write the KV flag and MUST surface
+  // `update-failed` so review-side falls through to the 2s wait.
+  // Fixture uses a STUB body so the update branch fires.
   it("returns update-failed and does NOT write KV flag when updateIssueComment throws (round-5 CR Major)", async () => {
     const { kv, store } = makeKvStub()
     mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 777, body: "<!-- sigilix:pr-overview -->\nold" },
+      { id: 777, body: STUB_BODY },
     ])
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
     mockUpdateIssueComment.mockRejectedValueOnce(new Error("403 perm denied"))
@@ -245,10 +274,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     expect(out).toEqual({ kind: "update-failed", commentId: 777 })
-    // KV flag MUST NOT be written — we couldn't confirm GitHub accepted
-    // the stub body, so review-side wait should fall through to 2s.
     expect(store.has(stubFlagKey(args))).toBe(false)
-    // Telemetry event emitted so we can observe these in prod logs.
     const emittedUpdateFailed = warnSpy.mock.calls.some((call) => {
       const first = call[0]
       if (typeof first !== "string") return false
@@ -329,7 +355,11 @@ describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
     expect(mockCreateIssueComment).toHaveBeenCalledTimes(1)
   })
 
-  it("a NEW headSha hits the marker-scan path and resets the prior stub", async () => {
+  // SIG-96: on a new headSha that finds a prior COMPLETED summary on
+  // the timeline, the helper resolves the existing comment id without
+  // erasing the body. The overview job will PATCH in place once it
+  // completes; in the meantime the reviewer sees the prior summary.
+  it("SIG-96: a NEW headSha finds the prior COMPLETED summary and PRESERVES it (no reset-to-stub)", async () => {
     const { kv } = makeKvStub()
     // First push: creates comment id 100.
     mockListIssueCommentsPage.mockResolvedValueOnce([])
@@ -337,10 +367,11 @@ describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
     await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     // Second push (new head SHA): KV miss for new key, marker scan
-    // finds the prior stub, resets its body to placeholder, writes
-    // the new key.
+    // finds the prior COMPLETED summary (no `_Reviewing…_` placeholder),
+    // SKIPS the reset, returns marker-scan-hit pointing at the existing
+    // comment id.
     mockListIssueCommentsPage.mockResolvedValueOnce([
-      { id: 100, body: "<!-- sigilix:pr-overview -->\nold walkthrough" },
+      { id: 100, body: "<!-- sigilix:pr-overview -->\n## Sigilix Overview\n\nPrior head's completed walkthrough." },
     ])
     const newHeadArgs = { ...args, headSha: "n".repeat(40) }
 
@@ -348,8 +379,30 @@ describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
 
     expect(out).toEqual({ kind: "marker-scan-hit", commentId: 100 })
     expect(mockCreateIssueComment).toHaveBeenCalledTimes(1) // only the first push
+    // SIG-96: the second push must NOT clobber the prior summary.
+    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
+  })
+
+  // SIG-96 companion: when the prior body IS the stub (e.g., a previous
+  // push timed out before the overview handler rendered the summary),
+  // the new push DOES re-write the stub. Idempotent + keeps the
+  // SIG-91 timeout-cap path live.
+  it("SIG-96: a NEW headSha finds a prior STUB body and re-writes the stub (idempotent)", async () => {
+    const { kv } = makeKvStub()
+    mockListIssueCommentsPage.mockResolvedValueOnce([])
+    mockCreateIssueComment.mockResolvedValueOnce({ id: 200 })
+    await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    mockListIssueCommentsPage.mockResolvedValueOnce([
+      { id: 200, body: STUB_BODY },
+    ])
+    const newHeadArgs = { ...args, headSha: "n".repeat(40) }
+
+    const out = await postPrOverviewStubIfNeeded({ ...newHeadArgs, env: makeEnv(kv) })
+
+    expect(out).toEqual({ kind: "marker-scan-hit", commentId: 200 })
     expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
-    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(STUB_BODY) // reset to placeholder
+    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(STUB_BODY)
   })
 })
 
@@ -558,9 +611,12 @@ describe("postPrOverviewStubIfNeeded — GitHub API timeouts (Sigilix round-4)",
     vi.useFakeTimers()
     try {
       const { kv, store } = makeKvStub()
-      // Existing sticky from a prior head → reset path → update call hangs.
+      // SIG-96: existing sticky body must be the stub itself for the
+      // update branch to fire. A completed-summary body would short-
+      // circuit through the new SIG-96 skip-path and never hit the
+      // update call this test pins.
       mockListIssueCommentsPage.mockResolvedValueOnce([
-        { id: 4321, body: "<!-- sigilix:pr-overview -->\nprior walkthrough" },
+        { id: 4321, body: STUB_BODY },
       ])
       mockUpdateIssueComment.mockImplementationOnce(() => new Promise(() => {}))
 
@@ -688,5 +744,87 @@ describe("postPrOverviewStubIfNeeded — SIG-92 concurrent-delivery short-circui
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
     expect(out).toEqual({ kind: "posted", commentId: 999 })
+  })
+})
+
+describe("isStubBody (SIG-96)", () => {
+  it("returns true for the exact STUB_BODY string", () => {
+    expect(isStubBody(STUB_BODY)).toBe(true)
+  })
+
+  it("returns true for stub body with surrounding whitespace (trim-tolerant)", () => {
+    expect(isStubBody(`\n\n${STUB_BODY}\n\n`)).toBe(true)
+  })
+
+  it("returns true for the legacy openclaw stub variant", () => {
+    expect(isStubBody("<!-- openclaw:pr-overview -->\n\n## Sigilix Overview\n\n_Reviewing…_")).toBe(true)
+  })
+
+  it("returns true for the ASCII fallback variant `_Reviewing..._`", () => {
+    expect(isStubBody("<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\n_Reviewing..._")).toBe(true)
+  })
+
+  it("returns true for the legacy openclaw + ASCII ellipsis combination", () => {
+    expect(isStubBody("<!-- openclaw:pr-overview -->\n\n## Sigilix Overview\n\n_Reviewing..._")).toBe(true)
+  })
+
+  it("returns false for a real completed summary body", () => {
+    const completed = [
+      "<!-- sigilix:pr-overview -->",
+      "",
+      "## Sigilix Overview",
+      "",
+      "### Summary — latest push",
+      "",
+      "This push refactors the authentication layer to use JWT tokens.",
+      "",
+      "### Important files",
+      "",
+      "| File | Score | Notes |",
+      "| --- | :---: | --- |",
+      "| `src/auth.ts` | 4/5 | Core JWT signing/verifying logic |",
+    ].join("\n")
+    expect(isStubBody(completed)).toBe(false)
+  })
+
+  // CodeRabbit catch on PR #111 (Major): the previous substring match
+  // would classify a real summary that quotes `_Reviewing…_` (e.g.,
+  // a Sigilix-reviews-its-own-PR meta-block) as a stub, clobbering
+  // exactly the summary SIG-96 was meant to preserve. Whole-body
+  // match prevents this.
+  it("CR catch: returns false when a completed summary embeds the stub placeholder verbatim", () => {
+    const reviewingItself = [
+      "<!-- sigilix:pr-overview -->",
+      "",
+      "## Sigilix Overview",
+      "",
+      "### Summary",
+      "",
+      "This PR introduces the `_Reviewing…_` stub fix. Pre-fix, every push reset the body to `_Reviewing…_`.",
+    ].join("\n")
+    expect(isStubBody(reviewingItself)).toBe(false)
+  })
+
+  it("returns false for null / undefined / non-string (semantics: 'this body is not the stub placeholder')", () => {
+    expect(isStubBody(null)).toBe(false)
+    expect(isStubBody(undefined)).toBe(false)
+    // @ts-expect-error — runtime guard against non-string
+    expect(isStubBody(42)).toBe(false)
+  })
+
+  it("returns false for an empty string", () => {
+    expect(isStubBody("")).toBe(false)
+  })
+
+  it("returns false when the body mentions `Reviewing` outside the stub-pattern context", () => {
+    const proseSummary = "<!-- sigilix:pr-overview -->\n\n## Sigilix Overview\n\nReviewing the auth changes uncovered three risks."
+    expect(isStubBody(proseSummary)).toBe(false)
+  })
+
+  it("returns false when the body has the stub format PLUS appended content (partial-render race)", () => {
+    // If the overview job rendered partial content before erroring,
+    // we should NOT treat that as a stub — preserve whatever is there.
+    const partialAppend = `${STUB_BODY}\n\n### Summary\n\nMid-render content.`
+    expect(isStubBody(partialAppend)).toBe(false)
   })
 })

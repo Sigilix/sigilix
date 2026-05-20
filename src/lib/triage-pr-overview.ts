@@ -15,6 +15,12 @@ import { PR_OVERVIEW_SCHEMA } from "./schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import { LEGACY_WARMUP_MARKER, WARMUP_CALLOUT_MARKER } from "./warmup"
+import { loadSigilixConfig, resolvePreMergeGatesConfig } from "./sigilix-config"
+import {
+  runPreMergeGates,
+  renderPreMergeGatesSection,
+  type GateResult,
+} from "./pre-merge-gates"
 import {
   batchReadFileCache,
   batchWriteFileCache,
@@ -45,6 +51,32 @@ export interface PrOverviewVerdict {
   confidence: number
   confidenceReason: string
   bullets: string[]
+  /**
+   * SIG-99 polish fields — all optional + back-compat. The parser
+   * clamps each independently; renderer omits the section when
+   * absent. Models trained against the older prompt that don't know
+   * these fields simply leave them undefined.
+   *
+   * - `reviewEffort` (1-5): drives a `**Effort:** N/5` badge under the
+   *   heading. Independent of `confidence` — a safe-to-merge change
+   *   can still demand careful reading.
+   * - `suggestedLabels`: 0-3 GitHub label names. Renders as a
+   *   `\`label1\` \`label2\`` line. Hooks into `customLabels` config
+   *   (SIG-90) when the operator wants filtering.
+   * - `suggestedReviewers`: 0-2 GitHub usernames. Rendered as
+   *   `@user1, @user2` so GitHub notifies them.
+   * - `relatedPrUrls`: 0-3 URLs. Stays empty until SIG-44 (multi-
+   *   corpus retrieval) feeds prior-PR context into the prompt;
+   *   shipped now so the schema + renderer are in place for the
+   *   retrieval-side enablement.
+   * - `mermaidDiagram`: an inline Mermaid `sequenceDiagram` block.
+   *   GitHub renders fenced ```mermaid blocks natively.
+   */
+  reviewEffort?: number
+  suggestedLabels?: string[]
+  suggestedReviewers?: string[]
+  relatedPrUrls?: string[]
+  mermaidDiagram?: string
 }
 
 export interface PrOverviewArgs {
@@ -148,6 +180,41 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       }),
     ])
     since("pr-fetched")
+
+    // SIG-100: run deterministic pre-merge quality gates (no model).
+    // Inputs come from `meta` + `commits`, both already in scope.
+    // Loaded config can be EMPTY_CONFIG (no sigilix.json on the PR)
+    // — `resolvePreMergeGatesConfig` fills in the locked defaults.
+    // Best-effort: a config-load failure falls through to default
+    // gate behavior; we don't block the overview render on it.
+    let gateResults: GateResult[] = []
+    try {
+      const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+      const gatesConfig = resolvePreMergeGatesConfig(sigilixConfig.preMergeGates)
+      gateResults = runPreMergeGates(
+        {
+          prTitle: meta.title ?? "",
+          prBody: meta.body ?? "",
+          commitMessages: commits.map((c) => c.message),
+        },
+        gatesConfig,
+      )
+      for (const r of gateResults) {
+        console.log(JSON.stringify({
+          event: "pr-overview-pre-merge-gate-result",
+          gate: r.id,
+          passed: r.passed,
+          severity: r.severity,
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        }))
+      }
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-overview-pre-merge-gates-failed",
+        err: err instanceof Error ? err.message : String(err),
+        owner, repo, prNumber,
+      }))
+    }
 
     // ─── SIG-84: stale-head guard #1 (pre-Ollama) ───────────────────
     //
@@ -339,6 +406,10 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       verdict: verdictForDisplay,
       isFirstRun: existingForWrite == null,
       warmup,
+      // SIG-100: thread gate results through to the renderer. Always
+      // pass — the formatter checks for an empty array internally and
+      // skips the section.
+      gateResults,
     })
 
     // ─── SIG-84: stale-head guard #2 (pre-write) ────────────────────
@@ -542,13 +613,80 @@ export function parseOverviewResponse(text: string): PrOverviewVerdict | null {
   const confidenceReason =
     typeof obj.confidenceReason === "string" ? obj.confidenceReason.trim() : ""
 
-  return {
+  // SIG-99: optional polish fields. Each is independently clamped /
+  // filtered; nothing fails the parse if any is malformed. Absent
+  // fields stay undefined → renderer skips the section.
+  const verdict: PrOverviewVerdict = {
     summary,
     files,
     confidence: Math.round(confidence),
     confidenceReason,
     bullets,
   }
+  const effortRaw = Number(obj.reviewEffort)
+  if (Number.isFinite(effortRaw) && effortRaw >= 1 && effortRaw <= 5) {
+    verdict.reviewEffort = Math.round(effortRaw)
+  }
+  if (Array.isArray(obj.suggestedLabels)) {
+    const labels = obj.suggestedLabels
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim())
+      // code-reviewer HIGH/MEDIUM catch (pre-PR): label strings are
+      // rendered inline as `` `${label}` `` with no escape. A label
+      // containing a backtick / newline / pipe would break out of the
+      // inline-code span and inject raw markdown. Drop anything with
+      // markdown metacharacters.
+      .filter((s) => !/[`\n\r|]/u.test(s))
+      .slice(0, 3)
+    if (labels.length > 0) verdict.suggestedLabels = labels
+  }
+  if (Array.isArray(obj.suggestedReviewers)) {
+    const reviewers = obj.suggestedReviewers
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      // Strip a leading `@` if the model adds one — the renderer
+      // adds it back uniformly.
+      .map((s) => s.trim().replace(/^@/, ""))
+      .filter((s) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(s))
+      .slice(0, 2)
+    if (reviewers.length > 0) verdict.suggestedReviewers = reviewers
+  }
+  if (Array.isArray(obj.relatedPrUrls)) {
+    const urls = obj.relatedPrUrls
+      .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim())
+      // code-reviewer MEDIUM catch (pre-PR): tighten path-character
+      // class to URL-legal characters only AND anchor with `$`. The
+      // previous `[^\s)]+` allowed backticks, brackets, and quotes,
+      // letting the model smuggle markdown-meta characters into the
+      // rendered list. The new pattern accepts only the GitHub PR
+      // URL alphabet (owner/repo charset is conservative + `pull/N`
+      // is digits + optional `?query` / `#fragment` tail).
+      .filter((s) => /^https:\/\/github\.com\/[A-Za-z0-9_.\-/]+\/pull\/\d+(?:[#?][^\s)`'"]*)?$/.test(s))
+      .slice(0, 3)
+    if (urls.length > 0) verdict.relatedPrUrls = urls
+  }
+  if (typeof obj.mermaidDiagram === "string") {
+    const m = obj.mermaidDiagram.trim()
+    // Defensive: only accept blocks that LOOK like Mermaid (start with
+    // a known diagram-kind keyword). Prevents the model from injecting
+    // arbitrary markdown that would render outside a code fence.
+    //
+    // code-reviewer HIGH catch (pre-PR): the prefix-keyword guard
+    // alone isn't enough. A payload like
+    //   "sequenceDiagram\n```\n# pwned"
+    // passes the prefix check but the embedded triple-backtick closes
+    // the renderer's mermaid fence early, letting the trailing prose
+    // render as top-level markdown. Reject any value containing
+    // triple-backtick so the fence stays intact.
+    if (
+      m.length > 0 &&
+      /^(?:sequenceDiagram|flowchart|graph|stateDiagram)/u.test(m) &&
+      !m.includes("```")
+    ) {
+      verdict.mermaidDiagram = m
+    }
+  }
+  return verdict
 }
 
 /**
@@ -634,6 +772,12 @@ interface FormatArgs {
    *  block at the top of the overview when the indexer hasn't
    *  produced a manifest yet. `"none"` (default) omits the callout. */
   warmup?: "pending" | "none"
+  /**
+   * SIG-100: deterministic pre-merge gate results. Rendered as a
+   * "Quality gates" checklist near the top of the body (just after
+   * the effort badge). Empty array / missing → no section.
+   */
+  gateResults?: readonly GateResult[]
 }
 
 /**
@@ -641,7 +785,12 @@ interface FormatArgs {
  * on line 1 is what `findExistingOverviewComment` greps for to decide
  * between POST-new and PATCH-in-place.
  */
-export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: FormatArgs): string {
+export function formatOverviewComment({
+  verdict,
+  isFirstRun,
+  warmup = "none",
+  gateResults = [],
+}: FormatArgs): string {
   const lines: string[] = [OVERVIEW_MARKER, ""]
   lines.push("## Sigilix Overview")
   lines.push("")
@@ -656,6 +805,25 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
   // delivers the upgraded review, which is signal enough on its own.
   if (warmup === "pending") {
     lines.push(WARMUP_CALLOUT_MARKER)
+    lines.push("")
+  }
+
+  // SIG-99: review-effort badge under the heading. Independent of
+  // confidence — see PrOverviewVerdict.reviewEffort docs. Rendered as
+  // a single bold-prefixed line so it picks up GitHub's normal weight
+  // hierarchy without competing with the `### Summary` heading.
+  if (typeof verdict.reviewEffort === "number") {
+    lines.push(`**Effort:** ${verdict.reviewEffort}/5 ${effortLabel(verdict.reviewEffort)}`)
+    lines.push("")
+  }
+
+  // SIG-100: pre-merge quality gates section. Placed BEFORE the
+  // summary so a reviewer sees blocking-or-actionable gate results
+  // first. Renders as a checklist with ✅ / ❌ / ⚠️ / ℹ️ glyphs per
+  // gate severity. Skipped entirely when no gates ran.
+  const gatesSection = renderPreMergeGatesSection(gateResults)
+  if (gatesSection !== null) {
+    lines.push(gatesSection)
     lines.push("")
   }
 
@@ -679,6 +847,18 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
     }
   }
 
+  // SIG-99: Mermaid sequence diagram. Placed AFTER the file table so
+  // a reviewer scans (summary → files → flow); GitHub renders fenced
+  // ```mermaid blocks natively.
+  if (verdict.mermaidDiagram) {
+    lines.push("")
+    lines.push("### Sequence diagram")
+    lines.push("")
+    lines.push("```mermaid")
+    lines.push(verdict.mermaidDiagram)
+    lines.push("```")
+  }
+
   lines.push("")
   lines.push(`### Confidence: ${verdict.confidence}/5`)
   if (verdict.confidenceReason) {
@@ -693,7 +873,43 @@ export function formatOverviewComment({ verdict, isFirstRun, warmup = "none" }: 
     }
   }
 
+  // SIG-99: footer trio (labels / reviewers / related). All optional;
+  // rendered as compact one-liners so they don't compete with the
+  // file table or summary. Placed at the bottom so a reviewer who's
+  // already digested the body sees the metadata last (matches
+  // CodeRabbit's information order).
+  if (verdict.suggestedLabels && verdict.suggestedLabels.length > 0) {
+    lines.push("")
+    lines.push(`**Suggested labels:** ${verdict.suggestedLabels.map((l) => `\`${l}\``).join(" ")}`)
+  }
+  if (verdict.suggestedReviewers && verdict.suggestedReviewers.length > 0) {
+    lines.push("")
+    lines.push(`**Suggested reviewers:** ${verdict.suggestedReviewers.map((u) => `@${u}`).join(", ")}`)
+  }
+  if (verdict.relatedPrUrls && verdict.relatedPrUrls.length > 0) {
+    lines.push("")
+    lines.push("**Related context:**")
+    for (const url of verdict.relatedPrUrls) {
+      lines.push(`- ${url}`)
+    }
+  }
+
   return lines.join("\n")
+}
+
+/**
+ * SIG-99: human-readable label for a review-effort score. Mirrors the
+ * anchor in the prompt's `## Field guidelines` section. Pure.
+ */
+function effortLabel(effort: number): string {
+  switch (effort) {
+    case 1: return "_(trivial)_"
+    case 2: return "_(small)_"
+    case 3: return "_(medium)_"
+    case 4: return "_(large)_"
+    case 5: return "_(needs deep review)_"
+    default: return ""
+  }
 }
 
 function escapeTableCell(value: string): string {
@@ -798,6 +1014,43 @@ export async function findExistingOverviewCommentId(
     event: "pr-overview-comment-scan-capped",
     owner, repo, prNumber,
     max_pages: MAX_COMMENT_SCAN_PAGES,
+  }))
+  return null
+}
+
+/**
+ * SIG-96: richer variant of `findExistingOverviewCommentId` that returns
+ * the comment BODY alongside the id. The stub-helper uses the body to
+ * decide whether the sticky already carries a completed summary (do
+ * NOT clobber with `_Reviewing…_`) or is itself a stub from an earlier
+ * push (idempotent re-write is fine).
+ *
+ * Same bilingual matcher + same `MAX_COMMENT_SCAN_PAGES` cap as
+ * `findExistingOverviewCommentId`. Short-circuits on the first marker
+ * hit; the body field is whatever GitHub returned for that comment.
+ */
+export async function findExistingOverviewComment(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<{ id: number; body: string } | null> {
+  for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
+    const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
+    if (items.length === 0) return null
+    for (const c of items) {
+      if (typeof c.body !== "string") continue
+      if (c.body.includes(OVERVIEW_MARKER) || c.body.includes(LEGACY_OVERVIEW_MARKER)) {
+        return { id: c.id, body: c.body }
+      }
+    }
+    if (items.length < 100) return null
+  }
+  console.warn(JSON.stringify({
+    event: "pr-overview-comment-scan-capped",
+    owner, repo, prNumber,
+    max_pages: MAX_COMMENT_SCAN_PAGES,
+    helper: "findExistingOverviewComment",
   }))
   return null
 }

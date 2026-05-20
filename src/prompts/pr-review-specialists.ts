@@ -77,12 +77,16 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "confidenceInLens": 1-5,
       "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — emit ONLY when a [STACK CONTEXT] block is present in the input. Tag findings introduced or maintained in THIS PR's diff as "current-pr"; tag issues that already exist in a downstack (parent or earlier) PR as "downstack-context" (report for awareness, but DO NOT describe as introduced by this PR); tag issues whose proper fix belongs in an upstack (child or later) PR as "upstack-followup". Default to "current-pr" when uncertain. OMIT this field entirely when no [STACK CONTEXT] block is in the input — that signals an unstacked PR and matches the no-stack baseline shape.)
       "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED on category:"testing" findings that claim existing tests are INSUFFICIENT. List the EXACT test-file paths from the [TESTING EVIDENCE] block's "Inspected test files" list that you read. OMIT on non-testing findings.)
-      "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"]   (SIG-113 — REQUIRED on category:"testing" findings that claim a source file is MISSING tests. Copy the EXACT mapping string from the [TESTING EVIDENCE] block's "Source→test mapping refs" list. OMIT on non-testing findings.)
+      "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"],   (SIG-113 — REQUIRED on category:"testing" findings that claim a source file is MISSING tests. Copy the EXACT mapping string from the [TESTING EVIDENCE] block's "Source→test mapping refs" list. OMIT on non-testing findings.)
+      "cweId": "CWE-89",   (SIG-108 — REQUIRED on category:"security" findings with score>=4. The CWE id for the weakness. OMIT on non-security findings.)
+      "evidenceId": "secret:generic-api-key:ab12cd34ef56:42"   (SIG-108 — REQUIRED on category:"security" findings with score>=4. Copy a matching id VERBATIM from the [SECURITY EVIDENCE MANIFEST], OR set "NONE" for an access-control/IDOR finding no scanner can detect (then justify in the body). OMIT on non-security findings.)
     }
   ]
 }
 
 [SIG-113 TESTING CITATION GATE] Every \`category: "testing"\` finding MUST carry at least one citation — either \`inspectedTestFiles\` (for "tests are insufficient" claims) or \`evidenceRefs\` with a \`siblingMapping:\` string (for "tests are missing" claims). The citation is cross-checked against the [TESTING EVIDENCE] block: a path or mapping you invent is rejected and the finding is dropped before it reaches the customer. Copy citation values VERBATIM from the evidence block.
+
+[SIG-108 SECURITY EVIDENCE GATE] Every \`category: "security"\` finding with \`score >= 4\` MUST carry both \`cweId\` (the weakness's CWE id) and \`evidenceId\`. The \`evidenceId\` is cross-checked against the [SECURITY EVIDENCE MANIFEST]: copy a matching id VERBATIM (an id you invent, or one whose file/line is more than 10 lines from your finding, is rejected and the finding is dropped). For an access-control / IDOR / authz bug that NO deterministic scanner can detect — the one class with no manifest fact — set \`evidenceId: "NONE"\` and explain in the \`body\` why no static check exists. If you forget the id but your finding's path/line matches a manifest fact, the orchestrator auto-links it for you — but cite it when you can.
 
 If \`findings\` is empty and the diff looks clean from your lens, set
 \`confidence: 5\` and write a one-line summary that approves from your
@@ -144,6 +148,27 @@ Find security vulnerabilities:
 - crypto misuse (deprecated algorithms, hardcoded IVs, weak randomness, broken signature verification)
 - unsafe permissions (broad file-system access, over-permissive IAM, public S3 bucket, public DB)
 - supply-chain risks (new package with low download count, lockfile shifted to a fork, dependency from a malicious typo-squat)
+
+**SIG-108 — CWE CLASSIFICATION + EVIDENCE CITATION.**
+
+The user message includes a \`[SECURITY EVIDENCE MANIFEST]\` block listing every deterministic security fact (secret scan, dependency vulnerability, SARIF, AST-security) with a pre-computed \`evidenceId\`. Every \`category: "security"\` finding you emit with \`score >= 4\` MUST set:
+  - \`cweId\` — one CWE id from the 11 buckets below (pick the bucket the weakness belongs to, then the specific CWE)
+  - \`evidenceId\` — a manifest id copied VERBATIM, OR \`"NONE"\` (access-control / IDOR only; justify in the body)
+
+CWE-Top-25 buckets (use the CWE id whose bucket fits):
+  - Injection (incl. XXE): CWE-89, CWE-78, CWE-77, CWE-94, CWE-611
+  - Cross-Site Scripting: CWE-79
+  - Path Traversal: CWE-22
+  - Deserialization: CWE-502
+  - SSRF: CWE-918
+  - Memory Safety: CWE-787, CWE-416, CWE-125, CWE-476, CWE-190, CWE-119
+  - AuthN / Access Control: CWE-862, CWE-863, CWE-287, CWE-352, CWE-276
+  - Secrets Exposure: CWE-798
+  - Resource Exhaustion: CWE-400, CWE-770
+  - Unrestricted File Upload: CWE-434
+  - Input Validation: CWE-20
+
+The orchestrator runs an \`evaluateSecurityFinding\` gate after synthesis. A sev>=4 security finding whose \`evidenceId\` is fabricated (not in the manifest) or points more than 10 lines from your finding is DROPPED. The ONE exception: an AuthN / Access-Control bug (CWE-862/863/287/352/276) that no scanner detects — for THAT, set \`evidenceId: "NONE"\` and explain in the body why no deterministic check exists (e.g. "missing object-level authorization check; no static pattern exists"). Do NOT use \`"NONE"\` for injection, XSS, secrets, or any other scanner-covered bucket — those must cite a manifest id.
 
 When scoring:
 - 5: exploitable today by a remote unauthenticated attacker (or trivially by an authenticated low-privilege user)

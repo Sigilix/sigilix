@@ -4723,12 +4723,23 @@ export interface ValidatedOutput {
  *     (no evidence to gate on; the SIG-91 prompt rule already covers
  *     this case via "[TESTING EVIDENCE] block absent → no missing-tests
  *     finding applicable")
- *   - Finding has at least one `inspectedTestFiles` entry → keep (specialist
- *     read test files while forming the finding)
- *   - Finding has at least one `evidenceRefs` entry referencing a
- *     `siblingMapping:` from the pack → keep (specialist cited the
- *     deterministic mapping that backs the absence claim)
- *   - Otherwise → drop with a structured reason
+ *   - Finding cites an `inspectedTestFiles` path that EXISTS in the
+ *     pack's inspected set → keep (specialist read a file we actually
+ *     embedded in its prompt)
+ *   - Finding cites an `evidenceRefs` `siblingMapping:<source>-><test>`
+ *     that MATCHES a real mapping in the pack → keep (specialist cited
+ *     the deterministic mapping that backs the absence claim)
+ *   - Otherwise → drop
+ *
+ * CodeRabbit catch on PR #112 (Major): the citation MUST be validated
+ * against the actual pack, not just shape-checked. Pre-fix, any
+ * non-empty `inspectedTestFiles` array or any `evidenceRefs` string
+ * with the right prefix passed — letting a hallucinating model bypass
+ * the gate with an invented path (`tests/made-up.test.ts`) or a
+ * fabricated mapping. That reopens the "structurally valid but
+ * factually unsupported" hole the gate exists to close. Now every
+ * citation is cross-checked against `pack.inspectedTestFiles` /
+ * `pack.siblingMappings`.
  *
  * Pure — exported for tests.
  */
@@ -4737,32 +4748,51 @@ export function evaluateTestingFindingCitation(
   pack: TestingEvidencePack | undefined,
 ): { keep: true } | { keep: false; reason: "no-citation" } {
   if (finding.category !== "testing") return { keep: true }
-  // CodeRabbit catch (pre-PR): `buildTestingEvidencePack` always
-  // returns a pack object — even for a pure docs PR it returns one
-  // with empty source/test arrays. Treat an empty pack the same as
-  // an absent one: no evidence to gate on, so pass the finding
-  // through. (Matches the specialist's prompt-side rule: "no
-  // missing-tests finding applicable when the evidence block is
-  // absent.")
+  // `buildTestingEvidencePack` always returns a pack object — even for
+  // a pure docs PR it returns one with empty source/test arrays. Treat
+  // an empty pack the same as an absent one: no evidence to gate on,
+  // so pass the finding through.
   if (!pack || (pack.sourceFilesChanged.length === 0 && pack.testFilesChanged.length === 0)) {
     return { keep: true }
   }
 
-  const hasInspected = Array.isArray(finding.inspectedTestFiles) && finding.inspectedTestFiles.length > 0
-  if (hasInspected) return { keep: true }
+  // Build the set of REAL inspected-test paths + REAL sibling-mapping
+  // citation strings from the pack. A citation only counts if it
+  // names something the pack actually contains.
+  const realInspected = new Set(pack.inspectedTestFiles)
+  // Canonical mapping refs the pack supports, both directions of the
+  // arrow value (`->NONE` when the source has no sibling test, or
+  // `-><test-path>` when it does).
+  const realMappingRefs = new Set<string>()
+  for (const m of pack.siblingMappings) {
+    realMappingRefs.add(`siblingMapping:${m.source}->${m.test ?? "NONE"}`)
+  }
 
-  // Accept an evidenceRefs entry whose prefix is `siblingMapping:`
-  // (deterministic backing for an absence claim) or
-  // `inspectedTestFile:` (specialist cited a file even though they
-  // didn't use the inspectedTestFiles array). Tolerate the looser
-  // shape so the validator doesn't drop legitimate citations on a
-  // schema technicality.
+  // inspectedTestFiles: at least one cited path must be in the pack's
+  // real inspected set. An invented path doesn't count.
+  if (Array.isArray(finding.inspectedTestFiles)) {
+    for (const p of finding.inspectedTestFiles) {
+      if (typeof p === "string" && realInspected.has(p.trim())) {
+        return { keep: true }
+      }
+    }
+  }
+
+  // evidenceRefs: validate each ref against the pack.
+  //   - `siblingMapping:<source>-><test|NONE>` must match a real mapping
+  //   - `inspectedTestFile:<path>` must be a real inspected path
   if (Array.isArray(finding.evidenceRefs)) {
     for (const ref of finding.evidenceRefs) {
       if (typeof ref !== "string") continue
       const trimmed = ref.trim()
-      if (trimmed.startsWith("siblingMapping:") || trimmed.startsWith("inspectedTestFile:")) {
+      if (realMappingRefs.has(trimmed)) {
         return { keep: true }
+      }
+      if (trimmed.startsWith("inspectedTestFile:")) {
+        const path = trimmed.slice("inspectedTestFile:".length).trim()
+        if (realInspected.has(path)) {
+          return { keep: true }
+        }
       }
     }
   }

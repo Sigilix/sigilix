@@ -272,8 +272,15 @@ export function renderTestingEvidenceBlock(
       }
       if (contentAvailable) {
         annotations.push(truncated ? "content included below (truncated)" : "content included below")
-      } else {
+      } else if (inspectedContent.failedPaths.includes(p)) {
+        // CodeRabbit catch on PR #112: distinguish a genuine fetch
+        // failure from cap-spillover. Only paths in `failedPaths`
+        // actually errored; a path absent from contentByPath for any
+        // OTHER reason (total-budget spillover) is a capacity drop,
+        // not a fetch error — misstating it biases the specialist.
         annotations.push("content NOT available (fetch failed)")
+      } else {
+        annotations.push("content NOT available (omitted to fit the evidence-block size budget)")
       }
       lines.push(`- \`${p}\` — ${annotations.join("; ")}`)
     }
@@ -286,15 +293,33 @@ export function renderTestingEvidenceBlock(
     "Citation requirements (the orchestrator's `evaluateTestingFindingCitation` gate drops findings that don't cite):",
   )
   lines.push(
-    "- When firing a `category: \"testing\"` finding claiming a source file lacks test coverage, you MUST set `evidenceRefs: [\"siblingMapping:<source>-><NONE|tests/...>\"]` referencing one of the source→test mappings above.",
+    "- When firing a `category: \"testing\"` finding claiming a source file lacks test coverage, you MUST set `evidenceRefs` to one of the EXACT mapping strings listed under \"Source→test mapping refs\" below. A mapping string you invent (or a path not in the list) is rejected — the citation is cross-checked against the deterministic mappings.",
   )
   lines.push(
-    "- When the finding instead claims the existing tests are insufficient (vs. absent), set `inspectedTestFiles: [\"<test-file-path>\"]` listing the test files you actually read to form the judgment.",
+    "- When the finding instead claims the existing tests are insufficient (vs. absent), set `inspectedTestFiles` to one or more of the EXACT test-file paths listed under \"Inspected test files\" below — files whose full content is embedded in this block. A path not in that list is rejected.",
   )
   lines.push(
-    "- Findings without either citation are dropped silently and never reach the customer review.",
+    "- Findings without a citation that resolves against this block are dropped silently and never reach the customer review.",
   )
   lines.push("")
+
+  // SIG-113 (CodeRabbit PR #112 catch): emit the EXACT citation
+  // strings the validator accepts, so the model copies them verbatim
+  // instead of inventing a near-miss the cross-check rejects.
+  if (pack.siblingMappings.length > 0) {
+    lines.push("Source→test mapping refs (copy verbatim into `evidenceRefs`):")
+    for (const m of pack.siblingMappings) {
+      lines.push(`- \`siblingMapping:${m.source}->${m.test ?? "NONE"}\``)
+    }
+    lines.push("")
+  }
+  if (pack.inspectedTestFiles.length > 0) {
+    lines.push("Inspected test files (copy verbatim into `inspectedTestFiles`):")
+    for (const p of pack.inspectedTestFiles) {
+      lines.push(`- \`${p}\``)
+    }
+    lines.push("")
+  }
 
   // Embed the test-file content. Walk `testFilesChanged` order so the
   // rendering is deterministic and matches the inventory list above.

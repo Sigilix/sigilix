@@ -75,10 +75,14 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
       "primaryLens": "logic" | "security" | "performance" | "tests",
       "confidenceInLens": 1-5,
-      "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup"   (OPTIONAL — emit ONLY when a [STACK CONTEXT] block is present in the input. Tag findings introduced or maintained in THIS PR's diff as "current-pr"; tag issues that already exist in a downstack (parent or earlier) PR as "downstack-context" (report for awareness, but DO NOT describe as introduced by this PR); tag issues whose proper fix belongs in an upstack (child or later) PR as "upstack-followup". Default to "current-pr" when uncertain. OMIT this field entirely when no [STACK CONTEXT] block is in the input — that signals an unstacked PR and matches the no-stack baseline shape.)
+      "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — emit ONLY when a [STACK CONTEXT] block is present in the input. Tag findings introduced or maintained in THIS PR's diff as "current-pr"; tag issues that already exist in a downstack (parent or earlier) PR as "downstack-context" (report for awareness, but DO NOT describe as introduced by this PR); tag issues whose proper fix belongs in an upstack (child or later) PR as "upstack-followup". Default to "current-pr" when uncertain. OMIT this field entirely when no [STACK CONTEXT] block is in the input — that signals an unstacked PR and matches the no-stack baseline shape.)
+      "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED on category:"testing" findings that claim existing tests are INSUFFICIENT. List the EXACT test-file paths from the [TESTING EVIDENCE] block's "Inspected test files" list that you read. OMIT on non-testing findings.)
+      "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"]   (SIG-113 — REQUIRED on category:"testing" findings that claim a source file is MISSING tests. Copy the EXACT mapping string from the [TESTING EVIDENCE] block's "Source→test mapping refs" list. OMIT on non-testing findings.)
     }
   ]
 }
+
+[SIG-113 TESTING CITATION GATE] Every \`category: "testing"\` finding MUST carry at least one citation — either \`inspectedTestFiles\` (for "tests are insufficient" claims) or \`evidenceRefs\` with a \`siblingMapping:\` string (for "tests are missing" claims). The citation is cross-checked against the [TESTING EVIDENCE] block: a path or mapping you invent is rejected and the finding is dropped before it reaches the customer. Copy citation values VERBATIM from the evidence block.
 
 If \`findings\` is empty and the diff looks clean from your lens, set
 \`confidence: 5\` and write a one-line summary that approves from your

@@ -43,6 +43,12 @@ function pack(overrides: Partial<TestingEvidencePack> = {}): TestingEvidencePack
 }
 
 describe("evaluateTestingFindingCitation", () => {
+  // The shared `pack()` helper has:
+  //   inspectedTestFiles: ["tests/foo.test.ts"]
+  //   siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }]
+  // → real mapping ref = "siblingMapping:src/lib/foo.ts->tests/foo.test.ts"
+  //   real inspected path = "tests/foo.test.ts"
+
   it("non-testing findings always pass (gate only applies to category='testing')", () => {
     const r = evaluateTestingFindingCitation(finding({ category: "logic" }), pack())
     expect(r.keep).toBe(true)
@@ -53,7 +59,7 @@ describe("evaluateTestingFindingCitation", () => {
     expect(r.keep).toBe(true)
   })
 
-  it("returns keep when the finding cites inspectedTestFiles", () => {
+  it("keeps when inspectedTestFiles cites a path that IS in the pack", () => {
     const r = evaluateTestingFindingCitation(
       finding({ inspectedTestFiles: ["tests/foo.test.ts"] }),
       pack(),
@@ -61,20 +67,63 @@ describe("evaluateTestingFindingCitation", () => {
     expect(r.keep).toBe(true)
   })
 
-  it("returns keep when the finding cites an evidenceRefs:siblingMapping ref", () => {
+  // CodeRabbit PR #112 (Major): a fabricated inspected path must NOT
+  // pass — the citation is cross-checked against the pack.
+  it("DROPS when inspectedTestFiles cites a path NOT in the pack (anti-fabrication)", () => {
     const r = evaluateTestingFindingCitation(
-      finding({ evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE"] }),
+      finding({ inspectedTestFiles: ["tests/totally-made-up.test.ts"] }),
+      pack(),
+    )
+    expect(r.keep).toBe(false)
+  })
+
+  it("keeps when evidenceRefs cites a siblingMapping that MATCHES the pack (real ->test)", () => {
+    const r = evaluateTestingFindingCitation(
+      finding({ evidenceRefs: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts"] }),
       pack(),
     )
     expect(r.keep).toBe(true)
   })
 
-  it("returns keep when the finding cites an evidenceRefs:inspectedTestFile ref", () => {
+  it("keeps when evidenceRefs cites a real ->NONE mapping (source with no sibling)", () => {
+    const r = evaluateTestingFindingCitation(
+      finding({ evidenceRefs: ["siblingMapping:src/lib/bar.ts->NONE"] }),
+      pack({
+        sourceFilesChanged: ["src/lib/foo.ts", "src/lib/bar.ts"],
+        siblingMappings: [
+          { source: "src/lib/foo.ts", test: "tests/foo.test.ts" },
+          { source: "src/lib/bar.ts", test: null },
+        ],
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  // CodeRabbit PR #112 (Major): the original FP pattern — model claims
+  // "src/lib/foo.ts->NONE" but the pack shows foo.ts HAS a sibling. The
+  // fabricated mapping must be rejected.
+  it("DROPS when evidenceRefs cites a siblingMapping that CONTRADICTS the pack (->NONE for a file that has a sibling)", () => {
+    const r = evaluateTestingFindingCitation(
+      finding({ evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE"] }),
+      pack(), // foo.ts -> tests/foo.test.ts in this pack, so ->NONE is a lie
+    )
+    expect(r.keep).toBe(false)
+  })
+
+  it("keeps when evidenceRefs uses the inspectedTestFile: prefix on a real path", () => {
     const r = evaluateTestingFindingCitation(
       finding({ evidenceRefs: ["inspectedTestFile:tests/foo.test.ts"] }),
       pack(),
     )
     expect(r.keep).toBe(true)
+  })
+
+  it("DROPS when evidenceRefs uses inspectedTestFile: on a path NOT in the pack", () => {
+    const r = evaluateTestingFindingCitation(
+      finding({ evidenceRefs: ["inspectedTestFile:tests/fake.test.ts"] }),
+      pack(),
+    )
+    expect(r.keep).toBe(false)
   })
 
   it("returns drop with no-citation reason when neither cited", () => {
@@ -91,7 +140,7 @@ describe("evaluateTestingFindingCitation", () => {
     expect(r.keep).toBe(false)
   })
 
-  it("drops when evidenceRefs is present but doesn't include a recognized prefix", () => {
+  it("drops when evidenceRefs has an unrecognized-prefix ref that maps to nothing", () => {
     const r = evaluateTestingFindingCitation(
       finding({ evidenceRefs: ["randomRef:foo", "another:bar"] }),
       pack(),
@@ -99,19 +148,19 @@ describe("evaluateTestingFindingCitation", () => {
     expect(r.keep).toBe(false)
   })
 
-  it("tolerates whitespace around evidenceRefs entries", () => {
+  it("tolerates whitespace around a REAL evidenceRefs entry", () => {
     const r = evaluateTestingFindingCitation(
-      finding({ evidenceRefs: ["  siblingMapping:x->y  "] }),
+      finding({ evidenceRefs: ["  siblingMapping:src/lib/foo.ts->tests/foo.test.ts  "] }),
       pack(),
     )
     expect(r.keep).toBe(true)
   })
 
-  it("ignores non-string evidenceRefs entries (defensive)", () => {
+  it("ignores non-string evidenceRefs entries but still validates the real one (defensive)", () => {
     const r = evaluateTestingFindingCitation(
       finding({
         // @ts-expect-error — runtime guard against schema-bypass
-        evidenceRefs: [42, null, "siblingMapping:x->y"],
+        evidenceRefs: [42, null, "siblingMapping:src/lib/foo.ts->tests/foo.test.ts"],
       }),
       pack(),
     )
@@ -218,7 +267,16 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
     expect(result.verdict.findings).toHaveLength(1)
   })
 
-  it("keeps a testing finding that cites a siblingMapping (legitimate absence claim)", () => {
+  it("keeps a testing finding that cites a REAL ->NONE siblingMapping (legitimate absence claim)", () => {
+    // The cited mapping must match the pack. Use a pack where
+    // src/lib/bar.ts genuinely has no sibling test.
+    const absencePack = pack({
+      sourceFilesChanged: ["src/lib/foo.ts", "src/lib/bar.ts"],
+      siblingMappings: [
+        { source: "src/lib/foo.ts", test: "tests/foo.test.ts" },
+        { source: "src/lib/bar.ts", test: null },
+      ],
+    })
     const synthOutput = {
       verdict: {
         summary: "Test",
@@ -226,7 +284,38 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
         confidenceReason: "Reason.",
         findings: [
           finding({
-            headline: "src/lib/foo.ts ships without a sibling test in this PR",
+            path: "src/lib/bar.ts",
+            headline: "src/lib/bar.ts ships without a sibling test in this PR",
+            evidenceRefs: ["siblingMapping:src/lib/bar.ts->NONE"],
+          }),
+        ],
+      },
+      provenance: makeProvenance(1),
+    }
+    const result = validateForSubmission({
+      synthOutput,
+      reviewable: new Map([
+        ["src/lib/bar.ts", [{ line: 1, side: "RIGHT" as const, position: 1 }]],
+      ]),
+      specialistVerdicts: makeSpecialistVerdicts() as never,
+      testingEvidence: absencePack,
+    })
+    expect(result.droppedForUncitedTestingEvidence).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+  })
+
+  it("DROPS a testing finding citing a CONTRADICTORY ->NONE mapping (foo.ts actually has a sibling)", () => {
+    // CodeRabbit PR #112 (Major): the exact original FP pattern. The
+    // model claims foo.ts has no test, but the pack shows it DOES.
+    // The fabricated ->NONE citation is rejected.
+    const synthOutput = {
+      verdict: {
+        summary: "Test",
+        confidence: 3,
+        confidenceReason: "Reason.",
+        findings: [
+          finding({
+            headline: "src/lib/foo.ts ships without tests",
             evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE"],
           }),
         ],
@@ -237,10 +326,10 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
       synthOutput,
       reviewable: makeReviewable(),
       specialistVerdicts: makeSpecialistVerdicts() as never,
-      testingEvidence: pack(),
+      testingEvidence: pack(), // foo.ts -> tests/foo.test.ts; ->NONE is a lie
     })
-    expect(result.droppedForUncitedTestingEvidence).toBe(0)
-    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.droppedForUncitedTestingEvidence).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
   })
 
   it("back-compat: when no testingEvidence is supplied, the gate no-ops (uncited findings pass)", () => {

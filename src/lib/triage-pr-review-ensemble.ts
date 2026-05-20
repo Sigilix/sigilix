@@ -4727,8 +4727,14 @@ export interface ValidatedOutput {
  *     pack's inspected set → keep (specialist read a file we actually
  *     embedded in its prompt)
  *   - Finding cites an `evidenceRefs` `siblingMapping:<source>-><test>`
- *     that MATCHES a real mapping in the pack → keep (specialist cited
- *     the deterministic mapping that backs the absence claim)
+ *     that MATCHES a real mapping in the pack AND whose `<source>`
+ *     equals `finding.path` → keep (relevant + accurate absence claim)
+ *   - Finding cites `evidenceRefs` `inspectedTestFile:<path>` resolving
+ *     to a real inspected path → keep
+ *   - Finding cites `evidenceRefs` `testFileChanged:<path>` resolving
+ *     to a test file in the PR's changed set → keep (covers the
+ *     "removed/renamed test coverage" class where the deleted test
+ *     can't be fetched at headSha)
  *   - Otherwise → drop
  *
  * CodeRabbit catch on PR #112 (Major): the citation MUST be validated
@@ -4756,20 +4762,21 @@ export function evaluateTestingFindingCitation(
     return { keep: true }
   }
 
-  // Build the set of REAL inspected-test paths + REAL sibling-mapping
-  // citation strings from the pack. A citation only counts if it
-  // names something the pack actually contains.
+  // Build the sets of REAL evidence from the pack. A citation only
+  // counts if it names something the pack actually contains.
   const realInspected = new Set(pack.inspectedTestFiles)
-  // Canonical mapping refs the pack supports, both directions of the
-  // arrow value (`->NONE` when the source has no sibling test, or
-  // `-><test-path>` when it does).
-  const realMappingRefs = new Set<string>()
+  const realTestFilesChanged = new Set(pack.testFilesChanged)
+  // Real mapping source → arrow-value, so we can both (a) confirm the
+  // mapping exists AND (b) enforce relevance to `finding.path`.
+  const realMappingBySource = new Map<string, string>()
   for (const m of pack.siblingMappings) {
-    realMappingRefs.add(`siblingMapping:${m.source}->${m.test ?? "NONE"}`)
+    realMappingBySource.set(m.source, m.test ?? "NONE")
   }
 
   // inspectedTestFiles: at least one cited path must be in the pack's
-  // real inspected set. An invented path doesn't count.
+  // real inspected set. An invented path doesn't count. No relevance-
+  // to-`finding.path` check here — a finding about a source file
+  // legitimately cites the (differently-named) test file it read.
   if (Array.isArray(finding.inspectedTestFiles)) {
     for (const p of finding.inspectedTestFiles) {
       if (typeof p === "string" && realInspected.has(p.trim())) {
@@ -4779,20 +4786,55 @@ export function evaluateTestingFindingCitation(
   }
 
   // evidenceRefs: validate each ref against the pack.
-  //   - `siblingMapping:<source>-><test|NONE>` must match a real mapping
-  //   - `inspectedTestFile:<path>` must be a real inspected path
   if (Array.isArray(finding.evidenceRefs)) {
     for (const ref of finding.evidenceRefs) {
       if (typeof ref !== "string") continue
       const trimmed = ref.trim()
-      if (realMappingRefs.has(trimmed)) {
-        return { keep: true }
+
+      // `siblingMapping:<source>-><test|NONE>` — must match a REAL
+      // mapping AND be RELEVANT to this finding. CodeRabbit PR #112
+      // (Major): a finding about `foo.ts` could otherwise cite an
+      // unrelated real mapping (`bar.ts->NONE`) and bypass the gate.
+      // The mapping's source must equal the finding's target path.
+      if (trimmed.startsWith("siblingMapping:")) {
+        const payload = trimmed.slice("siblingMapping:".length)
+        const arrowIdx = payload.indexOf("->")
+        if (arrowIdx < 0) continue
+        const source = payload.slice(0, arrowIdx).trim()
+        const arrowValue = payload.slice(arrowIdx + 2).trim()
+        // Relevance: the cited mapping must be ABOUT the file the
+        // finding targets.
+        if (source !== finding.path) continue
+        // Existence + accuracy: the cited arrow value must match the
+        // pack's real mapping for that source (a `->NONE` claim for a
+        // source that actually has a sibling is rejected).
+        if (realMappingBySource.get(source) === arrowValue) {
+          return { keep: true }
+        }
+        continue
       }
+
+      // `inspectedTestFile:<path>` — must be a real inspected path.
       if (trimmed.startsWith("inspectedTestFile:")) {
         const path = trimmed.slice("inspectedTestFile:".length).trim()
         if (realInspected.has(path)) {
           return { keep: true }
         }
+        continue
+      }
+
+      // `testFileChanged:<path>` — CodeRabbit PR #112 (Major): a
+      // legitimate "PR removed/renamed test coverage" finding can't
+      // cite an inspected file (the deleted test fails to fetch at
+      // headSha) or a sibling mapping (no source). Accept a citation
+      // that names a test file present in the PR's CHANGED set, which
+      // includes deletions/renames.
+      if (trimmed.startsWith("testFileChanged:")) {
+        const path = trimmed.slice("testFileChanged:".length).trim()
+        if (realTestFilesChanged.has(path)) {
+          return { keep: true }
+        }
+        continue
       }
     }
   }

@@ -293,10 +293,13 @@ export function renderTestingEvidenceBlock(
     "Citation requirements (the orchestrator's `evaluateTestingFindingCitation` gate drops findings that don't cite):",
   )
   lines.push(
-    "- When firing a `category: \"testing\"` finding claiming a source file lacks test coverage, you MUST set `evidenceRefs` to one of the EXACT mapping strings listed under \"Source→test mapping refs\" below. A mapping string you invent (or a path not in the list) is rejected — the citation is cross-checked against the deterministic mappings.",
+    "- When firing a `category: \"testing\"` finding claiming a source file lacks test coverage, anchor the finding to that source file (its `path`) and set `evidenceRefs` to the EXACT mapping string for THAT source from \"Source→test mapping refs\" below. The cited mapping's source must equal the finding's `path` — citing a mapping for a different file is rejected.",
   )
   lines.push(
     "- When the finding instead claims the existing tests are insufficient (vs. absent), set `inspectedTestFiles` to one or more of the EXACT test-file paths listed under \"Inspected test files\" below — files whose full content is embedded in this block. A path not in that list is rejected.",
+  )
+  lines.push(
+    "- When the finding claims the PR REMOVED or RENAMED test coverage (a deleted test file), set `evidenceRefs: [\"testFileChanged:<path>\"]` naming a path from \"Test files changed in this PR\" above. Use this form when the test was deleted (so its content can't be embedded).",
   )
   lines.push(
     "- Findings without a citation that resolves against this block are dropped silently and never reach the customer review.",

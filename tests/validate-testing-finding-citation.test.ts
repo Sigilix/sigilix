@@ -77,17 +77,40 @@ describe("evaluateTestingFindingCitation", () => {
     expect(r.keep).toBe(false)
   })
 
-  it("keeps when evidenceRefs cites a siblingMapping that MATCHES the pack (real ->test)", () => {
+  it("keeps when evidenceRefs cites a siblingMapping that MATCHES the pack AND is relevant to finding.path", () => {
     const r = evaluateTestingFindingCitation(
-      finding({ evidenceRefs: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts"] }),
+      finding({ path: "src/lib/foo.ts", evidenceRefs: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts"] }),
       pack(),
     )
     expect(r.keep).toBe(true)
   })
 
-  it("keeps when evidenceRefs cites a real ->NONE mapping (source with no sibling)", () => {
+  // CodeRabbit PR #112 round 2 (Major): relevance enforcement. A real
+  // mapping for an UNRELATED file must not let a finding about a
+  // different file bypass the gate.
+  it("DROPS when the cited siblingMapping is real but UNRELATED to finding.path", () => {
     const r = evaluateTestingFindingCitation(
-      finding({ evidenceRefs: ["siblingMapping:src/lib/bar.ts->NONE"] }),
+      finding({
+        path: "src/lib/foo.ts",
+        // bar.ts->NONE is a real mapping in the pack below, but this
+        // finding is about foo.ts — irrelevant citation.
+        evidenceRefs: ["siblingMapping:src/lib/bar.ts->NONE"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/foo.ts", "src/lib/bar.ts"],
+        siblingMappings: [
+          { source: "src/lib/foo.ts", test: "tests/foo.test.ts" },
+          { source: "src/lib/bar.ts", test: null },
+        ],
+      }),
+    )
+    expect(r.keep).toBe(false)
+  })
+
+  it("keeps when evidenceRefs cites a real ->NONE mapping relevant to finding.path", () => {
+    const r = evaluateTestingFindingCitation(
+      // finding.path must equal the mapping's source (relevance).
+      finding({ path: "src/lib/bar.ts", evidenceRefs: ["siblingMapping:src/lib/bar.ts->NONE"] }),
       pack({
         sourceFilesChanged: ["src/lib/foo.ts", "src/lib/bar.ts"],
         siblingMappings: [
@@ -97,6 +120,26 @@ describe("evaluateTestingFindingCitation", () => {
       }),
     )
     expect(r.keep).toBe(true)
+  })
+
+  it("keeps when evidenceRefs cites testFileChanged: for a deleted/renamed test (CodeRabbit PR #112 round 2)", () => {
+    const r = evaluateTestingFindingCitation(
+      finding({
+        path: "src/lib/foo.ts",
+        headline: "PR deletes tests/foo.test.ts, removing coverage for foo()",
+        evidenceRefs: ["testFileChanged:tests/foo.test.ts"],
+      }),
+      pack(), // tests/foo.test.ts IS in testFilesChanged
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("DROPS testFileChanged: citing a path NOT in the PR's changed test set", () => {
+    const r = evaluateTestingFindingCitation(
+      finding({ evidenceRefs: ["testFileChanged:tests/never-existed.test.ts"] }),
+      pack(),
+    )
+    expect(r.keep).toBe(false)
   })
 
   // CodeRabbit PR #112 (Major): the original FP pattern — model claims

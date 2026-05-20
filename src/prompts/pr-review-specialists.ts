@@ -20,6 +20,32 @@
 //     in their domain).
 
 import type { SpecialistRole } from "../lib/ensemble-router"
+import testsExamples from "./tests-examples.json"
+
+/**
+ * SIG-111: render the tests-specialist few-shot exemplars
+ * (`tests-examples.json`) into a compact prompt block. Wired into the
+ * TESTS role prompt ONLY (NOT `SHARED_OUTPUT_INSTRUCTIONS`) so the
+ * other specialists don't pay the token cost. Balanced good/bad
+ * examples — the negatives counter the over-flagging that the
+ * sibling-gap promotion (piece 1) could otherwise cause. Each line is
+ * a (EMIT|SKIP) + situation + why triple; full JSON findings are
+ * summarized to keep prompt size reasonable.
+ */
+function renderTestsExamplesBlock(): string {
+  const lines: string[] = [
+    "[TESTS FEW-SHOT EXEMPLARS — calibrate what to flag vs. skip; do NOT copy verbatim]",
+    "",
+  ]
+  for (const ex of testsExamples.examples) {
+    const verb = ex.emit ? "EMIT" : "SKIP"
+    lines.push(`- ${verb}: ${ex.situation}`)
+    lines.push(`  why: ${ex.why}`)
+  }
+  return lines.join("\n").trim()
+}
+
+const TESTS_EXAMPLES_BLOCK = renderTestsExamplesBlock()
 
 /**
  * ARC-156 (Greptile port A2): negative-constraint specialist prompts.
@@ -234,6 +260,10 @@ A "missing tests" finding (any phrasing — "ships without tests", "no test cove
 
 When the \`[TESTING EVIDENCE]\` block is ABSENT from the user message, the diff contains no source or test files (docs/config-only PR) — no "missing tests" finding is applicable in that case either.
 
+**SIG-111 — A \`->NONE\` SIBLING MAPPING IS CITABLE EVIDENCE, NOT A MANDATE.**
+
+A \`siblingMapping:<source>->NONE\` line in the \`[TESTING EVIDENCE]\` block is the authoritative basis for a missing-coverage finding: when you DO fire one, anchor the finding to that \`<source>\` (its \`path\`) and cite the EXACT \`siblingMapping:<source>->NONE\` string. But a missing sibling is EVIDENCE, not proof — it tells you a source has no test in this PR, NOT that the source warrants one. Fire a missing-coverage finding ONLY when the source genuinely warrants a test: it carries non-trivial runtime logic (branches, error paths, state transitions, computation a regression could silently break). Do NOT flag a \`->NONE\` source that is trivial — pure type/interface declarations, a flat constants list, a re-export barrel, a thin pass-through wrapper. Flagging every \`->NONE\` gap is noise the orchestrator drops; flag the gaps that matter.
+
 Find testing gaps and risks (subject to the rule above):
 - missing tests on a non-trivial branch the PR added (new conditional, new error path, new state transition) — but only when the source's sibling test in this diff does not cover that branch
 - asserts that don't actually verify the claim (a test that passes whether or not the bug exists)
@@ -250,6 +280,8 @@ When scoring:
 - 3: missing coverage on a non-trivial branch with bounded-but-real impact
 - 2: minor coverage gap (one edge case not tested)
 - 1: nit (test naming, redundant test, non-issue)
+
+${TESTS_EXAMPLES_BLOCK}
 
 ${SHARED_OUTPUT_INSTRUCTIONS}`,
 }

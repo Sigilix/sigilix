@@ -1,0 +1,141 @@
+{
+  "_comment": "SIG-111: few-shot exemplars for the TESTS specialist ONLY. Wired into the tests role prompt via pr-review-specialists.ts (NOT the shared block). Balanced on purpose: the GOOD examples show the three admissible shapes (missing-coverage citing siblingMapping->NONE, insufficient-test citing a concrete API/branch, removed-coverage citing testFileChanged); the BAD examples are the over-flagging FP shapes the SIG-111 specificity gate drops (vague 'needs more tests', uncited/wrong-file missing-coverage, sibling-gap flagged with no judgment about whether the source warrants a test, contradictory). Negative examples exist to COUNTER the over-flagging the sibling-gap promotion (piece 1) could otherwise cause. Each example is a (situation, emit_or_not, why) triple — compact, not full JSON findings, to keep prompt size reasonable.",
+  "examples": [
+    {
+      "id": "good-missing-coverage",
+      "situation": "Source `src/lib/pricing.ts` is NEW in this PR and computes tax tiers with several branches. The [TESTING EVIDENCE] block shows `siblingMapping:src/lib/pricing.ts->NONE` — no sibling test in this PR.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/pricing.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "`computeTaxTier` ships without any test coverage",
+        "body": "The new `computeTaxTier` function branches on three rate bands and an exempt case; none is exercised. Add a test file covering each band plus the exempt path.",
+        "evidenceRefs": ["siblingMapping:src/lib/pricing.ts->NONE"]
+      },
+      "why": "Non-trivial new logic + a real ->NONE mapping for THIS file. The missing sibling is EVIDENCE the source genuinely warrants a test, and the finding cites it. Admissible."
+    },
+    {
+      "id": "good-insufficient-test-branch",
+      "situation": "Source `src/lib/retry.ts` adds a timeout branch. Its sibling test `tests/retry.test.ts` IS in the [TESTING EVIDENCE] block's inspected files; reading it, the test only covers the happy path.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/retry.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "`retryWithBackoff` timeout branch is untested",
+        "body": "The existing test for `retryWithBackoff` asserts the success path but never triggers the new timeout branch, so a regression there ships silently. Add a case that forces the timeout.",
+        "inspectedTestFiles": ["tests/retry.test.ts"]
+      },
+      "why": "Cites a real inspected test AND names a concrete API + branch. Specific, not a generic 'add more tests'. Admissible."
+    },
+    {
+      "id": "good-removed-coverage",
+      "situation": "This PR DELETES `tests/auth.test.ts`, the only test for the auth-token refresh path. The deleted file appears in the [TESTING EVIDENCE] block's changed test files.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/auth.ts",
+        "category": "testing",
+        "score": 5,
+        "headline": "PR removes the only auth-refresh test by deleting `tests/auth.test.ts`",
+        "body": "Deleting `tests/auth.test.ts` leaves the token-refresh boundary unverified; a regression in `refreshToken` would now ship undetected. Restore coverage or justify the removal.",
+        "evidenceRefs": ["testFileChanged:tests/auth.test.ts"]
+      },
+      "why": "Removed-coverage class. The deleted test can't be embedded, so it cites `testFileChanged:` instead. The deletion exception always keeps a finding like this."
+    },
+    {
+      "id": "good-trivial-source-no-finding",
+      "situation": "Source `src/lib/constants.ts` is new and exports only a flat list of string constants. The [TESTING EVIDENCE] block shows `siblingMapping:src/lib/constants.ts->NONE`.",
+      "emit": false,
+      "why": "A missing sibling is EVIDENCE, not proof. This source is trivial (no logic, no branches) and does not genuinely warrant a test. Do NOT flag a missing-coverage finding just because the ->NONE mapping exists. Flagging every gap is the over-flagging FP the gate drops."
+    },
+    {
+      "id": "bad-vague-needs-more-tests",
+      "situation": "Source `src/lib/parser.ts` changed; its sibling test `tests/parser.test.ts` is inspected and already covers the changed code.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/parser.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "Module needs more tests",
+        "body": "This module could use additional tests to improve overall coverage.",
+        "inspectedTestFiles": ["tests/parser.test.ts"]
+      },
+      "why": "Names no concrete API, branch, or gap — a bare 'needs more tests' nudge. The specificity gate drops this as vague-insufficient-test. If the existing tests genuinely miss a branch, name THAT branch instead."
+    },
+    {
+      "id": "bad-uncited-missing-coverage",
+      "situation": "Source `src/lib/orders.ts` changed. The [TESTING EVIDENCE] block shows it IS covered: `siblingMapping:src/lib/orders.ts->tests/orders.test.ts`.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/orders.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "`orders.ts` ships without test coverage",
+        "body": "This module has no tests.",
+        "evidenceRefs": ["siblingMapping:src/lib/orders.ts->NONE"]
+      },
+      "why": "Asserts ->NONE for a source the evidence block says IS covered. The cited mapping contradicts the pack, so the gate drops it as uncited-missing-coverage. CONSULT the mapping before claiming absence."
+    },
+    {
+      "id": "bad-wrong-file-mapping",
+      "situation": "Source `src/lib/foo.ts` (new, untested per the block) and `src/lib/bar.ts` (also new, untested) both changed. A finding about `foo.ts` cites bar's mapping by mistake.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/foo.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "`foo.ts` lacks tests",
+        "body": "No coverage for the new `foo.ts` logic.",
+        "evidenceRefs": ["siblingMapping:src/lib/bar.ts->NONE"]
+      },
+      "why": "The cited mapping's source (`bar.ts`) doesn't match the finding's `path` (`foo.ts`). The gate requires the ->NONE mapping to be ABOUT the file the finding targets; otherwise it's dropped as uncited-missing-coverage. Cite `siblingMapping:src/lib/foo.ts->NONE`."
+    },
+    {
+      "id": "bad-sibling-gap-without-judgment",
+      "situation": "Source `src/lib/types.ts` is new — pure TypeScript type/interface declarations, no runtime logic. The block shows `siblingMapping:src/lib/types.ts->NONE`.",
+      "emit": false,
+      "why": "Type-only declarations have nothing to test. The ->NONE mapping is real but the source does NOT warrant a test. Firing here because the gap exists — without judging whether the source needs coverage — is exactly the over-flagging the sibling-gap rule must avoid."
+    },
+    {
+      "id": "good-flaky-pattern",
+      "situation": "Sibling test `tests/scheduler.test.ts` (inspected) asserts ordering of async callbacks via a fixed `setTimeout(…, 50)`.",
+      "emit": true,
+      "finding": {
+        "path": "tests/scheduler.test.ts",
+        "category": "testing",
+        "score": 3,
+        "headline": "`scheduler.test.ts` ordering assertion is timing-dependent",
+        "body": "The test relies on a 50ms `setTimeout` to order async callbacks; under load this flakes. Use fake timers or await the scheduler's completion signal instead.",
+        "inspectedTestFiles": ["tests/scheduler.test.ts"]
+      },
+      "why": "Cites a real inspected test and names a concrete fragile pattern (timing-dependent assertion) with a concrete fix. Specific. (Score 3 — below the gate's sev>=4 bar — but still a good, admissible finding.)"
+    },
+    {
+      "id": "good-assertion-does-not-verify",
+      "situation": "Sibling test `tests/validate.test.ts` (inspected) has a case named 'rejects invalid email' that only checks the function returns, never asserting it threw or returned false.",
+      "emit": true,
+      "finding": {
+        "path": "tests/validate.test.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "`rejects invalid email` test never asserts rejection",
+        "body": "The case calls `validateEmail(bad)` but asserts nothing about the result, so it passes whether or not the rejection works. Assert the thrown error or the `false` return.",
+        "inspectedTestFiles": ["tests/validate.test.ts"]
+      },
+      "why": "Names the exact test case and the missing assertion. Concrete inadequacy in an inspected test. Admissible."
+    },
+    {
+      "id": "bad-docs-only-pr",
+      "situation": "The PR touches only `README.md` and `docs/*.md`. No source or test files changed; the [TESTING EVIDENCE] block is absent.",
+      "emit": false,
+      "why": "No source or test files means no testing finding is applicable. Do NOT invent a 'this needs tests' finding for a docs-only PR. The absent block is the signal."
+    },
+    {
+      "id": "bad-contradictory-covered-claim",
+      "situation": "Source `src/lib/cache.ts` changed and the block shows it covered: `siblingMapping:src/lib/cache.ts->tests/cache.test.ts`, with `tests/cache.test.ts` inspected and thorough.",
+      "emit": false,
+      "why": "Both the mapping and the inspected test confirm coverage exists and is adequate. There is no gap to flag. Emitting a missing- or insufficient-coverage finding here contradicts the evidence and is dropped."
+    }
+  ]
+}

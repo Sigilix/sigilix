@@ -45,6 +45,7 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     const f = buildFactsByRole(baseInputs)
     expect(f.logic).toContain("[DETERMINISTIC]")
     expect(f.security).not.toContain("[DETERMINISTIC]")
+    expect(f.performance).not.toContain("[DETERMINISTIC]")
     expect(f.tests).not.toContain("[DETERMINISTIC]")
   })
 
@@ -53,6 +54,7 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     expect(f.tests).toContain("[DOCS COVERAGE]")
     expect(f.security).not.toContain("[DOCS COVERAGE]")
     expect(f.logic).not.toContain("[DOCS COVERAGE]")
+    expect(f.performance).not.toContain("[DOCS COVERAGE]")
   })
 
   it("splits AST findings by roleHint into the matching role", () => {
@@ -70,6 +72,10 @@ describe("buildFactsByRole — no cross-domain leak", () => {
     expect(f.logic).not.toContain("sec-rule")
     expect(f.performance).toContain("perf-rule")
     expect(f.performance).not.toContain("logic-rule")
+    // AST findings never spill into the tests role.
+    expect(f.tests).not.toContain("sec-rule")
+    expect(f.tests).not.toContain("logic-rule")
+    expect(f.tests).not.toContain("perf-rule")
   })
 
   it("yields an empty block for a role with no facts (omit-when-empty)", () => {

@@ -712,6 +712,42 @@ ARC-189 adds a **minimal cross-PR review-memory store** so Sigilix carries learn
 
 **Telemetry:** `review-memory-capture-skipped` (with reason), `review-memory-capture-written`, `review-memory-capture-failed` (with stage), `review-memory-lookup-skipped` (with reason), `review-memory-lookup-ran` (with `memoriesFound`/`memoriesInjected`/`durationMs`), `review-memory-corrupt-record`, `review-memory-softened-rendered` (with `softenedCount`), `review-stale-prompt-version-suppressed`, `review-stale-prompt-version-suppressed-heartbeat` (with `level: info|warn`), `review-stale-prompt-version-suppressed-stale` (after 72h fail-safe), `review-stale-prompt-version-suppress-misconfig` (with reason).
 
+## Coverage-diff ingestion (SIG-118)
+
+Sigilix can read a **test-coverage report from the PR head's CI run** and feed *coverage-gap* facts to the tests specialist. A coverage gap is a line that this PR **added** AND that the CI coverage run reports as **uncovered** — exactly the lines a reviewer should ask for a test on.
+
+**Default OFF** (`coverage.source: "off"`) — opposite polarity from the always-on scanners. Production behavior is unchanged until an operator opts in. Enable per-repo in `sigilix.json`:
+
+```json
+{
+  "coverage": {
+    "source": "github-actions-artifact",
+    "artifactName": "coverage-lcov",
+    "entry": "lcov.info"
+  }
+}
+```
+
+- `source` (default `"off"`) — `"github-actions-artifact"` reads an LCOV artifact uploaded by the head SHA's GitHub Actions run; any other value (including `"off"`) keeps the feature dormant.
+- `artifactName` (default `"coverage-lcov"`) — the `actions/upload-artifact` name to look for.
+- `entry` (default `"lcov.info"`) — the LCOV file inside the artifact ZIP.
+
+**How it works:**
+
+1. Find the latest **completed + successful** workflow run whose `head_sha` equals the PR head SHA (a mismatched SHA means the artifact is for a different commit — skipped).
+2. List that run's artifacts, take the first non-expired one matching `artifactName` whose **compressed** `size_in_bytes` is ≤ 5 MiB (checked BEFORE download).
+3. Download the artifact ZIP. **Security:** GitHub's artifact endpoint replies with a 302 to a short-lived signed storage URL; the redirect is followed MANUALLY — the first request carries the install token, the redirect target is required to be `https:`, and the second request to the signed URL carries **no auth headers** (the signed query string is the credential; sending the install token there would leak it to the storage host). The download is byte-capped at 15 MiB.
+4. Extract just the `entry` file (uncompressed entry capped at 15 MiB), parse `DA:<line>,0` records as the uncovered set, normalize each `SF:` path (strip the runner workspace prefix / `file://` / `./`), and resolve it to a changed file by exact-or-unique-suffix match (ambiguous / traversal paths rejected).
+5. Intersect the uncovered lines with the PR's **added** lines (reusing `buildChangedLines`) and emit a `[COVERAGE GAPS — pre-LLM, LCOV]` block to the tests specialist with citable `coverageGap:<path>:<line>` refs.
+
+The two tests-finding gates (`evaluateTestingFindingCitation`, `evaluateTestFinding`) accept a `coverageGap:<path>:<line>` ref as a real missing-coverage citation when the (path, line) is in the gap set and the cited path matches the finding's path.
+
+**Best-effort + non-fatal:** any failure — no run, no artifact, head-SHA mismatch, expired/oversized artifact, fetch/parse error — is swallowed and the review proceeds with no coverage block. Coverage ingestion can never break a review.
+
+**Telemetry:** `coverage-ingest` (with `source`/`runId`/`artifactName`/`gaps_count`/`skipped_reason`), `coverage-ingest-ran` (with `lcovFiles`/`gaps`), `coverage-ingest-skipped` (with `reason`).
+
+**Dependency note:** ZIP extraction uses [`fflate`](https://github.com/101arrowz/fflate) (`0.8.2`, exact pin, MIT license) — used ONLY for extracting the LCOV entry from a GitHub Actions artifact ZIP in the Worker. No other code path uses it.
+
 ## DO-backed pr-review run state (ARC-190)
 
 A Cloudflare Durable Object (`PrReviewRunDO`) replaces the legacy 7-day KV `pr-review:<owner>/<repo>#<pr>@<sha>` dedupe key with a per-PR state machine. The DO owns dedupe, retry orchestration, and a public status route; the queue consumer wrapper claims runs via `/pickup` and reports outcomes via `/run-result` so retries are scheduled centrally instead of leaking into queue redelivery.

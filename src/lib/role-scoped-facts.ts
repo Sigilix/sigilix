@@ -4,7 +4,8 @@
 // facts — the security specialist gets secret-scan / dep-vuln /
 // AST-security / SARIF / the security evidence manifest; logic gets
 // AST-correctness + regex deterministic-checks; performance gets
-// AST-performance; tests gets docs-coverage. This eliminates the
+// AST-performance; tests gets docs-coverage + SIG-118 coverage-gap
+// facts. This eliminates the
 // cross-domain leak where (e.g.) the logic specialist's prompt carried
 // secret-scan output.
 //
@@ -32,6 +33,8 @@ export interface RoleScopedFactInputs {
   deterministicBlock: string
   /** ARC-272 docs-coverage block (tests). */
   docsCoverageBlock: string
+  /** SIG-118 coverage-gap block from LCOV ingestion (tests). */
+  coverageGapBlock: string
   /** SIG-108 security evidence manifest render (security). */
   securityManifestBlock: string
   /** ARC-181 AST findings, split here by `roleHint`. */
@@ -58,6 +61,6 @@ export function buildFactsByRole(inputs: RoleScopedFactInputs): Record<Specialis
     ]),
     logic: join([astBlock("logic"), inputs.deterministicBlock]),
     performance: join([astBlock("performance")]),
-    tests: join([inputs.docsCoverageBlock]),
+    tests: join([inputs.docsCoverageBlock, inputs.coverageGapBlock]),
   }
 }

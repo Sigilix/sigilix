@@ -76,6 +76,32 @@ export type TestDropReason =
  * (`evaluateTestingFindingCitation`) so the two gates agree on what a
  * mapping ref means. Returns null for any other ref shape.
  */
+/**
+ * SIG-118: parse a `coverageGap:<path>:<line>` evidenceRef. The line is
+ * read from the LAST colon so paths that themselves contain colons
+ * (e.g. a Windows drive or a URL-shaped path) don't break parsing.
+ * Returns null for any non-coverageGap ref or a non-positive-integer
+ * line. Shared by `evaluateTestFinding` (SIG-111) and
+ * `evaluateTestingFindingCitation` (SIG-113) so the two gates agree on
+ * the shape (defined here, the lower-level module, to avoid a circular
+ * import with the orchestrator).
+ */
+export function parseCoverageGapRef(ref: string): { path: string; line: number } | null {
+  if (typeof ref !== "string") return null
+  const trimmed = ref.trim()
+  if (!trimmed.startsWith("coverageGap:")) return null
+  const i = trimmed.lastIndexOf(":")
+  // A valid ref has a SECOND colon separating path from line, so the
+  // last colon must be strictly after the prefix's own colon.
+  if (i < "coverageGap:".length) return null
+  const path = trimmed.slice("coverageGap:".length, i)
+  const lineStr = trimmed.slice(i + 1)
+  if (path.length === 0 || lineStr.length === 0) return null
+  const line = Number(lineStr)
+  if (!Number.isInteger(line) || line <= 0) return null
+  return { path, line }
+}
+
 function parseSiblingMappingRef(ref: string): { source: string; arrowValue: string } | null {
   const trimmed = ref.trim()
   if (!trimmed.startsWith("siblingMapping:")) return null
@@ -138,6 +164,45 @@ function citesRealMissingCoverage(finding: PrReviewFinding, pack: TestingEvidenc
     }
   }
   return false
+}
+
+/**
+ * SIG-118: does the finding cite at least one REAL coverage gap for its
+ * own path? A `coverageGap:<path>:<line>` ref is admissible only when
+ * (a) `<path>` equals `finding.path` (relevance, mirroring the sibling-
+ * mapping rule) AND (b) `"<path>:<line>"` is in the real gap set passed
+ * to the gate (the LCOV-derived added-and-uncovered set). This is a
+ * MISSING-COVERAGE-style claim backed by deterministic CI evidence.
+ */
+function citesRealCoverageGap(
+  finding: PrReviewFinding,
+  coverageGaps: ReadonlySet<string>,
+): boolean {
+  if (coverageGaps.size === 0) return false
+  if (!Array.isArray(finding.evidenceRefs)) return false
+  const findingPath = typeof finding.path === "string" ? finding.path.trim() : ""
+  for (const ref of finding.evidenceRefs) {
+    if (typeof ref !== "string") continue
+    const parsed = parseCoverageGapRef(ref)
+    if (parsed === null) continue
+    if (parsed.path !== findingPath) continue
+    if (coverageGaps.has(`${parsed.path}:${parsed.line}`)) return true
+  }
+  return false
+}
+
+/**
+ * SIG-118: does the finding cite a `coverageGap:` ref AT ALL (resolved or
+ * not)? A REAL coverageGap for the finding's path keeps earlier; this
+ * detects an UNRESOLVED one. It only promotes the finding to the
+ * missing-coverage class when there's no competing real insufficient-test
+ * class (see `evaluateTestFinding`) — so it catches a fabricated
+ * coverageGap-only claim WITHOUT letting one piggyback on a real
+ * inspected-test citation to escape via ambiguous-keep (Codex HIGH).
+ */
+function citesCoverageGapClass(finding: PrReviewFinding): boolean {
+  if (!Array.isArray(finding.evidenceRefs)) return false
+  return finding.evidenceRefs.some((ref) => parseCoverageGapRef(ref) !== null)
 }
 
 /**
@@ -281,6 +346,14 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
 export function evaluateTestFinding(
   finding: PrReviewFinding,
   pack: TestingEvidencePack | undefined,
+  /**
+   * SIG-118: the real coverage-gap set, keyed `"<path>:<line>"`. Defaults
+   * to an empty set (back-compat for callers that don't ingest coverage).
+   * A finding citing a real `coverageGap:<finding.path>:<line>` is making
+   * an admissible MISSING-COVERAGE claim backed by deterministic CI
+   * evidence — it ALWAYS keeps.
+   */
+  coverageGaps: ReadonlySet<string> = new Set<string>(),
 ): TestFindingDecision {
   // Scope: only sev>=4 testing findings are subject to the specificity
   // bar. Everything else passes untouched.
@@ -290,7 +363,8 @@ export function evaluateTestFinding(
   // No pack to cross-check against (pure docs PR, or caller hasn't
   // threaded the pack) → no evidence to gate on; keep (mirrors the
   // SIG-113 "absent/empty pack" branch + back-compat for the staged
-  // rollout).
+  // rollout). A coverage gap can only exist on a changed source line, so
+  // an empty pack also implies no relevant gaps — the keep is correct.
   if (!pack || (pack.sourceFilesChanged.length === 0 && pack.testFilesChanged.length === 0)) {
     return { keep: true }
   }
@@ -299,6 +373,13 @@ export function evaluateTestFinding(
   // finding citing a changed/deleted test file ALWAYS keeps. Checked
   // FIRST so it can never be reclassified into a reject path.
   if (citesChangedTestFile(finding, pack)) return { keep: true }
+
+  // SIG-118: a real coverage-gap citation for the finding's own path is
+  // a deterministic-CI-backed missing-coverage claim — it ALWAYS keeps.
+  // Checked alongside the deletion/rename exception (before the path /
+  // class machinery) so a legitimately-cited coverage gap can never be
+  // reclassified into the uncited-missing-coverage reject path.
+  if (citesRealCoverageGap(finding, coverageGaps)) return { keep: true }
 
   // A sev>=4 testing finding needs a concrete path to be actionable.
   // The SIG-113 gate doesn't require this; the missing-coverage check
@@ -309,15 +390,21 @@ export function evaluateTestFinding(
   }
 
   // Classify by which citation KIND the finding leans on — independent
-  // of whether that citation resolves. A finding citing a
-  // `siblingMapping:` ref is making a MISSING-COVERAGE claim; one citing
-  // an inspected test is making an INSUFFICIENT-TEST claim. The resolve
-  // / specificity checks below decide admissibility WITHIN the chosen
-  // class. Splitting class from admissibility is what lets the gate
-  // reject a wrong-file / contradictory ->NONE claim rather than letting
-  // it slip into the ambiguous-keep bucket.
-  const missingClass = citesSiblingMappingClass(finding)
+  // of whether that citation resolves. A `siblingMapping:` ref is a
+  // MISSING-COVERAGE claim; an inspected test is an INSUFFICIENT-TEST
+  // claim. The resolve / specificity checks below decide admissibility
+  // WITHIN the chosen class.
+  //
   const insufficientClass = citesInspectedClass(finding)
+  // Codex review (HIGH): an UNRESOLVED `coverageGap:` ref (a real one for
+  // the finding's path already kept at :381) promotes to missing-class
+  // ONLY when there's no competing real insufficient-test class. This
+  // catches a fabricated coverageGap-only claim (→ uncited-missing-
+  // coverage) while preventing a bogus coverageGap from piggybacking on a
+  // real inspected-test citation to straddle both classes and escape via
+  // ambiguous-keep (the bypass Codex flagged).
+  const missingClass =
+    citesSiblingMappingClass(finding) || (citesCoverageGapClass(finding) && !insufficientClass)
 
   // AMBIGUOUS: cites BOTH kinds, or NEITHER. Prefer keep (the FP-safe
   // crux) — the SIG-113 gate already required SOME real citation, and a

@@ -362,6 +362,175 @@ export class GitHubClient {
   }
 
   /**
+   * SIG-118: list workflow runs for a head commit SHA. Used by the
+   * coverage-diff ingestion path to locate the CI run that produced the
+   * LCOV artifact. Filters to `status=completed` server-side; the caller
+   * re-checks `head_sha` + `conclusion` before trusting any run.
+   */
+  async listRunsForSha(
+    owner: string,
+    repo: string,
+    headSha: string,
+  ): Promise<WorkflowRun[]> {
+    const res = await this.restGet<{ workflow_runs?: RawWorkflowRun[] }>(
+      `/repos/${owner}/${repo}/actions/runs?head_sha=${encodeURIComponent(headSha)}&status=completed&per_page=100`,
+    )
+    const runs = Array.isArray(res.workflow_runs) ? res.workflow_runs : []
+    return runs
+      .filter((r): r is RawWorkflowRun & { id: number } => typeof r.id === "number")
+      .map((r) => ({
+        id: r.id,
+        head_sha: typeof r.head_sha === "string" ? r.head_sha : "",
+        status: typeof r.status === "string" ? r.status : "",
+        conclusion: typeof r.conclusion === "string" ? r.conclusion : null,
+        created_at: typeof r.created_at === "string" ? r.created_at : "",
+      }))
+  }
+
+  /**
+   * SIG-118: list artifacts for a workflow run, filtered to an exact
+   * artifact `name`. Used to find the LCOV coverage artifact. Expired
+   * artifacts are returned with `expired: true` so the caller can skip
+   * them (a download attempt would 410). `size_in_bytes` is the
+   * COMPRESSED size — the caller enforces the pre-download size cap
+   * against it.
+   */
+  async listArtifacts(
+    owner: string,
+    repo: string,
+    runId: number,
+    name: string,
+  ): Promise<WorkflowArtifact[]> {
+    const res = await this.restGet<{ artifacts?: RawWorkflowArtifact[] }>(
+      `/repos/${owner}/${repo}/actions/runs/${runId}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
+    )
+    const artifacts = Array.isArray(res.artifacts) ? res.artifacts : []
+    return artifacts
+      .filter((a): a is RawWorkflowArtifact & { id: number } => typeof a.id === "number")
+      .map((a) => ({
+        id: a.id,
+        name: typeof a.name === "string" ? a.name : "",
+        size_in_bytes: typeof a.size_in_bytes === "number" ? a.size_in_bytes : 0,
+        expired: a.expired === true,
+      }))
+  }
+
+  /**
+   * SIG-118: download a workflow artifact ZIP.
+   *
+   * SECURITY (the crux): GitHub's artifact-download endpoint replies
+   * with a 302 to a SHORT-LIVED SIGNED storage URL (Azure Blob / S3).
+   * The signed URL is itself the credential — appending our install
+   * token's `Authorization` header to the redirected request would LEAK
+   * the install token to a third-party storage host. So we follow the
+   * redirect MANUALLY:
+   *   1. First request → the GitHub API host, carrying the install
+   *      token, with `redirect: "manual"`.
+   *   2. On 302, read `Location`. REQUIRE it be `https:` (never follow a
+   *      non-TLS or non-absolute redirect).
+   *   3. Second request → the signed URL with NO auth headers.
+   *
+   * Caps the bytes actually read at `maxBytes` (default 15 MiB) to bound
+   * memory in the Worker. Does NOT route through `request()` —
+   * `fetch`'s default redirect-following would re-attach our headers.
+   */
+  async downloadArtifactZip(
+    owner: string,
+    repo: string,
+    artifactId: number,
+    maxBytes = 15 * 1024 * 1024,
+  ): Promise<Uint8Array> {
+    const apiUrl = `${GITHUB_API}/repos/${owner}/${repo}/actions/artifacts/${artifactId}/zip`
+    const redirectRes = await fetch(apiUrl, {
+      method: "GET",
+      redirect: "manual",
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `token ${this.token}`,
+        "x-github-api-version": "2022-11-28",
+        "user-agent": "sigilix-worker",
+      },
+    })
+
+    // GitHub returns a 302 to the signed storage URL. Some runtimes
+    // surface a manual redirect as status 0 with `type: "opaqueredirect"`
+    // — in that case `Location` is unreadable and we can't safely follow,
+    // so treat it as a failure (the caller's best-effort path returns
+    // null). Read `Location` only from a real 3xx with a readable header.
+    if (redirectRes.status < 300 || redirectRes.status >= 400) {
+      throw new GitHubHttpError(
+        redirectRes.status,
+        `downloadArtifactZip: expected 302 redirect, got HTTP ${redirectRes.status}`,
+      )
+    }
+    const location = redirectRes.headers.get("location")
+    if (!location) {
+      throw new GitHubHttpError(redirectRes.status, "downloadArtifactZip: redirect missing Location")
+    }
+    // SECURITY: require an absolute https URL. Reject http:, relative
+    // paths, and any other scheme so the token can never be replayed to
+    // an attacker-influenced host and the second request is always TLS.
+    let target: URL
+    try {
+      target = new URL(location)
+    } catch {
+      throw new GitHubHttpError(redirectRes.status, "downloadArtifactZip: redirect Location is not an absolute URL")
+    }
+    if (target.protocol !== "https:") {
+      throw new GitHubHttpError(redirectRes.status, `downloadArtifactZip: redirect Location is not https (${target.protocol})`)
+    }
+
+    // SECURITY: NO auth headers on the signed-URL request — the signed
+    // query string is the credential. Sending our install token here is
+    // the exact leak this manual-redirect dance exists to prevent.
+    const zipRes = await fetch(target.toString(), { method: "GET" })
+    if (!zipRes.ok) {
+      throw new GitHubHttpError(zipRes.status, `downloadArtifactZip: signed download failed HTTP ${zipRes.status}`)
+    }
+    if (!zipRes.body) {
+      // No streaming body — fall back to arrayBuffer, but Codex MED: do
+      // NOT buffer first and check after (that defeats the cap). Require a
+      // declared Content-Length within the cap up front; reject otherwise.
+      const declared = Number(zipRes.headers.get("content-length"))
+      if (!Number.isFinite(declared) || declared <= 0 || declared > maxBytes) {
+        throw new GitHubHttpError(
+          zipRes.status,
+          `downloadArtifactZip: no body and missing/oversized content-length (${zipRes.headers.get("content-length") ?? "absent"})`,
+        )
+      }
+      const buf = new Uint8Array(await zipRes.arrayBuffer())
+      if (buf.byteLength > maxBytes) {
+        throw new GitHubHttpError(zipRes.status, `downloadArtifactZip: body exceeds ${maxBytes} bytes`)
+      }
+      return buf
+    }
+
+    // Stream + cap. Abort as soon as the running total exceeds maxBytes
+    // so we never buffer an unbounded download into Worker memory.
+    const reader = zipRes.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      total += value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {})
+        throw new GitHubHttpError(zipRes.status, `downloadArtifactZip: body exceeds ${maxBytes} bytes`)
+      }
+      chunks.push(value)
+    }
+    const out = new Uint8Array(total)
+    let offset = 0
+    for (const c of chunks) {
+      out.set(c, offset)
+      offset += c.byteLength
+    }
+    return out
+  }
+
+  /**
    * List PR review comments (the inline ones). Paginates so callers
    * doing thread-ancestry walks (e.g. `arcInThreadAbove`) don't get
    * silently truncated on PRs with >100 review comments — Arc's
@@ -1292,6 +1461,39 @@ export interface WorkflowJob {
   conclusion: string | null
   status: string
   html_url: string | null
+}
+
+/** SIG-118: a completed workflow run, narrowed from the REST payload. */
+export interface WorkflowRun {
+  id: number
+  head_sha: string
+  status: string
+  conclusion: string | null
+  created_at: string
+}
+
+interface RawWorkflowRun {
+  id?: number
+  head_sha?: string
+  status?: string
+  conclusion?: string | null
+  created_at?: string
+}
+
+/** SIG-118: a workflow-run artifact, narrowed from the REST payload. */
+export interface WorkflowArtifact {
+  id: number
+  name: string
+  /** COMPRESSED size in bytes (the pre-download size cap is enforced against this). */
+  size_in_bytes: number
+  expired: boolean
+}
+
+interface RawWorkflowArtifact {
+  id?: number
+  name?: string
+  size_in_bytes?: number
+  expired?: boolean
 }
 
 export interface ReviewComment {

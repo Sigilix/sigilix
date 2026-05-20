@@ -16,6 +16,7 @@ import {
   resolveAstRulesConfig,
   resolveCostControlsConfig,
   resolveSarifEvidenceConfig,
+  resolveCoverageConfig,
   loadSigilixConfig,
   EMPTY_CONFIG,
   KNOWN_MODELS,
@@ -1071,5 +1072,44 @@ describe("parseSigilixConfig — docsReview", () => {
     const cfg = parseSigilixConfig(JSON.stringify({ docsReview: "oops" }))
     expect(cfg).not.toBeNull()
     expect(cfg?.docsReview).toBeUndefined()
+  })
+})
+
+// SIG-118: coverage-diff ingestion config resolution (default OFF).
+describe("resolveCoverageConfig", () => {
+  it("defaults to off + default artifact/entry on null config", () => {
+    expect(resolveCoverageConfig(null)).toEqual({
+      source: "off",
+      artifactName: "coverage-lcov",
+      entry: "lcov.info",
+    })
+  })
+
+  it("stays off when no coverage key is present", () => {
+    expect(resolveCoverageConfig({} as SigilixConfig).source).toBe("off")
+  })
+
+  it("stays off on explicit source: off", () => {
+    expect(resolveCoverageConfig({ coverage: { source: "off" } } as SigilixConfig).source).toBe("off")
+  })
+
+  it("opts in on source: github-actions-artifact with defaults", () => {
+    expect(
+      resolveCoverageConfig({ coverage: { source: "github-actions-artifact" } } as SigilixConfig),
+    ).toEqual({ source: "github-actions-artifact", artifactName: "coverage-lcov", entry: "lcov.info" })
+  })
+
+  it("preserves partial artifactName / entry overrides", () => {
+    expect(
+      resolveCoverageConfig({
+        coverage: { source: "github-actions-artifact", artifactName: "cov", entry: "coverage.lcov" },
+      } as SigilixConfig),
+    ).toEqual({ source: "github-actions-artifact", artifactName: "cov", entry: "coverage.lcov" })
+  })
+
+  it("coerces an unrecognized source to off", () => {
+    expect(
+      resolveCoverageConfig({ coverage: { source: "weird" } } as unknown as SigilixConfig).source,
+    ).toBe("off")
   })
 })

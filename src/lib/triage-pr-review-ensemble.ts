@@ -1249,7 +1249,17 @@ export async function handlePrReviewEnsemble(
       config: astRulesConfig,
       ctx: { owner, repo, prNumber },
     })
-    const astBlock = renderAstFindingsForPrompt(astResult.findings)
+    // SIG-108: split AST findings by roleHint so each block reaches
+    // only its own specialist (security rules → security facts, etc.).
+    const astSecurityBlock = renderAstFindingsForPrompt(
+      astResult.findings.filter((f) => f.roleHint === "security"),
+    )
+    const astLogicBlock = renderAstFindingsForPrompt(
+      astResult.findings.filter((f) => f.roleHint === "logic"),
+    )
+    const astPerfBlock = renderAstFindingsForPrompt(
+      astResult.findings.filter((f) => f.roleHint === "performance"),
+    )
     telemetry.astRules = astResult.telemetry.scanned
       ? {
           scanned: true,
@@ -1316,14 +1326,27 @@ export async function handlePrReviewEnsemble(
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
     const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
-    // Combine all pre-LLM fact blocks. Order: secrets first
-    // (highest severity), dep vulns, AST rules, SARIF (Trivy IaC +
-    // CVE + license), regex deterministic checks, then the
-    // informational docs-coverage signal last (low-severity nudge,
-    // not a blocker).
-    const combinedFactsBlock = [secretScanBlock, depVulnBlock, astBlock, sarifBlock, deterministicBlock, docsCoverageBlock]
-      .filter((s) => s.length > 0)
-      .join("\n\n")
+    // SIG-108: role-scoped fact blocks — each specialist sees only its
+    // own domain's deterministic facts (no cross-domain leak). The
+    // SIG-91 diff-classification + ARC-182 stack blocks stay shared
+    // (diff topology / ambient context, not domain facts) per design.
+    //   security: secret-scan + dep-vuln + AST-security + SARIF
+    //   logic:    AST-correctness + regex deterministic-checks
+    //   perf:     AST-performance (placeholder until SIG-110)
+    //   tests:    docs-coverage (sibling-test map stays in the shared
+    //             classification / testing-evidence block)
+    const joinFacts = (blocks: string[]): string =>
+      blocks.filter((s) => s.length > 0).join("\n\n")
+    const securityFactsBlock = joinFacts([secretScanBlock, depVulnBlock, astSecurityBlock, sarifBlock])
+    const logicFactsBlock = joinFacts([astLogicBlock, deterministicBlock])
+    const perfFactsBlock = joinFacts([astPerfBlock])
+    const testsFactsBlock = joinFacts([docsCoverageBlock])
+    const factsByRole: Record<SpecialistRole, string> = {
+      security: securityFactsBlock,
+      logic: logicFactsBlock,
+      performance: perfFactsBlock,
+      tests: testsFactsBlock,
+    }
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
 
     // ARC-181 Task 9: auto-inline poster — gated behind
@@ -1532,40 +1555,38 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    // SIG-113: build TWO base messages — one for non-tests specialists
-    // (gets the original classification block) and one for the tests
-    // specialist (gets the stronger testing-evidence block). The
-    // dispatch loops below select per-role.
-    const baseInitialMessage = buildSpecialistInitialMessage({
-      prNumber,
-      title: meta.title,
-      body: meta.body ?? "",
-      diff,
-      retrievalSnapshot,
-      namespace,
-      ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
-      ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
-      ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
-      ...(stackBlock.length > 0 ? { stackBlock } : {}),
-      ...(diffFileClassificationBlock.length > 0 ? { diffFileClassificationBlock } : {}),
-    })
-    const testsSpecialistInitialMessage = testingEvidenceBlock.length > 0
-      ? buildSpecialistInitialMessage({
-          prNumber,
-          title: meta.title,
-          body: meta.body ?? "",
-          diff,
-          retrievalSnapshot,
-          namespace,
-          ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
-          ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
-          ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
-          ...(stackBlock.length > 0 ? { stackBlock } : {}),
-          testingEvidenceBlock,
-        })
-      : baseInitialMessage
-    const messageForRole = (role: string): string =>
-      role === "tests" ? testsSpecialistInitialMessage : baseInitialMessage
+    // SIG-108: build one message per role, injecting only that role's
+    // scoped facts block (no cross-domain leak). The tests specialist
+    // additionally gets the SIG-113 testing-evidence block (which
+    // REPLACES the shared classification block); every other role gets
+    // the shared SIG-91 classification block. guidance/profile/stack
+    // remain shared. Messages are cached per role since each fan-out
+    // path may request the same role's message more than once.
+    const specialistMessageCache = new Map<SpecialistRole, string>()
+    const messageForRole = (role: SpecialistRole): string => {
+      const cached = specialistMessageCache.get(role)
+      if (cached !== undefined) return cached
+      const roleFacts = factsByRole[role]
+      const message = buildSpecialistInitialMessage({
+        prNumber,
+        title: meta.title,
+        body: meta.body ?? "",
+        diff,
+        retrievalSnapshot,
+        namespace,
+        ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+        ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
+        ...(roleFacts.length > 0 ? { deterministicChecksBlock: roleFacts } : {}),
+        ...(stackBlock.length > 0 ? { stackBlock } : {}),
+        ...(role === "tests" && testingEvidenceBlock.length > 0
+          ? { testingEvidenceBlock }
+          : diffFileClassificationBlock.length > 0
+            ? { diffFileClassificationBlock }
+            : {}),
+      })
+      specialistMessageCache.set(role, message)
+      return message
+    }
 
     // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
     // prod Promise.allSettled below so both lineups run in parallel

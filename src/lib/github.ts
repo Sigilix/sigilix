@@ -488,7 +488,16 @@ export class GitHubClient {
       throw new GitHubHttpError(zipRes.status, `downloadArtifactZip: signed download failed HTTP ${zipRes.status}`)
     }
     if (!zipRes.body) {
-      // No streaming body — fall back to a bounded arrayBuffer read.
+      // No streaming body — fall back to arrayBuffer, but Codex MED: do
+      // NOT buffer first and check after (that defeats the cap). Require a
+      // declared Content-Length within the cap up front; reject otherwise.
+      const declared = Number(zipRes.headers.get("content-length"))
+      if (!Number.isFinite(declared) || declared <= 0 || declared > maxBytes) {
+        throw new GitHubHttpError(
+          zipRes.status,
+          `downloadArtifactZip: no body and missing/oversized content-length (${zipRes.headers.get("content-length") ?? "absent"})`,
+        )
+      }
       const buf = new Uint8Array(await zipRes.arrayBuffer())
       if (buf.byteLength > maxBytes) {
         throw new GitHubHttpError(zipRes.status, `downloadArtifactZip: body exceeds ${maxBytes} bytes`)

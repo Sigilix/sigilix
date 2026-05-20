@@ -192,16 +192,17 @@ function citesRealCoverageGap(
 }
 
 /**
- * SIG-118: CLASS detection — does the finding cite a `coverageGap:` ref
- * AT ALL (regardless of resolution)? A finding citing a coverage gap is
- * making a MISSING-COVERAGE claim. `citesRealCoverageGap` then decides
- * admissibility within the class.
+ * SIG-118: does the finding cite a `coverageGap:` ref AT ALL (resolved or
+ * not)? A REAL coverageGap for the finding's path keeps earlier; this
+ * detects an UNRESOLVED one. It only promotes the finding to the
+ * missing-coverage class when there's no competing real insufficient-test
+ * class (see `evaluateTestFinding`) — so it catches a fabricated
+ * coverageGap-only claim WITHOUT letting one piggyback on a real
+ * inspected-test citation to escape via ambiguous-keep (Codex HIGH).
  */
 function citesCoverageGapClass(finding: PrReviewFinding): boolean {
   if (!Array.isArray(finding.evidenceRefs)) return false
-  return finding.evidenceRefs.some(
-    (ref) => parseCoverageGapRef(ref) !== null,
-  )
+  return finding.evidenceRefs.some((ref) => parseCoverageGapRef(ref) !== null)
 }
 
 /**
@@ -389,18 +390,21 @@ export function evaluateTestFinding(
   }
 
   // Classify by which citation KIND the finding leans on — independent
-  // of whether that citation resolves. A finding citing a
-  // `siblingMapping:` ref OR a `coverageGap:` ref (SIG-118) is making a
-  // MISSING-COVERAGE claim; one citing an inspected test is making an
-  // INSUFFICIENT-TEST claim. The resolve / specificity checks below
-  // decide admissibility WITHIN the chosen class. Splitting class from
-  // admissibility is what lets the gate reject a wrong-file /
-  // contradictory ->NONE claim — or an unreal coverageGap — rather than
-  // letting it slip into the ambiguous-keep bucket. (A REAL coverageGap
-  // for the finding's path already kept above, so a coverageGap ref that
-  // reaches here is unresolved.)
-  const missingClass = citesSiblingMappingClass(finding) || citesCoverageGapClass(finding)
+  // of whether that citation resolves. A `siblingMapping:` ref is a
+  // MISSING-COVERAGE claim; an inspected test is an INSUFFICIENT-TEST
+  // claim. The resolve / specificity checks below decide admissibility
+  // WITHIN the chosen class.
+  //
   const insufficientClass = citesInspectedClass(finding)
+  // Codex review (HIGH): an UNRESOLVED `coverageGap:` ref (a real one for
+  // the finding's path already kept at :381) promotes to missing-class
+  // ONLY when there's no competing real insufficient-test class. This
+  // catches a fabricated coverageGap-only claim (→ uncited-missing-
+  // coverage) while preventing a bogus coverageGap from piggybacking on a
+  // real inspected-test citation to straddle both classes and escape via
+  // ambiguous-keep (the bypass Codex flagged).
+  const missingClass =
+    citesSiblingMappingClass(finding) || (citesCoverageGapClass(finding) && !insufficientClass)
 
   // AMBIGUOUS: cites BOTH kinds, or NEITHER. Prefer keep (the FP-safe
   // crux) — the SIG-113 gate already required SOME real citation, and a

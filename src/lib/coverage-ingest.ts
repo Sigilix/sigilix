@@ -34,6 +34,12 @@ import { buildChangedLines } from "./sarif-evidence/diff-lines"
 const COMPRESSED_CAP = 5 * 1024 * 1024
 /** UNCOMPRESSED LCOV entry cap, enforced in the unzip filter + verified after. */
 const ENTRY_CAP = 15 * 1024 * 1024
+/** Parse-time bounds (Codex OOM review): cap the accumulated maps so an
+ *  adversarial-but-byte-cap-passing LCOV can't blow the 128 MB isolate.
+ *  Generous enough for whole-repo coverage of large repos; exceeding
+ *  either stops accumulation and returns the bounded partial map. */
+const MAX_LCOV_FILES = 20000
+const MAX_LCOV_UNCOVERED = 500000
 
 /** A coverage gap: a changed file plus its added-and-uncovered line numbers. */
 export interface CoverageGap {
@@ -104,12 +110,26 @@ export function parseLcov(text: string): Map<string, number[]> {
     uncovered = null
   }
 
-  for (const raw of text.split("\n")) {
-    const line = raw.trim()
+  // Codex review (HIGH, OOM): scan line-by-line via indexOf rather than
+  // `text.split("\n")` — a 15 MiB LCOV of tiny `DA:x,0` records would
+  // otherwise materialize ~millions of substrings at once. slice() here
+  // allocates ONE line at a time (GC'd between iterations). Plus hard
+  // caps on files + total uncovered lines bound the accumulated Sets, so
+  // an adversarial (but byte-cap-passing) artifact can't OOM the 128 MB
+  // Worker. Exceeding a cap stops accumulation and returns the bounded
+  // partial map — a missed gap means fewer facts, never a false one.
+  let totalUncovered = 0
+  let start = 0
+  const len = text.length
+  while (start < len) {
+    let end = text.indexOf("\n", start)
+    if (end === -1) end = len
+    const line = text.slice(start, end).trim()
+    start = end + 1
     if (line.length === 0) continue
     if (line.startsWith("SF:")) {
-      // A new SF: without an intervening end_of_record — flush defensively.
-      flush()
+      flush() // a new SF: without an intervening end_of_record
+      if (out.size >= MAX_LCOV_FILES) return out // bounded — stop scanning
       currentFile = line.slice("SF:".length).trim()
       uncovered = new Set<number>()
       continue
@@ -120,14 +140,20 @@ export function parseLcov(text: string): Map<string, number[]> {
     }
     if (line.startsWith("DA:") && currentFile !== null && uncovered !== null) {
       // `DA:<line>,<hits>[,<checksum>]` — only the first two fields matter.
-      const payload = line.slice("DA:".length)
-      const parts = payload.split(",")
+      const parts = line.slice("DA:".length).split(",")
       if (parts.length < 2) continue
       const lineNo = Number(parts[0])
       const hits = Number(parts[1])
       if (!Number.isInteger(lineNo) || lineNo <= 0) continue
       if (!Number.isFinite(hits)) continue
-      if (hits === 0) uncovered.add(lineNo)
+      if (hits === 0) {
+        uncovered.add(lineNo)
+        totalUncovered++
+        if (totalUncovered > MAX_LCOV_UNCOVERED) {
+          flush()
+          return out // bounded — stop accumulating
+        }
+      }
       continue
     }
     // BRDA / FN / FNDA / LF / LH / TN etc. — ignored.
@@ -329,7 +355,15 @@ export async function ingestCoverage(args: IngestCoverageArgs): Promise<Coverage
     // 2. Locate the coverage artifact.
     const artifacts = await client.listArtifacts(owner, repo, runId, config.artifactName)
     const artifact = artifacts.find(
-      (a) => a.name === config.artifactName && !a.expired && a.size_in_bytes <= COMPRESSED_CAP,
+      // Codex MED: require a finite, positive reported size — a missing /
+      // non-number `size_in_bytes` must NOT coerce to 0 and slip past the
+      // pre-download cap.
+      (a) =>
+        a.name === config.artifactName &&
+        !a.expired &&
+        Number.isFinite(a.size_in_bytes) &&
+        a.size_in_bytes > 0 &&
+        a.size_in_bytes <= COMPRESSED_CAP,
     )
     if (!artifact) {
       const present = artifacts.find((a) => a.name === config.artifactName)
@@ -342,15 +376,26 @@ export async function ingestCoverage(args: IngestCoverageArgs): Promise<Coverage
       return null
     }
 
-    // 3. Download (token-leak guard inside the client method).
-    const zipBytes = await client.downloadArtifactZip(owner, repo, artifact.id, ENTRY_CAP)
+    // 3. Download (token-leak guard inside the client method). The
+    // downloaded payload is the COMPRESSED zip, so cap it at COMPRESSED_CAP
+    // (Codex MED) — not ENTRY_CAP, which bounds the UNCOMPRESSED entry.
+    const zipBytes = await client.downloadArtifactZip(owner, repo, artifact.id, COMPRESSED_CAP)
 
     // 4. Extract just the configured entry, capping the uncompressed size.
     const entry = config.entry
     let extracted: Uint8Array | undefined
     try {
+      // First-match-only filter (code-review LOW): a ZIP may carry several
+      // central-directory entries with the same name; matching every one
+      // would inflate ~ENTRY_CAP per duplicate before the map collapses to
+      // the last write. Inflate exactly the first matching entry.
+      let matched = false
       const files = unzipSync(zipBytes, {
-        filter: (f) => f.name === entry && f.originalSize <= ENTRY_CAP,
+        filter: (f) => {
+          if (matched || f.name !== entry || f.originalSize > ENTRY_CAP) return false
+          matched = true
+          return true
+        },
       })
       extracted = files[entry]
     } catch {

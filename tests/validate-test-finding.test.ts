@@ -245,6 +245,42 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     )
     expect(r.keep).toBe(true)
   })
+
+  // Codex review (HIGH): an UNREAL coverageGap ref must NOT create the
+  // ambiguous-keep escape when mixed with a real inspected-test citation.
+  // A vague insufficient-test finding that tacks on a bogus coverageGap
+  // must still be judged as insufficient-test (and rejected when vague),
+  // not rescued by straddling two classes.
+  it("REJECTS a vague insufficient-test finding that also cites an UNREAL coverageGap (no ambiguous-keep)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        score: 5,
+        headline: "Module needs more tests",
+        body: "This module could use additional tests to improve coverage overall.",
+        evidenceRefs: ["coverageGap:src/lib/foo.ts:999", "inspectedTestFile:tests/foo.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({ inspectedTestFiles: ["tests/foo.test.ts"] }),
+      new Set<string>(), // empty real-gap set → the coverageGap ref is unreal
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("KEEPS a finding citing a REAL coverageGap for its own path", () => {
+    const r = evaluateTestFinding(
+      finding({
+        score: 5,
+        headline: "`parseConfig` line 42 added without coverage",
+        body: "The new branch at src/lib/foo.ts:42 is uncovered by the CI run.",
+        evidenceRefs: ["coverageGap:src/lib/foo.ts:42"],
+        inspectedTestFiles: undefined,
+      }),
+      pack(),
+      new Set<string>(["src/lib/foo.ts:42"]),
+    )
+    expect(r.keep).toBe(true)
+  })
 })
 
 // ── Integration with validateForSubmission ──────────────────────

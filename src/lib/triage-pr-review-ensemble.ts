@@ -5002,7 +5002,9 @@ export function evaluateTestingFindingCitation(
       if (trimmed.startsWith("coverageGap:")) {
         const parsed = parseCoverageGapRef(trimmed)
         if (parsed === null) continue
-        if (parsed.path !== finding.path) continue
+        // Compare against the TRIMMED finding path (code-review LOW): the
+        // SIG-111 gate trims, so keep both gates consistent.
+        if (parsed.path !== finding.path.trim()) continue
         if (coverageGaps.has(`${parsed.path}:${parsed.line}`)) {
           return { keep: true }
         }

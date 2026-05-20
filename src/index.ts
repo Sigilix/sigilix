@@ -261,6 +261,17 @@ export interface Env {
   // `wrangler secret put OPENCLAW_SECURITY_VALIDATOR_MODE enforce`.
   OPENCLAW_SECURITY_VALIDATOR_MODE?: string
 
+  // SIG-111: tests-finding specificity gate mode. "shadow" (default;
+  // any value other than "enforce") counts + telemeters what the gate
+  // WOULD drop without dropping; "enforce" actually drops sev>=4
+  // `category: "testing"` findings whose missing-coverage claim is
+  // uncited or whose insufficient-test claim names no concrete
+  // source/API/branch. Default OFF-by-effect (shadow) so the gate ships
+  // dark — this gate is false-negative-sensitive, so the would-drop
+  // rate is observed before enforcement. Operator flips via
+  // `wrangler secret put OPENCLAW_TESTS_VALIDATOR_MODE enforce`.
+  OPENCLAW_TESTS_VALIDATOR_MODE?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

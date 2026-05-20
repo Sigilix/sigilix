@@ -71,6 +71,12 @@ import {
   type SecurityValidatorMode,
   type SecurityDropReason,
 } from "./validate-security-finding"
+import {
+  evaluateTestFinding,
+  parseTestsValidatorMode,
+  type TestsValidatorMode,
+  type TestDropReason,
+} from "./validate-test-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -842,7 +848,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -2192,6 +2198,7 @@ export async function handlePrReviewEnsemble(
       onSecurityFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
+          gate: "security",
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
           reason: info.reason,
           dropped: info.dropped,
@@ -2199,6 +2206,26 @@ export async function handlePrReviewEnsemble(
           line: finding.line,
           cweId: finding.cweId ?? null,
           evidenceId: finding.evidenceId ?? null,
+          category: finding.category,
+        }))
+      },
+      // SIG-111: thread the tests-finding specificity gate mode +
+      // telemetry through. Default `shadow` — counts/telemeters the
+      // would-drop until the operator flips OPENCLAW_TESTS_VALIDATOR_MODE
+      // to "enforce". Reuses the `pr-review-finding-rejected-validation`
+      // event with a `gate: "tests"` discriminator.
+      testsValidatorMode: parseTestsValidatorMode(env.OPENCLAW_TESTS_VALIDATOR_MODE),
+      onTestFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "tests",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          inspectedTestFiles_count: finding.inspectedTestFiles?.length ?? 0,
+          evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
           category: finding.category,
         }))
       },
@@ -2210,6 +2237,7 @@ export async function handlePrReviewEnsemble(
       droppedForVaguePrefix: validated.droppedForVaguePrefix,
       droppedForUncitedTestingEvidence: validated.droppedForUncitedTestingEvidence,
       droppedForFailedValidation: validated.droppedForFailedValidation,
+      droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4762,6 +4790,16 @@ export interface ValidatedOutput {
    */
   droppedForFailedValidation: number
   /**
+   * SIG-111: count of sev>=4 `category: "testing"` findings the
+   * specificity gate flagged for drop (uncited missing-coverage claim
+   * or vague insufficient-test claim that named no concrete
+   * source/API/branch). In `shadow` mode this counts what WOULD be
+   * dropped without dropping; in `enforce` mode the finding is dropped.
+   * Surfaced to telemetry so the gate's would-drop rate is observable
+   * before enforcement is enabled.
+   */
+  droppedForFailedTestValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -4953,6 +4991,28 @@ export function validateForSubmission(args: {
     finding: PrReviewFinding,
     info: { reason: SecurityDropReason; dropped: boolean },
   ) => void
+  /**
+   * SIG-111: tests-finding specificity gate mode. `shadow` (default):
+   * the gate's verdict is counted + telemetered but the finding is NOT
+   * dropped. `enforce`: rejected findings are dropped. Read from
+   * `OPENCLAW_TESTS_VALIDATOR_MODE` at the call site; defaults to
+   * `shadow`. This gate is false-negative-sensitive (the SIG-108 review
+   * caught real findings being dropped) so it ships dark and biases
+   * toward keep.
+   */
+  testsValidatorMode?: TestsValidatorMode
+  /**
+   * SIG-111: optional telemetry callback fired once per testing finding
+   * the specificity gate flagged (whether or not it was actually
+   * dropped — the `dropped` arg distinguishes enforce from shadow).
+   * Lets the orchestrator log `pr-review-finding-rejected-validation`
+   * (the SIG-108 event, reused with a `gate: "tests"` discriminator)
+   * without coupling the pure validator to a logger.
+   */
+  onTestFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: TestDropReason; dropped: boolean },
+  ) => void
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -4963,6 +5023,8 @@ export function validateForSubmission(args: {
     securityManifest,
     securityValidatorMode = "shadow",
     onSecurityFindingDropped,
+    testsValidatorMode = "shadow",
+    onTestFindingDropped,
   } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
@@ -4979,6 +5041,7 @@ export function validateForSubmission(args: {
   let droppedForVaguePrefix = 0
   let droppedForUncitedTestingEvidence = 0
   let droppedForFailedValidation = 0
+  let droppedForFailedTestValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -5029,6 +5092,28 @@ export function validateForSubmission(args: {
       droppedForUncitedTestingEvidence++
       onTestingFindingDropped?.(f, citationCheck.reason)
       continue
+    }
+
+    // SIG-111: tests-finding specificity gate. Runs IMMEDIATELY AFTER
+    // the SIG-113 citation gate (disjoint question: SIG-113 asks "did
+    // it cite something real?", this asks "is the cited finding
+    // SPECIFIC enough to be a true positive?"). Applies ONLY to sev>=4
+    // `category: "testing"` findings; everything else passes via the
+    // pure helper's early returns. Shadow-first: in `shadow` mode the
+    // verdict is counted + telemetered but the finding is NOT dropped;
+    // only `enforce` actually drops. False-negative-sensitive — the
+    // helper biases toward keep (deletion/rename exception preserved,
+    // ambiguous shapes kept). The SIG-86 shadow aggregator instruments
+    // the would-drop rate; the bake-off harness is NOT built here.
+    {
+      const testDecision = evaluateTestFinding(f, testingEvidence)
+      if (!testDecision.keep) {
+        const dropped = testsValidatorMode === "enforce"
+        droppedForFailedTestValidation++
+        onTestFindingDropped?.(f, { reason: testDecision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
     }
 
     // SIG-108: security evidence gate. Applies ONLY to findings whose
@@ -5114,6 +5199,7 @@ export function validateForSubmission(args: {
     droppedForVaguePrefix,
     droppedForUncitedTestingEvidence,
     droppedForFailedValidation,
+    droppedForFailedTestValidation,
     cleanFindingProvenance,
   }
 }
@@ -5230,6 +5316,10 @@ interface EnsembleTelemetry {
     /** SIG-108: count of security findings the evidence gate flagged
      * (would-drop in shadow mode, actual-drop in enforce mode). */
     droppedForFailedValidation: number
+    /** SIG-111: count of sev>=4 testing findings the specificity gate
+     * flagged (would-drop in shadow mode, actual-drop in enforce
+     * mode). */
+    droppedForFailedTestValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

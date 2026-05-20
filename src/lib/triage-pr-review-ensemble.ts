@@ -74,6 +74,7 @@ import {
 import {
   evaluateTestFinding,
   parseTestsValidatorMode,
+  parseCoverageGapRef,
   type TestsValidatorMode,
   type TestDropReason,
 } from "./validate-test-finding"
@@ -117,8 +118,10 @@ import {
   resolveDocsReviewConfig,
   resolveCommandConfig,
   resolveAstRulesConfig,
+  resolveCoverageConfig,
   type SigilixConfig,
 } from "./sigilix-config"
+import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
 import { waitForPrOverviewStub } from "./pr-overview-stub"
 import {
   runDocsCoverageCheck,
@@ -1330,10 +1333,50 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
+    // ─── SIG-118: coverage-diff ingestion ──────────────────────
+    // GATED OFF by default (`coverage.source: "off"`) — production is
+    // unaffected until an operator opts in. When enabled, fetch the LCOV
+    // coverage artifact from the head SHA's CI run, parse uncovered
+    // lines, intersect with the PR's added lines, and feed the resulting
+    // coverage-gap facts to the tests specialist. Best-effort + non-
+    // fatal: `ingestCoverage` returns null on ANY failure (never throws),
+    // so a coverage failure can never break a review. AWAITED here (not
+    // in the allSettled block) because the tests fact block depends on
+    // the result. Uses `diff` (the post-truncation prompt diff) for the
+    // added-line set so a gap is only reported on a line the specialist
+    // can actually see.
+    const coverageConfig = resolveCoverageConfig(sigilixConfig)
+    const coverageResult = coverageConfig.source !== "off"
+      ? await ingestCoverage({ client, owner, repo, headSha, diff, config: coverageConfig })
+      : null
+    // Real coverage-gap set keyed `"<path>:<line>"` for the citation
+    // gates. Empty when ingestion is off / yielded no gaps.
+    const coverageGapSet = new Set<string>()
+    for (const gap of coverageResult?.coverageGaps ?? []) {
+      for (const ln of gap.lines) coverageGapSet.add(`${gap.path}:${ln}`)
+    }
+    {
+      const gapsCount = coverageResult?.coverageGaps.reduce((n, g) => n + g.lines.length, 0) ?? 0
+      console.log(JSON.stringify({
+        event: "coverage-ingest",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        source: coverageConfig.source,
+        runId: coverageResult?.meta.runId ?? null,
+        artifactName: coverageConfig.source !== "off" ? coverageConfig.artifactName : null,
+        gaps_count: gapsCount,
+        skipped_reason: coverageConfig.source === "off"
+          ? "disabled-config"
+          : coverageResult === null
+            ? "no-coverage"
+            : null,
+      }))
+    }
+
     // ─── Fan out specialists ────────────────────────────────────
     const deterministicBlock = renderHitsForPrompt(deterministicHits)
     const secretScanBlock = renderSecretHitsForPrompt(secretHits)
     const docsCoverageBlock = renderDocsCoverageForPrompt(docsCoverageHit)
+    const coverageGapBlock = renderCoverageGapBlock(coverageResult?.coverageGaps ?? [])
     // SIG-108: security fact manifest — assigns each deterministic
     // security fact a hard-to-fabricate `evidenceId` (`tool:rule-id:
     // hash:line`). The render() block is folded into the security role's
@@ -1359,6 +1402,7 @@ export async function handlePrReviewEnsemble(
       sarifBlock,
       deterministicBlock,
       docsCoverageBlock,
+      coverageGapBlock,
       securityManifestBlock: securityManifest.render(),
       astFindings: astResult.findings,
     })
@@ -2215,6 +2259,11 @@ export async function handlePrReviewEnsemble(
       // to "enforce". Reuses the `pr-review-finding-rejected-validation`
       // event with a `gate: "tests"` discriminator.
       testsValidatorMode: parseTestsValidatorMode(env.OPENCLAW_TESTS_VALIDATOR_MODE),
+      // SIG-118: thread the real coverage-gap set so both the SIG-113
+      // citation gate and the SIG-111 specificity gate accept a
+      // `coverageGap:<path>:<line>` ref as a genuine missing-coverage
+      // citation. Empty when coverage ingestion is off / yielded nothing.
+      coverageGaps: coverageGapSet,
       onTestFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -4852,6 +4901,14 @@ export interface ValidatedOutput {
 export function evaluateTestingFindingCitation(
   finding: PrReviewFinding,
   pack: TestingEvidencePack | undefined,
+  /**
+   * SIG-118: the real coverage-gap set, keyed `"<path>:<line>"` (path
+   * resolved to a changed file, line in the PR's added set). Defaults to
+   * an empty set (back-compat for callers that don't ingest coverage). A
+   * `coverageGap:<path>:<line>` evidenceRef is a REAL citation (keep)
+   * only when (path,line) is in this set AND `finding.path === path`.
+   */
+  coverageGaps: ReadonlySet<string> = new Set<string>(),
 ): { keep: true } | { keep: false; reason: "no-citation" } {
   if (finding.category !== "testing") return { keep: true }
   // `buildTestingEvidencePack` always returns a pack object — even for
@@ -4936,6 +4993,21 @@ export function evaluateTestingFindingCitation(
         }
         continue
       }
+
+      // SIG-118: `coverageGap:<path>:<line>` — an LCOV-derived coverage
+      // gap. Parse the LINE from the LAST colon so paths containing
+      // colons stay intact. A real citation (keep) only when (path,line)
+      // is in the real coverage-gap set AND the cited path matches
+      // `finding.path` (relevance, mirroring the sibling-mapping rule).
+      if (trimmed.startsWith("coverageGap:")) {
+        const parsed = parseCoverageGapRef(trimmed)
+        if (parsed === null) continue
+        if (parsed.path !== finding.path) continue
+        if (coverageGaps.has(`${parsed.path}:${parsed.line}`)) {
+          return { keep: true }
+        }
+        continue
+      }
     }
   }
 
@@ -5013,6 +5085,15 @@ export function validateForSubmission(args: {
     finding: PrReviewFinding,
     info: { reason: TestDropReason; dropped: boolean },
   ) => void
+  /**
+   * SIG-118: the real coverage-gap set, keyed `"<path>:<line>"`, built
+   * by the orchestrator from `ingestCoverage`. Threaded into BOTH the
+   * SIG-113 citation gate and the SIG-111 specificity gate so a finding
+   * citing a real `coverageGap:<path>:<line>` is treated as a genuine
+   * missing-coverage citation. Absent / empty → both gates ignore
+   * coverageGap refs (back-compat; default off).
+   */
+  coverageGaps?: ReadonlySet<string>
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -5025,6 +5106,7 @@ export function validateForSubmission(args: {
     onSecurityFindingDropped,
     testsValidatorMode = "shadow",
     onTestFindingDropped,
+    coverageGaps = new Set<string>(),
   } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
@@ -5087,7 +5169,7 @@ export function validateForSubmission(args: {
     // nit also drops (no advisory bucket leak). Runs AFTER vague-
     // prefix + hallucination guards so the counter attribution
     // stays clean.
-    const citationCheck = evaluateTestingFindingCitation(f, testingEvidence)
+    const citationCheck = evaluateTestingFindingCitation(f, testingEvidence, coverageGaps)
     if (!citationCheck.keep) {
       droppedForUncitedTestingEvidence++
       onTestingFindingDropped?.(f, citationCheck.reason)
@@ -5106,7 +5188,7 @@ export function validateForSubmission(args: {
     // ambiguous shapes kept). The SIG-86 shadow aggregator instruments
     // the would-drop rate; the bake-off harness is NOT built here.
     {
-      const testDecision = evaluateTestFinding(f, testingEvidence)
+      const testDecision = evaluateTestFinding(f, testingEvidence, coverageGaps)
       if (!testDecision.keep) {
         const dropped = testsValidatorMode === "enforce"
         droppedForFailedTestValidation++

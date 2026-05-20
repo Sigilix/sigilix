@@ -272,6 +272,18 @@ export interface Env {
   // `wrangler secret put OPENCLAW_TESTS_VALIDATOR_MODE enforce`.
   OPENCLAW_TESTS_VALIDATOR_MODE?: string
 
+  // SIG-109: logic-finding evidence gate mode. "shadow" (default; any
+  // value other than "enforce") counts + telemeters what the gate WOULD
+  // drop without dropping; "enforce" actually drops sev>=4 logic findings
+  // that are unanchored (not on a changed path, or quoting no concrete
+  // code token on an added line, and unbacked by any co-located AST hit).
+  // Default OFF-by-effect (shadow) so the gate ships dark — this gate is
+  // false-negative-sensitive (logic bugs are LLM-found with no
+  // deterministic backing), so the would-drop rate is observed before
+  // enforcement. Operator flips via
+  // `wrangler secret put OPENCLAW_LOGIC_VALIDATOR_MODE enforce`.
+  OPENCLAW_LOGIC_VALIDATOR_MODE?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

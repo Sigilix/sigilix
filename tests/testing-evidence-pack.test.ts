@@ -1,0 +1,338 @@
+// SIG-113: testing-specialist evidence-pack unit tests.
+
+import { describe, it, expect } from "vitest"
+import {
+  applyTestFileContentCaps,
+  buildTestingEvidencePack,
+  mergeInspectedTestFileContents,
+  renderTestingEvidenceBlock,
+  TEST_FILE_CONTENT_CHAR_CAP,
+  TEST_FILE_CONTENT_TOTAL_CHAR_CAP,
+  type InspectedTestFileFetchResult,
+  type TestingEvidencePack,
+} from "../src/lib/testing-evidence-pack"
+
+describe("buildTestingEvidencePack", () => {
+  it("returns empty arrays when the diff has no source AND no test files", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["package.json", "README.md"],
+      reviewedFilePaths: ["package.json", "README.md"],
+    })
+    expect(pack.sourceFilesChanged).toEqual([])
+    expect(pack.testFilesChanged).toEqual([])
+    expect(pack.siblingMappings).toEqual([])
+    expect(pack.inspectedTestFiles).toEqual([])
+  })
+
+  it("classifies source files + finds sibling test pairs from the full diff", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: [
+        "src/lib/foo.ts",
+        "src/lib/bar.ts",
+        "tests/foo.test.ts",
+      ],
+      reviewedFilePaths: [
+        "src/lib/foo.ts",
+        "src/lib/bar.ts",
+        "tests/foo.test.ts",
+      ],
+    })
+    expect(pack.sourceFilesChanged).toEqual(["src/lib/foo.ts", "src/lib/bar.ts"])
+    expect(pack.testFilesChanged).toEqual(["tests/foo.test.ts"])
+    expect(pack.testFilesInPromptDiff).toEqual(["tests/foo.test.ts"])
+    expect(pack.testFilesNotInPromptDiff).toEqual([])
+    expect(pack.siblingMappings).toEqual([
+      { source: "src/lib/foo.ts", test: "tests/foo.test.ts" },
+      { source: "src/lib/bar.ts", test: null }, // no sibling test in this PR
+    ])
+  })
+
+  // CRITICAL: this test pins the PR #110 / PR #111 fix. Pre-SIG-113,
+  // the classifier was fed `reviewedFiles.map(...)` (first batch
+  // only); when test files lived in a later batch, the bot
+  // hallucinated "missing tests." The new pack uses splitFiles (full
+  // inventory) so the sibling pair is found regardless of batch.
+  it("SIG-113: finds sibling tests EVEN WHEN they're dropped from the prompt diff by the batcher", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: [
+        "src/lib/foo.ts",
+        "tests/foo.test.ts", // ← in full diff
+      ],
+      reviewedFilePaths: [
+        "src/lib/foo.ts",
+        // tests/foo.test.ts is NOT in reviewedFiles (batcher dropped it)
+      ],
+    })
+    expect(pack.testFilesInPromptDiff).toEqual([])
+    expect(pack.testFilesNotInPromptDiff).toEqual(["tests/foo.test.ts"])
+    expect(pack.siblingMappings).toEqual([
+      { source: "src/lib/foo.ts", test: "tests/foo.test.ts" },
+    ])
+  })
+
+  it("annotates test files in-prompt-diff vs not-in-prompt-diff correctly", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: [
+        "src/lib/foo.ts",
+        "src/lib/bar.ts",
+        "tests/foo.test.ts",
+        "tests/bar.test.ts",
+      ],
+      reviewedFilePaths: [
+        "src/lib/foo.ts",
+        "tests/foo.test.ts", // in prompt diff
+      ],
+    })
+    expect(pack.testFilesInPromptDiff).toEqual(["tests/foo.test.ts"])
+    expect(pack.testFilesNotInPromptDiff).toEqual(["tests/bar.test.ts"])
+  })
+
+  it("flags source files with no sibling test as test: null in siblingMappings", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: [
+        "src/api/unnoticed.ts",
+        "tests/foo.test.ts",
+        "src/lib/foo.ts",
+      ],
+      reviewedFilePaths: [
+        "src/api/unnoticed.ts",
+        "tests/foo.test.ts",
+        "src/lib/foo.ts",
+      ],
+    })
+    const unnoticed = pack.siblingMappings.find((m) => m.source === "src/api/unnoticed.ts")
+    expect(unnoticed?.test).toBeNull()
+    const foo = pack.siblingMappings.find((m) => m.source === "src/lib/foo.ts")
+    expect(foo?.test).toBe("tests/foo.test.ts")
+  })
+
+  it("initializes inspectedTestFiles as empty (orchestrator fills in via merge)", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo.ts", "tests/foo.test.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts", "tests/foo.test.ts"],
+    })
+    expect(pack.inspectedTestFiles).toEqual([])
+  })
+})
+
+describe("applyTestFileContentCaps", () => {
+  it("returns empty result when no content was fetched", () => {
+    const out = applyTestFileContentCaps({}, ["tests/foo.test.ts"])
+    expect(out.contentByPath).toEqual({})
+    expect(out.totalChars).toBe(0)
+    expect(out.truncatedPaths).toEqual([])
+  })
+
+  it("includes content under the per-file cap unchanged", () => {
+    const short = "describe('foo', () => { it('works', () => {}) })"
+    const out = applyTestFileContentCaps(
+      { "tests/foo.test.ts": short },
+      ["tests/foo.test.ts"],
+    )
+    expect(out.contentByPath["tests/foo.test.ts"]).toBe(short)
+    expect(out.truncatedPaths).toEqual([])
+    expect(out.totalChars).toBe(short.length)
+  })
+
+  it("truncates content over TEST_FILE_CONTENT_CHAR_CAP and flags it", () => {
+    const huge = "a".repeat(TEST_FILE_CONTENT_CHAR_CAP + 5000)
+    const out = applyTestFileContentCaps(
+      { "tests/huge.test.ts": huge },
+      ["tests/huge.test.ts"],
+    )
+    expect(out.contentByPath["tests/huge.test.ts"]).toContain("[…truncated at")
+    expect(out.truncatedPaths).toEqual(["tests/huge.test.ts"])
+    expect(out.contentByPath["tests/huge.test.ts"]!.length)
+      .toBeLessThan(huge.length)
+  })
+
+  it("stops including files once total budget is exceeded", () => {
+    // 30K per file × 4 files = 120K which is over TOTAL_CAP (60K).
+    // Per-file cap (20K) applies first → each file is 20K + truncation
+    // marker. ~3 files fit under 60K total cap.
+    const oneFile = "x".repeat(30_000)
+    const out = applyTestFileContentCaps(
+      {
+        "tests/a.test.ts": oneFile,
+        "tests/b.test.ts": oneFile,
+        "tests/c.test.ts": oneFile,
+        "tests/d.test.ts": oneFile,
+      },
+      ["tests/a.test.ts", "tests/b.test.ts", "tests/c.test.ts", "tests/d.test.ts"],
+    )
+    expect(Object.keys(out.contentByPath).length).toBeLessThan(4)
+    expect(out.totalChars).toBeLessThanOrEqual(TEST_FILE_CONTENT_TOTAL_CHAR_CAP + 200)
+  })
+
+  it("processes paths in the order hint (deterministic)", () => {
+    const oneFile = "x".repeat(20_000)
+    const out = applyTestFileContentCaps(
+      {
+        "tests/z.test.ts": oneFile,
+        "tests/a.test.ts": oneFile,
+      },
+      ["tests/a.test.ts", "tests/z.test.ts"], // a should be processed first
+    )
+    const keys = Object.keys(out.contentByPath)
+    expect(keys[0]).toBe("tests/a.test.ts")
+  })
+
+  it("skips paths in the order hint that aren't in the fetched-content map", () => {
+    const out = applyTestFileContentCaps(
+      { "tests/foo.test.ts": "content" },
+      ["tests/foo.test.ts", "tests/missing.test.ts"],
+    )
+    expect(out.contentByPath).toEqual({ "tests/foo.test.ts": "content" })
+  })
+})
+
+describe("mergeInspectedTestFileContents", () => {
+  const basePack: TestingEvidencePack = {
+    sourceFilesChanged: ["src/lib/foo.ts"],
+    testFilesChanged: ["tests/foo.test.ts"],
+    testFilesInPromptDiff: ["tests/foo.test.ts"],
+    testFilesNotInPromptDiff: [],
+    siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }],
+    inspectedTestFiles: [],
+  }
+
+  it("populates inspectedTestFiles from the fetch result", () => {
+    const merged = mergeInspectedTestFileContents(basePack, {
+      contentByPath: { "tests/foo.test.ts": "content" },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 7,
+    })
+    expect(merged.inspectedTestFiles).toEqual(["tests/foo.test.ts"])
+  })
+
+  it("returns a new object (immutability)", () => {
+    const merged = mergeInspectedTestFileContents(basePack, {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    })
+    expect(merged).not.toBe(basePack)
+  })
+})
+
+describe("renderTestingEvidenceBlock", () => {
+  const emptyFetch: InspectedTestFileFetchResult = {
+    contentByPath: {},
+    failedPaths: [],
+    truncatedPaths: [],
+    totalChars: 0,
+  }
+
+  it("returns '' for a pure docs/config PR (no source, no test files)", () => {
+    const pack: TestingEvidencePack = {
+      sourceFilesChanged: [],
+      testFilesChanged: [],
+      testFilesInPromptDiff: [],
+      testFilesNotInPromptDiff: [],
+      siblingMappings: [],
+      inspectedTestFiles: [],
+    }
+    expect(renderTestingEvidenceBlock(pack, emptyFetch)).toBe("")
+  })
+
+  it("renders source files + their sibling-test mappings", () => {
+    const pack: TestingEvidencePack = {
+      sourceFilesChanged: ["src/lib/foo.ts", "src/lib/bar.ts"],
+      testFilesChanged: ["tests/foo.test.ts"],
+      testFilesInPromptDiff: ["tests/foo.test.ts"],
+      testFilesNotInPromptDiff: [],
+      siblingMappings: [
+        { source: "src/lib/foo.ts", test: "tests/foo.test.ts" },
+        { source: "src/lib/bar.ts", test: null },
+      ],
+      inspectedTestFiles: ["tests/foo.test.ts"],
+    }
+    const block = renderTestingEvidenceBlock(pack, {
+      contentByPath: { "tests/foo.test.ts": "describe('foo', () => {})" },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 25,
+    })
+    expect(block).toContain("[TESTING EVIDENCE")
+    expect(block).toContain("Source files changed in this PR (2)")
+    expect(block).toContain("`src/lib/foo.ts`")
+    expect(block).toContain("covered by test in this PR: `tests/foo.test.ts`")
+    expect(block).toContain("`src/lib/bar.ts`")
+    expect(block).toContain("no sibling test file in this PR")
+  })
+
+  it("annotates test files NOT in the prompt [DIFF] block", () => {
+    const pack: TestingEvidencePack = {
+      sourceFilesChanged: ["src/lib/foo.ts"],
+      testFilesChanged: ["tests/foo.test.ts"],
+      testFilesInPromptDiff: [],
+      testFilesNotInPromptDiff: ["tests/foo.test.ts"],
+      siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }],
+      inspectedTestFiles: ["tests/foo.test.ts"],
+    }
+    const block = renderTestingEvidenceBlock(pack, {
+      contentByPath: { "tests/foo.test.ts": "describe('foo', () => {})" },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 25,
+    })
+    expect(block).toContain("NOT in [DIFF] block")
+    expect(block).toContain("batcher dropped")
+  })
+
+  it("includes the citation instructions for the specialist", () => {
+    const pack: TestingEvidencePack = {
+      sourceFilesChanged: ["src/lib/foo.ts"],
+      testFilesChanged: [],
+      testFilesInPromptDiff: [],
+      testFilesNotInPromptDiff: [],
+      siblingMappings: [{ source: "src/lib/foo.ts", test: null }],
+      inspectedTestFiles: [],
+    }
+    const block = renderTestingEvidenceBlock(pack, emptyFetch)
+    expect(block).toContain("Citation requirements")
+    expect(block).toContain("evidenceRefs")
+    expect(block).toContain("inspectedTestFiles")
+    expect(block).toContain("validateTestingFindingEvidence")
+  })
+
+  it("embeds full content of inspected test files in fenced blocks", () => {
+    const pack: TestingEvidencePack = {
+      sourceFilesChanged: [],
+      testFilesChanged: ["tests/foo.test.ts"],
+      testFilesInPromptDiff: ["tests/foo.test.ts"],
+      testFilesNotInPromptDiff: [],
+      siblingMappings: [],
+      inspectedTestFiles: ["tests/foo.test.ts"],
+    }
+    const block = renderTestingEvidenceBlock(pack, {
+      contentByPath: { "tests/foo.test.ts": "describe('foo', () => {})" },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 25,
+    })
+    expect(block).toContain("[TEST FILE CONTENT — `tests/foo.test.ts`]")
+    expect(block).toContain("describe('foo', () => {})")
+    expect(block).toContain("[END `tests/foo.test.ts`]")
+  })
+
+  it("renders the truncation annotation when a file was capped", () => {
+    const pack: TestingEvidencePack = {
+      sourceFilesChanged: [],
+      testFilesChanged: ["tests/huge.test.ts"],
+      testFilesInPromptDiff: ["tests/huge.test.ts"],
+      testFilesNotInPromptDiff: [],
+      siblingMappings: [],
+      inspectedTestFiles: ["tests/huge.test.ts"],
+    }
+    const block = renderTestingEvidenceBlock(pack, {
+      contentByPath: { "tests/huge.test.ts": "x".repeat(20_000) + "[…truncated…]" },
+      failedPaths: [],
+      truncatedPaths: ["tests/huge.test.ts"],
+      totalChars: 20_000,
+    })
+    expect(block).toContain("content included below (truncated)")
+  })
+})

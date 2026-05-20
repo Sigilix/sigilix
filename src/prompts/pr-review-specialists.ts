@@ -183,16 +183,27 @@ You are the **TESTS specialist** in a code review ensemble. Three other speciali
 
 Your lens: **missing tests, fragile tests, untested branches, regression risk.**
 
+**SIG-113 — CITE EVIDENCE FOR EVERY TESTING FINDING.**
+
+The user message includes a \`[TESTING EVIDENCE]\` block computed from the FULL diff (not just the files in the \`[DIFF]\` block — the diff is packed greedily and may have omitted some test files). The evidence block lists every source file changed, every test file changed, source→test sibling mappings, and embeds the FULL CONTENT of inspected test files.
+
+Every \`category: "testing"\` finding you emit MUST include at least ONE citation:
+  - \`inspectedTestFiles: ["<test-file-path>"]\` — the test files you actually read while forming the finding (e.g. concluding the existing tests are insufficient or missing a branch)
+  - \`evidenceRefs: ["siblingMapping:<source-path>-><NONE|tests/...>"]\` — a source→test mapping you're citing (e.g. claiming a source file has no test sibling in this PR)
+
+The orchestrator runs a \`validateTestingFindingEvidence\` validator after synthesis: findings without either citation are DROPPED before reaching the customer. This is the SIG-113 fix for the PR #110 / PR #111 false-positive class where the specialist hallucinated "no tests exist" for source files that DID have sibling tests in the same PR — the specialist never actually inspected those test files, but it asserted absence anyway.
+
 **SIG-91 — RECOGNIZE SIBLING TEST FILES BEFORE FIRING "MISSING TESTS".**
 
-The user message includes a \`[DIFF FILE CLASSIFICATION]\` block (when the diff contains source or test files) that lists every source file and every test file in this PR, with their sibling pairing already computed. CONSULT THAT BLOCK FIRST. If a source file's classification line says \`covered by test file in this diff: <path>\`, that source is tested in this PR — do NOT flag it as "module ships without tests" or any close variant.
+CONSULT THE \`[TESTING EVIDENCE]\` BLOCK FIRST. If a source file's mapping line says \`covered by test in this PR: <path>\`, that source is tested in this PR — do NOT flag it as "module ships without tests" or any close variant.
 
 A "missing tests" finding (any phrasing — "ships without tests", "no test coverage", "untested module", "lacks test file", etc.) is ONLY admissible when ALL of:
   (a) the source file is new or substantially changed in this diff, AND
-  (b) the \`[DIFF FILE CLASSIFICATION]\` block shows it has \`no sibling test file in this diff\`, AND
-  (c) no test file elsewhere in the diff plausibly covers it.
+  (b) the \`[TESTING EVIDENCE]\` block shows it has \`no sibling test file in this PR\`, AND
+  (c) no test file elsewhere in the diff plausibly covers it, AND
+  (d) the finding cites \`evidenceRefs: ["siblingMapping:<source>->NONE"]\` referencing the source's mapping line.
 
-When the \`[DIFF FILE CLASSIFICATION]\` block is ABSENT from the user message, the diff contains no source or test files (docs/config-only PR) — no "missing tests" finding is applicable in that case either.
+When the \`[TESTING EVIDENCE]\` block is ABSENT from the user message, the diff contains no source or test files (docs/config-only PR) — no "missing tests" finding is applicable in that case either.
 
 Find testing gaps and risks (subject to the rule above):
 - missing tests on a non-trivial branch the PR added (new conditional, new error path, new state transition) — but only when the source's sibling test in this diff does not cover that branch
@@ -362,6 +373,21 @@ export interface SpecialistInitialMessageCtx {
    * `renderDiffFileClassificationBlock` over the diff's file list.
    */
   diffFileClassificationBlock?: string
+  /**
+   * SIG-113: stronger evidence block specifically for the tests
+   * specialist. When set, REPLACES `diffFileClassificationBlock` in
+   * the rendered message — the testing-evidence block is a superset
+   * (full diff inventory, in/out-of-prompt-diff annotations, full
+   * test-file content, citation instructions).
+   *
+   * The orchestrator passes this only when building the tests
+   * specialist's message. Other roles get `diffFileClassificationBlock`
+   * unchanged.
+   *
+   * Caller builds via `renderTestingEvidenceBlock` from
+   * `src/lib/testing-evidence-pack.ts`.
+   */
+  testingEvidenceBlock?: string
 }
 
 export function buildSpecialistInitialMessage(
@@ -399,7 +425,18 @@ export function buildSpecialistInitialMessage(
   // pairing as the LAST thing before the diff. Empty string = no
   // source/test files in this diff; skip the block to keep the prompt
   // lean.
-  if (ctx.diffFileClassificationBlock && ctx.diffFileClassificationBlock.length > 0) {
+  //
+  // SIG-113: the tests specialist gets a STRONGER block
+  // (`testingEvidenceBlock`) instead — full diff inventory, full
+  // test-file content, explicit citation instructions. When both are
+  // supplied, testingEvidenceBlock wins. The orchestrator passes
+  // testingEvidenceBlock ONLY for the tests-specialist message;
+  // other specialists keep getting diffFileClassificationBlock as
+  // ambient context (cheap signal that doesn't bloat the prompt).
+  if (ctx.testingEvidenceBlock && ctx.testingEvidenceBlock.length > 0) {
+    lines.push(ctx.testingEvidenceBlock)
+    lines.push("")
+  } else if (ctx.diffFileClassificationBlock && ctx.diffFileClassificationBlock.length > 0) {
     lines.push(ctx.diffFileClassificationBlock)
     lines.push("")
   }

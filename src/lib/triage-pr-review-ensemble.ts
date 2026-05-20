@@ -53,6 +53,14 @@ import {
   chooseReviewEvent,
 } from "./triage-pr-review"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
+import {
+  buildTestingEvidencePack,
+  applyTestFileContentCaps,
+  mergeInspectedTestFileContents,
+  renderTestingEvidenceBlock,
+  type TestingEvidencePack,
+  type InspectedTestFileFetchResult,
+} from "./testing-evidence-pack"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -1416,9 +1424,69 @@ export async function handlePrReviewEnsemble(
     const classifiedDiffFiles = classifyDiffFiles(reviewedFiles.map((f) => f.path))
     const diffFileClassificationBlock = renderDiffFileClassificationBlock(classifiedDiffFiles)
 
-    // SIG-91 telemetry — lets us verify post-deploy that sibling pairs
-    // are being identified before each tests-specialist run on real
-    // customer PRs.
+    // SIG-113: build the testing-evidence pack from the FULL diff
+    // inventory (splitFiles, not reviewedFiles). Pre-SIG-113, the
+    // classification block above used `reviewedFiles` only — the
+    // first packed-diff batch — which produced 8 testing-completeness
+    // false positives across PR #110 + PR #111 when test files lived
+    // in later batches or were modified-not-added. The new pack uses
+    // `splitFiles`, embeds the FULL CONTENT of added/modified test
+    // files (subject to caps), and feeds the validator the
+    // `inspectedTestFiles` list so the post-LLM citation gate can
+    // drop unevidenced findings.
+    //
+    // Three-step build:
+    //   1. Pure pack (deterministic, no I/O)
+    //   2. Async fetch of test-file content via client.getFileContent
+    //      (mirrors the AST source fetch pattern at line ~1227)
+    //   3. Cap-application + merge → final pack with inspectedTestFiles
+    const testingEvidencePackInitial: TestingEvidencePack = buildTestingEvidencePack({
+      splitFilePaths: splitFiles.map((f) => f.path),
+      reviewedFilePaths: reviewedFiles.map((f) => f.path),
+    })
+    let testingEvidenceFetchResult: InspectedTestFileFetchResult = {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    }
+    if (testingEvidencePackInitial.testFilesChanged.length > 0) {
+      const rawByPath: Record<string, string> = {}
+      const failedPaths: string[] = []
+      const fetchResults = await Promise.allSettled(
+        testingEvidencePackInitial.testFilesChanged.map(async (p) => {
+          const src = await client.getFileContent(owner, repo, p, headSha)
+          return { p, src }
+        }),
+      )
+      for (let i = 0; i < fetchResults.length; i++) {
+        const path = testingEvidencePackInitial.testFilesChanged[i]
+        if (!path) continue
+        const r = fetchResults[i]
+        if (r && r.status === "fulfilled" && typeof r.value.src === "string") {
+          rawByPath[r.value.p] = r.value.src
+        } else {
+          failedPaths.push(path)
+        }
+      }
+      const capped = applyTestFileContentCaps(
+        rawByPath,
+        testingEvidencePackInitial.testFilesChanged,
+      )
+      testingEvidenceFetchResult = { ...capped, failedPaths }
+    }
+    const testingEvidencePack = mergeInspectedTestFileContents(
+      testingEvidencePackInitial,
+      testingEvidenceFetchResult,
+    )
+    const testingEvidenceBlock = renderTestingEvidenceBlock(
+      testingEvidencePack,
+      testingEvidenceFetchResult,
+    )
+
+    // SIG-91 + SIG-113 telemetry — lets us verify post-deploy that
+    // sibling pairs + the new evidence pack are being built from the
+    // full diff inventory (not just the first batch).
     {
       const sourceFilesInDiff: string[] = []
       const testFilesInDiff: string[] = []
@@ -1437,8 +1505,27 @@ export async function handlePrReviewEnsemble(
         testFilesInDiff,
         siblingMappingsDetected,
       }))
+      // SIG-113: separate event for the new evidence pack so we can
+      // monitor coverage of the full-inventory inspection independent
+      // of the SIG-91 first-batch classification.
+      console.log(JSON.stringify({
+        event: "pr-review-testing-evidence-built",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        sourceFilesChanged_count: testingEvidencePack.sourceFilesChanged.length,
+        testFilesChanged_count: testingEvidencePack.testFilesChanged.length,
+        testFilesInPromptDiff_count: testingEvidencePack.testFilesInPromptDiff.length,
+        testFilesNotInPromptDiff_count: testingEvidencePack.testFilesNotInPromptDiff.length,
+        inspectedTestFiles_count: testingEvidencePack.inspectedTestFiles.length,
+        contentTotalChars: testingEvidenceFetchResult.totalChars,
+        truncatedPaths_count: testingEvidenceFetchResult.truncatedPaths.length,
+        failedFetchPaths_count: testingEvidenceFetchResult.failedPaths.length,
+      }))
     }
 
+    // SIG-113: build TWO base messages — one for non-tests specialists
+    // (gets the original classification block) and one for the tests
+    // specialist (gets the stronger testing-evidence block). The
+    // dispatch loops below select per-role.
     const baseInitialMessage = buildSpecialistInitialMessage({
       prNumber,
       title: meta.title,
@@ -1452,6 +1539,23 @@ export async function handlePrReviewEnsemble(
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
       ...(diffFileClassificationBlock.length > 0 ? { diffFileClassificationBlock } : {}),
     })
+    const testsSpecialistInitialMessage = testingEvidenceBlock.length > 0
+      ? buildSpecialistInitialMessage({
+          prNumber,
+          title: meta.title,
+          body: meta.body ?? "",
+          diff,
+          retrievalSnapshot,
+          namespace,
+          ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+          ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
+          ...(combinedFactsBlock ? { deterministicChecksBlock: combinedFactsBlock } : {}),
+          ...(stackBlock.length > 0 ? { stackBlock } : {}),
+          testingEvidenceBlock,
+        })
+      : baseInitialMessage
+    const messageForRole = (role: string): string =>
+      role === "tests" ? testsSpecialistInitialMessage : baseInitialMessage
 
     // ARC-283 Phase B1b — shadow specialist fan-out. Fires BEFORE the
     // prod Promise.allSettled below so both lineups run in parallel
@@ -1480,7 +1584,10 @@ export async function handlePrReviewEnsemble(
         shadowConfig,
         apiKey: env.OLLAMA_API_KEY,
         systemPrompt: SPECIALIST_PROMPTS[role],
-        userMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
+        // SIG-113: pick per-role initial message — tests specialist
+        // gets the testing-evidence block, others get the
+        // classification block.
+        userMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
         chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
         signal: composedSignal,
         perfCtx,
@@ -1515,7 +1622,9 @@ export async function handlePrReviewEnsemble(
             role,
             apiKey: env.OLLAMA_API_KEY,
             systemPrompt: SPECIALIST_PROMPTS[role],
-            initialMessage: appendRoleRule(baseInitialMessage, role, sigilixConfig),
+            // SIG-113: tests specialist gets the testing-evidence
+            // block; other specialists get the classification block.
+            initialMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
             chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
             signal,
             // ARC-283 Phase B1b: thread the orchestrator's perfCtx

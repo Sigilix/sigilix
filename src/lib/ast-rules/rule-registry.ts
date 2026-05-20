@@ -26,6 +26,11 @@ import { noSelfAssignment } from "./rules/no-self-assignment"
 import { noConstantBinaryCondition } from "./rules/no-constant-binary-condition"
 import { noInvalidTypeofCompare } from "./rules/no-invalid-typeof-compare"
 import { noUnsafeNegation } from "./rules/no-unsafe-negation"
+// SIG-110: performance-specialist rules.
+import { noSpreadAccumulatorInLoop } from "./rules/no-spread-accumulator-in-loop"
+import { noAllocationInLoop } from "./rules/no-allocation-in-loop"
+import { noNPlusOneCallInLoop } from "./rules/no-n-plus-one-call-in-loop"
+import { noSyncIoInRequestPath } from "./rules/no-sync-io-in-request-path"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -54,6 +59,11 @@ export const ALL_RULES: readonly AstRule[] = [
   noConstantBinaryCondition,
   noInvalidTypeofCompare,
   noUnsafeNegation,
+  // SIG-110: performance-specialist rules (severity: warning).
+  noSpreadAccumulatorInLoop,
+  noAllocationInLoop,
+  noNPlusOneCallInLoop,
+  noSyncIoInRequestPath,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

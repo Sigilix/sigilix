@@ -86,6 +86,13 @@ import {
   type LogicDropReason,
   type LogicEvidence,
 } from "./validate-logic-finding"
+import {
+  evaluatePerfFinding,
+  parsePerfValidatorMode,
+  type PerfValidatorMode,
+  type PerfDropReason,
+  type PerfEvidence,
+} from "./validate-perf-finding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -859,7 +866,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -2311,6 +2318,29 @@ export async function handlePrReviewEnsemble(
           category: finding.category,
         }))
       },
+      // SIG-110: thread perf evidence + mode. Evidence is the same
+      // changed-line text + the roleHint:performance AST findings. Default
+      // `shadow` — counts/telemeters the would-drop until the operator
+      // flips OPENCLAW_PERF_VALIDATOR_MODE to "enforce". Reuses the
+      // `pr-review-finding-rejected-validation` event (`gate: "perf"`).
+      perfEvidence: {
+        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        astPerfFindings: astResult.findings.filter((f) => f.roleHint === "performance"),
+      },
+      perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
+      onPerfFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "perf",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+      },
     })
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
@@ -2321,6 +2351,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedValidation: validated.droppedForFailedValidation,
       droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
       droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
+      droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4893,6 +4924,13 @@ export interface ValidatedOutput {
    */
   droppedForFailedLogicValidation: number
   /**
+   * SIG-110: count of sev>=4 perf findings the evidence gate flagged
+   * (unanchored perf claim, perf finding on an unchanged path, or missing
+   * path). Shadow counts the would-drop; enforce drops. Surfaced to
+   * telemetry so the gate's would-drop rate is observable before enforce.
+   */
+  droppedForFailedPerfValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -5169,6 +5207,27 @@ export function validateForSubmission(args: {
     finding: PrReviewFinding,
     info: { reason: LogicDropReason; dropped: boolean },
   ) => void
+  /**
+   * SIG-110: perf-finding evidence (added-line text per path + the
+   * roleHint:performance AST findings). Threaded so `evaluatePerfFinding`
+   * can anchor sev>=4 perf findings to the diff. Absent → the gate no-ops.
+   */
+  perfEvidence?: PerfEvidence
+  /**
+   * SIG-110: perf-finding evidence gate mode. `shadow` (default) counts +
+   * telemeters but never drops; `enforce` drops rejected findings. Read
+   * from `OPENCLAW_PERF_VALIDATOR_MODE` at the call site.
+   */
+  perfValidatorMode?: PerfValidatorMode
+  /**
+   * SIG-110: telemetry callback fired once per perf finding the gate
+   * flagged (reuses the `pr-review-finding-rejected-validation` event with
+   * a `gate: "perf"` discriminator).
+   */
+  onPerfFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: PerfDropReason; dropped: boolean },
+  ) => void
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -5185,6 +5244,9 @@ export function validateForSubmission(args: {
     logicEvidence,
     logicValidatorMode = "shadow",
     onLogicFindingDropped,
+    perfEvidence,
+    perfValidatorMode = "shadow",
+    onPerfFindingDropped,
   } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
@@ -5203,6 +5265,7 @@ export function validateForSubmission(args: {
   let droppedForFailedValidation = 0
   let droppedForFailedTestValidation = 0
   let droppedForFailedLogicValidation = 0
+  let droppedForFailedPerfValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -5338,6 +5401,23 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-110: perf-finding evidence gate. A sev>=4 performance-sourced
+    // finding (derived from the `performance-` sourceFindingId prefix) must
+    // be anchored to the diff: on a changed path AND backed by a co-located
+    // AST perf hit OR a concrete token (from backticks / complexityEstimate
+    // / hotPathIdentifier) on a changed line. Disjoint domain from the
+    // logic/security gates. Shadow-first: only `enforce` drops.
+    if (perfEvidence && sourceRolesInclude(sourceIds, "performance")) {
+      const perfDecision = evaluatePerfFinding(f, perfEvidence)
+      if (!perfDecision.keep) {
+        const dropped = perfValidatorMode === "enforce"
+        droppedForFailedPerfValidation++
+        onPerfFindingDropped?.(f, { reason: perfDecision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
+    }
+
     // Score-1 advisory demotion
     if (f.score <= 1) {
       advisoryNits.push(f)
@@ -5385,6 +5465,7 @@ export function validateForSubmission(args: {
     droppedForFailedValidation,
     droppedForFailedTestValidation,
     droppedForFailedLogicValidation,
+    droppedForFailedPerfValidation,
     cleanFindingProvenance,
   }
 }
@@ -5508,6 +5589,9 @@ interface EnsembleTelemetry {
     /** SIG-109: count of sev>=4 logic findings the evidence gate flagged
      * (would-drop in shadow mode, actual-drop in enforce mode). */
     droppedForFailedLogicValidation: number
+    /** SIG-110: count of sev>=4 perf findings the evidence gate flagged
+     * (would-drop in shadow mode, actual-drop in enforce mode). */
+    droppedForFailedPerfValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

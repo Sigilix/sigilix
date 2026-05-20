@@ -222,6 +222,22 @@ export interface PrReviewFinding {
    * `validateSecurityFinding`.
    */
   evidenceId?: string
+  /**
+   * SIG-110: complexity claim backing a performance finding — names the
+   * changed loop/call and the input-growth source (e.g.
+   * "O(n^2): rebuilds `acc` for each item in `rows`"). One of
+   * `complexityEstimate` / `hotPathIdentifier` is required by
+   * `evaluatePerfFinding` on score>=4 perf findings. Absent on
+   * non-perf findings and on specialists not yet on the new prompt.
+   */
+  complexityEstimate?: string
+  /**
+   * SIG-110: a concrete changed route/handler/export token the perf
+   * finding sits on (e.g. "GET /api/orders", "handleCheckout"). Anchors
+   * a hot-path claim to a real token on a changed line; cross-checked by
+   * `evaluatePerfFinding`.
+   */
+  hotPathIdentifier?: string
 }
 
 export interface PrReviewVerdict {
@@ -441,6 +457,15 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     }
     if (typeof finding.evidenceId === "string" && finding.evidenceId.trim().length > 0) {
       finalFinding.evidenceId = finding.evidenceId.trim()
+    }
+    // SIG-110: read complexityEstimate + hotPathIdentifier (scalar
+    // strings) when supplied. Both optional; the perf validator handles
+    // absence.
+    if (typeof finding.complexityEstimate === "string" && finding.complexityEstimate.trim().length > 0) {
+      finalFinding.complexityEstimate = finding.complexityEstimate.trim()
+    }
+    if (typeof finding.hotPathIdentifier === "string" && finding.hotPathIdentifier.trim().length > 0) {
+      finalFinding.hotPathIdentifier = finding.hotPathIdentifier.trim()
     }
     findings.push(finalFinding)
     if (findings.length >= 8) break

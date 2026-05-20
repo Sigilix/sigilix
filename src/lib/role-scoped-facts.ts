@@ -4,7 +4,8 @@
 // facts — the security specialist gets secret-scan / dep-vuln /
 // AST-security / SARIF / the security evidence manifest; logic gets
 // AST-correctness + regex deterministic-checks; performance gets
-// AST-performance; tests gets docs-coverage. This eliminates the
+// AST-performance; tests gets docs-coverage + SIG-118 coverage-gap
+// facts. This eliminates the
 // cross-domain leak where (e.g.) the logic specialist's prompt carried
 // secret-scan output.
 //

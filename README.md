@@ -719,10 +719,12 @@ Sigilix can read a **test-coverage report from the PR head's CI run** and feed *
 **Default OFF** (`coverage.source: "off"`) — opposite polarity from the always-on scanners. Production behavior is unchanged until an operator opts in. Enable per-repo in `sigilix.json`:
 
 ```json
-"coverage": {
-  "source": "github-actions-artifact",
-  "artifactName": "coverage-lcov",
-  "entry": "lcov.info"
+{
+  "coverage": {
+    "source": "github-actions-artifact",
+    "artifactName": "coverage-lcov",
+    "entry": "lcov.info"
+  }
 }
 ```
 

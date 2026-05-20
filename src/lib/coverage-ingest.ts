@@ -295,6 +295,20 @@ export function intersectAddedUncovered(
  * specialist may cite — the citation gates parse the line from the LAST
  * colon so paths containing colons stay intact.
  */
+/**
+ * Strip characters that could break the prompt block's structure
+ * (Sigilix review — prompt-injection): backticks (close a code span),
+ * CR/LF/tab, and C0 control chars. Paths are already constrained to real
+ * changed-file paths (`resolveToChangedFile`), so a normal source path is
+ * unaffected; this only neutralizes a pathologically-named PR file. A
+ * path altered here won't round-trip as a `coverageGap:` citation, which
+ * is the correct trade — we drop a coverage fact on a hostile filename
+ * rather than let it inject.
+ */
+function sanitizePromptPath(p: string): string {
+  return p.replace(/[\u0000-\u001f\u007f\u0060]/g, "")
+}
+
 export function renderCoverageGapBlock(gaps: readonly CoverageGap[]): string {
   if (!Array.isArray(gaps) || gaps.length === 0) return ""
   const lines: string[] = [
@@ -304,10 +318,11 @@ export function renderCoverageGapBlock(gaps: readonly CoverageGap[]): string {
     "",
   ]
   for (const gap of gaps) {
+    const safePath = sanitizePromptPath(gap.path)
     const lineList = gap.lines.join(", ")
-    lines.push(`- \`${gap.path}\`: ${lineList}`)
+    lines.push(`- \`${safePath}\`: ${lineList}`)
     for (const ln of gap.lines) {
-      lines.push(`  - cite as \`coverageGap:${gap.path}:${ln}\``)
+      lines.push(`  - cite as \`coverageGap:${safePath}:${ln}\``)
     }
   }
   return lines.join("\n")

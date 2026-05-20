@@ -207,6 +207,15 @@ describe("renderCoverageGapBlock", () => {
     expect(block).toContain("cite as `coverageGap:src/a.ts:2`")
     expect(block).toContain("cite as `coverageGap:src/a.ts:3`")
   })
+
+  it("strips backticks from a hostile path but keeps hyphens/dots (prompt-injection guard)", () => {
+    // A maliciously-named PR file can't break out of the code span
+    // (Sigilix review). Backtick stripped; hyphen/dot/slash preserved.
+    const gaps: CoverageGap[] = [{ path: "src/a-b`.ts", lines: [1] }]
+    const block = renderCoverageGapBlock(gaps)
+    expect(block).toContain("- `src/a-b.ts`: 1")
+    expect(block).toContain("cite as `coverageGap:src/a-b.ts:1`")
+  })
 })
 
 // ─── parseCoverageGapRef ────────────────────────────────────────────

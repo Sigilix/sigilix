@@ -5,6 +5,7 @@ import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,
   mergeInspectedTestFileContents,
+  pickFence,
   renderTestingEvidenceBlock,
   TEST_FILE_CONTENT_CHAR_CAP,
   TEST_FILE_CONTENT_TOTAL_CHAR_CAP,
@@ -295,7 +296,7 @@ describe("renderTestingEvidenceBlock", () => {
     expect(block).toContain("Citation requirements")
     expect(block).toContain("evidenceRefs")
     expect(block).toContain("inspectedTestFiles")
-    expect(block).toContain("validateTestingFindingEvidence")
+    expect(block).toContain("evaluateTestingFindingCitation")
   })
 
   it("embeds full content of inspected test files in fenced blocks", () => {
@@ -334,5 +335,59 @@ describe("renderTestingEvidenceBlock", () => {
       totalChars: 20_000,
     })
     expect(block).toContain("content included below (truncated)")
+  })
+})
+
+describe("pickFence (SIG-113 M2 — fence collision)", () => {
+  it("returns the standard 3-backtick fence for content with no backticks", () => {
+    expect(pickFence("describe('foo', () => {})")).toBe("```")
+  })
+
+  it("returns the standard fence for content with backtick runs < 3", () => {
+    expect(pickFence("const x = `template`")).toBe("```") // single backtick run
+    expect(pickFence("a `` b")).toBe("```") // double backtick run
+  })
+
+  it("grows the fence to maxRun+1 when content has a triple-backtick", () => {
+    // A test file asserting markdown fences contains ``` — the outer
+    // fence must be longer (4 backticks).
+    expect(pickFence("expect(md).toContain('```mermaid')")).toBe("````")
+  })
+
+  it("grows past longer runs (quad-backtick in body → 5-backtick fence)", () => {
+    expect(pickFence("a ```` b")).toBe("`````")
+  })
+
+  it("handles backticks at the very start / end of the body", () => {
+    expect(pickFence("```start")).toBe("````")
+    expect(pickFence("end```")).toBe("````")
+  })
+})
+
+describe("renderTestingEvidenceBlock — M2 fence collision in embedded content", () => {
+  it("wraps a test file containing triple-backticks in a longer fence so the block stays intact", () => {
+    const pack: TestingEvidencePack = {
+      sourceFilesChanged: [],
+      testFilesChanged: ["tests/markdown.test.ts"],
+      testFilesInPromptDiff: ["tests/markdown.test.ts"],
+      testFilesNotInPromptDiff: [],
+      siblingMappings: [],
+      inspectedTestFiles: ["tests/markdown.test.ts"],
+    }
+    // A real-world test body that asserts markdown-fence rendering.
+    const bodyWithFence = "it('renders mermaid', () => {\n  expect(out).toContain('```mermaid')\n})"
+    const block = renderTestingEvidenceBlock(pack, {
+      contentByPath: { "tests/markdown.test.ts": bodyWithFence },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: bodyWithFence.length,
+    })
+    // The outer fence must be 4 backticks (one more than the embedded
+    // triple). The embedded ```mermaid stays intact inside it.
+    expect(block).toContain("````")
+    expect(block).toContain("```mermaid")
+    // The content + END sentinel both present (block not corrupted).
+    expect(block).toContain("[TEST FILE CONTENT — `tests/markdown.test.ts`]")
+    expect(block).toContain("[END `tests/markdown.test.ts`]")
   })
 })

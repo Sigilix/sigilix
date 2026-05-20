@@ -184,7 +184,7 @@ export interface PrReviewFinding {
    * SIG-113: file paths the specialist inspected while forming the
    * finding. Populated by the tests specialist from the
    * [TESTING EVIDENCE] block's `inspectedTestFiles` list. Used by
-   * `validateTestingFindingEvidence` to drop "missing tests" findings
+   * `evaluateTestingFindingCitation` to drop "missing tests" findings
    * where the specialist never actually looked at any test file
    * (the PR #110 / PR #111 FP class).
    *

@@ -1440,8 +1440,18 @@ export async function handlePrReviewEnsemble(
     //   2. Async fetch of test-file content via client.getFileContent
     //      (mirrors the AST source fetch pattern at line ~1227)
     //   3. Cap-application + merge → final pack with inspectedTestFiles
+    // code-reviewer M1 catch (pre-PR): build from `filesAfterFilter`
+    // (post-pathFilter, pre-batch) — NOT `splitFiles` (pre-filter).
+    // Using `splitFiles` would re-surface operator-excluded files
+    // (generated/, vendor/, etc.) in the evidence pack, inviting
+    // missing-tests findings on paths the operator chose not to
+    // review + wasting getFileContent fetches on them. The pack's
+    // JSDoc contract says "post-filter, pre-batch" — this aligns the
+    // call site with it. `filesAfterFilter` ⊇ `reviewedFiles` (the
+    // batcher subsets it), so `testFilesNotInPromptDiff` still
+    // correctly captures batch-dropped (not filter-dropped) tests.
     const testingEvidencePackInitial: TestingEvidencePack = buildTestingEvidencePack({
-      splitFilePaths: splitFiles.map((f) => f.path),
+      splitFilePaths: filesAfterFilter.map((f) => f.path),
       reviewedFilePaths: reviewedFiles.map((f) => f.path),
     })
     let testingEvidenceFetchResult: InspectedTestFileFetchResult = {
@@ -4727,11 +4737,16 @@ export function evaluateTestingFindingCitation(
   pack: TestingEvidencePack | undefined,
 ): { keep: true } | { keep: false; reason: "no-citation" } {
   if (finding.category !== "testing") return { keep: true }
-  // No pack → orchestrator didn't build one (pure docs PR / no
-  // source/test files in diff). Skip the gate; the specialist's
-  // prompt-side rule already says "no missing-tests finding
-  // applicable" when the evidence block is absent.
-  if (!pack) return { keep: true }
+  // CodeRabbit catch (pre-PR): `buildTestingEvidencePack` always
+  // returns a pack object — even for a pure docs PR it returns one
+  // with empty source/test arrays. Treat an empty pack the same as
+  // an absent one: no evidence to gate on, so pass the finding
+  // through. (Matches the specialist's prompt-side rule: "no
+  // missing-tests finding applicable when the evidence block is
+  // absent.")
+  if (!pack || (pack.sourceFilesChanged.length === 0 && pack.testFilesChanged.length === 0)) {
+    return { keep: true }
+  }
 
   const hasInspected = Array.isArray(finding.inspectedTestFiles) && finding.inspectedTestFiles.length > 0
   if (hasInspected) return { keep: true }

@@ -191,7 +191,7 @@ Every \`category: "testing"\` finding you emit MUST include at least ONE citatio
   - \`inspectedTestFiles: ["<test-file-path>"]\` — the test files you actually read while forming the finding (e.g. concluding the existing tests are insufficient or missing a branch)
   - \`evidenceRefs: ["siblingMapping:<source-path>-><NONE|tests/...>"]\` — a source→test mapping you're citing (e.g. claiming a source file has no test sibling in this PR)
 
-The orchestrator runs a \`validateTestingFindingEvidence\` validator after synthesis: findings without either citation are DROPPED before reaching the customer. This is the SIG-113 fix for the PR #110 / PR #111 false-positive class where the specialist hallucinated "no tests exist" for source files that DID have sibling tests in the same PR — the specialist never actually inspected those test files, but it asserted absence anyway.
+The orchestrator runs an \`evaluateTestingFindingCitation\` gate after synthesis: findings without either citation are DROPPED before reaching the customer. This is the SIG-113 fix for the PR #110 / PR #111 false-positive class where the specialist hallucinated "no tests exist" for source files that DID have sibling tests in the same PR — the specialist never actually inspected those test files, but it asserted absence anyway.
 
 **SIG-91 — RECOGNIZE SIBLING TEST FILES BEFORE FIRING "MISSING TESTS".**
 

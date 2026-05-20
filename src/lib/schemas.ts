@@ -125,7 +125,7 @@ export const PR_REVIEW_SCHEMA = {
           // OPTIONAL in the schema so the staged rollout (specialists
           // not yet trained on the new prompt) doesn't fail schema-
           // constrained decode. The orchestrator's
-          // `validateTestingFindingEvidence` validator gates on
+          // `evaluateTestingFindingCitation` gate gates on
           // these fields downstream and drops findings that fail to
           // cite.
           //   inspectedTestFiles — file paths the specialist actually

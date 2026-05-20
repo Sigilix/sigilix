@@ -283,7 +283,7 @@ export function renderTestingEvidenceBlock(
   // SIG-113: explicit instructions on citing evidence. The validator
   // gates on these fields downstream.
   lines.push(
-    "Citation requirements (the orchestrator's `validateTestingFindingEvidence` validator drops findings that don't cite):",
+    "Citation requirements (the orchestrator's `evaluateTestingFindingCitation` gate drops findings that don't cite):",
   )
   lines.push(
     "- When firing a `category: \"testing\"` finding claiming a source file lacks test coverage, you MUST set `evidenceRefs: [\"siblingMapping:<source>-><NONE|tests/...>\"]` referencing one of the source→test mappings above.",
@@ -303,13 +303,42 @@ export function renderTestingEvidenceBlock(
       const body = inspectedContent.contentByPath[p]
       if (!body) continue
       lines.push(`[TEST FILE CONTENT — \`${p}\`]`)
-      lines.push("```")
+      // code-reviewer M2 catch (pre-PR): test files in this very repo
+      // contain triple-backticks (markdown-rendering assertions,
+      // prompt-string fixtures). A bare ``` fence would be closed
+      // early by an embedded ``` in the body, corrupting the block
+      // structure the specialist parses. Use a fence longer than any
+      // backtick run in the body (CommonMark's info-string rule).
+      const fence = pickFence(body)
+      lines.push(fence)
       lines.push(body)
-      lines.push("```")
+      lines.push(fence)
       lines.push(`[END \`${p}\`]`)
       lines.push("")
     }
   }
 
   return lines.join("\n").trimEnd()
+}
+
+/**
+ * SIG-113: choose a backtick fence longer than the longest run of
+ * backticks in `body`, so embedding `body` in a fenced block can't be
+ * terminated early by a triple-backtick inside it. Minimum 3 (the
+ * standard fence); grows to maxRun+1 when the body has a longer run.
+ *
+ * Pure — exported for tests.
+ */
+export function pickFence(body: string): string {
+  let maxRun = 0
+  let current = 0
+  for (const ch of body) {
+    if (ch === "`") {
+      current += 1
+      if (current > maxRun) maxRun = current
+    } else {
+      current = 0
+    }
+  }
+  return "`".repeat(Math.max(3, maxRun + 1))
 }

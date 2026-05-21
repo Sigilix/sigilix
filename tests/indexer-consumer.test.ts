@@ -62,7 +62,10 @@ import {
   repoIndexManifestKey,
   type RepoIndexManifestV1,
 } from "../src/lib/repo-index-manifest"
+import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "../src/lib/repo-index-vectors"
+import { activeRunKey } from "../src/lib/repo-index-active-run"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
+import { CHUNKER_VERSION } from "../src/lib/indexer"
 import type { Env, JobMessage } from "../src/index"
 
 interface Sent {
@@ -78,9 +81,9 @@ function makeKvStub(): {
     async get(key: string): Promise<string | null> {
       return store.get(key) ?? null
     },
-    async put(key: string, value: string): Promise<void> {
+    put: vi.fn(async (key: string, value: string): Promise<void> => {
       store.set(key, value)
-    },
+    }),
     async delete(key: string): Promise<void> {
       store.delete(key)
     },
@@ -242,6 +245,88 @@ describe("handleIndexRepoJob — freshness skip", () => {
 
     expect(mockGetRepoTree).toHaveBeenCalled()
     expect(mockVectorizeUpsert).toHaveBeenCalled()
+  })
+
+  // SIG-136: reproduces the stale-skip abort. UNLIKE the test above, this one
+  // ALSO seeds a prior `repo-index-vectors` record for the OLD run — the piece
+  // that drives the real stale-skip path. Pre-fix, a repo with a stale manifest
+  // + a stored old-run vectors record stale-skipped the new run (no upsert, no
+  // new manifest); now the lease lets computeMerge supersede so it re-indexes.
+  // NOTE: HIGH-1's concurrent embedding-window race (the early-claim move) is a
+  // best-effort-KV concurrency property, covered by the design + the claim
+  // ordering — it is not directly reproducible in this single-threaded test.
+  it("re-indexes (does NOT stale-abort) when a prior old-run vectors record exists", async () => {
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "src/index.ts", type: "blob", size: 100 }],
+      truncated: false,
+    })
+    // New head → new runId. headSha is the ONLY freshness difference.
+    const newHeadSha = "c".repeat(40)
+    mockGetBranch.mockResolvedValue({ headSha: newHeadSha, treeSha: "d".repeat(40) })
+
+    const { env, kv } = makeEnv()
+
+    // Seed the OLD-run manifest (old headSha, current model/dim/chunker).
+    const manifest: RepoIndexManifestV1 = {
+      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      headSha: "a".repeat(40),
+      runId: "old-run",
+      fileCount: 1, chunkCount: 1, shardCount: 1,
+      indexedAt: "2026-05-17T00:00:00.000Z",
+      modelId: EMBEDDING_MODEL,
+      embeddingDim: EMBEDDING_DIMENSIONS,
+      chunkerVersion: CHUNKER_VERSION,
+      windowLines: 30, overlapLines: 10,
+    }
+    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+
+    // Seed the prior OLD-run vectors record — the piece the existing
+    // re-index test omits. This is what drove the stale-skip pre-fix.
+    const vectors: RepoIndexVectorsV1 = {
+      v: 1, owner: "Arc-and-Anchor", repo: "sigilix",
+      runId: "old-run",
+      byPath: { "src/index.ts": ["arc-and-anchor/sigilix#old-run#0"] },
+    }
+    kv.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors))
+
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    // Compute the runId the consumer derives for the new head.
+    const { computeRunId } = await import("../src/lib/indexer")
+    const newRunId = await computeRunId({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      headSha: newHeadSha,
+      modelId: EMBEDDING_MODEL,
+      chunkerVersion: CHUNKER_VERSION,
+    })
+    // Sanity: the seeded path differs from the path under test.
+    expect(newRunId).not.toBe("old-run")
+
+    // It RE-INDEXES rather than stale-aborting.
+    expect(mockVectorizeUpsert).toHaveBeenCalled()
+
+    // A new manifest with the new runId lands.
+    const storedManifest = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
+    expect(storedManifest).toBeTruthy()
+    const parsedManifest = JSON.parse(storedManifest as string) as RepoIndexManifestV1
+    expect(parsedManifest.runId).toBe(newRunId)
+    expect(parsedManifest.headSha).toBe(newHeadSha)
+
+    // The active-run lease holds the new runId.
+    const storedLease = kv.get(activeRunKey("Arc-and-Anchor", "sigilix"))
+    expect(storedLease).toBeTruthy()
+    const parsedLease = JSON.parse(storedLease as string) as { runId: string }
+    expect(parsedLease.runId).toBe(newRunId)
+
+    // SIG-136 HIGH-1: the lease must be claimed BEFORE the (slow) embedding/upsert work.
+    const putSpy = (env.OPENCLAW_STATE as unknown as { put: ReturnType<typeof vi.fn> }).put
+    const leaseKey = activeRunKey("Arc-and-Anchor", "sigilix")
+    const leaseCallIdx = putSpy.mock.calls.findIndex((args) => args[0] === leaseKey)
+    expect(leaseCallIdx).toBeGreaterThanOrEqual(0)
+    const leasePut = putSpy.mock.invocationCallOrder[leaseCallIdx]!
+    const firstUpsert = mockVectorizeUpsert.mock.invocationCallOrder[0]!
+    expect(leasePut).toBeLessThan(firstUpsert)
   })
 })
 

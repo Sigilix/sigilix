@@ -34,6 +34,7 @@ import {
   repoIndexVectorsKey,
   type RepoIndexVectorsV1,
 } from "../src/lib/repo-index-vectors"
+import { activeRunKey } from "../src/lib/repo-index-active-run"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
 import type { Env } from "../src/index"
 
@@ -160,6 +161,26 @@ describe("deleteRepoIndex — happy path", () => {
     expect(store.has("pr-review-manifest:Arc-and-Anchor/sigilix#10")).toBe(false)
     expect(store.has("pr-review-manifest:Arc-and-Anchor/sigilix#11")).toBe(false)
     expect(store.has("pr-review:Arc-and-Anchor/sigilix#10@aaa")).toBe(false)
+  })
+
+  it("deletes the active-run lease key on uninstall", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+    store.set(
+      activeRunKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify({ v: 1, runId: "x", startedAt: "t" }),
+    )
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    expect(store.has(activeRunKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(result.errors).toEqual([])
   })
 
   it("batches deleteByIds at 1000 ids per call", async () => {

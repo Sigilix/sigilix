@@ -62,6 +62,7 @@ import {
   readRepoIndexVectors,
   writeRepoIndexVectors,
 } from "./repo-index-vectors"
+import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
 
 // ---------------------------------------------------------------------
@@ -401,6 +402,12 @@ interface ConsumerArgs {
   env: Env
 }
 
+/** SIG-136: true iff this run still owns the lease (or it's absent) and may
+ *  proceed to persist a manifest / enqueue the next shard. */
+async function leaseAllows(env: Env, owner: string, repo: string, runId: string): Promise<boolean> {
+  return shouldFinalize(await readActiveRunId(env, owner, repo), runId)
+}
+
 export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
   if (args.job.shard !== undefined) {
     return handleShardJob(args.job, args.job.shard, args.env)
@@ -479,6 +486,14 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     // Fall through to re-index.
   }
 
+  // SIG-136: claim the run lease as the FIRST side-effecting write after
+  // deciding to (re-)index, so claim-order reflects run START order. An
+  // older run that started embedding earlier must not overwrite a newer
+  // run's lease late (after its own slow processSlice) — claiming here,
+  // before getTree / the empty-repo branch / processSlice, closes that
+  // embedding-window clobber. Throws on KV failure → queue retries.
+  await writeActiveRun(env, owner, repo, runId)
+
   const tree = await client.getRepoTree(owner, repo, treeSha)
   if (!tree) {
     console.log(JSON.stringify({
@@ -509,6 +524,13 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (totalFiles === 0) {
     // Empty repo (or all-filtered). Write a manifest so we don't
     // re-walk on every webhook for this SHA.
+    if (!(await leaseAllows(env, owner, repo, runId))) {
+      console.warn(JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        owner, repo, run_id: runId, site: "bootstrap-empty-manifest",
+      }))
+      return
+    }
     await persistManifest({
       env, owner, repo, namespace, headSha, runId,
       fileCount: 0, chunkCount: 0, shardCount: 1,
@@ -533,6 +555,8 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // chain. If proceed=false, the caller doesn't write the manifest
   // and doesn't enqueue the next shard — the authoritative run
   // already on disk owns those writes.
+  // SIG-136: the run lease was claimed early (right after the freshness
+  // gate, before processSlice) so a stale run can't clobber it late.
   const vectorsResult = await persistVectorIds({
     env, owner, repo, runId, idsByPathSlice: idsByPath,
     isBootstrap: true,
@@ -548,6 +572,14 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (totalFiles > MAX_FILES_PER_JOB) {
     // Hand off to the next continuation shard. Final shard will write
     // the manifest with cumulative totals; this bootstrap doesn't.
+    if (!(await leaseAllows(env, owner, repo, runId))) {
+      console.warn(JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        site: "bootstrap-enqueue",
+        owner, repo, run_id: runId,
+      }))
+      return
+    }
     await enqueueNextShard(env, {
       owner, repo, installationId, reason,
       lo: MAX_FILES_PER_JOB,
@@ -562,6 +594,14 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   }
 
   // Single-shard run — write manifest now.
+  if (!(await leaseAllows(env, owner, repo, runId))) {
+    console.warn(JSON.stringify({
+      event: "index-job-skip-superseded-finalize",
+      site: "bootstrap-manifest",
+      owner, repo, run_id: runId,
+    }))
+    return
+  }
   await persistManifest({
     env, owner, repo, namespace, headSha, runId,
     fileCount: sliceHi, chunkCount, shardCount: 1,
@@ -666,17 +706,35 @@ async function handleShardJob(
     return
   }
 
+  // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
+  // can return proceed=false on stale-skip. In that case we abort
+  // the chain — neither writing the manifest (would overwrite the
+  // authoritative one with stale runId + counts) nor enqueueing the
+  // next shard.
+  // SIG-136: a continuation shard proceeds only if it still owns the lease
+  // (or it's absent); then refresh the TTL so a long chain keeps the lease.
+  // Validate the lease BEFORE the slow embed/upsert work so a
+  // superseded/redelivered shard doesn't write orphaned vectors to Vectorize
+  // (vectors not recorded in the id-list pollute retrieval + escape the
+  // GDPR uninstall delete). persistVectorIds re-checks at the end as backstop.
+  if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+    console.warn(JSON.stringify({
+      event: "index-job-skip-superseded-shard",
+      owner, repo, run_id: shard.runId, lo: shard.lo, hi: shard.hi,
+    }))
+    return
+  }
+  // The check above and this refresh are NOT atomic, but that's safe: the
+  // authoritative gate is persistVectorIds' own lease read + computeMerge
+  // (a newer run that claims in this window stale-skips us at persist time).
+  await writeActiveRun(env, owner, repo, shard.runId)
+
   const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
   const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
     client, env, owner, repo, namespace,
     headSha: shard.headSha, files: sliceFiles,
   })
 
-  // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
-  // can return proceed=false on stale-skip. In that case we abort
-  // the chain — neither writing the manifest (would overwrite the
-  // authoritative one with stale runId + counts) nor enqueueing the
-  // next shard.
   const vectorsResult = await persistVectorIds({
     env, owner, repo,
     runId: shard.runId,
@@ -697,6 +755,14 @@ async function handleShardJob(
   if (shard.hi >= shard.totalFiles) {
     // Final shard — derive shardCount from the chain length.
     const shardCount = Math.ceil(shard.totalFiles / MAX_FILES_PER_JOB)
+    if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+      console.warn(JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        site: "shard-manifest",
+        owner, repo, run_id: shard.runId,
+      }))
+      return
+    }
     await persistManifest({
       env, owner, repo, namespace,
       headSha: shard.headSha, runId: shard.runId,
@@ -732,6 +798,14 @@ async function handleShardJob(
     return
   }
 
+  if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+    console.warn(JSON.stringify({
+      event: "index-job-skip-superseded-finalize",
+      site: "shard-enqueue",
+      owner, repo, run_id: shard.runId,
+    }))
+    return
+  }
   await enqueueNextShard(env, {
     owner, repo, installationId, reason,
     lo: shard.hi,
@@ -994,9 +1068,7 @@ interface PersistVectorIdsArgs {
 async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: boolean }> {
   const { env, owner, repo, runId, idsByPathSlice, isBootstrap } = args
   const existing = await readRepoIndexVectors(env, owner, repo)
-  const manifestRead = await readRepoIndexManifest(env, owner, repo)
-  const currentManifestRunId =
-    manifestRead.kind === "ok" ? manifestRead.manifest.runId : null
+  const activeRunId = await readActiveRunId(env, owner, repo)
 
   const outcome = computeMerge({
     existing,
@@ -1004,7 +1076,7 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     repo,
     runId,
     idsByPathSlice,
-    currentManifestRunId,
+    activeRunId,
   })
 
   if (outcome.action === "stale-skip") {
@@ -1014,7 +1086,7 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     console.warn(JSON.stringify({
       event: "repo-index-vectors-stale-skip",
       owner, repo, run_id: runId, existing_run_id: outcome.existingRunId,
-      current_manifest_run_id: currentManifestRunId,
+      active_run_id: activeRunId,
     }))
     return { proceed: false }
   }

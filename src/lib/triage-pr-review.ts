@@ -661,7 +661,7 @@ export function buildReviewSubmission({
     // Such a finding is anchored to real editable code anyway (the
     // committable ```suggestion needs a contiguous reviewable range).
     const hasSuggestion =
-      typeof f.suggestedReplacement === "string" && f.suggestedReplacement.length > 0
+      typeof f.suggestedReplacement === "string" && f.suggestedReplacement.trim().length > 0
     // Non-substantive ONLY when the map IS provided AND the line is
     // present in it AND its text is non-substantive. If the map is
     // absent, or the line isn't in it (`lineText === undefined`), treat

@@ -18,6 +18,7 @@ import {
   chunkFile,
   chunkId,
   computeRunId,
+  splitOversizedWindow,
   walkIndexableFiles,
   type TreeEntry,
 } from "../src/lib/indexer"
@@ -271,6 +272,73 @@ describe("chunkFile", () => {
     }
     expect(cursor).toBeGreaterThan(30)
     expect(reconstructed.join("\n")).toBe(lines.slice(0, 30).join("\n"))
+  })
+
+  it("covers leading blank lines at a split boundary (C1 regression)", () => {
+    // SIG-133 C1: a window whose first lines are blank ("") used to be
+    // skipped by the buffer-length flush gate — flush() bailed on the
+    // empty buffer and the next iteration overwrote bufStartLine, so the
+    // first emitted sub-chunk claimed a later line and lines 1/2 were
+    // uncovered. Blank lines are real content (a line that must be
+    // covered + counted) so coverage must start at line 1.
+    const dense = "z".repeat(100)
+    // 2 blank lines + 25 dense lines = 2 + 25*100 + 26 newlines = 2552 chars (> 1400).
+    const lines = ["", "", ...Array(25).fill(dense)]
+    const content = lines.join("\n")
+    const chunks = chunkFile("x.ts", content)
+    expect(chunks.length).toBeGreaterThan(0)
+    // The first sub-chunk of the first window must start at the window's
+    // true first line (1), not a shifted-forward line.
+    expect(chunks[0]?.lineStart).toBe(1)
+    // Walk the first window's sub-chunks (lines 1..27): every line covered
+    // with no gap.
+    const firstWindow = chunks.filter((c) => c.lineStart >= 1 && c.lineEnd <= 27)
+    let cursor = 1
+    for (const c of firstWindow) {
+      if (c.lineStart > cursor) break
+      expect(c.lineStart).toBe(cursor)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBeGreaterThan(27) // covered through line 27
+  })
+})
+
+describe("splitOversizedWindow", () => {
+  it("counts blank lines so coverage starts at the window's true line (C1)", () => {
+    // Window of 4 lines starting at absolute file line 10:
+    //   line 10: ""        (blank, leading)
+    //   line 11: 700 chars
+    //   line 12: ""        (blank, middle)
+    //   line 13: 700 chars
+    // Joined length = 0 + 1 + 700 + 1 + 0 + 1 + 700 = 1403 (> 1400 cap)
+    // so it splits. The buffer's first candidate ("" then "\n"+700) is
+    // 701 chars, still under cap; adding "\n" + "" → 702; adding
+    // "\n" + 700 → 1403 overflows, so flush happens before line 13.
+    const lines = ["", "x".repeat(700), "", "y".repeat(700)]
+    const out = splitOversizedWindow(lines, 10)
+
+    // Every input line index is covered by exactly one contiguous range,
+    // starting at line 10 (NOT shifted forward past the blank).
+    const ranges = out.map((c) => ({ lineStart: c.lineStart, lineEnd: c.lineEnd }))
+    expect(ranges).toEqual([
+      { lineStart: 10, lineEnd: 12 }, // "", 700, "" -> 702 chars
+      { lineStart: 13, lineEnd: 13 }, // 700 chars
+    ])
+    // path is left empty (caller sets it).
+    for (const c of out) {
+      expect(c.path).toBe("")
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+    }
+    // First sub-chunk content is "" + "\n" + 700-x + "\n" + "" .
+    expect(out[0]?.content).toBe(`\n${"x".repeat(700)}\n`)
+    expect(out[1]?.content).toBe("y".repeat(700))
+    // Coverage walk: lines 10..13 fully covered, no gap, no overlap.
+    let cursor = 10
+    for (const c of out) {
+      expect(c.lineStart).toBe(cursor)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBe(14) // covered 10,11,12,13
   })
 })
 

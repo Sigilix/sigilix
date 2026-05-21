@@ -212,12 +212,24 @@ export function splitOversizedWindow(
   const chunks: Chunk[] = []
   let buf = ""
   let bufStartLine = windowStartLine
-  let bufEndLine = windowStartLine
+  // SIG-133 C1: track the buffer by LINE COUNT, not string length. A blank
+  // line ("") is real content (a line that must be covered + counted) yet
+  // contributes 0 to buf.length. Gating buffer-open state on buf.length
+  // made flush() bail on a blank-only buffer and let the next iteration
+  // overwrite bufStartLine — dropping blank lines at split boundaries and
+  // shifting the first sub-chunk's lineStart forward. bufLineCount fixes it.
+  let bufLineCount = 0
 
   const flush = (): void => {
-    if (buf.length === 0) return
-    chunks.push({ path: "", lineStart: bufStartLine, lineEnd: bufEndLine, content: buf })
+    if (bufLineCount === 0) return
+    chunks.push({
+      path: "",
+      lineStart: bufStartLine,
+      lineEnd: bufStartLine + bufLineCount - 1,
+      content: buf,
+    })
     buf = ""
+    bufLineCount = 0
   }
 
   for (let i = 0; i < lines.length; i++) {
@@ -227,6 +239,8 @@ export function splitOversizedWindow(
     // A single physical line longer than the cap: flush any pending
     // buffer, then hard-split this line into <=cap char slices, each
     // tagged with this line's absolute number (lineStart === lineEnd).
+    // M3 (known rare limitation, SIG-133): two byte-identical hard-split
+    // slices of one repeating >2*cap line collide on chunk ID; left as-is.
     if (line.length > MAX_CHUNK_CHARS) {
       flush()
       for (let off = 0; off < line.length; off += MAX_CHUNK_CHARS) {
@@ -241,23 +255,24 @@ export function splitOversizedWindow(
     }
 
     // Would appending this line (with its joining newline if the buffer
-    // is non-empty) overflow the cap? If so, flush and start fresh.
-    const candidateLength = buf.length === 0 ? line.length : buf.length + 1 + line.length
-    if (candidateLength > MAX_CHUNK_CHARS) {
+    // already holds a line) overflow the cap? If so, flush and start fresh.
+    const candidate = bufLineCount === 0 ? line.length : buf.length + 1 + line.length
+    if (candidate > MAX_CHUNK_CHARS) {
       flush()
       buf = line
       bufStartLine = absLine
-      bufEndLine = absLine
+      bufLineCount = 1
       continue
     }
 
-    if (buf.length === 0) {
+    if (bufLineCount === 0) {
       buf = line
       bufStartLine = absLine
+      bufLineCount = 1
     } else {
       buf = `${buf}\n${line}`
+      bufLineCount += 1
     }
-    bufEndLine = absLine
   }
 
   flush()

@@ -2830,6 +2830,10 @@ export async function handlePrReviewEnsemble(
       // REQUEST_CHANGES — APPROVE bodies stay marker-only).
       ...(reviewCounter !== undefined ? { reviewCounter } : {}),
       ...(retriggerUrl !== undefined ? { retriggerUrl } : {}),
+      // SIG-125: thread the diff's reviewable-position map so
+      // `formatFindingComment` can render committable ```suggestion
+      // blocks when a finding cleanly anchors (RIGHT + contiguous).
+      reviewable,
     })
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE

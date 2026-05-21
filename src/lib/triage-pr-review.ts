@@ -34,6 +34,11 @@ import {
   type SubmitReviewComment,
 } from "./github"
 import { SIGILIX_BOT_LOGIN } from "./dismiss-prior-reviews"
+import {
+  isContiguousRightRange,
+  deriveSide,
+  type ReviewableMap,
+} from "./diff-positions"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
 // `renderStackContextSummary` is no longer used here — ARC-281
@@ -566,6 +571,15 @@ interface BuildReviewArgs {
    * `RenderBodyArgs.retriggerUrl`.
    */
   retriggerUrl?: string
+  /**
+   * SIG-125: the diff's reviewable-position map, used by
+   * `formatFindingComment` to decide whether a finding's
+   * `suggestedReplacement` can render as a committable ```suggestion
+   * (RIGHT side + contiguous reviewable range) or must fall back to a
+   * non-committable code snippet. Optional — omitted call sites fall
+   * back to the snippet tier.
+   */
+  reviewable?: ReviewableMap
 }
 
 /**
@@ -598,6 +612,7 @@ export function buildReviewSubmission({
   delta,
   reviewCounter,
   retriggerUrl,
+  reviewable,
 }: BuildReviewArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize every prose field for GitHub
   // rendering BEFORE downstream renderers see the verdict. Wraps
@@ -636,7 +651,7 @@ export function buildReviewSubmission({
     // and pass to the formatter so the inline comment carries the
     // P0/P1/P2 badge + `confidence: N/5` suffix.
     const confidence = resolveFindingConfidence(f, verdict.confidence)
-    const baseBody = formatFindingComment(f, confidence)
+    const baseBody = formatFindingComment(f, confidence, reviewable)
     const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
     const c: SubmitReviewComment = {
       path: f.path,
@@ -1229,6 +1244,11 @@ export function extensionToFenceLang(path: string): string {
   return FENCE_LANG_BY_EXT[ext] ?? ""
 }
 
+// SIG-125: confidence floor at/above which a finding's
+// `suggestedReplacement` is eligible to render as a committable
+// ```suggestion (still gated on clean anchorability).
+const HIGH_CONFIDENCE_FLOOR = 4
+
 /**
  * Inline finding comment, greptile-style. The category leads as
  * \`**category:**\` (logic, style, security, performance, etc.) so
@@ -1250,6 +1270,7 @@ export function extensionToFenceLang(path: string): string {
 export function formatFindingComment(
   finding: PrReviewFinding,
   confidence: number,
+  reviewable?: ReviewableMap,
 ): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
   const badge = severityBadgeForScore(finding.score)
@@ -1271,7 +1292,35 @@ export function formatFindingComment(
   } else {
     lines.push(finding.body)
   }
+  // SIG-125: render the proposed change when present. Two tiers:
+  //   committable ```suggestion (high-confidence + cleanly anchorable),
+  //   else an always-shown non-committable code snippet.
+  const repl = finding.suggestedReplacement
+  if (typeof repl === "string" && repl.length > 0) {
+    const committable =
+      confidence >= HIGH_CONFIDENCE_FLOOR &&
+      reviewable !== undefined &&
+      isFindingAnchorable(finding, reviewable)
+    lines.push("")
+    if (committable) {
+      lines.push("```suggestion", repl.replace(/\n$/, ""), "```")
+    } else {
+      const lang = extensionToFenceLang(finding.path)
+      lines.push("**Proposed change:**", "```" + lang, repl.replace(/\n$/, ""), "```")
+    }
+  }
   return lines.join("\n")
+}
+
+/**
+ * SIG-125: a finding's anchored range `[startLine ?? line, line]` is
+ * committable iff every line is RIGHT-reviewable (matches GitHub's
+ * ```suggestion applyability requirement).
+ */
+function isFindingAnchorable(finding: PrReviewFinding, reviewable: ReviewableMap): boolean {
+  if (deriveSide(reviewable, finding.path, finding.line) !== "RIGHT") return false
+  const start = finding.startLine != null && finding.startLine < finding.line ? finding.startLine : finding.line
+  return isContiguousRightRange(reviewable, finding.path, start, finding.line)
 }
 
 

@@ -1211,6 +1211,25 @@ export function resolveFindingConfidence(
 }
 
 /**
+ * SIG-125: map a file path's extension to a Markdown fence language for
+ * the non-committable "Proposed change" snippet. Empty string when
+ * unknown (renders a plain fence). Pure — exported for tests.
+ */
+const FENCE_LANG_BY_EXT: Readonly<Record<string, string>> = {
+  ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js",
+  mts: "ts", cts: "ts", json: "json", py: "python", rb: "ruby",
+  go: "go", rs: "rust", java: "java", sh: "bash", yml: "yaml",
+  yaml: "yaml", toml: "toml", css: "css", html: "html", sql: "sql",
+  md: "markdown",
+}
+export function extensionToFenceLang(path: string): string {
+  const dot = path.lastIndexOf(".")
+  if (dot < 0 || dot === path.length - 1) return ""
+  const ext = path.slice(dot + 1).toLowerCase()
+  return FENCE_LANG_BY_EXT[ext] ?? ""
+}
+
+/**
  * Inline finding comment, greptile-style. The category leads as
  * \`**category:**\` (logic, style, security, performance, etc.) so
  * a reviewer can scan a thread and immediately see what kind of

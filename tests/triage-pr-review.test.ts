@@ -1021,3 +1021,18 @@ describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
     expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
   })
 })
+
+import { extensionToFenceLang } from "../src/lib/triage-pr-review"
+
+describe("extensionToFenceLang (SIG-125)", () => {
+  it("maps known extensions", () => {
+    expect(extensionToFenceLang("src/a.ts")).toBe("ts")
+    expect(extensionToFenceLang("src/a.tsx")).toBe("tsx")
+    expect(extensionToFenceLang("x.py")).toBe("python")
+    expect(extensionToFenceLang("x.json")).toBe("json")
+  })
+  it("returns empty string for unknown/extensionless paths", () => {
+    expect(extensionToFenceLang("Makefile")).toBe("")
+    expect(extensionToFenceLang("x.weird")).toBe("")
+  })
+})

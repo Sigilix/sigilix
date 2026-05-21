@@ -185,3 +185,22 @@ export function deriveSide(
   if (left) return "LEFT"
   return null
 }
+
+/**
+ * Return true iff every line in `[startLine..line]` is RIGHT-reviewable
+ * for `path`. A missing intermediate line means the range crosses a hunk
+ * boundary. Pure. (Moved here from triage-pr-improve.ts, SIG-125, so both
+ * the /improve and proactive-review paths share one anchoring primitive.)
+ */
+export function isContiguousRightRange(
+  reviewable: ReviewableMap,
+  path: string,
+  startLine: number,
+  line: number,
+): boolean {
+  if (startLine > line) return false
+  for (let l = startLine; l <= line; l++) {
+    if (!isPositionReviewable(reviewable, path, l, "RIGHT")) return false
+  }
+  return true
+}

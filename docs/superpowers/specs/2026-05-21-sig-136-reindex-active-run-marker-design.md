@@ -95,7 +95,7 @@ activeRunKey(owner, repo): string                            // exported for the
 mismatch is checked FIRST** (Codex MED) so a stale run can't `create` /
 `invalid-overwrite` when a newer run owns the lease:
 
-```
+```text
 if activeRunId !== null && activeRunId !== runId → stale-skip   (a different run owns the lease)
 existing missing  → created
 existing invalid  → invalid-overwrite
@@ -128,7 +128,7 @@ could still enqueue a stale shard or overwrite the manifest with a stale run.
 
 ## Data flow
 
-```
+```text
 bootstrap (freshness=stale) → writeActiveRun(runId=NEW) [throws→retry on fail] → persistVectorIds
   computeMerge: cur.runId(OLD) !== NEW; activeRunId(NEW) === NEW → SUPERSEDED ✅ (was stale-skip ✗)
   → finalization guard (lease === NEW) → enqueue next shard / persistManifest

@@ -706,12 +706,6 @@ async function handleShardJob(
     return
   }
 
-  const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
-  const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
-    client, env, owner, repo, namespace,
-    headSha: shard.headSha, files: sliceFiles,
-  })
-
   // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
   // can return proceed=false on stale-skip. In that case we abort
   // the chain — neither writing the manifest (would overwrite the
@@ -719,6 +713,10 @@ async function handleShardJob(
   // next shard.
   // SIG-136: a continuation shard proceeds only if it still owns the lease
   // (or it's absent); then refresh the TTL so a long chain keeps the lease.
+  // Validate the lease BEFORE the slow embed/upsert work so a
+  // superseded/redelivered shard doesn't write orphaned vectors to Vectorize
+  // (vectors not recorded in the id-list pollute retrieval + escape the
+  // GDPR uninstall delete). persistVectorIds re-checks at the end as backstop.
   if (!(await leaseAllows(env, owner, repo, shard.runId))) {
     console.warn(JSON.stringify({
       event: "index-job-skip-superseded-shard",
@@ -730,6 +728,13 @@ async function handleShardJob(
   // authoritative gate is persistVectorIds' own lease read + computeMerge
   // (a newer run that claims in this window stale-skips us at persist time).
   await writeActiveRun(env, owner, repo, shard.runId)
+
+  const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
+  const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
+    client, env, owner, repo, namespace,
+    headSha: shard.headSha, files: sliceFiles,
+  })
+
   const vectorsResult = await persistVectorIds({
     env, owner, repo,
     runId: shard.runId,

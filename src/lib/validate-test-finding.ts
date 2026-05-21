@@ -333,9 +333,11 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
  *   - a finding citing `testFileChanged:<path>` for a real changed test
  *     ALWAYS keeps (SIG-113 deletion/rename exception).
  *   - MISSING-COVERAGE class (cites a siblingMapping, not an inspected
- *     test): keep iff `citesRealMissingCoverage`; else reject
- *     `uncited-missing-coverage`. The finding must require a concrete
- *     `path`.
+ *     test): SIG-128 — reject `glue-covered-by-helper` first when the
+ *     pack marks `finding.path` helper-covered with status "all" (changed
+ *     logic fully delegates to same-PR tested helpers); otherwise keep iff
+ *     `citesRealMissingCoverage`; else reject `uncited-missing-coverage`.
+ *     The finding must require a concrete `path`.
  *   - INSUFFICIENT-TEST class (cites an inspected test, not a sibling
  *     mapping): keep iff `namesConcreteTarget` AND not a bare
  *     "needs more tests"; else reject `vague-insufficient-test`. The

@@ -1344,8 +1344,20 @@ export async function handlePrReviewEnsemble(
     // Pre-LLM AST scan over pathFiltered JS/TS files.
     const astRulesConfig = resolveAstRulesConfig(sigilixConfig)
     const jsTsPaths = filePaths.filter((p) => /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i.test(p))
+    // SIG-121: decide symbol retrieval up front — it also needs JS/TS sources
+    // for AST symbol extraction, so the fetch below must run when EITHER AST
+    // rules or symbol retrieval may run. Otherwise disabling `astRules` in
+    // sigilix.json would silently starve symbol retrieval even with
+    // OPENCLAW_SYMBOL_RETRIEVAL=on. Budget is read here, before the fetch; no
+    // retrieval consumes between here and the block below, so the value is
+    // identical to reading it at the block.
+    const wantSymbolRetrieval = shouldRunSymbolRetrieval(
+      env.OPENCLAW_SYMBOL_RETRIEVAL,
+      router.specialists,
+      preflightCache.budgetRemaining(),
+    )
     const astFilesByPath = new Map<string, string>()
-    if (astRulesConfig.enabled && jsTsPaths.length > 0) {
+    if ((astRulesConfig.enabled || wantSymbolRetrieval) && jsTsPaths.length > 0) {
       const fetchResults = await Promise.allSettled(
         jsTsPaths.map(async (p) => {
           const src = await client.getFileContent(owner, repo, p, headSha)
@@ -1381,13 +1393,7 @@ export async function handlePrReviewEnsemble(
     let symbolRetrievalElapsedMs = 0
     let symbolQueryCount = 0
     let symbolInjected = false
-    if (
-      shouldRunSymbolRetrieval(
-        env.OPENCLAW_SYMBOL_RETRIEVAL,
-        router.specialists,
-        preflightCache.budgetRemaining(),
-      )
-    ) {
+    if (wantSymbolRetrieval) {
       const changedLines = buildChangedLines(diff)
       const symbols = extractChangedSymbols(astFilesByPath, changedLines)
       symbolQueryCount = symbols.length

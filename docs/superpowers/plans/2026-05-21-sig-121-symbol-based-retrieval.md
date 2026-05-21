@@ -141,16 +141,17 @@ describe("computeChunkOverlap", () => {
 })
 
 describe("shouldRunSymbolRetrieval", () => {
-  it("fires only when flag on, logic in lineup, and budget > 2", () => {
+  it("fires when flag on, logic in lineup, and budget > 1", () => {
     expect(shouldRunSymbolRetrieval("on", ["logic", "security"], 3)).toBe(true)
+    expect(shouldRunSymbolRetrieval("on", ["logic"], 2)).toBe(true)
   })
   it("skips when flag is not 'on'", () => {
     expect(shouldRunSymbolRetrieval("off", ["logic"], 3)).toBe(false)
     expect(shouldRunSymbolRetrieval(undefined, ["logic"], 3)).toBe(false)
   })
-  it("skips when logic not in lineup or budget too low", () => {
+  it("skips when logic not in lineup or budget too low (<=1, reserve synth)", () => {
     expect(shouldRunSymbolRetrieval("on", ["security"], 3)).toBe(false)
-    expect(shouldRunSymbolRetrieval("on", ["logic"], 2)).toBe(false)
+    expect(shouldRunSymbolRetrieval("on", ["logic"], 1)).toBe(false)
   })
 })
 
@@ -322,9 +323,9 @@ export function computeChunkOverlap(
 /**
  * Gate: run symbol retrieval only when the env flag is "on", the logic
  * specialist is in the lineup, and the retrieve budget leaves room for
- * preflight + symbol + the synth conflict-verification reserve
- * (`budgetRemaining > 2` ⇒ maxCalls >= 3 default). Mirrors
- * `shouldRunPerfRetrieval` plus the flag.
+ * this call + the synth reserve. Checked AFTER preflight (and perf) have
+ * consumed, so the threshold is `budgetRemaining > 1` (>= 2) — NOT perf's
+ * `> 2` (perf checks concurrently with preflight, before it consumes).
  */
 export function shouldRunSymbolRetrieval(
   flag: string | undefined,
@@ -333,7 +334,7 @@ export function shouldRunSymbolRetrieval(
 ): boolean {
   return (flag ?? "").trim().toLowerCase() === "on" &&
     specialists.includes("logic") &&
-    budgetRemaining > 2
+    budgetRemaining > 1
 }
 
 /**

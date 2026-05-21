@@ -12,6 +12,13 @@ import type { TestingSiblingMapping } from "./testing-evidence-pack"
 
 const CODE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const
 
+/**
+ * A line consisting only of structural close punctuation (and trivia). Used
+ * both to exclude such lines from the substantive count and to recover a
+ * parseable prefix when the added-line window closes a block opened above it.
+ */
+const STRUCTURAL_CLOSE_LINE = /^[)}\]( ;,]*$/
+
 export interface HelperCoverage {
   status: "all" | "partial" | "none"
   /** Distinct same-PR tested-helper source paths that contributed delegating lines. */
@@ -68,6 +75,27 @@ export interface HelperBinding {
 }
 
 /**
+ * Parse `code`, recovering from a single class of failure: trailing lines that
+ * are pure structural close-punctuation (e.g. a stray `}` closing a block whose
+ * opening lies above the analysed window). We strip those and reparse once.
+ * Genuinely corrupt input (error not from a danging closer) still yields a
+ * parse failure, so unrelated garbage is never silently accepted. Never throws.
+ */
+function parseResilient(code: string, ext: SourceExt): AstNode | null {
+  const first = parseSource(code, ext)
+  if (first.ok) return first.ast as AstNode
+  const lines = code.split("\n")
+  let trimmed = false
+  while (lines.length > 0 && STRUCTURAL_CLOSE_LINE.test(lines[lines.length - 1]!.trim())) {
+    lines.pop()
+    trimmed = true
+  }
+  if (!trimmed) return null
+  const second = parseSource(lines.join("\n"), ext)
+  return second.ok ? (second.ast as AstNode) : null
+}
+
+/**
  * Parse `code` and return bindings imported from same-PR TESTED helper
  * modules (skipping type-only imports). `testedHelpers` maps a tested
  * source path -> its sibling test path. Never throws — parse failure -> [].
@@ -78,11 +106,11 @@ export function extractTestedHelperBindings(
   ext: SourceExt,
   testedHelpers: ReadonlyMap<string, string>,
 ): HelperBinding[] {
-  const parsed = parseSource(code, ext)
-  if (!parsed.ok) return []
+  const ast = parseResilient(code, ext)
+  if (ast === null) return []
   const candidateSources = new Set(testedHelpers.keys())
   const out: HelperBinding[] = []
-  walkAst(parsed.ast as AstNode, {
+  walkAst(ast, {
     ImportDeclaration: (n) => {
       if (n?.importKind === "type") return
       const spec = typeof n?.source?.value === "string" ? n.source.value : ""
@@ -113,10 +141,90 @@ export function isSubstantiveAddedLine(text: string): boolean {
   const t = text.trim()
   if (t.length === 0) return false
   if (t.startsWith("//") || t.startsWith("/*") || t.startsWith("*")) return false
-  if (/^[)}\]( ;,]*$/.test(t)) return false
+  if (STRUCTURAL_CLOSE_LINE.test(t)) return false
   if (/^import\b/.test(t)) return false
   if (/^export\s+(type|interface)\b/.test(t)) return false
   if (/^(type|interface)\s/.test(t)) return false
   if (/^export\s*\{/.test(t)) return false
   return true
+}
+
+const KNOWN_EXTS: ReadonlySet<string> = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"])
+
+function extOf(path: string): SourceExt | null {
+  const dot = path.lastIndexOf(".")
+  if (dot < 0) return null
+  const e = path.slice(dot).toLowerCase()
+  return KNOWN_EXTS.has(e) ? (e as SourceExt) : null
+}
+
+/** Whole-token presence of `name` in `text`. */
+function referencesSymbol(text: string, name: string): boolean {
+  return new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(?:[^A-Za-z0-9_$]|$)`).test(text)
+}
+
+export interface DetectHelperCoverageArgs {
+  filesByPath: ReadonlyMap<string, string>
+  addedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>
+  siblingMappings: readonly TestingSiblingMapping[]
+  testContentByPath: Readonly<Record<string, string>>
+}
+
+/**
+ * Tri-state helper-coverage per `->NONE` source. `all` => every substantive
+ * added line delegates to a same-PR tested helper whose sibling test
+ * references the delegated symbol. Fail closed (-> `none`) on any missing
+ * input. Never throws.
+ */
+export function detectHelperCoverage(
+  args: DetectHelperCoverageArgs,
+): { coverageBySource: Record<string, HelperCoverage> } {
+  const testedHelpers = new Map<string, string>()
+  for (const m of args.siblingMappings) {
+    if (m.test !== null && m.test.length > 0) testedHelpers.set(m.source, m.test)
+  }
+  const noneSources = args.siblingMappings.filter((m) => m.test === null).map((m) => m.source)
+  const coverageBySource: Record<string, HelperCoverage> = {}
+  for (const source of noneSources) {
+    coverageBySource[source] = computeOne(source, testedHelpers, args)
+  }
+  return { coverageBySource }
+}
+
+function computeOne(
+  source: string,
+  testedHelpers: ReadonlyMap<string, string>,
+  args: DetectHelperCoverageArgs,
+): HelperCoverage {
+  const NONE: HelperCoverage = { status: "none", helpers: [] }
+  const content = args.filesByPath.get(source)
+  const ext = extOf(source)
+  const added = args.addedLineTextByPath.get(source)
+  if (typeof content !== "string" || ext === null || !added || added.size === 0) return NONE
+
+  const bindings = extractTestedHelperBindings(source, content, ext, testedHelpers)
+  if (bindings.length === 0) return NONE
+
+  let substantive = 0
+  let delegating = 0
+  const helpers = new Set<string>()
+  for (const [, text] of added) {
+    if (!isSubstantiveAddedLine(text)) continue
+    substantive += 1
+    let lineDelegates = false
+    for (const b of bindings) {
+      if (!referencesSymbol(text, b.local)) continue
+      const testBody = args.testContentByPath[b.helperTest]
+      if (typeof testBody === "string" && referencesSymbol(testBody, b.imported)) {
+        lineDelegates = true
+        helpers.add(b.helperSource)
+      }
+    }
+    if (lineDelegates) delegating += 1
+  }
+
+  if (substantive === 0) return NONE
+  if (delegating === substantive) return { status: "all", helpers: [...helpers].sort() }
+  if (delegating > 0) return { status: "partial", helpers: [...helpers].sort() }
+  return NONE
 }

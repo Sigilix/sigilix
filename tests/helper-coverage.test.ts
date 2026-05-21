@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest"
-import { extractTestedHelperBindings, isSubstantiveAddedLine, resolveImportToRepoPath } from "../src/lib/helper-coverage"
+import {
+  detectHelperCoverage,
+  extractTestedHelperBindings,
+  isSubstantiveAddedLine,
+  resolveImportToRepoPath,
+} from "../src/lib/helper-coverage"
+import type { TestingSiblingMapping } from "../src/lib/testing-evidence-pack"
 
 describe("resolveImportToRepoPath", () => {
   const tested = new Set(["src/lib/branch-retrieval.ts", "src/lib/foo.ts", "src/lib/widget/index.ts"])
@@ -62,5 +68,80 @@ describe("isSubstantiveAddedLine", () => {
     expect(isSubstantiveAddedLine("   }")).toBe(false)
     expect(isSubstantiveAddedLine("  })")).toBe(false)
     expect(isSubstantiveAddedLine(`export { foo } from "./y"`)).toBe(false)
+  })
+})
+
+const ORCH = "src/lib/ensemble.ts"
+const mappings: TestingSiblingMapping[] = [
+  { source: ORCH, test: null },
+  { source: "src/lib/branch-retrieval.ts", test: "tests/branch-retrieval.test.ts" },
+]
+const testContent = { "tests/branch-retrieval.test.ts": `it("mergeBranchAware", () => { mergeBranchAware([],[],new Set()) })` }
+
+function lineMap(lines: Record<number, string>): Map<string, Map<number, string>> {
+  const inner = new Map<number, string>()
+  for (const [k, v] of Object.entries(lines)) inner.set(Number(k), v)
+  return new Map([[ORCH, inner]])
+}
+
+describe("detectHelperCoverage", () => {
+  it("status=all when every substantive added line delegates to a tested helper exercised by its test", () => {
+    const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst merged = mergeBranchAware(a, b, paths)\n}`
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH, code]]),
+      addedLineTextByPath: lineMap({ 1: `import { mergeBranchAware } from "./branch-retrieval"`, 2: `const merged = mergeBranchAware(a, b, paths)`, 3: `}` }),
+      siblingMappings: mappings,
+      testContentByPath: testContent,
+    })
+    expect(out.coverageBySource[ORCH]).toEqual({ status: "all", helpers: ["src/lib/branch-retrieval.ts"] })
+  })
+  it("status=partial when only some substantive lines delegate", () => {
+    const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst merged = mergeBranchAware(a, b, p)\nif (x > threshold) doInlineThing(x)`
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH, code]]),
+      addedLineTextByPath: lineMap({ 1: `import { mergeBranchAware } from "./branch-retrieval"`, 2: `const merged = mergeBranchAware(a, b, p)`, 3: `if (x > threshold) doInlineThing(x)` }),
+      siblingMappings: mappings,
+      testContentByPath: testContent,
+    })
+    expect(out.coverageBySource[ORCH]?.status).toBe("partial")
+  })
+  it("status=none when no substantive line delegates (true positive preserved)", () => {
+    const code = `const y = computeInline(x)\nreturn y * 2`
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH, code]]),
+      addedLineTextByPath: lineMap({ 1: `const y = computeInline(x)`, 2: `return y * 2` }),
+      siblingMappings: mappings,
+      testContentByPath: testContent,
+    })
+    expect(out.coverageBySource[ORCH]?.status).toBe("none")
+  })
+  it("status=none (fail closed) when the helper test does NOT reference the delegated symbol", () => {
+    const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst m = mergeBranchAware(a, b, p)`
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH, code]]),
+      addedLineTextByPath: lineMap({ 1: `import { mergeBranchAware } from "./branch-retrieval"`, 2: `const m = mergeBranchAware(a, b, p)` }),
+      siblingMappings: mappings,
+      testContentByPath: { "tests/branch-retrieval.test.ts": `it("something else", () => {})` },
+    })
+    expect(out.coverageBySource[ORCH]?.status).toBe("none")
+  })
+  it("status=none (fail closed) when the source has no added-line text available", () => {
+    const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst m = mergeBranchAware(a, b, p)`
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH, code]]),
+      addedLineTextByPath: new Map(),
+      siblingMappings: mappings,
+      testContentByPath: testContent,
+    })
+    expect(out.coverageBySource[ORCH]?.status).toBe("none")
+  })
+  it("only considers ->NONE sources (covered sources are skipped)", () => {
+    const out = detectHelperCoverage({
+      filesByPath: new Map([["src/lib/branch-retrieval.ts", "export const x = 1"]]),
+      addedLineTextByPath: lineMap({}),
+      siblingMappings: mappings,
+      testContentByPath: testContent,
+    })
+    expect(out.coverageBySource["src/lib/branch-retrieval.ts"]).toBeUndefined()
   })
 })

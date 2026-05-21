@@ -1281,11 +1281,23 @@ export async function handlePrReviewEnsemble(
     // other roles. NOTE: this is the one intentional exception to the
     // "all specialists see the same retrieval snapshot" invariant — only
     // the performance role gets a perf-biased view.
+    // (On the orchCtrl-abort path the preflight `await` above re-throws
+    // before we reach here, so `perfRetrievalPromise` is intentionally
+    // abandoned — it carries `.catch(() => null)` and shares
+    // orchCtrl.signal, so it aborts cleanly with no unhandled rejection.)
     let perfRetrievalSnapshot = retrievalSnapshot
     if (perfRetrievalPromise) {
       const perfChunks = await perfRetrievalPromise
       const formattedPerf = perfChunks ? formatChunksForPrompt(perfChunks) ?? "" : ""
-      if (formattedPerf.length > 0) perfRetrievalSnapshot = formattedPerf
+      const perfRetrievalUsed = formattedPerf.length > 0
+      if (perfRetrievalUsed) perfRetrievalSnapshot = formattedPerf
+      // Bake-off signal: did the perf-biased snapshot actually differ
+      // from the shared one, or did we fall back? (SIG-110 → SIG-86.)
+      console.log(JSON.stringify({
+        event: "pr-review-perf-retrieval",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        used: perfRetrievalUsed,
+      }))
     }
 
     // ─── ARC-186: dependency-vulnerability scan ────────────────

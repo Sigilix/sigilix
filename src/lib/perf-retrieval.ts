@@ -46,6 +46,8 @@ const CONTROL_FLOW_STOPWORDS: ReadonlySet<string> = new Set([
   "if", "for", "while", "switch", "catch", "return", "function", "await",
   "const", "let", "var", "else", "do", "with", "throw", "typeof", "new",
   "yield", "case", "void", "delete", "in", "of", "instanceof",
+  // not control-flow, but `constructor(...) {` is method-shaped noise.
+  "constructor",
 ])
 
 // A function-name capture is keyed off the leading group of each regex.

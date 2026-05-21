@@ -580,6 +580,21 @@ interface BuildReviewArgs {
    * back to the snippet tier.
    */
   reviewable?: ReviewableMap
+  /**
+   * SIG-127: per-file map of new-side line number → added-line TEXT
+   * (from `buildAddedLineTextByLine`). When supplied, a finding whose
+   * anchored added line is NON-substantive (a bare `}`, blank line,
+   * structural punctuation) is routed to the review summary BODY (via
+   * the `unanchored` rendering path) instead of an inline comment that
+   * would land "on an empty line."
+   *
+   * Back-compat: when omitted, EVERY finding is treated as substantive
+   * and anchored inline exactly as before — zero behavior change. A
+   * finding whose `(path, line)` isn't present in the map is also
+   * treated as substantive (we only move findings we can positively
+   * classify as non-substantive).
+   */
+  addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
 }
 
 /**
@@ -613,22 +628,69 @@ export function buildReviewSubmission({
   reviewCounter,
   retriggerUrl,
   reviewable,
+  addedLineTextByLine,
 }: BuildReviewArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize every prose field for GitHub
   // rendering BEFORE downstream renderers see the verdict. Wraps
   // un-backticked HTML/JSX tags in backticks so an unclosed `<kbd>`
   // can't open a real DOM element that breaks paragraph rendering.
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
-  const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
+  const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
   // Event derivation merges anchored + unanchored so a verdict whose
   // only blocking findings happen to be unanchored doesn't post APPROVE
-  // (CR + Sigilix PR #38 catch).
-  const event = chooseReviewEvent([...verdict.findings, ...unanchored])
+  // (CR + Sigilix PR #38 catch). Computed from the FULL sanitized set
+  // BEFORE the SIG-127 verdict-rebuild below so the event/posture is
+  // unchanged regardless of where each finding ends up rendering.
+  const event = chooseReviewEvent([...verdict.findings, ...sanitizedUnanchored])
+
+  // SIG-127: partition the anchored findings into those whose anchored
+  // added line is substantive (stay inline) vs. non-substantive (route
+  // to the body via the `unanchored` rendering path). The original
+  // index is carried so `findingMarkers?.[originalIndex]` stays aligned
+  // even after filtering. When `addedLineTextByLine` is undefined every
+  // finding is substantive — zero behavior change (back-compat).
+  const inlineFindings: PrReviewFinding[] = []
+  const inlineOriginalIndex: number[] = []
+  const bodyFindings: PrReviewFinding[] = []
+  verdict.findings.forEach((f, i) => {
+    const lineText = addedLineTextByLine?.get(f.path)?.get(f.line)
+    // SIG-127: a finding carrying a localized `suggestedReplacement`
+    // stays inline regardless of its anchor line — the body renderer
+    // (`renderFindingsByFile`) only prints headline + body, so routing
+    // it would silently drop the proposed fix (Codex review catch).
+    // Such a finding is anchored to real editable code anyway (the
+    // committable ```suggestion needs a contiguous reviewable range).
+    const hasSuggestion =
+      typeof f.suggestedReplacement === "string" && f.suggestedReplacement.trim().length > 0
+    // Non-substantive ONLY when the map IS provided AND the line is
+    // present in it AND its text is non-substantive. If the map is
+    // absent, or the line isn't in it (`lineText === undefined`), treat
+    // as substantive — we only move findings we can positively classify
+    // (the line was a real added `+` line whose content is structural).
+    const isNonSubstantive =
+      !hasSuggestion &&
+      addedLineTextByLine !== undefined &&
+      lineText !== undefined &&
+      !isSubstantiveAnchorLine(lineText)
+    if (isNonSubstantive) {
+      bodyFindings.push(f)
+    } else {
+      inlineFindings.push(f)
+      inlineOriginalIndex.push(i)
+    }
+  })
+  // Rebuild the verdict so the moved findings are NOT also rendered as
+  // anchored, and fold them into `unanchored` so they render in the
+  // body. Avoids the double-render. When nothing moved, `unanchored`
+  // is the original sanitized set and `verdict.findings` is unchanged.
+  const renderVerdict: PrReviewVerdict = { ...verdict, findings: inlineFindings }
+  const unanchored: PrReviewFinding[] = [...sanitizedUnanchored, ...bodyFindings]
+
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
   // ARC-281: dispatch directly to the new renderers instead of
   // routing through the legacy `formatReviewBody`. Posture is set by
   // `chooseReviewEvent` above.
-  const renderArgs: RenderBodyArgs = { verdict, unanchored, prov }
+  const renderArgs: RenderBodyArgs = { verdict: renderVerdict, unanchored, prov }
   if (stack !== undefined) renderArgs.stack = stack
   if (coverage) renderArgs.coverage = coverage
   if (delta !== undefined) renderArgs.delta = delta
@@ -640,13 +702,18 @@ export function buildReviewSubmission({
   const body = event === "APPROVE"
     ? renderApproveBody(renderArgs)
     : renderRequestChangesBody(renderArgs)
-  const comments: SubmitReviewComment[] = verdict.findings.map((f, i) => {
+  const comments: SubmitReviewComment[] = inlineFindings.map((f, i) => {
     // ARC-189: append per-finding sigilix marker on its own line so
     // the cross-PR review-memory capture pipeline can correlate
     // future reply dismissals back to this finding's category + tier.
     // Marker is hidden HTML — invisible in rendered Markdown but
     // visible to the marker extractor. Sparse: nullish entries skip.
-    const marker = findingMarkers?.[i]
+    //
+    // SIG-127: `findingMarkers` is indexed by the ORIGINAL
+    // `verdict.findings` index, so look it up via the carried original
+    // index — NOT the filtered array's index, which would shift after
+    // any body-routed finding.
+    const marker = findingMarkers?.[inlineOriginalIndex[i] ?? i]
     // SIG-101: resolve per-finding confidence (verdict-level fallback)
     // and pass to the formatter so the inline comment carries the
     // P0/P1/P2 badge + `confidence: N/5` suffix.
@@ -1271,6 +1338,26 @@ export function fenceForContent(content: string): string {
 // `suggestedReplacement` is eligible to render as a committable
 // ```suggestion (still gated on clean anchorability).
 const HIGH_CONFIDENCE_FLOOR = 4
+
+/**
+ * SIG-127: classify a finding's anchored added-line TEXT as substantive
+ * code or a structural line. File/block-level findings (e.g. "lacks
+ * integration tests") often get anchored by the model to a structural
+ * line — a bare `}`, a blank line — and then render as an inline
+ * comment "on an empty line." Such findings are routed to the review
+ * summary body instead (see `buildReviewSubmission`).
+ *
+ * Non-substantive when `text` is undefined, empty/whitespace-only, or
+ * consists ONLY of structural punctuation/whitespace
+ * (`{ } ( ) [ ] ; ,` and whitespace). Substantive otherwise.
+ *
+ * Pure — exported for tests.
+ */
+export function isSubstantiveAnchorLine(text: string | undefined): boolean {
+  if (text === undefined) return false
+  if (text.trim() === "") return false
+  return !/^[\s{}()[\];,]*$/.test(text)
+}
 
 /**
  * Inline finding comment, greptile-style. The category leads as

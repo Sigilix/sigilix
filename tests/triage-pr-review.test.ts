@@ -8,6 +8,7 @@ import {
   chooseReviewEvent,
   filterToSigilixAuthored,
   formatFindingComment,
+  isSubstantiveAnchorLine,
   parsePrReviewResponse,
   renderFixPlan,
   renderRequestChangesBody,
@@ -492,6 +493,207 @@ describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", (
     expect(out.comments?.[0]?.body).toMatch(
       /[^\n]\n\n<!-- sigilix:fid:1111111111111111:cat:logic:sev:error:path:111111111111 -->$/,
     )
+  })
+})
+
+describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () => {
+  const codeFinding: PrReviewFinding = {
+    path: "src/lib/foo.ts",
+    line: 42,
+    score: 4,
+    headline: "off-by-one in clampIndex",
+    body: "Use `<=` instead of `<`.",
+  }
+  const blockFinding: PrReviewFinding = {
+    path: "src/lib/foo.ts",
+    line: 1370,
+    score: 3,
+    headline: "lacks integration tests for the queue consumer",
+    body: "Add an end-to-end test exercising the consumer.",
+  }
+
+  const verdict: PrReviewVerdict = {
+    summary: "One real finding, one block-level finding.",
+    confidence: 4,
+    confidenceReason: "Mixed.",
+    findings: [codeFinding, blockFinding],
+  }
+
+  // Map says line 42 is real code, line 1370 is a bare `}`.
+  const addedLineTextByLine = new Map<string, Map<number, string>>([
+    [
+      "src/lib/foo.ts",
+      new Map<number, string>([
+        [42, "  const idx = clampIndex(i)"],
+        [1370, "}"],
+      ]),
+    ],
+  ])
+
+  it("routes a finding anchored to a `}` into the body, not the inline comments", () => {
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    // The non-substantive finding is NOT an inline comment.
+    const inlinePaths = (out.comments ?? []).map((c) => c.body)
+    expect(inlinePaths.some((b) => b.includes("lacks integration tests"))).toBe(false)
+    // It appears in the body instead.
+    expect(out.body).toContain("lacks integration tests for the queue consumer")
+  })
+
+  it("keeps a finding anchored to real code as an inline comment", () => {
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(42)
+    expect(out.comments?.[0]?.body).toContain("off-by-one in clampIndex")
+  })
+
+  it("back-compat: no addedLineTextByLine arg → all findings inline exactly as before", () => {
+    const withMap = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+    })
+    expect(withMap.comments).toHaveLength(2)
+    expect(withMap.comments?.map((c) => c.line).sort((a, b) => a - b)).toEqual([42, 1370])
+    // Neither block finding is double-rendered into the body.
+    expect(withMap.body).not.toContain("Additional findings (could not anchor to diff)")
+  })
+
+  it("does not double-render a routed finding (only in body, not inline)", () => {
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    const inlineCount = (out.comments ?? []).filter((c) =>
+      c.body.includes("lacks integration tests"),
+    ).length
+    expect(inlineCount).toBe(0)
+    const bodyOccurrences = (out.body ?? "").split("lacks integration tests").length - 1
+    expect(bodyOccurrences).toBe(1)
+  })
+
+  it("marker alignment: substantive finding carries ITS marker after a non-substantive one is filtered out", () => {
+    // findings[0] = blockFinding (non-substantive → moved to body),
+    // findings[1] = codeFinding (substantive → stays inline). The
+    // inline comment for codeFinding must carry markers[1], not markers[0].
+    const mixedVerdict: PrReviewVerdict = {
+      summary: "block then code.",
+      confidence: 4,
+      confidenceReason: "Mixed.",
+      findings: [blockFinding, codeFinding],
+    }
+    const markerForBlock = "<!-- sigilix:fid:aaaaaaaaaaaaaaaa:cat:testing:sev:warn:path:aaaaaaaaaaaa -->"
+    const markerForCode = "<!-- sigilix:fid:bbbbbbbbbbbbbbbb:cat:logic:sev:error:path:bbbbbbbbbbbb -->"
+    const out = buildReviewSubmission({
+      verdict: mixedVerdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      findingMarkers: [markerForBlock, markerForCode],
+      addedLineTextByLine,
+    })
+    expect(out.comments).toHaveLength(1)
+    const body = out.comments?.[0]?.body ?? ""
+    expect(body).toContain("off-by-one in clampIndex")
+    expect(body).toContain(markerForCode)
+    expect(body).not.toContain(markerForBlock)
+  })
+
+  it("keeps the review event REQUEST_CHANGES even when all findings route to the body", () => {
+    const allBlock: PrReviewVerdict = {
+      summary: "only block-level findings.",
+      confidence: 4,
+      confidenceReason: "Block.",
+      findings: [{ ...blockFinding }],
+    }
+    const out = buildReviewSubmission({
+      verdict: allBlock,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("lacks integration tests")
+  })
+
+  it("keeps a suggestion-bearing finding inline even when anchored to a `}` (preserves the fix)", () => {
+    const fixFinding: PrReviewFinding = {
+      path: "src/lib/foo.ts",
+      line: 1370,
+      startLine: 1368,
+      score: 4,
+      headline: "close the missing guard",
+      body: "Add the early return.",
+      suggestedReplacement: "  if (!ok) return\n}",
+    }
+    const v: PrReviewVerdict = {
+      summary: "One range fix ending on a brace.",
+      confidence: 5,
+      confidenceReason: "Localized.",
+      findings: [fixFinding],
+    }
+    const out = buildReviewSubmission({
+      verdict: v,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    // Stays inline so the suggestion block is not dropped.
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.body).toContain("close the missing guard")
+    expect(out.comments?.[0]?.body).toContain("if (!ok) return")
+  })
+
+  it("treats a finding whose line is absent from the map as substantive (inline)", () => {
+    const emptyMap = new Map<string, Map<number, string>>()
+    const out = buildReviewSubmission({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine: emptyMap,
+    })
+    // Map provided but neither line present → both stay inline.
+    expect(out.comments).toHaveLength(2)
+  })
+})
+
+describe("isSubstantiveAnchorLine (SIG-127)", () => {
+  it("treats a bare closing brace as non-substantive", () => {
+    expect(isSubstantiveAnchorLine("}")).toBe(false)
+  })
+
+  it("treats a brace with surrounding whitespace as non-substantive", () => {
+    expect(isSubstantiveAnchorLine("  } ")).toBe(false)
+  })
+
+  it("treats empty string as non-substantive", () => {
+    expect(isSubstantiveAnchorLine("")).toBe(false)
+  })
+
+  it("treats undefined (line not in map / no map) as non-substantive", () => {
+    expect(isSubstantiveAnchorLine(undefined)).toBe(false)
+  })
+
+  it("treats structural-punctuation-only lines as non-substantive", () => {
+    expect(isSubstantiveAnchorLine("});")).toBe(false)
+    expect(isSubstantiveAnchorLine("  ),")).toBe(false)
+    expect(isSubstantiveAnchorLine("[")).toBe(false)
+  })
+
+  it("treats real code as substantive", () => {
+    expect(isSubstantiveAnchorLine("const x = 1")).toBe(true)
+    expect(isSubstantiveAnchorLine("  return batch(ids)")).toBe(true)
   })
 })
 

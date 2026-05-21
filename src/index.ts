@@ -290,6 +290,13 @@ export interface Env {
   // `wrangler secret put OPENCLAW_PERF_VALIDATOR_MODE enforce`.
   OPENCLAW_PERF_VALIDATOR_MODE?: string
 
+  // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
+  // specialist. "on" fires a second, AST-symbol-derived retrieval pass
+  // that AUGMENTS the logic role's shared snapshot; any other value
+  // (including unset) keeps it off so the feature ships dark. Operator
+  // flips via `wrangler secret put OPENCLAW_SYMBOL_RETRIEVAL on`.
+  OPENCLAW_SYMBOL_RETRIEVAL?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

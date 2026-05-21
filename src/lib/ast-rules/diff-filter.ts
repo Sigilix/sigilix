@@ -107,6 +107,92 @@ export function buildChangedLines(diff: string): ChangedLines {
 }
 
 /**
+ * SIG-127: per-file map of new-side `+`-line NUMBER → the line's TEXT
+ * (the content WITHOUT the leading `+`). Same diff-walk geometry as
+ * `buildChangedLines` — only the per-`+`-line payload differs (text
+ * instead of membership). Used by `buildReviewSubmission` to decide
+ * whether a finding's anchored added line is substantive code or a
+ * structural line (a bare `}`, blank line, etc.) that should route to
+ * the review summary body instead of an inline comment.
+ */
+export function buildAddedLineTextByLine(diff: string): Map<string, Map<number, string>> {
+  const out = new Map<string, Map<number, string>>()
+  if (!diff || typeof diff !== "string") return out
+
+  const lines = diff.split("\n")
+  let currentPath: string | null = null
+  let newLine = 0
+  let inHunk = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i] ?? ""
+
+    if (raw.startsWith("diff --git ")) {
+      currentPath = null
+      inHunk = false
+      continue
+    }
+
+    if (raw.startsWith("+++ ")) {
+      const newPath = raw.slice(4).trim()
+      if (newPath === "/dev/null") {
+        // File deleted — no new-side lines.
+        currentPath = null
+      } else {
+        currentPath = newPath.startsWith("b/") ? newPath.slice(2) : newPath
+        if (!out.has(currentPath)) out.set(currentPath, new Map())
+      }
+      inHunk = false
+      continue
+    }
+
+    if (raw.startsWith("--- ")) {
+      // Old-side path; ignored — the `+++` line is authoritative.
+      inHunk = false
+      continue
+    }
+
+    // Hunk header: @@ -oldStart,oldCount +newStart,newCount @@
+    const hunk = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(raw)
+    if (hunk) {
+      newLine = Number(hunk[1])
+      inHunk = true
+      continue
+    }
+
+    if (!inHunk || currentPath === null) continue
+
+    // Leading-char check matches `buildChangedLines` — inside a hunk the
+    // `+++`/`---` header branches already cleared `inHunk`, so a single
+    // leading `+` is unambiguously an added content line.
+    if (raw[0] === "+") {
+      const map = out.get(currentPath)
+      // Strip ONLY the leading diff marker (`+`); the rest is verbatim
+      // line content (preserves indentation so callers can classify a
+      // `  }` line as structural).
+      if (map) map.set(newLine, raw.slice(1))
+      newLine++
+      continue
+    }
+    if (raw[0] === "-") {
+      // Old-side line — does not advance the new-side counter.
+      continue
+    }
+    if (raw.startsWith(" ")) {
+      // Context line — advances the new-side counter, not captured.
+      newLine++
+      continue
+    }
+    if (raw.startsWith("\\")) {
+      // "\ No newline at end of file" marker; skip.
+      continue
+    }
+    // Other line shapes (binary marker, etc.): ignore.
+  }
+  return out
+}
+
+/**
  * Returns true when `[startLine, endLine]` (inclusive, 1-based)
  * intersects the changed-lines set for the given path.
  */

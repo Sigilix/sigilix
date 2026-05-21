@@ -45,6 +45,14 @@ import {
   resolvePerfSnapshot,
   selectRetrievalSnapshotForRole,
 } from "./perf-retrieval"
+import {
+  extractChangedSymbols,
+  buildSymbolRetrievalQuery,
+  computeChunkOverlap,
+  shouldRunSymbolRetrieval,
+  mergeLogicSnapshot,
+} from "./symbol-retrieval"
+import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -1336,8 +1344,20 @@ export async function handlePrReviewEnsemble(
     // Pre-LLM AST scan over pathFiltered JS/TS files.
     const astRulesConfig = resolveAstRulesConfig(sigilixConfig)
     const jsTsPaths = filePaths.filter((p) => /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i.test(p))
+    // SIG-121: decide symbol retrieval up front — it also needs JS/TS sources
+    // for AST symbol extraction, so the fetch below must run when EITHER AST
+    // rules or symbol retrieval may run. Otherwise disabling `astRules` in
+    // sigilix.json would silently starve symbol retrieval even with
+    // OPENCLAW_SYMBOL_RETRIEVAL=on. Budget is read here, before the fetch; no
+    // retrieval consumes between here and the block below, so the value is
+    // identical to reading it at the block.
+    const wantSymbolRetrieval = shouldRunSymbolRetrieval(
+      env.OPENCLAW_SYMBOL_RETRIEVAL,
+      router.specialists,
+      preflightCache.budgetRemaining(),
+    )
     const astFilesByPath = new Map<string, string>()
-    if (astRulesConfig.enabled && jsTsPaths.length > 0) {
+    if ((astRulesConfig.enabled || wantSymbolRetrieval) && jsTsPaths.length > 0) {
       const fetchResults = await Promise.allSettled(
         jsTsPaths.map(async (p) => {
           const src = await client.getFileContent(owner, repo, p, headSha)
@@ -1350,6 +1370,78 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+
+    // SIG-121: symbol-based retrieval for the LOGIC specialist (flag-gated,
+    // best-effort). Fires HERE — after astFilesByPath is built (it needs the
+    // file SOURCES for AST symbol extraction) and before the specialist
+    // fanout. Unlike SIG-110's perf retrieval (concurrent with preflight),
+    // this can't run at preflight time because the sources don't exist yet.
+    // Budget-aware, ≤15s cap, non-fatal (empty snapshot on failure; rethrow
+    // only on orchCtrl abort). AUGMENTS — never replaces — the logic role's
+    // shared snapshot via mergeLogicSnapshot below.
+    //
+    // BUDGET NOTE: the gate (shouldRunSymbolRetrieval) requires
+    // budgetRemaining() > 1 — checked HERE, after preflight (and perf, if
+    // any) have already consumed. At the default maxCalls=3: a logic-only PR
+    // leaves budgetRemaining()=2 → symbol fires (1 reserved for synth); a PR
+    // that ALSO ran a perf pass leaves 1 → symbol defers (perf + symbol are
+    // mutually exclusive at the default budget). Raise
+    // OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR (≥4) to run both — relevant
+    // when enabling this flag for the SIG-86 bake-off.
+    let logicSymbolSnapshot = ""
+    let symbolOverlap: ReturnType<typeof computeChunkOverlap> | null = null
+    let symbolRetrievalElapsedMs = 0
+    let symbolQueryCount = 0
+    let symbolInjected = false
+    if (wantSymbolRetrieval) {
+      const changedLines = buildChangedLines(diff)
+      const symbols = extractChangedSymbols(astFilesByPath, changedLines)
+      symbolQueryCount = symbols.length
+      const symbolQuery = buildSymbolRetrievalQuery(symbols)
+      if (symbolQuery.length > 0) {
+        const startMs = Date.now()
+        let symbolChunks: RetrievedChunk[] | null = null
+        try {
+          const r = await withComposedTimeout(
+            () =>
+              preflightCache.cachedRetrieve({
+                caller: "specialist:logic-symbol",
+                query: symbolQuery,
+                namespace,
+                fetcher: () => retrieveChunks({ text: symbolQuery, teamKey: namespace, env }),
+              }),
+            RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+            orchCtrl.signal,
+          )
+          symbolChunks = r.chunks
+        } catch (err) {
+          if (orchCtrl.signal.aborted) throw err
+          symbolChunks = null
+        }
+        symbolRetrievalElapsedMs = Date.now() - startMs
+        const formatted = symbolChunks ? formatChunksForPrompt(symbolChunks) ?? "" : ""
+        if (formatted.length > 0) {
+          logicSymbolSnapshot = formatted
+          symbolInjected = true
+        }
+        symbolOverlap = computeChunkOverlap(preflightChunks ?? [], symbolChunks ?? [])
+      }
+      // Bake-off signal (SIG-121 → SIG-86): how different is the
+      // symbol-derived snapshot from the shared one?
+      console.log(JSON.stringify({
+        event: "pr-review-symbol-retrieval",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        query_symbol_count: symbolQueryCount,
+        injected: symbolInjected,
+        elapsed_ms: symbolRetrievalElapsedMs,
+        budget_remaining: preflightCache.budgetRemaining(),
+        shared_chunks: symbolOverlap?.sharedCount ?? 0,
+        symbol_chunks: symbolOverlap?.symbolCount ?? 0,
+        intersection: symbolOverlap?.intersectionCount ?? 0,
+        jaccard: symbolOverlap?.jaccard ?? 0,
+      }))
+    }
+
     const astResult = await runAstRules({
       diff,
       filesByPath: astFilesByPath,
@@ -1743,9 +1835,17 @@ export async function handlePrReviewEnsemble(
         title: meta.title,
         body: meta.body ?? "",
         diff,
-        // SIG-110: the performance role gets the perf-biased snapshot;
-        // every other role gets the shared preflight snapshot.
-        retrievalSnapshot: selectRetrievalSnapshotForRole(role, perfRetrievalSnapshot, retrievalSnapshot),
+        // SIG-110: the performance role gets the perf-biased snapshot.
+        // SIG-121: the logic role AUGMENTS the shared snapshot with the
+        // symbol-derived block (empty when the flag is off, in which case
+        // mergeLogicSnapshot returns the shared snapshot unchanged). Every
+        // other role gets the shared preflight snapshot.
+        retrievalSnapshot:
+          role === "performance"
+            ? selectRetrievalSnapshotForRole(role, perfRetrievalSnapshot, retrievalSnapshot)
+            : role === "logic"
+              ? mergeLogicSnapshot(retrievalSnapshot, logicSymbolSnapshot)
+              : retrievalSnapshot,
         namespace,
         ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
         ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
@@ -2834,6 +2934,11 @@ export async function handlePrReviewEnsemble(
       // `formatFindingComment` can render committable ```suggestion
       // blocks when a finding cleanly anchors (RIGHT + contiguous).
       reviewable,
+      // SIG-127: per-file new-side-line → text map so findings the
+      // model anchored to a non-substantive structural line (a bare
+      // `}`, blank line) route to the summary body instead of an
+      // inline comment "on an empty line."
+      addedLineTextByLine: buildAddedLineTextByLine(fullPrDiff),
     })
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE

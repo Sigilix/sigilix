@@ -138,6 +138,24 @@ function genericFalsePositive(match: string, contextLine: string, matchOffset: n
   // keys (which can contain `/`) won't have a file extension after
   // them, so this doesn't suppress legit credentials.
   if (looksLikeFilePath(match, contextLine, matchOffset)) return true
+  // SIG-126: identifier / path / hyphenated-prose shapes — kebab ids,
+  // lower paths, slash-joined prose, SCREAMING_SNAKE env-var names,
+  // snake_case — tripped the 40+-char generic rule as P0 "secrets".
+  //
+  // FALSE-NEGATIVE GUARD (code-reviewer CRITICAL): segments must be
+  // PURELY ALPHABETIC (no digits). Single-case-alone is NOT enough — real
+  // single-case secret families with no dedicated provider rule contain
+  // digits in their random part and would otherwise be silently
+  // suppressed: DigitalOcean PATs (`dop_v1_<64 lowercase hex>`), npm
+  // tokens, lowercase-bodied Slack tokens. Requiring every segment to be
+  // `[a-z]+` / `[A-Z]+` keeps the dictionary-word identifier/prose
+  // suppression while letting any digit-bearing token (i.e. every real
+  // secret body) fall through to the generic flag. The tradeoff: a kebab
+  // id with a numeric segment (`arc-292-model`) is no longer suppressed —
+  // acceptable, since erring toward FLAGGING is the safe direction here.
+  if (/^[a-z]+([-/][a-z]+)+$/.test(match)) return true   // kebab / lower path / slash-prose
+  if (/^[A-Z]+(_[A-Z]+)+$/.test(match)) return true       // SCREAMING_SNAKE
+  if (/^[a-z]+(_[a-z]+)+$/.test(match)) return true       // lower snake_case
   return false
 }
 

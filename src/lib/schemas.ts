@@ -155,6 +155,19 @@ export const PR_REVIEW_SCHEMA = {
           //                justification).
           cweId: { type: "string" },
           evidenceId: { type: "string" },
+          // SIG-110: per-finding performance-evidence fields, gated by
+          // `evaluatePerfFinding` downstream. OPTIONAL (same staged-
+          // rollout reasoning as the fields above) so specialists not yet
+          // on the new prompt still decode. Listed here so schema-
+          // constrained generation can EMIT them — the parser reads them
+          // (triage-pr-review.ts) but the constrained decode surface
+          // needs the keys or the model may omit/reject them.
+          //   complexityEstimate — complexity claim naming the changed
+          //                        loop/call + input-growth source.
+          //   hotPathIdentifier  — a concrete changed route/handler/export
+          //                        token the perf finding sits on.
+          complexityEstimate: { type: "string" },
+          hotPathIdentifier: { type: "string" },
         },
         required: ["path", "line", "score", "category", "headline", "body"],
       },

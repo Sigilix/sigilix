@@ -30,6 +30,7 @@
 
 import type { GitHubClient } from "./github"
 import type { SpecialistRole } from "./ensemble-router"
+import type { ResolvedPerfBudgets } from "./perf-budgets"
 import { parseDeterministicChecks, type DeterministicCheck } from "./deterministic-checks"
 import {
   DEFAULT_PRE_MERGE_GATES_CONFIG,
@@ -344,6 +345,42 @@ export interface SigilixConfig {
       enabled?: boolean
       severity?: "info" | "warning" | "error"
     }
+  }
+  /**
+   * SIG-110: per-repo performance budgets + hot-path declarations.
+   * Read at runtime and injected as a `performance`-scoped
+   * authoritative fact: when a PR touches a file matching any
+   * `hotPaths` glob, the performance specialist's prompt carries a
+   * "this PR modifies a declared hot path" block listing the touched
+   * files + the declared budgets (see `perf-budgets.ts`).
+   *
+   * `hotPaths` are PATH GLOBS (same `compileGlob` semantics as
+   * `pathFilters` / `docsReview.architectureGlobs`), NOT function
+   * names — the finding-level `hotPathIdentifier` (function + call
+   * frequency) stays the LLM specialist's job.
+   *
+   * All fields optional. When `hotPaths` is absent/empty the check is
+   * a no-op (opt-in; zero behavior change for repos without config).
+   * The latency / bundle budgets are pure context echoed into the
+   * fact block — Sigilix does NOT measure runtime here (live telemetry
+   * ingestion is out of scope per the ticket).
+   *
+   * Validation: bounds-checked numbers (out-of-range dropped silently,
+   * fail-open); `hotPaths` trimmed + deduped, empties dropped.
+   *
+   * Example:
+   *   "perfBudgets": {
+   *     "p50LatencyBudgetMs": 50,
+   *     "p95LatencyBudgetMs": 200,
+   *     "bundleSizeBudgetKb": 250,
+   *     "hotPaths": ["src/lib/api/<gs>", "src/worker.ts"]
+   *   }
+   */
+  perfBudgets?: {
+    p50LatencyBudgetMs?: number
+    p95LatencyBudgetMs?: number
+    bundleSizeBudgetKb?: number
+    hotPaths?: string[]
   }
 }
 
@@ -953,6 +990,38 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (Object.keys(gatesOut).length > 0) out.preMergeGates = gatesOut
   }
+  // SIG-110: perfBudgets parsing. Bounds-checked latency / bundle
+  // numbers (out-of-range dropped silently, fail-open); hotPaths
+  // trimmed + deduped with empties dropped (mirrors architectureGlobs).
+  if (obj.perfBudgets && typeof obj.perfBudgets === "object" && !Array.isArray(obj.perfBudgets)) {
+    const pbIn = obj.perfBudgets as Record<string, unknown>
+    const pbOut: NonNullable<SigilixConfig["perfBudgets"]> = {}
+    const readLatency = (v: unknown): number | undefined => {
+      if (typeof v !== "number" || !Number.isFinite(v)) return undefined
+      const n = Math.round(v)
+      return n >= LATENCY_BUDGET_MS_MIN && n <= LATENCY_BUDGET_MS_MAX ? n : undefined
+    }
+    const p50 = readLatency(pbIn.p50LatencyBudgetMs)
+    if (p50 !== undefined) pbOut.p50LatencyBudgetMs = p50
+    const p95 = readLatency(pbIn.p95LatencyBudgetMs)
+    if (p95 !== undefined) pbOut.p95LatencyBudgetMs = p95
+    if (typeof pbIn.bundleSizeBudgetKb === "number" && Number.isFinite(pbIn.bundleSizeBudgetKb)) {
+      const kb = Math.round(pbIn.bundleSizeBudgetKb)
+      if (kb >= BUNDLE_SIZE_KB_MIN && kb <= BUNDLE_SIZE_KB_MAX) {
+        pbOut.bundleSizeBudgetKb = kb
+      }
+    }
+    if (Array.isArray(pbIn.hotPaths)) {
+      const paths = [...new Set(
+        pbIn.hotPaths
+          .filter((v): v is string => typeof v === "string")
+          .map((v) => v.trim())
+          .filter((v) => v.length > 0),
+      )]
+      if (paths.length > 0) pbOut.hotPaths = paths
+    }
+    if (Object.keys(pbOut).length > 0) out.perfBudgets = pbOut
+  }
   return { ok: true, config: out }
 }
 
@@ -1001,6 +1070,13 @@ export function resolvePreMergeGatesConfig(
 const DEFAULT_MAX_PATCH_LENGTH = 80_000
 const MAX_PATCH_LENGTH_MIN = 1_000
 const MAX_PATCH_LENGTH_MAX = 200_000
+
+// SIG-110: perfBudgets numeric bounds. Latency in ms (1ms .. 10min);
+// bundle size in KB (1KB .. 1GB). Out-of-range values drop silently.
+const LATENCY_BUDGET_MS_MIN = 1
+const LATENCY_BUDGET_MS_MAX = 600_000
+const BUNDLE_SIZE_KB_MIN = 1
+const BUNDLE_SIZE_KB_MAX = 1_000_000
 
 export interface ResolvedCostControls {
   maxPatchLength: number
@@ -1091,6 +1167,31 @@ export function resolveDocsReviewConfig(
     enabled: dr?.enabled !== false,
     architectureGlobs: dr?.architectureGlobs ?? [],
     docPaths: dr?.docPaths ?? DEFAULT_DOCS_PATHS,
+  }
+}
+
+// ─── SIG-110: perf-budgets resolution ───────────────────────────────
+
+/**
+ * SIG-110: resolve the per-repo `perfBudgets` config into a fully-
+ * locked shape with defaults filled in. Pure; never throws.
+ *
+ * Locked defaults (opt-in — no-op until the operator declares
+ * `hotPaths`):
+ *   - p50LatencyBudgetMs: null
+ *   - p95LatencyBudgetMs: null
+ *   - bundleSizeBudgetKb: null
+ *   - hotPaths: []
+ */
+export function resolvePerfBudgetsConfig(
+  config: SigilixConfig | null,
+): ResolvedPerfBudgets {
+  const pb = config?.perfBudgets
+  return {
+    p50LatencyBudgetMs: pb?.p50LatencyBudgetMs ?? null,
+    p95LatencyBudgetMs: pb?.p95LatencyBudgetMs ?? null,
+    bundleSizeBudgetKb: pb?.bundleSizeBudgetKb ?? null,
+    hotPaths: pb?.hotPaths ?? [],
   }
 }
 

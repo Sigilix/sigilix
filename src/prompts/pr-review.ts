@@ -41,7 +41,17 @@
  * mechanism as v1→v2). Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
  * during rollout to avoid the stale-mark spike.
  */
-export const PROMPT_VERSION = "3"
+/**
+ * v3 → v4 (SIG-110): the performance specialist prompt gains a
+ * few-shot exemplar block + an evidence-emission instruction
+ * (`complexityEstimate` / `hotPathIdentifier` on score>=4 findings),
+ * the shared output schema documents those two optional fields, and the
+ * synth prompt now preserves them verbatim from `performance-*` source
+ * findings. Reviews with v3 prompt version go stale on first deploy of
+ * v4 (same mechanism as prior bumps). Use
+ * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
+ */
+export const PROMPT_VERSION = "4"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, anchor every finding to a specific line.
 

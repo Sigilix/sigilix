@@ -164,6 +164,10 @@ function extOf(path: string): SourceExt | null {
  * glue; a full lexer would be over-engineering).
  */
 function referencesSymbol(text: string, name: string): boolean {
+  // Defensive (CodeRabbit): `name` is interpolated into a RegExp. Today's
+  // callers pass acorn-parsed identifiers, but guard against regex injection
+  // if reused — a non-identifier can't be a real symbol reference anyway.
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) return false
   return new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(?:[^A-Za-z0-9_$]|$)`).test(text)
 }
 

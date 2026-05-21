@@ -1887,6 +1887,10 @@ export async function handlePrReviewEnsemble(
     // for added-line text — NOT the truncated/first-batch `diff` — and the
     // already-fetched changed JS/TS head content (`astFilesByPath`). A source
     // missing from either input fails closed to "none" (never suppresses).
+    // SIG-128 observability: when `astFilesByPath` is empty (e.g. all retrieval
+    // flags off so no head content was fetched), every source fails closed to
+    // "none" and this credits nothing — a future flag change must not silently
+    // disable this path.
     const helperCoverage = detectHelperCoverage({
       filesByPath: astFilesByPath,
       addedLineTextByPath: buildAddedLineTextByLine(fullDiff),

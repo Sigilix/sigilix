@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   detectHelperCoverage,
   extractTestedHelperBindings,
+  hasInlineControlFlow,
   isSubstantiveAddedLine,
   resolveImportToRepoPath,
 } from "../src/lib/helper-coverage"
@@ -68,6 +69,19 @@ describe("isSubstantiveAddedLine", () => {
     expect(isSubstantiveAddedLine("   }")).toBe(false)
     expect(isSubstantiveAddedLine("  })")).toBe(false)
     expect(isSubstantiveAddedLine(`export { foo } from "./y"`)).toBe(false)
+  })
+})
+
+describe("hasInlineControlFlow", () => {
+  it("returns true for inline control-flow / boolean logic", () => {
+    expect(hasInlineControlFlow("if (mergeBranchAware(a, b, p)) { go() }")).toBe(true)
+    expect(hasInlineControlFlow("const ok = a && b")).toBe(true)
+    expect(hasInlineControlFlow("const ok = x || y")).toBe(true)
+    expect(hasInlineControlFlow("for (const x of xs) go(x)")).toBe(true)
+  })
+  it("returns false for a pure delegating line", () => {
+    expect(hasInlineControlFlow("const m = mergeBranchAware(a, b, p)")).toBe(false)
+    expect(hasInlineControlFlow("return helper(x)")).toBe(false)
   })
 })
 
@@ -159,6 +173,27 @@ describe("detectHelperCoverage", () => {
       testContentByPath: { "tests/branch-retrieval.test.ts": `it("mergeBranchAware works", () => { mergeBranchAware([],[],new Set()) })` },
     })
     expect(out.coverageBySource[ORCH2]).toEqual({ status: "all", helpers: ["src/lib/branch-retrieval.ts"] })
+  })
+  it("does NOT credit a mixed line (helper call + inline branching) → not all (FN-safe)", () => {
+    const ORCH4 = "src/lib/ensemble.ts"
+    const mappings4 = [
+      { source: ORCH4, test: null },
+      { source: "src/lib/branch-retrieval.ts", test: "tests/branch-retrieval.test.ts" },
+    ]
+    const code = `import { mergeBranchAware } from "./branch-retrieval"\nif (mergeBranchAware(a, b, p) && inlineUntested(y)) { go() }`
+    const inner = new Map<number, string>([
+      [1, `import { mergeBranchAware } from "./branch-retrieval"`],
+      [2, `if (mergeBranchAware(a, b, p) && inlineUntested(y)) { go() }`],
+    ])
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH4, code]]),
+      addedLineTextByPath: new Map([[ORCH4, inner]]),
+      siblingMappings: mappings4,
+      testContentByPath: { "tests/branch-retrieval.test.ts": `it("mergeBranchAware", () => mergeBranchAware([],[],new Set()))` },
+    })
+    // The only substantive line mixes a helper call with inline branching →
+    // not delegated → not "all". (Here it's the sole substantive line → none.)
+    expect(out.coverageBySource[ORCH4]?.status).not.toBe("all")
   })
   it("dedupes and sorts the helpers array across multiple tested helpers", () => {
     const ORCH3 = "src/lib/ensemble.ts"

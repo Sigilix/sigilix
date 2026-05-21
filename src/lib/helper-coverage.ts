@@ -133,6 +133,19 @@ export function isSubstantiveAddedLine(text: string): boolean {
   return true
 }
 
+/**
+ * SIG-128 (Codex MEDIUM): a line that calls a tested helper but ALSO contains
+ * inline control-flow / boolean logic is NOT pure delegation — it carries
+ * untested logic of its own, so it must not count toward `all`. Conservative
+ * and FN-safe: when in doubt we DON'T credit (→ partial/none → finding kept).
+ * Markers: `if`/`for`/`while`/`switch` keywords, `&&`, `||`.
+ */
+export function hasInlineControlFlow(text: string): boolean {
+  if (/\b(if|for|while|switch)\b/.test(text)) return true
+  if (text.includes("&&") || text.includes("||")) return true
+  return false
+}
+
 const KNOWN_EXTS: ReadonlySet<string> = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"])
 
 function extOf(path: string): SourceExt | null {
@@ -202,6 +215,11 @@ function computeOne(
   for (const [, text] of added) {
     if (!isSubstantiveAddedLine(text)) continue
     substantive += 1
+    // SIG-128 (Codex MEDIUM): a substantive line that mixes a tested-helper
+    // call with inline control-flow/boolean logic is NOT pure delegation. It
+    // stays in the `substantive` denominator (forcing partial/none) but can
+    // never count as delegating. FN-safe: never moves a source up to `all`.
+    if (hasInlineControlFlow(text)) continue
     let lineDelegates = false
     for (const b of bindings) {
       if (!referencesSymbol(text, b.local)) continue

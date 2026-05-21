@@ -144,4 +144,50 @@ describe("detectHelperCoverage", () => {
     })
     expect(out.coverageBySource["src/lib/branch-retrieval.ts"]).toBeUndefined()
   })
+  it("status=all for an aliased import: line uses the alias, test references the imported name", () => {
+    const ORCH2 = "src/lib/ensemble.ts"
+    const mappings2 = [
+      { source: ORCH2, test: null },
+      { source: "src/lib/branch-retrieval.ts", test: "tests/branch-retrieval.test.ts" },
+    ]
+    const code = `import { mergeBranchAware as mba } from "./branch-retrieval"\nconst merged = mba(a, b, paths)`
+    const inner = new Map<number, string>([[1, `import { mergeBranchAware as mba } from "./branch-retrieval"`], [2, `const merged = mba(a, b, paths)`]])
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH2, code]]),
+      addedLineTextByPath: new Map([[ORCH2, inner]]),
+      siblingMappings: mappings2,
+      testContentByPath: { "tests/branch-retrieval.test.ts": `it("mergeBranchAware works", () => { mergeBranchAware([],[],new Set()) })` },
+    })
+    expect(out.coverageBySource[ORCH2]).toEqual({ status: "all", helpers: ["src/lib/branch-retrieval.ts"] })
+  })
+  it("dedupes and sorts the helpers array across multiple tested helpers", () => {
+    const ORCH3 = "src/lib/ensemble.ts"
+    const mappings3 = [
+      { source: ORCH3, test: null },
+      { source: "src/lib/zebra.ts", test: "tests/zebra.test.ts" },
+      { source: "src/lib/alpha.ts", test: "tests/alpha.test.ts" },
+    ]
+    const code = [
+      `import { zfn } from "./zebra"`,
+      `import { afn } from "./alpha"`,
+      `const a = zfn(x)`,
+      `const b = afn(y)`,
+      `const c = zfn(z)`,
+    ].join("\n")
+    const inner = new Map<number, string>([
+      [3, `const a = zfn(x)`],
+      [4, `const b = afn(y)`],
+      [5, `const c = zfn(z)`],
+    ])
+    const out = detectHelperCoverage({
+      filesByPath: new Map([[ORCH3, code]]),
+      addedLineTextByPath: new Map([[ORCH3, inner]]),
+      siblingMappings: mappings3,
+      testContentByPath: {
+        "tests/zebra.test.ts": `it("zfn", () => zfn())`,
+        "tests/alpha.test.ts": `it("afn", () => afn())`,
+      },
+    })
+    expect(out.coverageBySource[ORCH3]).toEqual({ status: "all", helpers: ["src/lib/alpha.ts", "src/lib/zebra.ts"] })
+  })
 })

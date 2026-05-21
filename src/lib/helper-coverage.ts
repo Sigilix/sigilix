@@ -15,6 +15,11 @@ const CODE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]
 /**
  * A line consisting only of structural close punctuation (and trivia). Used to
  * exclude such lines from the substantive count.
+ *
+ * Note: the character class also matches a lone opening `(`, so a
+ * punctuation-only line is treated as non-substantive; this can only shrink the
+ * `all` denominator (leniency-direction), never cause a real finding to be
+ * suppressed incorrectly.
  */
 const STRUCTURAL_CLOSE_LINE = /^[)}\]( ;,]*$/
 
@@ -137,7 +142,14 @@ function extOf(path: string): SourceExt | null {
   return KNOWN_EXTS.has(e) ? (e as SourceExt) : null
 }
 
-/** Whole-token presence of `name` in `text`. */
+/**
+ * Whole-token presence of `name` in `text`.
+ *
+ * Note: this does NOT distinguish code from comments/strings, so a symbol
+ * mentioned only in a comment in the helper's test body still counts as a
+ * reference — an accepted fail-open leniency (the module errs toward crediting
+ * glue; a full lexer would be over-engineering).
+ */
 function referencesSymbol(text: string, name: string): boolean {
   return new RegExp(`(?:^|[^A-Za-z0-9_$])${name}(?:[^A-Za-z0-9_$]|$)`).test(text)
 }

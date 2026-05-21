@@ -238,6 +238,15 @@ export interface PrReviewFinding {
    * `evaluatePerfFinding`.
    */
   hotPathIdentifier?: string
+  /**
+   * SIG-125: exact replacement lines for the finding's anchored range
+   * `[startLine ?? line, line]` when the fix is a contiguous edit. Raw
+   * code (no diff markers, no fence). Rendered by `formatFindingComment`
+   * as a committable ```suggestion block (high-confidence + anchorable)
+   * or a non-committable code snippet. Absent when no localized fix
+   * applies (testing / architecture / multi-hunk).
+   */
+  suggestedReplacement?: string
 }
 
 export interface PrReviewVerdict {
@@ -466,6 +475,12 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     }
     if (typeof finding.hotPathIdentifier === "string" && finding.hotPathIdentifier.trim().length > 0) {
       finalFinding.hotPathIdentifier = finding.hotPathIdentifier.trim()
+    }
+    // SIG-125: read suggestedReplacement. Trim only to test emptiness —
+    // the value is kept VERBATIM (indentation + trailing newline matter
+    // for the rendered suggestion block).
+    if (typeof finding.suggestedReplacement === "string" && finding.suggestedReplacement.trim().length > 0) {
+      finalFinding.suggestedReplacement = finding.suggestedReplacement
     }
     findings.push(finalFinding)
     if (findings.length >= 8) break

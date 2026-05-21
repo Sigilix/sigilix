@@ -168,6 +168,10 @@ export const PR_REVIEW_SCHEMA = {
           //                        token the perf finding sits on.
           complexityEstimate: { type: "string" },
           hotPathIdentifier: { type: "string" },
+          // SIG-125: optional contiguous-replacement code for the
+          // finding's anchored range. Listed so constrained decode can
+          // emit it; the parser + renderer validate/anchor it.
+          suggestedReplacement: { type: "string" },
         },
         required: ["path", "line", "score", "category", "headline", "body"],
       },

@@ -997,3 +997,27 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
     expect(body).not.toContain("Review #")
   })
 })
+
+describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
+  const base = {
+    summary: "s", confidence: 4, confidenceReason: "r",
+    findings: [{
+      path: "src/a.ts", line: 10, score: 4, category: "performance",
+      headline: "h", body: "b", suggestedReplacement: "  return getUsers(ids)\n",
+    }],
+  }
+  it("reads a non-empty suggestedReplacement (raw kept, incl. indentation/newline)", () => {
+    const v = parsePrReviewResponse(JSON.stringify(base))
+    expect(v?.findings[0]?.suggestedReplacement).toBe("  return getUsers(ids)\n")
+  })
+  it("drops an empty / whitespace-only suggestedReplacement", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: "   " }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+  it("ignores a non-string suggestedReplacement", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: 42 }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+})

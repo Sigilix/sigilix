@@ -107,9 +107,11 @@ branch chunks appended for new paths) rather than score-interleaving.
 
 Emit a `pr-review-branch-retrieval` event per review, shaped like
 SIG-121's `pr-review-symbol-retrieval` so the SIG-86 aggregator ingests it
-the same way: `branch_chunk_count`, `embed_elapsed_ms`, per-pass
-`injected` counts, `head_override_count` (paths where branch beat main),
-and `jaccard` overlap vs the main snapshot.
+the same way: `branch_chunk_count`, `embed_elapsed_ms`, and the per-pass
+`head_override_preflight` / `head_override_perf` / `head_override_symbol`
+counts (main chunks displaced by the changed-path tombstone in each pass).
+These per-pass override counts are the chosen branch-vs-main signal for
+this event; no `jaccard` field is emitted here.
 
 Flag-off ⇒ no fetch, no embed, no emission ⇒ **bake-off and dogwatch are
 undisturbed.**

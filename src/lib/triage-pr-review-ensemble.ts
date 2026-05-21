@@ -1449,8 +1449,10 @@ export async function handlePrReviewEnsemble(
     // Re-merge the SHARED preflight snapshot (seen by every specialist) and
     // the perf snapshot now that branchVectors exists. No-op when the set is
     // empty. The symbol pass merges itself in its own block below.
+    let sharedChunksForOverlap: RetrievedChunk[] = preflightChunks ?? []
     if (branchVectors.length > 0) {
       const preflightMerged = await branchAwareMerge(preflightChunks, preflightQuery, "preflight")
+      sharedChunksForOverlap = preflightMerged ?? []
       retrievalSnapshot = preflightMerged ? formatChunksForPrompt(preflightMerged) ?? "" : ""
 
       if (perfChunks) {
@@ -1515,7 +1517,7 @@ export async function handlePrReviewEnsemble(
           logicSymbolSnapshot = formatted
           symbolInjected = true
         }
-        symbolOverlap = computeChunkOverlap(preflightChunks ?? [], symbolChunks ?? [])
+        symbolOverlap = computeChunkOverlap(sharedChunksForOverlap, symbolChunks ?? [])
       }
       // Bake-off signal (SIG-121 → SIG-86): how different is the
       // symbol-derived snapshot from the shared one?

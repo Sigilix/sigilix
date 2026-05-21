@@ -420,7 +420,7 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         result.errors.push(`kv.delete(repo-index-active-run): ${message}`)
         console.error(JSON.stringify({
           event: "index-delete-kv-active-run-failed",
-          owner, repo, err: message,
+          owner, repo, key: activeRunKey(owner, repo), err: message,
         }))
       }
 

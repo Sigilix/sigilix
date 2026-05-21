@@ -180,6 +180,7 @@ describe("deleteRepoIndex — happy path", () => {
 
     expect(result.status).toBe("complete")
     expect(store.has(activeRunKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(result.errors).toEqual([])
   })
 
   it("batches deleteByIds at 1000 ids per call", async () => {

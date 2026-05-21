@@ -22,6 +22,7 @@
 import type { SpecialistRole } from "../lib/ensemble-router"
 import testsExamples from "./tests-examples.json"
 import logicExamples from "./logic-examples.json"
+import perfExamples from "./perf-examples.json"
 
 /**
  * SIG-111: render the tests-specialist few-shot exemplars
@@ -74,6 +75,35 @@ function renderLogicExamplesBlock(): string {
 }
 
 const LOGIC_EXAMPLES_BLOCK = renderLogicExamplesBlock()
+
+/**
+ * SIG-110: render the performance-specialist few-shot exemplars
+ * (`perf-examples.json`) into a compact prompt block. Wired into the
+ * PERFORMANCE role prompt ONLY (NOT `SHARED_OUTPUT_INSTRUCTIONS`) so the
+ * other specialists don't pay the token cost. Balanced good/bad
+ * examples — the GOOD set shows concretely-anchored load-bearing
+ * regressions that carry the score>=4 evidence fields
+ * (`complexityEstimate` / `hotPathIdentifier`) the SIG-110 validator
+ * requires; the BAD set is the FP shapes the validator drops
+ * (unanchored "this is slow", a budget-exceeded claim from no
+ * measurement, premature-optimization nits, style-as-perf,
+ * unchanged-path). Each line is an (EMIT|SKIP) + situation + why triple;
+ * full JSON findings are summarized to keep prompt size reasonable.
+ */
+function renderPerfExamplesBlock(): string {
+  const lines: string[] = [
+    "[PERFORMANCE FEW-SHOT EXEMPLARS — calibrate what to flag vs. skip; do NOT copy verbatim]",
+    "",
+  ]
+  for (const ex of perfExamples.examples) {
+    const verb = ex.emit ? "EMIT" : "SKIP"
+    lines.push(`- ${verb}: ${ex.situation}`)
+    lines.push(`  why: ${ex.why}`)
+  }
+  return lines.join("\n").trim()
+}
+
+const PERF_EXAMPLES_BLOCK = renderPerfExamplesBlock()
 
 /**
  * ARC-156 (Greptile port A2): negative-constraint specialist prompts.
@@ -133,7 +163,9 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED on category:"testing" findings that claim existing tests are INSUFFICIENT. List the EXACT test-file paths from the [TESTING EVIDENCE] block's "Inspected test files" list that you read. OMIT on non-testing findings.)
       "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"],   (SIG-113 — REQUIRED on category:"testing" findings that claim a source file is MISSING tests. Copy the EXACT mapping string from the [TESTING EVIDENCE] block's "Source→test mapping refs" list. OMIT on non-testing findings.)
       "cweId": "CWE-89",   (SIG-108 — REQUIRED on category:"security" findings with score>=4. The CWE id for the weakness. OMIT on non-security findings.)
-      "evidenceId": "secret:generic-api-key:ab12cd34ef56:42"   (SIG-108 — REQUIRED on category:"security" findings with score>=4. Copy a matching id VERBATIM from the [SECURITY EVIDENCE MANIFEST], OR set "NONE" for an access-control/IDOR finding no scanner can detect (then justify in the body). OMIT on non-security findings.)
+      "evidenceId": "secret:generic-api-key:ab12cd34ef56:42",   (SIG-108 — REQUIRED on category:"security" findings with score>=4. Copy a matching id VERBATIM from the [SECURITY EVIDENCE MANIFEST], OR set "NONE" for an access-control/IDOR finding no scanner can detect (then justify in the body). OMIT on non-security findings.)
+      "complexityEstimate": "O(n^2) over items x others",   (SIG-110 — on category:"performance" findings with score>=4, supply this and/or hotPathIdentifier. Names the changed loop/call + input-growth source (reference identifiers in backticks). OMIT on non-performance findings.)
+      "hotPathIdentifier": "handleRequest"   (SIG-110 — on category:"performance" findings with score>=4, supply this and/or complexityEstimate. A concrete CHANGED route/handler/function token (NOT a configured hot-path glob). OMIT on non-performance findings.)
     }
   ]
 }
@@ -260,6 +292,18 @@ When scoring:
 - 2: minor inefficiency (premature optimization opportunity)
 - 1: theoretical (rarely emit)
 
+**SIG-110 — ANCHOR EVERY HIGH-SEVERITY PERF FINDING.**
+
+Every \`category: "performance"\` finding you emit with \`score >= 4\` MUST carry at least ONE of:
+  - \`complexityEstimate\` — a complexity claim that NAMES the changed loop/call and the input-growth source, e.g. "O(n²) over \`items\` × \`others\`" or "O(n) sequential round-trips on \`ids\`". Free-text boilerplate ("O(n²) somewhere") anchors nothing.
+  - \`hotPathIdentifier\` — a concrete CHANGED route / handler / function / export token the finding sits on, e.g. "handleRequest" or "GET /api/orders". This must name real changed code (or a route/handler token), NOT a configured hot-path glob from the [PERF BUDGETS] block.
+
+The orchestrator runs an \`evaluatePerfFinding\` gate after synthesis: a sev>=4 perf finding that does NOT anchor to a changed line — no concrete token in backticks, no \`complexityEstimate\`/\`hotPathIdentifier\` naming changed code, and no co-located deterministic AST perf hit — is DROPPED before reaching the customer. Anchor your finding to the specific changed code, in backticks, and fill in these fields.
+
+If a [PERF BUDGETS] block is present, treat the declared latency/bundle numbers as repo POLICY TARGETS, not measurements — Sigilix has not measured this PR. Do NOT claim a budget is "exceeded"; use the targets only to judge whether the added code plausibly threatens them.
+
+${PERF_EXAMPLES_BLOCK}
+
 ${SHARED_OUTPUT_INSTRUCTIONS}`,
 
   tests: `${SHARED_NEGATIVE_CONSTRAINTS}
@@ -371,7 +415,9 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "cweId": "CWE-89",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "security" and the source set one. The evidence gate runs AFTER you, keyed on category; dropping this field gets a valid finding rejected. OMIT only when no kept source finding had one.)
         "evidenceId": "secret:...:42" | "NONE",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "security", including the literal "NONE". Do NOT invent, alter, or drop it. OMIT only when no kept source finding had one.)
         "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "testing" and the source set it. The citation gate runs AFTER you, keyed on category; dropping this gets a valid finding rejected. OMIT only when no kept source finding had it.)
-        "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"]   (SIG-113 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "testing" and the source set it. Do NOT invent, alter, or drop it. OMIT only when no kept source finding had it.)
+        "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"],   (SIG-113 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "testing" and the source set it. Do NOT invent, alter, or drop it. OMIT only when no kept source finding had it.)
+        "complexityEstimate": "O(n^2) over items x others",   (SIG-110 — REQUIRED: PRESERVE VERBATIM from any kept source finding that came from a performance-* specialist finding (check provenance.sourceFindingIds), ESPECIALLY at score>=4. The perf evidence gate runs AFTER you, keyed on performance provenance — even if you relabel the final category to "logic" or "complexity", dropping this field gets a valid finding rejected. OMIT only when no kept performance source finding had it.)
+        "hotPathIdentifier": "handleRequest"   (SIG-110 — REQUIRED: PRESERVE VERBATIM from any kept source finding that came from a performance-* specialist finding, ESPECIALLY at score>=4. Same gate caveat as complexityEstimate. OMIT only when no kept performance source finding had it.)
       }
     ]
   },

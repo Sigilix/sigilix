@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "_comment": "SIG-110: few-shot exemplars for the PERFORMANCE specialist ONLY. Wired into the perf role prompt via pr-review-specialists.ts (NOT the shared block). Balanced on purpose. The GOOD examples cover the shapes the perf lens should fire on: real load-bearing regressions (N+1 round-trips, blocking I/O on a request path, unbounded growth, accidental O(n^2)) that are CONCRETELY ANCHORED to a changed symbol on an added line, AND carry the score>=4 evidence fields (complexityEstimate and/or hotPathIdentifier) the SIG-110 validator (evaluatePerfFinding) requires. The BAD examples are the FP shapes the validator drops: a vague unanchored 'this is slow', a premature-optimization nit, taste dressed as perf, a regression anchored to a file the PR did not change, and — critically — a 'budget exceeded' claim asserted from NO measurement (Sigilix does not measure runtime; perfBudgets are policy targets, not data). Each example is a (situation, emit_or_not, why) triple — compact, not full JSON, to keep prompt size reasonable.",
+  "examples": [
+    {
+      "id": "good-n-plus-one-anchored",
+      "situation": "An added loop does `for (const id of ids) { const u = await getUser(id) }` where a `getUsers(ids)` batch fetch exists.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/orders.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "N+1 query: `getUser` is awaited once per id in the loop",
+        "body": "The loop issues one DB round-trip per `id` via `await getUser(id)`; on a list of N orders that's N sequential round-trips. Use the existing `getUsers(ids)` batch fetch.",
+        "complexityEstimate": "O(n) sequential round-trips on `ids`; O(1) round-trips with `getUsers`",
+        "hotPathIdentifier": "loadOrderOwners"
+      },
+      "why": "Real load regression, CONCRETELY ANCHORED: names `getUser`/`ids` on the added line, on a changed path, and carries a complexityEstimate + hotPathIdentifier that name changed code. The high-value core of the perf lens. KEEP."
+    },
+    {
+      "id": "good-blocking-io-on-request-path-anchored",
+      "situation": "A request handler gains `const cfg = readFileSync('./config.json')` on an added line inside the per-request code path.",
+      "emit": true,
+      "finding": {
+        "path": "src/worker.ts",
+        "category": "performance",
+        "score": 5,
+        "headline": "`readFileSync` blocks the event loop on every request",
+        "body": "`readFileSync('./config.json')` runs synchronously inside `handleRequest`, blocking the event loop on each call. Read it once at module init, or use the async API.",
+        "hotPathIdentifier": "handleRequest"
+      },
+      "why": "Production-down severity, anchored to the `readFileSync` token on a changed line in a named hot path. KEEP — and the hotPathIdentifier names real changed code, so the validator credits it."
+    },
+    {
+      "id": "good-quadratic-anchored",
+      "situation": "An added nested loop does `items.filter(x => others.some(y => y.id === x.id))` inside another `items.map`, scanning `others` for every pair.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/reconcile.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "O(n²) membership scan: `others.some` runs for every `items` element",
+        "body": "`others.some(y => y.id === x.id)` is re-scanned for each of `items`, so cost is O(items × others). Build a `Set` of `others` ids once, then look up in O(1).",
+        "complexityEstimate": "O(n·m) over `items` × `others`; O(n+m) with a Set index"
+      },
+      "why": "Concrete complexity regression with no deterministic backing, anchored to `others.some`/`items` on changed lines, with a complexityEstimate that names the changed collections. KEEP."
+    },
+    {
+      "id": "good-unbounded-growth-anchored",
+      "situation": "An added line pushes into a module-level `cache` array on every call with no eviction: `cache.push(entry)`.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/metrics.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "`cache` grows unbounded — `cache.push` with no eviction",
+        "body": "`cache.push(entry)` appends on every call to a module-level array that is never trimmed, so memory grows for the lifetime of the isolate. Bound it (LRU / max-size) or scope it per-request.",
+        "hotPathIdentifier": "recordMetric"
+      },
+      "why": "Unbounded-growth memory regression anchored to `cache.push` on a changed line, hotPathIdentifier names the changed function. KEEP."
+    },
+    {
+      "id": "good-retry-storm-anchored",
+      "situation": "An added retry wrapper loops `while (true) { try { return await call() } catch { continue } }` with no backoff and no cap.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/upstream.ts",
+        "category": "performance",
+        "score": 5,
+        "headline": "`while (true)` retry has no backoff or cap — retry storm under upstream failure",
+        "body": "On a persistently failing `call()` this spins with zero delay and no attempt cap, hammering the upstream and pinning CPU. Add a max-attempt cap and exponential backoff.",
+        "complexityEstimate": "unbounded attempts/sec while `call` fails"
+      },
+      "why": "Operational-under-load failure anchored to the `while (true)` / `call()` tokens on changed lines. KEEP."
+    },
+    {
+      "id": "bad-vague-this-is-slow",
+      "situation": "A diff refactors a parser; the finding says the change 'may hurt performance' without naming any loop, call, or symbol.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/parser.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "This change may hurt performance",
+        "body": "The new code path looks heavier and could slow things down under load; worth profiling."
+      },
+      "why": "No concrete token, no named call/loop, no complexityEstimate or hotPathIdentifier that names changed code. A vague unanchored sev>=4 perf claim — the SIG-110 validator drops it as unanchored-perf-claim. State the exact regression or drop it."
+    },
+    {
+      "id": "bad-budget-claim-no-measurement",
+      "situation": "The [PERF BUDGETS] block shows a declared p95 ≤ 200ms target for a touched hot path; the finding asserts the PR 'exceeds the p95 budget'.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/api/orders.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "This change exceeds the declared p95 latency budget",
+        "body": "The added code pushes p95 latency over the 200ms budget."
+      },
+      "why": "Sigilix has NOT measured this PR's latency — perfBudgets are policy TARGETS, not data. Asserting a budget is 'exceeded' from no measurement is a fabrication. Use the budget only to judge whether added code plausibly threatens it, and anchor any finding to the concrete slow code, not the number."
+    },
+    {
+      "id": "bad-premature-optimization-nit",
+      "situation": "An added line builds a 3-element array with `.map` in a cold one-time setup path; the finding says to hand-unroll it.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/setup.ts",
+        "category": "performance",
+        "score": 2,
+        "headline": "Replace `.map` with a manual loop for speed",
+        "body": "`.map` allocates an intermediate; a manual loop would be marginally faster."
+      },
+      "why": "Cold one-time path, three elements — the 'optimization' saves nothing measurable and adds noise. Premature optimization is not a finding; the perf lens fires on load-bearing regressions, not micro-allocations in setup code."
+    },
+    {
+      "id": "bad-unanchored-on-unchanged-code",
+      "situation": "The finding describes a real-sounding N+1 but anchors it to `src/lib/legacy.ts`, a file this PR does NOT change.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/legacy.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "N+1 query in `fetchAll`",
+        "body": "`fetchAll` issues one query per row."
+      },
+      "why": "Pre-existing code the PR didn't touch — no anchor on a changed path. The validator has no changed-path anchor here, so it drops it. Belongs on a separate ticket unless this PR made it worse."
+    },
+    {
+      "id": "bad-style-as-perf",
+      "situation": "An added line uses `for...of` over an array; the finding objects that a C-style indexed loop 'would be faster' on taste grounds.",
+      "emit": false,
+      "finding": {
+        "path": "src/lib/util.ts",
+        "category": "performance",
+        "score": 2,
+        "headline": "`for...of` is slower than an indexed `for`",
+        "body": "An indexed `for (let i...)` loop avoids the iterator protocol overhead."
+      },
+      "why": "Micro-taste disagreement with no measured impact on a load-bearing path. Loop-style is the author's call; this is style dressed as perf, not a regression. Drop it."
+    }
+  ]
+}

@@ -343,6 +343,26 @@ describe("splitOversizedWindow", () => {
 })
 
 describe("chunkId", () => {
+  it("SIG-133: byte-identical hard-split fragments get DISTINCT ids (no Vectorize collapse)", async () => {
+    // A 2800-char line of one repeating char hard-splits into two identical
+    // 1400-char slices (same path/lineStart/lineEnd/content). Without the
+    // fragmentIndex discriminator these would collide and Vectorize would
+    // drop one — the data loss the split was meant to prevent.
+    const chunks = chunkFile("rule.ts", "=".repeat(2800))
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]?.content).toBe(chunks[1]?.content) // identical content
+    const id0 = await chunkId("ns", chunks[0]!)
+    const id1 = await chunkId("ns", chunks[1]!)
+    expect(id0).not.toBe(id1)
+  })
+
+  it("SIG-133: a normal chunk's id is unaffected by the fragmentIndex change (still content-addressed)", async () => {
+    const base = { path: "x.ts", lineStart: 1, lineEnd: 30, content: "hello" }
+    const withUndef = await chunkId("ns", base)
+    const explicitUndef = await chunkId("ns", { ...base, fragmentIndex: undefined })
+    expect(withUndef).toBe(explicitUndef)
+  })
+
   it("returns a 48-char hex id", async () => {
     const id = await chunkId("sigilix", {
       path: "x.ts",

@@ -144,6 +144,14 @@ export interface Chunk {
   lineStart: number
   lineEnd: number
   content: string
+  /**
+   * SIG-133: set ONLY on hard-split fragments of a single over-cap line.
+   * Disambiguates otherwise-identical slices (same path/lineStart/lineEnd/
+   * content) so `chunkId` doesn't hash them to one id and let Vectorize
+   * collapse them. Omitted on normal chunks — those stay purely content-
+   * addressed so re-runs are idempotent.
+   */
+  fragmentIndex?: number
 }
 
 /**
@@ -243,13 +251,21 @@ export function splitOversizedWindow(
     // slices of one repeating >2*cap line collide on chunk ID; left as-is.
     if (line.length > MAX_CHUNK_CHARS) {
       flush()
+      // SIG-133 (CodeRabbit Major): tag each fragment with its index. Two
+      // byte-identical slices of one repeating line (e.g. a 3000-char run of
+      // `=`) share path/lineStart/lineEnd/content, so without this they'd
+      // hash to the same chunkId and Vectorize would collapse them —
+      // reintroducing data loss on the very path that's meant to prevent it.
+      let fragmentIndex = 0
       for (let off = 0; off < line.length; off += MAX_CHUNK_CHARS) {
         chunks.push({
           path: "",
           lineStart: absLine,
           lineEnd: absLine,
           content: line.slice(off, off + MAX_CHUNK_CHARS),
+          fragmentIndex,
         })
+        fragmentIndex += 1
       }
       continue
     }
@@ -335,7 +351,11 @@ export function chunkFile(path: string, content: string): Chunk[] {
  * idempotency.
  */
 export async function chunkId(namespace: string, chunk: Chunk): Promise<string> {
-  const raw = `${namespace}\0${chunk.path}\0${chunk.lineStart}\0${chunk.lineEnd}\0${chunk.content}`
+  // SIG-133: fold the hard-split fragment index into the identity when set,
+  // so byte-identical slices of one repeating over-cap line get distinct ids.
+  // Normal chunks (fragmentIndex undefined) stay purely content-addressed.
+  const frag = chunk.fragmentIndex === undefined ? "" : `\0frag${chunk.fragmentIndex}`
+  const raw = `${namespace}\0${chunk.path}\0${chunk.lineStart}\0${chunk.lineEnd}\0${chunk.content}${frag}`
   return sha256HexPrefix(raw, 48)
 }
 

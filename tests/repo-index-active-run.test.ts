@@ -35,6 +35,12 @@ describe("writeActiveRun / readActiveRunId", () => {
     expect(await readActiveRunId(kvMock({ "repo-index-active-run:o/r": "not json" }), "o", "r")).toBeNull()
     expect(await readActiveRunId(kvMock({ "repo-index-active-run:o/r": JSON.stringify({ v: 2, runId: "x" }) }), "o", "r")).toBeNull()
   })
+  it("readActiveRunId returns null on array / non-object primitive / empty or non-string runId", async () => {
+    expect(await readActiveRunId(kvMock({ "repo-index-active-run:o/r": JSON.stringify(["x"]) }), "o", "r")).toBeNull()
+    expect(await readActiveRunId(kvMock({ "repo-index-active-run:o/r": JSON.stringify(5) }), "o", "r")).toBeNull()
+    expect(await readActiveRunId(kvMock({ "repo-index-active-run:o/r": JSON.stringify({ v: 1, runId: "" }) }), "o", "r")).toBeNull()
+    expect(await readActiveRunId(kvMock({ "repo-index-active-run:o/r": JSON.stringify({ v: 1, runId: 7 }) }), "o", "r")).toBeNull()
+  })
   it("writeActiveRun THROWS on KV put failure (so the caller can retry)", async () => {
     const env = kvMock()
     env.OPENCLAW_STATE.put = vi.fn(async () => { throw new Error("kv down") })

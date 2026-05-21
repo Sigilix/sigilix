@@ -158,9 +158,15 @@ export async function listIndexedRepos(env: {
       // but a direct `OPENCLAW_STATE.put` bypass with a mixed-case
       // key would otherwise leak casing into `availableRepos` and
       // break the case-sensitive lookup downstream.
-      // SIG-132: the suffix is now the `<owner>/<repo>` namespace.
+      // SIG-132: the suffix is now the `<owner>/<repo>` namespace. Require
+      // a `/` so orphaned LEGACY bare-`<repo>` keys (pre-migration) never
+      // leak into `availableRepos` — surfacing one would let tool
+      // resolution fall back to a bare, collision-prone namespace and
+      // weaken the tenant isolation this change establishes (CodeRabbit
+      // Major). GitHub owner/repo names can't contain `/`, so a single
+      // `/` cleanly identifies the new owner-qualified shape.
       const namespace = key.name.slice(PREFIX.length).toLowerCase()
-      if (namespace.length > 0) out.add(namespace)
+      if (namespace.includes("/")) out.add(namespace)
     }
     if (page.list_complete) break
     if (!page.cursor) {

@@ -37,7 +37,8 @@ import { chat, type ChatMessage } from "./ollama-chat"
 // type its `runWithRetryAndFallback` calls without reaching past
 // this module into ./ollama-chat.
 export type { ChatMessage }
-import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
+import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
+import { buildPerfRetrievalQuery, extractChangedFunctionNames } from "./perf-retrieval"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -1206,6 +1207,39 @@ export async function handlePrReviewEnsemble(
     // Capture cache locally so the lambda below sees a non-null narrowing.
     const preflightCache = cache
     let preflightChunks: Awaited<ReturnType<typeof preflightCache.cachedRetrieve>>["chunks"] = null
+    // SIG-110: perf-keyword retrieval. Kicked off HERE so it runs
+    // CONCURRENTLY with the preflight below — both share the ≤15s cap +
+    // orchCtrl.signal, so the perf query adds no critical-path wall-clock
+    // (the orchestrator has only ~10s of static slack). Fires only when
+    // the performance specialist is in the lineup AND the retrieve budget
+    // has room for preflight + perf + the synth conflict-verification
+    // reserve (`budgetRemaining() > 2` reads full budget here since the
+    // cache consumes only after its internal cacheKey await — so this
+    // means maxCalls >= 3, the default). The query seeds perf anti-pattern
+    // vocabulary + changed function names so Vectorize lands on
+    // perf-relevant code (single namespace → bias is via query terms, not
+    // a separate index). Best-effort: never rejects, falls back to the
+    // shared snapshot.
+    const wantPerfRetrieval =
+      router.specialists.includes("performance") &&
+      preflightCache.budgetRemaining() > 2
+    let perfRetrievalPromise: Promise<RetrievedChunk[] | null> | null = null
+    if (wantPerfRetrieval) {
+      const perfQuery = buildPerfRetrievalQuery(
+        preflightQuery,
+        extractChangedFunctionNames(diff),
+      )
+      perfRetrievalPromise = withComposedTimeout(
+        () => preflightCache.cachedRetrieve({
+          caller: "specialist:performance",
+          query: perfQuery,
+          namespace,
+          fetcher: () => retrieveChunks({ text: perfQuery, teamKey: namespace, env }),
+        }),
+        RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+        orchCtrl.signal,
+      ).then((r) => r.chunks).catch(() => null)
+    }
     // ARC-284: phase-completed event always emits (even on the catch
     // path) so a 15s pre-flight cap-hit shows up in the trace.
     const preflightStartMs = Date.now()
@@ -1239,6 +1273,20 @@ export async function handlePrReviewEnsemble(
     const retrievalSnapshot = preflightChunks
       ? formatChunksForPrompt(preflightChunks) ?? ""
       : ""
+    // SIG-110: resolve the perf-specific snapshot. Awaited AFTER the
+    // preflight (both already ran concurrently), so this adds no extra
+    // wall-clock. The inner promise never rejects (`.catch(() => null)`
+    // above); empty / skipped perf retrieval falls back to the shared
+    // snapshot so the performance specialist is never worse off than the
+    // other roles. NOTE: this is the one intentional exception to the
+    // "all specialists see the same retrieval snapshot" invariant — only
+    // the performance role gets a perf-biased view.
+    let perfRetrievalSnapshot = retrievalSnapshot
+    if (perfRetrievalPromise) {
+      const perfChunks = await perfRetrievalPromise
+      const formattedPerf = perfChunks ? formatChunksForPrompt(perfChunks) ?? "" : ""
+      if (formattedPerf.length > 0) perfRetrievalSnapshot = formattedPerf
+    }
 
     // ─── ARC-186: dependency-vulnerability scan ────────────────
     // Runs after secret-scan + deterministic-checks but BEFORE the
@@ -1676,7 +1724,9 @@ export async function handlePrReviewEnsemble(
         title: meta.title,
         body: meta.body ?? "",
         diff,
-        retrievalSnapshot,
+        // SIG-110: the performance role gets the perf-biased snapshot;
+        // every other role gets the shared preflight snapshot.
+        retrievalSnapshot: role === "performance" ? perfRetrievalSnapshot : retrievalSnapshot,
         namespace,
         ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
         ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),

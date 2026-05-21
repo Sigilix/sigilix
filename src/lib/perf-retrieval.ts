@@ -159,3 +159,19 @@ export function resolvePerfSnapshot(
 ): string {
   return formattedPerf.length > 0 ? formattedPerf : sharedSnapshot
 }
+
+/**
+ * Pick the retrieval snapshot a given specialist role sees: the
+ * performance role gets the perf-biased snapshot, every other role gets
+ * the shared preflight snapshot. This is the one intentional exception
+ * to the "all specialists see the same snapshot" invariant. Extracted
+ * from the orchestrator's per-role message builder so the per-role
+ * selection contract is unit-testable in isolation.
+ */
+export function selectRetrievalSnapshotForRole(
+  role: string,
+  perfSnapshot: string,
+  sharedSnapshot: string,
+): string {
+  return role === "performance" ? perfSnapshot : sharedSnapshot
+}

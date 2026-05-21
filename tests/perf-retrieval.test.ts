@@ -11,6 +11,7 @@ import {
   buildPerfRetrievalQuery,
   shouldRunPerfRetrieval,
   resolvePerfSnapshot,
+  selectRetrievalSnapshotForRole,
   PERF_RETRIEVAL_KEYWORDS,
 } from "../src/lib/perf-retrieval"
 
@@ -121,6 +122,18 @@ describe("resolvePerfSnapshot", () => {
 
   it("falls back to empty when both are empty", () => {
     expect(resolvePerfSnapshot("", "")).toBe("")
+  })
+})
+
+describe("selectRetrievalSnapshotForRole", () => {
+  it("gives the performance role the perf-biased snapshot", () => {
+    expect(selectRetrievalSnapshotForRole("performance", "perf", "shared")).toBe("perf")
+  })
+
+  it("gives every other role the shared snapshot", () => {
+    for (const role of ["logic", "security", "tests"]) {
+      expect(selectRetrievalSnapshotForRole(role, "perf", "shared")).toBe("shared")
+    }
   })
 })
 

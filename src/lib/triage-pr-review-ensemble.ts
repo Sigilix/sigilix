@@ -43,6 +43,7 @@ import {
   extractChangedFunctionNames,
   shouldRunPerfRetrieval,
   resolvePerfSnapshot,
+  selectRetrievalSnapshotForRole,
 } from "./perf-retrieval"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
@@ -1744,7 +1745,7 @@ export async function handlePrReviewEnsemble(
         diff,
         // SIG-110: the performance role gets the perf-biased snapshot;
         // every other role gets the shared preflight snapshot.
-        retrievalSnapshot: role === "performance" ? perfRetrievalSnapshot : retrievalSnapshot,
+        retrievalSnapshot: selectRetrievalSnapshotForRole(role, perfRetrievalSnapshot, retrievalSnapshot),
         namespace,
         ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
         ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),

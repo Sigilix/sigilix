@@ -86,7 +86,10 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
 })
 
 describe("PROMPT_VERSION", () => {
-  it("is bumped to 4 for the SIG-110 perf prompt/schema/synth changes", () => {
-    expect(PROMPT_VERSION).toBe("4")
+  it("is at least 4 (SIG-110 bumped 3->4; carried forward by later prompt changes)", () => {
+    // SIG-110 bumped 3->4; SIG-125 bumped 4->5. Assert the current value
+    // rather than a frozen number so a legitimate later bump doesn't
+    // require editing an unrelated specialist's test.
+    expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(4)
   })
 })

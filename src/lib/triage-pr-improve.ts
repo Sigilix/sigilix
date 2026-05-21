@@ -30,9 +30,10 @@ import { PR_IMPROVE_PROMPT } from "../prompts/pr-improve"
 import {
   parseDiffToReviewablePositions,
   deriveSide,
-  isPositionReviewable,
+  isContiguousRightRange,
   type ReviewableMap,
 } from "./diff-positions"
+export { isContiguousRightRange } from "./diff-positions"
 import { isRepoSensitive } from "./repo-policy"
 import {
   loadSigilixConfigRaw,
@@ -480,29 +481,6 @@ export function filterAnchorableSuggestions(
     out.push(s)
   }
   return out
-}
-
-/**
- * Return true iff every line in `[startLine..line]` is RIGHT-reviewable
- * for the given path. Used by `filterAnchorableSuggestions` to ensure a
- * multi-line suggestion's range stays inside one hunk — `ReviewableMap`
- * records every reviewable position, so a missing intermediate line is
- * a sufficient signal that the range crosses a hunk boundary or
- * escapes the hunk altogether.
- *
- * Pure — exported for tests.
- */
-export function isContiguousRightRange(
-  reviewable: ReviewableMap,
-  path: string,
-  startLine: number,
-  line: number,
-): boolean {
-  if (startLine > line) return false
-  for (let l = startLine; l <= line; l++) {
-    if (!isPositionReviewable(reviewable, path, l, "RIGHT")) return false
-  }
-  return true
 }
 
 /**

@@ -252,3 +252,20 @@ describe("deriveSide", () => {
     expect(deriveSide(map, "missing.ts", 5)).toBeNull()
   })
 })
+
+import { isContiguousRightRange } from "../src/lib/diff-positions"
+
+describe("isContiguousRightRange (moved from improve, SIG-125)", () => {
+  it("true when every line in the range is RIGHT-reviewable", () => {
+    const m = parseDiffToReviewablePositions(
+      "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,0 +1,3 @@\n+a\n+b\n+c\n",
+    )
+    expect(isContiguousRightRange(m, "x.ts", 1, 3)).toBe(true)
+  })
+  it("false when a line in the range is not reviewable", () => {
+    const m = parseDiffToReviewablePositions(
+      "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,0 +1,1 @@\n+a\n",
+    )
+    expect(isContiguousRightRange(m, "x.ts", 1, 3)).toBe(false)
+  })
+})

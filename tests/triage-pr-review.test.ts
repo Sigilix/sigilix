@@ -997,3 +997,48 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
     expect(body).not.toContain("Review #")
   })
 })
+
+describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
+  const base = {
+    summary: "s", confidence: 4, confidenceReason: "r",
+    findings: [{
+      path: "src/a.ts", line: 10, score: 4, category: "performance",
+      headline: "h", body: "b", suggestedReplacement: "  return getUsers(ids)\n",
+    }],
+  }
+  it("reads a non-empty suggestedReplacement (raw kept, incl. indentation/newline)", () => {
+    const v = parsePrReviewResponse(JSON.stringify(base))
+    expect(v?.findings[0]?.suggestedReplacement).toBe("  return getUsers(ids)\n")
+  })
+  it("drops an empty / whitespace-only suggestedReplacement", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: "   " }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+  it("ignores a non-string suggestedReplacement", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: 42 }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+})
+
+import { extensionToFenceLang } from "../src/lib/triage-pr-review"
+
+describe("extensionToFenceLang (SIG-125)", () => {
+  it("maps known extensions", () => {
+    expect(extensionToFenceLang("src/a.ts")).toBe("ts")
+    expect(extensionToFenceLang("src/a.tsx")).toBe("tsx")
+    expect(extensionToFenceLang("x.py")).toBe("python")
+    expect(extensionToFenceLang("x.json")).toBe("json")
+  })
+  it("returns empty string for unknown/extensionless paths", () => {
+    expect(extensionToFenceLang("Makefile")).toBe("")
+    expect(extensionToFenceLang("x.weird")).toBe("")
+  })
+  it("returns empty string for Object.prototype-key extensions (no proto pollution)", () => {
+    expect(extensionToFenceLang("x.constructor")).toBe("")
+    expect(extensionToFenceLang("x.__proto__")).toBe("")
+    expect(extensionToFenceLang("x.toString")).toBe("")
+    expect(extensionToFenceLang("x.hasOwnProperty")).toBe("")
+  })
+})

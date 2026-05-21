@@ -51,7 +51,19 @@
  * v4 (same mechanism as prior bumps). Use
  * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
  */
-export const PROMPT_VERSION = "4"
+/**
+ * v4 → v5 (SIG-125): the shared specialist output schema documents a
+ * new optional `suggestedReplacement` field — the model emits the exact
+ * contiguous replacement lines for a finding's anchored range so the
+ * review renderer can offer a one-click GitHub suggestion. The synth
+ * prompt now preserves `suggestedReplacement` verbatim from any kept
+ * source finding (mirroring the SIG-110 complexityEstimate/
+ * hotPathIdentifier preservation), so synthesis no longer strips the
+ * field before it reaches the renderer. Reviews with v4 prompt version
+ * go stale on first deploy of v5 (same mechanism as prior bumps). Use
+ * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
+ */
+export const PROMPT_VERSION = "5"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, anchor every finding to a specific line.
 

@@ -34,6 +34,11 @@ import {
   type SubmitReviewComment,
 } from "./github"
 import { SIGILIX_BOT_LOGIN } from "./dismiss-prior-reviews"
+import {
+  isContiguousRightRange,
+  deriveSide,
+  type ReviewableMap,
+} from "./diff-positions"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
 // `renderStackContextSummary` is no longer used here — ARC-281
@@ -238,6 +243,15 @@ export interface PrReviewFinding {
    * `evaluatePerfFinding`.
    */
   hotPathIdentifier?: string
+  /**
+   * SIG-125: exact replacement lines for the finding's anchored range
+   * `[startLine ?? line, line]` when the fix is a contiguous edit. Raw
+   * code (no diff markers, no fence). Rendered by `formatFindingComment`
+   * as a committable ```suggestion block (high-confidence + anchorable)
+   * or a non-committable code snippet. Absent when no localized fix
+   * applies (testing / architecture / multi-hunk).
+   */
+  suggestedReplacement?: string
 }
 
 export interface PrReviewVerdict {
@@ -467,6 +481,12 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (typeof finding.hotPathIdentifier === "string" && finding.hotPathIdentifier.trim().length > 0) {
       finalFinding.hotPathIdentifier = finding.hotPathIdentifier.trim()
     }
+    // SIG-125: read suggestedReplacement. Trim only to test emptiness —
+    // the value is kept VERBATIM (indentation + trailing newline matter
+    // for the rendered suggestion block).
+    if (typeof finding.suggestedReplacement === "string" && finding.suggestedReplacement.trim().length > 0) {
+      finalFinding.suggestedReplacement = finding.suggestedReplacement
+    }
     findings.push(finalFinding)
     if (findings.length >= 8) break
   }
@@ -551,6 +571,15 @@ interface BuildReviewArgs {
    * `RenderBodyArgs.retriggerUrl`.
    */
   retriggerUrl?: string
+  /**
+   * SIG-125: the diff's reviewable-position map, used by
+   * `formatFindingComment` to decide whether a finding's
+   * `suggestedReplacement` can render as a committable ```suggestion
+   * (RIGHT side + contiguous reviewable range) or must fall back to a
+   * non-committable code snippet. Optional — omitted call sites fall
+   * back to the snippet tier.
+   */
+  reviewable?: ReviewableMap
 }
 
 /**
@@ -583,6 +612,7 @@ export function buildReviewSubmission({
   delta,
   reviewCounter,
   retriggerUrl,
+  reviewable,
 }: BuildReviewArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize every prose field for GitHub
   // rendering BEFORE downstream renderers see the verdict. Wraps
@@ -621,7 +651,7 @@ export function buildReviewSubmission({
     // and pass to the formatter so the inline comment carries the
     // P0/P1/P2 badge + `confidence: N/5` suffix.
     const confidence = resolveFindingConfidence(f, verdict.confidence)
-    const baseBody = formatFindingComment(f, confidence)
+    const baseBody = formatFindingComment(f, confidence, reviewable)
     const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
     const c: SubmitReviewComment = {
       path: f.path,
@@ -1196,6 +1226,53 @@ export function resolveFindingConfidence(
 }
 
 /**
+ * SIG-125: map a file path's extension to a Markdown fence language for
+ * the non-committable "Proposed change" snippet. Empty string when
+ * unknown (renders a plain fence). Pure — exported for tests.
+ */
+const FENCE_LANG_BY_EXT: Readonly<Record<string, string>> = {
+  ts: "ts", tsx: "tsx", js: "js", jsx: "jsx", mjs: "js", cjs: "js",
+  mts: "ts", cts: "ts", json: "json", py: "python", rb: "ruby",
+  go: "go", rs: "rust", java: "java", sh: "bash", yml: "yaml",
+  yaml: "yaml", toml: "toml", css: "css", html: "html", sql: "sql",
+  md: "markdown",
+}
+export function extensionToFenceLang(path: string): string {
+  const dot = path.lastIndexOf(".")
+  if (dot < 0 || dot === path.length - 1) return ""
+  const ext = path.slice(dot + 1).toLowerCase()
+  // `Object.hasOwn` guard: a path like `x.constructor` / `x.__proto__`
+  // would otherwise resolve to an inherited Object.prototype member
+  // (`?? ""` doesn't catch a non-nullish function/object), emitting a
+  // broken fence label.
+  return Object.hasOwn(FENCE_LANG_BY_EXT, ext) ? FENCE_LANG_BY_EXT[ext]! : ""
+}
+
+/**
+ * SIG-125: a Markdown fence long enough to wrap `content` — one backtick
+ * longer than the longest backtick run inside it (min 3). Lets the
+ * non-committable snippet safely contain code that itself uses fences.
+ */
+export function fenceForContent(content: string): string {
+  let maxRun = 0
+  let cur = 0
+  for (const ch of content) {
+    if (ch === "`") {
+      cur += 1
+      if (cur > maxRun) maxRun = cur
+    } else {
+      cur = 0
+    }
+  }
+  return "`".repeat(Math.max(3, maxRun + 1))
+}
+
+// SIG-125: confidence floor at/above which a finding's
+// `suggestedReplacement` is eligible to render as a committable
+// ```suggestion (still gated on clean anchorability).
+const HIGH_CONFIDENCE_FLOOR = 4
+
+/**
  * Inline finding comment, greptile-style. The category leads as
  * \`**category:**\` (logic, style, security, performance, etc.) so
  * a reviewer can scan a thread and immediately see what kind of
@@ -1216,6 +1293,7 @@ export function resolveFindingConfidence(
 export function formatFindingComment(
   finding: PrReviewFinding,
   confidence: number,
+  reviewable?: ReviewableMap,
 ): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
   const badge = severityBadgeForScore(finding.score)
@@ -1237,7 +1315,40 @@ export function formatFindingComment(
   } else {
     lines.push(finding.body)
   }
+  // SIG-125: render the proposed change when present. Two tiers:
+  //   committable ```suggestion (high-confidence + cleanly anchorable),
+  //   else an always-shown non-committable code snippet.
+  const repl = finding.suggestedReplacement
+  if (typeof repl === "string" && repl.length > 0) {
+    // A GitHub ```suggestion block can't escape backticks — a line that is
+    // ``` always closes it — so a 3+ backtick run in the replacement
+    // disqualifies the committable tier and we fall through to the snippet.
+    const committable =
+      confidence >= HIGH_CONFIDENCE_FLOOR &&
+      reviewable !== undefined &&
+      !/`{3,}/.test(repl) &&
+      isFindingAnchorable(finding, reviewable)
+    lines.push("")
+    if (committable) {
+      lines.push("```suggestion", repl.replace(/\n$/, ""), "```")
+    } else {
+      const lang = extensionToFenceLang(finding.path)
+      const fence = fenceForContent(repl)
+      lines.push("**Proposed change:**", fence + lang, repl.replace(/\n$/, ""), fence)
+    }
+  }
   return lines.join("\n")
+}
+
+/**
+ * SIG-125: a finding's anchored range `[startLine ?? line, line]` is
+ * committable iff every line is RIGHT-reviewable (matches GitHub's
+ * ```suggestion applyability requirement).
+ */
+function isFindingAnchorable(finding: PrReviewFinding, reviewable: ReviewableMap): boolean {
+  if (deriveSide(reviewable, finding.path, finding.line) !== "RIGHT") return false
+  const start = finding.startLine != null && finding.startLine < finding.line ? finding.startLine : finding.line
+  return isContiguousRightRange(reviewable, finding.path, start, finding.line)
 }
 
 

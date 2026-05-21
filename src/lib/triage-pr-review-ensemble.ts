@@ -1367,6 +1367,14 @@ export async function handlePrReviewEnsemble(
     // Budget-aware, ≤15s cap, non-fatal (empty snapshot on failure; rethrow
     // only on orchCtrl abort). AUGMENTS — never replaces — the logic role's
     // shared snapshot via mergeLogicSnapshot below.
+    //
+    // BUDGET NOTE: at the default maxCalls=3, preflight (1) + perf retrieval
+    // (1, when the performance specialist is in the lineup) leave
+    // budgetRemaining()=1, so the `> 2` gate below skips symbol retrieval —
+    // i.e. perf and symbol are mutually exclusive at the default budget, and
+    // symbol effectively fires on logic-PRs without a perf pass. Raise
+    // OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR (≥4) to run both — relevant
+    // when enabling this flag for the SIG-86 bake-off.
     let logicSymbolSnapshot = ""
     let symbolOverlap: ReturnType<typeof computeChunkOverlap> | null = null
     let symbolRetrievalElapsedMs = 0

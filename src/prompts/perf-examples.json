@@ -18,7 +18,7 @@
       "why": "Real load regression, CONCRETELY ANCHORED: names `getUser`/`ids` on the added line, on a changed path, and carries a complexityEstimate + hotPathIdentifier that name changed code. The high-value core of the perf lens. KEEP."
     },
     {
-      "id": "good-blocking-io-on-request-path-anchored",
+      "id": "good-blocking-io",
       "situation": "A request handler gains `const cfg = readFileSync('./config.json')` on an added line inside the per-request code path.",
       "emit": true,
       "finding": {

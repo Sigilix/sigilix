@@ -51,13 +51,24 @@ const CONTROL_FLOW_STOPWORDS: ReadonlySet<string> = new Set([
 ])
 
 // A function-name capture is keyed off the leading group of each regex.
+// All character classes are negated single-char (`[^=]`, `[^{]`, `[^)]`)
+// so the patterns are linear — no ReDoS. The optional TypeScript
+// type-annotation groups (`: Type`) are non-capturing and never touch
+// group 1 (the name), so even when an exotic annotation makes the
+// overall match fail, the worst case is a missed name in a retrieval
+// query — never a wrong capture.
 const FUNCTION_PATTERNS: readonly RegExp[] = [
   // `function foo(` / `export function foo(` / `async function foo(`
   /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/,
-  // `const foo = (args) =>` / `const foo = async (args) =>` / `const foo = function`
-  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/,
-  // class / object method shorthand: `foo(args) {` or `async foo(args) {`
-  /^\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/,
+  // `const foo = (args) =>` / `const foo = async (args) =>` /
+  // `const foo = function` — plus an optional `: Type` annotation on
+  // the binding and an optional `: ReturnType` before the arrow, so
+  // TS-typed declarations (`const handler: EventHandler = (e) => {`)
+  // are captured.
+  /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)(?:\s*:\s*[^=]+)?\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*(?::\s*[^=]+)?=>|[A-Za-z_$][\w$]*\s*=>)/,
+  // class / object method shorthand: `foo(args) {`, `async foo(args) {`,
+  // or with a TS return-type annotation `foo(args): Promise<T> {`.
+  /^\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*(?::\s*[^{]+)?\{/,
 ] as const
 
 /**
@@ -111,4 +122,40 @@ export function buildPerfRetrievalQuery(
     parts.push(`Changed functions: ${changedFunctionNames.join(", ")}.`)
   }
   return parts.join("\n\n")
+}
+
+/**
+ * Decide whether the ensemble should fire the perf-keyword retrieval.
+ * Extracted from the orchestrator (which is too large to exercise in
+ * isolation — same rationale as `buildFactsByRole`) so the gate is
+ * directly unit-testable.
+ *
+ * Fires only when:
+ *   - the performance specialist is in the router's lineup, AND
+ *   - the retrieve budget has room for preflight + perf + the synth
+ *     conflict-verification reserve. `budgetRemaining` is read BEFORE
+ *     any retrieval consumes (the cache consumes only after an internal
+ *     `await`), so `> 2` means `maxCalls >= 3` (the default) — leaving
+ *     one call for the synth conflict-verification path the
+ *     SYNTHESIZER_PROMPT documents. A repo that lowers the budget to 2
+ *     degrades cleanly to the shared snapshot.
+ */
+export function shouldRunPerfRetrieval(
+  specialists: readonly string[],
+  budgetRemaining: number,
+): boolean {
+  return specialists.includes("performance") && budgetRemaining > 2
+}
+
+/**
+ * Resolve the performance specialist's retrieval snapshot: use the
+ * perf-biased snapshot when it has content, else fall back to the
+ * shared preflight snapshot so the perf role is never worse off than
+ * the others. Extracted for unit-testability.
+ */
+export function resolvePerfSnapshot(
+  formattedPerf: string,
+  sharedSnapshot: string,
+): string {
+  return formattedPerf.length > 0 ? formattedPerf : sharedSnapshot
 }

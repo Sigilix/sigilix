@@ -9,6 +9,8 @@ import { describe, expect, it } from "vitest"
 import {
   extractChangedFunctionNames,
   buildPerfRetrievalQuery,
+  shouldRunPerfRetrieval,
+  resolvePerfSnapshot,
   PERF_RETRIEVAL_KEYWORDS,
 } from "../src/lib/perf-retrieval"
 
@@ -71,6 +73,54 @@ describe("extractChangedFunctionNames", () => {
   it("returns empty for a diff with no function-shaped added lines", () => {
     expect(extractChangedFunctionNames("+const x = 1\n+x += 2")).toEqual([])
     expect(extractChangedFunctionNames("")).toEqual([])
+  })
+
+  it("ignores `constructor` (method-shaped noise, not a real signal)", () => {
+    expect(extractChangedFunctionNames("+  constructor(deps) {")).toEqual([])
+  })
+
+  // CodeRabbit: TS type annotations on typed-const arrows + typed methods.
+  it("captures a TS-typed arrow const (`const handler: Type = (e) => {`)", () => {
+    const diff = "+const handler: EventHandler = (e) => {\n+const mapper: Fn = async (x) => x"
+    expect(extractChangedFunctionNames(diff)).toEqual(["handler", "mapper"])
+  })
+
+  it("captures a method with a TS return-type annotation (`foo(args): T {`)", () => {
+    const diff = "+  async processBatch(items): Promise<void> {\n+  computeTotal(items): number {"
+    expect(extractChangedFunctionNames(diff)).toEqual(["processBatch", "computeTotal"])
+  })
+
+  it("does not mis-capture a typed property assignment (`const x: T = y;`)", () => {
+    expect(extractChangedFunctionNames("+const config: Config = loadConfig;")).toEqual([])
+  })
+})
+
+describe("shouldRunPerfRetrieval", () => {
+  it("fires when performance is in the lineup and budget leaves room (>2)", () => {
+    expect(shouldRunPerfRetrieval(["logic", "performance"], 3)).toBe(true)
+  })
+
+  it("skips when performance is not in the lineup", () => {
+    expect(shouldRunPerfRetrieval(["logic", "security"], 3)).toBe(false)
+  })
+
+  it("skips when the budget reserve is too low (<=2, e.g. maxCalls=2)", () => {
+    expect(shouldRunPerfRetrieval(["performance"], 2)).toBe(false)
+    expect(shouldRunPerfRetrieval(["performance"], 1)).toBe(false)
+  })
+})
+
+describe("resolvePerfSnapshot", () => {
+  it("uses the perf snapshot when it has content", () => {
+    expect(resolvePerfSnapshot("perf chunks", "shared chunks")).toBe("perf chunks")
+  })
+
+  it("falls back to the shared snapshot when perf retrieval was empty", () => {
+    expect(resolvePerfSnapshot("", "shared chunks")).toBe("shared chunks")
+  })
+
+  it("falls back to empty when both are empty", () => {
+    expect(resolvePerfSnapshot("", "")).toBe("")
   })
 })
 

@@ -38,7 +38,12 @@ import { chat, type ChatMessage } from "./ollama-chat"
 // this module into ./ollama-chat.
 export type { ChatMessage }
 import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
-import { buildPerfRetrievalQuery, extractChangedFunctionNames } from "./perf-retrieval"
+import {
+  buildPerfRetrievalQuery,
+  extractChangedFunctionNames,
+  shouldRunPerfRetrieval,
+  resolvePerfSnapshot,
+} from "./perf-retrieval"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -1220,9 +1225,10 @@ export async function handlePrReviewEnsemble(
     // perf-relevant code (single namespace → bias is via query terms, not
     // a separate index). Best-effort: never rejects, falls back to the
     // shared snapshot.
-    const wantPerfRetrieval =
-      router.specialists.includes("performance") &&
-      preflightCache.budgetRemaining() > 2
+    const wantPerfRetrieval = shouldRunPerfRetrieval(
+      router.specialists,
+      preflightCache.budgetRemaining(),
+    )
     let perfRetrievalPromise: Promise<RetrievedChunk[] | null> | null = null
     if (wantPerfRetrieval) {
       const perfQuery = buildPerfRetrievalQuery(
@@ -1290,7 +1296,7 @@ export async function handlePrReviewEnsemble(
       const perfChunks = await perfRetrievalPromise
       const formattedPerf = perfChunks ? formatChunksForPrompt(perfChunks) ?? "" : ""
       const perfRetrievalUsed = formattedPerf.length > 0
-      if (perfRetrievalUsed) perfRetrievalSnapshot = formattedPerf
+      perfRetrievalSnapshot = resolvePerfSnapshot(formattedPerf, retrievalSnapshot)
       // Bake-off signal: did the perf-biased snapshot actually differ
       // from the shared one, or did we fall back? (SIG-110 → SIG-86.)
       console.log(JSON.stringify({

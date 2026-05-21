@@ -186,6 +186,57 @@ describe("runSecretScan — SIG-93 path-shape false-positive gate", () => {
   })
 })
 
+describe("runSecretScan — SIG-126 identifier/path/prose-shape false-positive gate", () => {
+  // Suppression: single-case + separator-segmented tokens are
+  // identifiers/paths/prose, not secrets. The generic 40+-char rule
+  // matched these as P0 "secrets".
+  it("does NOT flag a 40+-char kebab-case identifier", () => {
+    const hits = runSecretScan(mkDiff("src/lib/notes.ts", [
+      'const NOTE = "good-blocking-io-on-request-path-anchored"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a slash-joined lowercase prose token", () => {
+    const hits = runSecretScan(mkDiff("src/lib/notes.ts", [
+      'const TAGS = "flag-gated/best-effort/timeout-capped/budget-aware/non-fatal"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a SCREAMING_SNAKE env-var name", () => {
+    const hits = runSecretScan(mkDiff("src/lib/config.ts", [
+      'const NAME = "OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a lower snake_case identifier", () => {
+    const hits = runSecretScan(mkDiff("src/lib/config.ts", [
+      'const FN = "resolve_symbol_retrieval_budget_for_the_logic_role"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  // FN-safety: the guard must NEVER suppress a real secret. These are
+  // mixed-case high-entropy strings that match the rule but match NONE
+  // of the single-case suppression shapes. If someone later widens the
+  // guard to catch mixed-case strings, these tests MUST start failing.
+  it("STILL flags a mixed-case base64-ish secret with no separators", () => {
+    const hits = runSecretScan(mkDiff("config.ts", [
+      'const KEY = "Ab3xZ9Qw7Lp2Rk8Mn4Vc6Bd1Hg5Tf0Js7Yu3Wq9Ea2"',
+    ]))
+    expect(hits[0]?.ruleId).toBe("generic-high-entropy-token")
+  })
+
+  it("STILL flags a mixed-case AWS-style secret that contains `/`", () => {
+    const hits = runSecretScan(mkDiff("aws-config.ts", [
+      'const AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYExampleKeyAbc1"',
+    ]))
+    expect(hits[0]?.ruleId).toBe("generic-high-entropy-token")
+  })
+})
+
 describe("runSecretScan — diff parsing semantics", () => {
   it("scans only added (+) lines, not deletions", () => {
     const diff = [

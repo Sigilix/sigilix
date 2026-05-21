@@ -138,6 +138,16 @@ function genericFalsePositive(match: string, contextLine: string, matchOffset: n
   // keys (which can contain `/`) won't have a file extension after
   // them, so this doesn't suppress legit credentials.
   if (looksLikeFilePath(match, contextLine, matchOffset)) return true
+  // SIG-126: identifier / path / hyphenated-prose shapes. Real
+  // high-entropy secrets are MIXED-CASE base64-ish; they are never a pure
+  // single-case run of word-segments joined by separators. These shapes
+  // (kebab ids, lower paths, slash-joined prose, SCREAMING_SNAKE env-var
+  // names, snake_case) tripped the 40+-char generic rule as P0 "secrets".
+  // Single-case + separator-segmented ⇒ identifier, not secret. Near-zero
+  // false-negative risk (a mixed-case key matches none of these).
+  if (/^[a-z0-9]+([-/][a-z0-9]+)+$/.test(match)) return true   // kebab / lower path / slash-prose
+  if (/^[A-Z0-9]+(_[A-Z0-9]+)+$/.test(match)) return true       // SCREAMING_SNAKE
+  if (/^[a-z0-9]+(_[a-z0-9]+)+$/.test(match)) return true       // lower snake_case
   return false
 }
 

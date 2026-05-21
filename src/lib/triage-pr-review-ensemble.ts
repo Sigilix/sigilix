@@ -1394,15 +1394,30 @@ export async function handlePrReviewEnsemble(
     let branchSetElapsedMs = 0
     if (shouldRunBranchAwareRetrieval(env.OPENCLAW_BRANCH_AWARE_RETRIEVAL, astFilesByPath)) {
       const startMs = Date.now()
-      branchVectors = await prepareBranchSet(env.AI, astFilesByPath)
+      try {
+        branchVectors = await withComposedTimeout(
+          () => prepareBranchSet(env.AI, astFilesByPath),
+          RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+          orchCtrl.signal,
+        )
+      } catch (err) {
+        // Genuine orchestrator cancellation propagates; a slow/stuck embed
+        // degrades to main-only retrieval (empty branch set).
+        if (orchCtrl.signal.aborted) throw err
+        branchVectors = []
+      }
       branchSetElapsedMs = Date.now() - startMs
     }
+    // SIG-129 tombstone set: every changed JS/TS file is stale on `main`, so
+    // its main-index chunks must be dropped from each merge regardless of
+    // whether a branch chunk for it surfaced in the retrieved top-K.
+    const changedPaths: ReadonlySet<string> = new Set(astFilesByPath.keys())
 
     // Branch-aware merge for one pass: embed the pass's query (single text,
     // best-effort) and overlay branch chunks on the main chunks. Returns the
     // main chunks unchanged when branch-aware is off / the set is empty / the
-    // query embed fails. Records the per-pass head-override count (paths
-    // where a branch chunk displaced a main chunk) for shadow telemetry.
+    // query embed fails. Records the per-pass head-override count (stale main
+    // chunks removed by the changed-path tombstone) for shadow telemetry.
     const branchMergeStats = { preflight: 0, perf: 0, symbol: 0 }
     const branchAwareMerge = async (
       mainChunks: RetrievedChunk[] | null,
@@ -1427,9 +1442,8 @@ export async function handlePrReviewEnsemble(
         return mainChunks
       }
       const branchChunks = retrieveBranchChunks(qVec, branchVectors, TOP_K_BRANCH)
-      const mainPaths = new Set(mainChunks.map((c) => c.path))
-      branchMergeStats[pass] = branchChunks.filter((c) => mainPaths.has(c.path)).length
-      return mergeBranchAware(mainChunks, branchChunks)
+      branchMergeStats[pass] = mainChunks.filter((c) => changedPaths.has(c.path)).length
+      return mergeBranchAware(mainChunks, branchChunks, changedPaths)
     }
 
     // Re-merge the SHARED preflight snapshot (seen by every specialist) and

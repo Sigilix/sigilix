@@ -18,7 +18,7 @@ describe("mergeBranchAware", () => {
   it("drops ALL main chunks for a path that branch also has (head wins)", () => {
     const main = [rc("a.ts", 1, 30, 0.9, "STALE"), rc("a.ts", 20, 50, 0.8, "STALE2"), rc("b.ts", 1, 30, 0.7)]
     const branch = [rc("a.ts", 1, 30, 0.5, "HEAD")]
-    const out = mergeBranchAware(main, branch)
+    const out = mergeBranchAware(main, branch, new Set(["a.ts"]))
     const aPaths = out.filter((c) => c.path === "a.ts")
     expect(aPaths).toHaveLength(1)
     expect(aPaths[0].content).toBe("HEAD")
@@ -28,13 +28,20 @@ describe("mergeBranchAware", () => {
   it("appends branch-only paths and re-ranks by score desc", () => {
     const main = [rc("b.ts", 1, 30, 0.4)]
     const branch = [rc("new.ts", 1, 30, 0.95, "NEW")]
-    const out = mergeBranchAware(main, branch)
+    const out = mergeBranchAware(main, branch, new Set(["new.ts"]))
     expect(out.map((c) => c.path)).toEqual(["new.ts", "b.ts"])
   })
 
   it("handles empty sides", () => {
-    expect(mergeBranchAware([], [])).toEqual([])
-    expect(mergeBranchAware([rc("a.ts", 1, 2, 0.1)], [])).toHaveLength(1)
+    expect(mergeBranchAware([], [], new Set())).toEqual([])
+    expect(mergeBranchAware([rc("a.ts", 1, 2, 0.1)], [], new Set())).toHaveLength(1)
+  })
+
+  it("drops a changed-path main chunk even when no branch chunk surfaced (tombstone)", () => {
+    const main = [rc("c.ts", 1, 30, 0.9, "STALE"), rc("keep.ts", 1, 30, 0.5)]
+    const out = mergeBranchAware(main, [], new Set(["c.ts"]))
+    expect(out.some((x) => x.path === "c.ts")).toBe(false)
+    expect(out.some((x) => x.path === "keep.ts")).toBe(true)
   })
 })
 
@@ -98,6 +105,13 @@ describe("retrieveBranchChunks", () => {
       bv("bad.ts", 1, 1, [Infinity, 0], "BAD"),
       bv("nan.ts", 1, 1, [NaN, 0], "NAN"),
     ]
+    const out = retrieveBranchChunks(q, set, 5)
+    expect(out.map((c) => c.path)).toEqual(["ok.ts"])
+  })
+
+  it("skips vectors whose dimension differs from the query", () => {
+    const q = [1, 0, 0]
+    const set = [bv("ok.ts", 1, 1, [1, 0, 0], "OK"), bv("bad.ts", 1, 1, [1, 0], "BAD")]
     const out = retrieveBranchChunks(q, set, 5)
     expect(out.map((c) => c.path)).toEqual(["ok.ts"])
   })
@@ -176,7 +190,7 @@ describe("SIG-129 acceptance: new exported symbol is retrievable + overrides sta
 
     // Stale main copy of the same path must be displaced by head content.
     const staleMain = [{ path: "src/util.ts", lineStart: 1, lineEnd: 3, content: "// OLD — symbol absent", score: 0.99 }]
-    const merged = mergeBranchAware(staleMain, branchChunks)
+    const merged = mergeBranchAware(staleMain, branchChunks, new Set(["src/util.ts"]))
     const utilChunks = merged.filter((c) => c.path === "src/util.ts")
     expect(utilChunks.every((c) => !c.content.includes("OLD"))).toBe(true)
     expect(utilChunks.some((c) => c.content.includes("computeWasteFactor"))).toBe(true)

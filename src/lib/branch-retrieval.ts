@@ -18,20 +18,20 @@ interface AiBinding {
 }
 
 /**
- * Merge main-index chunks with branch (PR-head) chunks. A path present in
- * the branch set is treated as authoritative: ALL main chunks for that
- * path are dropped (they reflect stale `main` content) and the branch
- * chunks take their place. Branch-only paths are appended. The result is
- * re-ranked by score descending (Vectorize and our in-memory scores are
- * both cosine, so they are directly comparable).
+ * Merge main-index chunks with branch (PR-head) chunks. Every changed file
+ * is stale on `main`, so ALL main chunks whose path is in `changedPaths` are
+ * dropped (the tombstone) — even if no branch chunk for that path surfaced in
+ * the retrieved top-K. Showing stale `main` content for a changed file is
+ * worse than omitting it (it causes "symbol doesn't exist" hallucinations).
+ * Surviving main chunks + the branch chunks are re-ranked by score descending
+ * (both are cosine scores, directly comparable).
  */
 export function mergeBranchAware(
   mainChunks: readonly RetrievedChunk[],
   branchChunks: readonly RetrievedChunk[],
+  changedPaths: ReadonlySet<string>,
 ): RetrievedChunk[] {
-  if (branchChunks.length === 0) return [...mainChunks]
-  const branchPaths = new Set(branchChunks.map((c) => c.path))
-  const keptMain = mainChunks.filter((c) => !branchPaths.has(c.path))
+  const keptMain = mainChunks.filter((c) => !changedPaths.has(c.path))
   return [...keptMain, ...branchChunks].sort((a, b) => b.score - a.score)
 }
 
@@ -94,6 +94,10 @@ export function retrieveBranchChunks(
   if (qn === 0) return []
   const scored: RetrievedChunk[] = []
   for (const bvi of branchVectors) {
+    // Defensive: a dimension mismatch would make cosine (dot over min-length,
+    // norms over full length) meaningless. In practice all vectors are
+    // EMBEDDING_DIMENSIONS-wide, so this only fires on a model/version skew.
+    if (bvi.vector.length !== queryVector.length) continue
     const vn = norm(bvi.vector)
     if (vn === 0) continue
     const score = dot(queryVector, bvi.vector) / (qn * vn)

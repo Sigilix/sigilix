@@ -13,9 +13,8 @@ import type { TestingSiblingMapping } from "./testing-evidence-pack"
 const CODE_EXTS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"] as const
 
 /**
- * A line consisting only of structural close punctuation (and trivia). Used
- * both to exclude such lines from the substantive count and to recover a
- * parseable prefix when the added-line window closes a block opened above it.
+ * A line consisting only of structural close punctuation (and trivia). Used to
+ * exclude such lines from the substantive count.
  */
 const STRUCTURAL_CLOSE_LINE = /^[)}\]( ;,]*$/
 
@@ -75,27 +74,6 @@ export interface HelperBinding {
 }
 
 /**
- * Parse `code`, recovering from a single class of failure: trailing lines that
- * are pure structural close-punctuation (e.g. a stray `}` closing a block whose
- * opening lies above the analysed window). We strip those and reparse once.
- * Genuinely corrupt input (error not from a danging closer) still yields a
- * parse failure, so unrelated garbage is never silently accepted. Never throws.
- */
-function parseResilient(code: string, ext: SourceExt): AstNode | null {
-  const first = parseSource(code, ext)
-  if (first.ok) return first.ast as AstNode
-  const lines = code.split("\n")
-  let trimmed = false
-  while (lines.length > 0 && STRUCTURAL_CLOSE_LINE.test(lines[lines.length - 1]!.trim())) {
-    lines.pop()
-    trimmed = true
-  }
-  if (!trimmed) return null
-  const second = parseSource(lines.join("\n"), ext)
-  return second.ok ? (second.ast as AstNode) : null
-}
-
-/**
  * Parse `code` and return bindings imported from same-PR TESTED helper
  * modules (skipping type-only imports). `testedHelpers` maps a tested
  * source path -> its sibling test path. Never throws — parse failure -> [].
@@ -106,8 +84,9 @@ export function extractTestedHelperBindings(
   ext: SourceExt,
   testedHelpers: ReadonlyMap<string, string>,
 ): HelperBinding[] {
-  const ast = parseResilient(code, ext)
-  if (ast === null) return []
+  const parsed = parseSource(code, ext)
+  if (!parsed.ok) return []
+  const ast = parsed.ast as AstNode
   const candidateSources = new Set(testedHelpers.keys())
   const out: HelperBinding[] = []
   walkAst(ast, {

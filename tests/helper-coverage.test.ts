@@ -86,7 +86,7 @@ function lineMap(lines: Record<number, string>): Map<string, Map<number, string>
 
 describe("detectHelperCoverage", () => {
   it("status=all when every substantive added line delegates to a tested helper exercised by its test", () => {
-    const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst merged = mergeBranchAware(a, b, paths)\n}`
+    const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst merged = mergeBranchAware(a, b, paths)`
     const out = detectHelperCoverage({
       filesByPath: new Map([[ORCH, code]]),
       addedLineTextByPath: lineMap({ 1: `import { mergeBranchAware } from "./branch-retrieval"`, 2: `const merged = mergeBranchAware(a, b, paths)`, 3: `}` }),

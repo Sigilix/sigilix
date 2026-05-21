@@ -593,8 +593,8 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       confidenceReason: "Mixed.",
       findings: [blockFinding, codeFinding],
     }
-    const markerForBlock = "<!-- sigilix:fid:1111111111111111:cat:testing:sev:warn:path:111111111111 -->"
-    const markerForCode = "<!-- sigilix:fid:2222222222222222:cat:logic:sev:error:path:222222222222 -->"
+    const markerForBlock = "<!-- sigilix:fid:aaaaaaaaaaaaaaaa:cat:testing:sev:warn:path:aaaaaaaaaaaa -->"
+    const markerForCode = "<!-- sigilix:fid:bbbbbbbbbbbbbbbb:cat:logic:sev:error:path:bbbbbbbbbbbb -->"
     const out = buildReviewSubmission({
       verdict: mixedVerdict,
       prAuthor: "alice",

@@ -52,3 +52,46 @@ export function buildBranchChunks(filesByPath: ReadonlyMap<string, string>): Chu
   }
   return out
 }
+
+/** A branch chunk paired with its embedding vector (cached for the review). */
+export interface BranchVector {
+  chunk: { path: string; lineStart: number; lineEnd: number; content: string }
+  vector: number[]
+}
+
+function dot(a: readonly number[], b: readonly number[]): number {
+  let s = 0
+  const n = Math.min(a.length, b.length)
+  for (let i = 0; i < n; i++) s += a[i] * b[i]
+  return s
+}
+
+function norm(a: readonly number[]): number {
+  return Math.sqrt(dot(a, a))
+}
+
+/**
+ * In-memory cosine retrieval over the cached branch vectors. Scores are
+ * cosine similarity in [-1, 1] — the same metric Vectorize returns — so
+ * callers may merge + re-rank against main-index chunks directly. Returns
+ * top-K as RetrievedChunk[]. Empty when the set is empty or the query has
+ * zero norm.
+ */
+export function retrieveBranchChunks(
+  queryVector: readonly number[],
+  branchVectors: readonly BranchVector[],
+  topK: number,
+): RetrievedChunk[] {
+  if (branchVectors.length === 0) return []
+  const qn = norm(queryVector)
+  if (qn === 0) return []
+  const scored: RetrievedChunk[] = []
+  for (const bvi of branchVectors) {
+    const vn = norm(bvi.vector)
+    if (vn === 0) continue
+    const score = dot(queryVector, bvi.vector) / (qn * vn)
+    scored.push({ ...bvi.chunk, score })
+  }
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, Math.max(0, topK))
+}

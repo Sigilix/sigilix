@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest"
-import { buildBranchChunks, mergeBranchAware } from "../src/lib/branch-retrieval"
+import {
+  buildBranchChunks,
+  mergeBranchAware,
+  retrieveBranchChunks,
+  type BranchVector,
+} from "../src/lib/branch-retrieval"
 import type { RetrievedChunk } from "../src/lib/retrieval"
 
 function rc(path: string, a: number, b: number, score: number, content = "x"): RetrievedChunk {
@@ -50,5 +55,36 @@ describe("buildBranchChunks", () => {
 
   it("returns [] for an empty map", () => {
     expect(buildBranchChunks(new Map())).toEqual([])
+  })
+})
+
+function bv(path: string, a: number, b: number, vector: number[], content = "x"): BranchVector {
+  return { chunk: { path, lineStart: a, lineEnd: b, content }, vector }
+}
+
+describe("retrieveBranchChunks", () => {
+  it("ranks by cosine similarity to the query vector, returns RetrievedChunk[]", () => {
+    const q = [1, 0, 0]
+    const set: BranchVector[] = [
+      bv("far.ts", 1, 2, [0, 1, 0], "FAR"),
+      bv("near.ts", 1, 2, [2, 0, 0], "NEAR"),
+      bv("mid.ts", 1, 2, [1, 1, 0], "MID"),
+    ]
+    const out = retrieveBranchChunks(q, set, 3)
+    expect(out.map((c) => c.path)).toEqual(["near.ts", "mid.ts", "far.ts"])
+    expect(out[0].score).toBeCloseTo(1, 5)
+    expect(out[1].score).toBeCloseTo(Math.SQRT1_2, 5)
+    expect(out[0].content).toBe("NEAR")
+  })
+
+  it("respects topK", () => {
+    const q = [1, 0]
+    const set: BranchVector[] = [bv("a.ts", 1, 1, [1, 0]), bv("b.ts", 1, 1, [0.9, 0.1]), bv("c.ts", 1, 1, [0.1, 0.9])]
+    expect(retrieveBranchChunks(q, set, 2)).toHaveLength(2)
+  })
+
+  it("returns [] for empty set or zero-norm query", () => {
+    expect(retrieveBranchChunks([1, 0], [], 5)).toEqual([])
+    expect(retrieveBranchChunks([0, 0], [bv("a.ts", 1, 1, [1, 0])], 5)).toEqual([])
   })
 })

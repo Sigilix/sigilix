@@ -59,3 +59,45 @@ export function resolveImportToRepoPath(
   }
   return matches.size === 1 ? [...matches][0]! : null
 }
+
+export interface HelperBinding {
+  local: string
+  imported: string
+  helperSource: string
+  helperTest: string
+}
+
+/**
+ * Parse `code` and return bindings imported from same-PR TESTED helper
+ * modules (skipping type-only imports). `testedHelpers` maps a tested
+ * source path -> its sibling test path. Never throws — parse failure -> [].
+ */
+export function extractTestedHelperBindings(
+  importerPath: string,
+  code: string,
+  ext: SourceExt,
+  testedHelpers: ReadonlyMap<string, string>,
+): HelperBinding[] {
+  const parsed = parseSource(code, ext)
+  if (!parsed.ok) return []
+  const candidateSources = new Set(testedHelpers.keys())
+  const out: HelperBinding[] = []
+  walkAst(parsed.ast as AstNode, {
+    ImportDeclaration: (n) => {
+      if (n?.importKind === "type") return
+      const spec = typeof n?.source?.value === "string" ? n.source.value : ""
+      const helperSource = resolveImportToRepoPath(importerPath, spec, candidateSources)
+      if (helperSource === null) return
+      const helperTest = testedHelpers.get(helperSource)
+      if (!helperTest) return
+      for (const s of n?.specifiers ?? []) {
+        if (s?.importKind === "type") continue
+        const local = s?.local?.name
+        if (typeof local !== "string" || local.length === 0) continue
+        const imported = typeof s?.imported?.name === "string" ? s.imported.name : local
+        out.push({ local, imported, helperSource, helperTest })
+      }
+    },
+  })
+  return out
+}

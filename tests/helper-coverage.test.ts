@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { resolveImportToRepoPath } from "../src/lib/helper-coverage"
+import { extractTestedHelperBindings, resolveImportToRepoPath } from "../src/lib/helper-coverage"
 
 describe("resolveImportToRepoPath", () => {
   const tested = new Set(["src/lib/branch-retrieval.ts", "src/lib/foo.ts", "src/lib/widget/index.ts"])
@@ -21,5 +21,26 @@ describe("resolveImportToRepoPath", () => {
   })
   it("resolves a parent-relative specifier", () => {
     expect(resolveImportToRepoPath("src/lib/sub/x.ts", "../foo", tested)).toBe("src/lib/foo.ts")
+  })
+})
+
+describe("extractTestedHelperBindings", () => {
+  const tested = new Map<string, string>([["src/lib/branch-retrieval.ts", "tests/branch-retrieval.test.ts"]])
+  it("returns local+imported names bound from a tested helper, skipping type-only", () => {
+    const src = [
+      `import { mergeBranchAware, retrieveBranchChunks as rbc } from "./branch-retrieval"`,
+      `import type { BranchVector } from "./branch-retrieval"`,
+      `import { foo } from "./untested"`,
+      `const x = mergeBranchAware([], [], new Set())`,
+    ].join("\n")
+    const out = extractTestedHelperBindings("src/lib/ensemble.ts", src, ".ts", tested)
+    const byLocal = Object.fromEntries(out.map((b) => [b.local, b]))
+    expect(byLocal["mergeBranchAware"]).toMatchObject({ imported: "mergeBranchAware", helperSource: "src/lib/branch-retrieval.ts" })
+    expect(byLocal["rbc"]).toMatchObject({ imported: "retrieveBranchChunks", helperSource: "src/lib/branch-retrieval.ts" })
+    expect(byLocal["BranchVector"]).toBeUndefined()
+    expect(byLocal["foo"]).toBeUndefined()
+  })
+  it("returns [] when the file does not parse", () => {
+    expect(extractTestedHelperBindings("src/lib/x.ts", "const = = =", ".ts", tested)).toEqual([])
   })
 })

@@ -1368,11 +1368,12 @@ export async function handlePrReviewEnsemble(
     // only on orchCtrl abort). AUGMENTS — never replaces — the logic role's
     // shared snapshot via mergeLogicSnapshot below.
     //
-    // BUDGET NOTE: at the default maxCalls=3, preflight (1) + perf retrieval
-    // (1, when the performance specialist is in the lineup) leave
-    // budgetRemaining()=1, so the `> 2` gate below skips symbol retrieval —
-    // i.e. perf and symbol are mutually exclusive at the default budget, and
-    // symbol effectively fires on logic-PRs without a perf pass. Raise
+    // BUDGET NOTE: the gate (shouldRunSymbolRetrieval) requires
+    // budgetRemaining() > 1 — checked HERE, after preflight (and perf, if
+    // any) have already consumed. At the default maxCalls=3: a logic-only PR
+    // leaves budgetRemaining()=2 → symbol fires (1 reserved for synth); a PR
+    // that ALSO ran a perf pass leaves 1 → symbol defers (perf + symbol are
+    // mutually exclusive at the default budget). Raise
     // OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR (≥4) to run both — relevant
     // when enabling this flag for the SIG-86 bake-off.
     let logicSymbolSnapshot = ""

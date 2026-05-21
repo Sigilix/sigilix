@@ -104,16 +104,19 @@ describe("computeChunkOverlap", () => {
 })
 
 describe("shouldRunSymbolRetrieval", () => {
-  it("fires only when flag on, logic in lineup, and budget > 2", () => {
+  it("fires when flag on, logic in lineup, and budget > 1", () => {
     expect(shouldRunSymbolRetrieval("on", ["logic", "security"], 3)).toBe(true)
+    // budget=2 is the default-maxCalls=3 logic-only case (preflight took 1):
+    // symbol fires and still leaves 1 for the synth reserve.
+    expect(shouldRunSymbolRetrieval("on", ["logic"], 2)).toBe(true)
   })
   it("skips when flag is not 'on'", () => {
     expect(shouldRunSymbolRetrieval("off", ["logic"], 3)).toBe(false)
     expect(shouldRunSymbolRetrieval(undefined, ["logic"], 3)).toBe(false)
   })
-  it("skips when logic not in lineup or budget too low", () => {
+  it("skips when logic not in lineup or budget too low (<=1, reserve synth)", () => {
     expect(shouldRunSymbolRetrieval("on", ["security"], 3)).toBe(false)
-    expect(shouldRunSymbolRetrieval("on", ["logic"], 2)).toBe(false)
+    expect(shouldRunSymbolRetrieval("on", ["logic"], 1)).toBe(false)
   })
 })
 

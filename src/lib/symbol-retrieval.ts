@@ -142,9 +142,16 @@ export function computeChunkOverlap(
 /**
  * Gate: run symbol retrieval only when the env flag is "on", the logic
  * specialist is in the lineup, and the retrieve budget leaves room for
- * preflight + symbol + the synth conflict-verification reserve
- * (`budgetRemaining > 2` ⇒ maxCalls >= 3 default). Mirrors
- * `shouldRunPerfRetrieval` plus the flag.
+ * this call PLUS the synth conflict-verification reserve.
+ *
+ * Threshold vs `shouldRunPerfRetrieval`'s `> 2`: perf checks its budget
+ * BEFORE any retrieval consumes (it fires concurrently with preflight),
+ * so `> 2` there means maxCalls >= 3. Symbol retrieval is checked AFTER
+ * preflight (and perf, if any) have already consumed, so `budgetRemaining`
+ * is the count STILL FREE at that point. We need 1 for this call + 1
+ * reserved for synth ⇒ `budgetRemaining > 1` (>= 2). At the default
+ * maxCalls=3 this fires for a logic-only PR (preflight took 1, leaving 2)
+ * and correctly defers when a perf pass also ran (leaving 1).
  */
 export function shouldRunSymbolRetrieval(
   flag: string | undefined,
@@ -153,7 +160,7 @@ export function shouldRunSymbolRetrieval(
 ): boolean {
   return (flag ?? "").trim().toLowerCase() === "on" &&
     specialists.includes("logic") &&
-    budgetRemaining > 2
+    budgetRemaining > 1
 }
 
 /**

@@ -69,6 +69,7 @@ export type TestDropReason =
   | "missing-path" // sev>=4 testing finding with no concrete path to anchor
   | "uncited-missing-coverage" // "source lacks tests" claim not backed by a real ->NONE mapping for finding.path
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
+  | "glue-covered-by-helper" // SIG-128: ->NONE finding on a file whose changed logic fully delegates to same-PR tested helpers
 
 /**
  * Parse a `siblingMapping:<source>-><test|NONE>` evidenceRef into its
@@ -332,9 +333,11 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
  *   - a finding citing `testFileChanged:<path>` for a real changed test
  *     ALWAYS keeps (SIG-113 deletion/rename exception).
  *   - MISSING-COVERAGE class (cites a siblingMapping, not an inspected
- *     test): keep iff `citesRealMissingCoverage`; else reject
- *     `uncited-missing-coverage`. The finding must require a concrete
- *     `path`.
+ *     test): SIG-128 — reject `glue-covered-by-helper` first when the
+ *     pack marks `finding.path` helper-covered with status "all" (changed
+ *     logic fully delegates to same-PR tested helpers); otherwise keep iff
+ *     `citesRealMissingCoverage`; else reject `uncited-missing-coverage`.
+ *     The finding must require a concrete `path`.
  *   - INSUFFICIENT-TEST class (cites an inspected test, not a sibling
  *     mapping): keep iff `namesConcreteTarget` AND not a bare
  *     "needs more tests"; else reject `vague-insufficient-test`. The
@@ -396,6 +399,7 @@ export function evaluateTestFinding(
   // WITHIN the chosen class.
   //
   const insufficientClass = citesInspectedClass(finding)
+  const siblingMissingClass = citesSiblingMappingClass(finding)
   // Codex review (HIGH): an UNRESOLVED `coverageGap:` ref (a real one for
   // the finding's path already kept at :381) promotes to missing-class
   // ONLY when there's no competing real insufficient-test class. This
@@ -404,7 +408,7 @@ export function evaluateTestFinding(
   // real inspected-test citation to straddle both classes and escape via
   // ambiguous-keep (the bypass Codex flagged).
   const missingClass =
-    citesSiblingMappingClass(finding) || (citesCoverageGapClass(finding) && !insufficientClass)
+    siblingMissingClass || (citesCoverageGapClass(finding) && !insufficientClass)
 
   // AMBIGUOUS: cites BOTH kinds, or NEITHER. Prefer keep (the FP-safe
   // crux) — the SIG-113 gate already required SOME real citation, and a
@@ -414,6 +418,15 @@ export function evaluateTestFinding(
   if (missingClass === insufficientClass) return { keep: true }
 
   if (missingClass) {
+    // SIG-128: glue-covered suppression applies ONLY to the ->NONE
+    // sibling-mapping missing-coverage class (not coverageGap-class claims).
+    // A ->NONE missing-coverage finding on a source whose changed logic
+    // FULLY delegates to same-PR tested helpers (status "all") is the
+    // orchestrator-glue false positive. Reject it. `partial`/`none` are not
+    // suppressed (FP-safe — a genuinely-untested orchestrator still fires).
+    if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.status === "all") {
+      return { keep: false, reason: "glue-covered-by-helper" }
+    }
     // Missing-coverage claim. Admissible only when the cited mapping is
     // a real `siblingMapping:<finding.path>->NONE` in the pack (relevant
     // + the pack agrees the source is genuinely untested). A wrong-file

@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest"
 import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,
+  mergeHelperCoverage,
   mergeInspectedTestFileContents,
   pickFence,
   renderTestingEvidenceBlock,
@@ -195,6 +196,7 @@ describe("mergeInspectedTestFileContents", () => {
     testFilesNotInPromptDiff: [],
     siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }],
     inspectedTestFiles: [],
+    helperCoverageBySource: {},
   }
 
   it("populates inspectedTestFiles from the fetch result", () => {
@@ -234,6 +236,7 @@ describe("renderTestingEvidenceBlock", () => {
       testFilesNotInPromptDiff: [],
       siblingMappings: [],
       inspectedTestFiles: [],
+      helperCoverageBySource: {},
     }
     expect(renderTestingEvidenceBlock(pack, emptyFetch)).toBe("")
   })
@@ -249,6 +252,7 @@ describe("renderTestingEvidenceBlock", () => {
         { source: "src/lib/bar.ts", test: null },
       ],
       inspectedTestFiles: ["tests/foo.test.ts"],
+      helperCoverageBySource: {},
     }
     const block = renderTestingEvidenceBlock(pack, {
       contentByPath: { "tests/foo.test.ts": "describe('foo', () => {})" },
@@ -272,6 +276,7 @@ describe("renderTestingEvidenceBlock", () => {
       testFilesNotInPromptDiff: ["tests/foo.test.ts"],
       siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }],
       inspectedTestFiles: ["tests/foo.test.ts"],
+      helperCoverageBySource: {},
     }
     const block = renderTestingEvidenceBlock(pack, {
       contentByPath: { "tests/foo.test.ts": "describe('foo', () => {})" },
@@ -291,6 +296,7 @@ describe("renderTestingEvidenceBlock", () => {
       testFilesNotInPromptDiff: [],
       siblingMappings: [{ source: "src/lib/foo.ts", test: null }],
       inspectedTestFiles: [],
+      helperCoverageBySource: {},
     }
     const block = renderTestingEvidenceBlock(pack, emptyFetch)
     expect(block).toContain("Citation requirements")
@@ -307,6 +313,7 @@ describe("renderTestingEvidenceBlock", () => {
       testFilesNotInPromptDiff: [],
       siblingMappings: [],
       inspectedTestFiles: ["tests/foo.test.ts"],
+      helperCoverageBySource: {},
     }
     const block = renderTestingEvidenceBlock(pack, {
       contentByPath: { "tests/foo.test.ts": "describe('foo', () => {})" },
@@ -327,6 +334,7 @@ describe("renderTestingEvidenceBlock", () => {
       testFilesNotInPromptDiff: [],
       siblingMappings: [],
       inspectedTestFiles: ["tests/huge.test.ts"],
+      helperCoverageBySource: {},
     }
     const block = renderTestingEvidenceBlock(pack, {
       contentByPath: { "tests/huge.test.ts": "x".repeat(20_000) + "[…truncated…]" },
@@ -373,6 +381,7 @@ describe("renderTestingEvidenceBlock — M2 fence collision in embedded content"
       testFilesNotInPromptDiff: [],
       siblingMappings: [],
       inspectedTestFiles: ["tests/markdown.test.ts"],
+      helperCoverageBySource: {},
     }
     // A real-world test body that asserts markdown-fence rendering.
     const bodyWithFence = "it('renders mermaid', () => {\n  expect(out).toContain('```mermaid')\n})"
@@ -389,5 +398,37 @@ describe("renderTestingEvidenceBlock — M2 fence collision in embedded content"
     // The content + END sentinel both present (block not corrupted).
     expect(block).toContain("[TEST FILE CONTENT — `tests/markdown.test.ts`]")
     expect(block).toContain("[END `tests/markdown.test.ts`]")
+  })
+})
+
+describe("SIG-128 helper-coverage annotation", () => {
+  const emptyFetch = { contentByPath: {}, failedPaths: [], truncatedPaths: [], totalChars: 0 }
+  function packWith(coverage: Record<string, { status: "all" | "partial" | "none"; helpers: string[] }>) {
+    const base = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/ensemble.ts", "src/lib/branch-retrieval.ts", "tests/branch-retrieval.test.ts"],
+      reviewedFilePaths: ["src/lib/ensemble.ts", "src/lib/branch-retrieval.ts", "tests/branch-retrieval.test.ts"],
+    })
+    return mergeHelperCoverage(base, coverage)
+  }
+  it("renders an 'all delegates' note for an all-status ->NONE source", () => {
+    const pack = packWith({ "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] } })
+    const block = renderTestingEvidenceBlock(pack, emptyFetch)
+    expect(block).toContain("ALL changed logic here delegates to helpers unit-tested in this PR")
+    expect(block).toContain("src/lib/branch-retrieval.ts")
+  })
+  it("renders a 'partial' note without suppressing", () => {
+    const pack = packWith({ "src/lib/ensemble.ts": { status: "partial", helpers: ["src/lib/branch-retrieval.ts"] } })
+    expect(renderTestingEvidenceBlock(pack, emptyFetch)).toContain("SOME changed lines call tested helpers")
+  })
+  it("leaves a none-status ->NONE source with the original wording", () => {
+    const pack = packWith({ "src/lib/ensemble.ts": { status: "none", helpers: [] } })
+    expect(renderTestingEvidenceBlock(pack, emptyFetch)).toContain("no sibling test file in this PR")
+  })
+  it("mergeHelperCoverage is immutable and defaults to {}", () => {
+    const base = buildTestingEvidencePack({ splitFilePaths: ["src/lib/ensemble.ts"], reviewedFilePaths: ["src/lib/ensemble.ts"] })
+    expect(base.helperCoverageBySource).toEqual({})
+    const merged = mergeHelperCoverage(base, { "src/lib/ensemble.ts": { status: "all", helpers: [] } })
+    expect(base.helperCoverageBySource).toEqual({})
+    expect(merged.helperCoverageBySource["src/lib/ensemble.ts"]?.status).toBe("all")
   })
 })

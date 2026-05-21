@@ -82,10 +82,12 @@ import {
   buildTestingEvidencePack,
   applyTestFileContentCaps,
   mergeInspectedTestFileContents,
+  mergeHelperCoverage,
   renderTestingEvidenceBlock,
   type TestingEvidencePack,
   type InspectedTestFileFetchResult,
 } from "./testing-evidence-pack"
+import { detectHelperCoverage } from "./helper-coverage"
 import {
   buildSecurityFactManifest,
   type SecurityFact,
@@ -1880,8 +1882,27 @@ export async function handlePrReviewEnsemble(
       testingEvidencePackInitial,
       testingEvidenceFetchResult,
     )
-    const testingEvidenceBlock = renderTestingEvidenceBlock(
+    // SIG-128: credit orchestrator glue whose changed logic delegates to
+    // same-PR tested helpers. Uses `fullDiff` (the COMPLETE per-file patch)
+    // for added-line text — NOT the truncated/first-batch `diff` — and the
+    // already-fetched changed JS/TS head content (`astFilesByPath`). A source
+    // missing from either input fails closed to "none" (never suppresses).
+    // SIG-128 observability: when `astFilesByPath` is empty (e.g. all retrieval
+    // flags off so no head content was fetched), every source fails closed to
+    // "none" and this credits nothing — a future flag change must not silently
+    // disable this path.
+    const helperCoverage = detectHelperCoverage({
+      filesByPath: astFilesByPath,
+      addedLineTextByPath: buildAddedLineTextByLine(fullDiff),
+      siblingMappings: testingEvidencePackInitial.siblingMappings,
+      testContentByPath: testingEvidenceFetchResult.contentByPath,
+    })
+    const testingEvidencePackWithCoverage = mergeHelperCoverage(
       testingEvidencePack,
+      helperCoverage.coverageBySource,
+    )
+    const testingEvidenceBlock = renderTestingEvidenceBlock(
+      testingEvidencePackWithCoverage,
       testingEvidenceFetchResult,
     )
 
@@ -1912,11 +1933,11 @@ export async function handlePrReviewEnsemble(
       console.log(JSON.stringify({
         event: "pr-review-testing-evidence-built",
         owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        sourceFilesChanged_count: testingEvidencePack.sourceFilesChanged.length,
-        testFilesChanged_count: testingEvidencePack.testFilesChanged.length,
-        testFilesInPromptDiff_count: testingEvidencePack.testFilesInPromptDiff.length,
-        testFilesNotInPromptDiff_count: testingEvidencePack.testFilesNotInPromptDiff.length,
-        inspectedTestFiles_count: testingEvidencePack.inspectedTestFiles.length,
+        sourceFilesChanged_count: testingEvidencePackWithCoverage.sourceFilesChanged.length,
+        testFilesChanged_count: testingEvidencePackWithCoverage.testFilesChanged.length,
+        testFilesInPromptDiff_count: testingEvidencePackWithCoverage.testFilesInPromptDiff.length,
+        testFilesNotInPromptDiff_count: testingEvidencePackWithCoverage.testFilesNotInPromptDiff.length,
+        inspectedTestFiles_count: testingEvidencePackWithCoverage.inspectedTestFiles.length,
         contentTotalChars: testingEvidenceFetchResult.totalChars,
         truncatedPaths_count: testingEvidenceFetchResult.truncatedPaths.length,
         failedFetchPaths_count: testingEvidenceFetchResult.failedPaths.length,
@@ -2538,7 +2559,7 @@ export async function handlePrReviewEnsemble(
       // citation gate fires on uncited `category: "testing"` findings.
       // Empty pack (no source/test files) → gate no-ops via the
       // pure helper's "pack undefined or empty" branch.
-      testingEvidence: testingEvidencePack,
+      testingEvidence: testingEvidencePackWithCoverage,
       onTestingFindingDropped: (finding, reason) => {
         console.log(JSON.stringify({
           event: "pr-review-testing-finding-dropped",

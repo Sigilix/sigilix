@@ -23,8 +23,8 @@ import {
 } from "../src/lib/indexer"
 
 describe("CHUNKER_VERSION constant", () => {
-  it("is pinned at 1 — bump invalidates the index", () => {
-    expect(CHUNKER_VERSION).toBe(1)
+  it("is pinned at 2 — bump invalidates the index (SIG-133 split-not-drop)", () => {
+    expect(CHUNKER_VERSION).toBe(2)
   })
   it("MAX_FILES_PER_JOB is 1000 per the ARC-235 spec", () => {
     expect(MAX_FILES_PER_JOB).toBe(1000)
@@ -186,13 +186,91 @@ describe("chunkFile", () => {
     expect(chunks.length).toBeGreaterThan(0)
   })
 
-  it("skips windows that exceed MAX_CHUNK_CHARS (=1800)", () => {
+  it("SPLITS windows that exceed MAX_CHUNK_CHARS (=1400) instead of dropping them", () => {
+    // SIG-133: an over-cap window used to be silently dropped (data loss).
+    // It must now be split into consecutive sub-chunks, all <= the cap,
+    // collectively covering every source line of the window.
     const longLine = "x".repeat(100)
-    // 30 of these = 30 * 100 + 29 newlines = 3029 chars (way over 1800)
-    const content = Array(30).fill(longLine).join("\n")
+    // 30 of these = 30 * 100 + 29 newlines = 3029 chars (over 1400).
+    const lines = Array(30).fill(longLine)
+    const content = lines.join("\n")
     const chunks = chunkFile("x.ts", content)
-    // Each window is over MAX_CHUNK_CHARS → all skipped.
-    expect(chunks).toEqual([])
+    // Not dropped.
+    expect(chunks.length).toBeGreaterThan(0)
+    // Every sub-chunk is within the token-safe cap.
+    for (const c of chunks) {
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+    }
+    // The sub-chunks (from the first over-cap window starting at line 1)
+    // together cover lines 1..30 with no gap. Filter to the chunks that
+    // belong to the first window (lineStart starts at 1) — for a 30-line
+    // file of long lines every window is over-cap, but the first window
+    // covers lines 1..30 and that range must be fully covered.
+    const firstWindow = chunks.filter((c) => c.lineStart >= 1 && c.lineEnd <= 30)
+    expect(firstWindow.length).toBeGreaterThan(0)
+    let cursor = 1
+    for (const c of firstWindow) {
+      if (c.lineStart > cursor) break // jumped past line 30 into next window overlap
+      expect(c.lineStart).toBe(cursor)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBeGreaterThan(30) // covered through line 30
+  })
+
+  it("returns exactly one chunk for a normal under-cap window (unchanged shape)", () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`)
+    const content = lines.join("\n")
+    const chunks = chunkFile("normal.ts", content)
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]).toMatchObject({
+      path: "normal.ts",
+      lineStart: 1,
+      lineEnd: 10,
+      content,
+    })
+    expect(chunks[0]!.content.length).toBeLessThanOrEqual(1400)
+  })
+
+  it("hard-splits a single line longer than MAX_CHUNK_CHARS into char slices", () => {
+    const longLine = "y".repeat(5000)
+    const chunks = chunkFile("hard.ts", longLine)
+    // ceil(5000 / 1400) = 4 sub-chunks.
+    expect(chunks).toHaveLength(Math.ceil(5000 / 1400))
+    for (const c of chunks) {
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+      // A single physical line → lineStart === lineEnd === 1.
+      expect(c.lineStart).toBe(1)
+      expect(c.lineEnd).toBe(1)
+    }
+    // Concatenating the slices reconstructs the original line exactly.
+    expect(chunks.map((c) => c.content).join("")).toBe(longLine)
+  })
+
+  it("splits the old 30-line drop case (3029 chars) preserving every source line", () => {
+    const lines = Array.from({ length: 30 }, (_, i) =>
+      `${i + 1}:`.padEnd(100, "a"),
+    )
+    const content = lines.join("\n")
+    const chunks = chunkFile("x.ts", content)
+    expect(chunks.length).toBeGreaterThan(1)
+    // Restrict to the first window (lines 1..30) sub-chunks.
+    const firstWindow = chunks.filter((c) => c.lineStart >= 1 && c.lineEnd <= 30)
+    for (const c of firstWindow) {
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+    }
+    // Reconstruct lines 1..30 from the first window's sub-chunks: each
+    // sub-chunk's content is a "\n"-join of consecutive source lines, so
+    // joining the sub-chunks back with "\n" yields lines 1..30 verbatim.
+    let cursor = 1
+    const reconstructed: string[] = []
+    for (const c of firstWindow) {
+      if (c.lineStart > cursor) break
+      expect(c.lineStart).toBe(cursor)
+      reconstructed.push(c.content)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBeGreaterThan(30)
+    expect(reconstructed.join("\n")).toBe(lines.slice(0, 30).join("\n"))
   })
 })
 

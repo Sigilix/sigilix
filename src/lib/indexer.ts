@@ -70,8 +70,13 @@ import { enqueueWarmupRerunsForIndex } from "./warmup"
  * Chunker config version. Bump when CHUNK_LINES / CHUNK_OVERLAP /
  * MAX_CHUNK_CHARS / chunk algorithm changes. The manifest's
  * chunkerVersion field invalidates a stale index when this rotates.
+ *
+ * v2 (SIG-133): split-not-drop. Over-cap windows are now split into
+ * consecutive sub-chunks instead of being silently dropped, and the
+ * cap was lowered to a token-safe 1400 chars. The bump forces a
+ * re-index so previously-dropped dense regions get indexed.
  */
-export const CHUNKER_VERSION = 1
+export const CHUNKER_VERSION = 2
 export const MAX_FILES_PER_JOB = 1000
 
 const SKIP_DIRS = new Set([
@@ -107,7 +112,15 @@ const INDEXED_EXTENSIONS = new Set([
 const MAX_FILE_BYTES = 200 * 1024
 const CHUNK_LINES = 30
 const CHUNK_OVERLAP = 10
-const MAX_CHUNK_CHARS = 1_800
+// Token-safe cap (SIG-133). The embedder (bge-base-en-v1.5) is a BERT
+// WordPiece model with a ~512-token context. Code averages ~3 chars/token,
+// so 1400 chars ≈ ~470 tokens, leaving margin for [CLS]/[SEP] + dense
+// lines that pack more tokens per char. No tokenizer is available offline
+// to measure exactly, so 1400 is the conservative choice; SIG-131 may
+// re-tune this with a real token measurement. The previous 1800-char cap
+// silently dropped 2.2% of windows and left ~15% in the 1400-1800 band
+// that likely overflowed the context and got truncated by the embedder.
+const MAX_CHUNK_CHARS = 1_400
 const EMBED_BATCH = 16
 const UPSERT_BATCH = 100
 
@@ -179,10 +192,93 @@ function pathHitsSkipDir(path: string): boolean {
 }
 
 /**
- * Split file content into overlapping line windows. Algorithm exactly
- * matches scripts/index-repo.mjs:116-141 — 30-line windows with 10-line
- * overlap, skip empty windows and over-MAX_CHUNK_CHARS windows, stop
- * at end of file.
+ * Split the lines of a single over-cap window into consecutive
+ * sub-chunks, each <= MAX_CHUNK_CHARS, with no content lost (SIG-133).
+ *
+ * `windowStartLine` is the 1-based absolute file line number of
+ * `lines[0]`, so emitted sub-chunks carry true file line ranges.
+ *
+ * Splitting is on LINE boundaries: lines accumulate into a buffer; before
+ * appending a line, if `buffer + "\n" + line` would exceed the cap the
+ * buffer is flushed as a sub-chunk and a fresh buffer starts. A SINGLE
+ * line that itself exceeds the cap is hard-split into <=cap character
+ * slices, each emitted with `lineStart === lineEnd ===` that line's
+ * absolute number. `path` is left empty here and set by the caller.
+ */
+export function splitOversizedWindow(
+  lines: ReadonlyArray<string>,
+  windowStartLine: number,
+): Chunk[] {
+  const chunks: Chunk[] = []
+  let buf = ""
+  let bufStartLine = windowStartLine
+  let bufEndLine = windowStartLine
+
+  const flush = (): void => {
+    if (buf.length === 0) return
+    chunks.push({ path: "", lineStart: bufStartLine, lineEnd: bufEndLine, content: buf })
+    buf = ""
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ""
+    const absLine = windowStartLine + i
+
+    // A single physical line longer than the cap: flush any pending
+    // buffer, then hard-split this line into <=cap char slices, each
+    // tagged with this line's absolute number (lineStart === lineEnd).
+    if (line.length > MAX_CHUNK_CHARS) {
+      flush()
+      for (let off = 0; off < line.length; off += MAX_CHUNK_CHARS) {
+        chunks.push({
+          path: "",
+          lineStart: absLine,
+          lineEnd: absLine,
+          content: line.slice(off, off + MAX_CHUNK_CHARS),
+        })
+      }
+      continue
+    }
+
+    // Would appending this line (with its joining newline if the buffer
+    // is non-empty) overflow the cap? If so, flush and start fresh.
+    const candidateLength = buf.length === 0 ? line.length : buf.length + 1 + line.length
+    if (candidateLength > MAX_CHUNK_CHARS) {
+      flush()
+      buf = line
+      bufStartLine = absLine
+      bufEndLine = absLine
+      continue
+    }
+
+    if (buf.length === 0) {
+      buf = line
+      bufStartLine = absLine
+    } else {
+      buf = `${buf}\n${line}`
+    }
+    bufEndLine = absLine
+  }
+
+  flush()
+  return chunks
+}
+
+/**
+ * Split file content into overlapping line windows — 30-line windows
+ * with 10-line overlap, skip empty windows, stop at end of file.
+ *
+ * SIG-133 (split-not-drop): a window whose char length exceeds
+ * MAX_CHUNK_CHARS is no longer dropped (that silently lost 2.2% of
+ * windows on our own repo, e.g. dense schema regions, and left ~15% in
+ * the 1400-1800 char band that likely overflowed the embedder's ~512-
+ * token context and got truncated). It is now SPLIT into consecutive
+ * sub-chunks via splitOversizedWindow(), each <= MAX_CHUNK_CHARS, with
+ * no content lost. The cap was also lowered to a token-safe 1400 chars.
+ *
+ * NOTE: this NO LONGER matches scripts/index-repo.mjs (which still drops
+ * over-cap windows at the old 1800 cap). That script is intentionally
+ * left untouched by SIG-133; the Worker indexer is the canonical path.
  */
 export function chunkFile(path: string, content: string): Chunk[] {
   const lines = content.split("\n")
@@ -191,12 +287,18 @@ export function chunkFile(path: string, content: string): Chunk[] {
   const step = Math.max(1, CHUNK_LINES - CHUNK_OVERLAP)
   for (let start = 0; start < lines.length; start += step) {
     const end = Math.min(start + CHUNK_LINES, lines.length)
-    const slice = lines.slice(start, end).join("\n")
+    const windowLines = lines.slice(start, end)
+    const slice = windowLines.join("\n")
     if (slice.trim().length === 0) {
       if (end === lines.length) break
       continue
     }
     if (slice.length > MAX_CHUNK_CHARS) {
+      // Split-not-drop: emit consecutive sub-chunks instead of losing
+      // the window. windowStartLine is 1-based (start is 0-based).
+      for (const sub of splitOversizedWindow(windowLines, start + 1)) {
+        chunks.push({ ...sub, path })
+      }
       if (end === lines.length) break
       continue
     }

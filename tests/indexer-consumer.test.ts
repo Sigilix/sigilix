@@ -195,7 +195,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       indexedAt: "2026-05-17T00:00:00.000Z",
       modelId: EMBEDDING_MODEL,
       embeddingDim: EMBEDDING_DIMENSIONS,
-      chunkerVersion: 1,
+      chunkerVersion: 2,
       windowLines: 30, overlapLines: 10,
     }
     kv.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest))
@@ -284,7 +284,7 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
       repo: "sigilix",
       headSha,
       modelId: EMBEDDING_MODEL,
-      chunkerVersion: 1,
+      chunkerVersion: 2,
     })
     const job: JobMessage = {
       type: "index-repo",
@@ -518,7 +518,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
       // future EMBEDDING_MODEL rotation doesn't make this test silently
       // hit the config-drift guard instead of exercising the B3 invariant.
       modelId: EMBEDDING_MODEL,
-      chunkerVersion: 1,
+      chunkerVersion: 2,
     })
     const shardJob: JobMessage = {
       type: "index-repo",

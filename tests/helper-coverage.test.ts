@@ -65,10 +65,15 @@ describe("isSubstantiveAddedLine", () => {
     expect(isSubstantiveAddedLine("  type Local = number")).toBe(false)
     expect(isSubstantiveAddedLine("  // a comment")).toBe(false)
     expect(isSubstantiveAddedLine("   * jsdoc")).toBe(false)
+    expect(isSubstantiveAddedLine("*/")).toBe(false)
+    expect(isSubstantiveAddedLine("*")).toBe(false)
     expect(isSubstantiveAddedLine("")).toBe(false)
     expect(isSubstantiveAddedLine("   }")).toBe(false)
     expect(isSubstantiveAddedLine("  })")).toBe(false)
     expect(isSubstantiveAddedLine(`export { foo } from "./y"`)).toBe(false)
+  })
+  it("treats a generator method declaration as substantive (not a comment line)", () => {
+    expect(isSubstantiveAddedLine("*build() {")).toBe(true)
   })
 })
 
@@ -78,10 +83,16 @@ describe("hasInlineControlFlow", () => {
     expect(hasInlineControlFlow("const ok = a && b")).toBe(true)
     expect(hasInlineControlFlow("const ok = x || y")).toBe(true)
     expect(hasInlineControlFlow("for (const x of xs) go(x)")).toBe(true)
+    expect(hasInlineControlFlow("const x = c ? helper(a) : b")).toBe(true)
+    expect(hasInlineControlFlow("const y = a ?? helper(b)")).toBe(true)
   })
   it("returns false for a pure delegating line", () => {
     expect(hasInlineControlFlow("const m = mergeBranchAware(a, b, p)")).toBe(false)
     expect(hasInlineControlFlow("return helper(x)")).toBe(false)
+  })
+  it("returns false for optional chaining / optional params (not control flow)", () => {
+    expect(hasInlineControlFlow("const v = obj?.prop")).toBe(false)
+    expect(hasInlineControlFlow("function f(x?: number) { return helper(x) }")).toBe(false)
   })
 })
 

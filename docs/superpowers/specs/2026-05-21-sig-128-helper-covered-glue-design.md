@@ -73,7 +73,7 @@ untested inline logic). The accepted shape:
 ```
 detectHelperCoverage(args: {
   filesByPath: ReadonlyMap<string, string>   // changed JS/TS head content
-  changedLines: ChangedLines                  // from buildChangedLines(diff)
+  addedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>  // per-file added-line TEXT from buildAddedLineTextByLine(fullDiff)
   siblingMappings: readonly TestingSiblingMapping[]
   testContentByPath: Record<string, string>   // inspected sibling-test content
 }): { coverageBySource: Record<string, HelperCoverage> }
@@ -123,8 +123,9 @@ doesn't receive.
   (or reuse `astFilesByPath` when already populated and skip otherwise →
   `none`, fail closed).
 - **Diff-basis consistency (Codex MED):** the testing pack is built from the
-  full post-filter inventory, but `buildChangedLines(diff)` uses the
-  possibly-truncated first-batch `diff`. Detection must use a changed-line basis
+  full post-filter inventory, so detection reads its per-file added-line TEXT
+  map from `buildAddedLineTextByLine(fullDiff)` (the FULL diff, not the
+  possibly-truncated first-batch `diff`). Detection must use a changed-line basis
   consistent with the file content it parses. If a `->NONE` source's complete
   added-line set isn't represented in the available diff (truncated / later
   batch), that file fails closed to `none`. (Implementation plan pins which
@@ -163,7 +164,7 @@ are all untouched. Rides the existing `OPENCLAW_TESTS_VALIDATOR_MODE`
 
 ```
 full diff inventory ─ buildTestingEvidencePack ─→ pack (siblingMappings, ->NONE sources)
-astFilesByPath + buildChangedLines(diff) + inspected test content
+astFilesByPath + buildAddedLineTextByLine(fullDiff) + inspected test content
         └─ detectHelperCoverage ─→ coverageBySource {source: all|partial|none}
                 └─ mergeHelperCoverage(pack, …) ─→ pack.helperCoverageBySource
                         ├─ renderTestingEvidenceBlock  (all/partial annotation, informational)

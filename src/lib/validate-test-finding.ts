@@ -399,6 +399,7 @@ export function evaluateTestFinding(
   // WITHIN the chosen class.
   //
   const insufficientClass = citesInspectedClass(finding)
+  const siblingMissingClass = citesSiblingMappingClass(finding)
   // Codex review (HIGH): an UNRESOLVED `coverageGap:` ref (a real one for
   // the finding's path already kept at :381) promotes to missing-class
   // ONLY when there's no competing real insufficient-test class. This
@@ -407,7 +408,7 @@ export function evaluateTestFinding(
   // real inspected-test citation to straddle both classes and escape via
   // ambiguous-keep (the bypass Codex flagged).
   const missingClass =
-    citesSiblingMappingClass(finding) || (citesCoverageGapClass(finding) && !insufficientClass)
+    siblingMissingClass || (citesCoverageGapClass(finding) && !insufficientClass)
 
   // AMBIGUOUS: cites BOTH kinds, or NEITHER. Prefer keep (the FP-safe
   // crux) — the SIG-113 gate already required SOME real citation, and a
@@ -417,11 +418,13 @@ export function evaluateTestFinding(
   if (missingClass === insufficientClass) return { keep: true }
 
   if (missingClass) {
-    // SIG-128: a ->NONE missing-coverage finding on a source whose changed
-    // logic FULLY delegates to same-PR tested helpers (status "all") is the
+    // SIG-128: glue-covered suppression applies ONLY to the ->NONE
+    // sibling-mapping missing-coverage class (not coverageGap-class claims).
+    // A ->NONE missing-coverage finding on a source whose changed logic
+    // FULLY delegates to same-PR tested helpers (status "all") is the
     // orchestrator-glue false positive. Reject it. `partial`/`none` are not
     // suppressed (FP-safe — a genuinely-untested orchestrator still fires).
-    if (pack.helperCoverageBySource?.[finding.path.trim()]?.status === "all") {
+    if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.status === "all") {
       return { keep: false, reason: "glue-covered-by-helper" }
     }
     // Missing-coverage claim. Admissible only when the cited mapping is

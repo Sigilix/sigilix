@@ -124,7 +124,10 @@ export function extractTestedHelperBindings(
 export function isSubstantiveAddedLine(text: string): boolean {
   const t = text.trim()
   if (t.length === 0) return false
-  if (t.startsWith("//") || t.startsWith("/*") || t.startsWith("*")) return false
+  if (t.startsWith("//") || t.startsWith("/*")) return false
+  // A `*` line is a comment continuation/close ONLY when followed by space,
+  // `/`, or end — NOT a generator method like `*build()`.
+  if (/^\*(\s|\/|$)/.test(t)) return false
   if (STRUCTURAL_CLOSE_LINE.test(t)) return false
   if (/^import\b/.test(t)) return false
   if (/^export\s+(type|interface)\b/.test(t)) return false
@@ -138,11 +141,13 @@ export function isSubstantiveAddedLine(text: string): boolean {
  * inline control-flow / boolean logic is NOT pure delegation — it carries
  * untested logic of its own, so it must not count toward `all`. Conservative
  * and FN-safe: when in doubt we DON'T credit (→ partial/none → finding kept).
- * Markers: `if`/`for`/`while`/`switch` keywords, `&&`, `||`.
+ * Markers: `if`/`for`/`while`/`switch` keywords, `&&`, `||`, `??`, ternary.
  */
 export function hasInlineControlFlow(text: string): boolean {
   if (/\b(if|for|while|switch)\b/.test(text)) return true
   if (text.includes("&&") || text.includes("||")) return true
+  if (text.includes("??")) return true        // nullish coalescing
+  if (/ \? /.test(text)) return true            // ternary (spaced; not ?. ?? ?:)
   return false
 }
 

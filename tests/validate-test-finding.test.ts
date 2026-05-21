@@ -334,6 +334,28 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     const r = evaluateTestFinding(orchFinding(), orchPack())
     expect(r.keep).toBe(true)
   })
+
+  // SIG-128 (CodeRabbit): glue-covered suppression is scoped to the ->NONE
+  // sibling-mapping missing class ONLY. A coverageGap-class missing claim
+  // (unresolved coverageGap ref, no ->NONE) on the SAME helper-covered
+  // status:"all" source must NOT be labeled glue-covered — it falls to the
+  // coverageGap reject path (uncited-missing-coverage) instead.
+  it("does NOT label a coverageGap-only missing finding as glue-covered (scoped to ->NONE class)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        score: 5,
+        path: "src/lib/ensemble.ts",
+        headline: "`ensemble` line 42 added without coverage",
+        body: "The new branch at src/lib/ensemble.ts:42 is uncovered.",
+        evidenceRefs: ["coverageGap:src/lib/ensemble.ts:42"],
+        inspectedTestFiles: undefined,
+      }),
+      orchPack({ status: "all", helpers: ["src/lib/branch-retrieval.ts"] }),
+      new Set<string>(), // empty real-gap set → the coverageGap ref is unreal
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("uncited-missing-coverage")
+  })
 })
 
 // ── Integration with validateForSubmission ──────────────────────

@@ -561,6 +561,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     if (!(await leaseAllows(env, owner, repo, runId))) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
+        site: "bootstrap-enqueue",
         owner, repo, run_id: runId,
       }))
       return
@@ -582,6 +583,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (!(await leaseAllows(env, owner, repo, runId))) {
     console.warn(JSON.stringify({
       event: "index-job-skip-superseded-finalize",
+      site: "bootstrap-manifest",
       owner, repo, run_id: runId,
     }))
     return
@@ -710,6 +712,9 @@ async function handleShardJob(
     }))
     return
   }
+  // The check above and this refresh are NOT atomic, but that's safe: the
+  // authoritative gate is persistVectorIds' own lease read + computeMerge
+  // (a newer run that claims in this window stale-skips us at persist time).
   await writeActiveRun(env, owner, repo, shard.runId)
   const vectorsResult = await persistVectorIds({
     env, owner, repo,
@@ -734,6 +739,7 @@ async function handleShardJob(
     if (!(await leaseAllows(env, owner, repo, shard.runId))) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
+        site: "shard-manifest",
         owner, repo, run_id: shard.runId,
       }))
       return
@@ -776,6 +782,7 @@ async function handleShardJob(
   if (!(await leaseAllows(env, owner, repo, shard.runId))) {
     console.warn(JSON.stringify({
       event: "index-job-skip-superseded-finalize",
+      site: "shard-enqueue",
       owner, repo, run_id: shard.runId,
     }))
     return

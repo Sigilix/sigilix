@@ -81,9 +81,9 @@ function makeKvStub(): {
     async get(key: string): Promise<string | null> {
       return store.get(key) ?? null
     },
-    async put(key: string, value: string): Promise<void> {
+    put: vi.fn(async (key: string, value: string): Promise<void> => {
       store.set(key, value)
-    },
+    }),
     async delete(key: string): Promise<void> {
       store.delete(key)
     },
@@ -247,14 +247,14 @@ describe("handleIndexRepoJob — freshness skip", () => {
     expect(mockVectorizeUpsert).toHaveBeenCalled()
   })
 
-  // SIG-136: the re-index abort regression. UNLIKE the test above, this one
-  // ALSO seeds a prior `repo-index-vectors` record for the OLD run — the
-  // missing piece that drives the real stale-skip path. Pre-fix, computeMerge
-  // saw the stored old-run vectors record + the old-run manifest as the
-  // "current" run and stale-skipped the new run → no upsert, no new manifest
-  // (event: index-job-skip-stale-bootstrap). With the early lease claim, the
-  // new run owns the lease before persistVectorIds, so the merge supersedes
-  // and the repo actually re-indexes.
+  // SIG-136: reproduces the stale-skip abort. UNLIKE the test above, this one
+  // ALSO seeds a prior `repo-index-vectors` record for the OLD run — the piece
+  // that drives the real stale-skip path. Pre-fix, a repo with a stale manifest
+  // + a stored old-run vectors record stale-skipped the new run (no upsert, no
+  // new manifest); now the lease lets computeMerge supersede so it re-indexes.
+  // NOTE: HIGH-1's concurrent embedding-window race (the early-claim move) is a
+  // best-effort-KV concurrency property, covered by the design + the claim
+  // ordering — it is not directly reproducible in this single-threaded test.
   it("re-indexes (does NOT stale-abort) when a prior old-run vectors record exists", async () => {
     mockGetRepoTree.mockResolvedValue({
       tree: [{ path: "src/index.ts", type: "blob", size: 100 }],
@@ -318,6 +318,15 @@ describe("handleIndexRepoJob — freshness skip", () => {
     expect(storedLease).toBeTruthy()
     const parsedLease = JSON.parse(storedLease as string) as { runId: string }
     expect(parsedLease.runId).toBe(newRunId)
+
+    // SIG-136 HIGH-1: the lease must be claimed BEFORE the (slow) embedding/upsert work.
+    const putSpy = (env.OPENCLAW_STATE as unknown as { put: ReturnType<typeof vi.fn> }).put
+    const leaseKey = activeRunKey("Arc-and-Anchor", "sigilix")
+    const leaseCallIdx = putSpy.mock.calls.findIndex((args) => args[0] === leaseKey)
+    expect(leaseCallIdx).toBeGreaterThanOrEqual(0)
+    const leasePut = putSpy.mock.invocationCallOrder[leaseCallIdx]!
+    const firstUpsert = mockVectorizeUpsert.mock.invocationCallOrder[0]!
+    expect(leasePut).toBeLessThan(firstUpsert)
   })
 })
 

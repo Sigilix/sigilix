@@ -124,7 +124,7 @@ describe("computeMerge — run-aware semantics", () => {
     owner: "Arc-and-Anchor",
     repo: "sigilix",
     runId: "run-A",
-    currentManifestRunId: "run-A" as string | null,
+    activeRunId: "run-A" as string | null,
   }
 
   it("CREATE — no existing record", () => {
@@ -190,7 +190,7 @@ describe("computeMerge — run-aware semantics", () => {
           byPath: { "src/old.ts": ["x"] },
         },
       },
-      currentManifestRunId: "run-A",
+      activeRunId: "run-A",
       idsByPathSlice: { "src/a.ts": ["a1"] },
     })
     expect(outcome.action).toBe("superseded")
@@ -211,7 +211,7 @@ describe("computeMerge — run-aware semantics", () => {
           byPath: { "src/a.ts": ["a1"] },
         },
       },
-      currentManifestRunId: "current-run",
+      activeRunId: "current-run",
       idsByPathSlice: { "src/a.ts": ["a-stale"] },
     })
     expect(outcome.action).toBe("stale-skip")
@@ -231,7 +231,7 @@ describe("computeMerge — run-aware semantics", () => {
           byPath: { "src/a.ts": ["a1"] },
         },
       },
-      currentManifestRunId: null,
+      activeRunId: null,
       idsByPathSlice: { "src/b.ts": ["b1"] },
     })
     expect(outcome.action).toBe("stale-skip")
@@ -247,6 +247,30 @@ describe("computeMerge — run-aware semantics", () => {
     if (outcome.action === "invalid-overwrite") {
       expect(outcome.vectors.byPath).toEqual({ "src/a.ts": ["a1"] })
     }
+  })
+
+  it("supersedes when the active-run lease names the incoming run (SIG-136 re-index)", () => {
+    const existing = { kind: "ok", vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } } } as const
+    const out = computeMerge({ existing, owner: "o", repo: "r", runId: "new", idsByPathSlice: { "a.ts": ["id2"] }, activeRunId: "new" })
+    expect(out.action).toBe("superseded")
+  })
+  it("stale-skips when a DIFFERENT run holds the lease (redelivery / superseded)", () => {
+    const existing = { kind: "ok", vectors: { v: 1, owner: "o", repo: "r", runId: "old", byPath: { "a.ts": ["id1"] } } } as const
+    const out = computeMerge({ existing, owner: "o", repo: "r", runId: "old", idsByPathSlice: { "a.ts": ["id1"] }, activeRunId: "newer" })
+    expect(out.action).toBe("stale-skip")
+  })
+  it("lease mismatch stale-skips even when existing is MISSING (gates create)", () => {
+    const out = computeMerge({ existing: { kind: "missing" }, owner: "o", repo: "r", runId: "run-1", idsByPathSlice: { "a.ts": ["id1"] }, activeRunId: "run-2" })
+    expect(out.action).toBe("stale-skip")
+  })
+  it("creates when existing missing and the lease is ours", () => {
+    const out = computeMerge({ existing: { kind: "missing" }, owner: "o", repo: "r", runId: "run-1", idsByPathSlice: { "a.ts": ["id1"] }, activeRunId: "run-1" })
+    expect(out.action).toBe("created")
+  })
+  it("extends a continuation shard of the same run", () => {
+    const existing = { kind: "ok", vectors: { v: 1, owner: "o", repo: "r", runId: "run-1", byPath: { "a.ts": ["id1"] } } } as const
+    const out = computeMerge({ existing, owner: "o", repo: "r", runId: "run-1", idsByPathSlice: { "b.ts": ["id2"] }, activeRunId: "run-1" })
+    expect(out.action).toBe("extended")
   })
 
   it("ignores empty path arrays in the incoming slice", () => {

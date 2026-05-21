@@ -1004,7 +1004,7 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     repo,
     runId,
     idsByPathSlice,
-    currentManifestRunId,
+    activeRunId: currentManifestRunId,
   })
 
   if (outcome.action === "stale-skip") {

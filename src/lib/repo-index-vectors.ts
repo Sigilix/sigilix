@@ -174,12 +174,11 @@ export interface MergeArgs {
   runId: string
   idsByPathSlice: Record<string, string[]>
   /**
-   * Codex v1 catch: pass the current manifest's runId so we can
-   * compare. If a stale run produces shard output AFTER a fresher
-   * run's manifest landed, we refuse to write — the fresh run is
-   * authoritative.
+   * SIG-136: the current run-lease holder's runId (from `readActiveRunId`),
+   * or null. Authoritative tiebreaker: a lease owned by a DIFFERENT run means
+   * this slice is from a superseded/redelivered run and must be rejected.
    */
-  currentManifestRunId: string | null
+  activeRunId: string | null
 }
 
 /**
@@ -188,20 +187,28 @@ export interface MergeArgs {
  * within one run, plus a tie-breaker against stale-run shards that
  * arrive after the chain has been superseded.
  *
- * Decision table:
+ * Decision table (SIG-136: lease is the tiebreaker, checked FIRST):
+ *   - lease held by a DIFFERENT run                 → stale-skip
+ *     (gates create/overwrite; a superseded/redelivered
+ *     run can't clobber a newer run's data)
  *   - existing missing                              → create
  *   - existing ok, runId matches incoming           → set-union (extend)
- *   - existing ok, runId differs, manifest is the
+ *   - existing ok, runId differs, lease is the
  *     incoming run                                  → supersede (overwrite)
- *   - existing ok, runId differs, manifest is the
- *     OTHER run                                     → stale-skip
+ *   - existing ok, runId differs, no lease          → stale-skip
  *   - existing invalid                              → overwrite
  *     (treat as corrupt; we have to write something
  *     so future deletes have an id list to walk)
  */
 export function computeMerge(args: MergeArgs): MergeOutcome {
-  const { existing, owner, repo, runId, idsByPathSlice, currentManifestRunId } = args
+  const { existing, owner, repo, runId, idsByPathSlice, activeRunId } = args
   const sliceByPath = normalizeByPath(idsByPathSlice)
+
+  // SIG-136: a lease owned by a DIFFERENT run supersedes this slice — reject
+  // BEFORE create/overwrite so a stale run can't clobber a newer run's data.
+  if (activeRunId !== null && activeRunId !== runId) {
+    return { action: "stale-skip", existingRunId: existing.kind === "ok" ? existing.vectors.runId : "" }
+  }
 
   if (existing.kind === "missing") {
     return {
@@ -232,17 +239,16 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
     }
   }
 
-  // Different run id. Manifest is the tiebreaker.
-  if (currentManifestRunId === runId) {
-    // This run is authoritative; the stored run is stale.
+  // Different stored run; this run holds the lease (mismatch already
+  // rejected) ⇒ authoritative ⇒ supersede.
+  if (activeRunId === runId) {
     return {
       action: "superseded",
       vectors: { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: sliceByPath },
     }
   }
-  // Either the stored run is current, or the manifest doesn't know
-  // about either run yet. Either way this incoming slice is from a
-  // run that's NOT current → don't overwrite.
+  // No lease names either run (activeRunId === null) and the stored run
+  // differs → don't overwrite.
   return { action: "stale-skip", existingRunId: cur.runId }
 }
 

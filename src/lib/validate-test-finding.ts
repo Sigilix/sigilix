@@ -69,6 +69,7 @@ export type TestDropReason =
   | "missing-path" // sev>=4 testing finding with no concrete path to anchor
   | "uncited-missing-coverage" // "source lacks tests" claim not backed by a real ->NONE mapping for finding.path
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
+  | "glue-covered-by-helper" // SIG-128: ->NONE finding on a file whose changed logic fully delegates to same-PR tested helpers
 
 /**
  * Parse a `siblingMapping:<source>-><test|NONE>` evidenceRef into its
@@ -414,6 +415,13 @@ export function evaluateTestFinding(
   if (missingClass === insufficientClass) return { keep: true }
 
   if (missingClass) {
+    // SIG-128: a ->NONE missing-coverage finding on a source whose changed
+    // logic FULLY delegates to same-PR tested helpers (status "all") is the
+    // orchestrator-glue false positive. Reject it. `partial`/`none` are not
+    // suppressed (FP-safe — a genuinely-untested orchestrator still fires).
+    if (pack.helperCoverageBySource?.[finding.path.trim()]?.status === "all") {
+      return { keep: false, reason: "glue-covered-by-helper" }
+    }
     // Missing-coverage claim. Admissible only when the cited mapping is
     // a real `siblingMapping:<finding.path>->NONE` in the pack (relevant
     // + the pack agrees the source is genuinely untested). A wrong-file

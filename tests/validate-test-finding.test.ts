@@ -17,6 +17,7 @@ import {
 import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
 import type { PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { TestingEvidencePack } from "../src/lib/testing-evidence-pack"
+import type { HelperCoverage } from "../src/lib/helper-coverage"
 import type { SynthesizerProvenance } from "../src/lib/triage-pr-review-ensemble"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
@@ -280,6 +281,57 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
       pack(),
       new Set<string>(["src/lib/foo.ts:42"]),
     )
+    expect(r.keep).toBe(true)
+  })
+
+  // ── SIG-128: orchestrator-glue false positive ─────────────────────
+  // A sev>=4 "needs integration tests" ->NONE finding on an orchestrator
+  // whose changed logic FULLY delegates to same-PR tested helpers
+  // (status "all") is the false positive — drop it. `partial`/`none`/
+  // absent are NOT suppressed (FP-safe).
+  const orchFinding = () =>
+    finding({
+      path: "src/lib/ensemble.ts",
+      headline: "`ensemble` orchestrator ships without integration tests",
+      body: "The new orchestrator wiring in `src/lib/ensemble.ts` has no sibling test file in this PR.",
+      evidenceRefs: ["siblingMapping:src/lib/ensemble.ts->NONE"],
+    })
+  const orchPack = (coverage?: HelperCoverage) =>
+    pack({
+      sourceFilesChanged: ["src/lib/ensemble.ts"],
+      siblingMappings: [{ source: "src/lib/ensemble.ts", test: null }],
+      helperCoverageBySource: coverage
+        ? { "src/lib/ensemble.ts": coverage }
+        : {},
+    })
+
+  it("DROPS a glue ->NONE finding when helper-coverage status is 'all'", () => {
+    const r = evaluateTestFinding(
+      orchFinding(),
+      orchPack({ status: "all", helpers: ["src/lib/branch-retrieval.ts"] }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-helper")
+  })
+
+  it("KEEPS a glue ->NONE finding when helper-coverage status is 'partial' (FP-safe)", () => {
+    const r = evaluateTestFinding(
+      orchFinding(),
+      orchPack({ status: "partial", helpers: ["src/lib/branch-retrieval.ts"] }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS a glue ->NONE finding when helper-coverage status is 'none' (FP-safe)", () => {
+    const r = evaluateTestFinding(
+      orchFinding(),
+      orchPack({ status: "none", helpers: [] }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS a glue ->NONE finding with NO helper-coverage entry (regression — real missing coverage)", () => {
+    const r = evaluateTestFinding(orchFinding(), orchPack())
     expect(r.keep).toBe(true)
   })
 })

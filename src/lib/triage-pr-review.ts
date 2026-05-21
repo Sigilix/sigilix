@@ -1244,6 +1244,25 @@ export function extensionToFenceLang(path: string): string {
   return FENCE_LANG_BY_EXT[ext] ?? ""
 }
 
+/**
+ * SIG-125: a Markdown fence long enough to wrap `content` — one backtick
+ * longer than the longest backtick run inside it (min 3). Lets the
+ * non-committable snippet safely contain code that itself uses fences.
+ */
+export function fenceForContent(content: string): string {
+  let maxRun = 0
+  let cur = 0
+  for (const ch of content) {
+    if (ch === "`") {
+      cur += 1
+      if (cur > maxRun) maxRun = cur
+    } else {
+      cur = 0
+    }
+  }
+  return "`".repeat(Math.max(3, maxRun + 1))
+}
+
 // SIG-125: confidence floor at/above which a finding's
 // `suggestedReplacement` is eligible to render as a committable
 // ```suggestion (still gated on clean anchorability).
@@ -1297,16 +1316,21 @@ export function formatFindingComment(
   //   else an always-shown non-committable code snippet.
   const repl = finding.suggestedReplacement
   if (typeof repl === "string" && repl.length > 0) {
+    // A GitHub ```suggestion block can't escape backticks — a line that is
+    // ``` always closes it — so a 3+ backtick run in the replacement
+    // disqualifies the committable tier and we fall through to the snippet.
     const committable =
       confidence >= HIGH_CONFIDENCE_FLOOR &&
       reviewable !== undefined &&
+      !/`{3,}/.test(repl) &&
       isFindingAnchorable(finding, reviewable)
     lines.push("")
     if (committable) {
       lines.push("```suggestion", repl.replace(/\n$/, ""), "```")
     } else {
       const lang = extensionToFenceLang(finding.path)
-      lines.push("**Proposed change:**", "```" + lang, repl.replace(/\n$/, ""), "```")
+      const fence = fenceForContent(repl)
+      lines.push("**Proposed change:**", fence + lang, repl.replace(/\n$/, ""), fence)
     }
   }
   return lines.join("\n")

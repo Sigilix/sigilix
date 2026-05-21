@@ -42,3 +42,17 @@ describe("formatFindingComment two-tier suggestions (SIG-125)", () => {
     expect(out).toContain("```ts")
   })
 })
+
+describe("formatFindingComment backtick hardening (SIG-125 Task 5)", () => {
+  it("uses a longer fence when the replacement contains a triple backtick", () => {
+    // replacement contains exactly a 3-backtick run; the snippet fence must
+    // therefore widen to >= 4 backticks so it can safely wrap the content.
+    const out = formatFindingComment(finding({ confidence: 3, suggestedReplacement: "const s = ```x" }), 3, reviewable)
+    // content has a ``` run (3) → fence must be at least 4 backticks
+    expect(out).toContain("````ts")
+  })
+  it("downgrades a high-confidence anchorable finding to a snippet when replacement has a triple backtick (GitHub can't escape it)", () => {
+    const out = formatFindingComment(finding({ suggestedReplacement: "a\n```\nb" }), 5, reviewable)
+    expect(out).not.toContain("```suggestion")
+  })
+})

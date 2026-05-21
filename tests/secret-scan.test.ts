@@ -235,6 +235,25 @@ describe("runSecretScan — SIG-126 identifier/path/prose-shape false-positive g
     ]))
     expect(hits[0]?.ruleId).toBe("generic-high-entropy-token")
   })
+
+  // FN-safety (code-reviewer CRITICAL): single-case secret families with
+  // NO dedicated provider rule must still fire. Their random bodies contain
+  // DIGITS, so the purely-alphabetic-segment guard does not suppress them.
+  // These guard specifically against the snake_case (r3) + kebab (r1) rules
+  // being widened back to admit digit-bearing segments.
+  it("STILL flags a DigitalOcean-style PAT (dop_v1_<lowercase hex>)", () => {
+    const hits = runSecretScan(mkDiff("src/lib/do.ts", [
+      'const TOKEN = "dop_v1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeDefined()
+  })
+
+  it("STILL flags a lowercase token whose segments contain digits (Slack-style body)", () => {
+    const hits = runSecretScan(mkDiff("src/lib/slack.ts", [
+      'const TOK = "xoxb-2401440store-2401440bot-abcd1234efgh5678ijkl9012"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeDefined()
+  })
 })
 
 describe("runSecretScan — diff parsing semantics", () => {

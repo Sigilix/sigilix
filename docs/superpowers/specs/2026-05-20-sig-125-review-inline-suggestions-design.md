@@ -94,7 +94,7 @@ callers that don't have it (if any) fall back to the snippet tier.
   from `triage-pr-improve.ts` — extract to a shared module if importing
   across files is awkward.
 - **422 fallback:** GitHub rejects the *entire* review if one committable
-  suggestion is un-applyable. Keep the existing review-submit fallback:
+  suggestion is not applicable. Keep the existing review-submit fallback:
   on a 422, re-render the offending finding's committable block as the
   non-committable snippet and retry / fall back to a top-level comment
   (mirror `/improve`'s 422 path). A bad suggestion must never fail the
@@ -112,7 +112,7 @@ callers that don't have it (if any) fall back to the snippet tier.
 
 ## Data flow
 
-```
+```text
 specialist verdict (suggestedReplacement?)  ── parsed/finalized ──▶
   synth verdict (suggestedReplacement preserved) ── finalized ──▶
     formatFindingComment(finding, confidence, anchoring?)

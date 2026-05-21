@@ -425,13 +425,13 @@ Expected: FAIL.
 
 - [ ] **Step 3: Document the field in `SHARED_OUTPUT_INSTRUCTIONS`** — in `src/prompts/pr-review-specialists.ts`, add to the findings-object schema (after the `hotPathIdentifier` line):
 
-```
+```text
       "suggestedReplacement": "const users = await getUsers(ids)"   (SIG-125 — OPTIONAL. Provide ONLY when the fix is a CONTIGUOUS edit to the exact lines this finding anchors to (its line, or startLine..line). Give the EXACT replacement lines for that range — raw code, no diff +/- markers, no fence. Omit for multi-hunk fixes, new-file additions, or non-code findings (testing/architecture). Sigilix renders it as a one-click suggestion when you're confident and it anchors cleanly, else as a code snippet.)
 ```
 
 - [ ] **Step 4: Add synth preservation** — in `SYNTHESIZER_PROMPT`'s output-schema findings object (after the `hotPathIdentifier` preservation line):
 
-```
+```text
         "suggestedReplacement": "const users = await getUsers(ids)"   (SIG-125 — REQUIRED: PRESERVE VERBATIM from any kept source finding that set it. The review renderer anchors it to the finding's line range; altering or dropping it loses the one-click fix. Keep the finding's line/startLine consistent with the replacement's range. OMIT only when no kept source finding had it.)
 ```
 
@@ -453,7 +453,7 @@ git commit -m "feat(sig-125): prompt emits suggestedReplacement + synth preserve
 
 ## Task 5: 422-safety on review submit (defensive)
 
-**Context:** GitHub rejects an ENTIRE review (HTTP 422) if any one inline comment carries a `` ```suggestion `` whose range isn't applyable. Our committable gate (`isFindingAnchorable`) matches GitHub's applyability rule, so this should be near-impossible — but `/improve` has hit it (a line listed reviewable yet not applyable, e.g. binary hunk). Mirror improve's safety so a bad suggestion can never fail a review.
+**Context:** GitHub rejects an ENTIRE review (HTTP 422) if any one inline comment carries a `` ```suggestion `` whose range isn't applicable. Our committable gate (`isFindingAnchorable`) matches GitHub's applicability rule, so this should be near-impossible — but `/improve` has hit it (a line listed reviewable yet not applicable, e.g. binary hunk). Mirror improve's safety so a bad suggestion can never fail a review.
 
 **Files:**
 - Modify: `src/lib/triage-pr-review-ensemble.ts` (the `submitReview` call for the main review path)
@@ -490,7 +490,7 @@ Expected: FAIL (not exported).
  * SIG-125: downgrade any committable ```suggestion block in a comment
  * body to a plain code fence (keeps the visible change, removes the
  * one-click apply). Used on the 422 retry when GitHub rejects the review
- * for an un-applyable suggestion. Pure — exported for tests.
+ * for an inapplicable suggestion. Pure — exported for tests.
  */
 export function stripSuggestionBlocks(body: string): string {
   return body.replace(/```suggestion\n/g, "```\n")
@@ -525,7 +525,7 @@ Expected: PASS; full build green (tsc + eslint + all vitest).
 
 ```bash
 git add src/lib/triage-pr-review.ts src/lib/triage-pr-review-ensemble.ts tests/sig125-review-suggestions.test.ts
-git commit -m "feat(sig-125): 422-safe review submit — downgrade un-applyable suggestions to snippets"
+git commit -m "feat(sig-125): 422-safe review submit — downgrade inapplicable suggestions to snippets"
 ```
 
 ---

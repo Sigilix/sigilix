@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
   buildBranchChunks,
   mergeBranchAware,
+  prepareBranchSet,
   retrieveBranchChunks,
+  shouldRunBranchAwareRetrieval,
   type BranchVector,
 } from "../src/lib/branch-retrieval"
 import type { RetrievedChunk } from "../src/lib/retrieval"
@@ -86,5 +88,44 @@ describe("retrieveBranchChunks", () => {
   it("returns [] for empty set or zero-norm query", () => {
     expect(retrieveBranchChunks([1, 0], [], 5)).toEqual([])
     expect(retrieveBranchChunks([0, 0], [bv("a.ts", 1, 1, [1, 0])], 5)).toEqual([])
+  })
+})
+
+describe("shouldRunBranchAwareRetrieval", () => {
+  const files = new Map([["a.ts", "const x = 1"]])
+  it("on only when flag is 'on' and there is changed content", () => {
+    expect(shouldRunBranchAwareRetrieval("on", files)).toBe(true)
+    expect(shouldRunBranchAwareRetrieval("ON", files)).toBe(true)
+    expect(shouldRunBranchAwareRetrieval("off", files)).toBe(false)
+    expect(shouldRunBranchAwareRetrieval(undefined, files)).toBe(false)
+    expect(shouldRunBranchAwareRetrieval("on", new Map())).toBe(false)
+  })
+})
+
+describe("prepareBranchSet", () => {
+  const files = new Map([["a.ts", "const x = 1\nconst y = 2"]])
+  it("embeds chunks and returns BranchVector[] aligned to chunks", async () => {
+    const ai = {
+      run: async (_m: string, input: { text: string | string[] }) => {
+        const texts = Array.isArray(input.text) ? input.text : [input.text]
+        return { data: texts.map(() => Array.from({ length: 768 }, () => 0.01)) }
+      },
+    }
+    const set = await prepareBranchSet(ai, files)
+    expect(set.length).toBeGreaterThan(0)
+    expect(set[0].vector).toHaveLength(768)
+    expect(set[0].chunk.path).toBe("a.ts")
+  })
+
+  it("returns [] (never throws) when embedding fails", async () => {
+    const ai = { run: async () => { throw new Error("AI down") } }
+    await expect(prepareBranchSet(ai, files)).resolves.toEqual([])
+  })
+
+  it("returns [] for empty files without calling AI", async () => {
+    let called = false
+    const ai = { run: async () => { called = true; return { data: [] } } }
+    expect(await prepareBranchSet(ai, new Map())).toEqual([])
+    expect(called).toBe(false)
   })
 })

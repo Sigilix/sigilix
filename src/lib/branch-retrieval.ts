@@ -9,8 +9,13 @@
 // Model: branch state = main index (unchanged files) ∪ changed-file head
 // content (overrides). No new GitHub fetches, no Vectorize writes.
 
+import { embedTexts } from "./embeddings"
 import { chunkFile, type Chunk } from "./indexer"
 import type { RetrievedChunk } from "./retrieval"
+
+interface AiBinding {
+  run(model: string, input: { text: string | string[] }): Promise<{ data?: number[][]; shape?: number[] }>
+}
 
 /**
  * Merge main-index chunks with branch (PR-head) chunks. A path present in
@@ -61,8 +66,10 @@ export interface BranchVector {
 
 function dot(a: readonly number[], b: readonly number[]): number {
   let s = 0
+  // i < min(a.length, b.length) keeps both indices in bounds, so the `!`
+  // is safe under noUncheckedIndexedAccess.
   const n = Math.min(a.length, b.length)
-  for (let i = 0; i < n; i++) s += a[i] * b[i]
+  for (let i = 0; i < n; i++) s += a[i]! * b[i]!
   return s
 }
 
@@ -94,4 +101,37 @@ export function retrieveBranchChunks(
   }
   scored.sort((a, b) => b.score - a.score)
   return scored.slice(0, Math.max(0, topK))
+}
+
+/** Gate: flag is "on" (case-insensitive) and there is changed JS/TS content. */
+export function shouldRunBranchAwareRetrieval(
+  flag: string | undefined,
+  filesByPath: ReadonlyMap<string, string>,
+): boolean {
+  return (flag ?? "").trim().toLowerCase() === "on" && filesByPath.size > 0
+}
+
+/**
+ * Build + embed the branch retrieval set ONCE per review. Best-effort:
+ * any failure (embed error, empty input) yields [] so the caller silently
+ * falls back to main-only retrieval. One batched `embedTexts` call.
+ */
+export async function prepareBranchSet(
+  ai: AiBinding,
+  filesByPath: ReadonlyMap<string, string>,
+): Promise<BranchVector[]> {
+  const chunks = buildBranchChunks(filesByPath)
+  if (chunks.length === 0) return []
+  try {
+    const vectors = await embedTexts(ai, chunks.map((c) => c.content))
+    if (vectors.length !== chunks.length) return []
+    // The length check above guarantees vectors[i] exists for every chunk
+    // index, so the `!` is safe under noUncheckedIndexedAccess.
+    return chunks.map((chunk, i) => ({
+      chunk: { path: chunk.path, lineStart: chunk.lineStart, lineEnd: chunk.lineEnd, content: chunk.content },
+      vector: vectors[i]!,
+    }))
+  } catch {
+    return []
+  }
 }

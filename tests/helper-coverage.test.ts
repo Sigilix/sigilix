@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { extractTestedHelperBindings, resolveImportToRepoPath } from "../src/lib/helper-coverage"
+import { extractTestedHelperBindings, isSubstantiveAddedLine, resolveImportToRepoPath } from "../src/lib/helper-coverage"
 
 describe("resolveImportToRepoPath", () => {
   const tested = new Set(["src/lib/branch-retrieval.ts", "src/lib/foo.ts", "src/lib/widget/index.ts"])
@@ -42,5 +42,25 @@ describe("extractTestedHelperBindings", () => {
   })
   it("returns [] when the file does not parse", () => {
     expect(extractTestedHelperBindings("src/lib/x.ts", "const = = =", ".ts", tested)).toEqual([])
+  })
+})
+
+describe("isSubstantiveAddedLine", () => {
+  it("treats executable lines as substantive", () => {
+    expect(isSubstantiveAddedLine("  const x = mergeBranchAware(a, b)")).toBe(true)
+    expect(isSubstantiveAddedLine("  return foo()")).toBe(true)
+    expect(isSubstantiveAddedLine("export const TOP_K = 6")).toBe(true)
+  })
+  it("treats imports/types/comments/blank/punctuation as NOT substantive", () => {
+    expect(isSubstantiveAddedLine(`import { x } from "./y"`)).toBe(false)
+    expect(isSubstantiveAddedLine("export type Foo = string")).toBe(false)
+    expect(isSubstantiveAddedLine("export interface Foo {")).toBe(false)
+    expect(isSubstantiveAddedLine("  type Local = number")).toBe(false)
+    expect(isSubstantiveAddedLine("  // a comment")).toBe(false)
+    expect(isSubstantiveAddedLine("   * jsdoc")).toBe(false)
+    expect(isSubstantiveAddedLine("")).toBe(false)
+    expect(isSubstantiveAddedLine("   }")).toBe(false)
+    expect(isSubstantiveAddedLine("  })")).toBe(false)
+    expect(isSubstantiveAddedLine(`export { foo } from "./y"`)).toBe(false)
   })
 })

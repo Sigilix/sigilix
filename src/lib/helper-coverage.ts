@@ -101,3 +101,22 @@ export function extractTestedHelperBindings(
   })
   return out
 }
+
+/**
+ * A line carries executable logic worth test-accounting. Excludes imports,
+ * type-only declarations, re-exports, comments, blank lines, and pure
+ * structural punctuation. Conservative: when unsure, treat as substantive
+ * (so genuine logic is never silently excluded from the `all` denominator).
+ * Input is the `+`-stripped added-line text (indentation preserved).
+ */
+export function isSubstantiveAddedLine(text: string): boolean {
+  const t = text.trim()
+  if (t.length === 0) return false
+  if (t.startsWith("//") || t.startsWith("/*") || t.startsWith("*")) return false
+  if (/^[)}\]( ;,]*$/.test(t)) return false
+  if (/^import\b/.test(t)) return false
+  if (/^export\s+(type|interface)\b/.test(t)) return false
+  if (/^(type|interface)\s/.test(t)) return false
+  if (/^export\s*\{/.test(t)) return false
+  return true
+}

@@ -97,6 +97,9 @@ export function retrieveBranchChunks(
     const vn = norm(bvi.vector)
     if (vn === 0) continue
     const score = dot(queryVector, bvi.vector) / (qn * vn)
+    // A non-finite score (NaN/Infinity from a corrupt vector) would make the
+    // sort comparator undefined and let a bad chunk land anywhere in top-K.
+    if (!Number.isFinite(score)) continue
     scored.push({ ...bvi.chunk, score })
   }
   scored.sort((a, b) => b.score - a.score)

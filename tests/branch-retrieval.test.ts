@@ -89,6 +89,17 @@ describe("retrieveBranchChunks", () => {
     expect(retrieveBranchChunks([1, 0], [], 5)).toEqual([])
     expect(retrieveBranchChunks([0, 0], [bv("a.ts", 1, 1, [1, 0])], 5)).toEqual([])
   })
+
+  it("skips vectors that produce a non-finite score", () => {
+    const q = [1, 0]
+    const set = [
+      bv("ok.ts", 1, 1, [1, 0], "OK"),
+      bv("bad.ts", 1, 1, [Infinity, 0], "BAD"),
+      bv("nan.ts", 1, 1, [NaN, 0], "NAN"),
+    ]
+    const out = retrieveBranchChunks(q, set, 5)
+    expect(out.map((c) => c.path)).toEqual(["ok.ts"])
+  })
 })
 
 describe("shouldRunBranchAwareRetrieval", () => {

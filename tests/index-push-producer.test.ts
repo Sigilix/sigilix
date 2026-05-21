@@ -92,7 +92,15 @@ const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
 }
 
 function seedManifest(kv: Map<string, string>, over: Partial<RepoIndexManifestV1> = {}): void {
-  kv.set(repoIndexManifestKey("sigilix"), JSON.stringify({ ...SAMPLE_MANIFEST, ...over }))
+  // SIG-132: the producer reads the manifest under the job's
+  // `<owner>/<repo>` namespace (always "Arc-and-Anchor"/"sigilix" in
+  // these tests). The cross-tenant test overrides the BODY's owner to
+  // "different-org" while the record still lives under the read key, so
+  // the producer's `manifest.owner !== owner` guard fires.
+  kv.set(
+    repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+    JSON.stringify({ ...SAMPLE_MANIFEST, ...over }),
+  )
 }
 
 beforeEach(() => {

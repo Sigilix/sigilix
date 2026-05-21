@@ -8,14 +8,20 @@
 //
 // Both call `deleteRepoIndex(owner, repo, reason)` per affected
 // (owner, repo) tuple. That worker:
-//   1. Reads `repo-index-vectors:<repo>` (the KV id-list from ARC-235's
-//      indexer extension in PR 3 commit 2). Codex v1: gate destructive
-//      ops on `vectors.owner === owner` — a same-named repo under a
-//      different owner doesn't get its data deleted by mistake.
+//   1. Reads `repo-index-vectors:<owner>/<repo>` (the KV id-list from
+//      ARC-235's indexer extension in PR 3 commit 2), probing the legacy
+//      bare `repo-index-vectors:<repo>` key too (SIG-132). Codex v1:
+//      gate destructive ops on `vectors.owner === owner` — a same-named
+//      repo under a different owner doesn't get its data deleted by
+//      mistake.
 //   2. Batches `deleteByIds` against Vectorize, dedup'd, ≤1000 per call.
-//   3. Deletes `repo-index-vectors:<repo>` KV.
-//   4. Deletes `repo-index-manifest:<repo>` KV — also gated on the
-//      manifest's owner matching the removal context.
+//      (Vectorize delete is by id and namespace-independent, so legacy
+//      vectors records purge their embeddings just the same.)
+//   3. Deletes the `repo-index-vectors:*` KV record at the EXACT key it
+//      was found under (new or legacy shape).
+//   4. Deletes the `repo-index-manifest:*` KV record at the EXACT key it
+//      was found under — also gated on the manifest's owner matching the
+//      removal context.
 //   5. Lists + deletes `pr-review-manifest:<owner>/<repo>#*` (ARC-184
 //      per-PR provenance) — these are owner-qualified so safe.
 //   6. Lists + deletes `pr-review:<owner>/<repo>#*` dedupe locks.
@@ -33,13 +39,20 @@
 
 import type { Env } from "../index"
 import {
+  legacyRepoIndexManifestKey,
+  parseRepoIndexManifest,
   readRepoIndexManifest,
   repoIndexManifestKey,
+  REPO_INDEX_MANIFEST_PREFIX,
+  type ReadResult as ManifestReadResult,
 } from "./repo-index-manifest"
 import {
-  deleteRepoIndexVectors,
   flattenIds,
+  legacyRepoIndexVectorsKey,
+  parseRepoIndexVectors,
   readRepoIndexVectors,
+  repoIndexVectorsKey,
+  type ReadResult as VectorsReadResult,
 } from "./repo-index-vectors"
 
 const VECTORIZE_DELETE_BATCH = 1000
@@ -58,9 +71,9 @@ export interface DeleteResult {
   prReviewManifests: number
   /** Per-(PR, headSha) dedupe locks deleted. */
   prReviewDedupeKeys: number
-  /** Whether the repo-index-manifest:<repo> KV was deleted. */
+  /** Whether the repo-index-manifest:* KV record was deleted (new or legacy key). */
   manifestDeleted: boolean
-  /** Whether the repo-index-vectors:<repo> KV was deleted. */
+  /** Whether the repo-index-vectors:* KV record was deleted (new or legacy key). */
   vectorsKvDeleted: boolean
   /** Non-fatal errors (per-step) that should make the webhook return 5xx. */
   errors: string[]
@@ -71,6 +84,172 @@ export interface DeleteRepoIndexArgs {
   owner: string
   repo: string
   reason: DeleteReason
+}
+
+/**
+ * SIG-132: read the manifest, probing the new `<owner>/<repo>` key first
+ * and falling back to the legacy bare `<repo>` key. Returns the read
+ * result, the ACTUAL key name the record was found under (null when
+ * neither shape exists), and — when the NEW key was the one found — an
+ * `extraOwnerSafeKey` pointing at a same-owner legacy orphan that should
+ * ALSO be purged. This covers the (narrow) case where a repo was indexed
+ * both pre- and post-migration: both key shapes coexist for the same
+ * owner and BOTH must be deleted so no customer data is stranded.
+ */
+async function resolveManifest(
+  env: Env,
+  owner: string,
+  repo: string,
+): Promise<{
+  read: ManifestReadResult
+  keyName: string | null
+  extraOwnerSafeKey: string | null
+}> {
+  const newKey = repoIndexManifestKey(owner, repo)
+  const legacyKey = legacyRepoIndexManifestKey(repo)
+  const newRead = await readRepoIndexManifest(env, owner, repo)
+  if (newRead.kind !== "missing") {
+    // New record found. Probe the legacy key for a same-owner orphan to
+    // sweep alongside it (different-owner orphans are someone else's).
+    const extra = newKey !== legacyKey
+      ? await probeLegacyManifestOrphanKey(env, legacyKey, owner)
+      : null
+    return { read: newRead, keyName: newKey, extraOwnerSafeKey: extra }
+  }
+  if (legacyKey === newKey) {
+    // Defensive: only equal if owner were empty; nothing more to probe.
+    return { read: newRead, keyName: null, extraOwnerSafeKey: null }
+  }
+  const legacyRaw = await env.OPENCLAW_STATE.get(legacyKey)
+  if (legacyRaw === null) {
+    return { read: { kind: "missing" }, keyName: null, extraOwnerSafeKey: null }
+  }
+  return {
+    read: parseRepoIndexManifest(legacyRaw),
+    keyName: legacyKey,
+    extraOwnerSafeKey: null,
+  }
+}
+
+/**
+ * SIG-132: vectors-record equivalent of `resolveManifest`. Probes new
+ * key then legacy bare-repo key, and reports a same-owner legacy orphan
+ * to sweep when the new key was the one found.
+ */
+async function resolveVectors(
+  env: Env,
+  owner: string,
+  repo: string,
+): Promise<{
+  read: VectorsReadResult
+  keyName: string | null
+  extraOwnerSafeKey: string | null
+}> {
+  const newKey = repoIndexVectorsKey(owner, repo)
+  const legacyKey = legacyRepoIndexVectorsKey(repo)
+  const newRead = await readRepoIndexVectors(env, owner, repo)
+  if (newRead.kind !== "missing") {
+    const extra = newKey !== legacyKey
+      ? await probeLegacyVectorsOrphanKey(env, legacyKey, owner)
+      : null
+    return { read: newRead, keyName: newKey, extraOwnerSafeKey: extra }
+  }
+  if (legacyKey === newKey) {
+    return { read: newRead, keyName: null, extraOwnerSafeKey: null }
+  }
+  const legacyRaw = await env.OPENCLAW_STATE.get(legacyKey)
+  if (legacyRaw === null) {
+    return { read: { kind: "missing" }, keyName: null, extraOwnerSafeKey: null }
+  }
+  return {
+    read: parseRepoIndexVectors(legacyRaw),
+    keyName: legacyKey,
+    extraOwnerSafeKey: null,
+  }
+}
+
+/**
+ * Return `legacyKey` IFF a manifest record exists there AND its owner
+ * matches `owner`. Used to opportunistically sweep a same-owner legacy
+ * orphan that coexists with a new-shape record. A record owned by a
+ * DIFFERENT tenant (or an unparseable one) is left untouched.
+ */
+async function probeLegacyManifestOrphanKey(
+  env: Env,
+  legacyKey: string,
+  owner: string,
+): Promise<string | null> {
+  const raw = await env.OPENCLAW_STATE.get(legacyKey)
+  if (raw === null) return null
+  const parsed = parseRepoIndexManifest(raw)
+  if (parsed.kind !== "ok") return null
+  return parsed.manifest.owner === owner ? legacyKey : null
+}
+
+/** Vectors-record equivalent of `probeLegacyManifestOrphanKey`. */
+async function probeLegacyVectorsOrphanKey(
+  env: Env,
+  legacyKey: string,
+  owner: string,
+): Promise<string | null> {
+  const raw = await env.OPENCLAW_STATE.get(legacyKey)
+  if (raw === null) return null
+  const parsed = parseRepoIndexVectors(raw)
+  if (parsed.kind !== "ok") return null
+  return parsed.vectors.owner === owner ? legacyKey : null
+}
+
+/**
+ * SIG-132: deleteByIds the embeddings of a same-owner legacy vectors
+ * orphan (ids are content-addressed under the OLD namespace, so they
+ * differ from the new record's), then delete its KV key. Errors are
+ * captured in `result.errors` to drive the webhook 503; the KV key is
+ * kept on Vectorize-delete failure so redelivery can retry.
+ */
+async function purgeLegacyVectorsOrphan(
+  env: Env,
+  legacyKey: string,
+  owner: string,
+  repo: string,
+  result: DeleteResult,
+): Promise<void> {
+  const raw = await env.OPENCLAW_STATE.get(legacyKey)
+  if (raw === null) return
+  const parsed = parseRepoIndexVectors(raw)
+  if (parsed.kind !== "ok") {
+    // Unparseable orphan — just drop the key.
+    try {
+      await env.OPENCLAW_STATE.delete(legacyKey)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      result.errors.push(`kv.delete(legacy-vectors-orphan): ${message}`)
+    }
+    return
+  }
+  let vectorizeFailed = false
+  const uniq = Array.from(new Set(flattenIds(parsed.vectors)))
+  for (let i = 0; i < uniq.length; i += VECTORIZE_DELETE_BATCH) {
+    const batch = uniq.slice(i, i + VECTORIZE_DELETE_BATCH)
+    try {
+      await env.OPENCLAW_CODE_INDEX.deleteByIds(batch)
+      result.vectorIds += batch.length
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      result.errors.push(`vectorize.deleteByIds(legacy-orphan): ${message}`)
+      vectorizeFailed = true
+      console.error(JSON.stringify({
+        event: "index-delete-legacy-orphan-vectorize-failed",
+        owner, repo, batch_start: i, batch_size: batch.length, err: message,
+      }))
+    }
+  }
+  if (vectorizeFailed) return // keep the KV id-list for redelivery retry
+  try {
+    await env.OPENCLAW_STATE.delete(legacyKey)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    result.errors.push(`kv.delete(legacy-vectors-orphan): ${message}`)
+  }
 }
 
 /**
@@ -95,23 +274,37 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     owner, repo, reason,
   }))
 
-  // Cross-tenant guard. Two same-named repos under different owners
-  // share the Vectorize namespace + repo-only KV records under the
-  // existing retrieval contract. EVERY destructive op on the repo-
-  // only state must check that the stored owner matches `owner`. The
-  // owner-qualified `pr-review-manifest:<owner>/<repo>#*` and
-  // `pr-review:<owner>/<repo>#*` keys ARE safe to delete without this
-  // gate because their KEY itself is disambiguated.
+  // Cross-tenant guard. SIG-132 made `<owner>/<repo>` the namespace, so
+  // newly-indexed repos no longer collide. But the cross-tenant guard is
+  // kept for two reasons: (1) orphaned PRE-MIGRATION records still live
+  // under the bare `<repo>` key shape and CAN collide; (2) defense in
+  // depth. EVERY destructive op on the repo-only state must check that
+  // the stored owner matches `owner`. The owner-qualified
+  // `pr-review-manifest:<owner>/<repo>#*` and `pr-review:<owner>/<repo>#*`
+  // keys ARE safe to delete without this gate (their KEY is disambiguated).
   //
-  // Sigilix HIGH + CR Critical #1 on PR #77: the previous structure
-  // had two separate ownership checks (manifest then vectors-record)
-  // that didn't compose — if manifest was missing/invalid OR the two
-  // records disagreed, the KV-delete arms still fired and clobbered
-  // another tenant's data. Consolidated below into one
-  // `safeToTouchRepoOnlyState` gate that requires every record we
-  // CAN read to agree on `owner`.
-  const manifestRead = await readRepoIndexManifest(env, repo)
-  const vectorsRead = await readRepoIndexVectors(env, repo)
+  // Sigilix HIGH + CR Critical #1 on PR #77: the previous structure had
+  // two separate ownership checks (manifest then vectors-record) that
+  // didn't compose — if manifest was missing/invalid OR the two records
+  // disagreed, the KV-delete arms still fired and clobbered another
+  // tenant's data. Consolidated below into one `safeToTouchRepoOnlyState`
+  // gate that requires every record we CAN read to agree on `owner`.
+  //
+  // SIG-132: probe BOTH the new `<owner>/<repo>` key and the legacy bare
+  // `<repo>` key so orphaned pre-migration records remain discoverable
+  // and deletable. We delete the ACTUAL key the record was found under
+  // (`manifestKeyName` / `vectorsKeyName`), never a reconstructed one,
+  // so an old-shape orphan isn't stranded by writing to the new shape.
+  const {
+    read: manifestRead,
+    keyName: manifestKeyName,
+    extraOwnerSafeKey: manifestLegacyOrphanKey,
+  } = await resolveManifest(env, owner, repo)
+  const {
+    read: vectorsRead,
+    keyName: vectorsKeyName,
+    extraOwnerSafeKey: vectorsLegacyOrphanKey,
+  } = await resolveVectors(env, owner, repo)
   const manifestOwnerMismatch =
     manifestRead.kind === "ok" && manifestRead.manifest.owner !== owner
   const vectorsOwnerMismatch =
@@ -184,29 +377,58 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         owner, repo, reason,
       }))
     } else {
-      if (vectorsRead.kind === "ok" || vectorsRead.kind === "invalid") {
+      if ((vectorsRead.kind === "ok" || vectorsRead.kind === "invalid") && vectorsKeyName) {
         try {
-          await deleteRepoIndexVectors(env, repo)
+          // SIG-132: delete the exact key the record was found under
+          // (new `<owner>/<repo>` OR legacy bare `<repo>`).
+          await env.OPENCLAW_STATE.delete(vectorsKeyName)
           result.vectorsKvDeleted = true
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           result.errors.push(`kv.delete(repo-index-vectors): ${message}`)
           console.error(JSON.stringify({
             event: "index-delete-kv-vectors-failed",
-            owner, repo, err: message,
+            owner, repo, key: vectorsKeyName, err: message,
           }))
         }
       }
-      try {
-        await env.OPENCLAW_STATE.delete(repoIndexManifestKey(repo))
-        result.manifestDeleted = true
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        result.errors.push(`kv.delete(repo-index-manifest): ${message}`)
-        console.error(JSON.stringify({
-          event: "index-delete-kv-manifest-failed",
-          owner, repo, err: message,
-        }))
+      if (manifestKeyName) {
+        try {
+          // SIG-132: delete the exact key the manifest was found under.
+          await env.OPENCLAW_STATE.delete(manifestKeyName)
+          result.manifestDeleted = true
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          result.errors.push(`kv.delete(repo-index-manifest): ${message}`)
+          console.error(JSON.stringify({
+            event: "index-delete-kv-manifest-failed",
+            owner, repo, key: manifestKeyName, err: message,
+          }))
+        }
+      }
+
+      // SIG-132: purge any leftover same-owner LEGACY KV keys that
+      // coexist with the new-shape records (already verified owner-safe
+      // by the probe). VERY narrow case (a repo indexed both pre- AND
+      // post-migration — effectively impossible given the indexer was
+      // enabled minutes before the migration). The legacy VECTORS
+      // record's ids are content-addressed under the old namespace and
+      // differ from the new record's; deleteByIds them too so their
+      // embeddings don't leak.
+      if (vectorsLegacyOrphanKey) {
+        await purgeLegacyVectorsOrphan(env, vectorsLegacyOrphanKey, owner, repo, result)
+      }
+      if (manifestLegacyOrphanKey) {
+        try {
+          await env.OPENCLAW_STATE.delete(manifestLegacyOrphanKey)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          result.errors.push(`kv.delete(legacy-manifest-orphan): ${message}`)
+          console.error(JSON.stringify({
+            event: "index-delete-kv-legacy-manifest-orphan-failed",
+            owner, repo, key: manifestLegacyOrphanKey, err: message,
+          }))
+        }
       }
     }
   }
@@ -381,7 +603,10 @@ export interface HandleInstallationDeletedArgs {
  *   1. `repositoriesFromPayload` if non-empty (authoritative).
  *   2. KV scan of `repo-index-manifest:` records, filtered by
  *      `manifest.owner === ownerLogin` (backup; useful for orphans
- *      from prior incomplete uninstalls or pre-PR3 indexes).
+ *      from prior incomplete uninstalls, pre-PR3 indexes, OR — SIG-132 —
+ *      orphaned pre-migration records still under the bare `<repo>` key
+ *      shape). The match is on the manifest BODY's owner, not the key
+ *      shape, so both new `<owner>/<repo>` and old `<repo>` keys match.
  *
  * Codex v1 sign-off Q1 confirmed walking our own KV as v1 shape;
  * code-reviewer HIGH-1 sharpened it: use the payload list when
@@ -434,12 +659,25 @@ export async function handleInstallationDeleted(
       break
     }
     for (const key of page.keys) {
-      const repo = key.name.slice("repo-index-manifest:".length)
-      if (repo.length === 0) continue
-      const manifest = await readRepoIndexManifest(env, repo)
+      // SIG-132: the key suffix is `<owner>/<repo>` for new records and a
+      // bare `<repo>` for orphaned pre-migration records. Don't derive
+      // owner/repo from the KEY SHAPE (it's ambiguous, and a repo name
+      // can itself contain no slash but an owner can't be inferred from
+      // an old bare key). Instead read the manifest BODY — it stores both
+      // `owner` and `repo` — and match on `manifest.owner === ownerLogin`.
+      // This makes BOTH new and orphaned-old records discoverable, which
+      // is the GDPR-critical requirement (no customer data stranded).
+      const suffix = key.name.slice(REPO_INDEX_MANIFEST_PREFIX.length)
+      if (suffix.length === 0) continue
+      const raw = await env.OPENCLAW_STATE.get(key.name)
+      if (raw === null) continue
+      const manifest = parseRepoIndexManifest(raw)
       if (manifest.kind === "ok" && manifest.manifest.owner === ownerLogin) {
-        if (!reposToDelete.has(repo)) {
-          reposToDelete.set(repo, ownerLogin)
+        const bareRepo = manifest.manifest.repo
+        if (!reposToDelete.has(bareRepo)) {
+          // Use the manifest's own owner so deleteRepoIndex reconstructs
+          // the right keys + probes both shapes.
+          reposToDelete.set(bareRepo, manifest.manifest.owner)
         }
       }
     }

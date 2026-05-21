@@ -21,6 +21,7 @@
 //     loop's catch can map it to `wall_clock_exceeded`.
 
 import { fetchPullRequestContext } from "./github-pr-context"
+import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
 import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
@@ -100,7 +101,8 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         },
         repo: {
           type: "string",
-          description: "Repository name (lowercased) — sets the namespace.",
+          description:
+            "Repository namespace (lowercased), `<owner>/<repo>` — sets the Vectorize namespace. A bare repo name is also accepted and resolves when it uniquely matches an allowed namespace.",
         },
       },
       required: ["query", "repo"],
@@ -111,23 +113,49 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       if (!query || !repo) {
         return { ok: false, error: "retrieve_codebase requires non-empty `query` and `repo` strings" }
       }
+      // SIG-132: the Vectorize namespace is `<owner>/<repo>` lowercased.
+      // The allowed namespace universe comes from:
+      //   - `ctx.allowedRepos` (Linear surface) — `listIndexedRepos`
+      //     returns `<owner>/<repo>` namespaces (the KV key suffix).
+      //   - `ctx.github.allowedRepos` (GitHub surface) — `{owner, repo}`
+      //     tuples mapped through `indexNamespace`.
+      // Resolve the model's `repo` arg (which may be a bare repo or a
+      // full namespace) against that universe.
+      const namespaceUniverse: string[] | undefined =
+        ctx.allowedRepos !== undefined
+          ? ctx.allowedRepos.map((r) => r.toLowerCase())
+          : ctx.github
+            ? ctx.github.allowedRepos.map((r) => indexNamespace(r.owner, r.repo))
+            : undefined
+
+      let namespace = repo.trim().toLowerCase()
+
       // CR PR #30 catch: enforce the namespace universe at execution
       // time, not just in prompt text. Otherwise the model could query
       // an unindexed namespace, retrieveChunks would soft-fail to [],
       // and the model gets no hint that its choice was invalid.
       //
-      // Presence-based — `[]` means "lock to none." ARC-239
-      // (2026-05-16): `listIndexedRepos` is KV-backed and returns
-      // `[]` when no `repo-index-manifest:*` records exist; this
-      // gate cleanly rejects retrieval against unindexed namespaces.
-      if (ctx.allowedRepos !== undefined) {
-        const lower = repo.trim().toLowerCase()
-        const allowed = new Set(ctx.allowedRepos.map((r) => r.toLowerCase()))
-        if (!allowed.has(lower)) {
-          return {
-            ok: false,
-            error: `repo '${repo}' is not in the indexed namespace set`,
-            allowedRepos: ctx.allowedRepos,
+      // `[]` means "lock to none." ARC-239 (2026-05-16):
+      // `listIndexedRepos` is KV-backed and returns `[]` when no
+      // `repo-index-manifest:*` records exist; this gate cleanly rejects
+      // retrieval against unindexed namespaces.
+      if (namespaceUniverse !== undefined) {
+        const allowed = new Set(namespaceUniverse)
+        if (!allowed.has(namespace)) {
+          // SIG-132 back-compat: the model may pass a bare repo (no
+          // owner). Resolve it to a namespace IFF it uniquely matches
+          // the `<repo>` segment of exactly one allowed namespace.
+          const matches = namespaceUniverse.filter(
+            (ns) => ns.slice(ns.indexOf("/") + 1) === namespace,
+          )
+          if (matches.length === 1) {
+            namespace = matches[0] as string
+          } else {
+            return {
+              ok: false,
+              error: `repo '${repo}' is not in the indexed namespace set`,
+              allowedRepos: namespaceUniverse,
+            }
           }
         }
       }
@@ -144,7 +172,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       }
       const chunks: RetrievedChunk[] = await retrieveChunks({
         text: query,
-        teamKey: repo,
+        teamKey: namespace,
         env: ctx.env,
       })
       return {

@@ -196,6 +196,58 @@ describe("retrieve_codebase", () => {
     expect(mockRetrieveChunks).toHaveBeenCalledOnce()
   })
 
+  it("accepts an exact <owner>/<repo> namespace and queries it verbatim (SIG-132)", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: ["arc-and-anchor/rubberfit", "acme/api"],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "Arc-and-Anchor/Rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean }
+    expect(result.ok).toBe(true)
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(
+      expect.objectContaining({ teamKey: "arc-and-anchor/rubberfit" }),
+    )
+  })
+
+  it("resolves a bare repo to its <owner>/<repo> namespace when unique (SIG-132 back-compat)", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: ["arc-and-anchor/rubberfit", "acme/api"],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "rubberfit" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean }
+    expect(result.ok).toBe(true)
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(
+      expect.objectContaining({ teamKey: "arc-and-anchor/rubberfit" }),
+    )
+  })
+
+  it("rejects a bare repo that matches more than one allowed namespace (ambiguous)", async () => {
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: ["arc-and-anchor/api", "acme/api"],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "api" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/'api' is not in the indexed namespace set/)
+    expect(mockRetrieveChunks).not.toHaveBeenCalled()
+  })
+
   it("accepts any repo when allowedRepos is unset (back-compat with existing GitHub-mention surface)", async () => {
     mockRetrieveChunks.mockResolvedValue([])
     const [tool] = createAgentTools({ env: makeEnv(), surface: "linear-mention" })

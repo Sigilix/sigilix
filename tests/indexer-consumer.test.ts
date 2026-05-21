@@ -160,9 +160,19 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     expect(mockGetRepoTree).toHaveBeenCalledTimes(1)
     expect(mockGetFileContent).toHaveBeenCalledTimes(2)
     expect(mockVectorizeUpsert).toHaveBeenCalled()
+    // SIG-132: vectors are upserted under the <owner>/<repo> namespace,
+    // not the bare repo, so two orgs with a repo named the same don't
+    // share a Vectorize namespace.
+    const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap(
+      (call) => call[0] as Array<{ namespace?: string }>,
+    )
+    expect(upsertedRecords.length).toBeGreaterThan(0)
+    for (const rec of upsertedRecords) {
+      expect(rec.namespace).toBe("arc-and-anchor/sigilix")
+    }
     expect(sent).toHaveLength(0) // no shard enqueued
     // manifest is written
-    const stored = kv.get(repoIndexManifestKey("sigilix"))
+    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
@@ -198,7 +208,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: 2,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
@@ -226,7 +236,7 @@ describe("handleIndexRepoJob — freshness skip", () => {
       chunkerVersion: 1,
       windowLines: 30, overlapLines: 10,
     }
-    kv.set(repoIndexManifestKey("sigilix"), JSON.stringify(manifest))
+    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
 
     await handleIndexRepoJob({ job: bootstrapJob(), env })
 
@@ -250,7 +260,7 @@ describe("handleIndexRepoJob — bootstrap with >MAX_FILES_PER_JOB enqueues next
 
     expect(mockGetFileContent).toHaveBeenCalledTimes(MAX_FILES_PER_JOB)
     // No manifest yet — chain not complete.
-    expect(kv.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
     // One shard enqueued.
     expect(sent).toHaveLength(1)
     const next = sent[0]!.message
@@ -310,7 +320,7 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
     // Final shard processed the trailing 3 files.
     expect(mockGetFileContent).toHaveBeenCalledTimes(3)
     // Manifest written with cumulative totals.
-    const stored = kv.get(repoIndexManifestKey("sigilix"))
+    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
@@ -351,7 +361,7 @@ describe("handleIndexRepoJob — config-drift refusal (Kimi v2 d.1)", () => {
     expect(mockGetRepoTree).not.toHaveBeenCalled()
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
 })
 
@@ -367,7 +377,7 @@ describe("handleIndexRepoJob — tree truncated refusal", () => {
 
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
 })
 
@@ -378,7 +388,7 @@ describe("handleIndexRepoJob — sensitive-repo gate (consumer-side)", () => {
 
     expect(mockGetRepository).not.toHaveBeenCalled()
     expect(mockGetRepoTree).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
 })
 
@@ -388,7 +398,7 @@ describe("handleIndexRepoJob — repo lookups returning null", () => {
     const { env, kv } = makeEnv()
     await handleIndexRepoJob({ job: bootstrapJob(), env })
     expect(mockGetBranch).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
 
   it("acks cleanly when getBranch returns null", async () => {
@@ -396,7 +406,7 @@ describe("handleIndexRepoJob — repo lookups returning null", () => {
     const { env, kv } = makeEnv()
     await handleIndexRepoJob({ job: bootstrapJob(), env })
     expect(mockGetRepoTree).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
 
   it("acks cleanly when getRepoTree returns null", async () => {
@@ -404,7 +414,7 @@ describe("handleIndexRepoJob — repo lookups returning null", () => {
     const { env, kv } = makeEnv()
     await handleIndexRepoJob({ job: bootstrapJob(), env })
     expect(mockGetFileContent).not.toHaveBeenCalled()
-    expect(kv.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
 })
 
@@ -420,7 +430,7 @@ describe("handleIndexRepoJob — empty repo (no indexable files)", () => {
 
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
-    const stored = kv.get(repoIndexManifestKey("sigilix"))
+    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
@@ -471,7 +481,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     )
 
     // Manifest must NOT have been written.
-    expect(store.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
 
   it("shard path: same invariant — no manifest write + no next-shard enqueue on vectors-write failure", async () => {
@@ -543,7 +553,7 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     )
     // No manifest, no next-shard enqueue (final shard would have
     // written the manifest; non-final would have enqueued).
-    expect(store.has(repoIndexManifestKey("sigilix"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
     expect(sent).toHaveLength(0)
   })
 })

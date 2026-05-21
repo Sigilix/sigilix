@@ -5,9 +5,10 @@
 // branch tree via GitHub Trees + Contents APIs using the installation
 // token, chunks files into 30-line overlapping windows (matching the
 // CLI script at scripts/index-repo.mjs), embeds via the Workers AI
-// binding, and upserts to OPENCLAW_CODE_INDEX under `namespace = <repo>`
-// lowercased (matches the existing retrieval contract — see Codex v1
-// BLOCKING note in .claude/handoff/arc-234-235-codex-verdict.md).
+// binding, and upserts to OPENCLAW_CODE_INDEX under
+// `namespace = <owner>/<repo>` lowercased (SIG-132 multi-tenant isolation;
+// matches the retrieval contract — see Codex v1 BLOCKING note in
+// .claude/handoff/arc-234-235-codex-verdict.md).
 //
 // State machine — bootstrap (message.shard is undefined):
 //   1. Sensitive-repo gate (consumer-side defense-in-depth).
@@ -49,6 +50,7 @@ import {
   embedTexts,
 } from "./embeddings"
 import {
+  indexNamespace,
   isManifestFresh,
   readRepoIndexManifest,
   writeRepoIndexManifest,
@@ -408,7 +410,7 @@ export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
 
 async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void> {
   const { owner, repo, installationId, reason } = job
-  const namespace = repo.toLowerCase()
+  const namespace = indexNamespace(owner, repo)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
     console.log(JSON.stringify({
@@ -452,7 +454,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
 
   // Freshness check — Codex v1 MAJOR. Skip when (owner, headSha,
   // modelId, chunkerVersion, embeddingDim) all match the prior run.
-  const existing = await readRepoIndexManifest(env, repo)
+  const existing = await readRepoIndexManifest(env, owner, repo)
   if (existing.kind === "ok") {
     const fresh = isManifestFresh({
       manifest: existing.manifest,
@@ -599,7 +601,7 @@ async function handleShardJob(
   env: Env,
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
-  const namespace = repo.toLowerCase()
+  const namespace = indexNamespace(owner, repo)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
     console.log(JSON.stringify({
@@ -928,7 +930,10 @@ interface PersistManifestArgs {
 async function persistManifest(args: PersistManifestArgs): Promise<void> {
   const manifest: RepoIndexManifestV1 = {
     v: 1,
-    repo: args.namespace,
+    // SIG-132: store the BARE lowercased repo, not the namespace. The
+    // namespace is `indexNamespace(owner, repo)` and is derivable from
+    // owner + repo at delete time.
+    repo: args.repo.toLowerCase(),
     owner: args.owner,
     headSha: args.headSha,
     runId: args.runId,
@@ -988,8 +993,8 @@ interface PersistVectorIdsArgs {
  */
 async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: boolean }> {
   const { env, owner, repo, runId, idsByPathSlice, isBootstrap } = args
-  const existing = await readRepoIndexVectors(env, repo)
-  const manifestRead = await readRepoIndexManifest(env, repo)
+  const existing = await readRepoIndexVectors(env, owner, repo)
+  const manifestRead = await readRepoIndexManifest(env, owner, repo)
   const currentManifestRunId =
     manifestRead.kind === "ok" ? manifestRead.manifest.runId : null
 

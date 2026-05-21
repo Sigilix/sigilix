@@ -64,10 +64,20 @@ export interface RetrievedChunk {
 
 /**
  * Map a Linear team key to a Vectorize namespace. Operator-overridable
- * via OPENCLAW_TEAM_REPO_MAP env var (JSON object, e.g.
- * `{"ARC":"rubberfit","RFD":"rubberfit-desktop"}`). Bad JSON falls
- * through to the default rather than crashing the triage pipeline —
- * a wrong namespace just produces zero matches, not an error.
+ * via OPENCLAW_TEAM_REPO_MAP env var (JSON object).
+ *
+ * SIG-132: the Vectorize namespace is now `<owner>/<repo>` lowercased
+ * (multi-tenant isolation). Map VALUES must therefore be `owner/repo`,
+ * e.g. `{"ARC":"arc-and-anchor/rubberfit","RFD":"arc-and-anchor/rubberfit-desktop"}`.
+ * Stale single-segment values (e.g. `"rubberfit"`) will simply produce
+ * zero retrieval matches against the new `<owner>/<repo>` namespaces.
+ *
+ * The fallback (no map entry) lowercases the bare team key — which does
+ * NOT yield a valid `<owner>/<repo>` namespace, so an unmapped team gets
+ * zero matches and the prompt instructs the model to abstain. Operators
+ * should populate the map with `owner/repo` values for every team whose
+ * indexed repo they want grounded. Bad JSON falls through to the default
+ * rather than crashing the triage pipeline.
  */
 export function teamKeyToNamespace(teamKey: string | null, mapJson?: string): string {
   if (!teamKey) return DEFAULT_NAMESPACE

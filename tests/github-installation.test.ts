@@ -176,39 +176,57 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
     }
   }
 
-  it("returns repos derived from `repo-index-manifest:*` keys", async () => {
+  it("returns namespaces derived from `repo-index-manifest:*` keys (SIG-132 <owner>/<repo>)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:rubberfit",
-      "repo-index-manifest:arc-and-anchor-website",
-      "repo-index-manifest:openclaw-worker",
+      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:arc-and-anchor/arc-and-anchor-website",
+      "repo-index-manifest:acme/openclaw-worker",
     ])
     const result = await listIndexedRepos(env)
-    expect(result.sort()).toEqual(["arc-and-anchor-website", "openclaw-worker", "rubberfit"])
+    expect(result.sort()).toEqual([
+      "acme/openclaw-worker",
+      "arc-and-anchor/arc-and-anchor-website",
+      "arc-and-anchor/rubberfit",
+    ])
+  })
+
+  it("EXCLUDES an orphaned pre-SIG-132 bare-repo key (no owner = bare namespace)", async () => {
+    // Old-shape keys (no slash) remain in KV until uninstall purges them.
+    // SIG-132 (CodeRabbit Major): they must NOT surface in availableRepos —
+    // advertising a bare namespace would let tool resolution fall back to a
+    // collision-prone, cross-tenant-unsafe namespace. Only owner-qualified
+    // (`<owner>/<repo>`) namespaces are surfaced.
+    const env = makeKvStub([
+      "repo-index-manifest:rubberfit", // legacy bare orphan → excluded
+      "repo-index-manifest:arc-and-anchor/rubberfit", // new shape → kept
+    ])
+    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
   })
 
   it("dedupes if the same key is somehow listed twice (defensive)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:rubberfit",
-      "repo-index-manifest:rubberfit",
+      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:arc-and-anchor/rubberfit",
     ])
-    expect(await listIndexedRepos(env)).toEqual(["rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
   })
 
-  it("ignores empty repo segments after the prefix", async () => {
+  it("ignores empty + bare (owner-less) segments after the prefix", async () => {
     const env = makeKvStub([
       "repo-index-manifest:",
-      "repo-index-manifest:rubberfit",
+      "repo-index-manifest:rubberfit", // bare → excluded
+      "repo-index-manifest:arc-and-anchor/rubberfit",
     ])
-    expect(await listIndexedRepos(env)).toEqual(["rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
   })
 
   it("ignores keys outside the `repo-index-manifest:` prefix", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:rubberfit",
+      "repo-index-manifest:arc-and-anchor/rubberfit",
       "pr-review-manifest:Arc-and-Anchor/sigilix#10",
       "pr-review:Arc-and-Anchor/rubberfit#5@abc",
     ])
-    expect(await listIndexedRepos(env)).toEqual(["rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
   })
 
   it("returns empty array when KV is empty (fresh deploy, no installs yet)", async () => {
@@ -218,7 +236,7 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
 
   it("paginates correctly across list_complete=false pages", async () => {
     const allKeys = Array.from({ length: 1500 }, (_, i) =>
-      `repo-index-manifest:repo-${String(i).padStart(4, "0")}`,
+      `repo-index-manifest:acme/repo-${String(i).padStart(4, "0")}`,
     )
     // Stub list that paginates 1000 at a time via cursor.
     const env = {
@@ -241,7 +259,7 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
     }
     const result = await listIndexedRepos(env)
     expect(result.length).toBe(1500)
-    expect(result[0]).toBe("repo-0000")
-    expect(result[1499]).toBe("repo-1499")
+    expect(result[0]).toBe("acme/repo-0000")
+    expect(result[1499]).toBe("acme/repo-1499")
   })
 })

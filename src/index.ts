@@ -129,6 +129,8 @@ export interface Env {
   // Public origin for OAuth callbacks (must match the GitHub App's
   // configured callback URL). Defaults to https://app.sigilix.ai.
   OPENCLAW_BASE_URL?: string
+  // SIG-132: VALUES are `<owner>/<repo>` lowercased (the Vectorize
+  // namespace), e.g. {"ARC":"arc-and-anchor/rubberfit"}.
   OPENCLAW_TEAM_REPO_MAP?: string
   OPENCLAW_MODEL?: string
   OPENCLAW_TEAM_KEY?: string

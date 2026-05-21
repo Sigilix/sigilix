@@ -44,9 +44,11 @@ const SAMPLE_VECTORS: RepoIndexVectorsV1 = {
 }
 
 describe("repoIndexVectorsKey", () => {
-  it("lowercases the repo", () => {
-    expect(repoIndexVectorsKey("Sigilix")).toBe("repo-index-vectors:sigilix")
-    expect(repoIndexVectorsKey("SIGILIX")).toBe("repo-index-vectors:sigilix")
+  it("keys by the lowercased <owner>/<repo> namespace", () => {
+    expect(repoIndexVectorsKey("Arc-and-Anchor", "Sigilix")).toBe(
+      "repo-index-vectors:arc-and-anchor/sigilix",
+    )
+    expect(repoIndexVectorsKey("ACME", "API")).toBe("repo-index-vectors:acme/api")
   })
 })
 
@@ -55,7 +57,7 @@ describe("read/write round-trip", () => {
     const { kv } = makeKvStub()
     const ok = await writeRepoIndexVectors(makeEnv(kv), SAMPLE_VECTORS)
     expect(ok).toBe(true)
-    const result = await readRepoIndexVectors(makeEnv(kv), "Sigilix")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
     expect(result.kind).toBe("ok")
     if (result.kind === "ok") {
       expect(result.vectors).toEqual(SAMPLE_VECTORS)
@@ -64,22 +66,25 @@ describe("read/write round-trip", () => {
 
   it("returns missing when no record exists", async () => {
     const { kv } = makeKvStub()
-    const result = await readRepoIndexVectors(makeEnv(kv), "nothing")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "nothing")
     expect(result.kind).toBe("missing")
   })
 
   it("returns invalid/json-parse for non-JSON", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-vectors:sigilix", "{not json")
-    const result = await readRepoIndexVectors(makeEnv(kv), "sigilix")
+    store.set("repo-index-vectors:arc-and-anchor/sigilix", "{not json")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("json-parse")
   })
 
   it("returns invalid/wrong-version for v0 records", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-vectors:sigilix", JSON.stringify({ ...SAMPLE_VECTORS, v: 2 }))
-    const result = await readRepoIndexVectors(makeEnv(kv), "sigilix")
+    store.set(
+      "repo-index-vectors:arc-and-anchor/sigilix",
+      JSON.stringify({ ...SAMPLE_VECTORS, v: 2 }),
+    )
+    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("wrong-version")
   })
@@ -88,29 +93,29 @@ describe("read/write round-trip", () => {
     const { kv, store } = makeKvStub()
     const bad = { ...SAMPLE_VECTORS } as Partial<RepoIndexVectorsV1>
     delete bad.owner
-    store.set("repo-index-vectors:sigilix", JSON.stringify(bad))
-    const result = await readRepoIndexVectors(makeEnv(kv), "sigilix")
+    store.set("repo-index-vectors:arc-and-anchor/sigilix", JSON.stringify(bad))
+    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("shape")
   })
 
   it("returns invalid/shape on non-array byPath value", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-vectors:sigilix", JSON.stringify({
+    store.set("repo-index-vectors:arc-and-anchor/sigilix", JSON.stringify({
       ...SAMPLE_VECTORS,
       byPath: { "src/a.ts": "not-an-array" },
     }))
-    const result = await readRepoIndexVectors(makeEnv(kv), "sigilix")
+    const result = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") expect(result.reason).toBe("shape")
   })
 
-  it("deleteRepoIndexVectors removes the record under the lowercased key", async () => {
+  it("deleteRepoIndexVectors removes the record under the <owner>/<repo> key", async () => {
     const { kv, store } = makeKvStub()
     await writeRepoIndexVectors(makeEnv(kv), SAMPLE_VECTORS)
-    expect(store.has("repo-index-vectors:sigilix")).toBe(true)
-    await deleteRepoIndexVectors(makeEnv(kv), "Sigilix")
-    expect(store.has("repo-index-vectors:sigilix")).toBe(false)
+    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
+    await deleteRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(false)
   })
 })
 

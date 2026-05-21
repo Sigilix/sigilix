@@ -54,6 +54,7 @@ import {
   repoIndexVectorsKey,
   type ReadResult as VectorsReadResult,
 } from "./repo-index-vectors"
+import { activeRunKey } from "./repo-index-active-run"
 
 const VECTORIZE_DELETE_BATCH = 1000
 const KV_LIST_PAGE_LIMIT = 1000
@@ -405,6 +406,22 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
             owner, repo, key: manifestKeyName, err: message,
           }))
         }
+      }
+
+      // SIG-136: drop the per-repo indexer run LEASE so nothing is
+      // stranded (GDPR completeness). The key is owner-qualified via
+      // `indexNamespace` and brand new (no legacy bare-repo shape), so
+      // it's safe under the same owner gate as the records above. Best-
+      // effort + idempotent (missing key = no-op).
+      try {
+        await env.OPENCLAW_STATE.delete(activeRunKey(owner, repo))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        result.errors.push(`kv.delete(repo-index-active-run): ${message}`)
+        console.error(JSON.stringify({
+          event: "index-delete-kv-active-run-failed",
+          owner, repo, err: message,
+        }))
       }
 
       // SIG-132: purge any leftover same-owner LEGACY KV keys that

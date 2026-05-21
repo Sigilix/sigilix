@@ -45,6 +45,14 @@ import {
   resolvePerfSnapshot,
   selectRetrievalSnapshotForRole,
 } from "./perf-retrieval"
+import {
+  extractChangedSymbols,
+  buildSymbolRetrievalQuery,
+  computeChunkOverlap,
+  shouldRunSymbolRetrieval,
+  mergeLogicSnapshot,
+} from "./symbol-retrieval"
+import { buildChangedLines } from "./ast-rules/diff-filter"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -1350,6 +1358,75 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+
+    // SIG-121: symbol-based retrieval for the LOGIC specialist (flag-gated,
+    // best-effort). Fires HERE — after astFilesByPath is built (it needs the
+    // file SOURCES for AST symbol extraction) and before the specialist
+    // fanout. Unlike SIG-110's perf retrieval (concurrent with preflight),
+    // this can't run at preflight time because the sources don't exist yet.
+    // Budget-aware, ≤15s cap, non-fatal (empty snapshot on failure; rethrow
+    // only on orchCtrl abort). AUGMENTS — never replaces — the logic role's
+    // shared snapshot via mergeLogicSnapshot below.
+    let logicSymbolSnapshot = ""
+    let symbolOverlap: ReturnType<typeof computeChunkOverlap> | null = null
+    let symbolRetrievalElapsedMs = 0
+    let symbolQueryCount = 0
+    let symbolInjected = false
+    if (
+      shouldRunSymbolRetrieval(
+        env.OPENCLAW_SYMBOL_RETRIEVAL,
+        router.specialists,
+        preflightCache.budgetRemaining(),
+      )
+    ) {
+      const changedLines = buildChangedLines(diff)
+      const symbols = extractChangedSymbols(astFilesByPath, changedLines)
+      symbolQueryCount = symbols.length
+      const symbolQuery = buildSymbolRetrievalQuery(symbols)
+      if (symbolQuery.length > 0) {
+        const startMs = Date.now()
+        let symbolChunks: RetrievedChunk[] | null = null
+        try {
+          const r = await withComposedTimeout(
+            () =>
+              preflightCache.cachedRetrieve({
+                caller: "specialist:logic-symbol",
+                query: symbolQuery,
+                namespace,
+                fetcher: () => retrieveChunks({ text: symbolQuery, teamKey: namespace, env }),
+              }),
+            RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+            orchCtrl.signal,
+          )
+          symbolChunks = r.chunks
+        } catch (err) {
+          if (orchCtrl.signal.aborted) throw err
+          symbolChunks = null
+        }
+        symbolRetrievalElapsedMs = Date.now() - startMs
+        const formatted = symbolChunks ? formatChunksForPrompt(symbolChunks) ?? "" : ""
+        if (formatted.length > 0) {
+          logicSymbolSnapshot = formatted
+          symbolInjected = true
+        }
+        symbolOverlap = computeChunkOverlap(preflightChunks ?? [], symbolChunks ?? [])
+      }
+      // Bake-off signal (SIG-121 → SIG-86): how different is the
+      // symbol-derived snapshot from the shared one?
+      console.log(JSON.stringify({
+        event: "pr-review-symbol-retrieval",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        query_symbol_count: symbolQueryCount,
+        injected: symbolInjected,
+        elapsed_ms: symbolRetrievalElapsedMs,
+        budget_remaining: preflightCache.budgetRemaining(),
+        shared_chunks: symbolOverlap?.sharedCount ?? 0,
+        symbol_chunks: symbolOverlap?.symbolCount ?? 0,
+        intersection: symbolOverlap?.intersectionCount ?? 0,
+        jaccard: symbolOverlap?.jaccard ?? 0,
+      }))
+    }
+
     const astResult = await runAstRules({
       diff,
       filesByPath: astFilesByPath,
@@ -1743,9 +1820,17 @@ export async function handlePrReviewEnsemble(
         title: meta.title,
         body: meta.body ?? "",
         diff,
-        // SIG-110: the performance role gets the perf-biased snapshot;
-        // every other role gets the shared preflight snapshot.
-        retrievalSnapshot: selectRetrievalSnapshotForRole(role, perfRetrievalSnapshot, retrievalSnapshot),
+        // SIG-110: the performance role gets the perf-biased snapshot.
+        // SIG-121: the logic role AUGMENTS the shared snapshot with the
+        // symbol-derived block (empty when the flag is off, in which case
+        // mergeLogicSnapshot returns the shared snapshot unchanged). Every
+        // other role gets the shared preflight snapshot.
+        retrievalSnapshot:
+          role === "performance"
+            ? selectRetrievalSnapshotForRole(role, perfRetrievalSnapshot, retrievalSnapshot)
+            : role === "logic"
+              ? mergeLogicSnapshot(retrievalSnapshot, logicSymbolSnapshot)
+              : retrievalSnapshot,
         namespace,
         ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
         ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),

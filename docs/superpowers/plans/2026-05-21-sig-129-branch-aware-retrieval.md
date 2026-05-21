@@ -749,4 +749,3 @@ git commit -m "test(sig-129): acceptance — new exported symbol retrievable, ov
 - **PR:** branch `sig-129`; body uses `Closes SIG-129` and links the issue in the Development rail; move the Linear ticket to In Progress at start, In Review on PR open.
 - **Rollout:** ship flag-off. Validate the FN/hallucination delta from `pr-review-branch-retrieval` telemetry via the SIG-86 aggregator before flipping `OPENCLAW_BRANCH_AWARE_RETRIEVAL on`.
 - **Follow-ups (out of v1 scope):** broaden beyond JS/TS changed files; make the live agent-loop `retrieve_codebase` tool branch-aware.
-```

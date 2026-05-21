@@ -118,6 +118,34 @@ export function shouldRunBranchAwareRetrieval(
   return (flag ?? "").trim().toLowerCase() === "on" && filesByPath.size > 0
 }
 
+/** Shadow telemetry event for the SIG-86 bake-off. Pure builder so the
+ *  emitted shape is unit-pinned (a dropped/renamed field breaks the test,
+ *  not a downstream log pipeline). headSha is truncated to 7 at emit time. */
+export interface BranchRetrievalEventInput {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  branchChunkCount: number
+  embedElapsedMs: number
+  headOverride: { preflight: number; perf: number; symbol: number }
+}
+
+export function buildBranchRetrievalEvent(e: BranchRetrievalEventInput): Record<string, unknown> {
+  return {
+    event: "pr-review-branch-retrieval",
+    owner: e.owner,
+    repo: e.repo,
+    prNumber: e.prNumber,
+    headSha: e.headSha.slice(0, 7),
+    branch_chunk_count: e.branchChunkCount,
+    embed_elapsed_ms: e.embedElapsedMs,
+    head_override_preflight: e.headOverride.preflight,
+    head_override_perf: e.headOverride.perf,
+    head_override_symbol: e.headOverride.symbol,
+  }
+}
+
 /**
  * Build + embed the branch retrieval set ONCE per review. Best-effort:
  * any failure (embed error, empty input) yields [] so the caller silently

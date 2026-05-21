@@ -58,6 +58,7 @@ import {
   prepareBranchSet,
   retrieveBranchChunks,
   mergeBranchAware,
+  buildBranchRetrievalEvent,
   type BranchVector,
 } from "./branch-retrieval"
 import { embedText } from "./embeddings"
@@ -1411,7 +1412,7 @@ export async function handlePrReviewEnsemble(
     // SIG-129 tombstone set: every changed JS/TS file is stale on `main`, so
     // its main-index chunks must be dropped from each merge regardless of
     // whether a branch chunk for it surfaced in the retrieved top-K.
-    const changedPaths: ReadonlySet<string> = new Set(astFilesByPath.keys())
+    const changedPaths: ReadonlySet<string> = new Set(jsTsPaths)
 
     // Branch-aware merge for one pass: embed the pass's query (single text,
     // best-effort) and overlay branch chunks on the main chunks. Returns the
@@ -1538,15 +1539,12 @@ export async function handlePrReviewEnsemble(
     // SIG-129 → SIG-86 bake-off signal. Flag-off ⇒ branchVectors empty ⇒
     // logs zeros and nothing changed in the snapshots.
     if (wantBranchAware) {
-      console.log(JSON.stringify({
-        event: "pr-review-branch-retrieval",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        branch_chunk_count: branchVectors.length,
-        embed_elapsed_ms: branchSetElapsedMs,
-        head_override_preflight: branchMergeStats.preflight,
-        head_override_perf: branchMergeStats.perf,
-        head_override_symbol: branchMergeStats.symbol,
-      }))
+      console.log(JSON.stringify(buildBranchRetrievalEvent({
+        owner, repo, prNumber, headSha,
+        branchChunkCount: branchVectors.length,
+        embedElapsedMs: branchSetElapsedMs,
+        headOverride: branchMergeStats,
+      })))
     }
 
     const astResult = await runAstRules({

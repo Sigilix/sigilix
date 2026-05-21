@@ -1,8 +1,9 @@
 // ARC-238 — KV bookkeeping for the per-repo Vectorize chunk-id list.
 //
-// One record per indexed repo, keyed `repo-index-vectors:<repo>`
-// (lowercased — same convention as `repo-index-manifest:<repo>` from
-// ARC-235). Without this record, `installation.deleted` and
+// One record per indexed repo, keyed `repo-index-vectors:<owner>/<repo>`
+// (lowercased — same convention as `repo-index-manifest:<owner>/<repo>`
+// from ARC-235, moved to `<owner>/<repo>` by SIG-132 for multi-tenant
+// isolation). Without this record, `installation.deleted` and
 // `installation_repositories.removed` can't enumerate which IDs to
 // `deleteByIds` — the only Vectorize delete primitive on the binding.
 //
@@ -18,6 +19,7 @@
 // does full re-index on push) can target removed files by path.
 
 import type { Env } from "../index"
+import { indexNamespace } from "./repo-index-manifest"
 
 const KV_KEY_PREFIX = "repo-index-vectors:"
 const TTL_SECONDS = 60 * 24 * 60 * 60 // 60 days; aligned with manifest
@@ -28,7 +30,12 @@ const TTL_SECONDS = 60 * 24 * 60 * 60 // 60 days; aligned with manifest
 
 export interface RepoIndexVectorsV1 {
   v: 1
-  /** Lowercased repo name — matches the Vectorize namespace. */
+  /**
+   * Lowercased BARE repo name (not the namespace). The Vectorize
+   * namespace is `indexNamespace(owner, repo)` = `<owner>/<repo>`. Stored
+   * bare so the uninstall delete path can reconstruct keys from owner +
+   * repo.
+   */
   repo: string
   /**
    * Owner at index time. The uninstall delete fan-out compares this
@@ -38,7 +45,7 @@ export interface RepoIndexVectorsV1 {
    * smashed by an unrelated uninstall.
    */
   owner: string
-  /** Stable per-run id (matches `repo-index-manifest:<repo>`'s runId). */
+  /** Stable per-run id (matches `repo-index-manifest:<owner>/<repo>`'s runId). */
   runId: string
   /** Path → ordered list of chunk ids for that path. */
   byPath: Record<string, string[]>
@@ -53,7 +60,16 @@ export type ReadResult =
 // KV serdes
 // ---------------------------------------------------------------------
 
-export function repoIndexVectorsKey(repo: string): string {
+export function repoIndexVectorsKey(owner: string, repo: string): string {
+  return `${KV_KEY_PREFIX}${indexNamespace(owner, repo)}`
+}
+
+/**
+ * SIG-132: the pre-migration bare-repo key shape
+ * (`repo-index-vectors:<repo>`). The uninstall delete path probes this so
+ * orphaned old-scheme records remain GDPR-deletable.
+ */
+export function legacyRepoIndexVectorsKey(repo: string): string {
   return `${KV_KEY_PREFIX}${repo.toLowerCase()}`
 }
 
@@ -77,10 +93,20 @@ function isRepoIndexVectorsV1(value: unknown): value is RepoIndexVectorsV1 {
 
 export async function readRepoIndexVectors(
   env: Env,
+  owner: string,
   repo: string,
 ): Promise<ReadResult> {
-  const raw = await env.OPENCLAW_STATE.get(repoIndexVectorsKey(repo))
+  const raw = await env.OPENCLAW_STATE.get(repoIndexVectorsKey(owner, repo))
   if (raw === null) return { kind: "missing" }
+  return parseRepoIndexVectors(raw)
+}
+
+/**
+ * Parse + validate a raw vectors JSON string. Extracted so SIG-132's
+ * uninstall delete path can validate a record read from the LEGACY
+ * bare-repo key shape. Never returns `missing`.
+ */
+export function parseRepoIndexVectors(raw: string): ReadResult {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -112,7 +138,7 @@ export async function writeRepoIndexVectors(
 ): Promise<boolean> {
   try {
     await env.OPENCLAW_STATE.put(
-      repoIndexVectorsKey(vectors.repo),
+      repoIndexVectorsKey(vectors.owner, vectors.repo),
       JSON.stringify(vectors),
       { expirationTtl: TTL_SECONDS },
     )
@@ -124,9 +150,10 @@ export async function writeRepoIndexVectors(
 
 export async function deleteRepoIndexVectors(
   env: Env,
+  owner: string,
   repo: string,
 ): Promise<void> {
-  await env.OPENCLAW_STATE.delete(repoIndexVectorsKey(repo))
+  await env.OPENCLAW_STATE.delete(repoIndexVectorsKey(owner, repo))
 }
 
 // ---------------------------------------------------------------------

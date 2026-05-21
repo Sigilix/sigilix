@@ -6,7 +6,9 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  indexNamespace,
   isManifestFresh,
+  legacyRepoIndexManifestKey,
   readRepoIndexManifest,
   repoIndexManifestKey,
   writeRepoIndexManifest,
@@ -54,22 +56,38 @@ const SAMPLE_MANIFEST: RepoIndexManifestV1 = {
   overlapLines: 10,
 }
 
+describe("indexNamespace", () => {
+  it("lowercases owner + repo and joins with a slash", () => {
+    expect(indexNamespace("Arc-and-Anchor", "Sigilix")).toBe("arc-and-anchor/sigilix")
+    expect(indexNamespace("ACME", "API")).toBe("acme/api")
+    expect(indexNamespace("acme", "api")).toBe("acme/api")
+  })
+})
+
 describe("repoIndexManifestKey", () => {
-  it("lowercases the repo segment", () => {
-    expect(repoIndexManifestKey("SIGILIX")).toBe("repo-index-manifest:sigilix")
-    expect(repoIndexManifestKey("Sigilix")).toBe("repo-index-manifest:sigilix")
-    expect(repoIndexManifestKey("rubberfit")).toBe("repo-index-manifest:rubberfit")
+  it("keys by the lowercased <owner>/<repo> namespace", () => {
+    expect(repoIndexManifestKey("Arc-and-Anchor", "SIGILIX")).toBe(
+      "repo-index-manifest:arc-and-anchor/sigilix",
+    )
+    expect(repoIndexManifestKey("acme", "api")).toBe("repo-index-manifest:acme/api")
+  })
+})
+
+describe("legacyRepoIndexManifestKey", () => {
+  it("keys by the bare lowercased repo (pre-SIG-132 shape)", () => {
+    expect(legacyRepoIndexManifestKey("SIGILIX")).toBe("repo-index-manifest:sigilix")
+    expect(legacyRepoIndexManifestKey("api")).toBe("repo-index-manifest:api")
   })
 })
 
 describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
-  it("round-trips a valid manifest under the lowercased key", async () => {
+  it("round-trips a valid manifest under the <owner>/<repo> key", async () => {
     const { kv, store } = makeKvStub()
     const ok = await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
     expect(ok).toBe(true)
-    expect(store.has("repo-index-manifest:sigilix")).toBe(true)
+    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
 
-    const result = await readRepoIndexManifest(makeEnv(kv), "Sigilix")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
     expect(result.kind).toBe("ok")
     if (result.kind === "ok") {
       expect(result.manifest).toEqual(SAMPLE_MANIFEST)
@@ -78,14 +96,14 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
 
   it("returns missing when no record exists", async () => {
     const { kv } = makeKvStub()
-    const result = await readRepoIndexManifest(makeEnv(kv), "nothing")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "nothing")
     expect(result.kind).toBe("missing")
   })
 
   it("returns invalid/json-parse for non-JSON garbage", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:sigilix", "{not json")
-    const result = await readRepoIndexManifest(makeEnv(kv), "sigilix")
+    store.set("repo-index-manifest:arc-and-anchor/sigilix", "{not json")
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {
       expect(result.reason).toBe("json-parse")
@@ -94,8 +112,11 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
 
   it("returns invalid/wrong-version for a v0 (or otherwise mismatched) record", async () => {
     const { kv, store } = makeKvStub()
-    store.set("repo-index-manifest:sigilix", JSON.stringify({ ...SAMPLE_MANIFEST, v: 2 }))
-    const result = await readRepoIndexManifest(makeEnv(kv), "sigilix")
+    store.set(
+      "repo-index-manifest:arc-and-anchor/sigilix",
+      JSON.stringify({ ...SAMPLE_MANIFEST, v: 2 }),
+    )
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {
       expect(result.reason).toBe("wrong-version")
@@ -106,8 +127,8 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     const { kv, store } = makeKvStub()
     const broken = { ...SAMPLE_MANIFEST } as Partial<RepoIndexManifestV1>
     delete broken.headSha
-    store.set("repo-index-manifest:sigilix", JSON.stringify(broken))
-    const result = await readRepoIndexManifest(makeEnv(kv), "sigilix")
+    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(broken))
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {
       expect(result.reason).toBe("shape")

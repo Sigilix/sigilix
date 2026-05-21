@@ -38,6 +38,7 @@ import { chat, type ChatMessage } from "./ollama-chat"
 // this module into ./ollama-chat.
 export type { ChatMessage }
 import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
+import { indexNamespace } from "./repo-index-manifest"
 import {
   buildPerfRetrievalQuery,
   extractChangedFunctionNames,
@@ -1212,7 +1213,7 @@ export async function handlePrReviewEnsemble(
     cache = createRetrievalCache({
       maxCalls: parseIntEnv(env.OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR, DEFAULT_MAX_RETRIEVE_CALLS_PER_PR),
     })
-    const namespace = repo.toLowerCase()
+    const namespace = indexNamespace(owner, repo)
     const preflightQuery = `${meta.title}\n\n${meta.body ?? ""}`
     // Phase 4a.1: cap the pre-flight Vectorize round-trip so a slow
     // retrieval can't silently consume the synth budget. Failure here

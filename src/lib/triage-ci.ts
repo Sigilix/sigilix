@@ -14,6 +14,7 @@ import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient, GitHubHttpError, type WorkflowJob } from "./github"
 import { retrieveChunks } from "./retrieval"
+import { indexNamespace } from "./repo-index-manifest"
 import { CI_TRIAGE_PROMPT } from "../prompts/ci-triage"
 import type { Env } from "../index"
 
@@ -171,7 +172,7 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
   try {
     const chunks = await retrieveChunks({
       text: `${ciLog}\n\n${diff}`,
-      teamKey: repo,
+      teamKey: indexNamespace(owner, repo),
       env,
     })
     const excludePaths = new Set(fileContexts.map((f) => f.path))

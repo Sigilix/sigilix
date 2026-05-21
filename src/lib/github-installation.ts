@@ -113,9 +113,11 @@ export function listTeamRepoMappings(
  * operator-managed env-var lag would lock customers out of retrieval
  * even though their repo was actually indexed.
  *
- * Returned slugs are always lowercased (Vectorize namespaces are
- * lowercased at index time — see scripts/index-repo.mjs and the
- * `repoIndexManifestKey` helper in `repo-index-manifest.ts`).
+ * SIG-132: returned slugs are the `<owner>/<repo>` Vectorize namespace
+ * (the KV key suffix), always lowercased (namespaces are lowercased at
+ * index time — see the `repoIndexManifestKey` / `indexNamespace` helpers
+ * in `repo-index-manifest.ts`). These feed `retrieve_codebase`'s allowed
+ * namespace set.
  *
  * Cloudflare KV's edge cache absorbs the read cost on hot paths
  * (the agent loop calls this once per invocation; same-region
@@ -156,8 +158,9 @@ export async function listIndexedRepos(env: {
       // but a direct `OPENCLAW_STATE.put` bypass with a mixed-case
       // key would otherwise leak casing into `availableRepos` and
       // break the case-sensitive lookup downstream.
-      const repo = key.name.slice(PREFIX.length).toLowerCase()
-      if (repo.length > 0) out.add(repo)
+      // SIG-132: the suffix is now the `<owner>/<repo>` namespace.
+      const namespace = key.name.slice(PREFIX.length).toLowerCase()
+      if (namespace.length > 0) out.add(namespace)
     }
     if (page.list_complete) break
     if (!page.cursor) {

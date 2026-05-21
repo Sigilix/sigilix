@@ -17,6 +17,7 @@ import {
   stripMentionFromBody,
 } from "./mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
+import { indexNamespace } from "./repo-index-manifest"
 import { MENTION_REPLY_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
@@ -167,7 +168,12 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         // model knows which `repo` to pass to its only tool. Without
         // this the model has to guess; if the team→repo mapping is
         // missing it can't ground retrieval at all.
-        repo: inferRepo()?.repo?.toLowerCase() ?? null,
+        // SIG-132: the namespace is `<owner>/<repo>` lowercased, matching
+        // the `availableRepos` entries (which are KV-key suffixes).
+        repo: (() => {
+          const r = inferRepo()
+          return r ? indexNamespace(r.owner, r.repo) : null
+        })(),
         // The full set of indexed namespaces the agent is allowed to
         // query. The team's primary repo (above) is the default, but
         // the model picks a different namespace from this list when the

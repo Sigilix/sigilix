@@ -1,9 +1,10 @@
 // ARC-235 — KV manifest for the customer-ready indexing pipeline.
 //
-// One record per indexed repo, keyed `repo-index-manifest:<repo>`
+// One record per indexed repo, keyed `repo-index-manifest:<owner>/<repo>`
 // (lowercased — matching the Vectorize namespace contract used at
 // retrieval time in `src/lib/retrieval.ts` and the agent loop's
-// `retrieve_codebase` tool).
+// `retrieve_codebase` tool). SIG-132 moved the key + namespace from the
+// bare `<repo>` to `<owner>/<repo>` for multi-tenant isolation.
 //
 // Distinct from `pr-review-manifest:<owner>/<repo>#<prNumber>` (ARC-184,
 // per-PR review provenance). Per Codex v2 BLOCKING: a repo-level key
@@ -25,6 +26,27 @@
 
 import type { Env } from "../index"
 
+// SIG-132 (2026-05-20) — multi-tenant isolation. The index namespace
+// (Vectorize namespace + the suffix of the manifest/vectors KV keys) is
+// now `<owner>/<repo>` lowercased, NOT the bare `<repo>`. Two orgs with a
+// repo named `api` previously collided in one Vectorize namespace + KV
+// keyspace (retrieval queries `namespace = repo` with no owner gate),
+// leaking chunks across tenants.
+//
+// Migration: existing bare-namespace data (`repo-index-manifest:<repo>`,
+// `repo-index-vectors:<repo>`, Vectorize namespace `<repo>`) is orphaned
+// by this change. Repos re-index on next push under the new namespace —
+// the freshness gate self-heals because the new-key manifest won't be
+// found. The indexer was enabled in prod only minutes before this change
+// so effectively no data exists yet; the migration cost is near-zero.
+// Orphaned old-scheme records remain GDPR-deletable on uninstall via the
+// `manifest.owner === ownerLogin` match in `index-delete.ts` (the delete
+// path probes BOTH the new `<owner>/<repo>` and the old bare `<repo>` key
+// shapes so no customer data is stranded).
+export function indexNamespace(owner: string, repo: string): string {
+  return `${owner.toLowerCase()}/${repo.toLowerCase()}`
+}
+
 const KV_KEY_PREFIX = "repo-index-manifest:"
 // ARC-238 Codex v1 catch (TTL alignment): bumped 30d → 60d to match
 // the sibling `repo-index-vectors:` TTL so an uninstall right after
@@ -39,15 +61,20 @@ const TTL_SECONDS = 60 * 24 * 60 * 60 // 60 days
 
 export interface RepoIndexManifestV1 {
   v: 1
-  /** Lowercased repo name — the Vectorize namespace this manifest gates. */
+  /**
+   * Lowercased BARE repo name (not the namespace). The Vectorize
+   * namespace this manifest gates is `indexNamespace(owner, repo)` =
+   * `<owner>/<repo>`. Stored as the bare repo so the uninstall delete
+   * path can reconstruct the namespace + KV keys from `owner` + `repo`.
+   */
   repo: string
   /**
-   * Owner at index time. Two installs of differently-owned repos with
-   * the same name will share a Vectorize namespace + manifest under
-   * today's contract; storing owner here lets the freshness check
-   * detect that case and re-index (the `manifest.owner === owner`
-   * guard in the consumer). A real fix is a future namespace migration
-   * to `<owner>/<repo>` across retrieval, prompts, and allowlists.
+   * Owner at index time. SIG-132 made `<owner>/<repo>` the namespace, so
+   * same-named repos under different owners no longer collide. Owner is
+   * still stored: the freshness check uses it (`manifest.owner === owner`
+   * guard in the consumer) and the uninstall delete path matches on it to
+   * find + purge BOTH new (`<owner>/<repo>`) and orphaned old (`<repo>`)
+   * pre-migration records.
    */
   owner: string
   /** Default-branch commit SHA at index time. */
@@ -83,7 +110,19 @@ export type ReadResult =
 // KV serdes
 // ---------------------------------------------------------------------
 
-export function repoIndexManifestKey(repo: string): string {
+export function repoIndexManifestKey(owner: string, repo: string): string {
+  return `${KV_KEY_PREFIX}${indexNamespace(owner, repo)}`
+}
+
+/** The shared `repo-index-manifest:` prefix. Exported for KV-scan callers. */
+export const REPO_INDEX_MANIFEST_PREFIX = KV_KEY_PREFIX
+
+/**
+ * SIG-132: the pre-migration bare-repo key shape
+ * (`repo-index-manifest:<repo>`). The uninstall delete path probes this
+ * so orphaned old-scheme records remain GDPR-deletable.
+ */
+export function legacyRepoIndexManifestKey(repo: string): string {
   return `${KV_KEY_PREFIX}${repo.toLowerCase()}`
 }
 
@@ -114,10 +153,21 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
  */
 export async function readRepoIndexManifest(
   env: Env,
+  owner: string,
   repo: string,
 ): Promise<ReadResult> {
-  const raw = await env.OPENCLAW_STATE.get(repoIndexManifestKey(repo))
+  const raw = await env.OPENCLAW_STATE.get(repoIndexManifestKey(owner, repo))
   if (raw === null) return { kind: "missing" }
+  return parseRepoIndexManifest(raw)
+}
+
+/**
+ * Parse + validate a raw manifest JSON string into a tagged ReadResult.
+ * Extracted so SIG-132's uninstall delete path can validate a record it
+ * read from the LEGACY bare-repo key shape without re-implementing the
+ * validation. Never returns `missing` (the caller already has the raw).
+ */
+export function parseRepoIndexManifest(raw: string): ReadResult {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -152,7 +202,7 @@ export async function writeRepoIndexManifest(
 ): Promise<boolean> {
   try {
     await env.OPENCLAW_STATE.put(
-      repoIndexManifestKey(manifest.repo),
+      repoIndexManifestKey(manifest.owner, manifest.repo),
       JSON.stringify(manifest),
       { expirationTtl: TTL_SECONDS },
     )

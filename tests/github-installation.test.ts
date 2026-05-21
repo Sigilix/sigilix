@@ -176,14 +176,27 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
     }
   }
 
-  it("returns repos derived from `repo-index-manifest:*` keys", async () => {
+  it("returns namespaces derived from `repo-index-manifest:*` keys (SIG-132 <owner>/<repo>)", async () => {
     const env = makeKvStub([
-      "repo-index-manifest:rubberfit",
-      "repo-index-manifest:arc-and-anchor-website",
-      "repo-index-manifest:openclaw-worker",
+      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:arc-and-anchor/arc-and-anchor-website",
+      "repo-index-manifest:acme/openclaw-worker",
     ])
     const result = await listIndexedRepos(env)
-    expect(result.sort()).toEqual(["arc-and-anchor-website", "openclaw-worker", "rubberfit"])
+    expect(result.sort()).toEqual([
+      "acme/openclaw-worker",
+      "arc-and-anchor/arc-and-anchor-website",
+      "arc-and-anchor/rubberfit",
+    ])
+  })
+
+  it("still surfaces an orphaned pre-SIG-132 bare-repo key as-is", async () => {
+    // Old-shape keys remain in KV until uninstall purges them; they
+    // parse as a bare-repo namespace (no slash). Retrieval against them
+    // simply yields zero matches once data re-indexes under the new
+    // shape — they don't crash the allow-list build.
+    const env = makeKvStub(["repo-index-manifest:rubberfit"])
+    expect(await listIndexedRepos(env)).toEqual(["rubberfit"])
   })
 
   it("dedupes if the same key is somehow listed twice (defensive)", async () => {

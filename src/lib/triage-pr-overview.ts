@@ -381,7 +381,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // overview post.
     let warmup: "pending" | "none" = "none"
     try {
-      const manifest = await readRepoIndexManifest(env, repo)
+      const manifest = await readRepoIndexManifest(env, owner, repo)
       if (manifest.kind !== "ok") warmup = "pending"
     } catch (err) {
       console.warn(JSON.stringify({

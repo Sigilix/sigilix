@@ -21,6 +21,7 @@ import { parseFirstJsonObject } from "./json-extract"
 import { GITHUB_MENTION_SCHEMA } from "./schemas"
 import { GITHUB_MENTION_PROMPT } from "../prompts/github-mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
+import { indexNamespace } from "./repo-index-manifest"
 import { arcInThreadAbove, bodyMentionsBot, getMentionTriggers, stripMentionFromBody } from "./mention"
 import { runAgentLoop } from "./agent-loop"
 import { createAgentTools } from "./agent-tools"
@@ -177,18 +178,17 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   ])
   since("github-fetched", { threadCount: thread.length })
 
-  // Codebase retrieval scoped to the repo. The Vectorize namespace
-  // matches the repo name lowercased (same convention scripts/index-
-  // repo.mjs uses). teamKeyToNamespace() lowercases as a fallback,
-  // but normalize at the boundary too so a case-sensitive entry in
-  // OPENCLAW_TEAM_REPO_MAP can't accidentally collide with a mixed-
-  // case repo name. Soft-fails to empty when retrieval errors or the
-  // repo isn't indexed — the prompt instructs the model to abstain
-  // rather than fabricate when chunks are empty.
+  // Codebase retrieval scoped to the repo. SIG-132: the Vectorize
+  // namespace is `<owner>/<repo>` lowercased (multi-tenant isolation),
+  // built via indexNamespace(). teamKeyToNamespace() lowercases as a
+  // fallback, but we pass the fully-formed namespace here. Soft-fails to
+  // empty when retrieval errors or the repo isn't indexed — the prompt
+  // instructs the model to abstain rather than fabricate when chunks are
+  // empty.
   const retrievalText = `${meta.title}\n\n${question}`
   const chunks = await retrieveChunks({
     text: retrievalText,
-    teamKey: repo.toLowerCase(),
+    teamKey: indexNamespace(owner, repo),
     env,
   })
   since("retrieval-done", { chunks: chunks.length })

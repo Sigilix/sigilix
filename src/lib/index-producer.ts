@@ -219,7 +219,7 @@ export async function maybeEnqueuePushIndexJob(
     return { skipped: "sensitive" }
   }
 
-  const manifest = await readRepoIndexManifest(env, repo)
+  const manifest = await readRepoIndexManifest(env, owner, repo)
   if (manifest.kind !== "ok") {
     // No prior index → don't sneak-bootstrap via push. Install /
     // repos-added is the only authorized bootstrap path.

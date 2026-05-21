@@ -9,6 +9,7 @@
 // Model: branch state = main index (unchanged files) ∪ changed-file head
 // content (overrides). No new GitHub fetches, no Vectorize writes.
 
+import { chunkFile, type Chunk } from "./indexer"
 import type { RetrievedChunk } from "./retrieval"
 
 /**
@@ -27,4 +28,27 @@ export function mergeBranchAware(
   const branchPaths = new Set(branchChunks.map((c) => c.path))
   const keptMain = mainChunks.filter((c) => !branchPaths.has(c.path))
   return [...keptMain, ...branchChunks].sort((a, b) => b.score - a.score)
+}
+
+// Bounds the embed payload + cosine cost on large/stacked PRs. ~400
+// chunks ≈ a few hundred KB of source — comfortably within one batched
+// embed budget. Chunks beyond the cap are dropped (best-effort: the model
+// still has the diff itself).
+export const MAX_BRANCH_CHUNKS = 400
+
+/**
+ * Chunk the changed-file HEAD content with the indexer's own `chunkFile`
+ * (same CHUNKER_VERSION windowing) so branch chunks are shaped exactly
+ * like the indexed ones. Capped at MAX_BRANCH_CHUNKS.
+ */
+export function buildBranchChunks(filesByPath: ReadonlyMap<string, string>): Chunk[] {
+  const out: Chunk[] = []
+  for (const [path, content] of filesByPath) {
+    if (out.length >= MAX_BRANCH_CHUNKS) break
+    for (const c of chunkFile(path, content)) {
+      out.push(c)
+      if (out.length >= MAX_BRANCH_CHUNKS) break
+    }
+  }
+  return out
 }

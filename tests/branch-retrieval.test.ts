@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mergeBranchAware } from "../src/lib/branch-retrieval"
+import { buildBranchChunks, mergeBranchAware } from "../src/lib/branch-retrieval"
 import type { RetrievedChunk } from "../src/lib/retrieval"
 
 function rc(path: string, a: number, b: number, score: number, content = "x"): RetrievedChunk {
@@ -27,5 +27,28 @@ describe("mergeBranchAware", () => {
   it("handles empty sides", () => {
     expect(mergeBranchAware([], [])).toEqual([])
     expect(mergeBranchAware([rc("a.ts", 1, 2, 0.1)], [])).toHaveLength(1)
+  })
+})
+
+describe("buildBranchChunks", () => {
+  it("chunks each changed file via the indexer chunker, tagging path", () => {
+    const files = new Map<string, string>([
+      ["src/new.ts", Array.from({ length: 40 }, (_, i) => `const x${i} = ${i}`).join("\n")],
+    ])
+    const chunks = buildBranchChunks(files)
+    expect(chunks.length).toBeGreaterThan(0)
+    expect(chunks.every((c) => c.path === "src/new.ts")).toBe(true)
+    expect(chunks.every((c) => typeof c.content === "string" && c.content.length > 0)).toBe(true)
+  })
+
+  it("caps total chunks at MAX_BRANCH_CHUNKS", () => {
+    const big = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join("\n")
+    const files = new Map<string, string>([["src/huge.ts", big]])
+    const chunks = buildBranchChunks(files)
+    expect(chunks.length).toBeLessThanOrEqual(400)
+  })
+
+  it("returns [] for an empty map", () => {
+    expect(buildBranchChunks(new Map())).toEqual([])
   })
 })

@@ -31,6 +31,17 @@ describe("formatFindingComment two-tier suggestions (SIG-125)", () => {
     expect(out).not.toContain("```suggestion")
     expect(out).toContain("```ts")
   })
+  it("committable for a multi-line range when every line is reviewable (startLine<line)", () => {
+    // lines 1..2 are both RIGHT-reviewable in the fixture diff
+    const out = formatFindingComment(finding({ startLine: 1, line: 2 }), 5, reviewable)
+    expect(out).toContain("```suggestion")
+  })
+  it("downgrades a multi-line range to a snippet when a line is outside the diff", () => {
+    // line 5 (and 3,4) are absent from the fixture → not contiguous-reviewable
+    const out = formatFindingComment(finding({ startLine: 1, line: 5 }), 5, reviewable)
+    expect(out).not.toContain("```suggestion")
+    expect(out).toContain("```ts")
+  })
   it("prose only when no suggestedReplacement", () => {
     const out = formatFindingComment(finding({ suggestedReplacement: undefined }), 5, reviewable)
     expect(out).not.toContain("```suggestion")

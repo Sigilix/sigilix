@@ -1035,4 +1035,10 @@ describe("extensionToFenceLang (SIG-125)", () => {
     expect(extensionToFenceLang("Makefile")).toBe("")
     expect(extensionToFenceLang("x.weird")).toBe("")
   })
+  it("returns empty string for Object.prototype-key extensions (no proto pollution)", () => {
+    expect(extensionToFenceLang("x.constructor")).toBe("")
+    expect(extensionToFenceLang("x.__proto__")).toBe("")
+    expect(extensionToFenceLang("x.toString")).toBe("")
+    expect(extensionToFenceLang("x.hasOwnProperty")).toBe("")
+  })
 })

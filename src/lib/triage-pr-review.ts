@@ -1241,7 +1241,11 @@ export function extensionToFenceLang(path: string): string {
   const dot = path.lastIndexOf(".")
   if (dot < 0 || dot === path.length - 1) return ""
   const ext = path.slice(dot + 1).toLowerCase()
-  return FENCE_LANG_BY_EXT[ext] ?? ""
+  // `Object.hasOwn` guard: a path like `x.constructor` / `x.__proto__`
+  // would otherwise resolve to an inherited Object.prototype member
+  // (`?? ""` doesn't catch a non-nullish function/object), emitting a
+  // broken fence label.
+  return Object.hasOwn(FENCE_LANG_BY_EXT, ext) ? FENCE_LANG_BY_EXT[ext]! : ""
 }
 
 /**

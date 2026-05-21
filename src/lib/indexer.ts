@@ -486,6 +486,14 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     // Fall through to re-index.
   }
 
+  // SIG-136: claim the run lease as the FIRST side-effecting write after
+  // deciding to (re-)index, so claim-order reflects run START order. An
+  // older run that started embedding earlier must not overwrite a newer
+  // run's lease late (after its own slow processSlice) — claiming here,
+  // before getTree / the empty-repo branch / processSlice, closes that
+  // embedding-window clobber. Throws on KV failure → queue retries.
+  await writeActiveRun(env, owner, repo, runId)
+
   const tree = await client.getRepoTree(owner, repo, treeSha)
   if (!tree) {
     console.log(JSON.stringify({
@@ -516,6 +524,13 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (totalFiles === 0) {
     // Empty repo (or all-filtered). Write a manifest so we don't
     // re-walk on every webhook for this SHA.
+    if (!(await leaseAllows(env, owner, repo, runId))) {
+      console.warn(JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        owner, repo, run_id: runId, site: "bootstrap-empty-manifest",
+      }))
+      return
+    }
     await persistManifest({
       env, owner, repo, namespace, headSha, runId,
       fileCount: 0, chunkCount: 0, shardCount: 1,
@@ -540,9 +555,8 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // chain. If proceed=false, the caller doesn't write the manifest
   // and doesn't enqueue the next shard — the authoritative run
   // already on disk owns those writes.
-  // SIG-136: claim the run lease BEFORE persisting so computeMerge recognizes
-  // this (re-)index as authoritative. Throws on KV failure → queue retries.
-  await writeActiveRun(env, owner, repo, runId)
+  // SIG-136: the run lease was claimed early (right after the freshness
+  // gate, before processSlice) so a stale run can't clobber it late.
   const vectorsResult = await persistVectorIds({
     env, owner, repo, runId, idsByPathSlice: idsByPath,
     isBootstrap: true,

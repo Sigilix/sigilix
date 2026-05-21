@@ -62,6 +62,7 @@ import {
   readRepoIndexVectors,
   writeRepoIndexVectors,
 } from "./repo-index-vectors"
+import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
 
 // ---------------------------------------------------------------------
@@ -401,6 +402,12 @@ interface ConsumerArgs {
   env: Env
 }
 
+/** SIG-136: true iff this run still owns the lease (or it's absent) and may
+ *  proceed to persist a manifest / enqueue the next shard. */
+async function leaseAllows(env: Env, owner: string, repo: string, runId: string): Promise<boolean> {
+  return shouldFinalize(await readActiveRunId(env, owner, repo), runId)
+}
+
 export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
   if (args.job.shard !== undefined) {
     return handleShardJob(args.job, args.job.shard, args.env)
@@ -533,6 +540,9 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // chain. If proceed=false, the caller doesn't write the manifest
   // and doesn't enqueue the next shard — the authoritative run
   // already on disk owns those writes.
+  // SIG-136: claim the run lease BEFORE persisting so computeMerge recognizes
+  // this (re-)index as authoritative. Throws on KV failure → queue retries.
+  await writeActiveRun(env, owner, repo, runId)
   const vectorsResult = await persistVectorIds({
     env, owner, repo, runId, idsByPathSlice: idsByPath,
     isBootstrap: true,
@@ -548,6 +558,13 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (totalFiles > MAX_FILES_PER_JOB) {
     // Hand off to the next continuation shard. Final shard will write
     // the manifest with cumulative totals; this bootstrap doesn't.
+    if (!(await leaseAllows(env, owner, repo, runId))) {
+      console.warn(JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        owner, repo, run_id: runId,
+      }))
+      return
+    }
     await enqueueNextShard(env, {
       owner, repo, installationId, reason,
       lo: MAX_FILES_PER_JOB,
@@ -562,6 +579,13 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   }
 
   // Single-shard run — write manifest now.
+  if (!(await leaseAllows(env, owner, repo, runId))) {
+    console.warn(JSON.stringify({
+      event: "index-job-skip-superseded-finalize",
+      owner, repo, run_id: runId,
+    }))
+    return
+  }
   await persistManifest({
     env, owner, repo, namespace, headSha, runId,
     fileCount: sliceHi, chunkCount, shardCount: 1,
@@ -677,6 +701,16 @@ async function handleShardJob(
   // the chain — neither writing the manifest (would overwrite the
   // authoritative one with stale runId + counts) nor enqueueing the
   // next shard.
+  // SIG-136: a continuation shard proceeds only if it still owns the lease
+  // (or it's absent); then refresh the TTL so a long chain keeps the lease.
+  if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+    console.warn(JSON.stringify({
+      event: "index-job-skip-superseded-shard",
+      owner, repo, run_id: shard.runId, lo: shard.lo, hi: shard.hi,
+    }))
+    return
+  }
+  await writeActiveRun(env, owner, repo, shard.runId)
   const vectorsResult = await persistVectorIds({
     env, owner, repo,
     runId: shard.runId,
@@ -697,6 +731,13 @@ async function handleShardJob(
   if (shard.hi >= shard.totalFiles) {
     // Final shard — derive shardCount from the chain length.
     const shardCount = Math.ceil(shard.totalFiles / MAX_FILES_PER_JOB)
+    if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+      console.warn(JSON.stringify({
+        event: "index-job-skip-superseded-finalize",
+        owner, repo, run_id: shard.runId,
+      }))
+      return
+    }
     await persistManifest({
       env, owner, repo, namespace,
       headSha: shard.headSha, runId: shard.runId,
@@ -732,6 +773,13 @@ async function handleShardJob(
     return
   }
 
+  if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+    console.warn(JSON.stringify({
+      event: "index-job-skip-superseded-finalize",
+      owner, repo, run_id: shard.runId,
+    }))
+    return
+  }
   await enqueueNextShard(env, {
     owner, repo, installationId, reason,
     lo: shard.hi,
@@ -994,9 +1042,7 @@ interface PersistVectorIdsArgs {
 async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: boolean }> {
   const { env, owner, repo, runId, idsByPathSlice, isBootstrap } = args
   const existing = await readRepoIndexVectors(env, owner, repo)
-  const manifestRead = await readRepoIndexManifest(env, owner, repo)
-  const currentManifestRunId =
-    manifestRead.kind === "ok" ? manifestRead.manifest.runId : null
+  const activeRunId = await readActiveRunId(env, owner, repo)
 
   const outcome = computeMerge({
     existing,
@@ -1004,7 +1050,7 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     repo,
     runId,
     idsByPathSlice,
-    activeRunId: currentManifestRunId,
+    activeRunId,
   })
 
   if (outcome.action === "stale-skip") {
@@ -1014,7 +1060,7 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     console.warn(JSON.stringify({
       event: "repo-index-vectors-stale-skip",
       owner, repo, run_id: runId, existing_run_id: outcome.existingRunId,
-      current_manifest_run_id: currentManifestRunId,
+      active_run_id: activeRunId,
     }))
     return { proceed: false }
   }

@@ -41,6 +41,7 @@ function pack(overrides: Partial<TestingEvidencePack> = {}): TestingEvidencePack
     testFilesNotInPromptDiff: [],
     siblingMappings: [{ source: "src/lib/foo.ts", test: null }],
     inspectedTestFiles: [],
+    helperCoverageBySource: {},
     ...overrides,
   }
 }

@@ -270,6 +270,7 @@ function pack(overrides: Partial<TestingEvidencePack> = {}): TestingEvidencePack
     testFilesNotInPromptDiff: [],
     siblingMappings: [],
     inspectedTestFiles: [],
+    helperCoverageBySource: {},
     ...overrides,
   } as TestingEvidencePack
 }

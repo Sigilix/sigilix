@@ -39,6 +39,7 @@ import {
   classifyDiffFiles,
   type ClassifiedDiffFile,
 } from "./diff-file-classify"
+import type { HelperCoverage } from "./helper-coverage"
 
 /**
  * Per-file cap on test-file content embedded in the prompt. A typical
@@ -89,6 +90,10 @@ export interface TestingEvidencePack {
    *  `inspectedTestFileContents` (populated separately by an async
    *  fetch step in the orchestrator). */
   inspectedTestFiles: string[]
+  /** SIG-128: per-source helper-coverage status, keyed by source path.
+   *  Only `->NONE` sources are present. Default {} (populated by
+   *  `mergeHelperCoverage` at orchestrator level). */
+  helperCoverageBySource: Record<string, HelperCoverage>
 }
 
 /**
@@ -143,6 +148,7 @@ export function buildTestingEvidencePack(args: {
     testFilesNotInPromptDiff,
     siblingMappings,
     inspectedTestFiles: [], // populated by mergeInspectedTestFileContents
+    helperCoverageBySource: {}, // populated by mergeHelperCoverage
   }
 }
 
@@ -220,6 +226,18 @@ export function mergeInspectedTestFileContents(
 }
 
 /**
+ * SIG-128: merge detected helper-coverage into the pack. Returns a new
+ * pack (immutable). Populated at orchestrator level because detection
+ * needs file content + diff the pure builder doesn't receive.
+ */
+export function mergeHelperCoverage(
+  pack: TestingEvidencePack,
+  coverageBySource: Record<string, HelperCoverage>,
+): TestingEvidencePack {
+  return { ...pack, helperCoverageBySource: { ...coverageBySource } }
+}
+
+/**
  * Render the `[TESTING EVIDENCE]` block injected at the top of the
  * testing specialist's user message. The block:
  *   1. Lists every source file changed in the PR (NOT just first-batch)
@@ -250,9 +268,19 @@ export function renderTestingEvidenceBlock(
     lines.push(`Source files changed in this PR (${pack.sourceFilesChanged.length}):`)
     for (const p of pack.sourceFilesChanged) {
       const m = pack.siblingMappings.find((s) => s.source === p)
-      const siblingHint = m && m.test !== null
-        ? `  ← covered by test in this PR: \`${m.test}\``
-        : `  ← no sibling test file in this PR`
+      const cov = pack.helperCoverageBySource[p]
+      let siblingHint: string
+      if (m && m.test !== null) {
+        siblingHint = `  ← covered by test in this PR: \`${m.test}\``
+      } else if (cov?.status === "all") {
+        const list = cov.helpers.map((h) => `\`${h}\``).join(", ")
+        siblingHint = `  ← no sibling test file in this PR, but ALL changed logic here delegates to helpers unit-tested in this PR: ${list}`
+      } else if (cov?.status === "partial") {
+        const list = cov.helpers.map((h) => `\`${h}\``).join(", ")
+        siblingHint = `  ← no sibling test file in this PR; SOME changed lines call tested helpers (${list}), others add inline logic — judge accordingly`
+      } else {
+        siblingHint = `  ← no sibling test file in this PR`
+      }
       lines.push(`- \`${p}\`${siblingHint}`)
     }
     lines.push("")

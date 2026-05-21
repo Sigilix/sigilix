@@ -52,7 +52,7 @@ import {
   shouldRunSymbolRetrieval,
   mergeLogicSnapshot,
 } from "./symbol-retrieval"
-import { buildChangedLines } from "./ast-rules/diff-filter"
+import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -2934,6 +2934,11 @@ export async function handlePrReviewEnsemble(
       // `formatFindingComment` can render committable ```suggestion
       // blocks when a finding cleanly anchors (RIGHT + contiguous).
       reviewable,
+      // SIG-127: per-file new-side-line → text map so findings the
+      // model anchored to a non-substantive structural line (a bare
+      // `}`, blank line) route to the summary body instead of an
+      // inline comment "on an empty line."
+      addedLineTextByLine: buildAddedLineTextByLine(fullPrDiff),
     })
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE

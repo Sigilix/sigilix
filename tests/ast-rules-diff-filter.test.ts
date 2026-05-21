@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "vitest"
 import {
+  buildAddedLineTextByLine,
   buildChangedLines,
   nodeOverlapsChanged,
   findReviewPosition,
@@ -81,6 +82,53 @@ describe("buildChangedLines", () => {
   it("returns empty map on empty input", () => {
     expect(buildChangedLines("").size).toBe(0)
     expect(buildChangedLines(undefined as unknown as string).size).toBe(0)
+  })
+})
+
+describe("buildAddedLineTextByLine (SIG-127)", () => {
+  it("maps each +-line's new-side number to its text (marker stripped)", () => {
+    const m = buildAddedLineTextByLine(DIFF_ADD_BLOCK)
+    const fileMap = m.get("src/foo.ts")
+    expect(fileMap?.get(13)).toBe('const d = eval("x")')
+    expect(fileMap?.get(14)).toBe("const e = 4")
+    // Context lines are NOT captured.
+    expect(fileMap?.has(10)).toBe(false)
+  })
+
+  it("REPLACEMENT HUNK: captures only the new-side +-line text", () => {
+    const m = buildAddedLineTextByLine(DIFF_REPLACEMENT)
+    const fileMap = m.get("src/r.ts")
+    expect(fileMap?.get(6)).toBe("added_line")
+    expect(fileMap?.size).toBe(1)
+  })
+
+  it("PURE-DELETION HUNK captures nothing on the new side", () => {
+    const m = buildAddedLineTextByLine(DIFF_PURE_DELETION)
+    expect(m.get("src/del.ts")?.size ?? 0).toBe(0)
+  })
+
+  it("FILE DELETED: no entry created for new-side path", () => {
+    const m = buildAddedLineTextByLine(DIFF_FILE_DELETED)
+    expect(m.has("src/zap.ts")).toBe(false)
+  })
+
+  it("preserves leading indentation so structural lines stay classifiable", () => {
+    const diff = `diff --git a/src/b.ts b/src/b.ts
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,1 +1,3 @@
+ head
++  return batch(ids)
++  }
+`
+    const fileMap = buildAddedLineTextByLine(diff).get("src/b.ts")
+    expect(fileMap?.get(2)).toBe("  return batch(ids)")
+    expect(fileMap?.get(3)).toBe("  }")
+  })
+
+  it("returns empty map on empty input", () => {
+    expect(buildAddedLineTextByLine("").size).toBe(0)
+    expect(buildAddedLineTextByLine(undefined as unknown as string).size).toBe(0)
   })
 })
 

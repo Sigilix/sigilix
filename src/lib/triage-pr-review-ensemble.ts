@@ -1411,9 +1411,19 @@ export async function handlePrReviewEnsemble(
     ): Promise<RetrievedChunk[] | null> => {
       if (branchVectors.length === 0 || !mainChunks) return mainChunks
       let qVec: number[]
+      // Cap the query embed input (chars) so a pathological query can't blow
+      // the embedder's context — mirrors retrieval.ts's 4k query slice.
       try {
-        qVec = await embedText(env.AI, queryText.slice(0, 4_000))
-      } catch {
+        qVec = await withComposedTimeout(
+          () => embedText(env.AI, queryText.slice(0, 4_000)),
+          RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+          orchCtrl.signal,
+        )
+      } catch (err) {
+        // Genuine orchestrator cancellation must propagate (matches the
+        // preflight/symbol passes); any other embed failure/timeout degrades
+        // to main-only retrieval.
+        if (orchCtrl.signal.aborted) throw err
         return mainChunks
       }
       const branchChunks = retrieveBranchChunks(qVec, branchVectors, TOP_K_BRANCH)

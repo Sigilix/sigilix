@@ -53,6 +53,15 @@ import {
   shouldRunSymbolRetrieval,
   mergeLogicSnapshot,
 } from "./symbol-retrieval"
+import {
+  shouldRunBranchAwareRetrieval,
+  prepareBranchSet,
+  retrieveBranchChunks,
+  mergeBranchAware,
+  buildBranchRetrievalEvent,
+  type BranchVector,
+} from "./branch-retrieval"
+import { embedText } from "./embeddings"
 import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
@@ -341,6 +350,9 @@ export const ORCHESTRATOR_TIMEOUT_MS = 895_000
 // silently consume the synth budget. Failed pre-flight is non-fatal
 // per v3.1 §8 — specialists fall back to empty snapshot.
 export const RETRIEVAL_PREFLIGHT_TIMEOUT_MS = 15_000
+// SIG-129: branch chunks to consider per pass before merge dedup/re-rank.
+// Matches retrieval.ts TOP_K (6) so a pass can be fully branch-sourced.
+const TOP_K_BRANCH = 6
 // Phase 4a.4 (ARC-175): cap each individual model attempt inside
 // `runWithRetryAndFallback` so a single slow primary call can't eat
 // the entire `SPECIALIST_TIMEOUT_MS` budget and starve the retry +
@@ -1239,9 +1251,11 @@ export async function handlePrReviewEnsemble(
       router.specialists,
       preflightCache.budgetRemaining(),
     )
+    let perfQuery = ""
+    let perfChunks: RetrievedChunk[] | null = null
     let perfRetrievalPromise: Promise<RetrievedChunk[] | null> | null = null
     if (wantPerfRetrieval) {
-      const perfQuery = buildPerfRetrievalQuery(
+      perfQuery = buildPerfRetrievalQuery(
         preflightQuery,
         extractChangedFunctionNames(diff),
       )
@@ -1286,7 +1300,7 @@ export async function handlePrReviewEnsemble(
     } finally {
       emitPhaseCompleted(perfCtx, "preflight_retrieval", preflightStartMs)
     }
-    const retrievalSnapshot = preflightChunks
+    let retrievalSnapshot = preflightChunks
       ? formatChunksForPrompt(preflightChunks) ?? ""
       : ""
     // SIG-110: resolve the perf-specific snapshot. Awaited AFTER the
@@ -1303,7 +1317,7 @@ export async function handlePrReviewEnsemble(
     // orchCtrl.signal, so it aborts cleanly with no unhandled rejection.)
     let perfRetrievalSnapshot = retrievalSnapshot
     if (perfRetrievalPromise) {
-      const perfChunks = await perfRetrievalPromise
+      perfChunks = await perfRetrievalPromise
       const formattedPerf = perfChunks ? formatChunksForPrompt(perfChunks) ?? "" : ""
       const perfRetrievalUsed = formattedPerf.length > 0
       perfRetrievalSnapshot = resolvePerfSnapshot(formattedPerf, retrievalSnapshot)
@@ -1357,8 +1371,10 @@ export async function handlePrReviewEnsemble(
       router.specialists,
       preflightCache.budgetRemaining(),
     )
+    const wantBranchAware =
+      (env.OPENCLAW_BRANCH_AWARE_RETRIEVAL ?? "").trim().toLowerCase() === "on"
     const astFilesByPath = new Map<string, string>()
-    if ((astRulesConfig.enabled || wantSymbolRetrieval) && jsTsPaths.length > 0) {
+    if ((astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware) && jsTsPaths.length > 0) {
       const fetchResults = await Promise.allSettled(
         jsTsPaths.map(async (p) => {
           const src = await client.getFileContent(owner, repo, p, headSha)
@@ -1369,6 +1385,83 @@ export async function handlePrReviewEnsemble(
         if (r.status === "fulfilled" && typeof r.value.src === "string") {
           astFilesByPath.set(r.value.p, r.value.src)
         }
+      }
+    }
+
+    // SIG-129: build the branch retrieval set ONCE (best-effort), reused
+    // across the preflight / perf / symbol merges. Empty set ⇒ every merge
+    // is a no-op ⇒ identical to today's main-only behavior.
+    let branchVectors: BranchVector[] = []
+    let branchSetElapsedMs = 0
+    if (shouldRunBranchAwareRetrieval(env.OPENCLAW_BRANCH_AWARE_RETRIEVAL, astFilesByPath)) {
+      const startMs = Date.now()
+      try {
+        branchVectors = await withComposedTimeout(
+          () => prepareBranchSet(env.AI, astFilesByPath),
+          RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+          orchCtrl.signal,
+        )
+      } catch (err) {
+        // Genuine orchestrator cancellation propagates; a slow/stuck embed
+        // degrades to main-only retrieval (empty branch set).
+        if (orchCtrl.signal.aborted) throw err
+        branchVectors = []
+      }
+      branchSetElapsedMs = Date.now() - startMs
+    }
+    // SIG-129 tombstone set: every changed JS/TS file is stale on `main`, so
+    // its main-index chunks must be dropped from each merge regardless of
+    // whether a branch chunk for it surfaced in the retrieved top-K.
+    const changedPaths: ReadonlySet<string> = new Set(jsTsPaths)
+
+    // Branch-aware merge for one pass: embed the pass's query (single text,
+    // best-effort) and overlay branch chunks on the main chunks. Returns the
+    // main chunks unchanged when branch-aware is off / the set is empty / the
+    // query embed fails. Records the per-pass head-override count (stale main
+    // chunks removed by the changed-path tombstone) for shadow telemetry.
+    const branchMergeStats = { preflight: 0, perf: 0, symbol: 0 }
+    const branchAwareMerge = async (
+      mainChunks: RetrievedChunk[] | null,
+      queryText: string,
+      pass: keyof typeof branchMergeStats,
+    ): Promise<RetrievedChunk[] | null> => {
+      if (branchVectors.length === 0 || !mainChunks) return mainChunks
+      let qVec: number[]
+      // Cap the query embed input (chars) so a pathological query can't blow
+      // the embedder's context — mirrors retrieval.ts's 4k query slice.
+      try {
+        qVec = await withComposedTimeout(
+          () => embedText(env.AI, queryText.slice(0, 4_000)),
+          RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
+          orchCtrl.signal,
+        )
+      } catch (err) {
+        // Genuine orchestrator cancellation must propagate (matches the
+        // preflight/symbol passes); any other embed failure/timeout degrades
+        // to main-only retrieval.
+        if (orchCtrl.signal.aborted) throw err
+        return mainChunks
+      }
+      const branchChunks = retrieveBranchChunks(qVec, branchVectors, TOP_K_BRANCH)
+      branchMergeStats[pass] = mainChunks.filter((c) => changedPaths.has(c.path)).length
+      return mergeBranchAware(mainChunks, branchChunks, changedPaths)
+    }
+
+    // Re-merge the SHARED preflight snapshot (seen by every specialist) and
+    // the perf snapshot now that branchVectors exists. No-op when the set is
+    // empty. The symbol pass merges itself in its own block below.
+    let sharedChunksForOverlap: RetrievedChunk[] = preflightChunks ?? []
+    if (branchVectors.length > 0) {
+      const preflightMerged = await branchAwareMerge(preflightChunks, preflightQuery, "preflight")
+      sharedChunksForOverlap = preflightMerged ?? []
+      retrievalSnapshot = preflightMerged ? formatChunksForPrompt(preflightMerged) ?? "" : ""
+
+      if (perfChunks) {
+        const perfMerged = await branchAwareMerge(perfChunks, perfQuery, "perf")
+        const formattedPerf = perfMerged ? formatChunksForPrompt(perfMerged) ?? "" : ""
+        perfRetrievalSnapshot = resolvePerfSnapshot(formattedPerf, retrievalSnapshot)
+      } else {
+        perfRetrievalSnapshot = retrievalSnapshot
       }
     }
 
@@ -1414,7 +1507,7 @@ export async function handlePrReviewEnsemble(
             RETRIEVAL_PREFLIGHT_TIMEOUT_MS,
             orchCtrl.signal,
           )
-          symbolChunks = r.chunks
+          symbolChunks = await branchAwareMerge(r.chunks, symbolQuery, "symbol")
         } catch (err) {
           if (orchCtrl.signal.aborted) throw err
           symbolChunks = null
@@ -1425,7 +1518,7 @@ export async function handlePrReviewEnsemble(
           logicSymbolSnapshot = formatted
           symbolInjected = true
         }
-        symbolOverlap = computeChunkOverlap(preflightChunks ?? [], symbolChunks ?? [])
+        symbolOverlap = computeChunkOverlap(sharedChunksForOverlap, symbolChunks ?? [])
       }
       // Bake-off signal (SIG-121 → SIG-86): how different is the
       // symbol-derived snapshot from the shared one?
@@ -1441,6 +1534,17 @@ export async function handlePrReviewEnsemble(
         intersection: symbolOverlap?.intersectionCount ?? 0,
         jaccard: symbolOverlap?.jaccard ?? 0,
       }))
+    }
+
+    // SIG-129 → SIG-86 bake-off signal. Flag-off ⇒ branchVectors empty ⇒
+    // logs zeros and nothing changed in the snapshots.
+    if (wantBranchAware) {
+      console.log(JSON.stringify(buildBranchRetrievalEvent({
+        owner, repo, prNumber, headSha,
+        branchChunkCount: branchVectors.length,
+        embedElapsedMs: branchSetElapsedMs,
+        headOverride: branchMergeStats,
+      })))
     }
 
     const astResult = await runAstRules({

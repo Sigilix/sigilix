@@ -299,6 +299,13 @@ export interface Env {
   // flips via `wrangler secret put OPENCLAW_SYMBOL_RETRIEVAL on`.
   OPENCLAW_SYMBOL_RETRIEVAL?: string
 
+  // SIG-129: branch-aware retrieval. When "on", the PR-review ensemble
+  // overlays the changed-file HEAD content onto the main-index retrieval
+  // results (head wins on path collision) so a PR's new/changed code is
+  // retrievable. Default off; flip via
+  // `wrangler secret put OPENCLAW_BRANCH_AWARE_RETRIEVAL on`.
+  OPENCLAW_BRANCH_AWARE_RETRIEVAL?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

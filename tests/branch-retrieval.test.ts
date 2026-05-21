@@ -8,6 +8,7 @@ import {
   type BranchVector,
 } from "../src/lib/branch-retrieval"
 import type { RetrievedChunk } from "../src/lib/retrieval"
+import { embedText } from "../src/lib/embeddings"
 
 function rc(path: string, a: number, b: number, score: number, content = "x"): RetrievedChunk {
   return { path, lineStart: a, lineEnd: b, content, score }
@@ -138,5 +139,46 @@ describe("prepareBranchSet", () => {
     const ai = { run: async () => { called = true; return { data: [] } } }
     expect(await prepareBranchSet(ai, new Map())).toEqual([])
     expect(called).toBe(false)
+  })
+})
+
+describe("SIG-129 acceptance: new exported symbol is retrievable + overrides stale main", () => {
+  // Deterministic 768-dim bag-of-words embedder: hash each token to a slot.
+  // Same vector space for chunk content and the query, so cosine similarity
+  // is highest for the chunk that shares the most tokens with the query.
+  const fakeAi = {
+    run: async (_m: string, input: { text: string | string[] }) => {
+      const texts = Array.isArray(input.text) ? input.text : [input.text]
+      const embed = (t: string): number[] => {
+        const v = new Array<number>(768).fill(0)
+        for (const tok of t.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean)) {
+          let h = 0
+          for (let i = 0; i < tok.length; i++) h = (h * 31 + tok.charCodeAt(i)) >>> 0
+          v[h % 768] += 1
+        }
+        return v
+      }
+      return { data: texts.map(embed) }
+    },
+  }
+
+  it("retrieves the branch-only symbol and the merge drops the stale main chunk", async () => {
+    const files = new Map<string, string>([
+      ["src/util.ts", "export function computeWasteFactor(width: number) {\n  return width * 0.0144\n}\n"],
+    ])
+    const branchVectors = await prepareBranchSet(fakeAi, files)
+    expect(branchVectors.length).toBeGreaterThan(0)
+
+    const qVec = await embedText(fakeAi, "where is computeWasteFactor defined")
+    const branchChunks = retrieveBranchChunks(qVec, branchVectors, 6)
+    expect(branchChunks[0].path).toBe("src/util.ts")
+    expect(branchChunks[0].content).toContain("computeWasteFactor")
+
+    // Stale main copy of the same path must be displaced by head content.
+    const staleMain = [{ path: "src/util.ts", lineStart: 1, lineEnd: 3, content: "// OLD — symbol absent", score: 0.99 }]
+    const merged = mergeBranchAware(staleMain, branchChunks)
+    const utilChunks = merged.filter((c) => c.path === "src/util.ts")
+    expect(utilChunks.every((c) => !c.content.includes("OLD"))).toBe(true)
+    expect(utilChunks.some((c) => c.content.includes("computeWasteFactor"))).toBe(true)
   })
 })

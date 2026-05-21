@@ -18,13 +18,14 @@ import {
   chunkFile,
   chunkId,
   computeRunId,
+  splitOversizedWindow,
   walkIndexableFiles,
   type TreeEntry,
 } from "../src/lib/indexer"
 
 describe("CHUNKER_VERSION constant", () => {
-  it("is pinned at 1 — bump invalidates the index", () => {
-    expect(CHUNKER_VERSION).toBe(1)
+  it("is pinned at 2 — bump invalidates the index (SIG-133 split-not-drop)", () => {
+    expect(CHUNKER_VERSION).toBe(2)
   })
   it("MAX_FILES_PER_JOB is 1000 per the ARC-235 spec", () => {
     expect(MAX_FILES_PER_JOB).toBe(1000)
@@ -186,17 +187,182 @@ describe("chunkFile", () => {
     expect(chunks.length).toBeGreaterThan(0)
   })
 
-  it("skips windows that exceed MAX_CHUNK_CHARS (=1800)", () => {
+  it("SPLITS windows that exceed MAX_CHUNK_CHARS (=1400) instead of dropping them", () => {
+    // SIG-133: an over-cap window used to be silently dropped (data loss).
+    // It must now be split into consecutive sub-chunks, all <= the cap,
+    // collectively covering every source line of the window.
     const longLine = "x".repeat(100)
-    // 30 of these = 30 * 100 + 29 newlines = 3029 chars (way over 1800)
-    const content = Array(30).fill(longLine).join("\n")
+    // 30 of these = 30 * 100 + 29 newlines = 3029 chars (over 1400).
+    const lines = Array(30).fill(longLine)
+    const content = lines.join("\n")
     const chunks = chunkFile("x.ts", content)
-    // Each window is over MAX_CHUNK_CHARS → all skipped.
-    expect(chunks).toEqual([])
+    // Not dropped.
+    expect(chunks.length).toBeGreaterThan(0)
+    // Every sub-chunk is within the token-safe cap.
+    for (const c of chunks) {
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+    }
+    // The sub-chunks (from the first over-cap window starting at line 1)
+    // together cover lines 1..30 with no gap. Filter to the chunks that
+    // belong to the first window (lineStart starts at 1) — for a 30-line
+    // file of long lines every window is over-cap, but the first window
+    // covers lines 1..30 and that range must be fully covered.
+    const firstWindow = chunks.filter((c) => c.lineStart >= 1 && c.lineEnd <= 30)
+    expect(firstWindow.length).toBeGreaterThan(0)
+    let cursor = 1
+    for (const c of firstWindow) {
+      if (c.lineStart > cursor) break // jumped past line 30 into next window overlap
+      expect(c.lineStart).toBe(cursor)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBeGreaterThan(30) // covered through line 30
+  })
+
+  it("returns exactly one chunk for a normal under-cap window (unchanged shape)", () => {
+    const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`)
+    const content = lines.join("\n")
+    const chunks = chunkFile("normal.ts", content)
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0]).toMatchObject({
+      path: "normal.ts",
+      lineStart: 1,
+      lineEnd: 10,
+      content,
+    })
+    expect(chunks[0]!.content.length).toBeLessThanOrEqual(1400)
+  })
+
+  it("hard-splits a single line longer than MAX_CHUNK_CHARS into char slices", () => {
+    const longLine = "y".repeat(5000)
+    const chunks = chunkFile("hard.ts", longLine)
+    // ceil(5000 / 1400) = 4 sub-chunks.
+    expect(chunks).toHaveLength(Math.ceil(5000 / 1400))
+    for (const c of chunks) {
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+      // A single physical line → lineStart === lineEnd === 1.
+      expect(c.lineStart).toBe(1)
+      expect(c.lineEnd).toBe(1)
+    }
+    // Concatenating the slices reconstructs the original line exactly.
+    expect(chunks.map((c) => c.content).join("")).toBe(longLine)
+  })
+
+  it("splits the old 30-line drop case (3029 chars) preserving every source line", () => {
+    const lines = Array.from({ length: 30 }, (_, i) =>
+      `${i + 1}:`.padEnd(100, "a"),
+    )
+    const content = lines.join("\n")
+    const chunks = chunkFile("x.ts", content)
+    expect(chunks.length).toBeGreaterThan(1)
+    // Restrict to the first window (lines 1..30) sub-chunks.
+    const firstWindow = chunks.filter((c) => c.lineStart >= 1 && c.lineEnd <= 30)
+    for (const c of firstWindow) {
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+    }
+    // Reconstruct lines 1..30 from the first window's sub-chunks: each
+    // sub-chunk's content is a "\n"-join of consecutive source lines, so
+    // joining the sub-chunks back with "\n" yields lines 1..30 verbatim.
+    let cursor = 1
+    const reconstructed: string[] = []
+    for (const c of firstWindow) {
+      if (c.lineStart > cursor) break
+      expect(c.lineStart).toBe(cursor)
+      reconstructed.push(c.content)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBeGreaterThan(30)
+    expect(reconstructed.join("\n")).toBe(lines.slice(0, 30).join("\n"))
+  })
+
+  it("covers leading blank lines at a split boundary (C1 regression)", () => {
+    // SIG-133 C1: a window whose first lines are blank ("") used to be
+    // skipped by the buffer-length flush gate — flush() bailed on the
+    // empty buffer and the next iteration overwrote bufStartLine, so the
+    // first emitted sub-chunk claimed a later line and lines 1/2 were
+    // uncovered. Blank lines are real content (a line that must be
+    // covered + counted) so coverage must start at line 1.
+    const dense = "z".repeat(100)
+    // 2 blank lines + 25 dense lines = 2 + 25*100 + 26 newlines = 2552 chars (> 1400).
+    const lines = ["", "", ...Array(25).fill(dense)]
+    const content = lines.join("\n")
+    const chunks = chunkFile("x.ts", content)
+    expect(chunks.length).toBeGreaterThan(0)
+    // The first sub-chunk of the first window must start at the window's
+    // true first line (1), not a shifted-forward line.
+    expect(chunks[0]?.lineStart).toBe(1)
+    // Walk the first window's sub-chunks (lines 1..27): every line covered
+    // with no gap.
+    const firstWindow = chunks.filter((c) => c.lineStart >= 1 && c.lineEnd <= 27)
+    let cursor = 1
+    for (const c of firstWindow) {
+      if (c.lineStart > cursor) break
+      expect(c.lineStart).toBe(cursor)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBeGreaterThan(27) // covered through line 27
+  })
+})
+
+describe("splitOversizedWindow", () => {
+  it("counts blank lines so coverage starts at the window's true line (C1)", () => {
+    // Window of 4 lines starting at absolute file line 10:
+    //   line 10: ""        (blank, leading)
+    //   line 11: 700 chars
+    //   line 12: ""        (blank, middle)
+    //   line 13: 700 chars
+    // Joined length = 0 + 1 + 700 + 1 + 0 + 1 + 700 = 1403 (> 1400 cap)
+    // so it splits. The buffer's first candidate ("" then "\n"+700) is
+    // 701 chars, still under cap; adding "\n" + "" → 702; adding
+    // "\n" + 700 → 1403 overflows, so flush happens before line 13.
+    const lines = ["", "x".repeat(700), "", "y".repeat(700)]
+    const out = splitOversizedWindow(lines, 10)
+
+    // Every input line index is covered by exactly one contiguous range,
+    // starting at line 10 (NOT shifted forward past the blank).
+    const ranges = out.map((c) => ({ lineStart: c.lineStart, lineEnd: c.lineEnd }))
+    expect(ranges).toEqual([
+      { lineStart: 10, lineEnd: 12 }, // "", 700, "" -> 702 chars
+      { lineStart: 13, lineEnd: 13 }, // 700 chars
+    ])
+    // path is left empty (caller sets it).
+    for (const c of out) {
+      expect(c.path).toBe("")
+      expect(c.content.length).toBeLessThanOrEqual(1400)
+    }
+    // First sub-chunk content is "" + "\n" + 700-x + "\n" + "" .
+    expect(out[0]?.content).toBe(`\n${"x".repeat(700)}\n`)
+    expect(out[1]?.content).toBe("y".repeat(700))
+    // Coverage walk: lines 10..13 fully covered, no gap, no overlap.
+    let cursor = 10
+    for (const c of out) {
+      expect(c.lineStart).toBe(cursor)
+      cursor = c.lineEnd + 1
+    }
+    expect(cursor).toBe(14) // covered 10,11,12,13
   })
 })
 
 describe("chunkId", () => {
+  it("SIG-133: byte-identical hard-split fragments get DISTINCT ids (no Vectorize collapse)", async () => {
+    // A 2800-char line of one repeating char hard-splits into two identical
+    // 1400-char slices (same path/lineStart/lineEnd/content). Without the
+    // fragmentIndex discriminator these would collide and Vectorize would
+    // drop one — the data loss the split was meant to prevent.
+    const chunks = chunkFile("rule.ts", "=".repeat(2800))
+    expect(chunks).toHaveLength(2)
+    expect(chunks[0]?.content).toBe(chunks[1]?.content) // identical content
+    const id0 = await chunkId("ns", chunks[0]!)
+    const id1 = await chunkId("ns", chunks[1]!)
+    expect(id0).not.toBe(id1)
+  })
+
+  it("SIG-133: a normal chunk's id is unaffected by the fragmentIndex change (still content-addressed)", async () => {
+    const base = { path: "x.ts", lineStart: 1, lineEnd: 30, content: "hello" }
+    const withUndef = await chunkId("ns", base)
+    const explicitUndef = await chunkId("ns", { ...base, fragmentIndex: undefined })
+    expect(withUndef).toBe(explicitUndef)
+  })
+
   it("returns a 48-char hex id", async () => {
     const id = await chunkId("sigilix", {
       path: "x.ts",

@@ -270,6 +270,7 @@ import type { Env } from "../index"
 // SIG-138 Phase 2 — graph expansion.
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
+import type { GraphRetrievalSample } from "../do/graph-metrics"
 import { edgeWeight, hopDecay } from "./graph-scoring"
 import { withTimeout } from "./with-timeout"
 
@@ -932,6 +933,14 @@ export interface EnsembleHandlerArgs {
    * (tests) can omit it.
    */
   validationSink?: ValidationRejectionEvent[]
+  /**
+   * SIG-152: dispatcher's single-sample sink for the per-review
+   * `pr-review-graph-retrieval` telemetry. The graph block pushes one sample
+   * (0 elements if graph retrieval is off / errored); flushed to
+   * GraphMetricsDO in the dispatcher's finally. Optional for non-dispatcher
+   * callers (tests).
+   */
+  graphMetricsSink?: GraphRetrievalSample[]
 }
 
 // ARC-280: `routeReview` + `RouteDecision` + the shadow/post/off
@@ -1797,6 +1806,18 @@ export async function handlePrReviewEnsemble(
           hop_distribution: hopDist,
           edge_type_distribution: edgeTypeDist,
         }))
+        // SIG-152: push the same sample to the dispatcher's sink so it lands in
+        // GraphMetricsDO (curl-able via /metrics/graph). Telemetry-only — fires
+        // in both shadow and post, matching the log event above.
+        args.graphMetricsSink?.push({
+          mode: graphRetrievalMode(env),
+          jaccard,
+          addedCount,
+          nodeCount: nodes.length,
+          cappedNodeCount: cappedNodes.length,
+          blastCallerCount: graphBlastCallerPaths.length,
+          blastDependentCount: graphBlastDependentPaths.length,
+        })
       } catch (err) {
         // Non-fatal: graph expansion is additive. Log for observability.
         console.log(JSON.stringify({

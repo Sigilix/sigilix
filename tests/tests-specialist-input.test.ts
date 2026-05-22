@@ -99,6 +99,20 @@ describe("classifyDiffFiles", () => {
     expect(test?.sourceSibling).toBe("src/lib/foo.ts")
   })
 
+  it("SIG-141: pairs a tests/-dir test with a source in a non-enumerated subdir (src/do/)", () => {
+    // candidateSources() only enumerates src, src/lib, app, lib, workers — so
+    // tests/repo-graph.test.ts never paired with src/do/repo-graph.ts, yielding
+    // a false "no test coverage" on the SIG-138 PR. Basename-stem fallback fixes it.
+    const result = classifyDiffFiles([
+      "src/do/repo-graph.ts",
+      "tests/repo-graph.test.ts",
+    ])
+    const source = result.find((r) => r.path === "src/do/repo-graph.ts")
+    const test = result.find((r) => r.path === "tests/repo-graph.test.ts")
+    expect(source?.testsSibling).toBe("tests/repo-graph.test.ts")
+    expect(test?.sourceSibling).toBe("src/do/repo-graph.ts")
+  })
+
   it("recognizes __tests__ directory siblings", () => {
     const result = classifyDiffFiles([
       "src/lib/foo.ts",

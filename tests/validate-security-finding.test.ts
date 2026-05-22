@@ -506,3 +506,106 @@ describe("evaluateSecurityFinding — review fixes (H1 / H2 / auto-enrich)", () 
     if (decision.keep) expect(decision.enrich?.evidenceId).toBe("ast:rule:near")
   })
 })
+
+// ── SIG-141: reviewer over-fire suppression (DO-authz + line-1 anchor) ──
+
+describe("validateForSubmission — SIG-141 over-fire suppression", () => {
+  it("suppresses an authz finding on a DurableObject path — unconditionally, even in shadow", () => {
+    const dropped: Array<{ reason: string; dropped: boolean }> = []
+    const onDrop = vi.fn((_f: PrReviewFinding, info: { reason: string; dropped: boolean }) => {
+      dropped.push(info)
+    })
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({
+            path: "src/do/repo-graph.ts",
+            cweId: "CWE-639",
+            evidenceId: "NONE",
+            body: "The blastRadius method lacks an access check before reading caller-supplied symbol ids and could be invoked without authorization.",
+          })],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: new Map([["src/do/repo-graph.ts", [{ line: 17, side: "RIGHT" as const, position: 1 }]]]),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      // line 17 is inside the DO class span → suppressed.
+      durableObjectClassSpans: new Map([["src/do/repo-graph.ts", [{ start: 1, end: 100 }]]]),
+      securityValidatorMode: "shadow", // shadow — but DO-authz suppression is a correctness drop, unconditional
+      onSecurityFindingDropped: onDrop,
+    })
+    expect(result.verdict.findings).toHaveLength(0) // dropped despite shadow mode
+    expect(dropped[0]).toEqual({ reason: "do-method-authz-trust-boundary", dropped: true })
+  })
+
+  it("does NOT suppress an authz finding OUTSIDE the DO class span (co-located top-level helper)", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({
+            path: "src/do/mixed.ts",
+            line: 5, // a top-level helper ABOVE the DO class (span starts at 20)
+            cweId: "CWE-639",
+            evidenceId: "NONE",
+            body: "The exported readRecord helper lacks an access check before returning the requested row and could leak another tenant's data.",
+          })],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: new Map([["src/do/mixed.ts", [{ line: 5, side: "RIGHT" as const, position: 1 }]]]),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      durableObjectClassSpans: new Map([["src/do/mixed.ts", [{ start: 20, end: 120 }]]]),
+      securityValidatorMode: "shadow",
+    })
+    // Real authz bug in a co-located helper (line 5, outside the class span)
+    // must NOT be hidden — kept via the AUTHZ NONE + justification path.
+    expect(result.verdict.findings).toHaveLength(1)
+  })
+
+  it("does NOT suppress an authz finding when the path is not a DurableObject", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({
+            path: "src/db.ts",
+            cweId: "CWE-639",
+            evidenceId: "NONE",
+            body: "The query handler lacks an access check before reading the requested record id and could leak another tenant's data.",
+          })],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable("src/db.ts"),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      durableObjectClassSpans: new Map(), // not a DO file
+      securityValidatorMode: "shadow",
+    })
+    // AUTHZ NONE + body justification keeps it; the DO gate does not fire.
+    expect(result.verdict.findings).toHaveLength(1)
+  })
+
+  it("withholds a line-1 (file-header) finding from inline anchoring even when line 1 is reviewable", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({ path: "src/db.ts", line: 1 })],
+        },
+        provenance: securityProvenance(),
+      },
+      // line 1 IS in the reviewable set — proves the withhold is by the line-1
+      // guard, not by side-derivation failing.
+      reviewable: new Map([["src/db.ts", [{ line: 1, side: "RIGHT" as const, position: 1 }]]]),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      // no securityManifest → security gate no-ops; finding flows to line-1 gate
+    })
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.droppedForInvalidLine).toBe(1)
+  })
+})

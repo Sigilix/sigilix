@@ -21,7 +21,10 @@ import type { ReviewableMap } from "../src/lib/diff-positions"
 function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {
     path: "src/lib/foo.ts",
-    line: 1,
+    // Line 2 (not 1): these tests isolate the SIG-113 citation gate; line 1
+    // would additionally trip the SIG-141 file-header withhold gate, which is
+    // exercised separately in validate-security-finding.test.ts.
+    line: 2,
     score: 3,
     category: "testing",
     headline: "Module ships without tests",
@@ -339,7 +342,7 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
     const result = validateForSubmission({
       synthOutput,
       reviewable: new Map([
-        ["src/lib/bar.ts", [{ line: 1, side: "RIGHT" as const, position: 1 }]],
+        ["src/lib/bar.ts", [{ line: 2, side: "RIGHT" as const, position: 1 }]],
       ]),
       specialistVerdicts: makeSpecialistVerdicts() as never,
       testingEvidence: absencePack,

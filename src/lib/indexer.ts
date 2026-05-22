@@ -552,14 +552,17 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (totalFiles === 0) {
     // Empty repo (or all-filtered). Write a manifest so we don't
     // re-walk on every webhook for this SHA.
-    if (!(await leaseAllows(env, owner, repo, runId))) {
+    // SIG-138: read activeRunId explicitly so we can reuse it for the graph
+    // commit check below without a second KV read (don't re-read KV).
+    const activeRunId = await readActiveRunId(env, owner, repo)
+    if (!shouldFinalize(activeRunId, runId)) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
         owner, repo, run_id: runId, site: "bootstrap-empty-manifest",
       }))
       return
     }
-    await persistManifest({
+    const manifestWritten = await persistManifest({
       env, owner, repo, namespace, headSha, runId,
       fileCount: 0, chunkCount: 0, shardCount: 1,
     })
@@ -568,6 +571,20 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       owner, repo, run_id: runId,
       file_count: 0, chunk_count: 0, shard_count: 1,
     }))
+    // SIG-138: commit an empty graph version to GC any stale graph left
+    // from a previously-indexed repo that is now empty. Best-effort —
+    // never fails the index job.
+    if (graphIndexEnabled(env) && shouldCommitGraph({ manifestWritten, activeRunId, runId })) {
+      try {
+        await commitGraph(env, owner, repo, runId)
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "graph-commit-failed",
+          owner, repo, run_id: runId,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
     return
   }
 

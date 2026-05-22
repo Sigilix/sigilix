@@ -826,4 +826,61 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     expect(graphDeletedNamespaces).toHaveLength(1)
     expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
   })
+
+  it("owner-mismatch AND graph delete throws → status=partial (not owner-mismatch-skip)", async () => {
+    // CodeRabbit finding on PR #128: the graph-delete arm runs
+    // unconditionally (even when !safeToTouchRepoOnlyState) and pushes
+    // failures to result.errors. The old status logic checked
+    // !safeToTouchRepoOnlyState BEFORE result.errors.length, so a
+    // failed GDPR graph delete during an owner-mismatch was silently
+    // masked as "owner-mismatch-skip" (treated as success → no 5xx /
+    // no redelivery retry). Fix: errors take precedence over the
+    // owner-mismatch label so callers surface a 503 and GitHub
+    // redelivers for the failed compliance delete.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+
+    const { env } = makeEnv({
+      kv,
+      graphDeleteImpl: async () => { throw new Error("DO write failed") },
+    })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Graph delete failed → must surface as partial, not owner-mismatch-skip.
+    expect(result.status).toBe("partial")
+    expect(result.errors.some((e) => e.includes("graph.delete"))).toBe(true)
+    // Repo-only state (KV/Vectorize) is still protected — the owner guard
+    // correctly blocked those arms.
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+  })
+
+  it("owner-mismatch AND graph delete succeeds → status=owner-mismatch-skip (happy path unaffected)", async () => {
+    // Regression guard: the fix must NOT change the happy-path behavior
+    // where owner mismatch AND graph delete succeeds — that should remain
+    // "owner-mismatch-skip" (no errors in result.errors).
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // No errors → owner-mismatch-skip preserved.
+    expect(result.status).toBe("owner-mismatch-skip")
+    expect(result.errors).toEqual([])
+    // Graph delete still fired.
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+    // Repo-only KV untouched.
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+  })
 })

@@ -493,10 +493,10 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     "pr-review-dedupe",
   )
 
-  if (!safeToTouchRepoOnlyState) {
-    result.status = "owner-mismatch-skip"
-  } else if (result.errors.length > 0) {
+  if (result.errors.length > 0) {
     result.status = "partial"
+  } else if (!safeToTouchRepoOnlyState) {
+    result.status = "owner-mismatch-skip"
   } else if (manifestRead.kind === "missing" && !result.vectorsKvDeleted) {
     // Nothing to delete at all — both repo-only records were absent.
     // The pr-review-manifest/dedupe keys may have been deleted but

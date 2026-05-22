@@ -269,6 +269,7 @@ import {
 import type { Env } from "../index"
 // SIG-138 Phase 2 — graph expansion.
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
+import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import { edgeWeight, hopDecay } from "./graph-scoring"
 import { withTimeout } from "./with-timeout"
 
@@ -923,6 +924,14 @@ export interface EnsembleHandlerArgs {
    * `handleStaleHead` when either ensemble guard fires.
    */
   staleHeadRequeueDepth?: number
+  /**
+   * SIG-119: the dispatcher's mutable telemetry sink. Each evidence-gate
+   * callback (security/tests/logic/perf `on*FindingDropped`) pushes a
+   * {gate, reason, dropped} event here; the dispatcher flushes it once to
+   * ValidationMetricsDO after the review. Optional so non-dispatcher callers
+   * (tests) can omit it.
+   */
+  validationSink?: ValidationRejectionEvent[]
 }
 
 // ARC-280: `routeReview` + `RouteDecision` + the shadow/post/off
@@ -2862,6 +2871,7 @@ export async function handlePrReviewEnsemble(
           evidenceId: finding.evidenceId ?? null,
           category: finding.category,
         }))
+        args.validationSink?.push({ gate: "security", reason: info.reason, dropped: info.dropped })
       },
       // SIG-111: thread the tests-finding specificity gate mode +
       // telemetry through. Default `shadow` — counts/telemeters the
@@ -2887,6 +2897,7 @@ export async function handlePrReviewEnsemble(
           evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
           category: finding.category,
         }))
+        args.validationSink?.push({ gate: "tests", reason: info.reason, dropped: info.dropped })
       },
       // SIG-109: thread the logic evidence + mode. Evidence is built
       // PR-A-contained — added-line text from the FULL PR diff +
@@ -2912,6 +2923,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
+        args.validationSink?.push({ gate: "logic", reason: info.reason, dropped: info.dropped })
       },
       // SIG-110: thread perf evidence + mode. Evidence is the same
       // changed-line text + the roleHint:performance AST findings. Default
@@ -2935,6 +2947,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
+        args.validationSink?.push({ gate: "perf", reason: info.reason, dropped: info.dropped })
       },
     })
     telemetry.postValidation = {

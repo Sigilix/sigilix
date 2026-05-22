@@ -1031,6 +1031,142 @@ describe("RepoGraphDO.blastRadius", () => {
     expect(br.callerPaths).toEqual([])
     expect(br.importDependents).toEqual([])
   })
+
+  it("dedup: same file imported/called via multiple edges yields no duplicates", async () => {
+    const do_ = makeDoInstance("o/blast-dedup")
+
+    // b.ts defines exported bar
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/b.ts",
+      symbols: [
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+
+    // a.ts imports bar TWICE (two import edges) AND calls bar() TWICE (two call edges)
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 3,
+          startCol: 0,
+        },
+      ],
+      callEdges: [
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "bar",
+          callKind: "imported_binding",
+          startLine: 5,
+          startCol: 0,
+        },
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "bar",
+          callKind: "imported_binding",
+          startLine: 7,
+          startCol: 0,
+        },
+      ],
+    })
+
+    await do_.commitGraphVersion("r")
+
+    const br = await do_.blastRadius({ changedSymbolIds: ["src/b.ts function bar 1 0"] })
+
+    // Both importDependents and callerPaths must contain src/a.ts exactly once
+    expect(br.importDependents).toContain("src/a.ts")
+    expect(new Set(br.importDependents).size).toBe(br.importDependents.length)
+
+    expect(br.callerPaths).toContain("src/a.ts")
+    expect(new Set(br.callerPaths).size).toBe(br.callerPaths.length)
+  })
+
+  it("same-file caller: file with same_file call edge to changed symbol includes callerPaths", async () => {
+    const do_ = makeDoInstance("o/blast-same-file")
+
+    // helper.ts defines both localFn (the callee) and an exported main
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/helper.ts",
+      symbols: [
+        {
+          symbolId: "src/helper.ts function localFn 1 0",
+          path: "src/helper.ts",
+          name: "localFn",
+          kind: "function",
+          exported: false,
+          startLine: 1,
+          startCol: 0,
+          endLine: 5,
+          endCol: 1,
+        },
+        {
+          symbolId: "src/helper.ts function main 10 0",
+          path: "src/helper.ts",
+          name: "main",
+          kind: "function",
+          exported: true,
+          startLine: 10,
+          startCol: 0,
+          endLine: 15,
+          endCol: 1,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [
+        {
+          sourcePath: "src/helper.ts",
+          calleeName: "localFn",
+          callKind: "same_file",
+          startLine: 12,
+          startCol: 2,
+        },
+      ],
+    })
+
+    await do_.commitGraphVersion("r")
+
+    // Query blastRadius for the localFn symbol change
+    const br = await do_.blastRadius({ changedSymbolIds: ["src/helper.ts function localFn 1 0"] })
+
+    // callerPaths must include src/helper.ts (the same file that has the same_file call edge)
+    expect(br.callerPaths).toContain("src/helper.ts")
+  })
 })
 
 // ─── deleteRepoGraph tests ────────────────────────────────────────

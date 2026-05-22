@@ -600,7 +600,11 @@ export class RepoGraphDO extends DurableObject<Env> {
     const ids = args.changedSymbolIds
     const idPlaceholders = ids.map(() => "?").join(",")
 
-    // import dependents: files that import a changed symbol (resolved target_symbol_id)
+    // import dependents: files that import a changed symbol (resolved target_symbol_id).
+    // importDependents matches only RESOLVED import edges (target_symbol_id set);
+    // ambiguous/unresolved import edges have null target_symbol_id and won't appear —
+    // a known recall gap by design (prefer-missing-over-false), consistent with the
+    // extractor's best-effort call edges.
     const importDependents = new Set<string>()
     for (const row of sql.exec<{ source_path: string }>(
       `SELECT DISTINCT source_path FROM file_edges WHERE graph_version = ? AND target_symbol_id IN (${idPlaceholders})`,

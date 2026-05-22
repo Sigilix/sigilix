@@ -931,6 +931,108 @@ describe("RepoGraphDO.commitGraphVersion", () => {
   })
 })
 
+// ─── blastRadius tests ───────────────────────────────────────────
+
+describe("RepoGraphDO.blastRadius", () => {
+  it("returns import dependents and callers of changed symbols", async () => {
+    const do_ = makeDoInstance("o/blast")
+
+    // b.ts defines exported bar; a.ts imports bar from './b' AND calls bar()
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/b.ts",
+      symbols: [
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
+      ],
+      callEdges: [
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "bar",
+          callKind: "imported_binding",
+          startLine: 2,
+          startCol: 0,
+        },
+      ],
+    })
+
+    await do_.commitGraphVersion("r")
+
+    const br = await do_.blastRadius({ changedSymbolIds: ["src/b.ts function bar 1 0"] })
+    expect(br.importDependents).toContain("src/a.ts")
+    expect(br.callerPaths).toContain("src/a.ts")
+  })
+
+  it("returns empty arrays when changedSymbolIds is empty", async () => {
+    const do_ = makeDoInstance("o/blast-empty-ids")
+
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function foo 1 0",
+          path: "src/a.ts",
+          name: "foo",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    const br = await do_.blastRadius({ changedSymbolIds: [] })
+    expect(br.callerPaths).toEqual([])
+    expect(br.importDependents).toEqual([])
+  })
+
+  it("returns empty arrays when there is no active version", async () => {
+    const do_ = makeDoInstance("o/blast-no-active")
+    // No commitGraphVersion call — no active version exists
+    const br = await do_.blastRadius({ changedSymbolIds: ["src/a.ts function foo 1 0"] })
+    expect(br.callerPaths).toEqual([])
+    expect(br.importDependents).toEqual([])
+  })
+})
+
 // ─── deleteRepoGraph tests ────────────────────────────────────────
 
 describe("RepoGraphDO.deleteRepoGraph", () => {

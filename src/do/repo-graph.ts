@@ -574,6 +574,67 @@ export class RepoGraphDO extends DurableObject<Env> {
   }
 
   /**
+   * Given a set of changed symbol IDs, return the files that directly call
+   * those symbols and the files that import them — both scoped to the ACTIVE
+   * graph version.
+   *
+   * - importDependents: DISTINCT source_path from file_edges where
+   *   target_symbol_id is one of the changed symbols.
+   * - callerPaths: resolve the changed symbols' NAMES, then DISTINCT
+   *   source_path from call_edges where callee_name is in that name set.
+   *
+   * Returns { callerPaths: [], importDependents: [] } when there is no active
+   * version or changedSymbolIds is empty.
+   */
+  async blastRadius(args: { changedSymbolIds: string[] }): Promise<{
+    callerPaths: string[]
+    importDependents: string[]
+  }> {
+    const empty = { callerPaths: [], importDependents: [] }
+    if (args.changedSymbolIds.length === 0) return empty
+
+    const active = await this.debugActiveVersion()
+    if (!active) return empty
+
+    const sql = this.sql()
+    const ids = args.changedSymbolIds
+    const idPlaceholders = ids.map(() => "?").join(",")
+
+    // import dependents: files that import a changed symbol (resolved target_symbol_id)
+    const importDependents = new Set<string>()
+    for (const row of sql.exec<{ source_path: string }>(
+      `SELECT DISTINCT source_path FROM file_edges WHERE graph_version = ? AND target_symbol_id IN (${idPlaceholders})`,
+      active, ...ids,
+    )) {
+      importDependents.add(row.source_path)
+    }
+
+    // callerPaths: resolve changed symbol IDs → names, then find call sites by callee_name
+    const names: string[] = [
+      ...sql.exec<{ name: string }>(
+        `SELECT name FROM symbols WHERE graph_version = ? AND symbol_id IN (${idPlaceholders})`,
+        active, ...ids,
+      ),
+    ].map((r) => r.name)
+
+    const callerPaths = new Set<string>()
+    if (names.length > 0) {
+      const namePlaceholders = names.map(() => "?").join(",")
+      for (const row of sql.exec<{ source_path: string }>(
+        `SELECT DISTINCT source_path FROM call_edges WHERE graph_version = ? AND callee_name IN (${namePlaceholders})`,
+        active, ...names,
+      )) {
+        callerPaths.add(row.source_path)
+      }
+    }
+
+    return {
+      callerPaths: [...callerPaths],
+      importDependents: [...importDependents],
+    }
+  }
+
+  /**
    * Wipe ALL data from this DO instance — every row in every table.
    * Used by the GDPR delete path (T8) when an installation is removed.
    *

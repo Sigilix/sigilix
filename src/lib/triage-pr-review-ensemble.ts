@@ -270,6 +270,7 @@ import type { Env } from "../index"
 // SIG-138 Phase 2 — graph expansion.
 import { graphContextFor, blastRadiusFor } from "./repo-graph-client"
 import { edgeWeight, hopDecay } from "./graph-scoring"
+import { withTimeout } from "./with-timeout"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -382,6 +383,12 @@ const TOP_K_BRANCH = 6
 // fallback = ~181s, fits comfortably within the 270s SPECIALIST
 // budget (89s slack).
 export const PER_ATTEMPT_TIMEOUT_MS = 60_000
+// Graph RPC budget: graph context is purely additive; a slow DO call must
+// not consume orchestrator wall time. Env-tunable via
+// OPENCLAW_GRAPH_RPC_TIMEOUT_MS (e.g. for integration test overrides).
+// Default 2500 ms is generous for a local DO RPC but tight enough that a
+// hung worker doesn't delay the review.
+export const GRAPH_RPC_TIMEOUT_MS = 2_500
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
 
@@ -1628,15 +1635,23 @@ export async function handlePrReviewEnsemble(
     let graphBlastCallerPaths: string[] = []
     let graphBlastDependentPaths: string[] = []
     if (graphRetrievalEnabled(env)) {
+      const graphRpcBudgetMs = parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS)
       try {
         // Seed from deduplicated chunk paths of the merged hit set.
         const seedPaths = [...new Set(sharedChunksForOverlap.map((c) => c.path))]
-        const { nodes } = await graphContextFor(env, owner, repo, {
-          seedPaths,
-          maxFiles: 8,
-          maxSymbolsPerHit: 12,
-          maxEdgesPerSymbol: 6,
-        })
+        // Wrap in withTimeout so a slow DO RPC cannot consume orchestrator wall
+        // time.  AbortSignal is unused by the DO stub but required by the helper
+        // signature.  On timeout the helper aborts and rejects; the outer catch
+        // below handles it and skips graph context gracefully.
+        const { nodes } = await withTimeout(
+          (_signal) => graphContextFor(env, owner, repo, {
+            seedPaths,
+            maxFiles: 8,
+            maxSymbolsPerHit: 12,
+            maxEdgesPerSymbol: 6,
+          }),
+          graphRpcBudgetMs,
+        )
         // Cap graph-only additions to ≤4 nodes per spec.
         // Sort: hop asc, then edge weight desc (higher weight = stronger edge).
         const cappedNodes = nodes
@@ -1652,7 +1667,10 @@ export async function handlePrReviewEnsemble(
         graphNodePaths = cappedNodes.map((n) => n.path)
 
         // Blast radius: pass empty symbol ids (see TODO(SIG-143) above).
-        const blast = await blastRadiusFor(env, owner, repo, { changedSymbolIds: [] })
+        const blast = await withTimeout(
+          (_signal) => blastRadiusFor(env, owner, repo, { changedSymbolIds: [] }),
+          graphRpcBudgetMs,
+        )
         // M2: preserve caller vs import-dependent distinction for telemetry.
         graphBlastCallerPaths = [...new Set(blast.callerPaths)]
         graphBlastDependentPaths = [...new Set(blast.importDependents)]

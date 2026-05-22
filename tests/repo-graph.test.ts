@@ -1167,6 +1167,71 @@ describe("RepoGraphDO.blastRadius", () => {
     // callerPaths must include src/helper.ts (the same file that has the same_file call edge)
     expect(br.callerPaths).toContain("src/helper.ts")
   })
+
+  // Fix 3a: changedSymbolId that does NOT exist in the graph
+  it("Fix 3a: changedSymbolId absent from graph returns empty arrays", async () => {
+    const do_ = makeDoInstance("o/blast-absent-id")
+
+    // Graph has one known symbol; we query with a different, nonexistent id.
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function foo 1 0",
+          path: "src/a.ts",
+          name: "foo",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    // "src/a.ts function ghost 99 0" does not exist in the graph.
+    const br = await do_.blastRadius({ changedSymbolIds: ["src/a.ts function ghost 99 0"] })
+    expect(br.callerPaths).toEqual([])
+    expect(br.importDependents).toEqual([])
+  })
+
+  // Fix 3b: symbol exists but has no callers and no import dependents
+  it("Fix 3b: isolated symbol (no callers, no import dependents) returns empty arrays", async () => {
+    const do_ = makeDoInstance("o/blast-isolated")
+
+    // a.ts defines 'standalone'; nobody imports or calls it.
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function standalone 1 0",
+          path: "src/a.ts",
+          name: "standalone",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    const br = await do_.blastRadius({ changedSymbolIds: ["src/a.ts function standalone 1 0"] })
+    expect(br.callerPaths).toEqual([])
+    expect(br.importDependents).toEqual([])
+  })
 })
 
 // ─── contextForVectorHits tests ──────────────────────────────────
@@ -1491,6 +1556,131 @@ describe("RepoGraphDO.contextForVectorHits", () => {
     expect(bCount).toBe(1)
     // a.ts must NOT appear in output (it's a seed)
     expect(paths).not.toContain("src/a.ts")
+  })
+
+  // Fix 4a: seed path with NO outgoing resolved edges → nodes: []
+  it("Fix 4a: seed file with no outgoing edges returns no nodes", async () => {
+    const do_ = makeDoInstance("o/ctx-no-edges")
+    // a.ts exists in the graph but has no import or call edges.
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function leaf 1 0",
+          path: "src/a.ts",
+          name: "leaf",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    const ctx = await do_.contextForVectorHits({
+      seedPaths: ["src/a.ts"],
+      maxFiles: 8,
+      maxSymbolsPerHit: 12,
+      maxEdgesPerSymbol: 6,
+    })
+    expect(ctx.nodes).toEqual([])
+  })
+
+  // Fix 4b: maxEdgesPerSymbol=0 → no edges fetched from any seed → no nodes
+  it("Fix 4b: maxEdgesPerSymbol=0 returns no nodes even when edges exist", async () => {
+    const do_ = makeDoInstance("o/ctx-max-edges-zero")
+    await mkFile(do_, "r", "src/b.ts", "fb", null)
+    await mkFile(do_, "r", "src/a.ts", "fa", { specifier: "./b", importedName: "fb" })
+    await do_.commitGraphVersion("r")
+
+    const ctx = await do_.contextForVectorHits({
+      seedPaths: ["src/a.ts"],
+      maxFiles: 8,
+      maxSymbolsPerHit: 12,
+      maxEdgesPerSymbol: 0,
+    })
+    expect(ctx.nodes).toEqual([])
+  })
+
+  // Fix 4c: maxFiles=0 → the outer loop condition (nodes.length < maxFiles) is
+  // immediately false → no nodes returned even when edges exist
+  it("Fix 4c: maxFiles=0 returns no nodes even when edges exist", async () => {
+    const do_ = makeDoInstance("o/ctx-max-files-zero")
+    await mkFile(do_, "r", "src/b.ts", "fb", null)
+    await mkFile(do_, "r", "src/a.ts", "fa", { specifier: "./b", importedName: "fb" })
+    await do_.commitGraphVersion("r")
+
+    const ctx = await do_.contextForVectorHits({
+      seedPaths: ["src/a.ts"],
+      maxFiles: 0,
+      maxSymbolsPerHit: 12,
+      maxEdgesPerSymbol: 6,
+    })
+    expect(ctx.nodes).toEqual([])
+  })
+
+  // Fix 4d: an UNRESOLVED edge (target_path is null) is NOT traversed or returned.
+  // The SQL query filters with `AND target_path IS NOT NULL`, so unresolved edges
+  // must never appear as nodes in the output.
+  it("Fix 4d: unresolved edge (target_path=null) is not traversed or returned", async () => {
+    const do_ = makeDoInstance("o/ctx-unresolved-edge")
+
+    // a.ts: imports './ghost' — ghost.ts is not in the graph, so the edge
+    // stays unresolved (target_path = null) after commitGraphVersion.
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function fa 1 0",
+          path: "src/a.ts",
+          name: "fa",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./ghost",
+          importedName: "ghost",
+          localName: "ghost",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
+      ],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    // Sanity: confirm the edge is unresolved (target_path = null).
+    const edges = await do_.debugResolvedEdges("src/a.ts")
+    const ghostEdge = edges.find((e) => e.resolutionStatus === "unresolved")
+    expect(ghostEdge).toBeDefined()
+    expect(ghostEdge!.targetPath).toBeNull()
+
+    // contextForVectorHits must return no nodes — the unresolved edge is excluded.
+    const ctx = await do_.contextForVectorHits({
+      seedPaths: ["src/a.ts"],
+      maxFiles: 8,
+      maxSymbolsPerHit: 12,
+      maxEdgesPerSymbol: 6,
+    })
+    expect(ctx.nodes).toEqual([])
   })
 })
 

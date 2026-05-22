@@ -38,6 +38,7 @@ import {
   graphRetrievalMode,
   formatGraphContext,
   graphOverlapStats,
+  GRAPH_RPC_TIMEOUT_MS,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
@@ -1436,5 +1437,21 @@ describe("graphOverlapStats", () => {
     const result = graphOverlapStats({ vectorPaths: ["a", "a", "b"], graphPaths: ["b", "b", "c"] })
     expect(result.jaccard).toBeCloseTo(1 / 3)
     expect(result.addedCount).toBe(1)
+  })
+})
+
+// ─── SIG-138 Fix 1: GRAPH_RPC_TIMEOUT_MS budget constant ─────────────────────
+//
+// Validates that the graph RPC timeout constant is exported with a sensible
+// default (tight enough to bound orchestrator wall time, generous enough for
+// a healthy DO RPC).
+
+describe("GRAPH_RPC_TIMEOUT_MS", () => {
+  it("is exported and set to 2500 ms by default", () => {
+    expect(GRAPH_RPC_TIMEOUT_MS).toBe(2_500)
+  })
+
+  it("is well below RETRIEVAL_PREFLIGHT_TIMEOUT_MS so a timed-out graph RPC cannot consume the full preflight budget", () => {
+    expect(GRAPH_RPC_TIMEOUT_MS).toBeLessThan(RETRIEVAL_PREFLIGHT_TIMEOUT_MS)
   })
 })

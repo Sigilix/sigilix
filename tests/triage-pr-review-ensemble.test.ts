@@ -1345,14 +1345,12 @@ describe("graphRetrievalMode", () => {
     expect(graphRetrievalMode(makeEnv("shadow"))).toBe("shadow")
   })
 
-  // SIG-143 guard: while BLAST_RADIUS_RESOLUTION_READY is false, 'post' is
-  // coerced to 'shadow' so a config flip cannot ship the incomplete
-  // graph-routed path to production.
-  // When SIG-143 lands and BLAST_RADIUS_RESOLUTION_READY is flipped to true,
-  // restore this assertion to expect("post").
-  it("coerces 'post' to 'shadow' while BLAST_RADIUS_RESOLUTION_READY is false (SIG-143 guard)", () => {
-    expect(BLAST_RADIUS_RESOLUTION_READY).toBe(false)
-    expect(graphRetrievalMode(makeEnv("post"))).toBe("shadow")
+  // SIG-143 landed: blast-radius name resolution (blastRadiusByNames) exists,
+  // so BLAST_RADIUS_RESOLUTION_READY is true and a raw 'post' is honored as
+  // 'post' (no longer coerced to 'shadow').
+  it("returns 'post' for 'post' (SIG-143 landed: BLAST_RADIUS_RESOLUTION_READY is true)", () => {
+    expect(BLAST_RADIUS_RESOLUTION_READY).toBe(true)
+    expect(graphRetrievalMode(makeEnv("post"))).toBe("post")
   })
 
   it("returns 'off' for 'off'", () => {
@@ -1367,11 +1365,9 @@ describe("graphRetrievalMode", () => {
     expect(graphRetrievalMode(makeEnv(""))).toBe("off")
   })
 
-  it("is case-insensitive: 'SHADOW' -> 'shadow', 'Post' coerced to 'shadow' (SIG-143 guard)", () => {
+  it("is case-insensitive: 'SHADOW' -> 'shadow', 'Post' -> 'post'", () => {
     expect(graphRetrievalMode(makeEnv("SHADOW"))).toBe("shadow")
-    // 'Post' resolves to raw "post", which is coerced to "shadow" until SIG-143.
-    // When BLAST_RADIUS_RESOLUTION_READY is flipped true, restore to expect("post").
-    expect(graphRetrievalMode(makeEnv("Post"))).toBe("shadow")
+    expect(graphRetrievalMode(makeEnv("Post"))).toBe("post")
   })
 })
 

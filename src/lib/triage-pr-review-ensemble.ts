@@ -268,7 +268,7 @@ import {
 } from "./shadow-bakeoff-runner"
 import type { Env } from "../index"
 // SIG-138 Phase 2 — graph expansion.
-import { graphContextFor, blastRadiusFor } from "./repo-graph-client"
+import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
 import { edgeWeight, hopDecay } from "./graph-scoring"
 import { withTimeout } from "./with-timeout"
 
@@ -526,11 +526,11 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
 // and string formatting). All three follow the env-flag conventions used
 // by OPENCLAW_SYMBOL_RETRIEVAL / OPENCLAW_BRANCH_AWARE_RETRIEVAL.
 
-// SIG-143: blast-radius resolution is name-based and not yet implemented, so
-// `blastRadiusFor` is called with an empty id set (inert). Until SIG-143 lands,
-// `post` is coerced to `shadow` so a config flip can't ship the incomplete
-// graph-routed path to production. Flip to true when blastRadiusByNames exists.
-export const BLAST_RADIUS_RESOLUTION_READY = false
+// SIG-143: blast-radius name resolution is implemented — the graph block calls
+// `blastRadiusByNamesFor` with the PR's changed symbol names, which the DO
+// resolves to symbol_ids in the active version. With resolution live, a raw
+// `post` is honored (no longer coerced to `shadow`).
+export const BLAST_RADIUS_RESOLUTION_READY = true
 
 /** Returns true when OPENCLAW_GRAPH_RETRIEVAL is "shadow" or "post". */
 export function graphRetrievalEnabled(env: Env): boolean {
@@ -1637,30 +1637,17 @@ export async function handlePrReviewEnsemble(
     //   to posted prompts.
     // post:   attach graphContext to logic + tests specialists + synth.
     //
-    // changedSymbolIds for blastRadius: the ensemble has changed symbol
-    // NAMES (from extractChangedSymbols) but not symbol_ids — symbol_ids
-    // are composite keys `${path} ${kind} ${name} ${startLine} ${startCol}`
-    // that require the indexer's AST output to reconstruct. Passing [] is
-    // safe: blastRadius fast-paths on empty input. The contextForVectorHits
-    // BFS already traverses outgoing file edges, giving comparable coverage.
-    // TODO(SIG-143): add a blastRadiusByNames DO method — name-based blast
-    // radius is a hard prereq for OPENCLAW_GRAPH_RETRIEVAL=post enforced mode.
+    // SIG-143: blast radius is driven by the PR's changed symbol NAMES
+    // (extractChangedSymbols), which the DO resolves to symbol_ids in the
+    // active graph version (blastRadiusByNames). Names are extracted here
+    // independently of the symbol-retrieval block above (that block is gated
+    // on a separate budget flag and may not run). Both helpers are pure.
     let graphContextString = ""
     let graphNodePaths: string[] = []
     // M2: keep caller + import-dependent counts separate for telemetry;
     // graph-context injection can use a combined set.
     let graphBlastCallerPaths: string[] = []
     let graphBlastDependentPaths: string[] = []
-    // Warn once per run when OPENCLAW_GRAPH_RETRIEVAL=post is coerced to shadow
-    // because BLAST_RADIUS_RESOLUTION_READY is false (SIG-143 not yet landed).
-    const rawGraphMode = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
-    if (rawGraphMode === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
-      console.warn(JSON.stringify({
-        event: "graph-retrieval-post-coerced-shadow",
-        reason: "BLAST_RADIUS_RESOLUTION_READY is false; set it true when SIG-143 lands",
-        owner, repo, prNumber,
-      }))
-    }
     if (graphRetrievalEnabled(env)) {
       const graphRpcBudgetMs = parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS)
       try {
@@ -1693,9 +1680,18 @@ export async function handlePrReviewEnsemble(
         graphContextString = formatGraphContext(cappedNodes)
         graphNodePaths = cappedNodes.map((n) => n.path)
 
-        // Blast radius: pass empty symbol ids (see TODO(SIG-143) above).
+        // Blast radius (SIG-143): resolve the PR's changed symbol names in the
+        // active graph version → caller + import-dependent files. Names come
+        // from the diff via the same pure helpers the symbol-retrieval block
+        // uses; resolution is scoped to the changed JS/TS files (astFilesByPath
+        // keys) as a name-collision guard. Empty input fast-paths inside the DO.
+        const changedGraphNames = extractChangedSymbols(astFilesByPath, buildChangedLines(diff))
+        const changedGraphPaths = [...astFilesByPath.keys()]
         const blast = await withTimeout(
-          (_signal) => blastRadiusFor(env, owner, repo, { changedSymbolIds: [] }),
+          (_signal) => blastRadiusByNamesFor(env, owner, repo, {
+            changedNames: changedGraphNames,
+            changedPaths: changedGraphPaths,
+          }),
           graphRpcBudgetMs,
         )
         // M2: preserve caller vs import-dependent distinction for telemetry.

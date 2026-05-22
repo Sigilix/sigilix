@@ -10,6 +10,8 @@ function assertCoverage(content: string, chunks: Chunk[] | null) {
   const covered = new Map<number, number>()
   for (const c of chunks!) {
     expect(c.content.trim().length).toBeGreaterThan(0)
+    expect(c.lineEnd).toBeLessThanOrEqual(lines.length)
+    expect(c.lineStart).toBeGreaterThanOrEqual(1)
     for (let ln = c.lineStart; ln <= c.lineEnd; ln++) covered.set(ln, (covered.get(ln) ?? 0) + 1)
   }
   for (let ln = 1; ln <= lines.length; ln++) {

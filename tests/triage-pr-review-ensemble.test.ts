@@ -37,6 +37,7 @@ import {
   graphRetrievalEnabled,
   graphRetrievalMode,
   formatGraphContext,
+  graphOverlapStats,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
@@ -1383,5 +1384,57 @@ describe("formatGraphContext", () => {
     const result = formatGraphContext([{ path: "src/x.ts", hop: 1, edgeKind: "export" }])
     expect(result).toBe("src/x.ts (hop1, export)")
     expect(result.endsWith("\n")).toBe(false)
+  })
+})
+
+describe("graphOverlapStats", () => {
+  it("computes jaccard and addedCount for overlapping sets", () => {
+    // vector=[a,b], graph=[b,c]
+    // intersection={b} (size 1), union={a,b,c} (size 3), jaccard=1/3
+    // addedCount: paths in graph NOT in vector = [c] → 1
+    const result = graphOverlapStats({ vectorPaths: ["a", "b"], graphPaths: ["b", "c"] })
+    expect(result.jaccard).toBeCloseTo(1 / 3)
+    expect(result.addedCount).toBe(1)
+  })
+
+  it("computes jaccard=0 and addedCount=N for disjoint sets", () => {
+    // vector=[a], graph=[b,c] → intersection={}, union={a,b,c} (size 3)
+    const result = graphOverlapStats({ vectorPaths: ["a"], graphPaths: ["b", "c"] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(2)
+  })
+
+  it("computes jaccard=1 and addedCount=0 for identical sets", () => {
+    const result = graphOverlapStats({ vectorPaths: ["x", "y"], graphPaths: ["x", "y"] })
+    expect(result.jaccard).toBe(1)
+    expect(result.addedCount).toBe(0)
+  })
+
+  it("returns jaccard=0 and addedCount=0 for empty sets", () => {
+    const result = graphOverlapStats({ vectorPaths: [], graphPaths: [] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(0)
+  })
+
+  it("computes correctly when vector is empty but graph has paths", () => {
+    // union = graph paths, intersection = 0, jaccard = 0, addedCount = graph.length
+    const result = graphOverlapStats({ vectorPaths: [], graphPaths: ["a", "b"] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(2)
+  })
+
+  it("computes correctly when graph is empty but vector has paths", () => {
+    // union = vector paths, intersection = 0, jaccard = 0, addedCount = 0
+    const result = graphOverlapStats({ vectorPaths: ["a", "b"], graphPaths: [] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(0)
+  })
+
+  it("deduplicates duplicate paths within each set for jaccard", () => {
+    // vector=[a,a,b] → Set{a,b}, graph=[b,b,c] → Set{b,c}
+    // intersection={b} (1), union={a,b,c} (3), jaccard=1/3
+    const result = graphOverlapStats({ vectorPaths: ["a", "a", "b"], graphPaths: ["b", "b", "c"] })
+    expect(result.jaccard).toBeCloseTo(1 / 3)
+    expect(result.addedCount).toBe(1)
   })
 })

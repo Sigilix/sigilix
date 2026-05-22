@@ -541,6 +541,27 @@ export function formatGraphContext(
   return nodes.map((n) => `${n.path} (hop${n.hop}, ${n.edgeKind})`).join("\n")
 }
 
+/**
+ * Compute overlap statistics between vector-hit seed paths and
+ * graph-expanded node paths for the SIG-86 bake-off.
+ *
+ * - `jaccard`: |intersection| / |union|. 0 when both sets are empty.
+ * - `addedCount`: paths in graph that were NOT in vector hits (net-new context).
+ */
+export function graphOverlapStats(a: {
+  vectorPaths: string[]
+  graphPaths: string[]
+}): { jaccard: number; addedCount: number } {
+  const v = new Set(a.vectorPaths)
+  const g = new Set(a.graphPaths)
+  const inter = [...g].filter((p) => v.has(p)).length
+  const union = new Set([...a.vectorPaths, ...a.graphPaths]).size
+  return {
+    jaccard: union === 0 ? 0 : inter / union,
+    addedCount: [...g].filter((p) => !v.has(p)).length,
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
@@ -1588,8 +1609,8 @@ export async function handlePrReviewEnsemble(
     // no behavior change. Any error in this block is caught and logged;
     // the review always proceeds unaffected (graph is additive context).
     //
-    // shadow: compute everything for telemetry seam (T15 reads the
-    //   variables below); do NOT attach graphContext to posted prompts.
+    // shadow: compute everything for telemetry; do NOT attach graphContext
+    //   to posted prompts.
     // post:   attach graphContext to logic + tests specialists + synth.
     //
     // changedSymbolIds for blastRadius: the ensemble has changed symbol
@@ -1598,13 +1619,14 @@ export async function handlePrReviewEnsemble(
     // that require the indexer's AST output to reconstruct. Passing [] is
     // safe: blastRadius fast-paths on empty input. The contextForVectorHits
     // BFS already traverses outgoing file edges, giving comparable coverage.
-    // A future phase can add a blastRadiusByNames DO method to fill this gap.
+    // TODO(SIG-143): add a blastRadiusByNames DO method — name-based blast
+    // radius is a hard prereq for OPENCLAW_GRAPH_RETRIEVAL=post enforced mode.
     let graphContextString = ""
-    // T15 telemetry seam: these variables are computed in both shadow and
-    // post modes so the emit in T15 can measure graph-vs-vector overlap.
-    // T15 telemetry seam: rename (drop underscore prefix) when adding the emit.
-    let _graphNodePaths: string[] = []
-    let _graphBlastPaths: string[] = []
+    let graphNodePaths: string[] = []
+    // M2: keep caller + import-dependent counts separate for telemetry;
+    // graph-context injection can use a combined set.
+    let graphBlastCallerPaths: string[] = []
+    let graphBlastDependentPaths: string[] = []
     if (graphRetrievalEnabled(env)) {
       try {
         // Seed from deduplicated chunk paths of the merged hit set.
@@ -1627,11 +1649,45 @@ export async function handlePrReviewEnsemble(
           })
           .slice(0, 4)
         graphContextString = formatGraphContext(cappedNodes)
-        _graphNodePaths = cappedNodes.map((n) => n.path)
+        graphNodePaths = cappedNodes.map((n) => n.path)
 
-        // Blast radius: pass empty symbol ids (see comment above).
+        // Blast radius: pass empty symbol ids (see TODO(SIG-143) above).
         const blast = await blastRadiusFor(env, owner, repo, { changedSymbolIds: [] })
-        _graphBlastPaths = [...new Set([...blast.callerPaths, ...blast.importDependents])]
+        // M2: preserve caller vs import-dependent distinction for telemetry.
+        graphBlastCallerPaths = [...new Set(blast.callerPaths)]
+        graphBlastDependentPaths = [...new Set(blast.importDependents)]
+
+        // Bake-off telemetry: emit in both shadow and post so the SIG-86
+        // analysis always has coverage data. Failure is non-fatal.
+        const vectorSeedPaths = seedPaths
+        const { jaccard, addedCount } = graphOverlapStats({
+          vectorPaths: vectorSeedPaths,
+          graphPaths: graphNodePaths,
+        })
+        // hop_distribution: count capped nodes per hop level.
+        const hopDist: Record<string, number> = {}
+        for (const n of cappedNodes) {
+          const key = String(n.hop)
+          hopDist[key] = (hopDist[key] ?? 0) + 1
+        }
+        // edge_type_distribution: count capped nodes per edgeKind.
+        const edgeTypeDist: Record<string, number> = {}
+        for (const n of cappedNodes) {
+          edgeTypeDist[n.edgeKind] = (edgeTypeDist[n.edgeKind] ?? 0) + 1
+        }
+        console.log(JSON.stringify({
+          event: "pr-review-graph-retrieval",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: graphRetrievalMode(env),
+          jaccard,
+          added_count: addedCount,
+          node_count: nodes.length,
+          capped_node_count: cappedNodes.length,
+          blast_caller_count: graphBlastCallerPaths.length,
+          blast_dependent_count: graphBlastDependentPaths.length,
+          hop_distribution: hopDist,
+          edge_type_distribution: edgeTypeDist,
+        }))
       } catch (err) {
         // Non-fatal: graph expansion is additive. Log for observability.
         console.log(JSON.stringify({
@@ -1640,26 +1696,15 @@ export async function handlePrReviewEnsemble(
           error: err instanceof Error ? err.message : String(err),
         }))
         graphContextString = ""
-        _graphNodePaths = []
-        _graphBlastPaths = []
+        graphNodePaths = []
+        graphBlastCallerPaths = []
+        graphBlastDependentPaths = []
       }
     }
     // In post mode, inject graph context into logic+tests specialists
     // and synthesizer. In shadow mode, the variables are computed but
-    // not attached (T15 will emit the telemetry seam).
+    // not attached to prompts (bake-off telemetry fires in both modes).
     const graphCtxForPrompt = graphRetrievalMode(env) === "post" ? graphContextString : ""
-    // T15 telemetry seam: emit `pr-review-graph-retrieval` with node_paths,
-    // blast_paths, and graph-vs-vector overlap stats. Replace this stub with
-    // the full emit in T15. Variables kept here so T15 can read them.
-    if (graphRetrievalEnabled(env)) {
-      console.log(JSON.stringify({
-        event: "pr-review-graph-retrieval-seam",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        mode: graphRetrievalMode(env),
-        node_count: _graphNodePaths.length,
-        blast_count: _graphBlastPaths.length,
-      }))
-    }
     // ──────────────────────────────────────────────────────────────────
 
     const astResult = await runAstRules({

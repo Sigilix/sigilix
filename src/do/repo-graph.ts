@@ -151,6 +151,14 @@ const CANDIDATE_EXTS = [
   "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mjs",
 ]
 
+/**
+ * Defensive upper bound on the number of symbol_ids a name-based blast-radius
+ * query resolves (SIG-143). Input names are already capped upstream
+ * (extractChangedSymbols → MAX_SYMBOLS=30) and scoped to changed files, so
+ * this only guards a pathological changed file with many same-named symbols.
+ */
+export const MAX_BLAST_IDS = 200
+
 // ─── Public result types ──────────────────────────────────────────
 
 /**
@@ -617,8 +625,71 @@ export class RepoGraphDO extends DurableObject<Env> {
     const active = await this.debugActiveVersion()
     if (!active) return empty
 
+    return this.blastRadiusForIds(active, args.changedSymbolIds)
+  }
+
+  /**
+   * Name-based blast radius (SIG-143). The ensemble extracts changed symbol
+   * NAMES from the diff (extractChangedSymbols) but does not reconstruct the
+   * composite symbol_ids. This resolves those names to symbol_ids in the
+   * ACTIVE version — SCOPED to the changed files — then reuses the same
+   * import-dependent + caller computation as blastRadius.
+   *
+   * Scoping to `changedPaths` is the name-collision guard: a bare name like
+   * `handle` can be declared in many files, but only the declaration in a file
+   * the PR actually changed is a changed symbol. Without the path scope a
+   * common name would inflate the blast radius with unrelated same-named
+   * symbols. The resolved id set is additionally capped at MAX_BLAST_IDS as a
+   * defensive bound.
+   *
+   * A changed name with no matching declaration in a changed file resolves to
+   * no id and contributes nothing — a deliberate recall gap consistent with
+   * the prefer-missing-over-false philosophy of blastRadius.
+   *
+   * Returns { callerPaths: [], importDependents: [] } when there is no active
+   * version, changedNames is empty, or changedPaths is empty.
+   */
+  async blastRadiusByNames(args: { changedNames: string[]; changedPaths: string[] }): Promise<{
+    callerPaths: string[]
+    importDependents: string[]
+  }> {
+    const empty = { callerPaths: [], importDependents: [] }
+    if (args.changedNames.length === 0 || args.changedPaths.length === 0) return empty
+
+    const active = await this.debugActiveVersion()
+    if (!active) return empty
+
     const sql = this.sql()
-    const ids = args.changedSymbolIds
+    const names = args.changedNames
+    const paths = args.changedPaths
+    const namePlaceholders = names.map(() => "?").join(",")
+    const pathPlaceholders = paths.map(() => "?").join(",")
+    const ids = [
+      ...sql.exec<{ symbol_id: string }>(
+        // ORDER BY before LIMIT so the capped id set is deterministic when
+        // matches exceed MAX_BLAST_IDS (otherwise the kept ids vary by plan).
+        `SELECT DISTINCT symbol_id FROM symbols WHERE graph_version = ? AND name IN (${namePlaceholders}) AND path IN (${pathPlaceholders}) ORDER BY symbol_id LIMIT ?`,
+        active, ...names, ...paths, MAX_BLAST_IDS,
+      ),
+    ].map((r) => r.symbol_id)
+
+    return this.blastRadiusForIds(active, ids)
+  }
+
+  /**
+   * Shared blast-radius computation over already-resolved symbol ids within
+   * the given active graph version. Both blastRadius (id-based) and
+   * blastRadiusByNames (name-based) delegate here so the import-dependent +
+   * caller logic lives in one place. Returns empty when `ids` is empty.
+   */
+  private blastRadiusForIds(active: string, ids: string[]): {
+    callerPaths: string[]
+    importDependents: string[]
+  } {
+    const empty = { callerPaths: [], importDependents: [] }
+    if (ids.length === 0) return empty
+
+    const sql = this.sql()
     const idPlaceholders = ids.map(() => "?").join(",")
 
     // import dependents: files that import a changed symbol (resolved target_symbol_id).

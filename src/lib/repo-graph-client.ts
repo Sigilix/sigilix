@@ -85,3 +85,19 @@ export async function blastRadiusFor(
 ): Promise<{ callerPaths: string[]; importDependents: string[] }> {
   return graphStub(env, owner, repo).blastRadius(args)
 }
+
+/**
+ * SIG-143: name-based blast radius. Resolves the changed symbol NAMES to
+ * symbol ids in the repo's active graph version — scoped to `changedPaths`
+ * (the files the PR changed) as a name-collision guard — then returns the
+ * caller and import-dependent file paths. When either `changedNames` or
+ * `changedPaths` is empty, both lists are empty (fast-path inside the DO).
+ */
+export async function blastRadiusByNamesFor(
+  env: Env,
+  owner: string,
+  repo: string,
+  args: { changedNames: string[]; changedPaths: string[] },
+): Promise<{ callerPaths: string[]; importDependents: string[] }> {
+  return graphStub(env, owner, repo).blastRadiusByNames(args)
+}

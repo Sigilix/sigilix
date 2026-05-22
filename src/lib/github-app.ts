@@ -265,28 +265,38 @@ export async function resolveRepoInstallationId(
   owner: string,
   repo: string,
 ): Promise<number | null> {
-  const jwt = await signGitHubAppJwt(appId, privateKeyPem)
-  const res = await fetch(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
-    {
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${jwt}`,
-        "x-github-api-version": "2022-11-28",
-        "user-agent": "sigilix-worker",
+  // Fully fail-soft: ANY failure (JWT signing, network, non-OK HTTP, JSON
+  // parse, missing/non-numeric id) returns null so the caller's "not
+  // found/unavailable" (404) path is consistent — never a 500. The reason is
+  // logged so an operator can still distinguish not-installed from a transient
+  // GitHub error / wrong-or-expired key.
+  try {
+    const jwt = await signGitHubAppJwt(appId, privateKeyPem)
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${jwt}`,
+          "x-github-api-version": "2022-11-28",
+          "user-agent": "sigilix-worker",
+        },
       },
-    },
-  )
-  if (!res.ok) {
-    // Log the status so an operator can distinguish "app not installed" (404)
-    // from a transient GitHub error / wrong-or-expired key (401/403/5xx) — the
-    // route collapses all of these to 404 for the caller.
+    )
+    if (!res.ok) {
+      console.warn(JSON.stringify({
+        event: "resolve-repo-installation-failed",
+        owner, repo, status: res.status,
+      }))
+      return null
+    }
+    const json = (await res.json()) as { id?: unknown }
+    return typeof json.id === "number" ? json.id : null
+  } catch (err) {
     console.warn(JSON.stringify({
-      event: "resolve-repo-installation-failed",
-      owner, repo, status: res.status,
+      event: "resolve-repo-installation-error",
+      owner, repo, error: err instanceof Error ? err.message : String(err),
     }))
     return null
   }
-  const json = (await res.json()) as { id?: unknown }
-  return typeof json.id === "number" ? json.id : null
 }

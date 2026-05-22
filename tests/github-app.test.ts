@@ -11,8 +11,8 @@
 // Web Crypto-friendly RSA key generator + verifyKey import) — that's
 // covered by GitHub itself rejecting invalid JWTs at token-exchange time.
 
-import { describe, expect, it } from "vitest"
-import { signGitHubAppJwt } from "../src/lib/github-app"
+import { describe, expect, it, vi, afterEach } from "vitest"
+import { signGitHubAppJwt, resolveRepoInstallationId } from "../src/lib/github-app"
 
 // PKCS#8 RSA-2048 private key — generated with:
 //   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
@@ -106,3 +106,36 @@ function b64UrlDecode(input: string): string {
   const standard = padded.replace(/-/g, "+").replace(/_/g, "/")
   return atob(standard)
 }
+
+// SIG-156: resolveRepoInstallationId — uses the PKCS8_PEM test key so the JWT
+// signs, and stubs global fetch to drive the GitHub response.
+describe("resolveRepoInstallationId", () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const stubFetch = (impl: (...a: unknown[]) => Promise<Response>) =>
+    vi.stubGlobal("fetch", vi.fn(impl))
+
+  it("returns the installation id on 200", async () => {
+    stubFetch(async () => new Response(JSON.stringify({ id: 12345 }), { status: 200 }))
+    expect(await resolveRepoInstallationId("123", PKCS8_PEM, "Arc-and-Anchor", "sigilix")).toBe(12345)
+  })
+
+  it("returns null when the app isn't installed (non-OK status)", async () => {
+    stubFetch(async () => new Response("not found", { status: 404 }))
+    expect(await resolveRepoInstallationId("123", PKCS8_PEM, "o", "r")).toBeNull()
+  })
+
+  it("returns null when id is missing or non-numeric", async () => {
+    stubFetch(async () => new Response(JSON.stringify({ id: "nope" }), { status: 200 }))
+    expect(await resolveRepoInstallationId("123", PKCS8_PEM, "o", "r")).toBeNull()
+  })
+
+  it("fail-soft: returns null when fetch throws (network error)", async () => {
+    stubFetch(async () => { throw new Error("network down") })
+    expect(await resolveRepoInstallationId("123", PKCS8_PEM, "o", "r")).toBeNull()
+  })
+
+  it("fail-soft: returns null when JWT signing fails (bad key)", async () => {
+    stubFetch(async () => new Response("{}", { status: 200 }))
+    expect(await resolveRepoInstallationId("123", "not-a-valid-pem", "o", "r")).toBeNull()
+  })
+})

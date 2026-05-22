@@ -425,28 +425,6 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         }))
       }
 
-      // SIG-138 T8: wipe the repo's DO-backed code graph (SQLite). The
-      // graph is keyed by indexNamespace(owner, repo) — no legacy bare-
-      // repo shape. MUST NOT be gated by OPENCLAW_INDEXER_ENABLED: graph
-      // deletion is GDPR/SOC 2 compliance just like vector + KV cleanup.
-      // Best-effort: a graph failure logs (with owner/repo for the audit
-      // trail) but does NOT abort the rest of the delete; redelivery is
-      // idempotent (deleteRepoGraph wipes all rows, so re-calling is safe).
-      try {
-        await deleteGraph(env, owner, repo)
-        console.log(JSON.stringify({
-          event: "index-delete-graph-deleted",
-          owner, repo,
-        }))
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        result.errors.push(`graph.delete(repo-graph): ${message}`)
-        console.error(JSON.stringify({
-          event: "index-delete-graph-failed",
-          owner, repo, err: message,
-        }))
-      }
-
       // SIG-132: purge any leftover same-owner LEGACY KV keys that
       // coexist with the new-shape records (already verified owner-safe
       // by the probe). VERY narrow case (a repo indexed both pre- AND
@@ -470,6 +448,36 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
           }))
         }
       }
+    }
+
+    // SIG-138 T8: wipe the repo's DO-backed code graph (SQLite). The
+    // graph is keyed by indexNamespace(owner, repo) — no legacy bare-
+    // repo shape. MUST NOT be gated by OPENCLAW_INDEXER_ENABLED: graph
+    // deletion is GDPR/SOC 2 compliance just like vector + KV cleanup.
+    //
+    // Runs UNCONDITIONALLY under the owner guard: the DO graph is
+    // independent of the Vectorize id-list (it needs only the
+    // indexNamespace, not the vector ids), so there is no stranding risk
+    // and no reason to defer when vectorizeDeleteFailed. Gating graph
+    // deletion on vectorize success would leave GDPR graph data lingering
+    // for the entire webhook redelivery window whenever Vectorize is down.
+    //
+    // Best-effort: a graph failure logs (with owner/repo for the audit
+    // trail) but does NOT abort the rest of the delete; redelivery is
+    // idempotent (deleteRepoGraph wipes all rows, so re-calling is safe).
+    try {
+      await deleteGraph(env, owner, repo)
+      console.log(JSON.stringify({
+        event: "index-delete-graph-deleted",
+        owner, repo,
+      }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      result.errors.push(`graph.delete(repo-graph): ${message}`)
+      console.error(JSON.stringify({
+        event: "index-delete-graph-failed",
+        owner, repo, err: message,
+      }))
     }
   }
 

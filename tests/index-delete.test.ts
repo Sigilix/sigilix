@@ -783,4 +783,39 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     expect(result.manifestDeleted).toBe(true)
     expect(result.vectorsKvDeleted).toBe(true)
   })
+
+  it("SIG-138: graph delete fires even when Vectorize deleteByIds fails (independent of vectorize outcome)", async () => {
+    // GDPR regression guard: the graph-delete arm is unconditional under
+    // the owner guard. A persistent Vectorize failure (e.g. Vectorize 503)
+    // must NOT leave the DO graph data lingering. The graph needs only
+    // indexNamespace(owner, repo), not the vector id-list, so there is no
+    // stranding risk and deferral serves no purpose.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, graphDeletedNamespaces } = makeEnv({
+      kv,
+      deleteByIdsImpl: async () => {
+        throw new Error("vectorize 503 service unavailable")
+      },
+    })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Vectorize failure → status is partial and KV id-list/manifest survive
+    // (so redelivery can retry the embeddings).
+    expect(result.status).toBe("partial")
+    expect(result.errors.some((e) => e.includes("vectorize.deleteByIds"))).toBe(true)
+    expect(result.vectorsKvDeleted).toBe(false)
+    expect(result.manifestDeleted).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+
+    // Graph delete still fired unconditionally (owner guard passed).
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+  })
 })

@@ -561,10 +561,15 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
       GITHUB_PRIVATE_KEY: "fake-key",
     } as unknown as Env
 
+    // SIG-137: the delete-coverage write now PRECEDES the Vectorize upsert, so
+    // a repo-index-vectors KV failure is caught before any vector is upserted.
     await expect(handleIndexRepoJob({ job: bootstrapJob(), env })).rejects.toThrow(
-      /repo-index-vectors write failed/,
+      /repo-index-vectors coverage write failed/,
     )
 
+    // Coverage-before-upsert guarantee: nothing was upserted to Vectorize
+    // before the ledger write failed (so no orphan is even possible here).
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
     // Manifest must NOT have been written.
     expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
   })
@@ -633,9 +638,11 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
       },
     }
 
+    // SIG-137: coverage write precedes upsert → caught before any upsert.
     await expect(handleIndexRepoJob({ job: shardJob, env })).rejects.toThrow(
-      /repo-index-vectors write failed/,
+      /repo-index-vectors coverage write failed/,
     )
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
     // No manifest, no next-shard enqueue (final shard would have
     // written the manifest; non-final would have enqueued).
     expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)

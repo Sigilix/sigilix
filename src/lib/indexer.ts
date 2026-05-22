@@ -61,6 +61,7 @@ import {
   computeMerge,
   readRepoIndexVectors,
   writeRepoIndexVectors,
+  appendVectorCoverage,
 } from "./repo-index-vectors"
 import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
@@ -780,6 +781,18 @@ export interface ProcessSliceResult {
   idsByPath: Record<string, string[]>
 }
 
+/** SIG-137: group an upsert batch's chunk ids by source path for the
+ *  delete-coverage ledger write that precedes each Vectorize upsert. */
+function coverageByPath(records: VectorizeRecord[]): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const r of records) {
+    const path = typeof r.metadata.path === "string" ? r.metadata.path : ""
+    if (path.length === 0) continue
+    ;(out[path] ??= []).push(r.id)
+  }
+  return out
+}
+
 async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult> {
   const { client, env, owner, repo, namespace, headSha, runId, files } = args
   let chunkBuffer: Chunk[] = []
@@ -866,6 +879,10 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
       // Flush upsert batches as they fill.
       while (vectorBuffer.length >= UPSERT_BATCH) {
         const upBatch = vectorBuffer.splice(0, UPSERT_BATCH)
+        // SIG-137: record ids in the delete-coverage ledger BEFORE upserting,
+        // so a crash or mid-slice supersede can't leave a Vectorize entry that
+        // isn't in the id-list (which would escape the GDPR uninstall delete).
+        await appendVectorCoverage(env, owner, repo, runId, coverageByPath(upBatch))
         await env.OPENCLAW_CODE_INDEX.upsert(upBatch)
       }
     }
@@ -886,6 +903,8 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
   // Drain remaining vectors.
   while (vectorBuffer.length > 0) {
     const upBatch = vectorBuffer.splice(0, UPSERT_BATCH)
+    // SIG-137: coverage-before-upsert (see flush loop above).
+    await appendVectorCoverage(env, owner, repo, runId, coverageByPath(upBatch))
     await env.OPENCLAW_CODE_INDEX.upsert(upBatch)
   }
 

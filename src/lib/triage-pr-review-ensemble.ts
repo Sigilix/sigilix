@@ -267,6 +267,9 @@ import {
   type ShadowRunResult,
 } from "./shadow-bakeoff-runner"
 import type { Env } from "../index"
+// SIG-138 Phase 2 — graph expansion.
+import { graphContextFor, blastRadiusFor } from "./repo-graph-client"
+import { edgeWeight, hopDecay } from "./graph-scoring"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -509,6 +512,36 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
       `consumer past the 900s ceiling → worker hard-killed → message re-delivered.`,
   )
 }
+
+// ─── SIG-138 Phase 2: graph-retrieval pure helpers ────────────────────────
+//
+// Exported for unit-testing (no DO/network access — pure env-flag reads
+// and string formatting). All three follow the env-flag conventions used
+// by OPENCLAW_SYMBOL_RETRIEVAL / OPENCLAW_BRANCH_AWARE_RETRIEVAL.
+
+/** Returns true when OPENCLAW_GRAPH_RETRIEVAL is "shadow" or "post". */
+export function graphRetrievalEnabled(env: Env): boolean {
+  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
+  return v === "shadow" || v === "post"
+}
+
+/** Returns the effective graph-retrieval mode: "off" | "shadow" | "post". */
+export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
+  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
+  return v === "post" ? "post" : v === "shadow" ? "shadow" : "off"
+}
+
+/**
+ * Render graph-expansion nodes as the `[GRAPH CONTEXT]` content string.
+ * Each line is `<path> (hopN, <edgeKind>)`. Empty array → empty string.
+ */
+export function formatGraphContext(
+  nodes: { path: string; hop: number; edgeKind: string }[],
+): string {
+  return nodes.map((n) => `${n.path} (hop${n.hop}, ${n.edgeKind})`).join("\n")
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 
 /**
  * Sentinels returned by `raceWithShadowGrace`.
@@ -1549,6 +1582,86 @@ export async function handlePrReviewEnsemble(
       })))
     }
 
+    // ─── SIG-138 Phase 2: graph-expansion retrieval ────────────────────
+    //
+    // Gated by OPENCLAW_GRAPH_RETRIEVAL=shadow|post. Off ⇒ no DO calls,
+    // no behavior change. Any error in this block is caught and logged;
+    // the review always proceeds unaffected (graph is additive context).
+    //
+    // shadow: compute everything for telemetry seam (T15 reads the
+    //   variables below); do NOT attach graphContext to posted prompts.
+    // post:   attach graphContext to logic + tests specialists + synth.
+    //
+    // changedSymbolIds for blastRadius: the ensemble has changed symbol
+    // NAMES (from extractChangedSymbols) but not symbol_ids — symbol_ids
+    // are composite keys `${path} ${kind} ${name} ${startLine} ${startCol}`
+    // that require the indexer's AST output to reconstruct. Passing [] is
+    // safe: blastRadius fast-paths on empty input. The contextForVectorHits
+    // BFS already traverses outgoing file edges, giving comparable coverage.
+    // A future phase can add a blastRadiusByNames DO method to fill this gap.
+    let graphContextString = ""
+    // T15 telemetry seam: these variables are computed in both shadow and
+    // post modes so the emit in T15 can measure graph-vs-vector overlap.
+    // T15 telemetry seam: rename (drop underscore prefix) when adding the emit.
+    let _graphNodePaths: string[] = []
+    let _graphBlastPaths: string[] = []
+    if (graphRetrievalEnabled(env)) {
+      try {
+        // Seed from deduplicated chunk paths of the merged hit set.
+        const seedPaths = [...new Set(sharedChunksForOverlap.map((c) => c.path))]
+        const { nodes } = await graphContextFor(env, owner, repo, {
+          seedPaths,
+          maxFiles: 8,
+          maxSymbolsPerHit: 12,
+          maxEdgesPerSymbol: 6,
+        })
+        // Cap graph-only additions to ≤4 nodes per spec.
+        // Sort: hop asc, then edge weight desc (higher weight = stronger edge).
+        const cappedNodes = nodes
+          .slice()
+          .sort((a, b) => {
+            const hopDiff = a.hop - b.hop
+            if (hopDiff !== 0) return hopDiff
+            return edgeWeight(b.edgeKind) * hopDecay(b.hop) -
+                   edgeWeight(a.edgeKind) * hopDecay(a.hop)
+          })
+          .slice(0, 4)
+        graphContextString = formatGraphContext(cappedNodes)
+        _graphNodePaths = cappedNodes.map((n) => n.path)
+
+        // Blast radius: pass empty symbol ids (see comment above).
+        const blast = await blastRadiusFor(env, owner, repo, { changedSymbolIds: [] })
+        _graphBlastPaths = [...new Set([...blast.callerPaths, ...blast.importDependents])]
+      } catch (err) {
+        // Non-fatal: graph expansion is additive. Log for observability.
+        console.log(JSON.stringify({
+          event: "pr-review-graph-retrieval-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          error: err instanceof Error ? err.message : String(err),
+        }))
+        graphContextString = ""
+        _graphNodePaths = []
+        _graphBlastPaths = []
+      }
+    }
+    // In post mode, inject graph context into logic+tests specialists
+    // and synthesizer. In shadow mode, the variables are computed but
+    // not attached (T15 will emit the telemetry seam).
+    const graphCtxForPrompt = graphRetrievalMode(env) === "post" ? graphContextString : ""
+    // T15 telemetry seam: emit `pr-review-graph-retrieval` with node_paths,
+    // blast_paths, and graph-vs-vector overlap stats. Replace this stub with
+    // the full emit in T15. Variables kept here so T15 can read them.
+    if (graphRetrievalEnabled(env)) {
+      console.log(JSON.stringify({
+        event: "pr-review-graph-retrieval-seam",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        mode: graphRetrievalMode(env),
+        node_count: _graphNodePaths.length,
+        blast_count: _graphBlastPaths.length,
+      }))
+    }
+    // ──────────────────────────────────────────────────────────────────
+
     const astResult = await runAstRules({
       diff,
       filesByPath: astFilesByPath,
@@ -1982,6 +2095,11 @@ export async function handlePrReviewEnsemble(
           : diffFileClassificationBlock.length > 0
             ? { diffFileClassificationBlock }
             : {}),
+        // SIG-138 Phase 2: logic + tests specialists see graph neighbors
+        // (post mode only; empty string when off or shadow).
+        ...(graphCtxForPrompt.length > 0 && (role === "logic" || role === "tests")
+          ? { graphContext: graphCtxForPrompt }
+          : {}),
       })
       specialistMessageCache.set(role, message)
       return message
@@ -2192,6 +2310,8 @@ export async function handlePrReviewEnsemble(
       // synth which roles it's missing so it can constrain its
       // output and acknowledge the gap in `summary`.
       ...(degradedCoverage ? { degradedCoverage } : {}),
+      // SIG-138 Phase 2: synth sees graph neighbors in post mode.
+      ...(graphCtxForPrompt.length > 0 ? { graphContext: graphCtxForPrompt } : {}),
     })
 
     // ARC-181 Task 8: thread structured AST findings into the synth

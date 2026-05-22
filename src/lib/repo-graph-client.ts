@@ -7,7 +7,7 @@
 
 import type { Env } from "../index"
 import { indexNamespace } from "./repo-index-manifest"
-import type { RepoGraphDO, UpsertFileGraphArgs } from "../do/repo-graph"
+import type { RepoGraphDO, UpsertFileGraphArgs, GraphContextNode } from "../do/repo-graph"
 
 // Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace.
 // Unlike PR_REVIEW_RUN (which is fetch-based and never calls RPC methods,
@@ -49,4 +49,39 @@ export async function deleteGraph(
   repo: string,
 ): Promise<void> {
   await graphStub(env, owner, repo).deleteRepoGraph()
+}
+
+// ─── Phase 2 read wrappers ─────────────────────────────────────────
+
+/**
+ * Expand `seedPaths` (K=2 BFS) over the repo's active graph and return
+ * neighboring file nodes for injection as `[GRAPH CONTEXT]`. Returns
+ * `{ nodes: [] }` when the graph is empty or the DO has no active version.
+ */
+export async function graphContextFor(
+  env: Env,
+  owner: string,
+  repo: string,
+  args: {
+    seedPaths: string[]
+    maxFiles: number
+    maxSymbolsPerHit: number
+    maxEdgesPerSymbol: number
+  },
+): Promise<{ nodes: GraphContextNode[] }> {
+  return graphStub(env, owner, repo).contextForVectorHits(args)
+}
+
+/**
+ * Return the set of caller and import-dependent file paths for the given
+ * changed symbol IDs. When `changedSymbolIds` is empty, both lists are
+ * empty (fast-path — no DO query).
+ */
+export async function blastRadiusFor(
+  env: Env,
+  owner: string,
+  repo: string,
+  args: { changedSymbolIds: string[] },
+): Promise<{ callerPaths: string[]; importDependents: string[] }> {
+  return graphStub(env, owner, repo).blastRadius(args)
 }

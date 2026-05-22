@@ -34,6 +34,9 @@ import {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
   MAX_CALLS_PER_ENSEMBLE_RUN,
+  graphRetrievalEnabled,
+  graphRetrievalMode,
+  formatGraphContext,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
@@ -1292,5 +1295,93 @@ describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278 + ARC-283)", ()
     expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBeGreaterThanOrEqual(
       Math.floor(SYNTHESIZER_TIMEOUT_MS * 0.3),
     )
+  })
+})
+
+// ─── SIG-138 Phase 2: graph-retrieval pure helpers ─────────────────────────
+
+describe("graphRetrievalEnabled", () => {
+  const makeEnv = (v: string | undefined) =>
+    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("../src/index").Env)
+
+  it("returns true for 'shadow'", () => {
+    expect(graphRetrievalEnabled(makeEnv("shadow"))).toBe(true)
+  })
+
+  it("returns true for 'post'", () => {
+    expect(graphRetrievalEnabled(makeEnv("post"))).toBe(true)
+  })
+
+  it("returns true for case-insensitive variants ('Shadow', 'POST')", () => {
+    expect(graphRetrievalEnabled(makeEnv("Shadow"))).toBe(true)
+    expect(graphRetrievalEnabled(makeEnv("POST"))).toBe(true)
+  })
+
+  it("returns false for 'off'", () => {
+    expect(graphRetrievalEnabled(makeEnv("off"))).toBe(false)
+  })
+
+  it("returns false for empty string", () => {
+    expect(graphRetrievalEnabled(makeEnv(""))).toBe(false)
+  })
+
+  it("returns false for undefined", () => {
+    expect(graphRetrievalEnabled(makeEnv(undefined))).toBe(false)
+  })
+
+  it("returns false for an unrecognized value", () => {
+    expect(graphRetrievalEnabled(makeEnv("on"))).toBe(false)
+  })
+})
+
+describe("graphRetrievalMode", () => {
+  const makeEnv = (v: string | undefined) =>
+    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("../src/index").Env)
+
+  it("returns 'shadow' for 'shadow'", () => {
+    expect(graphRetrievalMode(makeEnv("shadow"))).toBe("shadow")
+  })
+
+  it("returns 'post' for 'post'", () => {
+    expect(graphRetrievalMode(makeEnv("post"))).toBe("post")
+  })
+
+  it("returns 'off' for 'off'", () => {
+    expect(graphRetrievalMode(makeEnv("off"))).toBe("off")
+  })
+
+  it("returns 'off' for undefined", () => {
+    expect(graphRetrievalMode(makeEnv(undefined))).toBe("off")
+  })
+
+  it("returns 'off' for empty string", () => {
+    expect(graphRetrievalMode(makeEnv(""))).toBe("off")
+  })
+
+  it("is case-insensitive", () => {
+    expect(graphRetrievalMode(makeEnv("SHADOW"))).toBe("shadow")
+    expect(graphRetrievalMode(makeEnv("Post"))).toBe("post")
+  })
+})
+
+describe("formatGraphContext", () => {
+  it("formats nodes as 'path (hopN, edgeKind)' lines joined by newline", () => {
+    const nodes = [
+      { path: "src/lib/foo.ts", hop: 1, edgeKind: "import" },
+      { path: "src/lib/bar.ts", hop: 2, edgeKind: "same_file" },
+    ]
+    expect(formatGraphContext(nodes)).toBe(
+      "src/lib/foo.ts (hop1, import)\nsrc/lib/bar.ts (hop2, same_file)",
+    )
+  })
+
+  it("returns empty string for empty array", () => {
+    expect(formatGraphContext([])).toBe("")
+  })
+
+  it("returns a single line with no trailing newline for one node", () => {
+    const result = formatGraphContext([{ path: "src/x.ts", hop: 1, edgeKind: "export" }])
+    expect(result).toBe("src/x.ts (hop1, export)")
+    expect(result.endsWith("\n")).toBe(false)
   })
 })

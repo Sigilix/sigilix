@@ -70,6 +70,7 @@ import {
   CHUNK_OVERLAP,
   chunkFile,
 } from "./chunk-core"
+import { chunkFileAst, jsTsExtOf } from "./ast-chunker"
 
 // SIG-131: re-export the chunking primitives so existing consumers that
 // import them from "./indexer" (branch-retrieval.ts, tests/indexer-pure)
@@ -403,7 +404,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   const sliceFiles = indexableFiles.slice(0, sliceHi)
   const { chunkCount, idsByPath } = await processSlice({
     client, env, owner, repo, namespace,
-    headSha, files: sliceFiles,
+    headSha, files: sliceFiles, astChunking: astOn,
   })
 
   // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
@@ -590,7 +591,7 @@ async function handleShardJob(
   const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
   const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
     client, env, owner, repo, namespace,
-    headSha: shard.headSha, files: sliceFiles,
+    headSha: shard.headSha, files: sliceFiles, astChunking: astOn,
   })
 
   const vectorsResult = await persistVectorIds({
@@ -690,6 +691,7 @@ interface ProcessSliceArgs {
   namespace: string
   headSha: string
   files: ReadonlyArray<IndexableFile>
+  astChunking: boolean
 }
 
 export interface ProcessSliceResult {
@@ -706,6 +708,9 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
   const vectorBuffer: VectorizeRecord[] = []
   let totalChunks = 0
   const idsByPath: Record<string, string[]> = {}
+  let astChunkFiles = 0
+  let lineChunkFiles = 0
+  let parseFallbackFiles = 0
 
   for (const file of files) {
     let content: string | null = null
@@ -726,7 +731,21 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
     }
     if (content === null) continue
 
-    const fileChunks = chunkFile(file.path, content)
+    const ext = args.astChunking ? jsTsExtOf(file.path) : null
+    let fileChunks: Chunk[]
+    if (ext !== null) {
+      const astChunks = chunkFileAst(file.path, content, ext)
+      if (astChunks !== null) {
+        fileChunks = astChunks
+        astChunkFiles += 1
+      } else {
+        fileChunks = chunkFile(file.path, content) // parse failed → line-window
+        parseFallbackFiles += 1
+      }
+    } else {
+      fileChunks = chunkFile(file.path, content) // AST off or non-JS/TS
+      lineChunkFiles += 1
+    }
     chunkBuffer.push(...fileChunks)
 
     while (chunkBuffer.length >= EMBED_BATCH) {
@@ -764,6 +783,15 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
     const upBatch = vectorBuffer.splice(0, UPSERT_BATCH)
     await env.OPENCLAW_CODE_INDEX.upsert(upBatch)
   }
+
+  console.log(JSON.stringify({
+    event: "index-chunking",
+    owner: args.owner, repo: args.repo,
+    ast_on: args.astChunking,
+    ast_chunk_files: astChunkFiles,
+    line_chunk_files: lineChunkFiles,
+    parse_fallback_files: parseFallbackFiles,
+  }))
 
   return { chunkCount: totalChunks, idsByPath }
 }

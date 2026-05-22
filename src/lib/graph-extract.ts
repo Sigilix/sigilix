@@ -48,7 +48,17 @@ export interface FileEdgeRaw {
   startCol: number
 }
 
-export type CallEdge = Record<string, never>
+export type CallKind = "same_file" | "imported_binding"
+
+export interface CallEdge {
+  sourcePath: string
+  callerSymbolId: string | null
+  calleeSymbolId: string | null
+  calleeName: string
+  callKind: CallKind
+  startLine: number
+  startCol: number
+}
 
 export interface FileGraph {
   symbols: GraphSymbol[]
@@ -259,5 +269,54 @@ export function extractFileGraph(path: string, content: string): FileGraph {
     },
   })
 
-  return { symbols, fileEdgesRaw, callEdges: [] }
+  // Pass 4: collect call edges (best-effort, raw — callerSymbolId/calleeSymbolId
+  // resolved in Task 5 inside the DO). Only tracks `CallExpression` nodes whose
+  // callee is a plain `Identifier` — member calls (`obj.method()`) and computed
+  // calls are intentionally dropped (prefer missing over false positives).
+  //
+  // Resolution order: local function name wins over an imported binding with the
+  // same name (same_file takes precedence). This matches static scoping: a local
+  // declaration shadows the import.
+  const importedNames = new Set(
+    fileEdgesRaw
+      .filter((e) => e.edgeKind === "import" && e.localName != null)
+      .map((e) => e.localName as string),
+  )
+  const localFns = new Set(
+    symbols.filter((s) => s.kind === "function").map((s) => s.name),
+  )
+
+  const callEdges: CallEdge[] = []
+  walkAst(ast, {
+    CallExpression(node: AstNode) {
+      if (node.callee?.type !== "Identifier") return
+      const name: string = node.callee.name as string
+      if (!name) return
+      const s = node.loc.start
+      if (localFns.has(name)) {
+        callEdges.push({
+          sourcePath: path,
+          callerSymbolId: null,
+          calleeSymbolId: null,
+          calleeName: name,
+          callKind: "same_file",
+          startLine: s.line,
+          startCol: s.column,
+        })
+      } else if (importedNames.has(name)) {
+        callEdges.push({
+          sourcePath: path,
+          callerSymbolId: null,
+          calleeSymbolId: null,
+          calleeName: name,
+          callKind: "imported_binding",
+          startLine: s.line,
+          startCol: s.column,
+        })
+      }
+      // Unknown free identifier — skip (prefer missing over false positive)
+    },
+  })
+
+  return { symbols, fileEdgesRaw, callEdges }
 }

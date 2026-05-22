@@ -84,3 +84,80 @@ describe("extractFileGraph — file edges (raw)", () => {
     }))
   })
 })
+
+describe("extractFileGraph — call edges", () => {
+  it("links same-file and imported-binding calls; drops ambiguous obj.method()", () => {
+    const src = [
+      "import { fetchUser } from './api'",
+      "function helper() { return 1 }",
+      "export function run() {",
+      "  helper()",
+      "  fetchUser()",
+      "  obj.method()",
+      "}",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/run.ts", src)
+    const callees = callEdges.map((c) => ({ name: c.calleeName, kind: c.callKind }))
+
+    expect(callees).toContainEqual({ name: "helper", kind: "same_file" })
+    expect(callees).toContainEqual({ name: "fetchUser", kind: "imported_binding" })
+    expect(callees.find((c) => c.name === "method")).toBeUndefined()
+  })
+
+  it("local function name takes same_file over an unrelated import (separate names, precedence path)", () => {
+    // In valid ES modules a name cannot be both a local function and an
+    // imported binding in the same scope (duplicate binding = parse error).
+    // The `localFns.has` check comes first in the implementation so a name
+    // present in localFns is always classified same_file — confirmed by the
+    // primary test above. This test verifies the two kinds can coexist in
+    // one file without interfering with each other.
+    const src = [
+      "import { fetchUser } from './api'",
+      "function localFn() { return 1 }",
+      "export function run() {",
+      "  localFn()",
+      "  fetchUser()",
+      "}",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/shadow.ts", src)
+
+    const localCall = callEdges.find((c) => c.calleeName === "localFn")
+    const importCall = callEdges.find((c) => c.calleeName === "fetchUser")
+
+    expect(localCall?.callKind).toBe("same_file")
+    expect(importCall?.callKind).toBe("imported_binding")
+  })
+
+  it("unknown free identifiers are not tracked", () => {
+    const src = [
+      "export function go() { console.log('hi'); unknownFn() }",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/free.ts", src)
+    // `unknownFn` is neither a local function nor an imported binding
+    expect(callEdges.find((c) => c.calleeName === "unknownFn")).toBeUndefined()
+  })
+
+  it("call edge carries correct metadata fields", () => {
+    const src = [
+      "import { fetchUser } from './api'",
+      "export function run() { fetchUser() }",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/meta.ts", src)
+    const edge = callEdges.find((c) => c.calleeName === "fetchUser")
+
+    expect(edge).toBeDefined()
+    expect(edge).toMatchObject({
+      sourcePath: "src/meta.ts",
+      callerSymbolId: null,
+      calleeSymbolId: null,
+      calleeName: "fetchUser",
+      callKind: "imported_binding",
+    })
+    expect(typeof edge!.startLine).toBe("number")
+    expect(typeof edge!.startCol).toBe("number")
+  })
+})

@@ -60,6 +60,11 @@ export function hopDecay(hop: number): number {
 /**
  * Min-max normalise an array of raw vector similarity scores to [0, 1].
  *
+ * Non-finite (NaN, Infinity) inputs are handled defensively:
+ * - Compute min/max over only finite values.
+ * - Map any non-finite input element to 0 (lowest).
+ * - If all inputs are non-finite, return all 0s (safe fallback).
+ *
  * Edge cases:
  * - Empty array → [] (no-op).
  * - All scores identical (range < 1e-9) → all 1.0 (every candidate is
@@ -67,13 +72,24 @@ export function hopDecay(hop: number): number {
  */
 export function normalizeVectorScores(scores: number[]): number[] {
   if (scores.length === 0) return []
-  const min = Math.min(...scores)
-  const max = Math.max(...scores)
-  if (max - min < 1e-9) return scores.map(() => 1)
+
+  // Filter to finite values only; guard against NaN/Infinity poisoning.
+  const finiteScores = scores.filter(Number.isFinite)
+
+  // If no finite values exist, return all 0s (safe fallback).
+  if (finiteScores.length === 0) return scores.map(() => 0)
+
+  const min = Math.min(...finiteScores)
+  const max = Math.max(...finiteScores)
+
+  // If all finite values are identical, return 1.0 for finite, 0 for non-finite.
+  if (max - min < 1e-9) {
+    return scores.map((s) => (Number.isFinite(s) ? 1 : 0))
+  }
+
   const range = max - min
-  // Round to 10 decimal places to avoid float-subtraction drift (e.g.
-  // (0.7-0.2)/(1.2-0.2) → 0.49999… instead of 0.5).
-  return scores.map((s) => Math.round(((s - min) / range) * 1e10) / 1e10)
+  // Map each score: finite → normalized [0,1], non-finite → 0.
+  return scores.map((s) => (Number.isFinite(s) ? (s - min) / range : 0))
 }
 
 /**

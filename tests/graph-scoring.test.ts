@@ -13,9 +13,60 @@ describe("graph-scoring", () => {
     expect(hopDecay(3)).toBe(0)
   })
   it("min-max normalizes; range~0 → all 1; empty → []", () => {
-    expect(normalizeVectorScores([0.2, 0.7, 1.2])).toEqual([0, 0.5, 1])
+    const result = normalizeVectorScores([0.2, 0.7, 1.2])
+    expect(result.length).toBe(3)
+    expect(result[0]).toBeCloseTo(0)
+    expect(result[1]).toBeCloseTo(0.5)
+    expect(result[2]).toBeCloseTo(1)
     expect(normalizeVectorScores([0.5, 0.5])).toEqual([1, 1])
     expect(normalizeVectorScores([])).toEqual([])
+  })
+
+  it("edge case: single-element array", () => {
+    const result = normalizeVectorScores([0.7])
+    expect(result).toEqual([1])
+  })
+
+  it("edge case: negative scores", () => {
+    const result = normalizeVectorScores([-1, -0.5, 0])
+    expect(result.length).toBe(3)
+    expect(result[0]).toBeCloseTo(0)
+    expect(result[1]).toBeCloseTo(0.5)
+    expect(result[2]).toBeCloseTo(1)
+  })
+
+  it("edge case: all zero", () => {
+    expect(normalizeVectorScores([0, 0, 0])).toEqual([1, 1, 1])
+  })
+
+  it("edge case: NaN in input → no NaN in output", () => {
+    const result = normalizeVectorScores([0.2, NaN, 0.8])
+    expect(result.length).toBe(3)
+    // All elements must be finite (no NaN/Infinity)
+    expect(Number.isFinite(result[0])).toBe(true)
+    expect(Number.isFinite(result[1])).toBe(true)
+    expect(Number.isFinite(result[2])).toBe(true)
+    // Finite elements normalized [0,1]; non-finite (NaN) mapped to 0
+    expect(result[0]).toBeCloseTo(0)
+    expect(result[1]).toBeCloseTo(0) // NaN → 0
+    expect(result[2]).toBeCloseTo(1)
+  })
+
+  it("edge case: Infinity in input → no Infinity in output", () => {
+    const result = normalizeVectorScores([0.2, Infinity, 0.8])
+    expect(result.length).toBe(3)
+    expect(Number.isFinite(result[0])).toBe(true)
+    expect(Number.isFinite(result[1])).toBe(true)
+    expect(Number.isFinite(result[2])).toBe(true)
+    // Finite elements normalized; Infinity mapped to 0
+    expect(result[0]).toBeCloseTo(0)
+    expect(result[1]).toBeCloseTo(0)
+    expect(result[2]).toBeCloseTo(1)
+  })
+
+  it("edge case: all NaN → all 0", () => {
+    const result = normalizeVectorScores([NaN, NaN])
+    expect(result).toEqual([0, 0])
   })
   it("blends with LAMBDA=0.70 (vector weight)", () => {
     expect(LAMBDA).toBe(0.7)

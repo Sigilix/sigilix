@@ -621,6 +621,208 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     )
   })
 
+  // ── Fix A: GC stale PENDING versions on commit ──────────────────────────
+  //
+  // A run that upserted files but never committed (superseded, aborted, or
+  // retried with a new runId) must have its pending rows wiped when a later
+  // run commits.  Pre-fix, the GC only targeted status='active' versions, so
+  // a never-committed pending run would accumulate forever.
+  it("Fix A: uncommitted pending run is GC'd when a later run commits", async () => {
+    const do_ = makeDoInstance("o/gc-pending")
+
+    // run1: upsert a file but NEVER commit it — leaves run1 in pending state.
+    await do_.upsertFileGraph({
+      runId: "run1",
+      headSha: "sha1",
+      path: "src/stale.ts",
+      symbols: [
+        {
+          symbolId: "src/stale.ts function stale 1 0",
+          path: "src/stale.ts",
+          name: "stale",
+          kind: "function",
+          exported: true,
+          startLine: 1, startCol: 0, endLine: 1, endCol: 10,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+
+    // Sanity: run1 is pending with one symbol.
+    const before = await do_.debugCounts("run1")
+    expect(before.status).toBe("pending")
+    expect(before.symbols).toBe(1)
+
+    // run2: upsert + commit a different file.
+    await do_.upsertFileGraph({
+      runId: "run2",
+      headSha: "sha2",
+      path: "src/fresh.ts",
+      symbols: [
+        {
+          symbolId: "src/fresh.ts function fresh 1 0",
+          path: "src/fresh.ts",
+          name: "fresh",
+          kind: "function",
+          exported: true,
+          startLine: 1, startCol: 0, endLine: 1, endCol: 10,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("run2")
+
+    // run1 pending rows must all be gone.
+    const run1Counts = await do_.debugCounts("run1")
+    expect(run1Counts.symbols).toBe(0)
+    expect(run1Counts.fileEdges).toBe(0)
+    expect(run1Counts.callEdges).toBe(0)
+    expect(run1Counts.status).toBeNull()
+
+    // run2 is the active version.
+    expect(await do_.debugActiveVersion()).toBe("run2")
+  })
+
+  // ── Fix B: import/reexport resolution must use exported symbols only ─────
+  //
+  // A non-exported private function in the target file must NOT be resolved
+  // as the target of an import edge (prefer-missing-over-false).
+  it("Fix B: importing a NON-exported symbol yields ambiguous, not resolved", async () => {
+    const do_ = makeDoInstance("o/export-only")
+
+    // a.ts: private 'helper' (exported=false) + exported 'bar' (exported=true).
+    await do_.upsertFileGraph({
+      runId: "r-fixb",
+      headSha: "sha",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function helper 1 0",
+          path: "src/a.ts",
+          name: "helper",
+          kind: "function",
+          exported: false,
+          startLine: 1, startCol: 0, endLine: 3, endCol: 1,
+        },
+        {
+          symbolId: "src/a.ts function bar 5 0",
+          path: "src/a.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 5, startCol: 0, endLine: 7, endCol: 1,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+
+    // b.ts: imports 'helper' (private) and 'bar' (exported) from './a'.
+    await do_.upsertFileGraph({
+      runId: "r-fixb",
+      headSha: "sha",
+      path: "src/b.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/b.ts",
+          edgeKind: "import",
+          specifier: "./a",
+          importedName: "helper",
+          localName: "helper",
+          exportedName: null,
+          startLine: 1, startCol: 0,
+        },
+        {
+          sourcePath: "src/b.ts",
+          edgeKind: "import",
+          specifier: "./a",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 2, startCol: 0,
+        },
+      ],
+      callEdges: [],
+    })
+
+    await do_.commitGraphVersion("r-fixb")
+
+    const edges = await do_.debugResolvedEdges("src/b.ts")
+
+    // Importing the private 'helper': path resolves but symbol must NOT →
+    // resolution_status must be 'ambiguous', NOT 'resolved'.
+    const helperEdge = edges.find((e) => e.targetPath === "src/a.ts" && e.targetSymbolId === null)
+    expect(helperEdge).toBeDefined()
+    expect(helperEdge?.resolutionStatus).toBe("ambiguous")
+
+    // Contrasting case: importing the exported 'bar' resolves fully.
+    const barEdge = edges.find((e) => e.targetSymbolId === "src/a.ts function bar 5 0")
+    expect(barEdge).toBeDefined()
+    expect(barEdge?.resolutionStatus).toBe("resolved")
+  })
+
+  // ── Fix C: .mjs target resolves via CANDIDATE_EXTS probe ────────────────
+  //
+  // CANDIDATE_EXTS previously omitted .mjs, so imports to .mjs files stayed
+  // unresolved even though INDEXED_EXTENSIONS ingests .mjs files.
+  it("Fix C: import specifier resolves to .mjs target when probing CANDIDATE_EXTS", async () => {
+    const do_ = makeDoInstance("o/mjs-ext")
+
+    // src/x.mjs defines an exported symbol 'y'.
+    await do_.upsertFileGraph({
+      runId: "r-fixc",
+      headSha: "sha",
+      path: "src/x.mjs",
+      symbols: [
+        {
+          symbolId: "src/x.mjs function y 1 0",
+          path: "src/x.mjs",
+          name: "y",
+          kind: "function",
+          exported: true,
+          startLine: 1, startCol: 0, endLine: 3, endCol: 1,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+
+    // src/a.ts imports 'y' from './x' (no extension in specifier).
+    await do_.upsertFileGraph({
+      runId: "r-fixc",
+      headSha: "sha",
+      path: "src/a.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./x",
+          importedName: "y",
+          localName: "y",
+          exportedName: null,
+          startLine: 1, startCol: 0,
+        },
+      ],
+      callEdges: [],
+    })
+
+    await do_.commitGraphVersion("r-fixc")
+
+    const edges = await do_.debugResolvedEdges("src/a.ts")
+    // The .mjs probe must find src/x.mjs and fully resolve 'y'.
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        targetPath: "src/x.mjs",
+        targetSymbolId: "src/x.mjs function y 1 0",
+        resolutionStatus: "resolved",
+      }),
+    )
+  })
+
   it("same_file call resolution: local function callee gets callee_symbol_id set", async () => {
     const do_ = makeDoInstance("o/same-file-call")
 

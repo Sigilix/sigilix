@@ -133,8 +133,23 @@ export function resolveRelative(sourcePath: string, specifier: string): string |
   return stack.join("/")
 }
 
-/** Extensions to probe when looking up a resolved path in the symbol table. */
-const CANDIDATE_EXTS = ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js"]
+/**
+ * Extensions to probe when looking up a resolved path in the symbol table.
+ *
+ * Coverage rationale (Fix C):
+ *  - INDEXED_EXTENSIONS (indexer.ts) ingests: .ts .tsx .mjs .js .jsx
+ *    (.rs .sql .md .py .go .toml are also indexed but the graph extractor
+ *    produces no symbols for them — they can never be resolution targets)
+ *  - SourceExt / KNOWN_EXTS (graph-extract.ts) also knows .cjs/.mts/.cts
+ *    but the indexer does NOT ingest those, so they're excluded here.
+ *  - Intersection = .ts .tsx .mjs .js .jsx
+ * "" must stay first so an already-extensioned specifier short-circuits.
+ */
+const CANDIDATE_EXTS = [
+  "",
+  ".ts", ".tsx", ".js", ".jsx", ".mjs",
+  "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mjs",
+]
 
 // ─── Public arg types ─────────────────────────────────────────────
 
@@ -353,15 +368,29 @@ export class RepoGraphDO extends DurableObject<Env> {
       runId, now,
     )
 
-    // Step 2: build symbol lookup and path set for this version.
+    // Step 2: build symbol lookups and path set for this version.
     // This runs OUTSIDE the transaction so we can read the data without
     // nesting concerns (transactionSync wraps the mutation phase below).
-    const symbolsByKey = new Map<string, string>() // "${path} ${name}" → symbol_id
-    for (const row of sql.exec<{ path: string; name: string; symbol_id: string }>(
-      "SELECT path, name, symbol_id FROM symbols WHERE graph_version = ?",
+    //
+    // Two lookups:
+    //   symbolsByKey        — ALL symbols (exported + private). Used ONLY for
+    //                         same_file call-edge resolution (calls can target
+    //                         private functions — that is correct).
+    //   exportedSymbolsByKey — EXPORTED symbols only. Used for import/reexport
+    //                         target_symbol_id resolution: a module binding can
+    //                         only resolve to a symbol the target file actually
+    //                         exports. Resolving to a private declaration is a
+    //                         false edge (Fix B — prefer-missing-over-false).
+    const symbolsByKey = new Map<string, string>() // "${path} ${name}" → symbol_id (all)
+    const exportedSymbolsByKey = new Map<string, string>() // "${path} ${name}" → symbol_id (exported only)
+    for (const row of sql.exec<{ path: string; name: string; symbol_id: string; exported: number }>(
+      "SELECT path, name, symbol_id, exported FROM symbols WHERE graph_version = ?",
       runId,
     )) {
       symbolsByKey.set(`${row.path} ${row.name}`, row.symbol_id)
+      if (row.exported === 1) {
+        exportedSymbolsByKey.set(`${row.path} ${row.name}`, row.symbol_id)
+      }
     }
 
     // Fix 4 (v1 limitation): pathExists is built from files that produced at
@@ -410,8 +439,12 @@ export class RepoGraphDO extends DurableObject<Env> {
           continue
         }
 
+        // Fix B: look up the target symbol ONLY in the exported set.
+        // A module binding (`import { x } from "./a"`) can only resolve to
+        // a symbol that `a` actually exports. Resolving to a private
+        // declaration is a false edge — prefer ambiguous over false-resolved.
         const targetSymbolId = e.imported_name
-          ? (symbolsByKey.get(`${targetPath} ${e.imported_name}`) ?? null)
+          ? (exportedSymbolsByKey.get(`${targetPath} ${e.imported_name}`) ?? null)
           : null
 
         const resolutionStatus = targetSymbolId ? "resolved" : "ambiguous"
@@ -440,14 +473,16 @@ export class RepoGraphDO extends DurableObject<Env> {
         }
       }
 
-      // Step 5: GC old active version(s), then promote this version.
-      // Fix 3: spread the cursor BEFORE the loop so the DELETE statements
-      // inside do not mutate the table while a lazy/streaming cursor is still
-      // open. Real Cloudflare DO SQLite cursors are lazy — iterating and
-      // mutating the same table mid-cursor is a footgun even if it happens to
-      // work in the Node test shim (which materialises results eagerly).
+      // Step 5: GC ALL versions other than the one being committed, then
+      // promote this version.  The original code only deleted status='active'
+      // versions, leaving superseded/retried/aborted PENDING rows to accumulate
+      // unboundedly. A concurrent run that lost the lease will abort its own
+      // commit via the indexer's lease gate, so wiping its pending rows here
+      // is safe (Fix A). Fix 3 spread is retained: spread the cursor BEFORE
+      // the loop so the DELETE statements inside do not mutate the table while
+      // a lazy/streaming cursor is still open.
       for (const old of [...sql.exec<{ graph_version: string }>(
-        "SELECT graph_version FROM graph_versions WHERE status = 'active' AND graph_version != ?",
+        "SELECT graph_version FROM graph_versions WHERE graph_version != ?",
         runId,
       )]) {
         const ov = old.graph_version

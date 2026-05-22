@@ -10,7 +10,7 @@
 // directly (no HTTP fetch).
 
 import { describe, expect, it } from "vitest"
-import { RepoGraphDO } from "../src/do/repo-graph"
+import { RepoGraphDO, resolveRelative } from "../src/do/repo-graph"
 import type { Env } from "../src/index"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
@@ -292,5 +292,119 @@ describe("RepoGraphDO.upsertFileGraph", () => {
 
     const counts = await do_.debugCounts("run-sym-dup")
     expect(counts.symbols).toBe(1) // lands exactly once
+  })
+})
+
+// ─── resolveRelative unit tests ──────────────────────────────────
+
+describe("resolveRelative (pure helper)", () => {
+  it("resolves same-dir relative specifier", () => {
+    expect(resolveRelative("src/a.ts", "./b")).toBe("src/b")
+  })
+
+  it("resolves parent-dir relative specifier", () => {
+    expect(resolveRelative("src/x/a.ts", "../b")).toBe("src/b")
+  })
+
+  it("returns null for bare (non-relative) specifiers", () => {
+    expect(resolveRelative("src/a.ts", "left-pad")).toBeNull()
+  })
+
+  it("returns null for node: protocol specifiers", () => {
+    expect(resolveRelative("src/a.ts", "node:path")).toBeNull()
+  })
+})
+
+// ─── commitGraphVersion tests ────────────────────────────────────
+
+describe("RepoGraphDO.commitGraphVersion", () => {
+  it("resolves relative imports to target symbols, flips active, GCs old version", async () => {
+    const do_ = makeDoInstance("o/commit-test")
+
+    // b.ts defines `bar`; a.ts imports `bar` from './b'
+    await do_.upsertFileGraph({
+      runId: "run1",
+      headSha: "sha1",
+      path: "src/b.ts",
+      symbols: [
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    await do_.upsertFileGraph({
+      runId: "run1",
+      headSha: "sha1",
+      path: "src/a.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
+      ],
+      callEdges: [],
+    })
+
+    await do_.commitGraphVersion("run1")
+
+    const resolved = await do_.debugResolvedEdges("src/a.ts")
+    expect(resolved).toContainEqual(
+      expect.objectContaining({
+        targetPath: "src/b.ts",
+        targetSymbolId: "src/b.ts function bar 1 0",
+        resolutionStatus: "resolved",
+      }),
+    )
+    expect(await do_.debugActiveVersion()).toBe("run1")
+
+    // Second run supersedes run1 and GCs it.
+    await do_.upsertFileGraph({
+      runId: "run2",
+      headSha: "sha2",
+      path: "src/b.ts",
+      symbols: [
+        {
+          symbolId: "src/b.ts function bar 1 0",
+          path: "src/b.ts",
+          name: "bar",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("run2")
+
+    expect(await do_.debugActiveVersion()).toBe("run2")
+    expect((await do_.debugCounts("run1")).symbols).toBe(0) // GC'd
+  })
+
+  it("commits an empty active version (clears stale graph) for an empty repo", async () => {
+    const do_ = makeDoInstance("o/empty-commit")
+    // No upsertFileGraph calls — empty repo path.
+    await do_.commitGraphVersion("runE")
+    expect(await do_.debugActiveVersion()).toBe("runE")
   })
 })

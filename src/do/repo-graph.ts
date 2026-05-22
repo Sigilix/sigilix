@@ -88,6 +88,39 @@ CREATE INDEX IF NOT EXISTS call_edges_caller ON call_edges(graph_version, caller
 CREATE INDEX IF NOT EXISTS call_edges_source_line ON call_edges(graph_version, source_path, start_line);
 `
 
+// ─── Pure helpers ─────────────────────────────────────────────────
+
+/**
+ * Resolve a relative import specifier against the importing file's path.
+ * Only handles specifiers that start with "." (relative). Bare/aliased
+ * specifiers (e.g. "left-pad", "node:path", "@scope/pkg") return null
+ * and are left unresolved in v1.
+ *
+ * Returns the joined path WITHOUT a file extension — the caller probes
+ * CANDIDATE_EXTS to find the actual file in the symbol table.
+ *
+ * @example
+ *   resolveRelative("src/a.ts", "./b")        // "src/b"
+ *   resolveRelative("src/x/a.ts", "../b")     // "src/b"
+ *   resolveRelative("src/a.ts", "left-pad")   // null
+ */
+export function resolveRelative(sourcePath: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) return null
+  // Build the directory segments of the source file.
+  const dir = sourcePath.split("/").slice(0, -1)
+  const parts = specifier.split("/")
+  const stack = [...dir]
+  for (const p of parts) {
+    if (p === "." || p === "") continue
+    else if (p === "..") stack.pop()
+    else stack.push(p)
+  }
+  return stack.join("/")
+}
+
+/** Extensions to probe when looking up a resolved path in the symbol table. */
+const CANDIDATE_EXTS = ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.tsx", "/index.js"]
+
 // ─── Public arg types ─────────────────────────────────────────────
 
 export interface UpsertFileGraphArgs {
@@ -265,5 +298,178 @@ export class RepoGraphDO extends DurableObject<Env> {
       callEdges: one("SELECT COUNT(*) n FROM call_edges WHERE graph_version = ?"),
       status: statusRows[0]?.status ?? null,
     }
+  }
+
+  /**
+   * Resolve import/reexport edges for the pending `runId`, flip the
+   * version active, and GC any previously-active version.
+   *
+   * Steps (single transactionSync after the symbol lookup is built):
+   *  1. Ensure graph_versions row exists (empty-repo: insert with empty
+   *     head_sha, ON CONFLICT DO NOTHING so a prior upsertFileGraph row
+   *     is preserved).
+   *  2. Build the symbol lookup for this version:
+   *       `"${path} ${name}" → symbol_id`
+   *     and the set of paths that have at least one symbol (used to
+   *     probe candidate extensions).
+   *  3. Resolve file_edges of kind 'import' and 'reexport':
+   *     - Relative specifier (starts with ".") → resolveRelative() →
+   *       probe CANDIDATE_EXTS against the known-paths set.
+   *     - No matching path → resolution_status='unresolved'.
+   *     - Path found + importedName in lookup → 'resolved'
+   *       (target_path + target_symbol_id set).
+   *     - Path found but symbol not pinned → 'ambiguous'
+   *       (target_path set, target_symbol_id null).
+   *     - star_reexport edges are left 'raw' in v1.
+   *  4. Resolve same_file call edges: set callee_symbol_id from lookup.
+   *  5. Flip: DELETE all rows for the old active version, then set this
+   *     version status='active', committed_at=now.
+   *  6. Emit 'graph-version-committed'.
+   */
+  async commitGraphVersion(runId: string): Promise<void> {
+    const sql = this.sql()
+    const now = new Date().toISOString()
+
+    // Step 1: ensure the version row exists even for an empty repo.
+    sql.exec(
+      "INSERT INTO graph_versions (graph_version, head_sha, status, created_at) VALUES (?, '', 'pending', ?) ON CONFLICT(graph_version) DO NOTHING",
+      runId, now,
+    )
+
+    // Step 2: build symbol lookup and path set for this version.
+    // This runs OUTSIDE the transaction so we can read the data without
+    // nesting concerns (transactionSync wraps the mutation phase below).
+    const symbolsByKey = new Map<string, string>() // "${path} ${name}" → symbol_id
+    for (const row of sql.exec<{ path: string; name: string; symbol_id: string }>(
+      "SELECT path, name, symbol_id FROM symbols WHERE graph_version = ?",
+      runId,
+    )) {
+      symbolsByKey.set(`${row.path} ${row.name}`, row.symbol_id)
+    }
+
+    const pathExists = new Set<string>()
+    for (const row of sql.exec<{ path: string }>(
+      "SELECT DISTINCT path FROM symbols WHERE graph_version = ?",
+      runId,
+    )) {
+      pathExists.add(row.path)
+    }
+
+    // Helper: probe candidate extensions to find the actual target path.
+    const resolveTargetPath = (base: string): string | null => {
+      for (const ext of CANDIDATE_EXTS) {
+        if (pathExists.has(base + ext)) return base + ext
+      }
+      return null
+    }
+
+    // Steps 3–5 in a single transaction.
+    this.ctx.storage.transactionSync(() => {
+      // Step 3: resolve import and named-reexport file edges.
+      for (const e of sql.exec<{
+        edge_id: string
+        source_path: string
+        specifier: string
+        imported_name: string | null
+      }>(
+        "SELECT edge_id, source_path, specifier, imported_name FROM file_edges WHERE graph_version = ? AND edge_kind IN ('import','reexport')",
+        runId,
+      )) {
+        const base = resolveRelative(e.source_path, e.specifier)
+        const targetPath = base ? resolveTargetPath(base) : null
+
+        if (!targetPath) {
+          sql.exec(
+            "UPDATE file_edges SET resolution_status = 'unresolved' WHERE graph_version = ? AND edge_id = ?",
+            runId, e.edge_id,
+          )
+          continue
+        }
+
+        const targetSymbolId = e.imported_name
+          ? (symbolsByKey.get(`${targetPath} ${e.imported_name}`) ?? null)
+          : null
+
+        const resolutionStatus = targetSymbolId ? "resolved" : "ambiguous"
+
+        sql.exec(
+          "UPDATE file_edges SET target_path = ?, target_symbol_id = ?, resolution_status = ? WHERE graph_version = ? AND edge_id = ?",
+          targetPath, targetSymbolId, resolutionStatus, runId, e.edge_id,
+        )
+      }
+
+      // Step 4: resolve same_file call edges — set callee_symbol_id from lookup.
+      for (const c of sql.exec<{
+        edge_id: string
+        source_path: string
+        callee_name: string
+      }>(
+        "SELECT edge_id, source_path, callee_name FROM call_edges WHERE graph_version = ? AND call_kind = 'same_file'",
+        runId,
+      )) {
+        const calleeSymbolId = symbolsByKey.get(`${c.source_path} ${c.callee_name}`) ?? null
+        if (calleeSymbolId !== null) {
+          sql.exec(
+            "UPDATE call_edges SET callee_symbol_id = ? WHERE graph_version = ? AND edge_id = ?",
+            calleeSymbolId, runId, c.edge_id,
+          )
+        }
+      }
+
+      // Step 5: GC old active version(s), then promote this version.
+      for (const old of sql.exec<{ graph_version: string }>(
+        "SELECT graph_version FROM graph_versions WHERE status = 'active' AND graph_version != ?",
+        runId,
+      )) {
+        const ov = old.graph_version
+        sql.exec("DELETE FROM call_edges WHERE graph_version = ?", ov)
+        sql.exec("DELETE FROM file_edges WHERE graph_version = ?", ov)
+        sql.exec("DELETE FROM symbols WHERE graph_version = ?", ov)
+        sql.exec("DELETE FROM graph_versions WHERE graph_version = ?", ov)
+      }
+
+      sql.exec(
+        "UPDATE graph_versions SET status = 'active', committed_at = ? WHERE graph_version = ?",
+        now, runId,
+      )
+    })
+
+    emit("graph-version-committed", { runId })
+  }
+
+  /**
+   * Return resolved edge rows for a source path. Used by tests to
+   * inspect edge resolution after commitGraphVersion.
+   */
+  async debugResolvedEdges(sourcePath: string): Promise<Array<{
+    targetPath: string | null
+    targetSymbolId: string | null
+    resolutionStatus: string
+  }>> {
+    const sql = this.sql()
+    return [
+      ...sql.exec<{ target_path: string | null; target_symbol_id: string | null; resolution_status: string }>(
+        "SELECT target_path, target_symbol_id, resolution_status FROM file_edges WHERE source_path = ?",
+        sourcePath,
+      ),
+    ].map((row) => ({
+      targetPath: row.target_path,
+      targetSymbolId: row.target_symbol_id,
+      resolutionStatus: row.resolution_status,
+    }))
+  }
+
+  /**
+   * Return the graph_version string of the currently-active version,
+   * or null if no version is active. Used by tests.
+   */
+  async debugActiveVersion(): Promise<string | null> {
+    const sql = this.sql()
+    const rows = [
+      ...sql.exec<{ graph_version: string }>(
+        "SELECT graph_version FROM graph_versions WHERE status = 'active'",
+      ),
+    ]
+    return rows[0]?.graph_version ?? null
   }
 }

@@ -1337,7 +1337,7 @@ describe("RepoGraphDO.contextForVectorHits", () => {
 
   it("respects maxFiles cap — stops adding nodes at the cap", async () => {
     // a.ts → b.ts (would be hop1), a.ts → c.ts (would be hop1 too), etc.
-    // With maxFiles=1, only the first neighbor is returned.
+    // With maxFiles=1, only the first neighbor is returned (deterministic order).
     const do_ = makeDoInstance("o/ctx-maxfiles")
     await mkFile(do_, "r", "src/b.ts", "fb", null)
     await mkFile(do_, "r", "src/c.ts", "fc", null)
@@ -1390,8 +1390,107 @@ describe("RepoGraphDO.contextForVectorHits", () => {
       maxSymbolsPerHit: 12,
       maxEdgesPerSymbol: 6,
     })
-    // Must not exceed maxFiles
-    expect(ctx.nodes.length).toBeLessThanOrEqual(1)
+    // Must be exactly 1 (stops immediately when cap is reached)
+    expect(ctx.nodes).toHaveLength(1)
+  })
+
+  it("respects maxEdgesPerSymbol fan-out limit per node", async () => {
+    // a.ts has 3 outgoing edges to 3 distinct files (b.ts, c.ts, d.ts).
+    // With maxEdgesPerSymbol=2, only 2 hop-1 neighbors are returned (b.ts and c.ts,
+    // deterministically ordered by target_path).
+    const do_ = makeDoInstance("o/ctx-max-edges")
+    await mkFile(do_, "r", "src/b.ts", "fb", null)
+    await mkFile(do_, "r", "src/c.ts", "fc", null)
+    await mkFile(do_, "r", "src/d.ts", "fd", null)
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function fa 1 0",
+          path: "src/a.ts",
+          name: "fa",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 5,
+        },
+      ],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "fb",
+          localName: "fb",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./c",
+          importedName: "fc",
+          localName: "fc",
+          exportedName: null,
+          startLine: 2,
+          startCol: 0,
+        },
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./d",
+          importedName: "fd",
+          localName: "fd",
+          exportedName: null,
+          startLine: 3,
+          startCol: 0,
+        },
+      ],
+      callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    const ctx = await do_.contextForVectorHits({
+      seedPaths: ["src/a.ts"],
+      maxFiles: 8,
+      maxSymbolsPerHit: 12,
+      maxEdgesPerSymbol: 2, // Only 2 edges per source file allowed
+    })
+
+    // Should have at most 2 hop-1 neighbors (b.ts and c.ts, in alphabetical order)
+    const paths = ctx.nodes.map((n) => n.path)
+    expect(paths.length).toBeLessThanOrEqual(2)
+    // d.ts should be excluded due to maxEdgesPerSymbol=2
+    expect(paths).not.toContain("src/d.ts")
+  })
+
+  it("cycle safety: two-file cycle (a→b→a) does not duplicate or infinite loop", async () => {
+    // a.ts imports b; b.ts imports a (cycle).
+    // Seed from a.ts; output should contain b.ts exactly once (no a.ts since it's a seed).
+    const do_ = makeDoInstance("o/ctx-cycle")
+    await mkFile(do_, "r", "src/b.ts", "fb", { specifier: "./a", importedName: "fa" })
+    await mkFile(do_, "r", "src/a.ts", "fa", { specifier: "./b", importedName: "fb" })
+    await do_.commitGraphVersion("r")
+
+    const ctx = await do_.contextForVectorHits({
+      seedPaths: ["src/a.ts"],
+      maxFiles: 8,
+      maxSymbolsPerHit: 12,
+      maxEdgesPerSymbol: 6,
+    })
+
+    const paths = ctx.nodes.map((n) => n.path)
+    // b.ts should appear exactly once (hop1 from a.ts)
+    expect(paths).toContain("src/b.ts")
+    const bCount = paths.filter((p) => p === "src/b.ts").length
+    expect(bCount).toBe(1)
+    // a.ts must NOT appear in output (it's a seed)
+    expect(paths).not.toContain("src/a.ts")
   })
 })
 

@@ -710,7 +710,7 @@ export class RepoGraphDO extends DurableObject<Env> {
 
         const rows = [
           ...sql.exec<{ target_path: string; edge_kind: string }>(
-            "SELECT target_path, edge_kind FROM file_edges WHERE graph_version = ? AND source_path = ? AND target_path IS NOT NULL LIMIT ?",
+            "SELECT target_path, edge_kind FROM file_edges WHERE graph_version = ? AND source_path = ? AND target_path IS NOT NULL ORDER BY target_path, edge_kind LIMIT ?",
             active, path, args.maxEdgesPerSymbol,
           ),
         ]

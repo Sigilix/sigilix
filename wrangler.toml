@@ -99,6 +99,14 @@ class_name = "RepoGraphDO"
 name = "VALIDATION_METRICS_DO"
 class_name = "ValidationMetricsDO"
 
+# SIG-152: single global DO holding rolling daily aggregates of the SIG-138
+# `pr-review-graph-retrieval` shadow sample (avg jaccard / added-context /
+# blast counts, 35-day retention). Read via GET /metrics/graph (same
+# OPENCLAW_VALIDATION_METRICS_TOKEN bearer).
+[[durable_objects.bindings]]
+name = "GRAPH_METRICS_DO"
+class_name = "GraphMetricsDO"
+
 # Migration block — adds the new DO class. Forward-only; rolling back
 # this PR by reverting the wrangler.toml change is safe because no
 # data has been written yet (mode=off in production until phase 3 of
@@ -119,6 +127,11 @@ new_sqlite_classes = ["RepoGraphDO"]
 [[migrations]]
 tag = "sig-119-v1"
 new_sqlite_classes = ["ValidationMetricsDO"]
+
+# SIG-152: GraphMetricsDO uses SQLite storage. Forward-only.
+[[migrations]]
+tag = "sig-152-v1"
+new_sqlite_classes = ["GraphMetricsDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
@@ -162,8 +175,14 @@ SHADOW_BAKEOFF_ROLES = "synth"
 # Shadow emits telemetry only; neither changes posted review output. Flip to
 # "shadow" per phase after acceptance review, then "on"/"post" once the
 # bake-off telemetry is reviewed.
-OPENCLAW_GRAPH_INDEX = "off"
-OPENCLAW_GRAPH_RETRIEVAL = "off"
+# SIG-152 (2026-05-22): flipped to "shadow" to start live graph shadow
+# validation. Both paths are additive — indexer writes the graph, PR review
+# computes graph expansion + emits `pr-review-graph-retrieval`, but posted
+# review output is unchanged in shadow. Read the telemetry via GET
+# /metrics/graph. Flip OPENCLAW_GRAPH_RETRIEVAL → "post" only after founder
+# acceptance of the shadow telemetry.
+OPENCLAW_GRAPH_INDEX = "shadow"
+OPENCLAW_GRAPH_RETRIEVAL = "shadow"
 
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to

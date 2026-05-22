@@ -59,6 +59,9 @@ import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
 import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
+import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
+import { recordGraphMetrics } from "./lib/graph-metrics-client"
+import type { GraphRetrievalSample } from "./do/graph-metrics"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
@@ -265,10 +268,14 @@ export interface Env {
   // telemetry (would-drop / kept counts, daily buckets). Read via the
   // authenticated GET /metrics/validation endpoint.
   VALIDATION_METRICS_DO: DurableObjectNamespace
-  // Shared-secret bearer token guarding /metrics/validation. Unset → the
-  // endpoint returns 503. Set via
+  // Shared-secret bearer token guarding /metrics/validation AND /metrics/graph.
+  // Unset → both endpoints return 503. Set via
   // `wrangler secret put OPENCLAW_VALIDATION_METRICS_TOKEN <token>`.
   OPENCLAW_VALIDATION_METRICS_TOKEN?: string
+
+  // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
+  // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
+  GRAPH_METRICS_DO: DurableObjectNamespace
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
@@ -781,6 +788,11 @@ export default {
       return handleValidationMetricsRoute(request, env)
     }
 
+    // SIG-152: authenticated read of rolling SIG-138 graph shadow telemetry.
+    if (request.method === "GET" && url.pathname === "/metrics/graph") {
+      return handleGraphMetricsRoute(request, env)
+    }
+
     if (request.method === "POST" && url.pathname === "/linear/webhook") {
       return handleLinearWebhook(request, env, ctx)
     }
@@ -1016,6 +1028,10 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // into this sink; the dispatcher flushes it once to ValidationMetricsDO
       // in the finally below (off the review hot path, non-fatal).
       const validationSink: ValidationRejectionEvent[] = []
+      // SIG-152: the ensemble's graph block pushes its one per-review
+      // graph-retrieval sample here (0 or 1 element); flushed alongside the
+      // validation sink in the finally below.
+      const graphMetricsSink: GraphRetrievalSample[] = []
       const baseArgs = {
         owner: job.owner,
         repo: job.repo,
@@ -1024,6 +1040,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         installationId: job.installationId,
         env,
         validationSink,
+        graphMetricsSink,
         // ARC-251: thread the requeue depth from the job message into
         // both review pipelines. Webhook-driven messages omit the
         // field (treated as 0); stale-head-driven requeues carry the
@@ -1135,6 +1152,28 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             } catch (err) {
               console.log(JSON.stringify({
                 event: "validation-metrics-record-error",
+                owner: job.owner,
+                repo: job.repo,
+                prNumber: job.prNumber,
+                error: err instanceof Error ? err.message : String(err),
+              }))
+            }
+          }
+          // SIG-152: flush the per-review graph-retrieval sample once.
+          // Non-fatal — same guarantees as the validation flush above.
+          const graphSample = graphMetricsSink[0]
+          if (graphSample) {
+            try {
+              await recordGraphMetrics(env, {
+                owner: job.owner,
+                repo: job.repo,
+                prNumber: job.prNumber,
+                headSha: job.headSha,
+                sample: graphSample,
+              })
+            } catch (err) {
+              console.log(JSON.stringify({
+                event: "graph-metrics-record-error",
                 owner: job.owner,
                 repo: job.repo,
                 prNumber: job.prNumber,
@@ -2553,3 +2592,8 @@ export { RepoGraphDO } from "./do/repo-graph"
 // Registered via the [[durable_objects.bindings]] VALIDATION_METRICS_DO entry
 // + the sig-119-v1 new_sqlite_classes migration in wrangler.toml.
 export { ValidationMetricsDO } from "./do/validation-metrics"
+
+// SIG-152: GraphMetricsDO — rolling SIG-138 graph-retrieval shadow telemetry
+// (SQLite). Registered via the [[durable_objects.bindings]] GRAPH_METRICS_DO
+// entry + the sig-152-v1 new_sqlite_classes migration in wrangler.toml.
+export { GraphMetricsDO } from "./do/graph-metrics"

@@ -56,6 +56,9 @@ import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
+import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
+import { recordValidationMetrics } from "./lib/validation-metrics-client"
+import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
@@ -257,6 +260,15 @@ export interface Env {
   REPO_GRAPH_DO: DurableObjectNamespace
   OPENCLAW_GRAPH_INDEX?: string
   OPENCLAW_GRAPH_RETRIEVAL?: string
+
+  // SIG-119: single global DO holding rolling per-gate validator shadow
+  // telemetry (would-drop / kept counts, daily buckets). Read via the
+  // authenticated GET /metrics/validation endpoint.
+  VALIDATION_METRICS_DO: DurableObjectNamespace
+  // Shared-secret bearer token guarding /metrics/validation. Unset → the
+  // endpoint returns 503. Set via
+  // `wrangler secret put OPENCLAW_VALIDATION_METRICS_TOKEN <token>`.
+  OPENCLAW_VALIDATION_METRICS_TOKEN?: string
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
@@ -764,6 +776,11 @@ export default {
       })
     }
 
+    // SIG-119: authenticated read of rolling validator shadow telemetry.
+    if (request.method === "GET" && url.pathname === "/metrics/validation") {
+      return handleValidationMetricsRoute(request, env)
+    }
+
     if (request.method === "POST" && url.pathname === "/linear/webhook") {
       return handleLinearWebhook(request, env, ctx)
     }
@@ -995,6 +1012,10 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // DO is the dedupe + retry source-of-truth. The wrapper posts
       // /pickup → runs the work → posts /run-result. Legacy direct-path
       // messages (no runId) bypass and run unchanged.
+      // SIG-119: the ensemble's validator callbacks push rejection events
+      // into this sink; the dispatcher flushes it once to ValidationMetricsDO
+      // in the finally below (off the review hot path, non-fatal).
+      const validationSink: ValidationRejectionEvent[] = []
       const baseArgs = {
         owner: job.owner,
         repo: job.repo,
@@ -1002,6 +1023,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
+        validationSink,
         // ARC-251: thread the requeue depth from the job message into
         // both review pipelines. Webhook-driven messages omit the
         // field (treated as 0); stale-head-driven requeues carry the
@@ -1099,6 +1121,27 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             conclusion: conclusion ?? "failure",
             ...(reviewMeta !== undefined ? { reviewMeta } : {}),
           })
+          // SIG-119: flush collected validator-rejection telemetry once.
+          // Non-fatal — a metrics failure must never affect the review.
+          if (validationSink.length > 0) {
+            try {
+              await recordValidationMetrics(env, {
+                owner: job.owner,
+                repo: job.repo,
+                prNumber: job.prNumber,
+                headSha: job.headSha,
+                events: validationSink,
+              })
+            } catch (err) {
+              console.log(JSON.stringify({
+                event: "validation-metrics-record-error",
+                owner: job.owner,
+                repo: job.repo,
+                prNumber: job.prNumber,
+                error: err instanceof Error ? err.message : String(err),
+              }))
+            }
+          }
         }
       })
     }
@@ -2505,3 +2548,8 @@ export { PrReviewRunDO } from "./do/pr-review-run"
 // [[durable_objects.bindings]] REPO_GRAPH_DO entry in wrangler.toml
 // to resolve at deploy time.
 export { RepoGraphDO } from "./do/repo-graph"
+
+// SIG-119: ValidationMetricsDO — rolling validator shadow telemetry (SQLite).
+// Registered via the [[durable_objects.bindings]] VALIDATION_METRICS_DO entry
+// + the sig-119-v1 new_sqlite_classes migration in wrangler.toml.
+export { ValidationMetricsDO } from "./do/validation-metrics"

@@ -90,6 +90,15 @@ class_name = "PrReviewRunDO"
 name = "REPO_GRAPH_DO"
 class_name = "RepoGraphDO"
 
+# SIG-119: single global DO holding rolling per-gate validator shadow
+# telemetry (would-drop / kept daily buckets, 35-day retention). One
+# instance (idFromName("global")); read via the authenticated
+# GET /metrics/validation endpoint guarded by
+# OPENCLAW_VALIDATION_METRICS_TOKEN.
+[[durable_objects.bindings]]
+name = "VALIDATION_METRICS_DO"
+class_name = "ValidationMetricsDO"
+
 # Migration block — adds the new DO class. Forward-only; rolling back
 # this PR by reverting the wrangler.toml change is safe because no
 # data has been written yet (mode=off in production until phase 3 of
@@ -104,6 +113,12 @@ new_classes = ["PrReviewRunDO"]
 [[migrations]]
 tag = "sig-138-v1"
 new_sqlite_classes = ["RepoGraphDO"]
+
+# SIG-119: ValidationMetricsDO uses SQLite storage. Forward-only; reverting
+# this PR is safe (no data written until the endpoint is exercised).
+[[migrations]]
+tag = "sig-119-v1"
+new_sqlite_classes = ["ValidationMetricsDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
@@ -224,6 +239,12 @@ OPENCLAW_GRAPH_RETRIEVAL = "off"
 # Optional (other):
 #   OPENCLAW_MODEL                Override the default model (defaults to glm-5.1:cloud)
 #   OPENCLAW_TEAM_KEY             Linear team key to scope to (e.g. "ARC")
+#   OPENCLAW_VALIDATION_METRICS_TOKEN
+#                                 SIG-119 — shared-secret bearer token guarding
+#                                 GET /metrics/validation (validator shadow
+#                                 telemetry). If UNSET the endpoint returns 503
+#                                 (disabled); a missing/wrong bearer returns 401.
+#                                 Set via `wrangler secret put`.
 #
 # Optional (Phase 5 user-OAuth — required only for /auth/* routes; if
 # unset, /auth/github + /auth/github/callback return 503 and the rest

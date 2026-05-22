@@ -49,4 +49,38 @@ describe("extractFileGraph — file edges (raw)", () => {
     expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ edgeKind: "star_reexport", specifier: "./all" }))
     expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ specifier: "left-pad" }))
   })
+
+  it("covers namespace imports, side-effect imports, and named star re-exports", () => {
+    const src = [
+      "import * as ns from './m'",
+      "import './polyfill'",
+      "export * as utils from './u'",
+    ].join("\n")
+
+    const { fileEdgesRaw } = extractFileGraph("src/ns.ts", src)
+
+    // Namespace import: `import * as ns from './m'`
+    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({
+      edgeKind: "import",
+      specifier: "./m",
+      importedName: null,
+      localName: "ns",
+      sourcePath: "src/ns.ts",
+    }))
+
+    // Side-effect import: `import './polyfill'`
+    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({
+      edgeKind: "import",
+      specifier: "./polyfill",
+      importedName: null,
+      localName: null,
+    }))
+
+    // Named star re-export: `export * as utils from './u'`
+    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({
+      edgeKind: "star_reexport",
+      specifier: "./u",
+      exportedName: "utils",
+    }))
+  })
 })

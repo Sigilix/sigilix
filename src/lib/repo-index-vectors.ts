@@ -156,6 +156,55 @@ export async function deleteRepoIndexVectors(
   await env.OPENCLAW_STATE.delete(repoIndexVectorsKey(owner, repo))
 }
 
+/**
+ * SIG-137: append chunk ids to the delete-coverage ledger BEFORE the
+ * corresponding vectors are upserted to Vectorize. The ledger is a monotonic
+ * UNION (it only grows) and is lease-AGNOSTIC — its sole job is delete
+ * completeness, so a run that gets superseded mid-slice still has its
+ * already-upserted ids recorded and therefore deletable by the GDPR uninstall
+ * path. The separate lease-gated `computeMerge`/`persistVectorIds` path still
+ * owns the "may this run write the manifest / enqueue the next shard" decision.
+ *
+ * Preserves the existing record's runId/owner (coverage doesn't claim
+ * ownership); creates the record with `runId` when none exists. Throws on KV
+ * write failure so the caller aborts BEFORE the Vectorize upsert — guaranteeing
+ * no vector is ever written without its id already in the ledger.
+ *
+ * MVP caveat: a single KV key read-union-write is not atomic across concurrent
+ * runs (last-writer-wins), so a narrow concurrent-write race can still strand a
+ * few ids. Accepted for v1; per-batch append-only keys or a DO serializer would
+ * close it (tracked follow-up).
+ */
+export async function appendVectorCoverage(
+  env: Env,
+  owner: string,
+  repo: string,
+  runId: string,
+  byPathSlice: Record<string, string[]>,
+): Promise<void> {
+  const slice = normalizeByPath(byPathSlice)
+  if (Object.keys(slice).length === 0) return
+
+  const existing = await readRepoIndexVectors(env, owner, repo)
+  if (existing.kind === "invalid") {
+    // Fail closed: a corrupt ledger may already hold earlier batches' ids.
+    // Recreating it from only this slice would silently drop that coverage and
+    // reintroduce the orphan gap. Throw so the indexer aborts BEFORE upserting
+    // and the queue retries — mirrors persistVectorIds' mid-chain corruption
+    // handling.
+    throw new Error(`repo-index-vectors coverage write failed for ${repo}: existing record invalid (${existing.reason})`)
+  }
+  const record: RepoIndexVectorsV1 =
+    existing.kind === "ok"
+      ? { ...existing.vectors, byPath: setUnion(existing.vectors.byPath, slice) }
+      : { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: slice }
+
+  const ok = await writeRepoIndexVectors(env, record)
+  if (!ok) {
+    throw new Error(`repo-index-vectors coverage write failed for ${repo}`)
+  }
+}
+
 // ---------------------------------------------------------------------
 // Run-aware merge
 // ---------------------------------------------------------------------
@@ -240,11 +289,17 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
   }
 
   // Different stored run; this run holds the lease (mismatch already
-  // rejected) ⇒ authoritative ⇒ supersede.
+  // rejected) ⇒ authoritative ⇒ supersede. SIG-137: UNION the stored run's
+  // ids rather than overwriting — the id-list is a delete-coverage ledger, so
+  // the superseded run's already-upserted Vectorize entries must stay
+  // deletable (otherwise they orphan and escape the GDPR uninstall delete).
   if (activeRunId === runId) {
     return {
       action: "superseded",
-      vectors: { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: sliceByPath },
+      vectors: {
+        v: 1, owner, repo: repo.toLowerCase(), runId,
+        byPath: setUnion(cur.byPath, sliceByPath),
+      },
     }
   }
   // No lease names either run (activeRunId === null) and the stored run

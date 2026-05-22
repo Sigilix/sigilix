@@ -11,6 +11,7 @@ import {
   readRepoIndexVectors,
   repoIndexVectorsKey,
   writeRepoIndexVectors,
+  appendVectorCoverage,
   type RepoIndexVectorsV1,
 } from "../src/lib/repo-index-vectors"
 import type { Env } from "../src/index"
@@ -195,8 +196,10 @@ describe("computeMerge — run-aware semantics", () => {
     })
     expect(outcome.action).toBe("superseded")
     if (outcome.action === "superseded") {
-      // Stale run's data discarded.
-      expect(outcome.vectors.byPath).toEqual({ "src/a.ts": ["a1"] })
+      // SIG-137: the superseded run's ids are PRESERVED (union), not discarded —
+      // the id-list is a delete-coverage ledger, so the stale run's already-
+      // upserted vectors stay deletable by the GDPR uninstall path.
+      expect(outcome.vectors.byPath).toEqual({ "src/old.ts": ["x"], "src/a.ts": ["a1"] })
     }
   })
 
@@ -304,5 +307,64 @@ describe("flattenIds", () => {
       v: 1, owner: "o", repo: "r", runId: "rn", byPath: {},
     })
     expect(ids).toEqual([])
+  })
+})
+
+// ── SIG-137: appendVectorCoverage (pre-upsert, lease-agnostic delete ledger) ──
+
+describe("appendVectorCoverage", () => {
+  it("creates the record with the given runId when none exists", async () => {
+    const { kv } = makeKvStub()
+    await appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-1", { "src/a.ts": ["a1", "a2"] })
+    const r = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    expect(r.kind).toBe("ok")
+    if (r.kind === "ok") {
+      expect(r.vectors.runId).toBe("run-1")
+      expect(r.vectors.byPath).toEqual({ "src/a.ts": ["a1", "a2"] })
+    }
+  })
+
+  it("unions into an existing record and PRESERVES its runId (coverage doesn't claim ownership)", async () => {
+    const { kv } = makeKvStub()
+    await writeRepoIndexVectors(makeEnv(kv), {
+      v: 1, owner: "Arc-and-Anchor", repo: "sigilix", runId: "run-A",
+      byPath: { "src/a.ts": ["a1"] },
+    })
+    // A different (e.g. superseded) run appends coverage — must not drop run-A's
+    // ids and must not steal ownership of the runId field.
+    await appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-B", { "src/a.ts": ["a2"], "src/b.ts": ["b1"] })
+    const r = await readRepoIndexVectors(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    expect(r.kind).toBe("ok")
+    if (r.kind === "ok") {
+      expect(r.vectors.runId).toBe("run-A") // preserved
+      expect(new Set(r.vectors.byPath["src/a.ts"])).toEqual(new Set(["a1", "a2"]))
+      expect(r.vectors.byPath["src/b.ts"]).toEqual(["b1"])
+    }
+  })
+
+  it("is a no-op for an empty slice (no write)", async () => {
+    const { kv, store } = makeKvStub()
+    await appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-1", {})
+    expect(store.size).toBe(0)
+  })
+
+  it("fails closed when the existing record is invalid (does NOT silently discard prior coverage)", async () => {
+    const { kv, store } = makeKvStub()
+    // Corrupt ledger that may already hold earlier batches' ids.
+    store.set("repo-index-vectors:arc-and-anchor/sigilix", "{corrupt json")
+    await expect(
+      appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-1", { "src/a.ts": ["a1"] }),
+    ).rejects.toThrow(/coverage write failed.*invalid/)
+  })
+
+  it("throws when the KV write fails (so the caller aborts before upserting)", async () => {
+    const failingKv = {
+      async get(): Promise<string | null> { return null },
+      async put(): Promise<void> { throw new Error("kv down") },
+      async delete(): Promise<void> {},
+    } as unknown as Env["OPENCLAW_STATE"]
+    await expect(
+      appendVectorCoverage(makeEnv(failingKv), "o", "r", "run-1", { "src/a.ts": ["a1"] }),
+    ).rejects.toThrow(/coverage write failed/)
   })
 })

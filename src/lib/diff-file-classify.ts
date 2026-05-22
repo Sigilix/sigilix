@@ -200,6 +200,19 @@ export function classifyDiffFiles(
     }
   }
 
+  // SIG-141: basename-stem fallback. A test still without a source sibling
+  // pairs with any source in the diff sharing its EXACT leaf stem. This covers
+  // source files in subdirectories candidateSources() doesn't enumerate (e.g.
+  // `src/do/`, `src/prompts/`) — the gap that produced a false "no test
+  // coverage" on `src/do/repo-graph.ts` despite `tests/repo-graph.test.ts`
+  // existing. Exact-stem (not prefix), so it can't over-match.
+  for (const { path, kind } of initial) {
+    if (kind !== "test" || testToSource.has(path)) continue
+    const tStem = leafStem(path)
+    const src = initial.find((f) => f.kind === "source" && leafStem(f.path) === tStem)
+    if (src) testToSource.set(path, src.path)
+  }
+
   // Second pass: invert to source → test. Multiple tests for one
   // source: the first-seen wins (deterministic = input order).
   const sourceToTest = new Map<string, string>()

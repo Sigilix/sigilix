@@ -104,7 +104,7 @@ export type SecurityBucket =
  * widespread scanner coverage, so an unsupported sev>=4 finding there
  * is a likely hallucination.
  */
-const AUTHZ_BUCKET: SecurityBucket = "authn-access-control"
+export const AUTHZ_BUCKET: SecurityBucket = "authn-access-control"
 
 /**
  * Lines within which a cited/auto-enriched fact must sit relative to
@@ -155,6 +155,7 @@ export type SecurityDropReason =
   | "evidence-out-of-range" // cited fact resolves but its line is >+/-10 away
   | "authz-none-without-justification" // NONE exemption without a body justification
   | "unsupported-scanner-covered" // sev>=4 in a scanner-covered bucket, no cwe + no auto-enrich match
+  | "do-method-authz-trust-boundary" // SIG-141: authz finding on a DurableObject method — the binding is the trust boundary
 
 /**
  * Pure decision for ONE security-applicable finding. The caller has

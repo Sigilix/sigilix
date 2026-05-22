@@ -95,9 +95,12 @@ import {
 import {
   evaluateSecurityFinding,
   parseSecurityValidatorMode,
+  deriveSecurityBucket,
+  AUTHZ_BUCKET,
   type SecurityValidatorMode,
   type SecurityDropReason,
 } from "./validate-security-finding"
+import { durableObjectClassSpans, lineInDurableObjectClass, type LineSpan } from "./durable-object-spans"
 import {
   evaluateTestFinding,
   parseTestsValidatorMode,
@@ -2851,6 +2854,13 @@ export async function handlePrReviewEnsemble(
     }
 
     // ─── Post-synthesis validation ─────────────────────────────
+    // SIG-141: line spans of DurableObject class declarations in the changed
+    // files, parsed from the AST (not raw text). Authz findings inside a DO
+    // class body are false (the binding is the trust boundary). Best-effort:
+    // derived from the already-fetched changed JS/TS head content
+    // (astFilesByPath) — empty when AST features are off, which is fail-safe
+    // (no suppression → findings kept, never hidden).
+    const doClassSpans = durableObjectClassSpans(astFilesByPath)
     const validated = validateForSubmission({
       synthOutput: { verdict: synthOutput.verdict, provenance: synthOutput.provenance },
       reviewable,
@@ -2878,6 +2888,9 @@ export async function handlePrReviewEnsemble(
       // until the operator flips OPENCLAW_SECURITY_VALIDATOR_MODE to
       // "enforce".
       securityManifest: securityManifest.manifest,
+      // SIG-141: DurableObject class spans — authz findings inside a DO class
+      // body are suppressed (the binding is the trust boundary).
+      durableObjectClassSpans: doClassSpans,
       securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
       onSecurityFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
@@ -5767,6 +5780,18 @@ export function validateForSubmission(args: {
    */
   securityManifest?: Map<string, SecurityFact>
   /**
+   * SIG-141: per-file line spans of `class … extends DurableObject`
+   * declarations in the changed files (AST-derived, see
+   * `durableObjectClassSpans`). An authz-bucket security finding whose line
+   * lands INSIDE one of these spans is suppressed unconditionally — a DO method
+   * is only invokable by the Worker holding the binding, so the binding IS the
+   * trust boundary (per-tenant isolation is via the DO id, not per-method
+   * authz). Scoped to the class body so a real access-control bug in a
+   * co-located top-level helper or other class is still surfaced. Absent → no
+   * suppression (back-compat).
+   */
+  durableObjectClassSpans?: ReadonlyMap<string, readonly LineSpan[]>
+  /**
    * SIG-108: gate mode. `shadow` (default): the gate's verdict is
    * counted + telemetered but the finding is NOT dropped. `enforce`:
    * rejected findings are dropped. Read from
@@ -5874,6 +5899,7 @@ export function validateForSubmission(args: {
     testingEvidence,
     onTestingFindingDropped,
     securityManifest,
+    durableObjectClassSpans: doClassSpans = new Map<string, readonly LineSpan[]>(),
     securityValidatorMode = "shadow",
     onSecurityFindingDropped,
     testsValidatorMode = "shadow",
@@ -5978,6 +6004,27 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-141: DurableObject method-authz suppression. A DO method is only
+    // invokable by the Worker holding the binding, so the binding IS the trust
+    // boundary; per-tenant isolation is via the DO id, not per-method authz.
+    // The security specialist over-fires "missing access check" on every new
+    // DO method (false P1/P2). Suppress authz-bucket findings whose line lands
+    // INSIDE a changed DurableObject class body — UNCONDITIONALLY (a
+    // correctness drop, not a shadow-gated evidence policy), so it clears even
+    // while the security validator runs in shadow. Scoped to the class span so
+    // a real authz bug in a co-located top-level helper is still surfaced, and
+    // to SECURITY-sourced findings (provenance, like the SIG-108 gate) so an
+    // authz-CWE finding that actually came from logic/tests/perf is untouched.
+    if (
+      sourceRolesInclude(sourceIds, "security") &&
+      lineInDurableObjectClass(doClassSpans.get(f.path.trim()), f.line) &&
+      deriveSecurityBucket(f) === AUTHZ_BUCKET
+    ) {
+      droppedForFailedValidation++
+      onSecurityFindingDropped?.(f, { reason: "do-method-authz-trust-boundary", dropped: true })
+      continue
+    }
+
     // SIG-108: security evidence gate. Applies ONLY to findings whose
     // derived role set includes `security` (from provenance, NOT from
     // `finding.category` alone — Codex #3: a merged security+logic
@@ -6060,6 +6107,17 @@ export function validateForSubmission(args: {
     if (f.score <= 1) {
       advisoryNits.push(f)
       demotedScore1++
+      continue
+    }
+
+    // SIG-141: a finding anchored to line 1 almost always points at the file
+    // header (license/imports/opening comment), not a real code site — a
+    // common specialist over-fire on new-file PRs. Withhold it from inline
+    // anchoring and route to the summary body (same treatment as a
+    // non-reviewable line), where its content is still surfaced.
+    if (f.line === 1) {
+      droppedForInvalidLine++
+      unanchoredFindings.push(f)
       continue
     }
 

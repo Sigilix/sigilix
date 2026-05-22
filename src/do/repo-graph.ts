@@ -184,10 +184,12 @@ export class RepoGraphDO extends DurableObject<Env> {
         args.runId, args.path,
       )
 
-      // Insert symbols.
+      // Insert symbols. ON CONFLICT DO NOTHING: a duplicate symbol_id
+      // within one payload (same file, same symbolId) is silently
+      // ignored rather than aborting the entire file write.
       for (const s of args.symbols) {
         sql.exec(
-          "INSERT INTO symbols (graph_version, symbol_id, path, name, kind, exported, start_line, start_col, end_line, end_col) VALUES (?,?,?,?,?,?,?,?,?,?)",
+          "INSERT INTO symbols (graph_version, symbol_id, path, name, kind, exported, start_line, start_col, end_line, end_col) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
           args.runId, s.symbolId, s.path, s.name, s.kind,
           s.exported ? 1 : 0,
           s.startLine, s.startCol, s.endLine, s.endCol,
@@ -196,13 +198,15 @@ export class RepoGraphDO extends DurableObject<Env> {
 
       // Insert raw file edges. target_path + target_symbol_id are NULL
       // until commitGraphVersion() resolves them (Task 5).
+      // ON CONFLICT DO NOTHING: duplicate edge_id within one payload is
+      // silently ignored rather than aborting the file write.
       for (const e of args.fileEdgesRaw) {
         const edgeId = this.edgeId(
           "fe", e.sourcePath, e.startLine, e.startCol,
           `${e.specifier}|${e.importedName ?? ""}`,
         )
         sql.exec(
-          "INSERT INTO file_edges (graph_version, edge_id, source_path, edge_kind, specifier, imported_name, local_name, exported_name, resolution_status, start_line, start_col) VALUES (?,?,?,?,?,?,?,?,'raw',?,?)",
+          "INSERT INTO file_edges (graph_version, edge_id, source_path, edge_kind, specifier, imported_name, local_name, exported_name, resolution_status, start_line, start_col) VALUES (?,?,?,?,?,?,?,?,'raw',?,?) ON CONFLICT DO NOTHING",
           args.runId, edgeId, e.sourcePath, e.edgeKind, e.specifier,
           e.importedName, e.localName, e.exportedName,
           e.startLine, e.startCol,
@@ -211,12 +215,14 @@ export class RepoGraphDO extends DurableObject<Env> {
 
       // Insert call edges. caller_symbol_id + callee_symbol_id are NULL
       // until commitGraphVersion() resolves them (Task 5).
+      // ON CONFLICT DO NOTHING: duplicate edge_id within one payload is
+      // silently ignored rather than aborting the file write.
       for (const c of args.callEdges) {
         const edgeId = this.edgeId(
           "ce", c.sourcePath, c.startLine, c.startCol, c.calleeName,
         )
         sql.exec(
-          "INSERT INTO call_edges (graph_version, edge_id, source_path, callee_name, call_kind, start_line, start_col) VALUES (?,?,?,?,?,?,?)",
+          "INSERT INTO call_edges (graph_version, edge_id, source_path, callee_name, call_kind, start_line, start_col) VALUES (?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
           args.runId, edgeId, c.sourcePath, c.calleeName, c.callKind,
           c.startLine, c.startCol,
         )

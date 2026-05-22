@@ -97,6 +97,9 @@ type AnyRow = Record<string, unknown>
 // Statement-level re-use: node:sqlite StatementSync instances are
 // safe to reuse with different bindings.
 const READ_RE = /^\s*(?:SELECT|WITH|PRAGMA)\b/i
+// Fix 1: DML with a RETURNING clause must also use .all() to surface
+// the returned rows (plain INSERT/UPDATE/DELETE … RETURNING …).
+const RETURNING_RE = /\bRETURNING\b/i
 // Statements that Cloudflare forbids through sql.exec() — these must
 // go through transactionSync() instead.
 const TX_CTRL_RE = /^\s*(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i
@@ -145,6 +148,8 @@ function toPlain(row: object): AnyRow {
 export class NodeSqliteStorage {
   private readonly db: DatabaseSync
   private readonly stmtCache = new Map<string, StatementSync>()
+  // Fix 2: depth counter for re-entrant transactionSync via SAVEPOINT.
+  private txDepth = 0
 
   constructor() {
     this.db = new DatabaseSync(":memory:")
@@ -182,8 +187,11 @@ export class NodeSqliteStorage {
     // Single-statement path.
     const stmt = this.prepare(q)
 
-    if (READ_RE.test(q)) {
-      // SELECT / WITH / PRAGMA — use .all() which returns every row.
+    if (READ_RE.test(q) || RETURNING_RE.test(q)) {
+      // SELECT / WITH / PRAGMA and DML … RETURNING — use .all() which
+      // returns every row.  For RETURNING statements rowsWritten is not
+      // directly observable from .all(); we leave it as 0 to match the
+      // Cloudflare cursor contract (callers care about the returned rows).
       const raw = stmt.all(...(bindings as Parameters<typeof stmt.all>)) as object[]
       const rows = raw.map(toPlain) as T[]
       return rowsCursor(rows)
@@ -196,16 +204,39 @@ export class NodeSqliteStorage {
   }
 
   transactionSync<R>(cb: () => R): R {
-    // Issue BEGIN/COMMIT directly against the DB handle — NOT through
-    // the public sql.exec() which rejects transaction-control keywords.
-    this.db.exec("BEGIN")
+    // Fix 2: re-entrant transactionSync via SAVEPOINTs.
+    // Depth 0 → real BEGIN/COMMIT/ROLLBACK (outermost transaction).
+    // Depth > 0 → SAVEPOINT sp_<n> / RELEASE / ROLLBACK TO + RELEASE.
+    // Issue all transaction-control SQL directly against the DB handle —
+    // NOT through the public sql.exec() which rejects those keywords.
+    const depth = this.txDepth
+    this.txDepth++
+    const spName = `sp_${depth}`
     try {
+      if (depth === 0) {
+        this.db.exec("BEGIN")
+      } else {
+        this.db.exec(`SAVEPOINT ${spName}`)
+      }
       const result = cb()
-      this.db.exec("COMMIT")
+      if (depth === 0) {
+        this.db.exec("COMMIT")
+      } else {
+        this.db.exec(`RELEASE ${spName}`)
+      }
       return result
     } catch (err) {
-      try { this.db.exec("ROLLBACK") } catch { /* best-effort */ }
+      try {
+        if (depth === 0) {
+          this.db.exec("ROLLBACK")
+        } else {
+          this.db.exec(`ROLLBACK TO ${spName}`)
+          this.db.exec(`RELEASE ${spName}`)
+        }
+      } catch { /* best-effort */ }
       throw err
+    } finally {
+      this.txDepth--
     }
   }
 }

@@ -92,6 +92,19 @@ export type { Chunk } from "./chunk-core"
  * re-index so previously-dropped dense regions get indexed.
  */
 export const CHUNKER_VERSION = 2
+
+/** SIG-131: chunker config version folded with the AST-chunking flag.
+ *  off → 2 (line-window), on → 3 (AST). Flipping the flag changes the
+ *  effective version → runId/manifest/freshness shift → repos re-index. */
+export function effectiveChunkerVersion(astChunkingOn: boolean): number {
+  return astChunkingOn ? 3 : CHUNKER_VERSION
+}
+
+/** Read the AST-chunking flag from env (case-insensitive "on"). */
+export function astChunkingEnabled(env: Env): boolean {
+  return (env.OPENCLAW_AST_CHUNKING ?? "").trim().toLowerCase() === "on"
+}
+
 export const MAX_FILES_PER_JOB = 1000
 
 const SKIP_DIRS = new Set([
@@ -259,6 +272,7 @@ export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
 async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void> {
   const { owner, repo, installationId, reason } = job
   const namespace = indexNamespace(owner, repo)
+  const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
     console.log(JSON.stringify({
@@ -297,7 +311,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     repo,
     headSha,
     modelId: EMBEDDING_MODEL,
-    chunkerVersion: CHUNKER_VERSION,
+    chunkerVersion: effectiveChunkerVersion(astOn),
   })
 
   // Freshness check — Codex v1 MAJOR. Skip when (owner, headSha,
@@ -310,7 +324,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       currentOwner: owner,
       currentModelId: EMBEDDING_MODEL,
       currentEmbeddingDim: EMBEDDING_DIMENSIONS,
-      currentChunkerVersion: CHUNKER_VERSION,
+      currentChunkerVersion: effectiveChunkerVersion(astOn),
     })
     if (fresh) {
       console.log(JSON.stringify({
@@ -375,6 +389,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     await persistManifest({
       env, owner, repo, namespace, headSha, runId,
       fileCount: 0, chunkCount: 0, shardCount: 1,
+      chunkerVersion: effectiveChunkerVersion(astOn),
     })
     console.log(JSON.stringify({
       event: "index-job-completed",
@@ -446,6 +461,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   await persistManifest({
     env, owner, repo, namespace, headSha, runId,
     fileCount: sliceHi, chunkCount, shardCount: 1,
+    chunkerVersion: effectiveChunkerVersion(astOn),
   })
   console.log(JSON.stringify({
     event: "index-job-completed",
@@ -483,6 +499,7 @@ async function handleShardJob(
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
   const namespace = indexNamespace(owner, repo)
+  const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
     console.log(JSON.stringify({
@@ -502,7 +519,7 @@ async function handleShardJob(
     repo,
     headSha: shard.headSha,
     modelId: EMBEDDING_MODEL,
-    chunkerVersion: CHUNKER_VERSION,
+    chunkerVersion: effectiveChunkerVersion(astOn),
   })
   if (currentRunId !== shard.runId) {
     console.warn(JSON.stringify({
@@ -610,6 +627,7 @@ async function handleShardJob(
       fileCount: cumulativeFiles,
       chunkCount: cumulativeChunks,
       shardCount,
+      chunkerVersion: effectiveChunkerVersion(astOn),
     })
     console.log(JSON.stringify({
       event: "index-job-completed",
@@ -840,6 +858,7 @@ interface PersistManifestArgs {
   fileCount: number
   chunkCount: number
   shardCount: number
+  chunkerVersion: number
 }
 
 async function persistManifest(args: PersistManifestArgs): Promise<void> {
@@ -858,7 +877,7 @@ async function persistManifest(args: PersistManifestArgs): Promise<void> {
     indexedAt: new Date().toISOString(),
     modelId: EMBEDDING_MODEL,
     embeddingDim: EMBEDDING_DIMENSIONS,
-    chunkerVersion: CHUNKER_VERSION,
+    chunkerVersion: args.chunkerVersion,
     windowLines: CHUNK_LINES,
     overlapLines: CHUNK_OVERLAP,
   }

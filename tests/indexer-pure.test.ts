@@ -18,6 +18,7 @@ import {
   chunkFile,
   chunkId,
   computeRunId,
+  effectiveChunkerVersion,
   splitOversizedWindow,
   walkIndexableFiles,
   type TreeEntry,
@@ -449,5 +450,12 @@ describe("computeRunId", () => {
     const e = await computeRunId({ ...base, modelId: "different-model" })
     const f = await computeRunId({ ...base, chunkerVersion: 2 })
     expect(new Set([a, b, c, d, e, f]).size).toBe(6)
+  })
+})
+
+describe("effectiveChunkerVersion (SIG-131)", () => {
+  it("is 2 when AST chunking off, 3 when on", () => {
+    expect(effectiveChunkerVersion(false)).toBe(2)
+    expect(effectiveChunkerVersion(true)).toBe(3)
   })
 })

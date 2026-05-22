@@ -157,7 +157,7 @@ const CANDIDATE_EXTS = [
  * (extractChangedSymbols → MAX_SYMBOLS=30) and scoped to changed files, so
  * this only guards a pathological changed file with many same-named symbols.
  */
-const MAX_BLAST_IDS = 200
+export const MAX_BLAST_IDS = 200
 
 // ─── Public result types ──────────────────────────────────────────
 
@@ -666,7 +666,9 @@ export class RepoGraphDO extends DurableObject<Env> {
     const pathPlaceholders = paths.map(() => "?").join(",")
     const ids = [
       ...sql.exec<{ symbol_id: string }>(
-        `SELECT DISTINCT symbol_id FROM symbols WHERE graph_version = ? AND name IN (${namePlaceholders}) AND path IN (${pathPlaceholders}) LIMIT ?`,
+        // ORDER BY before LIMIT so the capped id set is deterministic when
+        // matches exceed MAX_BLAST_IDS (otherwise the kept ids vary by plan).
+        `SELECT DISTINCT symbol_id FROM symbols WHERE graph_version = ? AND name IN (${namePlaceholders}) AND path IN (${pathPlaceholders}) ORDER BY symbol_id LIMIT ?`,
         active, ...names, ...paths, MAX_BLAST_IDS,
       ),
     ].map((r) => r.symbol_id)

@@ -10,7 +10,7 @@
 // directly (no HTTP fetch).
 
 import { describe, expect, it } from "vitest"
-import { RepoGraphDO, resolveRelative } from "../src/do/repo-graph"
+import { RepoGraphDO, resolveRelative, MAX_BLAST_IDS } from "../src/do/repo-graph"
 import type { Env } from "../src/index"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
@@ -1576,6 +1576,63 @@ describe("RepoGraphDO.blastRadiusByNames", () => {
     const br = await do_.blastRadiusByNames({ changedNames: ["foo", "bar"], changedPaths: ["src/lib.ts"] })
     expect(br.importDependents).toEqual(["src/app.ts"])
     expect(br.callerPaths).toEqual(["src/app.ts"])
+  })
+
+  it("caps resolved ids at MAX_BLAST_IDS when a changed file matches more names", async () => {
+    const do_ = makeDoInstance("o/blast-names-cap")
+
+    // src/a.ts declares MAX_BLAST_IDS + 1 distinctly-named exported symbols.
+    const overCap = MAX_BLAST_IDS + 1
+    const names = Array.from({ length: overCap }, (_, i) => `dup${i}`)
+    await do_.upsertFileGraph({
+      runId: "r",
+      headSha: "h",
+      path: "src/a.ts",
+      symbols: names.map((name, i) => ({
+        symbolId: `src/a.ts function ${name} ${i + 1} 0`,
+        path: "src/a.ts",
+        name,
+        kind: "function",
+        exported: true,
+        startLine: i + 1,
+        startCol: 0,
+        endLine: i + 1,
+        endCol: 5,
+      })),
+      fileEdgesRaw: [],
+      callEdges: [],
+    })
+    // Each importer imports exactly one distinct name from ./a, so each
+    // resolves to a distinct target_symbol_id (no key collision).
+    for (let i = 0; i < overCap; i++) {
+      await do_.upsertFileGraph({
+        runId: "r",
+        headSha: "h",
+        path: `src/imp${i}.ts`,
+        symbols: [],
+        fileEdgesRaw: [
+          {
+            sourcePath: `src/imp${i}.ts`,
+            edgeKind: "import",
+            specifier: "./a",
+            importedName: names[i],
+            localName: names[i],
+            exportedName: null,
+            startLine: 1,
+            startCol: 0,
+          },
+        ],
+        callEdges: [],
+      })
+    }
+    await do_.commitGraphVersion("r")
+
+    // All overCap names changed in src/a.ts → resolution caps to MAX_BLAST_IDS
+    // ids, so at most MAX_BLAST_IDS importers appear (one name is dropped).
+    const br = await do_.blastRadiusByNames({ changedNames: names, changedPaths: ["src/a.ts"] })
+    expect(br.importDependents.length).toBe(MAX_BLAST_IDS)
+    expect(br.importDependents.length).toBeLessThan(overCap)
+    expect(new Set(br.importDependents).size).toBe(br.importDependents.length)
   })
 })
 

@@ -37,6 +37,7 @@ import {
   graphRetrievalEnabled,
   graphRetrievalMode,
   formatGraphContext,
+  formatGraphBlastContext,
   graphOverlapStats,
   GRAPH_RPC_TIMEOUT_MS,
   BLAST_RADIUS_RESOLUTION_READY,
@@ -1390,6 +1391,58 @@ describe("formatGraphContext", () => {
     const result = formatGraphContext([{ path: "src/x.ts", hop: 1, edgeKind: "export" }])
     expect(result).toBe("src/x.ts (hop1, export)")
     expect(result.endsWith("\n")).toBe(false)
+  })
+})
+
+describe("formatGraphBlastContext", () => {
+  it("formats callers before importers with role labels", () => {
+    const result = formatGraphBlastContext({
+      callerPaths: ["src/caller.ts"],
+      dependentPaths: ["src/dep.ts"],
+      exclude: new Set<string>(),
+      cap: 10,
+    })
+    expect(result).toBe("src/caller.ts (blast, caller)\nsrc/dep.ts (blast, importer)")
+  })
+
+  it("excludes paths already represented (seeds / graph nodes)", () => {
+    const result = formatGraphBlastContext({
+      callerPaths: ["src/seen.ts", "src/new.ts"],
+      dependentPaths: ["src/seen.ts"],
+      exclude: new Set(["src/seen.ts"]),
+      cap: 10,
+    })
+    expect(result).toBe("src/new.ts (blast, caller)")
+  })
+
+  it("dedups a path that is both a caller and a dependent", () => {
+    const result = formatGraphBlastContext({
+      callerPaths: ["src/both.ts"],
+      dependentPaths: ["src/both.ts"],
+      exclude: new Set<string>(),
+      cap: 10,
+    })
+    expect(result).toBe("src/both.ts (blast, caller)")
+  })
+
+  it("caps the number of emitted lines", () => {
+    const result = formatGraphBlastContext({
+      callerPaths: ["a.ts", "b.ts", "c.ts"],
+      dependentPaths: ["d.ts"],
+      exclude: new Set<string>(),
+      cap: 2,
+    })
+    expect(result.split("\n")).toHaveLength(2)
+    expect(result).toBe("a.ts (blast, caller)\nb.ts (blast, caller)")
+  })
+
+  it("returns empty string when nothing new to add", () => {
+    expect(formatGraphBlastContext({
+      callerPaths: [],
+      dependentPaths: [],
+      exclude: new Set<string>(),
+      cap: 4,
+    })).toBe("")
   })
 })
 

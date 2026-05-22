@@ -389,6 +389,10 @@ export const PER_ATTEMPT_TIMEOUT_MS = 60_000
 // Default 2500 ms is generous for a local DO RPC but tight enough that a
 // hung worker doesn't delay the review.
 export const GRAPH_RPC_TIMEOUT_MS = 2_500
+// SIG-143: max blast-radius paths folded into the prompt graph-context block.
+// Mirrors the ≤4 cap on BFS graph-node additions — keeps the additive context
+// from crowding out the primary vector-hit retrieval.
+const GRAPH_BLAST_PROMPT_CAP = 4
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
 
@@ -563,6 +567,36 @@ export function formatGraphContext(
   nodes: { path: string; hop: number; edgeKind: string }[],
 ): string {
   return nodes.map((n) => `${n.path} (hop${n.hop}, ${n.edgeKind})`).join("\n")
+}
+
+/**
+ * Render blast-radius file paths (callers + import dependents of the changed
+ * symbols) as additional `[GRAPH CONTEXT]` lines for folding into the prompt
+ * alongside the BFS-neighbor lines (SIG-143). Each line is
+ * `<path> (blast, caller|importer)`.
+ *
+ * Paths in `exclude` (vector-hit seeds + BFS graph nodes) are skipped so the
+ * block never repeats context already present, a path that is both a caller
+ * and a dependent appears once (caller wins), and the result is capped at
+ * `cap` lines for prompt-size safety. Callers are listed before importers;
+ * within each group, input order is preserved. Empty input → empty string.
+ */
+export function formatGraphBlastContext(args: {
+  callerPaths: string[]
+  dependentPaths: string[]
+  exclude: ReadonlySet<string>
+  cap: number
+}): string {
+  const seen = new Set(args.exclude)
+  const lines: string[] = []
+  const add = (path: string, role: string): void => {
+    if (lines.length >= args.cap || seen.has(path)) return
+    seen.add(path)
+    lines.push(`${path} (blast, ${role})`)
+  }
+  for (const p of args.callerPaths) add(p, "caller")
+  for (const p of args.dependentPaths) add(p, "importer")
+  return lines.join("\n")
 }
 
 /**
@@ -1648,6 +1682,8 @@ export async function handlePrReviewEnsemble(
     // graph-context injection can use a combined set.
     let graphBlastCallerPaths: string[] = []
     let graphBlastDependentPaths: string[] = []
+    // SIG-143: blast paths folded into the prompt graph-context block (post mode).
+    let graphBlastContextString = ""
     if (graphRetrievalEnabled(env)) {
       const graphRpcBudgetMs = parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS)
       try {
@@ -1687,16 +1723,39 @@ export async function handlePrReviewEnsemble(
         // keys) as a name-collision guard. Empty input fast-paths inside the DO.
         const changedGraphNames = extractChangedSymbols(astFilesByPath, buildChangedLines(diff))
         const changedGraphPaths = [...astFilesByPath.keys()]
-        const blast = await withTimeout(
-          (_signal) => blastRadiusByNamesFor(env, owner, repo, {
-            changedNames: changedGraphNames,
-            changedPaths: changedGraphPaths,
-          }),
-          graphRpcBudgetMs,
-        )
-        // M2: preserve caller vs import-dependent distinction for telemetry.
-        graphBlastCallerPaths = [...new Set(blast.callerPaths)]
-        graphBlastDependentPaths = [...new Set(blast.importDependents)]
+        // Isolated try: a blast RPC timeout/error must NOT discard the graph
+        // context already built above from graphContextFor (the outer catch
+        // clears it). Blast radius is additive on top of the BFS neighbors.
+        try {
+          const blast = await withTimeout(
+            (_signal) => blastRadiusByNamesFor(env, owner, repo, {
+              changedNames: changedGraphNames,
+              changedPaths: changedGraphPaths,
+            }),
+            graphRpcBudgetMs,
+          )
+          // M2: preserve caller vs import-dependent distinction for telemetry.
+          graphBlastCallerPaths = [...new Set(blast.callerPaths)]
+          graphBlastDependentPaths = [...new Set(blast.importDependents)]
+          // SIG-143: fold blast paths into the graph context that reaches the
+          // specialists (AC), excluding paths already covered by vector-hit
+          // seeds or BFS neighbors. Capped for prompt size.
+          graphBlastContextString = formatGraphBlastContext({
+            callerPaths: graphBlastCallerPaths,
+            dependentPaths: graphBlastDependentPaths,
+            exclude: new Set([...seedPaths, ...graphNodePaths]),
+            cap: GRAPH_BLAST_PROMPT_CAP,
+          })
+        } catch (blastErr) {
+          console.log(JSON.stringify({
+            event: "pr-review-graph-blast-error",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            error: blastErr instanceof Error ? blastErr.message : String(blastErr),
+          }))
+          graphBlastCallerPaths = []
+          graphBlastDependentPaths = []
+          graphBlastContextString = ""
+        }
 
         // Bake-off telemetry: emit in both shadow and post so the SIG-86
         // analysis always has coverage data. Failure is non-fatal.
@@ -1740,12 +1799,17 @@ export async function handlePrReviewEnsemble(
         graphNodePaths = []
         graphBlastCallerPaths = []
         graphBlastDependentPaths = []
+        graphBlastContextString = ""
       }
     }
     // In post mode, inject graph context into logic+tests specialists
-    // and synthesizer. In shadow mode, the variables are computed but
-    // not attached to prompts (bake-off telemetry fires in both modes).
-    const graphCtxForPrompt = graphRetrievalMode(env) === "post" ? graphContextString : ""
+    // and synthesizer: BFS neighbors (graphContextString) plus the folded
+    // blast-radius paths (graphBlastContextString). In shadow mode, the
+    // variables are computed but not attached to prompts (bake-off telemetry
+    // fires in both modes).
+    const graphCtxForPrompt = graphRetrievalMode(env) === "post"
+      ? [graphContextString, graphBlastContextString].filter((s) => s.length > 0).join("\n")
+      : ""
     // ──────────────────────────────────────────────────────────────────
 
     const astResult = await runAstRules({

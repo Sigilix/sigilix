@@ -39,6 +39,7 @@ import {
   formatGraphContext,
   graphOverlapStats,
   GRAPH_RPC_TIMEOUT_MS,
+  BLAST_RADIUS_RESOLUTION_READY,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
@@ -1344,8 +1345,14 @@ describe("graphRetrievalMode", () => {
     expect(graphRetrievalMode(makeEnv("shadow"))).toBe("shadow")
   })
 
-  it("returns 'post' for 'post'", () => {
-    expect(graphRetrievalMode(makeEnv("post"))).toBe("post")
+  // SIG-143 guard: while BLAST_RADIUS_RESOLUTION_READY is false, 'post' is
+  // coerced to 'shadow' so a config flip cannot ship the incomplete
+  // graph-routed path to production.
+  // When SIG-143 lands and BLAST_RADIUS_RESOLUTION_READY is flipped to true,
+  // restore this assertion to expect("post").
+  it("coerces 'post' to 'shadow' while BLAST_RADIUS_RESOLUTION_READY is false (SIG-143 guard)", () => {
+    expect(BLAST_RADIUS_RESOLUTION_READY).toBe(false)
+    expect(graphRetrievalMode(makeEnv("post"))).toBe("shadow")
   })
 
   it("returns 'off' for 'off'", () => {
@@ -1360,9 +1367,11 @@ describe("graphRetrievalMode", () => {
     expect(graphRetrievalMode(makeEnv(""))).toBe("off")
   })
 
-  it("is case-insensitive", () => {
+  it("is case-insensitive: 'SHADOW' -> 'shadow', 'Post' coerced to 'shadow' (SIG-143 guard)", () => {
     expect(graphRetrievalMode(makeEnv("SHADOW"))).toBe("shadow")
-    expect(graphRetrievalMode(makeEnv("Post"))).toBe("post")
+    // 'Post' resolves to raw "post", which is coerced to "shadow" until SIG-143.
+    // When BLAST_RADIUS_RESOLUTION_READY is flipped true, restore to expect("post").
+    expect(graphRetrievalMode(makeEnv("Post"))).toBe("shadow")
   })
 })
 

@@ -526,16 +526,33 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
 // and string formatting). All three follow the env-flag conventions used
 // by OPENCLAW_SYMBOL_RETRIEVAL / OPENCLAW_BRANCH_AWARE_RETRIEVAL.
 
+// SIG-143: blast-radius resolution is name-based and not yet implemented, so
+// `blastRadiusFor` is called with an empty id set (inert). Until SIG-143 lands,
+// `post` is coerced to `shadow` so a config flip can't ship the incomplete
+// graph-routed path to production. Flip to true when blastRadiusByNames exists.
+export const BLAST_RADIUS_RESOLUTION_READY = false
+
 /** Returns true when OPENCLAW_GRAPH_RETRIEVAL is "shadow" or "post". */
 export function graphRetrievalEnabled(env: Env): boolean {
   const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
   return v === "shadow" || v === "post"
 }
 
-/** Returns the effective graph-retrieval mode: "off" | "shadow" | "post". */
+/**
+ * Returns the effective graph-retrieval mode: "off" | "shadow" | "post".
+ *
+ * While BLAST_RADIUS_RESOLUTION_READY is false, a raw value of "post" is
+ * coerced to "shadow" — blast-radius resolution is inert (SIG-143) and the
+ * graph-routed path is not ready for production. A config flip to "post"
+ * will take effect only after the constant is flipped true.
+ */
 export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
   const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
-  return v === "post" ? "post" : v === "shadow" ? "shadow" : "off"
+  const raw = v === "post" ? "post" : v === "shadow" ? "shadow" : "off"
+  if (raw === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
+    return "shadow"
+  }
+  return raw
 }
 
 /**
@@ -1634,6 +1651,16 @@ export async function handlePrReviewEnsemble(
     // graph-context injection can use a combined set.
     let graphBlastCallerPaths: string[] = []
     let graphBlastDependentPaths: string[] = []
+    // Warn once per run when OPENCLAW_GRAPH_RETRIEVAL=post is coerced to shadow
+    // because BLAST_RADIUS_RESOLUTION_READY is false (SIG-143 not yet landed).
+    const rawGraphMode = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
+    if (rawGraphMode === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
+      console.warn(JSON.stringify({
+        event: "graph-retrieval-post-coerced-shadow",
+        reason: "BLAST_RADIUS_RESOLUTION_READY is false; set it true when SIG-143 lands",
+        owner, repo, prNumber,
+      }))
+    }
     if (graphRetrievalEnabled(env)) {
       const graphRpcBudgetMs = parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS)
       try {

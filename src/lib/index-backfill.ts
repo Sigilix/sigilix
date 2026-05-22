@@ -56,15 +56,28 @@ export async function runIndexBackfill(
     summary.repos += repos.items.length
     if (opts.dryRun || repos.items.length === 0) continue
 
-    const res = await enqueueIndexJobsForRepos({
-      env,
-      installationId,
-      repositories: repos.items.map((full_name) => ({ full_name })),
-      reason: "manual",
-    })
-    summary.enqueued += res.succeeded
-    summary.sensitiveSkipped += res.sensitiveSkipped
-    summary.perRepoFailed += res.perRepoFailed
+    try {
+      const res = await enqueueIndexJobsForRepos({
+        env,
+        installationId,
+        repositories: repos.items.map((full_name) => ({ full_name })),
+        reason: "manual",
+      })
+      summary.enqueued += res.succeeded
+      summary.sensitiveSkipped += res.sensitiveSkipped
+      summary.perRepoFailed += res.perRepoFailed
+    } catch (err) {
+      // Preserve per-installation fail-soft: an unexpected throw on one
+      // installation's fan-out (queue binding broken, etc.) must not abort
+      // the whole backfill. Flag coverage as incomplete so the operator
+      // re-runs.
+      console.warn(JSON.stringify({
+        event: "index-backfill-enqueue-error",
+        installation_id: installationId,
+        error: err instanceof Error ? err.message : String(err),
+      }))
+      summary.enumerationIncomplete = true
+    }
   }
 
   console.log(JSON.stringify({ event: "index-backfill-complete", ...summary }))

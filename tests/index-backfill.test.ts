@@ -78,6 +78,18 @@ describe("runIndexBackfill", () => {
     expect(mockEnqueue).toHaveBeenCalledTimes(2) // didn't abort
   })
 
+  it("per-installation fail-soft: an enqueue throw on one install doesn't abort the run", async () => {
+    mockListInstalls.mockResolvedValue(ok([111, 222]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"])).mockResolvedValueOnce(ok(["o/c"]))
+    mockEnqueue
+      .mockRejectedValueOnce(new Error("queue binding broken"))
+      .mockResolvedValueOnce({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+    const out = await runIndexBackfill(env, { dryRun: false })
+    expect(mockEnqueue).toHaveBeenCalledTimes(2) // didn't abort after the throw
+    expect(out.enqueued).toBe(1) // only the successful install counted
+    expect(out.enumerationIncomplete).toBe(true) // coverage incomplete → re-run
+  })
+
   it("per-installation fail-soft: an install with zero repos is skipped, others still run", async () => {
     mockListInstalls.mockResolvedValue(ok([111, 222]))
     mockListRepos.mockResolvedValueOnce(ok([])).mockResolvedValueOnce(ok(["o/c"]))

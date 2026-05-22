@@ -186,6 +186,15 @@ describe("listAppInstallationIds (pagination)", () => {
     const r = await listAppInstallationIds("123", PKCS8_PEM)
     expect(r).toEqual({ items: [], complete: false })
   })
+
+  it("MAX_PAGES cap hit → complete:false (every page returns a full 100)", async () => {
+    // If GitHub keeps returning full pages forever, the loop must exit at the
+    // defensive cap and mark the result as incomplete (operator re-run signal).
+    vi.stubGlobal("fetch", vi.fn(async () => resp(200, ids(100))))
+    const r = await listAppInstallationIds("123", PKCS8_PEM)
+    expect(r.complete).toBe(false)
+    expect(r.items.length).toBe(50 * 100) // MAX_PAGES × per_page
+  })
 })
 
 describe("listInstallationRepoFullNames", () => {

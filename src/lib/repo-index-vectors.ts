@@ -186,6 +186,14 @@ export async function appendVectorCoverage(
   if (Object.keys(slice).length === 0) return
 
   const existing = await readRepoIndexVectors(env, owner, repo)
+  if (existing.kind === "invalid") {
+    // Fail closed: a corrupt ledger may already hold earlier batches' ids.
+    // Recreating it from only this slice would silently drop that coverage and
+    // reintroduce the orphan gap. Throw so the indexer aborts BEFORE upserting
+    // and the queue retries — mirrors persistVectorIds' mid-chain corruption
+    // handling.
+    throw new Error(`repo-index-vectors coverage write failed for ${repo}: existing record invalid (${existing.reason})`)
+  }
   const record: RepoIndexVectorsV1 =
     existing.kind === "ok"
       ? { ...existing.vectors, byPath: setUnion(existing.vectors.byPath, slice) }

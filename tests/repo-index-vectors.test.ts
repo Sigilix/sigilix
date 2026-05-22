@@ -348,6 +348,15 @@ describe("appendVectorCoverage", () => {
     expect(store.size).toBe(0)
   })
 
+  it("fails closed when the existing record is invalid (does NOT silently discard prior coverage)", async () => {
+    const { kv, store } = makeKvStub()
+    // Corrupt ledger that may already hold earlier batches' ids.
+    store.set("repo-index-vectors:arc-and-anchor/sigilix", "{corrupt json")
+    await expect(
+      appendVectorCoverage(makeEnv(kv), "Arc-and-Anchor", "Sigilix", "run-1", { "src/a.ts": ["a1"] }),
+    ).rejects.toThrow(/coverage write failed.*invalid/)
+  })
+
   it("throws when the KV write fails (so the caller aborts before upserting)", async () => {
     const failingKv = {
       async get(): Promise<string | null> { return null },

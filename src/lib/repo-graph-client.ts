@@ -9,11 +9,12 @@ import type { Env } from "../index"
 import { indexNamespace } from "./repo-index-manifest"
 import type { RepoGraphDO, UpsertFileGraphArgs } from "../do/repo-graph"
 
-// Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace
-// (matching the rest of the codebase's convention — see PR_REVIEW_RUN).
-// We cast to the typed variant here so RPC method calls type-check against
-// the DO's public interface.  The cast is safe: wrangler.toml binds exactly
-// RepoGraphDO to the REPO_GRAPH_DO name.
+// Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace.
+// Unlike PR_REVIEW_RUN (which is fetch-based and never calls RPC methods,
+// so it stays bare), we cast to the typed variant here because we call RPC
+// methods on the stub and need the type-check against RepoGraphDO's public
+// interface.  The cast is safe: wrangler.toml binds exactly RepoGraphDO to
+// the REPO_GRAPH_DO name.
 function graphStub(
   env: Env,
   owner: string,

@@ -55,6 +55,7 @@ import {
   type ReadResult as VectorsReadResult,
 } from "./repo-index-vectors"
 import { activeRunKey } from "./repo-index-active-run"
+import { deleteGraph } from "./repo-graph-client"
 
 const VECTORIZE_DELETE_BATCH = 1000
 const KV_LIST_PAGE_LIMIT = 1000
@@ -421,6 +422,28 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         console.error(JSON.stringify({
           event: "index-delete-kv-active-run-failed",
           owner, repo, key: activeRunKey(owner, repo), err: message,
+        }))
+      }
+
+      // SIG-138 T8: wipe the repo's DO-backed code graph (SQLite). The
+      // graph is keyed by indexNamespace(owner, repo) — no legacy bare-
+      // repo shape. MUST NOT be gated by OPENCLAW_INDEXER_ENABLED: graph
+      // deletion is GDPR/SOC 2 compliance just like vector + KV cleanup.
+      // Best-effort: a graph failure logs (with owner/repo for the audit
+      // trail) but does NOT abort the rest of the delete; redelivery is
+      // idempotent (deleteRepoGraph wipes all rows, so re-calling is safe).
+      try {
+        await deleteGraph(env, owner, repo)
+        console.log(JSON.stringify({
+          event: "index-delete-graph-deleted",
+          owner, repo,
+        }))
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        result.errors.push(`graph.delete(repo-graph): ${message}`)
+        console.error(JSON.stringify({
+          event: "index-delete-graph-failed",
+          owner, repo, err: message,
         }))
       }
 

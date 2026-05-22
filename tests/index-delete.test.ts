@@ -74,9 +74,35 @@ function makeKvStub(): {
 function makeEnv(opts: {
   kv?: Env["OPENCLAW_STATE"]
   deleteByIdsImpl?: (ids: string[]) => Promise<unknown>
-} = {}): { env: Env; deletedBatches: string[][] } {
+  graphDeleteImpl?: (namespace: string) => Promise<void>
+} = {}): { env: Env; deletedBatches: string[][]; graphDeletedNamespaces: string[] } {
   const kv = opts.kv ?? makeKvStub().kv
   const deletedBatches: string[][] = []
+  const graphDeletedNamespaces: string[] = []
+
+  // Minimal REPO_GRAPH_DO stub: tracks which DO instances had deleteRepoGraph()
+  // called on them (identified by the namespace string passed to idFromName).
+  const graphDeleteImpl = opts.graphDeleteImpl
+  const repoGraphDO = {
+    idFromName(name: string) {
+      return { name, toString: () => name }
+    },
+    get(id: { name: string }) {
+      return {
+        async deleteRepoGraph(): Promise<void> {
+          if (graphDeleteImpl) {
+            await graphDeleteImpl(id.name)
+          } else {
+            graphDeletedNamespaces.push(id.name)
+          }
+        },
+        // Stub remaining RPC methods — not called by the delete path.
+        async upsertFileGraph(): Promise<void> { /* no-op */ },
+        async commitGraphVersion(): Promise<void> { /* no-op */ },
+      }
+    },
+  }
+
   const env = {
     OPENCLAW_STATE: kv,
     OPENCLAW_CODE_INDEX: {
@@ -85,8 +111,9 @@ function makeEnv(opts: {
         return { ids, count: ids.length }
       }),
     },
+    REPO_GRAPH_DO: repoGraphDO,
   } as unknown as Env
-  return { env, deletedBatches }
+  return { env, deletedBatches, graphDeletedNamespaces }
 }
 
 function manifest(over: Partial<RepoIndexManifestV1> = {}): RepoIndexManifestV1 {
@@ -671,5 +698,89 @@ describe("handleInstallationDeleted", () => {
       env, installationId: 99, ownerLogin: "Acme",
     })
     expect(anyError).toBe(true)
+  })
+})
+
+// ─── deleteRepoIndex — SIG-138 T8 graph-delete arm ─────────────────────
+
+describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
+  it("invokes deleteGraph for the resolved owner/repo on a normal uninstall", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    // The graph stub records the DO namespace string (indexNamespace(owner, repo)).
+    // indexNamespace lowercases: "arc-and-anchor/sigilix".
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+  })
+
+  it("graph delete runs even when OPENCLAW_INDEXER_ENABLED is absent (ungated by indexer flag)", async () => {
+    // The delete path must not check OPENCLAW_INDEXER_ENABLED. Verify by
+    // ensuring the graph delete fires on an env that does NOT define the flag.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    // Explicitly confirm the flag is absent on the env stub.
+    expect((env as Record<string, unknown>)["OPENCLAW_INDEXER_ENABLED"]).toBeUndefined()
+
+    await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-repos-removed",
+    })
+
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+  })
+
+  it("graph delete is skipped when owner guard fires (owner mismatch)", async () => {
+    // The graph delete arm is INSIDE the safeToTouchRepoOnlyState block.
+    // When manifest.owner != owner the arm must not fire.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("owner-mismatch-skip")
+    expect(graphDeletedNamespaces).toHaveLength(0)
+  })
+
+  it("graph delete failure is best-effort: logs an error and sets status=partial but other arms complete", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, deletedBatches } = makeEnv({
+      kv,
+      graphDeleteImpl: async () => { throw new Error("DO unavailable") },
+    })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Graph failure contributes to errors[] → status becomes partial.
+    expect(result.status).toBe("partial")
+    expect(result.errors.some((e) => e.includes("graph.delete"))).toBe(true)
+    // The rest of the arms still ran: Vectorize ids were deleted.
+    expect(result.vectorIds).toBe(3)
+    expect(deletedBatches).toHaveLength(1)
+    // KV records also cleaned up.
+    expect(result.manifestDeleted).toBe(true)
+    expect(result.vectorsKvDeleted).toBe(true)
   })
 })

@@ -545,6 +545,6 @@ export class RepoGraphDO extends DurableObject<Env> {
       sql.exec("DELETE FROM graph_versions")
     })
 
-    emit("graph-deleted", {})
+    emit("graph-deleted", { instance: this.ctx.id.toString() })
   }
 }

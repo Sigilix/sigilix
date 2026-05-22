@@ -25,23 +25,14 @@ export function jsTsExtOf(path: string): SourceExt | null {
  * internal error (caller falls back to line-window). Never throws.
  */
 export function chunkFileAst(path: string, content: string, ext: SourceExt): Chunk[] | null {
-  let parsed: ReturnType<typeof parseSource>
   try {
-    parsed = parseSource(content, ext)
-  } catch {
-    return null
-  }
+  const parsed = parseSource(content, ext)
   if (!parsed.ok) return null
 
   const lines = content.split("\n")
   const lineCount = lines.length
 
-  let body: unknown
-  try {
-    body = (parsed.ast as { body?: unknown }).body
-  } catch {
-    return null
-  }
+  const body = (parsed.ast as { body?: unknown }).body
   if (!Array.isArray(body)) return null
 
   const intervals: Array<[number, number]> = []
@@ -88,4 +79,7 @@ export function chunkFileAst(path: string, content: string, ext: SourceExt): Chu
   }
   if (cursor <= lineCount) emit(cursor, lineCount)
   return out
+  } catch {
+    return null
+  }
 }

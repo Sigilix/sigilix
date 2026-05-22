@@ -60,6 +60,14 @@ export function splitOversizedWindow(
 
   const flush = (): void => {
     if (bufLineCount === 0) return
+    // SIG-131: never emit a whitespace-only sub-chunk — embedTexts throws on
+    // blank input. A buffer of only blank lines (e.g. trailing blanks in an
+    // oversized window) is dropped here, mirroring chunkFile's blank-window skip.
+    if (buf.trim().length === 0) {
+      buf = ""
+      bufLineCount = 0
+      return
+    }
     chunks.push({
       path: "",
       lineStart: bufStartLine,
@@ -88,11 +96,13 @@ export function splitOversizedWindow(
       // reintroducing data loss on the very path that's meant to prevent it.
       let fragmentIndex = 0
       for (let off = 0; off < line.length; off += MAX_CHUNK_CHARS) {
+        const frag = line.slice(off, off + MAX_CHUNK_CHARS)
+        if (frag.trim().length === 0) continue // SIG-131: skip blank fragment (embedder throws)
         chunks.push({
           path: "",
           lineStart: absLine,
           lineEnd: absLine,
-          content: line.slice(off, off + MAX_CHUNK_CHARS),
+          content: frag,
           fragmentIndex,
         })
         fragmentIndex += 1

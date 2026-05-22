@@ -341,6 +341,14 @@ describe("splitOversizedWindow", () => {
     }
     expect(cursor).toBe(14) // covered 10,11,12,13
   })
+
+  it("never emits a whitespace-only sub-chunk (trailing blank buffer)", () => {
+    // 1400-char content line then trailing blanks: the content flushes, the
+    // trailing blanks accumulate into the final buffer → blank chunk pre-fix.
+    const chunks = splitOversizedWindow(["x".repeat(1400), "", "", ""], 1)
+    for (const c of chunks) expect(c.content.trim().length).toBeGreaterThan(0)
+    expect(chunks.length).toBeGreaterThan(0) // the content line still emitted
+  })
 })
 
 describe("chunkId", () => {

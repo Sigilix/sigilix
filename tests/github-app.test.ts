@@ -12,7 +12,7 @@
 // covered by GitHub itself rejecting invalid JWTs at token-exchange time.
 
 import { describe, expect, it, vi, afterEach } from "vitest"
-import { signGitHubAppJwt, resolveRepoInstallationId } from "../src/lib/github-app"
+import { signGitHubAppJwt, resolveRepoInstallationId, listAppInstallationIds, listInstallationRepoFullNames } from "../src/lib/github-app"
 
 // PKCS#8 RSA-2048 private key — generated with:
 //   openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
@@ -137,5 +137,89 @@ describe("resolveRepoInstallationId", () => {
   it("fail-soft: returns null when JWT signing fails (bad key)", async () => {
     stubFetch(async () => new Response("{}", { status: 200 }))
     expect(await resolveRepoInstallationId("123", "not-a-valid-pem", "o", "r")).toBeNull()
+  })
+})
+
+// SIG-156: paginated listing helpers — fetch-stubbed, App JWT signs via PKCS8_PEM.
+describe("listAppInstallationIds (pagination)", () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const resp = (status: number, body: unknown) => new Response(JSON.stringify(body), { status })
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => ({ id: i }))
+
+  it("accumulates across full pages, stops on a short page (complete)", async () => {
+    const seen: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      seen.push(url)
+      const p = new URL(url).searchParams.get("page")
+      if (p === "1") return resp(200, ids(100))
+      if (p === "2") return resp(200, [{ id: 1000 }, { id: 1001 }])
+      return resp(200, [])
+    }))
+    const r = await listAppInstallationIds("123", PKCS8_PEM)
+    expect(r.complete).toBe(true)
+    expect(r.items).toHaveLength(102)
+    expect(seen).toHaveLength(2)
+  })
+
+  it("exactly-100-then-empty terminates as complete", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const p = new URL(url).searchParams.get("page")
+      return p === "1" ? resp(200, ids(100)) : resp(200, [])
+    }))
+    const r = await listAppInstallationIds("123", PKCS8_PEM)
+    expect(r.complete).toBe(true)
+    expect(r.items).toHaveLength(100)
+  })
+
+  it("non-OK mid-pagination → partial items + complete:false", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const p = new URL(url).searchParams.get("page")
+      return p === "1" ? resp(200, ids(100)) : resp(500, {})
+    }))
+    const r = await listAppInstallationIds("123", PKCS8_PEM)
+    expect(r.complete).toBe(false)
+    expect(r.items).toHaveLength(100)
+  })
+
+  it("fetch throw → complete:false, empty", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("net") }))
+    const r = await listAppInstallationIds("123", PKCS8_PEM)
+    expect(r).toEqual({ items: [], complete: false })
+  })
+})
+
+describe("listInstallationRepoFullNames", () => {
+  afterEach(() => vi.unstubAllGlobals())
+  const kv = { get: async () => null, put: async () => {} } as unknown as Parameters<typeof listInstallationRepoFullNames>[0]
+
+  it("returns full_names (token fetch + repos page, uses `token` auth scheme)", async () => {
+    const authSchemes: string[] = []
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
+      if (url.includes("/access_tokens")) {
+        return new Response(JSON.stringify({ token: "tkn", expires_at: new Date(Date.now() + 3_600_000).toISOString() }), { status: 201 })
+      }
+      if (url.includes("/installation/repositories")) {
+        if (init?.headers?.authorization) authSchemes.push(init.headers.authorization)
+        const p = new URL(url).searchParams.get("page")
+        return p === "1"
+          ? new Response(JSON.stringify({ repositories: [{ full_name: "o/a" }, { full_name: "o/b" }] }), { status: 200 })
+          : new Response(JSON.stringify({ repositories: [] }), { status: 200 })
+      }
+      return new Response("{}", { status: 404 })
+    }))
+    const r = await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)
+    expect(r).toEqual({ items: ["o/a", "o/b"], complete: true })
+    expect(authSchemes[0]).toBe("token tkn") // installation token uses `token`, not `Bearer`
+  })
+
+  it("non-OK on the repos page → complete:false", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      if (url.includes("/access_tokens")) {
+        return new Response(JSON.stringify({ token: "tkn", expires_at: new Date(Date.now() + 3_600_000).toISOString() }), { status: 201 })
+      }
+      return new Response("forbidden", { status: 403 })
+    }))
+    const r = await listInstallationRepoFullNames(kv, "123", PKCS8_PEM, 999)
+    expect(r.complete).toBe(false)
   })
 })

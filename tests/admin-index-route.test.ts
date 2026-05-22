@@ -5,9 +5,11 @@ import { describe, expect, it, vi, beforeEach } from "vitest"
 // Mock the App-JWT installation resolver so the route can be tested without a
 // real RSA key / GitHub API call.
 vi.mock("../src/lib/github-app", () => ({ resolveRepoInstallationId: vi.fn() }))
+vi.mock("../src/lib/index-backfill", () => ({ runIndexBackfill: vi.fn() }))
 
-import { handleAdminIndexRoute } from "../src/lib/admin-index-route"
+import { handleAdminIndexRoute, handleAdminBackfillRoute } from "../src/lib/admin-index-route"
 import { resolveRepoInstallationId } from "../src/lib/github-app"
+import { runIndexBackfill } from "../src/lib/index-backfill"
 import type { Env } from "../src/index"
 import type { JobMessage } from "../src/lib/job-message"
 
@@ -88,5 +90,43 @@ describe("handleAdminIndexRoute", () => {
       installationId: 998877,
       reason: "manual",
     })
+  })
+})
+
+const mockBackfill = vi.mocked(runIndexBackfill)
+
+describe("handleAdminBackfillRoute", () => {
+  beforeEach(() => mockBackfill.mockReset())
+
+  it("503 when the admin token is unset", async () => {
+    const { env } = makeEnv({ OPENCLAW_ADMIN_TOKEN: undefined })
+    expect((await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)).status).toBe(503)
+    expect(mockBackfill).not.toHaveBeenCalled()
+  })
+
+  it("401 on missing/wrong bearer", async () => {
+    const { env } = makeEnv()
+    expect((await handleAdminBackfillRoute(post("https://x/admin/index-backfill"), env)).status).toBe(401)
+  })
+
+  it("503 when the GitHub App isn't configured", async () => {
+    const { env } = makeEnv({ GITHUB_PRIVATE_KEY: undefined })
+    expect((await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)).status).toBe(503)
+  })
+
+  it("200 returns the backfill summary (dryRun flag threaded)", async () => {
+    mockBackfill.mockResolvedValue({ installations: 3, repos: 12, enqueued: 12, sensitiveSkipped: 0, perRepoFailed: 0, dryRun: true, enumerationIncomplete: false })
+    const { env } = makeEnv()
+    const res = await handleAdminBackfillRoute(post("https://x/admin/index-backfill?dryRun=true", `Bearer ${TOKEN}`), env)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ installations: 3, repos: 12, dryRun: true })
+    expect(mockBackfill).toHaveBeenCalledWith(env, { dryRun: true })
+  })
+
+  it("defaults dryRun=false when not specified", async () => {
+    mockBackfill.mockResolvedValue({ installations: 0, repos: 0, enqueued: 0, sensitiveSkipped: 0, perRepoFailed: 0, dryRun: false, enumerationIncomplete: false })
+    const { env } = makeEnv()
+    await handleAdminBackfillRoute(post("https://x/admin/index-backfill", `Bearer ${TOKEN}`), env)
+    expect(mockBackfill).toHaveBeenCalledWith(env, { dryRun: false })
   })
 })

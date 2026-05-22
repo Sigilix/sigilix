@@ -300,3 +300,99 @@ export async function resolveRepoInstallationId(
     return null
   }
 }
+
+const GH_API_HEADERS = (auth: string): Record<string, string> => ({
+  accept: "application/vnd.github+json",
+  authorization: auth,
+  "x-github-api-version": "2022-11-28",
+  "user-agent": "sigilix-worker",
+})
+const MAX_PAGES = 50 // hard cap (5000 installs / repos) — defensive
+
+/** A paginated listing that reports whether the enumeration ran to completion. */
+export interface ListingResult<T> {
+  items: T[]
+  /** false if any page errored / threw / the MAX_PAGES cap was hit — i.e. the
+   *  result may be a partial subset. The backfill surfaces this so an operator
+   *  knows to re-run rather than trust incomplete coverage. */
+  complete: boolean
+}
+
+/**
+ * SIG-156: list every GitHub App installation id via the App JWT
+ * (`GET /app/installations`, paginated). Fail-soft — returns whatever pages
+ * succeeded plus a `complete` flag (false on any error / cap hit).
+ */
+export async function listAppInstallationIds(
+  appId: string,
+  privateKeyPem: string,
+): Promise<ListingResult<number>> {
+  const items: number[] = []
+  try {
+    const jwt = await signGitHubAppJwt(appId, privateKeyPem)
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(
+        `https://api.github.com/app/installations?per_page=100&page=${page}`,
+        { headers: GH_API_HEADERS(`Bearer ${jwt}`) },
+      )
+      if (!res.ok) {
+        console.warn(JSON.stringify({ event: "list-app-installations-failed", page, status: res.status }))
+        return { items, complete: false }
+      }
+      const arr = (await res.json()) as Array<{ id?: unknown }>
+      if (!Array.isArray(arr) || arr.length === 0) return { items, complete: true }
+      for (const inst of arr) if (typeof inst.id === "number") items.push(inst.id)
+      if (arr.length < 100) return { items, complete: true }
+      if (page === MAX_PAGES) {
+        console.warn(JSON.stringify({ event: "list-app-installations-truncated", max_pages: MAX_PAGES }))
+        return { items, complete: false }
+      }
+    }
+    return { items, complete: false }
+  } catch (err) {
+    console.warn(JSON.stringify({ event: "list-app-installations-error", error: err instanceof Error ? err.message : String(err) }))
+    return { items, complete: false }
+  }
+}
+
+/**
+ * SIG-156: list the `full_name`s of repos an installation can access
+ * (`GET /installation/repositories`, paginated, installation-token auth).
+ * Fail-soft + `complete` flag, mirroring listAppInstallationIds.
+ */
+export async function listInstallationRepoFullNames(
+  kv: KVNamespace,
+  appId: string,
+  privateKey: string,
+  installationId: number,
+): Promise<ListingResult<string>> {
+  const items: string[] = []
+  try {
+    const token = await getInstallationToken({ kv, appId, privateKey, installationId })
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const res = await fetch(
+        `https://api.github.com/installation/repositories?per_page=100&page=${page}`,
+        // Installation tokens use the `token` auth scheme (matches github.ts);
+        // only the App JWT uses `Bearer`.
+        { headers: GH_API_HEADERS(`token ${token}`) },
+      )
+      if (!res.ok) {
+        console.warn(JSON.stringify({ event: "list-installation-repos-failed", installation_id: installationId, page, status: res.status }))
+        return { items, complete: false }
+      }
+      const json = (await res.json()) as { repositories?: Array<{ full_name?: unknown }> }
+      const repos = json.repositories
+      if (!Array.isArray(repos) || repos.length === 0) return { items, complete: true }
+      for (const r of repos) if (typeof r.full_name === "string") items.push(r.full_name)
+      if (repos.length < 100) return { items, complete: true }
+      if (page === MAX_PAGES) {
+        console.warn(JSON.stringify({ event: "list-installation-repos-truncated", installation_id: installationId, max_pages: MAX_PAGES }))
+        return { items, complete: false }
+      }
+    }
+    return { items, complete: false }
+  } catch (err) {
+    console.warn(JSON.stringify({ event: "list-installation-repos-error", installation_id: installationId, error: err instanceof Error ? err.message : String(err) }))
+    return { items, complete: false }
+  }
+}

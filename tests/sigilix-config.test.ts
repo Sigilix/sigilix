@@ -1113,3 +1113,79 @@ describe("resolveCoverageConfig", () => {
     ).toBe("off")
   })
 })
+
+// ─── SIG-138 Phase 2: [GRAPH CONTEXT] prompt block ──────────────────────────
+
+describe("buildSpecialistInitialMessage — [GRAPH CONTEXT] block (SIG-138)", () => {
+  const baseCtx = {
+    prNumber: 42,
+    title: "feat: add thing",
+    body: "Adds a thing.",
+    diff: "diff --git a/x.ts b/x.ts\n@@ -0,0 +1 @@\n+export const x = 1",
+    retrievalSnapshot: "",
+    namespace: "myrepo",
+  }
+
+  it("renders a [GRAPH CONTEXT] block when graphContext is present, omits it otherwise", () => {
+    const withGraph = buildSpecialistInitialMessage({
+      ...baseCtx,
+      graphContext: "src/b.ts (hop1, import)\nsrc/c.ts (hop2, import)",
+    })
+    expect(withGraph).toContain("[GRAPH CONTEXT")
+    expect(withGraph).toContain("src/b.ts (hop1, import)")
+    const without = buildSpecialistInitialMessage(baseCtx)
+    expect(without).not.toContain("[GRAPH CONTEXT")
+  })
+
+  it("omits the [GRAPH CONTEXT] block when graphContext is an empty string", () => {
+    const msg = buildSpecialistInitialMessage({ ...baseCtx, graphContext: "" })
+    expect(msg).not.toContain("[GRAPH CONTEXT")
+  })
+
+  it("omits the [GRAPH CONTEXT] block when graphContext is whitespace-only", () => {
+    const msg = buildSpecialistInitialMessage({ ...baseCtx, graphContext: "   " })
+    expect(msg).not.toContain("[GRAPH CONTEXT")
+  })
+
+  it("places the [GRAPH CONTEXT] block adjacent to [RETRIEVAL SNAPSHOT]", () => {
+    const msg = buildSpecialistInitialMessage({
+      ...baseCtx,
+      graphContext: "src/b.ts (hop1, import)",
+    })
+    const retrievalIdx = msg.indexOf("[RETRIEVAL SNAPSHOT]")
+    const graphIdx = msg.indexOf("[GRAPH CONTEXT")
+    expect(retrievalIdx).toBeGreaterThan(-1)
+    expect(graphIdx).toBeGreaterThan(-1)
+    // [GRAPH CONTEXT] should appear after [RETRIEVAL SNAPSHOT]
+    expect(graphIdx).toBeGreaterThan(retrievalIdx)
+  })
+})
+
+describe("buildSynthesizerInitialMessage — [GRAPH CONTEXT] block (SIG-138)", () => {
+  const baseCtx = {
+    prNumber: 42,
+    diff: "diff --git a/x.ts b/x.ts\n@@ ...",
+    specialistVerdictsBlock: "=== LOGIC ===\n{}",
+  }
+
+  it("renders a [GRAPH CONTEXT] block when graphContext is present, omits it otherwise", () => {
+    const withGraph = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      graphContext: "src/b.ts (hop1, import)\nsrc/c.ts (hop2, import)",
+    })
+    expect(withGraph).toContain("[GRAPH CONTEXT")
+    expect(withGraph).toContain("src/b.ts (hop1, import)")
+    const without = buildSynthesizerInitialMessage(baseCtx)
+    expect(without).not.toContain("[GRAPH CONTEXT")
+  })
+
+  it("omits the [GRAPH CONTEXT] block when graphContext is an empty string", () => {
+    const msg = buildSynthesizerInitialMessage({ ...baseCtx, graphContext: "" })
+    expect(msg).not.toContain("[GRAPH CONTEXT")
+  })
+
+  it("omits the [GRAPH CONTEXT] block when graphContext is whitespace-only", () => {
+    const msg = buildSynthesizerInitialMessage({ ...baseCtx, graphContext: "   " })
+    expect(msg).not.toContain("[GRAPH CONTEXT")
+  })
+})

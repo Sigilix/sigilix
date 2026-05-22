@@ -34,6 +34,12 @@ import {
   SPECIALIST_CONFIGS,
   SYNTHESIZER_CONFIG,
   MAX_CALLS_PER_ENSEMBLE_RUN,
+  graphRetrievalEnabled,
+  graphRetrievalMode,
+  formatGraphContext,
+  graphOverlapStats,
+  GRAPH_RPC_TIMEOUT_MS,
+  BLAST_RADIUS_RESOLUTION_READY,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
@@ -1292,5 +1298,169 @@ describe("SYNTHESIZER_RETRY_TIMEOUT_MS budget invariant (ARC-278 + ARC-283)", ()
     expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBeGreaterThanOrEqual(
       Math.floor(SYNTHESIZER_TIMEOUT_MS * 0.3),
     )
+  })
+})
+
+// ─── SIG-138 Phase 2: graph-retrieval pure helpers ─────────────────────────
+
+describe("graphRetrievalEnabled", () => {
+  const makeEnv = (v: string | undefined) =>
+    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("../src/index").Env)
+
+  it("returns true for 'shadow'", () => {
+    expect(graphRetrievalEnabled(makeEnv("shadow"))).toBe(true)
+  })
+
+  it("returns true for 'post'", () => {
+    expect(graphRetrievalEnabled(makeEnv("post"))).toBe(true)
+  })
+
+  it("returns true for case-insensitive variants ('Shadow', 'POST')", () => {
+    expect(graphRetrievalEnabled(makeEnv("Shadow"))).toBe(true)
+    expect(graphRetrievalEnabled(makeEnv("POST"))).toBe(true)
+  })
+
+  it("returns false for 'off'", () => {
+    expect(graphRetrievalEnabled(makeEnv("off"))).toBe(false)
+  })
+
+  it("returns false for empty string", () => {
+    expect(graphRetrievalEnabled(makeEnv(""))).toBe(false)
+  })
+
+  it("returns false for undefined", () => {
+    expect(graphRetrievalEnabled(makeEnv(undefined))).toBe(false)
+  })
+
+  it("returns false for an unrecognized value", () => {
+    expect(graphRetrievalEnabled(makeEnv("on"))).toBe(false)
+  })
+})
+
+describe("graphRetrievalMode", () => {
+  const makeEnv = (v: string | undefined) =>
+    ({ OPENCLAW_GRAPH_RETRIEVAL: v } as unknown as import("../src/index").Env)
+
+  it("returns 'shadow' for 'shadow'", () => {
+    expect(graphRetrievalMode(makeEnv("shadow"))).toBe("shadow")
+  })
+
+  // SIG-143 guard: while BLAST_RADIUS_RESOLUTION_READY is false, 'post' is
+  // coerced to 'shadow' so a config flip cannot ship the incomplete
+  // graph-routed path to production.
+  // When SIG-143 lands and BLAST_RADIUS_RESOLUTION_READY is flipped to true,
+  // restore this assertion to expect("post").
+  it("coerces 'post' to 'shadow' while BLAST_RADIUS_RESOLUTION_READY is false (SIG-143 guard)", () => {
+    expect(BLAST_RADIUS_RESOLUTION_READY).toBe(false)
+    expect(graphRetrievalMode(makeEnv("post"))).toBe("shadow")
+  })
+
+  it("returns 'off' for 'off'", () => {
+    expect(graphRetrievalMode(makeEnv("off"))).toBe("off")
+  })
+
+  it("returns 'off' for undefined", () => {
+    expect(graphRetrievalMode(makeEnv(undefined))).toBe("off")
+  })
+
+  it("returns 'off' for empty string", () => {
+    expect(graphRetrievalMode(makeEnv(""))).toBe("off")
+  })
+
+  it("is case-insensitive: 'SHADOW' -> 'shadow', 'Post' coerced to 'shadow' (SIG-143 guard)", () => {
+    expect(graphRetrievalMode(makeEnv("SHADOW"))).toBe("shadow")
+    // 'Post' resolves to raw "post", which is coerced to "shadow" until SIG-143.
+    // When BLAST_RADIUS_RESOLUTION_READY is flipped true, restore to expect("post").
+    expect(graphRetrievalMode(makeEnv("Post"))).toBe("shadow")
+  })
+})
+
+describe("formatGraphContext", () => {
+  it("formats nodes as 'path (hopN, edgeKind)' lines joined by newline", () => {
+    const nodes = [
+      { path: "src/lib/foo.ts", hop: 1, edgeKind: "import" },
+      { path: "src/lib/bar.ts", hop: 2, edgeKind: "same_file" },
+    ]
+    expect(formatGraphContext(nodes)).toBe(
+      "src/lib/foo.ts (hop1, import)\nsrc/lib/bar.ts (hop2, same_file)",
+    )
+  })
+
+  it("returns empty string for empty array", () => {
+    expect(formatGraphContext([])).toBe("")
+  })
+
+  it("returns a single line with no trailing newline for one node", () => {
+    const result = formatGraphContext([{ path: "src/x.ts", hop: 1, edgeKind: "export" }])
+    expect(result).toBe("src/x.ts (hop1, export)")
+    expect(result.endsWith("\n")).toBe(false)
+  })
+})
+
+describe("graphOverlapStats", () => {
+  it("computes jaccard and addedCount for overlapping sets", () => {
+    // vector=[a,b], graph=[b,c]
+    // intersection={b} (size 1), union={a,b,c} (size 3), jaccard=1/3
+    // addedCount: paths in graph NOT in vector = [c] → 1
+    const result = graphOverlapStats({ vectorPaths: ["a", "b"], graphPaths: ["b", "c"] })
+    expect(result.jaccard).toBeCloseTo(1 / 3)
+    expect(result.addedCount).toBe(1)
+  })
+
+  it("computes jaccard=0 and addedCount=N for disjoint sets", () => {
+    // vector=[a], graph=[b,c] → intersection={}, union={a,b,c} (size 3)
+    const result = graphOverlapStats({ vectorPaths: ["a"], graphPaths: ["b", "c"] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(2)
+  })
+
+  it("computes jaccard=1 and addedCount=0 for identical sets", () => {
+    const result = graphOverlapStats({ vectorPaths: ["x", "y"], graphPaths: ["x", "y"] })
+    expect(result.jaccard).toBe(1)
+    expect(result.addedCount).toBe(0)
+  })
+
+  it("returns jaccard=0 and addedCount=0 for empty sets", () => {
+    const result = graphOverlapStats({ vectorPaths: [], graphPaths: [] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(0)
+  })
+
+  it("computes correctly when vector is empty but graph has paths", () => {
+    // union = graph paths, intersection = 0, jaccard = 0, addedCount = graph.length
+    const result = graphOverlapStats({ vectorPaths: [], graphPaths: ["a", "b"] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(2)
+  })
+
+  it("computes correctly when graph is empty but vector has paths", () => {
+    // union = vector paths, intersection = 0, jaccard = 0, addedCount = 0
+    const result = graphOverlapStats({ vectorPaths: ["a", "b"], graphPaths: [] })
+    expect(result.jaccard).toBe(0)
+    expect(result.addedCount).toBe(0)
+  })
+
+  it("deduplicates duplicate paths within each set for jaccard", () => {
+    // vector=[a,a,b] → Set{a,b}, graph=[b,b,c] → Set{b,c}
+    // intersection={b} (1), union={a,b,c} (3), jaccard=1/3
+    const result = graphOverlapStats({ vectorPaths: ["a", "a", "b"], graphPaths: ["b", "b", "c"] })
+    expect(result.jaccard).toBeCloseTo(1 / 3)
+    expect(result.addedCount).toBe(1)
+  })
+})
+
+// ─── SIG-138 Fix 1: GRAPH_RPC_TIMEOUT_MS budget constant ─────────────────────
+//
+// Validates that the graph RPC timeout constant is exported with a sensible
+// default (tight enough to bound orchestrator wall time, generous enough for
+// a healthy DO RPC).
+
+describe("GRAPH_RPC_TIMEOUT_MS", () => {
+  it("is exported and set to 2500 ms by default", () => {
+    expect(GRAPH_RPC_TIMEOUT_MS).toBe(2_500)
+  })
+
+  it("is well below RETRIEVAL_PREFLIGHT_TIMEOUT_MS so a timed-out graph RPC cannot consume the full preflight budget", () => {
+    expect(GRAPH_RPC_TIMEOUT_MS).toBeLessThan(RETRIEVAL_PREFLIGHT_TIMEOUT_MS)
   })
 })

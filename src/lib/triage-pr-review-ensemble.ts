@@ -267,6 +267,10 @@ import {
   type ShadowRunResult,
 } from "./shadow-bakeoff-runner"
 import type { Env } from "../index"
+// SIG-138 Phase 2 — graph expansion.
+import { graphContextFor, blastRadiusFor } from "./repo-graph-client"
+import { edgeWeight, hopDecay } from "./graph-scoring"
+import { withTimeout } from "./with-timeout"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -379,6 +383,12 @@ const TOP_K_BRANCH = 6
 // fallback = ~181s, fits comfortably within the 270s SPECIALIST
 // budget (89s slack).
 export const PER_ATTEMPT_TIMEOUT_MS = 60_000
+// Graph RPC budget: graph context is purely additive; a slow DO call must
+// not consume orchestrator wall time. Env-tunable via
+// OPENCLAW_GRAPH_RPC_TIMEOUT_MS (e.g. for integration test overrides).
+// Default 2500 ms is generous for a local DO RPC but tight enough that a
+// hung worker doesn't delay the review.
+export const GRAPH_RPC_TIMEOUT_MS = 2_500
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
 
@@ -509,6 +519,74 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
       `consumer past the 900s ceiling → worker hard-killed → message re-delivered.`,
   )
 }
+
+// ─── SIG-138 Phase 2: graph-retrieval pure helpers ────────────────────────
+//
+// Exported for unit-testing (no DO/network access — pure env-flag reads
+// and string formatting). All three follow the env-flag conventions used
+// by OPENCLAW_SYMBOL_RETRIEVAL / OPENCLAW_BRANCH_AWARE_RETRIEVAL.
+
+// SIG-143: blast-radius resolution is name-based and not yet implemented, so
+// `blastRadiusFor` is called with an empty id set (inert). Until SIG-143 lands,
+// `post` is coerced to `shadow` so a config flip can't ship the incomplete
+// graph-routed path to production. Flip to true when blastRadiusByNames exists.
+export const BLAST_RADIUS_RESOLUTION_READY = false
+
+/** Returns true when OPENCLAW_GRAPH_RETRIEVAL is "shadow" or "post". */
+export function graphRetrievalEnabled(env: Env): boolean {
+  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
+  return v === "shadow" || v === "post"
+}
+
+/**
+ * Returns the effective graph-retrieval mode: "off" | "shadow" | "post".
+ *
+ * While BLAST_RADIUS_RESOLUTION_READY is false, a raw value of "post" is
+ * coerced to "shadow" — blast-radius resolution is inert (SIG-143) and the
+ * graph-routed path is not ready for production. A config flip to "post"
+ * will take effect only after the constant is flipped true.
+ */
+export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
+  const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
+  const raw = v === "post" ? "post" : v === "shadow" ? "shadow" : "off"
+  if (raw === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
+    return "shadow"
+  }
+  return raw
+}
+
+/**
+ * Render graph-expansion nodes as the `[GRAPH CONTEXT]` content string.
+ * Each line is `<path> (hopN, <edgeKind>)`. Empty array → empty string.
+ */
+export function formatGraphContext(
+  nodes: { path: string; hop: number; edgeKind: string }[],
+): string {
+  return nodes.map((n) => `${n.path} (hop${n.hop}, ${n.edgeKind})`).join("\n")
+}
+
+/**
+ * Compute overlap statistics between vector-hit seed paths and
+ * graph-expanded node paths for the SIG-86 bake-off.
+ *
+ * - `jaccard`: |intersection| / |union|. 0 when both sets are empty.
+ * - `addedCount`: paths in graph that were NOT in vector hits (net-new context).
+ */
+export function graphOverlapStats(a: {
+  vectorPaths: string[]
+  graphPaths: string[]
+}): { jaccard: number; addedCount: number } {
+  const v = new Set(a.vectorPaths)
+  const g = new Set(a.graphPaths)
+  const inter = [...g].filter((p) => v.has(p)).length
+  const union = new Set([...a.vectorPaths, ...a.graphPaths]).size
+  return {
+    jaccard: union === 0 ? 0 : inter / union,
+    addedCount: [...g].filter((p) => !v.has(p)).length,
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 
 /**
  * Sentinels returned by `raceWithShadowGrace`.
@@ -1549,6 +1627,131 @@ export async function handlePrReviewEnsemble(
       })))
     }
 
+    // ─── SIG-138 Phase 2: graph-expansion retrieval ────────────────────
+    //
+    // Gated by OPENCLAW_GRAPH_RETRIEVAL=shadow|post. Off ⇒ no DO calls,
+    // no behavior change. Any error in this block is caught and logged;
+    // the review always proceeds unaffected (graph is additive context).
+    //
+    // shadow: compute everything for telemetry; do NOT attach graphContext
+    //   to posted prompts.
+    // post:   attach graphContext to logic + tests specialists + synth.
+    //
+    // changedSymbolIds for blastRadius: the ensemble has changed symbol
+    // NAMES (from extractChangedSymbols) but not symbol_ids — symbol_ids
+    // are composite keys `${path} ${kind} ${name} ${startLine} ${startCol}`
+    // that require the indexer's AST output to reconstruct. Passing [] is
+    // safe: blastRadius fast-paths on empty input. The contextForVectorHits
+    // BFS already traverses outgoing file edges, giving comparable coverage.
+    // TODO(SIG-143): add a blastRadiusByNames DO method — name-based blast
+    // radius is a hard prereq for OPENCLAW_GRAPH_RETRIEVAL=post enforced mode.
+    let graphContextString = ""
+    let graphNodePaths: string[] = []
+    // M2: keep caller + import-dependent counts separate for telemetry;
+    // graph-context injection can use a combined set.
+    let graphBlastCallerPaths: string[] = []
+    let graphBlastDependentPaths: string[] = []
+    // Warn once per run when OPENCLAW_GRAPH_RETRIEVAL=post is coerced to shadow
+    // because BLAST_RADIUS_RESOLUTION_READY is false (SIG-143 not yet landed).
+    const rawGraphMode = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
+    if (rawGraphMode === "post" && !BLAST_RADIUS_RESOLUTION_READY) {
+      console.warn(JSON.stringify({
+        event: "graph-retrieval-post-coerced-shadow",
+        reason: "BLAST_RADIUS_RESOLUTION_READY is false; set it true when SIG-143 lands",
+        owner, repo, prNumber,
+      }))
+    }
+    if (graphRetrievalEnabled(env)) {
+      const graphRpcBudgetMs = parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS)
+      try {
+        // Seed from deduplicated chunk paths of the merged hit set.
+        const seedPaths = [...new Set(sharedChunksForOverlap.map((c) => c.path))]
+        // Wrap in withTimeout so a slow DO RPC cannot consume orchestrator wall
+        // time.  AbortSignal is unused by the DO stub but required by the helper
+        // signature.  On timeout the helper aborts and rejects; the outer catch
+        // below handles it and skips graph context gracefully.
+        const { nodes } = await withTimeout(
+          (_signal) => graphContextFor(env, owner, repo, {
+            seedPaths,
+            maxFiles: 8,
+            maxSymbolsPerHit: 12,
+            maxEdgesPerSymbol: 6,
+          }),
+          graphRpcBudgetMs,
+        )
+        // Cap graph-only additions to ≤4 nodes per spec.
+        // Sort: hop asc, then edge weight desc (higher weight = stronger edge).
+        const cappedNodes = nodes
+          .slice()
+          .sort((a, b) => {
+            const hopDiff = a.hop - b.hop
+            if (hopDiff !== 0) return hopDiff
+            return edgeWeight(b.edgeKind) * hopDecay(b.hop) -
+                   edgeWeight(a.edgeKind) * hopDecay(a.hop)
+          })
+          .slice(0, 4)
+        graphContextString = formatGraphContext(cappedNodes)
+        graphNodePaths = cappedNodes.map((n) => n.path)
+
+        // Blast radius: pass empty symbol ids (see TODO(SIG-143) above).
+        const blast = await withTimeout(
+          (_signal) => blastRadiusFor(env, owner, repo, { changedSymbolIds: [] }),
+          graphRpcBudgetMs,
+        )
+        // M2: preserve caller vs import-dependent distinction for telemetry.
+        graphBlastCallerPaths = [...new Set(blast.callerPaths)]
+        graphBlastDependentPaths = [...new Set(blast.importDependents)]
+
+        // Bake-off telemetry: emit in both shadow and post so the SIG-86
+        // analysis always has coverage data. Failure is non-fatal.
+        const vectorSeedPaths = seedPaths
+        const { jaccard, addedCount } = graphOverlapStats({
+          vectorPaths: vectorSeedPaths,
+          graphPaths: graphNodePaths,
+        })
+        // hop_distribution: count capped nodes per hop level.
+        const hopDist: Record<string, number> = {}
+        for (const n of cappedNodes) {
+          const key = String(n.hop)
+          hopDist[key] = (hopDist[key] ?? 0) + 1
+        }
+        // edge_type_distribution: count capped nodes per edgeKind.
+        const edgeTypeDist: Record<string, number> = {}
+        for (const n of cappedNodes) {
+          edgeTypeDist[n.edgeKind] = (edgeTypeDist[n.edgeKind] ?? 0) + 1
+        }
+        console.log(JSON.stringify({
+          event: "pr-review-graph-retrieval",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: graphRetrievalMode(env),
+          jaccard,
+          added_count: addedCount,
+          node_count: nodes.length,
+          capped_node_count: cappedNodes.length,
+          blast_caller_count: graphBlastCallerPaths.length,
+          blast_dependent_count: graphBlastDependentPaths.length,
+          hop_distribution: hopDist,
+          edge_type_distribution: edgeTypeDist,
+        }))
+      } catch (err) {
+        // Non-fatal: graph expansion is additive. Log for observability.
+        console.log(JSON.stringify({
+          event: "pr-review-graph-retrieval-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          error: err instanceof Error ? err.message : String(err),
+        }))
+        graphContextString = ""
+        graphNodePaths = []
+        graphBlastCallerPaths = []
+        graphBlastDependentPaths = []
+      }
+    }
+    // In post mode, inject graph context into logic+tests specialists
+    // and synthesizer. In shadow mode, the variables are computed but
+    // not attached to prompts (bake-off telemetry fires in both modes).
+    const graphCtxForPrompt = graphRetrievalMode(env) === "post" ? graphContextString : ""
+    // ──────────────────────────────────────────────────────────────────
+
     const astResult = await runAstRules({
       diff,
       filesByPath: astFilesByPath,
@@ -1982,6 +2185,11 @@ export async function handlePrReviewEnsemble(
           : diffFileClassificationBlock.length > 0
             ? { diffFileClassificationBlock }
             : {}),
+        // SIG-138 Phase 2: logic + tests specialists see graph neighbors
+        // (post mode only; empty string when off or shadow).
+        ...(graphCtxForPrompt.length > 0 && (role === "logic" || role === "tests")
+          ? { graphContext: graphCtxForPrompt }
+          : {}),
       })
       specialistMessageCache.set(role, message)
       return message
@@ -2192,6 +2400,8 @@ export async function handlePrReviewEnsemble(
       // synth which roles it's missing so it can constrain its
       // output and acknowledge the gap in `summary`.
       ...(degradedCoverage ? { degradedCoverage } : {}),
+      // SIG-138 Phase 2: synth sees graph neighbors in post mode.
+      ...(graphCtxForPrompt.length > 0 ? { graphContext: graphCtxForPrompt } : {}),
     })
 
     // ARC-181 Task 8: thread structured AST findings into the synth

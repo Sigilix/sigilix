@@ -531,6 +531,17 @@ export interface SpecialistInitialMessageCtx {
    * `src/lib/testing-evidence-pack.ts`.
    */
   testingEvidenceBlock?: string
+  /**
+   * SIG-138 Phase 2: pre-rendered dependency-graph neighbors of the
+   * changed code (K=2 BFS hops from `contextForVectorHits`). Injected
+   * as a `[GRAPH CONTEXT]` labeled block adjacent to `[RETRIEVAL
+   * SNAPSHOT]` so the specialist sees structural neighbors alongside
+   * the semantic retrieval results.
+   *
+   * Empty/absent → block is not emitted; behavior is additive and
+   * zero-change for PRs where graph context is unavailable.
+   */
+  graphContext?: string
 }
 
 export function buildSpecialistInitialMessage(
@@ -594,6 +605,15 @@ export function buildSpecialistInitialMessage(
     "",
     "[RETRIEVAL SNAPSHOT]",
     ctx.retrievalSnapshot.length > 0 ? ctx.retrievalSnapshot : "(no chunks; pre-flight retrieval did not return results)",
+  )
+  // SIG-138 Phase 2: graph-context neighbors of the changed code,
+  // placed immediately after [RETRIEVAL SNAPSHOT] so both structural
+  // and semantic context appear together. Additive: absent/empty →
+  // no block emitted, output is bit-for-bit identical to pre-SIG-138.
+  if (ctx.graphContext && ctx.graphContext.trim()) {
+    lines.push("", "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]", ctx.graphContext.trim())
+  }
+  lines.push(
     "",
     `[CODEBASE NAMESPACE FOR FOLLOW-UP retrieve_codebase CALLS]`,
     ctx.namespace,
@@ -643,6 +663,16 @@ export interface SynthesizerInitialMessageCtx {
     rolesReturned: readonly SpecialistRole[]
     rolesMissing: readonly SpecialistRole[]
   }
+  /**
+   * SIG-138 Phase 2: same dependency-graph neighbors the specialists
+   * saw. Synth sees this block so it can weigh findings on graph-
+   * neighbor files with appropriate context (the callers passed the
+   * same `graphContext` string to every specialist).
+   *
+   * Empty/absent → block is not emitted; additive, zero-change for
+   * PRs where graph context is unavailable.
+   */
+  graphContext?: string
 }
 
 export function buildSynthesizerInitialMessage(
@@ -685,6 +715,16 @@ export function buildSynthesizerInitialMessage(
     "",
     "[DIFF]",
     ctx.diff,
+  )
+  // SIG-138 Phase 2: graph-context neighbors, placed after [DIFF] and
+  // before [SPECIALIST VERDICTS] so synth sees structural neighbors
+  // alongside the diff when weighing specialist findings. Additive:
+  // absent/empty → no block emitted, output is bit-for-bit identical
+  // to pre-SIG-138.
+  if (ctx.graphContext && ctx.graphContext.trim()) {
+    lines.push("", "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]", ctx.graphContext.trim())
+  }
+  lines.push(
     "",
     "[SPECIALIST VERDICTS]",
     ctx.specialistVerdictsBlock,

@@ -151,6 +151,27 @@ const CANDIDATE_EXTS = [
   "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mjs",
 ]
 
+// ─── Public result types ──────────────────────────────────────────
+
+/**
+ * A single node returned by `contextForVectorHits`.
+ *
+ * v1 returns file-level neighbors only — symbolId and name are always null.
+ * Symbol-level enrichment is reserved for a future phase; the fields are kept
+ * in the interface for forward-compat without requiring callers to change.
+ */
+export interface GraphContextNode {
+  path: string
+  /** Reserved for future symbol-level enrichment. Always null in v1. */
+  symbolId: string | null
+  /** Reserved for future symbol-level enrichment. Always null in v1. */
+  name: string | null
+  /** BFS hop count from the seed paths (1 = direct neighbor, 2 = neighbor-of-neighbor). */
+  hop: number
+  /** The `edge_kind` value from the file_edge that connected this node. */
+  edgeKind: string
+}
+
 // ─── Public arg types ─────────────────────────────────────────────
 
 export interface UpsertFileGraphArgs {
@@ -571,6 +592,143 @@ export class RepoGraphDO extends DurableObject<Env> {
       ),
     ]
     return rows[0]?.graph_version ?? null
+  }
+
+  /**
+   * Given a set of changed symbol IDs, return the files that directly call
+   * those symbols and the files that import them — both scoped to the ACTIVE
+   * graph version.
+   *
+   * - importDependents: DISTINCT source_path from file_edges where
+   *   target_symbol_id is one of the changed symbols.
+   * - callerPaths: resolve the changed symbols' NAMES, then DISTINCT
+   *   source_path from call_edges where callee_name is in that name set.
+   *
+   * Returns { callerPaths: [], importDependents: [] } when there is no active
+   * version or changedSymbolIds is empty.
+   */
+  async blastRadius(args: { changedSymbolIds: string[] }): Promise<{
+    callerPaths: string[]
+    importDependents: string[]
+  }> {
+    const empty = { callerPaths: [], importDependents: [] }
+    if (args.changedSymbolIds.length === 0) return empty
+
+    const active = await this.debugActiveVersion()
+    if (!active) return empty
+
+    const sql = this.sql()
+    const ids = args.changedSymbolIds
+    const idPlaceholders = ids.map(() => "?").join(",")
+
+    // import dependents: files that import a changed symbol (resolved target_symbol_id).
+    // importDependents matches only RESOLVED import edges (target_symbol_id set);
+    // ambiguous/unresolved import edges have null target_symbol_id and won't appear —
+    // a known recall gap by design (prefer-missing-over-false), consistent with the
+    // extractor's best-effort call edges.
+    const importDependents = new Set<string>()
+    for (const row of sql.exec<{ source_path: string }>(
+      `SELECT DISTINCT source_path FROM file_edges WHERE graph_version = ? AND target_symbol_id IN (${idPlaceholders})`,
+      active, ...ids,
+    )) {
+      importDependents.add(row.source_path)
+    }
+
+    // callerPaths: resolve changed symbol IDs → names, then find call sites by callee_name
+    const names: string[] = [
+      ...sql.exec<{ name: string }>(
+        `SELECT name FROM symbols WHERE graph_version = ? AND symbol_id IN (${idPlaceholders})`,
+        active, ...ids,
+      ),
+    ].map((r) => r.name)
+
+    const callerPaths = new Set<string>()
+    if (names.length > 0) {
+      const namePlaceholders = names.map(() => "?").join(",")
+      for (const row of sql.exec<{ source_path: string }>(
+        `SELECT DISTINCT source_path FROM call_edges WHERE graph_version = ? AND callee_name IN (${namePlaceholders})`,
+        active, ...names,
+      )) {
+        callerPaths.add(row.source_path)
+      }
+    }
+
+    return {
+      callerPaths: [...callerPaths],
+      importDependents: [...importDependents],
+    }
+  }
+
+  /**
+   * K=2 BFS over the ACTIVE graph that expands seed file paths to their
+   * graph neighbors via resolved file edges (target_path IS NOT NULL).
+   *
+   * Both `resolved` and `ambiguous` edges have a non-null target_path and are
+   * traversed — either status represents a real file dependency. Only
+   * `unresolved` edges (target_path = null) are excluded.
+   *
+   * v1 returns file-level neighbors only (symbolId/name are null on every
+   * node). `maxSymbolsPerHit` is reserved for a future symbol-level
+   * enrichment phase and is intentionally unused in this version; it is kept
+   * in the signature for forward-compat.
+   *
+   * Returns `{ nodes: [] }` when:
+   *  - There is no active version, OR
+   *  - `seedPaths` is empty.
+   *
+   * BFS mechanics:
+   *  1. Pre-seed `seen` with all `seedPaths` so they never appear as output nodes.
+   *  2. For each hop (1, 2) while `nodes.length < maxFiles`:
+   *     a. Query outgoing resolved edges for every path in the current frontier:
+   *        `SELECT target_path, edge_kind FROM file_edges WHERE graph_version=<active>
+   *         AND source_path = ? AND target_path IS NOT NULL LIMIT <maxEdgesPerSymbol>`
+   *     b. For each unseen target: mark seen, push to `nodes`, enqueue for next hop.
+   *  3. Stop after hop 2 (hard K=2 cap) or when `nodes.length >= maxFiles`.
+   */
+  async contextForVectorHits(args: {
+    seedPaths: string[]
+    maxFiles: number
+    /** Reserved for future symbol-level enrichment — unused in v1. */
+    maxSymbolsPerHit: number
+    maxEdgesPerSymbol: number
+  }): Promise<{ nodes: GraphContextNode[] }> {
+    if (args.seedPaths.length === 0) return { nodes: [] }
+
+    const active = await this.debugActiveVersion()
+    if (!active) return { nodes: [] }
+
+    const sql = this.sql()
+    const seen = new Set<string>(args.seedPaths)
+    const nodes: GraphContextNode[] = []
+    let frontier = [...args.seedPaths]
+
+    for (let hop = 1; hop <= 2 && nodes.length < args.maxFiles; hop++) {
+      const next: string[] = []
+
+      for (const path of frontier) {
+        if (nodes.length >= args.maxFiles) break
+
+        const rows = [
+          ...sql.exec<{ target_path: string; edge_kind: string }>(
+            "SELECT target_path, edge_kind FROM file_edges WHERE graph_version = ? AND source_path = ? AND target_path IS NOT NULL ORDER BY target_path, edge_kind LIMIT ?",
+            active, path, args.maxEdgesPerSymbol,
+          ),
+        ]
+
+        for (const row of rows) {
+          if (nodes.length >= args.maxFiles) break
+          const tp = row.target_path
+          if (seen.has(tp)) continue
+          seen.add(tp)
+          next.push(tp)
+          nodes.push({ path: tp, symbolId: null, name: null, hop, edgeKind: row.edge_kind })
+        }
+      }
+
+      frontier = next
+    }
+
+    return { nodes }
   }
 
   /**

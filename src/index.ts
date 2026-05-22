@@ -249,6 +249,14 @@ export interface Env {
   // validation + numeric clamping. Default OFF — feature opt-in.
   PR_REVIEW_RUN: DurableObjectNamespace
   OPENCLAW_PR_REVIEW_MODE?: string
+
+  // SIG-138: per-repo code/dependency graph stored in SQLite DO storage.
+  // One DO instance per repo, keyed by indexNamespace(owner, repo).
+  // Flag-gated: OPENCLAW_GRAPH_INDEX (write path) and
+  // OPENCLAW_GRAPH_RETRIEVAL (read/expansion path). Both default off.
+  REPO_GRAPH_DO: DurableObjectNamespace
+  OPENCLAW_GRAPH_INDEX?: string
+  OPENCLAW_GRAPH_RETRIEVAL?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT?: string
@@ -2483,3 +2491,10 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
 // guarantees this class never receives traffic until Task 8 wires
 // the webhook integration.
 export { PrReviewRunDO } from "./do/pr-review-run"
+
+// SIG-138: RepoGraphDO — per-repo code/dependency graph (SQLite).
+// Flag-gated behind OPENCLAW_GRAPH_INDEX / OPENCLAW_GRAPH_RETRIEVAL.
+// The class must be exported from the entry module for the
+// [[durable_objects.bindings]] REPO_GRAPH_DO entry in wrangler.toml
+// to resolve at deploy time.
+export { RepoGraphDO } from "./do/repo-graph"

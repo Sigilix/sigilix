@@ -43,6 +43,12 @@ interface DurableObjectState {
     setAlarm(timestamp: number): Promise<void>
     getAlarm(): Promise<number | null>
     deleteAlarm(): Promise<void>
+    // SIG-138: SQLite storage surface. Tests back this with a
+    // FakeSqlStorage in-memory implementation.
+    sql: {
+      exec<T extends Record<string, unknown>>(query: string, ...params: unknown[]): IterableIterator<T>
+    }
+    transactionSync<T>(closure: () => T): T
   }
   id: { toString(): string; name?: string }
 }

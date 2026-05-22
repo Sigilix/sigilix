@@ -282,6 +282,10 @@ export function extractFileGraph(path: string, content: string): FileGraph {
       .filter((e) => e.edgeKind === "import" && e.localName != null)
       .map((e) => e.localName as string),
   )
+  // NOTE: same_file calls are matched against function declarations only. Calls to
+  // arrow-function consts (kind "variable", e.g. `const f = () => {}`) are NOT captured
+  // here — a known recall gap, deferred pending Phase 2 shadow telemetry. Prefer-missing
+  // over false: widening to "variable" risks false edges for non-callable consts.
   const localFns = new Set(
     symbols.filter((s) => s.kind === "function").map((s) => s.name),
   )

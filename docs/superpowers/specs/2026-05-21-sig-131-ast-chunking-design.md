@@ -27,16 +27,16 @@ Move from `indexer.ts`: the `Chunk` interface, `MAX_CHUNK_CHARS`, `CHUNK_LINES`,
 1. `parseSource(content, ext)`; on failure → **return `null`** (signals the dispatcher to fall back). Wrap the whole body so any internal throw also → `null`.
 2. Collect each top-level `Program.body` statement's line range `[node.loc.start.line, node.loc.end.line]`.
 3. **Coalesce** into a sorted, non-overlapping interval list: sort by start; merge any interval that overlaps or is adjacent to the previous (covers nested decls, same-line statements, an export wrapper whose `loc` differs from the inner decl).
-4. **Gap-fill from a cursor** (line 1 → `lineCount`): walk the coalesced intervals in order; for each, emit any lines *between* the cursor and the interval start as gap chunk(s) (imports, blank lines, leading comments acorn doesn't attach), then emit the interval as a chunk, advance the cursor past it. After the last interval, emit a trailing gap chunk for any remaining lines. **Result: every line ∈ exactly one chunk** (no gap, no overlap).
+4. **Gap-fill from a cursor** (line 1 → `lineCount`): walk the coalesced intervals in order; for each, emit any lines *between* the cursor and the interval start as gap chunk(s) (imports, blank lines, leading comments acorn doesn't attach), then emit the interval as a chunk, advance the cursor past it. After the last interval, emit a trailing gap chunk for any remaining lines. **Result: every NON-blank line ∈ exactly one chunk** (no gap, no overlap; whitespace-only lines are skipped — see step 6).
 5. Any emitted chunk whose content exceeds `MAX_CHUNK_CHARS` → replace it with `splitOversizedWindow(itsLines, itsStartLine)` (line-split — this is where an oversized class/function degrades; per-method deferred).
-6. Gap chunks are built directly from the line slice (NOT via `chunkFile`, which **skips whitespace-only windows** — that would drop blank lines and break no-loss, Codex). A gap over `MAX_CHUNK_CHARS` also goes through `splitOversizedWindow`.
+6. Gap chunks are built by directly slicing lines (not via `chunkFile`'s overlap windowing). Like `chunkFile`, **whitespace-only gaps are skipped** — `embedTexts` throws on blank input, so a blank chunk must never be emitted (blank lines carry no content, so skipping them is not loss). A gap over `MAX_CHUNK_CHARS` goes through `splitOversizedWindow`.
 
 Reuses `Chunk`/`MAX_CHUNK_CHARS`/`splitOversizedWindow` from `chunk-core.ts`. Mirrors `symbol-retrieval.ts` purity/JSDoc style.
 
 ### 3. Dispatcher (indexer chunk step)
 
 In `processSlice` (where `chunkFile(file.path, content)` is called at `indexer.ts:870`), route:
-```
+```text
 astOn && isJsTs(ext) && (chunkFileAst(...) returns non-null)  →  AST chunks
 otherwise (non-JS/TS, AST off, or parse failure)             →  line-window chunkFile
 ```
@@ -56,7 +56,7 @@ Per-run `index-chunking` event: `ast_chunk_files`, `line_chunk_files`, `parse_fa
 
 ## Coverage invariant (load-bearing correctness)
 
-For any input file, `union(chunk line-ranges) == [1..lineCount]` with **no gaps and no overlaps**. Tested exhaustively against fixtures: nested declarations, same-line statements, an `export`-wrapped declaration, leading comments, blank lines between declarations, a file ending mid-declaration, and an oversized declaration (post-`splitOversizedWindow` the union still covers exactly). This is the SIG-133 no-loss guarantee re-expressed as a partition.
+For any input file, the union of chunk line-ranges covers **every non-blank line exactly once** (no gaps, no overlaps); whitespace-only lines may be uncovered (a blank chunk must never reach `embedTexts`). Tested exhaustively against fixtures: nested declarations, same-line statements, an `export`-wrapped declaration, leading comments, blank lines between declarations, a file ending mid-declaration, and an oversized declaration (post-`splitOversizedWindow` the union still covers every non-blank line exactly). This is the SIG-133 no-loss guarantee (no *content* lost) re-expressed as a partition.
 
 ## Error handling / edge cases
 

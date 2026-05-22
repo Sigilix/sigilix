@@ -823,6 +823,66 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     )
   })
 
+  it("Fix #1: barrel file (edges only, no symbols) is a valid resolution target (pathExists union)", async () => {
+    // Pre-fix: pathExists was built from symbols only. A barrel file that has a
+    // re-export edge but NO symbols would never appear in pathExists, so any
+    // import targeting it would resolve to 'unresolved'. Post-fix: pathExists is
+    // the union of symbols.path ∪ file_edges.source_path ∪ call_edges.source_path,
+    // so the barrel IS a known path. The import resolves to 'ambiguous' (target
+    // path set, no pinnable symbol) rather than 'unresolved'.
+    const do_ = makeDoInstance("o/barrel-fix1")
+
+    // barrel.ts: no symbols, only a re-export edge (side-effect barrel pattern).
+    await do_.upsertFileGraph({
+      runId: "r-barrel", headSha: "sha", path: "src/barrel.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/barrel.ts",
+          edgeKind: "star_reexport",
+          specifier: "./impl",
+          importedName: null,
+          localName: null,
+          exportedName: null,
+          startLine: 1, startCol: 0,
+        },
+      ],
+      callEdges: [],
+    })
+
+    // consumer.ts imports from './barrel' (which has NO symbols).
+    await do_.upsertFileGraph({
+      runId: "r-barrel", headSha: "sha", path: "src/consumer.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/consumer.ts",
+          edgeKind: "import",
+          specifier: "./barrel",
+          importedName: "something",
+          localName: "something",
+          exportedName: null,
+          startLine: 1, startCol: 0,
+        },
+      ],
+      callEdges: [],
+    })
+
+    await do_.commitGraphVersion("r-barrel")
+
+    const edges = await do_.debugResolvedEdges("src/consumer.ts")
+    // target_path MUST be set (barrel is in pathExists via file_edges union).
+    // target_symbol_id is null (no symbol named 'something' in barrel).
+    // resolution_status must be 'ambiguous', NOT 'unresolved'.
+    expect(edges).toContainEqual(
+      expect.objectContaining({
+        targetPath: "src/barrel.ts",
+        targetSymbolId: null,
+        resolutionStatus: "ambiguous",
+      }),
+    )
+  })
+
   it("same_file call resolution: local function callee gets callee_symbol_id set", async () => {
     const do_ = makeDoInstance("o/same-file-call")
 

@@ -742,9 +742,12 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
   })
 
-  it("graph delete is skipped when owner guard fires (owner mismatch)", async () => {
-    // The graph delete arm is INSIDE the safeToTouchRepoOnlyState block.
-    // When manifest.owner != owner the arm must not fire.
+  it("graph delete fires for the requested owner/repo even when safeToTouchRepoOnlyState is false (owner mismatch)", async () => {
+    // Fix #4 (CodeRabbit): the graph DO is keyed by indexNamespace(owner, repo)
+    // — deleting it only ever touches the requested tenant's DO. The owner guard
+    // exists to protect shared KV/vector records that can collide across tenants;
+    // it must NOT gate the graph delete. Repo-only KV/vector cleanup is still
+    // skipped on mismatch.
     const { kv, store } = makeKvStub()
     store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
     store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
@@ -756,7 +759,12 @@ describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
     })
 
     expect(result.status).toBe("owner-mismatch-skip")
-    expect(graphDeletedNamespaces).toHaveLength(0)
+    // Repo-only KV/vector records are protected (different owner).
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    // Graph delete DOES fire for the requested namespace (tenant-safe by design).
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
   })
 
   it("graph delete failure is best-effort: logs an error and sets status=partial but other arms complete", async () => {

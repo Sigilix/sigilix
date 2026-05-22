@@ -149,18 +149,18 @@ export function extractFileGraph(path: string, content: string): FileGraph {
 
   walkAst(ast, {
     FunctionDeclaration(node: AstNode) {
-      const name: unknown = node.id?.name
+      const wrapper = exportedDecls.get(node)
+      const name: unknown = node.id?.name ?? (wrapper?.type === "ExportDefaultDeclaration" ? "default" : undefined)
       if (typeof name === "string" && name.length > 0) {
-        const wrapper = exportedDecls.get(node)
         // Use wrapper loc when exported so startCol covers `export` keyword
         // (e.g. col 0), matching the test expectation for symbolId.
         push(name, "function", wrapper ?? node, wrapper != null)
       }
     },
     ClassDeclaration(node: AstNode) {
-      const name: unknown = node.id?.name
+      const wrapper = exportedDecls.get(node)
+      const name: unknown = node.id?.name ?? (wrapper?.type === "ExportDefaultDeclaration" ? "default" : undefined)
       if (typeof name === "string" && name.length > 0) {
-        const wrapper = exportedDecls.get(node)
         push(name, "class", wrapper ?? node, wrapper != null)
       }
     },
@@ -277,9 +277,12 @@ export function extractFileGraph(path: string, content: string): FileGraph {
   // Resolution order: local function name wins over an imported binding with the
   // same name (same_file takes precedence). This matches static scoping: a local
   // declaration shadows the import.
+  // Exclude namespace imports (importedName === null, e.g. `import * as ns`)
+  // from the importedNames set. Namespace object refs are not callable as
+  // bare imported bindings; including them causes false imported_binding edges.
   const importedNames = new Set(
     fileEdgesRaw
-      .filter((e) => e.edgeKind === "import" && e.localName != null)
+      .filter((e) => e.edgeKind === "import" && e.importedName !== null && e.localName != null)
       .map((e) => e.localName as string),
   )
   // NOTE: same_file calls are matched against function declarations only. Calls to

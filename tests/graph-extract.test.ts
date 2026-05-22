@@ -85,6 +85,34 @@ describe("extractFileGraph — file edges (raw)", () => {
   })
 })
 
+describe("extractFileGraph — anonymous default exports (Fix #2)", () => {
+  it("anonymous export default function produces a symbol with name 'default'", () => {
+    const src = "export default function () { return 1 }"
+    const { symbols } = extractFileGraph("src/anon-fn.ts", src)
+    const def = symbols.find((s) => s.name === "default")
+    expect(def).toBeDefined()
+    expect(def).toMatchObject({ kind: "function", exported: true, name: "default" })
+  })
+
+  it("anonymous export default class produces a symbol with name 'default'", () => {
+    const src = "export default class {}"
+    const { symbols } = extractFileGraph("src/anon-cls.ts", src)
+    const def = symbols.find((s) => s.name === "default")
+    expect(def).toBeDefined()
+    expect(def).toMatchObject({ kind: "class", exported: true, name: "default" })
+  })
+
+  it("named export default function still uses the function name, not 'default'", () => {
+    const src = "export default function foo() {}"
+    const { symbols } = extractFileGraph("src/named-default.ts", src)
+    const foo = symbols.find((s) => s.name === "foo")
+    expect(foo).toBeDefined()
+    expect(foo).toMatchObject({ kind: "function", exported: true })
+    // Must NOT also emit a 'default' symbol
+    expect(symbols.find((s) => s.name === "default")).toBeUndefined()
+  })
+})
+
 describe("extractFileGraph — call edges", () => {
   it("links same-file and imported-binding calls; drops ambiguous obj.method()", () => {
     const src = [
@@ -159,5 +187,34 @@ describe("extractFileGraph — call edges", () => {
     })
     expect(typeof edge!.startLine).toBe("number")
     expect(typeof edge!.startCol).toBe("number")
+  })
+
+  it("namespace import call is NOT classified as imported_binding (Fix #3)", () => {
+    // `import * as ns from './m'; ns()` — ns is a namespace object, not a
+    // named/default binding. Classifying ns() as imported_binding is a false
+    // edge; prefer missing over false per the codebase's stated policy.
+    const src = [
+      "import * as ns from './m'",
+      "export function run() { ns() }",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/ns-call.ts", src)
+    expect(callEdges.find((c) => c.calleeName === "ns")).toBeUndefined()
+  })
+
+  it("named/default imports still produce imported_binding edges after Fix #3", () => {
+    // Regression guard: the namespace-import filter must not affect named or
+    // default imports, which should still be captured as imported_binding.
+    const src = [
+      "import { f } from './m'",
+      "import Default from './d'",
+      "export function run() { f(); Default() }",
+    ].join("\n")
+
+    const { callEdges } = extractFileGraph("src/named-call.ts", src)
+    const fEdge = callEdges.find((c) => c.calleeName === "f")
+    const dEdge = callEdges.find((c) => c.calleeName === "Default")
+    expect(fEdge?.callKind).toBe("imported_binding")
+    expect(dEdge?.callKind).toBe("imported_binding")
   })
 })

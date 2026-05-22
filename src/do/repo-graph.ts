@@ -393,16 +393,26 @@ export class RepoGraphDO extends DurableObject<Env> {
       }
     }
 
-    // Fix 4 (v1 limitation): pathExists is built from files that produced at
-    // least one symbol. A file that exists in the repo but has NO indexable
-    // symbols will never appear here, so any import whose resolved path lands
-    // on such a file will stay 'unresolved'. Accepted v1 limitation — the
-    // AST extractor skips files it cannot parse, and symbol-free files (e.g.
-    // pure re-export barrels with no locally-declared symbols) fall into this
-    // category. A future task can track all indexed paths independently.
+    // pathExists: union of ALL paths seen across symbols, file_edges (source),
+    // and call_edges (source). This ensures barrel files and side-effect
+    // modules that have edges but no symbols are still valid resolution
+    // targets. Without the union, imports to edge-only files stay 'unresolved'
+    // even though the file is known to the graph.
     const pathExists = new Set<string>()
     for (const row of sql.exec<{ path: string }>(
       "SELECT DISTINCT path FROM symbols WHERE graph_version = ?",
+      runId,
+    )) {
+      pathExists.add(row.path)
+    }
+    for (const row of sql.exec<{ path: string }>(
+      "SELECT DISTINCT source_path AS path FROM file_edges WHERE graph_version = ?",
+      runId,
+    )) {
+      pathExists.add(row.path)
+    }
+    for (const row of sql.exec<{ path: string }>(
+      "SELECT DISTINCT source_path AS path FROM call_edges WHERE graph_version = ?",
       runId,
     )) {
       pathExists.add(row.path)

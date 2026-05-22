@@ -118,7 +118,7 @@ CREATE INDEX call_edges_caller ON call_edges(graph_version, caller_symbol_id);
 CREATE INDEX call_edges_source_line ON call_edges(graph_version, source_path, start_line);
 ```
 
-`reexport`/`star_reexport` are valid `edge_kind` values for forward-compat but are **stored raw and never resolved** in v1 (deferred fixpoint phase). `symbol_id` = `s:` + `sha256(path \0 kind \0 name \0 start_line \0 start_col)`. `scip_symbol` stays nullable so a later SCIP import maps onto the same identity scheme without a rewrite.
+`reexport` (named re-exports, e.g. `export { X } from './y'`) is **resolved to its direct target** in v1 exactly like an `import` edge — `target_path` and `target_symbol_id` are set during `commitGraphVersion`. `star_reexport` (`export * from '…'`) is stored raw and left unresolved in v1; the transitive re-export FIXPOINT is deferred to a future task. `symbol_id` = `s:` + `sha256(path \0 kind \0 name \0 start_line \0 start_col)`. `scip_symbol` stays nullable so a later SCIP import maps onto the same identity scheme without a rewrite.
 
 **API (`fetch` routes + exported pure helpers):**
 

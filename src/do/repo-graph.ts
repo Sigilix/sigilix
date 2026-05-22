@@ -105,14 +105,29 @@ CREATE INDEX IF NOT EXISTS call_edges_source_line ON call_edges(graph_version, s
  *   resolveRelative("src/a.ts", "left-pad")   // null
  */
 export function resolveRelative(sourcePath: string, specifier: string): string | null {
-  if (!specifier.startsWith(".")) return null
+  // Fix 1: only treat a specifier as relative if it is exactly "." or "..",
+  // or starts with "./" or "../". Bare dotfiles like ".hidden" or "..b" are
+  // NOT relative specifiers and should fall through to the null return.
+  if (
+    specifier !== "." &&
+    specifier !== ".." &&
+    !specifier.startsWith("./") &&
+    !specifier.startsWith("../")
+  ) {
+    return null
+  }
   // Build the directory segments of the source file.
   const dir = sourcePath.split("/").slice(0, -1)
   const parts = specifier.split("/")
   const stack = [...dir]
   for (const p of parts) {
     if (p === "." || p === "") continue
-    else if (p === "..") stack.pop()
+    else if (p === "..") {
+      // Fix 2: if a ".." segment would pop an empty stack the path escapes
+      // the repo root — treat as unresolvable.
+      if (stack.length === 0) return null
+      stack.pop()
+    }
     else stack.push(p)
   }
   return stack.join("/")
@@ -312,15 +327,17 @@ export class RepoGraphDO extends DurableObject<Env> {
    *       `"${path} ${name}" → symbol_id`
    *     and the set of paths that have at least one symbol (used to
    *     probe candidate extensions).
-   *  3. Resolve file_edges of kind 'import' and 'reexport':
-   *     - Relative specifier (starts with ".") → resolveRelative() →
-   *       probe CANDIDATE_EXTS against the known-paths set.
+   *  3. Resolve file_edges of kind 'import' and named 'reexport'
+   *     (export { X } from '…'). Both behave identically:
+   *     - Relative specifier → resolveRelative() → probe CANDIDATE_EXTS
+   *       against the known-paths set.
    *     - No matching path → resolution_status='unresolved'.
    *     - Path found + importedName in lookup → 'resolved'
    *       (target_path + target_symbol_id set).
    *     - Path found but symbol not pinned → 'ambiguous'
    *       (target_path set, target_symbol_id null).
-   *     - star_reexport edges are left 'raw' in v1.
+   *     - 'star_reexport' (export * from '…') edges are left 'raw' in v1;
+   *       transitive re-export FIXPOINT is deferred to a future task.
    *  4. Resolve same_file call edges: set callee_symbol_id from lookup.
    *  5. Flip: DELETE all rows for the old active version, then set this
    *     version status='active', committed_at=now.
@@ -347,6 +364,13 @@ export class RepoGraphDO extends DurableObject<Env> {
       symbolsByKey.set(`${row.path} ${row.name}`, row.symbol_id)
     }
 
+    // Fix 4 (v1 limitation): pathExists is built from files that produced at
+    // least one symbol. A file that exists in the repo but has NO indexable
+    // symbols will never appear here, so any import whose resolved path lands
+    // on such a file will stay 'unresolved'. Accepted v1 limitation — the
+    // AST extractor skips files it cannot parse, and symbol-free files (e.g.
+    // pure re-export barrels with no locally-declared symbols) fall into this
+    // category. A future task can track all indexed paths independently.
     const pathExists = new Set<string>()
     for (const row of sql.exec<{ path: string }>(
       "SELECT DISTINCT path FROM symbols WHERE graph_version = ?",
@@ -417,10 +441,15 @@ export class RepoGraphDO extends DurableObject<Env> {
       }
 
       // Step 5: GC old active version(s), then promote this version.
-      for (const old of sql.exec<{ graph_version: string }>(
+      // Fix 3: spread the cursor BEFORE the loop so the DELETE statements
+      // inside do not mutate the table while a lazy/streaming cursor is still
+      // open. Real Cloudflare DO SQLite cursors are lazy — iterating and
+      // mutating the same table mid-cursor is a footgun even if it happens to
+      // work in the Node test shim (which materialises results eagerly).
+      for (const old of [...sql.exec<{ graph_version: string }>(
         "SELECT graph_version FROM graph_versions WHERE status = 'active' AND graph_version != ?",
         runId,
-      )) {
+      )]) {
         const ov = old.graph_version
         sql.exec("DELETE FROM call_edges WHERE graph_version = ?", ov)
         sql.exec("DELETE FROM file_edges WHERE graph_version = ?", ov)
@@ -456,6 +485,32 @@ export class RepoGraphDO extends DurableObject<Env> {
       targetPath: row.target_path,
       targetSymbolId: row.target_symbol_id,
       resolutionStatus: row.resolution_status,
+    }))
+  }
+
+  /**
+   * Return call_edges rows for a source path in the active version.
+   * Used by tests to inspect callee resolution after commitGraphVersion.
+   */
+  async debugCallEdges(sourcePath: string): Promise<Array<{
+    calleeName: string
+    callKind: string
+    calleeSymbolId: string | null
+  }>> {
+    const sql = this.sql()
+    // Find the active graph version first.
+    const versionRows = [...sql.exec<{ graph_version: string }>(
+      "SELECT graph_version FROM graph_versions WHERE status = 'active'",
+    )]
+    const activeVersion = versionRows[0]?.graph_version
+    if (!activeVersion) return []
+    return [...sql.exec<{ callee_name: string; call_kind: string; callee_symbol_id: string | null }>(
+      "SELECT callee_name, call_kind, callee_symbol_id FROM call_edges WHERE graph_version = ? AND source_path = ?",
+      activeVersion, sourcePath,
+    )].map((row) => ({
+      calleeName: row.callee_name,
+      callKind: row.call_kind,
+      calleeSymbolId: row.callee_symbol_id,
     }))
   }
 

@@ -251,3 +251,52 @@ function base64Decode(input: string): Uint8Array {
   }
   return out
 }
+
+/**
+ * SIG-156: resolve the installation id for a repo via the App JWT
+ * (`GET /repos/{owner}/{repo}/installation`). Used by the admin manual-index
+ * endpoint + the backfill so a caller only needs owner/repo, not the numeric
+ * installation id. Returns null when the app isn't installed on the repo or
+ * the lookup fails (caller maps to 404).
+ */
+export async function resolveRepoInstallationId(
+  appId: string,
+  privateKeyPem: string,
+  owner: string,
+  repo: string,
+): Promise<number | null> {
+  // Fully fail-soft: ANY failure (JWT signing, network, non-OK HTTP, JSON
+  // parse, missing/non-numeric id) returns null so the caller's "not
+  // found/unavailable" (404) path is consistent — never a 500. The reason is
+  // logged so an operator can still distinguish not-installed from a transient
+  // GitHub error / wrong-or-expired key.
+  try {
+    const jwt = await signGitHubAppJwt(appId, privateKeyPem)
+    const res = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/installation`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: `Bearer ${jwt}`,
+          "x-github-api-version": "2022-11-28",
+          "user-agent": "sigilix-worker",
+        },
+      },
+    )
+    if (!res.ok) {
+      console.warn(JSON.stringify({
+        event: "resolve-repo-installation-failed",
+        owner, repo, status: res.status,
+      }))
+      return null
+    }
+    const json = (await res.json()) as { id?: unknown }
+    return typeof json.id === "number" ? json.id : null
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "resolve-repo-installation-error",
+      owner, repo, error: err instanceof Error ? err.message : String(err),
+    }))
+    return null
+  }
+}

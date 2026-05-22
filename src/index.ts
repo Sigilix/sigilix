@@ -62,6 +62,7 @@ import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
+import { handleAdminIndexRoute } from "./lib/admin-index-route"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
@@ -276,6 +277,11 @@ export interface Env {
   // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
   // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
   GRAPH_METRICS_DO: DurableObjectNamespace
+
+  // SIG-156: shared-secret bearer token for the privileged admin endpoints
+  // (POST /admin/index-repo manual (re)index trigger / backfill). Unset → those
+  // routes return 503. Set via `wrangler secret put OPENCLAW_ADMIN_TOKEN`.
+  OPENCLAW_ADMIN_TOKEN?: string
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
@@ -791,6 +797,11 @@ export default {
     // SIG-152: authenticated read of rolling SIG-138 graph shadow telemetry.
     if (request.method === "GET" && url.pathname === "/metrics/graph") {
       return handleGraphMetricsRoute(request, env)
+    }
+
+    // SIG-156: authenticated manual (re)index trigger.
+    if (request.method === "POST" && url.pathname === "/admin/index-repo") {
+      return handleAdminIndexRoute(request, env)
     }
 
     if (request.method === "POST" && url.pathname === "/linear/webhook") {

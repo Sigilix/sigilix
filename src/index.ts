@@ -322,6 +322,12 @@ export interface Env {
   // (including unset) keeps indexing disabled.
   OPENCLAW_INDEXER_ENABLED?: string
 
+  // SIG-131: AST-aware chunking. When "on", JS/TS files chunk on AST
+  // boundaries (effective CHUNKER_VERSION 3) and repos re-index under the new
+  // scheme; default off (line-window, version 2). Flip via
+  // `wrangler secret put OPENCLAW_AST_CHUNKING on`.
+  OPENCLAW_AST_CHUNKING?: string
+
   // ARC-283 Phase B1b — shadow-mode model bake-off. CSV of role names
   // whose CANDIDATE lineup (per `SHADOW_BAKEOFF_LINEUP` in
   // `lib/shadow-bakeoff-config.ts`) should fire in parallel with prod

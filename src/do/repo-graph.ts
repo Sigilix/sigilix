@@ -527,4 +527,24 @@ export class RepoGraphDO extends DurableObject<Env> {
     ]
     return rows[0]?.graph_version ?? null
   }
+
+  /**
+   * Wipe ALL data from this DO instance — every row in every table.
+   * Used by the GDPR delete path (T8) when an installation is removed.
+   *
+   * Runs inside a single transactionSync so the caller never observes
+   * partial state. Emits 'graph-deleted' for audit telemetry.
+   */
+  async deleteRepoGraph(): Promise<void> {
+    const sql = this.sql()
+
+    this.ctx.storage.transactionSync(() => {
+      sql.exec("DELETE FROM symbols")
+      sql.exec("DELETE FROM file_edges")
+      sql.exec("DELETE FROM call_edges")
+      sql.exec("DELETE FROM graph_versions")
+    })
+
+    emit("graph-deleted", {})
+  }
 }

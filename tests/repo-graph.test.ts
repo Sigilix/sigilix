@@ -668,3 +668,69 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     expect(importedEdge?.calleeSymbolId).toBeNull()
   })
 })
+
+// ─── deleteRepoGraph tests ────────────────────────────────────────
+
+describe("RepoGraphDO.deleteRepoGraph", () => {
+  it("wipes all tables: activeVersion is null and counts are 0 after delete", async () => {
+    const do_ = makeDoInstance("o/delete-test")
+
+    // Upsert a file and commit a version so the DO has real data.
+    await do_.upsertFileGraph({
+      runId: "run-del",
+      headSha: "sha-del",
+      path: "src/a.ts",
+      symbols: [
+        {
+          symbolId: "src/a.ts function foo 1 0",
+          path: "src/a.ts",
+          name: "foo",
+          kind: "function",
+          exported: true,
+          startLine: 1,
+          startCol: 0,
+          endLine: 1,
+          endCol: 10,
+        },
+      ],
+      fileEdgesRaw: [
+        {
+          sourcePath: "src/a.ts",
+          edgeKind: "import",
+          specifier: "./b",
+          importedName: "bar",
+          localName: "bar",
+          exportedName: null,
+          startLine: 1,
+          startCol: 0,
+        },
+      ],
+      callEdges: [
+        {
+          sourcePath: "src/a.ts",
+          calleeName: "helper",
+          callKind: "same_file",
+          startLine: 5,
+          startCol: 2,
+        },
+      ],
+    })
+    await do_.commitGraphVersion("run-del")
+
+    // Sanity-check: data is present before delete.
+    expect(await do_.debugActiveVersion()).toBe("run-del")
+
+    // Delete everything.
+    await do_.deleteRepoGraph()
+
+    // Active version must be null.
+    expect(await do_.debugActiveVersion()).toBeNull()
+
+    // All counts for the deleted version must be 0 and status null.
+    const counts = await do_.debugCounts("run-del")
+    expect(counts.symbols).toBe(0)
+    expect(counts.fileEdges).toBe(0)
+    expect(counts.callEdges).toBe(0)
+    expect(counts.status).toBeNull()
+  })
+})

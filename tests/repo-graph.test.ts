@@ -2,8 +2,8 @@
 //
 // The Cloudflare SQLite DO storage API (`ctx.storage.sql.exec` /
 // `ctx.storage.transactionSync`) is only available at Workers runtime.
-// In Node/vitest we back it with a lightweight in-memory fake SQL
-// engine that handles the exact query patterns RepoGraphDO uses.
+// In Node/vitest we back it with NodeSqliteStorage — a real in-memory
+// SQLite engine via Node 22's built-in `node:sqlite` (`DatabaseSync`).
 //
 // Pattern mirrors the existing PrReviewRunDO tests: construct the DO
 // in-process with a hand-built storage stub; call public methods
@@ -12,231 +12,21 @@
 import { describe, expect, it } from "vitest"
 import { RepoGraphDO } from "../src/do/repo-graph"
 import type { Env } from "../src/index"
+import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
-// ─── In-memory SQL storage stub ──────────────────────────────────
+// ─── DO storage stub ─────────────────────────────────────────────
 //
-// Mimics the SqlStorage + DurableObjectStorage surface that
-// RepoGraphDO calls:
-//   ctx.storage.sql.exec(sql, ...params) → iterable of row objects
-//   ctx.storage.transactionSync(fn)      → calls fn synchronously
-//
-// Implementation: each named table is a Map<string, Record> keyed by
-// the row's primary-key string. SQL is parsed by minimal regex-based
-// handlers that cover exactly the statements the DO issues.
-
-type Row = Record<string, unknown>
-
-class FakeSqlStorage {
-  // Table store: tableName → Map<pk-string, row>
-  private tables = new Map<string, Map<string, Row>>()
-
-  // Ensure a table exists (DDL no-op).
-  private ensureTable(name: string): Map<string, Row> {
-    if (!this.tables.has(name)) this.tables.set(name, new Map())
-    return this.tables.get(name)!
-  }
-
-  // Primary-key extractors per table (mirrors the DDL PRIMARY KEYs).
-  private pk(table: string, row: Row): string {
-    switch (table) {
-      case "graph_versions": return String(row["graph_version"])
-      case "symbols": return `${row["graph_version"]}::${row["symbol_id"]}`
-      case "file_edges": return `${row["graph_version"]}::${row["edge_id"]}`
-      case "call_edges": return `${row["graph_version"]}::${row["edge_id"]}`
-      default: return JSON.stringify(row)
-    }
-  }
-
-  exec(query: string, ...params: unknown[]): IterableIterator<Row> {
-    const q = query.trim()
-
-    // ── DDL: CREATE TABLE / INDEX — no-op (schema is implicit) ──
-    if (/^CREATE\s+(TABLE|INDEX)/i.test(q)) {
-      // Just ensure referenced tables exist.
-      const m = q.match(/ON\s+(\w+)\s*\(/i) ?? q.match(/INTO\s+(\w+)\s*\(/i)
-      if (m) this.ensureTable(m[1])
-      return [][Symbol.iterator]()
-    }
-
-    // ── INSERT ... ON CONFLICT ... DO NOTHING ────────────────────
-    const insertM = q.match(/^INSERT\s+INTO\s+(\w+)\s*\(([^)]+)\)\s+VALUES\s*\(([^)]+)\)\s*(?:ON\s+CONFLICT[^;]*DO\s+NOTHING)?/i)
-    if (insertM) {
-      const table = insertM[1]
-      const cols = insertM[2].split(",").map((c) => c.trim())
-      const valueTokens = insertM[3].split(",").map((v) => v.trim())
-      const store = this.ensureTable(table)
-      const row: Row = {}
-      let paramIdx = 0
-      for (let i = 0; i < cols.length; i++) {
-        const token = valueTokens[i] ?? "?"
-        if (token === "?") {
-          row[cols[i]] = params[paramIdx++] ?? null
-        } else if (/^'.*'$/.test(token)) {
-          // String literal — strip surrounding quotes.
-          row[cols[i]] = token.slice(1, -1)
-        } else if (token === "NULL") {
-          row[cols[i]] = null
-        } else {
-          // Numeric literal or other.
-          row[cols[i]] = isNaN(Number(token)) ? token : Number(token)
-        }
-      }
-      const pkKey = this.pk(table, row)
-      const isOnConflictDoNothing = /ON\s+CONFLICT[^;]*DO\s+NOTHING/i.test(q)
-      if (isOnConflictDoNothing && store.has(pkKey)) {
-        return [][Symbol.iterator]() // skip duplicate
-      }
-      store.set(pkKey, row)
-      return [][Symbol.iterator]()
-    }
-
-    // ── DELETE FROM table WHERE col1 = ? AND col2 = ? ────────────
-    const deleteM = q.match(/^DELETE\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?$/i)
-    if (deleteM) {
-      const table = deleteM[1]
-      const store = this.ensureTable(table)
-      if (!deleteM[2]) {
-        // DELETE FROM table (no WHERE) — truncate
-        store.clear()
-        return [][Symbol.iterator]()
-      }
-      const conditions = this.parseWhereEq(deleteM[2], params)
-      for (const [key, row] of store) {
-        if (this.matchesAll(row, conditions)) store.delete(key)
-      }
-      return [][Symbol.iterator]()
-    }
-
-    // ── UPDATE table SET col=?, ... WHERE col=? ──────────────────
-    const updateM = q.match(/^UPDATE\s+(\w+)\s+SET\s+(.+?)\s+WHERE\s+(.+)$/i)
-    if (updateM) {
-      const table = updateM[1]
-      const store = this.ensureTable(table)
-      const setParts = this.parseSetClause(updateM[2], params)
-      // Count how many ? tokens consumed by SET.
-      const setParamCount = (updateM[2].match(/\?/g) ?? []).length
-      const whereConditions = this.parseWhereEq(updateM[3], params.slice(setParamCount))
-      for (const [_key, row] of store) {
-        if (this.matchesAll(row, whereConditions)) {
-          Object.assign(row, setParts)
-          // Re-key if PK columns changed (unlikely but safe).
-          const newKey = this.pk(table, row)
-          if (newKey !== _key) {
-            store.delete(_key)
-            store.set(newKey, row)
-          }
-        }
-      }
-      return [][Symbol.iterator]()
-    }
-
-    // ── SELECT COUNT(*) AS n FROM table WHERE graph_version=? ────
-    const countM = q.match(/^SELECT\s+COUNT\(\*\)\s+(?:AS\s+)?(\w+)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?$/i)
-    if (countM) {
-      const alias = countM[1]
-      const table = countM[2]
-      const store = this.ensureTable(table)
-      let count = 0
-      if (countM[3]) {
-        const conditions = this.parseWhereEq(countM[3], params)
-        for (const [, row] of store) {
-          if (this.matchesAll(row, conditions)) count++
-        }
-      } else {
-        count = store.size
-      }
-      return [{ [alias]: count }][Symbol.iterator]()
-    }
-
-    // ── SELECT col FROM table WHERE ... ─────────────────────────
-    const selectM = q.match(/^SELECT\s+(.+?)\s+FROM\s+(\w+)(?:\s+WHERE\s+(.+))?$/i)
-    if (selectM) {
-      const colsPart = selectM[1]
-      const table = selectM[2]
-      const store = this.ensureTable(table)
-      const cols = colsPart.split(",").map((c) => c.trim())
-      const isStar = cols.length === 1 && cols[0] === "*"
-
-      let rows: Row[]
-      if (selectM[3]) {
-        const conditions = this.parseWhereEq(selectM[3], params)
-        rows = []
-        for (const [, row] of store) {
-          if (this.matchesAll(row, conditions)) rows.push(row)
-        }
-      } else {
-        rows = [...store.values()]
-      }
-
-      if (isStar) return rows[Symbol.iterator]()
-      // Project columns; handle `col AS alias` renaming.
-      const projected = rows.map((row) => {
-        const out: Row = {}
-        for (const colExpr of cols) {
-          const asM = colExpr.match(/^(\w+)\s+AS\s+(\w+)$/i)
-          if (asM) {
-            out[asM[2]] = row[asM[1]]
-          } else {
-            out[colExpr] = row[colExpr]
-          }
-        }
-        return out
-      })
-      return projected[Symbol.iterator]()
-    }
-
-    // ── Fallback ─────────────────────────────────────────────────
-    console.warn("FakeSqlStorage: unhandled query:", q)
-    return [][Symbol.iterator]()
-  }
-
-  // Parse `col = ?` AND `col = ?` ... clauses into a condition map.
-  private parseWhereEq(where: string, params: unknown[]): Map<string, unknown> {
-    const conds = new Map<string, unknown>()
-    // Split on AND (case-insensitive).
-    const parts = where.split(/\s+AND\s+/i)
-    let paramIdx = 0
-    for (const part of parts) {
-      const m = part.match(/(\w+)\s*=\s*\?/)
-      if (m) {
-        conds.set(m[1], params[paramIdx++])
-      }
-    }
-    return conds
-  }
-
-  // Parse `col=?, col2=?` SET clause. Returns the set assignments.
-  private parseSetClause(setStr: string, params: unknown[]): Row {
-    const out: Row = {}
-    const parts = setStr.split(",")
-    let paramIdx = 0
-    for (const part of parts) {
-      const m = part.trim().match(/(\w+)\s*=\s*\?/)
-      if (m) {
-        out[m[1]] = params[paramIdx++]
-      }
-    }
-    return out
-  }
-
-  // Check if row satisfies all conditions.
-  private matchesAll(row: Row, conditions: Map<string, unknown>): boolean {
-    for (const [col, val] of conditions) {
-      if (row[col] !== val) return false
-    }
-    return true
-  }
-}
+// Wires NodeSqliteStorage (real SQLite) into the DurableObjectState
+// shape that RepoGraphDO expects.
 
 function makeSqliteState(name: string = "test-instance") {
-  const fakeSql = new FakeSqlStorage()
+  const sqlStorage = new NodeSqliteStorage()
 
   const state = {
     storage: {
-      sql: fakeSql,
+      sql: sqlStorage,
       transactionSync<T>(fn: () => T): T {
-        // In-memory fake has no real transaction semantics; just run fn.
-        return fn()
+        return sqlStorage.transactionSync(fn)
       },
       // KV-style stubs (unused by RepoGraphDO but satisfy DurableObjectState shape)
       async get<T>(key: string): Promise<T | undefined> {

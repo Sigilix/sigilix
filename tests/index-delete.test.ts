@@ -74,9 +74,35 @@ function makeKvStub(): {
 function makeEnv(opts: {
   kv?: Env["OPENCLAW_STATE"]
   deleteByIdsImpl?: (ids: string[]) => Promise<unknown>
-} = {}): { env: Env; deletedBatches: string[][] } {
+  graphDeleteImpl?: (namespace: string) => Promise<void>
+} = {}): { env: Env; deletedBatches: string[][]; graphDeletedNamespaces: string[] } {
   const kv = opts.kv ?? makeKvStub().kv
   const deletedBatches: string[][] = []
+  const graphDeletedNamespaces: string[] = []
+
+  // Minimal REPO_GRAPH_DO stub: tracks which DO instances had deleteRepoGraph()
+  // called on them (identified by the namespace string passed to idFromName).
+  const graphDeleteImpl = opts.graphDeleteImpl
+  const repoGraphDO = {
+    idFromName(name: string) {
+      return { name, toString: () => name }
+    },
+    get(id: { name: string }) {
+      return {
+        async deleteRepoGraph(): Promise<void> {
+          if (graphDeleteImpl) {
+            await graphDeleteImpl(id.name)
+          } else {
+            graphDeletedNamespaces.push(id.name)
+          }
+        },
+        // Stub remaining RPC methods — not called by the delete path.
+        async upsertFileGraph(): Promise<void> { /* no-op */ },
+        async commitGraphVersion(): Promise<void> { /* no-op */ },
+      }
+    },
+  }
+
   const env = {
     OPENCLAW_STATE: kv,
     OPENCLAW_CODE_INDEX: {
@@ -85,8 +111,9 @@ function makeEnv(opts: {
         return { ids, count: ids.length }
       }),
     },
+    REPO_GRAPH_DO: repoGraphDO,
   } as unknown as Env
-  return { env, deletedBatches }
+  return { env, deletedBatches, graphDeletedNamespaces }
 }
 
 function manifest(over: Partial<RepoIndexManifestV1> = {}): RepoIndexManifestV1 {
@@ -671,5 +698,189 @@ describe("handleInstallationDeleted", () => {
       env, installationId: 99, ownerLogin: "Acme",
     })
     expect(anyError).toBe(true)
+  })
+})
+
+// ─── deleteRepoIndex — SIG-138 T8 graph-delete arm ─────────────────────
+
+describe("deleteRepoIndex — SIG-138 T8 graph-delete arm", () => {
+  it("invokes deleteGraph for the resolved owner/repo on a normal uninstall", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    // The graph stub records the DO namespace string (indexNamespace(owner, repo)).
+    // indexNamespace lowercases: "arc-and-anchor/sigilix".
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+  })
+
+  it("graph delete runs even when OPENCLAW_INDEXER_ENABLED is absent (ungated by indexer flag)", async () => {
+    // The delete path must not check OPENCLAW_INDEXER_ENABLED. Verify by
+    // ensuring the graph delete fires on an env that does NOT define the flag.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    // Explicitly confirm the flag is absent on the env stub.
+    expect((env as Record<string, unknown>)["OPENCLAW_INDEXER_ENABLED"]).toBeUndefined()
+
+    await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-repos-removed",
+    })
+
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+  })
+
+  it("graph delete fires for the requested owner/repo even when safeToTouchRepoOnlyState is false (owner mismatch)", async () => {
+    // Fix #4 (CodeRabbit): the graph DO is keyed by indexNamespace(owner, repo)
+    // — deleting it only ever touches the requested tenant's DO. The owner guard
+    // exists to protect shared KV/vector records that can collide across tenants;
+    // it must NOT gate the graph delete. Repo-only KV/vector cleanup is still
+    // skipped on mismatch.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("owner-mismatch-skip")
+    // Repo-only KV/vector records are protected (different owner).
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    // Graph delete DOES fire for the requested namespace (tenant-safe by design).
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+  })
+
+  it("graph delete failure is best-effort: logs an error and sets status=partial but other arms complete", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, deletedBatches } = makeEnv({
+      kv,
+      graphDeleteImpl: async () => { throw new Error("DO unavailable") },
+    })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Graph failure contributes to errors[] → status becomes partial.
+    expect(result.status).toBe("partial")
+    expect(result.errors.some((e) => e.includes("graph.delete"))).toBe(true)
+    // The rest of the arms still ran: Vectorize ids were deleted.
+    expect(result.vectorIds).toBe(3)
+    expect(deletedBatches).toHaveLength(1)
+    // KV records also cleaned up.
+    expect(result.manifestDeleted).toBe(true)
+    expect(result.vectorsKvDeleted).toBe(true)
+  })
+
+  it("SIG-138: graph delete fires even when Vectorize deleteByIds fails (independent of vectorize outcome)", async () => {
+    // GDPR regression guard: the graph-delete arm is unconditional under
+    // the owner guard. A persistent Vectorize failure (e.g. Vectorize 503)
+    // must NOT leave the DO graph data lingering. The graph needs only
+    // indexNamespace(owner, repo), not the vector id-list, so there is no
+    // stranding risk and deferral serves no purpose.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors()))
+
+    const { env, graphDeletedNamespaces } = makeEnv({
+      kv,
+      deleteByIdsImpl: async () => {
+        throw new Error("vectorize 503 service unavailable")
+      },
+    })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Vectorize failure → status is partial and KV id-list/manifest survive
+    // (so redelivery can retry the embeddings).
+    expect(result.status).toBe("partial")
+    expect(result.errors.some((e) => e.includes("vectorize.deleteByIds"))).toBe(true)
+    expect(result.vectorsKvDeleted).toBe(false)
+    expect(result.manifestDeleted).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+
+    // Graph delete still fired unconditionally (owner guard passed).
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+  })
+
+  it("owner-mismatch AND graph delete throws → status=partial (not owner-mismatch-skip)", async () => {
+    // CodeRabbit finding on PR #128: the graph-delete arm runs
+    // unconditionally (even when !safeToTouchRepoOnlyState) and pushes
+    // failures to result.errors. The old status logic checked
+    // !safeToTouchRepoOnlyState BEFORE result.errors.length, so a
+    // failed GDPR graph delete during an owner-mismatch was silently
+    // masked as "owner-mismatch-skip" (treated as success → no 5xx /
+    // no redelivery retry). Fix: errors take precedence over the
+    // owner-mismatch label so callers surface a 503 and GitHub
+    // redelivers for the failed compliance delete.
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+
+    const { env } = makeEnv({
+      kv,
+      graphDeleteImpl: async () => { throw new Error("DO write failed") },
+    })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Graph delete failed → must surface as partial, not owner-mismatch-skip.
+    expect(result.status).toBe("partial")
+    expect(result.errors.some((e) => e.includes("graph.delete"))).toBe(true)
+    // Repo-only state (KV/Vectorize) is still protected — the owner guard
+    // correctly blocked those arms.
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+  })
+
+  it("owner-mismatch AND graph delete succeeds → status=owner-mismatch-skip (happy path unaffected)", async () => {
+    // Regression guard: the fix must NOT change the happy-path behavior
+    // where owner mismatch AND graph delete succeeds — that should remain
+    // "owner-mismatch-skip" (no errors in result.errors).
+    const { kv, store } = makeKvStub()
+    store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest({ owner: "different-org" })))
+    store.set(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"), JSON.stringify(vectors({ owner: "different-org" })))
+
+    const { env, graphDeletedNamespaces } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // No errors → owner-mismatch-skip preserved.
+    expect(result.status).toBe("owner-mismatch-skip")
+    expect(result.errors).toEqual([])
+    // Graph delete still fired.
+    expect(graphDeletedNamespaces).toHaveLength(1)
+    expect(graphDeletedNamespaces[0]).toBe("arc-and-anchor/sigilix")
+    // Repo-only KV untouched.
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(true)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(true)
   })
 })

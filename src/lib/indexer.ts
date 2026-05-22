@@ -64,6 +64,8 @@ import {
 } from "./repo-index-vectors"
 import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
+import { extractFileGraph } from "./graph-extract"
+import { writeFileGraph, commitGraph } from "./repo-graph-client"
 import {
   type Chunk,
   CHUNK_LINES,
@@ -246,6 +248,32 @@ export async function computeRunId(args: {
   )
 }
 
+/**
+ * True iff the graph write path is active. Mirrors the idiom used by
+ * OPENCLAW_BRANCH_AWARE_RETRIEVAL: both "on" and "shadow" enable the
+ * path so it can be validated before full rollout.
+ */
+export function graphIndexEnabled(env: Env): boolean {
+  const v = (env.OPENCLAW_GRAPH_INDEX ?? "").trim().toLowerCase()
+  return v === "on" || v === "shadow"
+}
+
+/**
+ * True iff this run should call commitGraphVersion after writing the
+ * manifest. Requires:
+ *   - manifestWritten: the manifest write itself succeeded (so a KV
+ *     error mid-manifest doesn't trigger a commit for an un-indexed run)
+ *   - shouldFinalize(activeRunId, runId): this run still holds the lease
+ *     (or it's absent) — mirrors the invariant used by persistManifest.
+ */
+export function shouldCommitGraph(args: {
+  manifestWritten: boolean
+  activeRunId: string | null
+  runId: string
+}): boolean {
+  return args.manifestWritten && shouldFinalize(args.activeRunId, args.runId)
+}
+
 // ---------------------------------------------------------------------
 // Consumer entry point
 // ---------------------------------------------------------------------
@@ -380,14 +408,17 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (totalFiles === 0) {
     // Empty repo (or all-filtered). Write a manifest so we don't
     // re-walk on every webhook for this SHA.
-    if (!(await leaseAllows(env, owner, repo, runId))) {
+    // SIG-138: read activeRunId explicitly so we can reuse it for the graph
+    // commit check below without a second KV read (don't re-read KV).
+    const activeRunId = await readActiveRunId(env, owner, repo)
+    if (!shouldFinalize(activeRunId, runId)) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
         owner, repo, run_id: runId, site: "bootstrap-empty-manifest",
       }))
       return
     }
-    await persistManifest({
+    const manifestWritten = await persistManifest({
       env, owner, repo, namespace, headSha, runId,
       fileCount: 0, chunkCount: 0, shardCount: 1,
       chunkerVersion: effectiveChunkerVersion(astOn),
@@ -397,6 +428,20 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       owner, repo, run_id: runId,
       file_count: 0, chunk_count: 0, shard_count: 1,
     }))
+    // SIG-138: commit an empty graph version to GC any stale graph left
+    // from a previously-indexed repo that is now empty. Best-effort —
+    // never fails the index job.
+    if (graphIndexEnabled(env) && shouldCommitGraph({ manifestWritten, activeRunId, runId })) {
+      try {
+        await commitGraph(env, owner, repo, runId)
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "graph-commit-failed",
+          owner, repo, run_id: runId,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
     return
   }
 
@@ -404,7 +449,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   const sliceFiles = indexableFiles.slice(0, sliceHi)
   const { chunkCount, idsByPath } = await processSlice({
     client, env, owner, repo, namespace,
-    headSha, files: sliceFiles, astChunking: astOn,
+    headSha, runId, files: sliceFiles, astChunking: astOn,
   })
 
   // ARC-238 Codex v1 B3 + code-reviewer MED-2: vectors-record write
@@ -451,7 +496,10 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   }
 
   // Single-shard run — write manifest now.
-  if (!(await leaseAllows(env, owner, repo, runId))) {
+  // SIG-138: read activeRunId explicitly so we can reuse it for the graph
+  // commit check below without a second KV read (don't re-read KV).
+  const activeRunId = await readActiveRunId(env, owner, repo)
+  if (!shouldFinalize(activeRunId, runId)) {
     console.warn(JSON.stringify({
       event: "index-job-skip-superseded-finalize",
       site: "bootstrap-manifest",
@@ -459,7 +507,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     }))
     return
   }
-  await persistManifest({
+  const manifestWritten = await persistManifest({
     env, owner, repo, namespace, headSha, runId,
     fileCount: sliceHi, chunkCount, shardCount: 1,
     chunkerVersion: effectiveChunkerVersion(astOn),
@@ -469,6 +517,19 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     owner, repo, run_id: runId,
     file_count: sliceHi, chunk_count: chunkCount, shard_count: 1,
   }))
+  // SIG-138: commit the graph version after a successful manifest write,
+  // lease-gated. Best-effort — never fails the index job.
+  if (graphIndexEnabled(env) && shouldCommitGraph({ manifestWritten, activeRunId, runId })) {
+    try {
+      await commitGraph(env, owner, repo, runId)
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "graph-commit-failed",
+        owner, repo, run_id: runId,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+  }
   // ARC-236: fan out reruns for PRs that warmed up. Best-effort —
   // failure to enqueue doesn't fail the index job (the indexing
   // itself succeeded; reruns are a customer-UX upgrade).
@@ -591,7 +652,7 @@ async function handleShardJob(
   const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
   const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
     client, env, owner, repo, namespace,
-    headSha: shard.headSha, files: sliceFiles, astChunking: astOn,
+    headSha: shard.headSha, runId: shard.runId, files: sliceFiles, astChunking: astOn,
   })
 
   const vectorsResult = await persistVectorIds({
@@ -614,7 +675,10 @@ async function handleShardJob(
   if (shard.hi >= shard.totalFiles) {
     // Final shard — derive shardCount from the chain length.
     const shardCount = Math.ceil(shard.totalFiles / MAX_FILES_PER_JOB)
-    if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+    // SIG-138: read activeRunId explicitly so we can reuse it for the graph
+    // commit check below without a second KV read (don't re-read KV).
+    const activeRunId = await readActiveRunId(env, owner, repo)
+    if (!shouldFinalize(activeRunId, shard.runId)) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
         site: "shard-manifest",
@@ -622,7 +686,7 @@ async function handleShardJob(
       }))
       return
     }
-    await persistManifest({
+    const manifestWritten = await persistManifest({
       env, owner, repo, namespace,
       headSha: shard.headSha, runId: shard.runId,
       fileCount: cumulativeFiles,
@@ -637,6 +701,19 @@ async function handleShardJob(
       chunk_count: cumulativeChunks,
       shard_count: shardCount,
     }))
+    // SIG-138: commit the graph version after a successful manifest write,
+    // lease-gated. Best-effort — never fails the index job.
+    if (graphIndexEnabled(env) && shouldCommitGraph({ manifestWritten, activeRunId, runId: shard.runId })) {
+      try {
+        await commitGraph(env, owner, repo, shard.runId)
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "graph-commit-failed",
+          owner, repo, run_id: shard.runId,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
     // ARC-236: fan out reruns on the final-shard path too. Multi-
     // shard repos benefit from the same warmup-rerun UX.
     // M4 (CR PR #80): same runId-keyed dedupe as the single-shard
@@ -690,6 +767,7 @@ interface ProcessSliceArgs {
   repo: string
   namespace: string
   headSha: string
+  runId: string
   files: ReadonlyArray<IndexableFile>
   astChunking: boolean
 }
@@ -703,7 +781,7 @@ export interface ProcessSliceResult {
 }
 
 async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult> {
-  const { client, env, owner, repo, namespace, headSha, files } = args
+  const { client, env, owner, repo, namespace, headSha, runId, files } = args
   let chunkBuffer: Chunk[] = []
   const vectorBuffer: VectorizeRecord[] = []
   let totalChunks = 0
@@ -731,6 +809,33 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
     }
     if (content === null) continue
 
+    // SIG-138: graph write is best-effort and additive — any error here
+    // logs + continues; the embedding/upsert pipeline is unaffected.
+    if (graphIndexEnabled(env)) {
+      try {
+        const fg = extractFileGraph(file.path, content)
+        await writeFileGraph(env, owner, repo, {
+          runId, headSha, path: file.path,
+          symbols: fg.symbols,
+          fileEdgesRaw: fg.fileEdgesRaw,
+          callEdges: fg.callEdges.map((c) => ({
+            sourcePath: c.sourcePath,
+            calleeName: c.calleeName,
+            callKind: c.callKind,
+            startLine: c.startLine,
+            startCol: c.startCol,
+          })),
+        })
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "graph-write-failed",
+          owner, repo, path: file.path, run_id: runId,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
+
+    // SIG-131: AST-aware chunking with line-window fallback.
     const ext = args.astChunking ? jsTsExtOf(file.path) : null
     let fileChunks: Chunk[]
     if (ext !== null) {
@@ -889,7 +994,7 @@ interface PersistManifestArgs {
   chunkerVersion: number
 }
 
-async function persistManifest(args: PersistManifestArgs): Promise<void> {
+async function persistManifest(args: PersistManifestArgs): Promise<boolean> {
   const manifest: RepoIndexManifestV1 = {
     v: 1,
     // SIG-132: store the BARE lowercased repo, not the namespace. The
@@ -916,6 +1021,7 @@ async function persistManifest(args: PersistManifestArgs): Promise<void> {
       owner: args.owner, repo: args.repo, run_id: args.runId,
     }))
   }
+  return ok
 }
 
 interface PersistVectorIdsArgs {

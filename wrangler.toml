@@ -83,6 +83,13 @@ queue = "openclaw-jobs"
 name = "PR_REVIEW_RUN"
 class_name = "PrReviewRunDO"
 
+# SIG-138: per-repo code/dependency graph stored in SQLite DO storage.
+# Keyed by `indexNamespace(owner, repo)` (one DO instance per repo).
+# Flag-gated behind OPENCLAW_GRAPH_INDEX / OPENCLAW_GRAPH_RETRIEVAL.
+[[durable_objects.bindings]]
+name = "REPO_GRAPH_DO"
+class_name = "RepoGraphDO"
+
 # Migration block — adds the new DO class. Forward-only; rolling back
 # this PR by reverting the wrangler.toml change is safe because no
 # data has been written yet (mode=off in production until phase 3 of
@@ -91,6 +98,12 @@ class_name = "PrReviewRunDO"
 [[migrations]]
 tag = "arc-190-v1"
 new_classes = ["PrReviewRunDO"]
+
+# SIG-138: RepoGraphDO uses SQLite storage (new_sqlite_classes).
+# Sequential migration tag after arc-190-v1.
+[[migrations]]
+tag = "sig-138-v1"
+new_sqlite_classes = ["RepoGraphDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
@@ -125,6 +138,17 @@ new_classes = ["PrReviewRunDO"]
 # Flip back to "" to disable; flip to "synth,security" etc. to enable
 # additional roles per the rollout plan.
 SHADOW_BAKEOFF_ROLES = "synth"
+
+# SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
+#   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
+#                            indexer (extract + RepoGraphDO upsert/commit).
+#   OPENCLAW_GRAPH_RETRIEVAL "off" | "shadow" | "post" — graph EXPANSION of
+#                            vector hits in PR review (Phase 2).
+# Shadow emits telemetry only; neither changes posted review output. Flip to
+# "shadow" per phase after acceptance review, then "on"/"post" once the
+# bake-off telemetry is reviewed.
+OPENCLAW_GRAPH_INDEX = "off"
+OPENCLAW_GRAPH_RETRIEVAL = "off"
 
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to

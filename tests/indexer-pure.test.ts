@@ -18,6 +18,8 @@ import {
   chunkFile,
   chunkId,
   computeRunId,
+  graphIndexEnabled,
+  shouldCommitGraph,
   effectiveChunkerVersion,
   splitOversizedWindow,
   walkIndexableFiles,
@@ -428,6 +430,44 @@ describe("chunkId", () => {
       content: "hello",
     })
     expect(a).not.toBe(b)
+  })
+})
+
+describe("graphIndexEnabled", () => {
+  it("returns true for 'on' and 'shadow'", () => {
+    expect(graphIndexEnabled({ OPENCLAW_GRAPH_INDEX: "on" } as any)).toBe(true)
+    expect(graphIndexEnabled({ OPENCLAW_GRAPH_INDEX: "shadow" } as any)).toBe(true)
+  })
+
+  it("returns true for mixed-case values", () => {
+    expect(graphIndexEnabled({ OPENCLAW_GRAPH_INDEX: "ON" } as any)).toBe(true)
+    expect(graphIndexEnabled({ OPENCLAW_GRAPH_INDEX: "Shadow" } as any)).toBe(true)
+    expect(graphIndexEnabled({ OPENCLAW_GRAPH_INDEX: "  on  " } as any)).toBe(true)
+  })
+
+  it("returns false for 'off', empty string, and undefined", () => {
+    expect(graphIndexEnabled({ OPENCLAW_GRAPH_INDEX: "off" } as any)).toBe(false)
+    expect(graphIndexEnabled({ OPENCLAW_GRAPH_INDEX: "" } as any)).toBe(false)
+    expect(graphIndexEnabled({} as any)).toBe(false)
+  })
+})
+
+describe("shouldCommitGraph", () => {
+  it("returns true when manifestWritten and lease is held (same runId)", () => {
+    expect(shouldCommitGraph({ manifestWritten: true, activeRunId: "r1", runId: "r1" })).toBe(true)
+  })
+
+  it("returns true when manifestWritten and activeRunId is null (no competing run)", () => {
+    expect(shouldCommitGraph({ manifestWritten: true, activeRunId: null, runId: "r1" })).toBe(true)
+  })
+
+  it("returns false when manifestWritten is false (manifest write failed)", () => {
+    expect(shouldCommitGraph({ manifestWritten: false, activeRunId: "r1", runId: "r1" })).toBe(false)
+    expect(shouldCommitGraph({ manifestWritten: false, activeRunId: null, runId: "r1" })).toBe(false)
+  })
+
+  it("returns false when a different run holds the lease", () => {
+    expect(shouldCommitGraph({ manifestWritten: true, activeRunId: "r2", runId: "r1" })).toBe(false)
   })
 })
 

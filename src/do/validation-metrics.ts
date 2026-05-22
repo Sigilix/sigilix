@@ -181,7 +181,9 @@ export class ValidationMetricsDO extends DurableObject<Env> {
   override async alarm(): Promise<void> {
     const sql = this.sql()
     const now = new Date().toISOString()
-    const cutoffDay = utcDayMinus(now, RETENTION_DAYS)
+    // Retain exactly RETENTION_DAYS UTC days (today + RETENTION_DAYS-1 prior).
+    // `day < cutoffDay` then drops everything strictly older than that window.
+    const cutoffDay = utcDayMinus(now, RETENTION_DAYS - 1)
     const cutoffAt = new Date(Date.now() - RETENTION_DAYS * DAY_MS).toISOString()
 
     this.ctx.storage.transactionSync(() => {

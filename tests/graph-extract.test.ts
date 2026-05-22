@@ -27,3 +27,26 @@ describe("extractFileGraph — symbols", () => {
     expect(extractFileGraph("broken.ts", "function (").symbols).toEqual([])
   })
 })
+
+describe("extractFileGraph — file edges (raw)", () => {
+  it("captures relative imports and re-exports with names and kind", () => {
+    const src = [
+      "import { add, sub as minus } from './math'",
+      "import Default from '../util/log'",
+      "export { PI } from './constants'",
+      "export * from './all'",
+      "import { x } from 'left-pad'",
+    ].join("\n")
+
+    const { fileEdgesRaw } = extractFileGraph("src/a.ts", src)
+    const imports = fileEdgesRaw.filter((e) => e.edgeKind === "import")
+
+    expect(imports).toContainEqual(expect.objectContaining({
+      edgeKind: "import", specifier: "./math", importedName: "add", localName: "add", sourcePath: "src/a.ts",
+    }))
+    expect(imports).toContainEqual(expect.objectContaining({ specifier: "./math", importedName: "sub", localName: "minus" }))
+    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ edgeKind: "reexport", exportedName: "PI", specifier: "./constants" }))
+    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ edgeKind: "star_reexport", specifier: "./all" }))
+    expect(fileEdgesRaw).toContainEqual(expect.objectContaining({ specifier: "left-pad" }))
+  })
+})

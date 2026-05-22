@@ -33,11 +33,21 @@ export interface GraphSymbol {
   endCol: number
 }
 
-// T2/T3 fill these; stubs so FileGraph compiles before those tasks land.
-// Record<string, never> is the empty-object-friendly alternative to an
-// empty interface (avoids @typescript-eslint/no-empty-interface if that
-// rule is ever added).
-export type FileEdgeRaw = Record<string, never>
+// T2: file import/export edges (raw, unresolved specifiers).
+// T3 fills callEdges; stub kept until that task lands.
+export type FileEdgeKind = "import" | "export" | "reexport" | "star_reexport"
+
+export interface FileEdgeRaw {
+  sourcePath: string
+  edgeKind: FileEdgeKind
+  specifier: string
+  importedName: string | null
+  localName: string | null
+  exportedName: string | null
+  startLine: number
+  startCol: number
+}
+
 export type CallEdge = Record<string, never>
 
 export interface FileGraph {
@@ -168,5 +178,86 @@ export function extractFileGraph(path: string, content: string): FileGraph {
     },
   })
 
-  return { symbols, fileEdgesRaw: [], callEdges: [] }
+  // Pass 3: collect raw file edges (import / re-export declarations).
+  // ExportNamedDeclaration with a declaration (local `export function f(){}`)
+  // is intentionally skipped here — those are already captured as symbols in
+  // Pass 2 and produce no file edge. Only source-bearing export nodes create
+  // edges (re-exports). Bare `export { x }` without a source is also skipped.
+  const fileEdgesRaw: FileEdgeRaw[] = []
+
+  const pushEdge = (
+    edgeKind: FileEdgeKind,
+    specifier: string,
+    importedName: string | null,
+    localName: string | null,
+    exportedName: string | null,
+    node: AstNode,
+  ): void => {
+    const s = node.loc.start
+    fileEdgesRaw.push({
+      sourcePath: path,
+      edgeKind,
+      specifier,
+      importedName,
+      localName,
+      exportedName,
+      startLine: s.line,
+      startCol: s.column,
+    })
+  }
+
+  walkAst(ast, {
+    ImportDeclaration(node: AstNode) {
+      const specifier: string = node.source?.value ?? ""
+      if (!specifier) return
+      const specifiers: AstNode[] = node.specifiers ?? []
+      if (specifiers.length === 0) {
+        // Side-effect import: `import './polyfill'`
+        pushEdge("import", specifier, null, null, null, node)
+        return
+      }
+      for (const spec of specifiers) {
+        let importedName: string | null = null
+        const localName: string | null = spec.local?.name ?? null
+        if (spec.type === "ImportDefaultSpecifier") {
+          // `import Default from './m'` — imported binding is "default"
+          importedName = "default"
+        } else if (spec.type === "ImportNamespaceSpecifier") {
+          // `import * as ns from './m'` — no single importedName
+          importedName = null
+        } else {
+          // ImportSpecifier: `import { add }` or `import { sub as minus }`
+          // spec.imported holds the source name; spec.local holds the local alias.
+          importedName = spec.imported?.name ?? spec.imported?.value ?? null
+        }
+        pushEdge("import", specifier, importedName, localName, null, node)
+      }
+    },
+
+    ExportNamedDeclaration(node: AstNode) {
+      // Only source-bearing re-exports create file edges; local export
+      // declarations (`export function f(){}`) are handled by the symbol pass.
+      if (!node.source) return
+      const specifier: string = node.source?.value ?? ""
+      if (!specifier) return
+      const specifiers: AstNode[] = node.specifiers ?? []
+      for (const spec of specifiers) {
+        // spec.local is the name in the source module; spec.exported is the
+        // name re-exported from this module.
+        const importedName: string | null = spec.local?.name ?? spec.local?.value ?? null
+        const exportedName: string | null = spec.exported?.name ?? spec.exported?.value ?? null
+        pushEdge("reexport", specifier, importedName, null, exportedName, node)
+      }
+    },
+
+    ExportAllDeclaration(node: AstNode) {
+      // `export * from './all'` or `export * as ns from './all'`
+      const specifier: string = node.source?.value ?? ""
+      if (!specifier) return
+      const exportedName: string | null = node.exported?.name ?? node.exported?.value ?? null
+      pushEdge("star_reexport", specifier, null, null, exportedName, node)
+    },
+  })
+
+  return { symbols, fileEdgesRaw, callEdges: [] }
 }

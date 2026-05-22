@@ -50,10 +50,21 @@ describe("handleAdminIndexRoute", () => {
     expect((await handleAdminIndexRoute(post("https://x/admin/index-repo?repo=r", `Bearer ${TOKEN}`), env)).status).toBe(400)
   })
 
-  it("503 when the GitHub App isn't configured", async () => {
-    const { env } = makeEnv({ GITHUB_APP_ID: undefined })
-    const res = await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=o&repo=r", `Bearer ${TOKEN}`), env)
-    expect(res.status).toBe(503)
+  it("503 when the GitHub App isn't configured (either credential missing)", async () => {
+    for (const missing of [{ GITHUB_APP_ID: undefined }, { GITHUB_PRIVATE_KEY: undefined }]) {
+      const { env } = makeEnv(missing)
+      const res = await handleAdminIndexRoute(post("https://x/admin/index-repo?owner=o&repo=r", `Bearer ${TOKEN}`), env)
+      expect(res.status).toBe(503)
+    }
+  })
+
+  it("400 on an invalid owner/repo slug", async () => {
+    const { env, sent } = makeEnv()
+    for (const q of ["owner=a%20b&repo=r", "owner=o&repo=..%2Fx", "owner=o&repo=a/b"]) {
+      const res = await handleAdminIndexRoute(post(`https://x/admin/index-repo?${q}`, `Bearer ${TOKEN}`), env)
+      expect(res.status).toBe(400)
+    }
+    expect(sent).toHaveLength(0)
   })
 
   it("404 when the app isn't installed on the repo", async () => {

@@ -62,7 +62,7 @@ import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
-import { handleAdminIndexRoute } from "./lib/admin-index-route"
+import { handleAdminIndexRoute, handleAdminBackfillRoute } from "./lib/admin-index-route"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
@@ -802,6 +802,11 @@ export default {
     // SIG-156: authenticated manual (re)index trigger.
     if (request.method === "POST" && url.pathname === "/admin/index-repo") {
       return handleAdminIndexRoute(request, env)
+    }
+
+    // SIG-156: authenticated backfill — index every repo of every installation.
+    if (request.method === "POST" && url.pathname === "/admin/index-backfill") {
+      return handleAdminBackfillRoute(request, env)
     }
 
     if (request.method === "POST" && url.pathname === "/linear/webhook") {

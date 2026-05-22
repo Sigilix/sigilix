@@ -11,6 +11,7 @@
 import type { Env } from "../index"
 import { requireBearerToken } from "./auth-bearer"
 import { resolveRepoInstallationId } from "./github-app"
+import { runIndexBackfill } from "./index-backfill"
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -64,4 +65,27 @@ export async function handleAdminIndexRoute(request: Request, env: Env): Promise
   })
 
   return json({ enqueued: true, owner, repo, installationId }, 202)
+}
+
+/**
+ * SIG-156: POST /admin/index-backfill — bearer-auth fan-out that indexes every
+ * repo of every GitHub App installation. `?dryRun=true` reports counts without
+ * enqueuing. The escape hatch for installs that predate the indexer being
+ * enabled (which never bootstrapped and can't bootstrap via push).
+ */
+export async function handleAdminBackfillRoute(request: Request, env: Env): Promise<Response> {
+  const token = env.OPENCLAW_ADMIN_TOKEN
+  if (!token) {
+    return json({ error: "admin_endpoint_not_configured" }, 503)
+  }
+  if (!(await requireBearerToken(request, token))) {
+    return json({ error: "unauthorized" }, 401)
+  }
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    return json({ error: "github_app_not_configured" }, 503)
+  }
+
+  const dryRun = new URL(request.url).searchParams.get("dryRun") === "true"
+  const summary = await runIndexBackfill(env, { dryRun })
+  return json(summary, 200)
 }

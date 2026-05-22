@@ -566,6 +566,42 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     expect(result.verdict.findings).toHaveLength(1)
   })
 
+  it("does NOT suppress an authz-CWE finding that is NOT security-sourced (came from logic/tests/perf)", () => {
+    // A logic-sourced finding that happens to carry an authz CWE must not be
+    // caught by the DO suppression — that gate is scoped to security provenance.
+    const logicProvenance: SynthesizerProvenance = {
+      findings: [
+        { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+      ],
+      dropped: [],
+      softened: [],
+      retrievalCallsUsed: 0,
+    }
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({
+            path: "src/do/repo-graph.ts",
+            line: 17,
+            cweId: "CWE-639",
+            category: "logic",
+            headline: "Off-by-one lets the wrong record id through",
+            body: "The bounds check uses <= instead of <, so the loop reads one record past the requested range.",
+          })],
+        },
+        provenance: logicProvenance,
+      },
+      reviewable: new Map([["src/do/repo-graph.ts", [{ line: 17, side: "RIGHT" as const, position: 1 }]]]),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      durableObjectClassSpans: new Map([["src/do/repo-graph.ts", [{ start: 1, end: 100 }]]]),
+      securityValidatorMode: "shadow",
+    })
+    // Not security-sourced → DO gate skips → kept.
+    expect(result.verdict.findings).toHaveLength(1)
+  })
+
   it("does NOT suppress an authz finding when the path is not a DurableObject", () => {
     const result = validateForSubmission({
       synthOutput: {

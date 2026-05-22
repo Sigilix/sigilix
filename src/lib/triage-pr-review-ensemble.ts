@@ -6012,8 +6012,11 @@ export function validateForSubmission(args: {
     // INSIDE a changed DurableObject class body — UNCONDITIONALLY (a
     // correctness drop, not a shadow-gated evidence policy), so it clears even
     // while the security validator runs in shadow. Scoped to the class span so
-    // a real authz bug in a co-located top-level helper is still surfaced.
+    // a real authz bug in a co-located top-level helper is still surfaced, and
+    // to SECURITY-sourced findings (provenance, like the SIG-108 gate) so an
+    // authz-CWE finding that actually came from logic/tests/perf is untouched.
     if (
+      sourceRolesInclude(sourceIds, "security") &&
       lineInDurableObjectClass(doClassSpans.get(f.path.trim()), f.line) &&
       deriveSecurityBucket(f) === AUTHZ_BUCKET
     ) {

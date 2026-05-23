@@ -22,6 +22,7 @@ import {
   type PrReviewFinding,
   type PrReviewVerdict,
 } from "../src/lib/triage-pr-review"
+import type { ReviewableMap } from "../src/lib/diff-positions"
 
 const baseFinding: PrReviewFinding = {
   path: "src/lib/foo.ts",

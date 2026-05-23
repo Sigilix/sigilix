@@ -334,16 +334,21 @@ export interface CoverageRoles {
 }
 
 /**
- * ARC-281: per-Kimi spec the body now carries an explicit "**Δ:** +N
+ * ARC-281: per-Kimi spec the body now carries an explicit "**Changes:** +N
  * new · M likely-fixed" badge line under the heading instead of
- * prepending a `**Δ since last review:**` string into the summary.
- * Caller computes a `FindingDelta` via the existing
- * `computeFindingDelta` helper and passes the four counts through;
- * `renderDeltaBadge` formats them. Pure — exported for tests.
+ * prepending a "since last review" string into the summary. Caller
+ * computes a `FindingDelta` via the existing `computeFindingDelta`
+ * helper and passes the four counts through; `renderDeltaBadge`
+ * formats them. Pure — exported for tests.
  *
  * Returns `null` when no signal is worth surfacing (all counts
  * zero), so the renderer can skip the line entirely rather than
- * print "**Δ:**".
+ * print an empty "**Changes:**".
+ *
+ * 2026-05-23 rebrand: the Δ glyph (Greek capital delta, visually a
+ * triangle) was removed from both the badge label and the heading
+ * suffix per founder direction. Replaced with the literal word
+ * "Changes" + "since last review" — same semantics, no triangle.
  */
 export interface DeltaBadgeCounts {
   newCount: number
@@ -362,7 +367,7 @@ export function renderDeltaBadge(counts: DeltaBadgeCounts): string | null {
   if (stillOpenCount > 0) parts.push(`${stillOpenCount} still-open`)
   if (likelyFixedCount > 0) parts.push(`${likelyFixedCount} likely-fixed`)
   if (carriedOverCount > 0) parts.push(`${carriedOverCount} carried-over`)
-  return `**Δ:** ${parts.join(" · ")}`
+  return `**Changes:** ${parts.join(" · ")}`
 }
 
 /**
@@ -1391,7 +1396,7 @@ export function filterToSigilixAuthored<T extends AuthoredItem>(
  *   - `coverage` — which specialists were dispatched vs returned;
  *     drives the new `**Coverage:**` line (full or degraded).
  *   - `delta` — finding delta vs the prior review's manifest;
- *     drives the `**Δ:** +N new · M likely-fixed` badge under the
+ *     drives the `**Changes:** +N new · M likely-fixed` badge under the
  *     heading. `null` means no prior review or no signal.
  *
  * The new renderers do NOT consume `verdict.confidenceReason` —
@@ -1510,9 +1515,9 @@ export function renderCommentBody(args: RenderBodyArgs): string {
  *   ```
  *   <!-- sigilix:pr-review -->
  *
- *   ## Sigilix: 2 findings · Δ since last review
+ *   ## Sigilix: 2 findings · since last review
  *
- *   **Δ:** +2 new · 3 likely-fixed
+ *   **Changes:** +2 new · 3 likely-fixed
  *
  *   **Coverage:** logic · security · performance · tests
  *
@@ -1537,13 +1542,16 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
-  // Heading: "## Sigilix: N finding[s][ · Δ since last review]".
+  // Heading: "## Sigilix: N finding[s][ · since last review]".
+  // 2026-05-23 rebrand: Δ glyph (triangle) removed; literal "since
+  // last review" copy in its place. See `renderDeltaBadge` for the
+  // matching badge-line change.
   const findingNoun = totalFindings === 1 ? "finding" : "findings"
   const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
-  const deltaSuffix = deltaBadge ? " · Δ since last review" : ""
+  const deltaSuffix = deltaBadge ? " · since last review" : ""
   lines.push(`## Sigilix: ${totalFindings} ${findingNoun}${deltaSuffix}`)
 
-  // Δ badge line — directly under heading, before coverage and
+  // Changes-badge line — directly under heading, before coverage and
   // summary. Only present when delta has signal.
   if (deltaBadge) {
     lines.push("")

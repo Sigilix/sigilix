@@ -643,7 +643,9 @@ describe("renderCommentBody (SIG-161)", () => {
         carriedOverCount: 0,
       },
     })
-    expect(body).toContain("Δ")
+    // The Changes line is the post-rebrand evidence that `delta` flowed
+    // through (was `Δ` pre-2026-05-23 rebrand).
+    expect(body).toContain("**Changes:** +1 new")
   })
 })
 

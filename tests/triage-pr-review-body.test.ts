@@ -145,22 +145,30 @@ describe("renderDeltaBadge (ARC-281)", () => {
   it("formats the four parts in order: new · still-open · likely-fixed · carried-over", () => {
     expect(renderDeltaBadge({
       newCount: 2, stillOpenCount: 1, likelyFixedCount: 3, carriedOverCount: 1,
-    })).toBe("**Δ:** +2 new · 1 still-open · 3 likely-fixed · 1 carried-over")
+    })).toBe("**Changes:** +2 new · 1 still-open · 3 likely-fixed · 1 carried-over")
   })
 
   it("skips zero parts cleanly", () => {
     expect(renderDeltaBadge({
       newCount: 2, stillOpenCount: 0, likelyFixedCount: 3, carriedOverCount: 0,
-    })).toBe("**Δ:** +2 new · 3 likely-fixed")
+    })).toBe("**Changes:** +2 new · 3 likely-fixed")
   })
 
   it("renders only-fixed and only-new variants", () => {
     expect(renderDeltaBadge({
       newCount: 0, stillOpenCount: 0, likelyFixedCount: 4, carriedOverCount: 0,
-    })).toBe("**Δ:** 4 likely-fixed")
+    })).toBe("**Changes:** 4 likely-fixed")
     expect(renderDeltaBadge({
       newCount: 3, stillOpenCount: 0, likelyFixedCount: 0, carriedOverCount: 0,
-    })).toBe("**Δ:** +3 new")
+    })).toBe("**Changes:** +3 new")
+  })
+
+  it("does NOT emit the Δ triangle glyph (rebrand 2026-05-23)", () => {
+    const out = renderDeltaBadge({
+      newCount: 2, stillOpenCount: 1, likelyFixedCount: 3, carriedOverCount: 1,
+    })
+    expect(out).not.toContain("Δ")
+    expect(out).toContain("Changes")
   })
 })
 
@@ -277,7 +285,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     ].join("\n"))
   })
 
-  it("Variant E — REQUEST_CHANGES with delta badge appends ` · Δ since last review` to heading", () => {
+  it("Variant E — REQUEST_CHANGES with delta badge appends ` · since last review` to heading", () => {
     const delta: DeltaBadgeCounts = {
       newCount: 2, stillOpenCount: 0, likelyFixedCount: 3, carriedOverCount: 0,
     }
@@ -287,10 +295,12 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       delta,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toMatch(/^## Sigilix: 2 findings · Δ since last review$/m)
-    expect(body).toContain("**Δ:** +2 new · 3 likely-fixed")
+    expect(body).toMatch(/^## Sigilix: 2 findings · since last review$/m)
+    expect(body).toContain("**Changes:** +2 new · 3 likely-fixed")
+    // Body MUST NOT carry the Δ triangle glyph (2026-05-23 rebrand).
+    expect(body).not.toContain("Δ")
     // Badge line MUST appear before the coverage line per Kimi's spec.
-    const deltaIdx = body.indexOf("**Δ:**")
+    const deltaIdx = body.indexOf("**Changes:**")
     const coverageIdx = body.indexOf("**Coverage:**")
     expect(deltaIdx).toBeGreaterThan(-1)
     expect(coverageIdx).toBeGreaterThan(deltaIdx)

@@ -27,6 +27,7 @@ import { runAgentLoop } from "./agent-loop"
 import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
+import { writeWithdrawal } from "./review-withdrawal-store"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -64,6 +65,15 @@ interface GithubMentionVerdict {
   answer: string
   confidence: number
   abstain: boolean
+  /**
+   * SIG-160 PR3: "answer" (default) — just replying to a question.
+   * "concede" — the human's pushback was right and we're withdrawing
+   * the original finding. Only meaningful on `review-comment` surface
+   * with an `inlineAnchor`; the handler persists a WithdrawalRecord
+   * so subsequent reviews on the same PR don't re-emit the conceded
+   * finding.
+   */
+  verdict: "answer" | "concede"
 }
 
 export async function handleGithubMention(args: GithubMentionArgs): Promise<void> {
@@ -298,9 +308,61 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   })
   since("reply-posted", { newId })
 
+  // SIG-160 PR3: when the model explicitly concedes on an inline thread,
+  // persist a WithdrawalRecord so the review-emit path drops the
+  // re-emerging finding on the next push to this PR. Concedes are only
+  // meaningful when (a) the surface is `review-comment` (we have a
+  // pinned path+line), (b) the inlineAnchor parsed cleanly, and (c)
+  // the thread contains the bot's original finding to snapshot the
+  // body from. Failure modes log + continue — a missed withdrawal is
+  // a missed suppression, not a correctness break.
+  if (verdict.verdict === "concede" && surface === "review-comment") {
+    const inlineAnchor = extractAnchor(sourceComment)
+    const originalFindingBody = findOriginalFindingBody(thread)
+    if (inlineAnchor && inlineAnchor.line !== null && originalFindingBody !== null) {
+      // `meta.head?.sha` (PR HEAD at the moment the concession was decided)
+      // is the audit-trail field; cast-narrow to string with a safe fallback.
+      const prHeadSha = typeof meta.head?.sha === "string" ? meta.head.sha : ""
+      await writeWithdrawal({
+        env,
+        owner,
+        repo,
+        prNumber,
+        path: inlineAnchor.path,
+        line: inlineAnchor.line,
+        bodySnapshot: originalFindingBody,
+        withdrawnByCommentId: newId,
+        prHeadSha,
+      })
+    } else {
+      console.warn(JSON.stringify({
+        event: "review-withdrawal-skip-incomplete-context",
+        owner, repo, pr_number: prNumber, comment_id: newId,
+        has_anchor: inlineAnchor !== null && inlineAnchor.line !== null,
+        has_finding_body: originalFindingBody !== null,
+      }))
+    }
+  }
+
   await env.OPENCLAW_STATE.put(kvKey, String(newId), {
     expirationTtl: 60 * 60 * 24 * 30, // 30 days
   })
+}
+
+/**
+ * SIG-160 PR3: scan the thread context for the bot's ORIGINAL inline
+ * finding so we can snapshot its body into the WithdrawalRecord. The
+ * thread is chronological (oldest first), and the original finding is
+ * the first sigilix-authored entry that carries the
+ * `<!-- sigilix:pr-review-finding -->` marker (vs a regular mention
+ * reply, which carries `<!-- sigilix:gh-mention-reply -->`).
+ */
+function findOriginalFindingBody(thread: ThreadEntry[]): string | null {
+  const FINDING_MARKER = "<!-- sigilix:pr-review-finding -->"
+  for (const entry of thread) {
+    if (entry.body.includes(FINDING_MARKER)) return entry.body
+  }
+  return null
 }
 
 interface SourceComment {
@@ -534,7 +596,12 @@ export function parseGithubMentionResponse(text: string): GithubMentionVerdict |
       ? Math.round(confidenceRaw)
       : 3
   const abstain = Boolean(obj.abstain)
-  return { answer, confidence, abstain }
+  // SIG-160 PR3: default to "answer" when missing or invalid. Only
+  // explicit "concede" triggers withdrawal persistence — a missing
+  // field on an older deployed model output must not silently mark
+  // every reply as a concession.
+  const verdict: "answer" | "concede" = obj.verdict === "concede" ? "concede" : "answer"
+  return { answer, confidence, abstain, verdict }
 }
 
 /**

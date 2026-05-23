@@ -274,6 +274,12 @@ export const GITHUB_MENTION_SCHEMA = {
     answer: { type: "string" },
     confidence: { type: "integer", minimum: 1, maximum: 5 },
     abstain: { type: "boolean" },
+    // SIG-160 PR3: structured verdict so the mention-reply handler can
+    // persist a WithdrawalRecord when conceding pushback. "answer" is
+    // the default ("I'm just answering"); "concede" signals the human
+    // was right and we're withdrawing the original finding — only
+    // meaningful on review-comment surfaces with an inline anchor.
+    verdict: { type: "string", enum: ["answer", "concede"] },
   },
   required: ["answer", "confidence", "abstain"],
 } as const

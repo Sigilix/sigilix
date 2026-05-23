@@ -271,7 +271,7 @@ export function isDelegationShapedLine(text: string): boolean {
  * helper.
  */
 const FREE_FUNCTION_CALL =
-  /(?:^|[^\w$.?])(?!(?:if|for|while|switch|catch|function|async|return|throw|new|typeof|void|yield|await|do|in|of|else)\b)[a-z_$][\w$]*\s*\(/
+  /(?:^|[^\w$.?])(?!(?:if|for|while|switch|catch|function|async|return|throw|new|typeof|void|yield|await|do|in|of|else|super|import)\b)[a-z_$][\w$]*\s*\(/
 
 /**
  * SIG-128 PR 6: structural orchestrator-glue detector. Returns true when

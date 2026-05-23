@@ -148,4 +148,30 @@ describe("isStructurallyOrchestratorGlue (SIG-128 PR 6)", () => {
     )
     expect(isStructurallyOrchestratorGlue(added)).toBe(false)
   })
+
+  // CodeRabbit M3 (follow-up review on PR #143): `super(` and dynamic
+  // `import(` also look like identifier calls but aren't free-function
+  // delegations. A minimal subclass constructor / module loader was
+  // slipping past the keyword filter and could let
+  // isStructurallyOrchestratorGlue suppress real findings.
+  it("does NOT flag a minimal subclass constructor (super() is not delegation) — CR M3 regression", () => {
+    const added = linesOf(
+      '  class Child extends Parent {',
+      '    constructor() {',
+      '      super()',
+      '    }',
+      '  }',
+    )
+    expect(isStructurallyOrchestratorGlue(added)).toBe(false)
+  })
+
+  it("does NOT flag a minimal dynamic-import loader (import() is not delegation) — CR M3 regression", () => {
+    const added = linesOf(
+      '  async function load() {',
+      '    const mod = await import("./feature")',
+      '    return mod.default',
+      '  }',
+    )
+    expect(isStructurallyOrchestratorGlue(added)).toBe(false)
+  })
 })

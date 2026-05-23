@@ -9,6 +9,7 @@ import {
   filterToSigilixAuthored,
   formatFindingComment,
   isSubstantiveAnchorLine,
+  pickAnchorLineForward,
   parsePrReviewResponse,
   renderFixPlan,
   renderRequestChangesBody,
@@ -655,16 +656,161 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(out.comments?.[0]?.body).toContain("if (!ok) return")
   })
 
-  it("treats a finding whose line is absent from the map as substantive (inline)", () => {
-    const emptyMap = new Map<string, Map<number, string>>()
+  // SIG-159 PR1: replaces the prior "treats line-absent-from-map as
+  // substantive" test (which preserved a buggy back-compat where the
+  // model could anchor to a context `}` and the finding stayed inline
+  // looking like a comment on punctuation). The new contract: when
+  // the map IS provided but the requested line isn't an added line,
+  // walk forward to the nearest added line in the same file. If none
+  // exists, route to summary.
+
+  it("walk-forward: re-anchors to the nearest later added line when requested line is a context line", () => {
+    // codeFinding anchors at line 42 (added, real code — fast path)
+    // blockFinding anchors at line 1370 (added, `}` — non-substantive)
+    // New finding anchors at line 30 (NOT in map; line 42 is the next added line on the file)
+    const contextFinding: PrReviewFinding = {
+      path: "src/lib/foo.ts",
+      line: 30,
+      score: 4,
+      headline: "the new handler ignores idempotency",
+      body: "Wrap the call in a dedupe gate.",
+    }
+    const v: PrReviewVerdict = {
+      summary: "Anchor walked.",
+      confidence: 4,
+      confidenceReason: "Walked.",
+      findings: [contextFinding],
+    }
     const out = buildReviewSubmission({
-      verdict,
+      verdict: v,
       prAuthor: "alice",
       headSha: "abc",
-      addedLineTextByLine: emptyMap,
+      addedLineTextByLine,
     })
-    // Map provided but neither line present → both stay inline.
-    expect(out.comments).toHaveLength(2)
+    // Re-anchored to line 42 (the nearest later added line) + still inline.
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(42)
+    expect(out.comments?.[0]?.body).toContain("ignores idempotency")
+  })
+
+  it("walk-forward: re-anchored line still runs through the substantive check (lands on `}` → routes to summary)", () => {
+    // Anchor at line 1000 (not in map); the only added line at-or-after
+    // 1000 is 1370, which is `}` → after walking, the non-substantive
+    // check fires and routes the finding to summary.
+    const orphanFinding: PrReviewFinding = {
+      path: "src/lib/foo.ts",
+      line: 1000,
+      score: 3,
+      headline: "complexity creeping in this block",
+      body: "Consider extracting a helper.",
+    }
+    const v: PrReviewVerdict = {
+      summary: "Walks then routes.",
+      confidence: 4,
+      confidenceReason: "Both gates.",
+      findings: [orphanFinding],
+    }
+    const out = buildReviewSubmission({
+      verdict: v,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    // No inline comment (the walked-forward line is `}` → summary).
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("complexity creeping in this block")
+  })
+
+  it("walk-forward: routes to summary when there is NO added line at or after the requested line", () => {
+    // Anchor at line 9999 — past every added line on the file. No
+    // walk-forward target exists → finding routes to summary.
+    const tailFinding: PrReviewFinding = {
+      path: "src/lib/foo.ts",
+      line: 9999,
+      score: 3,
+      headline: "structural concern with the file",
+      body: "Worth splitting.",
+    }
+    const v: PrReviewVerdict = {
+      summary: "Tail miss.",
+      confidence: 4,
+      confidenceReason: "Past end.",
+      findings: [tailFinding],
+    }
+    const out = buildReviewSubmission({
+      verdict: v,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("structural concern with the file")
+  })
+
+  it("walk-forward: a suggestion-bearing finding bypasses walk-forward (preserves the fix)", () => {
+    // SIG-127 already pins this: a finding with `suggestedReplacement`
+    // stays inline regardless of anchor substance. Re-validate post-PR1:
+    // even when the anchor line is absent from the map, the suggestion
+    // shield keeps it inline at the model-given line — walk-forward
+    // would risk losing the contiguous replacement range.
+    const fixFinding: PrReviewFinding = {
+      path: "src/lib/foo.ts",
+      line: 700,
+      startLine: 698,
+      score: 5,
+      headline: "off-by-one in the loop bound",
+      body: "Replace `<` with `<=`.",
+      suggestedReplacement: "  for (let i = 0; i <= n; i++) {",
+    }
+    const v: PrReviewVerdict = {
+      summary: "Has a fix.",
+      confidence: 5,
+      confidenceReason: "Has fix.",
+      findings: [fixFinding],
+    }
+    const out = buildReviewSubmission({
+      verdict: v,
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+    expect(out.comments).toHaveLength(1)
+    // Line preserved (no walk) because the suggestion needs the original
+    // multi-line range to anchor cleanly.
+    expect(out.comments?.[0]?.line).toBe(700)
+  })
+})
+
+describe("pickAnchorLineForward (SIG-159 PR1)", () => {
+  const lines = new Map<number, string>([
+    [42, "  const idx = clampIndex(i)"],
+    [100, "  return result"],
+    [1370, "}"],
+  ])
+
+  it("fast path: returns requested line when it's already an added line", () => {
+    expect(pickAnchorLineForward(lines, 42)).toBe(42)
+    expect(pickAnchorLineForward(lines, 100)).toBe(100)
+    expect(pickAnchorLineForward(lines, 1370)).toBe(1370)
+  })
+
+  it("walks forward to the smallest added line > requested", () => {
+    expect(pickAnchorLineForward(lines, 30)).toBe(42)
+    expect(pickAnchorLineForward(lines, 43)).toBe(100)
+    expect(pickAnchorLineForward(lines, 500)).toBe(1370)
+  })
+
+  it("returns null when no added line exists at or after the requested line", () => {
+    expect(pickAnchorLineForward(lines, 1371)).toBeNull()
+    expect(pickAnchorLineForward(lines, 9999)).toBeNull()
+  })
+
+  it("returns null when the added-lines map for the path is undefined", () => {
+    expect(pickAnchorLineForward(undefined, 42)).toBeNull()
+  })
+
+  it("returns null on an empty added-lines map", () => {
+    expect(pickAnchorLineForward(new Map(), 42)).toBeNull()
   })
 })
 

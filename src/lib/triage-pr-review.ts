@@ -653,29 +653,57 @@ export function buildReviewSubmission({
   const inlineOriginalIndex: number[] = []
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
-    const lineText = addedLineTextByLine?.get(f.path)?.get(f.line)
+    const addedLinesForPath = addedLineTextByLine?.get(f.path)
     // SIG-127: a finding carrying a localized `suggestedReplacement`
     // stays inline regardless of its anchor line — the body renderer
     // (`renderFindingsByFile`) only prints headline + body, so routing
     // it would silently drop the proposed fix (Codex review catch).
     // Such a finding is anchored to real editable code anyway (the
     // committable ```suggestion needs a contiguous reviewable range).
+    // Walk-forward (below) is also skipped — moving the anchor breaks
+    // the suggestion's contiguous range guarantee.
     const hasSuggestion =
       typeof f.suggestedReplacement === "string" && f.suggestedReplacement.trim().length > 0
+
+    // SIG-159 PR1: walk-forward when the model anchored to a context line
+    // (the SIG-127 regression: anchor at the closing `}` of the prior
+    // block, with the real subject just below). Only applies when the
+    // added-lines map IS provided AND the finding doesn't have a
+    // suggestion that would lose its contiguous range when re-anchored.
+    let effective: PrReviewFinding = f
+    if (addedLineTextByLine !== undefined && !hasSuggestion) {
+      const resolved = pickAnchorLineForward(addedLinesForPath, f.line)
+      if (resolved === null) {
+        // No added line at or after the model's anchor on this file.
+        // Route the finding to the summary body — there is no real
+        // place to anchor it inline.
+        bodyFindings.push(f)
+        return
+      }
+      if (resolved !== f.line) {
+        // Re-anchor at the walked-forward line. Drop `startLine` so the
+        // moved anchor is a single line — the original multi-line range
+        // is no longer meaningful once the end-anchor has shifted.
+        const { startLine: _drop, ...rest } = f
+        effective = { ...rest, line: resolved }
+      }
+    }
+
+    const lineText = addedLineTextByLine?.get(effective.path)?.get(effective.line)
     // Non-substantive ONLY when the map IS provided AND the line is
-    // present in it AND its text is non-substantive. If the map is
-    // absent, or the line isn't in it (`lineText === undefined`), treat
-    // as substantive — we only move findings we can positively classify
-    // (the line was a real added `+` line whose content is structural).
+    // present in it AND its text is non-substantive. Walk-forward above
+    // guarantees we either have a present line, or we already routed
+    // to summary, so this branch handles the "added line but bare
+    // punctuation" case (SIG-127 original).
     const isNonSubstantive =
       !hasSuggestion &&
       addedLineTextByLine !== undefined &&
       lineText !== undefined &&
       !isSubstantiveAnchorLine(lineText)
     if (isNonSubstantive) {
-      bodyFindings.push(f)
+      bodyFindings.push(effective)
     } else {
-      inlineFindings.push(f)
+      inlineFindings.push(effective)
       inlineOriginalIndex.push(i)
     }
   })
@@ -1357,6 +1385,43 @@ export function isSubstantiveAnchorLine(text: string | undefined): boolean {
   if (text === undefined) return false
   if (text.trim() === "") return false
   return !/^[\s{}()[\];,]*$/.test(text)
+}
+
+/**
+ * SIG-159 PR1 (anchor walk-forward): when a finding's anchor line isn't
+ * an added line on its file (the model anchored to a context line — e.g.
+ * the bare `}` closing the block ABOVE the new code it actually means to
+ * comment on), search forward for the nearest added line on the same
+ * file and return that as the resolved anchor.
+ *
+ * Returns:
+ *   - `requestedLine` itself if it's already in `addedLinesForPath`
+ *     (fast path — model anchored to a real added line).
+ *   - The smallest line number > `requestedLine` that IS in the map.
+ *   - `null` when the map is absent for the file, OR when no added line
+ *     exists at or after `requestedLine` (caller routes to summary).
+ *
+ * Why forward, not backward (Codex/DeepSeek 2026-05-23 review): the
+ * SIG-127 regression observed on PR #138 anchored at line 960 (a `}`
+ * closing the prior `queue` block). The actual subject of the finding
+ * — the new `scheduled` handler — was lines 975-987, BELOW the brace.
+ * Walking backward would land on unrelated code in the prior block.
+ *
+ * Pure — exported for tests.
+ */
+export function pickAnchorLineForward(
+  addedLinesForPath: ReadonlyMap<number, string> | undefined,
+  requestedLine: number,
+): number | null {
+  if (addedLinesForPath === undefined) return null
+  if (addedLinesForPath.has(requestedLine)) return requestedLine
+  let best: number | null = null
+  for (const line of addedLinesForPath.keys()) {
+    if (line > requestedLine && (best === null || line < best)) {
+      best = line
+    }
+  }
+  return best
 }
 
 /**

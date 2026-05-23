@@ -334,16 +334,21 @@ export interface CoverageRoles {
 }
 
 /**
- * ARC-281: per-Kimi spec the body now carries an explicit "**Δ:** +N
+ * ARC-281: per-Kimi spec the body now carries an explicit "**Changes:** +N
  * new · M likely-fixed" badge line under the heading instead of
- * prepending a `**Δ since last review:**` string into the summary.
- * Caller computes a `FindingDelta` via the existing
- * `computeFindingDelta` helper and passes the four counts through;
- * `renderDeltaBadge` formats them. Pure — exported for tests.
+ * prepending a "since last review" string into the summary. Caller
+ * computes a `FindingDelta` via the existing `computeFindingDelta`
+ * helper and passes the four counts through; `renderDeltaBadge`
+ * formats them. Pure — exported for tests.
  *
  * Returns `null` when no signal is worth surfacing (all counts
  * zero), so the renderer can skip the line entirely rather than
- * print "**Δ:**".
+ * print an empty "**Changes:**".
+ *
+ * 2026-05-23 rebrand: the Δ glyph (Greek capital delta, visually a
+ * triangle) was removed from both the badge label and the heading
+ * suffix per founder direction. Replaced with the literal word
+ * "Changes" + "since last review" — same semantics, no triangle.
  */
 export interface DeltaBadgeCounts {
   newCount: number
@@ -362,7 +367,7 @@ export function renderDeltaBadge(counts: DeltaBadgeCounts): string | null {
   if (stillOpenCount > 0) parts.push(`${stillOpenCount} still-open`)
   if (likelyFixedCount > 0) parts.push(`${likelyFixedCount} likely-fixed`)
   if (carriedOverCount > 0) parts.push(`${carriedOverCount} carried-over`)
-  return `**Δ:** ${parts.join(" · ")}`
+  return `**Changes:** ${parts.join(" · ")}`
 }
 
 /**
@@ -1223,6 +1228,131 @@ export function computeGateScore(
   return Math.max(0, Math.min(1, conf + evidence + agreement + severity))
 }
 
+// ─── SIG-161 PR 4b — shadow-mode divergence helper ────────────────────
+// Pulled out of the inline ensemble call site (per Sigilix self-review
+// on PR #146 — the inline 95-LOC block was untestable; the helper is
+// pure + unit-coverable).
+
+/**
+ * Inputs to `computeShadowGateDivergence`. Decoupled from the
+ * ensemble's `Env` / `console.log` / provenance shape so the helper
+ * stays pure.
+ */
+export interface ShadowDivergenceInputs {
+  /** Findings that will render inline (anchored). Parallel to `provenance`. */
+  renderable: PrReviewFinding[]
+  /** Findings that fell out of inline anchoring; no parallel provenance. */
+  unanchored: PrReviewFinding[]
+  /**
+   * Per-renderable-finding provenance. Each entry maps to the same
+   * index in `renderable`; `undefined` entries signal "no source
+   * specialists information" (treated as zero agreement signal).
+   */
+  provenance: ReadonlyArray<{ sourceSpecialists?: ReadonlyArray<string> } | undefined>
+  /** Calibrated threshold (from KV at the call site). */
+  threshold: number
+  /** Verdict the legacy `chooseReviewEvent` already computed. */
+  legacyEvent: Exclude<ReviewEvent, "COMMENT">
+}
+
+/**
+ * Result of running the shadow-mode gate. `divergence` is populated
+ * only when the gate verdict differs from `legacyEvent`; otherwise
+ * null (the caller writes no log).
+ */
+export interface ShadowDivergenceResult {
+  gateEvent: ReviewEvent
+  divergence:
+    | {
+        threshold: number
+        legacyEvent: ReviewEvent
+        gateEvent: ReviewEvent
+        findingCount: number
+        blockingFindingCount: number
+        scoreSummary: string
+      }
+    | null
+}
+
+/**
+ * SIG-161 PR 4b — compute the gate's shadow-mode verdict + the
+ * divergence-log payload (when it disagrees with the legacy verdict).
+ *
+ * Pure — no env / KV / console access. The ensemble call site reads
+ * the env + threshold + provenance, calls this, and writes the log if
+ * `result.divergence !== null`.
+ *
+ * Behavior:
+ *   - Each finding's `gateScore` is preserved when already a finite
+ *     number; otherwise computed via `computeGateScore` with the
+ *     parallel provenance (or empty `sourceSpecialists` for unanchored
+ *     findings, which lack a provenance row).
+ *   - The verdict is taken from `chooseReviewEventWithGate` with
+ *     `missingScorePolicy: "block"` — non-finite or missing scores
+ *     contribute as 1.0 (= blocking), matching the rollout regime.
+ *   - When the gate's verdict disagrees with the legacy verdict, the
+ *     divergence payload's `blockingFindingCount` aligns with the
+ *     `"block"` policy: non-finite scores count as blocking even
+ *     though `score >= threshold` is false on NaN.
+ *
+ * Exported for tests. Production caller is `handlePrReviewEnsemble`
+ * (single call site as of PR 4b).
+ */
+export function computeShadowGateDivergence(
+  args: ShadowDivergenceInputs,
+): ShadowDivergenceResult {
+  const { renderable, unanchored, provenance, threshold, legacyEvent } = args
+
+  const fillScore = (
+    f: PrReviewFinding,
+    specialists: ReadonlyArray<string>,
+  ): PrReviewFinding => ({
+    ...f,
+    gateScore: typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
+      ? f.gateScore
+      : computeGateScore(f, { sourceSpecialists: specialists }),
+  })
+
+  const scoredRenderable = renderable.map((f, i) =>
+    fillScore(f, provenance[i]?.sourceSpecialists ?? []),
+  )
+  const scoredUnanchored = unanchored.map((f) => fillScore(f, []))
+  const allScored = [...scoredRenderable, ...scoredUnanchored]
+
+  const gateEvent = chooseReviewEventWithGate({
+    findings: allScored,
+    threshold,
+    missingScorePolicy: "block",
+  })
+
+  if (gateEvent === legacyEvent) {
+    return { gateEvent, divergence: null }
+  }
+
+  // `"block"` policy treats non-finite gateScore as effective 1.0
+  // (blocking). Align the telemetry counter so it doesn't under-report
+  // in the (rare today, common during PR 4b shadow) case where a
+  // finding sneaks through with no scored value.
+  const isBlocking = (f: PrReviewFinding): boolean => {
+    if (typeof f.gateScore !== "number" || !Number.isFinite(f.gateScore)) {
+      return true
+    }
+    return f.gateScore >= threshold
+  }
+
+  return {
+    gateEvent,
+    divergence: {
+      threshold,
+      legacyEvent,
+      gateEvent,
+      findingCount: allScored.length,
+      blockingFindingCount: allScored.filter(isBlocking).length,
+      scoreSummary: allScored.map((f) => f.gateScore?.toFixed(2)).join(","),
+    },
+  }
+}
+
 /**
  * SIG-37 — minimal shape for items that carry a GitHub-style author
  * login. Wide enough to cover review comments, review threads' root
@@ -1266,7 +1396,7 @@ export function filterToSigilixAuthored<T extends AuthoredItem>(
  *   - `coverage` — which specialists were dispatched vs returned;
  *     drives the new `**Coverage:**` line (full or degraded).
  *   - `delta` — finding delta vs the prior review's manifest;
- *     drives the `**Δ:** +N new · M likely-fixed` badge under the
+ *     drives the `**Changes:** +N new · M likely-fixed` badge under the
  *     heading. `null` means no prior review or no signal.
  *
  * The new renderers do NOT consume `verdict.confidenceReason` —
@@ -1385,9 +1515,9 @@ export function renderCommentBody(args: RenderBodyArgs): string {
  *   ```
  *   <!-- sigilix:pr-review -->
  *
- *   ## Sigilix: 2 findings · Δ since last review
+ *   ## Sigilix: 2 findings · since last review
  *
- *   **Δ:** +2 new · 3 likely-fixed
+ *   **Changes:** +2 new · 3 likely-fixed
  *
  *   **Coverage:** logic · security · performance · tests
  *
@@ -1412,13 +1542,16 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
-  // Heading: "## Sigilix: N finding[s][ · Δ since last review]".
+  // Heading: "## Sigilix: N finding[s][ · since last review]".
+  // 2026-05-23 rebrand: Δ glyph (triangle) removed; literal "since
+  // last review" copy in its place. See `renderDeltaBadge` for the
+  // matching badge-line change.
   const findingNoun = totalFindings === 1 ? "finding" : "findings"
   const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
-  const deltaSuffix = deltaBadge ? " · Δ since last review" : ""
+  const deltaSuffix = deltaBadge ? " · since last review" : ""
   lines.push(`## Sigilix: ${totalFindings} ${findingNoun}${deltaSuffix}`)
 
-  // Δ badge line — directly under heading, before coverage and
+  // Changes-badge line — directly under heading, before coverage and
   // summary. Only present when delta has signal.
   if (deltaBadge) {
     lines.push("")
@@ -1883,9 +2016,19 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
     finding.startLine != null && finding.startLine < finding.line
       ? `${finding.startLine}-${finding.line}`
       : String(finding.line)
+  // The inner prompt body is wrapped in a fenced code block so the
+  // structured prompt is visually demarcated AND copy-pasteable into
+  // an AI assistant without picking up the surrounding GitHub Markdown
+  // chrome (the badge image, the heading, the suggestion block).
+  // Use ` ```text ` (not ` ```ts `) — the body is prose, not code, and
+  // a `ts` fence would syntax-highlight English. The literal output
+  // includes the inner markdown (e.g. `**headline**`) as plain text;
+  // that's intentional — the AI assistant gets the unrendered prompt
+  // identical to what we'd hand it via copy-paste.
   const lines = [
     "<details><summary>Prompt To Fix With AI</summary>",
     "",
+    "```text",
     "This is a comment left during a code review.",
     `Path: ${finding.path}`,
     `Line: ${range}`,
@@ -1896,6 +2039,7 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
     finding.body,
     "",
     "How can I resolve this? If you propose a fix, please make it concise.",
+    "```",
     "",
     "</details>",
   ]

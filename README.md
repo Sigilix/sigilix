@@ -1,3 +1,4 @@
+<!-- post-transfer-canary -->
 # Sigilix
 
 > *The mark of merge-ready code.*

@@ -261,18 +261,19 @@ export function graphIndexEnabled(env: Env): boolean {
 
 /**
  * True iff this run should call commitGraphVersion after writing the
- * manifest. Requires:
- *   - manifestWritten: the manifest write itself succeeded (so a KV
- *     error mid-manifest doesn't trigger a commit for an un-indexed run)
- *   - shouldFinalize(activeRunId, runId): this run still holds the lease
- *     (or it's absent) — mirrors the invariant used by persistManifest.
+ * manifest. Requires `shouldFinalize(activeRunId, runId)` — this run
+ * still holds the lease (or it's absent), mirroring persistManifest.
+ *
+ * SIG-156 PR3: the prior `manifestWritten` gate was removed alongside
+ * the manifest-write hardening — persistManifest now throws on KV
+ * failure, so callers reaching shouldCommitGraph have a written manifest
+ * by construction.
  */
 export function shouldCommitGraph(args: {
-  manifestWritten: boolean
   activeRunId: string | null
   runId: string
 }): boolean {
-  return args.manifestWritten && shouldFinalize(args.activeRunId, args.runId)
+  return shouldFinalize(args.activeRunId, args.runId)
 }
 
 // ---------------------------------------------------------------------
@@ -419,7 +420,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       }))
       return
     }
-    const manifestWritten = await persistManifest({
+    await persistManifest({
       env, owner, repo, namespace, headSha, runId,
       fileCount: 0, chunkCount: 0, shardCount: 1,
       chunkerVersion: effectiveChunkerVersion(astOn),
@@ -432,7 +433,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     // SIG-138: commit an empty graph version to GC any stale graph left
     // from a previously-indexed repo that is now empty. Best-effort —
     // never fails the index job.
-    if (graphIndexEnabled(env) && shouldCommitGraph({ manifestWritten, activeRunId, runId })) {
+    if (graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId })) {
       try {
         await commitGraph(env, owner, repo, runId)
       } catch (err) {
@@ -508,7 +509,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     }))
     return
   }
-  const manifestWritten = await persistManifest({
+  await persistManifest({
     env, owner, repo, namespace, headSha, runId,
     fileCount: sliceHi, chunkCount, shardCount: 1,
     chunkerVersion: effectiveChunkerVersion(astOn),
@@ -520,7 +521,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   }))
   // SIG-138: commit the graph version after a successful manifest write,
   // lease-gated. Best-effort — never fails the index job.
-  if (graphIndexEnabled(env) && shouldCommitGraph({ manifestWritten, activeRunId, runId })) {
+  if (graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId })) {
     try {
       await commitGraph(env, owner, repo, runId)
     } catch (err) {
@@ -687,7 +688,7 @@ async function handleShardJob(
       }))
       return
     }
-    const manifestWritten = await persistManifest({
+    await persistManifest({
       env, owner, repo, namespace,
       headSha: shard.headSha, runId: shard.runId,
       fileCount: cumulativeFiles,
@@ -704,7 +705,7 @@ async function handleShardJob(
     }))
     // SIG-138: commit the graph version after a successful manifest write,
     // lease-gated. Best-effort — never fails the index job.
-    if (graphIndexEnabled(env) && shouldCommitGraph({ manifestWritten, activeRunId, runId: shard.runId })) {
+    if (graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId: shard.runId })) {
       try {
         await commitGraph(env, owner, repo, shard.runId)
       } catch (err) {
@@ -1013,7 +1014,7 @@ interface PersistManifestArgs {
   chunkerVersion: number
 }
 
-async function persistManifest(args: PersistManifestArgs): Promise<boolean> {
+async function persistManifest(args: PersistManifestArgs): Promise<void> {
   const manifest: RepoIndexManifestV1 = {
     v: 1,
     // SIG-132: store the BARE lowercased repo, not the namespace. The
@@ -1033,14 +1034,20 @@ async function persistManifest(args: PersistManifestArgs): Promise<boolean> {
     windowLines: CHUNK_LINES,
     overlapLines: CHUNK_OVERLAP,
   }
-  const ok = await writeRepoIndexManifest(args.env, manifest)
-  if (!ok) {
+  try {
+    await writeRepoIndexManifest(args.env, manifest)
+  } catch (err) {
+    // SIG-156 PR3: log + propagate. The throw aborts the consumer and
+    // the queue retries — bootstrap is idempotent (freshness-skips on
+    // the next attempt if data already landed; otherwise re-runs the
+    // slice with content-addressed vector ids).
     console.error(JSON.stringify({
       event: "repo-index-manifest-write-failed",
       owner: args.owner, repo: args.repo, run_id: args.runId,
+      error: err instanceof Error ? err.message : String(err),
     }))
+    throw err
   }
-  return ok
 }
 
 interface PersistVectorIdsArgs {

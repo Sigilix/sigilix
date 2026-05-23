@@ -62,7 +62,8 @@ import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
-import { handleAdminIndexRoute, handleAdminBackfillRoute } from "./lib/admin-index-route"
+import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute } from "./lib/admin-index-route"
+import { runIndexReconciliation } from "./lib/index-reconciliation"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
@@ -809,6 +810,13 @@ export default {
       return handleAdminBackfillRoute(request, env)
     }
 
+    // SIG-156 PR3: authenticated manual trigger for the reconciliation cron
+    // (same routine `scheduled` runs). Reads each repo's manifest and only
+    // enqueues repos with no manifest in KV.
+    if (request.method === "POST" && url.pathname === "/admin/index-reconcile") {
+      return handleAdminReconcileRoute(request, env)
+    }
+
     if (request.method === "POST" && url.pathname === "/linear/webhook") {
       return handleLinearWebhook(request, env, ctx)
     }
@@ -951,6 +959,32 @@ export default {
         }
       }
     }
+  },
+
+  /**
+   * SIG-156 PR3: Cloudflare Workers Cron — index reconciliation tick.
+   * Schedule lives in wrangler.toml `[triggers].crons`. Each tick walks
+   * every installation + every repo and enqueues an index-repo job for
+   * any repo whose manifest is missing from KV. Self-heals dropped
+   * install / repos-added webhooks. Idempotent (consumer freshness-skips
+   * if the manifest landed between the cron's read and pickup).
+   *
+   * Failures are swallowed — a transient GitHub/API error must not poison
+   * the cron; the next tick retries.
+   */
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          await runIndexReconciliation(env, { dryRun: false })
+        } catch (err) {
+          console.error(JSON.stringify({
+            event: "index-reconcile-tick-error",
+            error: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      })(),
+    )
   },
 }
 

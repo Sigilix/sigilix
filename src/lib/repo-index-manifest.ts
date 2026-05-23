@@ -191,25 +191,22 @@ export function parseRepoIndexManifest(raw: string): ReadResult {
 }
 
 /**
- * Write the manifest. Best-effort: returns false on write error so the
- * consumer can log without failing the whole indexing run (the
- * Vectorize upserts are the user-facing artifact; missing the manifest
- * just means the next webhook will re-walk + re-upsert idempotently).
+ * Write the manifest. SIG-156 PR3: fail loudly on KV error — propagate the
+ * throw so the consumer requeues the shard. Prior best-effort behavior left
+ * vectors written but no manifest, which made the repo undiscoverable AND
+ * skipped the push-webhook bootstrap path (which requires a prior manifest).
+ * Retry is safe: bootstrap freshness-skips on the next attempt if everything
+ * already landed, and vector chunk ids are content-addressed.
  */
 export async function writeRepoIndexManifest(
   env: Env,
   manifest: RepoIndexManifestV1,
-): Promise<boolean> {
-  try {
-    await env.OPENCLAW_STATE.put(
-      repoIndexManifestKey(manifest.owner, manifest.repo),
-      JSON.stringify(manifest),
-      { expirationTtl: TTL_SECONDS },
-    )
-    return true
-  } catch {
-    return false
-  }
+): Promise<void> {
+  await env.OPENCLAW_STATE.put(
+    repoIndexManifestKey(manifest.owner, manifest.repo),
+    JSON.stringify(manifest),
+    { expirationTtl: TTL_SECONDS },
+  )
 }
 
 /**

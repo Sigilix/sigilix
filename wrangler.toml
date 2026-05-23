@@ -293,6 +293,15 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # Identifying and authorizing users → User authorization callback URL:
 #   https://app.sigilix.ai/auth/github/callback
 
+# SIG-156 PR3: index reconciliation cron. Every 6h, walk all installations
+# + their repos and enqueue an index-repo job for any repo missing a
+# manifest in KV. Self-heals dropped install / repos-added webhooks (the
+# gap that left every install dark before PR2's backfill). Idempotent and
+# cheap to run more often if needed — the cost is one KV read per repo
+# + one queue send per missing repo.
+[triggers]
+crons = ["0 */6 * * *"]
+
 # Cloudflare Workers Logs — keep the full Workers Observability product
 # disabled (it costs per-event ingest) but turn on `invocation_logs` so
 # every webhook delivery still produces a head-sampled request line that

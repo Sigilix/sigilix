@@ -27,6 +27,15 @@ export interface HelperCoverage {
   status: "all" | "partial" | "none"
   /** Distinct same-PR tested-helper source paths that contributed delegating lines. */
   helpers: string[]
+  /**
+   * SIG-128 PR 6: true when the source's added lines structurally resemble
+   * orchestrator glue — small (≤12 substantive lines) AND mostly
+   * delegation-shaped AND contains at least one free-function call.
+   * Fires INDEPENDENTLY of `status`, so a `partial` source (mix of
+   * same-PR tested helpers + pre-existing helpers, as in PR #138's
+   * `scheduled` handler) can still be suppressed.
+   */
+  structurallyGlue: boolean
 }
 
 function stripCodeExt(p: string): string {
@@ -151,6 +160,149 @@ export function hasInlineControlFlow(text: string): boolean {
   return false
 }
 
+// ─── SIG-128 PR 6: structural orchestrator-glue heuristic ────────
+//
+// SIG-128's helper-coverage check only credits SAME-PR tested helpers. A
+// wrapper that delegates to a mix of same-PR helpers AND pre-existing
+// helpers (e.g. PR #138's `scheduled` handler — same-PR
+// `runIndexReconciliation` + pre-existing `isIndexerEnabled`) ends up
+// status="partial" not "all", so the bot fires anyway despite being
+// pure orchestrator glue.
+//
+// This adds a SECOND suppression path: detect the wrapper structurally
+// (small + mostly delegation-shaped lines) regardless of whether the
+// delegated-to callees are tested. Tight thresholds keep FN risk low —
+// a genuinely-logic-heavy function survives the heuristic and the
+// finding stays.
+
+/** Max substantive lines that can count as "small enough to be glue." */
+const GLUE_MAX_SUBSTANTIVE = 12
+
+/** Minimum ratio of delegation-shaped substantive lines to count as glue. */
+const GLUE_MIN_DELEGATION_RATIO = 0.5
+
+const ARITHMETIC_OPERATOR = /[+\-*/%]=|[A-Za-z_0-9$)\]]\s*[+\-*/%]\s*[A-Za-z_0-9$(]/
+const CONTROL_FLOW_KEYWORD = /(?:^|[\s{};(])(if|for|while|switch|return|throw|break|continue|try|catch|finally|else|do|await)\b/
+const CALL_EXPRESSION = /[A-Za-z_$][\w$.]*\s*\(/
+const ASSIGNMENT_KEYWORD = /(?:^|\s)(const|let|var)\s+[A-Za-z_$]/
+const METHOD_OR_FUNCTION_HEADER = /(?:^|\s)(async\s+)?(function\s+)?[A-Za-z_$][\w$]*\s*\([^)]*\)\s*[:{=]/
+const OBJECT_FIELD_NUMERIC_OR_BARE = /^[\s,]*[A-Za-z_$][\w$]*\s*:/
+
+/**
+ * SIG-128 PR 6: classify a substantive added line as "delegation-shaped"
+ * (call-through / log / control-flow / catch handler) vs business logic
+ * (arithmetic / data transformation / multi-step assignment).
+ *
+ * Delegation-shaped lines:
+ *   - pure log statements (`console.log(...)`, `console.error(...)`)
+ *   - control-flow keywords + a call (`if (...) {`, `return`, `throw`,
+ *     `try {`, `catch (...) {`, `await foo(x)`)
+ *   - bare call expressions (`foo(args)`, `obj.method(args)`)
+ *   - simple `const/let x = call(...)` with no arithmetic on the RHS
+ *   - method/function headers (`async scheduled(_event, env, ctx) {`)
+ *
+ * NOT delegation-shaped:
+ *   - arithmetic expressions (`a + b * c`, `sum += x`)
+ *   - object-literal fields with computed values
+ *   - chained transformations with no obvious call
+ *
+ * Pure — exported for tests.
+ */
+export function isDelegationShapedLine(text: string): boolean {
+  const t = text.trim()
+  if (t === "") return false
+
+  // Log calls — common in glue, no business logic.
+  if (/^console\.\w+\(/.test(t)) return true
+
+  // Method / function header — `async name(...) {` or `function name(...) {`.
+  // Always orchestrator-shape; the body's contents are what we evaluate
+  // line-by-line.
+  if (METHOD_OR_FUNCTION_HEADER.test(t)) return true
+
+  // Bare `}` etc. already filtered by isSubstantiveAddedLine, but extra
+  // safety: a `},` or `)` line is not logic.
+  if (/^[\s){}\],;]*$/.test(t)) return true
+
+  // Control-flow keyword on the line. But disqualify if there's arithmetic
+  // (e.g. `for (let i = 0; i < n; i++) sum += i * 2` is real logic).
+  if (CONTROL_FLOW_KEYWORD.test(t)) {
+    if (ARITHMETIC_OPERATOR.test(t)) return false
+    return true
+  }
+
+  // Object-literal field with a non-call RHS — typically computed values,
+  // not delegation. (A field whose value is just a call IS delegation; the
+  // check below catches that case via CALL_EXPRESSION + !ARITHMETIC.)
+  if (OBJECT_FIELD_NUMERIC_OR_BARE.test(t) && !CALL_EXPRESSION.test(t)) {
+    return false
+  }
+
+  // Simple `const/let foo = call(...)` with no arithmetic on the RHS.
+  if (ASSIGNMENT_KEYWORD.test(t)) {
+    if (ARITHMETIC_OPERATOR.test(t)) return false
+    if (CALL_EXPRESSION.test(t)) return true
+    return false
+  }
+
+  // Bare expression that's a call.
+  if (CALL_EXPRESSION.test(t)) {
+    if (ARITHMETIC_OPERATOR.test(t)) return false
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Free-function call (lowercase identifier followed by `(`, NOT preceded
+ * by `.` or `?.`). Distinguishes `runIndexReconciliation(env, opts)`
+ * (delegation to an imported/free function) from `x.toUpperCase()`
+ * (method on a local value — work, not delegation). The leading char
+ * lookbehind is via a negated character class so we cover string start,
+ * whitespace, `(`, `=`, `,` etc.
+ */
+const FREE_FUNCTION_CALL = /(?:^|[^\w$.?])[a-z_$][\w$]*\s*\(/
+
+/**
+ * SIG-128 PR 6: structural orchestrator-glue detector. Returns true when
+ * a changed file's added lines form a small + mostly-delegation block —
+ * the shape of a wrapper handler around tested helpers. Used by
+ * `evaluateTestFinding` to suppress "lacks coverage" false positives on
+ * wiring code regardless of whether the delegated-to helpers are
+ * same-PR tested (the limitation of `detectHelperCoverage`).
+ *
+ * Requirements:
+ *   - ≤ {@link GLUE_MAX_SUBSTANTIVE} substantive lines
+ *   - ≥ {@link GLUE_MIN_DELEGATION_RATIO} of them delegation-shaped
+ *   - at least ONE free-function call (the "wraps an external helper"
+ *     signal — distinguishes a delegating wrapper from a small
+ *     method-only data transformer, which IS work that warrants a test)
+ *
+ * Pure — exported for tests.
+ */
+export function isStructurallyOrchestratorGlue(
+  addedLines: ReadonlyMap<number, string>,
+): boolean {
+  let substantive = 0
+  let delegation = 0
+  let hasFreeFunctionCall = false
+  for (const [, text] of addedLines) {
+    if (!isSubstantiveAddedLine(text)) continue
+    substantive += 1
+    if (isDelegationShapedLine(text)) delegation += 1
+    // Don't count the function's OWN declaration as a free-function call.
+    // `function transform(x) {` matches FREE_FUNCTION_CALL via `transform(`,
+    // but it's the function being defined, not a call to anything external.
+    if (METHOD_OR_FUNCTION_HEADER.test(text)) continue
+    if (FREE_FUNCTION_CALL.test(text)) hasFreeFunctionCall = true
+  }
+  if (substantive === 0) return false
+  if (substantive > GLUE_MAX_SUBSTANTIVE) return false
+  if (!hasFreeFunctionCall) return false
+  return delegation / substantive >= GLUE_MIN_DELEGATION_RATIO
+}
+
 const KNOWN_EXTS: ReadonlySet<string> = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"])
 
 function extOf(path: string): SourceExt | null {
@@ -209,14 +361,24 @@ function computeOne(
   testedHelpers: ReadonlyMap<string, string>,
   args: DetectHelperCoverageArgs,
 ): HelperCoverage {
-  const NONE: HelperCoverage = { status: "none", helpers: [] }
+  const NONE: HelperCoverage = { status: "none", helpers: [], structurallyGlue: false }
   const content = args.filesByPath.get(source)
   const ext = extOf(source)
   const added = args.addedLineTextByPath.get(source)
   if (typeof content !== "string" || ext === null || !added || added.size === 0) return NONE
 
+  // SIG-128 PR 6: structural orchestrator-glue check runs FIRST + lives
+  // alongside the helper-coverage status. It fires INDEPENDENTLY of
+  // whether the file imports same-PR tested helpers, so a wrapper that
+  // delegates to a mix of same-PR + pre-existing helpers is still caught.
+  const structurallyGlue = isStructurallyOrchestratorGlue(added)
+
   const bindings = extractTestedHelperBindings(source, content, ext, testedHelpers)
-  if (bindings.length === 0) return NONE
+  if (bindings.length === 0) {
+    return structurallyGlue
+      ? { status: "none", helpers: [], structurallyGlue: true }
+      : NONE
+  }
 
   let substantive = 0
   let delegating = 0
@@ -241,8 +403,12 @@ function computeOne(
     if (lineDelegates) delegating += 1
   }
 
-  if (substantive === 0) return NONE
-  if (delegating === substantive) return { status: "all", helpers: [...helpers].sort() }
-  if (delegating > 0) return { status: "partial", helpers: [...helpers].sort() }
-  return NONE
+  if (substantive === 0) return { ...NONE, structurallyGlue }
+  if (delegating === substantive) {
+    return { status: "all", helpers: [...helpers].sort(), structurallyGlue }
+  }
+  if (delegating > 0) {
+    return { status: "partial", helpers: [...helpers].sort(), structurallyGlue }
+  }
+  return { ...NONE, structurallyGlue }
 }

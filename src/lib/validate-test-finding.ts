@@ -70,6 +70,7 @@ export type TestDropReason =
   | "uncited-missing-coverage" // "source lacks tests" claim not backed by a real ->NONE mapping for finding.path
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
   | "glue-covered-by-helper" // SIG-128: ->NONE finding on a file whose changed logic fully delegates to same-PR tested helpers
+  | "glue-covered-by-structure" // SIG-128 PR 6: ->NONE finding on a file whose changed logic is structurally orchestrator glue (small + delegation-shaped), independent of whether the delegated-to helpers are same-PR tested
 
 /**
  * Parse a `siblingMapping:<source>-><test|NONE>` evidenceRef into its
@@ -423,9 +424,22 @@ export function evaluateTestFinding(
     // A ->NONE missing-coverage finding on a source whose changed logic
     // FULLY delegates to same-PR tested helpers (status "all") is the
     // orchestrator-glue false positive. Reject it. `partial`/`none` are not
-    // suppressed (FP-safe — a genuinely-untested orchestrator still fires).
+    // suppressed at this gate (FP-safe — a genuinely-untested orchestrator
+    // still fires here).
     if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.status === "all") {
       return { keep: false, reason: "glue-covered-by-helper" }
+    }
+    // SIG-128 PR 6 (SIG-159 Bug 1 fix): structural orchestrator-glue
+    // suppression — independent of whether the delegated-to helpers are
+    // same-PR tested. Catches the PR #138 `scheduled` handler regression
+    // where the wrapper delegated to BOTH same-PR (`runIndexReconciliation`)
+    // AND pre-existing (`isIndexerEnabled`) helpers, giving status
+    // "partial" not "all". The structural check fires regardless of
+    // status. Tight thresholds (≤12 substantive lines + ≥50% delegation-
+    // shaped + ≥1 free-function call) keep the FN risk low — a
+    // genuinely-logic-heavy function survives.
+    if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.structurallyGlue === true) {
+      return { keep: false, reason: "glue-covered-by-structure" }
     }
     // Missing-coverage claim. Admissible only when the cited mapping is
     // a real `siblingMapping:<finding.path>->NONE` in the pack (relevant

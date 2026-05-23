@@ -250,8 +250,32 @@ export interface PrReviewFinding {
    * as a committable ```suggestion block (high-confidence + anchorable)
    * or a non-committable code snippet. Absent when no localized fix
    * applies (testing / architecture / multi-hunk).
+   *
+   * SIG-162 PR 5: when `kind === "delete"`, this field is REQUIRED but
+   * must be the empty string `""` — signals deletion intent. The
+   * renderer emits an empty ```suggestion block that GitHub treats as
+   * a one-click deletion of the anchored range.
    */
   suggestedReplacement?: string
+  /**
+   * SIG-162 PR 5: shape of the proposed change. Drives renderer's
+   * `suggestion` block contents:
+   *   - `"delete"`  — emit an EMPTY suggestion block (one-click removal
+   *                   of `[startLine ?? line, line]`). Requires
+   *                   `suggestedReplacement === ""` to be set.
+   *   - `"replace"` — emit a suggestion block with `suggestedReplacement`
+   *                   as the new content. Same as the SIG-125 default.
+   *   - `"insert"`  — reserved for future use (insertion at a single line).
+   *   - `"describe"` — no suggestion block; the body is descriptive only.
+   *
+   * Absent → behaves like `"describe"` (back-compat with pre-PR5 model
+   * output). Parser coerces inconsistent shapes:
+   *   - `kind:"delete"` + non-empty `suggestedReplacement` → `kind:"replace"`
+   *     (the replacement content is the actionable signal).
+   *   - `kind:"delete"` + missing `suggestedReplacement` → drop `kind`
+   *     (ambiguous intent — back-compat default).
+   */
+  kind?: "delete" | "replace" | "insert" | "describe"
 }
 
 export interface PrReviewVerdict {
@@ -484,8 +508,35 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     // SIG-125: read suggestedReplacement. Trim only to test emptiness —
     // the value is kept VERBATIM (indentation + trailing newline matter
     // for the rendered suggestion block).
-    if (typeof finding.suggestedReplacement === "string" && finding.suggestedReplacement.trim().length > 0) {
-      finalFinding.suggestedReplacement = finding.suggestedReplacement
+    //
+    // SIG-162 PR 5: also read `kind` and coerce inconsistent shapes.
+    //   - kind:"delete" + suggestedReplacement:""    → preserve both (deletion)
+    //   - kind:"delete" + suggestedReplacement:"..." → coerce to kind:"replace"
+    //                                                  (replacement content is
+    //                                                  the actionable signal)
+    //   - kind:"delete" + no suggestedReplacement    → drop kind (ambiguous)
+    //   - kind:"replace"|"insert" + non-empty repl   → preserve both
+    //   - kind invalid or absent                     → existing behavior
+    const kindRaw = typeof finding.kind === "string" ? finding.kind.trim() : ""
+    const replRaw = finding.suggestedReplacement
+    const replIsString = typeof replRaw === "string"
+    const replIsEmpty = replIsString && replRaw.trim().length === 0
+    const replIsNonEmpty = replIsString && replRaw.trim().length > 0
+
+    if (kindRaw === "delete" && replIsEmpty) {
+      finalFinding.kind = "delete"
+      finalFinding.suggestedReplacement = replRaw
+    } else if (kindRaw === "delete" && replIsNonEmpty) {
+      // Inconsistent — model said delete but provided content. Trust the
+      // content; reclassify as replace.
+      finalFinding.kind = "replace"
+      finalFinding.suggestedReplacement = replRaw
+    } else if ((kindRaw === "replace" || kindRaw === "insert") && replIsNonEmpty) {
+      finalFinding.kind = kindRaw
+      finalFinding.suggestedReplacement = replRaw
+    } else if (replIsNonEmpty) {
+      // SIG-125 back-compat: kind absent or unknown, non-empty replacement.
+      finalFinding.suggestedReplacement = replRaw
     }
     findings.push(finalFinding)
     if (findings.length >= 8) break
@@ -746,7 +797,7 @@ export function buildReviewSubmission({
     // and pass to the formatter so the inline comment carries the
     // P0/P1/P2 badge + `confidence: N/5` suffix.
     const confidence = resolveFindingConfidence(f, verdict.confidence)
-    const baseBody = formatFindingComment(f, confidence, reviewable)
+    const baseBody = formatFindingComment(f, confidence, reviewable, addedLineTextByLine)
     const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
     const c: SubmitReviewComment = {
       path: f.path,
@@ -754,7 +805,20 @@ export function buildReviewSubmission({
       side: "RIGHT",
       body: fullBody,
     }
-    if (f.startLine != null) {
+    // SIG-164 PR 5: emit `start_line` only when both endpoints survive
+    // the lax comment-anchor check (`isCommentAnchorable`). This is
+    // separate from `isFindingAnchorable` (which gates committable
+    // ```suggestion blocks via the stricter contiguous-RIGHT check).
+    // GitHub's multi-line comment endpoints must both be on the diff;
+    // in-between lines can be context within the hunk.
+    //
+    // When `reviewable` isn't supplied (test paths / fallback), keep
+    // the prior trust-the-model behavior (emit `start_line` as
+    // model-given). Production paths always pass `reviewable`.
+    const emitStartLine =
+      f.startLine != null &&
+      (reviewable === undefined || isCommentAnchorable(reviewable, f.path, f.startLine, f.line))
+    if (emitStartLine && f.startLine != null) {
       c.start_line = f.startLine
       c.start_side = "RIGHT"
     }
@@ -1289,11 +1353,25 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  *
  * Pure — exported for tests.
  */
-export function severityBadgeForScore(score: number): string | null {
-  if (score >= 5) return "🔴 P0"
-  if (score >= 4) return "🟠 P1"
-  if (score >= 3) return "🟡 P2"
-  return null
+/**
+ * SIG-164 (PR 5): replace the prior emoji badges with hosted SVG chips
+ * matching Greptile/CR convention — a small colored pill rendered inline
+ * via `<img>` tag. Designed by Kimi (rimmed dark lozenge, wax-seal
+ * concept) and served from `sigilix.ai/badges/p[0-3].svg`. Severity map:
+ *   - score 5  → P0 (critical / merge-blocker)
+ *   - score 4  → P1 (high)
+ *   - score 3  → P2 (medium)
+ *   - score 1-2 → P3 (low / nit)
+ *
+ * Always returns a string (was `string | null`) — P3 covers the prior
+ * low-severity null case, so every finding now carries a visible
+ * classification.
+ */
+export function severityBadgeForScore(score: number): string {
+  if (score >= 5) return `<a href="https://sigilix.ai"><img alt="P0" src="https://sigilix.ai/badges/p0.svg" align="top" width="48"></a>`
+  if (score >= 4) return `<a href="https://sigilix.ai"><img alt="P1" src="https://sigilix.ai/badges/p1.svg" align="top" width="48"></a>`
+  if (score >= 3) return `<a href="https://sigilix.ai"><img alt="P2" src="https://sigilix.ai/badges/p2.svg" align="top" width="48"></a>`
+  return `<a href="https://sigilix.ai"><img alt="P3" src="https://sigilix.ai/badges/p3.svg" align="top" width="48"></a>`
 }
 
 /**
@@ -1425,6 +1503,120 @@ export function pickAnchorLineForward(
 }
 
 /**
+ * SIG-164 (PR 5): render the "Current / Proposed" illustrative code
+ * blocks inside a finding's body — Greptile-style. Always shown when
+ * the finding has a localized change in scope (replace / delete),
+ * regardless of whether the suggestion is committable. The committable
+ * ```suggestion block (when emitted) is ADDITIVE — separate, sits
+ * below this block.
+ *
+ * Shape:
+ *
+ *   **Current:**
+ *   ```lang
+ *   <addedLineTextByPath[path][startLine..line] joined with \n>
+ *   ```
+ *
+ *   **Proposed:**
+ *   ```lang
+ *   <suggestedReplacement>
+ *   ```
+ *
+ * For `kind === "delete"` (suggestedReplacement === ""): only the
+ * **Current:** block (no Proposed — the proposal IS the deletion of
+ * what's shown above).
+ *
+ * For `kind === "describe"` or absent / no suggestedReplacement: returns
+ * "" (no block). The body prose already covers the description.
+ *
+ * Returns "" when there's no actionable "Current" content to show
+ * (e.g., the diff context isn't available, or the model anchored to
+ * lines that aren't in the added-lines map).
+ *
+ * Pure — exported for tests.
+ */
+export function formatProposedChangeBlock(
+  finding: PrReviewFinding,
+  addedLineTextByPath?: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): string {
+  const repl = finding.suggestedReplacement
+  const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
+  const isReplace =
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof repl === "string" && repl.length > 0
+  if (!isDeletion && !isReplace) return ""
+
+  // Pull the current-state lines from the diff context (added lines on
+  // the finding's range). When the map is absent or doesn't include
+  // any of the range lines, we can't render an honest "Current" block
+  // — return "" rather than emit a misleading empty fence.
+  const startL =
+    finding.startLine != null && finding.startLine < finding.line
+      ? finding.startLine
+      : finding.line
+  const endL = finding.line
+  const addedLines = addedLineTextByPath?.get(finding.path)
+  const currentLines: string[] = []
+  if (addedLines) {
+    for (let n = startL; n <= endL; n++) {
+      const text = addedLines.get(n)
+      if (text !== undefined) currentLines.push(text)
+    }
+  }
+  if (currentLines.length === 0) return ""
+
+  const lang = extensionToFenceLang(finding.path)
+  const out: string[] = []
+  // Each block uses its own fence so a backtick run in user code can't
+  // close both at once. We also pick a long-enough fence for the
+  // replacement specifically.
+  const currentFence = fenceForContent(currentLines.join("\n"))
+  out.push("**Current:**", currentFence + lang, ...currentLines, currentFence)
+
+  if (isReplace && typeof repl === "string") {
+    const propFence = fenceForContent(repl)
+    out.push("")
+    out.push("**Proposed:**", propFence + lang, repl.replace(/\n$/, ""), propFence)
+  }
+  return out.join("\n")
+}
+
+/**
+ * SIG-164 (PR 5): "Prompt To Fix With AI" block — mirrors Greptile's
+ * exact summary + body shape (no leading emoji; the words are the
+ * affordance). Folds the finding into a structured Markdown prompt
+ * that a reviewer can copy-paste into any LLM-based fix tool (Cursor,
+ * Aider, Claude Code, etc.). Always appended at the bottom of
+ * `formatFindingComment` so it never displaces the prose, and wrapped
+ * in `<details>` so collapsed-by-default.
+ *
+ * Pure — exported for tests.
+ */
+export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
+  const range =
+    finding.startLine != null && finding.startLine < finding.line
+      ? `${finding.startLine}-${finding.line}`
+      : String(finding.line)
+  const lines = [
+    "<details><summary>Prompt To Fix With AI</summary>",
+    "",
+    "This is a comment left during a code review.",
+    `Path: ${finding.path}`,
+    `Line: ${range}`,
+    "",
+    "Comment:",
+    `**${finding.headline}**`,
+    "",
+    finding.body,
+    "",
+    "How can I resolve this? If you propose a fix, please make it concise.",
+    "",
+    "</details>",
+  ]
+  return lines.join("\n")
+}
+
+/**
  * Inline finding comment, greptile-style. The category leads as
  * \`**category:**\` (logic, style, security, performance, etc.) so
  * a reviewer can scan a thread and immediately see what kind of
@@ -1446,13 +1638,13 @@ export function formatFindingComment(
   finding: PrReviewFinding,
   confidence: number,
   reviewable?: ReviewableMap,
+  addedLineTextByPath?: ReadonlyMap<string, ReadonlyMap<number, string>>,
 ): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
+  // SIG-164 PR 5: badge is always present (P3 covers low severity).
+  // Heading shape: <img badge> **category:** headline · _confidence: N/5_
   const badge = severityBadgeForScore(finding.score)
-  const heading = badge !== null
-    ? `${badge} · **${finding.category}:** ${finding.headline} · _confidence: ${confidence}/5_`
-    : `**${finding.category}:** ${finding.headline} · _confidence: ${confidence}/5_`
-  lines.push(heading)
+  lines.push(`${badge} **${finding.category}:** ${finding.headline} · _confidence: ${confidence}/5_`)
   lines.push("")
   if (confidence <= 2) {
     // Low-confidence findings collapse the body so the thread skims
@@ -1467,28 +1659,63 @@ export function formatFindingComment(
   } else {
     lines.push(finding.body)
   }
-  // SIG-125: render the proposed change when present. Two tiers:
-  //   committable ```suggestion (high-confidence + cleanly anchorable),
-  //   else an always-shown non-committable code snippet.
-  const repl = finding.suggestedReplacement
-  if (typeof repl === "string" && repl.length > 0) {
-    // A GitHub ```suggestion block can't escape backticks — a line that is
-    // ``` always closes it — so a 3+ backtick run in the replacement
-    // disqualifies the committable tier and we fall through to the snippet.
-    const committable =
-      confidence >= HIGH_CONFIDENCE_FLOOR &&
-      reviewable !== undefined &&
-      !/`{3,}/.test(repl) &&
-      isFindingAnchorable(finding, reviewable)
+  // SIG-164 PR 5: Greptile-style "Current / Proposed" illustrative
+  // blocks. Always shown when we have enough diff context to render an
+  // honest "Current" snippet. Independent of committable-ness.
+  const proposedBlock = formatProposedChangeBlock(finding, addedLineTextByPath)
+  if (proposedBlock !== "") {
     lines.push("")
-    if (committable) {
-      lines.push("```suggestion", repl.replace(/\n$/, ""), "```")
-    } else {
-      const lang = extensionToFenceLang(finding.path)
-      const fence = fenceForContent(repl)
-      lines.push("**Proposed change:**", fence + lang, repl.replace(/\n$/, ""), fence)
-    }
+    lines.push(proposedBlock)
   }
+  // SIG-125 / SIG-162 PR 5: committable ```suggestion block. Additive
+  // on top of the illustrative block above when:
+  //   - confidence >= HIGH_CONFIDENCE_FLOOR
+  //   - reviewable map is supplied
+  //   - finding's range is RIGHT-reviewable contiguously (suggestion
+  //     applyability requirement — stricter than the comment-anchor
+  //     check; see `isFindingAnchorable` vs `isCommentAnchorable`)
+  //   - replacement contains no 3+ backtick run that would close the
+  //     fence (replacements only — deletions have empty content).
+  const repl = finding.suggestedReplacement
+  const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
+  const hasReplacement = typeof repl === "string" && repl.length > 0
+  const fenceSafe = isDeletion || (hasReplacement && repl !== undefined && !/`{3,}/.test(repl))
+  const committable =
+    fenceSafe &&
+    confidence >= HIGH_CONFIDENCE_FLOOR &&
+    reviewable !== undefined &&
+    isFindingAnchorable(finding, reviewable)
+  if (committable && isDeletion) {
+    lines.push("")
+    lines.push("```suggestion", "", "```")
+  } else if (committable && hasReplacement && repl !== undefined) {
+    lines.push("")
+    lines.push("```suggestion", repl.replace(/\n$/, ""), "```")
+  } else if (proposedBlock === "" && isDeletion) {
+    // Last-resort fallback for a deletion when neither the illustrative
+    // block (no diff context) nor the committable suggestion (out of
+    // hunk) could render — a descriptive prose note so the reader at
+    // least knows what's intended.
+    const range =
+      finding.startLine != null && finding.startLine < finding.line
+        ? `lines ${finding.startLine}-${finding.line}`
+        : `line ${finding.line}`
+    lines.push("")
+    lines.push(`**Proposed change:** remove ${range}.`)
+  } else if (proposedBlock === "" && hasReplacement && repl !== undefined) {
+    // Last-resort fallback for a replacement when the illustrative
+    // block couldn't render — show a non-committable code-snippet
+    // tier as we did before SIG-164.
+    const lang = extensionToFenceLang(finding.path)
+    const fence = fenceForContent(repl)
+    lines.push("")
+    lines.push("**Proposed change:**", fence + lang, repl.replace(/\n$/, ""), fence)
+  }
+  // SIG-164 PR 5: copy-pastable AI-agent prompt block at the very
+  // bottom. Collapsed by default. Never displaces prose; reader can
+  // expand to grab a structured prompt for an LLM-based fix tool.
+  lines.push("")
+  lines.push(formatAiAgentPromptBlock(finding))
   return lines.join("\n")
 }
 
@@ -1501,6 +1728,33 @@ function isFindingAnchorable(finding: PrReviewFinding, reviewable: ReviewableMap
   if (deriveSide(reviewable, finding.path, finding.line) !== "RIGHT") return false
   const start = finding.startLine != null && finding.startLine < finding.line ? finding.startLine : finding.line
   return isContiguousRightRange(reviewable, finding.path, start, finding.line)
+}
+
+/**
+ * SIG-164 (PR 5): GitHub multi-line PR review comments require only that
+ * the `start_line` and `line` endpoints are on the diff (same side) —
+ * in-between lines may be unchanged context within the same hunk. This
+ * is laxer than `isFindingAnchorable` (which requires every line to be
+ * RIGHT-reviewable contiguously — correct for committable suggestions
+ * but too strict for the COMMENT anchor itself).
+ *
+ * Used by `buildReviewSubmission` to decide whether to emit `start_line`
+ * on a multi-line comment. When the model picks a wide range covering a
+ * whole function (per the SIG-164 prompt update) but some interior
+ * lines are context (unchanged) rather than added, this returns true
+ * and the comment renders with the full function as inline context.
+ *
+ * Pure — exported for tests.
+ */
+export function isCommentAnchorable(
+  reviewable: ReviewableMap,
+  path: string,
+  startLine: number | undefined,
+  line: number,
+): boolean {
+  if (deriveSide(reviewable, path, line) !== "RIGHT") return false
+  if (startLine === undefined || startLine >= line) return true
+  return deriveSide(reviewable, path, startLine) === "RIGHT"
 }
 
 

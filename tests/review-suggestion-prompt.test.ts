@@ -14,7 +14,22 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(SYNTHESIZER_PROMPT).toContain("suggestedReplacement")
     expect(SYNTHESIZER_PROMPT).toMatch(/PRESERVE VERBATIM/i)
   })
-  it("PROMPT_VERSION bumped to 5", () => {
-    expect(PROMPT_VERSION).toBe("5")
+  // SIG-162 PR 5: the `kind` field is a new specialist output that drives
+  // deletion-suggestion rendering. A prompt edit that accidentally
+  // dropped it would silently break deletions (model wouldn't emit it,
+  // parser falls back to the back-compat path). Pin both the specialist
+  // emission side AND the synth preservation side so either drop is
+  // caught at CI time.
+  it("specialist output schema documents the `kind` field (SIG-162)", () => {
+    expect(SPECIALIST_PROMPTS.logic).toContain('"kind"')
+    expect(SPECIALIST_PROMPTS.performance).toContain('"kind"')
+  })
+  it("synth preserves the `kind` field verbatim (SIG-162)", () => {
+    expect(SYNTHESIZER_PROMPT).toContain('"kind"')
+    // The synth-side line also mentions PRESERVE VERBATIM next to the kind doc.
+    expect(SYNTHESIZER_PROMPT).toMatch(/"kind"[\s\S]*?PRESERVE VERBATIM/i)
+  })
+  it("PROMPT_VERSION bumped to 6 (SIG-162: + deletion suggestions via kind:\"delete\")", () => {
+    expect(PROMPT_VERSION).toBe("6")
   })
 })

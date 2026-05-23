@@ -15,7 +15,7 @@
 
 import type { Env } from "../index"
 import { listAppInstallationIds, listInstallationRepoFullNames } from "./github-app"
-import { enqueueIndexJobsForRepos } from "./index-producer"
+import { enqueueIndexJobsForRepos, parseFullName } from "./index-producer"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 
 export interface ReconciliationSummary {
@@ -23,6 +23,12 @@ export interface ReconciliationSummary {
   reposChecked: number
   /** Repos whose manifest KV read returned `missing` or `invalid`. */
   reposMissingManifest: number
+  /**
+   * Codex review pass: `dryRun: true` short-circuits the per-installation
+   * `enqueueIndexJobsForRepos` call, so `enqueued` / `sensitiveSkipped` /
+   * `perRepoFailed` are always 0 in dry-run output by design. Read those
+   * fields only on real runs; for dry-run, use `reposMissingManifest`.
+   */
   enqueued: number
   sensitiveSkipped: number
   perRepoFailed: number
@@ -66,10 +72,12 @@ export async function runIndexReconciliation(
 
     const missing: { full_name: string }[] = []
     for (const fullName of repos.items) {
-      const slash = fullName.indexOf("/")
-      if (slash <= 0 || slash === fullName.length - 1) {
-        // Defensive: an `o/r` slug from GitHub should always parse, but
-        // we trust the upstream listing minimally and skip + log junk.
+      // Codex review pass: delegate to the producer's parser so reconcile's
+      // "is this enqueueable" decision matches what enqueueIndexJobsForRepos
+      // will actually accept — otherwise dry-run can count repos as
+      // `missing` that the producer would silently reject (false positive).
+      const parsed = parseFullName({ full_name: fullName })
+      if (parsed === null) {
         console.warn(JSON.stringify({
           event: "index-reconcile-skip-invalid-fullname",
           installation_id: installationId,
@@ -77,8 +85,7 @@ export async function runIndexReconciliation(
         }))
         continue
       }
-      const owner = fullName.slice(0, slash)
-      const repo = fullName.slice(slash + 1)
+      const { owner, repo } = parsed
       let result
       try {
         result = await readRepoIndexManifest(env, owner, repo)

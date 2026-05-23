@@ -8,7 +8,15 @@ vi.mock("../src/lib/github-app", () => ({
   listAppInstallationIds: vi.fn(),
   listInstallationRepoFullNames: vi.fn(),
 }))
-vi.mock("../src/lib/index-producer", () => ({ enqueueIndexJobsForRepos: vi.fn() }))
+vi.mock("../src/lib/index-producer", async () => {
+  // Keep the real `parseFullName` — it's pure, no IO, and reconcile delegates
+  // to it so its "missing manifest" decision matches what the producer
+  // actually accepts on enqueue.
+  const actual = await vi.importActual<typeof import("../src/lib/index-producer")>(
+    "../src/lib/index-producer",
+  )
+  return { ...actual, enqueueIndexJobsForRepos: vi.fn() }
+})
 vi.mock("../src/lib/repo-index-manifest", async () => {
   const actual = await vi.importActual<typeof import("../src/lib/repo-index-manifest")>(
     "../src/lib/repo-index-manifest",
@@ -162,6 +170,26 @@ describe("runIndexReconciliation", () => {
     const out = await runIndexReconciliation(env, { dryRun: false })
     expect(out.enumerationIncomplete).toBe(true)
     expect(mockEnqueue).toHaveBeenCalledTimes(2)
+  })
+
+  it("distinguishes 'all repos healthy' from 'nothing scanned' via enumerationIncomplete (Codex review)", async () => {
+    // Every install enumerates fine but every repo listing returns empty +
+    // incomplete (GitHub side error, e.g. rate-limited mid-page). The
+    // operator needs to read enumerationIncomplete=true + reposChecked=0
+    // to tell this apart from "all healthy, nothing to do."
+    mockListInstalls.mockResolvedValue(ok([111, 222]))
+    mockListRepos
+      .mockResolvedValueOnce({ items: [], complete: false })
+      .mockResolvedValueOnce({ items: [], complete: false })
+
+    const out = await runIndexReconciliation(env, { dryRun: false })
+
+    expect(out.installations).toBe(2)
+    expect(out.reposChecked).toBe(0)
+    expect(out.reposMissingManifest).toBe(0)
+    expect(out.enumerationIncomplete).toBe(true)
+    expect(mockEnqueue).not.toHaveBeenCalled()
+    expect(mockReadManifest).not.toHaveBeenCalled()
   })
 
   it("per-installation fail-soft: enqueue throw on one install doesn't abort the run", async () => {

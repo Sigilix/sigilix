@@ -3443,54 +3443,70 @@ export async function handlePrReviewEnsemble(
       ...renderableUnanchored,
     ])
 
-    // SIG-161 PR 4b — shadow-mode telemetry. When `OPENCLAW_GATE` is
-    // "shadow" or "enforce", run the gate in parallel and log
-    // divergence vs the legacy verdict to Logpush. In "shadow" the
-    // legacy verdict still ships (observation only); "enforce" (PR 4c)
-    // will swap.
+    // SIG-161 PR 4b — shadow-mode telemetry. Off the critical path:
+    // the KV read + divergence compute + log write are dispatched as
+    // a detached promise so a slow KV cold-read or anything else CANNOT
+    // delay the customer-visible verdict submission below.
+    //
+    // CodeRabbit catch (PR #146 fix-up #2): the prior version `await`ed
+    // `readGateThreshold` inline, which added a KV read latency budget
+    // to every production review even though shadow is observation-
+    // only. Fire-and-forget here is acceptable because the work is
+    // small (single KV read + ~1ms compute + single console.log) and
+    // CF Workers' microtask queue drains before the isolate is killed.
+    // If shadow ever grows expensive enough to warrant `ctx.waitUntil`,
+    // plumb the ExecutionContext through `EnsembleHandlerArgs`.
     //
     // The pure-helper `computeShadowGateDivergence` lives in
     // triage-pr-review.ts (unit-tested there); this call site just
     // does the I/O — read env, read KV threshold, write the log.
     // Wrapped in try/catch so a KV outage / compute failure CANNOT
-    // break the production verdict path.
+    // surface as an unhandled rejection.
     const gateMode = readGateMode(env)
     if (gateMode !== "off") {
-      try {
-        const threshold = await readGateThreshold(env)
-        const result = computeShadowGateDivergence({
-          renderable: renderableVerdict.findings,
-          unanchored: renderableUnanchored,
-          provenance: filteredConsensusProvenance,
-          threshold,
-          legacyEvent: intendedEvent,
-        })
-        if (result.divergence) {
+      // Snapshot the inputs at the (sync) call site so the detached
+      // task doesn't race with later mutation of `renderableVerdict`.
+      const snapshotRenderable: PrReviewFinding[] = [...renderableVerdict.findings]
+      const snapshotUnanchored: PrReviewFinding[] = [...renderableUnanchored]
+      const snapshotProvenance = [...filteredConsensusProvenance]
+      const snapshotLegacy = intendedEvent
+      void (async () => {
+        try {
+          const threshold = await readGateThreshold(env)
+          const result = computeShadowGateDivergence({
+            renderable: snapshotRenderable,
+            unanchored: snapshotUnanchored,
+            provenance: snapshotProvenance,
+            threshold,
+            legacyEvent: snapshotLegacy,
+          })
+          if (result.divergence) {
+            console.log(
+              JSON.stringify({
+                event: "pr-review-gate-shadow-divergence",
+                owner,
+                repo,
+                prNumber,
+                headSha: headSha.slice(0, 7),
+                mode: gateMode,
+                ...result.divergence,
+              }),
+            )
+          }
+        } catch (err) {
           console.log(
             JSON.stringify({
-              event: "pr-review-gate-shadow-divergence",
+              event: "pr-review-gate-shadow-error",
               owner,
               repo,
               prNumber,
               headSha: headSha.slice(0, 7),
               mode: gateMode,
-              ...result.divergence,
+              error: err instanceof Error ? err.message : String(err),
             }),
           )
         }
-      } catch (err) {
-        console.log(
-          JSON.stringify({
-            event: "pr-review-gate-shadow-error",
-            owner,
-            repo,
-            prNumber,
-            headSha: headSha.slice(0, 7),
-            mode: gateMode,
-            error: err instanceof Error ? err.message : String(err),
-          }),
-        )
-      }
+      })()
     }
 
     const reviewCounter = intendedEvent === "REQUEST_CHANGES"

@@ -266,6 +266,16 @@ export interface Env {
   OPENCLAW_GRAPH_INDEX?: string
   OPENCLAW_GRAPH_RETRIEVAL?: string
 
+  // SIG-161: confidence-threshold verdict gate. Three-state rollout
+  //   "off"     — bypassed; legacy `chooseReviewEvent` decides (default).
+  //   "shadow"  — `chooseReviewEventWithGate` runs but legacy verdict ships;
+  //               divergence logged to ValidationMetricsDO.
+  //   "enforce" — `chooseReviewEventWithGate` decides the posted verdict.
+  // The threshold + model artifact live in KV (config:gate-threshold:v1 /
+  // config:gate-model:v1) so retunes don't require a redeploy. See
+  // .claude/research/sig-161-labeling/DESIGN.md §9.
+  OPENCLAW_GATE?: string
+
   // SIG-119: single global DO holding rolling per-gate validator shadow
   // telemetry (would-drop / kept counts, daily buckets). Read via the
   // authenticated GET /metrics/validation endpoint.

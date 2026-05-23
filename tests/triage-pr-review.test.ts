@@ -6,14 +6,18 @@ import {
   buildFallbackBody,
   buildReviewSubmission,
   chooseReviewEvent,
+  chooseReviewEventWithGate,
+  computeGateScore,
   filterToSigilixAuthored,
   formatFindingComment,
   formatProposedChangeBlock,
   formatAiAgentPromptBlock,
+  hasRequiredEvidence,
   isCommentAnchorable,
   isSubstantiveAnchorLine,
   pickAnchorLineForward,
   parsePrReviewResponse,
+  renderCommentBody,
   renderFixPlan,
   renderRequestChangesBody,
   resolveFindingConfidence,
@@ -210,6 +214,479 @@ describe("chooseReviewEvent", () => {
       const deletedAuthor: AuthoredItem = { user: null }
       expect(chooseReviewEvent([], [deletedAuthor])).toBe("APPROVE")
     })
+  })
+})
+
+// SIG-161 PR 4a — new thresholded gate (`chooseReviewEventWithGate`)
+// runs alongside the legacy `chooseReviewEvent`. Used in shadow/enforce
+// modes; the legacy path remains in `off` mode for back-compat.
+// Implements the four-event table from DESIGN.md §4:
+//   - any finding with gateScore >= threshold → REQUEST_CHANGES (blocking)
+//   - no blocking + any Sigilix-authored open item → REQUEST_CHANGES
+//   - no blocking + findings in [FLOOR_SUPPRESS, threshold) → COMMENT
+//   - no findings + no open items → APPROVE
+describe("chooseReviewEventWithGate (SIG-161)", () => {
+  const f = (gateScore: number | undefined, score = 3): PrReviewFinding => ({
+    ...baseFinding,
+    score,
+    ...(gateScore !== undefined ? { gateScore } : {}),
+  })
+  const sigItem: AuthoredItem = { user: { login: "sigilix[bot]" } }
+  const crItem: AuthoredItem = { user: { login: "coderabbitai[bot]" } }
+
+  describe("verdict events", () => {
+    it("APPROVE on empty findings + empty open items", () => {
+      expect(
+        chooseReviewEventWithGate({
+          findings: [],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("APPROVE")
+    })
+
+    it("REQUEST_CHANGES when any finding clears the threshold", () => {
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(0.5), f(0.95), f(0.7)],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("REQUEST_CHANGES")
+    })
+
+    it("REQUEST_CHANGES when no blocking finding but Sigilix open item exists", () => {
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(0.7)],
+          threshold: 0.85,
+          openItems: [sigItem],
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("REQUEST_CHANGES")
+    })
+
+    it("COMMENT when borderline findings exist + no open items", () => {
+      // 0.70 in [0.60, 0.85) → posted as COMMENT, no verdict change
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(0.7)],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("COMMENT")
+    })
+
+    it("COMMENT also fires for multiple borderline findings", () => {
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(0.65), f(0.72), f(0.80)],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("COMMENT")
+    })
+
+    it("APPROVE ignores non-Sigilix-authored open items (SIG-37 preserved)", () => {
+      // CodeRabbit thread alone does not block.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [],
+          threshold: 0.85,
+          openItems: [crItem],
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("APPROVE")
+    })
+
+    it("threshold inclusive (>= chosenThreshold blocks)", () => {
+      // Exact-equal score must be treated as blocking per §4 table.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(0.85)],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("REQUEST_CHANGES")
+    })
+
+    it("threshold = 1.0 with all permitted scores produces COMMENT not REQUEST_CHANGES", () => {
+      // The "off-equivalent" knob: when permit policy + threshold 1.0,
+      // findings with gateScore < 1.0 are non-blocking borderline.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(0.5), f(0.7), f(0.9)],
+          threshold: 1.0,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("COMMENT")
+    })
+  })
+
+  describe("missingScorePolicy", () => {
+    it('block: missing gateScore is treated as 1.0 (effectively blocks)', () => {
+      // Rollout fail-open: a finding without a score blocks like today.
+      // With threshold = 1.0, the effective 1.0 score is >= threshold,
+      // so we get REQUEST_CHANGES — same as the legacy `findings.length > 0`.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(undefined)],
+          threshold: 1.0,
+          missingScorePolicy: "block",
+        }),
+      ).toBe("REQUEST_CHANGES")
+    })
+
+    it('block: missing gateScore still blocks even at sub-1.0 thresholds', () => {
+      // With threshold = 0.85 + block policy, the effective 1.0 is still
+      // >= 0.85, so REQUEST_CHANGES.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(undefined)],
+          threshold: 0.85,
+          missingScorePolicy: "block",
+        }),
+      ).toBe("REQUEST_CHANGES")
+    })
+
+    it('throw: missing gateScore raises a pipeline-invariant error', () => {
+      // Post-calibration regime — every finding MUST have a score by
+      // the time it reaches the gate. A missing score is a bug, not a
+      // case to silently handle.
+      expect(() =>
+        chooseReviewEventWithGate({
+          findings: [f(undefined)],
+          threshold: 0.85,
+          missingScorePolicy: "throw",
+        }),
+      ).toThrow(/gateScore missing/)
+    })
+
+    it("non-finite gateScore (NaN / Infinity) routes through missingScorePolicy, NOT the score comparison", () => {
+      // PR #145 CodeRabbit catch: `typeof NaN === "number"` so a NaN
+      // gateScore would otherwise pass the `typeof === "number"` check.
+      // `NaN >= threshold` is always false → blocker branch silently
+      // misses it. Guard by checking isFinite; non-finite falls through
+      // to missingScorePolicy.
+      const nanFinding: PrReviewFinding = { ...baseFinding, gateScore: Number.NaN }
+      // With "block" policy → effective 1.0 → blocks regardless of NaN.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [nanFinding],
+          threshold: 0.85,
+          missingScorePolicy: "block",
+        }),
+      ).toBe("REQUEST_CHANGES")
+      // With "permit" policy → effective 0.0 → COMMENT (non-blocking but
+      // not empty). Without the isFinite guard, the NaN finding would
+      // be treated as scored and skip both branches.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [nanFinding],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("COMMENT")
+      // With "throw" policy → explicit error.
+      expect(() =>
+        chooseReviewEventWithGate({
+          findings: [nanFinding],
+          threshold: 0.85,
+          missingScorePolicy: "throw",
+        }),
+      ).toThrow(/gateScore missing/)
+      // Same behavior for ±Infinity.
+      const infFinding: PrReviewFinding = { ...baseFinding, gateScore: Number.POSITIVE_INFINITY }
+      expect(
+        chooseReviewEventWithGate({
+          findings: [infFinding],
+          threshold: 0.85,
+          missingScorePolicy: "block",
+        }),
+      ).toBe("REQUEST_CHANGES")
+    })
+
+    it('permit: missing gateScore is treated as 0.0 (offline replay)', () => {
+      // Replay/backfill: synthesize verdicts on pre-gate findings.
+      // Missing score floors at 0.0 → suppressed (< FLOOR_SUPPRESS in
+      // the pre-emit filter, but here it just falls into the < threshold
+      // band and contributes to COMMENT). Empty findings APPROVE.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("APPROVE")
+      // A finding with no score + permit policy is below threshold →
+      // not blocking; still counts as a finding so COMMENT fires.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [f(undefined)],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("COMMENT")
+    })
+  })
+
+  describe("legacy-equivalent mode", () => {
+    // The configuration the call site uses when `OPENCLAW_GATE = off`:
+    // threshold = 1.0 + missingScorePolicy = "block" → identical to the
+    // legacy `chooseReviewEvent` (any finding → REQUEST_CHANGES).
+    const legacy = (findings: PrReviewFinding[], openItems: AuthoredItem[] = []) =>
+      chooseReviewEventWithGate({
+        findings,
+        threshold: 1.0,
+        openItems,
+        missingScorePolicy: "block",
+      })
+
+    it("empty findings → APPROVE (matches legacy)", () => {
+      expect(legacy([])).toBe("APPROVE")
+    })
+
+    it("any finding (no gateScore) → REQUEST_CHANGES (matches legacy)", () => {
+      expect(legacy([f(undefined)])).toBe("REQUEST_CHANGES")
+      expect(legacy([f(undefined), f(undefined)])).toBe("REQUEST_CHANGES")
+    })
+
+    it("Sigilix open item with no findings → REQUEST_CHANGES (matches legacy)", () => {
+      expect(legacy([], [{ user: { login: "sigilix[bot]" } }])).toBe("REQUEST_CHANGES")
+    })
+
+    it("non-Sigilix open item with no findings → APPROVE (matches legacy SIG-37)", () => {
+      expect(legacy([], [{ user: { login: "coderabbitai[bot]" } }])).toBe("APPROVE")
+    })
+  })
+})
+
+// SIG-161 PR 4a — gate-score blend (DESIGN.md §5). Hand-tuned coefficients
+// in v1; PR 4c replaces this with a logistic regression fit on labels.
+describe("computeGateScore (SIG-161 §5)", () => {
+  const f = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
+    ...baseFinding,
+    score: 3,
+    ...overrides,
+  })
+
+  it("clamps to [0, 1]", () => {
+    // Maximal inputs (conf 5 + evidence + 3-way agreement + score 5):
+    //   0.90 + 0.10 + 0.10 + 0.10 = 1.20 → clamped to 1.0
+    expect(
+      computeGateScore(
+        f({ confidence: 5, score: 5, category: "logic" }),
+        { sourceSpecialists: ["logic", "security", "performance"] },
+      ),
+    ).toBe(1.0)
+    // Minimal inputs (conf 1 + no evidence + 1-way + score 1):
+    //   0.10 + 0 + 0 + (-0.10) = 0.0
+    // Use category:"testing" without inspectedTestFiles/evidenceRefs so
+    // `hasRequiredEvidence` returns false and the evidence boost is 0.
+    // (Logic always returns true since it has no per-category
+    // evidence requirement.)
+    expect(
+      computeGateScore(
+        f({ confidence: 1, score: 1, category: "testing" }),
+        { sourceSpecialists: ["tests"] },
+      ),
+    ).toBe(0.0)
+  })
+
+  it("weakly monotone in confidence (1→5 produces non-decreasing scores)", () => {
+    const scores = [1, 2, 3, 4, 5].map((c) =>
+      computeGateScore(
+        f({ confidence: c, score: 3, category: "logic" }),
+        { sourceSpecialists: ["logic"] },
+      ),
+    )
+    for (let i = 1; i < scores.length; i++) {
+      expect(scores[i]).toBeGreaterThanOrEqual(scores[i - 1] ?? 0)
+    }
+  })
+
+  it("weakly monotone in severity (score 1→5 non-decreasing)", () => {
+    const out = [1, 2, 3, 4, 5].map((s) =>
+      computeGateScore(
+        f({ confidence: 3, score: s, category: "logic" }),
+        { sourceSpecialists: ["logic"] },
+      ),
+    )
+    for (let i = 1; i < out.length; i++) {
+      expect(out[i]).toBeGreaterThanOrEqual(out[i - 1] ?? 0)
+    }
+  })
+
+  it("evidence presence boosts score by 0.10 (testing category)", () => {
+    // Testing requires inspectedTestFiles OR evidenceRefs for evidence credit
+    const noEv = computeGateScore(
+      f({ confidence: 3, score: 3, category: "testing" }),
+      { sourceSpecialists: ["tests"] },
+    )
+    const withEv = computeGateScore(
+      f({
+        confidence: 3,
+        score: 3,
+        category: "testing",
+        inspectedTestFiles: ["tests/foo.test.ts"],
+      }),
+      { sourceSpecialists: ["tests"] },
+    )
+    expect(withEv - noEv).toBeCloseTo(0.10, 5)
+  })
+
+  it("agreement boosts score by 0.05 per additional specialist, capped at 0.10", () => {
+    const oneSpec = computeGateScore(
+      f({ confidence: 3, score: 3, category: "logic" }),
+      { sourceSpecialists: ["logic"] },
+    )
+    const twoSpec = computeGateScore(
+      f({ confidence: 3, score: 3, category: "logic" }),
+      { sourceSpecialists: ["logic", "security"] },
+    )
+    const threeSpec = computeGateScore(
+      f({ confidence: 3, score: 3, category: "logic" }),
+      { sourceSpecialists: ["logic", "security", "performance"] },
+    )
+    const fourSpec = computeGateScore(
+      f({ confidence: 3, score: 3, category: "logic" }),
+      { sourceSpecialists: ["logic", "security", "performance", "tests"] },
+    )
+    expect(twoSpec - oneSpec).toBeCloseTo(0.05, 5)
+    expect(threeSpec - twoSpec).toBeCloseTo(0.05, 5)
+    expect(fourSpec - threeSpec).toBeCloseTo(0.0, 5)   // cap
+  })
+
+  it("defaults missing confidence to 3 (neutral)", () => {
+    const missing = computeGateScore(
+      f({ confidence: undefined, score: 3, category: "logic" }),
+      { sourceSpecialists: ["logic"] },
+    )
+    const explicit3 = computeGateScore(
+      f({ confidence: 3, score: 3, category: "logic" }),
+      { sourceSpecialists: ["logic"] },
+    )
+    expect(missing).toBeCloseTo(explicit3, 5)
+  })
+
+  it("reproduces the PR #138 SIG-128 over-fire (acceptance evidence §10)", () => {
+    // confidence: 3 (rescale 0.50) + score: 4 (severity +0.05) +
+    // testing with inspectedTestFiles (evidence +0.10) +
+    // single specialist (no agreement boost) = 0.65 (COMMENT band)
+    const sig128 = computeGateScore(
+      f({
+        confidence: 3,
+        score: 4,
+        category: "testing",
+        inspectedTestFiles: ["tests/index-reconciliation.test.ts"],
+      }),
+      { sourceSpecialists: ["tests"] },
+    )
+    expect(sig128).toBeCloseTo(0.65, 5)
+  })
+})
+
+// SIG-161 PR 4a — `renderCommentBody` body shape. Unreachable in PR 4a
+// from the legacy call sites (their narrowed `ReviewEvent` excludes
+// COMMENT), but PR 4b's flag wrapper will turn this on. Tests here
+// guard against silent regressions when copy refinement lands in the
+// SIG-167 follow-up.
+describe("renderCommentBody (SIG-161)", () => {
+  const verdict: PrReviewVerdict = {
+    summary: "Borderline findings worth a look.",
+    confidence: 3,
+    confidenceReason: "Two findings in the borderline band.",
+    findings: [{ ...baseFinding, score: 3, category: "logic" }],
+  }
+
+  it("contains the sigilix:pr-review marker (same as RC body)", () => {
+    const body = renderCommentBody({ verdict })
+    expect(body).toContain("<!-- sigilix:pr-review -->")
+  })
+
+  it("STRIPS reviewCounter even when supplied (no 'Review #N' on a non-verdict post)", () => {
+    // PR 4c's `enforce` mode passes a counter to the renderer regardless
+    // of event — the body builder is responsible for omitting it on
+    // COMMENT. Verified by passing a counter that WOULD render via
+    // renderRequestChangesBody and confirming it doesn't.
+    const body = renderCommentBody({
+      verdict,
+      reviewCounter: 5,
+      prov: { headSha: "abc1234", nowMs: 1747547318000 },
+    })
+    expect(body).not.toContain("Review #")
+    expect(body).not.toContain("Review #5")
+  })
+
+  it("STRIPS retriggerUrl even when supplied (no '/sigilix review' hint on a non-verdict post)", () => {
+    // Same rationale as the counter — the dispatching call site doesn't
+    // need to know about event type; the body builder strips.
+    const body = renderCommentBody({
+      verdict,
+      retriggerUrl: "https://github.com/owner/repo/pull/42",
+    })
+    expect(body).not.toContain("Comment `/sigilix review`")
+  })
+
+  it("forward-safe via rest-spread strip: new optional RenderBodyArgs fields flow through unchanged", () => {
+    // Belt-and-suspenders: confirm a field that exists today (delta)
+    // still reaches the body when supplied to renderCommentBody. The
+    // rest-spread denylist only omits reviewCounter + retriggerUrl;
+    // anything else delegates as-is.
+    const body = renderCommentBody({
+      verdict,
+      delta: {
+        newCount: 1,
+        stillOpenCount: 0,
+        likelyFixedCount: 0,
+        carriedOverCount: 0,
+      },
+    })
+    expect(body).toContain("Δ")
+  })
+})
+
+// SIG-161 PR 4a — evidence presence rules per category (DESIGN.md §5).
+// Categories with score>=4 requirements: security (cweId AND evidenceId),
+// performance (one of complexityEstimate / hotPathIdentifier),
+// testing (one of inspectedTestFiles / evidenceRefs).
+// Other categories: always true (no per-category requirement today).
+describe("hasRequiredEvidence (SIG-161 §5)", () => {
+  it("security score>=4 requires both cweId and evidenceId", () => {
+    const base = { ...baseFinding, category: "security" as const, score: 4 }
+    expect(hasRequiredEvidence({ ...base })).toBe(false)
+    expect(hasRequiredEvidence({ ...base, cweId: "CWE-89" })).toBe(false)
+    expect(hasRequiredEvidence({ ...base, evidenceId: "x" })).toBe(false)
+    expect(hasRequiredEvidence({ ...base, cweId: "CWE-89", evidenceId: "x" })).toBe(true)
+  })
+
+  it("security score<4 does not require evidence (returns true)", () => {
+    expect(
+      hasRequiredEvidence({ ...baseFinding, category: "security", score: 3 }),
+    ).toBe(true)
+  })
+
+  it("performance score>=4 requires complexityEstimate OR hotPathIdentifier", () => {
+    const base = { ...baseFinding, category: "performance" as const, score: 4 }
+    expect(hasRequiredEvidence({ ...base })).toBe(false)
+    expect(hasRequiredEvidence({ ...base, complexityEstimate: "O(n^2)" })).toBe(true)
+    expect(hasRequiredEvidence({ ...base, hotPathIdentifier: "handleRequest" })).toBe(true)
+  })
+
+  it("testing requires inspectedTestFiles OR evidenceRefs at any severity", () => {
+    const base = { ...baseFinding, category: "testing" as const, score: 3 }
+    expect(hasRequiredEvidence({ ...base })).toBe(false)
+    expect(hasRequiredEvidence({ ...base, inspectedTestFiles: ["t.test.ts"] })).toBe(true)
+    expect(hasRequiredEvidence({ ...base, evidenceRefs: ["siblingMapping:a->NONE"] })).toBe(true)
+  })
+
+  it("other categories always return true (no per-category requirement)", () => {
+    expect(hasRequiredEvidence({ ...baseFinding, category: "logic", score: 5 })).toBe(true)
+    expect(hasRequiredEvidence({ ...baseFinding, category: "complexity", score: 5 })).toBe(true)
+    expect(hasRequiredEvidence({ ...baseFinding, category: "style", score: 5 })).toBe(true)
+    expect(hasRequiredEvidence({ ...baseFinding, category: "syntax", score: 5 })).toBe(true)
+    expect(hasRequiredEvidence({ ...baseFinding, category: "docs", score: 5 })).toBe(true)
+    expect(hasRequiredEvidence({ ...baseFinding, category: "error-handling", score: 5 })).toBe(true)
   })
 })
 

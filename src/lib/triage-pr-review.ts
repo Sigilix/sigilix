@@ -67,7 +67,21 @@ import { type StackContext } from "./pr-stack"
 // per-specialist hunk packing (`packFilesIntoBatches` in
 // `diff-packing.ts`) and doesn't need this. Deleted with Phase 3.
 
-type ReviewEvent = "APPROVE" | "REQUEST_CHANGES"
+/**
+ * SIG-161 PR 4a: widened from the legacy two-state `"APPROVE" |
+ * "REQUEST_CHANGES"` to three states by adding `"COMMENT"`.
+ *
+ * `"COMMENT"` is a real GitHub review event (POST /pulls/{n}/reviews
+ * `event: "COMMENT"`) — posts inline comments without taking a
+ * verdict. The legacy `chooseReviewEvent` never returns it; only the
+ * new `chooseReviewEventWithGate` does, and only for findings whose
+ * `gateScore` falls in the borderline band
+ * `[FLOOR_SUPPRESS, chosenThreshold)`. See DESIGN.md §4.
+ *
+ * Exported (was previously file-local) because PR 4b's flag wrapper
+ * + the renderer body builders need to switch on the widened union.
+ */
+export type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
 
 /**
  * ARC-156 follow-up (rubberfit PR #232 catch): the model occasionally
@@ -276,6 +290,24 @@ export interface PrReviewFinding {
    *     (ambiguous intent — back-compat default).
    */
   kind?: "delete" | "replace" | "insert" | "describe"
+  /**
+   * SIG-161 PR 4a: deterministic gate score (0-1) driving the verdict
+   * gate. NOT emitted by the LLM — computed post-parse by
+   * `computeGateScore` from `confidence`, `score`, evidence-citation
+   * presence, and specialist agreement (from `provenance.sourceSpecialists`).
+   *
+   * Absent on findings that haven't been scored yet (the rollout regime;
+   * `chooseReviewEventWithGate` treats missing scores per `missingScorePolicy`).
+   * Present on every finding that passes through PR 4b's ensemble post-
+   * processing.
+   *
+   * Distinct from:
+   *   - `confidence` (1-5, self-reported, drives renderer chrome)
+   *   - `score` (1-5, severity)
+   *
+   * See DESIGN.md §3 for the naming rationale (`gateScore` over `calibratedScore`).
+   */
+  gateScore?: number
 }
 
 export interface PrReviewVerdict {
@@ -778,9 +810,16 @@ export function buildReviewSubmission({
   // fields, but it's cheaper / clearer to forward them unconditionally.
   if (typeof reviewCounter === "number") renderArgs.reviewCounter = reviewCounter
   if (retriggerUrl) renderArgs.retriggerUrl = retriggerUrl
-  const body = event === "APPROVE"
-    ? renderApproveBody(renderArgs)
-    : renderRequestChangesBody(renderArgs)
+  // SIG-161 PR 4a: ReviewEvent now includes "COMMENT" but the legacy
+  // `chooseReviewEvent` (used at this call site) returns the narrowed
+  // `Exclude<ReviewEvent, "COMMENT">` — the COMMENT branch is
+  // unreachable until PR 4b switches the call site to the gate's
+  // wrapper. Keep this branch terse; the COMMENT body renderer
+  // (`renderCommentBody`) is defined for that wrapper's use.
+  const body =
+    event === "APPROVE"
+      ? renderApproveBody(renderArgs)
+      : renderRequestChangesBody(renderArgs)
   const comments: SubmitReviewComment[] = inlineFindings.map((f, i) => {
     // ARC-189: append per-finding sigilix marker on its own line so
     // the cross-PR review-memory capture pipeline can correlate
@@ -951,7 +990,7 @@ export function buildFallbackBody(
 export function chooseReviewEvent(
   findings: PrReviewFinding[],
   openItems: ReadonlyArray<AuthoredItem> = [],
-): ReviewEvent {
+): Exclude<ReviewEvent, "COMMENT"> {
   // Strict: any inline finding the model surfaces is a blocker. The
   // verdict is two-state (APPROVE | REQUEST_CHANGES) — score still
   // sorts/severity-tags the findings but doesn't decide the gate.
@@ -979,6 +1018,209 @@ export function chooseReviewEvent(
   if (findings.length > 0) return "REQUEST_CHANGES"
   const sigilixOpenItems = filterToSigilixAuthored(openItems)
   return sigilixOpenItems.length === 0 ? "APPROVE" : "REQUEST_CHANGES"
+}
+
+// ─── SIG-161 PR 4a: thresholded gate ─────────────────────────────────
+// Sits alongside the legacy `chooseReviewEvent`. The flag wrapper in
+// PR 4b switches between them based on `OPENCLAW_GATE`. The legacy
+// path is preserved unchanged for back-compat (every existing call
+// site still uses it; nothing in PR 4a routes findings through the
+// new path in production).
+//
+// See DESIGN.md §4 for the four-event table and §5 for the score
+// blend.
+
+/** Compile-time policy for a finding whose `gateScore` is absent. */
+export type MissingScorePolicy =
+  /** Treat missing as `1.0` — finding blocks like today. Rollout default. */
+  | "block"
+  /** Treat missing as a pipeline-invariant failure — throw. Post-calibration default. */
+  | "throw"
+  /** Treat missing as `0.0` — non-blocking; useful for offline replay / backfill. */
+  | "permit"
+
+export interface ChooseReviewEventWithGateArgs {
+  findings: PrReviewFinding[]
+  /** Calibrated cutoff. A finding with `gateScore >= threshold` blocks. */
+  threshold: number
+  /** Optional list of open PR threads — same SIG-37 semantics as legacy. */
+  openItems?: ReadonlyArray<AuthoredItem>
+  missingScorePolicy: MissingScorePolicy
+}
+
+/**
+ * SIG-161 PR 4a — four-event verdict gate.
+ *
+ *   - any finding's `gateScore >= threshold`  → REQUEST_CHANGES
+ *   - no blocking + any Sigilix-authored open → REQUEST_CHANGES
+ *   - no blocking + any finding present       → COMMENT
+ *   - no blocking + no findings + no items    → APPROVE
+ *
+ * `missingScorePolicy` controls handling of `gateScore === undefined`:
+ *   - `"block"`: effective score = 1.0 (matches legacy + rollout).
+ *   - `"throw"`: pipeline invariant — every finding MUST be scored
+ *                by the time it reaches the gate. Production
+ *                `enforce`-mode setting.
+ *   - `"permit"`: effective score = 0.0 (offline replay / backfill).
+ *
+ * Pure — exported for tests. PR 4b's flag wrapper is the production
+ * call site; PR 4a itself never reaches this function in prod (the
+ * existing call sites continue to use legacy `chooseReviewEvent`).
+ *
+ * NOTE: this function does NOT apply the `FLOOR_SUPPRESS = 0.60`
+ * suppression. That happens upstream in the ensemble's pre-emit
+ * filter (alongside review-memory softening, withdrawal suppression,
+ * structural-glue suppression). The gate sees only findings that
+ * already survived suppression and decides which event to emit.
+ */
+export function chooseReviewEventWithGate(
+  args: ChooseReviewEventWithGateArgs,
+): ReviewEvent {
+  const { findings, threshold, openItems = [], missingScorePolicy } = args
+
+  const effectiveScore = (f: PrReviewFinding): number => {
+    // Guard non-finite: `typeof NaN === "number"`, and `NaN >= threshold`
+    // is always false, so a NaN gateScore would silently bypass the
+    // blocking branch instead of routing through missingScorePolicy.
+    // Treat NaN / +Infinity / -Infinity as "missing" and fall through.
+    if (typeof f.gateScore === "number" && Number.isFinite(f.gateScore)) {
+      return f.gateScore
+    }
+    if (missingScorePolicy === "block") return 1.0
+    if (missingScorePolicy === "permit") return 0.0
+    // throw
+    throw new Error(
+      `gateScore missing on finding ${f.path}:${f.line} (${f.headline.slice(0, 60)}); ` +
+        `pipeline invariant — every finding reaching the gate must be scored. ` +
+        `If this fires in prod, the ensemble's post-processing is bypassing computeGateScore.`,
+    )
+  }
+
+  const blocking = findings.filter((f) => effectiveScore(f) >= threshold)
+  if (blocking.length > 0) return "REQUEST_CHANGES"
+
+  const sigilixOpenItems = filterToSigilixAuthored(openItems)
+  if (sigilixOpenItems.length > 0) return "REQUEST_CHANGES"
+
+  // No blocking finding, no open items — distinguish empty (APPROVE)
+  // from "had findings, none blocking" (COMMENT, the new event).
+  if (findings.length > 0) return "COMMENT"
+
+  return "APPROVE"
+}
+
+/**
+ * SIG-161 PR 4a — provenance subset relevant to gate scoring.
+ *
+ * The full `provenance` shape lives on the synth verdict (see
+ * `synth-verdict.ts`) but `computeGateScore` only needs the
+ * specialist-agreement count per finding. Decoupled so the function
+ * stays pure + snapshot-testable.
+ */
+export interface GateScoreProvenance {
+  /**
+   * Specialists whose findings merged into this synth finding.
+   * Length ≥ 1 (single-source findings are admissible per the
+   * synthesizer prompt). More specialists = stronger agreement.
+   */
+  sourceSpecialists: ReadonlyArray<string>
+}
+
+/**
+ * SIG-161 PR 4a — does this finding carry the evidence its category
+ * requires? Used as a 0/1 boost input to `computeGateScore`.
+ *
+ *   - `security` + score>=4 → cweId AND evidenceId  (SIG-108 contract)
+ *   - `performance` + score>=4 → complexityEstimate OR hotPathIdentifier
+ *   - `testing` (all severities) → inspectedTestFiles OR evidenceRefs
+ *   - any other category → true (no per-category requirement today)
+ *
+ * Mirrors the per-category validators that drop findings without
+ * evidence; the score-blend boost is a soft echo of the hard validator
+ * gate — findings WITH evidence get +0.10 even before the validator
+ * applies, findings WITHOUT evidence (and below their validator
+ * threshold) don't get the boost. Pure — exported for tests.
+ */
+export function hasRequiredEvidence(f: PrReviewFinding): boolean {
+  if (f.category === "security") {
+    if (f.score < 4) return true
+    return (
+      typeof f.cweId === "string" &&
+      f.cweId.length > 0 &&
+      typeof f.evidenceId === "string" &&
+      f.evidenceId.length > 0
+    )
+  }
+  if (f.category === "performance") {
+    if (f.score < 4) return true
+    return (
+      (typeof f.complexityEstimate === "string" && f.complexityEstimate.length > 0) ||
+      (typeof f.hotPathIdentifier === "string" && f.hotPathIdentifier.length > 0)
+    )
+  }
+  if (f.category === "testing") {
+    return (
+      (Array.isArray(f.inspectedTestFiles) && f.inspectedTestFiles.length > 0) ||
+      (Array.isArray(f.evidenceRefs) && f.evidenceRefs.length > 0)
+    )
+  }
+  // logic / error-handling / complexity / style / syntax / docs — no
+  // per-category requirement in v1. The category-specific validators
+  // (SIG-109 logic) handle their own admissibility.
+  return true
+}
+
+/**
+ * SIG-161 PR 4a — deterministic gate-score blend.
+ *
+ * `gateScore = clamp01(rescale(confidence) + evidence + agreement + severity)`
+ *
+ *   rescale: 1→0.10, 2→0.30, 3→0.50, 4→0.75, 5→0.90
+ *     (conservative at the high end — overconfident "5/5" claims
+ *      don't collapse to 1.0)
+ *   evidence: +0.10 if `hasRequiredEvidence(f)`, else 0
+ *   agreement: +0.05 per specialist beyond the first, capped at +0.10
+ *   severity: score 1→-0.10, 2→-0.05, 3→0, 4→+0.05, 5→+0.10
+ *
+ * Hand-tuned coefficients in v1; PR 4c replaces this with a logistic-
+ * regression fit on the labeled dataset (see DESIGN.md §8c). The
+ * hand-blend stays in the codebase as the fallback when the calibrated
+ * model artifact is unavailable (KV miss).
+ *
+ * Properties:
+ *   - WEAKLY monotone in each input (clamp at 1.0 + 0.0 saturates).
+ *   - Bounded in [0, 1].
+ *   - Pure — exported for tests.
+ *
+ * NOT called by the renderer or any production code path in PR 4a.
+ * PR 4b's ensemble post-processing calls this on each finding before
+ * emit; PR 4c flips the flag so the score actually drives the gate.
+ */
+export function computeGateScore(
+  f: PrReviewFinding,
+  p: GateScoreProvenance,
+): number {
+  // Rescale self-reported 1-5 confidence to 0-1, conservative on the
+  // high end. Missing self-report defaults to 3 (neutral) to mirror
+  // `resolveFindingConfidence`'s "as confident as the verdict" fallback.
+  const confRaw = typeof f.confidence === "number" ? f.confidence : 3
+  const confBucket = Math.max(1, Math.min(5, Math.round(confRaw))) as 1 | 2 | 3 | 4 | 5
+  const confMap = { 1: 0.10, 2: 0.30, 3: 0.50, 4: 0.75, 5: 0.90 } as const
+  const conf = confMap[confBucket]
+
+  const evidence = hasRequiredEvidence(f) ? 0.10 : 0
+
+  // Cap agreement at +0.10 (two extra specialists). Beyond that, more
+  // agreement doesn't add precision — diminishing returns + risk of
+  // false-consensus boosts on category-overlap noise.
+  const extraSpecs = Math.max(0, p.sourceSpecialists.length - 1)
+  const agreement = Math.min(0.10, 0.05 * extraSpecs)
+
+  const sevBucket = Math.max(1, Math.min(5, Math.round(f.score))) as 1 | 2 | 3 | 4 | 5
+  const sevMap = { 1: -0.10, 2: -0.05, 3: 0, 4: 0.05, 5: 0.10 } as const
+  const severity = sevMap[sevBucket]
+
+  return Math.max(0, Math.min(1, conf + evidence + agreement + severity))
 }
 
 /**
@@ -1089,6 +1331,50 @@ export function renderApproveBody(_args: RenderBodyArgs): string {
   // via the existing `ensemble-specialists-degraded` log event for
   // operators; customers do NOT need to see it on the PR.
   return `${SIGILIX_REVIEW_MARKER}\n`
+}
+
+/**
+ * SIG-161 PR 4a — COMMENT-posture body renderer.
+ *
+ * Posted when the gate decides at least one finding is in the
+ * borderline band `[FLOOR_SUPPRESS, chosenThreshold)` but none cross
+ * the threshold. GitHub event is `COMMENT` — comments post but no
+ * verdict change.
+ *
+ * Body shape mirrors `renderRequestChangesBody` (same heading, same
+ * findings rendering) because the visual layout is largely identical;
+ * the only mechanical difference today is the strip of
+ * `reviewCounter` + `retriggerUrl` (REQUEST_CHANGES-specific
+ * affordances that don't make sense when there's no verdict to
+ * dismiss or retrigger).
+ *
+ * COPY REFINEMENT IS DEFERRED to [SIG-167](https://linear.app/sigilix/issue/SIG-167) —
+ * the `DISMISSAL_HINT` text + the "Sigilix: N findings" heading both
+ * still leak through this delegation and read as blocker framing.
+ * SIG-167 MUST land before PR 4c flips `OPENCLAW_GATE = "enforce"`.
+ *
+ * In PR 4a this function is UNREACHABLE in production — the legacy
+ * `chooseReviewEvent`'s narrowed return excludes "COMMENT". PR 4b
+ * wires the shadow-mode log path; PR 4c wires `enforce`.
+ *
+ * Pure — exported for tests.
+ */
+export function renderCommentBody(args: RenderBodyArgs): string {
+  // Reuse RC layout but strip the counter / retrigger inputs so the
+  // body doesn't claim "Nth REQUEST_CHANGES" on a non-verdict post.
+  // PR 4c will redesign the copy further (see SIG-167 follow-up); for
+  // PR 4a the delegation keeps the type-exhaustiveness obligation
+  // satisfied without inventing a parallel body builder we'll throw
+  // away.
+  //
+  // Strip pattern: denylist-by-name via rest spread so any new
+  // optional field added to RenderBodyArgs later (a stack hint, a
+  // delta variant, etc.) flows through without an opt-in step. The
+  // ONLY two fields we omit are REQUEST_CHANGES-specific affordances.
+  const { reviewCounter: _rc, retriggerUrl: _rt, ...stripped } = args
+  void _rc
+  void _rt
+  return renderRequestChangesBody(stripped)
 }
 
 /**

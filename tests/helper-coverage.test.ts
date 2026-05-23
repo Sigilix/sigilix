@@ -118,7 +118,7 @@ describe("detectHelperCoverage", () => {
       siblingMappings: mappings,
       testContentByPath: testContent,
     })
-    expect(out.coverageBySource[ORCH]).toMatchObject({ status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: expect.any(Boolean) })
+    expect(out.coverageBySource[ORCH]).toEqual({ status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: expect.any(Boolean) })
   })
   it("status=partial when only some substantive lines delegate", () => {
     const code = `import { mergeBranchAware } from "./branch-retrieval"\nconst merged = mergeBranchAware(a, b, p)\nif (x > threshold) doInlineThing(x)`
@@ -183,7 +183,7 @@ describe("detectHelperCoverage", () => {
       siblingMappings: mappings2,
       testContentByPath: { "tests/branch-retrieval.test.ts": `it("mergeBranchAware works", () => { mergeBranchAware([],[],new Set()) })` },
     })
-    expect(out.coverageBySource[ORCH2]).toMatchObject({ status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: expect.any(Boolean) })
+    expect(out.coverageBySource[ORCH2]).toEqual({ status: "all", helpers: ["src/lib/branch-retrieval.ts"], structurallyGlue: expect.any(Boolean) })
   })
   it("does NOT credit a mixed line (helper call + inline branching) → not all (FN-safe)", () => {
     const ORCH4 = "src/lib/ensemble.ts"
@@ -234,6 +234,6 @@ describe("detectHelperCoverage", () => {
         "tests/alpha.test.ts": `it("afn", () => afn())`,
       },
     })
-    expect(out.coverageBySource[ORCH3]).toMatchObject({ status: "all", helpers: ["src/lib/alpha.ts", "src/lib/zebra.ts"], structurallyGlue: expect.any(Boolean) })
+    expect(out.coverageBySource[ORCH3]).toEqual({ status: "all", helpers: ["src/lib/alpha.ts", "src/lib/zebra.ts"], structurallyGlue: expect.any(Boolean) })
   })
 })

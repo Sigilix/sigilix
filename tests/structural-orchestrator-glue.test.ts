@@ -134,4 +134,18 @@ describe("isStructurallyOrchestratorGlue (SIG-128 PR 6)", () => {
   it("returns false on empty added lines", () => {
     expect(isStructurallyOrchestratorGlue(new Map())).toBe(false)
   })
+
+  // CodeRabbit M1 (review on PR #143): the free-function-call regex used
+  // to match JS keywords like `if (` as identifier calls — so a tiny
+  // pure-guard function with no real delegation would falsely satisfy
+  // the gate. Negative-lookahead exclusion in the regex fixes that.
+  it("does NOT flag a tiny pure-guard function (no real free-function call) — CR M1 regression", () => {
+    const added = linesOf(
+      '  function validate(x) {',
+      '    if (x > 0) return "ok"',
+      '    return "bad"',
+      '  }',
+    )
+    expect(isStructurallyOrchestratorGlue(added)).toBe(false)
+  })
 })

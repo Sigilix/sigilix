@@ -261,8 +261,17 @@ export function isDelegationShapedLine(text: string): boolean {
  * (method on a local value — work, not delegation). The leading char
  * lookbehind is via a negated character class so we cover string start,
  * whitespace, `(`, `=`, `,` etc.
+ *
+ * CodeRabbit M1 (review on PR #143): the negative lookahead excludes JS
+ * keywords that would otherwise match the identifier pattern — `if (`,
+ * `for (`, `while (`, `switch (`, `catch (`, `function (`, `async (`
+ * are control-flow / declaration constructs, not free-function calls.
+ * Without this guard, `if (x > 0) return "ok"` would satisfy
+ * `hasFreeFunctionCall` and incorrectly count as wrapping an external
+ * helper.
  */
-const FREE_FUNCTION_CALL = /(?:^|[^\w$.?])[a-z_$][\w$]*\s*\(/
+const FREE_FUNCTION_CALL =
+  /(?:^|[^\w$.?])(?!(?:if|for|while|switch|catch|function|async|return|throw|new|typeof|void|yield|await|do|in|of|else)\b)[a-z_$][\w$]*\s*\(/
 
 /**
  * SIG-128 PR 6: structural orchestrator-glue detector. Returns true when

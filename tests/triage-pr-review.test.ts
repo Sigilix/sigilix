@@ -1592,6 +1592,27 @@ describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
   it("ends with the Greptile-style fix-request question", () => {
     expect(formatAiAgentPromptBlock(f)).toContain("How can I resolve this? If you propose a fix, please make it concise.")
   })
+
+  it("wraps the structured prompt body in a fenced code block (PR #146 founder feedback)", () => {
+    // The inner prompt (path / line / comment / question) needs to read
+    // as a demarcated copy-pasteable unit, not as flowing markdown
+    // inside the <details> chrome. ```text fence makes the block
+    // visually distinct AND preserves literal whitespace + asterisks
+    // for the AI assistant the reader pastes it into.
+    const out = formatAiAgentPromptBlock(f)
+    expect(out).toContain("```text")
+    expect(out).toContain("```\n")
+    // The opening fence sits inside the <details> block, not outside.
+    const detailsIdx = out.indexOf("<details>")
+    const fenceIdx = out.indexOf("```text")
+    const closeIdx = out.indexOf("</details>")
+    expect(detailsIdx).toBeLessThan(fenceIdx)
+    expect(fenceIdx).toBeLessThan(closeIdx)
+    // The closing ``` sits between the closing question and </details>.
+    const closeFenceIdx = out.lastIndexOf("```")
+    expect(closeFenceIdx).toBeGreaterThan(fenceIdx)
+    expect(closeFenceIdx).toBeLessThan(closeIdx)
+  })
 })
 
 describe("formatFindingComment integration (SIG-164 PR 5)", () => {

@@ -2008,9 +2008,19 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
     finding.startLine != null && finding.startLine < finding.line
       ? `${finding.startLine}-${finding.line}`
       : String(finding.line)
+  // The inner prompt body is wrapped in a fenced code block so the
+  // structured prompt is visually demarcated AND copy-pasteable into
+  // an AI assistant without picking up the surrounding GitHub Markdown
+  // chrome (the badge image, the heading, the suggestion block).
+  // Use ` ```text ` (not ` ```ts `) — the body is prose, not code, and
+  // a `ts` fence would syntax-highlight English. The literal output
+  // includes the inner markdown (e.g. `**headline**`) as plain text;
+  // that's intentional — the AI assistant gets the unrendered prompt
+  // identical to what we'd hand it via copy-paste.
   const lines = [
     "<details><summary>Prompt To Fix With AI</summary>",
     "",
+    "```text",
     "This is a comment left during a code review.",
     `Path: ${finding.path}`,
     `Line: ${range}`,
@@ -2021,6 +2031,7 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
     finding.body,
     "",
     "How can I resolve this? If you propose a fix, please make it concise.",
+    "```",
     "",
     "</details>",
   ]

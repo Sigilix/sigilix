@@ -13,7 +13,8 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "check:advisory-db-size": "./scripts/check-advisory-db-size.sh",
-    "bakeoff-report": "tsx scripts/bakeoff-report.ts"
+    "bakeoff-report": "tsx scripts/bakeoff-report.ts",
+    "collect-sig-161-findings": "tsx scripts/collect-sig-161-findings.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250101.0",

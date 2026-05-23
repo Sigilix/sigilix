@@ -14,7 +14,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(SYNTHESIZER_PROMPT).toContain("suggestedReplacement")
     expect(SYNTHESIZER_PROMPT).toMatch(/PRESERVE VERBATIM/i)
   })
-  it("PROMPT_VERSION bumped to 5", () => {
-    expect(PROMPT_VERSION).toBe("5")
+  it("PROMPT_VERSION bumped to 6 (SIG-162: + deletion suggestions via kind:\"delete\")", () => {
+    expect(PROMPT_VERSION).toBe("6")
   })
 })

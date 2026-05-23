@@ -63,7 +63,34 @@
  * go stale on first deploy of v5 (same mechanism as prior bumps). Use
  * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
  */
-export const PROMPT_VERSION = "5"
+/**
+ * v5 → v6 (SIG-162 + SIG-164): bundles two prompt-side changes that
+ * together meaningfully shift visible review output.
+ *
+ *   SIG-162 — adds the `kind: "delete" | "replace" | "insert" |
+ *     "describe"` field to the specialist output schema. When
+ *     `kind === "delete"`, the model emits `suggestedReplacement: ""`
+ *     (empty signals deletion intent) and the renderer emits an empty
+ *     ```suggestion block (GitHub one-click delete) when the range is
+ *     RIGHT-reviewable; else a descriptive prose fallback.
+ *
+ *   SIG-164 — STRONGLY prefers a multi-line `(startLine, line)` range
+ *     covering the smallest enclosing function/method/block. The wide
+ *     range is what GitHub renders as inline context above the comment
+ *     — single-line anchors leave the reader staring at a closing
+ *     brace. Renderer also adds:
+ *       - SVG severity badges (sigilix.ai/badges/p[0-3].svg) replacing
+ *         the prior emoji
+ *       - "Current / Proposed" illustrative code blocks (always shown
+ *         when diff context is available, independent of committable-
+ *         ness — matches CR + Greptile pattern)
+ *       - "Prompt for AI Agents" collapsible block at the bottom
+ *
+ * Reviews with v5 prompt version go stale on first deploy of v6 (same
+ * mechanism as prior bumps). Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
+ * during rollout.
+ */
+export const PROMPT_VERSION = "6"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, anchor every finding to a specific line.
 
@@ -85,11 +112,11 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
     {
       "path": "app/foo.ts",
       "line": 142,
-      "startLine": 138,
+      "startLine": 138,   (SIG-164 — STRONGLY PREFER a wide range. \`startLine\` is the FIRST visible line of the smallest enclosing function/method/block, \`line\` is the LAST changed or most relevant line. The range becomes the inline code GitHub renders ABOVE the comment; a reader should see the whole subject. Use a single-line range (omit \`startLine\` or set it equal to \`line\`) only when the issue is GENUINELY single-line — a typo, a stray \`console.log\`, an off-by-one.)
       "score": 1-5,
       "category": "logic",
       "headline": "One sentence stating the symptom, ≤120 chars, no period at end.",
-      "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English. When the fix is a clean inline replacement of the lines this finding anchors to, append exactly ONE \`\`\`suggestion fenced block at the very end containing the literal replacement code (no diff markers, no language tag, no surrounding context — just the new line(s) GitHub will swap in when the reviewer clicks \\"Commit suggestion\\"). Skip the suggestion block when the fix spans multiple non-adjacent hunks, multiple files, or requires non-trivial logic.",
+      "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English. When the fix is a clean inline replacement of the lines this finding anchors to, append exactly ONE \`\`\`suggestion fenced block at the very end containing the literal replacement code (no diff markers, no language tag, no surrounding context — just the new line(s) GitHub will swap in when the reviewer clicks \\"Commit suggestion\\"). When the fix is a clean DELETION of the anchored lines (dead code, unused imports, redundant defensive branches), append an EMPTY \`\`\`suggestion block (just the opening and closing fences with nothing between) — GitHub treats this as a one-click delete. Skip the suggestion block when the fix spans multiple non-adjacent hunks, multiple files, or requires non-trivial logic.",
       "stackOrigin": "current-pr | downstack-context | upstack-followup (OPTIONAL — only when [STACK CONTEXT] is in input)"
     }
   ]
@@ -156,6 +183,7 @@ Omit \`stackOrigin\` entirely when no \`[STACK CONTEXT]\` block is present (no-s
 - Only on findings where the fix is a clean, single-hunk, multi-line-OR-less replacement of the lines the finding anchors to.
 - Block contents are the LITERAL replacement code — what GitHub will paste in place of lines \`startLine\`-\`line\`.
 - No \`+\` / \`-\` diff markers, no \`...\` ellipses, no language tag (\`\`\`suggestion not \`\`\`ts).
+- For DELETIONS: emit an EMPTY \`\`\`suggestion block (just the opening and closing fences with nothing between them). GitHub treats this as a one-click removal of \`startLine\`-\`line\`. Use this for dead code, unused imports, redundant defensive branches, stray \`console.log\` — anything that's "remove these lines, no replacement."
 - If the fix needs the engineer to write logic, omit the block and describe the fix in prose.
 
 ## Output discipline

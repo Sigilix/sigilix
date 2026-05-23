@@ -8,6 +8,9 @@ import {
   chooseReviewEvent,
   filterToSigilixAuthored,
   formatFindingComment,
+  formatProposedChangeBlock,
+  formatAiAgentPromptBlock,
+  isCommentAnchorable,
   isSubstantiveAnchorLine,
   pickAnchorLineForward,
   parsePrReviewResponse,
@@ -781,6 +784,225 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
   })
 })
 
+// ── SIG-164 PR 5: comment-anchor + format-parity helpers ─────────
+
+describe("isCommentAnchorable (SIG-164 PR 5)", () => {
+  // GitHub PR comment endpoints (`start_line` + `line`) must both be
+  // on the diff (same side); in-between lines may be context within
+  // a hunk. This helper is laxer than `isFindingAnchorable` (which
+  // requires every line in the range to be RIGHT-reviewable
+  // contiguously — correct for committable suggestion blocks).
+  const reviewable: ReviewableMap = new Map([
+    ["src/a.ts", [
+      { line: 10, side: "RIGHT" as const },
+      // gap: lines 11-19 are context (unchanged), NOT in the map
+      { line: 20, side: "RIGHT" as const },
+    ]],
+  ])
+
+  it("allows wide ranges whose endpoints are RIGHT-reviewable but interior is context", () => {
+    expect(isCommentAnchorable(reviewable, "src/a.ts", 10, 20)).toBe(true)
+  })
+
+  it("returns true for a single-line anchor (startLine undefined)", () => {
+    expect(isCommentAnchorable(reviewable, "src/a.ts", undefined, 10)).toBe(true)
+  })
+
+  it("returns true when startLine === line (degenerate range collapses to single-line)", () => {
+    expect(isCommentAnchorable(reviewable, "src/a.ts", 10, 10)).toBe(true)
+  })
+
+  it("rejects when end is not RIGHT-reviewable", () => {
+    expect(isCommentAnchorable(reviewable, "src/a.ts", 10, 50)).toBe(false)
+  })
+
+  it("rejects when start is not RIGHT-reviewable (only endpoints checked)", () => {
+    // startLine: 5 isn't in the map; line: 10 is RIGHT-reviewable.
+    // Range is real (5 < 10) so the start-reviewability check fires.
+    expect(isCommentAnchorable(reviewable, "src/a.ts", 5, 10)).toBe(false)
+  })
+
+  it("rejects when the path is missing from the map", () => {
+    expect(isCommentAnchorable(reviewable, "src/missing.ts", 10, 20)).toBe(false)
+  })
+})
+
+describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
+  const addedLines = new Map([
+    ["src/a.ts", new Map<number, string>([
+      [10, "  const x = compute()"],
+      [11, "  if (x > 100) return"],
+      [12, "  return x"],
+    ])],
+  ])
+
+  it("emits **Current:** + **Proposed:** for a replacement", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, startLine: 10, score: 4,
+      category: "logic", headline: "h", body: "b",
+      kind: "replace",
+      suggestedReplacement: "  const x = computeSafe()\n  return x",
+    }
+    const out = formatProposedChangeBlock(f, addedLines)
+    expect(out).toContain("**Current:**")
+    expect(out).toContain("const x = compute()")
+    expect(out).toContain("**Proposed:**")
+    expect(out).toContain("const x = computeSafe()")
+    expect(out).toContain("```ts")
+  })
+
+  it("emits ONLY **Current:** for a deletion (no Proposed — the deletion IS the proposal)", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, startLine: 10, score: 4,
+      category: "logic", headline: "h", body: "b",
+      kind: "delete",
+      suggestedReplacement: "",
+    }
+    const out = formatProposedChangeBlock(f, addedLines)
+    expect(out).toContain("**Current:**")
+    expect(out).toContain("const x = compute()")
+    expect(out).not.toContain("**Proposed:**")
+  })
+
+  it("returns empty string when kind is describe-only (no actionable change)", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, startLine: 10, score: 4,
+      category: "complexity", headline: "h", body: "b",
+      kind: "describe",
+    }
+    expect(formatProposedChangeBlock(f, addedLines)).toBe("")
+  })
+
+  it("returns empty string when no addedLineTextByPath context is available", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, startLine: 10, score: 4,
+      category: "logic", headline: "h", body: "b",
+      kind: "replace",
+      suggestedReplacement: "x = 1",
+    }
+    expect(formatProposedChangeBlock(f, undefined)).toBe("")
+    expect(formatProposedChangeBlock(f, new Map())).toBe("")
+  })
+
+  it("returns empty string when finding's range has no added lines (anchored at context only)", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 99, startLine: 95, score: 4,
+      category: "logic", headline: "h", body: "b",
+      kind: "replace",
+      suggestedReplacement: "x = 1",
+    }
+    // None of 95..99 are in the addedLines map → empty block.
+    expect(formatProposedChangeBlock(f, addedLines)).toBe("")
+  })
+
+  it("picks the right language fence based on file extension", () => {
+    const py = new Map([
+      ["src/x.py", new Map([[5, "  return 0"]])],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/x.py", line: 5, score: 4,
+      category: "logic", headline: "h", body: "b",
+      kind: "replace",
+      suggestedReplacement: "  return 1",
+    }
+    expect(formatProposedChangeBlock(f, py)).toContain("```python")
+  })
+})
+
+describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
+  const f: PrReviewFinding = {
+    path: "src/foo.ts", line: 50, startLine: 42, score: 4,
+    category: "logic",
+    headline: "missing null guard on `user.profile`",
+    body: "Wrap with `if (!user) return` before accessing `user.profile`.",
+  }
+
+  it("wraps a structured prompt inside a collapsible <details> block", () => {
+    const out = formatAiAgentPromptBlock(f)
+    expect(out.startsWith("<details>")).toBe(true)
+    expect(out.endsWith("</details>")).toBe(true)
+    expect(out).toContain("<summary>🤖 Prompt for AI Agents</summary>")
+  })
+
+  it("includes path + line range + headline + body verbatim", () => {
+    const out = formatAiAgentPromptBlock(f)
+    expect(out).toContain("Path: `src/foo.ts`")
+    expect(out).toContain("Line: `42-50`")
+    expect(out).toContain("missing null guard on `user.profile`")
+    expect(out).toContain("Wrap with `if (!user) return`")
+  })
+
+  it("uses a single-line range when startLine is absent or equal to line", () => {
+    const single: PrReviewFinding = { ...f, startLine: undefined }
+    expect(formatAiAgentPromptBlock(single)).toContain("Line: `50`")
+  })
+
+  it("ends with the stock fix-request question", () => {
+    expect(formatAiAgentPromptBlock(f)).toContain("What is the smallest safe code change that fixes this finding?")
+  })
+})
+
+describe("formatFindingComment integration (SIG-164 PR 5)", () => {
+  // End-to-end shape check on a high-confidence anchorable replacement
+  // finding — should produce ALL THREE block types in order:
+  //   1. **Current:** / **Proposed:** illustrative block (always when context available)
+  //   2. ```suggestion committable block (high confidence + anchorable)
+  //   3. <details>🤖 Prompt for AI Agents</details> (always at bottom)
+  const reviewable: ReviewableMap = new Map([
+    ["src/a.ts", [
+      { line: 10, side: "RIGHT" as const },
+      { line: 11, side: "RIGHT" as const },
+      { line: 12, side: "RIGHT" as const },
+    ]],
+  ])
+  const addedLines = new Map([
+    ["src/a.ts", new Map<number, string>([
+      [10, "  const x = compute()"],
+      [11, "  if (x > 100) return"],
+      [12, "  return x"],
+    ])],
+  ])
+
+  it("emits Current/Proposed + committable suggestion + AI agent prompt (all three tiers)", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, startLine: 10, score: 5,
+      category: "logic", headline: "guard against undefined",
+      body: "x can be undefined here.",
+      kind: "replace",
+      suggestedReplacement: "  const x = compute() ?? 0\n  return x",
+    }
+    const out = formatFindingComment(f, 5, reviewable, addedLines)
+
+    // 1. Current/Proposed block present
+    expect(out).toContain("**Current:**")
+    expect(out).toContain("**Proposed:**")
+    // 2. Committable ```suggestion present (high confidence + anchorable)
+    expect(out).toContain("```suggestion")
+    expect(out).toContain("compute() ?? 0")
+    // 3. AI agent prompt at the bottom
+    expect(out).toContain("<summary>🤖 Prompt for AI Agents</summary>")
+    // Order check: Current/Proposed BEFORE suggestion BEFORE AI prompt
+    const currentIdx = out.indexOf("**Current:**")
+    const suggIdx = out.indexOf("```suggestion")
+    const aiIdx = out.indexOf("🤖 Prompt")
+    expect(currentIdx).toBeLessThan(suggIdx)
+    expect(suggIdx).toBeLessThan(aiIdx)
+  })
+
+  it("emits AI agent prompt even on describe-only findings (no fix to commit)", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, score: 3,
+      category: "complexity", headline: "this block is hard to read",
+      body: "Consider extracting a helper.",
+      kind: "describe",
+    }
+    const out = formatFindingComment(f, 4, reviewable, addedLines)
+    expect(out).not.toContain("**Current:**")
+    expect(out).not.toContain("```suggestion")
+    expect(out).toContain("<summary>🤖 Prompt for AI Agents</summary>")
+  })
+})
+
 describe("pickAnchorLineForward (SIG-159 PR1)", () => {
   const lines = new Map<number, string>([
     [42, "  const idx = clampIndex(i)"],
@@ -1023,25 +1245,32 @@ describe("renderFixPlan (ARC-180)", () => {
 
 // ─── SIG-101 — severity badges, confidence, retrigger, counter ─────
 
-describe("severityBadgeForScore (SIG-101)", () => {
-  it("returns 🔴 P0 for score 5", () => {
-    expect(severityBadgeForScore(5)).toBe("🔴 P0")
+describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
+  // SIG-164 PR 5: emoji badges → hosted SVG <img> tags. Now always
+  // returns a string (was string|null) since P3 covers the previously-
+  // null low-severity case.
+  it("returns the P0 badge img for score 5", () => {
+    expect(severityBadgeForScore(5)).toContain('alt="P0"')
+    expect(severityBadgeForScore(5)).toContain("https://sigilix.ai/badges/p0.svg")
   })
-  it("returns 🟠 P1 for score 4", () => {
-    expect(severityBadgeForScore(4)).toBe("🟠 P1")
+  it("returns the P1 badge img for score 4", () => {
+    expect(severityBadgeForScore(4)).toContain('alt="P1"')
+    expect(severityBadgeForScore(4)).toContain("https://sigilix.ai/badges/p1.svg")
   })
-  it("returns 🟡 P2 for score 3", () => {
-    expect(severityBadgeForScore(3)).toBe("🟡 P2")
+  it("returns the P2 badge img for score 3", () => {
+    expect(severityBadgeForScore(3)).toContain('alt="P2"')
+    expect(severityBadgeForScore(3)).toContain("https://sigilix.ai/badges/p2.svg")
   })
-  it("returns null for score 2 (informational)", () => {
-    expect(severityBadgeForScore(2)).toBeNull()
+  it("returns the P3 badge img for score 2 (was null pre-SIG-164)", () => {
+    expect(severityBadgeForScore(2)).toContain('alt="P3"')
+    expect(severityBadgeForScore(2)).toContain("https://sigilix.ai/badges/p3.svg")
   })
-  it("returns null for score 1 (informational)", () => {
-    expect(severityBadgeForScore(1)).toBeNull()
+  it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
+    expect(severityBadgeForScore(1)).toContain('alt="P3"')
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {
-    expect(severityBadgeForScore(6)).toBe("🔴 P0")
-    expect(severityBadgeForScore(99)).toBe("🔴 P0")
+    expect(severityBadgeForScore(6)).toContain('alt="P0"')
+    expect(severityBadgeForScore(99)).toContain('alt="P0"')
   })
 })
 
@@ -1081,30 +1310,30 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     ...overrides,
   })
 
-  it("prefixes 🔴 P0 on score-5 findings", () => {
+  it("prefixes the P0 badge img on score-5 findings", () => {
     const out = formatFindingComment(fnd({ score: 5, headline: "deref crash" }), 5)
-    expect(out).toContain("🔴 P0")
+    expect(out).toContain('alt="P0"')
+    expect(out).toContain("https://sigilix.ai/badges/p0.svg")
     expect(out).toContain("**logic:** deref crash")
   })
 
-  it("prefixes 🟠 P1 on score-4 findings", () => {
+  it("prefixes the P1 badge img on score-4 findings", () => {
     const out = formatFindingComment(fnd({ score: 4 }), 4)
-    expect(out).toContain("🟠 P1")
+    expect(out).toContain('alt="P1"')
   })
 
-  it("prefixes 🟡 P2 on score-3 findings", () => {
+  it("prefixes the P2 badge img on score-3 findings", () => {
     const out = formatFindingComment(fnd({ score: 3 }), 4)
-    expect(out).toContain("🟡 P2")
+    expect(out).toContain('alt="P2"')
   })
 
-  it("omits the badge on score 1-2 (informational, no severity prefix)", () => {
+  it("uses the P3 badge img on score 1-2 (SIG-164 PR 5: was null pre-SIG-164)", () => {
     const out = formatFindingComment(fnd({ score: 2 }), 4)
+    expect(out).toContain('alt="P3"')
+    expect(out).toContain("https://sigilix.ai/badges/p3.svg")
     expect(out).not.toContain("🔴")
     expect(out).not.toContain("🟠")
     expect(out).not.toContain("🟡")
-    expect(out).not.toContain("P0")
-    expect(out).not.toContain("P1")
-    expect(out).not.toContain("P2")
   })
 
   it("appends `_confidence: N/5_` suffix on every finding regardless of score", () => {
@@ -1126,10 +1355,14 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(detailsIdx).toBeGreaterThan(headIdx)
   })
 
-  it("does NOT collapse on confidence ≥ 3", () => {
+  it("does NOT collapse the body on confidence ≥ 3", () => {
+    // SIG-164 PR 5: <details> can still appear for the always-present
+    // "Prompt for AI Agents" block at the bottom. The body-collapse
+    // check is now specifically that the BODY's low-confidence
+    // <summary> doesn't appear (that summary is unique to the
+    // low-confidence body-collapse path).
     const out = formatFindingComment(fnd({ score: 3 }), 3)
-    expect(out).not.toContain("<details>")
-    expect(out).not.toContain("<summary>")
+    expect(out).not.toContain("<summary>Low-confidence finding")
   })
 
   it("preserves the inline-finding marker as the first line", () => {
@@ -1367,6 +1600,112 @@ describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
     const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: 42 }] }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+})
+
+describe("parsePrReviewResponse — kind / deletion suggestion (SIG-162 PR 5)", () => {
+  const base = {
+    summary: "s", confidence: 4, confidenceReason: "r",
+    findings: [{
+      path: "src/a.ts", line: 10, score: 4, category: "logic",
+      headline: "h", body: "b",
+    }],
+  }
+
+  it("preserves kind=\"delete\" + empty suggestedReplacement (deletion intent)", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], kind: "delete", suggestedReplacement: "" }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.kind).toBe("delete")
+    expect(v?.findings[0]?.suggestedReplacement).toBe("")
+  })
+
+  it("preserves kind=\"replace\" + non-empty suggestedReplacement", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], kind: "replace", suggestedReplacement: "  return ok\n" }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.kind).toBe("replace")
+    expect(v?.findings[0]?.suggestedReplacement).toBe("  return ok\n")
+  })
+
+  it("coerces kind=\"delete\" + NON-empty suggestedReplacement to kind=\"replace\" (intent inconsistent)", () => {
+    // Model said delete but provided replacement content — trust the content
+    // (it's the actionable signal), reclassify as replace so the renderer
+    // emits a normal replacement suggestion instead of a deletion block.
+    const raw = { ...base, findings: [{ ...base.findings[0], kind: "delete", suggestedReplacement: "  return ok\n" }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.kind).toBe("replace")
+    expect(v?.findings[0]?.suggestedReplacement).toBe("  return ok\n")
+  })
+
+  it("drops kind=\"delete\" when suggestedReplacement is absent (ambiguous intent)", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], kind: "delete" }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.kind).toBeUndefined()
+    expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+
+  it("defaults kind to undefined when absent (back-compat with pre-PR5 prompts)", () => {
+    const v = parsePrReviewResponse(JSON.stringify(base))
+    expect(v?.findings[0]?.kind).toBeUndefined()
+  })
+
+  it("treats unknown kind values as if absent", () => {
+    const raw = { ...base, findings: [{ ...base.findings[0], kind: "rearrange", suggestedReplacement: "x" }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.kind).toBeUndefined()
+    // Replacement content is still preserved when present (back-compat).
+    expect(v?.findings[0]?.suggestedReplacement).toBe("x")
+  })
+})
+
+describe("formatFindingComment — deletion suggestion rendering (SIG-162 PR 5)", () => {
+  const baseFinding: PrReviewFinding = {
+    path: "src/a.ts", line: 12, startLine: 10, score: 5,
+    category: "logic", headline: "remove unreachable branch",
+    body: "Lines 10-12 are dead code after the refactor.",
+    kind: "delete",
+    suggestedReplacement: "",
+  }
+  // Map 10..12 as RIGHT-side reviewable so isFindingAnchorable passes.
+  const reviewable: ReviewableMap = new Map([
+    ["src/a.ts", [
+      { line: 10, side: "RIGHT" as const },
+      { line: 11, side: "RIGHT" as const },
+      { line: 12, side: "RIGHT" as const },
+    ]],
+  ])
+
+  it("emits an EMPTY ```suggestion block when kind=delete + anchorable + high-confidence", () => {
+    const out = formatFindingComment(baseFinding, 5, reviewable)
+    // The literal empty suggestion block: opening fence, empty content, closing fence.
+    expect(out).toContain("```suggestion\n\n```")
+  })
+
+  it("falls back to descriptive text when kind=delete but NOT anchorable (out of diff hunk)", () => {
+    const emptyReviewable: ReviewableMap = new Map()
+    const out = formatFindingComment(baseFinding, 5, emptyReviewable)
+    expect(out).not.toContain("```suggestion")
+    expect(out).toContain("**Proposed change:**")
+    expect(out.toLowerCase()).toContain("remove")
+  })
+
+  it("falls back to descriptive text when kind=delete but confidence is below the committable floor", () => {
+    const out = formatFindingComment(baseFinding, 2, reviewable)
+    expect(out).not.toContain("```suggestion")
+    expect(out).toContain("**Proposed change:**")
+  })
+
+  it("kind=replace + non-empty content still renders as before (regression check)", () => {
+    const f: PrReviewFinding = { ...baseFinding, kind: "replace", suggestedReplacement: "  return ok\n" }
+    const out = formatFindingComment(f, 5, reviewable)
+    expect(out).toContain("```suggestion")
+    expect(out).toContain("return ok")
+  })
+
+  it("kind absent + suggestedReplacement absent → no suggestion block (back-compat)", () => {
+    const f: PrReviewFinding = { path: "src/a.ts", line: 12, score: 4, category: "logic", headline: "x", body: "y" }
+    const out = formatFindingComment(f, 5, reviewable)
+    expect(out).not.toContain("```suggestion")
+    expect(out).not.toContain("**Proposed change:**")
   })
 })
 

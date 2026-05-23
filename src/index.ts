@@ -973,6 +973,15 @@ export default {
    * the cron; the next tick retries.
    */
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
+    // manual routes (index-repo / index-backfill / index-reconcile) stay
+    // ungated — those are operator-triggered and the operator already
+    // knows what flag state they're in. The cron is the only auto-trigger;
+    // a flag flip-off should immediately halt automatic fan-out.
+    if (!isIndexerEnabled(env)) {
+      console.log(JSON.stringify({ event: "index-reconcile-tick-skip-disabled" }))
+      return
+    }
     ctx.waitUntil(
       (async () => {
         try {

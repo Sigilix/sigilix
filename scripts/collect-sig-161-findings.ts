@@ -33,6 +33,7 @@ import { promisify } from "node:util"
 import { createHash } from "node:crypto"
 import { writeFile, mkdir } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
 import { parseArgs } from "node:util"
 
 const exec = promisify(execFile)
@@ -417,7 +418,11 @@ const isMain = (() => {
   try {
     const argv1 = process.argv[1]
     if (!argv1) return false
-    const argvUrl = new URL(`file://${resolve(argv1)}`).href
+    // `pathToFileURL` produces a valid `file://` URL on every platform —
+    // a `file://${resolve(path)}` template fails on Windows where
+    // `resolve` returns `C:\foo\bar` rather than `/foo/bar`. CodeRabbit
+    // catch on PR 4b.
+    const argvUrl = pathToFileURL(resolve(argv1)).href
     return import.meta.url === argvUrl
   } catch {
     return false

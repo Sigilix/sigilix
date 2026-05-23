@@ -3495,9 +3495,19 @@ export async function handlePrReviewEnsemble(
           missingScorePolicy: "block",
         })
         if (shadowGateEvent !== intendedEvent) {
-          const blocking = allScored.filter(
-            (f) => typeof f.gateScore === "number" && f.gateScore >= threshold,
-          ).length
+          // CodeRabbit catch on PR 4b: align telemetry's blocking
+          // count with `missingScorePolicy: "block"` semantics.
+          // The gate treats non-finite gateScore as effective 1.0
+          // (= blocking); counting only `score >= threshold` would
+          // under-report blocking findings and distort calibration
+          // telemetry. Use the gate's own predicate.
+          const isBlocking = (f: PrReviewFinding): boolean => {
+            if (typeof f.gateScore !== "number" || !Number.isFinite(f.gateScore)) {
+              return true   // missingScorePolicy: "block" treats this as blocking
+            }
+            return f.gateScore >= threshold
+          }
+          const blocking = allScored.filter(isBlocking).length
           console.log(
             JSON.stringify({
               event: "pr-review-gate-shadow-divergence",

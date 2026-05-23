@@ -226,6 +226,17 @@ describe("parseGateModel (SIG-161)", () => {
     expect(parseGateModel(JSON.stringify({ ...valid, intercept: "Infinity" }))).toBeNull()
   })
 
+  it("rejects string-typed numeric intercept (PR #145 CodeRabbit)", () => {
+    // `Number("0.5")` returns 0.5 — the old `Number(obj.intercept)`
+    // pattern silently accepted string-encoded floats from a hand-
+    // edited / malformed KV value. The strict `typeof === "number"`
+    // check rejects them; the calibration script's output is required
+    // to be JSON numbers, not strings.
+    expect(parseGateModel(JSON.stringify({ ...valid, intercept: "0.5" }))).toBeNull()
+    expect(parseGateModel(JSON.stringify({ ...valid, intercept: "-1.2" }))).toBeNull()
+    expect(parseGateModel(JSON.stringify({ ...valid, intercept: "0" }))).toBeNull()
+  })
+
   it("rejects when coefs / featureNames lengths mismatch", () => {
     expect(
       parseGateModel(JSON.stringify({ ...valid, coefs: [0.5, 0.3] })),

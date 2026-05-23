@@ -1079,7 +1079,13 @@ export function chooseReviewEventWithGate(
   const { findings, threshold, openItems = [], missingScorePolicy } = args
 
   const effectiveScore = (f: PrReviewFinding): number => {
-    if (typeof f.gateScore === "number") return f.gateScore
+    // Guard non-finite: `typeof NaN === "number"`, and `NaN >= threshold`
+    // is always false, so a NaN gateScore would silently bypass the
+    // blocking branch instead of routing through missingScorePolicy.
+    // Treat NaN / +Infinity / -Infinity as "missing" and fall through.
+    if (typeof f.gateScore === "number" && Number.isFinite(f.gateScore)) {
+      return f.gateScore
+    }
     if (missingScorePolicy === "block") return 1.0
     if (missingScorePolicy === "permit") return 0.0
     // throw

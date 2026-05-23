@@ -215,8 +215,12 @@ export function parseGateModel(raw: string): GateModel | null {
   if (!parsed || typeof parsed !== "object") return null
   const obj = parsed as Record<string, unknown>
   if (obj.version !== 1) return null
-  const intercept = Number(obj.intercept)
-  if (!Number.isFinite(intercept)) return null
+  // Strict numeric: refuse string-typed numerics like "0.5". `Number()`
+  // would coerce them silently, which lets a malformed artifact pass
+  // validation in a way the hand-blend fallback can't detect at
+  // inference time. Coefs + intercept must all be JSON numbers.
+  if (typeof obj.intercept !== "number" || !Number.isFinite(obj.intercept)) return null
+  const intercept = obj.intercept
   if (!Array.isArray(obj.coefs)) return null
   const coefs = (obj.coefs as unknown[]).filter(
     (c): c is number => typeof c === "number" && Number.isFinite(c),

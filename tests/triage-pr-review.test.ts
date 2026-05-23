@@ -362,6 +362,50 @@ describe("chooseReviewEventWithGate (SIG-161)", () => {
       ).toThrow(/gateScore missing/)
     })
 
+    it("non-finite gateScore (NaN / Infinity) routes through missingScorePolicy, NOT the score comparison", () => {
+      // PR #145 CodeRabbit catch: `typeof NaN === "number"` so a NaN
+      // gateScore would otherwise pass the `typeof === "number"` check.
+      // `NaN >= threshold` is always false → blocker branch silently
+      // misses it. Guard by checking isFinite; non-finite falls through
+      // to missingScorePolicy.
+      const nanFinding: PrReviewFinding = { ...baseFinding, gateScore: Number.NaN }
+      // With "block" policy → effective 1.0 → blocks regardless of NaN.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [nanFinding],
+          threshold: 0.85,
+          missingScorePolicy: "block",
+        }),
+      ).toBe("REQUEST_CHANGES")
+      // With "permit" policy → effective 0.0 → COMMENT (non-blocking but
+      // not empty). Without the isFinite guard, the NaN finding would
+      // be treated as scored and skip both branches.
+      expect(
+        chooseReviewEventWithGate({
+          findings: [nanFinding],
+          threshold: 0.85,
+          missingScorePolicy: "permit",
+        }),
+      ).toBe("COMMENT")
+      // With "throw" policy → explicit error.
+      expect(() =>
+        chooseReviewEventWithGate({
+          findings: [nanFinding],
+          threshold: 0.85,
+          missingScorePolicy: "throw",
+        }),
+      ).toThrow(/gateScore missing/)
+      // Same behavior for ±Infinity.
+      const infFinding: PrReviewFinding = { ...baseFinding, gateScore: Number.POSITIVE_INFINITY }
+      expect(
+        chooseReviewEventWithGate({
+          findings: [infFinding],
+          threshold: 0.85,
+          missingScorePolicy: "block",
+        }),
+      ).toBe("REQUEST_CHANGES")
+    })
+
     it('permit: missing gateScore is treated as 0.0 (offline replay)', () => {
       // Replay/backfill: synthesize verdicts on pre-gate findings.
       // Missing score floors at 0.0 → suppressed (< FLOOR_SUPPRESS in

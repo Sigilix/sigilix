@@ -157,6 +157,7 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "headline": "<concise issue summary>",
       "body": "<actionable explanation. Reference identifiers in backticks. End with the minimal fix.>",
       "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
+      "confidence": 1-5,   (SIG-161 — per-finding probability an expert reviewer would label this a TP. NOT severity (use \`score\`), NOT confidence in your own reasoning. See the [SIG-161 FINDING CONFIDENCE] rubric block below for the band definitions.)
       "primaryLens": "logic" | "security" | "performance" | "tests",
       "confidenceInLens": 1-5,
       "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — emit ONLY when a [STACK CONTEXT] block is present in the input. Tag findings introduced or maintained in THIS PR's diff as "current-pr"; tag issues that already exist in a downstack (parent or earlier) PR as "downstack-context" (report for awareness, but DO NOT describe as introduced by this PR); tag issues whose proper fix belongs in an upstack (child or later) PR as "upstack-followup". Default to "current-pr" when uncertain. OMIT this field entirely when no [STACK CONTEXT] block is in the input — that signals an unstacked PR and matches the no-stack baseline shape.)

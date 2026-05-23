@@ -1223,6 +1223,131 @@ export function computeGateScore(
   return Math.max(0, Math.min(1, conf + evidence + agreement + severity))
 }
 
+// ─── SIG-161 PR 4b — shadow-mode divergence helper ────────────────────
+// Pulled out of the inline ensemble call site (per Sigilix self-review
+// on PR #146 — the inline 95-LOC block was untestable; the helper is
+// pure + unit-coverable).
+
+/**
+ * Inputs to `computeShadowGateDivergence`. Decoupled from the
+ * ensemble's `Env` / `console.log` / provenance shape so the helper
+ * stays pure.
+ */
+export interface ShadowDivergenceInputs {
+  /** Findings that will render inline (anchored). Parallel to `provenance`. */
+  renderable: PrReviewFinding[]
+  /** Findings that fell out of inline anchoring; no parallel provenance. */
+  unanchored: PrReviewFinding[]
+  /**
+   * Per-renderable-finding provenance. Each entry maps to the same
+   * index in `renderable`; `undefined` entries signal "no source
+   * specialists information" (treated as zero agreement signal).
+   */
+  provenance: ReadonlyArray<{ sourceSpecialists?: ReadonlyArray<string> } | undefined>
+  /** Calibrated threshold (from KV at the call site). */
+  threshold: number
+  /** Verdict the legacy `chooseReviewEvent` already computed. */
+  legacyEvent: Exclude<ReviewEvent, "COMMENT">
+}
+
+/**
+ * Result of running the shadow-mode gate. `divergence` is populated
+ * only when the gate verdict differs from `legacyEvent`; otherwise
+ * null (the caller writes no log).
+ */
+export interface ShadowDivergenceResult {
+  gateEvent: ReviewEvent
+  divergence:
+    | {
+        threshold: number
+        legacyEvent: ReviewEvent
+        gateEvent: ReviewEvent
+        findingCount: number
+        blockingFindingCount: number
+        scoreSummary: string
+      }
+    | null
+}
+
+/**
+ * SIG-161 PR 4b — compute the gate's shadow-mode verdict + the
+ * divergence-log payload (when it disagrees with the legacy verdict).
+ *
+ * Pure — no env / KV / console access. The ensemble call site reads
+ * the env + threshold + provenance, calls this, and writes the log if
+ * `result.divergence !== null`.
+ *
+ * Behavior:
+ *   - Each finding's `gateScore` is preserved when already a finite
+ *     number; otherwise computed via `computeGateScore` with the
+ *     parallel provenance (or empty `sourceSpecialists` for unanchored
+ *     findings, which lack a provenance row).
+ *   - The verdict is taken from `chooseReviewEventWithGate` with
+ *     `missingScorePolicy: "block"` — non-finite or missing scores
+ *     contribute as 1.0 (= blocking), matching the rollout regime.
+ *   - When the gate's verdict disagrees with the legacy verdict, the
+ *     divergence payload's `blockingFindingCount` aligns with the
+ *     `"block"` policy: non-finite scores count as blocking even
+ *     though `score >= threshold` is false on NaN.
+ *
+ * Exported for tests. Production caller is `handlePrReviewEnsemble`
+ * (single call site as of PR 4b).
+ */
+export function computeShadowGateDivergence(
+  args: ShadowDivergenceInputs,
+): ShadowDivergenceResult {
+  const { renderable, unanchored, provenance, threshold, legacyEvent } = args
+
+  const fillScore = (
+    f: PrReviewFinding,
+    specialists: ReadonlyArray<string>,
+  ): PrReviewFinding => ({
+    ...f,
+    gateScore: typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
+      ? f.gateScore
+      : computeGateScore(f, { sourceSpecialists: specialists }),
+  })
+
+  const scoredRenderable = renderable.map((f, i) =>
+    fillScore(f, provenance[i]?.sourceSpecialists ?? []),
+  )
+  const scoredUnanchored = unanchored.map((f) => fillScore(f, []))
+  const allScored = [...scoredRenderable, ...scoredUnanchored]
+
+  const gateEvent = chooseReviewEventWithGate({
+    findings: allScored,
+    threshold,
+    missingScorePolicy: "block",
+  })
+
+  if (gateEvent === legacyEvent) {
+    return { gateEvent, divergence: null }
+  }
+
+  // `"block"` policy treats non-finite gateScore as effective 1.0
+  // (blocking). Align the telemetry counter so it doesn't under-report
+  // in the (rare today, common during PR 4b shadow) case where a
+  // finding sneaks through with no scored value.
+  const isBlocking = (f: PrReviewFinding): boolean => {
+    if (typeof f.gateScore !== "number" || !Number.isFinite(f.gateScore)) {
+      return true
+    }
+    return f.gateScore >= threshold
+  }
+
+  return {
+    gateEvent,
+    divergence: {
+      threshold,
+      legacyEvent,
+      gateEvent,
+      findingCount: allScored.length,
+      blockingFindingCount: allScored.filter(isBlocking).length,
+      scoreSummary: allScored.map((f) => f.gateScore?.toFixed(2)).join(","),
+    },
+  }
+}
+
 /**
  * SIG-37 — minimal shape for items that carry a GitHub-style author
  * login. Wide enough to cover review comments, review threads' root

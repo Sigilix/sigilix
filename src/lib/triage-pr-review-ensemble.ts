@@ -73,13 +73,11 @@ import {
   type PrReviewFinding,
   type CoverageRoles,
   type DeltaBadgeCounts,
-  type ReviewEvent,
   parsePrReviewResponse,
   buildReviewSubmission,
   buildFallbackSubmission,
   chooseReviewEvent,
-  chooseReviewEventWithGate,
-  computeGateScore,
+  computeShadowGateDivergence,
 } from "./triage-pr-review"
 import { readGateMode, readGateThreshold } from "./gate-config"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
@@ -3446,68 +3444,28 @@ export async function handlePrReviewEnsemble(
     ])
 
     // SIG-161 PR 4b — shadow-mode telemetry. When `OPENCLAW_GATE` is
-    // "shadow" or "enforce", compute the gate's would-be verdict in
-    // parallel using `chooseReviewEventWithGate` and the per-finding
-    // `gateScore` from `computeGateScore`. Log divergence vs the
-    // legacy `intendedEvent` to Logpush.
+    // "shadow" or "enforce", run the gate in parallel and log
+    // divergence vs the legacy verdict to Logpush. In "shadow" the
+    // legacy verdict still ships (observation only); "enforce" (PR 4c)
+    // will swap.
     //
-    // In "shadow" the legacy verdict still ships — divergence is
-    // observation only. In "enforce" (gated to PR 4c) the gate verdict
-    // SHIPS instead. PR 4b only adds the shadow path; the flag flip
-    // to "shadow" + the calibrated threshold are also part of PR 4b.
-    //
-    // Score policy is "block" so missing `gateScore` (every finding
-    // today — nobody emits the field yet, computed here on the fly)
-    // defaults to 1.0 = always blocking. The shadow telemetry is the
-    // forcing function for `computeGateScore`'s reliability: any case
-    // where the gate diverges from the legacy verdict is a real
-    // signal about the blend's calibration.
+    // The pure-helper `computeShadowGateDivergence` lives in
+    // triage-pr-review.ts (unit-tested there); this call site just
+    // does the I/O — read env, read KV threshold, write the log.
+    // Wrapped in try/catch so a KV outage / compute failure CANNOT
+    // break the production verdict path.
     const gateMode = readGateMode(env)
-    let shadowGateEvent: ReviewEvent | undefined
     if (gateMode !== "off") {
       try {
         const threshold = await readGateThreshold(env)
-        const scoredRenderable: PrReviewFinding[] = renderableVerdict.findings.map(
-          (f, i) => ({
-            ...f,
-            gateScore: typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
-              ? f.gateScore
-              : computeGateScore(f, {
-                  sourceSpecialists: filteredConsensusProvenance[i]?.sourceSpecialists ?? [],
-                }),
-          }),
-        )
-        // Unanchored findings have no per-finding provenance row in
-        // `filteredConsensusProvenance` (they live in a parallel
-        // `unanchoredFindings` list off `validated`). Score them with
-        // an empty `sourceSpecialists` — no agreement boost. The body
-        // / evidence-citation signals still contribute.
-        const scoredUnanchored: PrReviewFinding[] = renderableUnanchored.map((f) => ({
-          ...f,
-          gateScore: typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
-            ? f.gateScore
-            : computeGateScore(f, { sourceSpecialists: [] }),
-        }))
-        const allScored: PrReviewFinding[] = [...scoredRenderable, ...scoredUnanchored]
-        shadowGateEvent = chooseReviewEventWithGate({
-          findings: allScored,
+        const result = computeShadowGateDivergence({
+          renderable: renderableVerdict.findings,
+          unanchored: renderableUnanchored,
+          provenance: filteredConsensusProvenance,
           threshold,
-          missingScorePolicy: "block",
+          legacyEvent: intendedEvent,
         })
-        if (shadowGateEvent !== intendedEvent) {
-          // CodeRabbit catch on PR 4b: align telemetry's blocking
-          // count with `missingScorePolicy: "block"` semantics.
-          // The gate treats non-finite gateScore as effective 1.0
-          // (= blocking); counting only `score >= threshold` would
-          // under-report blocking findings and distort calibration
-          // telemetry. Use the gate's own predicate.
-          const isBlocking = (f: PrReviewFinding): boolean => {
-            if (typeof f.gateScore !== "number" || !Number.isFinite(f.gateScore)) {
-              return true   // missingScorePolicy: "block" treats this as blocking
-            }
-            return f.gateScore >= threshold
-          }
-          const blocking = allScored.filter(isBlocking).length
+        if (result.divergence) {
           console.log(
             JSON.stringify({
               event: "pr-review-gate-shadow-divergence",
@@ -3516,21 +3474,11 @@ export async function handlePrReviewEnsemble(
               prNumber,
               headSha: headSha.slice(0, 7),
               mode: gateMode,
-              threshold,
-              legacyEvent: intendedEvent,
-              gateEvent: shadowGateEvent,
-              findingCount: allScored.length,
-              blockingFindingCount: blocking,
-              scoreSummary: allScored
-                .map((f) => f.gateScore?.toFixed(2))
-                .join(","),
+              ...result.divergence,
             }),
           )
         }
       } catch (err) {
-        // Defensive — shadow telemetry MUST NOT break the production
-        // verdict path. Any failure (KV read throw, score compute, etc.)
-        // is logged + swallowed.
         console.log(
           JSON.stringify({
             event: "pr-review-gate-shadow-error",

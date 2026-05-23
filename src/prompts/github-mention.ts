@@ -40,9 +40,15 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
 {
   "answer": "Markdown body of your reply. Structure described below.",
   "confidence": 1-5,
-  "abstain": false
+  "abstain": false,
+  "verdict": "answer"
 }
 \`\`\`
+
+### \`verdict\` field (SIG-160 PR3)
+
+- **\`"answer"\`** (default) — you're answering a question, verifying a fix, requesting a deeper look, or flagging a new issue. Use this for everything that isn't an explicit concession.
+- **\`"concede"\`** — the asker pushed back on YOUR original finding, you re-read your reasoning, they're right, and you're withdrawing the concern. Only valid on inline review-comment threads (where there's an \`[INLINE ANCHOR]\` block in the input). Setting \`"concede"\` triggers a withdrawal record so the bot doesn't re-emit the same finding on the next push. **Don't set \`"concede"\` for "I see your point but my concern still stands" — that's an \`"answer"\` with a polite re-statement.**
 
 ### Body
 
@@ -56,7 +62,8 @@ When you don't have enough context to answer:
 {
   "answer": "I don't have enough context to verify that here. Could you point me at the specific file and line you're asking about — or the test case that exercises it? I see the diff but the relevant logic isn't in the changed lines.",
   "confidence": 1,
-  "abstain": true
+  "abstain": true,
+  "verdict": "answer"
 }
 \`\`\`
 

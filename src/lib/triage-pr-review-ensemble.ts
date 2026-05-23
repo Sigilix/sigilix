@@ -63,6 +63,7 @@ import {
 } from "./branch-retrieval"
 import { embedText } from "./embeddings"
 import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
+import { loadWithdrawals, filterWithdrawnFindings } from "./review-withdrawal-store"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -3145,9 +3146,89 @@ export async function handlePrReviewEnsemble(
       return annotateWithConsensus(working, consensusByIndex[i] ?? 1)
     })
     const renderableUnanchored = validated.unanchoredFindings  // unanchored never matches by index
+    // SIG-160 PR3: drop any finding the bot already conceded via mention-reply
+    // (`<!-- sigilix:gh-mention-reply -->` with verdict:"concede"). Filter
+    // applies to inline-anchored findings only — unanchored findings have
+    // no path+line to match a WithdrawalRecord against. Runs BEFORE the
+    // manifest snapshot + counter bump so a withdrawn finding never:
+    //   - lands in the persisted manifest (would corrupt next push's delta)
+    //   - triggers a REQUEST_CHANGES counter bump (would re-block the PR)
+    //   - reaches `buildReviewSubmission` (would post the inline comment).
+    //
+    // Index alignment (CodeRabbit M1 catch): `consensusVerdict.findings`,
+    // `consensusByIndex`, and `consensusProvenance` are parallel arrays
+    // — index `i` in each refers to the same finding. The filter must
+    // produce a `keepIndex` whose entries are valid indices into the
+    // original arrays, and downstream consumers (snapshot + marker
+    // computation) read through that index list so the filtered view
+    // stays aligned end-to-end.
+    // CodeRabbit M1 (review on PR #142): defense-in-depth wrap. The
+    // store helper already swallows + returns [] on KV/parse failure,
+    // but a future regression (sync throw in helper init, etc.) would
+    // otherwise unwind the whole review path through the outer catch
+    // and surface as `errored` on the PR. Withdrawal suppression is a
+    // nice-to-have; never let it fail a review.
+    let withdrawals: Awaited<ReturnType<typeof loadWithdrawals>> = []
+    try {
+      withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "review-withdrawal-load-unexpected-throw",
+        owner, repo, prNumber,
+        error: err instanceof Error ? err.message : String(err),
+      }))
+    }
+    const { kept: postWithdrawalFindings, suppressed: withdrawnFindings } =
+      filterWithdrawnFindings(renderableFindings, withdrawals)
+    const keptRefSet = new Set(postWithdrawalFindings)
+    const keepIndex: number[] = []
+    for (let i = 0; i < renderableFindings.length; i++) {
+      if (keptRefSet.has(renderableFindings[i]!)) keepIndex.push(i)
+    }
+    if (withdrawnFindings.length > 0) {
+      console.log(JSON.stringify({
+        event: "review-findings-suppressed-by-withdrawal",
+        owner, repo, prNumber,
+        suppressed: withdrawnFindings.length,
+        withdrawals_active: withdrawals.length,
+        paths: withdrawnFindings.map((f) => f.path),
+      }))
+    }
+    // Filtered parallel views for downstream consumers — snapshot and
+    // marker computation read through these so the manifest, counter,
+    // and inline-comment markers all see the same kept set the renderer
+    // does. Original `consensusVerdict` stays intact (it's the audit
+    // record of what the model produced before suppression).
+    const filteredConsensusFindings = keepIndex.map((i) => consensusVerdict.findings[i]!)
+    const filteredConsensusByIndex = keepIndex.map((i) => consensusByIndex[i] ?? 1)
+    const filteredConsensusProvenance = keepIndex.map((i) => consensusProvenance[i])
+    // CodeRabbit M2 (review on PR #142): the synthesizer wrote
+    // `consensusVerdict.summary` over the FULL finding set including
+    // findings we're about to suppress. Reusing it verbatim could
+    // surface conceded content (e.g. "two findings about test
+    // coverage") even though the renderer drops one of them. When any
+    // suppression happened, replace the summary with a neutral
+    // fallback the renderer can use unmodified.
+    //
+    // CodeRabbit M-new (follow-up review on PR #142): the "nothing
+    // remaining to block" branch must consider BOTH anchored kept +
+    // unanchored findings — `renderableUnanchored` is independent of
+    // the withdrawal filter (no path+line to match against). Without
+    // this, an all-anchored-withdrawn run with surviving unanchored
+    // findings would post REQUEST_CHANGES with a summary that says
+    // "nothing remaining." `chooseReviewEvent` reads the merged set
+    // for the verdict decision, so the summary must agree.
+    const hasRemainingFindings =
+      postWithdrawalFindings.length + renderableUnanchored.length > 0
+    const summaryAfterSuppression = withdrawnFindings.length > 0
+      ? (!hasRemainingFindings
+          ? "All flagged findings were previously addressed via review-thread acknowledgments; nothing remaining to block."
+          : "Summary regenerated after suppressing findings previously acknowledged via review-thread replies.")
+      : consensusVerdict.summary
     const renderableVerdict: PrReviewVerdict = {
       ...consensusVerdict,
-      findings: renderableFindings,
+      summary: summaryAfterSuppression,
+      findings: postWithdrawalFindings,
     }
     if (softenedCount > 0) {
       console.log(JSON.stringify({
@@ -3175,8 +3256,15 @@ export async function handlePrReviewEnsemble(
     // `new` on the next push. Unanchored findings never went through
     // consensus ranking (they were filtered for failing line
     // validity, not for consensus), so their consensus defaults to 1.
+    // SIG-160 PR3: snapshot the FILTERED set so withdrawn findings
+    // don't land in the persisted manifest — otherwise next push's
+    // delta would compare {prior: includes withdrawn} vs
+    // {current: excludes withdrawn} and report the withdrawn finding
+    // as `likely-fixed`. Unanchored findings can't be withdrawn (no
+    // path+line to match against a WithdrawalRecord), so they stay
+    // exactly as before.
     const snapshotInputs = [
-      ...consensusVerdict.findings.map((f, i) => ({ f, consensus: consensusByIndex[i] ?? 1 })),
+      ...filteredConsensusFindings.map((f, j) => ({ f, consensus: filteredConsensusByIndex[j] ?? 1 })),
       ...validated.unanchoredFindings.map((f) => ({ f, consensus: 1 })),
     ]
     const currentFindingsForManifest: ReviewManifestFinding[] = await Promise.all(
@@ -3272,9 +3360,15 @@ export async function handlePrReviewEnsemble(
     // order. `consensusProvenance` and `consensusVerdict.findings`
     // are in the new ranking; `findingMarkers[i]` lines up with
     // `renderableFindings[i]`.
+    //
+    // SIG-160 PR3: walk the FILTERED parallel views so markers align
+    // with `postWithdrawalFindings` (== `renderableVerdict.findings`),
+    // not the original pre-suppression set. Otherwise `buildReviewSubmission`
+    // would index off-by-one when consulting `findingMarkers` for an inline
+    // comment whose `originalIndex` survived suppression.
     const findingMarkers: Array<string | null> = await Promise.all(
-      consensusVerdict.findings.map(async (f, i) => {
-        const sourceSpec = consensusProvenance[i]?.sourceSpecialists?.[0]
+      filteredConsensusFindings.map(async (f, j) => {
+        const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
         if (!sourceSpec) return null
         return await buildSigilixMarker({
           ruleId: null,

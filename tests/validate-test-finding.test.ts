@@ -335,6 +335,62 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     expect(r.keep).toBe(true)
   })
 
+  // ── SIG-128 PR 6: structural orchestrator-glue suppression ───────
+  // The PR #138 regression: a wrapper that delegates to BOTH same-PR
+  // helpers AND pre-existing helpers gets status "partial" (not "all"),
+  // so the original SIG-128 check doesn't fire. The structural check
+  // catches this case via the `structurallyGlue: true` flag on the
+  // coverage record.
+
+  it("DROPS a glue ->NONE finding when structurallyGlue=true even if status is 'partial' (PR 6)", () => {
+    const r = evaluateTestFinding(
+      orchFinding(),
+      orchPack({
+        status: "partial",
+        helpers: ["src/lib/branch-retrieval.ts"],
+        structurallyGlue: true,
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-structure")
+  })
+
+  it("DROPS a glue ->NONE finding when structurallyGlue=true and status is 'none' (PR 6)", () => {
+    const r = evaluateTestFinding(
+      orchFinding(),
+      orchPack({ status: "none", helpers: [], structurallyGlue: true }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-structure")
+  })
+
+  it("PREFERS the 'all' helper reason over the structural reason when both apply (PR 6)", () => {
+    // status:"all" already suppressed; structural is redundant. The
+    // existing reason takes priority since it's the stronger signal.
+    const r = evaluateTestFinding(
+      orchFinding(),
+      orchPack({
+        status: "all",
+        helpers: ["src/lib/branch-retrieval.ts"],
+        structurallyGlue: true,
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-helper")
+  })
+
+  it("KEEPS when structurallyGlue=false and status is 'partial' (FP-safe — real undertested logic)", () => {
+    const r = evaluateTestFinding(
+      orchFinding(),
+      orchPack({
+        status: "partial",
+        helpers: ["src/lib/branch-retrieval.ts"],
+        structurallyGlue: false,
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
   // SIG-128 (CodeRabbit): glue-covered suppression is scoped to the ->NONE
   // sibling-mapping missing class ONLY. A coverageGap-class missing claim
   // (unresolved coverageGap ref, no ->NONE) on the SAME helper-covered

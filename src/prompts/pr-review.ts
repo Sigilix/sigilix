@@ -89,8 +89,15 @@
  * Reviews with v5 prompt version go stale on first deploy of v6 (same
  * mechanism as prior bumps). Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
  * during rollout.
+ *
+ * v7 (SIG-161 PR 4b): specialist + synth prompts gain a `confidence` rubric
+ * in SHARED_OUTPUT_INSTRUCTIONS — the 1-5 scale is now anchored to
+ * "probability an expert reviewer labels this a true positive" instead
+ * of free-form self-assessment. Feeds the calibration corpus that
+ * scripts/collect-sig-161-findings.ts pulls for labeling. Reviews with
+ * v6 prompt version go stale on first deploy of v7.
  */
-export const PROMPT_VERSION = "6"
+export const PROMPT_VERSION = "7"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, anchor every finding to a specific line.
 

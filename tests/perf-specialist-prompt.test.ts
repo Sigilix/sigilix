@@ -87,9 +87,49 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
 
 describe("PROMPT_VERSION", () => {
   it("is at least 4 (SIG-110 bumped 3->4; carried forward by later prompt changes)", () => {
-    // SIG-110 bumped 3->4; SIG-125 bumped 4->5. Assert the current value
-    // rather than a frozen number so a legitimate later bump doesn't
-    // require editing an unrelated specialist's test.
+    // SIG-110 bumped 3->4; SIG-125 bumped 4->5; SIG-162 bumped 5->6;
+    // SIG-161 PR 4b bumped 6->7. Assert the current value rather than
+    // a frozen number so a legitimate later bump doesn't require
+    // editing an unrelated specialist's test.
     expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(4)
+  })
+})
+
+// SIG-161 PR 4b — confidence rubric embedded in SHARED_OUTPUT_INSTRUCTIONS.
+// Every specialist sees the rubric because they all interpolate
+// SHARED_OUTPUT_INSTRUCTIONS into their system prompt. Tests pin the
+// substantive bands so a future copy edit doesn't silently weaken
+// the calibration signal.
+describe("SIG-161 confidence rubric (PR 4b)", () => {
+  // Sample from each specialist prompt — they all share
+  // SHARED_OUTPUT_INSTRUCTIONS so any one is sufficient as proof.
+  const prompt = SPECIALIST_PROMPTS.logic
+
+  it("introduces the rubric with the SIG-161 marker + scale framing", () => {
+    expect(prompt).toContain("SIG-161 FINDING CONFIDENCE")
+    expect(prompt).toContain("probability that an expert reviewer would label the finding a true positive")
+  })
+
+  it("defines all five bands explicitly (1..5)", () => {
+    expect(prompt).toMatch(/- 5: A senior engineer would agree without needing to re-read the code/)
+    expect(prompt).toMatch(/- 4: An engineer would agree after checking the cited line\(s\)/)
+    expect(prompt).toMatch(/- 3: Borderline/)
+    expect(prompt).toMatch(/- 2: You see a pattern that often indicates a problem/)
+    expect(prompt).toMatch(/- 1: Speculative or stylistic/)
+  })
+
+  it("disambiguates confidence from score (severity) and self-reasoning", () => {
+    expect(prompt).toContain("NOT your confidence in your own reasoning")
+    expect(prompt).toContain("NOT severity")
+  })
+
+  it("warns against rounding up (catches the over-confidence FP class)", () => {
+    expect(prompt).toContain("Do NOT round up")
+  })
+
+  it("reaches every specialist (rubric is in SHARED_OUTPUT_INSTRUCTIONS, not per-role)", () => {
+    for (const role of ["logic", "security", "performance", "tests"] as const) {
+      expect(SPECIALIST_PROMPTS[role]).toContain("SIG-161 FINDING CONFIDENCE")
+    }
   })
 })

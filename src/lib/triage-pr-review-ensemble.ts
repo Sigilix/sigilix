@@ -3208,12 +3208,20 @@ export async function handlePrReviewEnsemble(
     // surface conceded content (e.g. "two findings about test
     // coverage") even though the renderer drops one of them. When any
     // suppression happened, replace the summary with a neutral
-    // fallback the renderer can use unmodified. (A more sophisticated
-    // approach would re-run synth over the kept set; that's premature
-    // — the fallback is unambiguous and stable across edge cases like
-    // "every finding was withdrawn → empty kept set".)
+    // fallback the renderer can use unmodified.
+    //
+    // CodeRabbit M-new (follow-up review on PR #142): the "nothing
+    // remaining to block" branch must consider BOTH anchored kept +
+    // unanchored findings — `renderableUnanchored` is independent of
+    // the withdrawal filter (no path+line to match against). Without
+    // this, an all-anchored-withdrawn run with surviving unanchored
+    // findings would post REQUEST_CHANGES with a summary that says
+    // "nothing remaining." `chooseReviewEvent` reads the merged set
+    // for the verdict decision, so the summary must agree.
+    const hasRemainingFindings =
+      postWithdrawalFindings.length + renderableUnanchored.length > 0
     const summaryAfterSuppression = withdrawnFindings.length > 0
-      ? (postWithdrawalFindings.length === 0
+      ? (!hasRemainingFindings
           ? "All flagged findings were previously addressed via review-thread acknowledgments; nothing remaining to block."
           : "Summary regenerated after suppressing findings previously acknowledged via review-thread replies.")
       : consensusVerdict.summary

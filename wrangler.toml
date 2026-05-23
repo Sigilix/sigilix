@@ -190,6 +190,23 @@ SHADOW_BAKEOFF_ROLES = "synth"
 OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
 
+# SIG-161 confidence-threshold verdict gate. Three-state rollout:
+#   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.
+#               Identical behavior to pre-SIG-161. This is the PR 4a default.
+#   "shadow"  — gate runs but ships the legacy verdict; the new verdict is
+#               logged to ValidationMetricsDO for divergence analysis.
+#               Flips in PR 4b.
+#   "enforce" — gate ships its verdict (REQUEST_CHANGES / COMMENT / APPROVE).
+#               Flips in PR 4c after stage-1 calibration is committed.
+#
+# The threshold + model artifact live in KV (NOT here) so a calibration
+# retune is a `wrangler kv:key put` not a redeploy. See DESIGN.md §9.
+#   KV key  config:gate-threshold:v1   number  (default 1.0 = never block)
+#   KV key  config:gate-model:v1       JSON    (logistic-regression coefs;
+#                                               default null = use hand-blend)
+# Cache TTL 60s in the Worker so updates take effect on the next request.
+OPENCLAW_GATE = "off"
+
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to
 # this same script (HTTP 11004 — "Queue already has a consumer"), and

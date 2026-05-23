@@ -73,11 +73,15 @@ import {
   type PrReviewFinding,
   type CoverageRoles,
   type DeltaBadgeCounts,
+  type ReviewEvent,
   parsePrReviewResponse,
   buildReviewSubmission,
   buildFallbackSubmission,
   chooseReviewEvent,
+  chooseReviewEventWithGate,
+  computeGateScore,
 } from "./triage-pr-review"
+import { readGateMode, readGateThreshold } from "./gate-config"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
 import {
   buildTestingEvidencePack,
@@ -3440,6 +3444,97 @@ export async function handlePrReviewEnsemble(
       ...renderableVerdict.findings,
       ...renderableUnanchored,
     ])
+
+    // SIG-161 PR 4b — shadow-mode telemetry. When `OPENCLAW_GATE` is
+    // "shadow" or "enforce", compute the gate's would-be verdict in
+    // parallel using `chooseReviewEventWithGate` and the per-finding
+    // `gateScore` from `computeGateScore`. Log divergence vs the
+    // legacy `intendedEvent` to Logpush.
+    //
+    // In "shadow" the legacy verdict still ships — divergence is
+    // observation only. In "enforce" (gated to PR 4c) the gate verdict
+    // SHIPS instead. PR 4b only adds the shadow path; the flag flip
+    // to "shadow" + the calibrated threshold are also part of PR 4b.
+    //
+    // Score policy is "block" so missing `gateScore` (every finding
+    // today — nobody emits the field yet, computed here on the fly)
+    // defaults to 1.0 = always blocking. The shadow telemetry is the
+    // forcing function for `computeGateScore`'s reliability: any case
+    // where the gate diverges from the legacy verdict is a real
+    // signal about the blend's calibration.
+    const gateMode = readGateMode(env)
+    let shadowGateEvent: ReviewEvent | undefined
+    if (gateMode !== "off") {
+      try {
+        const threshold = await readGateThreshold(env)
+        const scoredRenderable: PrReviewFinding[] = renderableVerdict.findings.map(
+          (f, i) => ({
+            ...f,
+            gateScore: typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
+              ? f.gateScore
+              : computeGateScore(f, {
+                  sourceSpecialists: filteredConsensusProvenance[i]?.sourceSpecialists ?? [],
+                }),
+          }),
+        )
+        // Unanchored findings have no per-finding provenance row in
+        // `filteredConsensusProvenance` (they live in a parallel
+        // `unanchoredFindings` list off `validated`). Score them with
+        // an empty `sourceSpecialists` — no agreement boost. The body
+        // / evidence-citation signals still contribute.
+        const scoredUnanchored: PrReviewFinding[] = renderableUnanchored.map((f) => ({
+          ...f,
+          gateScore: typeof f.gateScore === "number" && Number.isFinite(f.gateScore)
+            ? f.gateScore
+            : computeGateScore(f, { sourceSpecialists: [] }),
+        }))
+        const allScored: PrReviewFinding[] = [...scoredRenderable, ...scoredUnanchored]
+        shadowGateEvent = chooseReviewEventWithGate({
+          findings: allScored,
+          threshold,
+          missingScorePolicy: "block",
+        })
+        if (shadowGateEvent !== intendedEvent) {
+          const blocking = allScored.filter(
+            (f) => typeof f.gateScore === "number" && f.gateScore >= threshold,
+          ).length
+          console.log(
+            JSON.stringify({
+              event: "pr-review-gate-shadow-divergence",
+              owner,
+              repo,
+              prNumber,
+              headSha: headSha.slice(0, 7),
+              mode: gateMode,
+              threshold,
+              legacyEvent: intendedEvent,
+              gateEvent: shadowGateEvent,
+              findingCount: allScored.length,
+              blockingFindingCount: blocking,
+              scoreSummary: allScored
+                .map((f) => f.gateScore?.toFixed(2))
+                .join(","),
+            }),
+          )
+        }
+      } catch (err) {
+        // Defensive — shadow telemetry MUST NOT break the production
+        // verdict path. Any failure (KV read throw, score compute, etc.)
+        // is logged + swallowed.
+        console.log(
+          JSON.stringify({
+            event: "pr-review-gate-shadow-error",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            mode: gateMode,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
+      }
+    }
+
     const reviewCounter = intendedEvent === "REQUEST_CHANGES"
       ? await bumpPrReviewCounter(env, owner, repo, prNumber)
       : undefined

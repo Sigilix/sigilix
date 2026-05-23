@@ -205,7 +205,7 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 #   KV key  config:gate-model:v1       JSON    (logistic-regression coefs;
 #                                               default null = use hand-blend)
 # Cache TTL 60s in the Worker so updates take effect on the next request.
-OPENCLAW_GATE = "off"
+OPENCLAW_GATE = "shadow"
 
 # Consumer binding — DEFERRED out of wrangler.toml because Cloudflare's
 # Queue API rejects re-registering a consumer that's already bound to

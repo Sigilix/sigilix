@@ -16,13 +16,24 @@ import type { Env } from "../src/index"
 
 // ── KV stub ───────────────────────────────────────────────────────
 
+interface RecordedPut {
+  key: string
+  value: string
+  opts?: { expirationTtl?: number }
+}
+
 function makeKvStub() {
   const store = new Map<string, string>()
+  // CodeRabbit M3 (review on PR #142): capture `put` opts so tests can
+  // assert TTL regressions — a future drop of `expirationTtl` would
+  // otherwise silently let withdrawal records live forever.
+  const puts: RecordedPut[] = []
   const kv = {
     async get(key: string): Promise<string | null> {
       return store.get(key) ?? null
     },
-    async put(key: string, value: string, _opts?: { expirationTtl?: number }): Promise<void> {
+    async put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void> {
+      puts.push({ key, value, opts })
       store.set(key, value)
     },
     async delete(key: string): Promise<void> {
@@ -35,7 +46,7 @@ function makeKvStub() {
       return { keys }
     },
   }
-  return { kv, store }
+  return { kv, store, puts }
 }
 
 function makeEnv(kv: ReturnType<typeof makeKvStub>["kv"]): Env {
@@ -198,11 +209,13 @@ describe("filterWithdrawnFindings", () => {
 describe("writeWithdrawal / loadWithdrawals round-trip", () => {
   let kv: ReturnType<typeof makeKvStub>["kv"]
   let store: ReturnType<typeof makeKvStub>["store"]
+  let puts: ReturnType<typeof makeKvStub>["puts"]
 
   beforeEach(() => {
     const k = makeKvStub()
     kv = k.kv
     store = k.store
+    puts = k.puts
   })
 
   it("writes under the keyed prefix and is recoverable via load", async () => {
@@ -220,6 +233,9 @@ describe("writeWithdrawal / loadWithdrawals round-trip", () => {
     })
     expect(ok).toBe(true)
     expect(store.has("withdrawal:Sigilix:sigilix:138:999111")).toBe(true)
+    // CodeRabbit M3 (review on PR #142): pin the 30-day TTL contract so
+    // a future regression that drops `expirationTtl` is caught here.
+    expect(puts[0]?.opts?.expirationTtl).toBe(60 * 60 * 24 * 30)
 
     const loaded = await loadWithdrawals(env, "Sigilix", "sigilix", 138)
     expect(loaded).toHaveLength(1)

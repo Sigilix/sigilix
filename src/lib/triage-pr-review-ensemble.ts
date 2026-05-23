@@ -3162,7 +3162,22 @@ export async function handlePrReviewEnsemble(
     // original arrays, and downstream consumers (snapshot + marker
     // computation) read through that index list so the filtered view
     // stays aligned end-to-end.
-    const withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
+    // CodeRabbit M1 (review on PR #142): defense-in-depth wrap. The
+    // store helper already swallows + returns [] on KV/parse failure,
+    // but a future regression (sync throw in helper init, etc.) would
+    // otherwise unwind the whole review path through the outer catch
+    // and surface as `errored` on the PR. Withdrawal suppression is a
+    // nice-to-have; never let it fail a review.
+    let withdrawals: Awaited<ReturnType<typeof loadWithdrawals>> = []
+    try {
+      withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "review-withdrawal-load-unexpected-throw",
+        owner, repo, prNumber,
+        error: err instanceof Error ? err.message : String(err),
+      }))
+    }
     const { kept: postWithdrawalFindings, suppressed: withdrawnFindings } =
       filterWithdrawnFindings(renderableFindings, withdrawals)
     const keptRefSet = new Set(postWithdrawalFindings)
@@ -3187,8 +3202,24 @@ export async function handlePrReviewEnsemble(
     const filteredConsensusFindings = keepIndex.map((i) => consensusVerdict.findings[i]!)
     const filteredConsensusByIndex = keepIndex.map((i) => consensusByIndex[i] ?? 1)
     const filteredConsensusProvenance = keepIndex.map((i) => consensusProvenance[i])
+    // CodeRabbit M2 (review on PR #142): the synthesizer wrote
+    // `consensusVerdict.summary` over the FULL finding set including
+    // findings we're about to suppress. Reusing it verbatim could
+    // surface conceded content (e.g. "two findings about test
+    // coverage") even though the renderer drops one of them. When any
+    // suppression happened, replace the summary with a neutral
+    // fallback the renderer can use unmodified. (A more sophisticated
+    // approach would re-run synth over the kept set; that's premature
+    // — the fallback is unambiguous and stable across edge cases like
+    // "every finding was withdrawn → empty kept set".)
+    const summaryAfterSuppression = withdrawnFindings.length > 0
+      ? (postWithdrawalFindings.length === 0
+          ? "All flagged findings were previously addressed via review-thread acknowledgments; nothing remaining to block."
+          : "Summary regenerated after suppressing findings previously acknowledged via review-thread replies.")
+      : consensusVerdict.summary
     const renderableVerdict: PrReviewVerdict = {
       ...consensusVerdict,
+      summary: summaryAfterSuppression,
       findings: postWithdrawalFindings,
     }
     if (softenedCount > 0) {

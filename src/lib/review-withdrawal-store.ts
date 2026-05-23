@@ -227,9 +227,21 @@ export async function loadWithdrawals(
     const list = await env.OPENCLAW_STATE.list({
       prefix: withdrawalPrefix(owner, repo, prNumber),
     })
+    // CodeRabbit T1 (review on PR #142): parallelize KV gets in bounded
+    // batches so a PR with 30+ withdrawals doesn't serialize N round-trips.
+    // Bounded at 10 to stay well clear of any CF KV concurrency hints
+    // without exploding subrequest fan-out.
+    const BATCH = 10
+    const rawEntries: (string | null)[] = []
+    for (let i = 0; i < list.keys.length; i += BATCH) {
+      const slice = list.keys.slice(i, i + BATCH)
+      const batchResults = await Promise.all(
+        slice.map((key) => env.OPENCLAW_STATE.get(key.name)),
+      )
+      rawEntries.push(...batchResults)
+    }
     const records: WithdrawalRecord[] = []
-    for (const key of list.keys) {
-      const raw = await env.OPENCLAW_STATE.get(key.name)
+    for (const raw of rawEntries) {
       if (raw === null) continue
       try {
         const parsed = JSON.parse(raw) as Partial<WithdrawalRecord>

@@ -61,12 +61,26 @@ export async function runIndexReconciliation(
   if (!installs.complete) summary.enumerationIncomplete = true
 
   for (const installationId of installs.items) {
-    const repos = await listInstallationRepoFullNames(
-      env.OPENCLAW_STATE,
-      env.GITHUB_APP_ID,
-      env.GITHUB_PRIVATE_KEY,
-      installationId,
-    )
+    // CodeRabbit review-pass: an upstream throw here (token refresh, GH 5xx,
+    // timeout) used to abort the WHOLE reconciliation for every remaining
+    // installation. Wrap fail-soft so one bad install can't poison the run.
+    let repos: Awaited<ReturnType<typeof listInstallationRepoFullNames>>
+    try {
+      repos = await listInstallationRepoFullNames(
+        env.OPENCLAW_STATE,
+        env.GITHUB_APP_ID,
+        env.GITHUB_PRIVATE_KEY,
+        installationId,
+      )
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "index-reconcile-repos-list-error",
+        installation_id: installationId,
+        error: err instanceof Error ? err.message : String(err),
+      }))
+      summary.enumerationIncomplete = true
+      continue
+    }
     if (!repos.complete) summary.enumerationIncomplete = true
     summary.reposChecked += repos.items.length
 

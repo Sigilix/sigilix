@@ -192,6 +192,28 @@ describe("runIndexReconciliation", () => {
     expect(mockReadManifest).not.toHaveBeenCalled()
   })
 
+  it("per-installation fail-soft: listInstallationRepoFullNames throw doesn't abort (CodeRabbit M1)", async () => {
+    // Token refresh / GH 5xx mid-tick used to abort every remaining install.
+    // Wrap fail-soft: log + enumerationIncomplete, continue to next install.
+    mockListInstalls.mockResolvedValue(ok([111, 222]))
+    mockListRepos
+      .mockRejectedValueOnce(new Error("github 503"))
+      .mockResolvedValueOnce(ok(["o/x"]))
+    mockReadManifest.mockResolvedValueOnce({ kind: "missing" })
+    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+
+    const out = await runIndexReconciliation(env, { dryRun: false })
+
+    expect(out.installations).toBe(2)
+    expect(out.enumerationIncomplete).toBe(true)
+    expect(out.enqueued).toBe(1) // 2nd install completed
+    expect(mockEnqueue).toHaveBeenCalledTimes(1)
+    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
+      installationId: 222,
+      repositories: [{ full_name: "o/x" }],
+    }))
+  })
+
   it("per-installation fail-soft: enqueue throw on one install doesn't abort the run", async () => {
     mockListInstalls.mockResolvedValue(ok([111, 222]))
     mockListRepos.mockResolvedValueOnce(ok(["o/a"])).mockResolvedValueOnce(ok(["o/c"]))

@@ -453,21 +453,19 @@ describe("graphIndexEnabled", () => {
 })
 
 describe("shouldCommitGraph", () => {
-  it("returns true when manifestWritten and lease is held (same runId)", () => {
-    expect(shouldCommitGraph({ manifestWritten: true, activeRunId: "r1", runId: "r1" })).toBe(true)
+  // SIG-156 PR3: dropped the `manifestWritten` arg — persistManifest now
+  // throws on KV failure, so callers reaching here have a written manifest
+  // by construction. The remaining gate is the lease.
+  it("returns true when the lease is held (same runId)", () => {
+    expect(shouldCommitGraph({ activeRunId: "r1", runId: "r1" })).toBe(true)
   })
 
-  it("returns true when manifestWritten and activeRunId is null (no competing run)", () => {
-    expect(shouldCommitGraph({ manifestWritten: true, activeRunId: null, runId: "r1" })).toBe(true)
-  })
-
-  it("returns false when manifestWritten is false (manifest write failed)", () => {
-    expect(shouldCommitGraph({ manifestWritten: false, activeRunId: "r1", runId: "r1" })).toBe(false)
-    expect(shouldCommitGraph({ manifestWritten: false, activeRunId: null, runId: "r1" })).toBe(false)
+  it("returns true when activeRunId is null (no competing run)", () => {
+    expect(shouldCommitGraph({ activeRunId: null, runId: "r1" })).toBe(true)
   })
 
   it("returns false when a different run holds the lease", () => {
-    expect(shouldCommitGraph({ manifestWritten: true, activeRunId: "r2", runId: "r1" })).toBe(false)
+    expect(shouldCommitGraph({ activeRunId: "r2", runId: "r1" })).toBe(false)
   })
 })
 

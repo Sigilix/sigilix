@@ -83,8 +83,7 @@ describe("legacyRepoIndexManifestKey", () => {
 describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
   it("round-trips a valid manifest under the <owner>/<repo> key", async () => {
     const { kv, store } = makeKvStub()
-    const ok = await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
-    expect(ok).toBe(true)
+    await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
     expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
 
     const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
@@ -135,7 +134,10 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     }
   })
 
-  it("writeRepoIndexManifest returns false when KV.put throws", async () => {
+  it("writeRepoIndexManifest propagates the KV.put error (SIG-156 PR3 hardening)", async () => {
+    // Was best-effort (caught + returned false), leaving vectors written
+    // with no manifest → repo undiscoverable + push won't bootstrap.
+    // Now: throw → consumer aborts → queue retries the shard.
     const env = {
       OPENCLAW_STATE: {
         get: async () => null,
@@ -145,8 +147,7 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
         delete: async () => {},
       },
     } as unknown as Env
-    const ok = await writeRepoIndexManifest(env, SAMPLE_MANIFEST)
-    expect(ok).toBe(false)
+    await expect(writeRepoIndexManifest(env, SAMPLE_MANIFEST)).rejects.toThrow("KV down")
   })
 })
 

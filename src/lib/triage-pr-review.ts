@@ -1582,10 +1582,11 @@ export function formatProposedChangeBlock(
 }
 
 /**
- * SIG-164 (PR 5): Greptile-style "Prompt To Fix With AI" block. Folds
- * the finding into a structured Markdown prompt that a reviewer can
- * copy-paste into any LLM-based fix tool (Cursor, Aider, Claude Code,
- * etc.) for a guided fix attempt. Always appended at the bottom of
+ * SIG-164 (PR 5): "Prompt To Fix With AI" block — mirrors Greptile's
+ * exact summary + body shape (no leading emoji; the words are the
+ * affordance). Folds the finding into a structured Markdown prompt
+ * that a reviewer can copy-paste into any LLM-based fix tool (Cursor,
+ * Aider, Claude Code, etc.). Always appended at the bottom of
  * `formatFindingComment` so it never displaces the prose, and wrapped
  * in `<details>` so collapsed-by-default.
  *
@@ -1597,19 +1598,18 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
       ? `${finding.startLine}-${finding.line}`
       : String(finding.line)
   const lines = [
-    "<details><summary>🤖 Prompt for AI Agents</summary>",
+    "<details><summary>Prompt To Fix With AI</summary>",
     "",
-    "### Sigilix review finding",
+    "This is a comment left during a code review.",
+    `Path: ${finding.path}`,
+    `Line: ${range}`,
     "",
-    `Path: \`${finding.path}\``,
-    `Line: \`${range}\``,
+    "Comment:",
+    `**${finding.headline}**`,
     "",
-    `Headline: ${finding.headline}`,
-    "",
-    "Body:",
     finding.body,
     "",
-    "What is the smallest safe code change that fixes this finding?",
+    "How can I resolve this? If you propose a fix, please make it concise.",
     "",
     "</details>",
   ]

@@ -910,6 +910,9 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
 })
 
 describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
+  // Mirrors Greptile's exact "Prompt To Fix With AI" shape — no
+  // leading emoji on the summary (the words are the affordance) and
+  // body matches their copy-pastable structure verbatim.
   const f: PrReviewFinding = {
     path: "src/foo.ts", line: 50, startLine: 42, score: 4,
     category: "logic",
@@ -917,28 +920,32 @@ describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
     body: "Wrap with `if (!user) return` before accessing `user.profile`.",
   }
 
-  it("wraps a structured prompt inside a collapsible <details> block", () => {
+  it("wraps a structured prompt inside a collapsible <details> block (Greptile shape, no emoji)", () => {
     const out = formatAiAgentPromptBlock(f)
     expect(out.startsWith("<details>")).toBe(true)
     expect(out.endsWith("</details>")).toBe(true)
-    expect(out).toContain("<summary>🤖 Prompt for AI Agents</summary>")
+    expect(out).toContain("<summary>Prompt To Fix With AI</summary>")
+    // Affirm the summary has no leading emoji.
+    expect(out).not.toContain("🤖")
   })
 
-  it("includes path + line range + headline + body verbatim", () => {
+  it("includes the Greptile preamble + path + line + headline + body verbatim", () => {
     const out = formatAiAgentPromptBlock(f)
-    expect(out).toContain("Path: `src/foo.ts`")
-    expect(out).toContain("Line: `42-50`")
-    expect(out).toContain("missing null guard on `user.profile`")
+    expect(out).toContain("This is a comment left during a code review.")
+    expect(out).toContain("Path: src/foo.ts")
+    expect(out).toContain("Line: 42-50")
+    expect(out).toContain("Comment:")
+    expect(out).toContain("**missing null guard on `user.profile`**")
     expect(out).toContain("Wrap with `if (!user) return`")
   })
 
   it("uses a single-line range when startLine is absent or equal to line", () => {
     const single: PrReviewFinding = { ...f, startLine: undefined }
-    expect(formatAiAgentPromptBlock(single)).toContain("Line: `50`")
+    expect(formatAiAgentPromptBlock(single)).toContain("Line: 50")
   })
 
-  it("ends with the stock fix-request question", () => {
-    expect(formatAiAgentPromptBlock(f)).toContain("What is the smallest safe code change that fixes this finding?")
+  it("ends with the Greptile-style fix-request question", () => {
+    expect(formatAiAgentPromptBlock(f)).toContain("How can I resolve this? If you propose a fix, please make it concise.")
   })
 })
 
@@ -947,7 +954,7 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
   // finding — should produce ALL THREE block types in order:
   //   1. **Current:** / **Proposed:** illustrative block (always when context available)
   //   2. ```suggestion committable block (high confidence + anchorable)
-  //   3. <details>🤖 Prompt for AI Agents</details> (always at bottom)
+  //   3. <details>Prompt To Fix With AI</details> (always at bottom)
   const reviewable: ReviewableMap = new Map([
     ["src/a.ts", [
       { line: 10, side: "RIGHT" as const },
@@ -980,11 +987,11 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     expect(out).toContain("```suggestion")
     expect(out).toContain("compute() ?? 0")
     // 3. AI agent prompt at the bottom
-    expect(out).toContain("<summary>🤖 Prompt for AI Agents</summary>")
+    expect(out).toContain("<summary>Prompt To Fix With AI</summary>")
     // Order check: Current/Proposed BEFORE suggestion BEFORE AI prompt
     const currentIdx = out.indexOf("**Current:**")
     const suggIdx = out.indexOf("```suggestion")
-    const aiIdx = out.indexOf("🤖 Prompt")
+    const aiIdx = out.indexOf("Prompt To Fix")
     expect(currentIdx).toBeLessThan(suggIdx)
     expect(suggIdx).toBeLessThan(aiIdx)
   })
@@ -999,7 +1006,7 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     const out = formatFindingComment(f, 4, reviewable, addedLines)
     expect(out).not.toContain("**Current:**")
     expect(out).not.toContain("```suggestion")
-    expect(out).toContain("<summary>🤖 Prompt for AI Agents</summary>")
+    expect(out).toContain("<summary>Prompt To Fix With AI</summary>")
   })
 })
 
@@ -1357,7 +1364,7 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
 
   it("does NOT collapse the body on confidence ≥ 3", () => {
     // SIG-164 PR 5: <details> can still appear for the always-present
-    // "Prompt for AI Agents" block at the bottom. The body-collapse
+    // "Prompt To Fix With AI" block at the bottom. The body-collapse
     // check is now specifically that the BODY's low-confidence
     // <summary> doesn't appear (that summary is unique to the
     // low-confidence body-collapse path).

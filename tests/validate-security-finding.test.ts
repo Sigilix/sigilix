@@ -204,6 +204,21 @@ function makeSpecialistVerdicts(): SpecialistVerdictsArg {
   ] as unknown as SpecialistVerdictsArg
 }
 
+function makeSpecialistVerdictsWithSecuritySource(
+  source: Partial<PrReviewFinding> & { id: string },
+): SpecialistVerdictsArg {
+  return makeSpecialistVerdictsWithSecuritySources([source])
+}
+
+function makeSpecialistVerdictsWithSecuritySources(
+  sources: Array<Partial<PrReviewFinding> & { id: string }>,
+): SpecialistVerdictsArg {
+  return [
+    { role: "security", verdict: { findings: sources.map((source) => ({ ...finding(), ...source })) } },
+    { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
+  ] as unknown as SpecialistVerdictsArg
+}
+
 function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
   return {
     findings: [
@@ -318,6 +333,130 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     })
     expect(result.droppedForFailedValidation).toBe(0)
     expect(result.verdict.findings).toHaveLength(1)
+  })
+
+  it("SIG-117: backfills missing cweId/evidenceId from source findings before validation", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({
+            cweId: undefined,
+            evidenceId: undefined,
+            body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
+          })],
+        },
+        provenance: securityProvenance("security-0"),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdictsWithSecuritySource({
+        id: "security-0",
+        cweId: "CWE-862",
+        evidenceId: "NONE",
+      }),
+      securityManifest: manifestOf(),
+      securityValidatorMode: "enforce",
+    })
+
+    expect(result.droppedForFailedValidation).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]!.cweId).toBe("CWE-862")
+    expect(result.verdict.findings[0]!.evidenceId).toBe("NONE")
+  })
+
+  it("SIG-117: does not combine cweId/evidenceId from different source findings", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({ cweId: undefined, evidenceId: undefined })],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["security"],
+            sourceFindingIds: ["security-0", "security-1"],
+            action: "merged",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+          softened: [],
+        },
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdictsWithSecuritySources([
+        { id: "security-0", cweId: "CWE-862", evidenceId: undefined },
+        { id: "security-1", cweId: undefined, evidenceId: "NONE" },
+      ]),
+    })
+
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]!.cweId).toBe("CWE-862")
+    expect(result.verdict.findings[0]!.evidenceId).toBeUndefined()
+  })
+
+  it("SIG-117: prefers a source record matching an existing synth evidenceId", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({
+            cweId: undefined,
+            evidenceId: "NONE",
+            body: "Missing object-level authorization check; no static pattern exists for this IDOR.",
+          })],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["security"],
+            sourceFindingIds: ["security-0", "security-1"],
+            action: "merged",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+          softened: [],
+        },
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdictsWithSecuritySources([
+        { id: "security-0", cweId: "CWE-89", evidenceId: undefined },
+        { id: "security-1", cweId: "CWE-862", evidenceId: "NONE" },
+      ]),
+      securityManifest: manifestOf(),
+      securityValidatorMode: "enforce",
+    })
+
+    expect(result.droppedForFailedValidation).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]!.cweId).toBe("CWE-862")
+    expect(result.verdict.findings[0]!.evidenceId).toBe("NONE")
+  })
+
+  it("SIG-117: does not overwrite cweId/evidenceId already emitted by synth", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({
+            cweId: "CWE-89",
+            evidenceId: "sarif:sql-injection:abc123abc123:17",
+          })],
+        },
+        provenance: securityProvenance("security-0"),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdictsWithSecuritySource({
+        id: "security-0",
+        cweId: "CWE-862",
+        evidenceId: "NONE",
+      }),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+    })
+
+    expect(result.droppedForFailedValidation).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]!.cweId).toBe("CWE-89")
+    expect(result.verdict.findings[0]!.evidenceId).toBe("sarif:sql-injection:abc123abc123:17")
   })
 
   it("does NOT apply the gate to a non-security finding (logic finding with no evidence is untouched)", () => {

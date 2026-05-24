@@ -5,10 +5,10 @@
 // `pr-review`. The handler:
 //
 //   1. Loads `sigilix.json::customLabels` at the PR head SHA. If
-//      empty/absent → no-op (zero behavior change for repos without
-//      config).
+//      present, it becomes the curated candidate allowlist. If absent,
+//      the repo's existing labels become the candidate pool.
 //   2. Lists repo labels with descriptions + current PR labels.
-//   3. Combines customLabels + repo labels into a candidate pool.
+//   3. Applies the status/triage denylist and builds the candidate pool.
 //   4. Asks Ollama (schema-constrained) to pick 0–5 labels.
 //   5. Applies new labels via GitHub API.
 //   6. Removes any Sigilix-applied label (tracked in KV) that the
@@ -21,7 +21,7 @@
 import { generate } from "./ollama"
 import { GitHubClient } from "./github"
 import { getInstallationToken } from "./github-app"
-import { loadSigilixConfig } from "./sigilix-config"
+import { isPrLabelsEnabled, loadSigilixConfig } from "./sigilix-config"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_LABEL_SCHEMA } from "./schemas"
 import { PR_LABEL_PROMPT } from "../prompts/pr-labels"
@@ -38,6 +38,22 @@ const APPLIED_LABELS_TTL_SECONDS = 90 * 24 * 60 * 60
 
 const PROMPT_DIFF_LIMIT = 12_000
 const PROMPT_BODY_LIMIT = 2_000
+
+const STATUS_LABEL_DENYLIST: ReadonlySet<string> = new Set([
+  "blocked",
+  "duplicate",
+  "good first issue",
+  "help wanted",
+  "invalid",
+  "in progress",
+  "needs triage",
+  "question",
+  "ready for review",
+  "triage",
+  "wont fix",
+  "wontfix",
+  "won't fix",
+])
 
 export interface PrLabelArgs {
   owner: string
@@ -86,14 +102,14 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
     return
   }
 
-  // 1. Load sigilix.json — zero behavior change for repos without
-  //    `customLabels` configured.
+  // 1. Load sigilix.json — labels are default-on, but repos can opt
+  //    out with `labels.enabled:false`.
   const config = await loadSigilixConfig(client, owner, repo, headSha)
   const customLabels = config.customLabels
-  if (!customLabels || customLabels.length === 0) {
+  if (!isPrLabelsEnabled(config)) {
     console.log(JSON.stringify({
       event: "pr-labels-skipped",
-      reason: "no-custom-labels-configured",
+      reason: "labels-disabled",
       ...tag,
     }))
     return
@@ -132,20 +148,19 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
     return
   }
 
-  // 3. Build candidate pool — customLabels first, then repo labels
-  //    that aren't already in customLabels (config wins on name
-  //    collision so the operator's description is authoritative).
-  const candidatesByName = new Map<string, { name: string; description: string }>()
-  for (const cl of customLabels) {
-    candidatesByName.set(cl.name, cl)
+  // 3. Build candidate pool. If `customLabels` is present, it is the
+  //    curated allowlist. Otherwise, derive candidates from existing
+  //    repo labels with descriptions. Status/workflow labels are
+  //    excluded in either mode so Sigilix doesn't apply triage state.
+  const candidates = buildLabelCandidates(customLabels, repoLabels)
+  if (candidates.length === 0) {
+    console.log(JSON.stringify({
+      event: "pr-labels-skipped",
+      reason: "no-candidate-labels",
+      ...tag,
+    }))
+    return
   }
-  for (const rl of repoLabels) {
-    if (rl.description.length === 0) continue // description is required for sensible LLM judgment
-    if (!candidatesByName.has(rl.name)) {
-      candidatesByName.set(rl.name, rl)
-    }
-  }
-  const candidates = [...candidatesByName.values()]
 
   // code-reviewer HIGH catch on commit 2: GitHub's POST /labels
   // auto-creates labels that don't exist on the repo. A typo in
@@ -155,15 +170,26 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   // logs. We don't reject the label — auto-create is sometimes
   // intentional (first-time setup) — but the visibility avoids the
   // silent-phantom failure mode.
-  const repoLabelNames = new Set(repoLabels.map((r) => r.name))
-  for (const cl of customLabels) {
-    if (!repoLabelNames.has(cl.name)) {
-      console.warn(JSON.stringify({
-        event: "pr-labels-custom-label-not-in-repo",
-        ...tag,
-        label: cl.name,
-        note: "Label doesn't exist on the repo yet; GitHub will auto-create on first apply. Confirm the name isn't a typo of an existing label.",
-      }))
+  if (customLabels && customLabels.length > 0) {
+    const repoLabelNames = new Set(repoLabels.map((r) => r.name))
+    for (const cl of customLabels) {
+      if (isStatusLabel(cl.name)) {
+        console.warn(JSON.stringify({
+          event: "pr-labels-custom-label-denied",
+          ...tag,
+          label: cl.name,
+          note: "Status/triage labels are not auto-applied by Sigilix.",
+        }))
+        continue
+      }
+      if (!repoLabelNames.has(cl.name)) {
+        console.warn(JSON.stringify({
+          event: "pr-labels-custom-label-not-in-repo",
+          ...tag,
+          label: cl.name,
+          note: "Label doesn't exist on the repo yet; GitHub will auto-create on first apply. Confirm the name isn't a typo of an existing label.",
+        }))
+      }
     }
   }
 
@@ -334,6 +360,30 @@ function buildLabelPrompt(ctx: {
     "[OUTPUT]",
     "Return only the JSON object.",
   ].join("\n")
+}
+
+export function buildLabelCandidates(
+  customLabels: ReadonlyArray<{ name: string; description: string }> | undefined,
+  repoLabels: ReadonlyArray<{ name: string; description: string }>,
+): Array<{ name: string; description: string }> {
+  const source = customLabels !== undefined ? customLabels : repoLabels
+  const candidatesByName = new Map<string, { name: string; description: string }>()
+  for (const label of source) {
+    if (label.description.length === 0) continue
+    if (isStatusLabel(label.name)) continue
+    if (!candidatesByName.has(label.name)) {
+      candidatesByName.set(label.name, label)
+    }
+  }
+  return [...candidatesByName.values()]
+}
+
+function isStatusLabel(name: string): boolean {
+  return STATUS_LABEL_DENYLIST.has(normalizeLabelName(name))
+}
+
+function normalizeLabelName(name: string): string {
+  return name.trim().toLowerCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ")
 }
 
 export function parseLabelResponse(text: string): string[] | null {

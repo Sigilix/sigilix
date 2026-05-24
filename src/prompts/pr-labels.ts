@@ -13,6 +13,7 @@ export const PR_LABEL_PROMPT = `You are **Sigilix**, an automated PR label picke
 - **Quality over quantity.** Only pick a label if the description clearly fits the PR's scope. A PR that's primarily a refactor with a small security touch-up should pick the refactor label, not the security one. When in doubt, omit.
 - **Don't double up.** If two candidate labels overlap (e.g. \`area:auth\` and \`area:security\`), pick the more specific one.
 - **No human bias.** A label's name might suggest a meaning; trust the description. If \`bug\` is described as "user-facing regression" and the PR is a typo fix in a comment, don't pick \`bug\`.
+- **Do not set workflow state.** Never pick labels that describe triage or lifecycle state, such as \`wontfix\`, \`duplicate\`, \`good first issue\`, \`help wanted\`, \`question\`, \`needs triage\`, \`blocked\`, or \`ready for review\`. Sigilix labels PR content, not project management status.
 
 ## Output JSON shape
 

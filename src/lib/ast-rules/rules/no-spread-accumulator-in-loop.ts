@@ -122,14 +122,14 @@ export const noSpreadAccumulatorInLoop: AstRule = {
   shortDescription: "spread-rebuild of an accumulator inside a loop (O(n²))",
   language: "both",
   nodeTypes: ["Program"],
-  visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
+  visit(node: AstNode, ctx: RuleContext): AstRuleHit[] | null {
     if (!node || node.type !== "Program") return null
-    let hit: AstNode | null = null
+    const hits: AstNode[] = []
 
     // declaredInLoop: names bound inside the current outermost active loop.
     // Empty when not in a loop. Reset at function boundaries.
     function walk(n: AstNode, loopDepth: number, declaredInLoop: Set<string>): void {
-      if (hit || !n || typeof n !== "object") return
+      if (!n || typeof n !== "object") return
       const t = n.type
       let nextDepth = loopDepth
       let nextDeclared = declaredInLoop
@@ -149,7 +149,7 @@ export const noSpreadAccumulatorInLoop: AstRule = {
       if (nextDepth > 0) {
         const name = spreadSelfAssignName(n)
         if (name !== null && !nextDeclared.has(name)) {
-          hit = n
+          hits.push(n)
           return
         }
       }
@@ -164,14 +164,13 @@ export const noSpreadAccumulatorInLoop: AstRule = {
       }
     }
     walk(node, 0, new Set())
-    if (!hit) return null
-    const h = hit as AstNode
-    return {
+    if (hits.length === 0) return null
+    return hits.map((h) => ({
       message: "Rebuilding a collection with a spread (`acc = [...acc, …]`) on each iteration is O(n²) over the loop. Mutate in place (`acc.push(…)`) or build once after the loop.",
       evidence: sliceEvidence(ctx.source, h),
       line: h.loc?.start?.line ?? 1,
       endLine: h.loc?.end?.line ?? h.loc?.start?.line ?? 1,
       column: h.loc?.start?.column ?? 0,
-    }
+    }))
   },
 }

@@ -157,14 +157,17 @@ function isSyncIoCall(call: AstNode, a: ImportAliases): boolean {
   return false
 }
 
-/** Search a handler body for the first sync I/O call, WITHOUT descending
+/** Search a handler body for sync I/O calls, WITHOUT descending
  *  into nested functions (those don't run synchronously on the request). */
-function findSyncIoInBody(body: AstNode, a: ImportAliases): AstNode | null {
-  let found: AstNode | null = null
+function findSyncIoInBody(body: AstNode, a: ImportAliases): AstNode[] {
+  const found: AstNode[] = []
   function walk(n: AstNode): void {
-    if (found || !n || typeof n !== "object") return
+    if (!n || typeof n !== "object") return
     if (typeof n.type === "string" && FUNCTION_TYPES.has(n.type)) return // nested fn boundary
-    if (n.type === "CallExpression" && isSyncIoCall(n, a)) { found = n; return }
+    if (n.type === "CallExpression" && isSyncIoCall(n, a)) {
+      found.push(n)
+      return
+    }
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue
       const v = (n as Record<string, unknown>)[k]
@@ -252,7 +255,7 @@ export const noSyncIoInRequestPath: AstRule = {
   shortDescription: "synchronous I/O inside a request handler",
   language: "both",
   nodeTypes: ["Program"],
-  visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
+  visit(node: AstNode, ctx: RuleContext): AstRuleHit[] | null {
     if (!node || node.type !== "Program") return null
     if (SKIP_PATH.test(ctx.path)) return null
     const aliases = collectImports(node)
@@ -260,20 +263,19 @@ export const noSyncIoInRequestPath: AstRule = {
     if (aliases.fsNamespaces.size === 0 && aliases.fsNamed.size === 0
       && aliases.cpNamespaces.size === 0 && aliases.cpNamed.size === 0) return null
 
+    const hits: AstNode[] = []
     for (const handler of collectHandlers(node)) {
       const body = handler.body as AstNode
       if (!body) continue
-      const hit = findSyncIoInBody(body, aliases)
-      if (hit) {
-        return {
-          message: "Synchronous I/O on a request path blocks the event loop and serializes concurrent requests. Use the async API (e.g. `fs.promises.readFile`, `await execFile`) instead.",
-          evidence: sliceEvidence(ctx.source, hit),
-          line: hit.loc?.start?.line ?? 1,
-          endLine: hit.loc?.end?.line ?? hit.loc?.start?.line ?? 1,
-          column: hit.loc?.start?.column ?? 0,
-        }
-      }
+      hits.push(...findSyncIoInBody(body, aliases))
     }
-    return null
+    if (hits.length === 0) return null
+    return hits.map((hit) => ({
+      message: "Synchronous I/O on a request path blocks the event loop and serializes concurrent requests. Use the async API (e.g. `fs.promises.readFile`, `await execFile`) instead.",
+      evidence: sliceEvidence(ctx.source, hit),
+      line: hit.loc?.start?.line ?? 1,
+      endLine: hit.loc?.end?.line ?? hit.loc?.start?.line ?? 1,
+      column: hit.loc?.start?.column ?? 0,
+    }))
   },
 }

@@ -7,7 +7,13 @@ import { parseSource } from "../src/lib/ast-rules/parser"
 import { walkAst } from "../src/lib/ast-rules/walker"
 import { noEvalCall } from "../src/lib/ast-rules/rules/no-eval-call"
 import { getEnabledRules, ALL_RULES } from "../src/lib/ast-rules/rule-registry"
-import type { AstRuleHit } from "../src/lib/ast-rules/types"
+import type { AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+
+function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
+  if (!hit) return
+  if (Array.isArray(hit)) out.push(...hit)
+  else out.push(hit)
+}
 
 function runRule(source: string, ext: ".js" | ".ts" | ".tsx" = ".js"): AstRuleHit[] {
   const r = parseSource(source, ext)
@@ -16,7 +22,7 @@ function runRule(source: string, ext: ".js" | ".ts" | ".tsx" = ".js"): AstRuleHi
   walkAst(r.ast, {
     CallExpression(node) {
       const hit = noEvalCall.visit(node, { path: "test.js", source, ast: r.ast })
-      if (hit) hits.push(hit)
+      appendHits(hits, hit)
     },
   })
   return hits

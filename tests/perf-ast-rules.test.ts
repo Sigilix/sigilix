@@ -7,11 +7,17 @@
 import { describe, it, expect } from "vitest"
 import { parseSource } from "../src/lib/ast-rules/parser"
 import { walkAst } from "../src/lib/ast-rules/walker"
-import type { AstRule, AstRuleHit } from "../src/lib/ast-rules/types"
+import type { AstRule, AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
 import { noSpreadAccumulatorInLoop } from "../src/lib/ast-rules/rules/no-spread-accumulator-in-loop"
 import { noAllocationInLoop } from "../src/lib/ast-rules/rules/no-allocation-in-loop"
 import { noNPlusOneCallInLoop } from "../src/lib/ast-rules/rules/no-n-plus-one-call-in-loop"
 import { noSyncIoInRequestPath } from "../src/lib/ast-rules/rules/no-sync-io-in-request-path"
+
+function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
+  if (!hit) return
+  if (Array.isArray(hit)) out.push(...hit)
+  else out.push(hit)
+}
 
 function runRule(rule: AstRule, source: string, path = "src/app.ts", ext: ".js" | ".ts" = ".ts"): AstRuleHit[] {
   const r = parseSource(source, ext)
@@ -21,7 +27,7 @@ function runRule(rule: AstRule, source: string, path = "src/app.ts", ext: ".js" 
   for (const t of rule.nodeTypes) {
     visitors[t] = (n: unknown) => {
       const hit = rule.visit(n, { path, source, ast: r.ast })
-      if (hit) hits.push(hit)
+      appendHits(hits, hit)
     }
   }
   walkAst(r.ast, visitors)

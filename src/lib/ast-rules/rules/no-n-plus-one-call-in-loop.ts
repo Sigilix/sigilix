@@ -132,12 +132,12 @@ export const noNPlusOneCallInLoop: AstRule = {
   shortDescription: "awaited data-access call inside a loop (N+1)",
   language: "both",
   nodeTypes: ["Program"],
-  visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
+  visit(node: AstNode, ctx: RuleContext): AstRuleHit[] | null {
     if (!node || node.type !== "Program") return null
-    let hit: AstNode | null = null
+    const hits: AstNode[] = []
 
     function walk(n: AstNode, loopDepth: number): void {
-      if (hit || !n || typeof n !== "object") return
+      if (!n || typeof n !== "object") return
       const t = n.type
       let nextDepth = loopDepth
       if (typeof t === "string" && FUNCTION_BOUNDARY_TYPES.has(t)) nextDepth = 0
@@ -145,7 +145,7 @@ export const noNPlusOneCallInLoop: AstRule = {
       if (nextDepth > 0 && t === "AwaitExpression") {
         const arg = n.argument as AstNode
         if (arg?.type === "CallExpression" && isDataAccessCallee(arg.callee as AstNode)) {
-          hit = arg
+          hits.push(arg)
           return
         }
       }
@@ -160,14 +160,13 @@ export const noNPlusOneCallInLoop: AstRule = {
       }
     }
     walk(node, 0)
-    if (!hit) return null
-    const h = hit as AstNode
-    return {
+    if (hits.length === 0) return null
+    return hits.map((h) => ({
       message: "Awaiting a data-access call inside a loop runs one round-trip per iteration (N+1). Batch the work into a single query/request, or collect the promises and `await Promise.all(…)`.",
       evidence: sliceEvidence(ctx.source, h),
       line: h.loc?.start?.line ?? 1,
       endLine: h.loc?.end?.line ?? h.loc?.start?.line ?? 1,
       column: h.loc?.start?.column ?? 0,
-    }
+    }))
   },
 }

@@ -77,21 +77,16 @@ export const noAwaitInLoop: AstRule = {
   language: "both",
   // Visit Program once; the rule does a depth-tracked walk itself.
   nodeTypes: ["Program"],
-  visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
+  visit(node: AstNode, ctx: RuleContext): AstRuleHit[] | null {
     if (!node || node.type !== "Program") return null
     const hits = findAwaitsInLoops(node)
     if (hits.length === 0) return null
-    // Emit at the FIRST hit's location. The runner emits one
-    // finding per visit() call; if a file has multiple await-in-loop
-    // sites, only the first is flagged in v1. Multiple-emit support
-    // is a v2 enhancement.
-    const first = hits[0]!
-    return {
+    return hits.map(({ node: awaitNode }) => ({
       message: "`await` inside a loop body executes iterations sequentially. If iterations are independent, use `Promise.all(arr.map(...))` for parallelism.",
-      evidence: sliceEvidence(ctx.source, first.node),
-      line: first.node.loc?.start?.line ?? 1,
-      endLine: first.node.loc?.end?.line ?? first.node.loc?.start?.line ?? 1,
-      column: first.node.loc?.start?.column ?? 0,
-    }
+      evidence: sliceEvidence(ctx.source, awaitNode),
+      line: awaitNode.loc?.start?.line ?? 1,
+      endLine: awaitNode.loc?.end?.line ?? awaitNode.loc?.start?.line ?? 1,
+      column: awaitNode.loc?.start?.column ?? 0,
+    }))
   },
 }

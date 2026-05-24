@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest"
 import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,
+  fetchTestFileContentsWithBudget,
   mergeHelperCoverage,
   mergeInspectedTestFileContents,
   pickFence,
@@ -185,6 +186,64 @@ describe("applyTestFileContentCaps", () => {
       ["tests/foo.test.ts", "tests/missing.test.ts"],
     )
     expect(out.contentByPath).toEqual({ "tests/foo.test.ts": "content" })
+  })
+})
+
+describe("fetchTestFileContentsWithBudget", () => {
+  it("fetches all files in the common small-PR case", async () => {
+    const paths = ["tests/a.test.ts", "tests/b.test.ts", "tests/c.test.ts"]
+    const fetched: string[] = []
+    const out = await fetchTestFileContentsWithBudget({
+      paths,
+      concurrency: 2,
+      fetchContent: async (path) => {
+        fetched.push(path)
+        return `content for ${path}`
+      },
+    })
+
+    expect(fetched).toEqual(paths)
+    expect(Object.keys(out.contentByPath)).toEqual(paths)
+    expect(out.failedPaths).toEqual([])
+    expect(out.budgetOmittedPaths).toEqual([])
+    expect(out.fetchedCount).toBe(3)
+    expect(out.skippedForBudgetCount).toBe(0)
+  })
+
+  it("stops scheduling once the total evidence budget is full", async () => {
+    const paths = Array.from({ length: 60 }, (_unused, i) => `tests/file-${i}.test.ts`)
+    const fetched: string[] = []
+    const out = await fetchTestFileContentsWithBudget({
+      paths,
+      concurrency: 5,
+      fetchContent: async (path) => {
+        fetched.push(path)
+        return "x".repeat(TEST_FILE_CONTENT_CHAR_CAP)
+      },
+    })
+
+    expect(Object.keys(out.contentByPath)).toHaveLength(3)
+    expect(fetched.length).toBe(5)
+    expect(out.fetchedCount).toBe(5)
+    expect(out.budgetOmittedPaths).toHaveLength(57)
+    expect(out.skippedForBudgetCount).toBe(57)
+    expect(out.failedPaths).toEqual([])
+    expect(out.totalChars).toBe(TEST_FILE_CONTENT_TOTAL_CHAR_CAP)
+  })
+
+  it("keeps fetch failures distinct from budget omissions", async () => {
+    const out = await fetchTestFileContentsWithBudget({
+      paths: ["tests/a.test.ts", "tests/missing.test.ts", "tests/b.test.ts"],
+      concurrency: 2,
+      fetchContent: async (path) => {
+        if (path.includes("missing")) throw new Error("404")
+        return "small"
+      },
+    })
+
+    expect(Object.keys(out.contentByPath)).toEqual(["tests/a.test.ts", "tests/b.test.ts"])
+    expect(out.failedPaths).toEqual(["tests/missing.test.ts"])
+    expect(out.budgetOmittedPaths).toEqual([])
   })
 })
 

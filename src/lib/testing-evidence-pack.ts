@@ -57,6 +57,8 @@ export const TEST_FILE_CONTENT_CHAR_CAP = 20_000
  */
 export const TEST_FILE_CONTENT_TOTAL_CHAR_CAP = 60_000
 
+export const DEFAULT_TEST_FILE_FETCH_CONCURRENCY = 5
+
 /**
  * A single source/test sibling mapping derived from the full diff
  * inventory. `test === null` means the source file has no sibling
@@ -162,10 +164,35 @@ export interface InspectedTestFileFetchResult {
   contentByPath: Record<string, string>
   /** Paths whose fetch failed (404, network error, etc.). */
   failedPaths: string[]
+  /** Paths intentionally omitted because the total evidence budget was full. */
+  budgetOmittedPaths?: string[]
   /** Per-file truncation applied? (path was over `TEST_FILE_CONTENT_CHAR_CAP`). */
   truncatedPaths: string[]
   /** Total chars across all included files after truncation. */
   totalChars: number
+}
+
+export interface BudgetedTestFileFetchResult extends InspectedTestFileFetchResult {
+  /** Number of `fetchContent` calls started. */
+  fetchedCount: number
+  /** Number of paths skipped or omitted because the total budget was full. */
+  skippedForBudgetCount: number
+}
+
+function capTestFileContent(path: string, body: string): {
+  path: string
+  body: string
+  truncated: boolean
+} {
+  if (body.length <= TEST_FILE_CONTENT_CHAR_CAP) {
+    return { path, body, truncated: false }
+  }
+  return {
+    path,
+    body: body.slice(0, TEST_FILE_CONTENT_CHAR_CAP) +
+      `\n[…truncated at ${TEST_FILE_CONTENT_CHAR_CAP} chars per the testing-evidence per-file cap…]`,
+    truncated: true,
+  }
 }
 
 /**
@@ -180,23 +207,26 @@ export function applyTestFileContentCaps(
   pathOrderHint: readonly string[],
 ): InspectedTestFileFetchResult {
   const contentByPath: Record<string, string> = {}
+  const budgetOmittedPaths: string[] = []
   const truncatedPaths: string[] = []
   let totalChars = 0
   // Walk the path-order hint so the cap-fill is deterministic when
   // multiple test files arrive — `pathOrderHint` should reflect the
   // diff's natural order (e.g. alphabetical or original Codex order).
-  for (const path of pathOrderHint) {
+  for (let i = 0; i < pathOrderHint.length; i++) {
+    const path = pathOrderHint[i]!
     if (!(path in rawContentByPath)) continue
-    let body = rawContentByPath[path] ?? ""
-    if (body.length > TEST_FILE_CONTENT_CHAR_CAP) {
-      body = body.slice(0, TEST_FILE_CONTENT_CHAR_CAP) +
-        `\n[…truncated at ${TEST_FILE_CONTENT_CHAR_CAP} chars per the testing-evidence per-file cap…]`
-      truncatedPaths.push(path)
-    }
+    const capped = capTestFileContent(path, rawContentByPath[path] ?? "")
+    if (capped.truncated) truncatedPaths.push(path)
+    const body = capped.body
     if (totalChars + body.length > TEST_FILE_CONTENT_TOTAL_CHAR_CAP) {
       // Cap-spillover: stop including further files; the specialist
       // sees what fits in the budget. Don't try to slice a partial
       // file in — keeps the included files atomic.
+      budgetOmittedPaths.push(path)
+      for (const remainingPath of pathOrderHint.slice(i + 1)) {
+        if (remainingPath in rawContentByPath) budgetOmittedPaths.push(remainingPath)
+      }
       break
     }
     contentByPath[path] = body
@@ -205,8 +235,80 @@ export function applyTestFileContentCaps(
   return {
     contentByPath,
     failedPaths: [],
+    budgetOmittedPaths,
     truncatedPaths,
     totalChars,
+  }
+}
+
+export async function fetchTestFileContentsWithBudget(args: {
+  paths: readonly string[]
+  fetchContent: (path: string) => Promise<string>
+  concurrency?: number
+}): Promise<BudgetedTestFileFetchResult> {
+  const concurrency = Math.max(
+    1,
+    Math.floor(args.concurrency ?? DEFAULT_TEST_FILE_FETCH_CONCURRENCY),
+  )
+  const contentByPath: Record<string, string> = {}
+  const failedPaths: string[] = []
+  const budgetOmittedPaths: string[] = []
+  const truncatedPaths: string[] = []
+  let totalChars = 0
+  let fetchedCount = 0
+
+  for (let i = 0; i < args.paths.length; i += concurrency) {
+    if (totalChars >= TEST_FILE_CONTENT_TOTAL_CHAR_CAP) {
+      budgetOmittedPaths.push(...args.paths.slice(i))
+      break
+    }
+    const batch = args.paths.slice(i, i + concurrency)
+    fetchedCount += batch.length
+    const fetchResults = await Promise.allSettled(
+      batch.map(async (path) => ({ path, body: await args.fetchContent(path) })),
+    )
+
+    let budgetFull = false
+    for (let j = 0; j < batch.length; j++) {
+      const path = batch[j]!
+      const result = fetchResults[j]
+      if (budgetFull) {
+        budgetOmittedPaths.push(path)
+        continue
+      }
+      if (!result || result.status === "rejected" || typeof result.value.body !== "string") {
+        failedPaths.push(path)
+        continue
+      }
+      const capped = capTestFileContent(path, result.value.body)
+      if (totalChars + capped.body.length > TEST_FILE_CONTENT_TOTAL_CHAR_CAP) {
+        budgetOmittedPaths.push(path)
+        budgetFull = true
+        continue
+      }
+      contentByPath[path] = capped.body
+      totalChars += capped.body.length
+      if (capped.truncated) truncatedPaths.push(path)
+    }
+
+    if (budgetFull) {
+      budgetOmittedPaths.push(...args.paths.slice(i + concurrency))
+      break
+    }
+    if (totalChars >= TEST_FILE_CONTENT_TOTAL_CHAR_CAP) {
+      budgetOmittedPaths.push(...args.paths.slice(i + concurrency))
+      break
+    }
+  }
+
+  return {
+    contentByPath,
+    failedPaths,
+    budgetOmittedPaths,
+    truncatedPaths,
+    totalChars,
+    fetchedCount,
+    skippedForBudgetCount: budgetOmittedPaths.length,
   }
 }
 

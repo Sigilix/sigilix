@@ -147,9 +147,8 @@ export function splitOversizedWindow(
  * sub-chunks via splitOversizedWindow(), each <= MAX_CHUNK_CHARS, with
  * no content lost. The cap was also lowered to a token-safe 1400 chars.
  *
- * NOTE: this NO LONGER matches scripts/index-repo.mjs (which still drops
- * over-cap windows at the old 1800 cap). That script is intentionally
- * left untouched by SIG-133; the Worker indexer is the canonical path.
+ * The Worker indexer is the canonical path; no off-Worker fallback should
+ * write vectors directly to Vectorize.
  */
 export function chunkFile(path: string, content: string): Chunk[] {
   const lines = content.split("\n")

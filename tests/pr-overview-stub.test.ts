@@ -39,10 +39,13 @@ vi.mock("../src/lib/github", async () => {
 })
 
 import {
+  buildPrOverviewStubBody,
   isStubBody,
   postPrOverviewStubIfNeeded,
+  selectPrOverviewStubQuip,
   STUB_BODY,
   STUB_GITHUB_API_TIMEOUT_MS,
+  STUB_QUIPS,
   stubFlagKey,
   stubInflightKey,
   waitForPrOverviewStub,
@@ -80,6 +83,14 @@ const args = {
   prNumber: 73,
   headSha: "h".repeat(40),
   installationId: 1,
+}
+
+function stubBodyFor(overrides: Partial<typeof args> = {}): string {
+  const merged = { ...args, ...overrides }
+  return buildPrOverviewStubBody({
+    prNumber: merged.prNumber,
+    headSha: merged.headSha,
+  })
 }
 
 beforeEach(() => {
@@ -254,7 +265,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
     expect(out).toEqual({ kind: "marker-scan-hit", commentId: 555 })
     expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
     expect(mockUpdateIssueComment.mock.calls[0]![2]).toBe(555)
-    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(STUB_BODY)
+    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(stubBodyFor())
     expect(store.get(stubFlagKey(args))).toBe("555")
   })
 
@@ -291,7 +302,7 @@ describe("postPrOverviewStubIfNeeded — marker scan fallback (Codex Q2)", () =>
 })
 
 describe("postPrOverviewStubIfNeeded — create path", () => {
-  it("creates a new stub comment with STUB_BODY when no marker exists; writes KV flag", async () => {
+  it("creates a new stub comment with the deterministic placeholder body when no marker exists; writes KV flag", async () => {
     const { kv, store } = makeKvStub()
     mockListIssueCommentsPage.mockResolvedValueOnce([])
 
@@ -299,7 +310,7 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
 
     expect(out).toEqual({ kind: "posted", commentId: 999 })
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
-    expect(mockCreateIssueComment.mock.calls[0]![3]).toBe(STUB_BODY)
+    expect(mockCreateIssueComment.mock.calls[0]![3]).toBe(stubBodyFor())
     expect(store.get(stubFlagKey(args))).toBe("999")
   })
 
@@ -316,7 +327,31 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
 
   it("STUB_BODY starts with the sigilix-overview marker so the handler edits it in place", () => {
     expect(STUB_BODY.split("\n")[0]).toBe("<!-- sigilix:pr-overview -->")
-    expect(STUB_BODY).toContain("_Reviewing…_")
+    expect(STUB_BODY).toContain("Sigilix is reviewing this pull request...")
+    expect(STUB_BODY).toContain("30-90 seconds")
+    expect(STUB_BODY).toContain("```text")
+  })
+
+  it("SIG-165: quip selection is deterministic per PR number and head SHA", () => {
+    expect(STUB_QUIPS.length).toBeGreaterThanOrEqual(12)
+    const first = selectPrOverviewStubQuip(args)
+    const second = selectPrOverviewStubQuip({ ...args })
+    const body = stubBodyFor()
+
+    expect(second).toBe(first)
+    expect(body).toContain(first)
+    expect(body).toBe(stubBodyFor())
+    expect(body).not.toContain("_Reviewing")
+  })
+
+  it("SIG-165: keeps the ASCII speech bubble borders aligned with the content row", () => {
+    const codeBlock = /```text\n([\s\S]*?)\n```/.exec(stubBodyFor())?.[1]
+    expect(codeBlock).toBeDefined()
+
+    const [topBorder, contentRow, bottomBorder] = codeBlock!.split("\n")
+
+    expect(topBorder!.length).toBe(contentRow!.length)
+    expect(bottomBorder!.length).toBe(contentRow!.length)
   })
 
   it("falls back to creating when the marker-scan throws (best-effort)", async () => {
@@ -402,7 +437,7 @@ describe("postPrOverviewStubIfNeeded — idempotency across deliveries", () => {
 
     expect(out).toEqual({ kind: "marker-scan-hit", commentId: 200 })
     expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
-    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(STUB_BODY)
+    expect(mockUpdateIssueComment.mock.calls[0]![3]).toBe(stubBodyFor({ headSha: newHeadArgs.headSha }))
   })
 })
 

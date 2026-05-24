@@ -148,50 +148,25 @@ This creates the index that holds embedded code chunks. The Worker queries it at
 
 ### 4d. Index your repos
 
-For each repo you want Arc to know about, run the local indexer:
+Repo indexing is owned by the Worker indexer. Do not add GitHub Actions workflows that write directly to Vectorize; the retired `.github/workflows/openclaw-index.yml` / `.github/workflows/codebase-index.yml` path used bare repo namespaces and can leave orphan vectors outside uninstall cleanup.
+
+New GitHub App installs and repository-added events enqueue `index-repo` jobs automatically. For repos that predate the Worker indexer rollout, use the authenticated admin routes:
 
 ```bash
-export CLOUDFLARE_ACCOUNT_ID=<your account id>
-export CLOUDFLARE_API_TOKEN=<token with Workers AI Read + Vectorize Write>
+curl -X POST \
+  -H "Authorization: Bearer $OPENCLAW_ADMIN_TOKEN" \
+  "https://<worker-host>/admin/index-repo?owner=Arc-and-Anchor&repo=sigilix"
 
-node scripts/index-repo.mjs ../rubberfit
-node scripts/index-repo.mjs ../Rubberfit-Desktop --namespace=rubberfit-desktop
+curl -X POST \
+  -H "Authorization: Bearer $OPENCLAW_ADMIN_TOKEN" \
+  "https://<worker-host>/admin/index-backfill?dryRun=true"
+
+curl -X POST \
+  -H "Authorization: Bearer $OPENCLAW_ADMIN_TOKEN" \
+  "https://<worker-host>/admin/index-reconcile?dryRun=true"
 ```
 
-The default namespace is the repo directory name lowercased. Linear team keys map to namespaces via `OPENCLAW_TEAM_REPO_MAP` (see step 5).
-
-The first run takes several minutes for a 10k-chunk repo. Subsequent runs are full re-embeds — incremental indexing is a future enhancement.
-
-### 4e. Auto-reindex on every push (recommended)
-
-To keep the index fresh without running the CLI manually, drop a thin workflow file into each tracked repo. It calls a **reusable workflow** in this repo (`.github/workflows/codebase-index.yml`) so the indexer logic stays in one place.
-
-**Step 1 — set org-level secrets** (one-time, applies to every repo):
-
-Go to https://github.com/organizations/Arc-and-Anchor/settings/secrets/actions and add:
-- `CLOUDFLARE_ACCOUNT_ID` — your CF account ID
-- `CLOUDFLARE_AI_TOKEN` — token with `Account → Workers AI → Read` and `Account → Vectorize → Edit`
-
-Set them with **Repository access → All repositories** (or pick the specific repos you want to index).
-
-**Step 2 — drop the caller workflow into each tracked repo**, at `.github/workflows/openclaw-index.yml`. Copy from `examples/openclaw-index.yml` in this repo:
-
-```yaml
-name: OpenClaw codebase index
-on:
-  push:
-    branches: [dev, main]
-  workflow_dispatch:
-
-jobs:
-  index:
-    uses: Arc-and-Anchor/Sigilix/.github/workflows/codebase-index.yml@main
-    secrets:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_AI_TOKEN }}
-```
-
-Triggers on push to `dev` OR `main`. dev is the active development branch; main is the customer-facing release. Both reindex into the same namespace (`<repo-name>` lowercased) — whichever branch changed last wins, matching what the team is actually working on at any given moment. The reusable workflow checks out the calling repo at the triggering ref, runs the indexer, and upserts vectors into Vectorize.
+The canonical namespace is `<owner>/<repo>` lowercased. Linear team keys map to namespaces via `OPENCLAW_TEAM_REPO_MAP` (see step 5).
 
 ### 5. Set the secrets
 
@@ -829,9 +804,6 @@ Sigilix/
 ├── wrangler.toml                          # Cloudflare config + KV/Vectorize bindings + secrets list
 ├── .dev.vars.example                      # local secret template (.dev.vars is gitignored)
 ├── .github/workflows/ci.yml               # PR typecheck + tests (deploys are owned by Cloudflare Workers Builds)
-├── .github/workflows/codebase-index.yml   # reusable workflow — auto-reindex on push to dev/main
-├── examples/openclaw-index.yml            # template caller for each tracked repo
-├── scripts/index-repo.mjs                 # CLI indexer (chunk + embed + upsert to Vectorize)
 ├── scripts/phase3-bakeoff.mjs             # Phase 3 bake-off — replay agent-loop runs through single-shot
 ├── scripts/phase4-bakeoff.mjs             # Phase 4 bake-off — paired ensemble vs Phase 3 review comparison
 └── src/
@@ -867,7 +839,7 @@ Sigilix/
 
 - **Cycle awareness**: when triaging an issue mid-cycle, suggest whether it fits the current cycle or should be deferred to the next based on team capacity.
 - **Linked PR detection**: when a PR mentions an issue, post a "PR ready for review" comment on the issue side.
-- **Incremental indexing**: re-embed only changed files on each push (current scripts/index-repo.mjs re-embeds the whole repo).
+- **Incremental indexing**: re-embed only changed files on each push (the Worker indexer currently processes the repo tree in sharded jobs).
 
 ## Security
 

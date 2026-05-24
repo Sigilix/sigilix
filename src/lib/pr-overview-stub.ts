@@ -1,4 +1,4 @@
-// SIG-84 — synchronous "Reviewing…" stub for the pr-overview sticky.
+// SIG-84 — synchronous review-in-progress stub for the pr-overview sticky.
 //
 // Founder direction (post-PR #100): the pr-overview sticky comment was
 // posting ~30s AFTER the `pr-review` event on every PR push because
@@ -34,7 +34,8 @@
 // The flag is intentionally per-`(prNumber, headSha)`, not per-PR. A
 // new push fires a new webhook with the new headSha — the new stub
 // helper checks the new key, misses, scans, finds the prior stub,
-// resets its body to `_Reviewing…_`, and rewrites the KV flag.
+// resets its body to the review-in-progress placeholder, and rewrites
+// the KV flag.
 
 import type { Env } from "../index"
 import { GitHubClient } from "./github"
@@ -48,26 +49,88 @@ import {
 /**
  * Body posted by the stub. The marker on line 1 is what the overview
  * handler greps for to decide POST-vs-PATCH; sharing the same string
- * means the in-place edit Just Works.
- *
- * Body intentionally short. The "Sigilix Overview" heading mirrors
- * what `formatOverviewComment` renders on the final walkthrough, so
- * the customer sees the same surface throughout (placeholder →
- * completed) without a visual reflow.
- *
- * The `_Reviewing…_` italics + ellipsis is what CodeRabbit uses
- * (founder reference comparison: "two stickies, ordering matches
- * CodeRabbit"). Markdown italics render the same in light/dark mode.
+ * means the in-place edit Just Works. The v2 stub marker lets
+ * `isStubBody` distinguish a real loading state from a completed
+ * overview that merely mentions "reviewing".
  */
-export const STUB_BODY = `${OVERVIEW_MARKER}
+const STUB_V2_MARKER = "<!-- sigilix:pr-overview-stub:v2 -->"
+const DEFAULT_STUB_HEAD_SHA = "0".repeat(40)
 
-## Sigilix Overview
+export const STUB_QUIPS = [
+  "Prove the path before you trust the patch.",
+  "Small diffs still deserve sharp eyes.",
+  "Facts first. Verdicts second.",
+  "Trace the edge before naming the risk.",
+  "Changed lines get the first question.",
+  "Evidence beats confidence every time.",
+  "Follow the call, then follow the consequence.",
+  "A clean review starts with a clean anchor.",
+  "The quiet bug is usually in the boundary.",
+  "Good findings can point to their proof.",
+  "Review the behavior, not just the shape.",
+  "If it matters, it should survive citation.",
+] as const
 
-_Reviewing…_`
+function quipIndex(prNumber: number, headSha: string): number {
+  let hash = 2166136261
+  const input = `${prNumber}:${headSha}`
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i)
+    hash = Math.imul(hash, 16777619) >>> 0
+  }
+  return hash % STUB_QUIPS.length
+}
+
+export function selectPrOverviewStubQuip(args: {
+  prNumber: number
+  headSha: string
+}): string {
+  return STUB_QUIPS[quipIndex(args.prNumber, args.headSha)]!
+}
+
+function renderStubFlourish(quip: string): string {
+  const width = Math.max(46, quip.length + 2)
+  const line = "_".repeat(width + 1)
+  const dash = "-".repeat(width + 1)
+  const paddedQuip = quip.padEnd(width - 2, " ")
+  return [
+    `  ${line}`,
+    ` < ${paddedQuip} >`,
+    `  ${dash}`,
+    "        \\\\",
+    "         \\\\      /\\",
+    "          \\\\    /__\\",
+    "             [ SIGILIX ]",
+    "              \\____/",
+  ].join("\n")
+}
+
+export function buildPrOverviewStubBody(args: {
+  prNumber: number
+  headSha: string
+}): string {
+  const quip = selectPrOverviewStubQuip(args)
+  return `${OVERVIEW_MARKER}
+
+${STUB_V2_MARKER}
+
+**Sigilix is reviewing this pull request...**
+
+You'll see a structured overview here in 30-90 seconds.
+
+\`\`\`text
+${renderStubFlourish(quip)}
+\`\`\``
+}
+
+export const STUB_BODY = buildPrOverviewStubBody({
+  prNumber: 0,
+  headSha: DEFAULT_STUB_HEAD_SHA,
+})
 
 /**
- * SIG-96: detect whether an existing overview-sticky body is the stub
- * (`_Reviewing…_` placeholder) vs a completed summary. Used by
+ * SIG-96: detect whether an existing overview-sticky body is a stub
+ * placeholder vs a completed summary. Used by
  * `postPrOverviewStubIfNeeded` to decide whether the reset-to-stub
  * edit on a subsequent push is a no-op idempotent re-write (existing
  * body IS the stub) or would clobber a real summary (existing body
@@ -80,8 +143,7 @@ _Reviewing…_`
  * mentions the stub format verbatim) got misclassified as a stub
  * and triggered the reset path — clobbering exactly the summary
  * SIG-96 was meant to preserve. Tightened to a whole-body match
- * against the four exact stub forms (current + legacy marker, Unicode
- * ellipsis + ASCII fallback).
+ * against exact legacy forms plus the v2 marker-gated placeholder.
  *
  * Non-string input now returns `false`. Pre-fix it returned `true`
  * (defensive "no body = treat as stub") but no real call site
@@ -92,7 +154,7 @@ _Reviewing…_`
  *
  * Pure — exported for tests.
  */
-function buildStubFormVariants(): readonly string[] {
+function buildLegacyStubFormVariants(): readonly string[] {
   // Both marker prefixes × both ellipsis flavors = 4 exact stub
   // strings to whole-match against. Trimmed at compare time.
   const HEADING_BLOCK = "\n\n## Sigilix Overview\n\n"
@@ -106,12 +168,29 @@ function buildStubFormVariants(): readonly string[] {
   ].map((s) => s.trim())
 }
 
-const STUB_FORM_VARIANTS = buildStubFormVariants()
+const LEGACY_STUB_FORM_VARIANTS = buildLegacyStubFormVariants()
+
+function isV2StubBody(trimmed: string): boolean {
+  for (const marker of [OVERVIEW_MARKER, LEGACY_OVERVIEW_MARKER]) {
+    const prefix = `${marker}
+
+${STUB_V2_MARKER}
+
+**Sigilix is reviewing this pull request...**
+
+You'll see a structured overview here in 30-90 seconds.
+
+\`\`\`text
+`
+    if (trimmed.startsWith(prefix) && trimmed.endsWith("\n```")) return true
+  }
+  return false
+}
 
 export function isStubBody(body: string | null | undefined): boolean {
   if (typeof body !== "string") return false
   const trimmed = body.trim()
-  return STUB_FORM_VARIANTS.includes(trimmed)
+  return LEGACY_STUB_FORM_VARIANTS.includes(trimmed) || isV2StubBody(trimmed)
 }
 
 const STUB_KV_PREFIX = "pr-overview-stub-posted:"
@@ -297,10 +376,10 @@ export type PostStubOutcome =
  *      KV and return `marker-scan-hit` — handles cross-region KV
  *      misses + the openclaw→sigilix transition.
  *   3. Reset-or-create. With no prior stub for THIS head and an
- *      existing sticky for a PRIOR head, edit that sticky's body
- *      back to `_Reviewing…_` (so the overview handler can rewrite
- *      it again in place); otherwise create a fresh comment. Write
- *      KV flag in both branches.
+ *      existing sticky for a PRIOR head, edit that sticky's body back
+ *      to the review-in-progress placeholder (so the overview handler
+ *      can rewrite it again in place); otherwise create a fresh
+ *      comment. Write KV flag in both branches.
  */
 export async function postPrOverviewStubIfNeeded(
   args: PostStubArgs,
@@ -312,6 +391,7 @@ export async function postPrOverviewStubIfNeeded(
   }
 
   const flagKey = stubFlagKey({ owner, repo, prNumber, headSha })
+  const stubBody = buildPrOverviewStubBody({ prNumber, headSha })
 
   // ── 1. KV fast path ──────────────────────────────────────────────
   // Cloudflare KV is eventually consistent across regions, so a kv-hit
@@ -426,7 +506,7 @@ export async function postPrOverviewStubIfNeeded(
   // SIG-96: fetch BODY alongside id so we can distinguish a stale
   // stub from a completed summary on subsequent pushes. Pre-fix the
   // helper returned only the id and the caller unconditionally reset
-  // the body to `_Reviewing…_`, clobbering prior summaries on every
+  // the body to a placeholder, clobbering prior summaries on every
   // push.
   let existingComment: { id: number; body: string } | null = null
   try {
@@ -448,7 +528,7 @@ export async function postPrOverviewStubIfNeeded(
     const existingCommentId = existingComment.id
 
     // SIG-96: if the existing sticky already carries a completed
-    // summary (anything other than the `_Reviewing…_` stub), do NOT
+    // summary (anything other than the placeholder stub), do NOT
     // overwrite it. The overview handler will PATCH it atomically when
     // the fresh render finishes; in the meantime a reviewer landing
     // mid-rerender sees the prior head's summary instead of an empty
@@ -496,7 +576,7 @@ export async function postPrOverviewStubIfNeeded(
     // failure.
     try {
       const raced = await raceWithTimeout(
-        client.updateIssueComment(owner, repo, existingCommentId, STUB_BODY),
+        client.updateIssueComment(owner, repo, existingCommentId, stubBody),
         STUB_GITHUB_API_TIMEOUT_MS,
       )
       if (raced.kind === "timeout") {
@@ -535,7 +615,7 @@ export async function postPrOverviewStubIfNeeded(
   let created: { id: number }
   try {
     const raced = await raceWithTimeout(
-      client.createIssueComment(owner, repo, prNumber, STUB_BODY),
+      client.createIssueComment(owner, repo, prNumber, stubBody),
       STUB_GITHUB_API_TIMEOUT_MS,
     )
     if (raced.kind === "timeout") {

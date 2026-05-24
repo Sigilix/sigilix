@@ -5784,28 +5784,31 @@ function backfillSecurityEvidenceFromSources(
   sourceIds: readonly string[],
   sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>,
 ): PrReviewFinding {
-  const cweId = hasNonEmptyString(finding.cweId)
-    ? undefined
-    : firstSourceEvidenceField(sourceIds, sourceEvidenceById, "cweId")
-  const evidenceId = hasNonEmptyString(finding.evidenceId)
-    ? undefined
-    : firstSourceEvidenceField(sourceIds, sourceEvidenceById, "evidenceId")
-  if (!cweId && !evidenceId) return finding
+  const source = selectSourceEvidenceForBackfill(finding, sourceIds, sourceEvidenceById)
+  if (!source) return finding
   return {
     ...finding,
-    ...(cweId ? { cweId } : {}),
-    ...(evidenceId ? { evidenceId } : {}),
+    ...(!hasNonEmptyString(finding.cweId) && source.cweId ? { cweId: source.cweId } : {}),
+    ...(!hasNonEmptyString(finding.evidenceId) && source.evidenceId ? { evidenceId: source.evidenceId } : {}),
   }
 }
 
-function firstSourceEvidenceField(
+function selectSourceEvidenceForBackfill(
+  finding: PrReviewFinding,
   sourceIds: readonly string[],
   sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>,
-  field: keyof SourceFindingSecurityEvidence,
-): string | undefined {
+): SourceFindingSecurityEvidence | undefined {
   for (const sourceId of sourceIds) {
-    const value = sourceEvidenceById.get(sourceId)?.[field]
-    if (hasNonEmptyString(value)) return value
+    const source = sourceEvidenceById.get(sourceId)
+    if (!source) continue
+    if (hasNonEmptyString(finding.evidenceId) && source.evidenceId === finding.evidenceId) return source
+    if (hasNonEmptyString(finding.cweId) && source.cweId === finding.cweId) return source
+  }
+  for (const sourceId of sourceIds) {
+    const source = sourceEvidenceById.get(sourceId)
+    if (source && (hasNonEmptyString(source.cweId) || hasNonEmptyString(source.evidenceId))) {
+      return source
+    }
   }
   return undefined
 }

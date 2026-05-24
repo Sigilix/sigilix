@@ -237,8 +237,10 @@ export interface SigilixConfig {
    * `description` the LLM uses to judge whether the label fits the
    * PR's diff + title + body.
    *
-   * When this field is absent or empty, Sigilix derives candidates
-   * from the repo's existing labels unless `labels.enabled:false`.
+   * When this field is absent, Sigilix derives candidates from the
+   * repo's existing labels unless `labels.enabled:false`.
+   * An explicit empty array (`customLabels: []`) is treated as an
+   * intentional empty allowlist (no candidates).
    *
    * Sigilix-managed origin is tracked separately in KV so we never
    * remove human-applied labels on subsequent runs.
@@ -902,9 +904,9 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   // ARC-265/SIG-135: customLabels parsing. Strict-ish: each entry
   // must be an object with non-empty string name + description. Bad
   // entries are dropped (forward-compat: a typo in one entry shouldn't
-  // disable the whole feature). Preserve an explicit empty array so
-  // the label picker can distinguish "no curated allowlist configured"
-  // from "configured allowlist intentionally contains no labels".
+  // disable the whole feature). Preserve only an explicit empty array
+  // as an empty allowlist; a non-empty array with zero valid entries
+  // is treated as missing config so repo-label fallback still works.
   if (Array.isArray(obj.customLabels)) {
     const labels: NonNullable<SigilixConfig["customLabels"]> = []
     const seen = new Set<string>()
@@ -918,7 +920,9 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       seen.add(name)
       labels.push({ name, description })
     }
-    out.customLabels = labels
+    if (obj.customLabels.length === 0 || labels.length > 0) {
+      out.customLabels = labels
+    }
   }
   // ARC-273: costControls parsing. Strict bounds on numbers + string
   // arrays; bad entries dropped silently (fail-open per the existing

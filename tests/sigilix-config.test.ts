@@ -86,6 +86,13 @@ describe("parseSigilixConfig — happy paths", () => {
     expect(result).toEqual({ customLabels: [] })
   })
 
+  it("does not treat fully-invalid non-empty customLabels as an empty allowlist", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      customLabels: [{ name: "bug" }],
+    }))
+    expect(result).toEqual({})
+  })
+
   it("drops empty-string guidance (treats as absent)", () => {
     expect(parseSigilixConfig(JSON.stringify({ guidance: "" }))).toEqual({})
   })

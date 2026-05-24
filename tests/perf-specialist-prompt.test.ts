@@ -83,6 +83,13 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
     expect(props.complexityEstimate).toEqual({ type: "string" })
     expect(props.hotPathIdentifier).toEqual({ type: "string" })
   })
+
+  it("requires finding scope so constrained generation chooses the review surface", () => {
+    const props = PR_REVIEW_SCHEMA.properties.findings.items.properties as Record<string, unknown>
+    const required = PR_REVIEW_SCHEMA.properties.findings.items.required as string[]
+    expect(props.scope).toEqual({ type: "string", enum: ["line", "file", "pr", "comment"] })
+    expect(required).toContain("scope")
+  })
 })
 
 describe("PROMPT_VERSION", () => {

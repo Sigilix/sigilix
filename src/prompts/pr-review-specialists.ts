@@ -153,6 +153,7 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "path": "src/...",
       "line": 42,
       "startLine": null | int,   (SIG-164/SIG-180 — Prefer a multi-line range when the finding is block-level or the fix needs contiguous surrounding context. Set "line" to the last changed or most relevant line in the affected function/block, and set "startLine" to the FIRST visible line of the smallest enclosing function, method, JSX block, branch, or statement group needed to understand the issue. For point-fix findings — a typo, stray "console.log", off-by-one, single condition/operator, single call argument, one import, one deleted line, or any one-line suggestedReplacement/delete — keep "startLine: null" and anchor "line" to the exact changed line. Do NOT widen a point-fix to the enclosing block just to satisfy the multi-line preference. Examples: a finding about a function's lacking error handling spans "startLine" at the function-def line and "line" at the function-close line; a finding about a single off-by-one is "startLine: null" with "line" set to the off-by-one line.)
+      "scope": "line" | "file" | "pr" | "comment",   (SIG-202 — REQUIRED. Use "line" only when the exact changed line/range is the subject and should become an inline GitHub review comment. Use "file" for file/module-level findings, "pr" for cross-file/PR-level findings, and "comment" for GitHub comment/review-event/bot-command behavior. If no semantically correct changed line exists, do NOT force a nearby line; choose a broader scope and keep line/path as context.)
       "score": 1-5,
       "headline": "<concise issue summary>",
       "body": "<actionable explanation. Reference identifiers in backticks. End with the minimal fix.>",
@@ -186,6 +187,11 @@ Do NOT round up. A finding you would describe to a teammate as "I think there's 
 - For point-fix findings, set \`line\` to the exact changed line and keep \`startLine: null\`. Do NOT widen to the enclosing function, JSX block, or statement group just to satisfy the multi-line preference.
 - Use a multi-line \`startLine..line\` range only when the problem and fix are one contiguous block and the surrounding block is necessary for the reader to understand the issue.
 
+[REVIEW SURFACE SCOPE — SIG-202]
+- Set \`scope:"line"\` only when the exact changed line/range is what the reviewer should inspect inline.
+- Set \`scope:"file"\`, \`scope:"pr"\`, or \`scope:"comment"\` when the finding is about a file/module, the PR as a whole, or GitHub comment/review-event behavior. These render in the review body instead of an inline diff thread.
+- A broader-scope finding still needs the most relevant \`path\` and \`line\` as context, but that line must not be treated as the subject of the issue.
+
 [SIG-113 TESTING CITATION GATE] Every \`category: "testing"\` finding MUST carry at least one citation — either \`inspectedTestFiles\` (for "tests are insufficient" claims) or \`evidenceRefs\` with a \`siblingMapping:\` string (for "tests are missing" claims). The citation is cross-checked against the [TESTING EVIDENCE] block: a path or mapping you invent is rejected and the finding is dropped before it reaches the customer. Copy citation values VERBATIM from the evidence block.
 
 [SIG-108 SECURITY EVIDENCE GATE] Every \`category: "security"\` finding with \`score >= 4\` MUST carry both \`cweId\` (the weakness's CWE id) and \`evidenceId\`. The \`evidenceId\` is cross-checked against the [SECURITY EVIDENCE MANIFEST]: copy a matching id VERBATIM (an id you invent, or one whose file/line is more than 10 lines from your finding, is rejected and the finding is dropped). For an access-control / IDOR / authz bug that NO deterministic scanner can detect — the one class with no manifest fact — set \`evidenceId: "NONE"\` and explain in the \`body\` why no static check exists. If you forget the id but your finding's path/line matches a manifest fact, the orchestrator auto-links it for you — but cite it when you can.
@@ -202,9 +208,11 @@ borderline cases). The synthesizer dedupes.
 DO NOT pad findings to look thorough. A 5-finding review where 4 are
 score-1 nits is worse than a 1-finding review on a real bug.
 
-DO NOT comment on lines outside the PR diff. Findings must anchor to
-lines that actually changed (added or modified). Pre-existing issues
-belong on a separate ticket unless this PR made them worse.
+DO NOT cite lines outside the PR diff. Findings must use changed lines
+as their context. Pre-existing issues belong on a separate ticket
+unless this PR made them worse. If the issue is real but not about one
+exact changed line, use \`scope:"file"\`, \`scope:"pr"\`, or
+\`scope:"comment"\`.
 
 Score-1 advisory findings are fine to emit but the orchestrator may
 aggregate or drop them — they never block the merge.
@@ -431,6 +439,7 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "body": "...",
         "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
         "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
+        "scope": "line" | "file" | "pr" | "comment",   (SIG-202 — REQUIRED. Preserve from the source finding when one source owns the kept finding. When merging sources, choose the narrowest semantically correct review surface: "line" only if the exact changed line/range remains the subject; otherwise use "file", "pr", or "comment" and keep path/line only as context.)
         "cweId": "CWE-89",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "security" and the source set one. The evidence gate runs AFTER you, keyed on category; dropping this field gets a valid finding rejected. OMIT only when no kept source finding had one.)
         "evidenceId": "secret:...:42" | "NONE",   (SIG-108 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "security", including the literal "NONE". Do NOT invent, alter, or drop it. OMIT only when no kept source finding had one.)
         "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED: PRESERVE VERBATIM from any kept source finding when the synthesized finding is category "testing" and the source set it. The citation gate runs AFTER you, keyed on category; dropping this gets a valid finding rejected. OMIT only when no kept source finding had it.)

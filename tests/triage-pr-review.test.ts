@@ -90,6 +90,20 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings[0]?.score).toBe(5)
   })
 
+  it("parses finding scope when provided", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: "comment/event" }] })
+    )
+    expect(out?.findings[0]?.scope).toBe("comment")
+  })
+
+  it("ignores invalid finding scope for back-compat", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: "thread" }] })
+    )
+    expect(out?.findings[0]?.scope).toBeUndefined()
+  })
+
   it("includes startLine when valid (positive, less than line)", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({ ...valid, findings: [{ ...baseFinding, startLine: 38 }] })
@@ -1227,7 +1241,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(withMap.comments).toHaveLength(2)
     expect(withMap.comments?.map((c) => c.line).sort((a, b) => a - b)).toEqual([42, 1370])
     // Neither block finding is double-rendered into the body.
-    expect(withMap.body).not.toContain("Additional findings (could not anchor to diff)")
+    expect(withMap.body).not.toContain("Findings without inline comments")
   })
 
   it("does not double-render a routed finding (only in body, not inline)", () => {
@@ -1439,6 +1453,76 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     // Line preserved (no walk) because the suggestion needs the original
     // multi-line range to anchor cleanly.
     expect(out.comments?.[0]?.line).toBe(700)
+  })
+})
+
+describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
+  const commentFinding: PrReviewFinding = {
+    path: "src/lib/github-mention.ts",
+    line: 436,
+    scope: "comment",
+    score: 4,
+    category: "security",
+    headline: "dismiss command trusts the issue-comment author",
+    body: "The `/sigilix dismiss` path authorizes from the issue-comment sender instead of the review-thread participant. Check the parent review comment before accepting the dismissal.",
+  }
+
+  const addedLineTextByLine = new Map<string, Map<number, string>>([
+    [
+      "src/lib/github-mention.ts",
+      new Map<number, string>([
+        [436, "expirationTtl: MENTION_DEDUPE_TTL,"],
+      ]),
+    ],
+  ])
+
+  it("routes comment-scoped findings to the review body even when the nearest changed line is substantive", () => {
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "Comment-surface auth issue.",
+        confidence: 2,
+        confidenceReason: "High impact.",
+        findings: [commentFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("### Findings without inline comments")
+    expect(out.body).toContain("Comment-level (high, score 4)")
+    expect(out.body).toContain("dismiss command trusts the issue-comment author")
+    expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
+  })
+
+  it("does not duplicate body-only high findings in the Fix Plan", () => {
+    const inlineFinding: PrReviewFinding = {
+      path: "src/lib/github-mention.ts",
+      line: 436,
+      score: 4,
+      category: "logic",
+      headline: "ttl is too short",
+      body: "Use the configured TTL.",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "One inline and one body-only finding.",
+        confidence: 2,
+        confidenceReason: "Mixed.",
+        findings: [inlineFinding, commentFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.comments).toHaveLength(1)
+    expect(out.body).toContain("### Fix Plan")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl is too short")
+    expect(out.body).not.toContain("`src/lib/github-mention.ts:436` — `security`: dismiss command trusts")
+    expect(out.body).toContain("Comment-level (high, score 4)")
   })
 })
 

@@ -330,7 +330,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).not.toContain("Stack context")
   })
 
-  it("Variant H — REQUEST_CHANGES with unanchored findings groups them under '### Additional findings'", () => {
+  it("Variant H — REQUEST_CHANGES with unanchored findings groups them under body-only findings", () => {
     const anchored = finding({ score: 5 })
     const unanchored = finding({
       path: "src/bar.ts",
@@ -344,11 +344,32 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toContain("### Additional findings (could not anchor to diff)")
+    expect(body).toContain("### Findings without inline comments")
     expect(body).toContain("**src/bar.ts**")
     expect(body).toContain("could not anchor")
     // Heading count includes both.
     expect(body).toMatch(/^## Sigilix: 2 findings/m)
+  })
+
+  it("SIG-5 — body-only high findings are prominent but omitted from Fix Plan", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [finding({ score: 2, headline: "minor inline note" })] }),
+      unanchored: [
+        finding({
+          path: "src/bar.ts",
+          line: 99,
+          headline: "body-only blocker",
+          score: 5,
+        }),
+      ],
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).not.toContain("### Fix Plan")
+    expect(body).toContain("### Findings without inline comments")
+    expect(body).toContain("Line 99 (critical, score 5)")
+    expect(body).toContain("body-only blocker")
+    expect(body).not.toContain("`src/bar.ts:99`")
   })
 
   it("Variant I — REQUEST_CHANGES omits Fix Plan when no findings are score >= 4", () => {
@@ -392,7 +413,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
   })
 
   // Founder-mandated invariant (2026-05-18): the verdict summary MUST
-  // appear before the Fix Plan / Additional findings sections in every
+  // appear before the Fix Plan / body-only findings sections in every
   // body variant. A review that leads with the diff before saying what
   // the diff is about is the CodeRabbit failure mode the founder
   // explicitly called out — Sigilix must never replicate it. The
@@ -401,7 +422,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
   describe("summary-before-findings ordering invariant", () => {
     const SUMMARY_PARAGRAPH = "The PR adds a feature flag and a test."
     const FIX_PLAN_HEADING = "### Fix Plan"
-    const ADDITIONAL_HEADING = "### Additional findings"
+    const BODY_ONLY_HEADING = "### Findings without inline comments"
 
     function assertSummaryFirst(body: string, label: string): void {
       const summaryIdx = body.indexOf(SUMMARY_PARAGRAPH)
@@ -410,9 +431,9 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       if (fixPlanIdx !== -1) {
         expect(summaryIdx, `${label}: summary must precede Fix Plan`).toBeLessThan(fixPlanIdx)
       }
-      const additionalIdx = body.indexOf(ADDITIONAL_HEADING)
-      if (additionalIdx !== -1) {
-        expect(summaryIdx, `${label}: summary must precede Additional findings`).toBeLessThan(additionalIdx)
+      const bodyOnlyIdx = body.indexOf(BODY_ONLY_HEADING)
+      if (bodyOnlyIdx !== -1) {
+        expect(summaryIdx, `${label}: summary must precede body-only findings`).toBeLessThan(bodyOnlyIdx)
       }
     }
 
@@ -458,7 +479,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       expect(body).toContain("_(Stacked on #87)_")
     })
 
-    it("summary precedes BOTH Fix Plan AND Additional findings when unanchored present", () => {
+    it("summary precedes BOTH Fix Plan AND body-only findings when unanchored present", () => {
       const body = renderRequestChangesBody({
         verdict: verdict({ findings: [finding({ score: 5 })] }),
         unanchored: [finding({ path: "src/bar.ts", line: 99, score: 3 })],
@@ -466,12 +487,12 @@ describe("renderRequestChangesBody (ARC-281)", () => {
         prov: { headSha: HEAD, nowMs: NOW },
       })
       assertSummaryFirst(body, "with unanchored")
-      // Fix Plan must also precede Additional findings — diff context
-      // (anchored, severity-gated) outranks unanchored noise.
-      expect(body.indexOf(FIX_PLAN_HEADING)).toBeLessThan(body.indexOf(ADDITIONAL_HEADING))
+      // Fix Plan must also precede body-only findings — diff context
+      // (anchored, severity-gated) remains the primary repair queue.
+      expect(body.indexOf(FIX_PLAN_HEADING)).toBeLessThan(body.indexOf(BODY_ONLY_HEADING))
     })
 
-    it("summary precedes Additional findings even when Fix Plan is absent (low-severity only)", () => {
+    it("summary precedes body-only findings even when Fix Plan is absent (low-severity only)", () => {
       const body = renderRequestChangesBody({
         verdict: verdict({ findings: [finding({ score: 2 })] }),
         unanchored: [finding({ path: "src/bar.ts", line: 99, score: 3 })],

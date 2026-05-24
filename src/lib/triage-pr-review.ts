@@ -1,8 +1,8 @@
 // Proactive primary review (greptile-style). Reviews the PR in
 // isolation — does its own pass independent of CR or any other
-// reviewer. Each finding is anchored to a specific line, scored 1-5,
-// and tagged with a category (logic / style / security / etc.) that
-// leads the inline comment.
+// reviewer. Each finding carries a review surface scope, score 1-5,
+// and category (logic / style / security / etc.) that leads the
+// inline comment when rendered inline.
 //
 // Submits a single review via POST /pulls/{n}/reviews so all findings
 // arrive as one coherent unit on GitHub. Approval state is derived from
@@ -175,10 +175,29 @@ export const STACK_ORIGINS: ReadonlySet<StackOrigin> = new Set([
   "upstack-followup",
 ])
 
+export type ReviewFindingScope = "line" | "file" | "pr" | "comment"
+
+export const REVIEW_FINDING_SCOPES: ReadonlySet<ReviewFindingScope> = new Set([
+  "line",
+  "file",
+  "pr",
+  "comment",
+])
+
 export interface PrReviewFinding {
   path: string
   line: number
   startLine?: number
+  /**
+   * SIG-202: where the finding belongs in GitHub's review surfaces.
+   * Missing is treated as "line" for backwards compatibility.
+   *
+   *   - "line"    — exact changed line is the subject; render inline.
+   *   - "file"    — file/module-level concern; render in review body.
+   *   - "pr"      — PR-level/cross-file concern; render in review body.
+   *   - "comment" — webhook/comment/review-event concern; body only.
+   */
+  scope?: ReviewFindingScope
   score: number
   category: FindingCategory
   headline: string
@@ -318,6 +337,24 @@ export interface PrReviewVerdict {
   findings: PrReviewFinding[]
 }
 
+function normalizeReviewFindingScope(raw: unknown): ReviewFindingScope | undefined {
+  if (typeof raw !== "string") return undefined
+  const value = raw.trim().toLowerCase()
+  if (value === "comment/event" || value === "event" || value === "review-comment") {
+    return "comment"
+  }
+  if (value === "pull-request" || value === "pull_request" || value === "review") {
+    return "pr"
+  }
+  return REVIEW_FINDING_SCOPES.has(value as ReviewFindingScope)
+    ? (value as ReviewFindingScope)
+    : undefined
+}
+
+function findingScope(finding: PrReviewFinding): ReviewFindingScope {
+  return finding.scope ?? "line"
+}
+
 /**
  * ARC-281: specialist coverage signal injected into the review body
  * so customers can see which dimensions Sigilix actually ran. When
@@ -425,6 +462,7 @@ export function renderStackParenthetical(stack: StackContext | undefined): strin
 }
 
 const SIGILIX_REVIEW_MARKER = "<!-- sigilix:pr-review -->"
+const BODY_ONLY_FINDINGS_HEADING = "### Findings without inline comments"
 
 const DISMISSAL_HINT =
   "To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread."
@@ -497,6 +535,8 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
       headline,
       body,
     }
+    const scope = normalizeReviewFindingScope(finding.scope)
+    if (scope) finalFinding.scope = scope
     if (validStartLine != null) finalFinding.startLine = validStartLine
     if (stackOrigin) finalFinding.stackOrigin = stackOrigin
     // SIG-101: read per-finding confidence when the model supplies it.
@@ -607,8 +647,8 @@ interface BuildReviewArgs {
    *   - The chosen review event takes ALL findings into account
    *     (anchored + unanchored), so a verdict with only-unanchored
    *     blocking findings doesn't post as APPROVE.
-   *   - The body grows with an `### Additional findings (could not
-   *     anchor to diff)` section listing the unanchored set.
+   *   - The body grows with a "Findings without inline comments"
+   *     section listing the body-only set.
    */
   unanchored?: PrReviewFinding[]
   /**
@@ -742,6 +782,14 @@ export function buildReviewSubmission({
   const inlineOriginalIndex: number[] = []
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
+    // SIG-202: GitHub inline review comments are for exact line
+    // anchors. Review-level, file-level, and comment-event findings stay
+    // in the body even if they carry a nearby line for context.
+    if (findingScope(f) !== "line") {
+      bodyFindings.push(f)
+      return
+    }
+
     const addedLinesForPath = addedLineTextByLine?.get(f.path)
     // SIG-127: a finding carrying a localized `suggestedReplacement`
     // stays inline regardless of its anchor line — the body renderer
@@ -966,10 +1014,8 @@ export function buildFallbackBody(
   // dropped the inline anchors, so the body must carry every
   // finding. Pour both `verdict.findings` and `unanchored` into the
   // single `unanchored` bucket of the new renderer — they render as
-  // the "Additional findings (could not anchor to diff)" section
-  // grouped by file, which is exactly the right place when none of
-  // them landed inline. The Fix Plan (high/critical only) still
-  // renders on top as a prioritized teaser.
+  // the body-only findings section grouped by file, which is exactly
+  // the right place when none of them landed inline.
   const all = [...verdict.findings, ...unanchored]
   const event = chooseReviewEvent(all)
   if (event === "APPROVE") {
@@ -1408,9 +1454,9 @@ export function filterToSigilixAuthored<T extends AuthoredItem>(
  */
 export interface RenderBodyArgs {
   verdict: PrReviewVerdict
-  /** Findings that passed the hallucination guard but couldn't be
-   *  anchored to a diff line. Surfaced via the "Additional findings"
-   *  section. Default `[]`. */
+  /** Findings that passed review but should not be inline comments:
+   *  unanchored line findings plus file/PR/comment-scoped findings.
+   *  Surfaced via the body-only findings section. Default `[]`. */
   unanchored?: PrReviewFinding[]
   /** Specialist dispatch/success roster. When absent, the coverage
    *  line is omitted (back-compat shim for call sites that haven't
@@ -1512,7 +1558,7 @@ export function renderCommentBody(args: RenderBodyArgs): string {
  *   ### Fix Plan
  *   ...
  *
- *   ### Additional findings (could not anchor to diff)
+ *   ### Findings without inline comments
  *   ...
  *
  *   To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread.
@@ -1569,18 +1615,19 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   lines.push("")
   lines.push(summary)
 
-  // Fix Plan — high/critical findings (anchored + unanchored both
-  // contribute since severity is the gate, not anchoring).
-  const fixPlan = renderFixPlan([...args.verdict.findings, ...unanchored])
+  // Fix Plan — only inline findings. Body-only findings appear in the
+  // section below so the plan never promises a file:line with no inline
+  // review thread.
+  const fixPlan = renderFixPlan(args.verdict.findings)
   if (fixPlan) {
     lines.push("")
     lines.push(fixPlan)
   }
 
-  // Additional findings — unanchored set, grouped by file.
+  // Body-only findings — unanchored or non-line-scoped set, grouped by file.
   if (unanchored.length > 0) {
     lines.push("")
-    lines.push("### Additional findings (could not anchor to diff)")
+    lines.push(BODY_ONLY_FINDINGS_HEADING)
     lines.push(...renderFindingsByFile(unanchored))
   }
 
@@ -1721,6 +1768,27 @@ function formatFixPlanRow(f: PrReviewFinding): string {
   return `- \`${range}\` — \`${f.category}\`: ${headline}`
 }
 
+function formatBodyFindingLocation(f: PrReviewFinding): string {
+  switch (findingScope(f)) {
+    case "pr":
+      return "PR-level"
+    case "file":
+      return "File-level"
+    case "comment":
+      return "Comment-level"
+    case "line":
+      return f.startLine != null && f.startLine !== f.line
+        ? `Lines ${f.startLine}-${f.line}`
+        : `Line ${f.line}`
+  }
+}
+
+function formatBodyFindingSeverity(f: PrReviewFinding): string {
+  if (f.score >= 5) return "critical, score 5"
+  if (f.score >= 4) return "high, score 4"
+  return `score ${f.score}`
+}
+
 /**
  * Group findings by file path, sort within each file by score DESC
  * then line ASC, and render as a Markdown bullet list. Shared by
@@ -1746,11 +1814,9 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
     lines.push("")
     lines.push(`**${path}**`)
     for (const f of arr) {
-      const range =
-        f.startLine != null && f.startLine !== f.line
-          ? `Lines ${f.startLine}-${f.line}`
-          : `Line ${f.line}`
-      lines.push(`- ${range} — **${f.category}:** ${f.headline}`)
+      const location = formatBodyFindingLocation(f)
+      const severity = formatBodyFindingSeverity(f)
+      lines.push(`- ${location} (${severity}) — **${f.category}:** ${f.headline}`)
       // Indent the body so it nests under the bullet visually.
       const bodyLines = f.body
         .split("\n")

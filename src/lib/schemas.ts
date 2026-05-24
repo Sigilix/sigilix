@@ -93,6 +93,10 @@ export const PR_REVIEW_SCHEMA = {
           path: { type: "string" },
           line: { type: "integer", minimum: 1 },
           startLine: { type: "integer", minimum: 1 },
+          scope: {
+            type: "string",
+            enum: ["line", "file", "pr", "comment"],
+          },
           score: { type: "integer", minimum: 1, maximum: 5 },
           category: {
             type: "string",
@@ -173,7 +177,7 @@ export const PR_REVIEW_SCHEMA = {
           // emit it; the parser + renderer validate/anchor it.
           suggestedReplacement: { type: "string" },
         },
-        required: ["path", "line", "score", "category", "headline", "body"],
+        required: ["path", "line", "scope", "score", "category", "headline", "body"],
       },
     },
   },
@@ -326,4 +330,3 @@ export const PR_DESCRIBE_SCHEMA = {
   },
   required: ["summary", "body"],
 } as const
-

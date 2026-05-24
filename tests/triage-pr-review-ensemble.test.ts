@@ -260,6 +260,29 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.droppedForHallucination).toBe(1)
   })
 
+  it("DROPS score-1 findings with empty sourceFindingIds before advisory provenance recording", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 42, score: 1, headline: "tiny nit" }] },
+        provenance: {
+          findings: [{
+            sourceSpecialists: [],
+            sourceFindingIds: [],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(0)
+    expect(out.demotedScore1).toBe(0)
+    expect(out.droppedForHallucination).toBe(1)
+    expect(out.provenance.dropped).toEqual([])
+  })
+
   it("DROPS findings whose (path, line) is not a reviewable position", () => {
     const out = validateForSubmission({
       synthOutput: {
@@ -1254,6 +1277,8 @@ describe("buildSynthRetryMessage (ARC-278)", () => {
   it("appends a provenance-specific hint on provenance failure", () => {
     const out = buildSynthRetryMessage(original, "provenance")
     expect(out).toContain("RETRY: Your previous response's `provenance` field was malformed")
+    expect(out).toContain("softened?:")
+    expect(out).toContain("provenance.softened[i].sourceFindingId")
     expect(out).toContain("SPECIALIST VERDICTS")
   })
 

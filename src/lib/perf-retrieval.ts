@@ -136,9 +136,9 @@ export function buildPerfRetrievalQuery(
  *     conflict-verification reserve. `budgetRemaining` is read BEFORE
  *     any retrieval consumes (the cache consumes only after an internal
  *     `await`), so `> 2` means `maxCalls >= 3` (the default) — leaving
- *     one call for the synth conflict-verification path the
- *     shared preflight retrieval. A repo that lowers the budget to 2
- *     degrades cleanly to the shared snapshot.
+ *     one call in reserve for later role-specific retrieval. A repo
+ *     that lowers the budget to 2 degrades cleanly to the shared
+ *     snapshot.
  */
 export function shouldRunPerfRetrieval(
   specialists: readonly string[],

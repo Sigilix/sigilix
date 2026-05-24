@@ -1867,8 +1867,8 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 52
-const SEVERITY_BADGE_HEIGHT = 32
+const SEVERITY_BADGE_WIDTH = 38
+const SEVERITY_BADGE_HEIGHT = 28
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
   return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`

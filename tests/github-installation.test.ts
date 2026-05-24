@@ -190,6 +190,20 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
     ])
   })
 
+  it("filters namespaces to the requested owner case-insensitively (SIG-134)", async () => {
+    const env = makeKvStub([
+      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:acme/api",
+      "repo-index-manifest:other/sigilix",
+    ])
+    const result = await listIndexedRepos(env, { owner: "Arc-and-Anchor" })
+    expect(result.sort()).toEqual([
+      "arc-and-anchor/rubberfit",
+      "arc-and-anchor/sigilix",
+    ])
+  })
+
   it("EXCLUDES an orphaned pre-SIG-132 bare-repo key (no owner = bare namespace)", async () => {
     // Old-shape keys (no slash) remain in KV until uninstall purges them.
     // SIG-132 (CodeRabbit Major): they must NOT surface in availableRepos —

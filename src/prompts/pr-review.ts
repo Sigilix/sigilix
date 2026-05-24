@@ -79,8 +79,7 @@
  *     range is what GitHub renders as inline context above the comment
  *     — single-line anchors leave the reader staring at a closing
  *     brace. Renderer also adds:
- *       - SVG severity badges (sigilix.ai/badges/p[0-3].svg) replacing
- *         the prior emoji
+ *       - SVG severity badges replacing the prior emoji
  *       - "Current / Proposed" illustrative code blocks (always shown
  *         when diff context is available, independent of committable-
  *         ness — matches CR + Greptile pattern)

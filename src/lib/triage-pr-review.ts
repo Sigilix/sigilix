@@ -1771,10 +1771,10 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * Pure — exported for tests.
  */
 /**
- * SIG-164 (PR 5): replace the prior emoji badges with hosted SVG chips
- * matching Greptile/CR convention — a small colored pill rendered inline
- * via `<img>` tag. Designed by Kimi (rimmed dark lozenge, wax-seal
- * concept) and served from `sigilix.ai/badges/p[0-3].svg`. Severity map:
+ * SIG-164/SIG-200: replace the prior emoji badges with SVG chips
+ * matching Greptile/CR convention — a compact colored chip rendered
+ * inline via `<img>` tag. The assets use path-drawn glyphs rather than
+ * font text so GitHub cannot fall back to a generic typeface. Severity map:
  *   - score 5  → P0 (critical / merge-blocker)
  *   - score 4  → P1 (high)
  *   - score 3  → P2 (medium)
@@ -1784,11 +1784,19 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
+const SEVERITY_BADGE_WIDTH = 44
+const SEVERITY_BADGE_HEIGHT = 32
+const SEVERITY_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges"
+
+function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
+  return `<a href="https://sigilix.ai"><img alt="${label}" src="${SEVERITY_BADGE_BASE_URL}/${file}.svg" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
+}
+
 export function severityBadgeForScore(score: number): string {
-  if (score >= 5) return `<a href="https://sigilix.ai"><img alt="P0" src="https://sigilix.ai/badges/p0.svg" align="top" width="48"></a>`
-  if (score >= 4) return `<a href="https://sigilix.ai"><img alt="P1" src="https://sigilix.ai/badges/p1.svg" align="top" width="48"></a>`
-  if (score >= 3) return `<a href="https://sigilix.ai"><img alt="P2" src="https://sigilix.ai/badges/p2.svg" align="top" width="48"></a>`
-  return `<a href="https://sigilix.ai"><img alt="P3" src="https://sigilix.ai/badges/p3.svg" align="top" width="48"></a>`
+  if (score >= 5) return severityBadgeImg("P0", "p0")
+  if (score >= 4) return severityBadgeImg("P1", "p1")
+  if (score >= 3) return severityBadgeImg("P2", "p2")
+  return severityBadgeImg("P3", "p3")
 }
 
 /**

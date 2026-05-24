@@ -1936,22 +1936,27 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   // null low-severity case.
   it("returns the P0 badge img for score 5", () => {
     expect(severityBadgeForScore(5)).toContain('alt="P0"')
-    expect(severityBadgeForScore(5)).toContain("https://sigilix.ai/badges/p0.svg")
+    expect(severityBadgeForScore(5)).toContain("https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges/p0.svg")
   })
   it("returns the P1 badge img for score 4", () => {
     expect(severityBadgeForScore(4)).toContain('alt="P1"')
-    expect(severityBadgeForScore(4)).toContain("https://sigilix.ai/badges/p1.svg")
+    expect(severityBadgeForScore(4)).toContain("https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges/p1.svg")
   })
   it("returns the P2 badge img for score 3", () => {
     expect(severityBadgeForScore(3)).toContain('alt="P2"')
-    expect(severityBadgeForScore(3)).toContain("https://sigilix.ai/badges/p2.svg")
+    expect(severityBadgeForScore(3)).toContain("https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges/p2.svg")
   })
   it("returns the P3 badge img for score 2 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(2)).toContain('alt="P3"')
-    expect(severityBadgeForScore(2)).toContain("https://sigilix.ai/badges/p3.svg")
+    expect(severityBadgeForScore(2)).toContain("https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges/p3.svg")
   })
   it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(1)).toContain('alt="P3"')
+  })
+  it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
+    const out = severityBadgeForScore(3)
+    expect(out).toContain('width="44"')
+    expect(out).toContain('height="32"')
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {
     expect(severityBadgeForScore(6)).toContain('alt="P0"')
@@ -1998,7 +2003,7 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
   it("prefixes the P0 badge img on score-5 findings", () => {
     const out = formatFindingComment(fnd({ score: 5, headline: "deref crash" }), 5)
     expect(out).toContain('alt="P0"')
-    expect(out).toContain("https://sigilix.ai/badges/p0.svg")
+    expect(out).toContain("https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges/p0.svg")
     expect(out).toContain("**logic:** deref crash")
   })
 
@@ -2015,7 +2020,7 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
   it("uses the P3 badge img on score 1-2 (SIG-164 PR 5: was null pre-SIG-164)", () => {
     const out = formatFindingComment(fnd({ score: 2 }), 4)
     expect(out).toContain('alt="P3"')
-    expect(out).toContain("https://sigilix.ai/badges/p3.svg")
+    expect(out).toContain("https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges/p3.svg")
     expect(out).not.toContain("🔴")
     expect(out).not.toContain("🟠")
     expect(out).not.toContain("🟡")

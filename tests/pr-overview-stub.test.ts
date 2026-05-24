@@ -344,6 +344,16 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
     expect(body).not.toContain("_Reviewing")
   })
 
+  it("SIG-165: keeps the ASCII speech bubble borders aligned with the content row", () => {
+    const codeBlock = /```text\n([\s\S]*?)\n```/.exec(stubBodyFor())?.[1]
+    expect(codeBlock).toBeDefined()
+
+    const [topBorder, contentRow, bottomBorder] = codeBlock!.split("\n")
+
+    expect(topBorder!.length).toBe(contentRow!.length)
+    expect(bottomBorder!.length).toBe(contentRow!.length)
+  })
+
   it("falls back to creating when the marker-scan throws (best-effort)", async () => {
     const { kv } = makeKvStub()
     mockListIssueCommentsPage.mockRejectedValueOnce(new Error("503"))

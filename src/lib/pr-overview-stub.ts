@@ -90,8 +90,8 @@ export function selectPrOverviewStubQuip(args: {
 
 function renderStubFlourish(quip: string): string {
   const width = Math.max(46, quip.length + 2)
-  const line = "_".repeat(width)
-  const dash = "-".repeat(width)
+  const line = "_".repeat(width + 1)
+  const dash = "-".repeat(width + 1)
   const paddedQuip = quip.padEnd(width - 2, " ")
   return [
     `  ${line}`,

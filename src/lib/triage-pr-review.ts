@@ -1952,6 +1952,41 @@ export function fenceForContent(content: string): string {
 // ```suggestion (still gated on clean anchorability).
 const HIGH_CONFIDENCE_FLOOR = 4
 
+export interface ProposedChangeScopeMismatch {
+  anchorLines: number
+  replacementLines: number
+  replacementToAnchorRatio: number
+}
+
+function countReplacementLines(replacement: string): number {
+  const normalized = replacement.replace(/\n$/, "")
+  if (normalized.length === 0) return 0
+  return normalized.split("\n").length
+}
+
+function referencesMultipleSpecificLines(body: string): boolean {
+  return /\blines?\s+\d+\s*,\s*(?:and\s+)?\d+(?:\s*,\s*(?:and\s+)?\d+)*\b/i.test(body)
+}
+
+export function getProposedChangeScopeMismatch(finding: PrReviewFinding): ProposedChangeScopeMismatch | null {
+  const repl = finding.suggestedReplacement
+  const isReplace =
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof repl === "string" && repl.length > 0
+  if (!isReplace || typeof repl !== "string") return null
+  if (!referencesMultipleSpecificLines(finding.body)) return null
+
+  const startL =
+    finding.startLine != null && finding.startLine < finding.line
+      ? finding.startLine
+      : finding.line
+  const anchorLines = Math.max(1, finding.line - startL + 1)
+  const replacementLines = countReplacementLines(repl)
+  const replacementToAnchorRatio = replacementLines / anchorLines
+  if (replacementToAnchorRatio >= 0.5) return null
+  return { anchorLines, replacementLines, replacementToAnchorRatio }
+}
+
 /**
  * SIG-127: classify a finding's anchored added-line TEXT as substantive
  * code or a structural line. File/block-level findings (e.g. "lacks
@@ -2052,6 +2087,13 @@ export function formatProposedChangeBlock(
     (finding.kind === "replace" || finding.kind === undefined) &&
     typeof repl === "string" && repl.length > 0
   if (!isDeletion && !isReplace) return ""
+
+  // SIG-179: when a very small replacement is paired with a broad
+  // anchor and the prose names multiple exact lines, showing the full
+  // anchor as "Current" makes a local patch look like a wholesale
+  // rewrite. Keep the committable suggestion path, but skip this
+  // illustrative block.
+  if (getProposedChangeScopeMismatch(finding) !== null) return ""
 
   // Pull the current-state lines from the diff context (added lines on
   // the finding's range). When the map is absent or doesn't include

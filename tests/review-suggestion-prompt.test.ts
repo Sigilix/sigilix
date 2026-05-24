@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "../src/prompts/pr-review-specialists"
+import { PR_IMPROVE_PROMPT } from "../src/prompts/pr-improve"
 import { PROMPT_VERSION, PR_REVIEW_PROMPT } from "../src/prompts/pr-review"
 
 describe("SIG-125 suggestion prompt wiring", () => {
@@ -43,6 +44,10 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(SYNTHESIZER_PROMPT).toMatch(/"scope"[\s\S]*?SIG-202/i)
     expect(PR_REVIEW_PROMPT).toContain("Finding scope")
     expect(PR_REVIEW_PROMPT).toMatch(/scope:"line"[\s\S]*?inline/i)
+  })
+  it("improve prompt explicitly permits empty deletion suggestions (SIG-142)", () => {
+    expect(PR_IMPROVE_PROMPT).toMatch(/EMPTY[\s\S]*?```suggestion/i)
+    expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
   })
   it("PROMPT_VERSION bumped to 10 (SIG-202: finding scope routing)", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);

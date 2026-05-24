@@ -5,9 +5,11 @@
 //
 //   - No security or correctness findings (those go to /review)
 //   - No score field, no approve/request-changes verdict
-//   - Every suggestion MUST carry a runnable patch — no prose-only
-//     advice; if the fix can't be expressed as a literal line
-//     replacement, drop the suggestion
+//   - Every suggestion SHOULD carry a runnable patch. Empty
+//     ```suggestion blocks are allowed for deletion-only dead-code
+//     patches. If the fix can't be expressed safely as a literal patch,
+//     keep the prose anchored to file:line so Sigilix can preserve it in
+//     the summary instead of dropping it.
 //   - Cap at 5 suggestions per run (quality > breadth)
 //
 // Output shape mirrors the regular review's `findings` array so the
@@ -41,7 +43,7 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
       "startLine": 138,
       "category": "naming",
       "headline": "One sentence stating the improvement, ≤120 chars, no period at end.",
-      "body": "1-2 sentences describing the rationale. Reference \`identifiers\` in backticks. Then exactly ONE \`\`\`suggestion fenced block containing the literal replacement code (no diff markers, no language tag, no surrounding context — just the new line(s) GitHub will swap in for lines startLine..line)."
+      "body": "1-2 sentences describing the rationale. Reference \`identifiers\` in backticks. Then exactly ONE \`\`\`suggestion fenced block containing the literal replacement code (no diff markers, no language tag, no surrounding context — just the new line(s) GitHub will swap in for lines startLine..line). For deletion-only fixes, use an EMPTY \`\`\`suggestion block."
     }
   ]
 }
@@ -56,9 +58,10 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
 ## Suggestion block discipline
 
 - Block contents are **the LITERAL replacement** — what GitHub pastes in place of lines \`startLine\`..\`line\`.
+- For deletion-only fixes (dead code, unused imports, no-op branches), emit an EMPTY \`\`\`suggestion block — opening fence, blank content, closing fence — so GitHub removes the anchored line/range.
 - No \`+\` / \`-\` diff markers, no \`...\` ellipses, no language tag (\`\`\`suggestion not \`\`\`ts).
 - Preserve the file's existing indentation style (tabs vs. spaces, indent width).
-- If the fix would change behavior, semantics, or test coverage, **omit the suggestion** — that is a /review finding, not an /improve patch.
+- If the fix would change behavior, semantics, or test coverage, **omit the fenced suggestion** but keep the file:line suggestion prose only when it is still useful for the reviewer; Sigilix will preserve non-applyable suggestions in the review summary.
 
 ## Categories (\`category\` field)
 

@@ -1567,6 +1567,38 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).not.toContain("### Findings without inline comments")
   })
 
+  it("keeps delete-intent non-line findings inline so the deletion suggestion is not dropped", () => {
+    const deleteFinding: PrReviewFinding = {
+      ...commentFinding,
+      scope: "file",
+      category: "logic",
+      headline: "ttl constant should be removed",
+      body: "This broad file-level finding carries an empty deletion replacement, so preserve the inline suggestion surface.",
+      kind: "delete",
+      suggestedReplacement: "",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "File-scoped finding with a localized deletion.",
+        confidence: 4,
+        confidenceReason: "Specific deletion supplied.",
+        findings: [deleteFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(436)
+    expect(out.comments?.[0]?.body).toContain("ttl constant should be removed")
+    expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
+    expect(out.body).toContain("### Fix Plan")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should be removed")
+    expect(out.body).not.toContain("### Findings without inline comments")
+  })
+
   it("does not duplicate body-only high findings in the Fix Plan", () => {
     const inlineFinding: PrReviewFinding = {
       path: "src/lib/github-mention.ts",
@@ -2115,7 +2147,7 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260524-3/p2.svg`)
     expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {

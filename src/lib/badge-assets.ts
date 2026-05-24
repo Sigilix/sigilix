@@ -9,8 +9,8 @@ export type BadgeAssetName = keyof typeof BADGE_STYLES
 
 export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
-const BADGE_ASSET_VERSION = "20260524.2"
-const BADGE_PATH_RE = /^\/assets\/badges\/(p[0-3])\.svg$/
+const BADGE_ASSET_VERSION = "v20260524-3"
+const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?(p[0-3])\.svg$/
 
 function renderBadgeSvg(style: (typeof BADGE_STYLES)[BadgeAssetName]): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 52 32" width="52" height="32" role="img" aria-label="${style.label}">
@@ -29,7 +29,7 @@ const BADGE_SVGS: Record<BadgeAssetName, string> = {
 }
 
 export function badgeAssetUrl(name: BadgeAssetName): string {
-  return `${PUBLIC_BADGE_BASE_URL}/${name}.svg?v=${BADGE_ASSET_VERSION}`
+  return `${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/${name}.svg`
 }
 
 export function getBadgeSvg(name: BadgeAssetName): string {

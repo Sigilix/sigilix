@@ -783,7 +783,8 @@ export function buildReviewSubmission({
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
     const hasSuggestion =
-      typeof f.suggestedReplacement === "string" && f.suggestedReplacement.trim().length > 0
+      typeof f.suggestedReplacement === "string" &&
+      (f.suggestedReplacement.trim().length > 0 || f.kind === "delete")
     const scope = findingScope(f)
     const findingForInline =
       hasSuggestion && scope !== "line"
@@ -791,9 +792,10 @@ export function buildReviewSubmission({
         : f
 
     // SIG-127 wins over broad scope: a localized suggestedReplacement
-    // needs an inline review thread or the proposed fix disappears from
-    // the customer-visible review body. Treat that shape as line-scoped
-    // even if the model supplied a broader scope.
+    // or empty deletion suggestion needs an inline review thread or the
+    // proposed fix disappears from the customer-visible review body.
+    // Treat that shape as line-scoped even if the model supplied a
+    // broader scope.
     // SIG-202: GitHub inline review comments are for exact line
     // anchors. Review-level, file-level, and comment-event findings stay
     // in the body even if they carry a nearby line for context.

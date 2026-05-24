@@ -106,6 +106,7 @@ import {
 import { requireSession } from "./lib/auth-middleware"
 import { renderWelcomePage } from "./lib/auth-welcome"
 import { readCookie, SESSION_COOKIE_NAME } from "./lib/auth-session"
+import { handleBadgeAssetRoute } from "./lib/badge-assets"
 
 export interface Env {
   OPENCLAW_STATE: KVNamespace
@@ -766,6 +767,9 @@ function validationCacheKey(env: Env): string {
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const badgeAsset = handleBadgeAssetRoute(request)
+    if (badgeAsset) return badgeAsset
+
     const key = validationCacheKey(env)
     if (validatedKey !== key) {
       validatedKey = key  // SET BEFORE call — prevents retry loop on throw

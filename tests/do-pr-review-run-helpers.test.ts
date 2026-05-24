@@ -59,7 +59,6 @@ describe("decideEnqueueAction", () => {
     baseSha: "b".repeat(40),
     installationId: 99,
     deliveryId: "delivery-1",
-    mode: "post" as const,
   }
 
   it("no existing state → create", () => {

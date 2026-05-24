@@ -86,6 +86,26 @@ describe("queueGithubMention dispatch — slash-command 👀 ack wiring", () => 
     }))
   })
 
+  it("/sigilix review queues a manual rerun without consulting pull-request draft state", async () => {
+    eyesAckDispatchMock.mockClear()
+    const { env, queueSent } = makeEnv()
+    const res = await queueGithubMention({
+      env, ctx: fakeCtx,
+      payload: makePayload({ body: "/sigilix review", authorAssoc: "MEMBER" }),
+      owner: "Arc-and-Anchor", repo: "sigilix", installationId: 99,
+      surface: "issue", prNumber: 7,
+    })
+    expect(res.status).toBe(202)
+    expect(queueSent).toHaveLength(1)
+    expect(queueSent[0]).toMatchObject({
+      type: "pr-review-rerun",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 7,
+    })
+    expect(eyesAckDispatchMock).toHaveBeenCalledOnce()
+  })
+
   it("eyes-ack does NOT fire when ACL rejects (untrusted author_association)", async () => {
     eyesAckDispatchMock.mockClear()
     const { env, queueSent } = makeEnv()

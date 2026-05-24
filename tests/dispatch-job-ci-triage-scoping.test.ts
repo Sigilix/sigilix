@@ -29,7 +29,6 @@ function makeEnvWithDoSpy() {
   const get = vi.fn(() => ({ fetch: vi.fn() }) as unknown as DurableObjectStub)
   const env = {
     PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
-    OPENCLAW_PR_REVIEW_MODE: "post",
     GITHUB_APP_ID: "1",
     GITHUB_PRIVATE_KEY: "k",
   } as unknown as Env

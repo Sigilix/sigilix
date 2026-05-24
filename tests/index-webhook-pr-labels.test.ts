@@ -16,12 +16,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 // ─── Module mocks (kept above the dynamic import below) ─────────────
 
 const mockPostStub = vi.fn(async () => ({ kind: "posted" as const, commentId: 999 }))
+const mockPostDraftSkipNotice = vi.fn(async () => ({ kind: "posted" as const, commentId: 1000 }))
+const mockSupersedeDraftSkipNotice = vi.fn(async () => ({ kind: "not-found" as const }))
 const mockLoadSigilixConfig = vi.fn()
 const mockGetInstallationToken = vi.fn(async () => "fake-token")
 const mockEnqueuePrReviewJob = vi.fn(async () => ({ ok: true as const }))
 
 vi.mock("../src/lib/pr-overview-stub", () => ({
   postPrOverviewStubIfNeeded: (a: unknown) => mockPostStub(a),
+}))
+
+vi.mock("../src/lib/pr-draft-skip-notice", () => ({
+  postDraftPrSkipNotice: (a: unknown) => mockPostDraftSkipNotice(a),
+  supersedeDraftPrSkipNotice: (a: unknown) => mockSupersedeDraftSkipNotice(a),
 }))
 
 vi.mock("../src/lib/github-app", () => ({
@@ -97,7 +104,6 @@ function makeEnv(): {
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
     GITHUB_WEBHOOK_SECRET: SECRET,
-    OPENCLAW_PR_REVIEW_MODE: "off",
     OPENCLAW_REVIEW_MANIFEST_ENABLED: "off",
     OPENCLAW_JOBS: {
       send: async (msg: { type: string; [k: string]: unknown }) => {
@@ -135,7 +141,9 @@ async function postWebhook(
 
 beforeEach(() => {
   mockPostStub.mockClear()
-  mockLoadSigilixConfig.mockClear()
+  mockPostDraftSkipNotice.mockClear()
+  mockSupersedeDraftSkipNotice.mockClear()
+  mockLoadSigilixConfig.mockReset()
   mockGetInstallationToken.mockClear()
   mockEnqueuePrReviewJob.mockClear()
   vi.spyOn(console, "log").mockImplementation(() => undefined)
@@ -176,7 +184,7 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     expect(mockPostStub).not.toHaveBeenCalled()
   })
 
-  it("does NOT enqueue pr-labels when the action would skip overview entirely (e.g. draft)", async () => {
+  it("posts a draft-skip notice and does NOT enqueue pr-labels for draft PR webhooks", async () => {
     // pr-labels rides on the same decision gate as pr-overview. When
     // `decision.overview === false` (e.g. draft PR, irrelevant action),
     // labels also shouldn't fire. SIG-90 only decoupled labels from
@@ -207,5 +215,90 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
 
     expect(res.status).toBe(200)
     expect(sentJobs.map((j) => j.type)).not.toContain("pr-labels")
+    expect(mockPostDraftSkipNotice).toHaveBeenCalledOnce()
+    expect(mockPostDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({
+      owner: "acme",
+      repo: "site",
+      prNumber: 73,
+      headSha: "a".repeat(40),
+    }))
+    expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
+  })
+
+  it("posts a draft-skip notice when a PR is converted back to draft", async () => {
+    const { env, sentJobs } = makeEnv()
+    const worker = (await import("../src/index")).default
+
+    const body = JSON.stringify({
+      ...makeWebhookPayload(),
+      action: "converted_to_draft",
+      pull_request: { ...makeWebhookPayload().pull_request, draft: true },
+    })
+    const sig = await signBody(body)
+    const req = new Request("https://example.com/github/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-github-delivery": "test-delivery-converted-to-draft",
+        "x-hub-signature-256": sig,
+      },
+      body,
+    })
+    const ctx = { waitUntil: () => {}, passThroughOnException: () => {} }
+    const res = await worker.fetch(req, env as never, ctx as never)
+
+    expect(res.status).toBe(200)
+    expect(sentJobs).toHaveLength(0)
+    expect(mockPostDraftSkipNotice).toHaveBeenCalledOnce()
+    expect(mockPostDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({
+      owner: "acme",
+      repo: "site",
+      prNumber: 73,
+      headSha: "a".repeat(40),
+    }))
+    expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
+  })
+
+  it("supersedes the draft-skip notice on ready_for_review even when review dispatch is skipped", async () => {
+    mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: true } })
+    const { env, sentJobs } = makeEnv()
+    env.OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES = "on"
+    const worker = (await import("../src/index")).default
+
+    const body = JSON.stringify({
+      ...makeWebhookPayload(),
+      action: "ready_for_review",
+      pull_request: {
+        ...makeWebhookPayload().pull_request,
+        draft: false,
+        base: { sha: "b".repeat(40), ref: "main" },
+        head: { sha: "a".repeat(40), ref: "dev" },
+      },
+    })
+    const sig = await signBody(body)
+    const req = new Request("https://example.com/github/webhook", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-github-event": "pull_request",
+        "x-github-delivery": "test-delivery-ready-for-review",
+        "x-hub-signature-256": sig,
+      },
+      body,
+    })
+    const ctx = { waitUntil: () => {}, passThroughOnException: () => {} }
+    const res = await worker.fetch(req, env as never, ctx as never)
+
+    expect(res.status).toBe(202)
+    expect(sentJobs.map((j) => j.type)).toEqual(["pr-overview", "pr-labels"])
+    expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
+    expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledOnce()
+    expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({
+      owner: "acme",
+      repo: "site",
+      prNumber: 73,
+      headSha: "a".repeat(40),
+    }))
   })
 })

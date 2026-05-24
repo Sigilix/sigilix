@@ -74,11 +74,6 @@ queue = "openclaw-jobs"
 # DO orchestrates dedupe + retry + watchdog for `pr-review` work; the
 # existing OPENCLAW_JOBS queue still executes the actual review (DOs
 # are time- and memory-capped, ensemble runs are 60-180s).
-#
-# Feature is OFF by default — `OPENCLAW_PR_REVIEW_MODE` env var (default
-# "off") gates whether the webhook handler invokes the DO. The class
-# is registered on every deploy via the migration below; the binding
-# costs nothing at idle.
 [[durable_objects.bindings]]
 name = "PR_REVIEW_RUN"
 class_name = "PrReviewRunDO"
@@ -107,11 +102,9 @@ class_name = "ValidationMetricsDO"
 name = "GRAPH_METRICS_DO"
 class_name = "GraphMetricsDO"
 
-# Migration block — adds the new DO class. Forward-only; rolling back
-# this PR by reverting the wrangler.toml change is safe because no
-# data has been written yet (mode=off in production until phase 3 of
-# the rollout). Use `new_classes` (KV-backed DO storage) per spec
-# §4.8 — v1 access is point-lookup; SQLite buys nothing.
+# Migration block — adds the DO class. Forward-only; use
+# `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
+# point-lookup; SQLite buys nothing.
 [[migrations]]
 tag = "arc-190-v1"
 new_classes = ["PrReviewRunDO"]
@@ -135,7 +128,6 @@ new_sqlite_classes = ["GraphMetricsDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
-#   OPENCLAW_PR_REVIEW_MODE              # "off" | "shadow" | "post" (default "off")
 #   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES    # numeric; clamped [1, 10], default 3
 #   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS    # numeric; clamped [60000, 1800000] ms, default 1200000 (20 min)
 #   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT  # numeric; clamped [1, 100], default 10

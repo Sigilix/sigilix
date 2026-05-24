@@ -44,7 +44,7 @@ interface Harness {
   status: () => Promise<{ status: number; body: StatusResponse | { error: string } }>
 }
 
-function buildHarness(opts: { maxRetries?: number; mode?: "off" | "shadow" | "post" } = {}): Harness {
+function buildHarness(opts: { maxRetries?: number } = {}): Harness {
   const store = new Map<string, unknown>()
   const alarms: AlarmState = { alarmAt: null }
   const queue: QueueState = { sent: [] }
@@ -81,7 +81,6 @@ function buildHarness(opts: { maxRetries?: number; mode?: "off" | "shadow" | "po
       send: async (message: JobMessage) => { queue.sent.push(message) },
     } as unknown as Queue<JobMessage>,
     PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
-    OPENCLAW_PR_REVIEW_MODE: opts.mode ?? "post",
     OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: String(opts.maxRetries ?? 3),
     OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "1200000",
     OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "10",
@@ -163,7 +162,7 @@ describe("ARC-190 acceptance — 3-replay dedupe (spec §2 AC)", () => {
       expect(result.ok).toBe(true)
     }
 
-    // The DO dispatched exactly ONE queue message in post mode (the
+    // The DO dispatched exactly ONE queue message (the
     // first /enqueue call); subsequent calls deduped.
     expect(h.queue.sent).toHaveLength(1)
     expect(eventCount("do-review-deduped")).toBe(2)

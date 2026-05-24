@@ -10,7 +10,7 @@ interface DoStubArgs {
   expectedName?: string
 }
 
-function makeEnv(args: DoStubArgs, mode: "off" | "shadow" | "post" = "post"): Env {
+function makeEnv(args: DoStubArgs): Env {
   const fetchMock = vi.fn(async (_req: Request) => {
     if (args.response === "throw") {
       throw new Error("DO transport failed")
@@ -29,7 +29,6 @@ function makeEnv(args: DoStubArgs, mode: "off" | "shadow" | "post" = "post"): En
   })
   const get = vi.fn(() => stub) as unknown as DurableObjectNamespace["get"]
   return {
-    OPENCLAW_PR_REVIEW_MODE: mode,
     PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
   } as unknown as Env
 }
@@ -110,25 +109,6 @@ describe("handleReviewStatusRoute — input validation (400)", () => {
   })
 })
 
-describe("handleReviewStatusRoute — feature-gate", () => {
-  it("404 when mode=off (feature disabled)", async () => {
-    const env = makeEnv({ response: { kind: "found", current: { runId: "x", headSha: "y", state: "running", attempts: 1, startedAt: "z" }, history: [] } }, "off")
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
-    expect(res.status).toBe(404)
-  })
-
-  it("200 reachable when mode=shadow", async () => {
-    const found: StatusResponse = {
-      kind: "found",
-      current: { runId: "r", headSha: "a".repeat(40), state: "queued", attempts: 1, startedAt: "2026-05-07T06:00:00.000Z" },
-      history: [],
-    }
-    const env = makeEnv({ response: found }, "shadow")
-    const res = await handleReviewStatusRoute(env, "Arc-and-Anchor", "sigilix", 7)
-    expect(res.status).toBe(200)
-  })
-})
-
 describe("handleReviewStatusRoute — DO transport failure", () => {
   it("503 when DO fetch throws", async () => {
     const env = makeEnv({ response: "throw" })
@@ -142,7 +122,6 @@ describe("handleReviewStatusRoute — DO transport failure", () => {
     )
     const stub = { fetch: fetchMock }
     const env = {
-      OPENCLAW_PR_REVIEW_MODE: "post",
       PR_REVIEW_RUN: {
         idFromName: () => ({ name: "x" }),
         get: () => stub,
@@ -174,7 +153,6 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
     }))
     const stub = { fetch: fetchMock }
     return {
-      OPENCLAW_PR_REVIEW_MODE: "post",
       PR_REVIEW_RUN: {
         idFromName: () => ({ name: "x" }),
         get: () => stub,
@@ -233,7 +211,6 @@ describe("handleReviewStatusRoute — response-shape validation (CR PR #70)", ()
     const fetchMock = vi.fn(async () => { throw new Error("internal-secret-leak: kv://node-3-internal") })
     const stub = { fetch: fetchMock }
     const env = {
-      OPENCLAW_PR_REVIEW_MODE: "post",
       PR_REVIEW_RUN: {
         idFromName: () => ({ name: "x" }),
         get: () => stub,

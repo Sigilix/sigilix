@@ -129,51 +129,33 @@ export class PrReviewRunDO extends DurableObject<Env> {
         : {}),
     }
 
-    // Dispatch to OPENCLAW_JOBS queue + schedule watchdog ONLY in
-    // post mode. Shadow mode is observation-only; the existing
-    // webhook→queue path is the executor.
-    if (body.mode === "post") {
-      // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
-      // Previously we wrote `state.queued` and only later persisted
-      // alarm metadata + setAlarm — if the queue producer threw in
-      // between, the run was stuck `queued` forever (no alarm armed,
-      // GitHub's webhook redelivery would dedupe against the stuck
-      // state). Now: arm alarm + persist state + set DO alarm first;
-      // queue.send is the LAST thing. If send throws, the watchdog
-      // catches it on schedule (§4.6a) and reschedules a retry alarm
-      // that re-sends — recovery without operator intervention.
-      const watchdogAt = Date.now() + config.watchdogMs
-      newState.alarmTargetRunId = runId
-      newState.alarmKind = "watchdog"
-      await this.ctx.storage.put(STATE_KEY, newState)
-      await this.ctx.storage.setAlarm(watchdogAt)
-      await this.env.OPENCLAW_JOBS.send({
-        type: "pr-review",
-        owner: body.owner,
-        repo: body.repo,
-        prNumber: body.prNumber,
-        headSha: body.headSha,
-        installationId: body.installationId,
-        runId,
-        // ARC-251: forward requeue depth so the consumer side keeps
-        // the cap accurate across the initial enqueue path too.
-        ...(body.staleHeadRequeueDepth !== undefined
-          ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
-          : {}),
-      })
-    } else if (body.mode === "shadow") {
-      // Shadow: no queue dispatch, no watchdog. Persist the queued
-      // state row so the status route reflects the observed run.
-      await this.ctx.storage.put(STATE_KEY, newState)
-      emit("do-review-enqueued-shadow", {
-        owner: body.owner, repo: body.repo, prNumber: body.prNumber, runId,
-        headSha: body.headSha,
-      })
-    }
+    // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
+    // setAlarm is first so a persisted queued state never exists
+    // without a scheduled watchdog. queue.send remains last; if it
+    // throws, the armed watchdog resends on schedule.
+    const watchdogAt = Date.now() + config.watchdogMs
+    newState.alarmTargetRunId = runId
+    newState.alarmKind = "watchdog"
+    await this.ctx.storage.setAlarm(watchdogAt)
+    await this.ctx.storage.put(STATE_KEY, newState)
+    await this.env.OPENCLAW_JOBS.send({
+      type: "pr-review",
+      owner: body.owner,
+      repo: body.repo,
+      prNumber: body.prNumber,
+      headSha: body.headSha,
+      installationId: body.installationId,
+      runId,
+      // ARC-251: forward requeue depth so the consumer side keeps
+      // the cap accurate across the initial enqueue path too.
+      ...(body.staleHeadRequeueDepth !== undefined
+        ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
+        : {}),
+    })
 
     emit("do-review-enqueued", {
       owner: body.owner, repo: body.repo, prNumber: body.prNumber,
-      runId, headSha: body.headSha, mode: body.mode, action: decision.action,
+      runId, headSha: body.headSha, action: decision.action,
     })
 
     const resp: EnqueueResponse = {
@@ -205,34 +187,27 @@ export class PrReviewRunDO extends DurableObject<Env> {
       })
       return jsonResponse(409, { reason: decision.action })
     }
+    if (existing!.state === "running" && existing!.consumerId === body.consumerId) {
+      return jsonResponse(200, { picked: true })
+    }
 
     // claim
     const config = resolveDoConfig(this.env)
-    // Post-mode runs were armed with alarmKind at /enqueue; shadow
-    // mode skips dispatch + watchdog entirely (observation-only).
-    // Refresh the watchdog only for post-mode runs so a stray
-    // /pickup on a shadow run can't accidentally arm the retry
-    // pipeline.
-    const isPostMode = existing!.alarmKind !== undefined
     const updated: RunState = {
       ...existing!,
       state: "running",
       consumerId: body.consumerId,
       pickedUpAt: existing!.pickedUpAt ?? nowIso(),
       lastActivityAt: nowIso(),
+      alarmTargetRunId: existing!.runId,
+      alarmKind: "watchdog",
     }
-    if (isPostMode) {
-      updated.alarmTargetRunId = existing!.runId
-      updated.alarmKind = "watchdog"
-    }
+    // Refresh watchdog: measure from pickup-time, not enqueue-time.
+    // A queue backlog could otherwise burn most of the budget
+    // before the consumer even starts.
+    const pickupWatchdogAt = Date.now() + config.watchdogMs
+    await this.ctx.storage.setAlarm(pickupWatchdogAt)
     await this.ctx.storage.put(STATE_KEY, updated)
-    if (isPostMode) {
-      // Refresh watchdog: measure from pickup-time, not enqueue-time.
-      // A queue backlog could otherwise burn most of the budget
-      // before the consumer even starts.
-      const watchdogAt = Date.now() + config.watchdogMs
-      await this.ctx.storage.setAlarm(watchdogAt)
-    }
 
     emit("do-review-picked-up", {
       owner: updated.owner, repo: updated.repo, prNumber: updated.prNumber,

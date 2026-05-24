@@ -9,11 +9,12 @@
 //
 // v1 ships with a built-in baseline rule set covering the patterns
 // that actually leak in real PRs: AWS keys, GitHub tokens, Slack
-// webhooks, Stripe keys, OpenAI/Anthropic keys, generic private-key
-// PEM headers, and a high-entropy safety net for "long random-looking
-// string in source." Hits become structured findings injected into
-// the specialist prompts as authoritative facts — the security
-// specialist isn't asked to re-discover secrets by reading raw diff.
+// webhooks, Stripe keys, OpenAI/Anthropic/Ollama keys, generic
+// private-key PEM headers, and a high-entropy safety net for "long
+// random-looking string in source." Hits become structured findings
+// injected into the specialist prompts as authoritative facts — the
+// security specialist isn't asked to re-discover secrets by reading
+// raw diff.
 //
 // Privacy contract: matched substrings are NEVER returned in raw
 // form. The renderer emits only a redacted preview (first 4 + last 4
@@ -32,7 +33,16 @@
 interface SecretRule {
   id: string
   /** Human-readable category surfaced to the model + reviewer. */
-  category: "aws" | "github" | "slack" | "stripe" | "openai" | "anthropic" | "private-key" | "generic-token"
+  category:
+    | "aws"
+    | "github"
+    | "slack"
+    | "stripe"
+    | "openai"
+    | "anthropic"
+    | "ollama"
+    | "private-key"
+    | "generic-token"
   /** Pre-compiled-friendly source. */
   pattern: RegExp
   /** When omitted, severity defaults to `error` — secrets in code
@@ -89,6 +99,12 @@ const RULES: readonly SecretRule[] = [
     category: "openai",
     // `sk-` followed by 32+ chars, EXCLUDING `sk-ant-` (anthropic).
     pattern: /\bsk-(?!ant-)[A-Za-z0-9_-]{32,}\b/,
+  },
+  {
+    id: "ollama-api-key",
+    category: "ollama",
+    // Ollama cloud API keys are documented/shown with an `ollama_` prefix.
+    pattern: /\bollama_[A-Za-z0-9_-]{24,}\b/,
   },
   {
     id: "private-key-pem-header",

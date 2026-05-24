@@ -569,6 +569,7 @@ Built-in rule baseline (severity = `error` unless noted):
 | `stripe-secret-key` | `sk_live_...` / `sk_test_...` |
 | `anthropic-api-key` | `sk-ant-...` |
 | `openai-api-key` | `sk-...` (excluding `sk-ant-`) |
+| `ollama-api-key` | `ollama_...` |
 | `private-key-pem-header` | `-----BEGIN ... PRIVATE KEY-----` |
 | `generic-high-entropy-token` (warn) | 40+ char base64-ish; suppresses hex-only and URL fragments |
 

@@ -7,7 +7,9 @@ import {
   filterAnchorableSuggestions,
   hasSuggestionBlock,
   isContiguousRightRange,
+  partitionImproveSuggestions,
   renderInlineFallbackBody,
+  renderUnpostedImproveSuggestions,
   type PrImproveSuggestion,
 } from "../src/lib/triage-pr-improve"
 import type { ReviewableMap } from "../src/lib/diff-positions"
@@ -18,9 +20,9 @@ describe("hasSuggestionBlock", () => {
     expect(hasSuggestionBlock(body)).toBe(true)
   })
 
-  it("rejects an empty suggestion block", () => {
+  it("accepts an empty suggestion block as a deletion suggestion", () => {
     const body = "Use a clearer name.\n\n```suggestion\n\n```"
-    expect(hasSuggestionBlock(body)).toBe(false)
+    expect(hasSuggestionBlock(body)).toBe(true)
   })
 
   it("rejects a body with no fenced suggestion block", () => {
@@ -159,6 +161,47 @@ describe("filterAnchorableSuggestions", () => {
       reviewable,
     )
     expect(out).toHaveLength(0)
+  })
+
+  it("keeps empty suggestion blocks as anchorable deletion patches", () => {
+    const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
+    const out = filterAnchorableSuggestions(
+      [okSuggestion({ body: "Remove the dead branch.\n\n```suggestion\n\n```" })],
+      reviewable,
+    )
+    expect(out).toHaveLength(1)
+  })
+
+  it("partitions unanchorable or prose-only suggestions into summary fallback instead of dropping them", () => {
+    const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
+    const proseOnly = okSuggestion({ body: "This can be simplified without a safe inline patch." })
+    const offDiff = okSuggestion({ line: 99, body: "Rename this.\n\n```suggestion\nconst name = value\n```" })
+    const out = partitionImproveSuggestions([okSuggestion(), proseOnly, offDiff], reviewable)
+
+    expect(out.valid).toHaveLength(1)
+    expect(out.fallback).toEqual([proseOnly, offDiff])
+  })
+
+  it("partitions duplicate-anchor suggestions into summary fallback instead of dropping them", () => {
+    const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
+    const first = okSuggestion()
+    const duplicate = okSuggestion({ headline: "duplicate" })
+    const out = partitionImproveSuggestions([first, duplicate], reviewable)
+
+    expect(out.valid).toEqual([first])
+    expect(out.fallback).toEqual([duplicate])
+  })
+
+  it("partitions inverted startLine ranges into summary fallback instead of posting invalid anchors", () => {
+    const reviewable = makeReviewable([
+      { path: "src/foo.ts", line: 10, side: "RIGHT" },
+      { path: "src/foo.ts", line: 12, side: "RIGHT" },
+    ])
+    const inverted = okSuggestion({ line: 10, startLine: 12 })
+    const out = partitionImproveSuggestions([inverted], reviewable)
+
+    expect(out.valid).toHaveLength(0)
+    expect(out.fallback).toEqual([inverted])
   })
 
   it("dedupes suggestions targeting the same anchor", () => {
@@ -342,6 +385,7 @@ describe("renderInlineFallbackBody (ARC-179 422 fallback)", () => {
     expect(out).toContain("src/foo.ts:10")
     expect(out).toContain("src/bar.ts:23-25")
     expect(out).toContain("`abcdef1`")
+    expect(out).toContain("treat prose-only items as advisory")
   })
 
   it("works with an empty suggestions list (defensive)", () => {
@@ -349,5 +393,33 @@ describe("renderInlineFallbackBody (ARC-179 422 fallback)", () => {
     expect(typeof out).toBe("string")
     expect(out).toContain("Nothing.")
     expect(out).toContain("`deadbee`")
+  })
+})
+
+describe("renderUnpostedImproveSuggestions (SIG-142)", () => {
+  it("renders unposted improve suggestions with file:line anchors", () => {
+    const out = renderUnpostedImproveSuggestions([
+      {
+        path: "src/foo.ts",
+        line: 10,
+        category: "clarity",
+        headline: "Clarify branch naming",
+        body: "This is useful but cannot be posted as an inline patch.",
+      },
+      {
+        path: "src/bar.ts",
+        line: 20,
+        startLine: 18,
+        category: "dead-code",
+        headline: "Remove dead branch",
+        body: "Remove the unused branch.\n\n```suggestion\n\n```",
+      },
+    ])
+
+    expect(out).toContain("Findings not posted inline")
+    expect(out).toContain("`src/foo.ts:10`")
+    expect(out).toContain("`src/bar.ts:18-20`")
+    expect(out).toContain("Clarify branch naming")
+    expect(out).toContain("```suggestion\n\n```")
   })
 })

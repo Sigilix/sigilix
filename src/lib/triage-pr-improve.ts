@@ -9,9 +9,9 @@
 //     codepath — single model call, not 4 specialists + synthesizer)
 //   - REQUEST_CHANGES is never used; the review event is always
 //     COMMENT (suggestions are advisory, not blocking)
-//   - Findings without anchorable suggestion blocks get dropped
-//     silently — the whole point is apply-able patches, so prose-
-//     only "advice" doesn't belong here (it goes to /review)
+//   - Findings without anchorable suggestion blocks are kept in the
+//     review/comment summary with file:line context. Apply-able patches
+//     still post inline; non-applyable advice is no longer silent.
 //   - No 7-day dedupe lock — reviewers can re-run /improve anytime
 //   - Sensitive-repo gate IS enforced (we never send code to LLMs
 //     for repos on the OPENCLAW_SENSITIVE_REPOS denylist)
@@ -253,13 +253,20 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
       throw new Error(`pr-improve verdict did not parse after ${modelChain.length} attempt(s); last error: ${lastErr instanceof Error ? lastErr.message : "parse-failed"}`)
     }
 
-    // Filter suggestions to those that anchor cleanly to the diff,
-    // carry a non-empty `\`\`\`suggestion` block, and don't duplicate
-    // an earlier suggestion at the same anchor.
-    const valid = filterAnchorableSuggestions(verdict.suggestions, reviewable)
+    // Split suggestions into applyable inline patches and summary-only
+    // fallbacks. Empty suggestion blocks are valid deletion patches.
+    const partition = partitionImproveSuggestions(verdict.suggestions, reviewable)
+    const valid = partition.valid
+    const fallback = partition.fallback
     since(`filtered ${valid.length}/${verdict.suggestions.length}`)
 
     if (valid.length === 0) {
+      if (fallback.length > 0) {
+        await client.createIssueComment(owner, repo, prNumber, renderUnpostedImproveBody(verdict.summary, fallback, headSha))
+        posted = true
+        since("unposted-suggestions-comment-posted")
+        return
+      }
       // No-suggestions branch (acceptance criterion): post a brief
       // top-level comment so the reviewer doesn't think the command
       // got dropped on the floor.
@@ -273,6 +280,7 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
     const reviewBody = buildImproveReview({
       verdict,
       validSuggestions: valid,
+      unpostedSuggestions: fallback,
       headSha,
     })
     try {
@@ -299,7 +307,7 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
       // copy-paste.
       const status = readHttpStatus(err)
       if (status === 422) {
-        const fallbackBody = renderInlineFallbackBody(verdict.summary, valid, headSha)
+        const fallbackBody = renderInlineFallbackBody(verdict.summary, [...valid, ...fallback], headSha)
         await client.createIssueComment(owner, repo, prNumber, fallbackBody)
         posted = true
         since("improve-422-fallback-posted")
@@ -448,7 +456,7 @@ export function parsePrImproveResponse(text: string): PrImproveVerdict | null {
  *   - **RIGHT-side only.** `\`\`\`suggestion` blocks can't be applied
  *     against deleted lines (the file no longer has those lines).
  *     Drop any anchor whose primary side resolves to LEFT.
- *   - **startLine must also be in-diff and on the same side.**
+ *   - **startLine must be <= line, in-diff, and on the same side.**
  *     GitHub 422s the whole review on one bad anchor, so a model
  *     that picks a valid `line` but an out-of-hunk `startLine` would
  *     poison the whole batch.
@@ -464,47 +472,69 @@ export function filterAnchorableSuggestions(
   raw: PrImproveSuggestion[],
   reviewable: ReviewableMap,
 ): PrImproveSuggestion[] {
+  return partitionImproveSuggestions(raw, reviewable).valid
+}
+
+export interface PartitionedImproveSuggestions {
+  valid: PrImproveSuggestion[]
+  fallback: PrImproveSuggestion[]
+}
+
+export function partitionImproveSuggestions(
+  raw: PrImproveSuggestion[],
+  reviewable: ReviewableMap,
+): PartitionedImproveSuggestions {
   const seen = new Set<string>()
-  const out: PrImproveSuggestion[] = []
+  const valid: PrImproveSuggestion[] = []
+  const fallback: PrImproveSuggestion[] = []
   for (const s of raw) {
     const lineSide = deriveSide(reviewable, s.path, s.line)
-    if (lineSide !== "RIGHT") continue
-    if (!hasSuggestionBlock(s.body)) continue
-    if (typeof s.startLine === "number" && s.startLine < s.line) {
-      if (!isContiguousRightRange(reviewable, s.path, s.startLine, s.line)) {
-        continue
+    let anchorable = lineSide === "RIGHT" && hasSuggestionBlock(s.body)
+    if (typeof s.startLine === "number") {
+      if (s.startLine > s.line) {
+        anchorable = false
+      } else if (s.startLine < s.line) {
+        if (!isContiguousRightRange(reviewable, s.path, s.startLine, s.line)) {
+          anchorable = false
+        }
       }
     }
+    if (!anchorable) {
+      fallback.push(s)
+      continue
+    }
     const key = `${s.path}:${s.startLine ?? s.line}-${s.line}`
-    if (seen.has(key)) continue
+    if (seen.has(key)) {
+      fallback.push(s)
+      continue
+    }
     seen.add(key)
-    out.push(s)
+    valid.push(s)
   }
-  return out
+  return { valid, fallback }
 }
 
 /**
  * Return true iff the body contains at least one fenced
- * `\`\`\`suggestion ...\`\`\`` block with non-empty content. The model
- * is instructed to emit exactly one; we accept the first one we see
- * and ignore the rest.
+ * `\`\`\`suggestion ...\`\`\`` block. Empty content is valid and means
+ * a deletion suggestion in GitHub's apply-suggestion semantics. The
+ * model is instructed to emit exactly one; we accept the first one we
+ * see and ignore the rest.
  */
 export function hasSuggestionBlock(body: string): boolean {
   if (typeof body !== "string") return false
-  const match = body.match(/```suggestion\s*\n([\s\S]*?)```/)
-  if (!match) return false
-  const inner = match[1] ?? ""
-  return inner.trim().length > 0
+  return /```suggestion\s*\n[\s\S]*?```/.test(body)
 }
 
 interface BuildImproveArgs {
   verdict: PrImproveVerdict
   validSuggestions: PrImproveSuggestion[]
+  unpostedSuggestions?: PrImproveSuggestion[]
   headSha: string
 }
 
 function buildImproveReview(args: BuildImproveArgs): SubmitReviewBody {
-  const { verdict, validSuggestions, headSha } = args
+  const { verdict, validSuggestions, unpostedSuggestions = [], headSha } = args
   // Pre-condition: every entry in validSuggestions has already been
   // proved RIGHT-side anchorable by `filterAnchorableSuggestions`.
   // No need to re-derive side here.
@@ -526,9 +556,15 @@ function buildImproveReview(args: BuildImproveArgs): SubmitReviewBody {
     `**Sigilix improve** — ${comments.length} apply-able suggestion${comments.length === 1 ? "" : "s"}.`,
     "",
     verdict.summary,
+  ]
+  const unposted = renderUnpostedImproveSuggestions(unpostedSuggestions)
+  if (unposted !== "") {
+    bodyParts.push("", unposted)
+  }
+  bodyParts.push(
     "",
     `<sub>Run on \`${headSha.slice(0, 7)}\`. Suggestions are advisory — apply via the "Commit suggestion" button.</sub>`,
-  ]
+  )
 
   return {
     body: bodyParts.join("\n"),
@@ -549,6 +585,42 @@ function renderNoSuggestionsBody(summary: string): string {
     summary,
     "",
     "<sub>This pass focuses on style / clarity / refactor opportunities only. For correctness or security findings, use `/sigilix review`.</sub>",
+  ].join("\n")
+}
+
+export function renderUnpostedImproveSuggestions(suggestions: PrImproveSuggestion[]): string {
+  if (suggestions.length === 0) return ""
+  const parts = [
+    "### Findings not posted inline",
+    "",
+    "These suggestions could not be represented as apply-able GitHub inline patches, so they are preserved here instead of being dropped.",
+    "",
+  ]
+  for (const s of suggestions) {
+    const range = typeof s.startLine === "number" && s.startLine < s.line
+      ? `${s.path}:${s.startLine}-${s.line}`
+      : `${s.path}:${s.line}`
+    parts.push(`- **\`${s.category}\`: ${s.headline}** — \`${range}\``)
+    parts.push("")
+    parts.push(s.body)
+    parts.push("")
+  }
+  return parts.join("\n").trimEnd()
+}
+
+function renderUnpostedImproveBody(
+  summary: string,
+  suggestions: PrImproveSuggestion[],
+  headSha: string,
+): string {
+  return [
+    "**Sigilix improve** — suggestions not posted inline.",
+    "",
+    summary,
+    "",
+    renderUnpostedImproveSuggestions(suggestions),
+    "",
+    `<sub>Run on \`${headSha.slice(0, 7)}\`. Suggestions are preserved with file:line anchors when GitHub inline application is not available.</sub>`,
   ].join("\n")
 }
 
@@ -579,7 +651,7 @@ export function renderInlineFallbackBody(
     parts.push(s.body)
     parts.push("")
   }
-  parts.push(`<sub>Run on \`${headSha.slice(0, 7)}\`. GitHub rejected the inline anchors; copy each \`\`\`suggestion block into a manual review comment to apply.</sub>`)
+  parts.push(`<sub>Run on \`${headSha.slice(0, 7)}\`. GitHub rejected the inline anchors; apply any included \`\`\`suggestion blocks manually where present, and treat prose-only items as advisory.</sub>`)
   return parts.join("\n")
 }
 

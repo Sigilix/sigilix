@@ -15,7 +15,7 @@ function ctx(): ExecutionContext {
 }
 
 describe("badge assets (SIG-201)", () => {
-  it("serves a path-drawn P2 priority chip from a public Worker route", async () => {
+  it("serves a compact color-coded P2 priority chip from a public Worker route", async () => {
     const res = handleBadgeAssetRoute(
       new Request(badgeAssetUrl("p2"))
     )
@@ -25,10 +25,12 @@ describe("badge assets (SIG-201)", () => {
     expect(res?.headers.get("cache-control")).toContain("immutable")
     const body = await res!.text()
     expect(body).toContain('aria-label="P2"')
-    expect(body).toContain('viewBox="0 0 52 32"')
-    expect(body).toContain('transform="translate(4 0)"')
-    expect(body).not.toContain("<text")
-    expect(body).toContain("<path")
+    expect(body).toContain('viewBox="0 0 38 28"')
+    expect(body).toContain('fill="#84CC16"')
+    expect(body).toContain('fill="#0B0C10"')
+    expect(body).toContain('text-anchor="middle"')
+    expect(body).not.toContain("<image")
+    expect(body).toContain("<text")
     expect(body).toBe(getBadgeSvg("p2"))
   })
 
@@ -47,7 +49,7 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260524-4/p2.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260524-5/p2.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
   })
 

@@ -12,7 +12,6 @@ import { getAppActorToken } from "./linear-oauth"
 import { getMarker, setMarker } from "./dedupe"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { ISSUE_TRIAGE_SCHEMA } from "./schemas"
-import { badgeAssetUrl, type BadgeAssetName } from "./badge-assets"
 import type { Env } from "../index"
 import { ISSUE_TRIAGE_PROMPT } from "../prompts/issue-triage"
 
@@ -22,11 +21,11 @@ const MAX_LABELS = 3
 const VALID_SEVERITIES = new Set(["P0", "P1", "P2", "P3"])
 const VALID_ESTIMATES = new Set(["trivial", "S", "M", "L", "XL"])
 const ISSUE_TRIAGE_BADGES = {
-  P0: { label: "P0", asset: "p0" },
-  P1: { label: "P1", asset: "p1" },
-  P2: { label: "P2", asset: "p2" },
-  P3: { label: "P3", asset: "p3" },
-} as const satisfies Record<string, { label: "P0" | "P1" | "P2" | "P3"; asset: BadgeAssetName }>
+  P0: { label: "P0" },
+  P1: { label: "P1" },
+  P2: { label: "P2" },
+  P3: { label: "P3" },
+} as const satisfies Record<string, { label: "P0" | "P1" | "P2" | "P3" }>
 
 const LIMITS = {
   issueBody: 8_000,
@@ -311,7 +310,7 @@ export function issueTriagePriorityBadge(severity: string): string {
   const badge = key in ISSUE_TRIAGE_BADGES
     ? ISSUE_TRIAGE_BADGES[key as keyof typeof ISSUE_TRIAGE_BADGES]
     : ISSUE_TRIAGE_BADGES.P2
-  return `![${badge.label}](${badgeAssetUrl(badge.asset)})`
+  return `[${badge.label}]`
 }
 
 export function formatIssueTriageComment(verdict: IssueTriageCommentVerdict): string {

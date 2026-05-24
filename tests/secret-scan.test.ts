@@ -82,6 +82,16 @@ describe("runSecretScan — provider-specific rules", () => {
     expect(hits[0]?.ruleId).toBe("openai-api-key")
   })
 
+  it("flags Ollama cloud API keys (ollama_)", () => {
+    const hits = runSecretScan(mkDiff("ai.ts", [
+      'const OLLAMA = "ollama_1234567890abcdef1234567890abcdef"',
+    ]))
+    expect(hits).toHaveLength(1)
+    expect(hits[0]?.ruleId).toBe("ollama-api-key")
+    expect(hits[0]?.category).toBe("ollama")
+    expect(hits[0]?.severity).toBe("error")
+  })
+
   it("flags PEM private-key headers", () => {
     const hits = runSecretScan(mkDiff("keys/server.key", [
       "-----BEGIN RSA PRIVATE KEY-----",

@@ -1867,8 +1867,8 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 52
-const SEVERITY_BADGE_HEIGHT = 32
+const SEVERITY_BADGE_WIDTH = 38
+const SEVERITY_BADGE_HEIGHT = 28
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
   return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
@@ -1951,6 +1951,45 @@ export function fenceForContent(content: string): string {
 // `suggestedReplacement` is eligible to render as a committable
 // ```suggestion (still gated on clean anchorability).
 const HIGH_CONFIDENCE_FLOOR = 4
+
+export interface ProposedChangeScopeMismatch {
+  anchorLines: number
+  replacementLines: number
+  replacementToAnchorRatio: number
+}
+
+function countReplacementLines(replacement: string): number {
+  const normalized = replacement.replace(/\n$/, "")
+  if (normalized.length === 0) return 0
+  return normalized.split("\n").length
+}
+
+function referencesMultipleSpecificLines(body: string): boolean {
+  return /\blines?\s+\d+(?:\s*(?:,|\band\b)\s*(?:and\s+)?\d+)+\b/i.test(body)
+}
+
+// SIG-179: below this ratio, a replacement is treated as much smaller
+// than its anchor and the illustrative Current/Proposed block is skipped.
+const SCOPE_MISMATCH_RATIO_THRESHOLD = 0.5
+
+export function getProposedChangeScopeMismatch(finding: PrReviewFinding): ProposedChangeScopeMismatch | null {
+  const repl = finding.suggestedReplacement
+  const isReplace =
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof repl === "string" && repl.length > 0
+  if (!isReplace) return null
+  if (!referencesMultipleSpecificLines(finding.body)) return null
+
+  const startL =
+    finding.startLine != null && finding.startLine < finding.line
+      ? finding.startLine
+      : finding.line
+  const anchorLines = Math.max(1, finding.line - startL + 1)
+  const replacementLines = countReplacementLines(repl)
+  const replacementToAnchorRatio = replacementLines / anchorLines
+  if (replacementToAnchorRatio >= SCOPE_MISMATCH_RATIO_THRESHOLD) return null
+  return { anchorLines, replacementLines, replacementToAnchorRatio }
+}
 
 /**
  * SIG-127: classify a finding's anchored added-line TEXT as substantive
@@ -2052,6 +2091,13 @@ export function formatProposedChangeBlock(
     (finding.kind === "replace" || finding.kind === undefined) &&
     typeof repl === "string" && repl.length > 0
   if (!isDeletion && !isReplace) return ""
+
+  // SIG-179: when a very small replacement is paired with a broad
+  // anchor and the prose names multiple exact lines, showing the full
+  // anchor as "Current" makes a local patch look like a wholesale
+  // rewrite. Keep the committable suggestion path, but skip this
+  // illustrative block.
+  if (getProposedChangeScopeMismatch(finding) !== null) return ""
 
   // Pull the current-state lines from the diff context (added lines on
   // the finding's range). When the map is absent or doesn't include

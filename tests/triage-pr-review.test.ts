@@ -1751,6 +1751,99 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
     }
     expect(formatProposedChangeBlock(f, py)).toContain("```python")
   })
+
+  it("skips Current/Proposed when replacement scope is much smaller and body names multiple exact lines", () => {
+    const wideLines = new Map([
+      ["src/a.ts", new Map<number, string>(
+        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
+      )],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 10, startLine: 1, score: 4,
+      category: "logic", headline: "h",
+      body: "Add suppression comments on lines 2, 8.",
+      kind: "replace",
+      suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
+    }
+    // 2 replacement lines / 10 anchor lines is below the mismatch threshold.
+    expect(formatProposedChangeBlock(f, wideLines)).toBe("")
+  })
+
+  it("detects comma-free multi-line wording when checking scope mismatch", () => {
+    const wideLines = new Map([
+      ["src/a.ts", new Map<number, string>(
+        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
+      )],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 10, startLine: 1, score: 4,
+      category: "logic", headline: "h",
+      body: "Add suppression comments on lines 2 and 8.",
+      kind: "replace",
+      suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
+    }
+    expect(formatProposedChangeBlock(f, wideLines)).toBe("")
+  })
+
+  it("keeps Current/Proposed for scope mismatch when the body only names one line", () => {
+    const wideLines = new Map([
+      ["src/a.ts", new Map<number, string>(
+        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
+      )],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 10, startLine: 1, score: 4,
+      category: "logic", headline: "h",
+      body: "Add a guard on line 8.",
+      kind: "replace",
+      suggestedReplacement: "  if (!ok) return\n  line8()",
+    }
+    expect(formatProposedChangeBlock(f, wideLines)).toContain("**Current:**")
+  })
+
+  it("keeps Current/Proposed when replacement scope roughly matches the anchor", () => {
+    const lines = new Map([
+      ["src/a.ts", new Map<number, string>([
+        [1, "  a()"],
+        [2, "  b()"],
+        [3, "  c()"],
+        [4, "  d()"],
+      ])],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 4, startLine: 1, score: 4,
+      category: "logic", headline: "h",
+      body: "Rewrite lines 1, 4.",
+      kind: "replace",
+      suggestedReplacement: "  aSafe()\n  bSafe()\n  cSafe()",
+    }
+    expect(formatProposedChangeBlock(f, lines)).toContain("**Current:**")
+  })
+
+  it("still emits the committable suggestion when Current/Proposed is skipped for scope mismatch", () => {
+    const wideLines = new Map([
+      ["src/a.ts", new Map<number, string>(
+        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
+      )],
+    ])
+    const reviewable: ReviewableMap = new Map([
+      ["src/a.ts", Array.from({ length: 10 }, (_, i) => ({
+        line: i + 1,
+        side: "RIGHT" as const,
+      }))],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 10, startLine: 1, score: 4,
+      category: "logic", headline: "h",
+      body: "Add suppression comments on lines 2, 8.",
+      kind: "replace",
+      suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
+    }
+    const out = formatFindingComment(f, 5, reviewable, wideLines)
+    expect(out).not.toContain("**Current:**")
+    expect(out).toContain("```suggestion")
+    expect(out).toContain("// suppress line 2")
+  })
 })
 
 describe("formatAiAgentPromptBlock (SIG-164 PR 5)", () => {
@@ -2142,12 +2235,12 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
   it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="52"')
-    expect(out).toContain('height="32"')
+    expect(out).toContain('width="38"')
+    expect(out).toContain('height="28"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260524-4/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260524-5/p2.svg`)
     expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {

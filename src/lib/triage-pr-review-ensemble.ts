@@ -79,6 +79,7 @@ import {
   buildFallbackSubmission,
   chooseReviewEvent,
   computeShadowGateDivergence,
+  getProposedChangeScopeMismatch,
 } from "./triage-pr-review"
 import { readGateMode, readGateThreshold } from "./gate-config"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
@@ -3513,6 +3514,27 @@ export async function handlePrReviewEnsemble(
       ? buildPrUrl(owner, repo, prNumber)
       : undefined
 
+    const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
+    for (const finding of renderableVerdict.findings) {
+      const mismatch = getProposedChangeScopeMismatch(finding)
+      if (mismatch === null) continue
+      console.log(JSON.stringify({
+        event: "pr-review-finding-anchor-scope-mismatch",
+        gate: "rendering",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        reason: "replacement_anchor_scope_mismatch",
+        dropped: false,
+        path: finding.path,
+        line: finding.line,
+        startLine: finding.startLine ?? null,
+        score: finding.score,
+        category: finding.category,
+        anchorLines: mismatch.anchorLines,
+        replacementLines: mismatch.replacementLines,
+        replacementToAnchorRatio: Number(mismatch.replacementToAnchorRatio.toFixed(3)),
+      }))
+    }
+
     const submission = buildReviewSubmission({
       verdict: renderableVerdict,
       prAuthor: meta.user?.login ?? null,
@@ -3541,7 +3563,7 @@ export async function handlePrReviewEnsemble(
       // model anchored to a non-substantive structural line (a bare
       // `}`, blank line) route to the summary body instead of an
       // inline comment "on an empty line."
-      addedLineTextByLine: buildAddedLineTextByLine(fullPrDiff),
+      addedLineTextByLine,
     })
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE

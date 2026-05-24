@@ -1471,17 +1471,9 @@ export function renderApproveBody(_args: RenderBodyArgs): string {
  * the threshold. GitHub event is `COMMENT` — comments post but no
  * verdict change.
  *
- * Body shape mirrors `renderRequestChangesBody` (same heading, same
- * findings rendering) because the visual layout is largely identical;
- * the only mechanical difference today is the strip of
- * `reviewCounter` + `retriggerUrl` (REQUEST_CHANGES-specific
- * affordances that don't make sense when there's no verdict to
- * dismiss or retrigger).
- *
- * COPY REFINEMENT IS DEFERRED to [SIG-167](https://linear.app/sigilix/issue/SIG-167) —
- * the `DISMISSAL_HINT` text + the "Sigilix: N findings" heading both
- * still leak through this delegation and read as blocker framing.
- * SIG-167 MUST land before PR 4c flips `OPENCLAW_GATE = "enforce"`.
+ * Body shape mirrors `renderRequestChangesBody` for the finding layout,
+ * but uses non-blocking copy and omits REQUEST_CHANGES-only affordances
+ * so borderline findings don't read as blocker framing.
  *
  * In PR 4a this function is UNREACHABLE in production — the legacy
  * `chooseReviewEvent`'s narrowed return excludes "COMMENT". PR 4b
@@ -1490,13 +1482,6 @@ export function renderApproveBody(_args: RenderBodyArgs): string {
  * Pure — exported for tests.
  */
 export function renderCommentBody(args: RenderBodyArgs): string {
-  // Reuse RC layout but strip the counter / retrigger inputs so the
-  // body doesn't claim "Nth REQUEST_CHANGES" on a non-verdict post.
-  // PR 4c will redesign the copy further (see SIG-167 follow-up); for
-  // PR 4a the delegation keeps the type-exhaustiveness obligation
-  // satisfied without inventing a parallel body builder we'll throw
-  // away.
-  //
   // Strip pattern: denylist-by-name via rest spread so any new
   // optional field added to RenderBodyArgs later (a stack hint, a
   // delta variant, etc.) flows through without an opt-in step. The
@@ -1504,7 +1489,7 @@ export function renderCommentBody(args: RenderBodyArgs): string {
   const { reviewCounter: _rc, retriggerUrl: _rt, ...stripped } = args
   void _rc
   void _rt
-  return renderRequestChangesBody(stripped)
+  return renderFindingsReviewBody(stripped, "comment")
 }
 
 /**
@@ -1537,19 +1522,26 @@ export function renderCommentBody(args: RenderBodyArgs): string {
  * Pure — exported for tests.
  */
 export function renderRequestChangesBody(args: RenderBodyArgs): string {
+  return renderFindingsReviewBody(args, "request_changes")
+}
+
+type FindingsReviewPosture = "request_changes" | "comment"
+
+function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewPosture): string {
   const unanchored = args.unanchored ?? []
   const totalFindings = args.verdict.findings.length + unanchored.length
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
-  // Heading: "## Sigilix: N finding[s][ · since last review]".
+  // Heading: "## Sigilix: N [non-blocking ]finding[s][ · since last review]".
   // 2026-05-23 rebrand: Δ glyph (triangle) removed; literal "since
   // last review" copy in its place. See `renderDeltaBadge` for the
   // matching badge-line change.
   const findingNoun = totalFindings === 1 ? "finding" : "findings"
   const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
   const deltaSuffix = deltaBadge ? " · since last review" : ""
-  lines.push(`## Sigilix: ${totalFindings} ${findingNoun}${deltaSuffix}`)
+  const postureCopy = posture === "comment" ? "non-blocking " : ""
+  lines.push(`## Sigilix: ${totalFindings} ${postureCopy}${findingNoun}${deltaSuffix}`)
 
   // Changes-badge line — directly under heading, before coverage and
   // summary. Only present when delta has signal.
@@ -1593,8 +1585,10 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
 
   // Dismissal hint — REQUEST_CHANGES only, before the provenance
   // footer.
-  lines.push("")
-  lines.push(DISMISSAL_HINT)
+  if (posture === "request_changes") {
+    lines.push("")
+    lines.push(DISMISSAL_HINT)
+  }
 
   // SIG-101: retrigger hint. The original Greptile-style
   // `[🔄 Re-run review](URL)` button was dropped on founder feedback
@@ -1604,7 +1598,7 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
   // can do, without occupying header-weight real estate. GitHub
   // doesn't support pre-filled comment bodies on existing PRs, so a
   // URL-link wouldn't have actually triggered the rerun anyway.
-  if (args.retriggerUrl) {
+  if (posture === "request_changes" && args.retriggerUrl) {
     lines.push("")
     lines.push("<sub>Comment `/sigilix review` on this PR to re-run on the current head.</sub>")
   }
@@ -1614,7 +1608,11 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
   // value `renderProvenanceFooter` uses, so the two footers stay in
   // sync. APPROVE bodies render marker-only per SIG-94 and skip
   // this; only REQUEST_CHANGES bodies surface the counter.
-  if (typeof args.reviewCounter === "number" && args.reviewCounter > 0) {
+  if (
+    posture === "request_changes" &&
+    typeof args.reviewCounter === "number" &&
+    args.reviewCounter > 0
+  ) {
     const counterTs = new Date(args.prov?.nowMs ?? Date.now()).toISOString()
     lines.push("")
     lines.push(
@@ -2186,5 +2184,3 @@ export function isCommentAnchorable(
   if (startLine === undefined || startLine >= line) return true
   return deriveSide(reviewable, path, startLine) === "RIGHT"
 }
-
-

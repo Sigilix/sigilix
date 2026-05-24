@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { SPECIALIST_PROMPTS, SYNTHESIZER_PROMPT } from "../src/prompts/pr-review-specialists"
-import { PROMPT_VERSION } from "../src/prompts/pr-review"
+import { PROMPT_VERSION, PR_REVIEW_PROMPT } from "../src/prompts/pr-review"
 
 describe("SIG-125 suggestion prompt wiring", () => {
   it("output schema documents suggestedReplacement", () => {
@@ -29,10 +29,18 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // The synth-side line also mentions PRESERVE VERBATIM next to the kind doc.
     expect(SYNTHESIZER_PROMPT).toMatch(/"kind"[\s\S]*?PRESERVE VERBATIM/i)
   })
-  it("PROMPT_VERSION bumped to 7 (SIG-161 PR 4b: + per-finding confidence rubric)", () => {
+  it("keeps point-fix anchors narrow instead of widening to the enclosing block (SIG-180)", () => {
+    expect(SPECIALIST_PROMPTS.logic).toContain("ANCHOR SCOPE EXCEPTION")
+    expect(SPECIALIST_PROMPTS.logic).toMatch(/point-fix[\s\S]*?startLine: null/i)
+    expect(SPECIALIST_PROMPTS.logic).toMatch(/Do NOT widen a point-fix/i)
+    expect(PR_REVIEW_PROMPT).toContain("Anchor scope exception: point-fix shapes")
+    expect(PR_REVIEW_PROMPT).toMatch(/point-fix[\s\S]*?omitting `startLine`/i)
+    expect(PR_REVIEW_PROMPT).toMatch(/Do NOT widen a point-fix/i)
+  })
+  it("PROMPT_VERSION bumped to 8 (SIG-180: point-fix anchor guidance)", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
-    // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric in
-    // SHARED_OUTPUT_INSTRUCTIONS).
-    expect(PROMPT_VERSION).toBe("7")
+    // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
+    // SIG-180 7→8 (point-fix anchor scope exception).
+    expect(PROMPT_VERSION).toBe("8")
   })
 })

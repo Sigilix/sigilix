@@ -587,11 +587,9 @@ describe("computeGateScore (SIG-161 §5)", () => {
   })
 })
 
-// SIG-161 PR 4a — `renderCommentBody` body shape. Unreachable in PR 4a
-// from the legacy call sites (their narrowed `ReviewEvent` excludes
-// COMMENT), but PR 4b's flag wrapper will turn this on. Tests here
-// guard against silent regressions when copy refinement lands in the
-// SIG-167 follow-up.
+// SIG-161/SIG-167 — `renderCommentBody` body shape. COMMENT posts share
+// the findings layout with REQUEST_CHANGES but must read as non-blocking
+// and omit verdict-only affordances.
 describe("renderCommentBody (SIG-161)", () => {
   const verdict: PrReviewVerdict = {
     summary: "Borderline findings worth a look.",
@@ -603,6 +601,18 @@ describe("renderCommentBody (SIG-161)", () => {
   it("contains the sigilix:pr-review marker (same as RC body)", () => {
     const body = renderCommentBody({ verdict })
     expect(body).toContain("<!-- sigilix:pr-review -->")
+  })
+
+  it("uses non-blocking heading copy instead of blocker framing (SIG-167)", () => {
+    const body = renderCommentBody({ verdict })
+    expect(body).toMatch(/^## Sigilix: 1 non-blocking finding$/m)
+    expect(body).not.toMatch(/^## Sigilix: 1 finding$/m)
+  })
+
+  it("omits the dismissal hint because COMMENT has no verdict to dismiss (SIG-167)", () => {
+    const body = renderCommentBody({ verdict })
+    expect(body).not.toContain("To dismiss this review")
+    expect(body).not.toContain("@sigilix dismiss")
   })
 
   it("STRIPS reviewCounter even when supplied (no 'Review #N' on a non-verdict post)", () => {

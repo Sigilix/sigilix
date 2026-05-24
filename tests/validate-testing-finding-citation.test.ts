@@ -250,7 +250,6 @@ function makeProvenance(count: number, sourceId = "tests-0"): SynthesizerProvena
     findings,
     dropped: [],
     softened: [],
-    retrievalCallsUsed: 0,
   }
 }
 
@@ -419,7 +418,6 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
         ],
         dropped: [],
         softened: [],
-        retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
     const result = validateForSubmission({
@@ -454,7 +452,6 @@ describe("validateForSubmission — SIG-113 testing-evidence citation gate", () 
         })),
         dropped: [],
         softened: [],
-        retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
     const result = validateForSubmission({

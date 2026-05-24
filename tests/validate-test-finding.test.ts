@@ -437,7 +437,6 @@ function testsProvenance(sourceId = "tests-0"): SynthesizerProvenance {
     ],
     dropped: [],
     softened: [],
-    retrievalCallsUsed: 0,
   }
 }
 
@@ -554,7 +553,7 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
         },
         provenance: {
           findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [], retrievalCallsUsed: 0,
+          dropped: [], softened: [],
         },
       },
       reviewable: makeReviewable(),

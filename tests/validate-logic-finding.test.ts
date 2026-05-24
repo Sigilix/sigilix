@@ -288,7 +288,6 @@ function logicProvenance(sourceId = "logic-0"): SynthesizerProvenance {
     ],
     dropped: [],
     softened: [],
-    retrievalCallsUsed: 0,
   }
 }
 
@@ -395,7 +394,7 @@ describe("validateForSubmission — SIG-109 logic evidence gate", () => {
         verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [f] },
         provenance: {
           findings: [{ sourceSpecialists: ["security"], sourceFindingIds: ["security-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [], retrievalCallsUsed: 0,
+          dropped: [], softened: [],
         },
       },
       reviewable: makeReviewable(),

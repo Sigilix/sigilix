@@ -211,7 +211,6 @@ function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
     ],
     dropped: [],
     softened: [],
-    retrievalCallsUsed: 0,
   }
 }
 
@@ -330,7 +329,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         },
         provenance: {
           findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [], retrievalCallsUsed: 0,
+          dropped: [], softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -352,7 +351,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         },
         provenance: {
           findings: [{ sourceSpecialists: ["security", "logic"], sourceFindingIds: ["security-0", "logic-0"], action: "merged", verifiedViaRetrieval: false }],
-          dropped: [], softened: [], retrievalCallsUsed: 0,
+          dropped: [], softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -374,7 +373,7 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
         provenance: {
           // sourceSpecialists empty, but the validated id has the security- prefix.
           findings: [{ sourceSpecialists: [], sourceFindingIds: ["security-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [], retrievalCallsUsed: 0,
+          dropped: [], softened: [],
         },
       },
       reviewable: makeReviewable(),
@@ -575,7 +574,6 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
       ],
       dropped: [],
       softened: [],
-      retrievalCallsUsed: 0,
     }
     const result = validateForSubmission({
       synthOutput: {

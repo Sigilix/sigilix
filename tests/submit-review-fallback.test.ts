@@ -367,7 +367,6 @@ describe("validateForSubmission populates unanchoredFindings", () => {
             },
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -399,7 +398,6 @@ describe("validateForSubmission populates unanchoredFindings", () => {
             },
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -409,7 +407,7 @@ describe("validateForSubmission populates unanchoredFindings", () => {
     expect(out.unanchoredFindings).toHaveLength(0)
   })
 
-  it("does NOT push score-1 findings into unanchoredFindings (still demoted to summary)", () => {
+  it("does NOT push score-1 findings into unanchoredFindings or default/chill summary", () => {
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
@@ -427,7 +425,6 @@ describe("validateForSubmission populates unanchoredFindings", () => {
             },
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -435,8 +432,15 @@ describe("validateForSubmission populates unanchoredFindings", () => {
     })
     expect(out.demotedScore1).toBe(1)
     expect(out.unanchoredFindings).toHaveLength(0)
-    // The score-1 should appear in summary aggregation, not unanchored.
-    expect(out.verdict.summary).toContain("tiny nit")
+    expect(out.verdict.summary).not.toContain("tiny nit")
+    expect(out.provenance.dropped).toEqual([
+      {
+        specialist: "logic",
+        sourceFindingId: "logic-0",
+        headline: "tiny nit",
+        reason: "score-1-advisory",
+      },
+    ])
   })
 
   it("returns empty unanchoredFindings on the happy-path (line valid)", () => {
@@ -453,7 +457,6 @@ describe("validateForSubmission populates unanchoredFindings", () => {
             },
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,

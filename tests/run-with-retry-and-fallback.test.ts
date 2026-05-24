@@ -390,7 +390,7 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
   // `parseSynthAnswer` + `isValidProvenance`. Minimal valid shape.
   const VALID_SYNTH_JSON = JSON.stringify({
     verdict: { summary: "synthesized", confidence: 3, findings: [] },
-    provenance: { findings: [], dropped: [], retrievalCallsUsed: 0 },
+    provenance: { findings: [], dropped: [] },
   })
   const perfCtx = {
     owner: "Arc-and-Anchor",

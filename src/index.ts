@@ -409,8 +409,8 @@ export type JobMessage =
   | {
       // ARC-265: auto-label picker. Fires per `pull_request` webhook
       // alongside pr-overview / pr-review. Handler short-circuits if
-      // `sigilix.json::customLabels` is empty — zero behavior change
-      // for repos without label config.
+      // `sigilix.json::labels.enabled` is false. Without customLabels,
+      // it derives candidates from the repo's existing label set.
       type: "pr-labels"
       owner: string
       repo: string
@@ -1055,9 +1055,9 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         ...(job.force ? { force: true } : {}),
       })
     case "pr-labels":
-      // ARC-265: auto-label picker. Short-circuits if
-      // `sigilix.json::customLabels` is empty/absent — zero behavior
-      // change for repos without label config.
+      // ARC-265/SIG-135: auto-label picker. Short-circuits only when
+      // `sigilix.json::labels.enabled` is false; otherwise it uses
+      // customLabels or falls back to existing repo labels.
       return handlePrLabels({
         owner: job.owner,
         repo: job.repo,
@@ -2055,8 +2055,7 @@ async function handleGitHubWebhook(
     // ready_for_review). Independent of `overview.enabled` per
     // founder direction — labels are a separate product capability
     // and should be available even when overview is opted out.
-    // The handler short-circuits if `sigilix.json::customLabels` is
-    // empty/absent, so this is free for repos without label config.
+    // The handler short-circuits only if `labels.enabled:false`.
     if (decision.overview) {
       await env.OPENCLAW_JOBS.send({
         type: "pr-labels",

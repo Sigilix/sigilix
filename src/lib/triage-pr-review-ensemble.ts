@@ -5758,6 +5758,62 @@ export interface ValidatedOutput {
   provenance: SynthesizerProvenance
 }
 
+interface SourceFindingSecurityEvidence {
+  cweId?: string
+  evidenceId?: string
+}
+
+function buildSourceFindingSecurityEvidenceById(
+  specialistVerdicts: CollectedVerdict[],
+): Map<string, SourceFindingSecurityEvidence> {
+  const out = new Map<string, SourceFindingSecurityEvidence>()
+  for (const verdict of specialistVerdicts) {
+    if (!verdict.verdict) continue
+    for (const finding of verdict.verdict.findings) {
+      const entry: SourceFindingSecurityEvidence = {}
+      if (hasNonEmptyString(finding.cweId)) entry.cweId = finding.cweId
+      if (hasNonEmptyString(finding.evidenceId)) entry.evidenceId = finding.evidenceId
+      if (Object.keys(entry).length > 0) out.set(finding.id, entry)
+    }
+  }
+  return out
+}
+
+function backfillSecurityEvidenceFromSources(
+  finding: PrReviewFinding,
+  sourceIds: readonly string[],
+  sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>,
+): PrReviewFinding {
+  const cweId = hasNonEmptyString(finding.cweId)
+    ? undefined
+    : firstSourceEvidenceField(sourceIds, sourceEvidenceById, "cweId")
+  const evidenceId = hasNonEmptyString(finding.evidenceId)
+    ? undefined
+    : firstSourceEvidenceField(sourceIds, sourceEvidenceById, "evidenceId")
+  if (!cweId && !evidenceId) return finding
+  return {
+    ...finding,
+    ...(cweId ? { cweId } : {}),
+    ...(evidenceId ? { evidenceId } : {}),
+  }
+}
+
+function firstSourceEvidenceField(
+  sourceIds: readonly string[],
+  sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>,
+  field: keyof SourceFindingSecurityEvidence,
+): string | undefined {
+  for (const sourceId of sourceIds) {
+    const value = sourceEvidenceById.get(sourceId)?.[field]
+    if (hasNonEmptyString(value)) return value
+  }
+  return undefined
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0
+}
+
 /**
  * SIG-113: gate per-finding evidence citation for `category: "testing"`
  * findings. Drops uncited findings to suppress the PR #110/#111
@@ -6086,6 +6142,7 @@ export function validateForSubmission(args: {
     profile = "chill",
   } = args
   const validIds = new Set<string>()
+  const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
     for (const f of v.verdict.findings) validIds.add(f.id)
@@ -6130,6 +6187,14 @@ export function validateForSubmission(args: {
       droppedForHallucination++
       continue
     }
+
+    // SIG-117: synth may preserve provenance but omit security
+    // evidence fields copied from the original specialist findings.
+    // Backfill missing `cweId`/`evidenceId` from the cited source
+    // findings BEFORE any validation gates run. The clone keeps raw
+    // synth telemetry intact and never overwrites fields the synth
+    // already provided.
+    f = backfillSecurityEvidenceFromSources(f, sourceIds, sourceEvidenceById)
 
     // ARC-156: vague-prefix filter. Drop findings whose headline OR
     // body starts with one of the VAGUE_PREFIXES words (case-

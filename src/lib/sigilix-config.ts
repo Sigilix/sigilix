@@ -121,6 +121,17 @@ export interface SigilixConfig {
     enabled?: boolean
   }
   /**
+   * SIG-135: per-repo opt-OUT for automatic PR label application.
+   * Default (missing field) = enabled. Only literal `false` disables;
+   * anything else is dropped at parse time and treated as enabled.
+   *
+   * `customLabels` remains the curated allowlist. When it is absent,
+   * the label picker uses the repo's existing labels as candidates.
+   */
+  labels?: {
+    enabled?: boolean
+  }
+  /**
    * ARC-185: per-command prompt addendum + model overrides. Each
    * command (`review`, `improve`, `describe`, `ask`) can declare its
    * own `prompt.addendum` (string ≤ 4000 code points appended to the
@@ -226,8 +237,8 @@ export interface SigilixConfig {
    * `description` the LLM uses to judge whether the label fits the
    * PR's diff + title + body.
    *
-   * When this field is absent or empty, Sigilix does NOT touch
-   * labels at all — zero behavior change for repos without config.
+   * When this field is absent or empty, Sigilix derives candidates
+   * from the repo's existing labels unless `labels.enabled:false`.
    *
    * Sigilix-managed origin is tracked separately in KV so we never
    * remove human-applied labels on subsequent runs.
@@ -598,6 +609,19 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       out.overview = { enabled: overviewIn.enabled }
     }
   }
+  // SIG-135: labels.enabled — strict boolean parsing, same opt-OUT
+  // polarity as overview.enabled. Unknown subfields under `labels`
+  // are ignored so future label settings can ship compatibly.
+  if (
+    obj.labels &&
+    typeof obj.labels === "object" &&
+    !Array.isArray(obj.labels)
+  ) {
+    const labelsIn = obj.labels as Record<string, unknown>
+    if (typeof labelsIn.enabled === "boolean") {
+      out.labels = { enabled: labelsIn.enabled }
+    }
+  }
   // ARC-185: commands.<cmd>.{prompt.addendum, model.{primary, fallbacks}}
   if (obj.commands !== undefined) {
     if (typeof obj.commands !== "object" || obj.commands === null || Array.isArray(obj.commands)) {
@@ -875,11 +899,12 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       out.reviewMemory = rmOut
     }
   }
-  // ARC-265: customLabels parsing. Strict-ish: each entry must be
-  // an object with non-empty string name + description. Bad entries
-  // are dropped (forward-compat: a typo in one entry shouldn't
-  // disable the whole feature). Empty result drops the field
-  // entirely so `handlePrLabels` sees `undefined` and no-ops.
+  // ARC-265/SIG-135: customLabels parsing. Strict-ish: each entry
+  // must be an object with non-empty string name + description. Bad
+  // entries are dropped (forward-compat: a typo in one entry shouldn't
+  // disable the whole feature). Preserve an explicit empty array so
+  // the label picker can distinguish "no curated allowlist configured"
+  // from "configured allowlist intentionally contains no labels".
   if (Array.isArray(obj.customLabels)) {
     const labels: NonNullable<SigilixConfig["customLabels"]> = []
     const seen = new Set<string>()
@@ -893,7 +918,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
       seen.add(name)
       labels.push({ name, description })
     }
-    if (labels.length > 0) out.customLabels = labels
+    out.customLabels = labels
   }
   // ARC-273: costControls parsing. Strict bounds on numbers + string
   // arrays; bad entries dropped silently (fail-open per the existing
@@ -1211,6 +1236,17 @@ export function resolvePerfBudgetsConfig(
  */
 export function isPrOverviewEnabled(config: SigilixConfig | null): boolean {
   return config?.overview?.enabled !== false
+}
+
+// ─── SIG-135: pr-labels enablement resolution ────────────────────────
+
+/**
+ * SIG-135: resolve the per-repo `labels.enabled` flag to a locked
+ * boolean. Default-on (opt-OUT): only an explicit literal `false`
+ * disables automatic PR label application.
+ */
+export function isPrLabelsEnabled(config: SigilixConfig | null): boolean {
+  return config?.labels?.enabled !== false
 }
 
 /** Pure clamp helper for the reviewMemory numeric fields. */

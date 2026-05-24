@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from "vitest"
 
 import {
   isPrOverviewEnabled,
+  isPrLabelsEnabled,
   parseSigilixConfig,
   parseSigilixConfigDetailed,
   passesLabelGate,
@@ -78,6 +79,11 @@ describe("parseSigilixConfig — happy paths", () => {
     })
     const result = parseSigilixConfig(raw)
     expect(result).toEqual({ guidance: "X" })
+  })
+
+  it("preserves an explicit empty customLabels allowlist", () => {
+    const result = parseSigilixConfig(JSON.stringify({ customLabels: [] }))
+    expect(result).toEqual({ customLabels: [] })
   })
 
   it("drops empty-string guidance (treats as absent)", () => {
@@ -381,6 +387,61 @@ describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
 
     it("overview.enabled === false → disabled", () => {
       expect(isPrOverviewEnabled({ overview: { enabled: false } })).toBe(false)
+    })
+  })
+})
+
+describe("parseSigilixConfig — labels.enabled (SIG-135)", () => {
+  it("parses labels.enabled === true", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      labels: { enabled: true },
+    }))
+    expect(result).toEqual({ labels: { enabled: true } })
+  })
+
+  it("parses labels.enabled === false", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      labels: { enabled: false },
+    }))
+    expect(result).toEqual({ labels: { enabled: false } })
+  })
+
+  it('strips a string `"false"` (strict boolean)', () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      labels: { enabled: "false" },
+    }))
+    expect(result).toEqual({})
+  })
+
+  it("strips a top-level labels value that isn't an object", () => {
+    expect(parseSigilixConfig(JSON.stringify({ labels: "off" }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ labels: false }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ labels: [] }))).toEqual({})
+  })
+
+  it("ignores unknown subfields under labels (forward-compat)", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      labels: { enabled: false, strategy: "future-field" },
+    }))
+    expect(result).toEqual({ labels: { enabled: false } })
+  })
+
+  describe("isPrLabelsEnabled resolver — defaults to ENABLED (opt-OUT polarity)", () => {
+    it("missing config → enabled", () => {
+      expect(isPrLabelsEnabled(null)).toBe(true)
+      expect(isPrLabelsEnabled({})).toBe(true)
+    })
+
+    it("labels with no `enabled` flag → enabled (default)", () => {
+      expect(isPrLabelsEnabled({ labels: {} })).toBe(true)
+    })
+
+    it("labels.enabled === true → enabled", () => {
+      expect(isPrLabelsEnabled({ labels: { enabled: true } })).toBe(true)
+    })
+
+    it("labels.enabled === false → disabled", () => {
+      expect(isPrLabelsEnabled({ labels: { enabled: false } })).toBe(false)
     })
   })
 })

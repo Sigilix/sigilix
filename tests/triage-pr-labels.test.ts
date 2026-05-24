@@ -48,7 +48,7 @@ vi.mock("../src/lib/ollama", () => ({
   generate: (args: unknown) => mockGenerate(args),
 }))
 
-import { handlePrLabels, parseLabelResponse } from "../src/lib/triage-pr-labels"
+import { buildLabelCandidates, handlePrLabels, parseLabelResponse } from "../src/lib/triage-pr-labels"
 import type { Env } from "../src/index"
 
 function makeKvStub(): { kv: Env["OPENCLAW_STATE"]; store: Map<string, string> } {
@@ -133,21 +133,54 @@ describe("parseLabelResponse", () => {
 })
 
 describe("handlePrLabels — config gating", () => {
-  it("no-ops when sigilix.json has no customLabels (zero behavior change)", async () => {
+  it("applies repo labels when sigilix.json is missing", async () => {
     mockGetFileContent.mockResolvedValue(null) // no sigilix.json
+    mockGetPullRequest.mockResolvedValue({
+      number: 42, title: "auth refactor", body: "rewrites password hashing",
+      head: { sha: "a".repeat(40), ref: "feat/auth" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
+    })
+    mockListRepositoryLabels.mockResolvedValue([
+      { name: "area:security", description: "Touches auth or secrets" },
+    ])
+    mockGenerate.mockResolvedValue('{"labels":["area:security"]}')
+
     const { kv } = makeKvStub()
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
-    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockGenerate).toHaveBeenCalledTimes(1)
+    expect(mockListRepositoryLabels).toHaveBeenCalledTimes(1)
+    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", 42, ["area:security"])
+  })
+
+  it("no-ops when labels.enabled is false", async () => {
+    mockGetFileContent.mockResolvedValue(JSON.stringify({ labels: { enabled: false } }))
+    const { kv } = makeKvStub()
+    await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
+
     expect(mockListRepositoryLabels).not.toHaveBeenCalled()
+    expect(mockGenerate).not.toHaveBeenCalled()
     expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
   })
 
-  it("no-ops when customLabels array is empty", async () => {
+  it("no-ops when customLabels array is present but empty", async () => {
     mockGetFileContent.mockResolvedValue(JSON.stringify({ customLabels: [] }))
+    mockGetPullRequest.mockResolvedValue({
+      number: 42, title: "ui polish", body: "updates button layout",
+      head: { sha: "a".repeat(40), ref: "feat/ui" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
+    })
+    mockListRepositoryLabels.mockResolvedValue([
+      { name: "area:frontend", description: "Touches frontend UI" },
+    ])
+    mockGenerate.mockResolvedValue('{"labels":["area:frontend"]}')
+
     const { kv } = makeKvStub()
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
+    expect(mockListRepositoryLabels).toHaveBeenCalledTimes(1)
     expect(mockGenerate).not.toHaveBeenCalled()
     expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
   })
@@ -213,7 +246,7 @@ describe("handlePrLabels — happy path", () => {
     )
   })
 
-  it("includes repo labels with descriptions in the candidate pool", async () => {
+  it("uses customLabels as a strict allowlist when configured", async () => {
     mockGetFileContent.mockResolvedValue(configFixture)
     mockGetPullRequest.mockResolvedValue({
       number: 42, title: "x", body: "y", head: { sha: "a".repeat(40), ref: "x" },
@@ -221,15 +254,15 @@ describe("handlePrLabels — happy path", () => {
     })
     mockListRepositoryLabels.mockResolvedValue([
       { name: "bug", description: "User-facing regression" },
-      { name: "no-desc-label", description: "" }, // excluded — no description
+      { name: "area:security", description: "Repo-side description should not override config" },
     ])
-    mockGenerate.mockResolvedValue('{"labels":["bug"]}')
+    mockGenerate.mockResolvedValue('{"labels":["bug","area:security"]}')
 
     const { kv } = makeKvStub()
     await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
 
     expect(mockAddLabelsToIssue).toHaveBeenCalledWith(
-      "Arc-and-Anchor", "sigilix", 42, ["bug"],
+      "Arc-and-Anchor", "sigilix", 42, ["area:security"],
     )
   })
 
@@ -284,6 +317,45 @@ describe("handlePrLabels — happy path", () => {
 
     expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
     expect(mockRemoveLabelFromIssue).not.toHaveBeenCalled() // wontfix is NOT touched
+  })
+})
+
+describe("buildLabelCandidates", () => {
+  it("uses repo labels with descriptions when customLabels is absent", () => {
+    expect(buildLabelCandidates(undefined, [
+      { name: "bug", description: "User-facing regression" },
+      { name: "no-desc-label", description: "" },
+    ])).toEqual([
+      { name: "bug", description: "User-facing regression" },
+    ])
+  })
+
+  it("uses customLabels as a strict allowlist when present", () => {
+    expect(buildLabelCandidates(
+      [{ name: "area:security", description: "Touches auth or secrets" }],
+      [{ name: "bug", description: "User-facing regression" }],
+    )).toEqual([
+      { name: "area:security", description: "Touches auth or secrets" },
+    ])
+  })
+
+  it("preserves an explicit empty customLabels allowlist", () => {
+    expect(buildLabelCandidates([], [
+      { name: "bug", description: "User-facing regression" },
+    ])).toEqual([])
+  })
+
+  it("excludes common status and triage labels", () => {
+    expect(buildLabelCandidates(undefined, [
+      { name: "wontfix", description: "This will not be worked on" },
+      { name: "duplicate", description: "Already tracked elsewhere" },
+      { name: "good first issue", description: "Good for first-time contributors" },
+      { name: "help wanted", description: "Maintainers want help" },
+      { name: "question", description: "Needs more information" },
+      { name: "area:security", description: "Touches auth or secrets" },
+    ])).toEqual([
+      { name: "area:security", description: "Touches auth or secrets" },
+    ])
   })
 })
 

@@ -1965,15 +1965,19 @@ function countReplacementLines(replacement: string): number {
 }
 
 function referencesMultipleSpecificLines(body: string): boolean {
-  return /\blines?\s+\d+\s*,\s*(?:and\s+)?\d+(?:\s*,\s*(?:and\s+)?\d+)*\b/i.test(body)
+  return /\blines?\s+\d+(?:\s*(?:,|\band\b)\s*(?:and\s+)?\d+)+\b/i.test(body)
 }
+
+// SIG-179: below this ratio, a replacement is treated as much smaller
+// than its anchor and the illustrative Current/Proposed block is skipped.
+const SCOPE_MISMATCH_RATIO_THRESHOLD = 0.5
 
 export function getProposedChangeScopeMismatch(finding: PrReviewFinding): ProposedChangeScopeMismatch | null {
   const repl = finding.suggestedReplacement
   const isReplace =
     (finding.kind === "replace" || finding.kind === undefined) &&
     typeof repl === "string" && repl.length > 0
-  if (!isReplace || typeof repl !== "string") return null
+  if (!isReplace) return null
   if (!referencesMultipleSpecificLines(finding.body)) return null
 
   const startL =
@@ -1983,7 +1987,7 @@ export function getProposedChangeScopeMismatch(finding: PrReviewFinding): Propos
   const anchorLines = Math.max(1, finding.line - startL + 1)
   const replacementLines = countReplacementLines(repl)
   const replacementToAnchorRatio = replacementLines / anchorLines
-  if (replacementToAnchorRatio >= 0.5) return null
+  if (replacementToAnchorRatio >= SCOPE_MISMATCH_RATIO_THRESHOLD) return null
   return { anchorLines, replacementLines, replacementToAnchorRatio }
 }
 

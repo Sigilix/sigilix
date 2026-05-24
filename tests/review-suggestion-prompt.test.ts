@@ -48,6 +48,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
   it("improve prompt explicitly permits empty deletion suggestions (SIG-142)", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/EMPTY[\s\S]*?```suggestion/i)
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
+    expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
   it("PROMPT_VERSION bumped to 10 (SIG-202: finding scope routing)", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);

@@ -1765,6 +1765,23 @@ describe("formatProposedChangeBlock (SIG-164 PR 5)", () => {
       kind: "replace",
       suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
     }
+    // 2 replacement lines / 10 anchor lines is below the mismatch threshold.
+    expect(formatProposedChangeBlock(f, wideLines)).toBe("")
+  })
+
+  it("detects comma-free multi-line wording when checking scope mismatch", () => {
+    const wideLines = new Map([
+      ["src/a.ts", new Map<number, string>(
+        Array.from({ length: 10 }, (_, i) => [i + 1, `  line${i + 1}()`]),
+      )],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 10, startLine: 1, score: 4,
+      category: "logic", headline: "h",
+      body: "Add suppression comments on lines 2 and 8.",
+      kind: "replace",
+      suggestedReplacement: "  // suppress line 2\n  // suppress line 8",
+    }
     expect(formatProposedChangeBlock(f, wideLines)).toBe("")
   })
 

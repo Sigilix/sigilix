@@ -182,6 +182,16 @@ describe("filterAnchorableSuggestions", () => {
     expect(out.fallback).toEqual([proseOnly, offDiff])
   })
 
+  it("partitions duplicate-anchor suggestions into summary fallback instead of dropping them", () => {
+    const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
+    const first = okSuggestion()
+    const duplicate = okSuggestion({ headline: "duplicate" })
+    const out = partitionImproveSuggestions([first, duplicate], reviewable)
+
+    expect(out.valid).toEqual([first])
+    expect(out.fallback).toEqual([duplicate])
+  })
+
   it("dedupes suggestions targeting the same anchor", () => {
     const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
     const out = filterAnchorableSuggestions(
@@ -363,6 +373,7 @@ describe("renderInlineFallbackBody (ARC-179 422 fallback)", () => {
     expect(out).toContain("src/foo.ts:10")
     expect(out).toContain("src/bar.ts:23-25")
     expect(out).toContain("`abcdef1`")
+    expect(out).toContain("treat prose-only items as advisory")
   })
 
   it("works with an empty suggestions list (defensive)", () => {

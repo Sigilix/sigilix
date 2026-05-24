@@ -61,7 +61,7 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
 - For deletion-only fixes (dead code, unused imports, no-op branches), emit an EMPTY \`\`\`suggestion block — opening fence, blank content, closing fence — so GitHub removes the anchored line/range.
 - No \`+\` / \`-\` diff markers, no \`...\` ellipses, no language tag (\`\`\`suggestion not \`\`\`ts).
 - Preserve the file's existing indentation style (tabs vs. spaces, indent width).
-- If the fix would change behavior, semantics, or test coverage, **omit the fenced suggestion** but keep the file:line suggestion prose only when it is still useful for the reviewer; Sigilix will preserve non-applyable suggestions in the review summary.
+- If the fix would change behavior, semantics, or test coverage, **omit the fenced suggestion** but keep the file:line suggestion prose; Sigilix will preserve non-applyable suggestions in the review summary.
 
 ## Categories (\`category\` field)
 

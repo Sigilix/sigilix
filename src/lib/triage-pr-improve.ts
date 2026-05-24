@@ -500,7 +500,10 @@ export function partitionImproveSuggestions(
       continue
     }
     const key = `${s.path}:${s.startLine ?? s.line}-${s.line}`
-    if (seen.has(key)) continue
+    if (seen.has(key)) {
+      fallback.push(s)
+      continue
+    }
     seen.add(key)
     valid.push(s)
   }
@@ -644,7 +647,7 @@ export function renderInlineFallbackBody(
     parts.push(s.body)
     parts.push("")
   }
-  parts.push(`<sub>Run on \`${headSha.slice(0, 7)}\`. GitHub rejected the inline anchors; copy each \`\`\`suggestion block into a manual review comment to apply.</sub>`)
+  parts.push(`<sub>Run on \`${headSha.slice(0, 7)}\`. GitHub rejected the inline anchors; apply any included \`\`\`suggestion blocks manually where present, and treat prose-only items as advisory.</sub>`)
   return parts.join("\n")
 }
 

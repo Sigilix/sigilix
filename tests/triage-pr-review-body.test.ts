@@ -372,6 +372,30 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).not.toContain("`src/bar.ts:99`")
   })
 
+  it("SIG-202/SIG-5 — direct renderer routes non-line findings out of Fix Plan", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({
+        findings: [
+          finding({
+            path: "src/bar.ts",
+            line: 99,
+            headline: "pr-level blocker",
+            score: 5,
+            scope: "pr",
+          }),
+        ],
+      }),
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).toMatch(/^## Sigilix: 1 finding$/m)
+    expect(body).not.toContain("### Fix Plan")
+    expect(body).toContain("### Findings without inline comments")
+    expect(body).toContain("PR-level (critical, score 5)")
+    expect(body).toContain("pr-level blocker")
+    expect(body).not.toContain("`src/bar.ts:99`")
+  })
+
   it("Variant I — REQUEST_CHANGES omits Fix Plan when no findings are score >= 4", () => {
     const body = renderRequestChangesBody({
       verdict: verdict({ findings: [finding({ score: 2 }), finding({ line: 99, score: 3 })] }),

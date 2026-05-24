@@ -1575,8 +1575,12 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
 type FindingsReviewPosture = "request_changes" | "comment"
 
 function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewPosture): string {
-  const unanchored = args.unanchored ?? []
-  const totalFindings = args.verdict.findings.length + unanchored.length
+  const inlineFindings = args.verdict.findings.filter((f) => findingScope(f) === "line")
+  const bodyOnlyFindings = [
+    ...(args.unanchored ?? []),
+    ...args.verdict.findings.filter((f) => findingScope(f) !== "line"),
+  ]
+  const totalFindings = inlineFindings.length + bodyOnlyFindings.length
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
@@ -1618,17 +1622,17 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   // Fix Plan — only inline findings. Body-only findings appear in the
   // section below so the plan never promises a file:line with no inline
   // review thread.
-  const fixPlan = renderFixPlan(args.verdict.findings)
+  const fixPlan = renderFixPlan(inlineFindings)
   if (fixPlan) {
     lines.push("")
     lines.push(fixPlan)
   }
 
   // Body-only findings — unanchored or non-line-scoped set, grouped by file.
-  if (unanchored.length > 0) {
+  if (bodyOnlyFindings.length > 0) {
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_HEADING)
-    lines.push(...renderFindingsByFile(unanchored))
+    lines.push(...renderFindingsByFile(bodyOnlyFindings))
   }
 
   // Dismissal hint — REQUEST_CHANGES only, before the provenance

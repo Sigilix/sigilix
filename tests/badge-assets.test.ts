@@ -15,7 +15,7 @@ function ctx(): ExecutionContext {
 }
 
 describe("badge assets (SIG-201)", () => {
-  it("serves the Tron-style P2 SVG from a public Worker route", async () => {
+  it("serves a readable P2 priority chip from a public Worker route", async () => {
     const res = handleBadgeAssetRoute(
       new Request(`${PUBLIC_BADGE_BASE_URL}/p2.svg`)
     )
@@ -25,6 +25,7 @@ describe("badge assets (SIG-201)", () => {
     expect(res?.headers.get("cache-control")).toContain("immutable")
     const body = await res!.text()
     expect(body).toContain('aria-label="P2"')
+    expect(body).toContain(">P2</text>")
     expect(body).toContain("<path")
     expect(body).toBe(getBadgeSvg("p2"))
   })
@@ -44,7 +45,7 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/p2.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/p2.svg?v=20260524.2`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
   })
 

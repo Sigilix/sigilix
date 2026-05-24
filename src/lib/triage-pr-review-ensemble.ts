@@ -81,6 +81,7 @@ import {
   computeShadowGateDivergence,
   getProposedChangeScopeMismatch,
 } from "./triage-pr-review"
+import { assessApprovalReadiness } from "./approval-readiness"
 import { readGateMode, readGateThreshold } from "./gate-config"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
 import {
@@ -3440,6 +3441,43 @@ export async function handlePrReviewEnsemble(
       ...renderableVerdict.findings,
       ...renderableUnanchored,
     ])
+    const sourceFindingsForApproval = succeeded.flatMap((v) => {
+      const verdict = v.verdict
+      if (!verdict) return []
+      return verdict.findings.map((finding) => ({
+        role: v.role,
+        id: finding.id,
+        finding,
+        verdictConfidence: verdict.confidence,
+      }))
+    })
+    const approvalReadiness = assessApprovalReadiness({
+      intendedEvent,
+      sourceFindings: sourceFindingsForApproval,
+      provenance: validated.provenance,
+    })
+    const renderableUnanchoredForSubmission = [
+      ...renderableUnanchored,
+      ...approvalReadiness.bodyOnlyFindings,
+    ]
+    const effectiveEvent = approvalReadiness.event
+    if (approvalReadiness.blockers.length > 0) {
+      console.warn(JSON.stringify({
+        event: "pr-review-approval-readiness-blocked",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        legacy_event: intendedEvent,
+        effective_event: effectiveEvent,
+        blockers: approvalReadiness.blockers.slice(0, 5).map((b) => ({
+          sourceFindingId: b.sourceFindingId,
+          role: b.role,
+          path: b.path,
+          line: b.line,
+          score: b.score,
+          confidence: b.confidence,
+          headline: b.headline,
+        })),
+      }))
+    }
 
     // SIG-161 PR 4b — shadow-mode telemetry. Off the critical path:
     // the KV read + divergence compute + log write are dispatched as
@@ -3465,9 +3503,9 @@ export async function handlePrReviewEnsemble(
       // Snapshot the inputs at the (sync) call site so the detached
       // task doesn't race with later mutation of `renderableVerdict`.
       const snapshotRenderable: PrReviewFinding[] = [...renderableVerdict.findings]
-      const snapshotUnanchored: PrReviewFinding[] = [...renderableUnanchored]
+      const snapshotUnanchored: PrReviewFinding[] = [...renderableUnanchoredForSubmission]
       const snapshotProvenance = [...filteredConsensusProvenance]
-      const snapshotLegacy = intendedEvent
+      const snapshotLegacy = effectiveEvent
       void (async () => {
         try {
           const threshold = await readGateThreshold(env)
@@ -3507,10 +3545,10 @@ export async function handlePrReviewEnsemble(
       })()
     }
 
-    const reviewCounter = intendedEvent === "REQUEST_CHANGES"
+    const reviewCounter = effectiveEvent === "REQUEST_CHANGES"
       ? await bumpPrReviewCounter(env, owner, repo, prNumber)
       : undefined
-    const retriggerUrl = intendedEvent === "REQUEST_CHANGES"
+    const retriggerUrl = effectiveEvent === "REQUEST_CHANGES"
       ? buildPrUrl(owner, repo, prNumber)
       : undefined
 
@@ -3539,7 +3577,7 @@ export async function handlePrReviewEnsemble(
       verdict: renderableVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
-      unanchored: renderableUnanchored,
+      unanchored: renderableUnanchoredForSubmission,
       findingMarkers,
       // ARC-182 (code-review C1): thread stack so the renderer can
       // append the `_(Stacked on #N)_` parenthetical to the summary
@@ -3647,7 +3685,7 @@ export async function handlePrReviewEnsemble(
         // the body and survive the channel switch.
         const fallbackCommentSubmission = buildFallbackSubmission({
           verdict: renderableVerdict,
-          unanchored: renderableUnanchored,
+          unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
           headSha,
           ...(stack.isStacked ? { stack } : {}),
@@ -3669,7 +3707,8 @@ export async function handlePrReviewEnsemble(
           submitPath: "inline-anchored",
         })
         if (fallback.ok) {
-          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          const findingsCount =
+            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
           // SIG-89 note: comment-fallback paths intentionally do NOT
           // write a noop-merge diff hash. The surface is degraded
           // already (we couldn't post a formal review), and the next
@@ -3677,7 +3716,7 @@ export async function handlePrReviewEnsemble(
           // dispatch. Same rationale at all four `surface: "comment"`
           // return sites below.
           return finalize(telemetry, env, "posted", cache, {
-            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            event: effectiveEvent,
             findingsCount,
             surface: "comment",
           })
@@ -3762,9 +3801,10 @@ export async function handlePrReviewEnsemble(
       // ARC-276: signal the customer-visible verdict back to the
       // dispatcher so the Sigilix Check Run title can render
       // "Approved — no issues found" vs "N findings posted".
-      const inlineFindings = renderableVerdict.findings.length + renderableUnanchored.length
+      const inlineFindings =
+        renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
       return finalize(telemetry, env, "posted", cache, {
-        event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+        event: effectiveEvent,
         findingsCount: inlineFindings,
       })
     } catch (submitErr) {
@@ -3799,7 +3839,7 @@ export async function handlePrReviewEnsemble(
         }))
         const fallbackBodyOnly = buildFallbackSubmission({
           verdict: renderableVerdict,
-          unanchored: renderableUnanchored,
+          unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
           headSha,
           ...(stack.isStacked ? { stack } : {}),
@@ -3814,9 +3854,10 @@ export async function handlePrReviewEnsemble(
           submitPath: "inline-anchored-error",
         })
         if (commentFallback.ok) {
-          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          const findingsCount =
+            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
           return finalize(telemetry, env, "posted", cache, {
-            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            event: effectiveEvent,
             findingsCount,
             surface: "comment",
           })
@@ -3845,7 +3886,7 @@ export async function handlePrReviewEnsemble(
         // verdict. Markers are NOT emitted on the fallback (it's a
         // body-only review with no inline anchors) — see Task 2.5.
         verdict: renderableVerdict,
-        unanchored: renderableUnanchored,
+        unanchored: renderableUnanchoredForSubmission,
         prAuthor: meta.user?.login ?? null,
         headSha,
         // ARC-182 (code-review C1): thread stack to the anchorless
@@ -3885,9 +3926,10 @@ export async function handlePrReviewEnsemble(
           submitPath: "anchorless-fallback-error",
         })
         if (commentFallback.ok) {
-          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          const findingsCount =
+            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
           return finalize(telemetry, env, "posted", cache, {
-            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            event: effectiveEvent,
             findingsCount,
             surface: "comment",
           })
@@ -3928,9 +3970,10 @@ export async function handlePrReviewEnsemble(
           submitPath: "anchorless-fallback",
         })
         if (commentFallback.ok) {
-          const findingsCount = renderableVerdict.findings.length + renderableUnanchored.length
+          const findingsCount =
+            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
           return finalize(telemetry, env, "posted", cache, {
-            event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+            event: effectiveEvent,
             findingsCount,
             surface: "comment",
           })
@@ -3992,9 +4035,10 @@ export async function handlePrReviewEnsemble(
       await maybePostAstAutoInline()
       // ARC-276: same reviewMeta plumbing as the inline-anchored
       // path — the anchorless fallback is still a posted review.
-      const fallbackFindings = renderableVerdict.findings.length + renderableUnanchored.length
+      const fallbackFindings =
+        renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
       return finalize(telemetry, env, "posted", cache, {
-        event: chooseReviewEvent([...renderableVerdict.findings, ...renderableUnanchored]),
+        event: effectiveEvent,
         findingsCount: fallbackFindings,
       })
     } finally {

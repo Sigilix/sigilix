@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { runAstRules } from "../src/lib/ast-rules/runner"
 import type { ReviewableMap } from "../src/lib/diff-positions"
+import { assessApprovalReadiness } from "../src/lib/approval-readiness"
+import {
+  buildReviewSubmission,
+  chooseReviewEvent,
+  type PrReviewFinding,
+  type PrReviewVerdict,
+} from "../src/lib/triage-pr-review"
 import {
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
@@ -147,5 +154,53 @@ describe("PR review engine acceptance flow (SIG-124 + SIG-116)", () => {
     expect(rendered).toContain("content included below")
     expect(rendered).toContain("content NOT available (omitted to fit the evidence-block size budget)")
     expect(rendered).not.toContain("content NOT available (fetch failed)")
+  })
+})
+
+describe("PR review engine acceptance flow (SIG-205)", () => {
+  it("withholds marker-only approval when a PR #157-style source finding disappears", () => {
+    const duplicateAnchorFinding: PrReviewFinding = {
+      path: "src/lib/triage-pr-improve.ts",
+      line: 221,
+      score: 4,
+      confidence: 4,
+      category: "logic",
+      headline: "duplicate `/sigilix improve` anchor drops preserved suggestion",
+      body: "The preservation path still drops the conflicting fallback suggestion.",
+    }
+    const cleanSynthVerdict: PrReviewVerdict = {
+      summary: "No issues found.",
+      confidence: 5,
+      confidenceReason: "Synth reported a clean preservation path.",
+      findings: [],
+    }
+
+    const intendedEvent = chooseReviewEvent(cleanSynthVerdict.findings)
+    const readiness = assessApprovalReadiness({
+      intendedEvent,
+      sourceFindings: [{
+        role: "logic",
+        id: "logic-0",
+        finding: duplicateAnchorFinding,
+        verdictConfidence: 4,
+      }],
+      provenance: { findings: [], dropped: [] },
+    })
+    const submission = buildReviewSubmission({
+      verdict: cleanSynthVerdict,
+      prAuthor: "alice",
+      headSha: "a".repeat(40),
+      unanchored: readiness.bodyOnlyFindings,
+      nowMs: 0,
+    })
+
+    expect(intendedEvent).toBe("APPROVE")
+    expect(readiness.event).toBe("REQUEST_CHANGES")
+    expect(submission.event).toBe("REQUEST_CHANGES")
+    expect(submission.comments).toBeUndefined()
+    expect(submission.body).not.toBe("<!-- sigilix:pr-review -->\n")
+    expect(submission.body).toContain("Approval validation lost logic finding")
+    expect(submission.body).toContain("duplicate `/sigilix improve` anchor drops preserved suggestion")
+    expect(submission.body).toContain("kept, merged, softened, or explicitly dropped")
   })
 })

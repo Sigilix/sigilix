@@ -1,8 +1,7 @@
 // Cloudflare Workers AI embedding wrapper.
 //
 // Single model: @cf/baai/bge-base-en-v1.5 (768 dims, ~512 token context).
-// The same model is used by the off-Worker indexer (scripts/index-repo.mjs)
-// against Cloudflare's REST API. Mismatched embedding models would silently
+// The same model is used by the Worker indexer. Mismatched embedding models would silently
 // produce noise in retrieval — chunks indexed with model X are not
 // comparable to query vectors from model Y, even at the same dimensionality.
 //
@@ -46,9 +45,7 @@ export async function embedText(ai: AiBinding, text: string): Promise<number[]> 
  * Codex MED catch on the design review: keep the shape parsing here
  * rather than duplicating it in `indexer.ts`. The Worker AI binding
  * returns the unwrapped `{ data, shape }` shape that this file already
- * validates for `embedText`; the local CLI script's `{ result: { data } }`
- * REST wrapping is NOT the binding shape, and a copy-paste of the CLI
- * parser into the indexer would silently break.
+ * validates for `embedText`.
  */
 export async function embedTexts(ai: AiBinding, texts: ReadonlyArray<string>): Promise<number[][]> {
   if (texts.length === 0) return []

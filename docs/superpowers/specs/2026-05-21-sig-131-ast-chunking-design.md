@@ -83,7 +83,7 @@ Unit (pure, no I/O):
 
 ## Scope boundaries (v1)
 
-- **Worker indexer only** (`src/lib/indexer.ts`); CLI `scripts/index-repo.mjs` stays line-window (consistent with SIG-133; the freshness gate re-indexes via the Worker).
+- **Worker indexer only** (`src/lib/indexer.ts`); the retired off-Worker CLI path is out of scope.
 - **JS/TS subset only**; other indexed extensions → line-window.
 - **Per-method class decomposition DEFERRED** (oversized class → line-split); follow-up ticket once the interval partition is proven.
 - **Flag default off**; the SIG-86 bake-off validates the precision improvement before the flag flips on.

@@ -3,9 +3,8 @@
 // Handles `index-repo` messages enqueued by ARC-234's webhook producer
 // (and, later, by ARC-237 push-driven re-index). Walks the default-
 // branch tree via GitHub Trees + Contents APIs using the installation
-// token, chunks files into 30-line overlapping windows (matching the
-// CLI script at scripts/index-repo.mjs), embeds via the Workers AI
-// binding, and upserts to OPENCLAW_CODE_INDEX under
+// token, chunks files into 30-line overlapping windows, embeds via the
+// Workers AI binding, and upserts to OPENCLAW_CODE_INDEX under
 // `namespace = <owner>/<repo>` lowercased (SIG-132 multi-tenant isolation;
 // matches the retrieval contract — see Codex v1 BLOCKING note in
 // .claude/handoff/arc-234-235-codex-verdict.md).
@@ -83,7 +82,7 @@ export { chunkFile, splitOversizedWindow } from "./chunk-core"
 export type { Chunk } from "./chunk-core"
 
 // ---------------------------------------------------------------------
-// Constants (ported from scripts/index-repo.mjs — keep aligned)
+// Constants
 // ---------------------------------------------------------------------
 
 /**
@@ -163,10 +162,9 @@ export interface IndexableFile {
 
 /**
  * Filter raw GitHub tree entries down to indexable blob files.
- * Mirrors the SKIP_DIRS / INDEXED_EXTENSIONS / MAX_FILE_BYTES logic
- * in scripts/index-repo.mjs:78-114 (the local walker uses fs.stat to
- * filter dirs + extension match; the Worker version filters the
- * already-flattened recursive tree response).
+ * Applies the Worker indexer's SKIP_DIRS / INDEXED_EXTENSIONS /
+ * MAX_FILE_BYTES policy to the already-flattened recursive tree
+ * response.
  */
 export function walkIndexableFiles(entries: ReadonlyArray<TreeEntry>): IndexableFile[] {
   const out: IndexableFile[] = []

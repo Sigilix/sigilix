@@ -174,8 +174,7 @@ concurrent run2 → writeActiveRun(run2) overwrites lease → run1's later merge
 
 ## Scope boundaries
 
-- **Worker indexer only.** The CLI `scripts/index-repo.mjs` is a separate local
-  path and is not changed (consistent with SIG-132/133).
+- **Worker indexer only.** The retired off-Worker CLI path is out of scope.
 - No manifest schema change, no chunker change, no embedding change.
 - Does not implement SIG-131's multi-shard chunker-config capture — but the
   active-run marker is the primitive SIG-131 will extend (it can later carry

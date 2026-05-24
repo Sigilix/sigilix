@@ -215,7 +215,7 @@ Per the founder's bar (sanity + telemetry) **plus** Codex's fixture-test set:
 
 ## Scope boundaries
 
-- **Worker indexer + PR-review path only.** The CLI `scripts/index-repo.mjs` is not changed (consistent with SIG-132/133/136).
+- **Worker indexer + PR-review path only.** The retired off-Worker CLI path is out of scope.
 - **No manifest/chunker/embedding changes.** Graph writes are a parallel, additive side-channel in `processSlice`.
 - **Shadow only.** Both flags default `off`; neither phase changes posted review output until the founder flips them after telemetry review.
 - **Deferred to later phases (epic, not this slice):** re-export/star fixpoint resolution, tsconfig `paths`/`@/` alias resolution, `obj.method()` low-confidence `calls_name` edges, and any SCIP/tsc/tree-sitter extraction. The schema (`reexport` edge kinds, nullable `scip_symbol`) reserves space for these without a future rewrite.

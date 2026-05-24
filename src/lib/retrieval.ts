@@ -98,7 +98,7 @@ export function teamKeyToNamespace(teamKey: string | null, mapJson?: string): st
     }
   }
   // No explicit mapping — use the team key itself, lowercased.
-  // Matches the convention scripts/index-repo.mjs uses (namespace=repo dir name).
+  // Prefer OPENCLAW_TEAM_REPO_MAP for modern repo namespaces (`owner/repo`).
   return teamKey.toLowerCase()
 }
 

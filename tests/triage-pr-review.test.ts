@@ -90,16 +90,27 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings[0]?.score).toBe(5)
   })
 
-  it("parses finding scope when provided", () => {
+  it.each([
+    ["line", "line"],
+    ["file", "file"],
+    ["pr", "pr"],
+    ["comment", "comment"],
+    ["comment/event", "comment"],
+    ["event", "comment"],
+    ["review-comment", "comment"],
+    ["pull-request", "pr"],
+    ["pull_request", "pr"],
+    ["review", "pr"],
+  ] as const)("normalizes finding scope %s to %s", (raw, expected) => {
     const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: "comment/event" }] })
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: raw }] })
     )
-    expect(out?.findings[0]?.scope).toBe("comment")
+    expect(out?.findings[0]?.scope).toBe(expected)
   })
 
-  it("ignores invalid finding scope for back-compat", () => {
+  it.each(["thread", ""])("ignores invalid finding scope %j for back-compat", (scope) => {
     const out = parsePrReviewResponse(
-      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: "thread" }] })
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope }] })
     )
     expect(out?.findings[0]?.scope).toBeUndefined()
   })
@@ -1494,6 +1505,34 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).toContain("### Findings without inline comments")
     expect(out.body).toContain("Comment-level (high, score 4)")
     expect(out.body).toContain("dismiss command trusts the issue-comment author")
+    expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
+  })
+
+  it("routes file-scoped findings to the review body with a file-level label", () => {
+    const fileFinding: PrReviewFinding = {
+      ...commentFinding,
+      scope: "file",
+      score: 5,
+      headline: "module-level lifecycle ordering is unsafe",
+      body: "The issue spans the module's event flow rather than one changed statement, so it should not be forced into an inline thread.",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "File-level routing issue.",
+        confidence: 2,
+        confidenceReason: "High impact.",
+        findings: [fileFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("### Findings without inline comments")
+    expect(out.body).toContain("File-level (critical, score 5)")
+    expect(out.body).toContain("module-level lifecycle ordering is unsafe")
     expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
   })
 

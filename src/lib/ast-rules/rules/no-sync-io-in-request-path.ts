@@ -166,7 +166,6 @@ function findSyncIoInBody(body: AstNode, a: ImportAliases): AstNode[] {
     if (typeof n.type === "string" && FUNCTION_TYPES.has(n.type)) return // nested fn boundary
     if (n.type === "CallExpression" && isSyncIoCall(n, a)) {
       found.push(n)
-      return
     }
     for (const k of Object.keys(n)) {
       if (k === "type" || k === "loc" || k === "start" || k === "end") continue

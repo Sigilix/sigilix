@@ -113,6 +113,9 @@ describe("no-n-plus-one-call-in-loop", () => {
   it("flags an awaited knex builder chain in a loop", () => {
     expect(runRule(noNPlusOneCallInLoop, `async function f(){ for (const id of ids) { await knex("users").where({ id }).first() } }`)).toHaveLength(1)
   })
+  it("continues traversal after a hit so nested awaited data calls are not dropped", () => {
+    expect(runRule(noNPlusOneCallInLoop, `async function f(){ for (const url of urls) { await db.query(await fetch(url)) } }`)).toHaveLength(2)
+  })
   it("does NOT flag a non-awaited (batched) call", () => {
     expect(runRule(noNPlusOneCallInLoop, `function f(){ const ps = []; for (const id of ids) { ps.push(db.query("x")) } }`)).toHaveLength(0)
   })
@@ -142,6 +145,9 @@ describe("no-sync-io-in-request-path", () => {
   })
   it("flags fs.statSync via CJS require in a handler", () => {
     expect(runRule(noSyncIoInRequestPath, `const fs = require("fs"); app.get("/z", (req, res) => { fs.statSync("f") })`)).toHaveLength(1)
+  })
+  it("continues traversal after a sync I/O hit so nested sync calls are not dropped", () => {
+    expect(runRule(noSyncIoInRequestPath, `import fs from "fs"; app.get("/x", (req, res) => { fs.readFileSync(fs.readFileSync("path"), "utf8") })`)).toHaveLength(2)
   })
   it("does NOT flag when fs is not imported (unresolved identifier)", () => {
     expect(runRule(noSyncIoInRequestPath, `app.get("/x", (req, res) => { fs.readFileSync("f") })`)).toHaveLength(0)

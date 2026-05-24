@@ -1,3 +1,15 @@
+export function normalizeConcurrencyLimit(
+  concurrency: number | undefined,
+  maxConcurrency: number,
+  fallback = 1,
+): number {
+  const max = Math.max(1, Math.floor(maxConcurrency))
+  const fallbackValue = Number.isFinite(fallback) ? Math.max(1, Math.floor(fallback)) : 1
+  const candidate = Number(concurrency ?? fallbackValue)
+  const value = Number.isFinite(candidate) ? Math.floor(candidate) : fallbackValue
+  return Math.max(1, Math.min(max, value))
+}
+
 export async function mapWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
@@ -5,7 +17,7 @@ export async function mapWithConcurrency<T, R>(
 ): Promise<Array<PromiseSettledResult<R>>> {
   if (items.length === 0) return []
 
-  const workerCount = Math.max(1, Math.min(items.length, Math.floor(concurrency)))
+  const workerCount = normalizeConcurrencyLimit(concurrency, items.length)
   const results = new Array<PromiseSettledResult<R>>(items.length)
   let nextIndex = 0
 

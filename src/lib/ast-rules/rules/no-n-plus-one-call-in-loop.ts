@@ -146,7 +146,6 @@ export const noNPlusOneCallInLoop: AstRule = {
         const arg = n.argument as AstNode
         if (arg?.type === "CallExpression" && isDataAccessCallee(arg.callee as AstNode)) {
           hits.push(arg)
-          return
         }
       }
       for (const k of Object.keys(n)) {

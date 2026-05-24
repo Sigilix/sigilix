@@ -245,6 +245,25 @@ describe("fetchTestFileContentsWithBudget", () => {
     expect(out.failedPaths).toEqual(["tests/missing.test.ts"])
     expect(out.budgetOmittedPaths).toEqual([])
   })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY])(
+    "normalizes non-finite concurrency %s without breaking fetch accounting",
+    async (concurrency) => {
+      const paths = ["tests/a.test.ts", "tests/b.test.ts", "tests/c.test.ts"]
+      const out = await fetchTestFileContentsWithBudget({
+        paths,
+        concurrency,
+        fetchContent: async (path) => `content for ${path}`,
+      })
+
+      expect(Number.isInteger(out.fetchedCount)).toBe(true)
+      expect(out.fetchedCount).toBeGreaterThanOrEqual(0)
+      expect(out.fetchedCount).toBeLessThanOrEqual(paths.length)
+      expect(out.fetchedCount + out.skippedForBudgetCount).toBe(paths.length)
+      expect(out.failedPaths).toEqual([])
+      expect(Object.keys(out.contentByPath).every((path) => paths.includes(path))).toBe(true)
+    },
+  )
 })
 
 describe("mergeInspectedTestFileContents", () => {

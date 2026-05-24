@@ -39,6 +39,7 @@ import {
   classifyDiffFiles,
   type ClassifiedDiffFile,
 } from "./diff-file-classify"
+import { normalizeConcurrencyLimit } from "./bounded-concurrency"
 import type { HelperCoverage } from "./helper-coverage"
 
 /**
@@ -246,9 +247,10 @@ export async function fetchTestFileContentsWithBudget(args: {
   fetchContent: (path: string) => Promise<string>
   concurrency?: number
 }): Promise<BudgetedTestFileFetchResult> {
-  const concurrency = Math.max(
-    1,
-    Math.floor(args.concurrency ?? DEFAULT_TEST_FILE_FETCH_CONCURRENCY),
+  const concurrency = normalizeConcurrencyLimit(
+    args.concurrency,
+    Math.max(1, args.paths.length),
+    DEFAULT_TEST_FILE_FETCH_CONCURRENCY,
   )
   const contentByPath: Record<string, string> = {}
   const failedPaths: string[] = []

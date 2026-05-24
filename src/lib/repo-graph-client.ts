@@ -43,6 +43,14 @@ export async function commitGraph(
   await graphStub(env, owner, repo).commitGraphVersion(runId)
 }
 
+export async function debugActiveGraphVersion(
+  env: Env,
+  owner: string,
+  repo: string,
+): Promise<string | null> {
+  return graphStub(env, owner, repo).debugActiveVersion()
+}
+
 export async function deleteGraph(
   env: Env,
   owner: string,

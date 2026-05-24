@@ -21,6 +21,9 @@ const {
   mockGetFileContent,
   mockAiRun,
   mockVectorizeUpsert,
+  mockWriteFileGraph,
+  mockCommitGraph,
+  mockDebugActiveGraphVersion,
 } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockGetRepository: vi.fn(),
@@ -29,6 +32,9 @@ const {
   mockGetFileContent: vi.fn(),
   mockAiRun: vi.fn(),
   mockVectorizeUpsert: vi.fn(async () => ({ ids: [], count: 0 })),
+  mockWriteFileGraph: vi.fn(async () => undefined),
+  mockCommitGraph: vi.fn(async () => undefined),
+  mockDebugActiveGraphVersion: vi.fn(async () => null),
 }))
 
 vi.mock("../src/lib/github-app", () => ({
@@ -56,6 +62,12 @@ vi.mock("../src/lib/github", async () => {
     GitHubClient: GitHubClientMock,
   }
 })
+
+vi.mock("../src/lib/repo-graph-client", () => ({
+  writeFileGraph: (...args: unknown[]) => mockWriteFileGraph(...args),
+  commitGraph: (...args: unknown[]) => mockCommitGraph(...args),
+  debugActiveGraphVersion: (...args: unknown[]) => mockDebugActiveGraphVersion(...args),
+}))
 
 import { handleIndexRepoJob, MAX_FILES_PER_JOB } from "../src/lib/indexer"
 import {
@@ -117,6 +129,9 @@ beforeEach(() => {
   mockGetFileContent.mockReset()
   mockAiRun.mockReset()
   mockVectorizeUpsert.mockReset()
+  mockWriteFileGraph.mockReset().mockResolvedValue(undefined)
+  mockCommitGraph.mockReset().mockResolvedValue(undefined)
+  mockDebugActiveGraphVersion.mockReset().mockResolvedValue(null)
 
   mockGetRepository.mockResolvedValue({ default_branch: "main" })
   mockGetBranch.mockResolvedValue({ headSha: "a".repeat(40), treeSha: "b".repeat(40) })
@@ -218,6 +233,152 @@ describe("handleIndexRepoJob — freshness skip", () => {
     expect(mockGetRepoTree).not.toHaveBeenCalled()
     expect(mockGetFileContent).not.toHaveBeenCalled()
     expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+  })
+
+  it("skips a fresh manifest only when graph active version also matches (SIG-155)", async () => {
+    const headSha = "a".repeat(40)
+    const { computeRunId } = await import("../src/lib/indexer")
+    const runId = await computeRunId({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      headSha,
+      modelId: EMBEDDING_MODEL,
+      chunkerVersion: CHUNKER_VERSION,
+    })
+    const { env, kv } = makeEnv()
+    ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
+    const manifest: RepoIndexManifestV1 = {
+      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      headSha,
+      runId,
+      fileCount: 1, chunkCount: 1, shardCount: 1,
+      indexedAt: "2026-05-17T00:00:00.000Z",
+      modelId: EMBEDDING_MODEL,
+      embeddingDim: EMBEDDING_DIMENSIONS,
+      chunkerVersion: CHUNKER_VERSION,
+      windowLines: 30, overlapLines: 10,
+    }
+    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    mockDebugActiveGraphVersion.mockResolvedValue(runId)
+
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    expect(mockDebugActiveGraphVersion).toHaveBeenCalledWith(env, "Arc-and-Anchor", "sigilix")
+    expect(mockGetRepoTree).not.toHaveBeenCalled()
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+    expect(mockWriteFileGraph).not.toHaveBeenCalled()
+    expect(mockCommitGraph).not.toHaveBeenCalled()
+  })
+
+  it("re-indexes a fresh manifest when graph active version is missing (SIG-155)", async () => {
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "src/index.ts", type: "blob", size: 100 }],
+      truncated: false,
+    })
+
+    const headSha = "a".repeat(40)
+    const { computeRunId } = await import("../src/lib/indexer")
+    const runId = await computeRunId({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      headSha,
+      modelId: EMBEDDING_MODEL,
+      chunkerVersion: CHUNKER_VERSION,
+    })
+    const { env, kv } = makeEnv()
+    ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
+    const manifest: RepoIndexManifestV1 = {
+      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      headSha,
+      runId,
+      fileCount: 1, chunkCount: 1, shardCount: 1,
+      indexedAt: "2026-05-17T00:00:00.000Z",
+      modelId: EMBEDDING_MODEL,
+      embeddingDim: EMBEDDING_DIMENSIONS,
+      chunkerVersion: CHUNKER_VERSION,
+      windowLines: 30, overlapLines: 10,
+    }
+    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    mockDebugActiveGraphVersion.mockResolvedValue(null)
+
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    expect(mockGetRepoTree).toHaveBeenCalled()
+    expect(mockWriteFileGraph).toHaveBeenCalled()
+    expect(mockVectorizeUpsert).toHaveBeenCalled()
+    expect(mockCommitGraph).toHaveBeenCalledWith(env, "Arc-and-Anchor", "sigilix", runId)
+  })
+
+  it("re-indexes a fresh manifest when graph active version is stale", async () => {
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "src/index.ts", type: "blob", size: 100 }],
+      truncated: false,
+    })
+
+    const headSha = "a".repeat(40)
+    const { computeRunId } = await import("../src/lib/indexer")
+    const runId = await computeRunId({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      headSha,
+      modelId: EMBEDDING_MODEL,
+      chunkerVersion: CHUNKER_VERSION,
+    })
+    const { env, kv } = makeEnv()
+    ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
+    const manifest: RepoIndexManifestV1 = {
+      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      headSha,
+      runId,
+      fileCount: 1, chunkCount: 1, shardCount: 1,
+      indexedAt: "2026-05-17T00:00:00.000Z",
+      modelId: EMBEDDING_MODEL,
+      embeddingDim: EMBEDDING_DIMENSIONS,
+      chunkerVersion: CHUNKER_VERSION,
+      windowLines: 30, overlapLines: 10,
+    }
+    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    mockDebugActiveGraphVersion.mockResolvedValue("older-run")
+
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    expect(mockGetRepoTree).toHaveBeenCalled()
+    expect(mockWriteFileGraph).toHaveBeenCalled()
+    expect(mockCommitGraph).toHaveBeenCalledWith(env, "Arc-and-Anchor", "sigilix", runId)
+  })
+
+  it("does not re-index a fresh manifest on transient graph active-version read failure", async () => {
+    const headSha = "a".repeat(40)
+    const { computeRunId } = await import("../src/lib/indexer")
+    const runId = await computeRunId({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      headSha,
+      modelId: EMBEDDING_MODEL,
+      chunkerVersion: CHUNKER_VERSION,
+    })
+    const { env, kv } = makeEnv()
+    ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
+    const manifest: RepoIndexManifestV1 = {
+      v: 1, repo: "sigilix", owner: "Arc-and-Anchor",
+      headSha,
+      runId,
+      fileCount: 1, chunkCount: 1, shardCount: 1,
+      indexedAt: "2026-05-17T00:00:00.000Z",
+      modelId: EMBEDDING_MODEL,
+      embeddingDim: EMBEDDING_DIMENSIONS,
+      chunkerVersion: CHUNKER_VERSION,
+      windowLines: 30, overlapLines: 10,
+    }
+    kv.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest))
+    mockDebugActiveGraphVersion.mockRejectedValue(new Error("DO transient"))
+
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    expect(mockGetRepoTree).not.toHaveBeenCalled()
+    expect(mockVectorizeUpsert).not.toHaveBeenCalled()
+    expect(mockWriteFileGraph).not.toHaveBeenCalled()
+    expect(mockCommitGraph).not.toHaveBeenCalled()
   })
 
   it("re-indexes when headSha differs (the most common case)", async () => {

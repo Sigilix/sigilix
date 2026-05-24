@@ -140,6 +140,13 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       // `repo-index-manifest:*` records exist; this gate cleanly rejects
       // retrieval against unindexed namespaces.
       if (namespaceUniverse !== undefined) {
+        if (namespaceUniverse.length === 0) {
+          return {
+            ok: false,
+            error: "No indexed repositories are available in the current retrieval scope.",
+            allowedRepos: namespaceUniverse,
+          }
+        }
         const allowed = new Set(namespaceUniverse)
         if (!allowed.has(namespace)) {
           // SIG-132 back-compat: the model may pass a bare repo (no
@@ -175,6 +182,9 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         teamKey: namespace,
         env: ctx.env,
       })
+      const noChunksMessage = chunks.length === 0
+        ? `Retrieval returned no chunks for repo '${namespace}'. Refine the query; if this persists, retrieval may be temporarily unavailable.`
+        : undefined
       return {
         ok: true,
         chunks: chunks.map((c) => ({
@@ -185,6 +195,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
           content: c.content,
         })),
         count: chunks.length,
+        ...(noChunksMessage ? { message: noChunksMessage } : {}),
       }
     },
   }

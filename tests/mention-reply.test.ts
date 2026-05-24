@@ -13,7 +13,9 @@
 import { describe, expect, it } from "vitest"
 import {
   buildAgentInitialUserMessage,
+  linearRetrievalTeamKey,
   renderPrContext,
+  renderCodebaseRetrievalStatus,
   renderPrUnavailable,
   resolveLinearAgentRepoScope,
   type LinkedPrFailure,
@@ -185,6 +187,28 @@ describe("resolveLinearAgentRepoScope", () => {
             list_complete: true,
           }
         },
+        get: async (key: string): Promise<string | null> => {
+          if (!keys.includes(key)) return null
+          const namespace = key.slice("repo-index-manifest:".length)
+          const [owner, repo] = namespace.split("/")
+          if (!owner || !repo) return null
+          return JSON.stringify({
+            v: 1,
+            owner,
+            repo,
+            headSha: "h",
+            runId: "run",
+            fileCount: 1,
+            chunkCount: 1,
+            shardCount: 1,
+            indexedAt: "2026-05-24T00:00:00.000Z",
+            modelId: "m",
+            embeddingDim: 768,
+            chunkerVersion: 1,
+            windowLines: 30,
+            overlapLines: 10,
+          })
+        },
       } as unknown as KVNamespace,
     }
   }
@@ -203,10 +227,12 @@ describe("resolveLinearAgentRepoScope", () => {
 
     expect(scope).toEqual({
       repo: "arc-and-anchor/sigilix",
+      mappedRepo: "arc-and-anchor/sigilix",
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
       ],
+      status: "mapped_indexed",
     })
   })
 
@@ -214,7 +240,9 @@ describe("resolveLinearAgentRepoScope", () => {
     const env = makeEnv(["repo-index-manifest:acme/sigilix"])
     await expect(resolveLinearAgentRepoScope(env, null)).resolves.toEqual({
       repo: null,
+      mappedRepo: null,
       availableRepos: [],
+      status: "unmapped",
     })
   })
 
@@ -226,8 +254,138 @@ describe("resolveLinearAgentRepoScope", () => {
       repo: "sigilix",
     })).resolves.toEqual({
       repo: null,
+      mappedRepo: "arc-and-anchor/sigilix",
       availableRepos: ["arc-and-anchor/rubberfit"],
+      status: "mapped_default_not_indexed",
     })
+  })
+
+  it("keeps the mapped repo available when exact manifest read succeeds even if list misses it", async () => {
+    const env = {
+      OPENCLAW_STATE: {
+        list: async (): Promise<Page> => ({ keys: [], list_complete: true }),
+        get: async (key: string): Promise<string | null> => {
+          if (key !== "repo-index-manifest:arc-and-anchor/sigilix") return null
+          return JSON.stringify({
+            v: 1,
+            owner: "Arc-and-Anchor",
+            repo: "sigilix",
+            headSha: "h",
+            runId: "run",
+            fileCount: 1,
+            chunkCount: 1,
+            shardCount: 1,
+            indexedAt: "2026-05-24T00:00:00.000Z",
+            modelId: "m",
+            embeddingDim: 768,
+            chunkerVersion: 1,
+            windowLines: 30,
+            overlapLines: 10,
+          })
+        },
+      } as unknown as KVNamespace,
+    }
+
+    await expect(resolveLinearAgentRepoScope(env, {
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+    })).resolves.toMatchObject({
+      repo: "arc-and-anchor/sigilix",
+      mappedRepo: "arc-and-anchor/sigilix",
+      availableRepos: ["arc-and-anchor/sigilix"],
+      status: "mapped_indexed",
+    })
+  })
+
+  it("fail-softs repo listing errors and still checks the exact mapped manifest", async () => {
+    const env = {
+      OPENCLAW_STATE: {
+        list: async (): Promise<Page> => {
+          throw new Error("KV list transient")
+        },
+        get: async (key: string): Promise<string | null> => {
+          if (key !== "repo-index-manifest:arc-and-anchor/sigilix") return null
+          return JSON.stringify({
+            v: 1,
+            owner: "Arc-and-Anchor",
+            repo: "sigilix",
+            headSha: "h",
+            runId: "run",
+            fileCount: 1,
+            chunkCount: 1,
+            shardCount: 1,
+            indexedAt: "2026-05-24T00:00:00.000Z",
+            modelId: "m",
+            embeddingDim: 768,
+            chunkerVersion: 1,
+            windowLines: 30,
+            overlapLines: 10,
+          })
+        },
+      } as unknown as KVNamespace,
+    }
+
+    await expect(resolveLinearAgentRepoScope(env, {
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+    })).resolves.toMatchObject({
+      repo: "arc-and-anchor/sigilix",
+      mappedRepo: "arc-and-anchor/sigilix",
+      availableRepos: ["arc-and-anchor/sigilix"],
+      status: "mapped_indexed",
+    })
+  })
+})
+
+describe("linearRetrievalTeamKey", () => {
+  it("uses the owner/repo mapping for retrieval when configured", () => {
+    expect(linearRetrievalTeamKey({
+      owner: "Sigilix",
+      repo: "sigilix",
+    })).toBe("sigilix/sigilix")
+  })
+
+  it("returns null when no explicit team repo mapping exists", () => {
+    expect(linearRetrievalTeamKey(null)).toBeNull()
+  })
+})
+
+describe("renderCodebaseRetrievalStatus", () => {
+  it("distinguishes every repo-scope status branch", () => {
+    expect(renderCodebaseRetrievalStatus({
+      repo: null,
+      mappedRepo: null,
+      availableRepos: [],
+      status: "unmapped",
+    }, 0)).toContain("No GitHub repo mapping")
+
+    expect(renderCodebaseRetrievalStatus({
+      repo: null,
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: [],
+      status: "mapped_not_indexed",
+    }, 0)).toContain("does not have an index manifest yet")
+
+    expect(renderCodebaseRetrievalStatus({
+      repo: null,
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: ["sigilix/docs"],
+      status: "mapped_default_not_indexed",
+    }, 0)).toContain("default repo is not indexed yet")
+
+    expect(renderCodebaseRetrievalStatus({
+      repo: "sigilix/sigilix",
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: ["sigilix/sigilix"],
+      status: "mapped_indexed",
+    }, 0)).toContain("retrieval returned no relevant chunks")
+
+    expect(renderCodebaseRetrievalStatus({
+      repo: "sigilix/sigilix",
+      mappedRepo: "sigilix/sigilix",
+      availableRepos: ["sigilix/sigilix"],
+      status: "mapped_indexed",
+    }, 3)).toContain("Retrieved 3 relevant codebase chunk(s)")
   })
 })
 
@@ -244,12 +402,15 @@ describe("buildAgentInitialUserMessage", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: null,
+      mappedRepo: null,
       availableRepos: [],
+      repoStatus: "unmapped",
     })
 
     expect(out).toContain("[INDEXED REPOS] (none configured)")
     expect(out).toContain("[DEFAULT REPO] (none configured)")
-    expect(out).toContain("No indexed repositories are configured for this Linear team")
+    expect(out).toContain("[MAPPED REPO] (none configured)")
+    expect(out).toContain("No GitHub repo mapping is configured for this Linear team")
     expect(out).toContain("do not call retrieve_codebase")
     expect(out).not.toContain("lowercased repo name")
   })
@@ -258,7 +419,9 @@ describe("buildAgentInitialUserMessage", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: "arc-and-anchor/sigilix",
+      mappedRepo: "arc-and-anchor/sigilix",
       availableRepos: ["arc-and-anchor/sigilix"],
+      repoStatus: "mapped_indexed",
     })
 
     expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/sigilix'")
@@ -270,10 +433,12 @@ describe("buildAgentInitialUserMessage", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: "arc-and-anchor/sigilix",
+      mappedRepo: "arc-and-anchor/sigilix",
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
       ],
+      repoStatus: "mapped_indexed",
     })
 
     expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
@@ -287,10 +452,12 @@ describe("buildAgentInitialUserMessage", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: null,
+      mappedRepo: null,
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
       ],
+      repoStatus: "unmapped",
     })
 
     expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
@@ -298,5 +465,20 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("retrieve_codebase takes a 'repo' argument")
     expect(out).toContain("Pick the one that matches the issue's subject")
     expect(out).toContain("If none clearly fits")
+  })
+
+  it("distinguishes a mapped repo that is not indexed yet", () => {
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: null,
+      mappedRepo: "arc-and-anchor/sigilix",
+      availableRepos: [],
+      repoStatus: "mapped_not_indexed",
+    })
+
+    expect(out).toContain("[MAPPED REPO] arc-and-anchor/sigilix")
+    expect(out).toContain("[DEFAULT REPO] (not indexed: arc-and-anchor/sigilix)")
+    expect(out).toContain("does not have an index manifest yet")
+    expect(out).toContain("mapped but not indexed yet")
   })
 })

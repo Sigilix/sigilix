@@ -151,7 +151,7 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
           queued_head_sha: queuedHeadSha,
           new_head_sha: currentHeadSha,
           next_depth: depth + 1,
-          mode: result.mode,
+          route: result.route,
         }))
         return { requeued: true, newHeadSha: currentHeadSha, nextDepth: depth + 1 }
       }

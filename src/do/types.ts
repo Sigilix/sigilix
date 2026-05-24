@@ -3,8 +3,6 @@
 // Spec: docs/superpowers/specs/2026-05-07-arc-190-durable-objects-webhook-ingest-design.md
 // Plan: docs/superpowers/plans/2026-05-07-arc-190-durable-objects-webhook-ingest.md
 
-export type PrReviewMode = "off" | "shadow" | "post"
-
 export type RunFinalState = "done" | "failed"
 
 export type RunStateLifecycle =
@@ -89,8 +87,6 @@ export interface EnqueueRequest {
   installationId: number
   /** GitHub `x-github-delivery` header captured at webhook time. */
   deliveryId: string | null
-  /** "shadow" mode skips DO-internal queue dispatch + watchdog alarm. */
-  mode: PrReviewMode
   /**
    * ARC-251: optional requeue depth for stale-head-driven auto-retries.
    * Webhook-originated enqueues omit this field (treated as 0). The
@@ -170,7 +166,6 @@ export type StatusResponse = StatusResponseFound | StatusResponseEmpty
 // ─── Resolved config ──────────────────────────────────────────
 
 export interface ResolvedDoConfig {
-  mode: PrReviewMode
   /** Clamped [1, 10]; default 3. */
   maxRetries: number
   /** Clamped [60000, 1800000] ms; default 1200000 (20 min). */

@@ -19,7 +19,7 @@ Verified against `arc-190-do-webhook-ingest` head (currently at `fd6a8e8`) befor
 - **`OPENCLAW_JOBS` queue is shared** across 11 JobMessage variants (`linear-triage`, `linear-mention`, `pr-overview`, `pr-review`, `pr-review-rerun`, `pr-improve`, `pr-help`, `pr-describe`, `pr-stale-mark`, `ci-triage`, `github-mention`). v1 gates DO ownership to `pr-review` ONLY; the queue config is unchanged.
 - **`handleGitHubWebhook` lives at `src/index.ts:971`**; the `pull_request` branch enqueues `pr-review` JobMessages around lines 1042-1130.
 - **Queue consumer at `src/index.ts:557`** dispatches via `dispatchJob(job)` at line 609; the `pr-review` branch calls `handlePrReviewEnsemble`.
-- **Existing dedupe** for `pr-review` lives in `src/lib/triage-pr-review.ts:45-61` via the KV key `pr-review:<owner>/<repo>/<pr>/<sha>` (7-day TTL). v1 keeps this for backward-compat during rollout; the DO is the new source of truth and will eventually deprecate the KV key after the rollout window.
+- **Existing dedupe** for `pr-review` lives in `src/lib/triage-pr-review.ts:45-61` via the KV key `pr-review:<owner>/<repo>/<pr>/<sha>` (7-day TTL). v1 keeps this for backward-compat with in-flight legacy runs; the DO is the new source of truth and will eventually deprecate the KV key after the migration window.
 - **No existing `src/do/` directory.** v1 creates it.
 - **No existing class extending `DurableObject`** — class-name + import surface is greenfield.
 
@@ -62,14 +62,14 @@ Verified against `arc-190-do-webhook-ingest` head (currently at `fd6a8e8`) befor
 ### Task 1 — Types + Env + wrangler binding (NEW + EDIT)
 
 **Outputs:**
-- `src/do/types.ts` (NEW): `RunState`, `RunRecord`, `EnqueueRequest`, `PickupRequest`, `PickupResponse`, `RunResultRequest`, `StatusResponse`, `PrReviewMode = "off" | "shadow" | "post"`.
+- `src/do/types.ts` (NEW): `RunState`, `RunRecord`, `EnqueueRequest`, `PickupRequest`, `PickupResponse`, `RunResultRequest`, `StatusResponse`.
 - `src/index.ts` `JobMessage` `pr-review` variant extended with **optional `runId?: string`** (Codex BLOCKING B1 on plan v1). DO-posted `pr-review` queue messages MUST carry the runId; legacy direct-path `pr-review` messages MAY omit it (presence-checked at consumer wrapper time per Task 7). The `ci-triage` variant's existing `runId: number` is unrelated and untouched.
-- `src/index.ts` `Env` interface extended with: `PR_REVIEW_RUN: DurableObjectNamespace`, `OPENCLAW_PR_REVIEW_MODE?: string`, `OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string`, `OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string`, `OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT?: string`.
+- `src/index.ts` `Env` interface extended with: `PR_REVIEW_RUN: DurableObjectNamespace`, `OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string`, `OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string`, `OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT?: string`.
 - `wrangler.toml`: new `[[durable_objects.bindings]]` block (`name = "PR_REVIEW_RUN"`, `class_name = "PrReviewRunDO"`) + new `[[migrations]]` block (`tag = "arc-190-v1"`, `new_classes = ["PrReviewRunDO"]`). Migration is forward-compatible (adding a class). Added env-vars also documented in the wrangler comment block.
-- **NEW: `src/do/config.ts`** with `resolveDoConfig(env: Env) → ResolvedDoConfig` (Codex BLOCKING B4 on plan v1 — env validation under-spec'd). Imports `Env` via **`import type { Env } from "../index"`** to avoid runtime cycles through `src/index.ts` (Codex MINOR on plan v2 — pure types-only import sidesteps the entry-module load order issue). Pure function; clamps numeric envs (`maxRetries ∈ [1, 10]` default 3; `watchdogMs ∈ [60000, 1800000]` default 1200000; `historyLimit ∈ [1, 100]` default 10); validates mode is `"off" | "shadow" | "post"` (default `"off"` on unknown). Locked defaults match spec §4.9.
+- **NEW: `src/do/config.ts`** with `resolveDoConfig(env: Env) → ResolvedDoConfig` (Codex BLOCKING B4 on plan v1 — env validation under-spec'd). Imports `Env` via **`import type { Env } from "../index"`** to avoid runtime cycles through `src/index.ts` (Codex MINOR on plan v2 — pure types-only import sidesteps the entry-module load order issue). Pure function; clamps numeric envs (`maxRetries ∈ [1, 10]` default 3; `watchdogMs ∈ [60000, 1800000]` default 1200000; `historyLimit ∈ [1, 100]` default 10). Locked defaults match spec §4.9.
 - `src/index.ts` exports `PrReviewRunDO` from `./do/pr-review-run` (Cloudflare Workers requires the DO class to be exported by the entry module to register the binding).
 
-**Tests** (~10 cases, `tests/do-config.test.ts`): defaults when env unset, mode literals accepted, mode garbage → `"off"`, numeric clamp boundaries (low/high/zero/negative/non-numeric) for each of the three numeric fields. Plus a small JobMessage-shape compile-time check that `runId` is optional only on `pr-review`, not on other variants. Validate via `npx tsc --noEmit` and `npx wrangler types` (regenerates `worker-configuration.d.ts` from wrangler.toml).
+**Tests** (~10 cases, `tests/do-config.test.ts`): defaults when env unset and numeric clamp boundaries (low/high/zero/negative/non-numeric) for each of the three numeric fields. Plus a small JobMessage-shape compile-time check that `runId` is optional only on `pr-review`, not on other variants. Validate via `npx tsc --noEmit` and `npx wrangler types` (regenerates `worker-configuration.d.ts` from wrangler.toml).
 
 **Commit 1.**
 
@@ -119,7 +119,7 @@ Verified against `arc-190-do-webhook-ingest` head (currently at `fd6a8e8`) befor
 
 **Outputs:**
 - `src/do/status-route.ts` (NEW): `handleReviewStatusRoute(env: Env, owner: string, repo: string, prNumber: number): Promise<Response>`. Decodes path segments, validates non-empty + no-slash, fetches DO stub `/status`, returns 404 if DO returned `{ kind: "no-state" }`, else 200 JSON.
-- `src/index.ts` `fetch()` adds the new route handler before the catch-all, gated on `mode !== "off"` (no need to expose the route when feature is fully off).
+- `src/index.ts` `fetch()` adds the new route handler before the catch-all.
 
 **Tests** (≈ 14 cases, `tests/do-status-route.test.ts`):
 - 200 with valid JSON shape (current.runId, history[])
@@ -129,7 +129,7 @@ Verified against `arc-190-do-webhook-ingest` head (currently at `fd6a8e8`) befor
 - 400 on non-numeric prNumber
 - 503 on DO transport failure
 - Path-segment URL-decode (e.g., `%2E` → `.`)
-- Routes only when `mode !== "off"` (returns 404 with feature-disabled body otherwise)
+- Route is always available when the DO binding is configured; no rollout gate remains.
 - Test fixtures cover idle/queued/running/done/failed/failed-transient state shapes
 
 **Commit 4.**
@@ -144,7 +144,7 @@ Per Codex MAJOR on plan v1 — keep as one task, but enforce land order: `/enque
 
 **Outputs:**
 - `PrReviewRunDO.fetch(req)` dispatches on path:
-  - `POST /enqueue` → reads body, calls `decideEnqueueAction`, on `create`: writes RunState (with fresh `lastActivityAt`), sends queue message via `env.OPENCLAW_JOBS.send({type: "pr-review", ..., runId})` (skipped in `mode === "shadow"`), schedules watchdog alarm via `setAlarm` (skipped in shadow), emits telemetry. Returns `{ deduped: bool, runId, action }`.
+  - `POST /enqueue` → reads body, calls `decideEnqueueAction`, on `create`: writes RunState (with fresh `lastActivityAt`), sends queue message via `env.OPENCLAW_JOBS.send({type: "pr-review", ..., runId})`, schedules watchdog alarm via `setAlarm`, emits telemetry. Returns `{ deduped: bool, runId, action }`.
   - `POST /pickup` → reads body, calls `decidePickupAction`, on `claim`: updates state to `running` (with fresh `lastActivityAt`), sets `pickedUpAt`, persists `consumerId`, emits `do-review-picked-up`. Returns 200 / 409 / 410 / 410 stale per spec §4.3.
   - `POST /run-result` → reads body, calls `decideRunResultAction`, applies transition (with fresh `lastActivityAt`), schedules retry alarm if needed (sets `alarmKind = "retry"`, persists `alarmTargetRunId`), emits telemetry. `consumerId` mismatch → write to history + `do-review-result-superseded`.
   - `GET /status` → returns current state JSON or `{ kind: "no-state" }` when storage is empty.
@@ -152,7 +152,7 @@ Per Codex MAJOR on plan v1 — keep as one task, but enforce land order: `/enque
 
 **Tests** (≈ 26 cases, `tests/do-pr-review-run-routes.test.ts`, `state.storage` mocked):
 - `/enqueue`: first run, dedupe-same-sha-active, dedupe-terminal-same-sha, supersede-different-sha
-- `/enqueue` shadow mode skips queue dispatch + skips watchdog alarm
+- `/enqueue` sends exactly one queue message and arms the watchdog for a new run
 - `/pickup`: 200 claim; 409 same-runId different-consumerId; 410 superseded; 410 terminal; 410 stale-runId
 - `/run-result`: success → done; transient w/ retries-left → failed-transient + alarm scheduled; transient retries-exhausted → failed; terminal → failed; superseded consumer → history; 410 unknown runId
 - `/status`: returns state shape; 404-equivalent when no state
@@ -211,21 +211,17 @@ Per Codex MAJOR on plan v1 — keep as one task, but enforce land order: `/enque
 **Depends on:** Tasks 1, 5, 7.
 
 **Outputs:**
-- `src/index.ts` `handleGitHubWebhook` `pull_request` branch (lines ~1042-1130) gates on `OPENCLAW_PR_REVIEW_MODE`:
-  - `off` → existing direct `OPENCLAW_JOBS.send({type: "pr-review", ...})` only. No DO calls.
-  - `shadow` → BOTH paths fire: DO `/enqueue` (writes state, observation-only) AND existing direct `OPENCLAW_JOBS.send`. The DO does NOT enqueue its own queue message in shadow (spec §4.4); the existing path is the work executor. Two pr-review messages would otherwise produce duplicate ensemble runs.
-  - `post` → DO `/enqueue` only. **The webhook handler does NOT call `OPENCLAW_JOBS.send` directly** (Codex MAJOR on plan v1 — explicit so reviewers can verify against the diff). The DO's `/enqueue` route owns the queue message with the DO-generated `runId` attached; consumer's `/pickup` reads it from `message.runId`. On DO `/enqueue` failure → return 503 to GitHub for redelivery (spec §4.4 awaited semantics, NOT `ctx.waitUntil`).
+- `src/index.ts` `handleGitHubWebhook` `pull_request` branch (lines ~1042-1130) uses the authoritative DO-backed path:
+  - Automatic PR review webhook events call DO `/enqueue` only. **The webhook handler does NOT call `OPENCLAW_JOBS.send` directly** (Codex MAJOR on plan v1 — explicit so reviewers can verify against the diff). The DO's `/enqueue` route owns the queue message with the DO-generated `runId` attached; consumer's `/pickup` reads it from `message.runId`. On DO `/enqueue` failure → return 503 to GitHub for redelivery (spec §4.4 awaited semantics, NOT `ctx.waitUntil`).
 - DO enqueue is `await stub.fetch(...)`-ed — NEVER `ctx.waitUntil` (per spec §4.4 + §7.1).
 - Sibling JobMessage variants (`pr-overview`, `pr-improve`, `pr-describe`, `pr-stale-mark`, `ci-triage`, `github-mention`) get `dedupe_system: "kv"` added at their existing telemetry emission sites. ~6 single-line tag additions.
 
 **Tests** (≈ 14 cases, extension of `tests/index-webhook.test.ts` or new file):
-- mode=off: existing path only; no DO call
-- mode=shadow: DO call + existing path; DO failure → continue + log
-- mode=post: DO call only; DO success → 202; DO transport failure → 503; DO 4xx → 503
-- mode=post: response timing ≤ 500ms (DO + return)
+- DO-backed enqueue only: DO success → 202; DO transport failure → 503; DO 4xx → 503
+- DO-backed enqueue response timing ≤ 500ms (DO + return)
 - KV-routed events emit `dedupe_system: "kv"` (smoke test on the 6 siblings)
-- mode=post: synchronize webhook deliverable replayed 3 times → exactly 1 work execution (the integration scenario from spec §2)
-- mode=post: webhook handler does NOT call `env.OPENCLAW_JOBS.send` directly with a `pr-review` message; assert via mock-call-count that DO `/enqueue` is the only path that enqueues. The DO emits the queue message internally with `runId` populated; assert that the queue payload (intercepted via DO's queue stub) carries a non-empty string `runId`.
+- synchronize webhook deliverable replayed 3 times → exactly 1 work execution (the integration scenario from spec §2)
+- webhook handler does NOT call `env.OPENCLAW_JOBS.send` directly with a `pr-review` message; assert via mock-call-count that DO `/enqueue` is the only path that enqueues. The DO emits the queue message internally with `runId` populated; assert that the queue payload (intercepted via DO's queue stub) carries a non-empty string `runId`.
 
 **Commit 8 (impl). Likely commit 8b for CR fix-pass.**
 
@@ -240,8 +236,7 @@ Per Codex MAJOR on plan v1 — keep as one task, but enforce land order: `/enque
   - Watchdog scenario: `/run-result` never arrives, watchdog fires after `WATCHDOG_MS`, schedules retry, eventually exhausts attempts → `{ state: "failed", lastError.stage: "watchdog" }`.
 - `sigilix.json` (or similar repo config) gets a noop / dogfood entry. Most config lives in env vars for this feature, so the JSON change may be empty.
 - `README.md`:
-  - New `## DO-backed pr-review run state (ARC-190)` section after the existing `## Cross-PR review memory (ARC-189)` section. ~50 lines: how it works, status route shape, env vars, mode semantics, rollout phases, telemetry, v1 limitations.
-  - `### `OPENCLAW_PR_REVIEW_MODE`` config block reference earlier in the README near the other env vars.
+  - New `## DO-backed pr-review run state (ARC-190)` section after the existing `## Cross-PR review memory (ARC-189)` section. ~50 lines: how it works, status route shape, numeric DO env vars, telemetry, v1 limitations.
 
 **Commit 9.**
 
@@ -272,11 +267,11 @@ Per Codex MAJOR on plan v1 — keep as one task, but enforce land order: `/enque
 
 Per spec §6 / migration plan:
 
-1. **Deploy with `OPENCLAW_PR_REVIEW_MODE="off"`** (default). DO class is registered (wrangler migration applies) but never invoked.
-2. **Flip Sigilix repo only to `shadow`** for 1 week. Monitor `do-review-enqueued-shadow` rate matches webhook event count + status-route sampling against live PRs.
-3. **Flip to `post`.** Existing KV `pr-review:` dedupe keys remain operational for the duration of any in-flight non-DO runs (7-day TTL); new runs use the DO.
-4. **After 30 days of stable `post`,** remove the legacy KV `pr-review:` dedupe write site (deferred follow-up; not in this PR).
-5. **Rollback:** flip env back to `off` or `shadow`. The DO continues to receive shadow traffic if `shadow`; existing direct path always works regardless.
+1. Deploy the DO class and binding (wrangler migration applies).
+2. Route automatic PR review webhooks through DO `/enqueue`; the DO owns dedupe, retry, and queue dispatch.
+3. Existing KV `pr-review:` dedupe keys remain operational for the duration of any in-flight non-DO runs (7-day TTL); new runs use the DO.
+4. After 30 days of stable DO-backed operation, remove the legacy KV `pr-review:` dedupe write site (deferred follow-up; not in this PR).
+5. Rollback requires reverting to the previous direct queue path; no runtime selector remains.
 
 ### 4.2 Test infrastructure
 
@@ -296,9 +291,9 @@ GH client stub: existing `as unknown as GitHubClient` cast pattern. New methods 
 
 ### 4.3 Backward compatibility
 
-- `mode === "off"` is the default; an upgrading deploy with no env config behaves identically to today.
-- Existing `pr-review:<sha>` KV keys keep their TTL — no migration code reads them; they expire naturally over 7 days during rollout.
-- The DO migration `new_classes = ["PrReviewRunDO"]` is forward-only. A rollback to v1 of this PR (no DO) doesn't break — Cloudflare DOs are durable independent of code; if the binding is removed, traffic just routes via `mode=off` (which never dispatches to the DO).
+- Automatic PR-review webhooks are DO-authoritative for new runs; the webhook handler no longer carries a runtime pipeline selector.
+- Existing `pr-review:<sha>` KV keys keep their TTL for in-flight non-DO runs and expire naturally over 7 days.
+- The DO migration `new_classes = ["PrReviewRunDO"]` is forward-only. Rollback requires reverting to the previous direct queue path; no data migration is required because Cloudflare DOs remain durable independent of code.
 
 ### 4.4 Per-task README placement
 
@@ -341,7 +336,7 @@ Per-task quality gates per `feedback_per_task_workflow`:
 
 - Other 6 per-PR JobMessage variants migrated to DO (`pr-overview`, `pr-improve`, `pr-describe`, `pr-stale-mark`, `ci-triage`, `github-mention`) — v1 ships only `pr-review`.
 - DO instance GC / cleanup sweep — `lastActivityAt` instrumented in v1 but the cron + `state.storage.deleteAll()` call is v2 (waiting on Cloudflare's stable `list()` API).
-- `do-review-shadow-mismatch` cross-path verdict comparison — needs existing-path consumer to also report; v2.
+- Cross-path verdict comparison is no longer relevant after the DO path became authoritative; v2 can add richer DO status analytics instead.
 - Web UI for status route — v1 returns JSON only.
 - Per-installation auth on the status route — v1 unauth (read-only metadata).
 - D1 / SQL backing — v1 is KV-backed DO storage.
@@ -361,8 +356,8 @@ Per-task quality gates per `feedback_per_task_workflow`:
 - **Codex BLOCKING B1**: Task 1 extends `pr-review` JobMessage variant with optional `runId?: string` (DO-routed messages MUST carry it; legacy direct-path MAY omit). `ci-triage`'s existing numeric `runId` is unrelated and untouched.
 - **Codex BLOCKING B2**: Task 7 wrapper guard tightened to `job.type === "pr-review" && typeof job.runId === "string"` (was generic `message.runId` which would falsely match `ci-triage`'s numeric runId). Added regression test for ci-triage flowing through unchanged.
 - **Codex BLOCKING B3**: Task 9 dependency list updated to include Task 4 (acceptance asserts the status route).
-- **Codex BLOCKING B4**: Added `src/do/config.ts` `resolveDoConfig(env)` resolver to Task 1 with ~10 unit tests covering mode-string validation, numeric clamps for retry/watchdog/history fields, default-OFF behavior.
-- **Codex MAJOR**: Task 8 explicitly states `post` mode webhook does NOT call `OPENCLAW_JOBS.send` directly — DO `/enqueue` owns that. Test asserts via mock-call-count.
+- **Codex BLOCKING B4**: Added `src/do/config.ts` `resolveDoConfig(env)` resolver to Task 1 with unit tests covering numeric clamps for retry/watchdog/history fields and default behavior.
+- **Codex MAJOR**: Task 8 explicitly states the webhook does NOT call `OPENCLAW_JOBS.send` directly — DO `/enqueue` owns that. Test asserts via mock-call-count.
 - **Codex MAJOR**: §4.2 promoted from Task 9 to cross-cutting; documents the DO stub contract (`idFromName`, `get(stub).fetch`, storage Map, single-slot alarm, `triggerAlarm()` helper) explicitly before implementation.
 - **Codex MAJOR**: Task 5 keep-as-one with implementation order constraint (`/enqueue` + `/pickup` green before `/run-result` + `/status`); split into 5a/5b only if the green-state slips.
 - **Codex MAJOR**: §4.5 NEW section noting the unrelated GitHub `issue_comment.created` delivery issue as non-blocking.

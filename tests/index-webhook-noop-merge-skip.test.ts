@@ -141,7 +141,6 @@ function makeEnv(
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
     GITHUB_WEBHOOK_SECRET: SECRET,
-    OPENCLAW_PR_REVIEW_MODE: "off",
     OPENCLAW_REVIEW_MANIFEST_ENABLED: opts.reviewManifestEnabled ?? "off",
     OPENCLAW_JOBS: {
       send: async (msg: { type: string; [k: string]: unknown }) => {

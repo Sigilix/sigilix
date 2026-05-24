@@ -49,7 +49,6 @@ interface QueueState { sent: unknown[] }
 function makeEnv(queue: QueueState, retries: number = 3): Env {
   return {
     OPENCLAW_JOBS: { send: async (m: unknown) => { queue.sent.push(m) } },
-    OPENCLAW_PR_REVIEW_MODE: "post",
     OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: String(retries),
     OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "1200000",
     OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "10",

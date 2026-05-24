@@ -1,4 +1,4 @@
-// ARC-190 Task 1 — resolveDoConfig env validator tests.
+// ARC-190 Task 1 + SIG-174 — resolveDoConfig env validator tests.
 
 import { describe, it, expect } from "vitest"
 import { resolveDoConfig } from "../src/do/config"
@@ -9,30 +9,11 @@ function envWith(over: Record<string, string | undefined> = {}): Env {
 }
 
 describe("resolveDoConfig — defaults", () => {
-  it("all-undefined env → mode=off, locked numeric defaults", () => {
+  it("all-undefined env → locked numeric defaults", () => {
     const c = resolveDoConfig(envWith())
-    expect(c.mode).toBe("off")
     expect(c.maxRetries).toBe(3)
     expect(c.watchdogMs).toBe(1200000)
     expect(c.historyLimit).toBe(10)
-  })
-})
-
-describe("resolveDoConfig — mode validation", () => {
-  it.each(["off", "shadow", "post"] as const)("accepts literal %s", (mode) => {
-    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_MODE: mode })).mode).toBe(mode)
-  })
-
-  it("garbage mode value → off", () => {
-    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_MODE: "bogus" })).mode).toBe("off")
-  })
-
-  it("empty string mode → off", () => {
-    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_MODE: "" })).mode).toBe("off")
-  })
-
-  it("uppercase mode → off (case-sensitive)", () => {
-    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_MODE: "POST" })).mode).toBe("off")
   })
 })
 
@@ -85,15 +66,13 @@ describe("resolveDoConfig — historyLimit clamp [1, 100]", () => {
 })
 
 describe("resolveDoConfig — combined", () => {
-  it("post mode + custom retries + custom watchdog + custom history", () => {
+  it("custom retries + custom watchdog + custom history", () => {
     const c = resolveDoConfig(envWith({
-      OPENCLAW_PR_REVIEW_MODE: "post",
       OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: "5",
       OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "900000",
       OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "20",
     }))
     expect(c).toEqual({
-      mode: "post",
       maxRetries: 5,
       watchdogMs: 900000,
       historyLimit: 20,

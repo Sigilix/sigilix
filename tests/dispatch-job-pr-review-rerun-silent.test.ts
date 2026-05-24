@@ -70,7 +70,7 @@ beforeEach(() => {
 
 describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
   it("skips slash-command ack when silent=true (warmup-fired rerun)", async () => {
-    const { env, sent } = makeEnv()
+    const { env, sent, doCalls } = makeEnvWithDo()
     const job: JobMessage = {
       type: "pr-review-rerun",
       owner: "Arc-and-Anchor",
@@ -82,10 +82,11 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
     await dispatchJob(job, env)
 
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
-    // The rerun still enqueues the regular pr-review job — silence is
+    // The rerun still routes the review through the DO; silence is
     // ack-only, the review itself must still happen.
-    expect(sent).toHaveLength(1)
-    expect(sent[0]?.type).toBe("pr-review")
+    expect(doCalls).toHaveLength(1)
+    expect(doCalls[0]?.url).toContain("/enqueue")
+    expect(sent).toHaveLength(0)
   })
 
   it("posts slash-command ack when silent is unset (slash-command-driven rerun)", async () => {
@@ -145,9 +146,8 @@ describe("dispatchJob — pr-review-rerun silent flag (ARC-236 M1)", () => {
 // wrapper's runId check, producing duplicate ensemble runs (PR #96).
 
 function makeEnvWithDo(args: {
-  mode: "off" | "shadow" | "post"
   doResponse?: { deduped: boolean; runId: string; action: string }
-}): { env: Env; sent: JobMessage[]; doCalls: Array<{ url: string; body: unknown }> } {
+} = {}): { env: Env; sent: JobMessage[]; doCalls: Array<{ url: string; body: unknown }> } {
   const sent: JobMessage[] = []
   const doCalls: Array<{ url: string; body: unknown }> = []
   const stub = {
@@ -174,7 +174,6 @@ function makeEnvWithDo(args: {
       idFromName: vi.fn((name: string) => ({ name }) as unknown as DurableObjectId),
       get: vi.fn(() => stub) as unknown as DurableObjectNamespace["get"],
     } as unknown as DurableObjectNamespace,
-    OPENCLAW_PR_REVIEW_MODE: args.mode,
     GITHUB_APP_ID: "12345",
     GITHUB_PRIVATE_KEY: "fake-key",
   } as unknown as Env
@@ -182,8 +181,8 @@ function makeEnvWithDo(args: {
 }
 
 describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
-  it("silent=true routes through DO /enqueue in post mode (no legacy queue send when DO is authoritative)", async () => {
-    const { env, sent, doCalls } = makeEnvWithDo({ mode: "post" })
+  it("silent=true routes through DO /enqueue with no direct queue send", async () => {
+    const { env, sent, doCalls } = makeEnvWithDo()
     const job: JobMessage = {
       type: "pr-review-rerun",
       owner: "Arc-and-Anchor",
@@ -204,11 +203,9 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
       prNumber: 237,
       headSha: "a".repeat(40),
       baseSha: "b".repeat(40),
-      mode: "post",
     })
-    // post mode: legacy OPENCLAW_JOBS.send is NOT called by the
-    // webhook — the DO's /enqueue handler emits the queue message
-    // itself with runId populated.
+    // The helper does not direct-send; the DO's /enqueue handler
+    // emits the queue message itself with runId populated.
     expect(sent).toHaveLength(0)
   })
 
@@ -217,7 +214,6 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     // ensemble run; the warmup rerun arriving moments later must
     // observe the dedup-terminal and skip.
     const { env, sent, doCalls } = makeEnvWithDo({
-      mode: "post",
       doResponse: { deduped: true, runId: "prior-run-id", action: "dedupe-terminal" },
     })
     const job: JobMessage = {
@@ -242,7 +238,7 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     // dedup — the user explicitly typed `/sigilix review` and wants
     // a fresh run. Preserve that contract; SIG-11 only changes the
     // silent (warmup) path.
-    const { env, sent, doCalls } = makeEnvWithDo({ mode: "post" })
+    const { env, sent, doCalls } = makeEnvWithDo()
     const job: JobMessage = {
       type: "pr-review-rerun",
       owner: "Arc-and-Anchor",
@@ -253,50 +249,7 @@ describe("dispatchJob — pr-review-rerun SIG-11 DO dedup routing", () => {
     }
     await dispatchJob(job, env)
 
-    // No DO call — went straight to legacy queue send.
-    expect(doCalls).toHaveLength(0)
-    expect(sent).toHaveLength(1)
-    expect(sent[0]?.type).toBe("pr-review")
-  })
-
-  it("silent=true in shadow mode: DO observes, legacy send still fires (mode contract)", async () => {
-    // Shadow mode keeps both paths so we don't lose the review while
-    // validating DO behavior. SIG-11 routing through
-    // `enqueuePrReviewJob` preserves this contract — same as the
-    // webhook path uses today.
-    const { env, sent, doCalls } = makeEnvWithDo({ mode: "shadow" })
-    const job: JobMessage = {
-      type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
-      repo: "sigilix",
-      prNumber: 237,
-      installationId: 99,
-      silent: true,
-    }
-    await dispatchJob(job, env)
-
-    expect(doCalls).toHaveLength(1)
-    expect(doCalls[0]?.url).toContain("/enqueue")
-    expect(sent).toHaveLength(1)
-    expect(sent[0]?.type).toBe("pr-review")
-  })
-
-  it("silent=true in off mode: still works (no DO, raw queue send via enqueuePrReviewJob)", async () => {
-    // Off mode means DO is dormant — `enqueuePrReviewJob` falls
-    // straight to OPENCLAW_JOBS.send. SIG-11 fix gains no immediate
-    // dedup benefit in off mode but doesn't regress either; the dedup
-    // engages automatically once the deploy flips to shadow/post.
-    const { env, sent, doCalls } = makeEnvWithDo({ mode: "off" })
-    const job: JobMessage = {
-      type: "pr-review-rerun",
-      owner: "Arc-and-Anchor",
-      repo: "sigilix",
-      prNumber: 237,
-      installationId: 99,
-      silent: true,
-    }
-    await dispatchJob(job, env)
-
+    // No DO call — slash-command rerun went straight to queue send.
     expect(doCalls).toHaveLength(0)
     expect(sent).toHaveLength(1)
     expect(sent[0]?.type).toBe("pr-review")
@@ -331,7 +284,7 @@ describe("dispatchJob — pr-review-rerun SIG-98 pause gate bypass", () => {
   })
 
   it("silent (warmup) reruns DO honor the pause gate via enqueuePrReviewJob", async () => {
-    const { env, sent, doCalls } = makeEnvWithDo({ mode: "off" })
+    const { env, sent, doCalls } = makeEnvWithDo()
     // Reach into the env's KV (makeEnvWithDo's KV always returns
     // null) and replace it with a stub that returns a pause flag.
     const kv = new Map<string, string>([

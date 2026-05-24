@@ -116,7 +116,6 @@ function makeEnv(args: MakeStubArgs = {}): { env: Env; calls: DoCall[]; idFromNa
   const get = vi.fn((_id: DurableObjectId) => stub) as unknown as DurableObjectNamespace["get"]
   const env = {
     PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
-    OPENCLAW_PR_REVIEW_MODE: "post",
   } as unknown as Env
   return { env, calls, idFromName }
 }
@@ -355,7 +354,6 @@ describe("runPrReviewWithDoCallback — /run-result bounded retry (CR PR #70)", 
     const get = vi.fn(() => stub) as unknown as DurableObjectNamespace["get"]
     const env = {
       PR_REVIEW_RUN: { idFromName, get } as unknown as DurableObjectNamespace,
-      OPENCLAW_PR_REVIEW_MODE: "post",
     } as unknown as Env
     void pickupCalls
     return { env, get runResultCalls() { return runResultCalls } } as { env: Env; runResultCalls: number }

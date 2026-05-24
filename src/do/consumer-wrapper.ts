@@ -53,7 +53,7 @@ async function readPickupReason(res: Response): Promise<string | undefined> {
 /**
  * Wrap the queue consumer's pr-review work with /pickup → run →
  * /run-result. Bypasses cleanly when `job.runId` is not a string
- * (legacy / shadow-mode direct-path messages).
+ * (for example, user-triggered reruns or older queued messages).
  */
 export async function runPrReviewWithDoCallback(
   job: PrReviewJob,

@@ -231,7 +231,7 @@ describe("handleStaleHead — sticky comment (exhausted retry budget)", () => {
 
 describe("handleStaleHead — ARC-251 auto-requeue (depth < MAX_STALE_HEAD_REQUEUES)", () => {
   it("re-enqueues against the current SHA with depth+1 when depth=0 (first attempt)", async () => {
-    mockEnqueuePrReviewJob.mockResolvedValue({ ok: true, mode: "off" })
+    mockEnqueuePrReviewJob.mockResolvedValue({ ok: true, route: "do" })
 
     const result = await handleStaleHead({
       env: makeEnv(),
@@ -259,7 +259,7 @@ describe("handleStaleHead — ARC-251 auto-requeue (depth < MAX_STALE_HEAD_REQUE
   })
 
   it("re-enqueues with depth+1 at every intermediate depth below the cap", async () => {
-    mockEnqueuePrReviewJob.mockResolvedValue({ ok: true, mode: "post" })
+    mockEnqueuePrReviewJob.mockResolvedValue({ ok: true, route: "do" })
 
     // depth = MAX-1 → still requeue (transitions to MAX, no further
     // requeue from THAT next attempt; this attempt still re-enqueues).
@@ -304,7 +304,7 @@ describe("handleStaleHead — ARC-251 auto-requeue (depth < MAX_STALE_HEAD_REQUE
     // now falls through to the sticky-comment upsert path.
     mockEnqueuePrReviewJob.mockResolvedValue({
       ok: false,
-      mode: "post",
+      route: "do",
       reason: "do-transport",
     })
     mockListIssueComments.mockResolvedValue([])

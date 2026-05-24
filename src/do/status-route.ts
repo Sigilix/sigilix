@@ -8,7 +8,6 @@
 //   - segments must be non-empty after URL-decoding
 //   - segments must NOT contain `/` (path-traversal guard)
 //   - prNumber must be a positive integer
-//   - feature-gate: returns 404 when mode === "off"
 //
 // On valid input, the route fetches the DO stub at
 // `https://do.internal/status` (internal route — see §4.3), inspects
@@ -17,7 +16,6 @@
 
 import type { Env } from "../index"
 import type { RunStateLifecycle, StatusResponse } from "./types"
-import { resolveDoConfig } from "./config"
 
 const VALID_STATES: ReadonlySet<RunStateLifecycle> = new Set([
   "idle",
@@ -94,17 +92,6 @@ export async function handleReviewStatusRoute(
   repo: string,
   prNumber: number,
 ): Promise<Response> {
-  // Feature-gate: return 404 when DO mode is "off". A 404 here is
-  // semantically "no such resource"; from the caller's perspective
-  // the feature simply doesn't exist on this deployment.
-  const config = resolveDoConfig(env)
-  if (config.mode === "off") {
-    return new Response(
-      JSON.stringify({ error: "review status disabled (mode=off)" }),
-      { status: 404, headers: { "content-type": "application/json" } },
-    )
-  }
-
   // Input validation.
   const validations = [
     rejectInvalidSegment(owner, "owner"),

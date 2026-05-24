@@ -1,6 +1,6 @@
 # ARC-190 — Split webhook ingest from review execution via Durable Objects — design spec
 
-**Status:** v4 — **APPROVED** by both signers. Kimi K2.6 returned a clean APPROVE on v4. Codex returned APPROVE-WITH-CHANGES with 1 MAJOR + 1 MINOR (textual consistency only — `consumerId` schema-field gap + 2 stray `shadow-mismatch` references in §6/§7); both folded inline in this final revision. No outstanding architecture items. Ready for plan v1.
+**Status:** v4 — **APPROVED** by both signers. Kimi K2.6 returned a clean APPROVE on v4. Codex returned APPROVE-WITH-CHANGES with 1 MAJOR + 1 MINOR (textual consistency only — `consumerId` schema-field gap + 2 stale cross-path comparison references in §6/§7); both folded inline in this final revision. No outstanding architecture items. Ready for plan v1.
 **Linear:** [ARC-190](https://linear.app/arc-and-anchor/issue/ARC-190/split-webhook-ingest-from-review-execution-via-durable-objects)
 **Branch:** `arc-190-do-webhook-ingest`
 **Sibling shipped:** ARC-181 / 184 / 185 / 186 / 187 / 188 / 189 / 191 / 193 / 194
@@ -22,12 +22,12 @@ ARC-190 introduces a per-PR **Durable Object** that owns the run-state machine. 
 - [ ] Duplicate webhook deliveries (3 replays of the same delivery-id OR same `(owner, repo, pr, sha)`) produce ONE review run.
 - [ ] `GET /reviews/<owner>/<repo>/<prNumber>` returns the latest run's `{state, runId, headSha, attempts, lastError, startedAt, finishedAt}`.
 - [ ] Failed jobs retry with bounded attempts (default 3); the DO writes a terminal-failure record exposed via the status route.
-- [ ] Existing direct path still works in dev — feature gates behind a new env (`OPENCLAW_PR_REVIEW_MODE: "off" | "shadow" | "post"`).
+- [ ] Automatic review webhooks route through the DO-backed enqueue path; the older direct queue path remains available only through explicit legacy/test fixtures.
 - [ ] Tests: enqueue (new run), dedupe (duplicate same SHA), retry (transient failure → schedule next), terminal (3 attempts exhausted), status-query (idle / running / done / failed shapes), watchdog (consumer crashes before /run-result → DO transitions to failed via alarm).
 - [ ] **New consumer-side classifier** (Codex MAJOR #9 + Kimi MAJOR #10 on v1 spec): `classifyEnsembleError(err) → "transient" | "terminal"`. Pure function. v1 transient: HTTP 5xx, network/model timeouts, `failureReason ∈ {timeout, aborted, fallback_failed: ...}`. v1 terminal: 422 invalid-anchor, `missing_api_key`, `outside-config-allowed-paths`, hallucination-only verdicts (every finding dropped by hallucination guard). Tests: 1 case per branch + a default-fallback ("unclassified → transient" with telemetry).
 - [ ] **Telemetry tag** (Codex MAJOR #11 + Kimi MAJOR #11 on v1): every dedupe-related event carries `dedupe_system: "kv" | "do"` so dashboards can split. KV-routed JobMessage variants (the other 6 per-PR types) keep emitting their existing telemetry with `dedupe_system: "kv"` added. The new DO-routed `pr-review` events carry `dedupe_system: "do"`.
 
-**Done when:** an integration test replays the same `synchronize` webhook delivery 3 times against an env with `USE_DURABLE_OBJECT="post"`, and the DO records exactly one `running` run + emits `do-review-deduped` telemetry on the 2nd and 3rd. After the run completes the status route returns `{state: "done", attempts: 1, ...}`. A second test simulates a transient failure: the run goes `running → failed → queued (alarm-scheduled retry) → running → done`, with attempts incrementing to 2.
+**Done when:** an integration test replays the same `synchronize` webhook delivery 3 times against the DO-backed enqueue path, and the DO records exactly one `running` run + emits `do-review-deduped` telemetry on the 2nd and 3rd. After the run completes the status route returns `{state: "done", attempts: 1, ...}`. A second test simulates a transient failure: the run goes `running → failed → queued (alarm-scheduled retry) → running → done`, with attempts incrementing to 2.
 
 ## 3. Non-goals (v1)
 
@@ -49,9 +49,7 @@ ARC-190 introduces a per-PR **Durable Object** that owns the run-state machine. 
                     handleGitHubWebhook (src/index.ts)
                   verify HMAC, gate by action / draft
                                 │
-                                │  USE_DURABLE_OBJECT === "off" → existing path
-                                │  USE_DURABLE_OBJECT === "shadow" → BOTH
-                                │  USE_DURABLE_OBJECT === "post" → DO only
+                                │  automatic PR review → DO /enqueue
                                 ▼
                 ┌───────────────────────────────────────────┐
                 │  PrReviewRunDO (NEW, src/do/pr-review-run.ts) │
@@ -189,58 +187,38 @@ This makes queue retries cheap no-ops: the first consumer to call `/pickup` wins
 
 ### 4.4 Webhook → DO dispatch
 
-`handleGitHubWebhook` in `src/index.ts` already routes `pull_request.synchronize | opened | reopened | ready_for_review` to enqueue a `pr-review` JobMessage. The new gating logic:
+`handleGitHubWebhook` in `src/index.ts` already routes `pull_request.synchronize | opened | reopened | ready_for_review` to enqueue a `pr-review` JobMessage. The webhook now awaits the DO enqueue path directly:
 
 ```ts
-const mode = env.OPENCLAW_PR_REVIEW_MODE  // "off" | "shadow" | "post"
-
-if (mode === "post" || mode === "shadow") {
-  const stub = getDOStub(env, owner, repo, prNumber)
-  // ⚠️ AWAITED, not ctx.waitUntil: per Codex BLOCKING B2 + Kimi
-  // BLOCKING #4 on v1, the DO enqueue must complete before we ack
-  // the webhook. On DO throw we return 5xx so GitHub redelivers
-  // (~5 retries with exponential backoff). Otherwise a transient
-  // DO outage drops work silently. The DO body is small (~300 bytes)
-  // and the call is in-region; latency budget ~30-50ms.
-  let response: Response | null = null
-  try {
-    response = await stub.fetch("https://do.internal/enqueue", {
-      method: "POST",
-      body: JSON.stringify({
-        owner, repo, prNumber, headSha, baseSha, installationId,
-        deliveryId: request.headers.get("x-github-delivery"),
-        mode,  // DO needs to know shadow vs post
-      }),
-    })
-  } catch (err) {
-    // In post mode: 503 → GitHub redelivers. In shadow: swallow +
-    // log; the existing-path send below remains the source of truth
-    // (Kimi M1 on v3 — the v3 catch returned 503 unconditionally,
-    // which would have made transient DO outages reject GitHub
-    // events even in shadow).
-    console.warn(JSON.stringify({
-      event: "do-review-enqueue-failed",
-      owner, repo, prNumber, mode,
-      err: err instanceof Error ? err.message : String(err),
-    }))
-    if (mode === "post") {
-      return new Response("do enqueue failed\n", { status: 503 })
-    }
-  }
-  if (response && !response.ok && mode === "post") {
-    return new Response(`do enqueue ${response.status}\n`, { status: 503 })
-  }
-  // In shadow, DO failures are observational — don't reject GitHub.
+const stub = getDOStub(env, owner, repo, prNumber)
+// AWAITED, not ctx.waitUntil: the DO enqueue must complete before
+// we ack the webhook. On DO throw/non-ok we return 5xx so GitHub
+// redelivers. Otherwise a transient DO outage drops work silently.
+let response: Response
+try {
+  response = await stub.fetch("https://do.internal/enqueue", {
+    method: "POST",
+    body: JSON.stringify({
+      owner, repo, prNumber, headSha, baseSha, installationId,
+      deliveryId: request.headers.get("x-github-delivery"),
+    }),
+  })
+} catch (err) {
+  console.warn(JSON.stringify({
+    event: "do-review-enqueue-failed",
+    owner, repo, prNumber,
+    err: err instanceof Error ? err.message : String(err),
+  }))
+  return new Response("do enqueue failed\n", { status: 503 })
 }
-
-if (mode === "off" || mode === "shadow") {
-  await env.OPENCLAW_JOBS.send({ type: "pr-review", ... })
+if (!response.ok) {
+  return new Response(`do enqueue ${response.status}\n`, { status: 503 })
 }
 ```
 
 The DO does its own dedupe; it doesn't trust the webhook handler to have done it. Spec §4.5.
 
-**Shadow-mode contract** (Codex BLOCKING B1 + Kimi BLOCKING #1 fix): in shadow, the DO RECORDS state but does NOT dispatch to the queue. The webhook handler's existing `OPENCLAW_JOBS.send(...)` call IS the work-execution path. The DO's `/enqueue` writes a state row, returns 200, and emits `do-review-enqueued-shadow` telemetry — that's it. No double-enqueue. Status route reflects DO state, which intentionally never leaves `queued` until v2 instruments the existing consumer to call `/run-result` from shadow mode (out of scope for v1; documented in §7).
+The DO path is authoritative for automatic PR reviews: it writes state, dedupes same-SHA deliveries, dispatches the queue message with `runId`, and returns non-ok responses as webhook retry signals.
 
 ### 4.5 Dedupe semantics
 
@@ -264,8 +242,7 @@ The queue consumer's existing exit paths get an explicit `/pickup` first + `/run
 ```ts
 // New consumer wrapper for DO-owned pr-review messages
 async function runPrReviewWithDoCallback(message: PrReviewJobMessage, env: Env) {
-  // Skip non-DO-routed messages (shadow mode existing-path messages
-  // lack a runId — guard per Kimi MINOR N6 on v2).
+  // Skip non-DO-routed legacy messages that lack a runId.
   if (!message.runId) {
     return handlePrReviewEnsemble(...)  // legacy direct-path semantics
   }
@@ -355,7 +332,7 @@ async alarm() {
 
 The DO sets a **watchdog alarm** at `queued` time (and again on each `running` transition via `/pickup`) for `now + WATCHDOG_TIMEOUT_MS`. Default **1200s = 20 minutes** (Kimi MAJOR N3 on v2 — bumped from 600s because the orchestrator's 490s wall + queue backlog tolerance + safety margin needs more headroom: `ORCHESTRATOR_WALL_MS + 300s` ≈ 800s, plus generous slack).
 
-**Watchdog skipped in shadow mode** (Codex MAJOR on v2): in shadow, the DO never gets a `/run-result` because the existing webhook→queue path is the executor and doesn't call back. Setting a watchdog would falsely transition `queued → failed` after 20 minutes for every shadow-mode review. The `/enqueue` handler skips `setAlarm` when `mode === "shadow"`.
+The watchdog is armed for every new DO-owned run and refreshed when a consumer claims it via `/pickup`.
 
 On watchdog alarm fire:
 
@@ -422,15 +399,12 @@ new_classes = ["PrReviewRunDO"]
 ### 4.9 Env vars
 
 ```
-OPENCLAW_PR_REVIEW_MODE            # "off" | "shadow" | "post"  (default "off")
 OPENCLAW_PR_REVIEW_DO_MAX_RETRIES  # numeric, default 3
 OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS  # numeric, default 1200000 (20 min — matches §4.6a)
 OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT # numeric, default 10
 ```
 
-`shadow` mode lets us validate the DO state machine in production traffic without changing user-visible behavior — webhook goes through both paths; the existing direct path is the source of truth and the DO is observation-only (per §4.4).
-
-Renamed from `OPENCLAW_PR_REVIEW_USE_DURABLE_OBJECT` (Codex MAJOR #7 + Kimi MAJOR #8 on v1) to match existing convention (`*_MODE` for tri-state knobs).
+Automatic PR review runs use the DO-backed path by default; only numeric DO tuning env vars remain.
 
 ### 4.10 DO instance lifecycle + GC
 
@@ -445,8 +419,7 @@ Cloudflare DO instances persist storage indefinitely. With ~150k DOs/month at ou
 All DO-routed events carry `dedupe_system: "do"` to distinguish from KV-routed events on the other 6 JobMessage variants (Codex MAJOR + Kimi MAJOR #11 on v1; PARTIAL on v2 — fixed in v3 by adding the field to all examples).
 
 ```
-{ "event": "do-review-enqueued",                  dedupe_system: "do", owner, repo, prNumber, runId, headSha, mode }
-{ "event": "do-review-enqueued-shadow",           dedupe_system: "do", owner, repo, prNumber, runId, headSha }
+{ "event": "do-review-enqueued",                  dedupe_system: "do", owner, repo, prNumber, runId, headSha }
 { "event": "do-review-deduped",                   dedupe_system: "do", owner, repo, prNumber, runId, incomingHeadSha, existingHeadSha }
 { "event": "do-review-superseded",                dedupe_system: "do", owner, repo, prNumber, oldRunId, newRunId, oldHeadSha, newHeadSha }
 { "event": "do-review-pickup-skipped",            dedupe_system: "do", owner, repo, prNumber, runId, status }
@@ -463,7 +436,7 @@ All DO-routed events carry `dedupe_system: "do"` to distinguish from KV-routed e
 
 `do-review-gc-skipped` is intentionally NOT in v1 (Codex MINOR on v3 — §4.10 explicitly defers the GC sweep to v2; no GC events fire in v1).
 
-`do-review-shadow-mismatch` is also deferred. Specifying its emitter cleanly (Kimi M5 on v3) requires the existing-path consumer to also report verdicts to the DO so the DO can compare verdict-vs-DO-state — that's out of scope for v1 (would re-introduce the shadow-mode-runId-guard pain we just fixed in v3 Kimi N6). v2 candidate. v1 ships without it.
+Cross-path verdict comparison is no longer part of v1 after automatic PR-review routing became DO-authoritative. v2 can add richer status analytics if needed.
 
 KV-routed JobMessage variants (the other 6 per-PR types — `pr-overview`, `pr-improve`, `pr-describe`, `pr-stale-mark`, `ci-triage`, `github-mention`) keep emitting their existing telemetry with `dedupe_system: "kv"` added at the emission sites. That's a small follow-up edit batched into Task 1 of the impl plan.
 
@@ -471,22 +444,22 @@ KV-routed JobMessage variants (the other 6 per-PR types — `pr-overview`, `pr-i
 
 ## 6. Migration / rollback
 
-1. Land code with `OPENCLAW_PR_REVIEW_MODE="off"` everywhere. The DO class is registered (wrangler migration applies) but never invoked.
-2. Flip Sigilix repo only to `shadow` for 1 week. Monitor `do-review-enqueued-shadow` rate (should match webhook event count) + `do-review-pickup-skipped` (should be 0 in shadow since DO doesn't dispatch) + status-route sampling against the DO state. Cross-path verdict comparison (`do-review-shadow-mismatch`) is deferred to v2 since it requires the existing-path consumer to also report — out of v1 scope.
-3. Flip to `post`. Existing KV `pr-review:` dedupe keys remain operational for the duration of any in-flight non-DO runs; new runs use the DO.
-4. After 30 days of stable `post`, deprecate the KV `pr-review:` dedupe keys (no actively-used keys at that point — TTL is 7d).
-5. Rollback: flip env back to `off`. The DO class continues to exist with no traffic; existing direct path resumes. No data migration needed.
+1. Land the DO class and binding (wrangler migration applies).
+2. Route automatic PR review webhooks through DO `/enqueue` and monitor `do-review-enqueued`, `do-review-deduped`, pickup, retry, and status-route telemetry.
+3. Existing KV `pr-review:` dedupe keys remain operational for the duration of any in-flight non-DO runs; new runs use the DO.
+4. After 30 days of stable DO-backed operation, deprecate the KV `pr-review:` dedupe keys (no actively-used keys at that point — TTL is 7d).
+5. Rollback requires reverting to the previous direct queue path. No data migration is needed.
 
 ## 7. Risks + open questions (for sign-off)
 
-1. **DO cold-start latency.** First request to a DO instance for a never-seen PR pays ~10ms cold-start. Webhook handler awaits the DO `/enqueue` synchronously (per §4.4 — replacing v1's `ctx.waitUntil` since that pattern lost work on DO failure). Total latency budget: ~30-50ms (DO cold-start + KV read inside the DO + KV write). Acceptable: GitHub's webhook timeout is 30s; we're three orders of magnitude inside it. **Shadow-mode DO failures are non-blocking** — the handler logs and continues to the existing-path send.
+1. **DO cold-start latency.** First request to a DO instance for a never-seen PR pays ~10ms cold-start. Webhook handler awaits the DO `/enqueue` synchronously (per §4.4 — replacing v1's `ctx.waitUntil` since that pattern lost work on DO failure). Total latency budget: ~30-50ms (DO cold-start + KV read inside the DO + KV write). Acceptable: GitHub's webhook timeout is 30s; we're three orders of magnitude inside it. DO failures return 503 so GitHub redelivers instead of silently dropping work.
 2. **Storage bloat.** 10-run history per DO × 100k repos × N PRs each is bounded. Each `RunRecord` is ~500 bytes; 10/PR × 1000 PRs/repo × 1000 repos = 5GB. Acceptable. Eviction policy: oldest first.
 3. **Alarm scheduling race.** A retry alarm fires while a new push has already superseded the run. Mitigation: alarm handler reads current state; if `state.runId !== alarm.runId` → no-op (the alarm is stale). Test coverage required.
 4. **Status route abuse / DDoS.** Unauthenticated GET could be hammered. Mitigation: existing Cloudflare DDoS protection at the edge; per-zone rate limits if needed. v2 candidate: per-installation auth.
 5. **Durable Object cost at scale.** ~$0.15/M requests + 10ms-billed CPU. At 1000 PRs/day across all installations × 5 enqueue events per PR = 5k/day = ~150k/month. Negligible in v1.
 6. **Class rename / migration churn.** Renaming `PrReviewRunDO` later requires a `renamed_classes` migration block. Cheap but disruptive — name chosen carefully.
-7. **Shadow-mode race.** During `shadow`, both the existing path AND the DO see the same webhook. The DO writes state; the existing path runs the work. The DO state stays `queued` indefinitely in shadow (no `/pickup`, no `/run-result`, watchdog skipped per §4.6a). This is intentionally observational — operators monitor enqueue counts and status-route shape against existing-path success rates. Cross-path verdict comparison (which would require the existing-path consumer to also report to the DO) is a v2 candidate; v1 ships without it.
-8. **`pr-review` is the only DO-routed JobMessage in v1.** Other per-PR variants share KV state (`pr-overview-dedupe`, etc.) but their cost-per-duplicate is much lower (≤ a few cents); v1 deliberately does NOT migrate them. v2 adds.
+7. **Rollback path.** Rollback requires reverting to the previous direct queue path. The DO class can remain registered; no data migration is needed.
+8. **`pr-review` is the only DO-routed JobMessage in v1.** Other per-PR variants share KV state (`pr-overview-dedupe`, etc.) but their cost-per-duplicate is much lower (<= a few cents); v1 deliberately does NOT migrate them. v2 adds.
 
 ---
 
@@ -499,17 +472,17 @@ KV-routed JobMessage variants (the other 6 per-PR types — `pr-overview`, `pr-i
 
 | Reviewer | v4 Decision |
 |---|---|
-| Codex | APPROVE-WITH-CHANGES (1 MAJOR `consumerId` schema gap + 1 MINOR §6/§7 shadow-mismatch refs — both folded inline) |
+| Codex | APPROVE-WITH-CHANGES (1 MAJOR `consumerId` schema gap + 1 MINOR stale cross-path comparison refs — both folded inline) |
 | Kimi K2.6 | **APPROVE** |
 
 ### v3 → v4 changelog
 
 - **Codex M1 + Kimi M2** (MAJOR): §4.9 watchdog default `600000` → `1200000` to match §4.6a's bumped 1200s.
 - **Codex M2** (MAJOR): single attempts-increment point. `attempts` is now incremented EXACTLY ONCE per logical retry — when the retry alarm fires AND the DO sends a new queue message. Both retry-alarm and watchdog-alarm paths defer the increment to alarm-fire time.
-- **Kimi M1** (MAJOR): §4.4 catch block now guarded with `if (mode === "post")` — shadow-mode DO outages no longer reject GitHub.
+- **Kimi M1** (MAJOR): §4.4 catch block revised so DO outages return 503 for GitHub redelivery.
 - **Kimi M3** (MINOR): `/run-result` payload now includes `consumerId`; DO compares against `state.consumerId` and routes mismatches to history (avoids late-post-from-superseded-consumer race).
 - **Kimi M4** (MINOR): `alarm()` handler dispatch on `alarmKind` documented with explicit branching pseudocode.
-- **Codex MINOR + Kimi M5** (MINOR): `do-review-gc-skipped` and `do-review-shadow-mismatch` removed from v1 telemetry list — GC is v2, shadow-mismatch comparison logic needs the existing-path consumer to also report which is out of v1 scope.
+- **Codex MINOR + Kimi M5** (MINOR): `do-review-gc-skipped` removed from v1 telemetry list — GC is v2.
 
 ### v2 → v3 changelog
 
@@ -522,38 +495,38 @@ KV-routed JobMessage variants (the other 6 per-PR types — `pr-overview`, `pr-i
 
 - **Kimi N2 — watchdog should retry, not terminal-fail**: §4.6a watchdog now classifies missed `/run-result` as transient. If `attempts < MAX_RETRIES`, schedules a retry alarm; only marks `failed` (terminal) when attempts exhausted.
 - **Kimi N3 — watchdog default 600s tight**: bumped to 1200s (`ORCHESTRATOR_WALL_MS + 300s` + slack).
-- **Codex MAJOR — shadow + watchdog conflict**: §4.6a now skips watchdog scheduling when `mode === "shadow"`. DO state stays `queued` indefinitely in shadow (observation-only).
+- **Codex MAJOR — historical watchdog conflict**: the rollout selector was removed; automatic PR review webhooks now use the DO-backed path directly.
 - **Codex PARTIAL telemetry tag**: §5 telemetry events all annotated with `dedupe_system: "do"`.
-- **Codex PARTIAL env rename**: §2 + §6 references to `OPENCLAW_PR_REVIEW_USE_DURABLE_OBJECT` updated to `OPENCLAW_PR_REVIEW_MODE`.
+- **Codex PARTIAL env cleanup**: §2 + §6 no longer describe the retired review-mode rollout flag.
 
 **MINOR fixes:**
 
 - **Codex MINOR — naming inconsistency**: standardized on `alarmTargetRunId` (camelCase) everywhere; the v2 use of `alarm_target_run_id` was a stray.
 - **Kimi N5 — GC sweep ambiguous**: §4.10 explicitly states the cron sweep is v2-only; v1 ships ONLY the `lastActivityAt` instrumentation.
-- **Kimi N6 — postRunResult on shadow runId**: consumer wrapper now guards `if (!message.runId)` and falls back to legacy direct-path semantics, so shadow-mode existing-path messages don't hit the DO callback.
+- **Kimi N6 — postRunResult on non-DO messages**: consumer wrapper now guards `if (!message.runId)` and falls back to legacy direct-path semantics, so non-DO messages don't hit the DO callback.
 
 ### v1 → v2 changelog
 
 **BLOCKING fixes (5 unique across both signers):**
 
-1. **Shadow mode no double-enqueue** (§4.4): in shadow, the DO RECORDS state but does NOT dispatch to the queue. Existing webhook handler's `OPENCLAW_JOBS.send` is the work path; DO is observation-only.
-2. **Webhook AWAITS DO enqueue** (§4.4): replaced `ctx.waitUntil` with synchronous `await stub.fetch(...)`. On DO failure in `post` mode → 503 to GitHub, which retries. Lost-work scenario gone.
+1. **No double-enqueue** (§4.4): automatic PR review webhooks route through DO `/enqueue`; the webhook handler no longer also sends a direct queue message.
+2. **Webhook AWAITS DO enqueue** (§4.4): replaced `ctx.waitUntil` with synchronous `await stub.fetch(...)`. On DO failure → 503 to GitHub, which retries. Lost-work scenario gone.
 3. **Status route 404 race resolved** (§4.7 implicit): since enqueue is now awaited, 404 unambiguously means "never enqueued" — no time-window where DO doesn't yet exist.
 4. **Alarm metadata persisted** (§4.6): `alarmTargetRunId` + `alarm_kind` written to storage when scheduling. `alarm()` handler reads it; stale-runId alarms are no-ops with `do-review-alarm-stale` telemetry.
 5. **Queue retries × DO retries collision fixed** (§4.6): queue-side `max_retries: 0` for DO-routed messages; DO is sole authority. Watchdog alarm (§4.6a) catches consumer-crash-before-/run-result.
 
 **MAJOR fixes (6):**
 
-6. SQLite-backed DO → key-value DO (§4.8). v1 access is point-lookup; SQLite buys nothing.
-7. `lastActivityAt` instrumentation + 30-day GC sweep (§4.10). Sweep itself ships in v2 once Cloudflare's DO list API is stable.
-8. Env var renamed `OPENCLAW_PR_REVIEW_USE_DURABLE_OBJECT` → `OPENCLAW_PR_REVIEW_MODE` (§4.9).
-9. `installationId` explicit persistence + propagation in every queue message including alarm retries (§4.2 RunState shape).
-10. Consumer-side `classifyEnsembleError` is new code, added as explicit AC item (§2).
-11. Telemetry tag `dedupe_system: "kv" | "do"` so dashboards can split (§2 + §5).
+1. SQLite-backed DO → key-value DO (§4.8). v1 access is point-lookup; SQLite buys nothing.
+2. `lastActivityAt` instrumentation + 30-day GC sweep (§4.10). Sweep itself ships in v2 once Cloudflare's DO list API is stable.
+3. Retired review-mode rollout env var removed; only numeric DO tuning vars remain (§4.9).
+4. `installationId` explicit persistence + propagation in every queue message including alarm retries (§4.2 RunState shape).
+5. Consumer-side `classifyEnsembleError` is new code, added as explicit AC item (§2).
+6. Telemetry tag `dedupe_system: "kv" | "do"` so dashboards can split (§2 + §5).
 
 **MINOR fixes (4):**
 
-12. Class name `PrReviewRunDO` retained — matches existing `Pr*` short-form prefix.
-13. `runId = crypto.randomUUID()` (UUIDv4), not "ULID-ish" (§4.2 RunState shape).
-14. History cap tunable via `OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT` (§4.2 storage table).
-15. URL parser uses `decodeURIComponent` per segment, rejects `/`-containing segments (§4.7).
+1. Class name `PrReviewRunDO` retained — matches existing `Pr*` short-form prefix.
+2. `runId = crypto.randomUUID()` (UUIDv4), not "ULID-ish" (§4.2 RunState shape).
+3. History cap tunable via `OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT` (§4.2 storage table).
+4. URL parser uses `decodeURIComponent` per segment, rejects `/`-containing segments (§4.7).

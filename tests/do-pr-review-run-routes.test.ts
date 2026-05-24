@@ -88,7 +88,6 @@ function makeQueue() {
 function makeEnv(queueSend: ReturnType<typeof makeQueue>["send"]): Env {
   return {
     OPENCLAW_JOBS: { send: queueSend },
-    OPENCLAW_PR_REVIEW_MODE: "post",
     OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: "3",
     OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "1200000",
     OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "10",
@@ -113,7 +112,6 @@ function makeEnqueueReq(over: Partial<EnqueueRequest> = {}): EnqueueRequest {
     baseSha: SAMPLE_BASE_SHA,
     installationId: 99,
     deliveryId: "delivery-1",
-    mode: "post",
     ...over,
   }
 }
@@ -143,7 +141,7 @@ afterEach(() => {
 // ─── /enqueue ─────────────────────────────────────────────────
 
 describe("PrReviewRunDO /enqueue — first run", () => {
-  it("creates a fresh RunState + sends queue message + schedules watchdog (post mode)", async () => {
+  it("creates a fresh RunState + sends queue message + schedules watchdog", async () => {
     const queue = makeQueue()
     const env = makeEnv(queue.send)
     const { instance, state } = makeDo(env)
@@ -165,19 +163,6 @@ describe("PrReviewRunDO /enqueue — first run", () => {
     expect(queuedMsg.type).toBe("pr-review")
     expect(typeof queuedMsg.runId).toBe("string")
     expect(state.alarms.alarmAt).not.toBeNull()
-  })
-
-  it("shadow mode skips queue dispatch + skips watchdog alarm", async () => {
-    const queue = makeQueue()
-    const env = makeEnv(queue.send)
-    const { instance, state } = makeDo(env)
-    const req = makeEnqueueReq({ mode: "shadow" })
-    const res = await postJson(instance, "/enqueue", req)
-    expect(res.status).toBe(200)
-    expect(queue.sent.length).toBe(0)
-    expect(state.alarms.alarmAt).toBeNull()
-    // State IS recorded for observation
-    expect((state.store.get("state") as RunState).state).toBe("queued")
   })
 
   it("ARC-251 — persists staleHeadRequeueDepth on RunState AND threads it onto the initial queue message", async () => {
@@ -303,10 +288,14 @@ describe("PrReviewRunDO /pickup", () => {
   })
 
   it("200 claim re-pickup — same consumerId is idempotent", async () => {
-    const { instance, runId } = await setupQueuedRun()
+    const { instance, state, runId } = await setupQueuedRun()
     await postJson(instance, "/pickup", { runId, consumerId: "consumer-A" })
+    const beforeState = state.store.get("state") as RunState
+    const beforeAlarmAt = state.alarms.alarmAt
     const res = await postJson(instance, "/pickup", { runId, consumerId: "consumer-A" })
     expect(res.status).toBe(200)
+    expect(state.store.get("state")).toBe(beforeState)
+    expect(state.alarms.alarmAt).toBe(beforeAlarmAt)
   })
 
   it("410 stale-runId — runId doesn't match current state", async () => {
@@ -332,27 +321,6 @@ describe("PrReviewRunDO /pickup", () => {
     expect(res.status).toBe(410)
   })
 
-  // Codex P2 regression: shadow-mode pickups must NOT arm a
-  // watchdog/retry pipeline — shadow runs are observation-only.
-  it("shadow-mode pickup does NOT arm watchdog alarm or alarmKind", async () => {
-    const queue = makeQueue()
-    const env = makeEnv(queue.send)
-    const { instance, state } = makeDo(env)
-    // Shadow-mode enqueue.
-    await postJson(instance, "/enqueue", makeEnqueueReq({ mode: "shadow" }))
-    const runId = (state.store.get("state") as RunState).runId
-    expect(state.alarms.alarmAt).toBeNull()  // shadow doesn't arm
-    expect((state.store.get("state") as RunState).alarmKind).toBeUndefined()
-
-    const res = await postJson(instance, "/pickup", { runId, consumerId: "consumer-A" })
-    expect(res.status).toBe(200)
-    // Pickup must NOT have armed an alarm or set alarmKind.
-    expect(state.alarms.alarmAt).toBeNull()
-    const after = state.store.get("state") as RunState
-    expect(after.alarmKind).toBeUndefined()
-    expect(after.alarmTargetRunId).toBeUndefined()
-  })
-
   // Codex P2 regression: /pickup must refresh the watchdog so the
   // timer measures from pickup-time (when the consumer actually
   // starts) rather than enqueue-time. Otherwise a queue-backlog
@@ -371,6 +339,24 @@ describe("PrReviewRunDO /pickup", () => {
     // The alarm should be (re)scheduled at >= now (with watchdogMs offset),
     // i.e. strictly later than the enqueue-time alarm value.
     expect(afterAlarm!).toBeGreaterThanOrEqual(beforePickup)
+  })
+
+  it("does not persist a running claim when the watchdog refresh fails", async () => {
+    const { instance, state, runId } = await setupQueuedRun()
+    const queuedState = state.store.get("state") as RunState
+    const enqueueAlarmAt = state.alarms.alarmAt
+    state.storage.setAlarm = vi.fn(async () => {
+      throw new Error("alarm unavailable")
+    })
+
+    await expect(postJson(instance, "/pickup", { runId, consumerId: "consumer-A" }))
+      .rejects.toThrow("alarm unavailable")
+
+    const after = state.store.get("state") as RunState
+    expect(after).toBe(queuedState)
+    expect(after.state).toBe("queued")
+    expect(after.consumerId).toBeUndefined()
+    expect(state.alarms.alarmAt).toBe(enqueueAlarmAt)
   })
 })
 

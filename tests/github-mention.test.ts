@@ -55,6 +55,7 @@ import {
   formatReviewDismissReply,
   formatReply,
   handleGithubMention,
+  isAuthorAllowedForReviewDismiss,
   isReviewDismissRequest,
   parseGithubMentionResponse,
   parseReviewDismissDedupeRecord,
@@ -166,6 +167,21 @@ describe("isReviewDismissRequest", () => {
   })
 })
 
+describe("isAuthorAllowedForReviewDismiss", () => {
+  it("allows trusted repository relationships", () => {
+    expect(isAuthorAllowedForReviewDismiss("OWNER")).toBe(true)
+    expect(isAuthorAllowedForReviewDismiss("member")).toBe(true)
+    expect(isAuthorAllowedForReviewDismiss("COLLABORATOR")).toBe(true)
+  })
+
+  it("rejects untrusted or missing relationships", () => {
+    expect(isAuthorAllowedForReviewDismiss("CONTRIBUTOR")).toBe(false)
+    expect(isAuthorAllowedForReviewDismiss("FIRST_TIME_CONTRIBUTOR")).toBe(false)
+    expect(isAuthorAllowedForReviewDismiss("NONE")).toBe(false)
+    expect(isAuthorAllowedForReviewDismiss(undefined)).toBe(false)
+  })
+})
+
 describe("review dismiss dedupe records", () => {
   it("round-trips an in-progress record", () => {
     expect(parseReviewDismissDedupeRecord(serializeReviewDismissInProgressRecord())).toEqual({
@@ -232,7 +248,12 @@ describe("handleGithubMention dismiss path", () => {
   it("dismisses, posts a reply, and stores the terminal dedupe record", async () => {
     const { env, store } = makeEnv()
     listIssueCommentsMock.mockResolvedValue([
-      { id: 4242, body: "@sigilix dismiss", user: { login: "human" } },
+      {
+        id: 4242,
+        body: "@sigilix dismiss",
+        user: { login: "human" },
+        author_association: "MEMBER",
+      },
     ])
     listPullRequestReviewsMock.mockResolvedValue([
       {
@@ -288,7 +309,12 @@ describe("handleGithubMention dismiss path", () => {
       "gh-mention:4242": serializeReviewDismissDedupeRecord({ kind: "not-found" }),
     })
     listIssueCommentsMock.mockResolvedValue([
-      { id: 4242, body: "@sigilix dismiss", user: { login: "human" } },
+      {
+        id: 4242,
+        body: "@sigilix dismiss",
+        user: { login: "human" },
+        author_association: "MEMBER",
+      },
     ])
 
     await handleGithubMention({
@@ -314,6 +340,39 @@ describe("handleGithubMention dismiss path", () => {
       result: { kind: "not-found" },
       replyCommentId: 777,
     })
+  })
+
+  it("rejects untrusted dismiss requests before mutating reviews", async () => {
+    const { env, store } = makeEnv()
+    listIssueCommentsMock.mockResolvedValue([
+      {
+        id: 4242,
+        body: "@sigilix dismiss",
+        user: { login: "drive-by" },
+        author_association: "FIRST_TIME_CONTRIBUTOR",
+      },
+    ])
+
+    await handleGithubMention({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 7,
+      installationId: 99,
+      surface: "issue",
+      commentId: 4242,
+      env,
+    })
+
+    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      4242,
+      "eyes",
+    )
+    expect(listPullRequestReviewsMock).not.toHaveBeenCalled()
+    expect(dismissReviewMock).not.toHaveBeenCalled()
+    expect(createIssueCommentMock).not.toHaveBeenCalled()
+    expect(store.has("gh-mention:4242")).toBe(false)
   })
 })
 

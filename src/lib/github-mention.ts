@@ -28,6 +28,7 @@ import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
+import { isAuthorAllowedForSlashCommand } from "./slash-commands"
 import {
   LEGACY_REVIEW_BODY_MARKER,
   SIGILIX_BOT_LOGIN,
@@ -198,6 +199,21 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   }
 
   if (explicit && isReviewDismissRequest(question)) {
+    if (!isAuthorAllowedForReviewDismiss(sourceComment.authorAssociation)) {
+      console.log(JSON.stringify({
+        event: "gh-mention-dismiss-rejected",
+        reason: "untrusted_author_association",
+        author_association: sourceComment.authorAssociation?.toUpperCase() ?? null,
+        login: sourceComment.author,
+        owner,
+        repo,
+        prNumber,
+        surface,
+        commentId,
+      }))
+      return
+    }
+
     let dismiss: ReviewDismissResult | null = null
     if (pendingDismissReply) {
       dismiss = pendingDismissReply.result
@@ -457,6 +473,7 @@ interface SourceComment {
   id: number
   body: string
   author: string
+  authorAssociation: string | null
   path?: string
   line?: number | null
 }
@@ -477,6 +494,7 @@ async function fetchSourceComment(
       id: hit.id,
       body: hit.body ?? "",
       author: hit.user?.login ?? "(unknown)",
+      authorAssociation: hit.author_association ?? null,
     }
   }
   const all = await client.listPullRequestReviewComments(owner, repo, prNumber)
@@ -486,6 +504,7 @@ async function fetchSourceComment(
     id: hit.id,
     body: hit.body ?? "",
     author: hit.user?.login ?? "(unknown)",
+    authorAssociation: hit.author_association ?? null,
     path: hit.path,
     line: hit.line,
   }
@@ -834,6 +853,17 @@ export function isReviewDismissRequest(question: string): boolean {
   return normalized === "dismiss" ||
     normalized === "dismiss review" ||
     normalized === "dismiss this review"
+}
+
+/**
+ * The dismiss command mutates PR review state, so it uses the same trust
+ * boundary as slash commands: only users GitHub marks as repo owner,
+ * organization member, or explicit collaborator can run it.
+ */
+export function isAuthorAllowedForReviewDismiss(
+  association: string | null | undefined,
+): boolean {
+  return isAuthorAllowedForSlashCommand(association)
 }
 
 export async function dismissLatestBlockingSigilixReview(args: {

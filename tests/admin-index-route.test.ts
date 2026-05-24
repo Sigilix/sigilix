@@ -135,7 +135,7 @@ describe("handleAdminBackfillRoute", () => {
 
 const mockReconcile = vi.mocked(runIndexReconciliation)
 const reconcileSummary = (dryRun: boolean) => ({
-  installations: 1, reposChecked: 2, reposMissingManifest: 1,
+  installations: 1, reposChecked: 2, reposMissingManifest: 1, reposMissingGraph: 0, graphReadErrors: 0,
   enqueued: 1, sensitiveSkipped: 0, perRepoFailed: 0,
   dryRun, enumerationIncomplete: false,
 })
@@ -164,7 +164,13 @@ describe("handleAdminReconcileRoute", () => {
     const { env } = makeEnv()
     const res = await handleAdminReconcileRoute(post("https://x/admin/index-reconcile?dryRun=true", `Bearer ${TOKEN}`), env)
     expect(res.status).toBe(200)
-    expect(await res.json()).toMatchObject({ reposChecked: 2, reposMissingManifest: 1, dryRun: true })
+    expect(await res.json()).toMatchObject({
+      reposChecked: 2,
+      reposMissingManifest: 1,
+      reposMissingGraph: 0,
+      graphReadErrors: 0,
+      dryRun: true,
+    })
     expect(mockReconcile).toHaveBeenCalledWith(env, { dryRun: true })
   })
 

@@ -3,12 +3,17 @@
 // repo that has NO manifest in KV. Catches dropped install / repos-added
 // webhooks (the gap that left every install dark in SIG-156 PR1/PR2).
 //
-// Why "missing manifest only" rather than "stale-vs-current-head":
+// SIG-155 extends the same reconciler to graph health: when graph indexing
+// is enabled, a repo with a fresh vector manifest but no matching active
+// graph version is also enqueued. That closes the rollout gap where vector
+// indexing predated OPENCLAW_GRAPH_INDEX and the consumer's fresh-manifest
+// skip prevented the graph from ever being built.
+//
+// Why not compare manifest headSha to the live default branch:
 // staleness is the push webhook's job (every merge re-indexes). The cron
-// only needs to plug the gap where an install/repos-added webhook was
-// dropped, which leaves the repo with NO manifest at all. Comparing
-// against the current head SHA would require a GitHub API call per repo
-// and add no value over the push path.
+// only needs to plug dropped install / repos-added webhooks and graph
+// rollout gaps. Comparing against the current head SHA would require a
+// GitHub API call per repo and add no value over the push path.
 //
 // Idempotent + safe to run hourly: the consumer freshness-skips repos
 // whose manifest was written between the cron's read and the job pickup.
@@ -17,12 +22,18 @@ import type { Env } from "../index"
 import { listAppInstallationIds, listInstallationRepoFullNames } from "./github-app"
 import { enqueueIndexJobsForRepos, parseFullName } from "./index-producer"
 import { readRepoIndexManifest } from "./repo-index-manifest"
+import { debugActiveGraphVersion } from "./repo-graph-client"
+import { graphIndexEnabled } from "./graph-flags"
 
 export interface ReconciliationSummary {
   installations: number
   reposChecked: number
   /** Repos whose manifest KV read returned `missing` or `invalid`. */
   reposMissingManifest: number
+  /** Repos whose vector manifest exists but graph active version is missing/stale. */
+  reposMissingGraph: number
+  /** Graph active-version reads that failed and were treated as fail-soft. */
+  graphReadErrors: number
   /**
    * Codex review pass: `dryRun: true` short-circuits the per-installation
    * `enqueueIndexJobsForRepos` call, so `enqueued` / `sensitiveSkipped` /
@@ -48,6 +59,8 @@ export async function runIndexReconciliation(
     installations: 0,
     reposChecked: 0,
     reposMissingManifest: 0,
+    reposMissingGraph: 0,
+    graphReadErrors: 0,
     enqueued: 0,
     sensitiveSkipped: 0,
     perRepoFailed: 0,
@@ -117,7 +130,15 @@ export async function runIndexReconciliation(
         summary.enumerationIncomplete = true
         continue
       }
-      if (result.kind === "ok") continue
+      if (result.kind === "ok") {
+        const graphStatus = await graphMissingForManifest(env, owner, repo, result.manifest.runId)
+        if (graphStatus.readError) summary.graphReadErrors += 1
+        if (graphStatus.missing) {
+          summary.reposMissingGraph += 1
+          missing.push({ full_name: fullName })
+        }
+        continue
+      }
       // missing OR invalid → re-index. invalid implies corrupt KV value
       // (json-parse, shape, wrong-version); re-index regenerates a clean v1.
       summary.reposMissingManifest += 1
@@ -149,4 +170,25 @@ export async function runIndexReconciliation(
 
   console.log(JSON.stringify({ event: "index-reconcile-complete", ...summary }))
   return summary
+}
+
+async function graphMissingForManifest(
+  env: Env,
+  owner: string,
+  repo: string,
+  runId: string,
+): Promise<{ missing: boolean; readError: boolean }> {
+  if (!graphIndexEnabled(env)) return { missing: false, readError: false }
+  let activeGraphVersion: string | null = null
+  try {
+    activeGraphVersion = await debugActiveGraphVersion(env, owner, repo)
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "index-reconcile-graph-read-error",
+      owner, repo, run_id: runId,
+      error: err instanceof Error ? err.message : String(err),
+    }))
+    return { missing: false, readError: true }
+  }
+  return { missing: activeGraphVersion !== runId, readError: false }
 }

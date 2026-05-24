@@ -66,7 +66,8 @@ import {
 import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
 import { extractFileGraph } from "./graph-extract"
-import { writeFileGraph, commitGraph } from "./repo-graph-client"
+import { writeFileGraph, commitGraph, debugActiveGraphVersion } from "./repo-graph-client"
+import { graphIndexEnabled } from "./graph-flags"
 import {
   type Chunk,
   CHUNK_LINES,
@@ -249,15 +250,7 @@ export async function computeRunId(args: {
   )
 }
 
-/**
- * True iff the graph write path is active. Mirrors the idiom used by
- * OPENCLAW_BRANCH_AWARE_RETRIEVAL: both "on" and "shadow" enable the
- * path so it can be validated before full rollout.
- */
-export function graphIndexEnabled(env: Env): boolean {
-  const v = (env.OPENCLAW_GRAPH_INDEX ?? "").trim().toLowerCase()
-  return v === "on" || v === "shadow"
-}
+export { graphIndexEnabled } from "./graph-flags"
 
 /**
  * True iff this run should call commitGraphVersion after writing the
@@ -358,11 +351,13 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       currentChunkerVersion: effectiveChunkerVersion(astOn),
     })
     if (fresh) {
-      console.log(JSON.stringify({
-        event: "index-job-skip-fresh",
-        owner, repo, head_sha: headSha, run_id: runId,
-      }))
-      return
+      if (await freshManifestHasActiveGraph({ env, owner, repo, runId })) {
+        console.log(JSON.stringify({
+          event: "index-job-skip-fresh",
+          owner, repo, head_sha: headSha, run_id: runId,
+        }))
+        return
+      }
     }
   } else if (existing.kind === "invalid") {
     console.warn(JSON.stringify({
@@ -554,6 +549,37 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       err: err instanceof Error ? err.message : String(err),
     }))
   }
+}
+
+async function freshManifestHasActiveGraph(args: {
+  env: Env
+  owner: string
+  repo: string
+  runId: string
+}): Promise<boolean> {
+  const { env, owner, repo, runId } = args
+  if (!graphIndexEnabled(env)) return true
+
+  let activeGraphVersion: string | null = null
+  try {
+    activeGraphVersion = await debugActiveGraphVersion(env, owner, repo)
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "graph-active-version-read-failed",
+      owner, repo, run_id: runId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return true
+  }
+
+  if (activeGraphVersion === runId) return true
+
+  console.warn(JSON.stringify({
+    event: "index-job-fresh-manifest-graph-missing",
+    owner, repo, run_id: runId,
+    active_graph_version: activeGraphVersion,
+  }))
+  return false
 }
 
 async function handleShardJob(

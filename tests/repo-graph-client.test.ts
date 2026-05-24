@@ -11,6 +11,7 @@ import {
   blastRadiusFor,
   writeFileGraph,
   commitGraph,
+  debugActiveGraphVersion,
   deleteGraph,
 } from "../src/lib/repo-graph-client"
 import { indexNamespace } from "../src/lib/repo-index-manifest"
@@ -144,6 +145,20 @@ describe("commitGraph delegation", () => {
     const rpcCall = calls.find((c) => c.method === "commitGraphVersion")
     expect(rpcCall).toBeDefined()
     expect(rpcCall!.args[0]).toBe("run42")
+  })
+})
+
+describe("debugActiveGraphVersion delegation", () => {
+  it("calls stub.debugActiveVersion()", async () => {
+    const owner = "acme"
+    const repo = "widget"
+    const { env, calls } = makeEnv(owner, repo)
+
+    await debugActiveGraphVersion(env, owner, repo)
+
+    const rpcCalls = calls.filter((c) => c.method === "debugActiveVersion")
+    expect(rpcCalls).toHaveLength(1)
+    expect(rpcCalls[0]?.args).toEqual([])
   })
 })
 

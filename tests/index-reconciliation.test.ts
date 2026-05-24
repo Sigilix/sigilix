@@ -23,17 +23,22 @@ vi.mock("../src/lib/repo-index-manifest", async () => {
   )
   return { ...actual, readRepoIndexManifest: vi.fn() }
 })
+vi.mock("../src/lib/repo-graph-client", () => ({
+  debugActiveGraphVersion: vi.fn(),
+}))
 
 import { runIndexReconciliation } from "../src/lib/index-reconciliation"
 import { listAppInstallationIds, listInstallationRepoFullNames } from "../src/lib/github-app"
 import { enqueueIndexJobsForRepos } from "../src/lib/index-producer"
 import { readRepoIndexManifest } from "../src/lib/repo-index-manifest"
+import { debugActiveGraphVersion } from "../src/lib/repo-graph-client"
 import type { Env } from "../src/index"
 
 const mockListInstalls = vi.mocked(listAppInstallationIds)
 const mockListRepos = vi.mocked(listInstallationRepoFullNames)
 const mockEnqueue = vi.mocked(enqueueIndexJobsForRepos)
 const mockReadManifest = vi.mocked(readRepoIndexManifest)
+const mockDebugActiveGraphVersion = vi.mocked(debugActiveGraphVersion)
 
 const env = { GITHUB_APP_ID: "1", GITHUB_PRIVATE_KEY: "k", OPENCLAW_STATE: {} } as unknown as Env
 const ok = <T>(items: T[]) => ({ items, complete: true })
@@ -53,6 +58,7 @@ beforeEach(() => {
   mockListRepos.mockReset()
   mockEnqueue.mockReset()
   mockReadManifest.mockReset()
+  mockDebugActiveGraphVersion.mockReset()
 })
 
 describe("runIndexReconciliation", () => {
@@ -80,6 +86,8 @@ describe("runIndexReconciliation", () => {
       installations: 1,
       reposChecked: 3,
       reposMissingManifest: 1,
+      reposMissingGraph: 0,
+      graphReadErrors: 0,
       enqueued: 1,
       sensitiveSkipped: 0,
       perRepoFailed: 0,
@@ -125,6 +133,75 @@ describe("runIndexReconciliation", () => {
     const out = await runIndexReconciliation(env, { dryRun: true })
 
     expect(out).toMatchObject({ reposChecked: 2, reposMissingManifest: 1, enqueued: 0, dryRun: true })
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("enqueues repos whose manifest is fresh but graph active version is missing (SIG-155)", async () => {
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a", "o/b"]))
+    mockReadManifest.mockResolvedValueOnce(okManifest()).mockResolvedValueOnce(okManifest())
+    mockDebugActiveGraphVersion.mockResolvedValueOnce("run").mockResolvedValueOnce(null)
+    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+
+    const out = await runIndexReconciliation(
+      { ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env,
+      { dryRun: false },
+    )
+
+    expect(out).toMatchObject({
+      reposChecked: 2,
+      reposMissingManifest: 0,
+      reposMissingGraph: 1,
+      enqueued: 1,
+    })
+    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
+      repositories: [{ full_name: "o/b" }],
+    }))
+  })
+
+  it("enqueues repos whose manifest is fresh but graph active version is stale", async () => {
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(okManifest())
+    mockDebugActiveGraphVersion.mockResolvedValueOnce("older-run")
+    mockEnqueue.mockResolvedValue({ attempted: 1, succeeded: 1, perRepoFailed: 0, sensitiveSkipped: 0 })
+
+    const out = await runIndexReconciliation(
+      { ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env,
+      { dryRun: false },
+    )
+
+    expect(out.reposMissingGraph).toBe(1)
+    expect(mockEnqueue).toHaveBeenCalledWith(expect.objectContaining({
+      repositories: [{ full_name: "o/a" }],
+    }))
+  })
+
+  it("treats graph active-version read errors as fail-soft and does not enqueue", async () => {
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(okManifest())
+    mockDebugActiveGraphVersion.mockRejectedValueOnce(new Error("DO transient"))
+
+    const out = await runIndexReconciliation(
+      { ...env, OPENCLAW_GRAPH_INDEX: "shadow" } as Env,
+      { dryRun: false },
+    )
+
+    expect(out.reposMissingGraph).toBe(0)
+    expect(out.graphReadErrors).toBe(1)
+    expect(mockEnqueue).not.toHaveBeenCalled()
+  })
+
+  it("does not read graph state when graph indexing is off", async () => {
+    mockListInstalls.mockResolvedValue(ok([111]))
+    mockListRepos.mockResolvedValueOnce(ok(["o/a"]))
+    mockReadManifest.mockResolvedValueOnce(okManifest())
+
+    const out = await runIndexReconciliation(env, { dryRun: false })
+
+    expect(out.reposMissingGraph).toBe(0)
+    expect(mockDebugActiveGraphVersion).not.toHaveBeenCalled()
     expect(mockEnqueue).not.toHaveBeenCalled()
   })
 

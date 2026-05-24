@@ -17,7 +17,7 @@ import {
   stripMentionFromBody,
 } from "./mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
-import { indexNamespace } from "./repo-index-manifest"
+import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
 import { MENTION_REPLY_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
@@ -46,20 +46,64 @@ const LIMITS = {
 
 export interface LinearAgentRepoScope {
   repo: string | null
+  mappedRepo: string | null
   availableRepos: string[]
+  status:
+    | "unmapped"
+    | "mapped_indexed"
+    | "mapped_not_indexed"
+    | "mapped_default_not_indexed"
+}
+
+export function linearRetrievalTeamKey(
+  teamRepo: { owner: string; repo: string } | null,
+): string | null {
+  return teamRepo ? indexNamespace(teamRepo.owner, teamRepo.repo) : null
 }
 
 export async function resolveLinearAgentRepoScope(
   env: { OPENCLAW_STATE: KVNamespace },
   teamRepo: { owner: string; repo: string } | null,
 ): Promise<LinearAgentRepoScope> {
-  if (!teamRepo) return { repo: null, availableRepos: [] }
-  const availableRepos = (await listIndexedRepos(env, { owner: teamRepo.owner }))
-    .sort((a, b) => a.localeCompare(b))
+  if (!teamRepo) {
+    return { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" }
+  }
   const defaultRepo = indexNamespace(teamRepo.owner, teamRepo.repo)
+  const available = new Set<string>()
+  try {
+    for (const repo of await listIndexedRepos(env, { owner: teamRepo.owner })) {
+      available.add(repo)
+    }
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "linear-agent-repo-scope-list-failed",
+      owner: teamRepo.owner,
+      repo: teamRepo.repo,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+  try {
+    const exactManifest = await readRepoIndexManifest(env as Env, teamRepo.owner, teamRepo.repo)
+    if (exactManifest.kind === "ok") available.add(defaultRepo)
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "linear-agent-repo-scope-manifest-read-failed",
+      owner: teamRepo.owner,
+      repo: teamRepo.repo,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+  const availableRepos = Array.from(available).sort((a, b) => a.localeCompare(b))
+  const defaultIndexed = available.has(defaultRepo)
   return {
-    repo: availableRepos.includes(defaultRepo) ? defaultRepo : null,
+    repo: defaultIndexed ? defaultRepo : null,
+    mappedRepo: defaultRepo,
     availableRepos,
+    status: defaultIndexed
+      ? "mapped_indexed"
+      : availableRepos.length > 0
+        ? "mapped_default_not_indexed"
+        : "mapped_not_indexed",
   }
 }
 
@@ -129,6 +173,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
   // objects so the agent can scope all indexed namespaces to the
   // requesting tenant owner before advertising or enforcing them.
   const teamRepo = parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
+  const repoScope = await resolveLinearAgentRepoScope(env, teamRepo)
   const inferRepo = (): { owner: string; repo: string } | null => teamRepo
   const prRefs = extractPullRequestRefs(fullQuestion, inferRepo)
   const { contexts: linkedPrs, failures: linkedPrFailures } = await fetchLinkedPrs(prRefs, env)
@@ -140,12 +185,15 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
 
   // Codebase retrieval scoped to the issue's team. Soft-fails to empty.
   const retrievalText = `${data.issue.title}\n\n${question}`
-  const chunks = await retrieveChunks({
-    text: retrievalText,
-    teamKey,
-    env,
-  })
-  log("retrieval-done", { chunks: chunks.length })
+  const retrievalTeamKey = linearRetrievalTeamKey(teamRepo)
+  const chunks = retrievalTeamKey
+    ? await retrieveChunks({
+      text: retrievalText,
+      teamKey: retrievalTeamKey,
+      env,
+    })
+    : []
+  log("retrieval-done", { chunks: chunks.length, namespace: retrievalTeamKey })
 
   const askerHandle = data.user?.displayName ?? data.user?.name ?? "there"
   const prompt = buildPrompt({
@@ -156,6 +204,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     question,
     recentComments: data.issue.comments.nodes,
     sourceCommentId: data.id,
+    codebaseStatus: renderCodebaseRetrievalStatus(repoScope, chunks.length),
     codebaseChunks: formatChunksForPrompt(chunks),
     linkedPrs,
     linkedPrFailures,
@@ -173,7 +222,6 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     // ARC-239: `listIndexedRepos` is now KV-backed (reads
     // `repo-index-manifest:*` keys). The agent loop already runs in
     // an async context so the new `await` adds no surface cost.
-    const { availableRepos, repo } = await resolveLinearAgentRepoScope(env, teamRepo)
     const loopResult = await runAgentLoop({
       model,
       apiKey: env.OLLAMA_API_KEY,
@@ -193,13 +241,15 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         // missing it can't ground retrieval at all.
         // SIG-132: the namespace is `<owner>/<repo>` lowercased, matching
         // the `availableRepos` entries (which are KV-key suffixes).
-        repo,
+        repo: repoScope.repo,
+        mappedRepo: repoScope.mappedRepo,
+        repoStatus: repoScope.status,
         // The full set of indexed namespaces the agent is allowed to
         // query. The team's primary repo (above) is the default, but
         // the model picks a different namespace from this list when the
         // issue is clearly about another repo (e.g. ARC-team issue
         // about the website).
-        availableRepos,
+        availableRepos: repoScope.availableRepos,
       }),
       tools: createAgentTools({
         env,
@@ -208,7 +258,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         // retrieve_codebase so a hallucinated namespace gets a
         // recoverable error with the valid choices, not a silent
         // empty-result.
-        allowedRepos: availableRepos,
+        allowedRepos: repoScope.availableRepos,
         // Linear surface — no GitHub auth/repo identity, so no fetch_pr/read_file_lines.
       }),
       finalAnswerSchema: MENTION_REPLY_SCHEMA as unknown as Record<string, unknown>,
@@ -288,6 +338,7 @@ interface PromptCtx {
     user: { name: string | null; displayName: string | null } | null
   }>
   sourceCommentId: string
+  codebaseStatus: string
   codebaseChunks: string | null
   linkedPrs: PrContext[]
   linkedPrFailures: LinkedPrFailure[]
@@ -326,6 +377,8 @@ function buildPrompt(ctx: PromptCtx): string {
   if (recent) {
     sections.push("[RECENT THREAD CONTEXT — chronological]", recent, "")
   }
+
+  sections.push("[CODEBASE RETRIEVAL STATUS]", ctx.codebaseStatus, "")
 
   // Linked PR context goes BEFORE retrieval chunks so the model treats
   // it as ground truth for the specific PRs being asked about. Every
@@ -399,6 +452,28 @@ export function renderPrUnavailable(f: LinkedPrFailure): string {
   return `<pr_unavailable ${attrs} />`
 }
 
+export function renderCodebaseRetrievalStatus(
+  scope: LinearAgentRepoScope,
+  chunkCount: number,
+): string {
+  if (scope.status === "unmapped") {
+    return "No GitHub repo mapping is configured for this Linear team. Repo-context answers require an explicit team-to-repo mapping."
+  }
+  if (scope.status === "mapped_not_indexed" && scope.mappedRepo) {
+    return `The Linear team maps to '${scope.mappedRepo}', but that repo does not have an index manifest yet.`
+  }
+  if (scope.status === "mapped_default_not_indexed" && scope.mappedRepo) {
+    return `The Linear team maps to '${scope.mappedRepo}', but that default repo is not indexed yet. Indexed repos available for this owner: ${scope.availableRepos.map((r) => `'${r}'`).join(", ")}.`
+  }
+  if (scope.repo && chunkCount === 0) {
+    return `Repo '${scope.repo}' is indexed, but retrieval returned no relevant chunks for this question.`
+  }
+  if (scope.repo) {
+    return `Retrieved ${chunkCount} relevant codebase chunk(s) from '${scope.repo}'.`
+  }
+  return "No codebase retrieval namespace was available for this Linear mention."
+}
+
 interface AgentInitialMessageCtx {
   issueIdentifier: string
   issueTitle: string
@@ -406,7 +481,9 @@ interface AgentInitialMessageCtx {
   askerHandle: string
   question: string
   repo: string | null
+  mappedRepo: string | null
   availableRepos: string[]
+  repoStatus: LinearAgentRepoScope["status"]
 }
 
 /**
@@ -432,16 +509,22 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
     repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo (e.g. the asker references a different repo by name, or links to a PR/issue that lives in another repo). Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.repo) {
     repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
+  } else if (ctx.mappedRepo && universe.length > 0) {
+    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that default repo is not indexed yet. You may call retrieve_codebase only for indexed namespaces: ${universeText}. Pick one only if it clearly matches the issue's subject; if the question is about '${ctx.mappedRepo}', explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
+  } else if (ctx.mappedRepo) {
+    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that repo does not have an index manifest yet. Do not call retrieve_codebase; explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
   } else if (universe.length > 0) {
     repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. Pick the one that matches the issue's subject. If none clearly fits, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt.`
   } else {
-    repoLine = "No indexed repositories are configured for this Linear team, so do not call retrieve_codebase. Answer from the issue and thread context only; if that is insufficient, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt."
+    repoLine = "No GitHub repo mapping is configured for this Linear team, so do not call retrieve_codebase. Answer from the issue and thread context only; if repo context is required, say the Linear team needs a GitHub repo mapping before code retrieval can run. Final answer is the JSON shape defined by the system prompt."
   }
   const lines: string[] = [
     "[SURFACE] Linear issue comment",
     `[ISSUE] ${ctx.issueIdentifier} — ${ctx.issueTitle}`,
     `[INDEXED REPOS] ${universeText}`,
-    `[DEFAULT REPO] ${ctx.repo ?? "(none configured)"}`,
+    `[MAPPED REPO] ${ctx.mappedRepo ?? "(none configured)"}`,
+    `[DEFAULT REPO] ${ctx.repo ?? (ctx.mappedRepo ? `(not indexed: ${ctx.mappedRepo})` : "(none configured)")}`,
+    `[REPO STATUS] ${ctx.repoStatus}`,
     "[ISSUE BODY]",
     ctx.issueBody.length > 0 ? ctx.issueBody : "(no description)",
     "",

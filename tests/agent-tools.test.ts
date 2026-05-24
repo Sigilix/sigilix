@@ -137,9 +137,11 @@ describe("retrieve_codebase", () => {
       { query: "x", repo: "rubberfit" },
       new AbortController().signal,
       new Map(),
-    )) as { ok: boolean; count: number }
+    )) as { ok: boolean; count: number; message?: string }
     expect(result.ok).toBe(true)
     expect(result.count).toBe(0)
+    expect(result.message).toContain("Retrieval returned no chunks for repo 'rubberfit'")
+    expect(result.message).toContain("retrieval may be temporarily unavailable")
   })
 
   it("returns recoverable error on missing args (does not throw)", async () => {
@@ -276,7 +278,7 @@ describe("retrieve_codebase", () => {
       new Map(),
     )) as { ok: boolean; error: string; allowedRepos: string[] }
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/not in the indexed namespace set/)
+    expect(result.error).toBe("No indexed repositories are available in the current retrieval scope.")
     expect(result.allowedRepos).toEqual([])
     expect(mockRetrieveChunks).not.toHaveBeenCalled()
   })

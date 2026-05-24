@@ -54,7 +54,8 @@ export async function resolveLinearAgentRepoScope(
   teamRepo: { owner: string; repo: string } | null,
 ): Promise<LinearAgentRepoScope> {
   if (!teamRepo) return { repo: null, availableRepos: [] }
-  const availableRepos = await listIndexedRepos(env, { owner: teamRepo.owner })
+  const availableRepos = (await listIndexedRepos(env, { owner: teamRepo.owner }))
+    .sort((a, b) => a.localeCompare(b))
   const defaultRepo = indexNamespace(teamRepo.owner, teamRepo.repo)
   return {
     repo: availableRepos.includes(defaultRepo) ? defaultRepo : null,

@@ -79,7 +79,7 @@ export type ReviewDismissResult =
   | { kind: "dismiss-failed"; reviewId: number; error: string }
 
 export type ReviewDismissDedupeRecord =
-  | { kind: typeof DISMISS_IN_PROGRESS_KIND }
+  | { kind: typeof DISMISS_IN_PROGRESS_KIND; token?: string; createdAt?: number }
   | { kind: typeof DISMISS_DEDUPE_KIND; result: ReviewDismissResult; replyCommentId?: number }
 
 interface GithubMentionVerdict {
@@ -198,22 +198,35 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   }
 
   if (explicit && isReviewDismissRequest(question)) {
-    let dismiss: ReviewDismissResult
+    let dismiss: ReviewDismissResult | null = null
     if (pendingDismissReply) {
       dismiss = pendingDismissReply.result
     } else {
-      await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissInProgressRecord(), {
-        expirationTtl: DISMISS_IN_PROGRESS_TTL,
-      })
-      dismiss = await dismissLatestBlockingSigilixReview({
-        client,
-        owner,
-        repo,
-        prNumber,
-      })
-      await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissDedupeRecord(dismiss), {
-        expirationTtl: MENTION_DEDUPE_TTL,
-      })
+      const lock = await acquireReviewDismissInProgressLock(env.OPENCLAW_STATE, kvKey)
+      if (!lock.acquired) {
+        const record = lock.record
+        if (record?.kind === DISMISS_DEDUPE_KIND && typeof record.replyCommentId !== "number") {
+          dismiss = record.result
+        } else {
+          since("dismiss-lock-not-acquired", { storedKind: record?.kind ?? null })
+          return
+        }
+      } else {
+        try {
+          dismiss = await dismissLatestBlockingSigilixReview({
+            client,
+            owner,
+            repo,
+            prNumber,
+          })
+          await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissDedupeRecord(dismiss), {
+            expirationTtl: MENTION_DEDUPE_TTL,
+          })
+        } catch (err) {
+          await releaseReviewDismissInProgressLock(env.OPENCLAW_STATE, kvKey, lock.token)
+          throw err
+        }
+      }
     }
     const newId = await postReply({
       client,
@@ -225,9 +238,21 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
       body: formatReviewDismissReply(dismiss),
     })
     since("dismiss-reply-posted", { newId, result: dismiss.kind })
-    await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissDedupeRecord(dismiss, newId), {
-      expirationTtl: MENTION_DEDUPE_TTL,
-    })
+    await env.OPENCLAW_STATE
+      .put(kvKey, serializeReviewDismissDedupeRecord(dismiss, newId), {
+        expirationTtl: MENTION_DEDUPE_TTL,
+      })
+      .catch((err: unknown) => {
+        console.warn("[gh-mention] dismiss reply-id persistence failed", {
+          owner,
+          repo,
+          prNumber,
+          surface,
+          commentId,
+          replyCommentId: newId,
+          err: err instanceof Error ? err.message : String(err),
+        })
+      })
     return
   }
 
@@ -677,8 +702,11 @@ export function formatReply(verdict: GithubMentionVerdict): string {
   return `${REPLY_MARKER}\n${verdict.answer}`
 }
 
-export function serializeReviewDismissInProgressRecord(): string {
-  return JSON.stringify({ kind: DISMISS_IN_PROGRESS_KIND } satisfies ReviewDismissDedupeRecord)
+export function serializeReviewDismissInProgressRecord(token?: string): string {
+  const record: ReviewDismissDedupeRecord = token
+    ? { kind: DISMISS_IN_PROGRESS_KIND, token, createdAt: Date.now() }
+    : { kind: DISMISS_IN_PROGRESS_KIND }
+  return JSON.stringify(record)
 }
 
 export function serializeReviewDismissDedupeRecord(
@@ -702,11 +730,19 @@ export function parseReviewDismissDedupeRecord(value: string | null): ReviewDism
   if (typeof raw !== "object" || raw === null) return null
   const record = raw as {
     kind?: unknown
+    token?: unknown
+    createdAt?: unknown
     result?: unknown
     replyCommentId?: unknown
   }
   if (record.kind === DISMISS_IN_PROGRESS_KIND) {
-    return { kind: DISMISS_IN_PROGRESS_KIND }
+    return {
+      kind: DISMISS_IN_PROGRESS_KIND,
+      ...(typeof record.token === "string" && record.token.length > 0
+        ? { token: record.token }
+        : {}),
+      ...(typeof record.createdAt === "number" ? { createdAt: record.createdAt } : {}),
+    }
   }
   if (record.kind !== DISMISS_DEDUPE_KIND || !isReviewDismissResult(record.result)) {
     return null
@@ -715,6 +751,60 @@ export function parseReviewDismissDedupeRecord(value: string | null): ReviewDism
     return { kind: DISMISS_DEDUPE_KIND, result: record.result, replyCommentId: record.replyCommentId }
   }
   return { kind: DISMISS_DEDUPE_KIND, result: record.result }
+}
+
+type ReviewDismissLock =
+  | { acquired: true; token: string }
+  | { acquired: false; record: ReviewDismissDedupeRecord | null }
+
+export async function acquireReviewDismissInProgressLock(
+  kv: KVNamespace,
+  key: string,
+): Promise<ReviewDismissLock> {
+  const before = parseReviewDismissDedupeRecord(await kv.get(key))
+  if (before) return { acquired: false, record: before }
+
+  const token = createReviewDismissLockToken()
+  await kv.put(key, serializeReviewDismissInProgressRecord(token), {
+    expirationTtl: DISMISS_IN_PROGRESS_TTL,
+  })
+
+  // Workers KV has no CAS primitive. The token readback gives us a
+  // create-if-missing single-flight guard: only the request that can see
+  // its own sentinel is allowed to perform the GitHub dismissal.
+  const after = parseReviewDismissDedupeRecord(await kv.get(key))
+  if (after?.kind === DISMISS_IN_PROGRESS_KIND && after.token === token) {
+    return { acquired: true, token }
+  }
+  if (after?.kind !== DISMISS_DEDUPE_KIND) {
+    await releaseReviewDismissInProgressLock(kv, key, token)
+  }
+  return { acquired: false, record: after }
+}
+
+export async function releaseReviewDismissInProgressLock(
+  kv: KVNamespace,
+  key: string,
+  token: string,
+): Promise<void> {
+  try {
+    const current = parseReviewDismissDedupeRecord(await kv.get(key))
+    if (current?.kind === DISMISS_IN_PROGRESS_KIND && current.token === token) {
+      await kv.delete(key)
+    }
+  } catch (err) {
+    console.warn("[gh-mention] dismiss lock cleanup failed", {
+      key,
+      err: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+function createReviewDismissLockToken(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
 function isReviewDismissResult(value: unknown): value is ReviewDismissResult {

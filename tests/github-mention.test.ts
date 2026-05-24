@@ -5,12 +5,14 @@
 
 import { describe, expect, it, vi } from "vitest"
 import {
+  acquireReviewDismissInProgressLock,
   dismissLatestBlockingSigilixReview,
   formatReviewDismissReply,
   formatReply,
   isReviewDismissRequest,
   parseGithubMentionResponse,
   parseReviewDismissDedupeRecord,
+  releaseReviewDismissInProgressLock,
   serializeReviewDismissDedupeRecord,
   serializeReviewDismissInProgressRecord,
 } from "../src/lib/github-mention"
@@ -106,6 +108,17 @@ describe("review dismiss dedupe records", () => {
     })
   })
 
+  it("round-trips a tokenized in-progress lock record", () => {
+    const parsed = parseReviewDismissDedupeRecord(
+      serializeReviewDismissInProgressRecord("lock-token-1")
+    )
+    expect(parsed).toMatchObject({
+      kind: "review-dismiss-in-progress",
+      token: "lock-token-1",
+    })
+    expect(typeof parsed?.createdAt).toBe("number")
+  })
+
   it("round-trips result records before and after a reply is posted", () => {
     const result = { kind: "dismissed" as const, reviewId: 10 }
 
@@ -127,6 +140,56 @@ describe("review dismiss dedupe records", () => {
       kind: "review-dismiss-result",
       result: { kind: "dismissed" },
     }))).toBeNull()
+  })
+})
+
+describe("review dismiss in-progress lock", () => {
+  function makeKv(initial?: string): { kv: KVNamespace; store: Map<string, string> } {
+    const store = new Map<string, string>()
+    if (initial) store.set("gh-mention:1", initial)
+    return {
+      store,
+      kv: {
+        get: vi.fn(async (key: string) => store.get(key) ?? null),
+        put: vi.fn(async (key: string, value: string) => { store.set(key, value) }),
+        delete: vi.fn(async (key: string) => { store.delete(key) }),
+      } as unknown as KVNamespace,
+    }
+  }
+
+  it("acquires an empty key and stores a tokenized sentinel", async () => {
+    const { kv, store } = makeKv()
+
+    const lock = await acquireReviewDismissInProgressLock(kv, "gh-mention:1")
+
+    expect(lock.acquired).toBe(true)
+    if (!lock.acquired) throw new Error("expected lock")
+    expect(parseReviewDismissDedupeRecord(store.get("gh-mention:1") ?? null)).toMatchObject({
+      kind: "review-dismiss-in-progress",
+      token: lock.token,
+    })
+  })
+
+  it("does not acquire when a terminal result already exists", async () => {
+    const result = { kind: "dismissed" as const, reviewId: 99 }
+    const { kv } = makeKv(serializeReviewDismissDedupeRecord(result))
+
+    const lock = await acquireReviewDismissInProgressLock(kv, "gh-mention:1")
+
+    expect(lock).toEqual({
+      acquired: false,
+      record: { kind: "review-dismiss-result", result },
+    })
+  })
+
+  it("clears only the matching in-progress sentinel", async () => {
+    const { kv, store } = makeKv(serializeReviewDismissInProgressRecord("ours"))
+
+    await releaseReviewDismissInProgressLock(kv, "gh-mention:1", "theirs")
+    expect(store.has("gh-mention:1")).toBe(true)
+
+    await releaseReviewDismissInProgressLock(kv, "gh-mention:1", "ours")
+    expect(store.has("gh-mention:1")).toBe(false)
   })
 })
 

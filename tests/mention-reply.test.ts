@@ -201,10 +201,7 @@ describe("resolveLinearAgentRepoScope", () => {
       repo: "sigilix",
     })
 
-    expect({
-      repo: scope.repo,
-      availableRepos: scope.availableRepos.slice().sort(),
-    }).toEqual({
+    expect(scope).toEqual({
       repo: "arc-and-anchor/sigilix",
       availableRepos: [
         "arc-and-anchor/rubberfit",

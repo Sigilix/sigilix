@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest"
 import { runAstRules } from "../src/lib/ast-rules/runner"
 import type { ReviewableMap } from "../src/lib/diff-positions"
-import { assessApprovalReadiness } from "../src/lib/approval-readiness"
+import {
+  assessApprovalReadiness,
+  buildApprovalReadinessSummary,
+} from "../src/lib/approval-readiness"
 import {
   buildReviewSubmission,
   chooseReviewEvent,
@@ -186,8 +189,12 @@ describe("PR review engine acceptance flow (SIG-205)", () => {
       }],
       provenance: { findings: [], dropped: [] },
     })
+    const postGateVerdict: PrReviewVerdict = {
+      ...cleanSynthVerdict,
+      summary: buildApprovalReadinessSummary(readiness, cleanSynthVerdict.summary),
+    }
     const submission = buildReviewSubmission({
-      verdict: cleanSynthVerdict,
+      verdict: postGateVerdict,
       prAuthor: "alice",
       headSha: "a".repeat(40),
       unanchored: readiness.bodyOnlyFindings,
@@ -199,6 +206,8 @@ describe("PR review engine acceptance flow (SIG-205)", () => {
     expect(submission.event).toBe("REQUEST_CHANGES")
     expect(submission.comments).toBeUndefined()
     expect(submission.body).not.toBe("<!-- sigilix:pr-review -->\n")
+    expect(submission.body).not.toContain("No issues found.")
+    expect(submission.body).toContain("Approval withheld")
     expect(submission.body).toContain("Approval validation lost logic finding")
     expect(submission.body).toContain("duplicate `/sigilix improve` anchor drops preserved suggestion")
     expect(submission.body).toContain("kept, merged, softened, or explicitly dropped")

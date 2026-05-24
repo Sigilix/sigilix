@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   assessApprovalReadiness,
+  buildApprovalReadinessSummary,
   type ApprovalReadinessSourceFinding,
 } from "../src/lib/approval-readiness"
 import type { PrReviewFinding } from "../src/lib/triage-pr-review"
@@ -55,6 +56,18 @@ describe("assessApprovalReadiness (SIG-205)", () => {
 
     expect(out.event).toBe("APPROVE")
     expect(out.blockers).toEqual([])
+  })
+
+  it("ignores high-confidence source findings with empty IDs", () => {
+    const out = assessApprovalReadiness({
+      intendedEvent: "APPROVE",
+      sourceFindings: [{ ...source, id: "" }],
+      provenance: { findings: [], dropped: [] },
+    })
+
+    expect(out.event).toBe("APPROVE")
+    expect(out.blockers).toEqual([])
+    expect(out.bodyOnlyFindings).toEqual([])
   })
 
   it("approves when the synth kept or merged the source finding", () => {
@@ -122,5 +135,23 @@ describe("assessApprovalReadiness (SIG-205)", () => {
     expect(out.bodyOnlyFindings[0]?.scope).toBe("pr")
     expect(out.bodyOnlyFindings[0]?.headline).toContain("Approval validation lost logic finding")
     expect(out.bodyOnlyFindings[0]?.body).toContain("kept, merged, softened, or explicitly dropped")
+  })
+
+  it("replaces stale clean summaries when approval readiness blocks", () => {
+    const cleanSummary = "No issues found."
+    const clean = assessApprovalReadiness({
+      intendedEvent: "APPROVE",
+      sourceFindings: [],
+      provenance: { findings: [], dropped: [] },
+    })
+    const blocked = assessApprovalReadiness({
+      intendedEvent: "APPROVE",
+      sourceFindings: [source],
+      provenance: { findings: [], dropped: [] },
+    })
+
+    expect(buildApprovalReadinessSummary(clean, cleanSummary)).toBe(cleanSummary)
+    expect(buildApprovalReadinessSummary(blocked, cleanSummary)).toContain("Approval withheld")
+    expect(buildApprovalReadinessSummary(blocked, cleanSummary)).not.toContain(cleanSummary)
   })
 })

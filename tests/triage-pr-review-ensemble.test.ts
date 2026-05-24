@@ -16,6 +16,7 @@ import {
   buildSynthRetryMessage,
   checkQuorum,
   classifySynthOutcome,
+  collectApprovalReadinessSourceFindings,
   computeConsensusRanking,
   computeDegradedCoverage,
   computeFindingDelta,
@@ -78,6 +79,38 @@ describe("assignStableFindingIds", () => {
       ...baseFinding,
       id: "security-0",
     })
+  })
+})
+
+describe("collectApprovalReadinessSourceFindings", () => {
+  it("excludes source findings that match active withdrawal records", () => {
+    const withdrawn = { ...baseFinding, id: "logic-0" }
+    const kept = {
+      ...baseFinding,
+      id: "logic-1",
+      line: 80,
+      body: "A distinct high-confidence finding that was never withdrawn.",
+    }
+    const out = collectApprovalReadinessSourceFindings(
+      [{
+        role: "logic",
+        verdict: {
+          ...baseVerdict,
+          findings: [withdrawn, kept],
+        },
+      }],
+      [{
+        path: withdrawn.path,
+        line: withdrawn.line,
+        bodySnapshot: withdrawn.body,
+        withdrawnAt: 0,
+        withdrawnByCommentId: 123,
+        prHeadSha: "a".repeat(40),
+        reason: "mention-reply-accepted",
+      }],
+    )
+
+    expect(out.map((source) => source.id)).toEqual(["logic-1"])
   })
 })
 

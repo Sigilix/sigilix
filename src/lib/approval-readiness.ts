@@ -70,6 +70,7 @@ export function assessApprovalReadiness(args: {
   const accountedSourceIds = collectAccountedSourceIds(args.provenance)
   const blockers: ApprovalReadinessBlocker[] = []
   for (const source of args.sourceFindings) {
+    if (source.id.length === 0) continue
     const confidence = resolveSourceConfidence(source)
     if (source.finding.score < BLOCKING_SCORE) continue
     if (confidence < BLOCKING_CONFIDENCE) continue
@@ -102,6 +103,18 @@ export function assessApprovalReadiness(args: {
       renderApprovalBlockerFinding(blocker),
     ),
   }
+}
+
+export function buildApprovalReadinessSummary(
+  decision: ApprovalReadinessDecision,
+  fallbackSummary: string,
+): string {
+  if (decision.blockers.length === 0) return fallbackSummary
+  const noun = decision.blockers.length === 1 ? "finding was" : "findings were"
+  return [
+    `Approval withheld because ${decision.blockers.length} high-confidence Sigilix specialist ${noun} not reconciled by the synthesizer.`,
+    "Review the approval validation blocker below before merging.",
+  ].join(" ")
 }
 
 function collectAccountedSourceIds(

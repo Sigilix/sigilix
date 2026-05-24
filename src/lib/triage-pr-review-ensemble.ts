@@ -64,7 +64,11 @@ import {
 import { embedText } from "./embeddings"
 import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
 import { mapWithConcurrency } from "./bounded-concurrency"
-import { loadWithdrawals, filterWithdrawnFindings } from "./review-withdrawal-store"
+import {
+  loadWithdrawals,
+  filterWithdrawnFindings,
+  type WithdrawalRecord,
+} from "./review-withdrawal-store"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -81,7 +85,11 @@ import {
   computeShadowGateDivergence,
   getProposedChangeScopeMismatch,
 } from "./triage-pr-review"
-import { assessApprovalReadiness } from "./approval-readiness"
+import {
+  assessApprovalReadiness,
+  buildApprovalReadinessSummary,
+  type ApprovalReadinessSourceFinding,
+} from "./approval-readiness"
 import { readGateMode, readGateThreshold } from "./gate-config"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
 import {
@@ -3441,16 +3449,10 @@ export async function handlePrReviewEnsemble(
       ...renderableVerdict.findings,
       ...renderableUnanchored,
     ])
-    const sourceFindingsForApproval = succeeded.flatMap((v) => {
-      const verdict = v.verdict
-      if (!verdict) return []
-      return verdict.findings.map((finding) => ({
-        role: v.role,
-        id: finding.id,
-        finding,
-        verdictConfidence: verdict.confidence,
-      }))
-    })
+    const sourceFindingsForApproval = collectApprovalReadinessSourceFindings(
+      succeeded,
+      withdrawals,
+    )
     const approvalReadiness = assessApprovalReadiness({
       intendedEvent,
       sourceFindings: sourceFindingsForApproval,
@@ -3461,6 +3463,10 @@ export async function handlePrReviewEnsemble(
       ...approvalReadiness.bodyOnlyFindings,
     ]
     const effectiveEvent = approvalReadiness.event
+    const submissionVerdict: PrReviewVerdict = {
+      ...renderableVerdict,
+      summary: buildApprovalReadinessSummary(approvalReadiness, renderableVerdict.summary),
+    }
     if (approvalReadiness.blockers.length > 0) {
       console.warn(JSON.stringify({
         event: "pr-review-approval-readiness-blocked",
@@ -3502,7 +3508,7 @@ export async function handlePrReviewEnsemble(
     if (gateMode !== "off") {
       // Snapshot the inputs at the (sync) call site so the detached
       // task doesn't race with later mutation of `renderableVerdict`.
-      const snapshotRenderable: PrReviewFinding[] = [...renderableVerdict.findings]
+      const snapshotRenderable: PrReviewFinding[] = [...submissionVerdict.findings]
       const snapshotUnanchored: PrReviewFinding[] = [...renderableUnanchoredForSubmission]
       const snapshotProvenance = [...filteredConsensusProvenance]
       const snapshotLegacy = effectiveEvent
@@ -3553,7 +3559,7 @@ export async function handlePrReviewEnsemble(
       : undefined
 
     const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
-    for (const finding of renderableVerdict.findings) {
+    for (const finding of submissionVerdict.findings) {
       const mismatch = getProposedChangeScopeMismatch(finding)
       if (mismatch === null) continue
       console.log(JSON.stringify({
@@ -3574,7 +3580,7 @@ export async function handlePrReviewEnsemble(
     }
 
     const submission = buildReviewSubmission({
-      verdict: renderableVerdict,
+      verdict: submissionVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
       unanchored: renderableUnanchoredForSubmission,
@@ -3684,7 +3690,7 @@ export async function handlePrReviewEnsemble(
         // (the anchorless body-only renderer) so findings move into
         // the body and survive the channel switch.
         const fallbackCommentSubmission = buildFallbackSubmission({
-          verdict: renderableVerdict,
+          verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
           headSha,
@@ -3708,7 +3714,7 @@ export async function handlePrReviewEnsemble(
         })
         if (fallback.ok) {
           const findingsCount =
-            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
+            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           // SIG-89 note: comment-fallback paths intentionally do NOT
           // write a noop-merge diff hash. The surface is degraded
           // already (we couldn't post a formal review), and the next
@@ -3802,7 +3808,7 @@ export async function handlePrReviewEnsemble(
       // dispatcher so the Sigilix Check Run title can render
       // "Approved — no issues found" vs "N findings posted".
       const inlineFindings =
-        renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
+        submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
       return finalize(telemetry, env, "posted", cache, {
         event: effectiveEvent,
         findingsCount: inlineFindings,
@@ -3838,7 +3844,7 @@ export async function handlePrReviewEnsemble(
           err: submitErr instanceof Error ? submitErr.message : String(submitErr),
         }))
         const fallbackBodyOnly = buildFallbackSubmission({
-          verdict: renderableVerdict,
+          verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
           headSha,
@@ -3855,7 +3861,7 @@ export async function handlePrReviewEnsemble(
         })
         if (commentFallback.ok) {
           const findingsCount =
-            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
+            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           return finalize(telemetry, env, "posted", cache, {
             event: effectiveEvent,
             findingsCount,
@@ -3885,7 +3891,7 @@ export async function handlePrReviewEnsemble(
         // ARC-189: fallback path also receives the soften-applied
         // verdict. Markers are NOT emitted on the fallback (it's a
         // body-only review with no inline anchors) — see Task 2.5.
-        verdict: renderableVerdict,
+        verdict: submissionVerdict,
         unanchored: renderableUnanchoredForSubmission,
         prAuthor: meta.user?.login ?? null,
         headSha,
@@ -3927,7 +3933,7 @@ export async function handlePrReviewEnsemble(
         })
         if (commentFallback.ok) {
           const findingsCount =
-            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
+            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           return finalize(telemetry, env, "posted", cache, {
             event: effectiveEvent,
             findingsCount,
@@ -3971,7 +3977,7 @@ export async function handlePrReviewEnsemble(
         })
         if (commentFallback.ok) {
           const findingsCount =
-            renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
+            submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           return finalize(telemetry, env, "posted", cache, {
             event: effectiveEvent,
             findingsCount,
@@ -4036,7 +4042,7 @@ export async function handlePrReviewEnsemble(
       // ARC-276: same reviewMeta plumbing as the inline-anchored
       // path — the anchorless fallback is still a posted review.
       const fallbackFindings =
-        renderableVerdict.findings.length + renderableUnanchoredForSubmission.length
+        submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
       return finalize(telemetry, env, "posted", cache, {
         event: effectiveEvent,
         findingsCount: fallbackFindings,
@@ -5264,6 +5270,28 @@ interface CollectedVerdict {
 
 interface PrReviewVerdictWithIds extends PrReviewVerdict {
   findings: Array<PrReviewFinding & { id: string }>
+}
+
+export interface ApprovalReadinessSourceVerdict {
+  role: SpecialistRole
+  verdict: (PrReviewVerdict & { findings: Array<PrReviewFinding & { id: string }> }) | null
+}
+
+export function collectApprovalReadinessSourceFindings(
+  sourceVerdicts: ReadonlyArray<ApprovalReadinessSourceVerdict>,
+  withdrawals: ReadonlyArray<WithdrawalRecord>,
+): ApprovalReadinessSourceFinding[] {
+  return sourceVerdicts.flatMap((v) => {
+    const verdict = v.verdict
+    if (!verdict) return []
+    const { kept } = filterWithdrawnFindings(verdict.findings, withdrawals)
+    return kept.map((finding) => ({
+      role: v.role,
+      id: finding.id,
+      finding,
+      verdictConfidence: verdict.confidence,
+    }))
+  })
 }
 
 function collectSpecialistVerdicts(

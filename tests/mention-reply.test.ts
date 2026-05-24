@@ -265,4 +265,38 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
     expect(out).toContain("lowercased owner/repo namespace 'arc-and-anchor/sigilix'")
   })
+
+  it("describes multiple indexed repos and names the default namespace", () => {
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: "arc-and-anchor/sigilix",
+      availableRepos: [
+        "arc-and-anchor/rubberfit",
+        "arc-and-anchor/sigilix",
+      ],
+    })
+
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
+    expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
+    expect(out).toContain("pick a different namespace from the list")
+  })
+
+  it("describes indexed repos without a default and tells the agent to choose by subject", () => {
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: null,
+      availableRepos: [
+        "arc-and-anchor/rubberfit",
+        "arc-and-anchor/sigilix",
+      ],
+    })
+
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[DEFAULT REPO] (none configured)")
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
+    expect(out).toContain("Pick the one that matches the issue's subject")
+    expect(out).toContain("If none clearly fits")
+  })
 })

@@ -3,12 +3,58 @@
 // covered by integration smoke; these tests pin down the JSON-shape
 // tolerance and the marker discipline.
 
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+
+const {
+  getInstallationTokenMock,
+  listIssueCommentsMock,
+  listPullRequestReviewCommentsMock,
+  addReactionToIssueCommentMock,
+  addReactionToReviewCommentMock,
+  listPullRequestReviewsMock,
+  dismissReviewMock,
+  createIssueCommentMock,
+  replyToReviewCommentMock,
+} = vi.hoisted(() => ({
+  getInstallationTokenMock: vi.fn(async () => "fake-token"),
+  listIssueCommentsMock: vi.fn(),
+  listPullRequestReviewCommentsMock: vi.fn(),
+  addReactionToIssueCommentMock: vi.fn(),
+  addReactionToReviewCommentMock: vi.fn(),
+  listPullRequestReviewsMock: vi.fn(),
+  dismissReviewMock: vi.fn(),
+  createIssueCommentMock: vi.fn(),
+  replyToReviewCommentMock: vi.fn(),
+}))
+
+vi.mock("../src/lib/github-app", () => ({
+  getInstallationToken: getInstallationTokenMock,
+}))
+
+vi.mock("../src/lib/github", async (importActual) => {
+  const actual = await importActual<typeof import("../src/lib/github")>()
+  class FakeGitHubClient {
+    listIssueComments = listIssueCommentsMock
+    listPullRequestReviewComments = listPullRequestReviewCommentsMock
+    addReactionToIssueComment = addReactionToIssueCommentMock
+    addReactionToReviewComment = addReactionToReviewCommentMock
+    listPullRequestReviews = listPullRequestReviewsMock
+    dismissReview = dismissReviewMock
+    createIssueComment = createIssueCommentMock
+    replyToReviewComment = replyToReviewCommentMock
+  }
+  return {
+    ...actual,
+    GitHubClient: FakeGitHubClient,
+  }
+})
+
 import {
   acquireReviewDismissInProgressLock,
   dismissLatestBlockingSigilixReview,
   formatReviewDismissReply,
   formatReply,
+  handleGithubMention,
   isReviewDismissRequest,
   parseGithubMentionResponse,
   parseReviewDismissDedupeRecord,
@@ -20,6 +66,25 @@ import {
   LEGACY_REVIEW_BODY_MARKER,
   SIGILIX_REVIEW_BODY_MARKER,
 } from "../src/lib/dismiss-prior-reviews"
+import type { Env } from "../src/index"
+
+beforeEach(() => {
+  getInstallationTokenMock.mockReset()
+  getInstallationTokenMock.mockResolvedValue("fake-token")
+  listIssueCommentsMock.mockReset()
+  listPullRequestReviewCommentsMock.mockReset()
+  addReactionToIssueCommentMock.mockReset()
+  addReactionToReviewCommentMock.mockReset()
+  listPullRequestReviewsMock.mockReset()
+  dismissReviewMock.mockReset()
+  createIssueCommentMock.mockReset()
+  replyToReviewCommentMock.mockReset()
+  addReactionToIssueCommentMock.mockResolvedValue(undefined)
+  addReactionToReviewCommentMock.mockResolvedValue(undefined)
+  dismissReviewMock.mockResolvedValue(undefined)
+  createIssueCommentMock.mockResolvedValue({ id: 777 })
+  replyToReviewCommentMock.mockResolvedValue({ id: 888 })
+})
 
 describe("parseGithubMentionResponse", () => {
   const valid = {
@@ -135,11 +200,120 @@ describe("review dismiss dedupe records", () => {
 
   it("rejects malformed stored values", () => {
     expect(parseReviewDismissDedupeRecord("not json")).toBeNull()
+    expect(parseReviewDismissDedupeRecord(null)).toBeNull()
+    expect(parseReviewDismissDedupeRecord("[]")).toBeNull()
+    expect(parseReviewDismissDedupeRecord(JSON.stringify({ kind: "other" }))).toBeNull()
     expect(parseReviewDismissDedupeRecord(JSON.stringify({ kind: "review-dismiss-result" }))).toBeNull()
     expect(parseReviewDismissDedupeRecord(JSON.stringify({
       kind: "review-dismiss-result",
       result: { kind: "dismissed" },
     }))).toBeNull()
+  })
+})
+
+describe("handleGithubMention dismiss path", () => {
+  function makeEnv(initial?: Record<string, string>): { env: Env; store: Map<string, string> } {
+    const store = new Map(Object.entries(initial ?? {}))
+    const kv = {
+      get: vi.fn(async (key: string) => store.get(key) ?? null),
+      put: vi.fn(async (key: string, value: string) => { store.set(key, value) }),
+      delete: vi.fn(async (key: string) => { store.delete(key) }),
+    } as unknown as KVNamespace
+    return {
+      store,
+      env: {
+        OPENCLAW_STATE: kv,
+        GITHUB_APP_ID: "1",
+        GITHUB_PRIVATE_KEY: "private-key",
+      } as unknown as Env,
+    }
+  }
+
+  it("dismisses, posts a reply, and stores the terminal dedupe record", async () => {
+    const { env, store } = makeEnv()
+    listIssueCommentsMock.mockResolvedValue([
+      { id: 4242, body: "@sigilix dismiss", user: { login: "human" } },
+    ])
+    listPullRequestReviewsMock.mockResolvedValue([
+      {
+        id: 90,
+        state: "CHANGES_REQUESTED",
+        user: { login: "sigilix[bot]" },
+        body: SIGILIX_REVIEW_BODY_MARKER,
+        commitId: null,
+      },
+    ])
+
+    await handleGithubMention({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 7,
+      installationId: 99,
+      surface: "issue",
+      commentId: 4242,
+      env,
+    })
+
+    expect(getInstallationTokenMock).toHaveBeenCalledWith(expect.objectContaining({
+      installationId: 99,
+    }))
+    expect(addReactionToIssueCommentMock).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      4242,
+      "eyes",
+    )
+    expect(dismissReviewMock).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      7,
+      90,
+      "Dismissed by explicit @sigilix dismiss request.",
+    )
+    expect(createIssueCommentMock).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      7,
+      expect.stringContaining("Dismissed the latest blocking Sigilix review"),
+    )
+    expect(parseReviewDismissDedupeRecord(store.get("gh-mention:4242") ?? null)).toEqual({
+      kind: "review-dismiss-result",
+      result: { kind: "dismissed", reviewId: 90 },
+      replyCommentId: 777,
+    })
+  })
+
+  it("reuses a stored dismiss result awaiting reply without dismissing again", async () => {
+    const { env, store } = makeEnv({
+      "gh-mention:4242": serializeReviewDismissDedupeRecord({ kind: "not-found" }),
+    })
+    listIssueCommentsMock.mockResolvedValue([
+      { id: 4242, body: "@sigilix dismiss", user: { login: "human" } },
+    ])
+
+    await handleGithubMention({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 7,
+      installationId: 99,
+      surface: "issue",
+      commentId: 4242,
+      env,
+    })
+
+    expect(listPullRequestReviewsMock).not.toHaveBeenCalled()
+    expect(dismissReviewMock).not.toHaveBeenCalled()
+    expect(createIssueCommentMock).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      7,
+      expect.stringContaining("couldn't find an active blocking Sigilix review"),
+    )
+    expect(parseReviewDismissDedupeRecord(store.get("gh-mention:4242") ?? null)).toEqual({
+      kind: "review-dismiss-result",
+      result: { kind: "not-found" },
+      replyCommentId: 777,
+    })
   })
 })
 
@@ -297,5 +471,27 @@ describe("formatReviewDismissReply", () => {
     const out = formatReviewDismissReply({ kind: "dismissed", reviewId: 10 })
     expect(out.startsWith("<!-- sigilix:gh-mention-reply -->")).toBe(true)
     expect(out).toContain("Dismissed the latest blocking Sigilix review")
+  })
+
+  it("formats the no-active-review branch", () => {
+    const out = formatReviewDismissReply({ kind: "not-found" })
+    expect(out.startsWith("<!-- sigilix:gh-mention-reply -->")).toBe(true)
+    expect(out).toContain("couldn't find an active blocking Sigilix review")
+  })
+
+  it("formats the review-list failure branch", () => {
+    const out = formatReviewDismissReply({ kind: "list-failed", error: "rate limited" })
+    expect(out.startsWith("<!-- sigilix:gh-mention-reply -->")).toBe(true)
+    expect(out).toContain("couldn't list this PR's reviews")
+  })
+
+  it("formats the dismiss failure branch", () => {
+    const out = formatReviewDismissReply({
+      kind: "dismiss-failed",
+      reviewId: 10,
+      error: "forbidden",
+    })
+    expect(out.startsWith("<!-- sigilix:gh-mention-reply -->")).toBe(true)
+    expect(out).toContain("GitHub rejected the dismissal request")
   })
 })

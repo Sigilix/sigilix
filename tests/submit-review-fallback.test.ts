@@ -73,7 +73,7 @@ describe("buildFallbackBody", () => {
     expect(body).toBe("<!-- sigilix:pr-review -->\n")
     // None of the legacy / verbose strings survive.
     expect(body).not.toContain("### Findings")
-    expect(body).not.toContain("### Additional findings")
+    expect(body).not.toContain("### Findings without inline comments")
     expect(body).not.toContain("### Fix Plan")
     expect(body).not.toContain("## Sigilix: Approved")
     expect(body).not.toContain("No issues found")
@@ -123,11 +123,11 @@ describe("buildFallbackBody", () => {
     )
     expect(body).toContain("anchored-finding")
     expect(body).toContain("unanchored-finding")
-    // ARC-281: the anchorless-fallback path now pours everything
-    // into the "Additional findings" section (since none of the
-    // findings landed as inline comments). Heading count is in the
-    // top-of-body status heading, not on the section.
-    expect(body).toContain("### Additional findings (could not anchor to diff)")
+    // ARC-281 + SIG-5: the anchorless-fallback path now pours everything
+    // into the body-only findings section (since none of the findings
+    // landed as inline comments). Heading count is in the top-of-body
+    // status heading, not on the section.
+    expect(body).toContain("### Findings without inline comments")
     expect(body).toMatch(/^## Sigilix: 2 findings/m)
     expect(body).not.toContain("### Findings (2)")
   })
@@ -139,14 +139,14 @@ describe("buildFallbackBody", () => {
       line: 50,
     }
     const body = buildFallbackBody({ ...baseVerdict, findings: [ranged] }, [])
-    expect(body).toContain("Lines 40-50")
-    expect(body).not.toContain("Line 50 — ")
+    expect(body).toContain("Lines 40-50 (high, score 4)")
+    expect(body).not.toContain("Line 50 (")
   })
 
   it("renders single-line target when startLine is omitted", () => {
     const single: PrReviewFinding = { ...baseFinding, line: 50 }
     const body = buildFallbackBody({ ...baseVerdict, findings: [single] }, [])
-    expect(body).toContain("Line 50 — ")
+    expect(body).toContain("Line 50 (high, score 4)")
     expect(body).not.toContain("Lines ")
   })
 
@@ -176,9 +176,9 @@ describe("buildFallbackBody", () => {
     expect(populated).not.toContain("Clear off-by-one.")
     const blank = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
     // Summary still renders; layout flows directly into the
-    // additional-findings section per Kimi's spec.
+    // body-only findings section per Kimi's spec.
     expect(blank).toContain("One real bug.")
-    expect(blank).toContain("### Additional findings (could not anchor to diff)")
+    expect(blank).toContain("### Findings without inline comments")
   })
 })
 
@@ -270,7 +270,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       unanchored,
     })
     expect(submission.body).toContain("unanchored-must-not-be-lost")
-    expect(submission.body).toContain("Additional findings")
+    expect(submission.body).toContain("Findings without inline comments")
   })
 
   it("still emits inline comments for the anchored findings (UX preserved)", () => {
@@ -313,9 +313,9 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     expect(submission.event).toBe("APPROVE")
   })
 
-  it("ARC-281: common path (empty unanchored) renders heading + summary + Fix Plan, no Additional findings section", () => {
+  it("ARC-281: common path (empty unanchored) renders heading + summary + Fix Plan, no body-only findings section", () => {
     // With no unanchored findings, the body skips the
-    // "Additional findings" section entirely. The inline-count
+    // body-only findings section entirely. The inline-count
     // pointer ("_N findings inline below._") was removed in
     // ARC-281 — the heading already states the count.
     const submission = buildReviewSubmission({
@@ -323,7 +323,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       prAuthor: null,
       headSha: "deadbeef",
     })
-    expect(submission.body).not.toContain("Additional findings")
+    expect(submission.body).not.toContain("Findings without inline comments")
     expect(submission.body).not.toMatch(/inline below/i)
     expect(submission.body).toMatch(/^## Sigilix: 1 finding/m)
   })

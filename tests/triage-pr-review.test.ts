@@ -90,6 +90,31 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings[0]?.score).toBe(5)
   })
 
+  it.each([
+    ["line", "line"],
+    ["file", "file"],
+    ["pr", "pr"],
+    ["comment", "comment"],
+    ["comment/event", "comment"],
+    ["event", "comment"],
+    ["review-comment", "comment"],
+    ["pull-request", "pr"],
+    ["pull_request", "pr"],
+    ["review", "pr"],
+  ] as const)("normalizes finding scope %s to %s", (raw, expected) => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope: raw }] })
+    )
+    expect(out?.findings[0]?.scope).toBe(expected)
+  })
+
+  it.each(["thread", ""])("ignores invalid finding scope %j for back-compat", (scope) => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({ ...valid, findings: [{ ...baseFinding, scope }] })
+    )
+    expect(out?.findings[0]?.scope).toBeUndefined()
+  })
+
   it("includes startLine when valid (positive, less than line)", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({ ...valid, findings: [{ ...baseFinding, startLine: 38 }] })
@@ -1227,7 +1252,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(withMap.comments).toHaveLength(2)
     expect(withMap.comments?.map((c) => c.line).sort((a, b) => a - b)).toEqual([42, 1370])
     // Neither block finding is double-rendered into the body.
-    expect(withMap.body).not.toContain("Additional findings (could not anchor to diff)")
+    expect(withMap.body).not.toContain("Findings without inline comments")
   })
 
   it("does not double-render a routed finding (only in body, not inline)", () => {
@@ -1439,6 +1464,167 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     // Line preserved (no walk) because the suggestion needs the original
     // multi-line range to anchor cleanly.
     expect(out.comments?.[0]?.line).toBe(700)
+  })
+})
+
+describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
+  const commentFinding: PrReviewFinding = {
+    path: "src/lib/github-mention.ts",
+    line: 436,
+    scope: "comment",
+    score: 4,
+    category: "security",
+    headline: "dismiss command trusts the issue-comment author",
+    body: "The `/sigilix dismiss` path authorizes from the issue-comment sender instead of the review-thread participant. Check the parent review comment before accepting the dismissal.",
+  }
+
+  const addedLineTextByLine = new Map<string, Map<number, string>>([
+    [
+      "src/lib/github-mention.ts",
+      new Map<number, string>([
+        [436, "expirationTtl: MENTION_DEDUPE_TTL,"],
+      ]),
+    ],
+  ])
+
+  it("routes comment-scoped findings to the review body even when the nearest changed line is substantive", () => {
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "Comment-surface auth issue.",
+        confidence: 2,
+        confidenceReason: "High impact.",
+        findings: [commentFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("### Findings without inline comments")
+    expect(out.body).toContain("Comment-level (high, score 4)")
+    expect(out.body).toContain("dismiss command trusts the issue-comment author")
+    expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
+  })
+
+  it("routes file-scoped findings to the review body with a file-level label", () => {
+    const fileFinding: PrReviewFinding = {
+      ...commentFinding,
+      scope: "file",
+      score: 5,
+      headline: "module-level lifecycle ordering is unsafe",
+      body: "The issue spans the module's event flow rather than one changed statement, so it should not be forced into an inline thread.",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "File-level routing issue.",
+        confidence: 2,
+        confidenceReason: "High impact.",
+        findings: [fileFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("### Findings without inline comments")
+    expect(out.body).toContain("File-level (critical, score 5)")
+    expect(out.body).toContain("module-level lifecycle ordering is unsafe")
+    expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
+  })
+
+  it("keeps suggestion-bearing non-line findings inline so the proposed fix is not dropped", () => {
+    const fixFinding: PrReviewFinding = {
+      ...commentFinding,
+      scope: "file",
+      category: "logic",
+      headline: "ttl constant should stay localized",
+      body: "This broad file-level finding still carries a localized replacement, so preserve the inline suggestion surface.",
+      suggestedReplacement: "expirationTtl: REVIEW_THREAD_DEDUPE_TTL,",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "File-scoped finding with a localized fix.",
+        confidence: 4,
+        confidenceReason: "Specific replacement supplied.",
+        findings: [fixFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(436)
+    expect(out.comments?.[0]?.body).toContain("ttl constant should stay localized")
+    expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
+    expect(out.body).toContain("### Fix Plan")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should stay localized")
+    expect(out.body).not.toContain("### Findings without inline comments")
+  })
+
+  it("keeps delete-intent non-line findings inline so the deletion suggestion is not dropped", () => {
+    const deleteFinding: PrReviewFinding = {
+      ...commentFinding,
+      scope: "file",
+      category: "logic",
+      headline: "ttl constant should be removed",
+      body: "This broad file-level finding carries an empty deletion replacement, so preserve the inline suggestion surface.",
+      kind: "delete",
+      suggestedReplacement: "",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "File-scoped finding with a localized deletion.",
+        confidence: 4,
+        confidenceReason: "Specific deletion supplied.",
+        findings: [deleteFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(436)
+    expect(out.comments?.[0]?.body).toContain("ttl constant should be removed")
+    expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
+    expect(out.body).toContain("### Fix Plan")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should be removed")
+    expect(out.body).not.toContain("### Findings without inline comments")
+  })
+
+  it("does not duplicate body-only high findings in the Fix Plan", () => {
+    const inlineFinding: PrReviewFinding = {
+      path: "src/lib/github-mention.ts",
+      line: 436,
+      score: 4,
+      category: "logic",
+      headline: "ttl is too short",
+      body: "Use the configured TTL.",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "One inline and one body-only finding.",
+        confidence: 2,
+        confidenceReason: "Mixed.",
+        findings: [inlineFinding, commentFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.comments).toHaveLength(1)
+    expect(out.body).toContain("### Fix Plan")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl is too short")
+    expect(out.body).not.toContain("`src/lib/github-mention.ts:436` — `security`: dismiss command trusts")
+    expect(out.body).toContain("Comment-level (high, score 4)")
   })
 })
 
@@ -1956,12 +2142,12 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
   it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="44"')
+    expect(out).toContain('width="52"')
     expect(out).toContain('height="32"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260524-3/p2.svg`)
     expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {

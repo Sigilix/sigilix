@@ -137,6 +137,24 @@ describe("assessApprovalReadiness (SIG-205)", () => {
     expect(out.bodyOnlyFindings[0]?.body).toContain("kept, merged, softened, or explicitly dropped")
   })
 
+  it("treats missing provenance as no accounted source findings", () => {
+    const nullProvenance = assessApprovalReadiness({
+      intendedEvent: "APPROVE",
+      sourceFindings: [source],
+      provenance: null,
+    })
+    const undefinedProvenance = assessApprovalReadiness({
+      intendedEvent: "APPROVE",
+      sourceFindings: [source],
+      provenance: undefined,
+    })
+
+    expect(nullProvenance.event).toBe("REQUEST_CHANGES")
+    expect(nullProvenance.blockers).toHaveLength(1)
+    expect(undefinedProvenance.event).toBe("REQUEST_CHANGES")
+    expect(undefinedProvenance.blockers).toHaveLength(1)
+  })
+
   it("replaces stale clean summaries when approval readiness blocks", () => {
     const cleanSummary = "No issues found."
     const clean = assessApprovalReadiness({
@@ -152,6 +170,36 @@ describe("assessApprovalReadiness (SIG-205)", () => {
 
     expect(buildApprovalReadinessSummary(clean, cleanSummary)).toBe(cleanSummary)
     expect(buildApprovalReadinessSummary(blocked, cleanSummary)).toContain("Approval withheld")
+    expect(buildApprovalReadinessSummary(blocked, cleanSummary)).toContain(
+      "approval validation blocker below",
+    )
     expect(buildApprovalReadinessSummary(blocked, cleanSummary)).not.toContain(cleanSummary)
+  })
+
+  it("pluralizes the approval-readiness blocker summary", () => {
+    const blocked = assessApprovalReadiness({
+      intendedEvent: "APPROVE",
+      sourceFindings: [
+        source,
+        {
+          ...source,
+          id: "security-0",
+          role: "security",
+          finding: {
+            ...sourceFinding,
+            category: "security",
+            headline: "missing webhook signature check",
+          },
+        },
+      ],
+      provenance: { findings: [], dropped: [] },
+    })
+
+    expect(buildApprovalReadinessSummary(blocked, "No issues found.")).toContain(
+      "2 high-confidence Sigilix specialist findings were",
+    )
+    expect(buildApprovalReadinessSummary(blocked, "No issues found.")).toContain(
+      "approval validation blockers below",
+    )
   })
 })

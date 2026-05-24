@@ -3246,6 +3246,33 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
+    // SIG-205 — approval-readiness must run before the delta/manifest
+    // snapshot below. Its body-only blockers are customer-visible
+    // findings, so they need the same persistence and still-open/new
+    // tracking as normal unanchored findings.
+    const intendedEvent = chooseReviewEvent([
+      ...renderableVerdict.findings,
+      ...renderableUnanchored,
+    ])
+    const sourceFindingsForApproval = collectApprovalReadinessSourceFindings(
+      succeeded,
+      withdrawals,
+    )
+    const approvalReadiness = assessApprovalReadiness({
+      intendedEvent,
+      sourceFindings: sourceFindingsForApproval,
+      provenance: validated.provenance,
+    })
+    const renderableUnanchoredForSubmission = [
+      ...renderableUnanchored,
+      ...approvalReadiness.bodyOnlyFindings,
+    ]
+    const effectiveEvent = approvalReadiness.event
+    const submissionVerdict: PrReviewVerdict = {
+      ...renderableVerdict,
+      summary: buildApprovalReadinessSummary(approvalReadiness, renderableVerdict.summary),
+    }
+
     // ARC-271 — finding delta vs the prior review.
     //
     // For each current finding compute a stable key and look it up
@@ -3269,12 +3296,12 @@ export async function handlePrReviewEnsemble(
     // don't land in the persisted manifest — otherwise next push's
     // delta would compare {prior: includes withdrawn} vs
     // {current: excludes withdrawn} and report the withdrawn finding
-    // as `likely-fixed`. Unanchored findings can't be withdrawn (no
-    // path+line to match against a WithdrawalRecord), so they stay
-    // exactly as before.
+    // as `likely-fixed`. SIG-205 extends the body-only side with
+    // approval-readiness blockers, which are already derived from the
+    // withdrawal-filtered source findings above.
     const snapshotInputs = [
       ...filteredConsensusFindings.map((f, j) => ({ f, consensus: filteredConsensusByIndex[j] ?? 1 })),
-      ...validated.unanchoredFindings.map((f) => ({ f, consensus: 1 })),
+      ...renderableUnanchoredForSubmission.map((f) => ({ f, consensus: 1 })),
     ]
     const currentFindingsForManifest: ReviewManifestFinding[] = await Promise.all(
       snapshotInputs.map(async ({ f, consensus }) => ({
@@ -3442,31 +3469,11 @@ export async function handlePrReviewEnsemble(
     // user-visible `Review #N` sequence between request-changes
     // reviews if we bumped on APPROVE.
     //
-    // The bump runs AFTER the merge-guard above so a PR that merged
+    // `effectiveEvent` was computed before the delta/manifest snapshot
+    // so SIG-205 blockers persist across pushes; the bump still runs
+    // AFTER the merge-guard above so a PR that merged
     // mid-review doesn't ghost-advance the counter on the marker-
     // only APPROVE short-circuit (CodeRabbit catch on PR #110).
-    const intendedEvent = chooseReviewEvent([
-      ...renderableVerdict.findings,
-      ...renderableUnanchored,
-    ])
-    const sourceFindingsForApproval = collectApprovalReadinessSourceFindings(
-      succeeded,
-      withdrawals,
-    )
-    const approvalReadiness = assessApprovalReadiness({
-      intendedEvent,
-      sourceFindings: sourceFindingsForApproval,
-      provenance: validated.provenance,
-    })
-    const renderableUnanchoredForSubmission = [
-      ...renderableUnanchored,
-      ...approvalReadiness.bodyOnlyFindings,
-    ]
-    const effectiveEvent = approvalReadiness.event
-    const submissionVerdict: PrReviewVerdict = {
-      ...renderableVerdict,
-      summary: buildApprovalReadinessSummary(approvalReadiness, renderableVerdict.summary),
-    }
     if (approvalReadiness.blockers.length > 0) {
       console.warn(JSON.stringify({
         event: "pr-review-approval-readiness-blocked",

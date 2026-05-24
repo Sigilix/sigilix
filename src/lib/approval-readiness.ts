@@ -111,9 +111,10 @@ export function buildApprovalReadinessSummary(
 ): string {
   if (decision.blockers.length === 0) return fallbackSummary
   const noun = decision.blockers.length === 1 ? "finding was" : "findings were"
+  const blockerNoun = decision.blockers.length === 1 ? "blocker" : "blockers"
   return [
     `Approval withheld because ${decision.blockers.length} high-confidence Sigilix specialist ${noun} not reconciled by the synthesizer.`,
-    "Review the approval validation blocker below before merging.",
+    `Review the approval validation ${blockerNoun} below before merging.`,
   ].join(" ")
 }
 

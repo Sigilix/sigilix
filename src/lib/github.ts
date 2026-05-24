@@ -1499,6 +1499,7 @@ interface RawWorkflowArtifact {
 export interface ReviewComment {
   id: number
   user: { login: string } | null
+  author_association?: string
   path: string
   line: number | null
   original_line: number | null
@@ -1513,6 +1514,7 @@ export interface IssueComment {
   id: number
   body: string
   user: { login: string } | null
+  author_association?: string
 }
 
 export interface SubmitReviewComment {

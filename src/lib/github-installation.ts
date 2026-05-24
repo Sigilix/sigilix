@@ -127,9 +127,10 @@ export function listTeamRepoMappings(
  */
 export async function listIndexedRepos(env: {
   OPENCLAW_STATE: KVNamespace
-}): Promise<string[]> {
+}, opts: { owner?: string | null } = {}): Promise<string[]> {
   const PREFIX = "repo-index-manifest:"
   const out = new Set<string>()
+  const ownerFilter = opts.owner?.toLowerCase() ?? null
   let cursor: string | undefined
   for (;;) {
     let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
@@ -166,7 +167,10 @@ export async function listIndexedRepos(env: {
       // Major). GitHub owner/repo names can't contain `/`, so a single
       // `/` cleanly identifies the new owner-qualified shape.
       const namespace = key.name.slice(PREFIX.length).toLowerCase()
-      if (namespace.includes("/")) out.add(namespace)
+      const parts = namespace.split("/")
+      if (parts.length !== 2 || !parts[0] || !parts[1]) continue
+      if (ownerFilter !== null && parts[0] !== ownerFilter) continue
+      out.add(namespace)
     }
     if (page.list_complete) break
     if (!page.cursor) {

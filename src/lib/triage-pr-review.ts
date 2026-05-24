@@ -41,6 +41,7 @@ import {
 } from "./diff-positions"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
+import { badgeAssetUrl } from "./badge-assets"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
 // rendered by `renderStackParenthetical`. The original helper still
@@ -1786,10 +1787,9 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  */
 const SEVERITY_BADGE_WIDTH = 44
 const SEVERITY_BADGE_HEIGHT = 32
-const SEVERITY_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges"
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
-  return `<a href="https://sigilix.ai"><img alt="${label}" src="${SEVERITY_BADGE_BASE_URL}/${file}.svg" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
+  return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
 }
 
 export function severityBadgeForScore(score: number): string {

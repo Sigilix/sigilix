@@ -11,7 +11,13 @@
 // intact and the hostile payload renders as escaped text.
 
 import { describe, expect, it } from "vitest"
-import { renderPrContext, renderPrUnavailable, type LinkedPrFailure } from "../src/lib/mention-reply"
+import {
+  buildAgentInitialUserMessage,
+  renderPrContext,
+  renderPrUnavailable,
+  resolveLinearAgentRepoScope,
+  type LinkedPrFailure,
+} from "../src/lib/mention-reply"
 import type { PrContext } from "../src/lib/github-pr-context"
 
 function basePr(overrides: Partial<PrContext> = {}): PrContext {
@@ -164,5 +170,133 @@ describe("renderPrUnavailable — failed-fetch placeholder", () => {
       const out = renderPrUnavailable(failure({ reason }))
       expect(out).toContain(`reason="${reason}"`)
     }
+  })
+})
+
+describe("resolveLinearAgentRepoScope", () => {
+  type Page = { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+  function makeEnv(keys: string[]): { OPENCLAW_STATE: KVNamespace } {
+    return {
+      OPENCLAW_STATE: {
+        list: async (opts: { prefix?: string }): Promise<Page> => {
+          const prefix = opts.prefix ?? ""
+          return {
+            keys: keys.filter((k) => k.startsWith(prefix)).map((name) => ({ name })),
+            list_complete: true,
+          }
+        },
+      } as unknown as KVNamespace,
+    }
+  }
+
+  it("scopes Linear agent availableRepos to the requesting tenant owner", async () => {
+    const env = makeEnv([
+      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:arc-and-anchor/rubberfit",
+      "repo-index-manifest:acme/sigilix",
+    ])
+
+    const scope = await resolveLinearAgentRepoScope(env, {
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+    })
+
+    expect(scope).toEqual({
+      repo: "arc-and-anchor/sigilix",
+      availableRepos: [
+        "arc-and-anchor/rubberfit",
+        "arc-and-anchor/sigilix",
+      ],
+    })
+  })
+
+  it("locks Linear agent retrieval to none when there is no team repo owner", async () => {
+    const env = makeEnv(["repo-index-manifest:acme/sigilix"])
+    await expect(resolveLinearAgentRepoScope(env, null)).resolves.toEqual({
+      repo: null,
+      availableRepos: [],
+    })
+  })
+
+  it("keeps tenant repos available but clears the default when it is not indexed", async () => {
+    const env = makeEnv(["repo-index-manifest:arc-and-anchor/rubberfit"])
+
+    await expect(resolveLinearAgentRepoScope(env, {
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+    })).resolves.toEqual({
+      repo: null,
+      availableRepos: ["arc-and-anchor/rubberfit"],
+    })
+  })
+})
+
+describe("buildAgentInitialUserMessage", () => {
+  const base = {
+    issueIdentifier: "SIG-134",
+    issueTitle: "Scope Linear agent repos",
+    issueBody: "Tenant A must not see tenant B.",
+    askerHandle: "daniel",
+    question: "Can this see other tenants?",
+  }
+
+  it("tells unmapped teams not to call retrieve_codebase", () => {
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: null,
+      availableRepos: [],
+    })
+
+    expect(out).toContain("[INDEXED REPOS] (none configured)")
+    expect(out).toContain("[DEFAULT REPO] (none configured)")
+    expect(out).toContain("No indexed repositories are configured for this Linear team")
+    expect(out).toContain("do not call retrieve_codebase")
+    expect(out).not.toContain("lowercased repo name")
+  })
+
+  it("describes configured repos as owner/repo namespaces", () => {
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: "arc-and-anchor/sigilix",
+      availableRepos: ["arc-and-anchor/sigilix"],
+    })
+
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
+    expect(out).toContain("lowercased owner/repo namespace 'arc-and-anchor/sigilix'")
+  })
+
+  it("describes multiple indexed repos and names the default namespace", () => {
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: "arc-and-anchor/sigilix",
+      availableRepos: [
+        "arc-and-anchor/rubberfit",
+        "arc-and-anchor/sigilix",
+      ],
+    })
+
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
+    expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
+    expect(out).toContain("pick a different namespace from the list")
+  })
+
+  it("describes indexed repos without a default and tells the agent to choose by subject", () => {
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: null,
+      availableRepos: [
+        "arc-and-anchor/rubberfit",
+        "arc-and-anchor/sigilix",
+      ],
+    })
+
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[DEFAULT REPO] (none configured)")
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
+    expect(out).toContain("Pick the one that matches the issue's subject")
+    expect(out).toContain("If none clearly fits")
   })
 })

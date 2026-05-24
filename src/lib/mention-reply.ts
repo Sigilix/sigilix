@@ -44,6 +44,25 @@ const LIMITS = {
   questionChars: 4_000,
 }
 
+export interface LinearAgentRepoScope {
+  repo: string | null
+  availableRepos: string[]
+}
+
+export async function resolveLinearAgentRepoScope(
+  env: { OPENCLAW_STATE: KVNamespace },
+  teamRepo: { owner: string; repo: string } | null,
+): Promise<LinearAgentRepoScope> {
+  if (!teamRepo) return { repo: null, availableRepos: [] }
+  const availableRepos = (await listIndexedRepos(env, { owner: teamRepo.owner }))
+    .sort((a, b) => a.localeCompare(b))
+  const defaultRepo = indexNamespace(teamRepo.owner, teamRepo.repo)
+  return {
+    repo: availableRepos.includes(defaultRepo) ? defaultRepo : null,
+    availableRepos,
+  }
+}
+
 interface MentionVerdict {
   answer: string
   confidence: number
@@ -105,8 +124,12 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
   // at the end isn't silently stripped by the questionChars limit.
   // Each ref gets an independent fetch with isolated failure handling.
   const teamKey = data.issue.team?.key ?? null
-  const inferRepo = (): { owner: string; repo: string } | null =>
-    parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
+  // SIG-134: this mapping is the Linear tenant boundary for agentic
+  // codebase retrieval. Values must be explicit `{ owner, repo }`
+  // objects so the agent can scope all indexed namespaces to the
+  // requesting tenant owner before advertising or enforcing them.
+  const teamRepo = parseTeamGithubRepo(env.OPENCLAW_TEAM_GITHUB_REPO_MAP, teamKey)
+  const inferRepo = (): { owner: string; repo: string } | null => teamRepo
   const prRefs = extractPullRequestRefs(fullQuestion, inferRepo)
   const { contexts: linkedPrs, failures: linkedPrFailures } = await fetchLinkedPrs(prRefs, env)
   log("linked-prs", {
@@ -150,7 +173,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     // ARC-239: `listIndexedRepos` is now KV-backed (reads
     // `repo-index-manifest:*` keys). The agent loop already runs in
     // an async context so the new `await` adds no surface cost.
-    const availableRepos = await listIndexedRepos(env)
+    const { availableRepos, repo } = await resolveLinearAgentRepoScope(env, teamRepo)
     const loopResult = await runAgentLoop({
       model,
       apiKey: env.OLLAMA_API_KEY,
@@ -170,10 +193,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         // missing it can't ground retrieval at all.
         // SIG-132: the namespace is `<owner>/<repo>` lowercased, matching
         // the `availableRepos` entries (which are KV-key suffixes).
-        repo: (() => {
-          const r = inferRepo()
-          return r ? indexNamespace(r.owner, r.repo) : null
-        })(),
+        repo,
         // The full set of indexed namespaces the agent is allowed to
         // query. The team's primary repo (above) is the default, but
         // the model picks a different namespace from this list when the
@@ -395,7 +415,7 @@ interface AgentInitialMessageCtx {
  * using its tools (vs the single-shot path which pre-fetches
  * codebase chunks + linked PRs and stuffs them into the prompt).
  */
-function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
+export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
   // Surface the full set of indexed namespaces so the agent can pick
   // the right one when an issue is clearly about a different repo than
   // the team's primary (e.g. an issue in the ARC team about the
@@ -411,15 +431,17 @@ function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
   if (ctx.repo && universe.length > 1) {
     repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo (e.g. the asker references a different repo by name, or links to a PR/issue that lives in another repo). Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.repo) {
-    repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased repo name '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
   } else if (universe.length > 0) {
     repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. Pick the one that matches the issue's subject. If none clearly fits, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt.`
   } else {
-    repoLine = "Use your tools to gather context as needed. retrieve_codebase queries against the lowercased repo name as the namespace; if you cannot determine the right repo from the issue context, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt."
+    repoLine = "No indexed repositories are configured for this Linear team, so do not call retrieve_codebase. Answer from the issue and thread context only; if that is insufficient, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt."
   }
   const lines: string[] = [
     "[SURFACE] Linear issue comment",
     `[ISSUE] ${ctx.issueIdentifier} — ${ctx.issueTitle}`,
+    `[INDEXED REPOS] ${universeText}`,
+    `[DEFAULT REPO] ${ctx.repo ?? "(none configured)"}`,
     "[ISSUE BODY]",
     ctx.issueBody.length > 0 ? ctx.issueBody : "(no description)",
     "",

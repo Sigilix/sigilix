@@ -28,11 +28,21 @@ import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
+import { isAuthorAllowedForSlashCommand } from "./slash-commands"
+import {
+  LEGACY_REVIEW_BODY_MARKER,
+  SIGILIX_BOT_LOGIN,
+  SIGILIX_REVIEW_BODY_MARKER,
+} from "./dismiss-prior-reviews"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 const KV_PREFIX = "gh-mention"
 const REPLY_MARKER = "<!-- sigilix:gh-mention-reply -->"
+const MENTION_DEDUPE_TTL = 60 * 60 * 24 * 30
+const DISMISS_IN_PROGRESS_TTL = 60 * 15
+const DISMISS_IN_PROGRESS_KIND = "review-dismiss-in-progress"
+const DISMISS_DEDUPE_KIND = "review-dismiss-result"
 
 const LIMITS = {
   prDiff: 18_000,
@@ -60,6 +70,18 @@ export interface GithubMentionArgs {
   threadRootId?: number
   env: Env
 }
+
+type ReviewDismissClient = Pick<GitHubClient, "listPullRequestReviews" | "dismissReview">
+
+export type ReviewDismissResult =
+  | { kind: "dismissed"; reviewId: number }
+  | { kind: "not-found" }
+  | { kind: "list-failed"; error: string }
+  | { kind: "dismiss-failed"; reviewId: number; error: string }
+
+export type ReviewDismissDedupeRecord =
+  | { kind: typeof DISMISS_IN_PROGRESS_KIND; token?: string; createdAt?: number }
+  | { kind: typeof DISMISS_DEDUPE_KIND; result: ReviewDismissResult; replyCommentId?: number }
 
 interface GithubMentionVerdict {
   answer: string
@@ -94,7 +116,15 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
 
   const kvKey = `${KV_PREFIX}:${commentId}`
   const seen = await env.OPENCLAW_STATE.get(kvKey)
-  if (seen) {
+  const dismissDedupe = parseReviewDismissDedupeRecord(seen)
+  if (dismissDedupe?.kind === DISMISS_IN_PROGRESS_KIND) {
+    since("dismiss-already-in-progress")
+    return
+  }
+  const pendingDismissReply = dismissDedupe && typeof dismissDedupe.replyCommentId !== "number"
+    ? dismissDedupe
+    : null
+  if (seen && !pendingDismissReply) {
     since("already-replied")
     console.log(JSON.stringify({
       event: "github-mention-skipped",
@@ -165,6 +195,80 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   ).slice(0, LIMITS.questionChars)
   if (!question) {
     since("empty-question-after-strip")
+    return
+  }
+
+  if (explicit && isReviewDismissRequest(question)) {
+    if (!isAuthorAllowedForReviewDismiss(sourceComment.authorAssociation)) {
+      console.log(JSON.stringify({
+        event: "gh-mention-dismiss-rejected",
+        reason: "untrusted_author_association",
+        author_association: sourceComment.authorAssociation?.toUpperCase() ?? null,
+        login: sourceComment.author,
+        owner,
+        repo,
+        prNumber,
+        surface,
+        commentId,
+      }))
+      return
+    }
+
+    let dismiss: ReviewDismissResult | null = null
+    if (pendingDismissReply) {
+      dismiss = pendingDismissReply.result
+    } else {
+      const lock = await acquireReviewDismissInProgressLock(env.OPENCLAW_STATE, kvKey)
+      if (!lock.acquired) {
+        const record = lock.record
+        if (record?.kind === DISMISS_DEDUPE_KIND && typeof record.replyCommentId !== "number") {
+          dismiss = record.result
+        } else {
+          since("dismiss-lock-not-acquired", { storedKind: record?.kind ?? null })
+          return
+        }
+      } else {
+        try {
+          dismiss = await dismissLatestBlockingSigilixReview({
+            client,
+            owner,
+            repo,
+            prNumber,
+          })
+          await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissDedupeRecord(dismiss), {
+            expirationTtl: MENTION_DEDUPE_TTL,
+          })
+        } catch (err) {
+          await releaseReviewDismissInProgressLock(env.OPENCLAW_STATE, kvKey, lock.token)
+          throw err
+        }
+      }
+    }
+    const newId = await postReply({
+      client,
+      owner,
+      repo,
+      prNumber,
+      surface,
+      threadRootId: args.threadRootId ?? commentId,
+      body: formatReviewDismissReply(dismiss),
+    })
+    since("dismiss-reply-posted", { newId, result: dismiss.kind })
+    await env.OPENCLAW_STATE
+      .put(kvKey, serializeReviewDismissDedupeRecord(dismiss, newId), {
+        expirationTtl: MENTION_DEDUPE_TTL,
+      })
+      .catch((err: unknown) => {
+        console.warn("[gh-mention] dismiss reply-id persistence failed", {
+          owner,
+          repo,
+          prNumber,
+          surface,
+          commentId,
+          replyCommentId: newId,
+          err: err instanceof Error ? err.message : String(err),
+        })
+      })
     return
   }
 
@@ -345,7 +449,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
   }
 
   await env.OPENCLAW_STATE.put(kvKey, String(newId), {
-    expirationTtl: 60 * 60 * 24 * 30, // 30 days
+    expirationTtl: MENTION_DEDUPE_TTL,
   })
 }
 
@@ -369,6 +473,7 @@ interface SourceComment {
   id: number
   body: string
   author: string
+  authorAssociation: string | null
   path?: string
   line?: number | null
 }
@@ -389,6 +494,7 @@ async function fetchSourceComment(
       id: hit.id,
       body: hit.body ?? "",
       author: hit.user?.login ?? "(unknown)",
+      authorAssociation: hit.author_association ?? null,
     }
   }
   const all = await client.listPullRequestReviewComments(owner, repo, prNumber)
@@ -398,6 +504,7 @@ async function fetchSourceComment(
     id: hit.id,
     body: hit.body ?? "",
     author: hit.user?.login ?? "(unknown)",
+    authorAssociation: hit.author_association ?? null,
     path: hit.path,
     line: hit.line,
   }
@@ -612,6 +719,228 @@ export function parseGithubMentionResponse(text: string): GithubMentionVerdict |
  */
 export function formatReply(verdict: GithubMentionVerdict): string {
   return `${REPLY_MARKER}\n${verdict.answer}`
+}
+
+export function serializeReviewDismissInProgressRecord(token?: string): string {
+  const record: ReviewDismissDedupeRecord = token
+    ? { kind: DISMISS_IN_PROGRESS_KIND, token, createdAt: Date.now() }
+    : { kind: DISMISS_IN_PROGRESS_KIND }
+  return JSON.stringify(record)
+}
+
+export function serializeReviewDismissDedupeRecord(
+  result: ReviewDismissResult,
+  replyCommentId?: number,
+): string {
+  const record: ReviewDismissDedupeRecord = typeof replyCommentId === "number"
+    ? { kind: DISMISS_DEDUPE_KIND, result, replyCommentId }
+    : { kind: DISMISS_DEDUPE_KIND, result }
+  return JSON.stringify(record)
+}
+
+export function parseReviewDismissDedupeRecord(value: string | null): ReviewDismissDedupeRecord | null {
+  if (!value) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(value)
+  } catch {
+    return null
+  }
+  if (typeof raw !== "object" || raw === null) return null
+  const record = raw as {
+    kind?: unknown
+    token?: unknown
+    createdAt?: unknown
+    result?: unknown
+    replyCommentId?: unknown
+  }
+  if (record.kind === DISMISS_IN_PROGRESS_KIND) {
+    return {
+      kind: DISMISS_IN_PROGRESS_KIND,
+      ...(typeof record.token === "string" && record.token.length > 0
+        ? { token: record.token }
+        : {}),
+      ...(typeof record.createdAt === "number" ? { createdAt: record.createdAt } : {}),
+    }
+  }
+  if (record.kind !== DISMISS_DEDUPE_KIND || !isReviewDismissResult(record.result)) {
+    return null
+  }
+  if (typeof record.replyCommentId === "number") {
+    return { kind: DISMISS_DEDUPE_KIND, result: record.result, replyCommentId: record.replyCommentId }
+  }
+  return { kind: DISMISS_DEDUPE_KIND, result: record.result }
+}
+
+type ReviewDismissLock =
+  | { acquired: true; token: string }
+  | { acquired: false; record: ReviewDismissDedupeRecord | null }
+
+export async function acquireReviewDismissInProgressLock(
+  kv: KVNamespace,
+  key: string,
+): Promise<ReviewDismissLock> {
+  const before = parseReviewDismissDedupeRecord(await kv.get(key))
+  if (before) return { acquired: false, record: before }
+
+  const token = createReviewDismissLockToken()
+  await kv.put(key, serializeReviewDismissInProgressRecord(token), {
+    expirationTtl: DISMISS_IN_PROGRESS_TTL,
+  })
+
+  // Workers KV has no CAS primitive. The token readback gives us a
+  // create-if-missing single-flight guard: only the request that can see
+  // its own sentinel is allowed to perform the GitHub dismissal.
+  const after = parseReviewDismissDedupeRecord(await kv.get(key))
+  if (after?.kind === DISMISS_IN_PROGRESS_KIND && after.token === token) {
+    return { acquired: true, token }
+  }
+  if (after?.kind !== DISMISS_DEDUPE_KIND) {
+    await releaseReviewDismissInProgressLock(kv, key, token)
+  }
+  return { acquired: false, record: after }
+}
+
+export async function releaseReviewDismissInProgressLock(
+  kv: KVNamespace,
+  key: string,
+  token: string,
+): Promise<void> {
+  try {
+    const current = parseReviewDismissDedupeRecord(await kv.get(key))
+    if (current?.kind === DISMISS_IN_PROGRESS_KIND && current.token === token) {
+      await kv.delete(key)
+    }
+  } catch (err) {
+    console.warn("[gh-mention] dismiss lock cleanup failed", {
+      key,
+      err: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
+function createReviewDismissLockToken(): string {
+  return crypto.randomUUID()
+}
+
+function isReviewDismissResult(value: unknown): value is ReviewDismissResult {
+  if (typeof value !== "object" || value === null) return false
+  const result = value as {
+    kind?: unknown
+    reviewId?: unknown
+    error?: unknown
+  }
+  switch (result.kind) {
+    case "dismissed":
+      return typeof result.reviewId === "number"
+    case "not-found":
+      return true
+    case "list-failed":
+      return typeof result.error === "string"
+    case "dismiss-failed":
+      return typeof result.reviewId === "number" && typeof result.error === "string"
+    default:
+      return false
+  }
+}
+
+export function isReviewDismissRequest(question: string): boolean {
+  const normalized = question
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/g, "")
+    .replace(/\s+/g, " ")
+  return normalized === "dismiss" ||
+    normalized === "dismiss review" ||
+    normalized === "dismiss this review"
+}
+
+/**
+ * The dismiss command mutates PR review state, so it uses the same trust
+ * boundary as slash commands: only users GitHub marks as repo owner,
+ * organization member, or explicit collaborator can run it.
+ */
+export function isAuthorAllowedForReviewDismiss(
+  association: string | null | undefined,
+): boolean {
+  return isAuthorAllowedForSlashCommand(association)
+}
+
+export async function dismissLatestBlockingSigilixReview(args: {
+  client: ReviewDismissClient
+  owner: string
+  repo: string
+  prNumber: number
+}): Promise<ReviewDismissResult> {
+  let reviews: Awaited<ReturnType<ReviewDismissClient["listPullRequestReviews"]>>
+  try {
+    reviews = await args.client.listPullRequestReviews(args.owner, args.repo, args.prNumber)
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    console.warn(JSON.stringify({
+      event: "gh-mention-dismiss-list-failed",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+      err: error,
+    }))
+    return { kind: "list-failed", error }
+  }
+
+  const target = reviews
+    .filter((r) =>
+      r.state === "CHANGES_REQUESTED" &&
+      r.user?.login === SIGILIX_BOT_LOGIN &&
+      (r.body.includes(SIGILIX_REVIEW_BODY_MARKER) ||
+        r.body.includes(LEGACY_REVIEW_BODY_MARKER)),
+    )
+    // Review IDs are monotonic; sort defensively instead of relying on
+    // REST list ordering when choosing the latest blocking Sigilix review.
+    .sort((a, b) => b.id - a.id)[0]
+
+  if (!target) {
+    console.log(JSON.stringify({
+      event: "gh-mention-dismiss-no-blocking-review",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+    }))
+    return { kind: "not-found" }
+  }
+
+  try {
+    await args.client.dismissReview(
+      args.owner,
+      args.repo,
+      args.prNumber,
+      target.id,
+      "Dismissed by explicit @sigilix dismiss request.",
+    )
+    console.log(JSON.stringify({
+      event: "gh-mention-dismissed-blocking-review",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+      review_id: target.id,
+    }))
+    return { kind: "dismissed", reviewId: target.id }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    console.warn(JSON.stringify({
+      event: "gh-mention-dismiss-failed",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+      review_id: target.id,
+      err: error,
+    }))
+    return { kind: "dismiss-failed", reviewId: target.id, error }
+  }
+}
+
+export function formatReviewDismissReply(result: ReviewDismissResult): string {
+  switch (result.kind) {
+    case "dismissed":
+      return `${REPLY_MARKER}\nDismissed the latest blocking Sigilix review. GitHub should recalculate the PR review decision shortly.`
+    case "not-found":
+      return `${REPLY_MARKER}\nI couldn't find an active blocking Sigilix review to dismiss on this PR.`
+    case "list-failed":
+      return `${REPLY_MARKER}\nI saw the dismiss request, but couldn't list this PR's reviews from GitHub. Please retry in a moment.`
+    case "dismiss-failed":
+      return `${REPLY_MARKER}\nI found the blocking Sigilix review, but GitHub rejected the dismissal request. Please verify the GitHub App has permission to dismiss pull request reviews and retry.`
+  }
 }
 
 interface PostReplyArgs {

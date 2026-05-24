@@ -782,15 +782,27 @@ export function buildReviewSubmission({
   const inlineOriginalIndex: number[] = []
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
+    const hasSuggestion =
+      typeof f.suggestedReplacement === "string" && f.suggestedReplacement.trim().length > 0
+    const scope = findingScope(f)
+    const findingForInline =
+      hasSuggestion && scope !== "line"
+        ? { ...f, scope: "line" as const }
+        : f
+
+    // SIG-127 wins over broad scope: a localized suggestedReplacement
+    // needs an inline review thread or the proposed fix disappears from
+    // the customer-visible review body. Treat that shape as line-scoped
+    // even if the model supplied a broader scope.
     // SIG-202: GitHub inline review comments are for exact line
     // anchors. Review-level, file-level, and comment-event findings stay
     // in the body even if they carry a nearby line for context.
-    if (findingScope(f) !== "line") {
+    if (scope !== "line" && !hasSuggestion) {
       bodyFindings.push(f)
       return
     }
 
-    const addedLinesForPath = addedLineTextByLine?.get(f.path)
+    const addedLinesForPath = addedLineTextByLine?.get(findingForInline.path)
     // SIG-127: a finding carrying a localized `suggestedReplacement`
     // stays inline regardless of its anchor line — the body renderer
     // (`renderFindingsByFile`) only prints headline + body, so routing
@@ -799,15 +811,12 @@ export function buildReviewSubmission({
     // committable ```suggestion needs a contiguous reviewable range).
     // Walk-forward (below) is also skipped — moving the anchor breaks
     // the suggestion's contiguous range guarantee.
-    const hasSuggestion =
-      typeof f.suggestedReplacement === "string" && f.suggestedReplacement.trim().length > 0
-
     // SIG-159 PR1: walk-forward when the model anchored to a context line
     // (the SIG-127 regression: anchor at the closing `}` of the prior
     // block, with the real subject just below). Only applies when the
     // added-lines map IS provided AND the finding doesn't have a
     // suggestion that would lose its contiguous range when re-anchored.
-    let effective: PrReviewFinding = f
+    let effective: PrReviewFinding = findingForInline
     if (addedLineTextByLine !== undefined && !hasSuggestion) {
       const resolved = pickAnchorLineForward(addedLinesForPath, f.line)
       if (resolved === null) {
@@ -1454,9 +1463,10 @@ export function filterToSigilixAuthored<T extends AuthoredItem>(
  */
 export interface RenderBodyArgs {
   verdict: PrReviewVerdict
-  /** Findings that passed review but should not be inline comments:
-   *  unanchored line findings plus file/PR/comment-scoped findings.
-   *  Surfaced via the body-only findings section. Default `[]`. */
+  /** Line-scoped findings that passed review but could not be anchored
+   *  to a diff line. Non-line-scoped findings may remain in
+   *  `verdict.findings`; the renderer routes them to the same body-only
+   *  section. Default `[]`. */
   unanchored?: PrReviewFinding[]
   /** Specialist dispatch/success roster. When absent, the coverage
    *  line is omitted (back-compat shim for call sites that haven't
@@ -1855,7 +1865,7 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 44
+const SEVERITY_BADGE_WIDTH = 52
 const SEVERITY_BADGE_HEIGHT = 32
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {

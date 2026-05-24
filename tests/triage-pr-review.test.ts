@@ -1536,6 +1536,37 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
   })
 
+  it("keeps suggestion-bearing non-line findings inline so the proposed fix is not dropped", () => {
+    const fixFinding: PrReviewFinding = {
+      ...commentFinding,
+      scope: "file",
+      category: "logic",
+      headline: "ttl constant should stay localized",
+      body: "This broad file-level finding still carries a localized replacement, so preserve the inline suggestion surface.",
+      suggestedReplacement: "expirationTtl: REVIEW_THREAD_DEDUPE_TTL,",
+    }
+    const out = buildReviewSubmission({
+      verdict: {
+        summary: "File-scoped finding with a localized fix.",
+        confidence: 4,
+        confidenceReason: "Specific replacement supplied.",
+        findings: [fixFinding],
+      },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine,
+    })
+
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments).toHaveLength(1)
+    expect(out.comments?.[0]?.line).toBe(436)
+    expect(out.comments?.[0]?.body).toContain("ttl constant should stay localized")
+    expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
+    expect(out.body).toContain("### Fix Plan")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should stay localized")
+    expect(out.body).not.toContain("### Findings without inline comments")
+  })
+
   it("does not duplicate body-only high findings in the Fix Plan", () => {
     const inlineFinding: PrReviewFinding = {
       path: "src/lib/github-mention.ts",
@@ -2079,7 +2110,7 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
   it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="44"')
+    expect(out).toContain('width="52"')
     expect(out).toContain('height="32"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {

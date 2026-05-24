@@ -456,7 +456,7 @@ export function parsePrImproveResponse(text: string): PrImproveVerdict | null {
  *   - **RIGHT-side only.** `\`\`\`suggestion` blocks can't be applied
  *     against deleted lines (the file no longer has those lines).
  *     Drop any anchor whose primary side resolves to LEFT.
- *   - **startLine must also be in-diff and on the same side.**
+ *   - **startLine must be <= line, in-diff, and on the same side.**
  *     GitHub 422s the whole review on one bad anchor, so a model
  *     that picks a valid `line` but an out-of-hunk `startLine` would
  *     poison the whole batch.
@@ -490,9 +490,13 @@ export function partitionImproveSuggestions(
   for (const s of raw) {
     const lineSide = deriveSide(reviewable, s.path, s.line)
     let anchorable = lineSide === "RIGHT" && hasSuggestionBlock(s.body)
-    if (typeof s.startLine === "number" && s.startLine < s.line) {
-      if (!isContiguousRightRange(reviewable, s.path, s.startLine, s.line)) {
+    if (typeof s.startLine === "number") {
+      if (s.startLine > s.line) {
         anchorable = false
+      } else if (s.startLine < s.line) {
+        if (!isContiguousRightRange(reviewable, s.path, s.startLine, s.line)) {
+          anchorable = false
+        }
       }
     }
     if (!anchorable) {

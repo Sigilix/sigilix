@@ -192,6 +192,18 @@ describe("filterAnchorableSuggestions", () => {
     expect(out.fallback).toEqual([duplicate])
   })
 
+  it("partitions inverted startLine ranges into summary fallback instead of posting invalid anchors", () => {
+    const reviewable = makeReviewable([
+      { path: "src/foo.ts", line: 10, side: "RIGHT" },
+      { path: "src/foo.ts", line: 12, side: "RIGHT" },
+    ])
+    const inverted = okSuggestion({ line: 10, startLine: 12 })
+    const out = partitionImproveSuggestions([inverted], reviewable)
+
+    expect(out.valid).toHaveLength(0)
+    expect(out.fallback).toEqual([inverted])
+  })
+
   it("dedupes suggestions targeting the same anchor", () => {
     const reviewable = makeReviewable([{ path: "src/foo.ts", line: 10, side: "RIGHT" }])
     const out = filterAnchorableSuggestions(

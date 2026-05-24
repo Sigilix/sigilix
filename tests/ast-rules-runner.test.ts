@@ -24,6 +24,12 @@ function diffWithEvalAt(line: number, path: string): string {
   return header + hunkStart + added
 }
 
+function diffAddingLineAt(line: number, path: string, lineText = "changed"): string {
+  const header = `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n`
+  const hunkStart = `@@ -${line},0 +${line},1 @@\n`
+  return header + hunkStart + `+${lineText}\n`
+}
+
 const REVIEWABLE_AT = (path: string, line: number): ReviewableMap =>
   new Map([[path, [{ line, side: "RIGHT" }]]])
 
@@ -201,5 +207,87 @@ describe("runAstRules — finding emission", () => {
     expect(r.findings.length).toBe(1)
     expect(r.findings[0].evidence).not.toContain(longStr)
     expect(r.findings[0].evidence).toContain("<redacted-literal>")
+  })
+
+  it.each([
+    {
+      ruleId: "no-await-in-loop",
+      path: "src/awaits.ts",
+      changedLine: 5,
+      source: [
+        "async function oldLoop(xs) {",
+        "  for (const x of xs) await oldWork(x)",
+        "}",
+        "async function newLoop(xs) {",
+        "  for (const x of xs) await newWork(x)",
+        "}",
+      ].join("\n"),
+    },
+    {
+      ruleId: "no-spread-accumulator-in-loop",
+      path: "src/spread.ts",
+      changedLine: 5,
+      source: [
+        "let oldAcc = []",
+        "for (const x of xs) { oldAcc = [...oldAcc, x] }",
+        "",
+        "let newAcc = []",
+        "for (const x of xs) { newAcc = [...newAcc, x] }",
+      ].join("\n"),
+    },
+    {
+      ruleId: "no-allocation-in-loop",
+      path: "src/allocation.ts",
+      changedLine: 5,
+      source: [
+        "function oldOne(xs) {",
+        "  for (const x of xs) { new RegExp(\"old\").test(x) }",
+        "}",
+        "function newOne(xs) {",
+        "  for (const x of xs) { new RegExp(\"new\").test(x) }",
+        "}",
+      ].join("\n"),
+    },
+    {
+      ruleId: "no-n-plus-one-call-in-loop",
+      path: "src/n-plus-one.ts",
+      changedLine: 5,
+      source: [
+        "async function oldOne(ids) {",
+        "  for (const id of ids) { await db.query(\"old\") }",
+        "}",
+        "async function newOne(ids) {",
+        "  for (const id of ids) { await db.query(\"new\") }",
+        "}",
+      ].join("\n"),
+    },
+    {
+      ruleId: "no-sync-io-in-request-path",
+      path: "src/app.ts",
+      changedLine: 4,
+      source: [
+        "import fs from \"fs\"",
+        "app.get(\"/old\", (req, res) => { fs.readFileSync(\"old\") })",
+        "",
+        "app.get(\"/new\", (req, res) => { fs.readFileSync(\"new\") })",
+      ].join("\n"),
+    },
+  ])("emits changed $ruleId hit when an unchanged earlier hit exists", async ({
+    ruleId,
+    path,
+    changedLine,
+    source,
+  }) => {
+    const r = await runAstRules({
+      diff: diffAddingLineAt(changedLine, path),
+      filesByPath: new Map([[path, source]]),
+      reviewable: REVIEWABLE_AT(path, changedLine),
+      config: DEFAULT_CONFIG,
+      ctx: CTX,
+    })
+
+    const findings = r.findings.filter((f) => f.ruleId === ruleId)
+    expect(findings).toHaveLength(1)
+    expect(findings[0].line).toBe(changedLine)
   })
 })

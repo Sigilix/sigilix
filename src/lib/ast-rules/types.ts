@@ -3,7 +3,7 @@
 // Each rule is a TS module that exports an `AstRule`. The runner
 // invokes `visit(node, ctx)` for each AST node whose `node.type`
 // matches the rule's declared `nodeTypes` list, and the rule returns
-// an `AstRuleHit | null`.
+// zero or more hits.
 //
 // The runner — not the rule — knows about diff filtering, finding
 // IDs, and the GitHub review-position resolution. Rules are pure
@@ -13,6 +13,7 @@ import type { AstNode } from "./walker"
 
 export type Severity = "info" | "warning" | "error"
 export type RoleHint = "security" | "logic" | "performance" | "tests"
+export type AstRuleVisitResult = AstRuleHit | AstRuleHit[] | null
 
 /**
  * Rule definition shipped under `src/lib/ast-rules/rules/<id>.ts`.
@@ -32,7 +33,7 @@ export interface AstRule {
    * specific node).
    */
   nodeTypes: string[]
-  visit(node: AstNode, ctx: RuleContext): AstRuleHit | null
+  visit(node: AstNode, ctx: RuleContext): AstRuleVisitResult
 }
 
 export interface RuleContext {

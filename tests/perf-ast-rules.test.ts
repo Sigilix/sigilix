@@ -7,11 +7,17 @@
 import { describe, it, expect } from "vitest"
 import { parseSource } from "../src/lib/ast-rules/parser"
 import { walkAst } from "../src/lib/ast-rules/walker"
-import type { AstRule, AstRuleHit } from "../src/lib/ast-rules/types"
+import type { AstRule, AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
 import { noSpreadAccumulatorInLoop } from "../src/lib/ast-rules/rules/no-spread-accumulator-in-loop"
 import { noAllocationInLoop } from "../src/lib/ast-rules/rules/no-allocation-in-loop"
 import { noNPlusOneCallInLoop } from "../src/lib/ast-rules/rules/no-n-plus-one-call-in-loop"
 import { noSyncIoInRequestPath } from "../src/lib/ast-rules/rules/no-sync-io-in-request-path"
+
+function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
+  if (!hit) return
+  if (Array.isArray(hit)) out.push(...hit)
+  else out.push(hit)
+}
 
 function runRule(rule: AstRule, source: string, path = "src/app.ts", ext: ".js" | ".ts" = ".ts"): AstRuleHit[] {
   const r = parseSource(source, ext)
@@ -21,7 +27,7 @@ function runRule(rule: AstRule, source: string, path = "src/app.ts", ext: ".js" 
   for (const t of rule.nodeTypes) {
     visitors[t] = (n: unknown) => {
       const hit = rule.visit(n, { path, source, ast: r.ast })
-      if (hit) hits.push(hit)
+      appendHits(hits, hit)
     }
   }
   walkAst(r.ast, visitors)
@@ -107,6 +113,9 @@ describe("no-n-plus-one-call-in-loop", () => {
   it("flags an awaited knex builder chain in a loop", () => {
     expect(runRule(noNPlusOneCallInLoop, `async function f(){ for (const id of ids) { await knex("users").where({ id }).first() } }`)).toHaveLength(1)
   })
+  it("continues traversal after a hit so nested awaited data calls are not dropped", () => {
+    expect(runRule(noNPlusOneCallInLoop, `async function f(){ for (const url of urls) { await db.query(await fetch(url)) } }`)).toHaveLength(2)
+  })
   it("does NOT flag a non-awaited (batched) call", () => {
     expect(runRule(noNPlusOneCallInLoop, `function f(){ const ps = []; for (const id of ids) { ps.push(db.query("x")) } }`)).toHaveLength(0)
   })
@@ -136,6 +145,9 @@ describe("no-sync-io-in-request-path", () => {
   })
   it("flags fs.statSync via CJS require in a handler", () => {
     expect(runRule(noSyncIoInRequestPath, `const fs = require("fs"); app.get("/z", (req, res) => { fs.statSync("f") })`)).toHaveLength(1)
+  })
+  it("continues traversal after a sync I/O hit so nested sync calls are not dropped", () => {
+    expect(runRule(noSyncIoInRequestPath, `import fs from "fs"; app.get("/x", (req, res) => { fs.readFileSync(fs.readFileSync("path"), "utf8") })`)).toHaveLength(2)
   })
   it("does NOT flag when fs is not imported (unresolved identifier)", () => {
     expect(runRule(noSyncIoInRequestPath, `app.get("/x", (req, res) => { fs.readFileSync("f") })`)).toHaveLength(0)

@@ -63,6 +63,7 @@ import {
 } from "./branch-retrieval"
 import { embedText } from "./embeddings"
 import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
+import { mapWithConcurrency } from "./bounded-concurrency"
 import { loadWithdrawals, filterWithdrawnFindings } from "./review-withdrawal-store"
 import { GitHubClient, GitHubHttpError } from "./github"
 import { getInstallationToken } from "./github-app"
@@ -83,7 +84,7 @@ import { readGateMode, readGateThreshold } from "./gate-config"
 import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
 import {
   buildTestingEvidencePack,
-  applyTestFileContentCaps,
+  fetchTestFileContentsWithBudget,
   mergeInspectedTestFileContents,
   mergeHelperCoverage,
   renderTestingEvidenceBlock,
@@ -1512,11 +1513,13 @@ export async function handlePrReviewEnsemble(
       (env.OPENCLAW_BRANCH_AWARE_RETRIEVAL ?? "").trim().toLowerCase() === "on"
     const astFilesByPath = new Map<string, string>()
     if ((astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware) && jsTsPaths.length > 0) {
-      const fetchResults = await Promise.allSettled(
-        jsTsPaths.map(async (p) => {
+      const fetchResults = await mapWithConcurrency(
+        jsTsPaths,
+        5,
+        async (p) => {
           const src = await client.getFileContent(owner, repo, p, headSha)
           return { p, src }
-        }),
+        },
       )
       for (const r of fetchResults) {
         if (r.status === "fulfilled" && typeof r.value.src === "string") {
@@ -2148,33 +2151,25 @@ export async function handlePrReviewEnsemble(
     let testingEvidenceFetchResult: InspectedTestFileFetchResult = {
       contentByPath: {},
       failedPaths: [],
+      budgetOmittedPaths: [],
       truncatedPaths: [],
       totalChars: 0,
     }
+    let testingEvidenceFetchedCount = 0
+    let testingEvidenceSkippedForBudgetCount = 0
     if (testingEvidencePackInitial.testFilesChanged.length > 0) {
-      const rawByPath: Record<string, string> = {}
-      const failedPaths: string[] = []
-      const fetchResults = await Promise.allSettled(
-        testingEvidencePackInitial.testFilesChanged.map(async (p) => {
+      const fetched = await fetchTestFileContentsWithBudget({
+        paths: testingEvidencePackInitial.testFilesChanged,
+        fetchContent: async (p) => {
           const src = await client.getFileContent(owner, repo, p, headSha)
-          return { p, src }
-        }),
-      )
-      for (let i = 0; i < fetchResults.length; i++) {
-        const path = testingEvidencePackInitial.testFilesChanged[i]
-        if (!path) continue
-        const r = fetchResults[i]
-        if (r && r.status === "fulfilled" && typeof r.value.src === "string") {
-          rawByPath[r.value.p] = r.value.src
-        } else {
-          failedPaths.push(path)
-        }
-      }
-      const capped = applyTestFileContentCaps(
-        rawByPath,
-        testingEvidencePackInitial.testFilesChanged,
-      )
-      testingEvidenceFetchResult = { ...capped, failedPaths }
+          if (typeof src !== "string") throw new Error("content unavailable")
+          return src
+        },
+        concurrency: 5,
+      })
+      testingEvidenceFetchResult = fetched
+      testingEvidenceFetchedCount = fetched.fetchedCount
+      testingEvidenceSkippedForBudgetCount = fetched.skippedForBudgetCount
     }
     const testingEvidencePack = mergeInspectedTestFileContents(
       testingEvidencePackInitial,
@@ -2239,6 +2234,8 @@ export async function handlePrReviewEnsemble(
         contentTotalChars: testingEvidenceFetchResult.totalChars,
         truncatedPaths_count: testingEvidenceFetchResult.truncatedPaths.length,
         failedFetchPaths_count: testingEvidenceFetchResult.failedPaths.length,
+        fetchedPaths_count: testingEvidenceFetchedCount,
+        skippedForBudgetPaths_count: testingEvidenceSkippedForBudgetCount,
       }))
     }
 

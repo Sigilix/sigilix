@@ -82,18 +82,18 @@ export const noAllocationInLoop: AstRule = {
   shortDescription: "loop-invariant allocation rebuilt every iteration",
   language: "both",
   nodeTypes: ["Program"],
-  visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
+  visit(node: AstNode, ctx: RuleContext): AstRuleHit[] | null {
     if (!node || node.type !== "Program") return null
-    let hit: AstNode | null = null
+    const hits: AstNode[] = []
 
     function walk(n: AstNode, loopDepth: number): void {
-      if (hit || !n || typeof n !== "object") return
+      if (!n || typeof n !== "object") return
       const t = n.type
       let nextDepth = loopDepth
       if (typeof t === "string" && FUNCTION_BOUNDARY_TYPES.has(t)) nextDepth = 0
       else if (typeof t === "string" && LOOP_TYPES.has(t)) nextDepth = loopDepth + 1
       if (nextDepth > 0 && t === "NewExpression" && (isHoistableRegExp(n) || isIntlFormatter(n))) {
-        hit = n
+        hits.push(n)
         return
       }
       for (const k of Object.keys(n)) {
@@ -107,14 +107,13 @@ export const noAllocationInLoop: AstRule = {
       }
     }
     walk(node, 0)
-    if (!hit) return null
-    const h = hit as AstNode
-    return {
+    if (hits.length === 0) return null
+    return hits.map((h) => ({
       message: "This allocation does not depend on the loop and is rebuilt every iteration. Hoist it above the loop and reuse the single instance.",
       evidence: sliceEvidence(ctx.source, h),
       line: h.loc?.start?.line ?? 1,
       endLine: h.loc?.end?.line ?? h.loc?.start?.line ?? 1,
       column: h.loc?.start?.column ?? 0,
-    }
+    }))
   },
 }

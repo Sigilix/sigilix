@@ -6,7 +6,13 @@ import { describe, it, expect } from "vitest"
 import { parseSource } from "../src/lib/ast-rules/parser"
 import { walkAst } from "../src/lib/ast-rules/walker"
 import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
-import type { AstRule, AstRuleHit } from "../src/lib/ast-rules/types"
+import type { AstRule, AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
+
+function appendHits(out: AstRuleHit[], hit: AstRuleVisitResult): void {
+  if (!hit) return
+  if (Array.isArray(hit)) out.push(...hit)
+  else out.push(hit)
+}
 
 function runRule(rule: AstRule, source: string, ext: ".js" | ".ts" = ".js"): AstRuleHit[] {
   const r = parseSource(source, ext)
@@ -16,7 +22,7 @@ function runRule(rule: AstRule, source: string, ext: ".js" | ".ts" = ".js"): Ast
   for (const t of rule.nodeTypes) {
     visitors[t] = (n: unknown) => {
       const hit = rule.visit(n, { path: "test.js", source, ast: r.ast })
-      if (hit) hits.push(hit)
+      appendHits(hits, hit)
     }
   }
   walkAst(r.ast, visitors)

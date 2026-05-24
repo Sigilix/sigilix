@@ -98,6 +98,11 @@ function emitTelemetry(event: string, fields: Record<string, unknown>): void {
   console.log(JSON.stringify({ event, ...fields }))
 }
 
+function normalizeHits(hit: AstRuleHit | AstRuleHit[] | null): AstRuleHit[] {
+  if (!hit) return []
+  return Array.isArray(hit) ? hit : [hit]
+}
+
 export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesResult> {
   const { diff, filesByPath, reviewable, config, ctx } = args
   const t0 = Date.now()
@@ -193,7 +198,9 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
         for (const rule of ruleList) {
           try {
             const hit = rule.visit(node, ruleCtx)
-            if (hit) fileHits.push({ rule, hit })
+            for (const candidate of normalizeHits(hit)) {
+              fileHits.push({ rule, hit: candidate })
+            }
           } catch (err) {
             emitTelemetry("ast-rules-rule-threw", {
               path,

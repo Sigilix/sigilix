@@ -192,7 +192,6 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         ],
         dropped: [],
         softened: [],
-        retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
 
@@ -229,7 +228,6 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         ],
         dropped: [],
         softened: [],
-        retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
 
@@ -264,7 +262,6 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         ],
         dropped: [],
         softened: [],
-        retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
 
@@ -299,7 +296,6 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         ],
         dropped: [],
         softened: [],
-        retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
 
@@ -330,7 +326,6 @@ describe("validateForSubmission — ARC-156 vague-prefix filter", () => {
         ],
         dropped: [],
         softened: [],
-        retrievalCallsUsed: 0,
       } satisfies SynthesizerProvenance,
     }
 

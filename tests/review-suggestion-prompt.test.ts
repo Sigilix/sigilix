@@ -37,10 +37,11 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_REVIEW_PROMPT).toMatch(/point-fix[\s\S]*?omitting `startLine`/i)
     expect(PR_REVIEW_PROMPT).toMatch(/Do NOT widen a point-fix/i)
   })
-  it("PROMPT_VERSION bumped to 8 (SIG-180: point-fix anchor guidance)", () => {
+  it("PROMPT_VERSION bumped to 9 (SIG-176: synth retrieval schema cleanup)", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
-    // SIG-180 7→8 (point-fix anchor scope exception).
-    expect(PROMPT_VERSION).toBe("8")
+    // SIG-180 7→8 (point-fix anchor scope exception);
+    // SIG-176 8→9 (remove dead synth retrieve/provenance budget contract).
+    expect(PROMPT_VERSION).toBe("9")
   })
 })

@@ -45,7 +45,6 @@ const VALID_SYNTH_JSON = JSON.stringify({
       { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-1"], action: "kept", verifiedViaRetrieval: false },
     ],
     dropped: [],
-    retrievalCallsUsed: 0,
   },
 })
 

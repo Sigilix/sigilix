@@ -165,7 +165,7 @@ describe("truncateVerdictToTokens", () => {
   })
 })
 
-describe("validateForSubmission — hallucination guard + line validity + score-1 demotion", () => {
+describe("validateForSubmission — hallucination guard + line validity + score-1 handling", () => {
   const reviewable: ReviewableMap = new Map([
     ["src/lib/foo.ts", [
       { line: 42, side: "RIGHT" },
@@ -204,7 +204,6 @@ describe("validateForSubmission — hallucination guard + line validity + score-
             verifiedViaRetrieval: false,
           }],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -231,7 +230,6 @@ describe("validateForSubmission — hallucination guard + line validity + score-
             verifiedViaRetrieval: false,
           }],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -253,7 +251,6 @@ describe("validateForSubmission — hallucination guard + line validity + score-
             verifiedViaRetrieval: false,
           }],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -261,6 +258,29 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     })
     expect(out.verdict.findings).toHaveLength(0)
     expect(out.droppedForHallucination).toBe(1)
+  })
+
+  it("DROPS score-1 findings with empty sourceFindingIds before advisory provenance recording", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 42, score: 1, headline: "tiny nit" }] },
+        provenance: {
+          findings: [{
+            sourceSpecialists: [],
+            sourceFindingIds: [],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(0)
+    expect(out.demotedScore1).toBe(0)
+    expect(out.droppedForHallucination).toBe(1)
+    expect(out.provenance.dropped).toEqual([])
   })
 
   it("DROPS findings whose (path, line) is not a reviewable position", () => {
@@ -278,7 +298,6 @@ describe("validateForSubmission — hallucination guard + line validity + score-
             verifiedViaRetrieval: false,
           }],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -288,7 +307,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.droppedForInvalidLine).toBe(1)
   })
 
-  it("DEMOTES score-1 findings to summary, never inline", () => {
+  it("drops score-1 findings from chill reviews and records provenance", () => {
     const out = validateForSubmission({
       synthOutput: {
         verdict: {
@@ -305,19 +324,33 @@ describe("validateForSubmission — hallucination guard + line validity + score-
             { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-1"], action: "kept", verifiedViaRetrieval: false },
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
       specialistVerdicts,
+      profile: "chill",
     })
     expect(out.verdict.findings).toHaveLength(0)  // score-1 never goes inline
     expect(out.demotedScore1).toBe(2)
-    expect(out.verdict.summary).toContain("Advisory nits:")
-    expect(out.verdict.summary).toContain("first nit")
+    expect(out.verdict.summary).not.toContain("Advisory nits:")
+    expect(out.verdict.summary).not.toContain("first nit")
+    expect(out.provenance.dropped).toEqual([
+      {
+        specialist: "logic",
+        sourceFindingId: "logic-1",
+        headline: "first nit",
+        reason: "score-1-advisory",
+      },
+      {
+        specialist: "logic",
+        sourceFindingId: "logic-1",
+        headline: "second nit",
+        reason: "score-1-advisory",
+      },
+    ])
   })
 
-  it("caps advisory nits at 5, appends 'plus N more' (v3.1 spec)", () => {
+  it("caps advisory nits at 5 for assertive profile and appends 'plus N more'", () => {
     const findings = Array.from({ length: 8 }, (_, i) => ({
       ...baseFinding,
       line: 42,
@@ -336,14 +369,16 @@ describe("validateForSubmission — hallucination guard + line validity + score-
         provenance: {
           findings: provenance,
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
       specialistVerdicts,
+      profile: "assertive",
     })
     // Top 5 emitted in summary, "plus 3 more" appended.
     expect(out.verdict.summary).toContain("plus 3 more advisory nits")
+    expect(out.provenance.dropped).toHaveLength(8)
+    expect(out.provenance.dropped.every((d) => d.reason === "score-1-advisory")).toBe(true)
   })
 
   it("matches provenance to verdict findings BY INDEX, not by headline", () => {
@@ -364,7 +399,6 @@ describe("validateForSubmission — hallucination guard + line validity + score-
             { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-99"], action: "kept", verifiedViaRetrieval: false },  // index 1 = bad source
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -654,7 +688,6 @@ describe("validateForSubmission — emits cleanFindingProvenance aligned by inde
             },
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -692,7 +725,6 @@ describe("validateForSubmission — emits cleanFindingProvenance aligned by inde
             },
           ],
           dropped: [],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -725,7 +757,6 @@ describe("validateForSubmission — emits cleanFindingProvenance aligned by inde
             headline: "off-by-one",
             reason: "review-memory/logic",
           }],
-          retrievalCallsUsed: 0,
         },
       },
       reviewable,
@@ -1180,7 +1211,7 @@ describe("classifySynthOutcome (ARC-278)", () => {
     modelUsed: "glm-5.1:cloud",
     attemptsUsed: 1,
     verdict: { summary: "x".repeat(20), confidence: 4, confidenceReason: "y", findings: [] },
-    provenance: { findings: [], dropped: [], retrievalCallsUsed: 0 },
+    provenance: { findings: [], dropped: [] },
     elapsedMs: 100,
   } as const
 
@@ -1246,6 +1277,8 @@ describe("buildSynthRetryMessage (ARC-278)", () => {
   it("appends a provenance-specific hint on provenance failure", () => {
     const out = buildSynthRetryMessage(original, "provenance")
     expect(out).toContain("RETRY: Your previous response's `provenance` field was malformed")
+    expect(out).toContain("softened?:")
+    expect(out).toContain("provenance.softened[i].sourceFindingId")
     expect(out).toContain("SPECIALIST VERDICTS")
   })
 

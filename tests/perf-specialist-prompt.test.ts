@@ -95,6 +95,22 @@ describe("PROMPT_VERSION", () => {
   })
 })
 
+describe("SIG-176 synthesizer retrieval contract cleanup", () => {
+  it("does not advertise a callable retrieval loop or dead provenance budget", () => {
+    expect(SYNTHESIZER_PROMPT).not.toContain("retrieve_codebase")
+    expect(SYNTHESIZER_PROMPT).not.toContain("retrievalCallsUsed")
+    expect(SYNTHESIZER_PROMPT).not.toMatch(/per-PR retrieve budget/i)
+  })
+
+  it("tells synth to adjudicate from precomputed context only", () => {
+    expect(SYNTHESIZER_PROMPT).toContain("CONFLICT ADJUDICATION")
+    expect(SYNTHESIZER_PROMPT).toContain("precomputed context blocks")
+    expect(SYNTHESIZER_PROMPT).toContain("[RETRIEVAL SNAPSHOT]")
+    expect(SYNTHESIZER_PROMPT).toContain("[GRAPH CONTEXT]")
+    expect(SYNTHESIZER_PROMPT).toContain("[TESTING EVIDENCE]")
+  })
+})
+
 // SIG-161 PR 4b — confidence rubric embedded in SHARED_OUTPUT_INSTRUCTIONS.
 // Every specialist sees the rubric because they all interpolate
 // SHARED_OUTPUT_INSTRUCTIONS into their system prompt. Tests pin the

@@ -141,7 +141,7 @@ function makeSpecialistVerdicts(): SpecialistVerdictsArg {
 function perfProvenance(sourceId = "performance-0"): SynthesizerProvenance {
   return {
     findings: [{ sourceSpecialists: ["performance"], sourceFindingIds: [sourceId], action: "kept", verifiedViaRetrieval: false }],
-    dropped: [], softened: [], retrievalCallsUsed: 0,
+    dropped: [], softened: [],
   }
 }
 
@@ -233,7 +233,7 @@ describe("validateForSubmission — SIG-110 perf evidence gate", () => {
         verdict: { summary: "T", confidence: 3, confidenceReason: "R.", findings: [finding({ ...vague, category: "logic" })] },
         provenance: {
           findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false }],
-          dropped: [], softened: [], retrievalCallsUsed: 0,
+          dropped: [], softened: [],
         },
       },
       reviewable: makeReviewable(),

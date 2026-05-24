@@ -12,8 +12,8 @@
 //   7. Truncate each specialist verdict to 8k tokens before fan-in
 //   8. Assign stable IDs (logic-0, security-1, ...) so synthesizer can
 //      reference them in provenance.sourceFindingIds
-//   9. Synthesizer (Kimi K2.6) runs as a constrained agent loop with
-//      retrieve_codebase as its only tool, capped per remaining budget,
+//   9. Synthesizer (Kimi K2.6) runs on specialist verdicts plus
+//      precomputed context blocks, with no follow-up tool calls.
 //      120s timeout
 //  10. Post-synthesis validation:
 //      - Hallucination guard: provenance.findings[i].sourceFindingIds
@@ -21,8 +21,8 @@
 //      - Line validity: drop findings whose (path, line) isn't a
 //        reviewable position in the diff
 //      - Side derivation: orchestrator picks LEFT/RIGHT from parsed diff
-//      - Score-1 demotion: aggregated into Advisory nits (top 5),
-//        never inline
+//      - Score-1 demotion: dropped from inline output; optionally
+//        aggregated into Advisory nits only for assertive profiles
 //  11. Stale-head guard #2 (before posting)
 //  12. Submit OR skip (shadow mode = telemetry-only)
 //  13. Write ensemble telemetry record (paired with any Phase 3 record
@@ -169,6 +169,7 @@ import {
   resolveCoverageConfig,
   resolvePerfBudgetsConfig,
   type SigilixConfig,
+  type SigilixProfile,
 } from "./sigilix-config"
 import {
   runPerfBudgetsCheck,
@@ -284,9 +285,7 @@ import { withTimeout } from "./with-timeout"
 
 // DEFAULT_MAX_MODEL_CALLS_PER_PR is configured via env but currently
 // unused at the orchestrator level — Phase 4a relies on the per-call
-// timeouts + the retrieve budget for cost control. Reserved for Phase
-// 4b when the synthesizer's optional retrieve_codebase tool path is
-// fully wired.
+// timeouts + the precomputed retrieval budget for cost control.
 const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 
 // Phase 4a.3 timeout schedule (rebalanced 2026-05-06 after Phase 4a.2
@@ -1368,7 +1367,7 @@ export async function handlePrReviewEnsemble(
     // Phase 4a.1: cap the pre-flight Vectorize round-trip so a slow
     // retrieval can't silently consume the synth budget. Failure here
     // is non-fatal (per v3.1 §8) — specialists fall back to empty
-    // snapshot and may still call `retrieve_codebase` themselves.
+    // snapshot and may still use their role-specific context blocks.
     // Capture cache locally so the lambda below sees a non-null narrowing.
     const preflightCache = cache
     let preflightChunks: Awaited<ReturnType<typeof preflightCache.cachedRetrieve>>["chunks"] = null
@@ -1377,8 +1376,8 @@ export async function handlePrReviewEnsemble(
     // orchCtrl.signal, so the perf query adds no critical-path wall-clock
     // (the orchestrator has only ~10s of static slack). Fires only when
     // the performance specialist is in the lineup AND the retrieve budget
-    // has room for preflight + perf + the synth conflict-verification
-    // reserve (`budgetRemaining() > 2` reads full budget here since the
+    // has room for preflight + perf plus shared retrieval headroom
+    // (`budgetRemaining() > 2` reads full budget here since the
     // cache consumes only after its internal cacheKey await — so this
     // means maxCalls >= 3, the default). The query seeds perf anti-pattern
     // vocabulary + changed function names so Vectorize lands on
@@ -2744,7 +2743,6 @@ export async function handlePrReviewEnsemble(
         attemptsUsed: Math.max(1, synthAttemptsUsed),
         verdict: null,
         provenance: null,
-        retrievalCallsUsed: 0,
         elapsedMs: Date.now() - synthStartMs,
         timedOut: true,
         failureReason: "synth_timeout",
@@ -2778,7 +2776,6 @@ export async function handlePrReviewEnsemble(
         attemptsUsed: Math.max(1, synthAttemptsUsed),
         verdict: null,
         provenance: null,
-        retrievalCallsUsed: 0,
         elapsedMs: Date.now() - synthStartMs,
         timedOut: true,
         failureReason: "synth_timeout",
@@ -2810,7 +2807,6 @@ export async function handlePrReviewEnsemble(
       attemptsUsed: synthAttemptsUsed > 0 ? synthAttemptsUsed : synthOutput.attemptsUsed,
       verdict: synthOutput.verdict,
       provenance: synthOutput.provenance,
-      retrievalCallsUsed: 0,  // Phase 4a synth doesn't use retrieve; reserved for Phase 4b
       elapsedMs: Date.now() - synthStartMs,
       timedOut: synthAborted,
     }
@@ -2972,6 +2968,7 @@ export async function handlePrReviewEnsemble(
         astPerfFindings: astResult.findings.filter((f) => f.roleHint === "performance"),
       },
       perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
+      profile: sigilixConfig.profile ?? "chill",
       onPerfFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -2987,6 +2984,9 @@ export async function handlePrReviewEnsemble(
         args.validationSink?.push({ gate: "perf", reason: info.reason, dropped: info.dropped })
       },
     })
+    if (telemetry.synthesizer) {
+      telemetry.synthesizer.provenance = validated.provenance
+    }
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
       droppedForHallucination: validated.droppedForHallucination,
@@ -4017,12 +4017,11 @@ export async function handlePrReviewEnsemble(
     if (shadowSpecialistPromises.size > 0) {
       for (const [role, shadowPromise] of shadowSpecialistPromises) {
         try {
-          // eslint-disable-next-line no-await-in-loop -- shadow
-          // comparison is per-role + must serialize on the same
-          // wall-clock; each await independently catches its own
-          // failure so an early role error can't poison the rest.
-          // The grace race shares one absolute deadline across all
-          // roles, so a slow first role can't starve the others.
+          // Shadow comparison is per-role + must serialize on the
+          // same wall-clock; each await independently catches its own
+          // failure so an early role error can't poison the rest. The
+          // grace race shares one absolute deadline across all roles,
+          // so a slow first role can't starve the others.
           const shadow = await raceWithShadowGrace(
             shadowPromise,
             shadowDeadline,
@@ -4995,7 +4994,6 @@ export interface SynthesizerProvenance {
     headline: string
     reason: string
   }>
-  retrievalCallsUsed: number
 }
 
 /**
@@ -5145,12 +5143,12 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
 
 function isValidProvenance(value: unknown): value is SynthesizerProvenance {
   // CR PR #35 catch: tighten shape check beyond "are findings + dropped
-  // arrays?" — without this, a payload like `{findings:[{}], dropped:[],
-  // retrievalCallsUsed:0}` passes and validateForSubmission then crashes
+  // arrays?" — without this, a payload like `{findings:[{}], dropped:[]}`
+  // passes and validateForSubmission then crashes
   // on `provenance.findings[i].sourceFindingIds.length` (undefined).
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const v = value as Record<string, unknown>
-  if (!Array.isArray(v.findings) || !Array.isArray(v.dropped) || typeof v.retrievalCallsUsed !== "number") {
+  if (!Array.isArray(v.findings) || !Array.isArray(v.dropped)) {
     return false
   }
   // Each provenance.findings[i] must have an array sourceFindingIds.
@@ -5558,7 +5556,7 @@ export function buildSynthRetryMessage(
     outcome === "parse"
       ? "RETRY: Your previous response could not be parsed as JSON. Re-emit ONLY a single JSON object matching the schema. No prose. No markdown fence. No leading or trailing text."
       : outcome === "provenance"
-      ? "RETRY: Your previous response's `provenance` field was malformed. Re-emit with a valid `provenance` object: `{ findings: [...], dropped: [...], retrievalCallsUsed: number }`. Each `provenance.findings[i]` must reference real source specialist finding IDs from the [SPECIALIST VERDICTS] block."
+      ? "RETRY: Your previous response's `provenance` field was malformed. Re-emit with a valid `provenance` object: `{ findings: [...], dropped: [...], softened?: [...] }`. Each `provenance.findings[i].sourceFindingIds[]` and each `provenance.softened[i].sourceFindingId` must reference real source specialist finding IDs from the [SPECIALIST VERDICTS] block."
       : "RETRY: Your previous response did not arrive within the time budget. Re-emit promptly and concisely; the schema and inputs above are unchanged."
   return `${originalMessage}\n\n${hint}`
 }
@@ -5753,6 +5751,11 @@ export interface ValidatedOutput {
    * finding to its `ReviewMemoryCategory`.
    */
   cleanFindingProvenance: SynthesizerProvenance["findings"]
+  /**
+   * Synth provenance plus validation-layer drops that are not safe to
+   * send inline, such as score-1 advisories under the default profile.
+   */
+  provenance: SynthesizerProvenance
 }
 
 /**
@@ -6054,6 +6057,12 @@ export function validateForSubmission(args: {
     finding: PrReviewFinding,
     info: { reason: PerfDropReason; dropped: boolean },
   ) => void
+  /**
+   * ARC-176/SIG-175: review-tone preset. `assertive` preserves the
+   * old score-1 advisory summary aggregation; `chill`/default drops
+   * score-1 nits from customer-visible output entirely.
+   */
+  profile?: SigilixProfile
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -6074,6 +6083,7 @@ export function validateForSubmission(args: {
     perfEvidence,
     perfValidatorMode = "shadow",
     onPerfFindingDropped,
+    profile = "chill",
   } = args
   const validIds = new Set<string>()
   for (const v of specialistVerdicts) {
@@ -6083,6 +6093,9 @@ export function validateForSubmission(args: {
 
   const cleanFindings: PrReviewFinding[] = []
   const cleanFindingProvenance: SynthesizerProvenance["findings"] = []
+  const provenanceDropped: SynthesizerProvenance["dropped"] = [
+    ...synthOutput.provenance.dropped,
+  ]
   const unanchoredFindings: PrReviewFinding[] = []
   let droppedForInvalidLine = 0
   let droppedForHallucination = 0
@@ -6269,6 +6282,12 @@ export function validateForSubmission(args: {
     // Score-1 advisory demotion
     if (f.score <= 1) {
       advisoryNits.push(f)
+      provenanceDropped.push({
+        specialist: firstSpecialistRoleFromSourceIds(sourceIds),
+        sourceFindingId: sourceIds[0]!,
+        headline: f.headline,
+        reason: "score-1-advisory",
+      })
       demotedScore1++
       continue
     }
@@ -6302,9 +6321,11 @@ export function validateForSubmission(args: {
     if (provenance) cleanFindingProvenance.push(provenance)
   }
 
-  // Aggregate score-1 advisory nits (cap at 5, sort by score DESC then alpha)
+  // Aggregate score-1 advisory nits only when the repo opts into
+  // assertive review tone. Default/chill keeps these out of
+  // customer-visible output entirely while preserving audit provenance.
   let summary = synthOutput.verdict.summary
-  if (advisoryNits.length > 0) {
+  if (profile === "assertive" && advisoryNits.length > 0) {
     advisoryNits.sort((a, b) => b.score - a.score || a.headline.localeCompare(b.headline))
     const top = advisoryNits.slice(0, MAX_ADVISORY_NITS)
     const rest = advisoryNits.length - top.length
@@ -6326,6 +6347,10 @@ export function validateForSubmission(args: {
     droppedForFailedLogicValidation,
     droppedForFailedPerfValidation,
     cleanFindingProvenance,
+    provenance: {
+      ...synthOutput.provenance,
+      dropped: provenanceDropped,
+    },
   }
 }
 
@@ -6337,6 +6362,14 @@ export function validateForSubmission(args: {
  * validated finding ids too. A merged security+logic finding
  * (sourceSpecialists: ["security","logic"]) still counts as security.
  */
+function firstSpecialistRoleFromSourceIds(sourceIds: readonly string[]): SpecialistRole {
+  for (const id of sourceIds) {
+    const role = ALL_SPECIALISTS.find((candidate) => id.startsWith(`${candidate}-`))
+    if (role) return role
+  }
+  return "logic"
+}
+
 function sourceRolesInclude(
   sourceIds: readonly string[],
   role: SpecialistRole,
@@ -6420,7 +6453,6 @@ interface EnsembleTelemetry {
     attemptsUsed?: number
     verdict: PrReviewVerdict | null
     provenance: SynthesizerProvenance | null
-    retrievalCallsUsed: number
     failureReason?: string
     failureRawAnswer?: string
     elapsedMs: number

@@ -386,7 +386,7 @@ Four specialists (LOGIC, SECURITY, PERFORMANCE, TESTS) have each produced a verd
 
 1. **READ** all four verdicts and the original diff.
 2. **DEDUPE** findings that point to the same root issue (same file, same line, similar headline). Merge into one finding. Keep the higher-severity score, the more specific headline, the more actionable body.
-3. **RESOLVE** conflicts. If A says "bug" and B says "fine" on the same line, read the diff and pick. Document your call in the finding's body. For contested sev≥4 findings ONLY, you may use the \`retrieve_codebase\` tool to verify (subject to the per-PR retrieve budget — see CONFLICT VERIFICATION below).
+3. **RESOLVE** conflicts. If A says "bug" and B says "fine" on the same line, read the diff and pick. Use only the specialist verdicts, original diff, and precomputed context blocks provided in the user message. Document your call in the finding's body.
 4. **RANK** by severity. At equal numeric score, the tie-break is:
        security > logic > performance > tests
    So security-5 outranks logic-5 outranks perf-5 outranks tests-5.
@@ -400,14 +400,17 @@ If you think specialists missed something, mention it in \`summary\` as commenta
 
 # SCORE-1 = ADVISORY ONLY
 
-Score-1 findings (taste / nit) do NOT block. Drop them, OR aggregate the highest-confidence top-5 into a single "Advisory nits:" sentence in the top-level summary. They never appear as inline comments. Score ≥2 findings appear inline.
+Score-1 findings (taste / nit) do NOT block. Drop them from inline findings. The orchestrator may aggregate them only for repos using the assertive review profile. Score ≥2 findings appear inline.
 
-# CONFLICT VERIFICATION (limited tool — when present)
+# CONFLICT ADJUDICATION (precomputed context only)
 
-When you have access to \`retrieve_codebase\`, each call costs against a per-PR budget. Use a call ONLY when:
-  (a) two specialists disagree on the same line/file, AND
-  (b) the contested finding is severity ≥4
-For each contested sev≥4 finding, you may use up to 1 call. If you have more than the budget allows, prioritize the highest-severity ones; for the rest, document your adjudication as "unverified — relying on specialist agreement" in the body and lower confidence accordingly.
+You do not have a callable retrieval tool in this phase. For contested sev≥4 findings, adjudicate using:
+  (a) the four specialist verdicts,
+  (b) the original diff,
+  (c) [RETRIEVAL SNAPSHOT],
+  (d) [GRAPH CONTEXT], and
+  (e) [TESTING EVIDENCE] when present.
+If the supplied context is insufficient, lower confidence or drop the finding. Do not invent follow-up evidence.
 
 # OUTPUT (provenance-extended)
 
@@ -453,7 +456,7 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "specialist": "performance",
         "sourceFindingId": "performance-2",
         "headline": "...",
-        "reason": "off-domain noise" | "duplicate" | "false positive on diff inspection" | "score-1 advisory"
+        "reason": "off-domain noise" | "duplicate" | "false positive on diff inspection" | "score-1-advisory"
       }
     ],
     "softened": [
@@ -463,8 +466,7 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "headline": "...",
         "reason": "review-memory/performance" | "review-memory/performance/<pathSha12>"
       }
-    ],
-    "retrievalCallsUsed": 0
+    ]
   }
 }
 

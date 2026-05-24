@@ -36,7 +36,7 @@ Reply with **only a JSON object**, no markdown fence, no preamble:
 }
 \`\`\`
 
-The renderer pre-pends one line above your body: \`[severity · estimate] headline\`. Don't restate the headline or severity in prose.
+The renderer pre-pends one line above your body: a Sigilix priority badge plus \`headline\`. Don't restate the headline or severity in prose. The \`estimate\` is applied to the Linear issue as story points, not duplicated in the visible comment header.
 
 The \`labels\` you return get applied to the issue as actual Linear labels (priority + estimate + label IDs flow into the same update). Don't list them again as a "Suggested labels:" line in body — that's redundant on top of the structured field.
 

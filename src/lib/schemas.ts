@@ -237,8 +237,9 @@ export const ISSUE_TRIAGE_SCHEMA = {
     },
     // Free-form Markdown body. The model writes whatever shape it
     // wants here — its own headers, bullet lists, file refs, prior
-    // art, optional Mermaid diagrams. The renderer adds the
-    // [severity · estimate] headline tag above and posts as-is.
+    // art, optional Mermaid diagrams. The renderer adds the priority
+    // badge + headline above and posts as-is; estimate is applied as
+    // Linear story points rather than duplicated in the comment body.
     body: { type: "string" },
     // Issue-description rewrite — separate codepath that PATCHes
     // the Linear issue body. Has its own structural rules in the

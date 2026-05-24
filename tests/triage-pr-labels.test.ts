@@ -185,6 +185,28 @@ describe("handlePrLabels — config gating", () => {
     expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
   })
 
+  it("skips generation when repo-label fallback has no described candidates", async () => {
+    mockGetFileContent.mockResolvedValue(null) // no sigilix.json
+    mockGetPullRequest.mockResolvedValue({
+      number: 42, title: "docs update", body: "updates README",
+      head: { sha: "a".repeat(40), ref: "docs/readme" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
+    })
+    mockListRepositoryLabels.mockResolvedValue([
+      { name: "bug", description: "" },
+      { name: "area:security", description: "" },
+    ])
+
+    const { kv } = makeKvStub()
+    await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
+
+    expect(mockListRepositoryLabels).toHaveBeenCalledTimes(1)
+    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('"reason":"no-candidate-labels"'))
+  })
+
   it("no-ops when GITHUB_APP_ID is missing", async () => {
     const { kv } = makeKvStub()
     const env = {
@@ -318,6 +340,32 @@ describe("handlePrLabels — happy path", () => {
     expect(mockAddLabelsToIssue).not.toHaveBeenCalled()
     expect(mockRemoveLabelFromIssue).not.toHaveBeenCalled() // wontfix is NOT touched
   })
+
+  it("warns and filters custom labels that match status/triage labels", async () => {
+    mockGetFileContent.mockResolvedValue(JSON.stringify({
+      customLabels: [
+        { name: "wontfix", description: "Maintainer decision state" },
+        { name: "area:security", description: "Touches auth or secrets" },
+      ],
+    }))
+    mockGetPullRequest.mockResolvedValue({
+      number: 42, title: "auth refactor", body: "rewrites password hashing",
+      head: { sha: "a".repeat(40), ref: "feat/auth" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      labels: [],
+    })
+    mockListRepositoryLabels.mockResolvedValue([
+      { name: "area:security", description: "Touches auth or secrets" },
+    ])
+    mockGenerate.mockResolvedValue('{"labels":["wontfix","area:security"]}')
+
+    const { kv } = makeKvStub()
+    await handlePrLabels({ ...baseArgs, env: makeEnv(kv) })
+
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"event":"pr-labels-custom-label-denied"'))
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('"label":"wontfix"'))
+    expect(mockAddLabelsToIssue).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", 42, ["area:security"])
+  })
 })
 
 describe("buildLabelCandidates", () => {
@@ -352,6 +400,18 @@ describe("buildLabelCandidates", () => {
       { name: "good first issue", description: "Good for first-time contributors" },
       { name: "help wanted", description: "Maintainers want help" },
       { name: "question", description: "Needs more information" },
+      { name: "area:security", description: "Touches auth or secrets" },
+    ])).toEqual([
+      { name: "area:security", description: "Touches auth or secrets" },
+    ])
+  })
+
+  it("normalizes status labels before denylist matching", () => {
+    expect(buildLabelCandidates(undefined, [
+      { name: "wont-fix", description: "This will not be worked on" },
+      { name: "in_progress", description: "Currently being worked on" },
+      { name: "won't-fix", description: "This will not be worked on" },
+      { name: "needs--triage", description: "Needs initial review" },
       { name: "area:security", description: "Touches auth or secrets" },
     ])).toEqual([
       { name: "area:security", description: "Touches auth or secrets" },

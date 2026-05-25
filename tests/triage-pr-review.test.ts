@@ -22,6 +22,7 @@ import {
   isCommentAnchorable,
   isSubstantiveAnchorLine,
   pickAnchorLineForward,
+  previewReviewSubmissionEvent,
   parsePrReviewResponse,
   renderCommentBody,
   renderFixPlan,
@@ -355,6 +356,39 @@ describe("chooseReviewEventForRenderedFindings", () => {
       inlineFindings: [],
       bodyOnlyFindings: [],
       openItems: [sigilixThread],
+    })).toBe("REQUEST_CHANGES")
+  })
+})
+
+describe("previewReviewSubmissionEvent", () => {
+  it("matches final rendering for body-only routing without building the body", () => {
+    const fileFinding: PrReviewFinding = {
+      ...baseFinding,
+      scope: "file",
+      score: 4,
+    }
+
+    expect(previewReviewSubmissionEvent({
+      verdict: {
+        summary: "Body-only issue.",
+        confidence: 4,
+        confidenceReason: "Specific.",
+        findings: [fileFinding],
+      },
+      headSha: "abc",
+    })).toBe("COMMENT")
+  })
+
+  it("honors explicit event overrides", () => {
+    expect(previewReviewSubmissionEvent({
+      verdict: {
+        summary: "Body-only issue.",
+        confidence: 4,
+        confidenceReason: "Specific.",
+        findings: [{ ...baseFinding, scope: "file" }],
+      },
+      headSha: "abc",
+      eventOverride: "REQUEST_CHANGES",
     })).toBe("REQUEST_CHANGES")
   })
 })
@@ -1275,6 +1309,26 @@ describe("buildReviewSubmission", () => {
       annotation_level: "failure",
       title: "[P0] logic: module invariant is unclear",
     })
+  })
+
+  it("honors REQUEST_CHANGES override even when every finding renders body-only", () => {
+    const fileFinding = {
+      ...baseFinding,
+      scope: "file" as const,
+      score: 5,
+      headline: "approval-readiness blocker",
+      body: "The finding is policy-level and must block despite body rendering.",
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: { ...verdict, findings: [fileFinding] },
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "REQUEST_CHANGES",
+    })
+
+    expect(out.submission.event).toBe("REQUEST_CHANGES")
+    expect(out.submission.comments).toBeUndefined()
+    expect(out.submission.body).toContain("To dismiss this review")
   })
 })
 
@@ -2540,12 +2594,12 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
   it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="30"')
-    expect(out).toContain('height="22"')
+    expect(out).toContain('width="24"')
+    expect(out).toContain('height="18"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260525-1/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260525-2/p2.svg`)
     expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {

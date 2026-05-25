@@ -155,7 +155,8 @@ describe("buildFallbackBody", () => {
   it("includes category metadata next to the body-only anchor", () => {
     const body = buildFallbackBody(baseVerdict, [])
     expect(body).toContain("**off-by-one in `clampIndex`**")
-    expect(body).toContain("`logic` · `src/lib/foo.ts:42`")
+    expect(body).toContain('alt="LOGIC"')
+    expect(body).toContain("`src/lib/foo.ts:42`")
   })
 
   it("indents the finding body so it nests under its bullet visually", () => {

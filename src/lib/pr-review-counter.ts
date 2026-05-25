@@ -1,10 +1,11 @@
 // SIG-101 — per-PR review counter persistence.
 //
-// The orchestrator calls `bumpPrReviewCounter` before rendering a
-// REQUEST_CHANGES body so the resulting `_Sigilix · Review #N for
-// this PR · last rendered <ts>._` footer line reflects the actual
-// number of reviews Sigilix has submitted against this PR. APPROVE
-// bodies stay marker-only (SIG-94) and skip the bump.
+// The orchestrator calls `preparePrReviewCounter` before rendering a
+// REQUEST_CHANGES body, then persists it only after that review has
+// posted. The resulting `_Sigilix · Review #N for this PR · last
+// rendered <ts>._` footer line reflects the actual number of
+// request-changes reviews Sigilix has submitted against this PR.
+// APPROVE/COMMENT bodies skip the counter.
 //
 // KV shape:
 //   key:   pr-review-counter:<owner>/<repo>#<prNumber>
@@ -32,6 +33,62 @@ export function buildReviewCounterKey(
   return `pr-review-counter:${owner}/${repo}#${prNumber}`
 }
 
+export interface PreparedPrReviewCounter {
+  value: number
+  persist: () => Promise<void>
+}
+
+/**
+ * Compute the next visible review counter without mutating KV yet.
+ * The caller can render the counter into a REQUEST_CHANGES body, then
+ * persist it only after that REQUEST_CHANGES review actually posts.
+ */
+export async function preparePrReviewCounter(
+  env: Env,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<PreparedPrReviewCounter> {
+  const key = buildReviewCounterKey(owner, repo, prNumber)
+  let current = 0
+  let readSucceeded = false
+  try {
+    const raw = await env.OPENCLAW_STATE.get(key)
+    readSucceeded = true
+    if (raw !== null) {
+      const parsed = parseInt(raw, 10)
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        current = parsed
+      }
+    }
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-counter-read-failed",
+      owner, repo, prNumber,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+
+  const value = current + 1
+  let persisted = false
+  const persist = async (): Promise<void> => {
+    if (persisted) return
+    persisted = true
+    if (!readSucceeded) return
+    try {
+      await env.OPENCLAW_STATE.put(key, String(value))
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-review-counter-write-failed",
+        owner, repo, prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+  }
+
+  return { value, persist }
+}
+
 /**
  * Read the current counter (or 0 if absent), increment to N, persist
  * N, and return N. Best-effort — KV failures fall back to a synthetic
@@ -54,42 +111,9 @@ export async function bumpPrReviewCounter(
   repo: string,
   prNumber: number,
 ): Promise<number> {
-  const key = buildReviewCounterKey(owner, repo, prNumber)
-  let current = 0
-  let readSucceeded = false
-  try {
-    const raw = await env.OPENCLAW_STATE.get(key)
-    readSucceeded = true
-    if (raw !== null) {
-      const parsed = parseInt(raw, 10)
-      if (Number.isFinite(parsed) && parsed >= 0) {
-        current = parsed
-      }
-    }
-  } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-counter-read-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
-  }
-  const next = current + 1
-  if (!readSucceeded) {
-    // Read failed → `current` is the synthetic 0, not a verified
-    // value. Writing `next` (= 1) here would clobber whatever real
-    // counter was persisted before the outage. Skip the put-back.
-    return next
-  }
-  try {
-    await env.OPENCLAW_STATE.put(key, String(next))
-  } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-counter-write-failed",
-      owner, repo, prNumber,
-      err: err instanceof Error ? err.message : String(err),
-    }))
-  }
-  return next
+  const prepared = await preparePrReviewCounter(env, owner, repo, prNumber)
+  await prepared.persist()
+  return prepared.value
 }
 
 /**

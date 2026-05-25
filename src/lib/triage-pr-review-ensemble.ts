@@ -94,6 +94,8 @@ import {
   chooseReviewEvent,
   computeShadowGateDivergence,
   getProposedChangeScopeMismatch,
+  previewFallbackSubmissionEvent,
+  previewReviewSubmissionEvent,
   type ReviewEvent,
 } from "./triage-pr-review"
 import {
@@ -102,7 +104,7 @@ import {
   type ApprovalReadinessSourceFinding,
 } from "./approval-readiness"
 import { readGateMode, readGateThreshold } from "./gate-config"
-import { bumpPrReviewCounter, buildPrUrl } from "./pr-review-counter"
+import { buildPrUrl, preparePrReviewCounter } from "./pr-review-counter"
 import {
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
@@ -1018,6 +1020,30 @@ export interface EnsembleHandlerArgs {
    * callers (tests).
    */
   graphMetricsSink?: GraphRetrievalSample[]
+}
+
+export interface SubmissionAffordance {
+  reviewCounter?: number
+  retriggerUrl?: string
+  persistReviewCounter: () => Promise<void>
+}
+
+export async function prepareSubmissionAffordance(args: {
+  env: Env
+  owner: string
+  repo: string
+  prNumber: number
+  event: ReviewEvent
+}): Promise<SubmissionAffordance> {
+  if (args.event !== "REQUEST_CHANGES") {
+    return { persistReviewCounter: async () => undefined }
+  }
+  const counter = await preparePrReviewCounter(args.env, args.owner, args.repo, args.prNumber)
+  return {
+    reviewCounter: counter.value,
+    retriggerUrl: buildPrUrl(args.owner, args.repo, args.prNumber),
+    persistReviewCounter: counter.persist,
+  }
 }
 
 // ARC-280: `routeReview` + `RouteDecision` + the shadow/post/off
@@ -3700,7 +3726,18 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    let submissionBuild = buildReviewSubmissionWithMetadata({
+    const primaryEvent = previewReviewSubmissionEvent({
+      verdict: submissionVerdict,
+      headSha,
+      unanchored: renderableUnanchoredForSubmission,
+      addedLineTextByLine,
+      ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
+    })
+    const primaryAffordance = await prepareSubmissionAffordance({
+      env, owner, repo, prNumber, event: primaryEvent,
+    })
+
+    const submissionBuild = buildReviewSubmissionWithMetadata({
       verdict: submissionVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
@@ -3717,6 +3754,12 @@ export async function handlePrReviewEnsemble(
       // to the new renderer.
       coverage,
       delta: deltaCounts,
+      ...(primaryAffordance.reviewCounter !== undefined
+        ? { reviewCounter: primaryAffordance.reviewCounter }
+        : {}),
+      ...(primaryAffordance.retriggerUrl !== undefined
+        ? { retriggerUrl: primaryAffordance.retriggerUrl }
+        : {}),
       // SIG-125: thread the diff's reviewable-position map so
       // `formatFindingComment` can render committable ```suggestion
       // blocks when a finding cleanly anchors (RIGHT + contiguous).
@@ -3727,33 +3770,7 @@ export async function handlePrReviewEnsemble(
       // inline comment "on an empty line."
       addedLineTextByLine,
     })
-    let submission = submissionBuild.submission
-    // The event is known only after body-only routing. Bump/render
-    // request-changes affordances only for the final posted event.
-    const reviewCounter = submission.event === "REQUEST_CHANGES"
-      ? await bumpPrReviewCounter(env, owner, repo, prNumber)
-      : undefined
-    const retriggerUrl = submission.event === "REQUEST_CHANGES"
-      ? buildPrUrl(owner, repo, prNumber)
-      : undefined
-    if (reviewCounter !== undefined || retriggerUrl !== undefined) {
-      submissionBuild = buildReviewSubmissionWithMetadata({
-        verdict: submissionVerdict,
-        prAuthor: meta.user?.login ?? null,
-        headSha,
-        unanchored: renderableUnanchoredForSubmission,
-        findingMarkers,
-        ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
-        ...(stack.isStacked ? { stack } : {}),
-        coverage,
-        delta: deltaCounts,
-        ...(reviewCounter !== undefined ? { reviewCounter } : {}),
-        ...(retriggerUrl !== undefined ? { retriggerUrl } : {}),
-        reviewable,
-        addedLineTextByLine,
-      })
-      submission = submissionBuild.submission
-    }
+    const submission = submissionBuild.submission
     const bodyOnlyAnnotations = submissionBuild.bodyOnlyAnnotations
     const allFindingAnnotations = buildBodyOnlyCheckAnnotations([
       ...submissionVerdict.findings,
@@ -3854,11 +3871,6 @@ export async function handlePrReviewEnsemble(
           // coverage signal that ARC-277 surfaces on the main path.
           coverage,
           delta: deltaCounts,
-          // SIG-101: retrigger button + counter survive every
-          // fallback path so the customer sees the same footer
-          // regardless of which submit channel succeeded.
-          ...(reviewCounter !== undefined ? { reviewCounter } : {}),
-          ...(retriggerUrl !== undefined ? { retriggerUrl } : {}),
         })
         const fallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
@@ -3884,6 +3896,7 @@ export async function handlePrReviewEnsemble(
         // Comment fallback ALSO failed — `errored` is the truth.
         return finalize(telemetry, env, "errored", cache)
       }
+      await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
       // ARC-258 follow-up: dismiss any stale Sigilix reviews from
       // earlier commits on this PR so the Reviews tab reflects only
@@ -4007,8 +4020,6 @@ export async function handlePrReviewEnsemble(
           ...(stack.isStacked ? { stack } : {}),
           coverage,
           delta: deltaCounts,
-          ...(reviewCounter !== undefined ? { reviewCounter } : {}),
-          ...(retriggerUrl !== undefined ? { retriggerUrl } : {}),
         })
         const commentFallback = await postReviewCommentFallback({
           env, client, owner, repo, prNumber, headSha,
@@ -4044,6 +4055,16 @@ export async function handlePrReviewEnsemble(
         prNumber,
         reason: fallbackReason,
       })
+      const fallbackEvent = previewFallbackSubmissionEvent({
+        verdict: submissionVerdict,
+        unanchored: renderableUnanchoredForSubmission,
+        ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
+      })
+      const fallbackAffordance = fallbackEvent === primaryEvent
+        ? primaryAffordance
+        : await prepareSubmissionAffordance({
+            env, owner, repo, prNumber, event: fallbackEvent,
+          })
       const fallback = buildFallbackSubmission({
         // ARC-189: fallback path also receives the soften-applied
         // verdict. Markers are NOT emitted on the fallback (it's a
@@ -4062,8 +4083,12 @@ export async function handlePrReviewEnsemble(
         // as the inline-anchored primary.
         coverage,
         delta: deltaCounts,
-        ...(reviewCounter !== undefined ? { reviewCounter } : {}),
-        ...(retriggerUrl !== undefined ? { retriggerUrl } : {}),
+        ...(fallbackAffordance.reviewCounter !== undefined
+          ? { reviewCounter: fallbackAffordance.reviewCounter }
+          : {}),
+        ...(fallbackAffordance.retriggerUrl !== undefined
+          ? { retriggerUrl: fallbackAffordance.retriggerUrl }
+          : {}),
       })
       // CR PR #97 round-4 catch: the anchorless-fallback submit
       // can also throw (merge race after the guard, transient
@@ -4146,6 +4171,7 @@ export async function handlePrReviewEnsemble(
         }
         return finalize(telemetry, env, "errored", cache)
       }
+      await fallbackAffordance.persistReviewCounter()
       telemetry.submitted = true
       // ARC-287: post-submit dismissPriorSigilixReviews call removed
       // (was the anchorless-fallback's parallel of the inline-anchored

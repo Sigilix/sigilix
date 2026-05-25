@@ -42,7 +42,7 @@ import {
 } from "./diff-positions"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
-import { badgeAssetUrl } from "./badge-assets"
+import { badgeAssetLabel, badgeAssetSize, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
 // rendered by `renderStackParenthetical`. The original helper still
@@ -808,38 +808,24 @@ export interface ReviewSubmissionBuildResult {
   bodyOnlyAnnotations: CheckRunAnnotation[]
 }
 
-export function buildReviewSubmissionWithMetadata({
-  verdict: rawVerdict,
-  // `prAuthor` is still part of the public args shape (older
-  // call sites pass it) but ARC-281's renderers don't take it —
-  // the Kimi redesign dropped per-author dialogue from the body.
-  prAuthor: _prAuthor,
-  headSha,
-  unanchored: rawUnanchored = [],
-  nowMs,
-  findingMarkers,
-  stack,
-  coverage,
-  delta,
-  reviewCounter,
-  retriggerUrl,
-  reviewable,
-  addedLineTextByLine,
-  eventOverride,
-}: BuildReviewArgs): ReviewSubmissionBuildResult {
-  // ARC-156 follow-up: sanitize every prose field for GitHub
-  // rendering BEFORE downstream renderers see the verdict. Wraps
-  // un-backticked HTML/JSX tags in backticks so an unclosed `<kbd>`
-  // can't open a real DOM element that breaks paragraph rendering.
+interface PreparedReviewSubmissionFindings {
+  verdict: PrReviewVerdict
+  renderVerdict: PrReviewVerdict
+  inlineFindings: PrReviewFinding[]
+  inlineOriginalIndex: number[]
+  unanchored: PrReviewFinding[]
+}
+
+function prepareReviewSubmissionFindings(args: {
+  rawVerdict: PrReviewVerdict
+  rawUnanchored: readonly PrReviewFinding[]
+  headSha: string
+  addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+}): PreparedReviewSubmissionFindings {
+  const { rawVerdict, rawUnanchored, headSha, addedLineTextByLine } = args
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
 
-  // SIG-127: partition the anchored findings into those whose anchored
-  // added line is substantive (stay inline) vs. non-substantive (route
-  // to the body via the `unanchored` rendering path). The original
-  // index is carried so `findingMarkers?.[originalIndex]` stays aligned
-  // even after filtering. When `addedLineTextByLine` is undefined every
-  // finding is substantive — zero behavior change (back-compat).
   const inlineFindings: PrReviewFinding[] = []
   const inlineOriginalIndex: number[] = []
   const bodyFindings: PrReviewFinding[] = []
@@ -865,44 +851,20 @@ export function buildReviewSubmissionWithMetadata({
     }
 
     const addedLinesForPath = addedLineTextByLine?.get(findingForInline.path)
-    // SIG-127: a finding carrying a localized `suggestedReplacement`
-    // stays inline regardless of its anchor line — the body renderer
-    // (`renderFindingsByFile`) only prints headline + body, so routing
-    // it would silently drop the proposed fix (Codex review catch).
-    // Such a finding is anchored to real editable code anyway (the
-    // committable ```suggestion needs a contiguous reviewable range).
-    // Walk-forward (below) is also skipped — moving the anchor breaks
-    // the suggestion's contiguous range guarantee.
-    // SIG-159 PR1: walk-forward when the model anchored to a context line
-    // (the SIG-127 regression: anchor at the closing `}` of the prior
-    // block, with the real subject just below). Only applies when the
-    // added-lines map IS provided AND the finding doesn't have a
-    // suggestion that would lose its contiguous range when re-anchored.
     let effective: PrReviewFinding = findingForInline
     if (addedLineTextByLine !== undefined && !hasSuggestion) {
       const resolved = pickAnchorLineForward(addedLinesForPath, f.line)
       if (resolved === null) {
-        // No added line at or after the model's anchor on this file.
-        // Route the finding to the summary body — there is no real
-        // place to anchor it inline.
         bodyFindings.push(withLineMovedNote(f, headSha))
         return
       }
       if (resolved !== f.line) {
-        // Re-anchor at the walked-forward line. Drop `startLine` so the
-        // moved anchor is a single line — the original multi-line range
-        // is no longer meaningful once the end-anchor has shifted.
         const { startLine: _drop, ...rest } = f
         effective = { ...rest, line: resolved }
       }
     }
 
     const lineText = addedLineTextByLine?.get(effective.path)?.get(effective.line)
-    // Non-substantive ONLY when the map IS provided AND the line is
-    // present in it AND its text is non-substantive. Walk-forward above
-    // guarantees we either have a present line, or we already routed
-    // to summary, so this branch handles the "added line but bare
-    // punctuation" case (SIG-127 original).
     const isNonSubstantive =
       !hasSuggestion &&
       addedLineTextByLine !== undefined &&
@@ -915,12 +877,97 @@ export function buildReviewSubmissionWithMetadata({
       inlineOriginalIndex.push(i)
     }
   })
-  // Rebuild the verdict so the moved findings are NOT also rendered as
-  // anchored, and fold them into `unanchored` so they render in the
-  // body. Avoids the double-render. When nothing moved, `unanchored`
-  // is the original sanitized set and `verdict.findings` is unchanged.
+
   const renderVerdict: PrReviewVerdict = { ...verdict, findings: inlineFindings }
   const unanchored: PrReviewFinding[] = [...sanitizedUnanchored, ...bodyFindings]
+
+  return {
+    verdict,
+    renderVerdict,
+    inlineFindings,
+    inlineOriginalIndex,
+    unanchored,
+  }
+}
+
+export interface PreviewReviewSubmissionEventArgs {
+  verdict: PrReviewVerdict
+  headSha: string
+  unanchored?: readonly PrReviewFinding[]
+  addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+  eventOverride?: ReviewEvent
+}
+
+export function previewReviewSubmissionEvent({
+  verdict: rawVerdict,
+  headSha,
+  unanchored: rawUnanchored = [],
+  addedLineTextByLine,
+  eventOverride,
+}: PreviewReviewSubmissionEventArgs): ReviewEvent {
+  const prepared = prepareReviewSubmissionFindings({
+    rawVerdict,
+    rawUnanchored,
+    headSha,
+    ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
+  })
+  return eventOverride ?? chooseReviewEventForRenderedFindings({
+    inlineFindings: prepared.inlineFindings,
+    bodyOnlyFindings: prepared.unanchored,
+  })
+}
+
+export interface PreviewFallbackSubmissionEventArgs {
+  verdict: PrReviewVerdict
+  unanchored: readonly PrReviewFinding[]
+  eventOverride?: ReviewEvent
+}
+
+export function previewFallbackSubmissionEvent({
+  verdict: rawVerdict,
+  unanchored: rawUnanchored,
+  eventOverride,
+}: PreviewFallbackSubmissionEventArgs): ReviewEvent {
+  const verdict = sanitizeVerdictForGitHub(rawVerdict)
+  const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
+  const all = [...verdict.findings, ...unanchored]
+  return eventOverride ?? chooseReviewEventForRenderedFindings({
+    inlineFindings: [],
+    bodyOnlyFindings: all,
+  })
+}
+
+export function buildReviewSubmissionWithMetadata({
+  verdict: rawVerdict,
+  // `prAuthor` is still part of the public args shape (older
+  // call sites pass it) but ARC-281's renderers don't take it —
+  // the Kimi redesign dropped per-author dialogue from the body.
+  prAuthor: _prAuthor,
+  headSha,
+  unanchored: rawUnanchored = [],
+  nowMs,
+  findingMarkers,
+  stack,
+  coverage,
+  delta,
+  reviewCounter,
+  retriggerUrl,
+  reviewable,
+  addedLineTextByLine,
+  eventOverride,
+}: BuildReviewArgs): ReviewSubmissionBuildResult {
+  const {
+    verdict,
+    renderVerdict,
+    inlineFindings,
+    inlineOriginalIndex,
+    unanchored,
+  } = prepareReviewSubmissionFindings({
+    rawVerdict,
+    rawUnanchored,
+    headSha,
+    ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
+  })
   const event = eventOverride ?? chooseReviewEventForRenderedFindings({
     inlineFindings,
     bodyOnlyFindings: unanchored,
@@ -1952,11 +1999,11 @@ function renderBodyOnlyFindings(findings: PrReviewFinding[]): string[] {
     const severity = formatBodyFindingSeverity(f)
     const anchor = formatBodyFindingAnchor(f)
     const anchorNote = f.anchorNote ? ` · ${f.anchorNote}` : ""
-    const category = formatFindingCategory(f)
     const badge = severityBadgeForScore(f.score)
+    const categoryBadge = categoryBadgeForFinding(f)
     lines.push("")
-    lines.push(`- ${badge} **${stripAstMarkers(f.headline)}**`)
-    lines.push(`  <sub>${location} (${severity}) · \`${category}\` · ${anchor}${anchorNote}</sub>`)
+    lines.push(`- ${badge} ${categoryBadge} **${stripAstMarkers(f.headline)}**`)
+    lines.push(`  <sub>${location} (${severity}) · ${anchor}${anchorNote}</sub>`)
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -2052,14 +2099,18 @@ function truncateCheckAnnotationText(value: string, max: number): string {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 30
-const SEVERITY_BADGE_HEIGHT = 22
 const FINDING_BODY_PREVIEW_LIMIT = 500
 const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
 const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 
-function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
-  return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
+function badgeImg(file: ReviewBadgeAssetName): string {
+  const { width, height } = badgeAssetSize(file)
+  const label = badgeAssetLabel(file)
+  return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${width}" height="${height}"></a>`
+}
+
+function severityBadgeImg(file: "p0" | "p1" | "p2" | "p3"): string {
+  return badgeImg(file)
 }
 
 export function severityLabelForScore(score: number): "P0" | "P1" | "P2" | "P3" {
@@ -2072,7 +2123,16 @@ export function severityLabelForScore(score: number): "P0" | "P1" | "P2" | "P3" 
 export function severityBadgeForScore(score: number): string {
   const label = severityLabelForScore(score)
   const file = label.toLowerCase() as "p0" | "p1" | "p2" | "p3"
-  return severityBadgeImg(label, file)
+  return severityBadgeImg(file)
+}
+
+function categoryBadgeAssetName(category: FindingCategory): ReviewBadgeAssetName {
+  return category
+}
+
+function categoryBadgeForFinding(finding: PrReviewFinding): string {
+  const category = formatFindingCategory(finding) as FindingCategory
+  return badgeImg(categoryBadgeAssetName(category))
 }
 
 function stripAstMarkers(text: string): string {
@@ -2502,9 +2562,10 @@ export function formatFindingComment(
   // confidence stay machine-readable through hidden markers instead of
   // repeating as visible metadata on every stacked thread.
   const badge = severityBadgeForScore(finding.score)
+  const categoryBadge = categoryBadgeForFinding(finding)
   const headline = stripAstMarkers(finding.headline)
   const body = formatFindingBodyMarkdown(finding.body)
-  lines.push(`${badge} **${headline}**`)
+  lines.push(`${badge} ${categoryBadge} **${headline}**`)
   lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
   lines.push(`<!-- sigilix:severity:${finding.score} -->`)
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)

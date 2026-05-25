@@ -183,7 +183,7 @@ const HEADING_V2_RE =
 // quieter. Category/severity come from the stable fid marker and
 // confidence is hidden in its own machine-readable marker.
 const HEADING_V3_RE =
-  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*(?:\r?\n|$)/
+  /^(?:(?:<a\b[^>]*>\s*<img\b[^>]*>\s*<\/a>\s*)+)?\*\*(.+?)\*\*\s*(?:\r?\n|$)/
 
 const CATEGORY_MARKER_RE =
   /<!--\s*sigilix:category:([a-z-]+)\s*-->/

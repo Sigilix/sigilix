@@ -1,6 +1,6 @@
 # SIG-161 labeling guide
 
-> The protocol for labeling Sigilix's 200-finding calibration dataset.
+> The protocol for labeling Sigilix's calibration dataset (target: 200 findings; stage-1 corpus: 76).
 > Sibling: `DESIGN.md` (the threshold-gate design this dataset calibrates).
 
 This file is the labeler's operating manual. Anyone labeling — founder, Claude pre-labeling, or a future rater — reads this and follows it exactly. Disagreements between labelers are resolved by re-reading this guide, not by debating the specific finding.
@@ -160,7 +160,7 @@ Open `labels.csv` in a spreadsheet. The columns:
 | `labelerInitials` | `dm` for founder, `cc` for Claude pre-label, `dm-override` for founder overriding Claude |
 | `labelDate` | `YYYY-MM-DD` |
 
-Save as CSV. Commit at the end of each labeling session (don't wait for all 200).
+Save as CSV. Commit at the end of each labeling session (don't wait for the whole corpus to be labeled — partial sessions are committable).
 
 ### Quality check
 
@@ -189,7 +189,7 @@ pnpm tsx scripts/calibrate-sig-161.ts \
 ```
 
 Outputs:
-- Recommended threshold (or "calibration failed at N=200" with diagnostic).
+- Recommended threshold (or "calibration failed at the current corpus size" with diagnostic).
 - FPR + recall at threshold candidates `0.60` through `1.00` in `0.02` steps.
 - Wilson 95% CI for FPR at each candidate.
 - Per-category breakdown.

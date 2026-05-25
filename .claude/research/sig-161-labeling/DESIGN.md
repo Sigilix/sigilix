@@ -56,6 +56,18 @@ interface PrReviewFinding {
   // SIG-161 NEW
   gateScore?: number   // 0-1, post-hoc, drives chooseReviewEvent
 }
+
+interface Provenance {
+  // All source findings that merged into this synth finding (one per
+  // specialist-emitted finding the synth combined).
+  sourceFindingIds: string[]
+  // Distinct specialist roles that contributed (e.g. ["logic", "tests"]).
+  // Used by computeGateScore (§5) for the agreement boost — must be a count
+  // of distinct specialists, not a count of source findings, so a single
+  // specialist emitting multiple findings doesn't spuriously inflate the
+  // agreement signal.
+  sourceSpecialists: string[]
+}
 ```
 
 Naming: `gateScore` (revised on Codex review). Earlier draft used `calibratedScore` — Codex correctly noted that overclaims during the placeholder phase (the v1 blend is hand-tuned, not calibrated). `gateScore` describes what the field DOES (drives the gate), not what method produced it; it stays accurate before AND after labeling. Other candidates rejected:
@@ -68,7 +80,7 @@ Naming: `gateScore` (revised on Codex review). Earlier draft used `calibratedSco
 `gateScore` is **not emitted by the LLM**. It is computed by a deterministic post-processing step (see §5) from signals the orchestrator already collects:
 
 - Self-reported `confidence` (1–5, rescaled)
-- Specialist agreement (how many specialists' source findings merged into this synth finding via `provenance.sourceFindingIds`)
+- Specialist agreement (count of distinct specialists that contributed via `provenance.sourceSpecialists`; the source-finding list is tracked separately in `provenance.sourceFindingIds`)
 - Evidence-citation presence (`cweId`, `evidenceId`, `complexityEstimate`, `hotPathIdentifier`, `inspectedTestFiles`, `evidenceRefs` populated)
 - Severity (`score` 1–5)
 - Validation-gate outcomes (passed/wouldDrop in SIG-119 shadow telemetry)
@@ -129,12 +141,17 @@ export function chooseReviewEvent(args: ChooseReviewEventArgs): ReviewEvent {
 
   // No blocking finding, no open Sigilix items — distinguish empty (APPROVE)
   // from "had findings, none blocking" (COMMENT). The latter is the new event
-  // SIG-161 introduces.
-  if (findings.length > 0) return "COMMENT"
+  // SIG-161 introduces. Apply the floor here too: under
+  // missingScorePolicy="permit" a missing gateScore yields effectiveScore=0.0,
+  // which is below FLOOR_SUPPRESS — those findings must not reach COMMENT.
+  const aboveFloor = findings.filter((f) => effectiveScore(f) >= 0.60)
+  if (aboveFloor.length > 0) return "COMMENT"
 
   return "APPROVE"
 }
 ```
+
+Note on the `aboveFloor` filter: under `missingScorePolicy="permit"`, findings without `gateScore` get `effectiveScore = 0.0`, which falls below `FLOOR_SUPPRESS` (`0.60`) — the explicit floor filter ensures those don't reach the COMMENT branch despite passing the blocking check. The blocking branch above is already safe by construction because `threshold >= FLOOR_SUPPRESS` (calibration only picks thresholds in `[0.60, 1.00]`), so any finding clearing `threshold` is automatically above the floor.
 
 `missingScorePolicy` is the explicit hook for the rollout vs post-calibration regime:
 - **Flag `off` / `shadow`:** caller passes `"block"`. Findings without a score block like today; nothing changes for customer-visible behavior.
@@ -375,13 +392,18 @@ for each t in threshold_candidates:
   compute FPR(t), recall(t) on labeled set
   compute Wilson upper bound for FPR(t) at CI_LEVEL  (n = FP+TN)
 
-choose smallest t such that:
+choose largest t such that:
   Wilson_upper(FPR(t)) <= FPR_BOUND
   AND recall(t) >= 0.70
+
+# Equivalent: iterate threshold_candidates in descending order and pick
+# the first t that satisfies both constraints.
 
 if no t satisfies both:
   emit calibration-failed report; ship with threshold = 0.85, flag = off
 ```
+
+Why **largest** t (not smallest): FPR is monotone non-increasing in t (higher threshold ⇒ fewer findings pass ⇒ fewer false positives), and recall is monotone non-increasing in t for the same reason. The Wilson_upper FPR constraint is satisfied by *all* thresholds at or above the smallest t that meets it; the recall constraint is satisfied by *all* thresholds at or below the largest t that meets it. The feasible interval is `[t_min_FPR, t_max_recall]`. Among feasible thresholds, the **largest** is the safest precision-side choice — it minimizes FPR (with the tightest Wilson upper bound headroom) while still keeping recall above 0.70. Picking the smallest feasible t would burn the precision margin we just paid for.
 
 Pre-flight power check — Codex flagged the need to fail fast when the math is statistically impossible, and DeepSeek's recommendation #4 is identical. `compute_min_detectable_fpr` answers: "given `n_fp_total` FPs and observing zero of them above threshold, what's the tightest Wilson upper bound I can achieve?" If that minimum exceeds the stage's `FPR_BOUND`, calibration is unwinnable at this N and the script emits a diagnostic recommending expansion or relaxation rather than silently producing a misleading threshold.
 

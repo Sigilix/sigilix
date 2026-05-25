@@ -94,6 +94,7 @@ import {
   chooseReviewEvent,
   computeShadowGateDivergence,
   getProposedChangeScopeMismatch,
+  isSubstantiveAnchorLine,
   previewFallbackSubmissionEvent,
   previewReviewSubmissionEvent,
   type ReviewEvent,
@@ -1147,7 +1148,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -3090,6 +3091,7 @@ export async function handlePrReviewEnsemble(
       // `coverageGap:<path>:<line>` ref as a genuine missing-coverage
       // citation. Empty when coverage ingestion is off / yielded nothing.
       coverageGaps: coverageGapSet,
+      addedLineTextByLine: buildAddedLineTextByLine(fullPrDiff),
       onTestFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -3162,6 +3164,7 @@ export async function handlePrReviewEnsemble(
     }
     telemetry.postValidation = {
       droppedForInvalidLine: validated.droppedForInvalidLine,
+      remappedInvalidLineToInline: validated.remappedInvalidLineToInline,
       droppedForHallucination: validated.droppedForHallucination,
       demotedScore1: validated.demotedScore1,
       droppedForVaguePrefix: validated.droppedForVaguePrefix,
@@ -6001,6 +6004,12 @@ export interface ValidatedOutput {
    */
   unanchoredFindings: PrReviewFinding[]
   droppedForInvalidLine: number
+  /**
+   * Count of line-scoped findings whose model-chosen line was not
+   * reviewable but was repaired to a nearby substantive added line.
+   * These stay inline instead of falling into the body-only section.
+   */
+  remappedInvalidLineToInline: number
   droppedForHallucination: number
   demotedScore1: number
   /**
@@ -6130,6 +6139,59 @@ function selectSourceEvidenceForBackfill(
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0
+}
+
+const INLINE_ANCHOR_REPAIR_WINDOW = 12
+
+function findingScopeForInlineRepair(finding: PrReviewFinding): "line" | "file" | "pr" | "comment" {
+  return finding.scope ?? "line"
+}
+
+function hasStructuredFixForInlineRepair(finding: PrReviewFinding): boolean {
+  const replacement = finding.suggestedReplacement
+  const deletion = finding.kind === "delete" && typeof replacement === "string" && replacement.length === 0
+  const replace =
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof replacement === "string" &&
+    replacement.length > 0
+  return deletion || replace
+}
+
+function findRepairableInlineAnchor(args: {
+  finding: PrReviewFinding
+  reviewable: ReviewableMap
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>> | undefined
+}): number | null {
+  const { finding, reviewable, addedLineTextByLine } = args
+  if (findingScopeForInlineRepair(finding) !== "line") return null
+  if (hasStructuredFixForInlineRepair(finding)) return null
+
+  const addedLinesForPath = addedLineTextByLine?.get(finding.path)
+  if (!addedLinesForPath || addedLinesForPath.size === 0) return null
+
+  let bestLine: number | null = null
+  let bestDistance = Number.POSITIVE_INFINITY
+  let bestIsForward = false
+
+  for (const [candidateLine, text] of addedLinesForPath) {
+    const distance = Math.abs(candidateLine - finding.line)
+    if (distance > INLINE_ANCHOR_REPAIR_WINDOW) continue
+    if (deriveSide(reviewable, finding.path, candidateLine) !== "RIGHT") continue
+    if (!isSubstantiveAnchorLine(text)) continue
+
+    const isForward = candidateLine >= finding.line
+    if (
+      distance < bestDistance ||
+      (distance === bestDistance && isForward && !bestIsForward) ||
+      (distance === bestDistance && isForward === bestIsForward && bestLine !== null && candidateLine < bestLine)
+    ) {
+      bestLine = candidateLine
+      bestDistance = distance
+      bestIsForward = isForward
+    }
+  }
+
+  return bestLine
 }
 
 /**
@@ -6423,6 +6485,13 @@ export function validateForSubmission(args: {
    */
   perfValidatorMode?: PerfValidatorMode
   /**
+   * PR3 inline-first routing: per-file new-side added-line text. When
+   * a line-scoped, non-suggestion finding lands just outside GitHub's
+   * reviewable diff coordinates, validation may repair it to the
+   * nearest substantive added line in the same file.
+   */
+  addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+  /**
    * SIG-110: telemetry callback fired once per perf finding the gate
    * flagged (reuses the `pr-review-finding-rejected-validation` event with
    * a `gate: "perf"` discriminator).
@@ -6456,6 +6525,7 @@ export function validateForSubmission(args: {
     onLogicFindingDropped,
     perfEvidence,
     perfValidatorMode = "shadow",
+    addedLineTextByLine,
     onPerfFindingDropped,
     profile = "chill",
   } = args
@@ -6473,6 +6543,7 @@ export function validateForSubmission(args: {
   ]
   const unanchoredFindings: PrReviewFinding[] = []
   let droppedForInvalidLine = 0
+  let remappedInvalidLineToInline = 0
   let droppedForHallucination = 0
   let demotedScore1 = 0
   let droppedForVaguePrefix = 0
@@ -6689,6 +6760,14 @@ export function validateForSubmission(args: {
     // Line validity + side derivation
     const side = deriveSide(reviewable, f.path, f.line)
     if (!side) {
+      const repairedLine = findRepairableInlineAnchor({ finding: f, reviewable, addedLineTextByLine })
+      if (repairedLine !== null) {
+        const { startLine: _dropStartLine, ...rest } = f
+        cleanFindings.push({ ...rest, line: repairedLine })
+        if (provenance) cleanFindingProvenance.push(provenance)
+        remappedInvalidLineToInline++
+        continue
+      }
       droppedForInvalidLine++
       // Preserve for submit-fallback. Inline anchoring would fail here,
       // but the finding's *content* is still actionable when posted as
@@ -6721,6 +6800,7 @@ export function validateForSubmission(args: {
     verdict: { ...synthOutput.verdict, summary, findings: cleanFindings },
     unanchoredFindings,
     droppedForInvalidLine,
+    remappedInvalidLineToInline,
     droppedForHallucination,
     demotedScore1,
     droppedForVaguePrefix,
@@ -6843,6 +6923,7 @@ interface EnsembleTelemetry {
   } | null
   postValidation: {
     droppedForInvalidLine: number
+    remappedInvalidLineToInline: number
     droppedForHallucination: number
     demotedScore1: number
     /** ARC-156: count of synth findings dropped by the vague-prefix

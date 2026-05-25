@@ -440,6 +440,101 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.droppedForInvalidLine).toBe(1)
   })
 
+  it("repairs a nearby line-scoped finding to the nearest substantive added line", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          ...baseVerdict,
+          findings: [{ ...baseFinding, line: 47, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+      addedLineTextByLine: new Map([
+        ["src/lib/foo.ts", new Map([
+          [42, "  const idx = clampIndex(i)"],
+          [50, "  return result"],
+        ])],
+      ]),
+    })
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.verdict.findings[0]?.line).toBe(50)
+    expect(out.cleanFindingProvenance).toHaveLength(1)
+    expect(out.droppedForInvalidLine).toBe(0)
+    expect(out.remappedInvalidLineToInline).toBe(1)
+    expect(out.unanchoredFindings).toHaveLength(0)
+  })
+
+  it("keeps header-line findings body-only instead of repairing them", () => {
+    const lineOneReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [{ line: 2, side: "RIGHT" }]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          ...baseVerdict,
+          findings: [{ ...baseFinding, line: 1, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable: lineOneReviewable,
+      specialistVerdicts,
+      addedLineTextByLine: new Map([
+        ["src/lib/foo.ts", new Map([[2, "export const value = 1"]])],
+      ]),
+    })
+    expect(out.verdict.findings).toHaveLength(0)
+    expect(out.droppedForInvalidLine).toBe(1)
+    expect(out.remappedInvalidLineToInline).toBe(0)
+    expect(out.unanchoredFindings[0]?.line).toBe(1)
+  })
+
+  it("does not repair broad-scope findings into inline comments", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          ...baseVerdict,
+          findings: [{ ...baseFinding, line: 47, scope: "file", score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+      addedLineTextByLine: new Map([
+        ["src/lib/foo.ts", new Map([[50, "  return result"]])],
+      ]),
+    })
+    expect(out.verdict.findings).toHaveLength(0)
+    expect(out.droppedForInvalidLine).toBe(1)
+    expect(out.remappedInvalidLineToInline).toBe(0)
+    expect(out.unanchoredFindings[0]?.scope).toBe("file")
+  })
+
   it("drops score-1 findings from chill reviews and records provenance", () => {
     const out = validateForSubmission({
       synthOutput: {

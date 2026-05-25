@@ -507,7 +507,15 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
     : ctx.repo
       ? [ctx.repo]
       : []
-  const visibleUniverse = universe.slice(0, MAX_PROMPT_VISIBLE_NAMESPACES)
+  let visibleUniverse = universe.slice(0, MAX_PROMPT_VISIBLE_NAMESPACES)
+  if (
+    ctx.repo &&
+    universe.includes(ctx.repo) &&
+    !visibleUniverse.includes(ctx.repo) &&
+    visibleUniverse.length > 0
+  ) {
+    visibleUniverse = [...visibleUniverse.slice(0, -1), ctx.repo]
+  }
   const hiddenUniverseCount = Math.max(0, universe.length - visibleUniverse.length)
   const universeText = visibleUniverse.length > 0
     ? `${visibleUniverse.map((r) => `'${r}'`).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`

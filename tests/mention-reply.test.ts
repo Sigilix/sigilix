@@ -472,6 +472,26 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/repo-00")
   })
 
+  it("keeps the default repo visible when it falls after the namespace cap", () => {
+    const availableRepos = Array.from(
+      { length: 52 },
+      (_, i) => `arc-and-anchor/repo-${String(i).padStart(2, "0")}`,
+    )
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: "arc-and-anchor/repo-51",
+      mappedRepo: "arc-and-anchor/repo-51",
+      availableRepos,
+      repoStatus: "mapped_indexed",
+    })
+
+    expect(out).toContain("'arc-and-anchor/repo-00'")
+    expect(out).not.toContain("'arc-and-anchor/repo-49'")
+    expect(out).toContain("'arc-and-anchor/repo-51'")
+    expect(out).toContain("... (+2 more)")
+    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/repo-51")
+  })
+
   it("describes indexed repos without a default and tells the agent to choose by subject", () => {
     const out = buildAgentInitialUserMessage({
       ...base,

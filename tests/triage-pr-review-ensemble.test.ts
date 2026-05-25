@@ -14,6 +14,7 @@ import {
   annotateWithConsensus,
   assignStableFindingIds,
   buildSynthRetryMessage,
+  buildSynthInputVerdicts,
   checkQuorum,
   classifySynthOutcome,
   collectApprovalReadinessSourceFindings,
@@ -111,6 +112,39 @@ describe("collectApprovalReadinessSourceFindings", () => {
     )
 
     expect(out.map((source) => source.id)).toEqual(["logic-1"])
+  })
+
+  it("collects readiness sources from the same truncated verdicts sent to synth", () => {
+    const truncatedFinding = {
+      ...baseFinding,
+      id: "logic-0",
+      score: 4,
+      body: "x".repeat(1800),
+    }
+    const keptFinding = {
+      ...baseFinding,
+      id: "logic-1",
+      score: 5,
+      headline: "critical auth bypass",
+      body: "Missing authorization guard.",
+    }
+    const verdict = {
+      summary: "Two findings.",
+      confidence: 5,
+      confidenceReason: "Clear regression.",
+      findings: [truncatedFinding, keptFinding],
+    }
+    const keptOnlyVerdict = { ...verdict, findings: [keptFinding] }
+    const maxTokens = Math.ceil(JSON.stringify(keptOnlyVerdict).length / 4) + 2
+
+    const synthInput = buildSynthInputVerdicts(
+      [{ role: "logic" as const, verdict, elapsedMs: 100 }],
+      maxTokens,
+    )
+    const sources = collectApprovalReadinessSourceFindings(synthInput, [])
+
+    expect(synthInput[0]?.verdict.findings.map((f) => f.id)).toEqual(["logic-1"])
+    expect(sources.map((source) => source.id)).toEqual(["logic-1"])
   })
 })
 

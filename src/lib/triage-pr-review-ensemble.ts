@@ -2487,11 +2487,8 @@ export async function handlePrReviewEnsemble(
     }
 
     // ─── Synthesizer ───────────────────────────────────────────
-    const synthVerdictBlock = renderSpecialistVerdictsForSynth(
-      succeeded
-        .filter((v): v is CollectedVerdict & { verdict: PrReviewVerdictWithIds } => v.verdict !== null)
-        .map((v) => ({ role: v.role, verdict: truncateVerdictToTokens(v.verdict, SPECIALIST_VERDICT_TOKEN_CAP) })),
-    )
+    const synthInputVerdicts = buildSynthInputVerdicts(succeeded)
+    const synthVerdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts)
     const synthMessage = buildSynthesizerInitialMessage({
       prNumber,
       diff,
@@ -2838,7 +2835,7 @@ export async function handlePrReviewEnsemble(
     // scoped to "synth produced a usable verdict."
     emitPhaseCompleted(perfCtx, "synth", synthStartMs)
     {
-      const inputFindingCount = succeeded.reduce(
+      const inputFindingCount = synthInputVerdicts.reduce(
         (sum, v) => sum + (v.verdict?.findings.length ?? 0),
         0,
       )
@@ -2851,7 +2848,7 @@ export async function handlePrReviewEnsemble(
         // the orchestrator-internal `"n/a"` and `"exhausted-budget"`
         // sentinels to `null` for the telemetry contract.
         retryOutcome: narrowSynthRetryOutcome(synthRetryUsed, synthRetryOutcome),
-        inputSpecialistCount: succeeded.length,
+        inputSpecialistCount: synthInputVerdicts.length,
         inputFindingCount,
         outputFindingCount: synthOutput.verdict.findings.length,
         modelUsed: synthOutput.modelUsed,
@@ -2870,7 +2867,7 @@ export async function handlePrReviewEnsemble(
     const validated = validateForSubmission({
       synthOutput: { verdict: synthOutput.verdict, provenance: synthOutput.provenance },
       reviewable,
-      specialistVerdicts: succeeded,
+      specialistVerdicts: synthInputVerdicts,
       // SIG-113: thread the testing-evidence pack through so the
       // citation gate fires on uncited `category: "testing"` findings.
       // Empty pack (no source/test files) → gate no-ops via the
@@ -3255,7 +3252,7 @@ export async function handlePrReviewEnsemble(
       ...renderableUnanchored,
     ])
     const sourceFindingsForApproval = collectApprovalReadinessSourceFindings(
-      succeeded,
+      synthInputVerdicts,
       withdrawals,
     )
     const approvalReadiness = assessApprovalReadiness({
@@ -5299,6 +5296,21 @@ export function collectApprovalReadinessSourceFindings(
       verdictConfidence: verdict.confidence,
     }))
   })
+}
+
+export function buildSynthInputVerdicts<T extends ApprovalReadinessSourceVerdict>(
+  sourceVerdicts: ReadonlyArray<T>,
+  maxTokens: number = SPECIALIST_VERDICT_TOKEN_CAP,
+): Array<T & { verdict: PrReviewVerdictWithIds }> {
+  const out: Array<T & { verdict: PrReviewVerdictWithIds }> = []
+  for (const source of sourceVerdicts) {
+    if (!source.verdict) continue
+    out.push({
+      ...source,
+      verdict: truncateVerdictToTokens(source.verdict, maxTokens),
+    } as T & { verdict: PrReviewVerdictWithIds })
+  }
+  return out
 }
 
 function collectSpecialistVerdicts(

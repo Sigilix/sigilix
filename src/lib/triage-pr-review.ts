@@ -42,7 +42,7 @@ import {
 } from "./diff-positions"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
-import { badgeAssetUrl } from "./badge-assets"
+import { badgeAssetLabel, badgeAssetSize, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
 // rendered by `renderStackParenthetical`. The original helper still
@@ -84,6 +84,7 @@ import { badgeAssetUrl } from "./badge-assets"
  * + the renderer body builders need to switch on the widened union.
  */
 export type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+export type ReviewEventOverride = Extract<ReviewEvent, "REQUEST_CHANGES">
 
 /**
  * ARC-156 follow-up (rubberfit PR #232 catch): the model occasionally
@@ -679,6 +680,12 @@ interface BuildReviewArgs {
   prAuthor: string | null
   headSha: string
   /**
+   * Explicit caller override for policy-level blockers that are not
+   * represented by inline comments. Most body-only findings render as
+   * COMMENT; approval-readiness can still force REQUEST_CHANGES.
+   */
+  eventOverride?: ReviewEventOverride
+  /**
    * ARC-184: Override `Date.now()` for deterministic snapshots in
    * tests. Production callers omit this and the renderer falls back
    * to wall-clock time at submit-render time.
@@ -802,43 +809,24 @@ export interface ReviewSubmissionBuildResult {
   bodyOnlyAnnotations: CheckRunAnnotation[]
 }
 
-export function buildReviewSubmissionWithMetadata({
-  verdict: rawVerdict,
-  // `prAuthor` is still part of the public args shape (older
-  // call sites pass it) but ARC-281's renderers don't take it —
-  // the Kimi redesign dropped per-author dialogue from the body.
-  prAuthor: _prAuthor,
-  headSha,
-  unanchored: rawUnanchored = [],
-  nowMs,
-  findingMarkers,
-  stack,
-  coverage,
-  delta,
-  reviewCounter,
-  retriggerUrl,
-  reviewable,
-  addedLineTextByLine,
-}: BuildReviewArgs): ReviewSubmissionBuildResult {
-  // ARC-156 follow-up: sanitize every prose field for GitHub
-  // rendering BEFORE downstream renderers see the verdict. Wraps
-  // un-backticked HTML/JSX tags in backticks so an unclosed `<kbd>`
-  // can't open a real DOM element that breaks paragraph rendering.
+interface PreparedReviewSubmissionFindings {
+  verdict: PrReviewVerdict
+  renderVerdict: PrReviewVerdict
+  inlineFindings: PrReviewFinding[]
+  inlineOriginalIndex: number[]
+  unanchored: PrReviewFinding[]
+}
+
+function prepareReviewSubmissionFindings(args: {
+  rawVerdict: PrReviewVerdict
+  rawUnanchored: readonly PrReviewFinding[]
+  headSha: string
+  addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+}): PreparedReviewSubmissionFindings {
+  const { rawVerdict, rawUnanchored, headSha, addedLineTextByLine } = args
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
-  // Event derivation merges anchored + unanchored so a verdict whose
-  // only blocking findings happen to be unanchored doesn't post APPROVE
-  // (CR + Sigilix PR #38 catch). Computed from the FULL sanitized set
-  // BEFORE the SIG-127 verdict-rebuild below so the event/posture is
-  // unchanged regardless of where each finding ends up rendering.
-  const event = chooseReviewEvent([...verdict.findings, ...sanitizedUnanchored])
 
-  // SIG-127: partition the anchored findings into those whose anchored
-  // added line is substantive (stay inline) vs. non-substantive (route
-  // to the body via the `unanchored` rendering path). The original
-  // index is carried so `findingMarkers?.[originalIndex]` stays aligned
-  // even after filtering. When `addedLineTextByLine` is undefined every
-  // finding is substantive — zero behavior change (back-compat).
   const inlineFindings: PrReviewFinding[] = []
   const inlineOriginalIndex: number[] = []
   const bodyFindings: PrReviewFinding[] = []
@@ -864,44 +852,20 @@ export function buildReviewSubmissionWithMetadata({
     }
 
     const addedLinesForPath = addedLineTextByLine?.get(findingForInline.path)
-    // SIG-127: a finding carrying a localized `suggestedReplacement`
-    // stays inline regardless of its anchor line — the body renderer
-    // (`renderFindingsByFile`) only prints headline + body, so routing
-    // it would silently drop the proposed fix (Codex review catch).
-    // Such a finding is anchored to real editable code anyway (the
-    // committable ```suggestion needs a contiguous reviewable range).
-    // Walk-forward (below) is also skipped — moving the anchor breaks
-    // the suggestion's contiguous range guarantee.
-    // SIG-159 PR1: walk-forward when the model anchored to a context line
-    // (the SIG-127 regression: anchor at the closing `}` of the prior
-    // block, with the real subject just below). Only applies when the
-    // added-lines map IS provided AND the finding doesn't have a
-    // suggestion that would lose its contiguous range when re-anchored.
     let effective: PrReviewFinding = findingForInline
     if (addedLineTextByLine !== undefined && !hasSuggestion) {
       const resolved = pickAnchorLineForward(addedLinesForPath, f.line)
       if (resolved === null) {
-        // No added line at or after the model's anchor on this file.
-        // Route the finding to the summary body — there is no real
-        // place to anchor it inline.
         bodyFindings.push(withLineMovedNote(f, headSha))
         return
       }
       if (resolved !== f.line) {
-        // Re-anchor at the walked-forward line. Drop `startLine` so the
-        // moved anchor is a single line — the original multi-line range
-        // is no longer meaningful once the end-anchor has shifted.
         const { startLine: _drop, ...rest } = f
         effective = { ...rest, line: resolved }
       }
     }
 
     const lineText = addedLineTextByLine?.get(effective.path)?.get(effective.line)
-    // Non-substantive ONLY when the map IS provided AND the line is
-    // present in it AND its text is non-substantive. Walk-forward above
-    // guarantees we either have a present line, or we already routed
-    // to summary, so this branch handles the "added line but bare
-    // punctuation" case (SIG-127 original).
     const isNonSubstantive =
       !hasSuggestion &&
       addedLineTextByLine !== undefined &&
@@ -914,12 +878,101 @@ export function buildReviewSubmissionWithMetadata({
       inlineOriginalIndex.push(i)
     }
   })
-  // Rebuild the verdict so the moved findings are NOT also rendered as
-  // anchored, and fold them into `unanchored` so they render in the
-  // body. Avoids the double-render. When nothing moved, `unanchored`
-  // is the original sanitized set and `verdict.findings` is unchanged.
+
   const renderVerdict: PrReviewVerdict = { ...verdict, findings: inlineFindings }
   const unanchored: PrReviewFinding[] = [...sanitizedUnanchored, ...bodyFindings]
+
+  return {
+    verdict,
+    renderVerdict,
+    inlineFindings,
+    inlineOriginalIndex,
+    unanchored,
+  }
+}
+
+export interface PreviewReviewSubmissionEventArgs {
+  verdict: PrReviewVerdict
+  headSha: string
+  unanchored?: readonly PrReviewFinding[]
+  addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+  eventOverride?: ReviewEventOverride
+}
+
+export function previewReviewSubmissionEvent({
+  verdict: rawVerdict,
+  headSha,
+  unanchored: rawUnanchored = [],
+  addedLineTextByLine,
+  eventOverride,
+}: PreviewReviewSubmissionEventArgs): ReviewEvent {
+  const prepared = prepareReviewSubmissionFindings({
+    rawVerdict,
+    rawUnanchored,
+    headSha,
+    ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
+  })
+  return chooseRenderedEventWithOverride({
+    inlineFindings: prepared.inlineFindings,
+    bodyOnlyFindings: prepared.unanchored,
+  }, eventOverride)
+}
+
+export interface PreviewFallbackSubmissionEventArgs {
+  verdict: PrReviewVerdict
+  unanchored: readonly PrReviewFinding[]
+  eventOverride?: ReviewEventOverride
+}
+
+export function previewFallbackSubmissionEvent({
+  verdict: rawVerdict,
+  unanchored: rawUnanchored,
+  eventOverride,
+}: PreviewFallbackSubmissionEventArgs): ReviewEvent {
+  const verdict = sanitizeVerdictForGitHub(rawVerdict)
+  const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
+  const all = [...verdict.findings, ...unanchored]
+  return chooseRenderedEventWithOverride({
+    inlineFindings: [],
+    bodyOnlyFindings: all,
+  }, eventOverride)
+}
+
+export function buildReviewSubmissionWithMetadata({
+  verdict: rawVerdict,
+  // `prAuthor` is still part of the public args shape (older
+  // call sites pass it) but ARC-281's renderers don't take it —
+  // the Kimi redesign dropped per-author dialogue from the body.
+  prAuthor: _prAuthor,
+  headSha,
+  unanchored: rawUnanchored = [],
+  nowMs,
+  findingMarkers,
+  stack,
+  coverage,
+  delta,
+  reviewCounter,
+  retriggerUrl,
+  reviewable,
+  addedLineTextByLine,
+  eventOverride,
+}: BuildReviewArgs): ReviewSubmissionBuildResult {
+  const {
+    verdict,
+    renderVerdict,
+    inlineFindings,
+    inlineOriginalIndex,
+    unanchored,
+  } = prepareReviewSubmissionFindings({
+    rawVerdict,
+    rawUnanchored,
+    headSha,
+    ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
+  })
+  const event = chooseRenderedEventWithOverride({
+    inlineFindings,
+    bodyOnlyFindings: unanchored,
+  }, eventOverride)
 
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
   // ARC-281: dispatch directly to the new renderers instead of
@@ -934,15 +987,11 @@ export function buildReviewSubmissionWithMetadata({
   // fields, but it's cheaper / clearer to forward them unconditionally.
   if (typeof reviewCounter === "number") renderArgs.reviewCounter = reviewCounter
   if (retriggerUrl) renderArgs.retriggerUrl = retriggerUrl
-  // SIG-161 PR 4a: ReviewEvent now includes "COMMENT" but the legacy
-  // `chooseReviewEvent` (used at this call site) returns the narrowed
-  // `Exclude<ReviewEvent, "COMMENT">` — the COMMENT branch is
-  // unreachable until PR 4b switches the call site to the gate's
-  // wrapper. Keep this branch terse; the COMMENT body renderer
-  // (`renderCommentBody`) is defined for that wrapper's use.
   const body =
     event === "APPROVE"
       ? renderApproveBody(renderArgs)
+      : event === "COMMENT"
+        ? renderCommentBody(renderArgs)
       : renderRequestChangesBody(renderArgs)
   const comments: SubmitReviewComment[] = inlineFindings.map((f, i) => {
     // ARC-189: append per-finding sigilix marker on its own line so
@@ -1005,6 +1054,8 @@ interface BuildFallbackArgs {
   unanchored: PrReviewFinding[]
   prAuthor: string | null
   headSha: string
+  /** See BuildReviewArgs.eventOverride. */
+  eventOverride?: ReviewEventOverride
   /** ARC-182: optional stack context, forwarded to buildFallbackBody. */
   stack?: StackContext
   /** ARC-281: specialist coverage roster (forwarded to renderer). */
@@ -1045,19 +1096,21 @@ export function buildFallbackSubmission({
   delta,
   reviewCounter,
   retriggerUrl,
+  eventOverride,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
   // path so the body-rendered findings also get HTML-tag wrap.
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
-  // Event derivation merges anchored + unanchored — same fix as
-  // `buildReviewSubmission`. Without this, a verdict whose only
-  // blocking findings are unanchored would post APPROVE while the
-  // body lists blockers (CR + Sigilix PR #38 catch).
-  const event = chooseReviewEvent([...verdict.findings, ...unanchored])
+  const all = [...verdict.findings, ...unanchored]
+  const event = chooseRenderedEventWithOverride({
+    inlineFindings: [],
+    bodyOnlyFindings: all,
+  }, eventOverride)
   const body = buildFallbackBody(
     verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl,
+    event === "REQUEST_CHANGES" ? event : undefined,
   )
   return {
     event,
@@ -1083,6 +1136,7 @@ export function buildFallbackBody(
   delta?: DeltaBadgeCounts | null,
   reviewCounter?: number,
   retriggerUrl?: string,
+  eventOverride?: ReviewEventOverride,
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
   // dropped the inline anchors, so the body must carry every
@@ -1091,7 +1145,10 @@ export function buildFallbackBody(
   // the body-only findings section grouped by file, which is exactly
   // the right place when none of them landed inline.
   const all = [...verdict.findings, ...unanchored]
-  const event = chooseReviewEvent(all)
+  const event = chooseRenderedEventWithOverride({
+    inlineFindings: [],
+    bodyOnlyFindings: all,
+  }, eventOverride)
   if (event === "APPROVE") {
     const args: RenderBodyArgs = { verdict, unanchored: [] }
     if (stack !== undefined) args.stack = stack
@@ -1110,7 +1167,9 @@ export function buildFallbackBody(
   if (delta !== undefined) args.delta = delta
   if (typeof reviewCounter === "number") args.reviewCounter = reviewCounter
   if (retriggerUrl) args.retriggerUrl = retriggerUrl
-  return renderRequestChangesBody(args)
+  return event === "COMMENT"
+    ? renderCommentBody(args)
+    : renderRequestChangesBody(args)
 }
 
 export function chooseReviewEvent(
@@ -1144,6 +1203,43 @@ export function chooseReviewEvent(
   if (findings.length > 0) return "REQUEST_CHANGES"
   const sigilixOpenItems = filterToSigilixAuthored(openItems)
   return sigilixOpenItems.length === 0 ? "APPROVE" : "REQUEST_CHANGES"
+}
+
+export interface ChooseReviewEventForRenderedFindingsArgs {
+  inlineFindings: readonly PrReviewFinding[]
+  bodyOnlyFindings: readonly PrReviewFinding[]
+  openItems?: ReadonlyArray<AuthoredItem>
+}
+
+/**
+ * Verdict gate for the final rendered surface.
+ *
+ * Inline review comments are blocking because GitHub places them on
+ * changed code. Body-only findings are still surfaced, but they do
+ * not create a misleading REQUEST_CHANGES review unless a separate
+ * policy blocker explicitly overrides the event. This mirrors the
+ * product expectation from competitor examples: off-diff/global
+ * feedback remains visible without pretending it is an inline fix.
+ */
+export function chooseReviewEventForRenderedFindings(
+  args: ChooseReviewEventForRenderedFindingsArgs,
+): ReviewEvent {
+  if (args.inlineFindings.length > 0) return "REQUEST_CHANGES"
+
+  const sigilixOpenItems = filterToSigilixAuthored(args.openItems ?? [])
+  if (sigilixOpenItems.length > 0) return "REQUEST_CHANGES"
+
+  return args.bodyOnlyFindings.length === 0 ? "APPROVE" : "COMMENT"
+}
+
+function chooseRenderedEventWithOverride(
+  args: ChooseReviewEventForRenderedFindingsArgs,
+  eventOverride?: ReviewEventOverride,
+): ReviewEvent {
+  // Only escalation is safe here. COMMENT/APPROVE overrides can hide
+  // rendered findings, so even an unsafe cast at runtime is ignored.
+  if (eventOverride === "REQUEST_CHANGES") return "REQUEST_CHANGES"
+  return chooseReviewEventForRenderedFindings(args)
 }
 
 // ─── SIG-161 PR 4a: thresholded gate ─────────────────────────────────
@@ -1656,6 +1752,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     ...args.verdict.findings.filter((f) => findingScope(f) !== "line"),
   ]
   const totalFindings = inlineFindings.length + bodyOnlyFindings.length
+  const zeroFindingBlocker = posture === "request_changes" && totalFindings === 0
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
@@ -1667,7 +1764,11 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
   const deltaSuffix = deltaBadge ? " · since last review" : ""
   const postureCopy = posture === "comment" ? "non-blocking " : ""
-  lines.push(`## Sigilix: ${totalFindings} ${postureCopy}${findingNoun}${deltaSuffix}`)
+  lines.push(
+    zeroFindingBlocker
+      ? "## Sigilix: approval pending"
+      : `## Sigilix: ${totalFindings} ${postureCopy}${findingNoun}${deltaSuffix}`,
+  )
 
   // Changes-badge line — directly under heading, before coverage and
   // summary. Only present when delta has signal.
@@ -1692,6 +1793,13 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     ? `${args.verdict.summary.trimEnd()} ${stackParen}`
     : args.verdict.summary
   lines.push("")
+  if (zeroFindingBlocker) {
+    lines.push(
+      "Approval is pending because Sigilix has an unresolved policy-level blocker, " +
+      "but no line-specific findings were rendered in this review.",
+    )
+    lines.push("")
+  }
   lines.push(summary)
 
   // Fix Plan — only inline findings. Body-only findings appear in the
@@ -1915,11 +2023,11 @@ function renderBodyOnlyFindings(findings: PrReviewFinding[]): string[] {
     const severity = formatBodyFindingSeverity(f)
     const anchor = formatBodyFindingAnchor(f)
     const anchorNote = f.anchorNote ? ` · ${f.anchorNote}` : ""
-    const category = formatFindingCategory(f)
     const badge = severityBadgeForScore(f.score)
+    const categoryBadge = categoryBadgeForFinding(f)
     lines.push("")
-    lines.push(`- ${badge} **${stripAstMarkers(f.headline)}**`)
-    lines.push(`  <sub>${location} (${severity}) · \`${category}\` · ${anchor}${anchorNote}</sub>`)
+    lines.push(`- ${badge} ${categoryBadge} **${stripAstMarkers(f.headline)}**`)
+    lines.push(`  <sub>${location} (${severity}) · ${anchor}${anchorNote}</sub>`)
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -2015,14 +2123,18 @@ function truncateCheckAnnotationText(value: string, max: number): string {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 30
-const SEVERITY_BADGE_HEIGHT = 22
 const FINDING_BODY_PREVIEW_LIMIT = 500
 const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
 const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 
-function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
-  return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
+function badgeImg(file: ReviewBadgeAssetName): string {
+  const { width, height } = badgeAssetSize(file)
+  const label = badgeAssetLabel(file)
+  return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${width}" height="${height}"></a>`
+}
+
+function severityBadgeImg(file: "p0" | "p1" | "p2" | "p3"): string {
+  return badgeImg(file)
 }
 
 export function severityLabelForScore(score: number): "P0" | "P1" | "P2" | "P3" {
@@ -2035,7 +2147,16 @@ export function severityLabelForScore(score: number): "P0" | "P1" | "P2" | "P3" 
 export function severityBadgeForScore(score: number): string {
   const label = severityLabelForScore(score)
   const file = label.toLowerCase() as "p0" | "p1" | "p2" | "p3"
-  return severityBadgeImg(label, file)
+  return severityBadgeImg(file)
+}
+
+function categoryBadgeAssetName(category: FindingCategory): ReviewBadgeAssetName {
+  return category
+}
+
+function categoryBadgeForFinding(finding: PrReviewFinding): string {
+  const category = formatFindingCategory(finding) as FindingCategory
+  return badgeImg(categoryBadgeAssetName(category))
 }
 
 function stripAstMarkers(text: string): string {
@@ -2465,9 +2586,10 @@ export function formatFindingComment(
   // confidence stay machine-readable through hidden markers instead of
   // repeating as visible metadata on every stacked thread.
   const badge = severityBadgeForScore(finding.score)
+  const categoryBadge = categoryBadgeForFinding(finding)
   const headline = stripAstMarkers(finding.headline)
   const body = formatFindingBodyMarkdown(finding.body)
-  lines.push(`${badge} **${headline}**`)
+  lines.push(`${badge} ${categoryBadge} **${headline}**`)
   lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
   lines.push(`<!-- sigilix:severity:${finding.score} -->`)
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)

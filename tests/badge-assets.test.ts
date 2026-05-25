@@ -25,13 +25,26 @@ describe("badge assets (SIG-201)", () => {
     expect(res?.headers.get("cache-control")).toContain("immutable")
     const body = await res!.text()
     expect(body).toContain('aria-label="P2"')
-    expect(body).toContain('viewBox="0 0 30 22"')
+    expect(body).toContain('viewBox="0 0 24 18"')
     expect(body).toContain('fill="#84CC16"')
     expect(body).toContain('fill="#0B0C10"')
     expect(body).toContain('text-anchor="middle"')
     expect(body).not.toContain("<image")
     expect(body).toContain("<text")
     expect(body).toBe(getBadgeSvg("p2"))
+  })
+
+  it("serves compact category chips for specialist labels", async () => {
+    const res = handleBadgeAssetRoute(
+      new Request(badgeAssetUrl("security"))
+    )
+
+    expect(res?.status).toBe(200)
+    const body = await res!.text()
+    expect(body).toContain('aria-label="SECURITY"')
+    expect(body).toContain('fill="#F0ABFC"')
+    expect(body).toContain('letter-spacing="1.1"')
+    expect(body).toBe(getBadgeSvg("security"))
   })
 
   it("supports HEAD for external image probes without returning a body", async () => {
@@ -48,8 +61,13 @@ describe("badge assets (SIG-201)", () => {
     expect(handleBadgeAssetRoute(new Request(`${PUBLIC_BADGE_BASE_URL}/p2.png`))).toBeNull()
   })
 
+  it("rejects prototype property names instead of serving inherited values", () => {
+    expect(handleBadgeAssetRoute(new Request(`${PUBLIC_BADGE_BASE_URL}/constructor.svg`))).toBeNull()
+  })
+
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-1/p2.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-2/p2.svg`)
+    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-2/security.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
   })
 

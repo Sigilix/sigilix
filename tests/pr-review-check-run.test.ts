@@ -438,6 +438,25 @@ describe("completeCheckRun", () => {
     expect(p.output.summary).toContain("3 findings")
   })
 
+  it("renders the COMMENT title with non-blocking findings count", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "COMMENT", findingsCount: 2 },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { title: string; summary: string } }
+    expect(p.output.title).toBe("2 non-blocking findings posted")
+    expect(p.output.summary).toContain("COMMENT")
+    expect(p.output.summary).toContain("non-blocking")
+  })
+
   it("singularizes the title when REQUEST_CHANGES has exactly 1 finding", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })

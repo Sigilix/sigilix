@@ -10,6 +10,7 @@ import {
   CHECK_ANNOTATION_TEXT_LIMIT,
   CHECK_ANNOTATION_TITLE_LIMIT,
   chooseReviewEvent,
+  chooseReviewEventForRenderedFindings,
   chooseReviewEventWithGate,
   computeGateScore,
   computeShadowGateDivergence,
@@ -21,6 +22,7 @@ import {
   isCommentAnchorable,
   isSubstantiveAnchorLine,
   pickAnchorLineForward,
+  previewReviewSubmissionEvent,
   parsePrReviewResponse,
   renderCommentBody,
   renderFixPlan,
@@ -308,6 +310,86 @@ describe("chooseReviewEvent", () => {
       const deletedAuthor: AuthoredItem = { user: null }
       expect(chooseReviewEvent([], [deletedAuthor])).toBe("APPROVE")
     })
+  })
+})
+
+describe("chooseReviewEventForRenderedFindings", () => {
+  const f = (score = 3): PrReviewFinding => ({ ...baseFinding, score })
+  const crThread: AuthoredItem = { user: { login: "coderabbitai[bot]" } }
+  const sigilixThread: AuthoredItem = { user: { login: "sigilix[bot]" } }
+
+  it("APPROVE when no rendered findings or Sigilix-owned open items remain", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [],
+    })).toBe("APPROVE")
+  })
+
+  it("REQUEST_CHANGES when at least one finding rendered inline", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [f()],
+      bodyOnlyFindings: [f(2)],
+    })).toBe("REQUEST_CHANGES")
+  })
+
+  it("COMMENT when findings are visible only in the review body", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [f(5)],
+    })).toBe("COMMENT")
+  })
+
+  it("REQUEST_CHANGES for unresolved Sigilix-authored items, but not competitor items", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [],
+      openItems: [crThread],
+    })).toBe("APPROVE")
+
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [f()],
+      openItems: [crThread],
+    })).toBe("COMMENT")
+
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [],
+      openItems: [sigilixThread],
+    })).toBe("REQUEST_CHANGES")
+  })
+})
+
+describe("previewReviewSubmissionEvent", () => {
+  it("matches final rendering for body-only routing without building the body", () => {
+    const fileFinding: PrReviewFinding = {
+      ...baseFinding,
+      scope: "file",
+      score: 4,
+    }
+
+    expect(previewReviewSubmissionEvent({
+      verdict: {
+        summary: "Body-only issue.",
+        confidence: 4,
+        confidenceReason: "Specific.",
+        findings: [fileFinding],
+      },
+      headSha: "abc",
+    })).toBe("COMMENT")
+  })
+
+  it("honors explicit event overrides", () => {
+    expect(previewReviewSubmissionEvent({
+      verdict: {
+        summary: "Body-only issue.",
+        confidence: 4,
+        confidenceReason: "Specific.",
+        findings: [{ ...baseFinding, scope: "file" }],
+      },
+      headSha: "abc",
+      eventOverride: "REQUEST_CHANGES",
+    })).toBe("REQUEST_CHANGES")
   })
 })
 
@@ -1219,6 +1301,7 @@ describe("buildReviewSubmission", () => {
       headSha: "abc",
     })
 
+    expect(out.submission.event).toBe("COMMENT")
     expect(out.submission.comments).toBeUndefined()
     expect(out.bodyOnlyFindings).toEqual([fileFinding])
     expect(out.bodyOnlyAnnotations[0]).toMatchObject({
@@ -1226,6 +1309,61 @@ describe("buildReviewSubmission", () => {
       annotation_level: "failure",
       title: "[P0] logic: module invariant is unclear",
     })
+  })
+
+  it("honors REQUEST_CHANGES override even when every finding renders body-only", () => {
+    const fileFinding = {
+      ...baseFinding,
+      scope: "file" as const,
+      score: 5,
+      headline: "approval-readiness blocker",
+      body: "The finding is policy-level and must block despite body rendering.",
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: { ...verdict, findings: [fileFinding] },
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "REQUEST_CHANGES",
+    })
+
+    expect(out.submission.event).toBe("REQUEST_CHANGES")
+    expect(out.submission.comments).toBeUndefined()
+    expect(out.submission.body).toContain("To dismiss this review")
+  })
+
+  it("ignores unsafe non-blocking event overrides even if a caller casts around the type", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "APPROVE" as unknown as "REQUEST_CHANGES",
+    })
+
+    expect(out.submission.event).toBe("REQUEST_CHANGES")
+    expect(out.submission.comments).toHaveLength(1)
+    expect(out.submission.body).toMatch(/^## Sigilix: 1 finding/m)
+  })
+
+  it("renders approval-pending copy for forced blockers with no rendered findings", () => {
+    const empty: PrReviewVerdict = {
+      summary: "Approval validation still has an unresolved policy blocker.",
+      confidence: 4,
+      confidenceReason: "The blocker comes from approval-readiness validation.",
+      findings: [],
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: empty,
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "REQUEST_CHANGES",
+    })
+
+    expect(out.submission.event).toBe("REQUEST_CHANGES")
+    expect(out.submission.comments).toBeUndefined()
+    expect(out.submission.body).toMatch(/^## Sigilix: approval pending/m)
+    expect(out.submission.body).toContain("unresolved policy-level blocker")
+    expect(out.submission.body).toContain("Approval validation still has an unresolved policy blocker.")
+    expect(out.submission.body).not.toContain("0 findings")
   })
 })
 
@@ -1493,7 +1631,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(body).not.toContain(markerForBlock)
   })
 
-  it("keeps the review event REQUEST_CHANGES even when all findings route to the body", () => {
+  it("uses COMMENT when all findings route to the body", () => {
     const allBlock: PrReviewVerdict = {
       summary: "only block-level findings.",
       confidence: 4,
@@ -1506,8 +1644,9 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       headSha: "abc",
       addedLineTextByLine,
     })
-    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("lacks integration tests")
   })
 
@@ -1698,8 +1837,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
     expect(out.body).toContain("Comment-level (high, score 4)")
@@ -1727,8 +1867,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("File-level (critical, score 5)")
     expect(out.body).toContain("module-level lifecycle ordering is unsafe")
@@ -2326,7 +2467,10 @@ describe("provenance footer (ARC-184)", () => {
 
   it("buildFallbackBody REQUEST_CHANGES path still ends with the provenance footer", () => {
     const expected = `_Reviewed against \`abc1234\` at ${new Date(NOW).toISOString()}._`
-    const out = buildFallbackBody(verdictWithFinding, [], { headSha: HEAD, nowMs: NOW })
+    const out = buildFallbackBody(
+      verdictWithFinding, [], { headSha: HEAD, nowMs: NOW },
+      undefined, undefined, undefined, undefined, undefined, "REQUEST_CHANGES",
+    )
     expect(out.trimEnd().endsWith(expected)).toBe(true)
   })
 
@@ -2485,12 +2629,12 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
   it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="30"')
-    expect(out).toContain('height="22"')
+    expect(out).toContain('width="24"')
+    expect(out).toContain('height="18"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260525-1/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260525-2/p2.svg`)
     expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {

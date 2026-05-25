@@ -44,6 +44,7 @@ import {
   GRAPH_RPC_TIMEOUT_MS,
   BLAST_RADIUS_RESOLUTION_READY,
   resolveDynamicEvidencePromptBlock,
+  prepareSubmissionAffordance,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import {
@@ -52,6 +53,7 @@ import {
 } from "../src/prompts/pr-review-specialists"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { ReviewableMap } from "../src/lib/diff-positions"
+import type { Env } from "../src/index"
 
 const baseFinding: PrReviewFinding = {
   path: "src/lib/foo.ts",
@@ -68,6 +70,66 @@ const baseVerdict: PrReviewVerdict = {
   confidenceReason: "Clear off-by-one.",
   findings: [baseFinding],
 }
+
+function makeCounterEnv(store = new Map<string, string>(), puts: Array<[string, string]> = []): Env {
+  return {
+    OPENCLAW_STATE: {
+      async get(key: string): Promise<string | null> {
+        return store.get(key) ?? null
+      },
+      async put(key: string, value: string): Promise<void> {
+        puts.push([key, value])
+        store.set(key, value)
+      },
+      async delete(key: string): Promise<void> {
+        store.delete(key)
+      },
+    },
+  } as unknown as Env
+}
+
+describe("prepareSubmissionAffordance", () => {
+  it("does not prepare or persist a review counter for COMMENT submissions", async () => {
+    const store = new Map<string, string>()
+    const puts: Array<[string, string]> = []
+    const affordance = await prepareSubmissionAffordance({
+      env: makeCounterEnv(store, puts),
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 168,
+      event: "COMMENT",
+    })
+
+    expect(affordance.reviewCounter).toBeUndefined()
+    expect(affordance.retriggerUrl).toBeUndefined()
+    await affordance.persistReviewCounter()
+    expect(puts).toHaveLength(0)
+  })
+
+  it("renders REQUEST_CHANGES counters only after the posted review is confirmed", async () => {
+    const key = "pr-review-counter:Arc-and-Anchor/sigilix#168"
+    const store = new Map<string, string>([[key, "7"]])
+    const puts: Array<[string, string]> = []
+    const affordance = await prepareSubmissionAffordance({
+      env: makeCounterEnv(store, puts),
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 168,
+      event: "REQUEST_CHANGES",
+    })
+
+    expect(affordance.reviewCounter).toBe(8)
+    expect(affordance.retriggerUrl).toBe("https://github.com/Arc-and-Anchor/sigilix/pull/168")
+    expect(store.get(key)).toBe("7")
+    expect(puts).toHaveLength(0)
+
+    await affordance.persistReviewCounter()
+    await affordance.persistReviewCounter()
+
+    expect(store.get(key)).toBe("8")
+    expect(puts).toEqual([[key, "8"]])
+  })
+})
 
 describe("assignStableFindingIds", () => {
   it("assigns deterministic IDs scoped by role", () => {

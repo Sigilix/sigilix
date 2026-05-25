@@ -12,6 +12,7 @@ import {
   bumpPrReviewCounter,
   buildReviewCounterKey,
   buildPrUrl,
+  preparePrReviewCounter,
 } from "../src/lib/pr-review-counter"
 import type { Env } from "../src/index"
 
@@ -126,5 +127,46 @@ describe("bumpPrReviewCounter", () => {
     await bumpPrReviewCounter(env, "a", "x", 2)
     expect(kv.store.get("pr-review-counter:a/x#1")).toBe("2")
     expect(kv.store.get("pr-review-counter:a/x#2")).toBe("1")
+  })
+})
+
+describe("preparePrReviewCounter", () => {
+  it("returns the next visible value without writing until persist is called", async () => {
+    const kv = makeKv({ "pr-review-counter:Arc-and-Anchor/sigilix#42": "2" })
+    const prepared = await preparePrReviewCounter(makeEnv(kv), OWNER, REPO, PR)
+
+    expect(prepared.value).toBe(3)
+    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("2")
+
+    await prepared.persist()
+    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("3")
+  })
+
+  it("makes persist idempotent", async () => {
+    const kv = makeKv()
+    const prepared = await preparePrReviewCounter(makeEnv(kv), OWNER, REPO, PR)
+
+    await prepared.persist()
+    await prepared.persist()
+
+    expect(kv.store.get("pr-review-counter:Arc-and-Anchor/sigilix#42")).toBe("1")
+  })
+
+  it("does not write the synthetic value when the read failed", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    const putMock = vi.fn(async () => {})
+    const env = {
+      OPENCLAW_STATE: {
+        get: async () => { throw new Error("KV get boom") },
+        put: putMock,
+        delete: async () => {},
+      } as unknown as KVNamespace,
+    } as unknown as Env
+
+    const prepared = await preparePrReviewCounter(env, OWNER, REPO, PR)
+    await prepared.persist()
+
+    expect(prepared.value).toBe(1)
+    expect(putMock).not.toHaveBeenCalled()
   })
 })

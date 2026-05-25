@@ -14,6 +14,11 @@
 
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "../index"
+import {
+  ALL_DISMISS_REASONS,
+  type DismissReason,
+  isDismissReason,
+} from "../lib/dismiss-reasons"
 
 // Retention: keep 35 days of daily buckets so the endpoint can serve up to a
 // 30-day window with margin. GC runs via a daily alarm; queries always filter
@@ -44,13 +49,32 @@ CREATE TABLE IF NOT EXISTS last_seen_pr (
 CREATE INDEX IF NOT EXISTS last_seen_by_at ON last_seen_pr(last_seen_at);
 `
 
-/** One validator-gate rejection (the shape the ensemble collects + forwards). */
-export interface ValidationRejectionEvent {
-  gate: string
-  reason: string
-  /** true = actually dropped (enforce mode); false = would-drop (shadow). */
-  dropped: boolean
-}
+/**
+ * One validator-gate rejection (the shape the ensemble collects + forwards).
+ *
+ * SIG-173: discriminated union — `"gate-rejection"` is the existing
+ * shadow/enforce telemetry the validator gates push; `"dismissal-reason"`
+ * is the per-reason rollup written when `@sigilix dismiss <reason>`
+ * succeeds in `github-mention.ts`. Both flow through the same DO so a
+ * single endpoint surface can serve both rollups, and the `daily_counts`
+ * table is the natural place for the per-reason counter
+ * (gate = `"dismissal"`, reason = `<DismissReason>`, kept = 0).
+ */
+export type ValidationRejectionEvent =
+  | {
+      kind: "gate-rejection"
+      gate: string
+      reason: string
+      /** true = actually dropped (enforce mode); false = would-drop (shadow). */
+      dropped: boolean
+    }
+  | {
+      kind: "dismissal-reason"
+      reason: DismissReason
+    }
+
+/** Synthetic gate name used to file dismissal-reason rows in `daily_counts`. */
+export const DISMISSAL_METRICS_GATE = "dismissal"
 
 export interface RecordBatchArgs {
   owner: string
@@ -73,6 +97,12 @@ export interface ValidationMetricsQuery {
     headSha: string
     lastSeenAt: string
   }>
+}
+
+/** SIG-173: per-reason dismissal rollup. One entry per `DismissReason`. */
+export interface DismissalMetricsQuery {
+  reasonCounts: Record<DismissReason, number>
+  window: { days: number; startDay: string; endDay: string }
 }
 
 /** UTC YYYY-MM-DD for an ISO timestamp (or now). */
@@ -98,39 +128,72 @@ export class ValidationMetricsDO extends DurableObject<Env> {
 
   /**
    * Record a batch of validator rejections for one PR review. Per event:
-   * would_drop += 1; if NOT actually dropped (shadow), kept += 1. Updates the
-   * PR's last-seen head SHA. Idempotency is not required — each review run
-   * contributes its own counts. Runs in a single transaction; schedules the
-   * daily GC alarm if none is pending.
+   *
+   *   - `kind: "gate-rejection"` (existing SIG-119 shadow telemetry):
+   *     `would_drop += 1`; if NOT actually dropped (shadow), `kept += 1`.
+   *     Updates the PR's last-seen head SHA.
+   *
+   *   - `kind: "dismissal-reason"` (SIG-173): files under the synthetic
+   *     gate `"dismissal"` with reason = `<DismissReason>`, `kept = 0`
+   *     (a dismissal is always terminal — no "would-drop / kept" duality
+   *     to model). Does NOT update `last_seen_pr` — dismissals don't
+   *     supply a head SHA and we don't want to fabricate one.
+   *
+   * Idempotency is not required — each review / dismiss contributes its
+   * own counts. Runs in a single transaction; schedules the daily GC
+   * alarm if none is pending.
    */
   async recordBatch(args: RecordBatchArgs): Promise<void> {
     if (args.events.length === 0) return
     const sql = this.sql()
     const day = utcDay(args.occurredAt)
     const at = args.occurredAt ?? new Date().toISOString()
+    let sawGateRejection = false
 
     this.ctx.storage.transactionSync(() => {
       for (const e of args.events) {
+        switch (e.kind) {
+          case "gate-rejection":
+            sawGateRejection = true
+            sql.exec(
+              `INSERT INTO daily_counts (day, gate, reason, would_drop, kept)
+               VALUES (?, ?, ?, 1, ?)
+               ON CONFLICT(day, gate, reason) DO UPDATE SET
+                 would_drop = would_drop + 1,
+                 kept = kept + ?`,
+              day, e.gate, e.reason,
+              e.dropped ? 0 : 1,
+              e.dropped ? 0 : 1,
+            )
+            break
+          case "dismissal-reason":
+            sql.exec(
+              `INSERT INTO daily_counts (day, gate, reason, would_drop, kept)
+               VALUES (?, ?, ?, 1, 0)
+               ON CONFLICT(day, gate, reason) DO UPDATE SET
+                 would_drop = would_drop + 1`,
+              day, DISMISSAL_METRICS_GATE, e.reason,
+            )
+            break
+          default: {
+            // Compile-time exhaustiveness — any new ValidationRejectionEvent
+            // variant must be wired into one of the cases above.
+            const _exhaustive: never = e
+            throw new Error(`unhandled validation rejection event kind: ${JSON.stringify(_exhaustive)}`)
+          }
+        }
+      }
+      if (sawGateRejection) {
         sql.exec(
-          `INSERT INTO daily_counts (day, gate, reason, would_drop, kept)
-           VALUES (?, ?, ?, 1, ?)
-           ON CONFLICT(day, gate, reason) DO UPDATE SET
-             would_drop = would_drop + 1,
-             kept = kept + ?`,
-          day, e.gate, e.reason,
-          e.dropped ? 0 : 1,
-          e.dropped ? 0 : 1,
+          `INSERT INTO last_seen_pr (owner, repo, pr_number, head_sha, last_seen_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(owner, repo, pr_number) DO UPDATE SET
+             head_sha = excluded.head_sha,
+             last_seen_at = excluded.last_seen_at
+           WHERE excluded.last_seen_at >= last_seen_pr.last_seen_at`,
+          args.owner, args.repo, args.prNumber, args.headSha, at,
         )
       }
-      sql.exec(
-        `INSERT INTO last_seen_pr (owner, repo, pr_number, head_sha, last_seen_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(owner, repo, pr_number) DO UPDATE SET
-           head_sha = excluded.head_sha,
-           last_seen_at = excluded.last_seen_at
-         WHERE excluded.last_seen_at >= last_seen_pr.last_seen_at`,
-        args.owner, args.repo, args.prNumber, args.headSha, at,
-      )
     })
 
     // Ensure a GC alarm is pending (idempotent — only sets when none exists).
@@ -151,11 +214,14 @@ export class ValidationMetricsDO extends DurableObject<Env> {
     const startDay = utcDayMinus(now, args.windowDays - 1)
 
     const counts: ValidationMetricsQuery["counts"] = {}
+    // SIG-173: exclude the synthetic dismissal gate from the validator
+    // rollup. Dismissal counts have their own dedicated query path so the
+    // `/metrics/validation` endpoint stays focused on validator gates.
     for (const row of sql.exec<{ gate: string; reason: string; would_drop: number; kept: number }>(
       `SELECT gate, reason, SUM(would_drop) AS would_drop, SUM(kept) AS kept
-       FROM daily_counts WHERE day >= ? AND day <= ?
+       FROM daily_counts WHERE day >= ? AND day <= ? AND gate != ?
        GROUP BY gate, reason`,
-      startDay, endDay,
+      startDay, endDay, DISMISSAL_METRICS_GATE,
     )) {
       ;(counts[row.gate] ??= {})[row.reason] = { wouldDrop: row.would_drop, kept: row.kept }
     }
@@ -175,6 +241,37 @@ export class ValidationMetricsDO extends DurableObject<Env> {
     }))
 
     return { counts, window: { days: args.windowDays, startDay, endDay }, lastSeenPrHeads }
+  }
+
+  /**
+   * SIG-173: aggregate dismissal-reason counts over the trailing `windowDays`.
+   * Returns one entry per canonical `DismissReason` (including `"unlabeled"`),
+   * defaulting absent reasons to 0 so consumers can iterate the full set
+   * without null-handling. Unknown reasons in the table (older data, manual
+   * KV pokes) are dropped defensively.
+   */
+  async queryDismissals(args: { windowDays: number; nowIso?: string }): Promise<DismissalMetricsQuery> {
+    const sql = this.sql()
+    const now = args.nowIso ?? new Date().toISOString()
+    const endDay = utcDay(now)
+    const startDay = utcDayMinus(now, args.windowDays - 1)
+
+    const reasonCounts: Record<DismissReason, number> = Object.fromEntries(
+      ALL_DISMISS_REASONS.map((r) => [r, 0]),
+    ) as Record<DismissReason, number>
+
+    for (const row of sql.exec<{ reason: string; total: number }>(
+      `SELECT reason, SUM(would_drop) AS total
+       FROM daily_counts WHERE day >= ? AND day <= ? AND gate = ?
+       GROUP BY reason`,
+      startDay, endDay, DISMISSAL_METRICS_GATE,
+    )) {
+      if (isDismissReason(row.reason)) {
+        reasonCounts[row.reason] = row.total
+      }
+    }
+
+    return { reasonCounts, window: { days: args.windowDays, startDay, endDay } }
   }
 
   /** Daily retention GC: drop buckets + PR heads older than RETENTION_DAYS. */

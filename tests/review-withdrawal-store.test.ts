@@ -305,5 +305,78 @@ describe("writeWithdrawal / loadWithdrawals round-trip", () => {
   })
 })
 
+// SIG-173 — optional dismissReason field round-trips through write+load.
+
+describe("WithdrawalRecord dismissReason field (SIG-173)", () => {
+  it("persists dismissReason and recovers it via loadWithdrawals", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    await writeWithdrawal({
+      env, owner: "o", repo: "r", prNumber: 1,
+      path: "src/x.ts", line: 1, bodySnapshot: "concern",
+      withdrawnByCommentId: 1, prHeadSha: "s",
+      dismissReason: "too-minor",
+    })
+    const out = await loadWithdrawals(env, "o", "r", 1)
+    expect(out).toHaveLength(1)
+    expect(out[0]?.dismissReason).toBe("too-minor")
+  })
+
+  it("omits dismissReason from the wire when the writer doesn't supply one (back-compat)", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    await writeWithdrawal({
+      env, owner: "o", repo: "r", prNumber: 1,
+      path: "src/x.ts", line: 1, bodySnapshot: "concern",
+      withdrawnByCommentId: 1, prHeadSha: "s",
+    })
+    const raw = store.get("withdrawal:o:r:1:1")
+    expect(raw).toBeTruthy()
+    // The serialized JSON should NOT contain the field at all (avoids
+    // leaking an `undefined` over the wire / shadow-test artifacts).
+    expect(raw).not.toContain("dismissReason")
+
+    const out = await loadWithdrawals(env, "o", "r", 1)
+    expect(out).toHaveLength(1)
+    expect(out[0]?.dismissReason).toBeUndefined()
+  })
+
+  it("loads legacy records that pre-date the dismissReason field (forward compat)", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    // Hand-write a pre-SIG-173 shape: no dismissReason field at all.
+    await kv.put(
+      "withdrawal:o:r:1:42",
+      JSON.stringify({
+        path: "src/x.ts", line: 1, bodySnapshot: "concern",
+        withdrawnAt: 1700000000000, withdrawnByCommentId: 42, prHeadSha: "s",
+        reason: "mention-reply-accepted",
+      }),
+    )
+    const out = await loadWithdrawals(env, "o", "r", 1)
+    expect(out).toHaveLength(1)
+    expect(out[0]?.withdrawnByCommentId).toBe(42)
+    expect(out[0]?.dismissReason).toBeUndefined()
+  })
+
+  it("ignores unknown / invalid dismissReason values on the wire", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    await kv.put(
+      "withdrawal:o:r:1:43",
+      JSON.stringify({
+        path: "src/x.ts", line: 1, bodySnapshot: "concern",
+        withdrawnAt: 1700000000000, withdrawnByCommentId: 43, prHeadSha: "s",
+        reason: "mention-reply-accepted",
+        dismissReason: "not-a-real-label",
+      }),
+    )
+    const out = await loadWithdrawals(env, "o", "r", 1)
+    expect(out).toHaveLength(1)
+    // Unknown label is dropped so it can't poison softening weight calcs.
+    expect(out[0]?.dismissReason).toBeUndefined()
+  })
+})
+
 // suppress unused-var lint
 void vi

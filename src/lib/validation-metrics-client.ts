@@ -36,20 +36,20 @@ export async function queryValidationMetrics(
 }
 
 /**
- * SIG-173: record one `@sigilix dismiss <reason>` event. `owner/repo/prNumber`
- * are accepted but unused for dismissal events inside the DO — `recordBatch`
- * skips the `last_seen_pr` update for the dismissal path so a dismiss never
- * pollutes the validator-rejection PR-head tracker. The placeholders here
- * keep the DO's `RecordBatchArgs` signature uniform across both event kinds.
+ * SIG-173: record one `@sigilix dismiss <reason>` event. The DO's
+ * `recordBatch` skips the `last_seen_pr` update for the dismissal path so
+ * a dismiss never pollutes the validator-rejection PR-head tracker; the
+ * synthetic owner/repo/prNumber placeholders below exist only to satisfy
+ * `RecordBatchArgs`'s shape.
  */
 export async function recordDismissalMetric(
   env: Env,
-  args: { reason: DismissReason; owner?: string; repo?: string; prNumber?: number },
+  args: { reason: DismissReason },
 ): Promise<void> {
   await metricsStub(env).recordBatch({
-    owner: args.owner ?? "",
-    repo: args.repo ?? "",
-    prNumber: args.prNumber ?? 0,
+    owner: "",
+    repo: "",
+    prNumber: 0,
     headSha: "",
     events: [{ kind: "dismissal-reason", reason: args.reason }],
   })

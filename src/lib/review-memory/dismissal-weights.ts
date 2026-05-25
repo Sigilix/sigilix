@@ -1,3 +1,13 @@
+// SIG-173: differential weighting is wired through `weightedSignalCount`
+// but the production signal writer (`captureReviewFeedback`) does not
+// yet emit a `dismissReason` on the ReviewMemorySignal — bridging the
+// explicit-dismiss → memory-signal path is its own design surface
+// (which findings in the dismissed review get reason-attribution?) and
+// will land in a follow-up ticket. Until then, this weighting fires
+// only in tests + any future code path that writes a categorized
+// reason signal. The infrastructure here is back-compat with the
+// existing unlabeled (`dismissReason: undefined`) signals — default 1.0.
+//
 // SIG-173 — differential softening weights for review-memory signals.
 //
 // The review-memory activation threshold (see `lookup.ts::isMemoryActive`)

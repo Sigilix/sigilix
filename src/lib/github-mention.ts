@@ -234,25 +234,21 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     }
 
     let dismiss: ReviewDismissResult | null = null
-    // SIG-173: prefer the reason persisted at the original dismiss-time over
-    // the current command's reason on a replay. Older records (pre-SIG-173)
-    // have no `dismissReason` field; default to the fresh parse instead so
-    // replays still tag the metric + acknowledgement copy.
+    // SIG-173: prefer the reason persisted at the original dismiss-time
+    // over the current command's reason on a replay (see
+    // `preferPersistedReason`). The fresh parse from `dismissCommand` is
+    // the fallback for the first-write path where no record exists yet.
     let dismissReason: DismissReason = dismissCommand.reason
     if (pendingDismissReply) {
       dismiss = pendingDismissReply.result
-      if (pendingDismissReply.dismissReason) {
-        dismissReason = pendingDismissReply.dismissReason
-      }
+      dismissReason = preferPersistedReason(pendingDismissReply, dismissCommand.reason)
     } else {
       const lock = await acquireReviewDismissInProgressLock(env.OPENCLAW_STATE, kvKey)
       if (!lock.acquired) {
         const record = lock.record
         if (record?.kind === DISMISS_DEDUPE_KIND && typeof record.replyCommentId !== "number") {
           dismiss = record.result
-          if (record.dismissReason) {
-            dismissReason = record.dismissReason
-          }
+          dismissReason = preferPersistedReason(record, dismissCommand.reason)
         } else {
           since("dismiss-lock-not-acquired", { storedKind: record?.kind ?? null })
           return
@@ -915,11 +911,51 @@ function isReviewDismissResult(value: unknown): value is ReviewDismissResult {
 const DISMISS_COMMAND_PREFIXES = ["dismiss this review", "dismiss review", "dismiss"] as const
 
 /**
+ * SIG-173 follow-up: shape the residual after stripping a dismiss prefix
+ * must match before we treat the body as a real dismiss command. Without
+ * this, `dismiss the irrelevant context you raised here is concerning`
+ * would trip a real dismissal. The shape is deliberately label-like:
+ * starts with an alphanumeric, then alphanumerics + hyphen/underscore/space
+ * only, no longer than 32 chars total. Combined with the MAX_REST_WORDS
+ * gate this admits all canonical labels (and the hyphen/space variants
+ * the alias table recognizes) but rejects free prose.
+ */
+const REASON_REST_SHAPE = /^[a-z0-9][a-z0-9 _-]{0,31}$/
+const MAX_REST_WORDS = 3
+
+/**
+ * Strip wrappers people commonly type around a single-word label
+ * (`*not-a-bug*`, `` `too-minor` ``, `_wrong-context_`, `not-a-bug 🎉`)
+ * BEFORE the shape gate so the label still parses. Conservative — runs
+ * once, doesn't touch interior characters.
+ */
+function stripReasonWrappers(rest: string): string {
+  let out = rest
+  // Trailing emoji (most common case: celebration / shrug at end of comment).
+  // Strip any trailing run of: \p{Extended_Pictographic} (the emoji bases
+  // we care about — celebration, gestures, etc), skin-tone modifiers
+  // (U+1F3FB..U+1F3FF), the ZWJ that joins emoji sequences (U+200D), and
+  // the variation selector that picks the emoji-presentation form
+  // (U+FE0F). One sweep peels off `🎉`, `🤷‍♀️`, `👍🏽`, etc. without
+  // touching label chars like `*` or `#` (which Emoji_Component would
+  // also match — keycap bases).
+  out = out.replace(/[\s‍️\u{1F3FB}-\u{1F3FF}\p{Extended_Pictographic}]+$/gu, "")
+  // Surrounding markdown emphasis: *, _, `. Strip ONE matching pair at the
+  // ends so `*not-a-bug*` → `not-a-bug` without touching internal underscores
+  // in `not_a_bug`.
+  const wrapperPair = /^([*_`])(.+)\1$/
+  const m = wrapperPair.exec(out)
+  if (m && m[2] !== undefined) out = m[2]
+  return out.trim()
+}
+
+/**
  * SIG-173: parse `@sigilix dismiss [<reason>]`. Returns `{kind: "dismiss",
  * reason}` when the body is a dismiss command (reason defaults to
- * `"unlabeled"` for bare `dismiss` AND for invalid labels — typos shouldn't
- * silently fail the dismiss). Returns null when the body isn't a dismiss
- * command at all.
+ * `"unlabeled"` for bare `dismiss` AND for invalid-but-label-shaped values
+ * — typos shouldn't silently fail the dismiss). Returns null when the body
+ * isn't a dismiss command at all, including the case where the residual
+ * after stripping the prefix is free prose, not a label.
  *
  * Pure — exported for tests.
  */
@@ -936,10 +972,20 @@ export function parseDismissCommand(
       return { kind: "dismiss", reason: "unlabeled" }
     }
     if (normalized.startsWith(`${prefix} `)) {
-      const rest = normalized.slice(prefix.length + 1).trim()
+      const raw = normalized.slice(prefix.length + 1).trim()
+      const rest = stripReasonWrappers(raw)
+      if (rest.length === 0) {
+        return { kind: "dismiss", reason: "unlabeled" }
+      }
+      // Gate the residual to label-shape only — anything else (prose,
+      // sentences, special chars) means this body was about something
+      // else that happened to start with "dismiss".
+      if (!REASON_REST_SHAPE.test(rest) || rest.split(/\s+/).length > MAX_REST_WORDS) {
+        return null
+      }
       const parsed = parseDismissReason(rest)
-      // Invalid label → still a dismiss command, just unlabeled. A typo
-      // shouldn't silently swallow the dismiss intent.
+      // Label-shaped but not in the alias table → still a dismiss command,
+      // just unlabeled. A typo on a label shouldn't swallow the dismiss.
       return { kind: "dismiss", reason: parsed ?? "unlabeled" }
     }
   }
@@ -953,6 +999,29 @@ export function parseDismissCommand(
  */
 export function isReviewDismissRequest(question: string): boolean {
   return parseDismissCommand(question) !== null
+}
+
+/**
+ * SIG-173 follow-up: single decision point for "which reason wins on a
+ * replay". The dedupe-record's persisted reason is canonical the moment
+ * it exists — a fresh @sigilix dismiss command coming in with a different
+ * label must NOT silently overwrite history on the next dedupe-record
+ * write. A legacy record (pre-SIG-173, no `dismissReason` field) signals
+ * "original dismiss was unlabeled" and is preserved as `"unlabeled"` for
+ * the same reason: don't let the new label rewrite the original intent.
+ * Only when no `DISMISS_DEDUPE_KIND` record exists at all do we fall back
+ * to the fresh parse.
+ *
+ * Pure — exported for tests.
+ */
+export function preferPersistedReason(
+  record: ReviewDismissDedupeRecord | null,
+  fresh: DismissReason,
+): DismissReason {
+  if (record?.kind === DISMISS_DEDUPE_KIND) {
+    return record.dismissReason ?? "unlabeled"
+  }
+  return fresh
 }
 
 /**

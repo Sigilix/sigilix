@@ -60,6 +60,7 @@ import {
   parseDismissCommand,
   parseGithubMentionResponse,
   parseReviewDismissDedupeRecord,
+  preferPersistedReason,
   releaseReviewDismissInProgressLock,
   serializeReviewDismissDedupeRecord,
   serializeReviewDismissInProgressRecord,
@@ -170,13 +171,22 @@ describe("isReviewDismissRequest", () => {
     expect(isReviewDismissRequest("please review")).toBe(false)
   })
 
-  it("accepts the new reason-bearing forms (forgiving parse — typos accepted as unlabeled)", () => {
-    // SIG-173: `dismiss <anything>` is treated as a dismiss command with an
-    // unlabeled reason so reviewers' typos don't silently swallow the
-    // dismiss intent. The reason-parsing layer (parseDismissCommand) is
-    // where the validity check lives.
+  it("accepts the new reason-bearing forms (label-shaped residual only)", () => {
+    // SIG-173: `dismiss <label>` is treated as a dismiss command. Typos on
+    // a label-shaped residual still parse as `unlabeled` so the dismiss
+    // goes through. Free prose that just happens to start with "dismiss"
+    // does NOT trigger — see the next test.
     expect(isReviewDismissRequest("dismiss too-minor")).toBe(true)
-    expect(isReviewDismissRequest("dismiss the finding after checking this file")).toBe(true)
+    expect(isReviewDismissRequest("dismiss notabug")).toBe(true)
+  })
+
+  it("rejects prose that happens to start with the word 'dismiss' (SIG-173 follow-up)", () => {
+    // The residual after the dismiss prefix must be label-shaped (<=3
+    // words, [a-z0-9 _-], <=32 chars). Anything else is prose, not a
+    // command — the comment is left alone for the question-answer path.
+    expect(isReviewDismissRequest("dismiss the finding after checking this file")).toBe(false)
+    expect(isReviewDismissRequest("dismiss the irrelevant context you raised here is concerning")).toBe(false)
+    expect(isReviewDismissRequest("dismiss the bug i mentioned earlier")).toBe(false)
   })
 })
 
@@ -225,6 +235,83 @@ describe("parseDismissCommand", () => {
     expect(parseDismissCommand("dismiss whatever")).toEqual({ kind: "dismiss", reason: "unlabeled" })
     expect(parseDismissCommand("dismiss nope")).toEqual({ kind: "dismiss", reason: "unlabeled" })
     expect(parseDismissCommand("dismiss too-mnir")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+  })
+
+  it("returns null on free prose that happens to start with 'dismiss' (SIG-173 follow-up)", () => {
+    // The residual must be label-shape (<=3 label-shape words, <=32 chars).
+    // Multi-word prose, special chars, or anything over the cap are NOT
+    // commands — the body is left for the question-answer path to handle.
+    expect(parseDismissCommand("dismiss the finding after checking this file")).toBeNull()
+    expect(parseDismissCommand("dismiss because xyz, this is fine")).toBeNull()
+    expect(parseDismissCommand("dismiss the irrelevant context you raised here is concerning")).toBeNull()
+    // Punctuation / special chars are NOT label-shape.
+    expect(parseDismissCommand("dismiss not (a bug)")).toBeNull()
+    // Over the 32-char rest cap.
+    expect(parseDismissCommand("dismiss aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")).toBeNull()
+  })
+
+  it("pins the boundary: 3-word label-shape residual still parses", () => {
+    // "not a bug" is 3 words, all label-shape — the hyphen-tolerant alias
+    // table converts the space-separated form to the canonical label.
+    expect(parseDismissCommand("dismiss not a bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+  })
+
+  it("tolerates markdown-emphasis and trailing-emoji wrappers around labels (SIG-173 follow-up)", () => {
+    expect(parseDismissCommand("dismiss *not-a-bug*")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss `not-a-bug`")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss _too-minor_")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("dismiss not-a-bug 🎉")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss too-minor 🤷‍♀️")).toEqual({ kind: "dismiss", reason: "too-minor" })
+  })
+})
+
+describe("preferPersistedReason (SIG-173 follow-up)", () => {
+  it("falls back to the fresh reason when no persisted record exists", () => {
+    expect(preferPersistedReason(null, "too-minor")).toBe("too-minor")
+  })
+
+  it("falls back to fresh when the record is the in-progress lock kind", () => {
+    expect(preferPersistedReason({ kind: "review-dismiss-in-progress" }, "too-minor")).toBe("too-minor")
+  })
+
+  it("returns the persisted reason verbatim when present", () => {
+    expect(
+      preferPersistedReason(
+        {
+          kind: "review-dismiss-result",
+          result: { kind: "dismissed", reviewId: 1 },
+          dismissReason: "bad-anchor",
+        },
+        "too-minor",
+      ),
+    ).toBe("bad-anchor")
+  })
+
+  it("preserves a persisted 'unlabeled' over a fresh labeled command", () => {
+    expect(
+      preferPersistedReason(
+        {
+          kind: "review-dismiss-result",
+          result: { kind: "dismissed", reviewId: 1 },
+          dismissReason: "unlabeled",
+        },
+        "too-minor",
+      ),
+    ).toBe("unlabeled")
+  })
+
+  it("treats a legacy record (no dismissReason field) as 'unlabeled' — fresh label does NOT win", () => {
+    // Pre-SIG-173 records have no field. The original dismiss was, by
+    // definition, unlabeled — a replay must not silently rewrite history.
+    expect(
+      preferPersistedReason(
+        {
+          kind: "review-dismiss-result",
+          result: { kind: "dismissed", reviewId: 1 },
+        },
+        "too-minor",
+      ),
+    ).toBe("unlabeled")
   })
 })
 
@@ -289,19 +376,39 @@ describe("review dismiss dedupe records", () => {
 })
 
 describe("handleGithubMention dismiss path", () => {
-  function makeEnv(initial?: Record<string, string>): { env: Env; store: Map<string, string> } {
+  function makeEnv(initial?: Record<string, string>): {
+    env: Env
+    store: Map<string, string>
+    metricsBatches: Array<{ events: Array<{ kind: string; reason?: string }> }>
+  } {
     const store = new Map(Object.entries(initial ?? {}))
     const kv = {
       get: vi.fn(async (key: string) => store.get(key) ?? null),
       put: vi.fn(async (key: string, value: string) => { store.set(key, value) }),
       delete: vi.fn(async (key: string) => { store.delete(key) }),
     } as unknown as KVNamespace
+    // SIG-173 follow-up: minimal VALIDATION_METRICS_DO stub so the
+    // dismissal-metric record call hits the happy path instead of
+    // silently swallowing a binding-missing error. Captures recorded
+    // batches for assertion-side inspection.
+    const metricsBatches: Array<{ events: Array<{ kind: string; reason?: string }> }> = []
+    const metricsStub = {
+      async recordBatch(args: { events: Array<{ kind: string; reason?: string }> }) {
+        metricsBatches.push(args)
+      },
+    }
+    const metricsNs = {
+      idFromName: (_name: string) => "global-id",
+      get: (_id: unknown) => metricsStub,
+    }
     return {
       store,
+      metricsBatches,
       env: {
         OPENCLAW_STATE: kv,
         GITHUB_APP_ID: "1",
         GITHUB_PRIVATE_KEY: "private-key",
+        VALIDATION_METRICS_DO: metricsNs,
       } as unknown as Env,
     }
   }
@@ -438,8 +545,50 @@ describe("handleGithubMention dismiss path", () => {
     expect(store.has("gh-mention:4242")).toBe(false)
   })
 
+  it("legacy record (no dismissReason field) preserves 'unlabeled' on a fresh labeled replay (SIG-173 follow-up)", async () => {
+    // The original dismiss landed before SIG-173 shipped — the record has
+    // no `dismissReason` field. A fresh `@sigilix dismiss too-minor` replay
+    // arrives. The dedupe-record write that follows must NOT silently
+    // overwrite the original (unlabeled) intent with "too-minor".
+    const legacyJson = JSON.stringify({
+      kind: "review-dismiss-result",
+      result: { kind: "dismissed", reviewId: 90 },
+      // No replyCommentId — this is the pendingDismissReply branch.
+      // No dismissReason — pre-SIG-173 shape.
+    })
+    const { env, store } = makeEnv({ "gh-mention:4242": legacyJson })
+    listIssueCommentsMock.mockResolvedValue([
+      {
+        id: 4242,
+        body: "@sigilix dismiss too-minor",
+        user: { login: "human" },
+        author_association: "MEMBER",
+      },
+    ])
+
+    await handleGithubMention({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 7,
+      installationId: 99,
+      surface: "issue",
+      commentId: 4242,
+      env,
+    })
+
+    // We did NOT re-dismiss (the result was already persisted).
+    expect(dismissReviewMock).not.toHaveBeenCalled()
+    // Persisted "unlabeled" wins; the fresh "too-minor" does NOT take over.
+    expect(parseReviewDismissDedupeRecord(store.get("gh-mention:4242") ?? null)).toEqual({
+      kind: "review-dismiss-result",
+      result: { kind: "dismissed", reviewId: 90 },
+      replyCommentId: 777,
+      dismissReason: "unlabeled",
+    })
+  })
+
   it("threads the parsed reason into the persisted record and the reply copy (SIG-173)", async () => {
-    const { env, store } = makeEnv()
+    const { env, store, metricsBatches } = makeEnv()
     listIssueCommentsMock.mockResolvedValue([
       {
         id: 4242,
@@ -483,6 +632,12 @@ describe("handleGithubMention dismiss path", () => {
       replyCommentId: 777,
       dismissReason: "too-minor",
     })
+    // SIG-173 follow-up: the dismissal-metric path actually fires on the
+    // happy path (the env now binds VALIDATION_METRICS_DO).
+    expect(metricsBatches).toHaveLength(1)
+    expect(metricsBatches[0].events).toEqual([
+      { kind: "dismissal-reason", reason: "too-minor" },
+    ])
   })
 })
 

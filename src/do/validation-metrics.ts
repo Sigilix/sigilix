@@ -152,26 +152,35 @@ export class ValidationMetricsDO extends DurableObject<Env> {
 
     this.ctx.storage.transactionSync(() => {
       for (const e of args.events) {
-        if (e.kind === "gate-rejection") {
-          sawGateRejection = true
-          sql.exec(
-            `INSERT INTO daily_counts (day, gate, reason, would_drop, kept)
-             VALUES (?, ?, ?, 1, ?)
-             ON CONFLICT(day, gate, reason) DO UPDATE SET
-               would_drop = would_drop + 1,
-               kept = kept + ?`,
-            day, e.gate, e.reason,
-            e.dropped ? 0 : 1,
-            e.dropped ? 0 : 1,
-          )
-        } else {
-          sql.exec(
-            `INSERT INTO daily_counts (day, gate, reason, would_drop, kept)
-             VALUES (?, ?, ?, 1, 0)
-             ON CONFLICT(day, gate, reason) DO UPDATE SET
-               would_drop = would_drop + 1`,
-            day, DISMISSAL_METRICS_GATE, e.reason,
-          )
+        switch (e.kind) {
+          case "gate-rejection":
+            sawGateRejection = true
+            sql.exec(
+              `INSERT INTO daily_counts (day, gate, reason, would_drop, kept)
+               VALUES (?, ?, ?, 1, ?)
+               ON CONFLICT(day, gate, reason) DO UPDATE SET
+                 would_drop = would_drop + 1,
+                 kept = kept + ?`,
+              day, e.gate, e.reason,
+              e.dropped ? 0 : 1,
+              e.dropped ? 0 : 1,
+            )
+            break
+          case "dismissal-reason":
+            sql.exec(
+              `INSERT INTO daily_counts (day, gate, reason, would_drop, kept)
+               VALUES (?, ?, ?, 1, 0)
+               ON CONFLICT(day, gate, reason) DO UPDATE SET
+                 would_drop = would_drop + 1`,
+              day, DISMISSAL_METRICS_GATE, e.reason,
+            )
+            break
+          default: {
+            // Compile-time exhaustiveness — any new ValidationRejectionEvent
+            // variant must be wired into one of the cases above.
+            const _exhaustive: never = e
+            throw new Error(`unhandled validation rejection event kind: ${JSON.stringify(_exhaustive)}`)
+          }
         }
       }
       if (sawGateRejection) {

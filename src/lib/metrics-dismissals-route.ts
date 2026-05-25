@@ -19,10 +19,7 @@ import type { Env } from "../index"
 import { requireBearerToken } from "./auth-bearer"
 import { queryDismissalMetrics } from "./validation-metrics-client"
 
-// SIG-173: default window matches the SIG-119 endpoint default (7 days).
-// Spec asks for `windowDays: 30` in the response shape — `MAX_WINDOW_DAYS`
-// is the operator-facing cap, NOT the default. The endpoint accepts
-// `?window=30d` to opt into the maximum window.
+// Cap mirrors SIG-173 spec; default mirrors /metrics/validation (7 days).
 const DEFAULT_WINDOW_DAYS = 7
 const MAX_WINDOW_DAYS = 30
 

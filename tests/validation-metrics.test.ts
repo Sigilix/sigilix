@@ -118,6 +118,31 @@ describe("ValidationMetricsDO.alarm (retention GC)", () => {
     // Direct retention check independent of the query window.
     expect(await do_.debugDayCount("2020-01-01", "security", "evidence-out-of-range")).toBeNull()
   })
+
+  it("also prunes dismissal-reason rows past the retention window (SIG-173 follow-up)", async () => {
+    // Regression guard against a future "GC only prunes gate rows" bug —
+    // dismissals share `daily_counts` so the same DELETE must cover them.
+    const do_ = makeDoInstance()
+    await do_.recordBatch({
+      owner: "", repo: "", prNumber: 0, headSha: "",
+      occurredAt: "2020-01-01T00:00:00.000Z",
+      events: [{ kind: "dismissal-reason", reason: "too-minor" }],
+    })
+    const fresh = new Date().toISOString()
+    await do_.recordBatch({
+      owner: "", repo: "", prNumber: 0, headSha: "",
+      occurredAt: fresh,
+      events: [{ kind: "dismissal-reason", reason: "too-minor" }],
+    })
+
+    await do_.alarm()
+
+    // Direct check: the ancient dismissal row is gone.
+    expect(await do_.debugDayCount("2020-01-01", "dismissal", "too-minor")).toBeNull()
+    // The fresh dismissal still counts via the rollup.
+    const out = await do_.queryDismissals({ windowDays: 30, nowIso: fresh })
+    expect(out.reasonCounts["too-minor"]).toBe(1)
+  })
 })
 
 // SIG-173 — `dismissal-reason` event + queryDismissals rollup.

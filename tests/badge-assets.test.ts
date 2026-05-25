@@ -61,6 +61,10 @@ describe("badge assets (SIG-201)", () => {
     expect(handleBadgeAssetRoute(new Request(`${PUBLIC_BADGE_BASE_URL}/p2.png`))).toBeNull()
   })
 
+  it("rejects prototype property names instead of serving inherited values", () => {
+    expect(handleBadgeAssetRoute(new Request(`${PUBLIC_BADGE_BASE_URL}/constructor.svg`))).toBeNull()
+  })
+
   it("builds unauthenticated HTTPS image URLs", () => {
     expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-2/p2.svg`)
     expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-2/security.svg`)

@@ -242,6 +242,25 @@ describe("buildFallbackSubmission", () => {
     expect(submission.body).toContain("To dismiss this review")
   })
 
+  it("renders approval-pending copy when a zero-finding policy blocker forces REQUEST_CHANGES", () => {
+    const submission = buildFallbackSubmission({
+      verdict: {
+        ...baseVerdict,
+        summary: "Approval validation still has an unresolved policy blocker.",
+        findings: [],
+      },
+      unanchored: [],
+      prAuthor: null,
+      headSha: "deadbeef",
+      eventOverride: "REQUEST_CHANGES",
+    })
+
+    expect(submission.event).toBe("REQUEST_CHANGES")
+    expect(submission.body).toMatch(/^## Sigilix: approval pending/m)
+    expect(submission.body).toContain("unresolved policy-level blocker")
+    expect(submission.body).not.toContain("0 findings")
+  })
+
   it("threads commit_id from headSha so the review is pinned to the reviewed sha", () => {
     const submission = buildFallbackSubmission({
       verdict: baseVerdict,

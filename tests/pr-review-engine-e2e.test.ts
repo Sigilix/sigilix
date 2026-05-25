@@ -199,7 +199,7 @@ describe("PR review engine acceptance flow (SIG-205)", () => {
       headSha: "a".repeat(40),
       unanchored: readiness.bodyOnlyFindings,
       nowMs: 0,
-      eventOverride: readiness.event,
+      eventOverride: "REQUEST_CHANGES",
     })
 
     expect(intendedEvent).toBe("APPROVE")

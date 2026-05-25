@@ -130,12 +130,14 @@ export function handleBadgeAssetRoute(request: Request): Response | null {
   if (!match) return null
 
   const name = match[1] as ReviewBadgeAssetName
-  if (!(name in BADGE_SVGS)) return null
+  if (!Object.prototype.hasOwnProperty.call(BADGE_SVGS, name)) return null
+  const svg = BADGE_SVGS[name]
+  if (typeof svg !== "string" || !svg.trimStart().startsWith("<svg")) return null
   const headers = {
     "access-control-allow-origin": "*",
     "cache-control": "public, max-age=31536000, immutable",
     "content-type": "image/svg+xml; charset=utf-8",
     "x-content-type-options": "nosniff",
   }
-  return new Response(request.method === "HEAD" ? null : BADGE_SVGS[name], { headers })
+  return new Response(request.method === "HEAD" ? null : svg, { headers })
 }

@@ -1330,6 +1330,41 @@ describe("buildReviewSubmission", () => {
     expect(out.submission.comments).toBeUndefined()
     expect(out.submission.body).toContain("To dismiss this review")
   })
+
+  it("ignores unsafe non-blocking event overrides even if a caller casts around the type", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "APPROVE" as unknown as "REQUEST_CHANGES",
+    })
+
+    expect(out.submission.event).toBe("REQUEST_CHANGES")
+    expect(out.submission.comments).toHaveLength(1)
+    expect(out.submission.body).toMatch(/^## Sigilix: 1 finding/m)
+  })
+
+  it("renders approval-pending copy for forced blockers with no rendered findings", () => {
+    const empty: PrReviewVerdict = {
+      summary: "Approval validation still has an unresolved policy blocker.",
+      confidence: 4,
+      confidenceReason: "The blocker comes from approval-readiness validation.",
+      findings: [],
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: empty,
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "REQUEST_CHANGES",
+    })
+
+    expect(out.submission.event).toBe("REQUEST_CHANGES")
+    expect(out.submission.comments).toBeUndefined()
+    expect(out.submission.body).toMatch(/^## Sigilix: approval pending/m)
+    expect(out.submission.body).toContain("unresolved policy-level blocker")
+    expect(out.submission.body).toContain("Approval validation still has an unresolved policy blocker.")
+    expect(out.submission.body).not.toContain("0 findings")
+  })
 })
 
 describe("buildBodyOnlyCheckAnnotations", () => {

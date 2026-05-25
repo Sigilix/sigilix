@@ -84,6 +84,7 @@ import { badgeAssetLabel, badgeAssetSize, badgeAssetUrl, type ReviewBadgeAssetNa
  * + the renderer body builders need to switch on the widened union.
  */
 export type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+export type ReviewEventOverride = Extract<ReviewEvent, "REQUEST_CHANGES">
 
 /**
  * ARC-156 follow-up (rubberfit PR #232 catch): the model occasionally
@@ -683,7 +684,7 @@ interface BuildReviewArgs {
    * represented by inline comments. Most body-only findings render as
    * COMMENT; approval-readiness can still force REQUEST_CHANGES.
    */
-  eventOverride?: ReviewEvent
+  eventOverride?: ReviewEventOverride
   /**
    * ARC-184: Override `Date.now()` for deterministic snapshots in
    * tests. Production callers omit this and the renderer falls back
@@ -895,7 +896,7 @@ export interface PreviewReviewSubmissionEventArgs {
   headSha: string
   unanchored?: readonly PrReviewFinding[]
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
-  eventOverride?: ReviewEvent
+  eventOverride?: ReviewEventOverride
 }
 
 export function previewReviewSubmissionEvent({
@@ -911,16 +912,16 @@ export function previewReviewSubmissionEvent({
     headSha,
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
   })
-  return eventOverride ?? chooseReviewEventForRenderedFindings({
+  return chooseRenderedEventWithOverride({
     inlineFindings: prepared.inlineFindings,
     bodyOnlyFindings: prepared.unanchored,
-  })
+  }, eventOverride)
 }
 
 export interface PreviewFallbackSubmissionEventArgs {
   verdict: PrReviewVerdict
   unanchored: readonly PrReviewFinding[]
-  eventOverride?: ReviewEvent
+  eventOverride?: ReviewEventOverride
 }
 
 export function previewFallbackSubmissionEvent({
@@ -931,10 +932,10 @@ export function previewFallbackSubmissionEvent({
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
   const all = [...verdict.findings, ...unanchored]
-  return eventOverride ?? chooseReviewEventForRenderedFindings({
+  return chooseRenderedEventWithOverride({
     inlineFindings: [],
     bodyOnlyFindings: all,
-  })
+  }, eventOverride)
 }
 
 export function buildReviewSubmissionWithMetadata({
@@ -968,10 +969,10 @@ export function buildReviewSubmissionWithMetadata({
     headSha,
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
   })
-  const event = eventOverride ?? chooseReviewEventForRenderedFindings({
+  const event = chooseRenderedEventWithOverride({
     inlineFindings,
     bodyOnlyFindings: unanchored,
-  })
+  }, eventOverride)
 
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
   // ARC-281: dispatch directly to the new renderers instead of
@@ -1054,7 +1055,7 @@ interface BuildFallbackArgs {
   prAuthor: string | null
   headSha: string
   /** See BuildReviewArgs.eventOverride. */
-  eventOverride?: ReviewEvent
+  eventOverride?: ReviewEventOverride
   /** ARC-182: optional stack context, forwarded to buildFallbackBody. */
   stack?: StackContext
   /** ARC-281: specialist coverage roster (forwarded to renderer). */
@@ -1103,12 +1104,13 @@ export function buildFallbackSubmission({
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
   const all = [...verdict.findings, ...unanchored]
-  const event = eventOverride ?? chooseReviewEventForRenderedFindings({
+  const event = chooseRenderedEventWithOverride({
     inlineFindings: [],
     bodyOnlyFindings: all,
-  })
+  }, eventOverride)
   const body = buildFallbackBody(
-    verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl, event,
+    verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl,
+    event === "REQUEST_CHANGES" ? event : undefined,
   )
   return {
     event,
@@ -1134,7 +1136,7 @@ export function buildFallbackBody(
   delta?: DeltaBadgeCounts | null,
   reviewCounter?: number,
   retriggerUrl?: string,
-  eventOverride?: ReviewEvent,
+  eventOverride?: ReviewEventOverride,
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
   // dropped the inline anchors, so the body must carry every
@@ -1143,10 +1145,10 @@ export function buildFallbackBody(
   // the body-only findings section grouped by file, which is exactly
   // the right place when none of them landed inline.
   const all = [...verdict.findings, ...unanchored]
-  const event = eventOverride ?? chooseReviewEventForRenderedFindings({
+  const event = chooseRenderedEventWithOverride({
     inlineFindings: [],
     bodyOnlyFindings: all,
-  })
+  }, eventOverride)
   if (event === "APPROVE") {
     const args: RenderBodyArgs = { verdict, unanchored: [] }
     if (stack !== undefined) args.stack = stack
@@ -1228,6 +1230,16 @@ export function chooseReviewEventForRenderedFindings(
   if (sigilixOpenItems.length > 0) return "REQUEST_CHANGES"
 
   return args.bodyOnlyFindings.length === 0 ? "APPROVE" : "COMMENT"
+}
+
+function chooseRenderedEventWithOverride(
+  args: ChooseReviewEventForRenderedFindingsArgs,
+  eventOverride?: ReviewEventOverride,
+): ReviewEvent {
+  // Only escalation is safe here. COMMENT/APPROVE overrides can hide
+  // rendered findings, so even an unsafe cast at runtime is ignored.
+  if (eventOverride === "REQUEST_CHANGES") return "REQUEST_CHANGES"
+  return chooseReviewEventForRenderedFindings(args)
 }
 
 // ─── SIG-161 PR 4a: thresholded gate ─────────────────────────────────
@@ -1740,6 +1752,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     ...args.verdict.findings.filter((f) => findingScope(f) !== "line"),
   ]
   const totalFindings = inlineFindings.length + bodyOnlyFindings.length
+  const zeroFindingBlocker = posture === "request_changes" && totalFindings === 0
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
@@ -1751,7 +1764,11 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
   const deltaSuffix = deltaBadge ? " · since last review" : ""
   const postureCopy = posture === "comment" ? "non-blocking " : ""
-  lines.push(`## Sigilix: ${totalFindings} ${postureCopy}${findingNoun}${deltaSuffix}`)
+  lines.push(
+    zeroFindingBlocker
+      ? "## Sigilix: approval pending"
+      : `## Sigilix: ${totalFindings} ${postureCopy}${findingNoun}${deltaSuffix}`,
+  )
 
   // Changes-badge line — directly under heading, before coverage and
   // summary. Only present when delta has signal.
@@ -1776,6 +1793,13 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     ? `${args.verdict.summary.trimEnd()} ${stackParen}`
     : args.verdict.summary
   lines.push("")
+  if (zeroFindingBlocker) {
+    lines.push(
+      "Approval is pending because Sigilix has an unresolved policy-level blocker, " +
+      "but no line-specific findings were rendered in this review.",
+    )
+    lines.push("")
+  }
   lines.push(summary)
 
   // Fix Plan — only inline findings. Body-only findings appear in the

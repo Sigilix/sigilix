@@ -411,6 +411,28 @@ export function evaluateTestFinding(
   const missingClass =
     siblingMissingClass || (citesCoverageGapClass(finding) && !insufficientClass)
 
+  // SIG-166-1: structural orchestrator-glue suppression fires for EITHER
+  // the ->NONE sibling-mapping missing class OR the insufficient-test
+  // class on the SAME glue files (founder feedback on PR #144,
+  // 2026-05-23). Originally (SIG-128 + PR 6) the suppression was hoisted
+  // only inside the missing-class branch and scoped to siblingMissingClass,
+  // but the testing specialist over-fires the SAME orchestrator-glue FP
+  // shape via the insufficient-test class too — same helper-covered /
+  // structurally-glue sources, different citation kind. Scoping to
+  // `siblingMissingClass || insufficientClass` keeps the coverageGap-only
+  // class routing through `uncited-missing-coverage`, preserving the
+  // CodeRabbit-scoping invariant at
+  // tests/validate-test-finding.test.ts:399.
+  if (siblingMissingClass || insufficientClass) {
+    const helperCov = pack.helperCoverageBySource?.[finding.path.trim()]
+    if (helperCov?.status === "all") {
+      return { keep: false, reason: "glue-covered-by-helper" }
+    }
+    if (helperCov?.structurallyGlue === true) {
+      return { keep: false, reason: "glue-covered-by-structure" }
+    }
+  }
+
   // AMBIGUOUS: cites BOTH kinds, or NEITHER. Prefer keep (the FP-safe
   // crux) — the SIG-113 gate already required SOME real citation, and a
   // finding that straddles both classes (or fits neither cleanly) is not
@@ -419,28 +441,6 @@ export function evaluateTestFinding(
   if (missingClass === insufficientClass) return { keep: true }
 
   if (missingClass) {
-    // SIG-128: glue-covered suppression applies ONLY to the ->NONE
-    // sibling-mapping missing-coverage class (not coverageGap-class claims).
-    // A ->NONE missing-coverage finding on a source whose changed logic
-    // FULLY delegates to same-PR tested helpers (status "all") is the
-    // orchestrator-glue false positive. Reject it. `partial`/`none` are not
-    // suppressed at this gate (FP-safe — a genuinely-untested orchestrator
-    // still fires here).
-    if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.status === "all") {
-      return { keep: false, reason: "glue-covered-by-helper" }
-    }
-    // SIG-128 PR 6 (SIG-159 Bug 1 fix): structural orchestrator-glue
-    // suppression — independent of whether the delegated-to helpers are
-    // same-PR tested. Catches the PR #138 `scheduled` handler regression
-    // where the wrapper delegated to BOTH same-PR (`runIndexReconciliation`)
-    // AND pre-existing (`isIndexerEnabled`) helpers, giving status
-    // "partial" not "all". The structural check fires regardless of
-    // status. Tight thresholds (≤12 substantive lines + ≥50% delegation-
-    // shaped + ≥1 free-function call) keep the FN risk low — a
-    // genuinely-logic-heavy function survives.
-    if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.structurallyGlue === true) {
-      return { keep: false, reason: "glue-covered-by-structure" }
-    }
     // Missing-coverage claim. Admissible only when the cited mapping is
     // a real `siblingMapping:<finding.path>->NONE` in the pack (relevant
     // + the pack agrees the source is genuinely untested). A wrong-file

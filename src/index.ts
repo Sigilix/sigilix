@@ -1242,10 +1242,18 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // returned before assigning one (shouldn't happen with the
           // current branches, but defensive). Map it to `failure` so
           // the check doesn't hang in_progress.
+          // SIG-216: thread prNumber into reviewMeta so the check-run
+          // summary can render the `[View review](pr-url)` link. When
+          // the ensemble didn't return a reviewMeta (degraded paths),
+          // the summary degrades to the link-less fallback — that's
+          // intentional, not worth scaffolding a synthetic reviewMeta.
+          const reviewMetaForComplete = reviewMeta !== undefined
+            ? { ...reviewMeta, prNumber: job.prNumber }
+            : undefined
           await completeCheckRun({
             handle: checkRun,
             conclusion: conclusion ?? "failure",
-            ...(reviewMeta !== undefined ? { reviewMeta } : {}),
+            ...(reviewMetaForComplete !== undefined ? { reviewMeta: reviewMetaForComplete } : {}),
           })
           // SIG-119: flush collected validator-rejection telemetry once.
           // Non-fatal — a metrics failure must never affect the review.

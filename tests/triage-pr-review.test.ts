@@ -165,6 +165,36 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings[0]?.fixExample).toBeUndefined()
   })
 
+  it("unwraps CRLF and no-final-newline fenced structured examples", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          failureExample: "```text\r\nvalue```",
+          fixExample: "```ts\r\nconst ok = true\r\n```",
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.failureExample).toBe("value")
+    expect(out?.findings[0]?.fixExample).toBe("const ok = true")
+  })
+
+  it("keeps backtick-heavy structured examples renderable", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          failureExample: "value includes ``` inside",
+        }],
+      }),
+    )
+    const comment = formatFindingComment(out!.findings[0]!, 5)
+    expect(comment).toContain("````text")
+    expect(comment).toContain("value includes ``` inside")
+  })
+
   it("caps findings at 8", () => {
     const many = Array.from({ length: 12 }, (_, i) => ({
       ...baseFinding,
@@ -2153,7 +2183,7 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     expect(out).toContain("```ts")
     expect(out).toContain("**Why this wasn't caught:** The existing test only covers")
     expect(out).toContain("Suggested fix shape:")
-    expect(out).toContain("Why this was not caught:")
+    expect(out).toContain("Why this wasn't caught:")
   })
 
   it("suppresses illustrative fixExample when an exact suggestedReplacement exists", () => {
@@ -2169,6 +2199,22 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     expect(out).toContain("**Proposed:**")
     expect(out).not.toContain("**Suggested fix:**")
     expect(out).toContain("Suggested fix shape:")
+  })
+
+  it("keeps fixExample visible for unsupported insert-shaped replacements", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, score: 4,
+      category: "logic", headline: "insert shape needs manual handling",
+      body: "Insertion suggestions are not committable yet.",
+      kind: "insert",
+      suggestedReplacement: "  inserted()",
+      fixExample: "insert `inserted()` before `return x`",
+    }
+    const out = formatFindingComment(f, 5, reviewable, addedLines)
+    expect(out).toContain("**Suggested fix:**")
+    expect(out).toContain("insert `inserted()` before `return x`")
+    expect(out).not.toContain("```suggestion")
+    expect(out).not.toContain("**Proposed change:**")
   })
 })
 

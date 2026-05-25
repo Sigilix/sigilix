@@ -665,7 +665,7 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
 function normalizeFindingDetail(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined
   let clean = value.trim()
-  const fenced = clean.match(/^```[a-zA-Z0-9_-]*\n([\s\S]*?)\n```$/)
+  const fenced = clean.match(/^```[a-zA-Z0-9_-]*\r?\n([\s\S]*?)\r?\n?```$/)
   if (fenced) clean = fenced[1]?.trim() ?? ""
   if (clean.length === 0) return undefined
   if (clean.length > FINDING_STRUCTURED_DETAIL_LIMIT) {
@@ -843,9 +843,7 @@ export function buildReviewSubmissionWithMetadata({
   const inlineOriginalIndex: number[] = []
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
-    const hasSuggestion =
-      typeof f.suggestedReplacement === "string" &&
-      (f.suggestedReplacement.trim().length > 0 || f.kind === "delete")
+    const hasSuggestion = hasStructuredFix(f)
     const scope = findingScope(f)
     const findingForInline =
       hasSuggestion && scope !== "line"
@@ -2021,6 +2019,7 @@ const SEVERITY_BADGE_WIDTH = 34
 const SEVERITY_BADGE_HEIGHT = 24
 const FINDING_BODY_PREVIEW_LIMIT = 500
 const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
+const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
   return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
@@ -2066,8 +2065,22 @@ function formatFenceSection(label: string, content: string, lang: string): strin
   return [label, fence + lang, clean, fence].join("\n")
 }
 
+function isDeletionSuggestion(finding: PrReviewFinding): boolean {
+  const repl = finding.suggestedReplacement
+  return finding.kind === "delete" && typeof repl === "string" && repl.length === 0
+}
+
+function isReplacementSuggestion(finding: PrReviewFinding): boolean {
+  const repl = finding.suggestedReplacement
+  return (
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof repl === "string" &&
+    repl.length > 0
+  )
+}
+
 function hasStructuredFix(finding: PrReviewFinding): boolean {
-  return typeof finding.suggestedReplacement === "string"
+  return isDeletionSuggestion(finding) || isReplacementSuggestion(finding)
 }
 
 function formatFindingStructuredDetailsMarkdown(
@@ -2087,17 +2100,15 @@ function formatFindingStructuredDetailsMarkdown(
   }
   if (finding.testGap) {
     const clean = stripAstMarkers(finding.testGap).trim()
-    if (clean) sections.push(`**Why this wasn't caught:** ${clean}`)
+    if (clean) sections.push(`**${WHY_NOT_CAUGHT_LABEL}:** ${clean}`)
   }
   return sections.join("\n\n")
 }
 
 function formatBodyFindingSuggestedChange(finding: PrReviewFinding): string {
   const repl = finding.suggestedReplacement
-  const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
-  const isReplace =
-    (finding.kind === "replace" || finding.kind === undefined) &&
-    typeof repl === "string" && repl.length > 0
+  const isDeletion = isDeletionSuggestion(finding)
+  const isReplace = isReplacementSuggestion(finding)
   if (isDeletion) {
     const range =
       finding.startLine != null && finding.startLine < finding.line
@@ -2411,7 +2422,7 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
     promptLines.push("", "Suggested fix shape:", stripAstMarkers(finding.fixExample))
   }
   if (finding.testGap) {
-    promptLines.push("", "Why this was not caught:", stripAstMarkers(finding.testGap))
+    promptLines.push("", `${WHY_NOT_CAUGHT_LABEL}:`, stripAstMarkers(finding.testGap))
   }
   promptLines.push("", "How can I resolve this? If you propose a fix, please make it concise.")
   const promptBody = promptLines.join("\n")
@@ -2501,8 +2512,8 @@ export function formatFindingComment(
   //   - replacement contains no 3+ backtick run that would close the
   //     fence (replacements only — deletions have empty content).
   const repl = finding.suggestedReplacement
-  const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
-  const hasReplacement = typeof repl === "string" && repl.length > 0
+  const isDeletion = isDeletionSuggestion(finding)
+  const hasReplacement = isReplacementSuggestion(finding) && typeof repl === "string"
   const fenceSafe = isDeletion || (hasReplacement && repl !== undefined && !/`{3,}/.test(repl))
   const committable =
     fenceSafe &&

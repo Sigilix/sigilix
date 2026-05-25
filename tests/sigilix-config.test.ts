@@ -189,6 +189,8 @@ describe("parseSigilixConfig — pathFilters (ARC-176)", () => {
 })
 
 describe("parseSigilixConfig — pathInstructions", () => {
+  const codePoints = (s: string): number => [...s].length
+
   it("accepts path-scoped guidance with role-specific rules", () => {
     const result = parseSigilixConfig(JSON.stringify({
       pathInstructions: [
@@ -248,6 +250,72 @@ describe("parseSigilixConfig — pathInstructions", () => {
         rules: { logic: "Real rule." },
       },
     ])
+  })
+
+  it("caps pathInstructions at 20 entries", () => {
+    const below = Array.from({ length: 19 }, (_, i) => ({
+      paths: [`src/below-${i}/**`],
+      guidance: "below",
+    }))
+    expect(parseSigilixConfig(JSON.stringify({ pathInstructions: below }))?.pathInstructions).toHaveLength(19)
+
+    const at = Array.from({ length: 20 }, (_, i) => ({
+      paths: [`src/at-${i}/**`],
+      guidance: "at",
+    }))
+    expect(parseSigilixConfig(JSON.stringify({ pathInstructions: at }))?.pathInstructions).toHaveLength(20)
+
+    const above = Array.from({ length: 21 }, (_, i) => ({
+      paths: [`src/above-${i}/**`],
+      guidance: "above",
+    }))
+    const result = parseSigilixConfig(JSON.stringify({ pathInstructions: above }))
+    expect(result?.pathInstructions).toHaveLength(20)
+    expect(resolvePathInstructionsForChangedPaths(result, ["src/above-19/file.ts"])).toHaveLength(1)
+    expect(resolvePathInstructionsForChangedPaths(result, ["src/above-20/file.ts"])).toHaveLength(0)
+  })
+
+  it("caps each pathInstructions entry at 50 paths", () => {
+    const makePaths = (prefix: string, n: number) =>
+      Array.from({ length: n }, (_, i) => `src/${prefix}/${i}/**`)
+    const result = parseSigilixConfig(JSON.stringify({
+      pathInstructions: [
+        { paths: makePaths("below", 49), guidance: "below" },
+        { paths: makePaths("at", 50), guidance: "at" },
+        { paths: makePaths("above", 51), guidance: "above" },
+      ],
+    }))
+
+    expect(result?.pathInstructions?.[0]?.paths).toHaveLength(49)
+    expect(result?.pathInstructions?.[1]?.paths).toHaveLength(50)
+    expect(result?.pathInstructions?.[2]?.paths).toHaveLength(50)
+    expect(resolvePathInstructionsForChangedPaths(result, ["src/above/49/file.ts"])).toHaveLength(1)
+    expect(resolvePathInstructionsForChangedPaths(result, ["src/above/50/file.ts"])).toHaveLength(0)
+  })
+
+  it("truncates pathInstructions guidance and role rules to 4000 code points", () => {
+    const below = "b".repeat(3999)
+    const at = "a".repeat(4000)
+    const above = "x".repeat(4001)
+    const result = parseSigilixConfig(JSON.stringify({
+      pathInstructions: [
+        { paths: ["src/below/**"], guidance: below, rules: { security: below } },
+        { paths: ["src/at/**"], guidance: at, rules: { security: at } },
+        { paths: ["src/above/**"], guidance: above, rules: { security: above } },
+      ],
+    }))
+
+    expect(codePoints(result?.pathInstructions?.[0]?.guidance ?? "")).toBe(3999)
+    expect(codePoints(result?.pathInstructions?.[0]?.rules?.security ?? "")).toBe(3999)
+    expect(codePoints(result?.pathInstructions?.[1]?.guidance ?? "")).toBe(4000)
+    expect(codePoints(result?.pathInstructions?.[1]?.rules?.security ?? "")).toBe(4000)
+    expect(codePoints(result?.pathInstructions?.[2]?.guidance ?? "")).toBe(4000)
+    expect(codePoints(result?.pathInstructions?.[2]?.rules?.security ?? "")).toBe(4000)
+
+    const matches = resolvePathInstructionsForChangedPaths(result, ["src/above/file.ts"])
+    const block = renderPathInstructionsForPrompt(matches, "security")
+    expect(block).toContain(`Guidance: ${"x".repeat(4000)}`)
+    expect(block).toContain(`security rule: ${"x".repeat(4000)}`)
   })
 })
 
@@ -423,9 +491,11 @@ describe("buildSpecialistInitialMessage — sigilix.json guidance injection", ()
   it("prepends matched path guidance before the PR block", () => {
     const msg = buildSpecialistInitialMessage({
       ...baseCtx,
+      guidance: "Repo guidance.",
       pathInstructionsBlock: "[PATH-SCOPED REVIEW GUIDANCE (from sigilix.json)]\nGuidance: Auth paths are sensitive.",
     })
     expect(msg).toContain("[PATH-SCOPED REVIEW GUIDANCE (from sigilix.json)]")
+    expect(msg.indexOf("REPO GUIDANCE")).toBeLessThan(msg.indexOf("PATH-SCOPED REVIEW GUIDANCE"))
     expect(msg.indexOf("PATH-SCOPED REVIEW GUIDANCE")).toBeLessThan(msg.indexOf("[PR]"))
   })
 
@@ -475,9 +545,11 @@ describe("buildSynthesizerInitialMessage — sigilix.json guidance injection", (
   it("prepends matched path guidance before the PR block", () => {
     const msg = buildSynthesizerInitialMessage({
       ...baseCtx,
+      guidance: "Repo guidance.",
       pathInstructionsBlock: "[PATH-SCOPED REVIEW GUIDANCE (from sigilix.json)]\nGuidance: Auth paths are sensitive.",
     })
     expect(msg).toContain("[PATH-SCOPED REVIEW GUIDANCE (from sigilix.json)]")
+    expect(msg.indexOf("REPO GUIDANCE")).toBeLessThan(msg.indexOf("PATH-SCOPED REVIEW GUIDANCE"))
     expect(msg.indexOf("PATH-SCOPED REVIEW GUIDANCE")).toBeLessThan(msg.indexOf("[PR]"))
   })
 })

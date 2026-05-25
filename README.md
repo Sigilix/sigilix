@@ -297,7 +297,7 @@ All fields are optional. Missing file = no extra context (current behavior). Mal
 
 ### Path instructions
 
-Use `pathInstructions` when a repo needs different review behavior for different parts of the codebase. This mirrors the path-instruction pattern used by AI review competitors: auth/API paths can be strict about authorization, database paths can focus on migrations and transactions, generated paths can be filtered out, and tests/docs can get their own expectations.
+Use `pathInstructions` when a repo needs different review behavior for different parts of the codebase. This mirrors the path-instruction pattern used by AI review competitors: auth/API paths can be strict about authorization, database paths can focus on migrations and transactions, generated paths can be handled differently via `pathInstructions`, or excluded entirely via `pathFilters`, and tests/docs can get their own expectations.
 
 ```json
 {

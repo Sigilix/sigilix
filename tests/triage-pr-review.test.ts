@@ -1252,7 +1252,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(withMap.comments).toHaveLength(2)
     expect(withMap.comments?.map((c) => c.line).sort((a, b) => a - b)).toEqual([42, 1370])
     // Neither block finding is double-rendered into the body.
-    expect(withMap.body).not.toContain("Findings without inline comments")
+    expect(withMap.body).not.toContain("Review Body Findings")
   })
 
   it("does not double-render a routed finding (only in body, not inline)", () => {
@@ -1503,10 +1503,11 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 
     expect(out.event).toBe("REQUEST_CHANGES")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("### Findings without inline comments")
+    expect(out.body).toContain("### Review Body Findings")
+    expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
     expect(out.body).toContain("Comment-level (high, score 4)")
     expect(out.body).toContain("dismiss command trusts the issue-comment author")
-    expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436`")
   })
 
   it("routes file-scoped findings to the review body with a file-level label", () => {
@@ -1531,10 +1532,10 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 
     expect(out.event).toBe("REQUEST_CHANGES")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("### Findings without inline comments")
+    expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("File-level (critical, score 5)")
     expect(out.body).toContain("module-level lifecycle ordering is unsafe")
-    expect(out.body).not.toContain("`src/lib/github-mention.ts:436`")
+    expect(out.body).toContain("`src/lib/github-mention.ts:436`")
   })
 
   it("keeps suggestion-bearing non-line findings inline so the proposed fix is not dropped", () => {
@@ -1565,7 +1566,7 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
     expect(out.body).toContain("### Fix Plan")
     expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should stay localized")
-    expect(out.body).not.toContain("### Findings without inline comments")
+    expect(out.body).not.toContain("### Review Body Findings")
   })
 
   it("keeps delete-intent non-line findings inline so the deletion suggestion is not dropped", () => {
@@ -1597,7 +1598,7 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
     expect(out.body).toContain("### Fix Plan")
     expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should be removed")
-    expect(out.body).not.toContain("### Findings without inline comments")
+    expect(out.body).not.toContain("### Review Body Findings")
   })
 
   it("does not duplicate body-only high findings in the Fix Plan", () => {

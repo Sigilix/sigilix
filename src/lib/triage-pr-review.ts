@@ -468,7 +468,9 @@ export function renderStackParenthetical(stack: StackContext | undefined): strin
 }
 
 const SIGILIX_REVIEW_MARKER = "<!-- sigilix:pr-review -->"
-const BODY_ONLY_FINDINGS_HEADING = "### Findings without inline comments"
+const BODY_ONLY_FINDINGS_HEADING = "### Review Body Findings"
+const BODY_ONLY_FINDINGS_EXPLANATION =
+  "<sub>These findings are shown in the review body because GitHub only supports PR review comments on diff lines, or because the finding is broader than one exact changed line.</sub>"
 
 const DISMISSAL_HINT =
   "To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread."
@@ -643,7 +645,7 @@ interface BuildReviewArgs {
    * Findings that passed the hallucination guard but failed the
    * line-validity check. The inline-comments path can't anchor them
    * (GitHub would 422), so they get rolled into the review body as
-   * markdown grouped by file. Without this, unanchored findings were
+   * compact body-only findings. Without this, unanchored findings were
    * silently dropped on the success path of the orchestrator (only
    * the submit-fallback path recovered them). CodeRabbit + Sigilix
    * both caught the regression on PR #38.
@@ -653,8 +655,8 @@ interface BuildReviewArgs {
    *   - The chosen review event takes ALL findings into account
    *     (anchored + unanchored), so a verdict with only-unanchored
    *     blocking findings doesn't post as APPROVE.
-   *   - The body grows with a "Findings without inline comments"
-   *     section listing the body-only set.
+   *   - The body grows with a "Review Body Findings" section listing
+   *     the body-only set.
    */
   unanchored?: PrReviewFinding[]
   /**
@@ -1576,7 +1578,7 @@ export function renderCommentBody(args: RenderBodyArgs): string {
  *   ### Fix Plan
  *   ...
  *
- *   ### Findings without inline comments
+ *   ### Review Body Findings
  *   ...
  *
  *   To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread.
@@ -1646,11 +1648,15 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     lines.push(fixPlan)
   }
 
-  // Body-only findings — unanchored or non-line-scoped set, grouped by file.
+  // Body-only findings — unanchored or non-line-scoped set, rendered
+  // as compact standalone entries. Avoid file-only headings: they read
+  // like orphaned inline comments when GitHub cannot create a thread.
   if (bodyOnlyFindings.length > 0) {
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_HEADING)
-    lines.push(...renderFindingsByFile(bodyOnlyFindings))
+    lines.push("")
+    lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
+    lines.push(...renderBodyOnlyFindings(bodyOnlyFindings))
   }
 
   // Dismissal hint — REQUEST_CHANGES only, before the provenance
@@ -1817,6 +1823,14 @@ function formatBodyFindingLocation(f: PrReviewFinding): string {
   }
 }
 
+function formatBodyFindingAnchor(f: PrReviewFinding): string {
+  if (findingScope(f) === "pr") return `\`${f.path}\``
+  if (f.startLine != null && f.startLine !== f.line) {
+    return `\`${f.path}:${f.startLine}-${f.line}\``
+  }
+  return `\`${f.path}:${f.line}\``
+}
+
 function formatBodyFindingSeverity(f: PrReviewFinding): string {
   if (f.score >= 5) return "critical, score 5"
   if (f.score >= 4) return "high, score 4"
@@ -1828,46 +1842,40 @@ function formatFindingCategory(f: PrReviewFinding): string {
 }
 
 /**
- * Group findings by file path, sort within each file by score DESC
- * then line ASC, and render as a Markdown bullet list. Shared by
- * `formatReviewBody` (when unanchored findings need to be surfaced
- * alongside the inline-anchored ones) and `buildFallbackBody` (when
- * the entire submission is anchorless and every finding lives in the
- * body).
+ * Sort findings by severity DESC, then path, then line, and render a
+ * compact Markdown list. Body-only findings deliberately do not use
+ * standalone file headings: if GitHub could not create an inline
+ * thread, a naked filename header looks like lost context rather than
+ * a deliberate fallback surface.
  *
  * Returns an array of lines (caller joins with `\n`). Pure.
  */
-function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
-  const byPath = new Map<string, PrReviewFinding[]>()
-  for (const f of findings) {
-    if (!byPath.has(f.path)) byPath.set(f.path, [])
-    byPath.get(f.path)!.push(f)
-  }
-  const sortedPaths = [...byPath.keys()].sort()
-
+function renderBodyOnlyFindings(findings: PrReviewFinding[]): string[] {
+  const sorted = [...findings].sort((a, b) =>
+    b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
+  )
   const lines: string[] = []
-  for (const path of sortedPaths) {
-    const arr = byPath.get(path)!
-    arr.sort((a, b) => b.score - a.score || a.line - b.line)
+  for (const f of sorted) {
+    const location = formatBodyFindingLocation(f)
+    const severity = formatBodyFindingSeverity(f)
+    const anchor = formatBodyFindingAnchor(f)
+    const anchorNote = f.anchorNote ? ` · ${f.anchorNote}` : ""
+    const category = formatFindingCategory(f)
+    const badge = severityBadgeForScore(f.score)
     lines.push("")
-    lines.push(`**${path}**`)
-    for (const f of arr) {
-      const location = formatBodyFindingLocation(f)
-      const severity = formatBodyFindingSeverity(f)
-      const anchorNote = f.anchorNote ? ` ${f.anchorNote}` : ""
-      lines.push(`- ${location}${anchorNote} (${severity}) — **${formatFindingCategory(f)}:** ${stripAstMarkers(f.headline)}`)
-      // Indent the body so it nests under the bullet visually.
-      const detailLines = [
-        formatFindingBodyMarkdown(f.body),
-        formatBodyFindingSuggestedChange(f),
-      ].filter((s) => s !== "")
-      const bodyLines = detailLines
-        .join("\n\n")
-        .split("\n")
-        .map((l) => `  ${l}`)
-        .join("\n")
-      lines.push(bodyLines)
-    }
+    lines.push(`- ${badge} **${stripAstMarkers(f.headline)}**`)
+    lines.push(`  <sub>${location} (${severity}) · \`${category}\` · ${anchor}${anchorNote}</sub>`)
+    // Indent the body so it nests under the bullet visually.
+    const detailLines = [
+      formatFindingBodyMarkdown(f.body),
+      formatBodyFindingSuggestedChange(f),
+    ].filter((s) => s !== "")
+    const bodyLines = detailLines
+      .join("\n\n")
+      .split("\n")
+      .map((l) => `  ${l}`)
+      .join("\n")
+    lines.push(bodyLines)
   }
   return lines
 }

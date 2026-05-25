@@ -8,8 +8,8 @@
 //   1. validateForSubmission populates `unanchoredFindings` for findings
 //      that pass the hallucination guard but fail line-validity. These
 //      are the findings the fallback recovers.
-//   2. buildFallbackBody groups findings by file, sorts within file by
-//      score desc, includes both anchored + unanchored, and preserves
+//   2. buildFallbackBody renders body-only findings as compact bullets,
+//      sorts by score desc, includes both anchored + unanchored, and preserves
 //      the dedupe marker.
 //   3. buildFallbackSubmission emits a SubmitReviewBody with NO
 //      `comments` array (so GitHub doesn't re-validate inline anchors).
@@ -73,26 +73,28 @@ describe("buildFallbackBody", () => {
     expect(body).toBe("<!-- sigilix:pr-review -->\n")
     // None of the legacy / verbose strings survive.
     expect(body).not.toContain("### Findings")
-    expect(body).not.toContain("### Findings without inline comments")
+    expect(body).not.toContain("### Review Body Findings")
     expect(body).not.toContain("### Fix Plan")
     expect(body).not.toContain("## Sigilix: Approved")
     expect(body).not.toContain("No issues found")
     expect(body).not.toContain("### Sigilix Summary")
   })
 
-  it("groups findings by file, sorts paths alphabetically", () => {
+  it("renders compact anchors without orphan file headings", () => {
     const findings: PrReviewFinding[] = [
       { ...baseFinding, path: "src/z.ts", line: 10, headline: "z-issue" },
       { ...baseFinding, path: "src/a.ts", line: 20, headline: "a-issue" },
       { ...baseFinding, path: "src/m.ts", line: 30, headline: "m-issue" },
     ]
     const body = buildFallbackBody({ ...baseVerdict, findings }, [])
-    const aIdx = body.indexOf("**src/a.ts**")
-    const mIdx = body.indexOf("**src/m.ts**")
-    const zIdx = body.indexOf("**src/z.ts**")
-    expect(aIdx).toBeGreaterThan(-1)
-    expect(mIdx).toBeGreaterThan(aIdx)
-    expect(zIdx).toBeGreaterThan(mIdx)
+    expect(body).toContain("### Review Body Findings")
+    expect(body).toContain("GitHub only supports PR review comments on diff lines")
+    expect(body).toContain("`src/a.ts:20`")
+    expect(body).toContain("`src/m.ts:30`")
+    expect(body).toContain("`src/z.ts:10`")
+    expect(body).not.toContain("**src/a.ts**")
+    expect(body).not.toContain("**src/m.ts**")
+    expect(body).not.toContain("**src/z.ts**")
   })
 
   it("sorts findings within a file by score DESC then line ASC", () => {
@@ -127,7 +129,7 @@ describe("buildFallbackBody", () => {
     // into the body-only findings section (since none of the findings
     // landed as inline comments). Heading count is in the top-of-body
     // status heading, not on the section.
-    expect(body).toContain("### Findings without inline comments")
+    expect(body).toContain("### Review Body Findings")
     expect(body).toMatch(/^## Sigilix: 2 findings/m)
     expect(body).not.toContain("### Findings (2)")
   })
@@ -150,9 +152,10 @@ describe("buildFallbackBody", () => {
     expect(body).not.toContain("Lines ")
   })
 
-  it("includes category prefix in the bullet headline", () => {
+  it("includes category metadata next to the body-only anchor", () => {
     const body = buildFallbackBody(baseVerdict, [])
-    expect(body).toContain("**logic:** off-by-one in `clampIndex`")
+    expect(body).toContain("**off-by-one in `clampIndex`**")
+    expect(body).toContain("`logic` · `src/lib/foo.ts:42`")
   })
 
   it("indents the finding body so it nests under its bullet visually", () => {
@@ -178,7 +181,7 @@ describe("buildFallbackBody", () => {
     // Summary still renders; layout flows directly into the
     // body-only findings section per Kimi's spec.
     expect(blank).toContain("One real bug.")
-    expect(blank).toContain("### Findings without inline comments")
+    expect(blank).toContain("### Review Body Findings")
   })
 })
 
@@ -270,7 +273,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       unanchored,
     })
     expect(submission.body).toContain("unanchored-must-not-be-lost")
-    expect(submission.body).toContain("Findings without inline comments")
+    expect(submission.body).toContain("Review Body Findings")
   })
 
   it("still emits inline comments for the anchored findings (UX preserved)", () => {
@@ -323,7 +326,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       prAuthor: null,
       headSha: "deadbeef",
     })
-    expect(submission.body).not.toContain("Findings without inline comments")
+    expect(submission.body).not.toContain("Review Body Findings")
     expect(submission.body).not.toMatch(/inline below/i)
     expect(submission.body).toMatch(/^## Sigilix: 1 finding/m)
   })

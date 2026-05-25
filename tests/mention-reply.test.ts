@@ -216,6 +216,7 @@ describe("resolveLinearAgentRepoScope", () => {
   it("scopes Linear agent availableRepos to the requesting tenant owner", async () => {
     const env = makeEnv([
       "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576",
       "repo-index-manifest:arc-and-anchor/rubberfit",
       "repo-index-manifest:acme/sigilix",
     ])
@@ -231,6 +232,7 @@ describe("resolveLinearAgentRepoScope", () => {
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
+        "arc-and-anchor/sigilix/__branch__/h646576",
       ],
       status: "mapped_indexed",
     })
@@ -437,15 +439,57 @@ describe("buildAgentInitialUserMessage", () => {
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
+        "arc-and-anchor/sigilix/__branch__/h646576",
       ],
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix', 'arc-and-anchor/sigilix/__branch__/h646576'")
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument")
     expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
     expect(out).toContain("pick a different namespace from the list")
+    expect(out).toContain("branch indexes look like 'owner/repo/__branch__/hex-encoded-branch'")
+  })
+
+  it("caps the prompt-visible namespace list without dropping the default repo", () => {
+    const availableRepos = Array.from(
+      { length: 52 },
+      (_, i) => `arc-and-anchor/repo-${String(i).padStart(2, "0")}`,
+    )
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: "arc-and-anchor/repo-00",
+      mappedRepo: "arc-and-anchor/repo-00",
+      availableRepos,
+      repoStatus: "mapped_indexed",
+    })
+
+    expect(out).toContain("'arc-and-anchor/repo-00'")
+    expect(out).toContain("'arc-and-anchor/repo-49'")
+    expect(out).toContain("... (+2 more)")
+    expect(out).not.toContain("'arc-and-anchor/repo-50'")
+    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/repo-00")
+  })
+
+  it("keeps the default repo visible when it falls after the namespace cap", () => {
+    const availableRepos = Array.from(
+      { length: 52 },
+      (_, i) => `arc-and-anchor/repo-${String(i).padStart(2, "0")}`,
+    )
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: "arc-and-anchor/repo-51",
+      mappedRepo: "arc-and-anchor/repo-51",
+      availableRepos,
+      repoStatus: "mapped_indexed",
+    })
+
+    expect(out).toContain("'arc-and-anchor/repo-00'")
+    expect(out).not.toContain("'arc-and-anchor/repo-49'")
+    expect(out).toContain("'arc-and-anchor/repo-51'")
+    expect(out).toContain("... (+2 more)")
+    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/repo-51")
   })
 
   it("describes indexed repos without a default and tells the agent to choose by subject", () => {

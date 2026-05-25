@@ -43,6 +43,7 @@ const LIMITS = {
   recentComments: 10,
   questionChars: 4_000,
 }
+const MAX_PROMPT_VISIBLE_NAMESPACES = 50
 
 export interface LinearAgentRepoScope {
   repo: string | null
@@ -71,7 +72,10 @@ export async function resolveLinearAgentRepoScope(
   const defaultRepo = indexNamespace(teamRepo.owner, teamRepo.repo)
   const available = new Set<string>()
   try {
-    for (const repo of await listIndexedRepos(env, { owner: teamRepo.owner })) {
+    for (const repo of await listIndexedRepos(env, {
+      owner: teamRepo.owner,
+      includeBranches: true,
+    })) {
       available.add(repo)
     }
   } catch (err) {
@@ -494,19 +498,31 @@ interface AgentInitialMessageCtx {
  */
 export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
   // Surface the full set of indexed namespaces so the agent can pick
-  // the right one when an issue is clearly about a different repo than
-  // the team's primary (e.g. an issue in the ARC team about the
-  // marketing site). Tool already accepts an arbitrary `repo` arg —
-  // this just informs the model which choices are valid.
+  // the right one when an issue is clearly about a different repo or
+  // branch than the team's primary. Keep the prompt-visible list
+  // bounded; retrieve_codebase authorization still uses the full
+  // allowed namespace set outside this prompt.
   const universe = ctx.availableRepos.length > 0
     ? ctx.availableRepos
     : ctx.repo
       ? [ctx.repo]
       : []
-  const universeText = universe.length > 0 ? universe.map((r) => `'${r}'`).join(", ") : "(none configured)"
+  let visibleUniverse = universe.slice(0, MAX_PROMPT_VISIBLE_NAMESPACES)
+  if (
+    ctx.repo &&
+    universe.includes(ctx.repo) &&
+    !visibleUniverse.includes(ctx.repo) &&
+    visibleUniverse.length > 0
+  ) {
+    visibleUniverse = [...visibleUniverse.slice(0, -1), ctx.repo]
+  }
+  const hiddenUniverseCount = Math.max(0, universe.length - visibleUniverse.length)
+  const universeText = visibleUniverse.length > 0
+    ? `${visibleUniverse.map((r) => `'${r}'`).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
+    : "(none configured)"
   let repoLine: string
   if (ctx.repo && universe.length > 1) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo (e.g. the asker references a different repo by name, or links to a PR/issue that lives in another repo). Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo or branch (branch indexes look like 'owner/repo/__branch__/hex-encoded-branch'). Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.repo) {
     repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo && universe.length > 0) {

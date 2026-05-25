@@ -69,6 +69,19 @@ export interface RepoIndexManifestV1 {
    */
   repo: string
   /**
+   * SIG-35: actual GitHub repo name for branch-scoped manifests whose `repo`
+   * field stores a state identity such as `sigilix/__branch__/h646576`.
+   * Default-branch manifests may omit this because `repo` already is the
+   * GitHub repo.
+   */
+  actualRepo?: string
+  /** Git branch indexed by this manifest. Omitted for the default branch. */
+  branch?: string
+  /** Repo default branch observed at index time. */
+  defaultBranch?: string
+  /** Vectorize namespace written by this index run. */
+  namespace?: string
+  /**
    * Owner at index time. SIG-132 made `<owner>/<repo>` the namespace, so
    * same-named repos under different owners no longer collide. Owner is
    * still stored: the freshness check uses it (`manifest.owner === owner`
@@ -131,6 +144,10 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   const o = value as Record<string, unknown>
   if (o.v !== 1) return false
   if (typeof o.repo !== "string" || o.repo.length === 0) return false
+  if (o.actualRepo !== undefined && (typeof o.actualRepo !== "string" || o.actualRepo.length === 0)) return false
+  if (o.branch !== undefined && (typeof o.branch !== "string" || o.branch.length === 0)) return false
+  if (o.defaultBranch !== undefined && (typeof o.defaultBranch !== "string" || o.defaultBranch.length === 0)) return false
+  if (o.namespace !== undefined && (typeof o.namespace !== "string" || o.namespace.length === 0)) return false
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
   if (typeof o.headSha !== "string" || o.headSha.length === 0) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false

@@ -265,7 +265,10 @@ OPENCLAW_GATE = "shadow"
 #   Repository → Metadata: Read      (default)
 #
 # Required GitHub App webhook events:
+#   installation                  (initial indexing + uninstall cleanup)
+#   installation_repositories     (repos added/removed indexing + cleanup)
 #   pull_request                  (opened, synchronize, ready_for_review, reopened)
+#   push                          (default/dev/active-PR branch re-indexing)
 #   workflow_run                  (CI failure triage)
 #   issue_comment                 (top-level PR conversation @-mentions)
 #   pull_request_review_comment   (inline PR review comment @-mentions)

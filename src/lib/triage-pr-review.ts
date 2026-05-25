@@ -220,9 +220,9 @@ export interface PrReviewFinding {
    * per-finding confidence; when absent, callers default to the
    * verdict-level `confidence` field via `resolveFindingConfidence`
    * so every finding has a value downstream. `formatFindingComment`
-   * renders the suffix `_confidence: N/5_` and wraps low-confidence
-   * (≤2) bodies in a collapsed `<details>` block so noisy findings
-   * de-emphasize.
+   * preserves confidence in a hidden marker for tooling and wraps
+   * low-confidence (≤2) bodies in a collapsed `<details>` block so
+   * noisy findings de-emphasize.
    */
   confidence?: number
   /**
@@ -1895,8 +1895,8 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 38
-const SEVERITY_BADGE_HEIGHT = 28
+const SEVERITY_BADGE_WIDTH = 34
+const SEVERITY_BADGE_HEIGHT = 24
 const FINDING_BODY_PREVIEW_LIMIT = 500
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
@@ -1910,14 +1910,6 @@ export function severityBadgeForScore(score: number): string {
   return severityBadgeImg("P3", "p3")
 }
 
-function severityTextForScore(score: number): string {
-  if (score >= 5) return "P0 critical (5/5)"
-  if (score >= 4) return "P1 high (4/5)"
-  if (score >= 3) return "P2 medium (3/5)"
-  if (score >= 2) return "P3 low (2/5)"
-  return "P3 info (1/5)"
-}
-
 function stripAstMarkers(text: string): string {
   return text.replace(/<!--\s*ast\/[\s\S]*?-->/g, "").trim()
 }
@@ -1926,12 +1918,13 @@ function formatFindingBodyMarkdown(body: string): string {
   const clean = stripAstMarkers(body)
   if (clean.length <= FINDING_BODY_PREVIEW_LIMIT) return clean
   const preview = clean.slice(0, FINDING_BODY_PREVIEW_LIMIT).trimEnd()
+  const rest = clean.slice(preview.length).trimStart()
   return [
     `${preview}...`,
     "",
-    "<details><summary>Show more</summary>",
+    "<details><summary>More Info</summary>",
     "",
-    clean,
+    rest,
     "",
     "</details>",
   ].join("\n")
@@ -2262,16 +2255,13 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
 
 /**
  * Inline finding comment, greptile-style. The headline carries the
- * bold line; category stays grep-able in a lighter metadata row so
- * stacked findings on one line do not all start with the same
- * `**category:**` prefix. Body and any ```suggestion block flow
- * underneath verbatim.
+ * bold line and the badge carries visible severity. Body and any
+ * ```suggestion block flow underneath verbatim.
  *
- * SIG-101: prefixed with a P0/P1/P2 severity badge (suppressed for
- * score 1-2), with `_confidence: N/5_`. When confidence
- * ≤ 2, the body is collapsed inside a `<details>` block so noisy
- * low-confidence findings de-emphasize visually but the headline
- * (with its severity badge) stays visible.
+ * SIG-101: prefixed with a P0/P1/P2/P3 severity badge. When
+ * confidence ≤ 2, the body is collapsed inside a `<details>` block so
+ * noisy low-confidence findings de-emphasize visually but the headline
+ * stays visible.
  *
  * Pure — exported for tests. The `confidence` arg is the
  * already-resolved per-finding confidence (see
@@ -2286,16 +2276,16 @@ export function formatFindingComment(
 ): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
   // SIG-164 PR 5: badge is always present (P3 covers low severity).
-  // Heading shape: <img badge> **headline**
-  // _category: X_ · _severity: PX label_ · _confidence: N/5_
-  // The headline carries visual weight; category remains grep-able but
-  // no longer repeats as the bold lead on every stacked thread.
+  // Heading shape: <img badge> **headline**. Category, severity, and
+  // confidence stay machine-readable through hidden markers instead of
+  // repeating as visible metadata on every stacked thread.
   const badge = severityBadgeForScore(finding.score)
-  const category = finding.category ?? "logic"
   const headline = stripAstMarkers(finding.headline)
   const body = formatFindingBodyMarkdown(finding.body)
   lines.push(`${badge} **${headline}**`)
-  lines.push(`_category: ${category}_ · _severity: ${severityTextForScore(finding.score)}_ · _confidence: ${confidence}/5_`)
+  lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
+  lines.push(`<!-- sigilix:severity:${finding.score} -->`)
+  lines.push(`<!-- sigilix:confidence:${confidence} -->`)
   lines.push("")
   if (confidence <= 2) {
     // Low-confidence findings collapse the body so the thread skims

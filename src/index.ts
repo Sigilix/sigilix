@@ -85,6 +85,7 @@ import { parseValidateMode, validateEnv } from "./lib/env-validate"
 import {
   enqueueIndexJobsForRepos,
   isIndexerEnabled,
+  maybeEnqueuePullRequestBranchIndexJobs,
   maybeEnqueuePushIndexJob,
   type IndexJobReason,
 } from "./lib/index-producer"
@@ -95,9 +96,11 @@ import {
   type SigilixCheckConclusion,
 } from "./lib/pr-review-check-run"
 import {
+  deleteRepoIndex,
   handleInstallReposRemoved,
   handleInstallationDeleted,
 } from "./lib/index-delete"
+import { branchStateRepo } from "./lib/index-branch"
 import {
   handleGitHubAuthCallback,
   handleGitHubAuthKickoff,
@@ -361,6 +364,12 @@ export interface Env {
   // (including unset) keeps indexing disabled.
   OPENCLAW_INDEXER_ENABLED?: string
 
+  // SIG-35: comma-separated long-lived non-default branches to persistently
+  // index in addition to the repo default branch. Defaults in code cover
+  // dev/develop/development/staging/stage; this var lets customers add
+  // names like "qa,release-candidate" without a deploy.
+  OPENCLAW_INDEX_BRANCHES?: string
+
   // SIG-131: AST-aware chunking. When "on", JS/TS files chunk on AST
   // boundaries (effective CHUNKER_VERSION 3) and repos re-index under the new
   // scheme; default off (line-window, version 2). Flip via
@@ -594,7 +603,20 @@ export type JobMessage =
       owner: string
       repo: string
       installationId: number
-      reason: "install" | "install-repos-added" | "manual" | "push"
+      reason:
+        | "install"
+        | "install-repos-added"
+        | "manual"
+        | "push"
+        | "pull-request"
+        | "merged-pr"
+      /**
+       * SIG-35: when set, index this Git branch into branch-scoped
+       * state instead of the default-branch compatibility namespace.
+       * Shards copy this root field so the consumer can derive the same
+       * Vectorize namespace / KV keys throughout the chain.
+       */
+      branch?: string
       shard?: {
         /** Inclusive lower bound into the filtered indexable-file list. */
         lo: number
@@ -604,6 +626,8 @@ export type JobMessage =
         headSha: string
         /** Tree SHA — `getRepoTree` argument. Distinct from headSha per Codex v2 B1. */
         treeSha: string
+        /** Default branch observed when the bootstrap job started. */
+        defaultBranch?: string
         /** Total filtered indexable file count from the bootstrap walk. */
         totalFiles: number
         /** Accumulated count of files processed so far in this run (chain). */
@@ -613,6 +637,13 @@ export type JobMessage =
         /** Stable run id: sha256(owner|repo|headSha|modelId|chunkerVersion).slice(0,16). */
         runId: string
       }
+    }
+  | {
+      type: "delete-repo-index"
+      owner: string
+      repo: string
+      reason: "branch-deleted" | "pr-branch-closed"
+      branch?: string
     }
 
 /**
@@ -686,9 +717,10 @@ interface GitHubWebhookPayload {
   }
   pull_request?: {
     number?: number
-    head?: { sha?: string; ref?: string }
+    head?: { sha?: string; ref?: string; repo?: { full_name?: string | null } | null }
     base?: { sha?: string; ref?: string }
     draft?: boolean
+    merged?: boolean
   }
   workflow_run?: {
     id?: number
@@ -737,10 +769,10 @@ interface GitHubWebhookPayload {
   // already gone) — the delete handler discovers affected repos by
   // walking `repo-index-manifest:` records and filtering by owner.
   repositories_removed?: Array<{ name?: string; full_name?: string }>
-  // ARC-237: `push` event fields. Default-branch pushes trigger
-  // incremental re-index via `maybeEnqueuePushIndexJob`. The handler
-  // ignores non-branch refs, branch deletes (`after === "000…"`), and
-  // pushes on non-default branches.
+  // ARC-237 / SIG-35: `push` event fields. Default-branch pushes refresh
+  // the compatibility index. Tracked long-lived branches and active PR
+  // head branches refresh isolated branch-scoped indexes. Branch deletes
+  // enqueue branch-index cleanup.
   ref?: string
   after?: string
   before?: string
@@ -1550,6 +1582,19 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // continuation tokens. See src/lib/indexer.ts for the full
       // state machine.
       return handleIndexRepoJob({ job, env })
+    case "delete-repo-index": {
+      const repoState = job.branch ? branchStateRepo(job.repo, job.branch) : job.repo
+      const result = await deleteRepoIndex({
+        env,
+        owner: job.owner,
+        repo: repoState,
+        reason: job.reason,
+      })
+      if (result.status === "partial") {
+        throw new Error(`delete-repo-index partial for ${job.owner}/${repoState}`)
+      }
+      return
+    }
     case "pr-pause":
       // SIG-98: `/sigilix pause` — 24h auto-review pause.
       return handlePrPause({
@@ -1879,6 +1924,38 @@ async function handleGitHubWebhook(
     const pr = payload.pull_request
     if (!pr || typeof pr.number !== "number") {
       return new Response("missing pr\n", { status: 400 })
+    }
+    const headRepoFullName = pr.head?.repo?.full_name
+    const headIsSameRepo =
+      typeof headRepoFullName === "string" &&
+      headRepoFullName.toLowerCase() === `${owner}/${repo}`.toLowerCase()
+    if (headIsSameRepo) {
+      ctx.waitUntil(
+        maybeEnqueuePullRequestBranchIndexJobs({
+          env,
+          owner,
+          repo,
+          installationId,
+          action,
+          draft: pr.draft,
+          headRef: pr.head?.ref,
+          baseRef: pr.base?.ref,
+          merged: pr.merged,
+        }).catch((err) => {
+          console.warn(JSON.stringify({
+            event: "index-pr-branch-enqueue-failed",
+            owner, repo, prNumber: pr.number,
+            action,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }),
+      )
+    } else {
+      console.log(JSON.stringify({
+        event: "index-pr-branch-skip-fork",
+        owner, repo, prNumber: pr.number,
+        head_repo: headRepoFullName,
+      }))
     }
     if (pr.draft) {
       const headSha = pr.head?.sha ?? ""
@@ -2302,11 +2379,12 @@ async function handleGitHubWebhook(
     })
   }
 
-  // ARC-237: push-driven re-index. Fires on every push to a branch
-  // ref; the producer helper filters to default-branch pushes on
-  // already-indexed repos (bootstrap stays install-driven). Push
-  // storm coalescing falls out of ARC-235's freshness check — 10
-  // pushes in 60s become 1 actual re-walk + 9 cheap skips.
+  // ARC-237 / SIG-35: push-driven re-index. Fires on every push to a branch
+  // ref. The producer refreshes the default branch, configured long-lived
+  // branches, and active same-repo PR branches on already-indexed repos
+  // (bootstrap stays install-driven). Push storm coalescing falls out of
+  // ARC-235's freshness check — 10 pushes in 60s become 1 actual re-walk
+  // + 9 cheap skips.
   if (event === "push") {
     if (!isIndexerEnabled(env)) {
       return new Response("push event ignored (indexer off)\n", { status: 200 })

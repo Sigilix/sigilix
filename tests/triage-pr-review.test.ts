@@ -2236,12 +2236,12 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
   it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="38"')
-    expect(out).toContain('height="28"')
+    expect(out).toContain('width="34"')
+    expect(out).toContain('height="24"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260524-5/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260524-6/p2.svg`)
     expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {
@@ -2291,8 +2291,8 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).toContain('alt="P0"')
     expect(out).toContain(badgeAssetUrl("p0"))
     expect(out).toContain("**deref crash**")
-    expect(out).toContain("_category: logic_")
-    expect(out).toContain("_severity: P0 critical (5/5)_")
+    expect(out).not.toContain("_category: logic_")
+    expect(out).not.toContain("_severity:")
   })
 
   it("prefixes the P1 badge img on score-4 findings", () => {
@@ -2314,10 +2314,19 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("🟡")
   })
 
-  it("appends `_confidence: N/5_` suffix on every finding regardless of score", () => {
-    expect(formatFindingComment(fnd({ score: 5 }), 5)).toContain("_confidence: 5/5_")
-    expect(formatFindingComment(fnd({ score: 2 }), 4)).toContain("_confidence: 4/5_")
-    expect(formatFindingComment(fnd({ score: 3 }), 1)).toContain("_confidence: 1/5_")
+  it("keeps confidence machine-readable without a visible metadata row", () => {
+    expect(formatFindingComment(fnd({ score: 5 }), 5)).toContain("<!-- sigilix:confidence:5 -->")
+    expect(formatFindingComment(fnd({ score: 2 }), 4)).toContain("<!-- sigilix:confidence:4 -->")
+    expect(formatFindingComment(fnd({ score: 3 }), 1)).toContain("<!-- sigilix:confidence:1 -->")
+    expect(formatFindingComment(fnd({ score: 3 }), 3)).not.toContain("_confidence: 3/5_")
+  })
+
+  it("keeps category and severity machine-readable without a visible metadata row", () => {
+    const out = formatFindingComment(fnd({ score: 4, category: "testing" }), 5)
+    expect(out).toContain("<!-- sigilix:category:testing -->")
+    expect(out).toContain("<!-- sigilix:severity:4 -->")
+    expect(out).not.toContain("_category: testing_")
+    expect(out).not.toContain("_severity:")
   })
 
   it("collapses body inside a <details> block when confidence ≤ 2", () => {
@@ -2325,8 +2334,8 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).toContain("<details>")
     expect(out).toContain("<summary>Low-confidence finding")
     expect(out).toContain("</details>")
-    // The headline + badge + confidence suffix stay OUTSIDE the
-    // details block so a reviewer skimming can still triage.
+    // The headline + badge stay outside the details block so a
+    // reviewer skimming can still triage.
     const headIdx = out.indexOf("**missing null guard")
     const detailsIdx = out.indexOf("<details>")
     expect(headIdx).toBeGreaterThan(-1)
@@ -2348,25 +2357,27 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out.split("\n")[0]).toBe("<!-- sigilix:pr-review-finding -->")
   })
 
-  it("renders five distinct severity text weights even though scores 1-2 share the P3 asset", () => {
-    expect(formatFindingComment(fnd({ score: 5 }), 5)).toContain("_severity: P0 critical (5/5)_")
-    expect(formatFindingComment(fnd({ score: 4 }), 5)).toContain("_severity: P1 high (4/5)_")
-    expect(formatFindingComment(fnd({ score: 3 }), 5)).toContain("_severity: P2 medium (3/5)_")
-    expect(formatFindingComment(fnd({ score: 2 }), 5)).toContain("_severity: P3 low (2/5)_")
-    expect(formatFindingComment(fnd({ score: 1 }), 5)).toContain("_severity: P3 info (1/5)_")
+  it("does not render a duplicate visible severity/category metadata row", () => {
+    const out = formatFindingComment(fnd({ score: 3, category: "testing" }), 5)
+    expect(out).toContain('alt="P2"')
+    expect(out).not.toContain("_category:")
+    expect(out).not.toContain("_severity:")
   })
 
-  it("truncates long bodies with a show-more affordance", () => {
+  it("truncates long bodies with a More Info affordance that only shows the remaining detail", () => {
     const body = "x".repeat(620)
     const out = formatFindingComment(fnd({ body }), 5)
-    expect(out).toContain("<summary>Show more</summary>")
+    expect(out).toContain("<summary>More Info</summary>")
     expect(out).toContain(`${"x".repeat(500)}...`)
+    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
+    expect(detailsMatch?.[1]).toContain("x".repeat(120))
+    expect(detailsMatch?.[1]).not.toContain("x".repeat(500))
   })
 
   it("does not truncate bodies exactly at the 500-character boundary", () => {
     const body = "x".repeat(500)
     const out = formatFindingComment(fnd({ body }), 5)
-    expect(out).not.toContain("<summary>Show more</summary>")
+    expect(out).not.toContain("<summary>More Info</summary>")
     expect(out).toContain(body)
     expect(out).not.toContain(`${body}...`)
   })

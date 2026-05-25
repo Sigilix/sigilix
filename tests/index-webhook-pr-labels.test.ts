@@ -89,7 +89,11 @@ function makeWebhookPayload() {
     pull_request: {
       number: 73,
       draft: false,
-      head: { sha: "a".repeat(40), ref: "feature/x" },
+      head: {
+        sha: "a".repeat(40),
+        ref: "feature/x",
+        repo: { full_name: "acme/site" },
+      },
       base: { sha: "b".repeat(40), ref: "main" },
     },
   }
@@ -123,7 +127,16 @@ async function postWebhook(
   worker: { fetch: (req: Request, env: unknown, ctx: unknown) => Promise<Response> },
   env: unknown,
 ): Promise<Response> {
-  const body = JSON.stringify(makeWebhookPayload())
+  return postWebhookPayload(worker, env, makeWebhookPayload())
+}
+
+async function postWebhookPayload(
+  worker: { fetch: (req: Request, env: unknown, ctx: unknown) => Promise<Response> },
+  env: unknown,
+  payload: unknown,
+  waitUntilPromises: Promise<unknown>[] = [],
+): Promise<Response> {
+  const body = JSON.stringify(payload)
   const sig = await signBody(body)
   const req = new Request("https://example.com/github/webhook", {
     method: "POST",
@@ -135,8 +148,13 @@ async function postWebhook(
     },
     body,
   })
-  const ctx = { waitUntil: () => {}, passThroughOnException: () => {} }
-  return worker.fetch(req, env, ctx)
+  const ctx = {
+    waitUntil: (promise: Promise<unknown>) => { waitUntilPromises.push(promise) },
+    passThroughOnException: () => {},
+  }
+  const res = await worker.fetch(req, env, ctx)
+  await Promise.all(waitUntilPromises)
+  return res
 }
 
 beforeEach(() => {
@@ -300,5 +318,66 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
       prNumber: 73,
       headSha: "a".repeat(40),
     }))
+  })
+
+  it("enqueues branch indexing only when pull_request head repo is verified same-repo", async () => {
+    mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: false } })
+    const { env, sentJobs } = makeEnv()
+    env.OPENCLAW_INDEXER_ENABLED = "on"
+    const worker = (await import("../src/index")).default
+    const waitUntilPromises: Promise<unknown>[] = []
+
+    const res = await postWebhookPayload(worker, env, makeWebhookPayload(), waitUntilPromises)
+    await Promise.all(waitUntilPromises)
+
+    expect(res.status).toBe(202)
+    expect(sentJobs).toContainEqual(expect.objectContaining({
+      type: "index-repo",
+      reason: "pull-request",
+      branch: "feature/x",
+    }))
+  })
+
+  it("does not enqueue branch indexing for missing or forked pull_request heads", async () => {
+    mockLoadSigilixConfig.mockResolvedValue({ overview: { enabled: false } })
+    const { env, sentJobs } = makeEnv()
+    env.OPENCLAW_INDEXER_ENABLED = "on"
+    const worker = (await import("../src/index")).default
+
+    const missingHeadRepoWaits: Promise<unknown>[] = []
+    await postWebhookPayload(
+      worker,
+      env,
+      {
+        ...makeWebhookPayload(),
+        pull_request: {
+          ...makeWebhookPayload().pull_request,
+          head: { sha: "a".repeat(40), ref: "missing-repo" },
+        },
+      },
+      missingHeadRepoWaits,
+    )
+    await Promise.all(missingHeadRepoWaits)
+
+    const forkWaits: Promise<unknown>[] = []
+    await postWebhookPayload(
+      worker,
+      env,
+      {
+        ...makeWebhookPayload(),
+        pull_request: {
+          ...makeWebhookPayload().pull_request,
+          head: {
+            sha: "a".repeat(40),
+            ref: "fork-branch",
+            repo: { full_name: "other/site" },
+          },
+        },
+      },
+      forkWaits,
+    )
+    await Promise.all(forkWaits)
+
+    expect(sentJobs.filter((job) => job.type === "index-repo")).toHaveLength(0)
   })
 })

@@ -102,7 +102,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         repo: {
           type: "string",
           description:
-            "Repository namespace (lowercased), `<owner>/<repo>` — sets the Vectorize namespace. A bare repo name is also accepted and resolves when it uniquely matches an allowed namespace.",
+            "Repository namespace (lowercased), `<owner>/<repo>` for default branch or `<owner>/<repo>/__branch__/<hexEncodedBranch>` for branch indexes. A bare repo name is also accepted and resolves when it uniquely matches an allowed namespace.",
         },
       },
       required: ["query", "repo"],
@@ -113,7 +113,9 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
       if (!query || !repo) {
         return { ok: false, error: "retrieve_codebase requires non-empty `query` and `repo` strings" }
       }
-      // SIG-132: the Vectorize namespace is `<owner>/<repo>` lowercased.
+      // SIG-132 / SIG-35: the Vectorize namespace is `<owner>/<repo>`
+      // lowercased for default branch and `<owner>/<repo>/__branch__/<hexEncodedBranch>`
+      // for branch-scoped indexes.
       // The allowed namespace universe comes from:
       //   - `ctx.allowedRepos` (Linear surface) — `listIndexedRepos`
       //     returns `<owner>/<repo>` namespaces (the KV key suffix).
@@ -151,7 +153,9 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         if (!allowed.has(namespace)) {
           // SIG-132 back-compat: the model may pass a bare repo (no
           // owner). Resolve it to a namespace IFF it uniquely matches
-          // the `<repo>` segment of exactly one allowed namespace.
+          // the `<repo>` segment of exactly one allowed namespace. Branch
+          // namespaces require an exact namespace because branch names are
+          // not unique or reliably encoded from natural language.
           const matches = namespaceUniverse.filter(
             (ns) => ns.slice(ns.indexOf("/") + 1) === namespace,
           )

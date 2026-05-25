@@ -216,6 +216,27 @@ describe("retrieve_codebase", () => {
     )
   })
 
+  it("accepts an exact branch-scoped namespace and queries it verbatim (SIG-35)", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: [
+        "arc-and-anchor/sigilix",
+        "arc-and-anchor/sigilix/__branch__/h646576",
+      ],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "Arc-and-Anchor/Sigilix/__branch__/h646576" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean }
+    expect(result.ok).toBe(true)
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(
+      expect.objectContaining({ teamKey: "arc-and-anchor/sigilix/__branch__/h646576" }),
+    )
+  })
+
   it("resolves a bare repo to its <owner>/<repo> namespace when unique (SIG-132 back-compat)", async () => {
     mockRetrieveChunks.mockResolvedValue([])
     const [tool] = createAgentTools({

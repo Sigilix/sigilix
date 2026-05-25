@@ -1,13 +1,13 @@
 // ARC-235 — async indexer Cloudflare Queue consumer.
 //
 // Handles `index-repo` messages enqueued by ARC-234's webhook producer
-// (and, later, by ARC-237 push-driven re-index). Walks the default-
+// (and, later, by ARC-237/SIG-35 push-driven re-index). Walks the target
 // branch tree via GitHub Trees + Contents APIs using the installation
 // token, chunks files into 30-line overlapping windows, embeds via the
 // Workers AI binding, and upserts to OPENCLAW_CODE_INDEX under
-// `namespace = <owner>/<repo>` lowercased (SIG-132 multi-tenant isolation;
-// matches the retrieval contract — see Codex v1 BLOCKING note in
-// .claude/handoff/arc-234-235-codex-verdict.md).
+// `namespace = <owner>/<repo>` lowercased for default branches and an isolated
+// `<owner>/<repo>/__branch__/<encodedBranch>` namespace for non-default
+// branch indexes.
 //
 // State machine — bootstrap (message.shard is undefined):
 //   1. Sensitive-repo gate (consumer-side defense-in-depth).
@@ -49,7 +49,6 @@ import {
   embedTexts,
 } from "./embeddings"
 import {
-  indexNamespace,
   isManifestFresh,
   readRepoIndexManifest,
   writeRepoIndexManifest,
@@ -74,6 +73,7 @@ import {
   chunkFile,
 } from "./chunk-core"
 import { chunkFileAst, jsTsExtOf } from "./ast-chunker"
+import { resolveIndexTarget, isBranchStateRepo } from "./index-branch"
 
 // SIG-131: re-export the chunking primitives so existing consumers that
 // import them from "./indexer" (branch-retrieval.ts, tests/indexer-pure)
@@ -293,7 +293,6 @@ export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
 
 async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void> {
   const { owner, repo, installationId, reason } = job
-  const namespace = indexNamespace(owner, repo)
   const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
@@ -318,11 +317,21 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     }))
     return
   }
-  const branch = await client.getBranch(owner, repo, repoMeta.default_branch)
+  const target = resolveIndexTarget({
+    owner,
+    repo,
+    defaultBranch: repoMeta.default_branch,
+    ...(job.branch ? { branch: job.branch } : {}),
+  })
+  const namespace = target.namespace
+  const stateRepo = target.stateRepo
+  const branch = await client.getBranch(owner, repo, target.branch)
   if (!branch) {
     console.log(JSON.stringify({
       event: "index-job-skip-branch-not-found",
-      owner, repo, installation_id: installationId, default_branch: repoMeta.default_branch,
+      owner, repo, installation_id: installationId,
+      branch: target.branch,
+      default_branch: repoMeta.default_branch,
     }))
     return
   }
@@ -330,7 +339,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
 
   const runId = await computeRunId({
     owner,
-    repo,
+    repo: stateRepo,
     headSha,
     modelId: EMBEDDING_MODEL,
     chunkerVersion: effectiveChunkerVersion(astOn),
@@ -338,7 +347,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
 
   // Freshness check — Codex v1 MAJOR. Skip when (owner, headSha,
   // modelId, chunkerVersion, embeddingDim) all match the prior run.
-  const existing = await readRepoIndexManifest(env, owner, repo)
+  const existing = await readRepoIndexManifest(env, owner, stateRepo)
   if (existing.kind === "ok") {
     const fresh = isManifestFresh({
       manifest: existing.manifest,
@@ -349,10 +358,11 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       currentChunkerVersion: effectiveChunkerVersion(astOn),
     })
     if (fresh) {
-      if (await freshManifestHasActiveGraph({ env, owner, repo, runId })) {
+      if (!target.isDefault || await freshManifestHasActiveGraph({ env, owner, repo, runId })) {
         console.log(JSON.stringify({
           event: "index-job-skip-fresh",
-          owner, repo, head_sha: headSha, run_id: runId,
+          owner, repo, branch: target.isDefault ? null : target.branch,
+          head_sha: headSha, run_id: runId,
         }))
         return
       }
@@ -360,7 +370,8 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   } else if (existing.kind === "invalid") {
     console.warn(JSON.stringify({
       event: "repo-index-manifest-invalid",
-      owner, repo, reason: existing.reason,
+      owner, repo, branch: target.isDefault ? null : target.branch,
+      state_repo: stateRepo, reason: existing.reason,
     }))
     // Fall through to re-index.
   }
@@ -371,7 +382,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // run's lease late (after its own slow processSlice) — claiming here,
   // before getTree / the empty-repo branch / processSlice, closes that
   // embedding-window clobber. Throws on KV failure → queue retries.
-  await writeActiveRun(env, owner, repo, runId)
+  await writeActiveRun(env, owner, stateRepo, runId)
 
   const tree = await client.getRepoTree(owner, repo, treeSha)
   if (!tree) {
@@ -394,7 +405,8 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   const indexableFiles = walkIndexableFiles(tree.tree)
   console.log(JSON.stringify({
     event: "index-tree-walked",
-    owner, repo, run_id: runId,
+    owner, repo, branch: target.isDefault ? null : target.branch,
+    run_id: runId,
     total_entries: tree.tree.length,
     indexable_files: indexableFiles.length,
   }))
@@ -405,28 +417,32 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     // re-walk on every webhook for this SHA.
     // SIG-138: read activeRunId explicitly so we can reuse it for the graph
     // commit check below without a second KV read (don't re-read KV).
-    const activeRunId = await readActiveRunId(env, owner, repo)
+    const activeRunId = await readActiveRunId(env, owner, stateRepo)
     if (!shouldFinalize(activeRunId, runId)) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
-        owner, repo, run_id: runId, site: "bootstrap-empty-manifest",
+        owner, repo, branch: target.isDefault ? null : target.branch,
+        run_id: runId, site: "bootstrap-empty-manifest",
       }))
       return
     }
     await persistManifest({
-      env, owner, repo, namespace, headSha, runId,
+      env, owner, repo, stateRepo, namespace, headSha, runId,
+      branch: target.isDefault ? null : target.branch,
+      defaultBranch: target.defaultBranch,
       fileCount: 0, chunkCount: 0, shardCount: 1,
       chunkerVersion: effectiveChunkerVersion(astOn),
     })
     console.log(JSON.stringify({
       event: "index-job-completed",
-      owner, repo, run_id: runId,
+      owner, repo, branch: target.isDefault ? null : target.branch,
+      run_id: runId,
       file_count: 0, chunk_count: 0, shard_count: 1,
     }))
     // SIG-138: commit an empty graph version to GC any stale graph left
     // from a previously-indexed repo that is now empty. Best-effort —
     // never fails the index job.
-    if (graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId })) {
+    if (target.isDefault && graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId })) {
       try {
         await commitGraph(env, owner, repo, runId)
       } catch (err) {
@@ -443,7 +459,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   const sliceHi = Math.min(totalFiles, MAX_FILES_PER_JOB)
   const sliceFiles = indexableFiles.slice(0, sliceHi)
   const { chunkCount, idsByPath } = await processSlice({
-    client, env, owner, repo, namespace,
+    client, env, owner, repo, stateRepo, namespace,
     headSha, runId, files: sliceFiles, astChunking: astOn,
   })
 
@@ -455,13 +471,14 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // SIG-136: the run lease was claimed early (right after the freshness
   // gate, before processSlice) so a stale run can't clobber it late.
   const vectorsResult = await persistVectorIds({
-    env, owner, repo, runId, idsByPathSlice: idsByPath,
+    env, owner, repo: stateRepo, runId, idsByPathSlice: idsByPath,
     isBootstrap: true,
   })
   if (!vectorsResult.proceed) {
     console.warn(JSON.stringify({
       event: "index-job-skip-stale-bootstrap",
-      owner, repo, run_id: runId,
+      owner, repo, branch: target.isDefault ? null : target.branch,
+      run_id: runId,
     }))
     return
   }
@@ -469,19 +486,22 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   if (totalFiles > MAX_FILES_PER_JOB) {
     // Hand off to the next continuation shard. Final shard will write
     // the manifest with cumulative totals; this bootstrap doesn't.
-    if (!(await leaseAllows(env, owner, repo, runId))) {
+    if (!(await leaseAllows(env, owner, stateRepo, runId))) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
         site: "bootstrap-enqueue",
-        owner, repo, run_id: runId,
+        owner, repo, branch: target.isDefault ? null : target.branch,
+        run_id: runId,
       }))
       return
     }
     await enqueueNextShard(env, {
       owner, repo, installationId, reason,
+      ...(target.isDefault ? {} : { branch: target.branch }),
       lo: MAX_FILES_PER_JOB,
       hi: Math.min(MAX_FILES_PER_JOB * 2, totalFiles),
       headSha, treeSha,
+      defaultBranch: target.defaultBranch,
       totalFiles,
       filesDone: sliceHi,
       chunksDone: chunkCount,
@@ -493,28 +513,32 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // Single-shard run — write manifest now.
   // SIG-138: read activeRunId explicitly so we can reuse it for the graph
   // commit check below without a second KV read (don't re-read KV).
-  const activeRunId = await readActiveRunId(env, owner, repo)
+  const activeRunId = await readActiveRunId(env, owner, stateRepo)
   if (!shouldFinalize(activeRunId, runId)) {
     console.warn(JSON.stringify({
       event: "index-job-skip-superseded-finalize",
       site: "bootstrap-manifest",
-      owner, repo, run_id: runId,
+      owner, repo, branch: target.isDefault ? null : target.branch,
+      run_id: runId,
     }))
     return
   }
   await persistManifest({
-    env, owner, repo, namespace, headSha, runId,
+    env, owner, repo, stateRepo, namespace, headSha, runId,
+    branch: target.isDefault ? null : target.branch,
+    defaultBranch: target.defaultBranch,
     fileCount: sliceHi, chunkCount, shardCount: 1,
     chunkerVersion: effectiveChunkerVersion(astOn),
   })
   console.log(JSON.stringify({
     event: "index-job-completed",
-    owner, repo, run_id: runId,
+    owner, repo, branch: target.isDefault ? null : target.branch,
+    run_id: runId,
     file_count: sliceHi, chunk_count: chunkCount, shard_count: 1,
   }))
   // SIG-138: commit the graph version after a successful manifest write,
   // lease-gated. Best-effort — never fails the index job.
-  if (graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId })) {
+  if (target.isDefault && graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId })) {
     try {
       await commitGraph(env, owner, repo, runId)
     } catch (err) {
@@ -537,7 +561,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // throw here must NOT fail the index job (which already
   // succeeded) and trigger an indexer queue retry → full re-embed.
   try {
-    await enqueueWarmupRerunsForIndex({
+    if (target.isDefault) await enqueueWarmupRerunsForIndex({
       env, client, owner, repo, installationId, runId,
     })
   } catch (err) {
@@ -586,7 +610,24 @@ async function handleShardJob(
   env: Env,
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
-  const namespace = indexNamespace(owner, repo)
+  const resolvedDefaultBranch = shard.defaultBranch ?? job.branch ?? null
+  if (resolvedDefaultBranch === null) {
+    console.warn(JSON.stringify({
+      event: "index-shard-default-branch-missing",
+      owner, repo, run_id: shard.runId,
+      shard_lo: shard.lo,
+      shard_hi: shard.hi,
+      note: "legacy shard missing defaultBranch; using sentinel",
+    }))
+  }
+  const target = resolveIndexTarget({
+    owner,
+    repo,
+    defaultBranch: resolvedDefaultBranch ?? "__default_unknown__",
+    ...(job.branch ? { branch: job.branch } : {}),
+  })
+  const stateRepo = target.stateRepo
+  const namespace = target.namespace
   const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
@@ -604,7 +645,7 @@ async function handleShardJob(
   // ARC-237 push re-index) starts fresh with the new config.
   const currentRunId = await computeRunId({
     owner,
-    repo,
+    repo: stateRepo,
     headSha: shard.headSha,
     modelId: EMBEDDING_MODEL,
     chunkerVersion: effectiveChunkerVersion(astOn),
@@ -663,7 +704,7 @@ async function handleShardJob(
   // superseded/redelivered shard doesn't write orphaned vectors to Vectorize
   // (vectors not recorded in the id-list pollute retrieval + escape the
   // GDPR uninstall delete). persistVectorIds re-checks at the end as backstop.
-  if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+  if (!(await leaseAllows(env, owner, stateRepo, shard.runId))) {
     console.warn(JSON.stringify({
       event: "index-job-skip-superseded-shard",
       owner, repo, run_id: shard.runId, lo: shard.lo, hi: shard.hi,
@@ -673,16 +714,16 @@ async function handleShardJob(
   // The check above and this refresh are NOT atomic, but that's safe: the
   // authoritative gate is persistVectorIds' own lease read + computeMerge
   // (a newer run that claims in this window stale-skips us at persist time).
-  await writeActiveRun(env, owner, repo, shard.runId)
+  await writeActiveRun(env, owner, stateRepo, shard.runId)
 
   const sliceFiles = indexableFiles.slice(shard.lo, shard.hi)
   const { chunkCount: sliceChunkCount, idsByPath } = await processSlice({
-    client, env, owner, repo, namespace,
+    client, env, owner, repo, stateRepo, namespace,
     headSha: shard.headSha, runId: shard.runId, files: sliceFiles, astChunking: astOn,
   })
 
   const vectorsResult = await persistVectorIds({
-    env, owner, repo,
+    env, owner, repo: stateRepo,
     runId: shard.runId,
     idsByPathSlice: idsByPath,
     isBootstrap: false,
@@ -703,7 +744,7 @@ async function handleShardJob(
     const shardCount = Math.ceil(shard.totalFiles / MAX_FILES_PER_JOB)
     // SIG-138: read activeRunId explicitly so we can reuse it for the graph
     // commit check below without a second KV read (don't re-read KV).
-    const activeRunId = await readActiveRunId(env, owner, repo)
+    const activeRunId = await readActiveRunId(env, owner, stateRepo)
     if (!shouldFinalize(activeRunId, shard.runId)) {
       console.warn(JSON.stringify({
         event: "index-job-skip-superseded-finalize",
@@ -713,7 +754,9 @@ async function handleShardJob(
       return
     }
     await persistManifest({
-      env, owner, repo, namespace,
+      env, owner, repo, stateRepo, namespace,
+      branch: target.isDefault ? null : target.branch,
+      defaultBranch: target.defaultBranch,
       headSha: shard.headSha, runId: shard.runId,
       fileCount: cumulativeFiles,
       chunkCount: cumulativeChunks,
@@ -729,7 +772,7 @@ async function handleShardJob(
     }))
     // SIG-138: commit the graph version after a successful manifest write,
     // lease-gated. Best-effort — never fails the index job.
-    if (graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId: shard.runId })) {
+    if (target.isDefault && graphIndexEnabled(env) && shouldCommitGraph({ activeRunId, runId: shard.runId })) {
       try {
         await commitGraph(env, owner, repo, shard.runId)
       } catch (err) {
@@ -748,7 +791,7 @@ async function handleShardJob(
     // try/catch as the bootstrap path. Best-effort applies here
     // too — multi-shard repos already paid the indexing cost.
     try {
-      await enqueueWarmupRerunsForIndex({
+      if (target.isDefault) await enqueueWarmupRerunsForIndex({
         env, client, owner, repo, installationId, runId: shard.runId,
       })
     } catch (err) {
@@ -761,7 +804,7 @@ async function handleShardJob(
     return
   }
 
-  if (!(await leaseAllows(env, owner, repo, shard.runId))) {
+  if (!(await leaseAllows(env, owner, stateRepo, shard.runId))) {
     console.warn(JSON.stringify({
       event: "index-job-skip-superseded-finalize",
       site: "shard-enqueue",
@@ -771,10 +814,12 @@ async function handleShardJob(
   }
   await enqueueNextShard(env, {
     owner, repo, installationId, reason,
+    ...(target.isDefault ? {} : { branch: target.branch }),
     lo: shard.hi,
     hi: Math.min(shard.hi + MAX_FILES_PER_JOB, shard.totalFiles),
     headSha: shard.headSha,
     treeSha: shard.treeSha,
+    defaultBranch: target.defaultBranch,
     totalFiles: shard.totalFiles,
     filesDone: cumulativeFiles,
     chunksDone: cumulativeChunks,
@@ -790,7 +835,10 @@ interface ProcessSliceArgs {
   client: GitHubClient
   env: Env
   owner: string
+  /** Actual GitHub repo name for file fetches. */
   repo: string
+  /** KV/vector/lease identity; branch indexes differ from repo. */
+  stateRepo: string
   namespace: string
   headSha: string
   runId: string
@@ -819,7 +867,7 @@ function coverageByPath(records: VectorizeRecord[]): Record<string, string[]> {
 }
 
 async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult> {
-  const { client, env, owner, repo, namespace, headSha, runId, files } = args
+  const { client, env, owner, repo, stateRepo, namespace, headSha, runId, files } = args
   let chunkBuffer: Chunk[] = []
   const vectorBuffer: VectorizeRecord[] = []
   let totalChunks = 0
@@ -849,7 +897,7 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
 
     // SIG-138: graph write is best-effort and additive — any error here
     // logs + continues; the embedding/upsert pipeline is unaffected.
-    if (graphIndexEnabled(env)) {
+    if (!isBranchStateRepo(stateRepo) && graphIndexEnabled(env)) {
       try {
         const fg = extractFileGraph(file.path, content)
         await writeFileGraph(env, owner, repo, {
@@ -907,7 +955,7 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
         // SIG-137: record ids in the delete-coverage ledger BEFORE upserting,
         // so a crash or mid-slice supersede can't leave a Vectorize entry that
         // isn't in the id-list (which would escape the GDPR uninstall delete).
-        await appendVectorCoverage(env, owner, repo, runId, coverageByPath(upBatch))
+        await appendVectorCoverage(env, owner, stateRepo, runId, coverageByPath(upBatch))
         await env.OPENCLAW_CODE_INDEX.upsert(upBatch)
       }
     }
@@ -929,7 +977,7 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
   while (vectorBuffer.length > 0) {
     const upBatch = vectorBuffer.splice(0, UPSERT_BATCH)
     // SIG-137: coverage-before-upsert (see flush loop above).
-    await appendVectorCoverage(env, owner, repo, runId, coverageByPath(upBatch))
+    await appendVectorCoverage(env, owner, stateRepo, runId, coverageByPath(upBatch))
     await env.OPENCLAW_CODE_INDEX.upsert(upBatch)
   }
 
@@ -988,10 +1036,12 @@ interface EnqueueNextShardArgs {
   repo: string
   installationId: number
   reason: IndexRepoMessage["reason"]
+  branch?: string
   lo: number
   hi: number
   headSha: string
   treeSha: string
+  defaultBranch: string
   totalFiles: number
   filesDone: number
   chunksDone: number
@@ -1005,11 +1055,13 @@ async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Promise<v
     repo: args.repo,
     installationId: args.installationId,
     reason: args.reason,
+    ...(args.branch ? { branch: args.branch } : {}),
     shard: {
       lo: args.lo,
       hi: args.hi,
       headSha: args.headSha,
       treeSha: args.treeSha,
+      defaultBranch: args.defaultBranch,
       totalFiles: args.totalFiles,
       filesDone: args.filesDone,
       chunksDone: args.chunksDone,
@@ -1028,8 +1080,13 @@ async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Promise<v
 interface PersistManifestArgs {
   env: Env
   owner: string
+  /** Actual GitHub repo name. */
   repo: string
+  /** State repo used for KV manifests/vectors. Branch indexes use repo/__branch__/... */
+  stateRepo: string
   namespace: string
+  branch: string | null
+  defaultBranch: string
   headSha: string
   runId: string
   fileCount: number
@@ -1041,11 +1098,16 @@ interface PersistManifestArgs {
 async function persistManifest(args: PersistManifestArgs): Promise<void> {
   const manifest: RepoIndexManifestV1 = {
     v: 1,
-    // SIG-132: store the BARE lowercased repo, not the namespace. The
-    // namespace is `indexNamespace(owner, repo)` and is derivable from
-    // owner + repo at delete time.
-    repo: args.repo.toLowerCase(),
+    // SIG-35: default-branch manifests keep the historical bare repo
+    // value. Branch manifests store a branch-state repo such as
+    // `sigilix/__branch__/h646576`, which keeps branch KV/vector state
+    // isolated and prevents `listIndexedRepos` from advertising it as
+    // another default repo.
+    repo: args.stateRepo.toLowerCase(),
     owner: args.owner,
+    actualRepo: args.repo.toLowerCase(),
+    defaultBranch: args.defaultBranch,
+    namespace: args.namespace,
     headSha: args.headSha,
     runId: args.runId,
     fileCount: args.fileCount,
@@ -1057,6 +1119,9 @@ async function persistManifest(args: PersistManifestArgs): Promise<void> {
     chunkerVersion: args.chunkerVersion,
     windowLines: CHUNK_LINES,
     overlapLines: CHUNK_OVERLAP,
+  }
+  if (args.branch !== null) {
+    manifest.branch = args.branch
   }
   try {
     await writeRepoIndexManifest(args.env, manifest)

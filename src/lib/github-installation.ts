@@ -20,6 +20,8 @@
 // Linear handler treats this as "no PR fetch happens for this comment"
 // and continues with retrieval-only context.
 
+import { BRANCH_STATE_SEGMENT } from "./index-branch"
+
 export type InstallationLookup =
   | { ok: true; installationId: number }
   | { ok: false; reason: "no_installation" }
@@ -127,10 +129,11 @@ export function listTeamRepoMappings(
  */
 export async function listIndexedRepos(env: {
   OPENCLAW_STATE: KVNamespace
-}, opts: { owner?: string | null } = {}): Promise<string[]> {
+}, opts: { owner?: string | null; includeBranches?: boolean } = {}): Promise<string[]> {
   const PREFIX = "repo-index-manifest:"
   const out = new Set<string>()
   const ownerFilter = opts.owner?.toLowerCase() ?? null
+  const includeBranches = opts.includeBranches === true
   let cursor: string | undefined
   for (;;) {
     let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
@@ -168,7 +171,18 @@ export async function listIndexedRepos(env: {
       // `/` cleanly identifies the new owner-qualified shape.
       const namespace = key.name.slice(PREFIX.length).toLowerCase()
       const parts = namespace.split("/")
-      if (parts.length !== 2 || !parts[0] || !parts[1]) continue
+      if (parts.length !== 2 || !parts[0] || !parts[1]) {
+        if (
+          !includeBranches ||
+          parts.length !== 4 ||
+          !parts[0] ||
+          !parts[1] ||
+          parts[2] !== BRANCH_STATE_SEGMENT ||
+          !parts[3]
+        ) {
+          continue
+        }
+      }
       if (ownerFilter !== null && parts[0] !== ownerFilter) continue
       out.add(namespace)
     }

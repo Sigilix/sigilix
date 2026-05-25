@@ -649,6 +649,94 @@ describe("handleInstallReposRemoved", () => {
     expect(store.has(repoIndexManifestKey("Acme", "repo-b"))).toBe(false)
   })
 
+  it("also deletes branch-scoped indexes for a removed repo (SIG-35)", async () => {
+    const { kv, store } = makeKvStub()
+    const branchRepo = "repo-a/__branch__/h646576"
+    store.set(repoIndexManifestKey("Acme", "repo-a"), JSON.stringify(manifest({ repo: "repo-a", owner: "Acme" })))
+    store.set(repoIndexVectorsKey("Acme", "repo-a"), JSON.stringify(vectors({ repo: "repo-a", owner: "Acme" })))
+    store.set(repoIndexManifestKey("Acme", branchRepo), JSON.stringify(manifest({
+      repo: branchRepo,
+      owner: "Acme",
+      actualRepo: "repo-a",
+      branch: "dev",
+      defaultBranch: "main",
+      namespace: "acme/repo-a/__branch__/h646576",
+    })))
+    store.set(repoIndexVectorsKey("Acme", branchRepo), JSON.stringify(vectors({
+      repo: branchRepo,
+      owner: "Acme",
+      byPath: { "src/dev.ts": ["dev-id"] },
+    })))
+
+    const { env, deletedBatches } = makeEnv({ kv })
+    const { results, anyError } = await handleInstallReposRemoved({
+      env,
+      installationId: 99,
+      repositories: [{ full_name: "Acme/repo-a" }],
+    })
+
+    expect(anyError).toBe(false)
+    expect(results).toHaveLength(2)
+    expect(results.map((r) => r.status)).toEqual(["complete", "complete"])
+    expect(store.has(repoIndexManifestKey("Acme", "repo-a"))).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Acme", "repo-a"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Acme", branchRepo))).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Acme", branchRepo))).toBe(false)
+    expect(new Set(deletedBatches.flat())).toEqual(new Set(["id-a1", "id-a2", "id-b1", "dev-id"]))
+  })
+
+  it("continues branch-scoped discovery when one branch manifest get fails", async () => {
+    const { kv, store } = makeKvStub()
+    const okBranchRepo = "repo-a/__branch__/h646576"
+    const badBranchRepo = "repo-a/__branch__/h6661696c"
+    const badManifestKey = repoIndexManifestKey("Acme", badBranchRepo)
+    store.set(repoIndexManifestKey("Acme", "repo-a"), JSON.stringify(manifest({ repo: "repo-a", owner: "Acme" })))
+    store.set(repoIndexVectorsKey("Acme", "repo-a"), JSON.stringify(vectors({ repo: "repo-a", owner: "Acme" })))
+    store.set(repoIndexManifestKey("Acme", okBranchRepo), JSON.stringify(manifest({
+      repo: okBranchRepo,
+      owner: "Acme",
+      actualRepo: "repo-a",
+      branch: "dev",
+      defaultBranch: "main",
+      namespace: "acme/repo-a/__branch__/h646576",
+    })))
+    store.set(repoIndexVectorsKey("Acme", okBranchRepo), JSON.stringify(vectors({
+      repo: okBranchRepo,
+      owner: "Acme",
+      byPath: { "src/dev.ts": ["dev-id"] },
+    })))
+    store.set(badManifestKey, JSON.stringify(manifest({
+      repo: badBranchRepo,
+      owner: "Acme",
+      actualRepo: "repo-a",
+      branch: "fail",
+      defaultBranch: "main",
+      namespace: "acme/repo-a/__branch__/h6661696c",
+    })))
+
+    const kvWithTransientGet = {
+      ...kv,
+      async get(key: string): Promise<string | null> {
+        if (key === badManifestKey) throw new Error("kv get transient")
+        return kv.get(key)
+      },
+    } as Env["OPENCLAW_STATE"]
+
+    const { env, deletedBatches } = makeEnv({ kv: kvWithTransientGet })
+    const { results, anyError } = await handleInstallReposRemoved({
+      env,
+      installationId: 99,
+      repositories: [{ full_name: "Acme/repo-a" }],
+    })
+
+    expect(anyError).toBe(true)
+    expect(results.map((r) => r.status)).toEqual(["complete", "complete"])
+    expect(store.has(repoIndexManifestKey("Acme", "repo-a"))).toBe(false)
+    expect(store.has(repoIndexManifestKey("Acme", okBranchRepo))).toBe(false)
+    expect(store.has(badManifestKey)).toBe(true)
+    expect(new Set(deletedBatches.flat())).toEqual(new Set(["id-a1", "id-a2", "id-b1", "dev-id"]))
+  })
+
   it("returns anyError=true when at least one repo's delete is partial", async () => {
     const { kv, store } = makeKvStub()
     store.set(repoIndexManifestKey("Acme", "repo-a"), JSON.stringify(manifest({ repo: "repo-a", owner: "Acme" })))

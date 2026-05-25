@@ -132,6 +132,69 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings[0]?.startLine).toBeUndefined()
   })
 
+  it("parses structured finding examples and test-gap details", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          failureExample: "input: FINAL(wrong) then FINAL(correct)",
+          fixExample: "match = re.search(r\"FINAL\\\\((.*?)\\\\)\", response, re.DOTALL)",
+          testGap: "The existing test only covers one FINAL(...) token.",
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.failureExample).toBe("input: FINAL(wrong) then FINAL(correct)")
+    expect(out?.findings[0]?.fixExample).toContain("re.search")
+    expect(out?.findings[0]?.testGap).toBe("The existing test only covers one FINAL(...) token.")
+  })
+
+  it("normalizes fenced structured examples and caps long details", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          failureExample: "```text\n" + "x".repeat(2200) + "\n```",
+          fixExample: 42,
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.failureExample).toHaveLength(2000)
+    expect(out?.findings[0]?.failureExample).not.toContain("```")
+    expect(out?.findings[0]?.fixExample).toBeUndefined()
+  })
+
+  it("unwraps CRLF and no-final-newline fenced structured examples", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          failureExample: "```text\r\nvalue```",
+          fixExample: "```ts\r\nconst ok = true\r\n```",
+        }],
+      }),
+    )
+    expect(out?.findings[0]?.failureExample).toBe("value")
+    expect(out?.findings[0]?.fixExample).toBe("const ok = true")
+  })
+
+  it("keeps backtick-heavy structured examples renderable", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{
+          ...baseFinding,
+          failureExample: "value includes ``` inside",
+        }],
+      }),
+    )
+    const comment = formatFindingComment(out!.findings[0]!, 5)
+    expect(comment).toContain("````text")
+    expect(comment).toContain("value includes ``` inside")
+  })
+
   it("caps findings at 8", () => {
     const many = Array.from({ length: 12 }, (_, i) => ({
       ...baseFinding,
@@ -1116,6 +1179,8 @@ describe("buildReviewSubmission", () => {
       category: "testing" as const,
       headline: "missing integration coverage",
       body: "The new branch has no integration coverage.",
+      failureExample: "opened/synchronize events are never exercised",
+      testGap: "The sibling test only covers push events.",
     }
     const out = buildReviewSubmissionWithMetadata({
       verdict,
@@ -1125,6 +1190,9 @@ describe("buildReviewSubmission", () => {
     })
 
     expect(out.submission.body).toContain("### Review Body Findings")
+    expect(out.submission.body).toContain("**Example:**")
+    expect(out.submission.body).toContain("opened/synchronize events")
+    expect(out.submission.body).toContain("**Why this wasn't caught:** The sibling test only covers push events.")
     expect(out.bodyOnlyFindings).toEqual([unanchored])
     expect(out.bodyOnlyAnnotations).toEqual([
       expect.objectContaining({
@@ -1213,6 +1281,23 @@ describe("buildBodyOnlyCheckAnnotations", () => {
     expect(annotations[0]!.title!.endsWith("…")).toBe(true)
     expect(annotations[0]!.message).toHaveLength(CHECK_ANNOTATION_TEXT_LIMIT)
     expect(annotations[0]!.message.endsWith("…")).toBe(true)
+  })
+
+  it("includes structured examples in annotation messages", () => {
+    const annotations = buildBodyOnlyCheckAnnotations([
+      {
+        ...baseFinding,
+        path: "src/parser.ts",
+        line: 24,
+        scope: "file",
+        failureExample: "input: FINAL(wrong) then FINAL(correct)",
+        testGap: "The existing test only covers one FINAL(...) token.",
+      },
+    ])
+
+    expect(annotations[0]!.message).toContain("**Example:**")
+    expect(annotations[0]!.message).toContain("FINAL(wrong)")
+    expect(annotations[0]!.message).toContain("**Why this wasn't caught:**")
   })
 })
 
@@ -2079,6 +2164,57 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     expect(out).not.toContain("**Current:**")
     expect(out).not.toContain("```suggestion")
     expect(out).toContain("<summary>Prompt To Fix With AI</summary>")
+  })
+
+  it("renders structured examples, suggested fix shape, and test-gap sections", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, score: 4,
+      category: "logic", headline: "greedy regex returns the wrong token",
+      body: "`extract()` uses a greedy capture when the response has multiple `FINAL(...)` calls.",
+      failureExample: "My first thought was FINAL(wrong) but actually FINAL(correct)",
+      fixExample: "match = re.search(r\"FINAL\\\\((.*?)\\\\)\", response, re.DOTALL)",
+      testGap: "The existing test only covers a single FINAL(...) occurrence.",
+    }
+    const out = formatFindingComment(f, 5, reviewable, addedLines)
+    expect(out).toContain("**Example:**")
+    expect(out).toContain("```text")
+    expect(out).toContain("FINAL(wrong)")
+    expect(out).toContain("**Suggested fix:**")
+    expect(out).toContain("```ts")
+    expect(out).toContain("**Why this wasn't caught:** The existing test only covers")
+    expect(out).toContain("Suggested fix shape:")
+    expect(out).toContain("Why this wasn't caught:")
+  })
+
+  it("suppresses illustrative fixExample when an exact suggestedReplacement exists", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, score: 5,
+      category: "logic", headline: "guard against undefined",
+      body: "x can be undefined here.",
+      fixExample: "const x = compute() ?? 0",
+      kind: "replace",
+      suggestedReplacement: "  const x = compute() ?? 0\n  return x",
+    }
+    const out = formatFindingComment(f, 5, reviewable, addedLines)
+    expect(out).toContain("**Proposed:**")
+    expect(out).not.toContain("**Suggested fix:**")
+    expect(out).toContain("Suggested fix shape:")
+  })
+
+  it("keeps fixExample visible for unsupported insert-shaped replacements", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, score: 4,
+      category: "logic", headline: "insert shape needs manual handling",
+      body: "Insertion suggestions are not committable yet.",
+      kind: "insert",
+      suggestedReplacement: "  inserted()",
+      fixExample: "insert `inserted()` before `return x`",
+    }
+    const out = formatFindingComment(f, 5, reviewable, addedLines)
+    expect(out).toContain("**Suggested fix:**")
+    expect(out).toContain("insert `inserted()` before `return x`")
+    expect(out).not.toContain("```suggestion")
+    expect(out).not.toContain("**Proposed change:**")
   })
 })
 

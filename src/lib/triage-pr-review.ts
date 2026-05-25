@@ -122,22 +122,26 @@ function sanitizeVerdictForGitHub(v: PrReviewVerdict): PrReviewVerdict {
     ...v,
     summary: wrapInlineHtmlTags(v.summary),
     confidenceReason: wrapInlineHtmlTags(v.confidenceReason),
-    findings: v.findings.map((f) => ({
-      ...f,
-      headline: wrapInlineHtmlTags(f.headline),
-      body: wrapInlineHtmlTags(f.body),
-    })),
+    findings: v.findings.map(sanitizeFindingForGitHub),
   }
 }
 
 function sanitizeFindingsForGitHub(
   findings: ReadonlyArray<PrReviewFinding>,
 ): PrReviewFinding[] {
-  return findings.map((f) => ({
+  return findings.map(sanitizeFindingForGitHub)
+}
+
+function sanitizeFindingForGitHub(f: PrReviewFinding): PrReviewFinding {
+  const sanitized: PrReviewFinding = {
     ...f,
     headline: wrapInlineHtmlTags(f.headline),
     body: wrapInlineHtmlTags(f.body),
-  }))
+  }
+  if (f.failureExample) sanitized.failureExample = f.failureExample
+  if (f.fixExample) sanitized.fixExample = f.fixExample
+  if (f.testGap) sanitized.testGap = wrapInlineHtmlTags(f.testGap)
+  return sanitized
 }
 
 export type FindingCategory =
@@ -203,6 +207,26 @@ export interface PrReviewFinding {
   category: FindingCategory
   headline: string
   body: string
+  /**
+   * Structured details: optional concrete example proving the finding. Intended
+   * for minimal repro input/output, runtime exception text, parser
+   * examples, or other compact evidence that is clearer in a fenced
+   * block than prose. Raw text/code only — the renderer adds fences.
+   */
+  failureExample?: string
+  /**
+   * Structured details: optional non-committable fix shape. Used when an exact
+   * contiguous GitHub suggestion is unsafe but a small snippet helps
+   * the reviewer understand the intended direction. Raw code/text only
+   * — `suggestedReplacement` remains the only one-click patch field.
+   */
+  fixExample?: string
+  /**
+   * Structured details: optional one-sentence explanation of why existing tests or
+   * checks missed the issue. Only populated when the model has concrete
+   * test/CI evidence; the renderer labels it explicitly.
+   */
+  testGap?: string
   /**
    * ARC-182: optional stack-origin tag. Emitted only when the input
    * prompt included a [STACK CONTEXT] block; absent for unstacked PRs.
@@ -548,6 +572,12 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (scope) finalFinding.scope = scope
     if (validStartLine != null) finalFinding.startLine = validStartLine
     if (stackOrigin) finalFinding.stackOrigin = stackOrigin
+    const failureExample = normalizeFindingDetail(finding.failureExample)
+    if (failureExample) finalFinding.failureExample = failureExample
+    const fixExample = normalizeFindingDetail(finding.fixExample)
+    if (fixExample) finalFinding.fixExample = fixExample
+    const testGap = normalizeFindingDetail(finding.testGap)
+    if (testGap) finalFinding.testGap = testGap
     // SIG-101: read per-finding confidence when the model supplies it.
     // Clamped to 1-5. Absent → leave undefined; downstream renderers
     // call `resolveFindingConfidence` which falls back to the
@@ -630,6 +660,18 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
   }
 
   return { summary, confidence, confidenceReason, findings }
+}
+
+function normalizeFindingDetail(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  let clean = value.trim()
+  const fenced = clean.match(/^```[a-zA-Z0-9_-]*\r?\n([\s\S]*?)\r?\n?```$/)
+  if (fenced) clean = fenced[1]?.trim() ?? ""
+  if (clean.length === 0) return undefined
+  if (clean.length > FINDING_STRUCTURED_DETAIL_LIMIT) {
+    clean = clean.slice(0, FINDING_STRUCTURED_DETAIL_LIMIT).trimEnd()
+  }
+  return clean.length > 0 ? clean : undefined
 }
 
 interface BuildReviewArgs {
@@ -801,9 +843,7 @@ export function buildReviewSubmissionWithMetadata({
   const inlineOriginalIndex: number[] = []
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
-    const hasSuggestion =
-      typeof f.suggestedReplacement === "string" &&
-      (f.suggestedReplacement.trim().length > 0 || f.kind === "delete")
+    const hasSuggestion = hasStructuredFix(f)
     const scope = findingScope(f)
     const findingForInline =
       hasSuggestion && scope !== "line"
@@ -1883,6 +1923,7 @@ function renderBodyOnlyFindings(findings: PrReviewFinding[]): string[] {
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
+      formatFindingStructuredDetailsMarkdown(f),
       formatBodyFindingSuggestedChange(f),
     ].filter((s) => s !== "")
     const bodyLines = detailLines
@@ -1918,9 +1959,10 @@ export function buildBodyOnlyCheckAnnotations(findings: PrReviewFinding[]): Chec
       const message = truncateCheckAnnotationText(
         [
           formatFindingBodyMarkdown(f.body),
+          formatFindingStructuredDetailsMarkdown(f),
           "",
           `${location} (${formatBodyFindingSeverity(f)}) · ${anchor}${f.anchorNote ? ` · ${f.anchorNote}` : ""}`,
-        ].join("\n"),
+        ].filter((s) => s !== "").join("\n"),
         CHECK_ANNOTATION_TEXT_LIMIT,
       )
       const rawDetails = formatBodyFindingSuggestedChange(f)
@@ -1976,6 +2018,8 @@ function truncateCheckAnnotationText(value: string, max: number): string {
 const SEVERITY_BADGE_WIDTH = 34
 const SEVERITY_BADGE_HEIGHT = 24
 const FINDING_BODY_PREVIEW_LIMIT = 500
+const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
+const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
   return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
@@ -2014,12 +2058,57 @@ function formatFindingBodyMarkdown(body: string): string {
   ].join("\n")
 }
 
+function formatFenceSection(label: string, content: string, lang: string): string {
+  const clean = stripAstMarkers(content).trim()
+  if (clean.length === 0) return ""
+  const fence = fenceForContent(clean)
+  return [label, fence + lang, clean, fence].join("\n")
+}
+
+function isDeletionSuggestion(finding: PrReviewFinding): boolean {
+  const repl = finding.suggestedReplacement
+  return finding.kind === "delete" && typeof repl === "string" && repl.length === 0
+}
+
+function isReplacementSuggestion(finding: PrReviewFinding): boolean {
+  const repl = finding.suggestedReplacement
+  return (
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof repl === "string" &&
+    repl.length > 0
+  )
+}
+
+function hasStructuredFix(finding: PrReviewFinding): boolean {
+  return isDeletionSuggestion(finding) || isReplacementSuggestion(finding)
+}
+
+function formatFindingStructuredDetailsMarkdown(
+  finding: PrReviewFinding,
+  opts: { includeFixExample?: boolean } = {},
+): string {
+  const includeFixExample = opts.includeFixExample ?? !hasStructuredFix(finding)
+  const sections: string[] = []
+  if (finding.failureExample) {
+    const section = formatFenceSection("**Example:**", finding.failureExample, "text")
+    if (section) sections.push(section)
+  }
+  if (includeFixExample && finding.fixExample) {
+    const lang = extensionToFenceLang(finding.path)
+    const section = formatFenceSection("**Suggested fix:**", finding.fixExample, lang)
+    if (section) sections.push(section)
+  }
+  if (finding.testGap) {
+    const clean = stripAstMarkers(finding.testGap).trim()
+    if (clean) sections.push(`**${WHY_NOT_CAUGHT_LABEL}:** ${clean}`)
+  }
+  return sections.join("\n\n")
+}
+
 function formatBodyFindingSuggestedChange(finding: PrReviewFinding): string {
   const repl = finding.suggestedReplacement
-  const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
-  const isReplace =
-    (finding.kind === "replace" || finding.kind === undefined) &&
-    typeof repl === "string" && repl.length > 0
+  const isDeletion = isDeletionSuggestion(finding)
+  const isReplace = isReplacementSuggestion(finding)
   if (isDeletion) {
     const range =
       finding.startLine != null && finding.startLine < finding.line
@@ -2316,10 +2405,7 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
   // includes the inner markdown (e.g. `**headline**`) as plain text;
   // that's intentional — the AI assistant gets the unrendered prompt
   // identical to what we'd hand it via copy-paste.
-  const lines = [
-    "<details><summary>Prompt To Fix With AI</summary>",
-    "",
-    "```text",
+  const promptLines = [
     "This is a comment left during a code review.",
     `Path: ${finding.path}`,
     `Line: ${range}`,
@@ -2328,13 +2414,28 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
     `**${stripAstMarkers(finding.headline)}**`,
     "",
     stripAstMarkers(finding.body),
+  ]
+  if (finding.failureExample) {
+    promptLines.push("", "Example:", stripAstMarkers(finding.failureExample))
+  }
+  if (finding.fixExample) {
+    promptLines.push("", "Suggested fix shape:", stripAstMarkers(finding.fixExample))
+  }
+  if (finding.testGap) {
+    promptLines.push("", `${WHY_NOT_CAUGHT_LABEL}:`, stripAstMarkers(finding.testGap))
+  }
+  promptLines.push("", "How can I resolve this? If you propose a fix, please make it concise.")
+  const promptBody = promptLines.join("\n")
+  const fence = fenceForContent(promptBody)
+  return [
+    "<details><summary>Prompt To Fix With AI</summary>",
     "",
-    "How can I resolve this? If you propose a fix, please make it concise.",
-    "```",
+    fence + "text",
+    promptBody,
+    fence,
     "",
     "</details>",
-  ]
-  return lines.join("\n")
+  ].join("\n")
 }
 
 /**
@@ -2371,6 +2472,7 @@ export function formatFindingComment(
   lines.push(`<!-- sigilix:severity:${finding.score} -->`)
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)
   lines.push("")
+  const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
   if (confidence <= 2) {
     // Low-confidence findings collapse the body so the thread skims
     // cleanly. The headline + severity badge + confidence suffix stay
@@ -2379,10 +2481,18 @@ export function formatFindingComment(
     lines.push("<summary>Low-confidence finding — expand to read</summary>")
     lines.push("")
     lines.push(body)
+    if (structuredDetails) {
+      lines.push("")
+      lines.push(structuredDetails)
+    }
     lines.push("")
     lines.push("</details>")
   } else {
     lines.push(body)
+    if (structuredDetails) {
+      lines.push("")
+      lines.push(structuredDetails)
+    }
   }
   // SIG-164 PR 5: Greptile-style "Current / Proposed" illustrative
   // blocks. Always shown when we have enough diff context to render an
@@ -2402,8 +2512,8 @@ export function formatFindingComment(
   //   - replacement contains no 3+ backtick run that would close the
   //     fence (replacements only — deletions have empty content).
   const repl = finding.suggestedReplacement
-  const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
-  const hasReplacement = typeof repl === "string" && repl.length > 0
+  const isDeletion = isDeletionSuggestion(finding)
+  const hasReplacement = isReplacementSuggestion(finding) && typeof repl === "string"
   const fenceSafe = isDeletion || (hasReplacement && repl !== undefined && !/`{3,}/.test(repl))
   const committable =
     fenceSafe &&

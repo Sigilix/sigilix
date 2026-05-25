@@ -2015,8 +2015,8 @@ function truncateCheckAnnotationText(value: string, max: number): string {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 34
-const SEVERITY_BADGE_HEIGHT = 24
+const SEVERITY_BADGE_WIDTH = 30
+const SEVERITY_BADGE_HEIGHT = 22
 const FINDING_BODY_PREVIEW_LIMIT = 500
 const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
 const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"

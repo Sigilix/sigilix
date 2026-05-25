@@ -43,9 +43,13 @@ import {
   graphOverlapStats,
   GRAPH_RPC_TIMEOUT_MS,
   BLAST_RADIUS_RESOLUTION_READY,
+  resolveDynamicEvidencePromptBlock,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
-import { buildSynthesizerInitialMessage } from "../src/prompts/pr-review-specialists"
+import {
+  buildSpecialistInitialMessage,
+  buildSynthesizerInitialMessage,
+} from "../src/prompts/pr-review-specialists"
 import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
@@ -1198,6 +1202,108 @@ describe("computeDegradedCoverage (ARC-277)", () => {
     )
     expect(out.rolesReturned).toEqual([])
     expect(out.rolesMissing).toEqual(["logic", "security"])
+  })
+})
+
+describe("resolveDynamicEvidencePromptBlock", () => {
+  const filesByPath = new Map([
+    [
+      "src/parser.ts",
+      [
+        "export function parseFinalAnswer(response: string): string {",
+        "  const match = response.match(/FINAL\\((.*?)\\)/)",
+        "  return match?.[1] ?? \"\"",
+        "}",
+      ].join("\n"),
+    ],
+  ])
+  const changedLines = new Map([["src/parser.ts", new Set([2])]])
+  const baseArgs = {
+    filesByPath,
+    changedLines,
+    reviewablePaths: ["src/parser.ts"],
+    retrievalChunks: [{
+      path: "src/repl.ts",
+      lineStart: 10,
+      lineEnd: 12,
+      score: 0.87,
+      content: "const answer = parseFinalAnswer(rawResponse)",
+    }],
+    graphNodes: [{
+      path: "src/repl.ts",
+      symbolId: null,
+      name: null,
+      hop: 1,
+      edgeKind: "import",
+    }],
+    blastCallerPaths: [],
+    blastDependentPaths: [],
+    testingEvidence: undefined,
+  }
+
+  it("keeps shadow-mode evidence out of generated prompts while still rendering telemetry text", () => {
+    const resolved = resolveDynamicEvidencePromptBlock({
+      ...baseArgs,
+      env: { OPENCLAW_DYNAMIC_REVIEW_EVIDENCE: "shadow" },
+    })
+
+    expect(resolved.mode).toBe("shadow")
+    expect(resolved.rendered).toContain("[DYNAMIC REVIEW EVIDENCE")
+    expect(resolved.rendered).toContain("function `parseFinalAnswer`")
+    expect(resolved.promptBlock).toBe("")
+
+    const specialistMessage = buildSpecialistInitialMessage({
+      prNumber: 101,
+      title: "Parser update",
+      body: "",
+      diff: "diff --git a/src/parser.ts b/src/parser.ts",
+      retrievalSnapshot: "",
+      namespace: "owner/repo@sha",
+      dynamicEvidenceBlock: resolved.promptBlock,
+    })
+    expect(specialistMessage).not.toContain("[DYNAMIC REVIEW EVIDENCE")
+  })
+
+  it("injects post-mode evidence into specialist and synthesizer generated messages", () => {
+    const resolved = resolveDynamicEvidencePromptBlock({
+      ...baseArgs,
+      env: { OPENCLAW_DYNAMIC_REVIEW_EVIDENCE: "post" },
+    })
+
+    expect(resolved.mode).toBe("post")
+    expect(resolved.promptBlock).toContain("[DYNAMIC REVIEW EVIDENCE")
+    expect(resolved.pack?.cards[0]?.symbolName).toBe("parseFinalAnswer")
+
+    const specialistMessage = buildSpecialistInitialMessage({
+      prNumber: 101,
+      title: "Parser update",
+      body: "",
+      diff: "diff --git a/src/parser.ts b/src/parser.ts",
+      retrievalSnapshot: "",
+      namespace: "owner/repo@sha",
+      dynamicEvidenceBlock: resolved.promptBlock,
+    })
+    expect(specialistMessage).toContain("[DYNAMIC REVIEW EVIDENCE")
+    expect(specialistMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeGreaterThan(
+      specialistMessage.indexOf("[RETRIEVAL SNAPSHOT]"),
+    )
+    expect(specialistMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeLessThan(
+      specialistMessage.indexOf("[CODEBASE NAMESPACE"),
+    )
+
+    const synthMessage = buildSynthesizerInitialMessage({
+      prNumber: 101,
+      diff: "diff --git a/src/parser.ts b/src/parser.ts",
+      specialistVerdictsBlock: "=== LOGIC ===\n{\"findings\":[]}",
+      dynamicEvidenceBlock: resolved.promptBlock,
+    })
+    expect(synthMessage).toContain("[DYNAMIC REVIEW EVIDENCE")
+    expect(synthMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeGreaterThan(
+      synthMessage.indexOf("[DIFF]"),
+    )
+    expect(synthMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeLessThan(
+      synthMessage.indexOf("[SPECIALIST VERDICTS]"),
+    )
   })
 })
 

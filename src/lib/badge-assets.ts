@@ -21,13 +21,13 @@ export type BadgeAssetName = keyof typeof BADGE_STYLES
 
 export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
-const BADGE_ASSET_VERSION = "v20260524-6"
+const BADGE_ASSET_VERSION = "v20260525-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?(p[0-3])\.svg$/
 
 function renderBadgeSvg(style: (typeof BADGE_STYLES)[BadgeAssetName]): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 24" width="34" height="24" role="img" aria-label="${style.label}">
-  <rect x="0.5" y="0.5" width="33" height="23" rx="4.5" fill="${style.accent}" stroke="#FFFFFF" stroke-opacity="0.22"/>
-  <text x="17" y="16" text-anchor="middle" fill="#0B0C10" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12.5" font-weight="700">${style.label}</text>
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 22" width="30" height="22" role="img" aria-label="${style.label}">
+  <rect x="0.5" y="0.5" width="29" height="21" rx="4.25" fill="${style.accent}" stroke="#FFFFFF" stroke-opacity="0.22"/>
+  <text x="15" y="14.8" text-anchor="middle" fill="#0B0C10" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11.8" font-weight="700">${style.label}</text>
 </svg>`
 }
 

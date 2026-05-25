@@ -356,6 +356,11 @@ export interface Env {
   // `wrangler secret put OPENCLAW_BRANCH_AWARE_RETRIEVAL on`.
   OPENCLAW_BRANCH_AWARE_RETRIEVAL?: string
 
+  // Dynamic review evidence cards. "shadow" computes/logs card coverage only;
+  // "post" injects the precomputed changed-symbol/context cards into
+  // specialist + synth prompts. Any other value keeps it off.
+  OPENCLAW_DYNAMIC_REVIEW_EVIDENCE?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

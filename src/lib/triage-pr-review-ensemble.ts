@@ -61,8 +61,17 @@ import {
   buildBranchRetrievalEvent,
   type BranchVector,
 } from "./branch-retrieval"
+import {
+  buildDynamicReviewEvidencePack,
+  dynamicReviewEvidenceEnabled,
+  dynamicReviewEvidenceMode,
+  renderDynamicReviewEvidenceBlock,
+  type DynamicReviewEvidenceEnv,
+  type DynamicReviewEvidenceMode,
+  type DynamicReviewEvidencePack,
+} from "./review-evidence-pack"
 import { embedText } from "./embeddings"
-import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
+import { buildAddedLineTextByLine, buildChangedLines, type ChangedLines } from "./ast-rules/diff-filter"
 import { mapWithConcurrency } from "./bounded-concurrency"
 import {
   loadWithdrawals,
@@ -292,6 +301,7 @@ import type { Env } from "../index"
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
+import type { GraphContextNode } from "../do/repo-graph"
 import { edgeWeight, hopDecay } from "./graph-scoring"
 import { withTimeout } from "./with-timeout"
 
@@ -416,6 +426,53 @@ export const GRAPH_RPC_TIMEOUT_MS = 2_500
 const GRAPH_BLAST_PROMPT_CAP = 4
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
+
+export interface ResolveDynamicEvidencePromptBlockArgs {
+  env: DynamicReviewEvidenceEnv
+  filesByPath: ReadonlyMap<string, string>
+  changedLines: ChangedLines
+  reviewablePaths: readonly string[]
+  retrievalChunks: readonly RetrievedChunk[]
+  graphNodes: readonly GraphContextNode[]
+  blastCallerPaths: readonly string[]
+  blastDependentPaths: readonly string[]
+  testingEvidence: TestingEvidencePack | undefined
+}
+
+export interface ResolvedDynamicEvidencePromptBlock {
+  mode: DynamicReviewEvidenceMode
+  pack: DynamicReviewEvidencePack | null
+  rendered: string
+  promptBlock: string
+}
+
+export function resolveDynamicEvidencePromptBlock(
+  args: ResolveDynamicEvidencePromptBlockArgs,
+): ResolvedDynamicEvidencePromptBlock {
+  const mode = dynamicReviewEvidenceMode(args.env)
+  if (mode === "off") {
+    return { mode, pack: null, rendered: "", promptBlock: "" }
+  }
+
+  const pack = buildDynamicReviewEvidencePack({
+    filesByPath: args.filesByPath,
+    changedLines: args.changedLines,
+    reviewablePaths: args.reviewablePaths,
+    retrievalChunks: args.retrievalChunks,
+    graphNodes: args.graphNodes,
+    blastCallerPaths: args.blastCallerPaths,
+    blastDependentPaths: args.blastDependentPaths,
+    ...(args.testingEvidence !== undefined ? { testingEvidence: args.testingEvidence } : {}),
+  })
+  const rendered = renderDynamicReviewEvidenceBlock(pack)
+
+  return {
+    mode,
+    pack,
+    rendered,
+    promptBlock: mode === "post" ? rendered : "",
+  }
+}
 
 // Static budget invariant — guarantees the synth always has its full
 // 180s budget regardless of pre-flight + diff-parse + stale-head latency.
@@ -1536,8 +1593,12 @@ export async function handlePrReviewEnsemble(
     )
     const wantBranchAware =
       (env.OPENCLAW_BRANCH_AWARE_RETRIEVAL ?? "").trim().toLowerCase() === "on"
+    const wantDynamicReviewEvidence = dynamicReviewEvidenceEnabled(env)
     const astFilesByPath = new Map<string, string>()
-    if ((astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware) && jsTsPaths.length > 0) {
+    if (
+      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence) &&
+      jsTsPaths.length > 0
+    ) {
       const fetchResults = await mapWithConcurrency(
         jsTsPaths,
         5,
@@ -1729,6 +1790,7 @@ export async function handlePrReviewEnsemble(
     // on a separate budget flag and may not run). Both helpers are pure.
     let graphContextString = ""
     let graphNodePaths: string[] = []
+    let graphContextNodesForEvidence: GraphContextNode[] = []
     // M2: keep caller + import-dependent counts separate for telemetry;
     // graph-context injection can use a combined set.
     let graphBlastCallerPaths: string[] = []
@@ -1766,6 +1828,7 @@ export async function handlePrReviewEnsemble(
           .slice(0, 4)
         graphContextString = formatGraphContext(cappedNodes)
         graphNodePaths = cappedNodes.map((n) => n.path)
+        graphContextNodesForEvidence = cappedNodes
 
         // Blast radius (SIG-143): resolve the PR's changed symbol names in the
         // active graph version → caller + import-dependent files. Names come
@@ -1860,6 +1923,7 @@ export async function handlePrReviewEnsemble(
         }))
         graphContextString = ""
         graphNodePaths = []
+        graphContextNodesForEvidence = []
         graphBlastCallerPaths = []
         graphBlastDependentPaths = []
         graphBlastContextString = ""
@@ -2264,6 +2328,45 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
+    // Dynamic review evidence (Greptile-style grounding): small cards around
+    // changed symbols/regions that bundle local code, graph/retrieval
+    // neighbors, and test context. Shadow mode computes coverage telemetry
+    // only; post mode injects the cards into specialist + synth prompts.
+    const dynamicEvidence = resolveDynamicEvidencePromptBlock({
+      env,
+      filesByPath: astFilesByPath,
+      changedLines: buildChangedLines(diff),
+      reviewablePaths: filePaths,
+      retrievalChunks: sharedChunksForOverlap,
+      graphNodes: graphContextNodesForEvidence,
+      blastCallerPaths: graphBlastCallerPaths,
+      blastDependentPaths: graphBlastDependentPaths,
+      testingEvidence: testingEvidencePackWithCoverage,
+    })
+    const dynamicEvidenceBlockForPrompt = dynamicEvidence.promptBlock
+    if (dynamicEvidence.pack !== null) {
+      const dynamicEvidencePack = dynamicEvidence.pack
+      const cardsWithGraph = dynamicEvidencePack.cards.filter((c) => c.graphRelations.length > 0).length
+      const cardsWithRetrieval = dynamicEvidencePack.cards.filter((c) => c.retrievalRefs.length > 0).length
+      const cardsWithTesting = dynamicEvidencePack.cards.filter((c) =>
+        c.testingContext.siblingRefs.length > 0 ||
+        c.testingContext.inspectedTestFiles.length > 0 ||
+        c.testingContext.helperCoverageRefs.length > 0
+      ).length
+      console.log(JSON.stringify({
+        event: "pr-review-dynamic-evidence",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        mode: dynamicEvidence.mode,
+        files_scanned: dynamicEvidencePack.filesScanned,
+        changed_files_with_sources: dynamicEvidencePack.changedFilesWithSources,
+        cards: dynamicEvidencePack.cards.length,
+        cards_with_graph: cardsWithGraph,
+        cards_with_retrieval: cardsWithRetrieval,
+        cards_with_testing: cardsWithTesting,
+        rendered_chars: dynamicEvidence.rendered.length,
+      }))
+    }
+
     // SIG-108: build one message per role, injecting only that role's
     // scoped facts block (no cross-domain leak). The tests specialist
     // additionally gets the SIG-113 testing-evidence block (which
@@ -2309,6 +2412,9 @@ export async function handlePrReviewEnsemble(
         // (post mode only; empty string when off or shadow).
         ...(graphCtxForPrompt.length > 0 && (role === "logic" || role === "tests")
           ? { graphContext: graphCtxForPrompt }
+          : {}),
+        ...(dynamicEvidenceBlockForPrompt.length > 0
+          ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt }
           : {}),
       })
       specialistMessageCache.set(role, message)
@@ -2522,6 +2628,9 @@ export async function handlePrReviewEnsemble(
       ...(degradedCoverage ? { degradedCoverage } : {}),
       // SIG-138 Phase 2: synth sees graph neighbors in post mode.
       ...(graphCtxForPrompt.length > 0 ? { graphContext: graphCtxForPrompt } : {}),
+      ...(dynamicEvidenceBlockForPrompt.length > 0
+        ? { dynamicEvidenceBlock: dynamicEvidenceBlockForPrompt }
+        : {}),
     })
 
     // ARC-181 Task 8: thread structured AST findings into the synth

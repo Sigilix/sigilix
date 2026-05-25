@@ -1449,6 +1449,20 @@ describe("buildSpecialistInitialMessage — [GRAPH CONTEXT] block (SIG-138)", ()
     // [GRAPH CONTEXT] should appear after [RETRIEVAL SNAPSHOT]
     expect(graphIdx).toBeGreaterThan(retrievalIdx)
   })
+
+  it("renders dynamic evidence after graph context when present", () => {
+    const msg = buildSpecialistInitialMessage({
+      ...baseCtx,
+      graphContext: "src/b.ts (hop1, import)",
+      dynamicEvidenceBlock: "[DYNAMIC REVIEW EVIDENCE — changed-symbol context]\nCard 1: src/x.ts:1-3",
+    })
+    const graphIdx = msg.indexOf("[GRAPH CONTEXT")
+    const evidenceIdx = msg.indexOf("[DYNAMIC REVIEW EVIDENCE")
+    const namespaceIdx = msg.indexOf("[CODEBASE NAMESPACE")
+    expect(graphIdx).toBeGreaterThan(-1)
+    expect(evidenceIdx).toBeGreaterThan(graphIdx)
+    expect(namespaceIdx).toBeGreaterThan(evidenceIdx)
+  })
 })
 
 describe("buildSynthesizerInitialMessage — [GRAPH CONTEXT] block (SIG-138)", () => {
@@ -1477,5 +1491,18 @@ describe("buildSynthesizerInitialMessage — [GRAPH CONTEXT] block (SIG-138)", (
   it("omits the [GRAPH CONTEXT] block when graphContext is whitespace-only", () => {
     const msg = buildSynthesizerInitialMessage({ ...baseCtx, graphContext: "   " })
     expect(msg).not.toContain("[GRAPH CONTEXT")
+  })
+
+  it("renders dynamic evidence before specialist verdicts when present", () => {
+    const msg = buildSynthesizerInitialMessage({
+      ...baseCtx,
+      graphContext: "src/b.ts (hop1, import)",
+      dynamicEvidenceBlock: "[DYNAMIC REVIEW EVIDENCE — changed-symbol context]\nCard 1: src/x.ts:1-3",
+    })
+    const graphIdx = msg.indexOf("[GRAPH CONTEXT")
+    const evidenceIdx = msg.indexOf("[DYNAMIC REVIEW EVIDENCE")
+    const verdictIdx = msg.indexOf("[SPECIALIST VERDICTS]")
+    expect(evidenceIdx).toBeGreaterThan(graphIdx)
+    expect(verdictIdx).toBeGreaterThan(evidenceIdx)
   })
 })

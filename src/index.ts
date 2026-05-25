@@ -57,6 +57,7 @@ import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
 import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
+import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
@@ -844,6 +845,11 @@ export default {
     // SIG-119: authenticated read of rolling validator shadow telemetry.
     if (request.method === "GET" && url.pathname === "/metrics/validation") {
       return handleValidationMetricsRoute(request, env)
+    }
+
+    // SIG-173: authenticated read of rolling per-reason dismissal rollup.
+    if (request.method === "GET" && url.pathname === "/metrics/dismissals") {
+      return handleDismissalMetricsRoute(request, env)
     }
 
     // SIG-152: authenticated read of rolling SIG-138 graph shadow telemetry.

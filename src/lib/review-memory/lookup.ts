@@ -23,6 +23,7 @@ import type {
 import { ALL_REVIEW_MEMORY_CATEGORIES } from "./types"
 import { computePathSha256 } from "./marker"
 import { readMemory } from "./storage"
+import { weightedSignalCount } from "./dismissal-weights"
 import type { Env } from "../../index"
 
 const PATH_RECENCY_DAYS = 30
@@ -55,6 +56,13 @@ function emitTelemetry(event: string, fields: Record<string, unknown>): void {
  *                check; "path-category" additionally requires a
  *                recent (≤30d) signal so dormant paths don't keep
  *                injecting after the team has moved on.
+ *
+ * SIG-173: the threshold check uses a WEIGHTED count via
+ * `weightedSignalCount` so `too-minor` signals push past the bar 1.5×
+ * faster than `not-a-bug` / unlabeled / textual-only signals. See
+ * `dismissal-weights.ts` for the table + rationale. Today's textual
+ * capture pipeline doesn't tag a reason, so its signals all weight 1.0
+ * — identical behavior to pre-SIG-173 for the existing call sites.
  */
 export function isMemoryActive(
   record: ReviewMemoryRecord,
@@ -67,7 +75,7 @@ export function isMemoryActive(
     const ts = Date.parse(s.ts)
     return Number.isFinite(ts) && ts >= cutoffMs && s.kind === "dismissed-textual"
   })
-  if (recent.length < config.minSignalThreshold) return false
+  if (weightedSignalCount(recent) < config.minSignalThreshold) return false
   if (scope === "path-category") {
     const pathRecencyCutoff = nowMs - PATH_RECENCY_DAYS * 24 * 60 * 60 * 1000
     const hasRecent = recent.some((s) => Date.parse(s.ts) >= pathRecencyCutoff)

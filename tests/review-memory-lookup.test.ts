@@ -404,6 +404,34 @@ describe("isMemoryActive (pure)", () => {
     const tightCfg = defaultConfig({ maxSignalAgeDays: 30 })
     expect(isMemoryActive(r, "category", tightCfg, now)).toBe(false)
   })
+
+  // SIG-173 — differential softening weights at the threshold layer.
+
+  it("activates earlier when signals carry a too-minor reason (1.5x weight)", () => {
+    // Threshold is 3 (default). Two too-minor signals contribute 2 * 1.5 = 3.0,
+    // which meets the threshold WITHOUT needing a third signal. Same two
+    // signals unlabeled would contribute 2.0 and remain inactive.
+    const twoTooMinor = recAll([
+      makeSignal({ ts: isoDaysAgo(10), dismissReason: "too-minor" }),
+      makeSignal({ ts: isoDaysAgo(20), dismissReason: "too-minor" }),
+    ])
+    expect(isMemoryActive(twoTooMinor, "category", cfg, now)).toBe(true)
+
+    const twoUnlabeled = recAll([
+      makeSignal({ ts: isoDaysAgo(10) }),
+      makeSignal({ ts: isoDaysAgo(20) }),
+    ])
+    expect(isMemoryActive(twoUnlabeled, "category", cfg, now)).toBe(false)
+  })
+
+  it("not-a-bug weights at 1.0 — same as unlabeled / textual signals", () => {
+    const twoNotABug = recAll([
+      makeSignal({ ts: isoDaysAgo(10), dismissReason: "not-a-bug" }),
+      makeSignal({ ts: isoDaysAgo(20), dismissReason: "not-a-bug" }),
+    ])
+    // Two * 1.0 = 2.0 < threshold-3 → inactive.
+    expect(isMemoryActive(twoNotABug, "category", cfg, now)).toBe(false)
+  })
 })
 
 // ─── selectTopMemories (pure) ─────────────────────────────────

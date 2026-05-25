@@ -610,10 +610,20 @@ async function handleShardJob(
   env: Env,
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
+  const resolvedDefaultBranch = shard.defaultBranch ?? job.branch ?? null
+  if (resolvedDefaultBranch === null) {
+    console.warn(JSON.stringify({
+      event: "index-shard-default-branch-missing",
+      owner, repo, run_id: shard.runId,
+      shard_lo: shard.lo,
+      shard_hi: shard.hi,
+      note: "legacy shard missing defaultBranch; using sentinel",
+    }))
+  }
   const target = resolveIndexTarget({
     owner,
     repo,
-    defaultBranch: shard.defaultBranch ?? job.branch ?? "__default_unknown__",
+    defaultBranch: resolvedDefaultBranch ?? "__default_unknown__",
     ...(job.branch ? { branch: job.branch } : {}),
   })
   const stateRepo = target.stateRepo
@@ -1090,7 +1100,7 @@ async function persistManifest(args: PersistManifestArgs): Promise<void> {
     v: 1,
     // SIG-35: default-branch manifests keep the historical bare repo
     // value. Branch manifests store a branch-state repo such as
-    // `sigilix/__branch__/dev`, which keeps branch KV/vector state
+    // `sigilix/__branch__/h646576`, which keeps branch KV/vector state
     // isolated and prevents `listIndexedRepos` from advertising it as
     // another default repo.
     repo: args.stateRepo.toLowerCase(),

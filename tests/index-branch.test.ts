@@ -11,8 +11,18 @@ import {
 
 describe("index branch helpers", () => {
   it("encodes branch names into one stable state segment", () => {
-    expect(encodeBranchName("feature/SIG-35 branch aware")).toBe("feature~2fsig-35~20branch~20aware")
-    expect(branchStateRepo("sigilix", "feature/SIG-35")).toBe("sigilix/__branch__/feature~2fsig-35")
+    expect(encodeBranchName("feature/SIG-35 branch aware")).toBe(
+      "h666561747572652f5349472d3335206272616e6368206177617265",
+    )
+    expect(branchStateRepo("sigilix", "feature/SIG-35")).toBe("sigilix/__branch__/h666561747572652f5349472d3335")
+  })
+
+  it("keeps branch encodings collision-free under lowercased namespaces", () => {
+    expect(encodeBranchName("Feature/X")).toBe("h466561747572652f58")
+    expect(encodeBranchName("feature/x")).toBe("h666561747572652f78")
+    expect(encodeBranchName("a%")).toBe("h6125")
+    expect(encodeBranchName("a~25")).toBe("h617e3235")
+    expect(encodeBranchName("emoji/ñ")).toBe("h656d6f6a692fc3b1")
   })
 
   it("resolves default branches to the existing repo namespace", () => {
@@ -37,12 +47,14 @@ describe("index branch helpers", () => {
       branch: "dev",
     })).toMatchObject({
       branch: "dev",
-      stateRepo: "sigilix/__branch__/dev",
-      namespace: "arc-and-anchor/sigilix/__branch__/dev",
+      stateRepo: "sigilix/__branch__/h646576",
+      namespace: "arc-and-anchor/sigilix/__branch__/h646576",
       isDefault: false,
     })
-    expect(isBranchStateRepo("sigilix/__branch__/dev")).toBe(true)
+    expect(isBranchStateRepo("sigilix/__branch__/h646576")).toBe(true)
     expect(isBranchStateRepo("sigilix")).toBe(false)
+    expect(isBranchStateRepo("my__branch__repo")).toBe(false)
+    expect(isBranchStateRepo("sigilix/nested/__branch__/dev")).toBe(false)
   })
 
   it("tracks common long-lived branches plus configured names", () => {

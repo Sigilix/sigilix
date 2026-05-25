@@ -418,20 +418,30 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
     action === "reopened" ||
     action === "ready_for_review"
   if (draft !== true && isBranchIndexAction && headRef && headRef !== baseRef) {
-    await env.OPENCLAW_JOBS.send({
-      type: "index-repo",
-      owner,
-      repo,
-      installationId,
-      reason: "pull-request",
-      branch: headRef,
-    })
-    console.log(JSON.stringify({
-      event: "index-pr-branch-enqueued",
-      owner, repo, installation_id: installationId,
-      branch: headRef,
-      action,
-    }))
+    try {
+      await env.OPENCLAW_JOBS.send({
+        type: "index-repo",
+        owner,
+        repo,
+        installationId,
+        reason: "pull-request",
+        branch: headRef,
+      })
+      console.log(JSON.stringify({
+        event: "index-pr-branch-enqueued",
+        owner, repo, installation_id: installationId,
+        branch: headRef,
+        action,
+      }))
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "index-pr-branch-enqueue-failed",
+        owner, repo, installation_id: installationId,
+        branch: headRef,
+        action,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
   }
 
   if (
@@ -440,19 +450,29 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
     headRef !== baseRef &&
     !isTrackedLongLivedBranch(headRef, env.OPENCLAW_INDEX_BRANCHES)
   ) {
-    await env.OPENCLAW_JOBS.send({
-      type: "delete-repo-index",
-      owner,
-      repo,
-      branch: headRef,
-      reason: "pr-branch-closed",
-    })
-    console.log(JSON.stringify({
-      event: "index-pr-branch-delete-enqueued",
-      owner, repo, installation_id: installationId,
-      branch: headRef,
-      merged: merged === true,
-    }))
+    try {
+      await env.OPENCLAW_JOBS.send({
+        type: "delete-repo-index",
+        owner,
+        repo,
+        branch: headRef,
+        reason: "pr-branch-closed",
+      })
+      console.log(JSON.stringify({
+        event: "index-pr-branch-delete-enqueued",
+        owner, repo, installation_id: installationId,
+        branch: headRef,
+        merged: merged === true,
+      }))
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "index-pr-branch-delete-enqueue-failed",
+        owner, repo, installation_id: installationId,
+        branch: headRef,
+        merged: merged === true,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
   } else if (
     action === "closed" &&
     headRef &&
@@ -468,19 +488,28 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
   }
 
   if (action === "closed" && merged === true && baseRef) {
-    await env.OPENCLAW_JOBS.send({
-      type: "index-repo",
-      owner,
-      repo,
-      installationId,
-      reason: "merged-pr",
-      branch: baseRef,
-    })
-    console.log(JSON.stringify({
-      event: "index-pr-merged-base-enqueued",
-      owner, repo, installation_id: installationId,
-      branch: baseRef,
-    }))
+    try {
+      await env.OPENCLAW_JOBS.send({
+        type: "index-repo",
+        owner,
+        repo,
+        installationId,
+        reason: "merged-pr",
+        branch: baseRef,
+      })
+      console.log(JSON.stringify({
+        event: "index-pr-merged-base-enqueued",
+        owner, repo, installation_id: installationId,
+        branch: baseRef,
+      }))
+    } catch (err) {
+      console.error(JSON.stringify({
+        event: "index-pr-merged-base-enqueue-failed",
+        owner, repo, installation_id: installationId,
+        branch: baseRef,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
   }
 }
 

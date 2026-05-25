@@ -287,6 +287,21 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     expect(outcome).toEqual({ skipped: "untracked-branch" })
     expect(sent).toHaveLength(0)
   })
+
+  it("skips active-PR branch indexing when the PR lookup fails", async () => {
+    const { env, sent, kv } = makeEnv()
+    seedManifest(kv)
+    mockGetRepository.mockResolvedValue({ default_branch: "main" })
+    mockListOpenPullRequests.mockRejectedValue(new Error("GitHub 502"))
+    const outcome = await maybeEnqueuePushIndexJob({
+      env, ...baseArgs,
+      ref: "refs/heads/feature-branch",
+      after: "b".repeat(40),
+    })
+    expect(outcome).toEqual({ skipped: "untracked-branch" })
+    expect(sent).toHaveLength(0)
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("index-push-open-pr-lookup-failed"))
+  })
 })
 
 describe("maybeEnqueuePushIndexJob — happy path", () => {
@@ -340,6 +355,23 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
       reason: "push",
       branch: "dev",
     }])
+  })
+
+  it("enqueues exactly once when a tracked branch also has an open PR", async () => {
+    const { env, sent, kv } = makeEnv()
+    seedManifest(kv)
+    mockListOpenPullRequests.mockResolvedValue([
+      { head: { ref: "dev", repo: { full_name: "Arc-and-Anchor/sigilix" } } },
+    ])
+    const outcome = await maybeEnqueuePushIndexJob({
+      env, ...baseArgs,
+      ref: "refs/heads/dev",
+      after: "b".repeat(40),
+    })
+    expect(outcome).toEqual({ enqueued: true, reason: "push" })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({ type: "index-repo", branch: "dev" })
+    expect(mockListOpenPullRequests).not.toHaveBeenCalled()
   })
 
   it("honors configured long-lived branches", async () => {
@@ -461,6 +493,36 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
       reason: "merged-pr",
       branch: "main",
     }])
+  })
+
+  it("continues to enqueue merged-base refresh when branch-delete enqueue fails", async () => {
+    const sent: JobMessage[] = []
+    let call = 0
+    const { env } = makeEnv({
+      sendImpl: async (msg) => {
+        call += 1
+        if (call === 1) throw new Error("queue delete write failed")
+        sent.push(msg)
+      },
+    })
+    await maybeEnqueuePullRequestBranchIndexJobs({
+      env,
+      ...baseArgs,
+      action: "closed",
+      draft: false,
+      headRef: "feature-branch",
+      baseRef: "main",
+      merged: true,
+    })
+    expect(sent).toEqual([{
+      type: "index-repo",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      installationId: 99,
+      reason: "merged-pr",
+      branch: "main",
+    }])
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("index-pr-branch-delete-enqueue-failed"))
   })
 })
 

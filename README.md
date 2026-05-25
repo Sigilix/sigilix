@@ -166,7 +166,7 @@ curl -X POST \
   "https://<worker-host>/admin/index-reconcile?dryRun=true"
 ```
 
-The canonical default-branch namespace is `<owner>/<repo>` lowercased. Branch-scoped indexes use `<owner>/<repo>/__branch__/<encodedBranch>` internally. Default repo listings stay branch-free unless a caller explicitly opts into branch namespaces, which the Linear mention agent does when it builds retrieval scope. Linear team keys map to namespaces via `OPENCLAW_TEAM_REPO_MAP` (see step 5).
+The canonical default-branch namespace is `<owner>/<repo>` lowercased. Branch-scoped indexes use `<owner>/<repo>/__branch__/<hexEncodedBranch>` internally. Default repo listings stay branch-free unless a caller explicitly opts into branch namespaces, which the Linear mention agent does when it builds retrieval scope. Linear team keys map to namespaces via `OPENCLAW_TEAM_REPO_MAP` (see step 5).
 
 ### 5. Set the secrets
 

@@ -102,7 +102,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         repo: {
           type: "string",
           description:
-            "Repository namespace (lowercased), `<owner>/<repo>` for default branch or `<owner>/<repo>/__branch__/<encodedBranch>` for branch indexes. A bare repo name is also accepted and resolves when it uniquely matches an allowed namespace.",
+            "Repository namespace (lowercased), `<owner>/<repo>` for default branch or `<owner>/<repo>/__branch__/<hexEncodedBranch>` for branch indexes. A bare repo name is also accepted and resolves when it uniquely matches an allowed namespace.",
         },
       },
       required: ["query", "repo"],
@@ -114,7 +114,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         return { ok: false, error: "retrieve_codebase requires non-empty `query` and `repo` strings" }
       }
       // SIG-132 / SIG-35: the Vectorize namespace is `<owner>/<repo>`
-      // lowercased for default branch and `<owner>/<repo>/__branch__/<encodedBranch>`
+      // lowercased for default branch and `<owner>/<repo>/__branch__/<hexEncodedBranch>`
       // for branch-scoped indexes.
       // The allowed namespace universe comes from:
       //   - `ctx.allowedRepos` (Linear surface) — `listIndexedRepos`

@@ -60,7 +60,7 @@ describe("parseFinding (SIG-161)", () => {
     expect(row!.body).not.toContain("sigilix:fid:")
   })
 
-  it("parses the current headline-first finding shape", () => {
+  it("parses the previous headline-first finding shape with visible metadata", () => {
     const body = [
       "<!-- sigilix:pr-review-finding -->",
       '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **New `scheduled` cron handler lacks test coverage**',
@@ -80,6 +80,28 @@ describe("parseFinding (SIG-161)", () => {
     expect(row!.confidence).toBe(3)
     expect(row!.body).toContain("reconciliation cron tick")
     expect(row!.body).not.toContain("_category: testing_")
+  })
+
+  it("parses the current quiet headline-first finding shape", () => {
+    const body = [
+      "<!-- sigilix:pr-review-finding -->",
+      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **New `scheduled` cron handler lacks test coverage**',
+      "<!-- sigilix:confidence:3 -->",
+      "",
+      "The `scheduled` handler at `src/index.ts:960` implements the index reconciliation cron tick.",
+      "",
+      "<!-- sigilix:fid:6133bdb79f7b71af:cat:testing:sev:warning:path:a2a171449d86 -->",
+    ].join("\n")
+    const row = parseFinding({
+      ...baseArgs,
+      comment: { ...baseComment, body },
+    })
+    expect(row).not.toBeNull()
+    expect(row!.category).toBe("testing")
+    expect(row!.headline).toContain("scheduled")
+    expect(row!.confidence).toBe(3)
+    expect(row!.body).toContain("reconciliation cron tick")
+    expect(row!.body).not.toContain("sigilix:confidence")
   })
 
   it("round-trips the current renderer shape through the collector parser", () => {

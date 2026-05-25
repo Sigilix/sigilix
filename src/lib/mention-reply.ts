@@ -509,7 +509,7 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
   const universeText = universe.length > 0 ? universe.map((r) => `'${r}'`).join(", ") : "(none configured)"
   let repoLine: string
   if (ctx.repo && universe.length > 1) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo or branch (branch indexes look like 'owner/repo/__branch__/encoded-branch'). Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo or branch (branch indexes look like 'owner/repo/__branch__/hex-encoded-branch'). Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.repo) {
     repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo && universe.length > 0) {

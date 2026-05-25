@@ -1,16 +1,17 @@
 import { indexNamespace } from "./repo-index-manifest"
 
-const BRANCH_STATE_SEGMENT = "__branch__"
+export const BRANCH_STATE_SEGMENT = "__branch__"
 
 /**
- * Encode a Git branch into a stable KV / namespace path segment. GitHub
- * branch names can contain slashes; KV keys and Vectorize namespaces can
- * too, but using one escaped segment keeps branch-state keys easy to
- * recognize and keeps `listIndexedRepos` from mistaking them for default
- * repo manifests.
+ * Encode a Git branch into a stable KV / namespace path segment. The
+ * wider repo-index namespace is lowercased for tenant isolation, so the
+ * branch segment must use a lowercase collision-free encoding rather
+ * than a case-sensitive URL encoding.
  */
 export function encodeBranchName(branch: string): string {
-  return encodeURIComponent(branch.trim()).replace(/%/g, "~").toLowerCase()
+  const bytes = new TextEncoder().encode(branch.trim())
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
+  return `h${hex}`
 }
 
 export function branchStateRepo(repo: string, branch: string): string {
@@ -18,7 +19,10 @@ export function branchStateRepo(repo: string, branch: string): string {
 }
 
 export function isBranchStateRepo(repo: string): boolean {
-  return repo.toLowerCase().includes(`/${BRANCH_STATE_SEGMENT}/`)
+  const parts = repo.split("/")
+  const segment = parts[1]
+  const encodedBranch = parts[2]
+  return parts.length === 3 && segment === BRANCH_STATE_SEGMENT && typeof encodedBranch === "string" && encodedBranch.length > 0
 }
 
 export interface IndexTarget {

@@ -237,8 +237,8 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
   it("ignores branch-scoped manifest keys so Linear sees repos, not branches (SIG-35)", async () => {
     const env = makeKvStub([
       "repo-index-manifest:arc-and-anchor/sigilix",
-      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/dev",
-      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/feature~2fsig-35",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h666561747572652f5349472d3335",
     ])
     expect(await listIndexedRepos(env, { owner: "Arc-and-Anchor" })).toEqual([
       "arc-and-anchor/sigilix",
@@ -248,15 +248,15 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
   it("can include branch-scoped namespaces for agent tools when explicitly requested (SIG-35)", async () => {
     const env = makeKvStub([
       "repo-index-manifest:arc-and-anchor/sigilix",
-      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/dev",
-      "repo-index-manifest:acme/sigilix/__branch__/dev",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576",
+      "repo-index-manifest:acme/sigilix/__branch__/h646576",
     ])
     expect(await listIndexedRepos(env, {
       owner: "Arc-and-Anchor",
       includeBranches: true,
     })).toEqual([
       "arc-and-anchor/sigilix",
-      "arc-and-anchor/sigilix/__branch__/dev",
+      "arc-and-anchor/sigilix/__branch__/h646576",
     ])
   })
 

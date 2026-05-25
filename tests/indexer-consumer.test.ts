@@ -224,21 +224,21 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
     )
     expect(upsertedRecords.length).toBeGreaterThan(0)
     for (const rec of upsertedRecords) {
-      expect(rec.namespace).toBe("arc-and-anchor/sigilix/__branch__/dev")
+      expect(rec.namespace).toBe("arc-and-anchor/sigilix/__branch__/h646576")
     }
     expect(mockWriteFileGraph).not.toHaveBeenCalled()
     expect(mockCommitGraph).not.toHaveBeenCalled()
 
     expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
-    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix/__branch__/dev"))
+    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix/__branch__/h646576"))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
-      expect(parsed.repo).toBe("sigilix/__branch__/dev")
+      expect(parsed.repo).toBe("sigilix/__branch__/h646576")
       expect(parsed.actualRepo).toBe("sigilix")
       expect(parsed.branch).toBe("dev")
       expect(parsed.defaultBranch).toBe("main")
-      expect(parsed.namespace).toBe("arc-and-anchor/sigilix/__branch__/dev")
+      expect(parsed.namespace).toBe("arc-and-anchor/sigilix/__branch__/h646576")
       expect(parsed.fileCount).toBe(1)
     }
   })
@@ -600,7 +600,9 @@ describe("handleIndexRepoJob — final shard writes manifest with cumulative tot
     }
 
     const { env, kv } = makeEnv()
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     await handleIndexRepoJob({ job, env })
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("index-shard-default-branch-missing"))
 
     // Final shard processed the trailing 3 files.
     expect(mockGetFileContent).toHaveBeenCalledTimes(3)

@@ -20,6 +20,8 @@
 // Linear handler treats this as "no PR fetch happens for this comment"
 // and continues with retrieval-only context.
 
+import { BRANCH_STATE_SEGMENT } from "./index-branch"
+
 export type InstallationLookup =
   | { ok: true; installationId: number }
   | { ok: false; reason: "no_installation" }
@@ -175,7 +177,7 @@ export async function listIndexedRepos(env: {
           parts.length !== 4 ||
           !parts[0] ||
           !parts[1] ||
-          parts[2] !== "__branch__" ||
+          parts[2] !== BRANCH_STATE_SEGMENT ||
           !parts[3]
         ) {
           continue

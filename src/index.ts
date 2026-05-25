@@ -1927,7 +1927,7 @@ async function handleGitHubWebhook(
     }
     const headRepoFullName = pr.head?.repo?.full_name
     const headIsSameRepo =
-      typeof headRepoFullName !== "string" ||
+      typeof headRepoFullName === "string" &&
       headRepoFullName.toLowerCase() === `${owner}/${repo}`.toLowerCase()
     if (headIsSameRepo) {
       ctx.waitUntil(

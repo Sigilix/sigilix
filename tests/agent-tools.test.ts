@@ -223,17 +223,17 @@ describe("retrieve_codebase", () => {
       surface: "linear-mention",
       allowedRepos: [
         "arc-and-anchor/sigilix",
-        "arc-and-anchor/sigilix/__branch__/dev",
+        "arc-and-anchor/sigilix/__branch__/h646576",
       ],
     })
     const result = (await tool!.execute(
-      { query: "x", repo: "Arc-and-Anchor/Sigilix/__branch__/dev" },
+      { query: "x", repo: "Arc-and-Anchor/Sigilix/__branch__/h646576" },
       new AbortController().signal,
       new Map(),
     )) as { ok: boolean }
     expect(result.ok).toBe(true)
     expect(mockRetrieveChunks).toHaveBeenCalledWith(
-      expect.objectContaining({ teamKey: "arc-and-anchor/sigilix/__branch__/dev" }),
+      expect.objectContaining({ teamKey: "arc-and-anchor/sigilix/__branch__/h646576" }),
     )
   })
 

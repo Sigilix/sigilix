@@ -172,12 +172,21 @@ const FINDING_MARKER = /<!--\s*sigilix:pr-review-finding\s*-->/
 const HEADING_RE =
   /^(?:[^\s]+\s+P\d\s+·\s+)?\*\*([a-z-]+):\*\*\s+(.+?)\s+·\s+_confidence:\s+(\d)\/5_\s*$/m
 
-// SIG-15: current renderer shape. Headline is first-class and category
+// SIG-15: previous renderer shape. Headline is first-class and category
 // moved into the metadata line:
 //   <img ... alt="P1" ...> **Some headline**
 //   _category: testing_ · _severity: P1 high (4/5)_ · _confidence: 3/5_
 const HEADING_V2_RE =
   /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*\n_category:\s*([a-z-]+)_\s+·\s+_severity:\s+P\d\s+[a-z]+\s+\(\d\/5\)_\s+·\s+_confidence:\s+(\d)\/5_\s*$/m
+
+// SIG-35 follow-up: current renderer shape keeps visible comments
+// quieter. Category/severity come from the stable fid marker and
+// confidence is hidden in its own machine-readable marker.
+const HEADING_V3_RE =
+  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*$/m
+
+const CONFIDENCE_MARKER_RE =
+  /<!--\s*sigilix:confidence:([1-5])\s*-->/
 
 // Parse the embedded marker, e.g.
 //   <!-- sigilix:fid:6133bdb79f7b71af:cat:tests:sev:warning:path:a2a171449d86 -->
@@ -207,8 +216,10 @@ function parseFinding(args: {
   if (!FINDING_MARKER.test(comment.body)) return null
 
   const headingV2Match = HEADING_V2_RE.exec(comment.body)
+  const headingV3Match = HEADING_V3_RE.exec(comment.body)
   const headingMatch = HEADING_RE.exec(comment.body)
   const markerMatch = MARKER_RE.exec(comment.body)
+  const confidenceMarkerMatch = CONFIDENCE_MARKER_RE.exec(comment.body)
 
   const findingId = createHash("sha256")
     .update(`${owner}|${repo}|${prNumber}|${comment.id}`)
@@ -244,6 +255,8 @@ function parseFinding(args: {
     if (Number.isFinite(confRaw) && confRaw >= 1 && confRaw <= 5) {
       row.confidence = confRaw
     }
+  } else if (headingV3Match) {
+    row.headline = headingV3Match[1]
   }
 
   if (markerMatch) {
@@ -253,13 +266,18 @@ function parseFinding(args: {
     const sevScore = SEVERITY_TO_SCORE[markerMatch[3]!]
     if (sevScore !== undefined) row.score = sevScore
   }
+  if (row.confidence === undefined && confidenceMarkerMatch) {
+    row.confidence = Number(confidenceMarkerMatch[1])
+  }
 
   // Body excerpt: the comment body minus the heading line + the
   // trailing marker line. The labeler reads this verbatim.
   row.body = comment.body
     .replace(FINDING_MARKER, "")
     .replace(HEADING_V2_RE, "")
+    .replace(HEADING_V3_RE, "")
     .replace(HEADING_RE, "")
+    .replace(CONFIDENCE_MARKER_RE, "")
     .replace(MARKER_RE, "")
     .trim()
     .slice(0, 4000)

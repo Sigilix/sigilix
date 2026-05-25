@@ -8,7 +8,7 @@
 //
 // Both call `deleteRepoIndex(owner, repo, reason)` per affected
 // (owner, repo) tuple. SIG-35 branch-scoped index records are deleted
-// as additional repo-state tuples such as `repo/__branch__/dev`. That worker:
+// as additional repo-state tuples such as `repo/__branch__/h646576`. That worker:
 //   1. Reads `repo-index-vectors:<owner>/<repo>` (the KV id-list from
 //      ARC-235's indexer extension in PR 3 commit 2), probing the legacy
 //      bare `repo-index-vectors:<repo>` key too (SIG-132). Codex v1:
@@ -613,7 +613,18 @@ async function listBranchStateReposForRepo(args: {
       break
     }
     for (const key of page.keys) {
-      const raw = await env.OPENCLAW_STATE.get(key.name)
+      let raw: string | null
+      try {
+        raw = await env.OPENCLAW_STATE.get(key.name)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        errors.push(`kv.get(branch-manifest:${key.name}): ${message}`)
+        console.error(JSON.stringify({
+          event: "index-delete-branch-manifest-get-failed",
+          owner, repo, key: key.name, err: message,
+        }))
+        continue
+      }
       if (raw === null) continue
       const manifest = parseRepoIndexManifest(raw)
       if (

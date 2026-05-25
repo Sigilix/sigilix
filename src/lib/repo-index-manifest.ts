@@ -70,7 +70,7 @@ export interface RepoIndexManifestV1 {
   repo: string
   /**
    * SIG-35: actual GitHub repo name for branch-scoped manifests whose `repo`
-   * field stores a state identity such as `sigilix/__branch__/dev`.
+   * field stores a state identity such as `sigilix/__branch__/h646576`.
    * Default-branch manifests may omit this because `repo` already is the
    * GitHub repo.
    */

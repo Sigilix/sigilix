@@ -13,6 +13,11 @@ worker-configuration.d.ts
 # Working artifacts — handoff briefs, research scratch, scripts, worktrees.
 # Specs + plans land under docs/superpowers/ and ARE committed.
 .claude/handoff/
-.claude/research/
+.claude/research/*
 .claude/scripts/
 .claude/worktrees/
+
+# SIG-161 calibration corpus + labeling artifacts ARE committed
+# (findings-source.jsonl is the immutable input per LABELING_GUIDE.md
+# §7e; labels.csv / labels-claude.csv are the labeled outputs).
+!.claude/research/sig-161-labeling/

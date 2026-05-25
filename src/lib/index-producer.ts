@@ -28,13 +28,16 @@ import { isRepoSensitive } from "./repo-policy"
 import { getInstallationToken } from "./github-app"
 import { GitHubClient } from "./github"
 import { readRepoIndexManifest } from "./repo-index-manifest"
+import { isTrackedLongLivedBranch } from "./index-branch"
 
 export type IndexJobReason =
   | "install"
   | "install-repos-added"
   | "manual"
-  /** ARC-237: push to the default branch fired the re-index. */
+  /** ARC-237 / SIG-35: push to a refresh-worthy branch fired the re-index. */
   | "push"
+  | "pull-request"
+  | "merged-pr"
 
 export interface InstallRepoEntry {
   /** May be `null` / missing when GitHub's webhook payload omits the field. */
@@ -146,12 +149,13 @@ export async function enqueueIndexJobsForRepos(args: {
 
 export type PushEnqueueOutcome =
   | { enqueued: true; reason: "push" }
+  | { enqueued: true; reason: "branch-delete" }
   | { skipped: "non-branch" }
-  | { skipped: "branch-delete" }
+  | { skipped: "default-branch-delete" }
   | { skipped: "sensitive" }
   | { skipped: "no-prior-index" }
   | { skipped: "owner-mismatch" }
-  | { skipped: "non-default-branch" }
+  | { skipped: "untracked-branch" }
   | { skipped: "missing-default-branch" }
   | { skipped: "missing-creds" }
   | { failed: "enqueue-throw"; reason: string }
@@ -171,22 +175,23 @@ const ZERO_SHA = "0000000000000000000000000000000000000000"
 const BRANCH_REF_PREFIX = "refs/heads/"
 
 /**
- * ARC-237: producer for the push-driven re-index. Called from the
- * `event === "push"` branch in `handleGitHubWebhook`. Enqueues an
- * `index-repo` job with `reason: "push"` only when:
+ * ARC-237 / SIG-35: producer for the push-driven re-index. Called from
+ * the `event === "push"` branch in `handleGitHubWebhook`. Enqueues a
+ * refresh job only when:
  *   - the push is on a branch ref (`refs/heads/…`)
- *   - the push is NOT a branch delete (after !== "000…")
  *   - the repo is NOT in the sensitive denylist
  *   - the repo already has an `repo-index-manifest:<repo>` record
  *     (bootstrap is exclusively install-driven; we don't sneak-bootstrap
  *     via a push event from an unauthorized repo)
  *   - `manifest.owner === owner` (Codex v1 B2: same-name repos under
  *     different owners must not accidentally re-index each other)
- *   - the push branch matches the current default branch
+ *   - the push branch is the default branch, a configured long-lived branch,
+ *     or an active same-repo PR branch. Branch deletes enqueue isolated
+ *     branch-state cleanup instead.
  *
  * Push storm coalescing falls out naturally: 10 pushes in 60s enqueue
  * 10 jobs. The first job to process wins the freshness check (writes
- * the manifest pointing at the current default-branch SHA); the
+ * the manifest pointing at the current branch SHA); the
  * remaining 9 hit `index-job-skip-fresh` and ack. No special primitive
  * required — ARC-235's existing freshness gate is the coalescer.
  */
@@ -203,14 +208,6 @@ export async function maybeEnqueuePushIndexJob(
     return { skipped: "non-branch" }
   }
 
-  if (after === ZERO_SHA) {
-    console.log(JSON.stringify({
-      event: "index-push-skip-branch-delete",
-      owner, repo, installation_id: installationId, ref,
-    }))
-    return { skipped: "branch-delete" }
-  }
-
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
     console.log(JSON.stringify({
       event: "index-push-skip-sensitive",
@@ -219,44 +216,6 @@ export async function maybeEnqueuePushIndexJob(
     return { skipped: "sensitive" }
   }
 
-  const manifest = await readRepoIndexManifest(env, owner, repo)
-  if (manifest.kind !== "ok") {
-    // No prior index → don't sneak-bootstrap via push. Install /
-    // repos-added is the only authorized bootstrap path.
-    console.log(JSON.stringify({
-      event: "index-push-skip-no-prior-index",
-      owner, repo, installation_id: installationId,
-      manifest_kind: manifest.kind,
-    }))
-    return { skipped: "no-prior-index" }
-  }
-  if (manifest.manifest.owner !== owner) {
-    // Codex v1 B2: same-name repo under a different owner; don't
-    // accidentally re-index someone else's namespace.
-    console.warn(JSON.stringify({
-      event: "index-push-skip-owner-mismatch",
-      owner, repo, installation_id: installationId,
-      manifest_owner: manifest.manifest.owner,
-    }))
-    return { skipped: "owner-mismatch" }
-  }
-
-  // Compare the push branch against the current default branch. The
-  // ARC-235 consumer always uses the current default branch, so a
-  // push to a non-default branch would just trigger a no-op
-  // freshness skip — but we save a queue message + a getRepository
-  // call by short-circuiting at the producer when the lookup is
-  // available.
-  //
-  // CR Major #3 on PR #77: GitHub does NOT auto-redeliver failed
-  // webhooks. The previous version converted `getInstallationToken`
-  // / `getRepository` errors into `skipped: "missing-default-branch"`
-  // which permanently lost the push on a transient failure. Since
-  // the default-branch check here is purely an optimization (the
-  // consumer revalidates on every job per ARC-235's freshness gate),
-  // a lookup failure should fall through to enqueue rather than skip
-  // — the consumer will resolve the current default branch itself
-  // and short-circuit if the push wasn't on it.
   const branchName = ref.slice(BRANCH_REF_PREFIX.length)
   if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
     console.error(JSON.stringify({
@@ -265,7 +224,31 @@ export async function maybeEnqueuePushIndexJob(
     }))
     return { skipped: "missing-creds" }
   }
+
+  const manifest = await readRepoIndexManifest(env, owner, repo)
+  if (manifest.kind !== "ok") {
+    // No prior default index → don't use push as the bootstrap path.
+    // Install / repos-added / reconciliation remain the authorized
+    // bootstrap flow; branch indexes depend on a default manifest.
+    console.log(JSON.stringify({
+      event: "index-push-skip-no-prior-index",
+      owner, repo, installation_id: installationId,
+      manifest_kind: manifest.kind,
+    }))
+    return { skipped: "no-prior-index" }
+  }
+  if (manifest.manifest.owner !== owner) {
+    console.warn(JSON.stringify({
+      event: "index-push-skip-owner-mismatch",
+      owner, repo, installation_id: installationId,
+      manifest_owner: manifest.manifest.owner,
+    }))
+    return { skipped: "owner-mismatch" }
+  }
+
   let defaultBranch: string | null = null
+  let branchPolicyLookupFailed = false
+  let client: GitHubClient | null = null
   try {
     const token = await getInstallationToken({
       kv: env.OPENCLAW_STATE,
@@ -273,7 +256,7 @@ export async function maybeEnqueuePushIndexJob(
       privateKey: env.GITHUB_PRIVATE_KEY,
       installationId,
     })
-    const client = new GitHubClient({ token })
+    client = new GitHubClient({ token })
     const repoMeta = await client.getRepository(owner, repo)
     if (repoMeta) {
       defaultBranch = repoMeta.default_branch
@@ -287,11 +270,12 @@ export async function maybeEnqueuePushIndexJob(
       return { skipped: "missing-default-branch" }
     }
   } catch (err) {
-    // Transient lookup failure (auth, rate limit, GH 5xx). Fall
-    // through to enqueue — the consumer's freshness check is
-    // authoritative; if the push wasn't on the default branch,
-    // ARC-235's `index-job-skip-fresh` covers the no-op cheaply.
-    // Better than silently dropping a real push.
+    // Transient lookup failure (auth, rate limit, GH 5xx). GitHub does not
+    // guarantee automatic redelivery for failed webhook deliveries, so do not
+    // silently drop the push. Fall through and enqueue the pushed branch; the
+    // consumer fetches repo metadata again and maps it to the default namespace
+    // if this branch is the repo default.
+    branchPolicyLookupFailed = true
     console.warn(JSON.stringify({
       event: "index-push-default-branch-lookup-failed",
       owner, repo, installation_id: installationId,
@@ -300,27 +284,79 @@ export async function maybeEnqueuePushIndexJob(
     }))
   }
 
-  if (defaultBranch !== null && branchName !== defaultBranch) {
+  if (after === ZERO_SHA) {
+    if (defaultBranch !== null && branchName === defaultBranch) {
+      console.log(JSON.stringify({
+        event: "index-push-skip-default-branch-delete",
+        owner, repo, installation_id: installationId, ref,
+      }))
+      return { skipped: "default-branch-delete" }
+    }
+    try {
+      await env.OPENCLAW_JOBS.send({
+        type: "delete-repo-index",
+        owner,
+        repo,
+        branch: branchName,
+        reason: "branch-deleted",
+      })
+      console.log(JSON.stringify({
+        event: "index-branch-delete-enqueued",
+        owner, repo, installation_id: installationId, branch: branchName,
+      }))
+      return { enqueued: true, reason: "branch-delete" }
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err)
+      console.error(JSON.stringify({
+        event: "index-branch-delete-enqueue-failed",
+        owner, repo, installation_id: installationId,
+        branch: branchName,
+        err: reason,
+      }))
+      return { failed: "enqueue-throw", reason }
+    }
+  }
+
+  let branchToIndex: string | undefined
+  if (defaultBranch === null) {
+    branchToIndex = branchPolicyLookupFailed ? branchName : undefined
+  } else if (branchName === defaultBranch) {
+    branchToIndex = undefined
+  } else if (isTrackedLongLivedBranch(branchName, env.OPENCLAW_INDEX_BRANCHES)) {
+    branchToIndex = branchName
+  } else if (client !== null && await branchHasOpenSameRepoPr(client, owner, repo, branchName)) {
+    branchToIndex = branchName
+  } else {
     console.log(JSON.stringify({
-      event: "index-push-skip-non-default-branch",
+      event: "index-push-skip-untracked-branch",
       owner, repo, installation_id: installationId,
       branch: branchName, default_branch: defaultBranch,
     }))
-    return { skipped: "non-default-branch" }
+    return { skipped: "untracked-branch" }
   }
 
   try {
-    await env.OPENCLAW_JOBS.send({
+    const message: {
+      type: "index-repo"
+      owner: string
+      repo: string
+      installationId: number
+      reason: "push"
+      branch?: string
+    } = {
       type: "index-repo",
       owner,
       repo,
       installationId,
       reason: "push",
-    })
+    }
+    if (branchToIndex) message.branch = branchToIndex
+    await env.OPENCLAW_JOBS.send(message)
     console.log(JSON.stringify({
       event: "index-push-enqueued",
       owner, repo, installation_id: installationId,
       branch: branchName,
+      index_branch: branchToIndex ?? null,
       after_sha: typeof after === "string" ? after : null,
     }))
     return { enqueued: true, reason: "push" }
@@ -332,6 +368,119 @@ export async function maybeEnqueuePushIndexJob(
       err: reason,
     }))
     return { failed: "enqueue-throw", reason }
+  }
+}
+
+async function branchHasOpenSameRepoPr(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  branchName: string,
+): Promise<boolean> {
+  try {
+    const expectedFullName = `${owner}/${repo}`.toLowerCase()
+    const open = await client.listOpenPullRequests(owner, repo, {
+      perPage: 100,
+      maxItems: 200,
+    })
+    return open.some((pr) =>
+      pr.head.ref === branchName &&
+      (pr.head.repo?.full_name ?? "").toLowerCase() === expectedFullName
+    )
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "index-push-open-pr-lookup-failed",
+      owner, repo, branch: branchName,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return false
+  }
+}
+
+export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
+  env: Env
+  owner: string
+  repo: string
+  installationId: number
+  action: string | undefined
+  draft: boolean | undefined
+  headRef: string | undefined
+  baseRef: string | undefined
+  merged: boolean | undefined
+}): Promise<void> {
+  const { env, owner, repo, installationId, action, draft, headRef, baseRef, merged } = args
+  if (!isIndexerEnabled(env)) return
+  if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) return
+
+  const isBranchIndexAction =
+    action === "opened" ||
+    action === "synchronize" ||
+    action === "reopened" ||
+    action === "ready_for_review"
+  if (draft !== true && isBranchIndexAction && headRef && headRef !== baseRef) {
+    await env.OPENCLAW_JOBS.send({
+      type: "index-repo",
+      owner,
+      repo,
+      installationId,
+      reason: "pull-request",
+      branch: headRef,
+    })
+    console.log(JSON.stringify({
+      event: "index-pr-branch-enqueued",
+      owner, repo, installation_id: installationId,
+      branch: headRef,
+      action,
+    }))
+  }
+
+  if (
+    action === "closed" &&
+    headRef &&
+    headRef !== baseRef &&
+    !isTrackedLongLivedBranch(headRef, env.OPENCLAW_INDEX_BRANCHES)
+  ) {
+    await env.OPENCLAW_JOBS.send({
+      type: "delete-repo-index",
+      owner,
+      repo,
+      branch: headRef,
+      reason: "pr-branch-closed",
+    })
+    console.log(JSON.stringify({
+      event: "index-pr-branch-delete-enqueued",
+      owner, repo, installation_id: installationId,
+      branch: headRef,
+      merged: merged === true,
+    }))
+  } else if (
+    action === "closed" &&
+    headRef &&
+    headRef !== baseRef &&
+    isTrackedLongLivedBranch(headRef, env.OPENCLAW_INDEX_BRANCHES)
+  ) {
+    console.log(JSON.stringify({
+      event: "index-pr-branch-delete-skipped-tracked",
+      owner, repo, installation_id: installationId,
+      branch: headRef,
+      merged: merged === true,
+    }))
+  }
+
+  if (action === "closed" && merged === true && baseRef) {
+    await env.OPENCLAW_JOBS.send({
+      type: "index-repo",
+      owner,
+      repo,
+      installationId,
+      reason: "merged-pr",
+      branch: baseRef,
+    })
+    console.log(JSON.stringify({
+      event: "index-pr-merged-base-enqueued",
+      owner, repo, installation_id: installationId,
+      branch: baseRef,
+    }))
   }
 }
 

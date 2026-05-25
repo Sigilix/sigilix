@@ -150,7 +150,7 @@ This creates the index that holds embedded code chunks. The Worker queries it at
 
 Repo indexing is owned by the Worker indexer. Do not add GitHub Actions workflows that write directly to Vectorize; the retired `.github/workflows/openclaw-index.yml` / `.github/workflows/codebase-index.yml` path used bare repo namespaces and can leave orphan vectors outside uninstall cleanup.
 
-New GitHub App installs and repository-added events enqueue `index-repo` jobs automatically. For repos that predate the Worker indexer rollout, use the authenticated admin routes:
+New GitHub App installs and repository-added events enqueue `index-repo` jobs automatically. Push events refresh the default branch plus configured long-lived branches (`dev`, `develop`, `development`, `staging`, `stage`, or `OPENCLAW_INDEX_BRANCHES`) and active same-repo PR branches. For repos that predate the Worker indexer rollout, use the authenticated admin routes:
 
 ```bash
 curl -X POST \
@@ -166,7 +166,7 @@ curl -X POST \
   "https://<worker-host>/admin/index-reconcile?dryRun=true"
 ```
 
-The canonical namespace is `<owner>/<repo>` lowercased. Linear team keys map to namespaces via `OPENCLAW_TEAM_REPO_MAP` (see step 5).
+The canonical default-branch namespace is `<owner>/<repo>` lowercased. Branch-scoped indexes use `<owner>/<repo>/__branch__/<encodedBranch>` internally. Default repo listings stay branch-free unless a caller explicitly opts into branch namespaces, which the Linear mention agent does when it builds retrieval scope. Linear team keys map to namespaces via `OPENCLAW_TEAM_REPO_MAP` (see step 5).
 
 ### 5. Set the secrets
 
@@ -229,7 +229,9 @@ Go to <https://github.com/organizations/Arc-and-Anchor/settings/apps> → **New 
 - **Metadata**: Read (default)
 
 **Required webhook events:**
+- `Installation` and `Installation repositories` (repo indexing and cleanup)
 - `Pull request` (opened, synchronize, ready_for_review, reopened)
+- `Push` (default/dev/active-PR branch re-indexing)
 - `Workflow run` (CI failure triage)
 - `Issue comment` (top-level PR conversation @-mentions)
 - `Pull request review comment` (inline review-comment @-mentions)

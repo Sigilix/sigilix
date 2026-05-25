@@ -234,6 +234,32 @@ describe("listIndexedRepos — KV-backed (ARC-239)", () => {
     expect(await listIndexedRepos(env)).toEqual(["arc-and-anchor/rubberfit"])
   })
 
+  it("ignores branch-scoped manifest keys so Linear sees repos, not branches (SIG-35)", async () => {
+    const env = makeKvStub([
+      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/dev",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/feature~2fsig-35",
+    ])
+    expect(await listIndexedRepos(env, { owner: "Arc-and-Anchor" })).toEqual([
+      "arc-and-anchor/sigilix",
+    ])
+  })
+
+  it("can include branch-scoped namespaces for agent tools when explicitly requested (SIG-35)", async () => {
+    const env = makeKvStub([
+      "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/dev",
+      "repo-index-manifest:acme/sigilix/__branch__/dev",
+    ])
+    expect(await listIndexedRepos(env, {
+      owner: "Arc-and-Anchor",
+      includeBranches: true,
+    })).toEqual([
+      "arc-and-anchor/sigilix",
+      "arc-and-anchor/sigilix/__branch__/dev",
+    ])
+  })
+
   it("ignores keys outside the `repo-index-manifest:` prefix", async () => {
     const env = makeKvStub([
       "repo-index-manifest:arc-and-anchor/rubberfit",

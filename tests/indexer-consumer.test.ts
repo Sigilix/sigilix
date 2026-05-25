@@ -56,6 +56,9 @@ vi.mock("../src/lib/github", async () => {
     async getFileContent(owner: string, repo: string, path: string, ref: string): Promise<unknown> {
       return mockGetFileContent(owner, repo, path, ref)
     }
+    async listOpenPullRequests(): Promise<unknown[]> {
+      return []
+    }
   }
   return {
     ...actual,
@@ -201,6 +204,42 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
       expect(parsed.shardCount).toBe(1)
       expect(parsed.modelId).toBe(EMBEDDING_MODEL)
       expect(parsed.embeddingDim).toBe(EMBEDDING_DIMENSIONS)
+    }
+  })
+
+  it("indexes a non-default branch into isolated KV and Vectorize state", async () => {
+    mockGetRepoTree.mockResolvedValue({
+      tree: [{ path: "src/dev-only.ts", type: "blob", size: 100 }],
+      truncated: false,
+    })
+
+    const { env, sent, kv } = makeEnv()
+    ;(env as Env & { OPENCLAW_GRAPH_INDEX: string }).OPENCLAW_GRAPH_INDEX = "shadow"
+    await handleIndexRepoJob({ job: bootstrapJob({ branch: "dev", reason: "pull-request" }), env })
+
+    expect(mockGetBranch).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", "dev")
+    expect(sent).toHaveLength(0)
+    const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap(
+      (call) => call[0] as Array<{ namespace?: string }>,
+    )
+    expect(upsertedRecords.length).toBeGreaterThan(0)
+    for (const rec of upsertedRecords) {
+      expect(rec.namespace).toBe("arc-and-anchor/sigilix/__branch__/dev")
+    }
+    expect(mockWriteFileGraph).not.toHaveBeenCalled()
+    expect(mockCommitGraph).not.toHaveBeenCalled()
+
+    expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix/__branch__/dev"))
+    expect(stored).toBeTruthy()
+    if (stored) {
+      const parsed = JSON.parse(stored) as RepoIndexManifestV1
+      expect(parsed.repo).toBe("sigilix/__branch__/dev")
+      expect(parsed.actualRepo).toBe("sigilix")
+      expect(parsed.branch).toBe("dev")
+      expect(parsed.defaultBranch).toBe("main")
+      expect(parsed.namespace).toBe("arc-and-anchor/sigilix/__branch__/dev")
+      expect(parsed.fileCount).toBe(1)
     }
   })
 })

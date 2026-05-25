@@ -216,6 +216,7 @@ describe("resolveLinearAgentRepoScope", () => {
   it("scopes Linear agent availableRepos to the requesting tenant owner", async () => {
     const env = makeEnv([
       "repo-index-manifest:arc-and-anchor/sigilix",
+      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/dev",
       "repo-index-manifest:arc-and-anchor/rubberfit",
       "repo-index-manifest:acme/sigilix",
     ])
@@ -231,6 +232,7 @@ describe("resolveLinearAgentRepoScope", () => {
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
+        "arc-and-anchor/sigilix/__branch__/dev",
       ],
       status: "mapped_indexed",
     })
@@ -437,15 +439,17 @@ describe("buildAgentInitialUserMessage", () => {
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
+        "arc-and-anchor/sigilix/__branch__/dev",
       ],
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix', 'arc-and-anchor/sigilix/__branch__/dev'")
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument")
     expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
     expect(out).toContain("pick a different namespace from the list")
+    expect(out).toContain("branch indexes look like 'owner/repo/__branch__/encoded-branch'")
   })
 
   it("describes indexed repos without a default and tells the agent to choose by subject", () => {

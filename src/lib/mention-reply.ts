@@ -71,7 +71,10 @@ export async function resolveLinearAgentRepoScope(
   const defaultRepo = indexNamespace(teamRepo.owner, teamRepo.repo)
   const available = new Set<string>()
   try {
-    for (const repo of await listIndexedRepos(env, { owner: teamRepo.owner })) {
+    for (const repo of await listIndexedRepos(env, {
+      owner: teamRepo.owner,
+      includeBranches: true,
+    })) {
       available.add(repo)
     }
   } catch (err) {
@@ -494,10 +497,10 @@ interface AgentInitialMessageCtx {
  */
 export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
   // Surface the full set of indexed namespaces so the agent can pick
-  // the right one when an issue is clearly about a different repo than
-  // the team's primary (e.g. an issue in the ARC team about the
-  // marketing site). Tool already accepts an arbitrary `repo` arg —
-  // this just informs the model which choices are valid.
+  // the right one when an issue is clearly about a different repo or
+  // branch than the team's primary (e.g. an ARC issue about the
+  // marketing site or the dev branch). Tool already accepts an arbitrary
+  // `repo` arg — this just informs the model which choices are valid.
   const universe = ctx.availableRepos.length > 0
     ? ctx.availableRepos
     : ctx.repo
@@ -506,7 +509,7 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
   const universeText = universe.length > 0 ? universe.map((r) => `'${r}'`).join(", ") : "(none configured)"
   let repoLine: string
   if (ctx.repo && universe.length > 1) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo (e.g. the asker references a different repo by name, or links to a PR/issue that lives in another repo). Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo or branch (branch indexes look like 'owner/repo/__branch__/encoded-branch'). Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.repo) {
     repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo && universe.length > 0) {

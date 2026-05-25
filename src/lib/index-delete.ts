@@ -7,7 +7,8 @@
 //                                          from the installation.
 //
 // Both call `deleteRepoIndex(owner, repo, reason)` per affected
-// (owner, repo) tuple. That worker:
+// (owner, repo) tuple. SIG-35 branch-scoped index records are deleted
+// as additional repo-state tuples such as `repo/__branch__/dev`. That worker:
 //   1. Reads `repo-index-vectors:<owner>/<repo>` (the KV id-list from
 //      ARC-235's indexer extension in PR 3 commit 2), probing the legacy
 //      bare `repo-index-vectors:<repo>` key too (SIG-132). Codex v1:
@@ -63,6 +64,8 @@ const KV_LIST_PAGE_LIMIT = 1000
 export type DeleteReason =
   | "install-deleted"
   | "install-repos-removed"
+  | "branch-deleted"
+  | "pr-branch-closed"
 
 export interface DeleteResult {
   /** Summary status — drives the webhook HTTP response. */
@@ -581,6 +584,56 @@ async function deleteKvPrefix(
   return deleted
 }
 
+async function listBranchStateReposForRepo(args: {
+  env: Env
+  owner: string
+  repo: string
+}): Promise<{ repos: string[]; errors: string[] }> {
+  const { env, owner, repo } = args
+  const repos = new Set<string>()
+  const errors: string[] = []
+  const branchRepoPrefix = `${repo.toLowerCase()}/__branch__/`
+  const keyPrefix = `${repoIndexManifestKey(owner, repo)}/__branch__/`
+  let cursor: string | undefined
+  for (;;) {
+    let page: { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+    try {
+      page = await env.OPENCLAW_STATE.list({
+        prefix: keyPrefix,
+        limit: KV_LIST_PAGE_LIMIT,
+        ...(cursor ? { cursor } : {}),
+      }) as { keys: Array<{ name: string }>; list_complete: boolean; cursor?: string }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      errors.push(`kv.list(repo-index-branch-manifest): ${message}`)
+      console.error(JSON.stringify({
+        event: "index-delete-branch-manifest-list-failed",
+        owner, repo, err: message,
+      }))
+      break
+    }
+    for (const key of page.keys) {
+      const raw = await env.OPENCLAW_STATE.get(key.name)
+      if (raw === null) continue
+      const manifest = parseRepoIndexManifest(raw)
+      if (
+        manifest.kind === "ok" &&
+        manifest.manifest.owner === owner &&
+        manifest.manifest.repo.startsWith(branchRepoPrefix)
+      ) {
+        repos.add(manifest.manifest.repo)
+      }
+    }
+    if (page.list_complete) break
+    if (!page.cursor) {
+      errors.push("kv.list(repo-index-branch-manifest): missing cursor on incomplete page")
+      break
+    }
+    cursor = page.cursor
+  }
+  return { repos: Array.from(repos).sort(), errors }
+}
+
 // ---------------------------------------------------------------------
 // Webhook entry points
 // ---------------------------------------------------------------------
@@ -615,12 +668,21 @@ export async function handleInstallReposRemoved(
       }))
       continue
     }
-    const r = await deleteRepoIndex({
-      env, owner: parsed.owner, repo: parsed.repo,
-      reason: "install-repos-removed",
+    const branchState = await listBranchStateReposForRepo({
+      env,
+      owner: parsed.owner,
+      repo: parsed.repo,
     })
-    results.push(r)
-    if (r.status === "partial") anyError = true
+    if (branchState.errors.length > 0) anyError = true
+    const stateRepos = [parsed.repo, ...branchState.repos]
+    for (const repo of stateRepos) {
+      const r = await deleteRepoIndex({
+        env, owner: parsed.owner, repo,
+        reason: "install-repos-removed",
+      })
+      results.push(r)
+      if (r.status === "partial") anyError = true
+    }
   }
   return { results, anyError }
 }

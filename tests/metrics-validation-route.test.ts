@@ -67,8 +67,8 @@ describe("handleValidationMetricsRoute", () => {
     await do_.recordBatch({
       owner: "o", repo: "r", prNumber: 1, headSha: "abc",
       events: [
-        { gate: "security", reason: "fabricated-evidence-id", dropped: false },
-        { gate: "tests", reason: "missing-path", dropped: true },
+        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: false },
+        { kind: "gate-rejection", gate: "tests", reason: "missing-path", dropped: true },
       ],
     })
     const env = makeEnv({ OPENCLAW_TESTS_VALIDATOR_MODE: "enforce" }, do_)

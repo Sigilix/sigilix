@@ -19,6 +19,7 @@
 //   bound. Clean prefix-delete on `pull_request.closed` is a follow-up).
 
 import type { Env } from "../index"
+import { type DismissReason, isDismissReason } from "./dismiss-reasons"
 
 const MATCH_THRESHOLD = 0.75
 const LINE_TOLERANCE = 5
@@ -43,6 +44,13 @@ export interface WithdrawalRecord {
   prHeadSha: string
   /** What signal triggered the write. Today only mention-reply-accepted. */
   reason: "mention-reply-accepted"
+  /**
+   * SIG-173: optional canonical reason label parsed off `@sigilix dismiss
+   * <reason>` when the writer has one. Absent on records produced by the
+   * model-side concede path (no reviewer label). Forward-compatible —
+   * older records loaded from KV simply lack the field.
+   */
+  dismissReason?: DismissReason
 }
 
 function withdrawalPrefix(owner: string, repo: string, prNumber: number): string {
@@ -164,6 +172,12 @@ interface WriteArgs {
   bodySnapshot: string
   withdrawnByCommentId: number
   prHeadSha: string
+  /**
+   * SIG-173: optional canonical reason label, threaded through from the
+   * `@sigilix dismiss <reason>` flow. The model-side concede caller leaves
+   * this unset; the record then omits the field on the wire.
+   */
+  dismissReason?: DismissReason
 }
 
 /**
@@ -181,6 +195,7 @@ export async function writeWithdrawal(args: WriteArgs): Promise<boolean> {
     withdrawnByCommentId: args.withdrawnByCommentId,
     prHeadSha: args.prHeadSha,
     reason: "mention-reply-accepted",
+    ...(args.dismissReason ? { dismissReason: args.dismissReason } : {}),
   }
   const key = withdrawalKey(args.owner, args.repo, args.prNumber, args.withdrawnByCommentId)
   try {
@@ -253,7 +268,23 @@ export async function loadWithdrawals(
           typeof parsed.withdrawnByCommentId === "number" &&
           typeof parsed.prHeadSha === "string"
         ) {
-          records.push(parsed as WithdrawalRecord)
+          // SIG-173: drop unknown values defensively. The field is optional
+          // — pre-SIG-173 records simply lack it, and an out-of-band value
+          // (manual KV poke, future-version downgrade) shouldn't poison the
+          // softening weight calculation.
+          const dismissReason = isDismissReason(parsed.dismissReason)
+            ? parsed.dismissReason
+            : undefined
+          records.push({
+            path: parsed.path,
+            line: parsed.line,
+            bodySnapshot: parsed.bodySnapshot,
+            withdrawnAt: parsed.withdrawnAt,
+            withdrawnByCommentId: parsed.withdrawnByCommentId,
+            prHeadSha: parsed.prHeadSha,
+            reason: "mention-reply-accepted",
+            ...(dismissReason ? { dismissReason } : {}),
+          })
         }
       } catch {
         // Skip malformed records; they auto-expire via TTL.

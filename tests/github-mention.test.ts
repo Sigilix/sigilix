@@ -57,6 +57,7 @@ import {
   handleGithubMention,
   isAuthorAllowedForReviewDismiss,
   isReviewDismissRequest,
+  parseDismissCommand,
   parseGithubMentionResponse,
   parseReviewDismissDedupeRecord,
   releaseReviewDismissInProgressLock,
@@ -158,12 +159,72 @@ describe("formatReply", () => {
 })
 
 describe("isReviewDismissRequest", () => {
-  it("accepts explicit dismiss command shapes only", () => {
+  it("accepts the bare + canonical command shapes", () => {
     expect(isReviewDismissRequest("dismiss")).toBe(true)
     expect(isReviewDismissRequest("Dismiss this review.")).toBe(true)
     expect(isReviewDismissRequest("dismiss review")).toBe(true)
+  })
+
+  it("rejects bodies that don't START with the dismiss prefix", () => {
     expect(isReviewDismissRequest("can you dismiss this?")).toBe(false)
-    expect(isReviewDismissRequest("dismiss the finding after checking this file")).toBe(false)
+    expect(isReviewDismissRequest("please review")).toBe(false)
+  })
+
+  it("accepts the new reason-bearing forms (forgiving parse — typos accepted as unlabeled)", () => {
+    // SIG-173: `dismiss <anything>` is treated as a dismiss command with an
+    // unlabeled reason so reviewers' typos don't silently swallow the
+    // dismiss intent. The reason-parsing layer (parseDismissCommand) is
+    // where the validity check lives.
+    expect(isReviewDismissRequest("dismiss too-minor")).toBe(true)
+    expect(isReviewDismissRequest("dismiss the finding after checking this file")).toBe(true)
+  })
+})
+
+describe("parseDismissCommand", () => {
+  it("returns null on non-dismiss bodies", () => {
+    expect(parseDismissCommand("can you take another look?")).toBeNull()
+    expect(parseDismissCommand("review this please")).toBeNull()
+    expect(parseDismissCommand("")).toBeNull()
+  })
+
+  it("defaults bare dismiss to unlabeled", () => {
+    expect(parseDismissCommand("dismiss")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("Dismiss.")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("dismiss review")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("dismiss this review")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+  })
+
+  it("parses all five canonical labels (hyphen form)", () => {
+    expect(parseDismissCommand("dismiss not-a-bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss bad-anchor")).toEqual({ kind: "dismiss", reason: "bad-anchor" })
+    expect(parseDismissCommand("dismiss already-covered")).toEqual({ kind: "dismiss", reason: "already-covered" })
+    expect(parseDismissCommand("dismiss too-minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("dismiss wrong-context")).toEqual({ kind: "dismiss", reason: "wrong-context" })
+  })
+
+  it("accepts mixed case", () => {
+    expect(parseDismissCommand("Dismiss TOO-MINOR")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("DISMISS Not-A-Bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+  })
+
+  it("tolerates underscores and spaces in place of hyphens", () => {
+    expect(parseDismissCommand("dismiss not_a_bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss not a bug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss too_minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("dismiss too minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
+  })
+
+  it("tolerates surrounding whitespace + a longer prefix", () => {
+    expect(parseDismissCommand("  dismiss   too-minor  ")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("dismiss this review too-minor")).toEqual({ kind: "dismiss", reason: "too-minor" })
+    expect(parseDismissCommand("dismiss review too minor.")).toEqual({ kind: "dismiss", reason: "too-minor" })
+  })
+
+  it("falls back to unlabeled on an unknown / typo'd label (forgiving parse)", () => {
+    expect(parseDismissCommand("dismiss notabug")).toEqual({ kind: "dismiss", reason: "not-a-bug" })
+    expect(parseDismissCommand("dismiss whatever")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("dismiss nope")).toEqual({ kind: "dismiss", reason: "unlabeled" })
+    expect(parseDismissCommand("dismiss too-mnir")).toEqual({ kind: "dismiss", reason: "unlabeled" })
   })
 })
 
@@ -301,6 +362,7 @@ describe("handleGithubMention dismiss path", () => {
       kind: "review-dismiss-result",
       result: { kind: "dismissed", reviewId: 90 },
       replyCommentId: 777,
+      dismissReason: "unlabeled",
     })
   })
 
@@ -339,6 +401,7 @@ describe("handleGithubMention dismiss path", () => {
       kind: "review-dismiss-result",
       result: { kind: "not-found" },
       replyCommentId: 777,
+      dismissReason: "unlabeled",
     })
   })
 
@@ -373,6 +436,53 @@ describe("handleGithubMention dismiss path", () => {
     expect(dismissReviewMock).not.toHaveBeenCalled()
     expect(createIssueCommentMock).not.toHaveBeenCalled()
     expect(store.has("gh-mention:4242")).toBe(false)
+  })
+
+  it("threads the parsed reason into the persisted record and the reply copy (SIG-173)", async () => {
+    const { env, store } = makeEnv()
+    listIssueCommentsMock.mockResolvedValue([
+      {
+        id: 4242,
+        body: "@sigilix dismiss too-minor",
+        user: { login: "human" },
+        author_association: "MEMBER",
+      },
+    ])
+    listPullRequestReviewsMock.mockResolvedValue([
+      {
+        id: 90,
+        state: "CHANGES_REQUESTED",
+        user: { login: "sigilix[bot]" },
+        body: SIGILIX_REVIEW_BODY_MARKER,
+        commitId: null,
+      },
+    ])
+
+    await handleGithubMention({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 7,
+      installationId: 99,
+      surface: "issue",
+      commentId: 4242,
+      env,
+    })
+
+    expect(dismissReviewMock).toHaveBeenCalled()
+    // Reason landed in the bot's acknowledgement reply body.
+    expect(createIssueCommentMock).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      7,
+      expect.stringContaining("(reason: too-minor)"),
+    )
+    // Reason landed in the dedupe record (so a replay re-renders the same copy).
+    expect(parseReviewDismissDedupeRecord(store.get("gh-mention:4242") ?? null)).toEqual({
+      kind: "review-dismiss-result",
+      result: { kind: "dismissed", reviewId: 90 },
+      replyCommentId: 777,
+      dismissReason: "too-minor",
+    })
   })
 })
 
@@ -552,5 +662,21 @@ describe("formatReviewDismissReply", () => {
     })
     expect(out.startsWith("<!-- sigilix:gh-mention-reply -->")).toBe(true)
     expect(out).toContain("GitHub rejected the dismissal request")
+  })
+
+  it("surfaces the labelled reason in the success copy", () => {
+    const out = formatReviewDismissReply({ kind: "dismissed", reviewId: 10 }, "too-minor")
+    expect(out).toContain("(reason: too-minor)")
+    expect(out).toContain("Dismissed the latest blocking Sigilix review")
+  })
+
+  it("omits the reason annotation on unlabeled dismissals (clean default copy)", () => {
+    const out = formatReviewDismissReply({ kind: "dismissed", reviewId: 10 }, "unlabeled")
+    expect(out).not.toContain("reason:")
+  })
+
+  it("does not annotate non-success branches with the reason", () => {
+    const out = formatReviewDismissReply({ kind: "not-found" }, "too-minor")
+    expect(out).not.toContain("reason:")
   })
 })

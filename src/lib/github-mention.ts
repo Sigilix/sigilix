@@ -34,6 +34,12 @@ import {
   SIGILIX_BOT_LOGIN,
   SIGILIX_REVIEW_BODY_MARKER,
 } from "./dismiss-prior-reviews"
+import {
+  type DismissReason,
+  isDismissReason,
+  parseDismissReason,
+} from "./dismiss-reasons"
+import { recordDismissalMetric } from "./validation-metrics-client"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -81,7 +87,19 @@ export type ReviewDismissResult =
 
 export type ReviewDismissDedupeRecord =
   | { kind: typeof DISMISS_IN_PROGRESS_KIND; token?: string; createdAt?: number }
-  | { kind: typeof DISMISS_DEDUPE_KIND; result: ReviewDismissResult; replyCommentId?: number }
+  | {
+      kind: typeof DISMISS_DEDUPE_KIND
+      result: ReviewDismissResult
+      replyCommentId?: number
+      /**
+       * SIG-173: the canonical reason label parsed off the dismiss command
+       * at write time. Persisted so a replayed reply renders identical copy
+       * (the reason is in the bot's acknowledgement line). Older records
+       * written before this field shipped omit it; the parser defaults
+       * those to `"unlabeled"` on read.
+       */
+      dismissReason?: DismissReason
+    }
 
 interface GithubMentionVerdict {
   answer: string
@@ -198,7 +216,8 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     return
   }
 
-  if (explicit && isReviewDismissRequest(question)) {
+  const dismissCommand = explicit ? parseDismissCommand(question) : null
+  if (dismissCommand) {
     if (!isAuthorAllowedForReviewDismiss(sourceComment.authorAssociation)) {
       console.log(JSON.stringify({
         event: "gh-mention-dismiss-rejected",
@@ -215,14 +234,25 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     }
 
     let dismiss: ReviewDismissResult | null = null
+    // SIG-173: prefer the reason persisted at the original dismiss-time over
+    // the current command's reason on a replay. Older records (pre-SIG-173)
+    // have no `dismissReason` field; default to the fresh parse instead so
+    // replays still tag the metric + acknowledgement copy.
+    let dismissReason: DismissReason = dismissCommand.reason
     if (pendingDismissReply) {
       dismiss = pendingDismissReply.result
+      if (pendingDismissReply.dismissReason) {
+        dismissReason = pendingDismissReply.dismissReason
+      }
     } else {
       const lock = await acquireReviewDismissInProgressLock(env.OPENCLAW_STATE, kvKey)
       if (!lock.acquired) {
         const record = lock.record
         if (record?.kind === DISMISS_DEDUPE_KIND && typeof record.replyCommentId !== "number") {
           dismiss = record.result
+          if (record.dismissReason) {
+            dismissReason = record.dismissReason
+          }
         } else {
           since("dismiss-lock-not-acquired", { storedKind: record?.kind ?? null })
           return
@@ -235,9 +265,26 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
             repo,
             prNumber,
           })
-          await env.OPENCLAW_STATE.put(kvKey, serializeReviewDismissDedupeRecord(dismiss), {
-            expirationTtl: MENTION_DEDUPE_TTL,
-          })
+          await env.OPENCLAW_STATE.put(
+            kvKey,
+            serializeReviewDismissDedupeRecord(dismiss, undefined, dismissReason),
+            { expirationTtl: MENTION_DEDUPE_TTL },
+          )
+          // SIG-173: count the reason once per successful dismiss attempt
+          // (kind === "dismissed"). Failures and not-found don't reflect
+          // reviewer intent reliably enough to surface in the rollup.
+          // Non-fatal: a metrics failure must never affect the reply.
+          if (dismiss.kind === "dismissed") {
+            await recordDismissalMetric(env, { reason: dismissReason }).catch((err: unknown) => {
+              console.log(JSON.stringify({
+                event: "dismissal-metrics-record-error",
+                owner,
+                repo,
+                prNumber,
+                error: err instanceof Error ? err.message : String(err),
+              }))
+            })
+          }
         } catch (err) {
           await releaseReviewDismissInProgressLock(env.OPENCLAW_STATE, kvKey, lock.token)
           throw err
@@ -251,13 +298,15 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
       prNumber,
       surface,
       threadRootId: args.threadRootId ?? commentId,
-      body: formatReviewDismissReply(dismiss),
+      body: formatReviewDismissReply(dismiss, dismissReason),
     })
-    since("dismiss-reply-posted", { newId, result: dismiss.kind })
+    since("dismiss-reply-posted", { newId, result: dismiss.kind, reason: dismissReason })
     await env.OPENCLAW_STATE
-      .put(kvKey, serializeReviewDismissDedupeRecord(dismiss, newId), {
-        expirationTtl: MENTION_DEDUPE_TTL,
-      })
+      .put(
+        kvKey,
+        serializeReviewDismissDedupeRecord(dismiss, newId, dismissReason),
+        { expirationTtl: MENTION_DEDUPE_TTL },
+      )
       .catch((err: unknown) => {
         console.warn("[gh-mention] dismiss reply-id persistence failed", {
           owner,
@@ -731,10 +780,14 @@ export function serializeReviewDismissInProgressRecord(token?: string): string {
 export function serializeReviewDismissDedupeRecord(
   result: ReviewDismissResult,
   replyCommentId?: number,
+  dismissReason?: DismissReason,
 ): string {
-  const record: ReviewDismissDedupeRecord = typeof replyCommentId === "number"
-    ? { kind: DISMISS_DEDUPE_KIND, result, replyCommentId }
-    : { kind: DISMISS_DEDUPE_KIND, result }
+  const record: ReviewDismissDedupeRecord = {
+    kind: DISMISS_DEDUPE_KIND,
+    result,
+    ...(typeof replyCommentId === "number" ? { replyCommentId } : {}),
+    ...(dismissReason ? { dismissReason } : {}),
+  }
   return JSON.stringify(record)
 }
 
@@ -766,10 +819,19 @@ export function parseReviewDismissDedupeRecord(value: string | null): ReviewDism
   if (record.kind !== DISMISS_DEDUPE_KIND || !isReviewDismissResult(record.result)) {
     return null
   }
-  if (typeof record.replyCommentId === "number") {
-    return { kind: DISMISS_DEDUPE_KIND, result: record.result, replyCommentId: record.replyCommentId }
+  // SIG-173: optional reason — present on records written after this PR
+  // ships; absent on legacy records (caller falls back to "unlabeled").
+  const dismissReason = isDismissReason((record as { dismissReason?: unknown }).dismissReason)
+    ? ((record as { dismissReason: DismissReason }).dismissReason)
+    : undefined
+  return {
+    kind: DISMISS_DEDUPE_KIND,
+    result: record.result,
+    ...(typeof record.replyCommentId === "number"
+      ? { replyCommentId: record.replyCommentId }
+      : {}),
+    ...(dismissReason ? { dismissReason } : {}),
   }
-  return { kind: DISMISS_DEDUPE_KIND, result: record.result }
 }
 
 type ReviewDismissLock =
@@ -844,15 +906,53 @@ function isReviewDismissResult(value: unknown): value is ReviewDismissResult {
   }
 }
 
-export function isReviewDismissRequest(question: string): boolean {
+/**
+ * Pre-stripped command prefixes the parser accepts before the optional
+ * reason label. Order matters — the longest prefix wins on match attempt
+ * so a body like "dismiss this review too-minor" parses as "too-minor"
+ * not "this review too-minor".
+ */
+const DISMISS_COMMAND_PREFIXES = ["dismiss this review", "dismiss review", "dismiss"] as const
+
+/**
+ * SIG-173: parse `@sigilix dismiss [<reason>]`. Returns `{kind: "dismiss",
+ * reason}` when the body is a dismiss command (reason defaults to
+ * `"unlabeled"` for bare `dismiss` AND for invalid labels — typos shouldn't
+ * silently fail the dismiss). Returns null when the body isn't a dismiss
+ * command at all.
+ *
+ * Pure — exported for tests.
+ */
+export function parseDismissCommand(
+  question: string,
+): { kind: "dismiss"; reason: DismissReason } | null {
   const normalized = question
     .trim()
     .toLowerCase()
     .replace(/[.!?]+$/g, "")
     .replace(/\s+/g, " ")
-  return normalized === "dismiss" ||
-    normalized === "dismiss review" ||
-    normalized === "dismiss this review"
+  for (const prefix of DISMISS_COMMAND_PREFIXES) {
+    if (normalized === prefix) {
+      return { kind: "dismiss", reason: "unlabeled" }
+    }
+    if (normalized.startsWith(`${prefix} `)) {
+      const rest = normalized.slice(prefix.length + 1).trim()
+      const parsed = parseDismissReason(rest)
+      // Invalid label → still a dismiss command, just unlabeled. A typo
+      // shouldn't silently swallow the dismiss intent.
+      return { kind: "dismiss", reason: parsed ?? "unlabeled" }
+    }
+  }
+  return null
+}
+
+/**
+ * Boolean wrapper kept for back-compat with existing callers + tests that
+ * only need the yes/no question. New code should call `parseDismissCommand`
+ * to also recover the reason label.
+ */
+export function isReviewDismissRequest(question: string): boolean {
+  return parseDismissCommand(question) !== null
 }
 
 /**
@@ -930,10 +1030,23 @@ export async function dismissLatestBlockingSigilixReview(args: {
   }
 }
 
-export function formatReviewDismissReply(result: ReviewDismissResult): string {
+/**
+ * SIG-173: render the bot's reply to `@sigilix dismiss [<reason>]`. The
+ * `reason` argument is the canonical reason label that landed in the
+ * persisted `WithdrawalRecord` + the `/metrics/dismissals` counter; surfacing
+ * it in the reply gives the reviewer immediate confirmation that we
+ * registered the label. Bare dismiss + invalid input both reach here as
+ * `"unlabeled"` — we skip the reason line in that case so the reply stays
+ * clean for the common path.
+ */
+export function formatReviewDismissReply(
+  result: ReviewDismissResult,
+  reason: DismissReason = "unlabeled",
+): string {
+  const reasonSuffix = reason !== "unlabeled" ? ` (reason: ${reason})` : ""
   switch (result.kind) {
     case "dismissed":
-      return `${REPLY_MARKER}\nDismissed the latest blocking Sigilix review. GitHub should recalculate the PR review decision shortly.`
+      return `${REPLY_MARKER}\nDismissed the latest blocking Sigilix review${reasonSuffix}. GitHub should recalculate the PR review decision shortly.`
     case "not-found":
       return `${REPLY_MARKER}\nI couldn't find an active blocking Sigilix review to dismiss on this PR.`
     case "list-failed":

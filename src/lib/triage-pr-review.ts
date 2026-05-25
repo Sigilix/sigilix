@@ -1,8 +1,8 @@
 // Proactive primary review (greptile-style). Reviews the PR in
 // isolation — does its own pass independent of CR or any other
 // reviewer. Each finding carries a review surface scope, score 1-5,
-// and category (logic / style / security / etc.) that leads the
-// inline comment when rendered inline.
+// and category (logic / style / security / etc.) that is rendered in
+// inline-comment metadata for scanability.
 //
 // Submits a single review via POST /pulls/{n}/reviews so all findings
 // arrive as one coherent unit on GitHub. Approval state is derived from
@@ -208,6 +208,12 @@ export interface PrReviewFinding {
    * Schema-bypass paths with an unknown value normalize to "current-pr".
    */
   stackOrigin?: StackOrigin
+  /**
+   * Renderer-only note for findings that had to move out of an inline
+   * GitHub review comment because the original line no longer anchors
+   * cleanly at the reviewed head.
+   */
+  anchorNote?: string
   /**
    * SIG-101: per-finding model confidence on a 1-5 scale (distinct from
    * `score`, which is severity). The synth specialist may emit a
@@ -825,7 +831,7 @@ export function buildReviewSubmission({
         // No added line at or after the model's anchor on this file.
         // Route the finding to the summary body — there is no real
         // place to anchor it inline.
-        bodyFindings.push(f)
+        bodyFindings.push(withLineMovedNote(f, headSha))
         return
       }
       if (resolved !== f.line) {
@@ -1780,8 +1786,20 @@ function formatFixPlanRow(f: PrReviewFinding): string {
     : `${f.path}:${f.line}`
   // Headline only — the inline comment carries the body. Truncate
   // defensively so an over-long headline can't break the bullet list.
-  const headline = f.headline.length > 140 ? `${f.headline.slice(0, 137)}…` : f.headline
-  return `- \`${range}\` — \`${f.category}\`: ${headline}`
+  const cleanHeadline = stripAstMarkers(f.headline)
+  const headline = cleanHeadline.length > 140 ? `${cleanHeadline.slice(0, 137)}…` : cleanHeadline
+  return `- \`${range}\` — \`${formatFindingCategory(f)}\`: ${headline}`
+}
+
+function formatHeadSha(headSha: string): string {
+  return headSha.slice(0, 7)
+}
+
+function withLineMovedNote(f: PrReviewFinding, headSha: string): PrReviewFinding {
+  return {
+    ...f,
+    anchorNote: `(line moved — see file at \`${formatHeadSha(headSha)}\`)`,
+  }
 }
 
 function formatBodyFindingLocation(f: PrReviewFinding): string {
@@ -1803,6 +1821,10 @@ function formatBodyFindingSeverity(f: PrReviewFinding): string {
   if (f.score >= 5) return "critical, score 5"
   if (f.score >= 4) return "high, score 4"
   return `score ${f.score}`
+}
+
+function formatFindingCategory(f: PrReviewFinding): string {
+  return f.category ?? "logic"
 }
 
 /**
@@ -1832,9 +1854,15 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
     for (const f of arr) {
       const location = formatBodyFindingLocation(f)
       const severity = formatBodyFindingSeverity(f)
-      lines.push(`- ${location} (${severity}) — **${f.category}:** ${f.headline}`)
+      const anchorNote = f.anchorNote ? ` ${f.anchorNote}` : ""
+      lines.push(`- ${location}${anchorNote} (${severity}) — **${formatFindingCategory(f)}:** ${stripAstMarkers(f.headline)}`)
       // Indent the body so it nests under the bullet visually.
-      const bodyLines = f.body
+      const detailLines = [
+        formatFindingBodyMarkdown(f.body),
+        formatBodyFindingSuggestedChange(f),
+      ].filter((s) => s !== "")
+      const bodyLines = detailLines
+        .join("\n\n")
         .split("\n")
         .map((l) => `  ${l}`)
         .join("\n")
@@ -1869,6 +1897,7 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  */
 const SEVERITY_BADGE_WIDTH = 38
 const SEVERITY_BADGE_HEIGHT = 28
+const FINDING_BODY_PREVIEW_LIMIT = 500
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {
   return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
@@ -1879,6 +1908,57 @@ export function severityBadgeForScore(score: number): string {
   if (score >= 4) return severityBadgeImg("P1", "p1")
   if (score >= 3) return severityBadgeImg("P2", "p2")
   return severityBadgeImg("P3", "p3")
+}
+
+function severityTextForScore(score: number): string {
+  if (score >= 5) return "P0 critical (5/5)"
+  if (score >= 4) return "P1 high (4/5)"
+  if (score >= 3) return "P2 medium (3/5)"
+  if (score >= 2) return "P3 low (2/5)"
+  return "P3 info (1/5)"
+}
+
+function stripAstMarkers(text: string): string {
+  return text.replace(/<!--\s*ast\/[\s\S]*?-->/g, "").trim()
+}
+
+function formatFindingBodyMarkdown(body: string): string {
+  const clean = stripAstMarkers(body)
+  if (clean.length <= FINDING_BODY_PREVIEW_LIMIT) return clean
+  const preview = clean.slice(0, FINDING_BODY_PREVIEW_LIMIT).trimEnd()
+  return [
+    `${preview}...`,
+    "",
+    "<details><summary>Show more</summary>",
+    "",
+    clean,
+    "",
+    "</details>",
+  ].join("\n")
+}
+
+function formatBodyFindingSuggestedChange(finding: PrReviewFinding): string {
+  const repl = finding.suggestedReplacement
+  const isDeletion = finding.kind === "delete" && typeof repl === "string" && repl.length === 0
+  const isReplace =
+    (finding.kind === "replace" || finding.kind === undefined) &&
+    typeof repl === "string" && repl.length > 0
+  if (isDeletion) {
+    const range =
+      finding.startLine != null && finding.startLine < finding.line
+        ? `lines ${finding.startLine}-${finding.line}`
+        : `line ${finding.line}`
+    return `**Suggested change:** remove ${range}.`
+  }
+  if (!isReplace || typeof repl !== "string") return ""
+  const lang = extensionToFenceLang(finding.path)
+  const fence = fenceForContent(repl)
+  return [
+    "**Suggested change:**",
+    fence + lang,
+    repl.replace(/\n$/, ""),
+    fence,
+  ].join("\n")
 }
 
 /**
@@ -2168,9 +2248,9 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
     `Line: ${range}`,
     "",
     "Comment:",
-    `**${finding.headline}**`,
+    `**${stripAstMarkers(finding.headline)}**`,
     "",
-    finding.body,
+    stripAstMarkers(finding.body),
     "",
     "How can I resolve this? If you propose a fix, please make it concise.",
     "```",
@@ -2181,14 +2261,14 @@ export function formatAiAgentPromptBlock(finding: PrReviewFinding): string {
 }
 
 /**
- * Inline finding comment, greptile-style. The category leads as
- * \`**category:**\` (logic, style, security, performance, etc.) so
- * a reviewer can scan a thread and immediately see what kind of
- * concern it is. Body and any \`\`\`suggestion block flow underneath
- * verbatim.
+ * Inline finding comment, greptile-style. The headline carries the
+ * bold line; category stays grep-able in a lighter metadata row so
+ * stacked findings on one line do not all start with the same
+ * `**category:**` prefix. Body and any ```suggestion block flow
+ * underneath verbatim.
  *
  * SIG-101: prefixed with a P0/P1/P2 severity badge (suppressed for
- * score 1-2), suffixed with `· _confidence: N/5_`. When confidence
+ * score 1-2), with `_confidence: N/5_`. When confidence
  * ≤ 2, the body is collapsed inside a `<details>` block so noisy
  * low-confidence findings de-emphasize visually but the headline
  * (with its severity badge) stays visible.
@@ -2206,9 +2286,16 @@ export function formatFindingComment(
 ): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
   // SIG-164 PR 5: badge is always present (P3 covers low severity).
-  // Heading shape: <img badge> **category:** headline · _confidence: N/5_
+  // Heading shape: <img badge> **headline**
+  // _category: X_ · _severity: PX label_ · _confidence: N/5_
+  // The headline carries visual weight; category remains grep-able but
+  // no longer repeats as the bold lead on every stacked thread.
   const badge = severityBadgeForScore(finding.score)
-  lines.push(`${badge} **${finding.category}:** ${finding.headline} · _confidence: ${confidence}/5_`)
+  const category = finding.category ?? "logic"
+  const headline = stripAstMarkers(finding.headline)
+  const body = formatFindingBodyMarkdown(finding.body)
+  lines.push(`${badge} **${headline}**`)
+  lines.push(`_category: ${category}_ · _severity: ${severityTextForScore(finding.score)}_ · _confidence: ${confidence}/5_`)
   lines.push("")
   if (confidence <= 2) {
     // Low-confidence findings collapse the body so the thread skims
@@ -2217,11 +2304,11 @@ export function formatFindingComment(
     lines.push("<details>")
     lines.push("<summary>Low-confidence finding — expand to read</summary>")
     lines.push("")
-    lines.push(finding.body)
+    lines.push(body)
     lines.push("")
     lines.push("</details>")
   } else {
-    lines.push(finding.body)
+    lines.push(body)
   }
   // SIG-164 PR 5: Greptile-style "Current / Proposed" illustrative
   // blocks. Always shown when we have enough diff context to render an

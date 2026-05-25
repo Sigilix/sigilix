@@ -42,8 +42,10 @@ import {
   buildPrOverviewStubBody,
   isStubBody,
   postPrOverviewStubIfNeeded,
+  selectPrOverviewStubAsciiTemplate,
   selectPrOverviewStubQuip,
   STUB_BODY,
+  STUB_ASCII_TEMPLATES,
   STUB_GITHUB_API_TIMEOUT_MS,
   STUB_QUIPS,
   stubFlagKey,
@@ -344,14 +346,37 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
     expect(body).not.toContain("_Reviewing")
   })
 
-  it("SIG-165: keeps the ASCII speech bubble borders aligned with the content row", () => {
-    const codeBlock = /```text\n([\s\S]*?)\n```/.exec(stubBodyFor())?.[1]
-    expect(codeBlock).toBeDefined()
+  it("SIG-206: ASCII template selection is deterministic and varies by PR head", () => {
+    expect(STUB_ASCII_TEMPLATES.length).toBeGreaterThanOrEqual(8)
+    const first = selectPrOverviewStubAsciiTemplate(args)
+    const second = selectPrOverviewStubAsciiTemplate({ ...args })
+    const templates = new Set(
+      Array.from({ length: 24 }, (_, i) =>
+        selectPrOverviewStubAsciiTemplate({
+          ...args,
+          headSha: `${String(i).padStart(2, "0")}${"a".repeat(38)}`,
+        }),
+      ),
+    )
 
-    const [topBorder, contentRow, bottomBorder] = codeBlock!.split("\n")
+    expect(second).toBe(first)
+    expect(templates.size).toBeGreaterThan(1)
+  })
 
-    expect(topBorder!.length).toBe(contentRow!.length)
-    expect(bottomBorder!.length).toBe(contentRow!.length)
+  it("SIG-206: keeps generated ASCII blocks rectangular for GitHub Markdown", () => {
+    for (let i = 0; i < 24; i++) {
+      const body = stubBodyFor({
+        headSha: `${String(i).padStart(2, "0")}${"b".repeat(38)}`,
+      })
+      const codeBlock = /```text\n([\s\S]*?)\n```/.exec(body)?.[1]
+      expect(codeBlock).toBeDefined()
+
+      const lines = codeBlock!.split("\n")
+      const width = lines[0]!.length
+
+      expect(lines.length).toBeGreaterThanOrEqual(5)
+      expect(lines.every((line) => line.length === width)).toBe(true)
+    }
   })
 
   it("falls back to creating when the marker-scan throws (best-effort)", async () => {

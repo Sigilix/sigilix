@@ -14,6 +14,22 @@ export function encodeBranchName(branch: string): string {
   return `h${hex}`
 }
 
+export function decodeBranchName(encoded: string): string | null {
+  const value = encoded.trim()
+  if (!/^h(?:[0-9a-f]{2})+$/i.test(value)) return null
+  const hex = value.slice(1)
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
+  }
+  try {
+    const branch = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes).trim()
+    return branch.length > 0 ? branch : null
+  } catch {
+    return null
+  }
+}
+
 export function branchStateRepo(repo: string, branch: string): string {
   return `${repo}/${BRANCH_STATE_SEGMENT}/${encodeBranchName(branch)}`
 }
@@ -23,6 +39,28 @@ export function isBranchStateRepo(repo: string): boolean {
   const segment = parts[1]
   const encodedBranch = parts[2]
   return parts.length === 3 && segment === BRANCH_STATE_SEGMENT && typeof encodedBranch === "string" && encodedBranch.length > 0
+}
+
+export interface BranchNamespace {
+  owner: string
+  repo: string
+  branch: string
+  namespace: string
+}
+
+export function parseBranchNamespace(namespace: string): BranchNamespace | null {
+  const parts = namespace.trim().toLowerCase().split("/")
+  if (parts.length !== 4) return null
+  const [owner, repo, segment, encodedBranch] = parts
+  if (!owner || !repo || segment !== BRANCH_STATE_SEGMENT || !encodedBranch) return null
+  const branch = decodeBranchName(encodedBranch)
+  if (!branch) return null
+  return {
+    owner,
+    repo,
+    branch,
+    namespace: `${owner}/${repo}/${BRANCH_STATE_SEGMENT}/${encodedBranch}`,
+  }
 }
 
 export interface IndexTarget {

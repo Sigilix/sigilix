@@ -63,7 +63,7 @@ describe("parseFinding (SIG-161)", () => {
   it("parses the previous headline-first finding shape with visible metadata", () => {
     const body = [
       "<!-- sigilix:pr-review-finding -->",
-      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **New `scheduled` cron handler lacks test coverage**',
+      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="30" height="22"></a> **New `scheduled` cron handler lacks test coverage**',
       "_category: testing_ · _severity: P1 high (4/5)_ · _confidence: 3/5_",
       "",
       "The `scheduled` handler at `src/index.ts:960` implements the index reconciliation cron tick.",
@@ -85,7 +85,7 @@ describe("parseFinding (SIG-161)", () => {
   it("parses the current quiet headline-first finding shape", () => {
     const body = [
       "<!-- sigilix:pr-review-finding -->",
-      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **New `scheduled` cron handler lacks test coverage**',
+      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="30" height="22"></a> **New `scheduled` cron handler lacks test coverage**',
       "<!-- sigilix:category:testing -->",
       "<!-- sigilix:severity:4 -->",
       "<!-- sigilix:confidence:3 -->",
@@ -112,7 +112,7 @@ describe("parseFinding (SIG-161)", () => {
   it("parses hidden category and severity markers when the fid marker is absent", () => {
     const body = [
       "<!-- sigilix:pr-review-finding -->",
-      '<a href="https://sigilix.ai"><img alt="P2" src="https://badges.example/p2.svg" align="top" width="34" height="24"></a> **Branch namespace can drift**',
+      '<a href="https://sigilix.ai"><img alt="P2" src="https://badges.example/p2.svg" align="top" width="30" height="22"></a> **Branch namespace can drift**',
       "<!-- sigilix:category:security -->",
       "<!-- sigilix:severity:3 -->",
       "<!-- sigilix:confidence:4 -->",
@@ -134,7 +134,7 @@ describe("parseFinding (SIG-161)", () => {
   it("does not strip later standalone bold lines as V3 headings", () => {
     const body = [
       "<!-- sigilix:pr-review-finding -->",
-      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **First heading**',
+      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="30" height="22"></a> **First heading**',
       "<!-- sigilix:category:logic -->",
       "<!-- sigilix:severity:4 -->",
       "<!-- sigilix:confidence:3 -->",

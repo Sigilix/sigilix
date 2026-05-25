@@ -125,11 +125,12 @@ export function buildDynamicReviewEvidencePack(
       )
       const uncovered = changedLinesForSymbol.filter((line) => !coveredChangedLines.has(line))
       if (uncovered.length === 0) continue
-      for (const line of changedLinesForSymbol) coveredChangedLines.add(line)
+      const linesForCard = uncovered.slice(0, MAX_CHANGED_LINES_PER_CARD)
+      for (const line of linesForCard) coveredChangedLines.add(line)
       cards.push(buildCard({
         path,
         source,
-        changedLinesForCard: changedLinesForSymbol.slice(0, MAX_CHANGED_LINES_PER_CARD),
+        changedLinesForCard: linesForCard,
         symbol,
         graphNodes: args.graphNodes ?? [],
         blastCallerPaths: args.blastCallerPaths ?? [],
@@ -176,9 +177,7 @@ export function renderDynamicReviewEvidenceBlock(pack: DynamicReviewEvidencePack
       `Card ${i + 1}: ${card.path}:${card.startLine}-${card.endLine} — ${subject}`,
       `Changed lines: ${card.changedLines.join(", ")}`,
       "Local snippet:",
-      `\`\`\`${languageForPath(card.path)}`,
-      card.localSnippet,
-      "```",
+      fenceBlock(card.localSnippet, languageForPath(card.path)),
     )
 
     if (card.graphRelations.length > 0) {
@@ -193,9 +192,7 @@ export function renderDynamicReviewEvidenceBlock(pack: DynamicReviewEvidencePack
       for (const ref of card.retrievalRefs) {
         lines.push(
           `- ${ref.path}:${ref.lineStart}-${ref.lineEnd} score=${ref.score.toFixed(3)} (${ref.reason})`,
-          "  ```",
-          indentBlock(ref.excerpt, "  "),
-          "  ```",
+          indentBlockLines(fenceBlock(ref.excerpt), "  "),
         )
       }
     }
@@ -346,10 +343,10 @@ function buildRetrievalRefs(args: {
   graphPaths: ReadonlySet<string>
   chunks: readonly RetrievedChunk[]
 }): DynamicReviewEvidenceRetrievalRef[] {
+  const symbolPattern = identifierPattern(args.symbolName)
   const scored = args.chunks
     .map((chunk) => {
-      const mentionsSymbol = args.symbolName !== null &&
-        containsIdentifier(chunk.content, args.symbolName)
+      const mentionsSymbol = symbolPattern !== null && symbolPattern.test(chunk.content)
       const graphRelated = args.graphPaths.has(chunk.path)
       const samePath = chunk.path === args.path
       const rank = (mentionsSymbol ? 4 : 0) + (graphRelated ? 2 : 0) - (samePath ? 2 : 0) + chunk.score
@@ -371,15 +368,15 @@ function buildRetrievalRefs(args: {
       lineEnd: chunk.lineEnd,
       score: chunk.score,
       reason,
-      excerpt: chunkExcerpt(chunk.content, args.symbolName),
+      excerpt: chunkExcerpt(chunk.content, symbolPattern),
     }))
 }
 
-function chunkExcerpt(content: string, symbolName: string | null): string {
+function chunkExcerpt(content: string, symbolPattern: RegExp | null): string {
   const lines = content.split("\n")
   let start = 0
-  if (symbolName !== null) {
-    const hit = lines.findIndex((line) => containsIdentifier(line, symbolName))
+  if (symbolPattern !== null) {
+    const hit = lines.findIndex((line) => symbolPattern.test(line))
     if (hit >= 0) start = Math.max(0, hit - 2)
   }
   const excerpt = lines.slice(start, start + MAX_RETRIEVAL_EXCERPT_LINES).join("\n")
@@ -388,10 +385,10 @@ function chunkExcerpt(content: string, symbolName: string | null): string {
     : excerpt
 }
 
-function containsIdentifier(text: string, identifier: string): boolean {
-  if (identifier.length === 0) return false
+function identifierPattern(identifier: string | null): RegExp | null {
+  if (identifier === null || identifier.length === 0) return null
   const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(`\\b${escaped}\\b`).test(text)
+  return new RegExp(`\\b${escaped}\\b`)
 }
 
 function buildTestingContext(
@@ -411,10 +408,6 @@ function buildTestingContext(
     if (mapping.test && testingEvidence.inspectedTestFiles.includes(mapping.test)) {
       inspectedTestFiles.add(mapping.test)
     }
-  }
-  for (const inspected of testingEvidence.inspectedTestFiles) {
-    if (inspectedTestFiles.size >= MAX_TEST_REFS_PER_CARD) break
-    inspectedTestFiles.add(inspected)
   }
 
   const helperCoverage = testingEvidence.helperCoverageBySource[path]
@@ -447,7 +440,27 @@ function languageForPath(path: string): string {
   return ""
 }
 
-function indentBlock(text: string, prefix: string): string {
+function fenceBlock(text: string, language = ""): string {
+  const maxBackticks = longestBacktickRun(text)
+  const fence = "`".repeat(Math.max(3, maxBackticks + 1))
+  return `${fence}${language}\n${text}\n${fence}`
+}
+
+function longestBacktickRun(text: string): number {
+  let longest = 0
+  let current = 0
+  for (const char of text) {
+    if (char === "`") {
+      current++
+      longest = Math.max(longest, current)
+    } else {
+      current = 0
+    }
+  }
+  return longest
+}
+
+function indentBlockLines(text: string, prefix: string): string {
   return text.split("\n").map((line) => `${prefix}${line}`).join("\n")
 }
 

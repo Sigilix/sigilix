@@ -93,6 +93,98 @@ describe("buildDynamicReviewEvidencePack", () => {
     expect(rendered).toContain("inspectedTestFile:tests/parser.test.ts")
   })
 
+  it("does not mark changed symbol lines as covered until they are emitted", () => {
+    const bodyLines = Array.from({ length: 15 }, (_, i) => `  const value${i + 1} = ${i + 1}`)
+    const filesByPath = new Map([
+      [
+        "src/large-symbol.ts",
+        [
+          "export function largeSymbol(): number {",
+          ...bodyLines,
+          "  return value15",
+          "}",
+        ].join("\n"),
+      ],
+    ])
+    const changedRange = Array.from({ length: 15 }, (_, i) => i + 2)
+    const changedLines: ChangedLines = new Map([["src/large-symbol.ts", new Set(changedRange)]])
+
+    const pack = buildDynamicReviewEvidencePack({
+      filesByPath,
+      changedLines,
+      reviewablePaths: ["src/large-symbol.ts"],
+    })
+
+    expect(pack.cards).toHaveLength(2)
+    expect(pack.cards[0]?.symbolName).toBe("largeSymbol")
+    expect(pack.cards[0]?.changedLines).toEqual(changedRange.slice(0, 12))
+    expect(pack.cards[1]?.symbolName).toBeNull()
+    expect(pack.cards[1]?.changedLines).toEqual(changedRange.slice(12))
+    expect(pack.cards.flatMap((card) => card.changedLines)).toEqual(changedRange)
+  })
+
+  it("uses longer fences when snippets or excerpts contain backticks", () => {
+    const filesByPath = new Map([
+      [
+        "src/fences.ts",
+        [
+          "export function renderFence(): string {",
+          "  return \"```\"",
+          "}",
+        ].join("\n"),
+      ],
+    ])
+    const changedLines: ChangedLines = new Map([["src/fences.ts", new Set([2])]])
+
+    const pack = buildDynamicReviewEvidencePack({
+      filesByPath,
+      changedLines,
+      reviewablePaths: ["src/fences.ts"],
+      retrievalChunks: [{
+        path: "src/fence-consumer.ts",
+        lineStart: 1,
+        lineEnd: 3,
+        score: 0.75,
+        content: "renderFence()\nconst literal = \"```\"",
+      }],
+    })
+
+    const rendered = renderDynamicReviewEvidenceBlock(pack)
+    expect(rendered).toContain("````ts\n")
+    expect(rendered).toContain("  ````\n  renderFence()")
+  })
+
+  it("does not attach unrelated inspected tests to a source card", () => {
+    const filesByPath = new Map([
+      [
+        "src/no-map.ts",
+        [
+          "export function changed(): number {",
+          "  return 1",
+          "}",
+        ].join("\n"),
+      ],
+    ])
+    const changedLines: ChangedLines = new Map([["src/no-map.ts", new Set([2])]])
+
+    const pack = buildDynamicReviewEvidencePack({
+      filesByPath,
+      changedLines,
+      reviewablePaths: ["src/no-map.ts"],
+      testingEvidence: {
+        sourceFilesChanged: ["src/no-map.ts"],
+        testFilesChanged: ["tests/unrelated.test.ts"],
+        testFilesInPromptDiff: ["tests/unrelated.test.ts"],
+        testFilesNotInPromptDiff: [],
+        siblingMappings: [],
+        inspectedTestFiles: ["tests/unrelated.test.ts"],
+        helperCoverageBySource: {},
+      },
+    })
+
+    expect(pack.cards[0]?.testingContext.inspectedTestFiles).toEqual([])
+  })
+
   it("falls back to a changed file-region card when no symbol is available", () => {
     const filesByPath = new Map([
       ["src/constants.ts", ["const one = 1", "const two = 2"].join("\n")],

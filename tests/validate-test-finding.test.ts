@@ -488,6 +488,31 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     )
     expect(r.keep).toBe(true)
   })
+
+  it("DROPS an ambiguous finding (cites BOTH classes) on a status:'all' glue file (SIG-166-1 — pins the natural extension; pre-patch behavior was ambiguous-keep)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/ensemble.ts",
+        headline: "`ensemble` orchestrator lacks integration coverage",
+        body: "The orchestrator at `src/lib/ensemble.ts` cites both ->NONE and an inspected test.",
+        evidenceRefs: [
+          "siblingMapping:src/lib/ensemble.ts->NONE",
+          "inspectedTestFile:tests/ensemble.test.ts",
+        ],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/ensemble.ts"],
+        siblingMappings: [{ source: "src/lib/ensemble.ts", test: null }],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+        helperCoverageBySource: {
+          "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] },
+        },
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-helper")
+  })
 })
 
 // ── Integration with validateForSubmission ──────────────────────

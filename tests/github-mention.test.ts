@@ -587,7 +587,17 @@ describe("handleGithubMention dismiss path", () => {
     })
   })
 
-  it("threads the parsed reason into the persisted record and the reply copy (SIG-173)", async () => {
+  // SIG-173 self-review (PR #171, finding 1, P1): end-to-end coverage for
+  // the LABELED dismiss command (`@sigilix dismiss <reason>`). The bare
+  // `dismiss` flow is exercised by the first test in this describe block;
+  // this one pins all four labeled-flow invariants in a single fire:
+  //   (1) dismissLatestBlockingSigilixReview runs end-to-end
+  //   (2) the dedupe record persists `dismissReason: "too-minor"`
+  //   (3) the bot's reply body carries the `(reason: too-minor)` suffix
+  //       produced by formatReviewDismissReply
+  //   (4) VALIDATION_METRICS_DO receives a recordBatch with the
+  //       `dismissal-reason` event (`recordDismissalMetric` happy path)
+  it("end-to-end labeled dismiss (`@sigilix dismiss too-minor`) persists reason, suffixes reply, records metric (SIG-173)", async () => {
     const { env, store, metricsBatches } = makeEnv()
     listIssueCommentsMock.mockResolvedValue([
       {
@@ -617,23 +627,34 @@ describe("handleGithubMention dismiss path", () => {
       env,
     })
 
-    expect(dismissReviewMock).toHaveBeenCalled()
-    // Reason landed in the bot's acknowledgement reply body.
+    // (1) The dismiss API call fired against the right review.
+    expect(dismissReviewMock).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      7,
+      90,
+      "Dismissed by explicit @sigilix dismiss request.",
+    )
+    // (3) Reason landed in the bot's acknowledgement reply body via
+    // formatReviewDismissReply. Match the literal suffix shape so a copy
+    // change requires intentionally updating this assertion.
     expect(createIssueCommentMock).toHaveBeenCalledWith(
       "Arc-and-Anchor",
       "sigilix",
       7,
       expect.stringContaining("(reason: too-minor)"),
     )
-    // Reason landed in the dedupe record (so a replay re-renders the same copy).
+    // (2) Reason landed in the dedupe record so a replay re-renders the
+    // same copy (and `preferPersistedReason` returns the canonical label).
     expect(parseReviewDismissDedupeRecord(store.get("gh-mention:4242") ?? null)).toEqual({
       kind: "review-dismiss-result",
       result: { kind: "dismissed", reviewId: 90 },
       replyCommentId: 777,
       dismissReason: "too-minor",
     })
-    // SIG-173 follow-up: the dismissal-metric path actually fires on the
-    // happy path (the env now binds VALIDATION_METRICS_DO).
+    // (4) `recordDismissalMetric` actually fires on the happy path (the
+    // env binds VALIDATION_METRICS_DO so we exercise the real call site,
+    // not the swallowed-error fallback).
     expect(metricsBatches).toHaveLength(1)
     expect(metricsBatches[0].events).toEqual([
       { kind: "dismissal-reason", reason: "too-minor" },

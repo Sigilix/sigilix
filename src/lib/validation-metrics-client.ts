@@ -28,10 +28,15 @@ export async function recordValidationMetrics(env: Env, args: RecordBatchArgs): 
   await metricsStub(env).recordBatch(args)
 }
 
-export async function queryValidationMetrics(
+export function queryValidationMetrics(
   env: Env,
   windowDays: number,
 ): Promise<ValidationMetricsQuery> {
+  // Direct return — no `async` because there's no `await` here. The DO RPC
+  // already returns a Promise, so wrapping in `async` would only add a
+  // microtask hop. Callers `await` either way (sync throws from
+  // `metricsStub` still surface to the caller's `try/catch` around the
+  // `await` call site).
   return metricsStub(env).query({ windowDays })
 }
 
@@ -55,9 +60,10 @@ export async function recordDismissalMetric(
   })
 }
 
-export async function queryDismissalMetrics(
+export function queryDismissalMetrics(
   env: Env,
   windowDays: number,
 ): Promise<DismissalMetricsQuery> {
+  // Direct return — see `queryValidationMetrics` for the no-async rationale.
   return metricsStub(env).queryDismissals({ windowDays })
 }

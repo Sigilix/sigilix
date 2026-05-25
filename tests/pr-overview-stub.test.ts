@@ -351,16 +351,16 @@ describe("postPrOverviewStubIfNeeded — create path", () => {
     const first = selectPrOverviewStubAsciiTemplate(args)
     const second = selectPrOverviewStubAsciiTemplate({ ...args })
     const templates = new Set(
-      Array.from({ length: 24 }, (_, i) =>
+      Array.from({ length: 512 }, (_, i) =>
         selectPrOverviewStubAsciiTemplate({
           ...args,
-          headSha: `${String(i).padStart(2, "0")}${"a".repeat(38)}`,
+          headSha: `${String(i).padStart(3, "0")}${"a".repeat(37)}`,
         }),
       ),
     )
 
     expect(second).toBe(first)
-    expect(templates.size).toBeGreaterThan(1)
+    expect(templates).toEqual(new Set(STUB_ASCII_TEMPLATES))
   })
 
   it("SIG-206: keeps generated ASCII blocks rectangular for GitHub Markdown", () => {

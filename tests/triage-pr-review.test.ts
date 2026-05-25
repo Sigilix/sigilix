@@ -2363,11 +2363,19 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).toContain(`${"x".repeat(500)}...`)
   })
 
+  it("does not truncate bodies exactly at the 500-character boundary", () => {
+    const body = "x".repeat(500)
+    const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).not.toContain("<summary>Show more</summary>")
+    expect(out).toContain(body)
+    expect(out).not.toContain(`${body}...`)
+  })
+
   it("strips AST markers from visible finding text and AI prompt", () => {
     const out = formatFindingComment(
       fnd({
         headline: "bad cache <!-- ast/cache-rule/abc -->",
-        body: "Fix the cache. <!-- ast/cache-rule/body -->",
+        body: "Fix the cache. <!-- ast/cache-rule/body --><!-- ast/cache-rule/second -->",
       }),
       5,
     )

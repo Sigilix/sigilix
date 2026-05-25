@@ -54,7 +54,7 @@ describe("buildFallbackBody", () => {
   it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
     const body = buildFallbackBody(baseVerdict, [])
     // New status heading replaces "### Sigilix Summary".
-    expect(body).toMatch(/^## Sigilix: \d+ finding/m)
+    expect(body).toMatch(/^## Sigilix: \d+ non-blocking finding/m)
     // Summary survives — Kimi keeps it as a flat paragraph under
     // the heading.
     expect(body).toContain("One real bug.")
@@ -130,7 +130,7 @@ describe("buildFallbackBody", () => {
     // landed as inline comments). Heading count is in the top-of-body
     // status heading, not on the section.
     expect(body).toContain("### Review Body Findings")
-    expect(body).toMatch(/^## Sigilix: 2 findings/m)
+    expect(body).toMatch(/^## Sigilix: 2 non-blocking findings/m)
     expect(body).not.toContain("### Findings (2)")
   })
 
@@ -196,14 +196,14 @@ describe("buildFallbackSubmission", () => {
     expect(submission.comments).toBeUndefined()
   })
 
-  it("preserves event from chooseReviewEvent (REQUEST_CHANGES with findings)", () => {
+  it("uses COMMENT when fallback findings are body-only by default", () => {
     const submission = buildFallbackSubmission({
       verdict: baseVerdict,
       unanchored: [],
       prAuthor: null,
       headSha: "deadbeef",
     })
-    expect(submission.event).toBe("REQUEST_CHANGES")
+    expect(submission.event).toBe("COMMENT")
   })
 
   it("returns APPROVE when both anchored and unanchored are empty", () => {
@@ -216,10 +216,7 @@ describe("buildFallbackSubmission", () => {
     expect(submission.event).toBe("APPROVE")
   })
 
-  // CR + Sigilix PR #38 catch: event derivation merges anchored AND
-  // unanchored — otherwise a verdict whose only blocking findings are
-  // unanchored posts as APPROVE while the body lists blockers.
-  it("returns REQUEST_CHANGES when only unanchored findings exist (anchored empty)", () => {
+  it("returns COMMENT when only unanchored findings exist (anchored empty)", () => {
     const unanchored: PrReviewFinding[] = [
       { ...baseFinding, line: 999, headline: "drift-flagged-but-line-out-of-diff" },
     ]
@@ -229,7 +226,19 @@ describe("buildFallbackSubmission", () => {
       prAuthor: null,
       headSha: "deadbeef",
     })
+    expect(submission.event).toBe("COMMENT")
+  })
+
+  it("preserves an explicit REQUEST_CHANGES override for policy blockers", () => {
+    const submission = buildFallbackSubmission({
+      verdict: baseVerdict,
+      unanchored: [],
+      prAuthor: null,
+      headSha: "deadbeef",
+      eventOverride: "REQUEST_CHANGES",
+    })
     expect(submission.event).toBe("REQUEST_CHANGES")
+    expect(submission.body).toContain("To dismiss this review")
   })
 
   it("threads commit_id from headSha so the review is pinned to the reviewed sha", () => {
@@ -292,8 +301,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     expect(submission.comments?.[0]?.line).toBe(42)
   })
 
-  it("derives event from anchored + unanchored merged set (no APPROVE-with-blockers)", () => {
-    // Anchored empty + only-unanchored blocking findings → MUST be REQUEST_CHANGES.
+  it("uses COMMENT when findings only render in the review body", () => {
     const unanchored: PrReviewFinding[] = [
       { ...baseFinding, line: 999, headline: "blocking-but-unanchored" },
     ]
@@ -303,7 +311,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       headSha: "deadbeef",
       unanchored,
     })
-    expect(submission.event).toBe("REQUEST_CHANGES")
+    expect(submission.event).toBe("COMMENT")
   })
 
   it("APPROVE when both anchored and unanchored are empty", () => {

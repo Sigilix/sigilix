@@ -10,6 +10,7 @@ import {
   CHECK_ANNOTATION_TEXT_LIMIT,
   CHECK_ANNOTATION_TITLE_LIMIT,
   chooseReviewEvent,
+  chooseReviewEventForRenderedFindings,
   chooseReviewEventWithGate,
   computeGateScore,
   computeShadowGateDivergence,
@@ -308,6 +309,53 @@ describe("chooseReviewEvent", () => {
       const deletedAuthor: AuthoredItem = { user: null }
       expect(chooseReviewEvent([], [deletedAuthor])).toBe("APPROVE")
     })
+  })
+})
+
+describe("chooseReviewEventForRenderedFindings", () => {
+  const f = (score = 3): PrReviewFinding => ({ ...baseFinding, score })
+  const crThread: AuthoredItem = { user: { login: "coderabbitai[bot]" } }
+  const sigilixThread: AuthoredItem = { user: { login: "sigilix[bot]" } }
+
+  it("APPROVE when no rendered findings or Sigilix-owned open items remain", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [],
+    })).toBe("APPROVE")
+  })
+
+  it("REQUEST_CHANGES when at least one finding rendered inline", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [f()],
+      bodyOnlyFindings: [f(2)],
+    })).toBe("REQUEST_CHANGES")
+  })
+
+  it("COMMENT when findings are visible only in the review body", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [f(5)],
+    })).toBe("COMMENT")
+  })
+
+  it("REQUEST_CHANGES for unresolved Sigilix-authored items, but not competitor items", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [],
+      openItems: [crThread],
+    })).toBe("APPROVE")
+
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [f()],
+      openItems: [crThread],
+    })).toBe("COMMENT")
+
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [],
+      openItems: [sigilixThread],
+    })).toBe("REQUEST_CHANGES")
   })
 })
 
@@ -1219,6 +1267,7 @@ describe("buildReviewSubmission", () => {
       headSha: "abc",
     })
 
+    expect(out.submission.event).toBe("COMMENT")
     expect(out.submission.comments).toBeUndefined()
     expect(out.bodyOnlyFindings).toEqual([fileFinding])
     expect(out.bodyOnlyAnnotations[0]).toMatchObject({
@@ -1493,7 +1542,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(body).not.toContain(markerForBlock)
   })
 
-  it("keeps the review event REQUEST_CHANGES even when all findings route to the body", () => {
+  it("uses COMMENT when all findings route to the body", () => {
     const allBlock: PrReviewVerdict = {
       summary: "only block-level findings.",
       confidence: 4,
@@ -1506,8 +1555,9 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       headSha: "abc",
       addedLineTextByLine,
     })
-    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("lacks integration tests")
   })
 
@@ -1698,8 +1748,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
     expect(out.body).toContain("Comment-level (high, score 4)")
@@ -1727,8 +1778,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("File-level (critical, score 5)")
     expect(out.body).toContain("module-level lifecycle ordering is unsafe")
@@ -2326,7 +2378,10 @@ describe("provenance footer (ARC-184)", () => {
 
   it("buildFallbackBody REQUEST_CHANGES path still ends with the provenance footer", () => {
     const expected = `_Reviewed against \`abc1234\` at ${new Date(NOW).toISOString()}._`
-    const out = buildFallbackBody(verdictWithFinding, [], { headSha: HEAD, nowMs: NOW })
+    const out = buildFallbackBody(
+      verdictWithFinding, [], { headSha: HEAD, nowMs: NOW },
+      undefined, undefined, undefined, undefined, undefined, "REQUEST_CHANGES",
+    )
     expect(out.trimEnd().endsWith(expected)).toBe(true)
   })
 

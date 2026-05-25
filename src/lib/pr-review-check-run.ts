@@ -147,7 +147,7 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
  * comment.
  */
 export interface ReviewCheckMeta {
-  event: "APPROVE" | "REQUEST_CHANGES"
+  event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
   findingsCount: number
   surface?: "review" | "comment" | "skip-notice"
   checkAnnotations?: CheckRunAnnotation[]
@@ -308,6 +308,12 @@ export function renderOutputForConclusion(
         }
         const n = reviewMeta.findingsCount
         const noun = n === 1 ? "finding" : "findings"
+        if (reviewMeta.event === "COMMENT") {
+          return {
+            title: `${n} non-blocking ${noun} posted`,
+            summary: `Sigilix reviewed this PR and posted a COMMENT review with ${n} non-blocking ${noun}. Open the conversation tab and check annotations for body-only findings.`,
+          }
+        }
         return {
           title: `${n} ${noun} — changes requested`,
           summary: `Sigilix reviewed this PR and posted a REQUEST_CHANGES review with ${n} ${noun}. Open the conversation tab to view inline comments.`,

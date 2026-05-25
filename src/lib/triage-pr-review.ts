@@ -679,6 +679,12 @@ interface BuildReviewArgs {
   prAuthor: string | null
   headSha: string
   /**
+   * Explicit caller override for policy-level blockers that are not
+   * represented by inline comments. Most body-only findings render as
+   * COMMENT; approval-readiness can still force REQUEST_CHANGES.
+   */
+  eventOverride?: ReviewEvent
+  /**
    * ARC-184: Override `Date.now()` for deterministic snapshots in
    * tests. Production callers omit this and the renderer falls back
    * to wall-clock time at submit-render time.
@@ -819,6 +825,7 @@ export function buildReviewSubmissionWithMetadata({
   retriggerUrl,
   reviewable,
   addedLineTextByLine,
+  eventOverride,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
   // ARC-156 follow-up: sanitize every prose field for GitHub
   // rendering BEFORE downstream renderers see the verdict. Wraps
@@ -826,12 +833,6 @@ export function buildReviewSubmissionWithMetadata({
   // can't open a real DOM element that breaks paragraph rendering.
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
-  // Event derivation merges anchored + unanchored so a verdict whose
-  // only blocking findings happen to be unanchored doesn't post APPROVE
-  // (CR + Sigilix PR #38 catch). Computed from the FULL sanitized set
-  // BEFORE the SIG-127 verdict-rebuild below so the event/posture is
-  // unchanged regardless of where each finding ends up rendering.
-  const event = chooseReviewEvent([...verdict.findings, ...sanitizedUnanchored])
 
   // SIG-127: partition the anchored findings into those whose anchored
   // added line is substantive (stay inline) vs. non-substantive (route
@@ -920,6 +921,10 @@ export function buildReviewSubmissionWithMetadata({
   // is the original sanitized set and `verdict.findings` is unchanged.
   const renderVerdict: PrReviewVerdict = { ...verdict, findings: inlineFindings }
   const unanchored: PrReviewFinding[] = [...sanitizedUnanchored, ...bodyFindings]
+  const event = eventOverride ?? chooseReviewEventForRenderedFindings({
+    inlineFindings,
+    bodyOnlyFindings: unanchored,
+  })
 
   const prov: ProvenanceCtx = nowMs !== undefined ? { headSha, nowMs } : { headSha }
   // ARC-281: dispatch directly to the new renderers instead of
@@ -934,15 +939,11 @@ export function buildReviewSubmissionWithMetadata({
   // fields, but it's cheaper / clearer to forward them unconditionally.
   if (typeof reviewCounter === "number") renderArgs.reviewCounter = reviewCounter
   if (retriggerUrl) renderArgs.retriggerUrl = retriggerUrl
-  // SIG-161 PR 4a: ReviewEvent now includes "COMMENT" but the legacy
-  // `chooseReviewEvent` (used at this call site) returns the narrowed
-  // `Exclude<ReviewEvent, "COMMENT">` — the COMMENT branch is
-  // unreachable until PR 4b switches the call site to the gate's
-  // wrapper. Keep this branch terse; the COMMENT body renderer
-  // (`renderCommentBody`) is defined for that wrapper's use.
   const body =
     event === "APPROVE"
       ? renderApproveBody(renderArgs)
+      : event === "COMMENT"
+        ? renderCommentBody(renderArgs)
       : renderRequestChangesBody(renderArgs)
   const comments: SubmitReviewComment[] = inlineFindings.map((f, i) => {
     // ARC-189: append per-finding sigilix marker on its own line so
@@ -1005,6 +1006,8 @@ interface BuildFallbackArgs {
   unanchored: PrReviewFinding[]
   prAuthor: string | null
   headSha: string
+  /** See BuildReviewArgs.eventOverride. */
+  eventOverride?: ReviewEvent
   /** ARC-182: optional stack context, forwarded to buildFallbackBody. */
   stack?: StackContext
   /** ARC-281: specialist coverage roster (forwarded to renderer). */
@@ -1045,19 +1048,20 @@ export function buildFallbackSubmission({
   delta,
   reviewCounter,
   retriggerUrl,
+  eventOverride,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
   // path so the body-rendered findings also get HTML-tag wrap.
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
-  // Event derivation merges anchored + unanchored — same fix as
-  // `buildReviewSubmission`. Without this, a verdict whose only
-  // blocking findings are unanchored would post APPROVE while the
-  // body lists blockers (CR + Sigilix PR #38 catch).
-  const event = chooseReviewEvent([...verdict.findings, ...unanchored])
+  const all = [...verdict.findings, ...unanchored]
+  const event = eventOverride ?? chooseReviewEventForRenderedFindings({
+    inlineFindings: [],
+    bodyOnlyFindings: all,
+  })
   const body = buildFallbackBody(
-    verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl,
+    verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl, event,
   )
   return {
     event,
@@ -1083,6 +1087,7 @@ export function buildFallbackBody(
   delta?: DeltaBadgeCounts | null,
   reviewCounter?: number,
   retriggerUrl?: string,
+  eventOverride?: ReviewEvent,
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
   // dropped the inline anchors, so the body must carry every
@@ -1091,7 +1096,10 @@ export function buildFallbackBody(
   // the body-only findings section grouped by file, which is exactly
   // the right place when none of them landed inline.
   const all = [...verdict.findings, ...unanchored]
-  const event = chooseReviewEvent(all)
+  const event = eventOverride ?? chooseReviewEventForRenderedFindings({
+    inlineFindings: [],
+    bodyOnlyFindings: all,
+  })
   if (event === "APPROVE") {
     const args: RenderBodyArgs = { verdict, unanchored: [] }
     if (stack !== undefined) args.stack = stack
@@ -1110,7 +1118,9 @@ export function buildFallbackBody(
   if (delta !== undefined) args.delta = delta
   if (typeof reviewCounter === "number") args.reviewCounter = reviewCounter
   if (retriggerUrl) args.retriggerUrl = retriggerUrl
-  return renderRequestChangesBody(args)
+  return event === "COMMENT"
+    ? renderCommentBody(args)
+    : renderRequestChangesBody(args)
 }
 
 export function chooseReviewEvent(
@@ -1144,6 +1154,33 @@ export function chooseReviewEvent(
   if (findings.length > 0) return "REQUEST_CHANGES"
   const sigilixOpenItems = filterToSigilixAuthored(openItems)
   return sigilixOpenItems.length === 0 ? "APPROVE" : "REQUEST_CHANGES"
+}
+
+export interface ChooseReviewEventForRenderedFindingsArgs {
+  inlineFindings: readonly PrReviewFinding[]
+  bodyOnlyFindings: readonly PrReviewFinding[]
+  openItems?: ReadonlyArray<AuthoredItem>
+}
+
+/**
+ * Verdict gate for the final rendered surface.
+ *
+ * Inline review comments are blocking because GitHub places them on
+ * changed code. Body-only findings are still surfaced, but they do
+ * not create a misleading REQUEST_CHANGES review unless a separate
+ * policy blocker explicitly overrides the event. This mirrors the
+ * product expectation from competitor examples: off-diff/global
+ * feedback remains visible without pretending it is an inline fix.
+ */
+export function chooseReviewEventForRenderedFindings(
+  args: ChooseReviewEventForRenderedFindingsArgs,
+): ReviewEvent {
+  if (args.inlineFindings.length > 0) return "REQUEST_CHANGES"
+
+  const sigilixOpenItems = filterToSigilixAuthored(args.openItems ?? [])
+  if (sigilixOpenItems.length > 0) return "REQUEST_CHANGES"
+
+  return args.bodyOnlyFindings.length === 0 ? "APPROVE" : "COMMENT"
 }
 
 // ─── SIG-161 PR 4a: thresholded gate ─────────────────────────────────

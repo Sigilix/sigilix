@@ -124,8 +124,13 @@ Score the finding's correctness on its merits — TP if the claim is right, FP i
 
 ```bash
 cd sigilix
-pnpm tsx scripts/collect-sig-161-findings.ts > .claude/research/sig-161-labeling/findings-source.jsonl
+npm run collect-sig-161-findings -- \
+  --repo Sigilix/sigilix:60 \
+  --repo Rubberfit/rubberfit:30 \
+  --out .claude/research/sig-161-labeling/findings-source.jsonl
 ```
+
+> The corpus committed at `.claude/research/sig-161-labeling/findings-source.jsonl` (76 findings as of 2026-05-25) was produced with this EXACT invocation. Re-running with different `--repo` arguments will yield a different distribution; if expanding the corpus, prefer ADDING new findings rather than regenerating from scratch (per §7).
 
 This pulls findings from the last ~60 dogfood PRs + ValidationMetricsDO rejections + Rubberfit sample. The output is immutable — don't edit it.
 
@@ -137,7 +142,7 @@ If founder time is tight:
 pnpm tsx scripts/prelabel-sig-161.ts --input findings-source.jsonl --output labels-claude.csv
 ```
 
-This script (Claude-implemented in PR 4 if founder picks the hybrid option) reads each finding + diff + cited lines and emits a `TP`/`FP`/`borderline` label with a one-sentence rationale. Founder reviews-not-labels — accept, override, or flip to borderline — which is ~3-4x faster than labeling from scratch.
+This script (Claude-implemented in PR 4 if founder picks the hybrid option) reads each finding + diff + cited lines and emits a `TP`/`FP`/`borderline` label with a one-sentence rationale. Founder reviews, not labels — accept, override, or flip to borderline — which is ~3-4x faster than labeling from scratch.
 
 Claude's pre-labels are persistent in `labels-claude.csv` even after founder review, for audit.
 

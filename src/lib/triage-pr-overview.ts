@@ -79,6 +79,23 @@ export interface PrOverviewVerdict {
   mermaidDiagram?: string
 }
 
+/**
+ * SIG-216: review-time context passed in by `handlePrReviewEnsemble`
+ * when the overview is being rendered inline with the review post.
+ * When present, the prompt builder appends a short paragraph informing
+ * the model of the review's findings so the overview body can reflect
+ * the verdict ("3 P1 + 2 P2 concerns surfaced" vs the generic
+ * review-independent framing). Omitted by warmup-driven enqueues and
+ * any other path that runs the overview without an associated review
+ * — those fall back to the pre-SIG-216 prompt.
+ */
+export interface PrOverviewReviewContext {
+  findingsCount: number
+  severityBreakdown: Record<string, number>
+  categoryBreakdown: Record<string, number>
+  verdict: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+}
+
 export interface PrOverviewArgs {
   owner: string
   repo: string
@@ -93,15 +110,28 @@ export interface PrOverviewArgs {
    * the per-(PR, headSha) dedupe (set by the initial pr-overview
    * run earlier in the same headSha) would suppress the refresh.
    * Webhook-driven calls omit this flag and keep dedupe intact.
+   *
+   * SIG-216: under the new ordering the ensemble passes `force: true`
+   * + a `reviewContext` together so the inline-from-review render
+   * bypasses any KV lock a prior queued run may have set.
    */
   force?: boolean
+  /**
+   * SIG-216: optional review-time finding context. When present, the
+   * prompt builder appends a paragraph summarizing the review's
+   * verdict + finding mix so the overview body can be informed by
+   * what the review actually surfaced. Absent → existing
+   * review-independent prompt (back-compat for warmup-driven and any
+   * legacy queue-dispatched overview runs).
+   */
+  reviewContext?: PrOverviewReviewContext
 }
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
 
 export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env, force } = args
+  const { owner, repo, prNumber, headSha, installationId, env, force, reviewContext } = args
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-overview] ${label} +${Date.now() - t0}ms`, {
@@ -322,6 +352,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       diff: promptDiff,
       newCommits: recentCommits,
       isFirstRun: existingBeforeModel == null,
+      ...(reviewContext ? { reviewContext } : {}),
     })
 
     const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
@@ -415,17 +446,17 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // ─── SIG-84: stale-head guard #2 (pre-write) ────────────────────
     //
     // Re-check the PR head right before the write. The Ollama call took
-    // 10-30s; a new commit may have landed in that window. Without this,
-    // the OLD head's walkthrough would overwrite either:
-    //   (a) the NEW head's `_Reviewing…_` stub (just posted at webhook
-    //       time by `postPrOverviewStubIfNeeded`), or
-    //   (b) the NEW head's already-rendered walkthrough (if the new
-    //       head's overview happened to complete first).
-    // Either way the comment moves backwards from the customer's
-    // perspective. Cheap (one extra `getPullRequest` round-trip) and
+    // 10-30s; a new commit may have landed in that window. Without
+    // this, the OLD head's walkthrough would overwrite the NEW head's
+    // already-rendered walkthrough (if the new head's overview
+    // happened to complete first), moving the comment backwards from
+    // the customer's perspective. SIG-216 drop-the-stub pattern: there
+    // is no longer a pre-review stub at webhook time to clobber, but
+    // the head-moved-during-Ollama race against a sibling overview run
+    // remains. Cheap (one extra `getPullRequest` round-trip) and
     // bounded to the path that actually writes — `force`-mode callers
-    // bypass since they're invoked by the review SUCCESS path on the
-    // live head.
+    // bypass since they're invoked by the ensemble on the live head
+    // (already guarded by the ensemble's stale-head guard #2).
     if (!force) {
       try {
         const metaCheck = await client.getPullRequest(owner, repo, prNumber)
@@ -527,6 +558,13 @@ interface PromptCtx {
   diff: string
   newCommits: PrCommit[]
   isFirstRun: boolean
+  /**
+   * SIG-216: when this overview run is paired with a review post,
+   * the ensemble passes the verdict + finding mix so the prompt can
+   * tell the model what the reviewer concluded. Absent on
+   * review-independent runs (warmup-driven, etc.).
+   */
+  reviewContext?: PrOverviewReviewContext
 }
 
 function buildPrompt(ctx: PromptCtx): string {
@@ -552,10 +590,46 @@ function buildPrompt(ctx: PromptCtx): string {
     "[DIFF]",
     truncate(ctx.diff, LIMITS.prDiff),
     "",
+  ]
+  if (ctx.reviewContext) {
+    sections.push(
+      "[REVIEW VERDICT — Sigilix's specialist review of this same head is being posted alongside your overview. Weave the findings into your summary so the two comments land as one coherent signal; do NOT enumerate the findings (the reviewer can read them inline).]",
+      renderReviewContextBlock(ctx.reviewContext),
+      "",
+    )
+  }
+  sections.push(
     "[OUTPUT]",
     "Return only the JSON object. No prose, no Markdown fence, no array.",
-  ]
+  )
   return sections.join("\n")
+}
+
+/**
+ * SIG-216: render the review-time context for the prompt. Compact —
+ * one line per dimension so the model can scan it without spending
+ * tokens. Severity / category orderings are deterministic so prompt
+ * diffs stay stable.
+ */
+function renderReviewContextBlock(ctx: PrOverviewReviewContext): string {
+  const sevEntries = Object.entries(ctx.severityBreakdown)
+    .filter(([, n]) => typeof n === "number" && n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+  const catEntries = Object.entries(ctx.categoryBreakdown)
+    .filter(([, n]) => typeof n === "number" && n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+  const sevLine = sevEntries.length > 0
+    ? sevEntries.map(([k, n]) => `${k}=${n}`).join(", ")
+    : "(none)"
+  const catLine = catEntries.length > 0
+    ? catEntries.map(([k, n]) => `${k}=${n}`).join(", ")
+    : "(none)"
+  return [
+    `Verdict: ${ctx.verdict}`,
+    `Findings: ${ctx.findingsCount}`,
+    `By severity: ${sevLine}`,
+    `By category: ${catLine}`,
+  ].join("\n")
 }
 
 function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {

@@ -206,7 +206,7 @@ import {
   type PerfBudgetsHit,
 } from "./perf-budgets"
 import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
-import { waitForPrOverviewStub } from "./pr-overview-stub"
+import { handlePrOverview, type PrOverviewReviewContext } from "./triage-pr-overview"
 import {
   runDocsCoverageCheck,
   renderDocsCoverageForPrompt,
@@ -3233,39 +3233,17 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "stale_head", cache)
     }
 
-    // ─── SIG-84: wait for the pr-overview stub ─────────────────
+    // ─── SIG-216: overview-then-submit ordering ────────────────
     //
-    // The webhook handler posts a "Reviewing…" stub for the
-    // pr-overview sticky synchronously BEFORE enqueueing this review
-    // job (see `postPrOverviewStubIfNeeded` in pr-overview-stub.ts).
-    // Polling for the KV flag here means the overview comment id is
-    // guaranteed to be on the PR timeline before we call
-    // `submitReview` below — fixes the founder-flagged backwards
-    // ordering (review approves first, overview lands ~30s later).
-    //
-    // 2s ceiling per Codex Q1 sign-off — covers the worst-case
-    // cross-region KV propagation delay without meaningfully slowing
-    // the review pipeline (overall review budget is 60s+). On the
-    // happy path the flag is already present from a fast-first-read,
-    // so the wait is ~0ms.
-    //
-    // Codex Q5 tweak: skip the wait entirely when the customer has
-    // opted OUT of pr-overview — there's no stub to wait for, and
-    // burning up to 2s of review time on a non-existent comment
-    // would be pure latency for no UX gain.
-    if (isPrOverviewEnabled(sigilixConfig)) {
-      const stubWaitStartMs = Date.now()
-      const stubOutcome = await waitForPrOverviewStub({
-        env, owner, repo, prNumber, headSha,
-      })
-      console.log(JSON.stringify({
-        event: "pr-review-overview-stub-wait",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        outcome: stubOutcome.kind,
-        waited_ms: stubOutcome.waitedMs,
-        elapsed_ms: Date.now() - stubWaitStartMs,
-      }))
-    }
+    // Pre-SIG-216 the overview ran as its own queue job kicked off
+    // by the push webhook and a "Reviewing…" stub was synchronously
+    // posted at webhook time so the review-side wait gate could line
+    // it up ahead of `submitReview`. Founder direction 2026-05-25:
+    // drop the stub-first pattern; the overview comment now lands
+    // immediately BEFORE the review comment in this same handler
+    // invocation, CodeRabbit-style. See `runInlineOverview` below
+    // (called once the submission verdict is final, just before the
+    // pre-submit dismiss + `submitReview`).
 
     // ─── Submit ────────────────────────────────────────────────
     // GitHub validates every inline anchor and rejects the entire review
@@ -3799,6 +3777,66 @@ export async function handlePrReviewEnsemble(
     const checkAnnotationMeta = (annotations: CheckRunAnnotation[]) =>
       annotations.length > 0 ? { checkAnnotations: annotations } : {}
 
+    // ─── SIG-216: post the overview comment IMMEDIATELY before the
+    // review submit so the two GitHub timeline entries land in the
+    // same time window (CodeRabbit-style Walkthrough-then-Review).
+    // The overview is informed by the review's verdict — we pass
+    // findingsCount + severity + category breakdown + the chosen
+    // event so the model can summarize "what reviewer concluded"
+    // instead of running blind. Gated on `overview.enabled` per the
+    // same `sigilixConfig` the ensemble loaded earlier; opted-out
+    // customers skip the inline render.
+    //
+    // Awaited (not `ctx.waitUntil`) so the overview comment is
+    // GUARANTEED on the PR timeline before `submitReview` fires.
+    // `force: true` bypasses the per-(PR, headSha) dedupe inside
+    // `handlePrOverview` so a sibling queued run (legacy warmup
+    // refresh, etc.) on this SHA can't block us.
+    //
+    // Best-effort: every failure mode inside `handlePrOverview` is
+    // already swallowed + logged by the handler itself; the outer
+    // try/catch here is defense in depth against an unexpected
+    // sync-throw so a hypothetical bug in the overview path can't
+    // take down the review submit. The customer still gets the
+    // review even if the overview comment fails to land.
+    if (isPrOverviewEnabled(sigilixConfig)) {
+      const overviewStartMs = Date.now()
+      const overviewReviewContext: PrOverviewReviewContext = {
+        findingsCount:
+          submissionVerdict.findings.length + renderableUnanchoredForSubmission.length,
+        severityBreakdown: countBySeverity([
+          ...submissionVerdict.findings,
+          ...renderableUnanchoredForSubmission,
+        ]),
+        categoryBreakdown: countByCategory([
+          ...submissionVerdict.findings,
+          ...renderableUnanchoredForSubmission,
+        ]),
+        verdict: primaryEvent,
+      }
+      try {
+        await handlePrOverview({
+          owner, repo, prNumber, headSha, installationId, env,
+          force: true,
+          reviewContext: overviewReviewContext,
+        })
+        console.log(JSON.stringify({
+          event: "pr-review-inline-overview-posted",
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+          elapsed_ms: Date.now() - overviewStartMs,
+          findings_count: overviewReviewContext.findingsCount,
+          verdict: overviewReviewContext.verdict,
+        }))
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "pr-review-inline-overview-failed",
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+          elapsed_ms: Date.now() - overviewStartMs,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
+
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE
     // posting the new one, so the GitHub timeline renders cleanup-
     // above-current-review (oldest-at-top). Pre-ARC-287 the dismiss
@@ -3978,25 +4016,13 @@ export async function handlePrReviewEnsemble(
       // falls back to dispatch instead of skipping. The helper
       // swallows internally.
       await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // ARC-258 follow-up: enqueue a forced pr-overview refresh so
-      // any stale warmup-callout marker in the sticky body gets
-      // cleared. `force: true` bypasses the per-headSha dedupe so
-      // the refresh runs within the same headSha as the initial
-      // overview render (5-min lock would otherwise suppress it).
-      // Best-effort: failure doesn't affect the review status.
-      try {
-        await env.OPENCLAW_JOBS.send({
-          type: "pr-overview",
-          owner, repo, prNumber, headSha, installationId,
-          force: true,
-        })
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-overview-refresh-enqueue-failed",
-          owner, repo, prNumber,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // SIG-216: post-submit `pr-overview` refresh enqueue removed.
+      // The overview is now rendered INLINE earlier in this handler
+      // (right before `dismissPriorSigilixReviews`), informed by the
+      // same submissionVerdict the review is built from — so there's
+      // no stale-warmup-callout to clear and nothing for a separate
+      // queue job to add. ARC-258's post-review refresh use case is
+      // subsumed by the inline render.
       await maybePostAstAutoInline()
       // ARC-276: signal the customer-visible verdict back to the
       // dispatcher so the Sigilix Check Run title can render
@@ -4234,22 +4260,11 @@ export async function handlePrReviewEnsemble(
       // noop-merge skip on the next synchronize. Same best-effort
       // semantics as the lastReviewedSha write above.
       await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // ARC-258 follow-up: forced pr-overview refresh on the 422
-      // fallback success path too — same rationale as the primary
-      // submit (clear any stale warmup callout in the sticky body).
-      try {
-        await env.OPENCLAW_JOBS.send({
-          type: "pr-overview",
-          owner, repo, prNumber, headSha, installationId,
-          force: true,
-        })
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-overview-refresh-enqueue-failed",
-          owner, repo, prNumber,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // SIG-216: post-submit `pr-overview` refresh enqueue removed
+      // here too — same rationale as the primary inline-anchored
+      // submit path above. The overview already ran inline at the
+      // top of the submit block, before the 422 fallback was even
+      // considered, so the comment is already on the timeline.
       await maybePostAstAutoInline()
       // ARC-276: same reviewMeta plumbing as the inline-anchored
       // path — the anchorless fallback is still a posted review.
@@ -4623,6 +4638,50 @@ function countLines(diff: string): number {
     else if (line.startsWith("-") && !line.startsWith("---")) n++
   }
   return n
+}
+
+/**
+ * SIG-216: bucket a finding's score (1-5) into the same P0/P1/P2/P3
+ * severity tiers the review body uses (`severityBadgeImg` in
+ * `triage-pr-review.ts`) so the overview prompt and the review body
+ * speak the same language. Pure.
+ */
+function severityTier(score: number): "P0" | "P1" | "P2" | "P3" {
+  if (score >= 5) return "P0"
+  if (score === 4) return "P1"
+  if (score === 3) return "P2"
+  return "P3"
+}
+
+/**
+ * SIG-216: count findings by P0/P1/P2/P3 severity tier for the
+ * `reviewContext.severityBreakdown` passed into `handlePrOverview`.
+ * Empty buckets are omitted so the prompt stays compact. Pure.
+ */
+function countBySeverity(
+  findings: readonly { score: number }[],
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const f of findings) {
+    const tier = severityTier(f.score)
+    out[tier] = (out[tier] ?? 0) + 1
+  }
+  return out
+}
+
+/**
+ * SIG-216: count findings by `FindingCategory` for the
+ * `reviewContext.categoryBreakdown` passed into `handlePrOverview`.
+ * Empty buckets are omitted so the prompt stays compact. Pure.
+ */
+function countByCategory(
+  findings: readonly { category: string }[],
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const f of findings) {
+    out[f.category] = (out[f.category] ?? 0) + 1
+  }
+  return out
 }
 
 /** Single-page cap on `listPullRequestReviews`. Reviews are returned

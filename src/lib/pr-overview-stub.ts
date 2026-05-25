@@ -1,5 +1,22 @@
 // SIG-84 — synchronous review-in-progress stub for the pr-overview sticky.
 //
+// ⚠ DEPRECATED as of SIG-216 (2026-05-25). Founder direction:
+// "no dont post before or after. post when review completes and fires.
+// like coderabbit". The webhook handler no longer calls
+// `postPrOverviewStubIfNeeded`, the pr-review ensemble no longer
+// calls `waitForPrOverviewStub`, and the overview now posts INLINE
+// from inside `handlePrReviewEnsemble` immediately before
+// `submitReview`. CodeRabbit-style Walkthrough-then-Review ordering.
+//
+// The helpers in this file are intentionally KEPT (not deleted) so
+// the change is easy to revert if the new ordering doesn't stick in
+// dogfood. The unit tests on `pr-overview-stub.test.ts` continue to
+// run against these helpers as pure code; they're just unwired from
+// the production flow. Plan to delete the file in a follow-up after
+// the new ordering proves out.
+//
+// ─── Pre-SIG-216 design (kept for context) ──────────────────────────
+//
 // Founder direction (post-PR #100): the pr-overview sticky comment was
 // posting ~30s AFTER the `pr-review` event on every PR push because
 // both ran as independent parallel queue consumers. Reads backwards —

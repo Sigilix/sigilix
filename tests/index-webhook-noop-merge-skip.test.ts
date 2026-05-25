@@ -377,9 +377,16 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
     expect(mockGetPullRequestDiff).not.toHaveBeenCalled()
   })
 
-  it("does NOT touch pr-overview path (still dispatches stub + queue)", async () => {
-    // The skip is review-only. pr-overview is cheap + a no-op merge
-    // is still a meaningful timeline event worth a fresh sticky.
+  it("does NOT touch the pr-labels dispatch (review-only skip)", async () => {
+    // The noop-merge skip is review-only — the label-picker still
+    // runs because labels are a separate product capability.
+    //
+    // SIG-216: pre-review pr-overview stub + pr-overview queue
+    // dispatch are gone for ALL webhook paths (the overview now runs
+    // inline from the ensemble's review-post flow). The noop-merge
+    // skip path doesn't enqueue a pr-review either, so the overview
+    // never lands — that's accepted: a no-op merge produces no new
+    // signal, so no new overview is warranted.
     const priorHash = await computeDiffHash(CURRENT_DIFF)
     const { env, sentJobs } = makeEnv({
       [`pr-review-diff-hash:${OWNER}/${REPO}#${PR_NUMBER}`]: JSON.stringify({
@@ -392,10 +399,8 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
 
     await postSynchronizeWebhook(worker, env)
 
-    // Both the stub-post helper + the pr-overview queue dispatch
-    // still fire on the no-op-merge skip path.
-    expect(mockPostStub).toHaveBeenCalledOnce()
-    expect(sentJobs.map((j) => j.type)).toContain("pr-overview")
+    expect(mockPostStub).not.toHaveBeenCalled()
+    expect(sentJobs.map((j) => j.type)).not.toContain("pr-overview")
     expect(sentJobs.map((j) => j.type)).toContain("pr-labels")
   })
 })

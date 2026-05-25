@@ -388,7 +388,10 @@ function chunkExcerpt(content: string, symbolPattern: RegExp | null): string {
 function identifierPattern(identifier: string | null): RegExp | null {
   if (identifier === null || identifier.length === 0) return null
   const escaped = identifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-  return new RegExp(`(?:^|[^A-Za-z0-9_$])${escaped}(?=$|[^A-Za-z0-9_$])`)
+  return new RegExp(
+    `(?<![$_\\p{ID_Continue}\\u200C\\u200D])${escaped}(?![$_\\p{ID_Continue}\\u200C\\u200D])`,
+    "u",
+  )
 }
 
 function buildTestingContext(

@@ -123,6 +123,35 @@ describe("buildDynamicReviewEvidencePack", () => {
     expect(pack.cards.flatMap((card) => card.changedLines)).toEqual(changedRange)
   })
 
+  it("clamps local snippets when a changed symbol is larger than the snippet budget", () => {
+    const bodyLines = Array.from({ length: 40 }, (_, i) => `  const value${i + 1} = ${i + 1}`)
+    const filesByPath = new Map([
+      [
+        "src/wide-symbol.ts",
+        [
+          "export function wideSymbol(): number {",
+          ...bodyLines,
+          "  return value40",
+          "}",
+        ].join("\n"),
+      ],
+    ])
+    const changedLines: ChangedLines = new Map([["src/wide-symbol.ts", new Set([20, 21])]])
+
+    const pack = buildDynamicReviewEvidencePack({
+      filesByPath,
+      changedLines,
+      reviewablePaths: ["src/wide-symbol.ts"],
+    })
+
+    expect(pack.cards).toHaveLength(1)
+    expect(pack.cards[0]?.startLine).toBe(12)
+    expect(pack.cards[0]?.endLine).toBe(35)
+    expect(pack.cards[0]?.localSnippet.split("\n")).toHaveLength(24)
+    expect(pack.cards[0]?.localSnippet).toContain("> 20 |   const value19 = 19")
+    expect(pack.cards[0]?.localSnippet).toContain("> 21 |   const value20 = 20")
+  })
+
   it("uses longer fences when snippets or excerpts contain backticks", () => {
     const filesByPath = new Map([
       [
@@ -237,6 +266,53 @@ describe("buildDynamicReviewEvidencePack", () => {
       reason: "mentions changed symbol + graph-related",
     })
     expect(bySymbol.get("render$")?.retrievalRefs[0]?.excerpt).toContain("render$(parsed)")
+  })
+
+  it("does not match ASCII symbols inside larger Unicode identifiers", () => {
+    const filesByPath = new Map([
+      [
+        "src/unicode-boundary.ts",
+        [
+          "export function parse(input: string): string {",
+          "  return input.trim()",
+          "}",
+        ].join("\n"),
+      ],
+    ])
+    const changedLines: ChangedLines = new Map([["src/unicode-boundary.ts", new Set([2])]])
+
+    const pack = buildDynamicReviewEvidencePack({
+      filesByPath,
+      changedLines,
+      reviewablePaths: ["src/unicode-boundary.ts"],
+      graphNodes: [{
+        path: "src/unicode-neighbor.ts",
+        symbolId: null,
+        name: null,
+        hop: 1,
+        edgeKind: "import",
+      }],
+      retrievalChunks: [
+        {
+          path: "src/unicode-neighbor.ts",
+          lineStart: 1,
+          lineEnd: 1,
+          score: 0.9,
+          content: "const wrong = parseΩ(source)",
+        },
+        {
+          path: "src/plain-consumer.ts",
+          lineStart: 1,
+          lineEnd: 1,
+          score: 0.2,
+          content: "const right = parse(source)",
+        },
+      ],
+    })
+
+    const refsByPath = new Map(pack.cards[0]?.retrievalRefs.map((ref) => [ref.path, ref]) ?? [])
+    expect(refsByPath.get("src/unicode-neighbor.ts")?.reason).toBe("graph-related")
+    expect(refsByPath.get("src/plain-consumer.ts")?.reason).toBe("mentions changed symbol")
   })
 
   it("falls back to a changed file-region card when no symbol is available", () => {

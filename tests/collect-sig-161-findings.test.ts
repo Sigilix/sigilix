@@ -63,7 +63,7 @@ describe("parseFinding (SIG-161)", () => {
   it("parses the current headline-first finding shape", () => {
     const body = [
       "<!-- sigilix:pr-review-finding -->",
-      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="38" height="28"></a> **New `scheduled` cron handler lacks test coverage**',
+      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **New `scheduled` cron handler lacks test coverage**',
       "_category: testing_ · _severity: P1 high (4/5)_ · _confidence: 3/5_",
       "",
       "The `scheduled` handler at `src/index.ts:960` implements the index reconciliation cron tick.",

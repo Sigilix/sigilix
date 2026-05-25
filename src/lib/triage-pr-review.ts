@@ -1895,8 +1895,8 @@ function renderFindingsByFile(findings: PrReviewFinding[]): string[] {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const SEVERITY_BADGE_WIDTH = 38
-const SEVERITY_BADGE_HEIGHT = 28
+const SEVERITY_BADGE_WIDTH = 34
+const SEVERITY_BADGE_HEIGHT = 24
 const FINDING_BODY_PREVIEW_LIMIT = 500
 
 function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | "p2" | "p3"): string {

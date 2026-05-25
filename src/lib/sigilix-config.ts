@@ -32,6 +32,7 @@ import type { GitHubClient } from "./github"
 import type { SpecialistRole } from "./ensemble-router"
 import type { ResolvedPerfBudgets } from "./perf-budgets"
 import { parseDeterministicChecks, type DeterministicCheck } from "./deterministic-checks"
+import { pathMatchesAny } from "./path-glob"
 import {
   DEFAULT_PRE_MERGE_GATES_CONFIG,
   type ResolvedPreMergeGatesConfig,
@@ -56,6 +57,24 @@ export interface SigilixConfig {
    * check for X" without polluting the other roles' prompts.
    */
   rules?: Partial<Record<SpecialistRole, string>>
+  /**
+   * Path-scoped review guidance. This is the repo-owned equivalent of
+   * competitor "path instructions": apply stricter or different review
+   * criteria only when a changed file matches the configured globs.
+   *
+   * Example:
+   *   "pathInstructions": [
+   *     {
+   *       "paths": ["src/auth/**", "workers/**"],
+   *       "guidance": "Treat this as a security-sensitive request path.",
+   *       "rules": {
+   *         "security": "Block unsafe token handling or missing authz checks.",
+   *         "tests": "Require integration coverage for auth behavior changes."
+   *       }
+   *     }
+   *   ]
+   */
+  pathInstructions?: SigilixPathInstruction[]
   /**
    * ARC-193: deterministic regex checks run BEFORE the LLM specialist
    * fanout. Each rule defines a JS regex matched against added diff
@@ -422,6 +441,16 @@ export type SarifFindingCategoryRef =
   | "secret"
   | "other"
 
+export interface SigilixPathInstruction {
+  paths: string[]
+  guidance?: string
+  rules?: Partial<Record<SpecialistRole, string>>
+}
+
+export interface MatchedSigilixPathInstruction extends SigilixPathInstruction {
+  matchedPaths: string[]
+}
+
 const SARIF_FINDING_CATEGORIES: ReadonlySet<SarifFindingCategoryRef> = new Set([
   "iac", "misconfiguration", "vulnerability", "license", "secret", "other",
 ])
@@ -457,6 +486,11 @@ const COMMAND_NAMES: ReadonlySet<SigilixCommandName> = new Set([
 
 const ADDENDUM_MAX_CODE_POINTS = 4000
 const FALLBACKS_MAX_ENTRIES = 4
+const PATH_INSTRUCTIONS_MAX_ENTRIES = 20
+const PATH_INSTRUCTIONS_MAX_PATHS = 50
+const PATH_INSTRUCTIONS_TEXT_MAX_CODE_POINTS = 4000
+
+const SPECIALIST_ROLES = ["logic", "security", "performance", "tests"] as const satisfies readonly SpecialistRole[]
 
 /**
  * Registry of model names accepted by `commands.<cmd>.model.primary`
@@ -495,6 +529,65 @@ function codePointLength(s: string): number {
   let n = 0
   for (const _ of s) n += 1
   return n
+}
+
+function takeCodePoints(s: string, max: number): string {
+  if (codePointLength(s) <= max) return s
+  return [...s].slice(0, max).join("")
+}
+
+function parseOptionalInstructionText(v: unknown): string | undefined {
+  if (typeof v !== "string") return undefined
+  const trimmed = v.trim()
+  if (trimmed.length === 0) return undefined
+  return takeCodePoints(trimmed, PATH_INSTRUCTIONS_TEXT_MAX_CODE_POINTS)
+}
+
+function parseInstructionPaths(v: unknown): string[] {
+  const raw = Array.isArray(v) ? v : typeof v === "string" ? [v] : []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== "string") continue
+    const trimmed = item.trim()
+    if (trimmed.length === 0 || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    out.push(trimmed)
+    if (out.length >= PATH_INSTRUCTIONS_MAX_PATHS) break
+  }
+  return out
+}
+
+function parseRoleRules(v: unknown): Partial<Record<SpecialistRole, string>> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const rulesIn = v as Record<string, unknown>
+  const rulesOut: Partial<Record<SpecialistRole, string>> = {}
+  for (const role of SPECIALIST_ROLES) {
+    const rule = parseOptionalInstructionText(rulesIn[role])
+    if (rule) rulesOut[role] = rule
+  }
+  return Object.keys(rulesOut).length > 0 ? rulesOut : undefined
+}
+
+function parsePathInstructions(v: unknown): SigilixPathInstruction[] {
+  if (!Array.isArray(v)) return []
+  const out: SigilixPathInstruction[] = []
+  for (const item of v) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue
+    const rec = item as Record<string, unknown>
+    const paths = parseInstructionPaths(rec.paths ?? rec.path)
+    if (paths.length === 0) continue
+    const guidance = parseOptionalInstructionText(rec.guidance ?? rec.instructions)
+    const rules = parseRoleRules(rec.rules)
+    if (!guidance && !rules) continue
+    out.push({
+      paths,
+      ...(guidance ? { guidance } : {}),
+      ...(rules ? { rules } : {}),
+    })
+    if (out.length >= PATH_INSTRUCTIONS_MAX_ENTRIES) break
+  }
+  return out
 }
 
 /**
@@ -551,7 +644,7 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
   if (obj.rules && typeof obj.rules === "object" && !Array.isArray(obj.rules)) {
     const rulesIn = obj.rules as Record<string, unknown>
     const rulesOut: Partial<Record<SpecialistRole, string>> = {}
-    for (const role of ["logic", "security", "performance", "tests"] as const) {
+    for (const role of SPECIALIST_ROLES) {
       const v = rulesIn[role]
       if (typeof v === "string" && v.length > 0) {
         rulesOut[role] = v
@@ -559,6 +652,11 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (Object.keys(rulesOut).length > 0) out.rules = rulesOut
   }
+  // Path-scoped review instructions. Mirrors the competitor pattern
+  // of path-specific guidance while preserving Sigilix's existing
+  // fail-open parser contract: bad entries are dropped, not fatal.
+  const pathInstructions = parsePathInstructions(obj.pathInstructions)
+  if (pathInstructions.length > 0) out.pathInstructions = pathInstructions
   // ARC-193: deterministicChecks parsing delegated to the runner module
   // so the schema stays co-located with the runtime that consumes it.
   if (obj.deterministicChecks !== undefined) {
@@ -1146,6 +1244,71 @@ export function passesLabelGate(
   if (runOnLabels.length === 0) return true
   const labelSet = new Set(labels.map((l) => l.toLowerCase()))
   return runOnLabels.some((g) => labelSet.has(g.toLowerCase()))
+}
+
+// ─── Path-scoped review guidance ─────────────────────────────────────
+
+export function resolvePathInstructionsForChangedPaths(
+  config: SigilixConfig | null,
+  changedPaths: ReadonlyArray<string>,
+): MatchedSigilixPathInstruction[] {
+  const instructions = config?.pathInstructions ?? []
+  if (instructions.length === 0 || changedPaths.length === 0) return []
+  const uniqueChangedPaths = [...new Set(
+    changedPaths
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0),
+  )]
+  const matches: MatchedSigilixPathInstruction[] = []
+  for (const instruction of instructions) {
+    const matchedPaths = uniqueChangedPaths.filter((path) => pathMatchesAny(path, instruction.paths))
+    if (matchedPaths.length === 0) continue
+    matches.push({ ...instruction, matchedPaths })
+  }
+  return matches
+}
+
+function renderLimitedList(values: readonly string[], max: number): string {
+  const visible = values.slice(0, max)
+  const suffix = values.length > max ? `, +${values.length - max} more` : ""
+  return `${visible.join(", ")}${suffix}`
+}
+
+export function renderPathInstructionsForPrompt(
+  matches: ReadonlyArray<MatchedSigilixPathInstruction>,
+  role?: SpecialistRole,
+): string {
+  const blocks: string[] = []
+  let renderedIndex = 1
+  for (const match of matches) {
+    const roleRules = role
+      ? match.rules?.[role] ? [[role, match.rules[role]]] as Array<[SpecialistRole, string]> : []
+      : SPECIALIST_ROLES
+        .map((r): [SpecialistRole, string] | null => match.rules?.[r] ? [r, match.rules[r]] : null)
+        .filter((entry): entry is [SpecialistRole, string] => entry !== null)
+    if (!match.guidance && roleRules.length === 0) continue
+
+    const lines = [
+      `Instruction ${renderedIndex}`,
+      `Patterns: ${renderLimitedList(match.paths, 8)}`,
+      `Matched changed files: ${renderLimitedList(match.matchedPaths, 8)}`,
+    ]
+    if (match.guidance) {
+      lines.push(`Guidance: ${match.guidance}`)
+    }
+    for (const [ruleRole, rule] of roleRules) {
+      lines.push(`${ruleRole} rule: ${rule}`)
+    }
+    blocks.push(lines.join("\n"))
+    renderedIndex += 1
+  }
+  if (blocks.length === 0) return ""
+  return [
+    "[PATH-SCOPED REVIEW GUIDANCE (from sigilix.json)]",
+    "These instructions apply only to matching changed files. Do not apply them to unrelated files in the PR.",
+    "",
+    ...blocks,
+  ].join("\n\n")
 }
 
 // ─── ARC-272: docs-coverage resolution ───────────────────────────────

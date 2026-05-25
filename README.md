@@ -291,9 +291,36 @@ iterate on the rules in the same PR they apply to.
 }
 ```
 
-Both top-level fields are optional. Missing file = no extra context (current behavior). Malformed JSON = ignored with a structured warning logged but the review still runs — the config is never load-bearing for review correctness.
+All fields are optional. Missing file = no extra context (current behavior). Malformed JSON = ignored with a structured warning logged but the review still runs — the config is never load-bearing for review correctness.
 
 `guidance` is prepended to every specialist's prompt **and** the synthesizer's prompt. `rules.<role>` is appended only to that role's prompt. Unknown fields are forward-compat ignored.
+
+### Path instructions
+
+Use `pathInstructions` when a repo needs different review behavior for different parts of the codebase. This mirrors the path-instruction pattern used by AI review competitors: auth/API paths can be strict about authorization, database paths can focus on migrations and transactions, generated paths can be filtered out, and tests/docs can get their own expectations.
+
+```json
+{
+  "pathInstructions": [
+    {
+      "paths": ["src/auth/**", "workers/api/**"],
+      "guidance": "Treat these as security-sensitive request paths.",
+      "rules": {
+        "security": "Block missing authorization checks, unsafe token handling, or secrets written to logs.",
+        "tests": "Require integration coverage for auth behavior changes."
+      }
+    },
+    {
+      "path": "tests/**",
+      "instructions": "Review test names, edge cases, and failure-path coverage."
+    }
+  ]
+}
+```
+
+Each entry applies only when at least one reviewable changed file matches `paths` (or the single-path alias `path`). `guidance` / `instructions` is shown to all specialists for the matching files. `rules.<role>` is shown only to that specialist, then the synthesizer sees the full matched block during fan-in so severity decisions remain consistent.
+
+Bad entries are dropped fail-open. Empty strings, unknown role names, and entries without a valid path are ignored. Entries are capped defensively to avoid prompt blowups (`20` entries, `50` paths per entry, `4000` code points per guidance/rule string).
 
 ### Path filters (ARC-176)
 

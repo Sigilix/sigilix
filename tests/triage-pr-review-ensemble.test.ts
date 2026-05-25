@@ -14,8 +14,10 @@ import {
   annotateWithConsensus,
   assignStableFindingIds,
   buildSynthRetryMessage,
+  buildSynthInputVerdicts,
   checkQuorum,
   classifySynthOutcome,
+  collectApprovalReadinessSourceFindings,
   computeConsensusRanking,
   computeDegradedCoverage,
   computeFindingDelta,
@@ -78,6 +80,71 @@ describe("assignStableFindingIds", () => {
       ...baseFinding,
       id: "security-0",
     })
+  })
+})
+
+describe("collectApprovalReadinessSourceFindings", () => {
+  it("excludes source findings that match active withdrawal records", () => {
+    const withdrawn = { ...baseFinding, id: "logic-0" }
+    const kept = {
+      ...baseFinding,
+      id: "logic-1",
+      line: 80,
+      body: "A distinct high-confidence finding that was never withdrawn.",
+    }
+    const out = collectApprovalReadinessSourceFindings(
+      [{
+        role: "logic",
+        verdict: {
+          ...baseVerdict,
+          findings: [withdrawn, kept],
+        },
+      }],
+      [{
+        path: withdrawn.path,
+        line: withdrawn.line,
+        bodySnapshot: withdrawn.body,
+        withdrawnAt: 0,
+        withdrawnByCommentId: 123,
+        prHeadSha: "a".repeat(40),
+        reason: "mention-reply-accepted",
+      }],
+    )
+
+    expect(out.map((source) => source.id)).toEqual(["logic-1"])
+  })
+
+  it("collects readiness sources from the same truncated verdicts sent to synth", () => {
+    const truncatedFinding = {
+      ...baseFinding,
+      id: "logic-0",
+      score: 4,
+      body: "x".repeat(1800),
+    }
+    const keptFinding = {
+      ...baseFinding,
+      id: "logic-1",
+      score: 5,
+      headline: "critical auth bypass",
+      body: "Missing authorization guard.",
+    }
+    const verdict = {
+      summary: "Two findings.",
+      confidence: 5,
+      confidenceReason: "Clear regression.",
+      findings: [truncatedFinding, keptFinding],
+    }
+    const keptOnlyVerdict = { ...verdict, findings: [keptFinding] }
+    const maxTokens = Math.ceil(JSON.stringify(keptOnlyVerdict).length / 4) + 2
+
+    const synthInput = buildSynthInputVerdicts(
+      [{ role: "logic" as const, verdict, elapsedMs: 100 }],
+      maxTokens,
+    )
+    const sources = collectApprovalReadinessSourceFindings(synthInput, [])
+
+    expect(synthInput[0]?.verdict.findings.map((f) => f.id)).toEqual(["logic-1"])
+    expect(sources.map((source) => source.id)).toEqual(["logic-1"])
   })
 })
 

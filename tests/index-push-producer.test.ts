@@ -288,7 +288,7 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
     expect(sent).toHaveLength(0)
   })
 
-  it("skips active-PR branch indexing when the PR lookup fails", async () => {
+  it("enqueues active-PR branch indexing when the PR lookup fails", async () => {
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)
     mockGetRepository.mockResolvedValue({ default_branch: "main" })
@@ -298,8 +298,15 @@ describe("maybeEnqueuePushIndexJob — skip branches (no enqueue, no GH calls wh
       ref: "refs/heads/feature-branch",
       after: "b".repeat(40),
     })
-    expect(outcome).toEqual({ skipped: "untracked-branch" })
-    expect(sent).toHaveLength(0)
+    expect(outcome).toEqual({ enqueued: true, reason: "push" })
+    expect(sent).toEqual([{
+      type: "index-repo",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      installationId: 99,
+      reason: "push",
+      branch: "feature-branch",
+    }])
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("index-push-open-pr-lookup-failed"))
   })
 })
@@ -495,7 +502,7 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
     }])
   })
 
-  it("continues to enqueue merged-base refresh when branch-delete enqueue fails", async () => {
+  it("continues to enqueue merged-base refresh and surfaces failure when branch-delete enqueue fails", async () => {
     const sent: JobMessage[] = []
     let call = 0
     const { env } = makeEnv({
@@ -505,7 +512,7 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
         sent.push(msg)
       },
     })
-    await maybeEnqueuePullRequestBranchIndexJobs({
+    await expect(maybeEnqueuePullRequestBranchIndexJobs({
       env,
       ...baseArgs,
       action: "closed",
@@ -513,7 +520,7 @@ describe("maybeEnqueuePullRequestBranchIndexJobs", () => {
       headRef: "feature-branch",
       baseRef: "main",
       merged: true,
-    })
+    })).rejects.toThrow("pull-request branch enqueue failures")
     expect(sent).toEqual([{
       type: "index-repo",
       owner: "Arc-and-Anchor",

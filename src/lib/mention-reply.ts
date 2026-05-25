@@ -43,6 +43,7 @@ const LIMITS = {
   recentComments: 10,
   questionChars: 4_000,
 }
+const MAX_PROMPT_VISIBLE_NAMESPACES = 50
 
 export interface LinearAgentRepoScope {
   repo: string | null
@@ -498,15 +499,19 @@ interface AgentInitialMessageCtx {
 export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): string {
   // Surface the full set of indexed namespaces so the agent can pick
   // the right one when an issue is clearly about a different repo or
-  // branch than the team's primary (e.g. an ARC issue about the
-  // marketing site or the dev branch). Tool already accepts an arbitrary
-  // `repo` arg — this just informs the model which choices are valid.
+  // branch than the team's primary. Keep the prompt-visible list
+  // bounded; retrieve_codebase authorization still uses the full
+  // allowed namespace set outside this prompt.
   const universe = ctx.availableRepos.length > 0
     ? ctx.availableRepos
     : ctx.repo
       ? [ctx.repo]
       : []
-  const universeText = universe.length > 0 ? universe.map((r) => `'${r}'`).join(", ") : "(none configured)"
+  const visibleUniverse = universe.slice(0, MAX_PROMPT_VISIBLE_NAMESPACES)
+  const hiddenUniverseCount = Math.max(0, universe.length - visibleUniverse.length)
+  const universeText = visibleUniverse.length > 0
+    ? `${visibleUniverse.map((r) => `'${r}'`).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
+    : "(none configured)"
   let repoLine: string
   if (ctx.repo && universe.length > 1) {
     repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo or branch (branch indexes look like 'owner/repo/__branch__/hex-encoded-branch'). Final answer is the JSON shape defined by the system prompt.`

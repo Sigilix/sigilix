@@ -170,20 +170,26 @@ const FINDING_MARKER = /<!--\s*sigilix:pr-review-finding\s*-->/
 // just `**cat:**`). The regex captures category, headline, and
 // confidence; severity is read from the badge separately if needed.
 const HEADING_RE =
-  /^(?:[^\s]+\s+P\d\s+·\s+)?\*\*([a-z-]+):\*\*\s+(.+?)\s+·\s+_confidence:\s+(\d)\/5_\s*$/m
+  /^(?:[^\s]+\s+P\d\s+·\s+)?\*\*([a-z-]+):\*\*\s+(.+?)\s+·\s+_confidence:\s+(\d)\/5_\s*(?:\r?\n|$)/
 
 // SIG-15: previous renderer shape. Headline is first-class and category
 // moved into the metadata line:
 //   <img ... alt="P1" ...> **Some headline**
 //   _category: testing_ · _severity: P1 high (4/5)_ · _confidence: 3/5_
 const HEADING_V2_RE =
-  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*\n_category:\s*([a-z-]+)_\s+·\s+_severity:\s+P\d\s+[a-z]+\s+\(\d\/5\)_\s+·\s+_confidence:\s+(\d)\/5_\s*$/m
+  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*\r?\n_category:\s*([a-z-]+)_\s+·\s+_severity:\s+P\d\s+[a-z]+\s+\(\d\/5\)_\s+·\s+_confidence:\s+(\d)\/5_\s*(?:\r?\n|$)/
 
 // SIG-35 follow-up: current renderer shape keeps visible comments
 // quieter. Category/severity come from the stable fid marker and
 // confidence is hidden in its own machine-readable marker.
 const HEADING_V3_RE =
-  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*$/m
+  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*(?:\r?\n|$)/
+
+const CATEGORY_MARKER_RE =
+  /<!--\s*sigilix:category:([a-z-]+)\s*-->/
+
+const SEVERITY_MARKER_RE =
+  /<!--\s*sigilix:severity:([1-5])\s*-->/
 
 const CONFIDENCE_MARKER_RE =
   /<!--\s*sigilix:confidence:([1-5])\s*-->/
@@ -215,10 +221,13 @@ function parseFinding(args: {
   if (!comment.user || comment.user.login !== SIGILIX_BOT) return null
   if (!FINDING_MARKER.test(comment.body)) return null
 
-  const headingV2Match = HEADING_V2_RE.exec(comment.body)
-  const headingV3Match = HEADING_V3_RE.exec(comment.body)
-  const headingMatch = HEADING_RE.exec(comment.body)
+  const bodyAfterFindingMarker = comment.body.replace(FINDING_MARKER, "").trimStart()
+  const headingV2Match = HEADING_V2_RE.exec(bodyAfterFindingMarker)
+  const headingV3Match = HEADING_V3_RE.exec(bodyAfterFindingMarker)
+  const headingMatch = HEADING_RE.exec(bodyAfterFindingMarker)
   const markerMatch = MARKER_RE.exec(comment.body)
+  const categoryMarkerMatch = CATEGORY_MARKER_RE.exec(comment.body)
+  const severityMarkerMatch = SEVERITY_MARKER_RE.exec(comment.body)
   const confidenceMarkerMatch = CONFIDENCE_MARKER_RE.exec(comment.body)
 
   const findingId = createHash("sha256")
@@ -266,17 +275,24 @@ function parseFinding(args: {
     const sevScore = SEVERITY_TO_SCORE[markerMatch[3]!]
     if (sevScore !== undefined) row.score = sevScore
   }
+  if (!row.category && categoryMarkerMatch) {
+    row.category = categoryMarkerMatch[1]
+  }
+  if (row.score === undefined && severityMarkerMatch) {
+    row.score = Number(severityMarkerMatch[1])
+  }
   if (row.confidence === undefined && confidenceMarkerMatch) {
     row.confidence = Number(confidenceMarkerMatch[1])
   }
 
   // Body excerpt: the comment body minus the heading line + the
   // trailing marker line. The labeler reads this verbatim.
-  row.body = comment.body
-    .replace(FINDING_MARKER, "")
+  row.body = bodyAfterFindingMarker
     .replace(HEADING_V2_RE, "")
     .replace(HEADING_V3_RE, "")
     .replace(HEADING_RE, "")
+    .replace(CATEGORY_MARKER_RE, "")
+    .replace(SEVERITY_MARKER_RE, "")
     .replace(CONFIDENCE_MARKER_RE, "")
     .replace(MARKER_RE, "")
     .trim()

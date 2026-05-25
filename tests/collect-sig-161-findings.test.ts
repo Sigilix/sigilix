@@ -86,6 +86,8 @@ describe("parseFinding (SIG-161)", () => {
     const body = [
       "<!-- sigilix:pr-review-finding -->",
       '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **New `scheduled` cron handler lacks test coverage**',
+      "<!-- sigilix:category:testing -->",
+      "<!-- sigilix:severity:4 -->",
       "<!-- sigilix:confidence:3 -->",
       "",
       "The `scheduled` handler at `src/index.ts:960` implements the index reconciliation cron tick.",
@@ -99,9 +101,58 @@ describe("parseFinding (SIG-161)", () => {
     expect(row).not.toBeNull()
     expect(row!.category).toBe("testing")
     expect(row!.headline).toContain("scheduled")
+    expect(row!.score).toBe(4)
     expect(row!.confidence).toBe(3)
     expect(row!.body).toContain("reconciliation cron tick")
+    expect(row!.body).not.toContain("sigilix:category")
+    expect(row!.body).not.toContain("sigilix:severity")
     expect(row!.body).not.toContain("sigilix:confidence")
+  })
+
+  it("parses hidden category and severity markers when the fid marker is absent", () => {
+    const body = [
+      "<!-- sigilix:pr-review-finding -->",
+      '<a href="https://sigilix.ai"><img alt="P2" src="https://badges.example/p2.svg" align="top" width="34" height="24"></a> **Branch namespace can drift**',
+      "<!-- sigilix:category:security -->",
+      "<!-- sigilix:severity:3 -->",
+      "<!-- sigilix:confidence:4 -->",
+      "",
+      "The branch namespace should stay tied to the exact ref.",
+    ].join("\n")
+    const row = parseFinding({
+      ...baseArgs,
+      comment: { ...baseComment, body },
+    })
+    expect(row).not.toBeNull()
+    expect(row!.category).toBe("security")
+    expect(row!.score).toBe(3)
+    expect(row!.confidence).toBe(4)
+    expect(row!.headline).toBe("Branch namespace can drift")
+    expect(row!.body).toContain("exact ref")
+  })
+
+  it("does not strip later standalone bold lines as V3 headings", () => {
+    const body = [
+      "<!-- sigilix:pr-review-finding -->",
+      '<a href="https://sigilix.ai"><img alt="P1" src="https://badges.example/p1.svg" align="top" width="34" height="24"></a> **First heading**',
+      "<!-- sigilix:category:logic -->",
+      "<!-- sigilix:severity:4 -->",
+      "<!-- sigilix:confidence:3 -->",
+      "",
+      "Keep this paragraph.",
+      "",
+      "**Important later body line**",
+      "",
+      "Keep this too.",
+    ].join("\n")
+    const row = parseFinding({
+      ...baseArgs,
+      comment: { ...baseComment, body },
+    })
+    expect(row).not.toBeNull()
+    expect(row!.headline).toBe("First heading")
+    expect(row!.body).toContain("**Important later body line**")
+    expect(row!.body).toContain("Keep this too")
   })
 
   it("round-trips the current renderer shape through the collector parser", () => {

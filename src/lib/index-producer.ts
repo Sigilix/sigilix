@@ -392,8 +392,9 @@ async function branchHasOpenSameRepoPr(
       event: "index-push-open-pr-lookup-failed",
       owner, repo, branch: branchName,
       err: err instanceof Error ? err.message : String(err),
+      note: "falling through to enqueue branch index; consumer will revalidate",
     }))
-    return false
+    return true
   }
 }
 
@@ -411,6 +412,7 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
   const { env, owner, repo, installationId, action, draft, headRef, baseRef, merged } = args
   if (!isIndexerEnabled(env)) return
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) return
+  const enqueueFailures: string[] = []
 
   const isBranchIndexAction =
     action === "opened" ||
@@ -434,13 +436,15 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
         action,
       }))
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       console.error(JSON.stringify({
         event: "index-pr-branch-enqueue-failed",
         owner, repo, installation_id: installationId,
         branch: headRef,
         action,
-        err: err instanceof Error ? err.message : String(err),
+        err: message,
       }))
+      enqueueFailures.push(`index-pr-branch:${message}`)
     }
   }
 
@@ -465,13 +469,15 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
         merged: merged === true,
       }))
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       console.error(JSON.stringify({
         event: "index-pr-branch-delete-enqueue-failed",
         owner, repo, installation_id: installationId,
         branch: headRef,
         merged: merged === true,
-        err: err instanceof Error ? err.message : String(err),
+        err: message,
       }))
+      enqueueFailures.push(`index-pr-branch-delete:${message}`)
     }
   } else if (
     action === "closed" &&
@@ -503,13 +509,19 @@ export async function maybeEnqueuePullRequestBranchIndexJobs(args: {
         branch: baseRef,
       }))
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
       console.error(JSON.stringify({
         event: "index-pr-merged-base-enqueue-failed",
         owner, repo, installation_id: installationId,
         branch: baseRef,
-        err: err instanceof Error ? err.message : String(err),
+        err: message,
       }))
+      enqueueFailures.push(`index-pr-merged-base:${message}`)
     }
+  }
+
+  if (enqueueFailures.length > 0) {
+    throw new Error(`pull-request branch enqueue failures: ${enqueueFailures.join("; ")}`)
   }
 }
 

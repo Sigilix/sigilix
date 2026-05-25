@@ -2321,6 +2321,14 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(formatFindingComment(fnd({ score: 3 }), 3)).not.toContain("_confidence: 3/5_")
   })
 
+  it("keeps category and severity machine-readable without a visible metadata row", () => {
+    const out = formatFindingComment(fnd({ score: 4, category: "testing" }), 5)
+    expect(out).toContain("<!-- sigilix:category:testing -->")
+    expect(out).toContain("<!-- sigilix:severity:4 -->")
+    expect(out).not.toContain("_category: testing_")
+    expect(out).not.toContain("_severity:")
+  })
+
   it("collapses body inside a <details> block when confidence ≤ 2", () => {
     const out = formatFindingComment(fnd({ score: 3 }), 2)
     expect(out).toContain("<details>")

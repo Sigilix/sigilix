@@ -2283,6 +2283,8 @@ export function formatFindingComment(
   const headline = stripAstMarkers(finding.headline)
   const body = formatFindingBodyMarkdown(finding.body)
   lines.push(`${badge} **${headline}**`)
+  lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
+  lines.push(`<!-- sigilix:severity:${finding.score} -->`)
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)
   lines.push("")
   if (confidence <= 2) {

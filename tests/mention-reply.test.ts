@@ -452,6 +452,26 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("branch indexes look like 'owner/repo/__branch__/hex-encoded-branch'")
   })
 
+  it("caps the prompt-visible namespace list without dropping the default repo", () => {
+    const availableRepos = Array.from(
+      { length: 52 },
+      (_, i) => `arc-and-anchor/repo-${String(i).padStart(2, "0")}`,
+    )
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: "arc-and-anchor/repo-00",
+      mappedRepo: "arc-and-anchor/repo-00",
+      availableRepos,
+      repoStatus: "mapped_indexed",
+    })
+
+    expect(out).toContain("'arc-and-anchor/repo-00'")
+    expect(out).toContain("'arc-and-anchor/repo-49'")
+    expect(out).toContain("... (+2 more)")
+    expect(out).not.toContain("'arc-and-anchor/repo-50'")
+    expect(out).toContain("[DEFAULT REPO] arc-and-anchor/repo-00")
+  })
+
   it("describes indexed repos without a default and tells the agent to choose by subject", () => {
     const out = buildAgentInitialUserMessage({
       ...base,

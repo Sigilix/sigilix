@@ -152,7 +152,9 @@ async function postWebhookPayload(
     waitUntil: (promise: Promise<unknown>) => { waitUntilPromises.push(promise) },
     passThroughOnException: () => {},
   }
-  return worker.fetch(req, env, ctx)
+  const res = await worker.fetch(req, env, ctx)
+  await Promise.all(waitUntilPromises)
+  return res
 }
 
 beforeEach(() => {

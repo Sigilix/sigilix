@@ -30,6 +30,17 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // The synth-side line also mentions PRESERVE VERBATIM next to the kind doc.
     expect(SYNTHESIZER_PROMPT).toMatch(/"kind"[\s\S]*?PRESERVE VERBATIM/i)
   })
+  it("documents structured finding examples and preserves them through synthesis", () => {
+    for (const field of ["failureExample", "fixExample", "testGap"]) {
+      expect(SPECIALIST_PROMPTS.logic).toContain(`"${field}"`)
+      expect(SYNTHESIZER_PROMPT).toContain(`"${field}"`)
+    }
+    expect(SPECIALIST_PROMPTS.logic).toMatch(/STRUCTURED FINDING DETAILS/i)
+    expect(SPECIALIST_PROMPTS.logic).toMatch(/Do NOT put Markdown fences/i)
+    expect(SYNTHESIZER_PROMPT).toMatch(/"failureExample"[\s\S]*?PRESERVE VERBATIM/i)
+    expect(PR_REVIEW_PROMPT).toContain("Structured finding details")
+    expect(PR_REVIEW_PROMPT).toContain("suggestedReplacement")
+  })
   it("keeps point-fix anchors narrow instead of widening to the enclosing block (SIG-180)", () => {
     expect(SPECIALIST_PROMPTS.logic).toContain("ANCHOR SCOPE EXCEPTION")
     expect(SPECIALIST_PROMPTS.logic).toMatch(/point-fix[\s\S]*?startLine: null/i)
@@ -50,12 +61,13 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 10 (SIG-202: finding scope routing)", () => {
+  it("PROMPT_VERSION bumped to 11", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
     // SIG-176 8→9 (remove dead synth retrieve/provenance budget contract).
     // SIG-202 9→10 (finding scope decides inline vs body review surface).
-    expect(PROMPT_VERSION).toBe("10")
+    // Structured details 10→11 (structured proof/fix/test-gap finding fields).
+    expect(PROMPT_VERSION).toBe("11")
   })
 })

@@ -90,6 +90,17 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
     expect(props.scope).toEqual({ type: "string", enum: ["line", "file", "pr", "comment"] })
     expect(required).toContain("scope")
   })
+
+  it("lists structured finding detail fields and kind for constrained generation", () => {
+    const props = PR_REVIEW_SCHEMA.properties.findings.items.properties as Record<string, unknown>
+    expect(props.failureExample).toEqual({ type: "string" })
+    expect(props.fixExample).toEqual({ type: "string" })
+    expect(props.testGap).toEqual({ type: "string" })
+    expect(props.kind).toEqual({
+      type: "string",
+      enum: ["delete", "replace", "insert", "describe"],
+    })
+  })
 })
 
 describe("PROMPT_VERSION", () => {

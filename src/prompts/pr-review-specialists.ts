@@ -161,6 +161,9 @@ PLUS \`primaryLens\` and \`confidenceInLens\` on each finding:
       "confidence": 1-5,   (SIG-161 — per-finding probability an expert reviewer would label this a TP. NOT severity (use \`score\`), NOT confidence in your own reasoning. See the [SIG-161 FINDING CONFIDENCE] rubric block below for the band definitions.)
       "primaryLens": "logic" | "security" | "performance" | "tests",
       "confidenceInLens": 1-5,
+      "failureExample": "input: ...\\nactual: ...\\nexpected: ...",   (Structured details — OPTIONAL but expected when the issue is clearer with a concrete repro, parser/regex example, runtime exception, serialization example, boundary input, or before/after behavior. Raw text/code only: no Markdown fence, no diff markers. Omit when it would just repeat the body.)
+      "fixExample": "return extractFinalAnswer(response)",   (Structured details — OPTIONAL. Provide a small non-committable fix shape when the fix is useful to show but NOT safe as one exact contiguous replacement. Raw text/code only: no Markdown fence, no diff markers. Prefer suggestedReplacement for exact point fixes.)
+      "testGap": "The sibling test file only covers the single FINAL(...) case, not multiple matches.",   (Structured details — OPTIONAL. One short sentence explaining why existing tests/checks missed this ONLY when visible testing/CI evidence supports it. Do not invent a test gap.)
       "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — emit ONLY when a [STACK CONTEXT] block is present in the input. Tag findings introduced or maintained in THIS PR's diff as "current-pr"; tag issues that already exist in a downstack (parent or earlier) PR as "downstack-context" (report for awareness, but DO NOT describe as introduced by this PR); tag issues whose proper fix belongs in an upstack (child or later) PR as "upstack-followup". Default to "current-pr" when uncertain. OMIT this field entirely when no [STACK CONTEXT] block is in the input — that signals an unstacked PR and matches the no-stack baseline shape.)
       "inspectedTestFiles": ["tests/foo.test.ts"],   (SIG-113 — REQUIRED on category:"testing" findings that claim existing tests are INSUFFICIENT. List the EXACT test-file paths from the [TESTING EVIDENCE] block's "Inspected test files" list that you read. OMIT on non-testing findings.)
       "evidenceRefs": ["siblingMapping:src/foo.ts->NONE"],   (SIG-113 — REQUIRED on category:"testing" findings that claim a source file is MISSING tests. Copy the EXACT mapping string from the [TESTING EVIDENCE] block's "Source→test mapping refs" list. OMIT on non-testing findings.)
@@ -191,6 +194,13 @@ Do NOT round up. A finding you would describe to a teammate as "I think there's 
 - Set \`scope:"line"\` only when the exact changed line/range is what the reviewer should inspect inline.
 - Set \`scope:"file"\`, \`scope:"pr"\`, or \`scope:"comment"\` when the finding is about a file/module, the PR as a whole, or GitHub comment/review-event behavior. These render in the review body instead of an inline diff thread.
 - A broader-scope finding still needs the most relevant \`path\` and \`line\` as context, but that line must not be treated as the subject of the issue.
+
+[STRUCTURED FINDING DETAILS]
+- Put the core claim in \`body\`; put concrete proof/examples in \`failureExample\` so the renderer can show them as separate fenced blocks.
+- For regex, parser, serializer, runtime-exception, boundary-input, and changed-invariant findings, include a minimal \`failureExample\` whenever you can make the bug falsifiable from the diff/context.
+- Use \`fixExample\` only for illustrative code that is not a safe one-click contiguous replacement. For exact local edits, use \`suggestedReplacement\` instead.
+- Use \`testGap\` only when the supplied testing evidence or visible tests justify the claim. If you did not inspect tests, omit \`testGap\`.
+- Do NOT put Markdown fences in \`failureExample\` or \`fixExample\`; Sigilix adds fences.
 
 [SIG-113 TESTING CITATION GATE] Every \`category: "testing"\` finding MUST carry at least one citation — either \`inspectedTestFiles\` (for "tests are insufficient" claims) or \`evidenceRefs\` with a \`siblingMapping:\` string (for "tests are missing" claims). The citation is cross-checked against the [TESTING EVIDENCE] block: a path or mapping you invent is rejected and the finding is dropped before it reaches the customer. Copy citation values VERBATIM from the evidence block.
 
@@ -437,6 +447,9 @@ Reply with ONLY a single JSON object. No prose preamble, no markdown fence aroun
         "score": 1-5,
         "headline": "...",
         "body": "...",
+        "failureExample": "input: ...\\nactual: ...\\nexpected: ...",   (Structured details — PRESERVE VERBATIM from the clearest kept source finding that set it. Keep examples out of \`body\`; the renderer shows them as separate fenced blocks. OMIT only when no kept source finding had one.)
+        "fixExample": "return extractFinalAnswer(response)",   (Structured details — PRESERVE VERBATIM from the clearest kept source finding that set it when no exact \`suggestedReplacement\` is available. Do NOT convert it into a committable replacement. OMIT when no kept source finding had one, or when preserving \`suggestedReplacement\` already gives the exact fix.)
+        "testGap": "The sibling test file only covers the single FINAL(...) case, not multiple matches.",   (Structured details — PRESERVE VERBATIM from a kept source finding when it is backed by testing evidence. Do NOT invent a test-gap sentence during synthesis.)
         "category": "logic" | "security" | "performance" | "error-handling" | "testing" | "complexity" | "style" | "syntax" | "docs",
         "stackOrigin": "current-pr" | "downstack-context" | "upstack-followup",   (OPTIONAL — preserve from the specialist verdict when present. When specialists disagree on stackOrigin for the same finding, default to "current-pr". OMIT entirely on no-stack PRs.)
         "scope": "line" | "file" | "pr" | "comment",   (SIG-202 — REQUIRED. Preserve from the source finding when one source owns the kept finding. When merging sources, choose the narrowest semantically correct review surface: "line" only if the exact changed line/range remains the subject; otherwise use "file", "pr", or "comment" and keep path/line only as context.)

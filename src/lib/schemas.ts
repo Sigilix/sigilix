@@ -114,6 +114,13 @@ export const PR_REVIEW_SCHEMA = {
           },
           headline: { type: "string" },
           body: { type: "string" },
+          // Structured details: proof/fix/test-gap fields for richer
+          // review comments. Optional so older prompt paths and clean
+          // findings can omit them; the renderer decides where each
+          // section belongs.
+          failureExample: { type: "string" },
+          fixExample: { type: "string" },
+          testGap: { type: "string" },
           // ARC-182: optional stack-origin tag for findings on PRs
           // that are part of a Graphite-style stack. Not in `required`
           // — emitted only when [STACK CONTEXT] is present in the
@@ -176,6 +183,10 @@ export const PR_REVIEW_SCHEMA = {
           // finding's anchored range. Listed so constrained decode can
           // emit it; the parser + renderer validate/anchor it.
           suggestedReplacement: { type: "string" },
+          kind: {
+            type: "string",
+            enum: ["delete", "replace", "insert", "describe"],
+          },
         },
         required: ["path", "line", "scope", "score", "category", "headline", "body"],
       },

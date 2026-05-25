@@ -117,8 +117,16 @@
  * v9 → v10 (SIG-202): finding output gains `scope: "line" | "file" |
  * "pr" | "comment"` so PR/comment-level issues render in the review
  * body instead of being forced onto an arbitrary diff line.
+ *
+ * v10 → v11: finding output gains structured proof/fix/test
+ * detail fields (`failureExample`, `fixExample`, `testGap`) so review
+ * comments can render concrete examples and "why tests missed it"
+ * sections separately from the prose body. The prompt also aligns the
+ * legacy single-review path with the existing `suggestedReplacement`
+ * field instead of asking the model to put suggestion fences inside
+ * `body`.
  */
-export const PROMPT_VERSION = "10"
+export const PROMPT_VERSION = "11"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 
@@ -145,7 +153,12 @@ Reply with **only a single JSON object**, no markdown fence, no preamble:
       "score": 1-5,
       "category": "logic",
       "headline": "One sentence stating the symptom, ≤120 chars, no period at end.",
-      "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English. When the fix is a clean inline replacement of the lines this finding anchors to, append exactly ONE \`\`\`suggestion fenced block at the very end containing the literal replacement code (no diff markers, no language tag, no surrounding context — just the new line(s) GitHub will swap in when the reviewer clicks \\"Commit suggestion\\"). When the fix is a clean DELETION of the anchored lines (dead code, unused imports, redundant defensive branches), append an EMPTY \`\`\`suggestion block (just the opening and closing fences with nothing between) — GitHub treats this as a one-click delete. Skip the suggestion block when the fix spans multiple non-adjacent hunks, multiple files, or requires non-trivial logic.",
+      "body": "1-3 sentences. Technical voice. Reference \`identifiers\` in backticks and file paths like \`app/foo.ts:42\`. End with the minimal-fix direction in plain English.",
+      "failureExample": "input: ...\\nactual: ...\\nexpected: ... (OPTIONAL — concrete proof/repro/example, raw text/code only, no Markdown fence)",
+      "fixExample": "return extractFinalAnswer(response) (OPTIONAL — illustrative non-committable fix shape when suggestedReplacement is not safe)",
+      "testGap": "Existing tests only cover the happy path. (OPTIONAL — one sentence, only when visible tests/CI evidence supports it)",
+      "suggestedReplacement": "literal replacement lines for startLine..line (OPTIONAL — exact contiguous replacement only, raw code, no fence)",
+      "kind": "delete | replace | insert | describe (OPTIONAL — use delete with suggestedReplacement:\"\" for one-click removal)",
       "stackOrigin": "current-pr | downstack-context | upstack-followup (OPTIONAL — only when [STACK CONTEXT] is in input)"
     }
   ]
@@ -209,6 +222,14 @@ If you cannot point to a semantically correct changed line, set \`scope\` to \`f
 
 SIG-164's multi-line preference applies to block-level findings, not point-fix findings. Point-fix shapes include a typo, stray \`console.log\`, off-by-one, single condition/operator, single call argument, one import, one deleted line, or any one-line suggestion/delete. For point-fix findings, anchor \`line\` to the exact changed line and keep \`startLine\` omitted/\`null\`. Do NOT widen to the enclosing function, JSX block, or statement group just to satisfy the multi-line preference. Use a multi-line \`startLine..line\` range only when the problem and fix are one contiguous block and the surrounding block is necessary for the reader to understand the issue.
 
+## Structured finding details
+
+- Put the core claim in \`body\`; put concrete proof or repro text in \`failureExample\` so Sigilix can render it as a separate fenced example block.
+- For regex, parser, serializer, runtime-exception, boundary-input, and changed-invariant findings, include a minimal \`failureExample\` when the issue is falsifiable from the diff/context.
+- Use \`fixExample\` only for illustrative code that is not safe as a one-click replacement. For exact local edits, use \`suggestedReplacement\` instead.
+- Use \`testGap\` only when visible tests/CI evidence supports why the issue was missed. Do not invent a test gap.
+- Do not put Markdown fences in \`failureExample\`, \`fixExample\`, or \`suggestedReplacement\`; the renderer adds the visible blocks.
+
 ## What to flag (and what not to)
 
 - **Don't comment on lines outside the PR diff.** Findings must anchor to lines that actually changed (added or modified) in the diff. Pre-existing issues belong on a separate ticket unless this PR made them worse.
@@ -224,11 +245,11 @@ SIG-164's multi-line preference applies to block-level findings, not point-fix f
 
 ## Suggestion block discipline
 
-- Only on findings where the fix is a clean, single-hunk, multi-line-OR-less replacement of the lines the finding anchors to.
-- Block contents are the LITERAL replacement code — what GitHub will paste in place of lines \`startLine\`-\`line\`.
-- No \`+\` / \`-\` diff markers, no \`...\` ellipses, no language tag (\`\`\`suggestion not \`\`\`ts).
-- For DELETIONS: emit an EMPTY \`\`\`suggestion block (just the opening and closing fences with nothing between them). GitHub treats this as a one-click removal of \`startLine\`-\`line\`. Use this for dead code, unused imports, redundant defensive branches, stray \`console.log\` — anything that's "remove these lines, no replacement."
-- If the fix needs the engineer to write logic, omit the block and describe the fix in prose.
+- Use \`suggestedReplacement\` only on findings where the fix is a clean, single-hunk replacement of the exact lines the finding anchors to.
+- \`suggestedReplacement\` is the LITERAL replacement code — what GitHub will paste in place of lines \`startLine\`-\`line\`.
+- No \`+\` / \`-\` diff markers, no \`...\` ellipses, no Markdown fence, no language tag.
+- For DELETIONS: set \`kind:"delete"\` and \`suggestedReplacement:""\`. GitHub treats the rendered empty suggestion as a one-click removal of \`startLine\`-\`line\`. Use this for dead code, unused imports, redundant defensive branches, stray \`console.log\` — anything that's "remove these lines, no replacement."
+- If the fix needs the engineer to write logic, omit \`suggestedReplacement\` and describe the fix in prose or \`fixExample\`.
 
 ## Output discipline
 

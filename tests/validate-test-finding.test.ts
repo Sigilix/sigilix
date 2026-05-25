@@ -412,6 +412,107 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     expect(r.keep).toBe(false)
     if (!r.keep) expect(r.reason).toBe("uncited-missing-coverage")
   })
+
+  // ── SIG-166-1: glue suppression extends to insufficient-test class ───
+  // Founder feedback on PR #144 (2026-05-23): the testing specialist
+  // over-fires the SAME orchestrator-glue FP via the insufficient-test
+  // class on the SAME glue files. The hoisted helper-coverage /
+  // structurally-glue checks now fire for either class.
+
+  it("DROPS an insufficient-test finding on a status:'all' glue file (SIG-166-1)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/ensemble.ts",
+        headline: "`ensemble` orchestrator tests are insufficient",
+        body: "The existing tests for `src/lib/ensemble.ts` do not exercise the new orchestration paths.",
+        evidenceRefs: ["inspectedTestFile:tests/ensemble.test.ts"],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/ensemble.ts"],
+        siblingMappings: [{ source: "src/lib/ensemble.ts", test: "tests/ensemble.test.ts" }],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+        helperCoverageBySource: {
+          "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] },
+        },
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-helper")
+  })
+
+  it("DROPS an insufficient-test finding on a structurallyGlue:true glue file with status 'partial' (SIG-166-1)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/ensemble.ts",
+        headline: "`ensemble` orchestrator tests are insufficient",
+        body: "The existing tests for `src/lib/ensemble.ts` miss the new delegation wiring.",
+        evidenceRefs: ["inspectedTestFile:tests/ensemble.test.ts"],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/ensemble.ts"],
+        siblingMappings: [{ source: "src/lib/ensemble.ts", test: "tests/ensemble.test.ts" }],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+        helperCoverageBySource: {
+          "src/lib/ensemble.ts": {
+            status: "partial",
+            helpers: ["src/lib/branch-retrieval.ts"],
+            structurallyGlue: true,
+          },
+        },
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-structure")
+  })
+
+  it("KEEPS an insufficient-test finding when the source is NOT glue (FP-safe regression for SIG-166-1)", () => {
+    // No helperCoverageBySource entry for the source → the hoisted
+    // suppression must not fire; the finding falls through to the normal
+    // insufficient-test admissibility + specificity checks and keeps.
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "`retryWithBackoff` test never exercises the timeout branch",
+        body: "The test for `retryWithBackoff` asserts the happy path but the new timeout branch is uncovered.",
+        evidenceRefs: ["inspectedTestFile:tests/retry.test.ts"],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("DROPS an ambiguous finding (cites BOTH classes) on a status:'all' glue file (SIG-166-1 — pins the natural extension; pre-patch behavior was ambiguous-keep)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/ensemble.ts",
+        headline: "`ensemble` orchestrator lacks integration coverage",
+        body: "The orchestrator at `src/lib/ensemble.ts` cites both ->NONE and an inspected test.",
+        evidenceRefs: [
+          "siblingMapping:src/lib/ensemble.ts->NONE",
+          "inspectedTestFile:tests/ensemble.test.ts",
+        ],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/ensemble.ts"],
+        siblingMappings: [{ source: "src/lib/ensemble.ts", test: null }],
+        inspectedTestFiles: ["tests/ensemble.test.ts"],
+        helperCoverageBySource: {
+          "src/lib/ensemble.ts": { status: "all", helpers: ["src/lib/branch-retrieval.ts"] },
+        },
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("glue-covered-by-helper")
+  })
 })
 
 // ── Integration with validateForSubmission ──────────────────────

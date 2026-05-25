@@ -69,8 +69,8 @@ export type TestDropReason =
   | "missing-path" // sev>=4 testing finding with no concrete path to anchor
   | "uncited-missing-coverage" // "source lacks tests" claim not backed by a real ->NONE mapping for finding.path
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
-  | "glue-covered-by-helper" // SIG-128: ->NONE finding on a file whose changed logic fully delegates to same-PR tested helpers
-  | "glue-covered-by-structure" // SIG-128 PR 6: ->NONE finding on a file whose changed logic is structurally orchestrator glue (small + delegation-shaped), independent of whether the delegated-to helpers are same-PR tested
+  | "glue-covered-by-helper" // SIG-128 / SIG-166-1: missing-coverage (->NONE) OR insufficient-test finding on a file whose changed logic fully delegates to same-PR tested helpers
+  | "glue-covered-by-structure" // SIG-128 PR 6 / SIG-166-1: missing-coverage (->NONE) OR insufficient-test finding on a file whose changed logic is structurally orchestrator glue (small + delegation-shaped), independent of whether the delegated-to helpers are same-PR tested
 
 /**
  * Parse a `siblingMapping:<source>-><test|NONE>` evidenceRef into its
@@ -333,19 +333,26 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
  *     scopes by category, but keep the helper self-contained).
  *   - a finding citing `testFileChanged:<path>` for a real changed test
  *     ALWAYS keeps (SIG-113 deletion/rename exception).
+ *   - GLUE SUPPRESSION (hoisted, applies first): SIG-128 + SIG-166-1 —
+ *     reject `glue-covered-by-helper` when the pack marks `finding.path`
+ *     helper-covered with status "all"; reject `glue-covered-by-structure`
+ *     when the pack marks it `structurallyGlue: true`. Fires for the
+ *     MISSING-COVERAGE or INSUFFICIENT-TEST classes (and the ambiguous
+ *     case where the finding cites both). Does NOT fire for a pure
+ *     coverageGap-only class — that path is reserved for the
+ *     uncited-missing-coverage reject (preserves the CodeRabbit-scoping
+ *     test at tests/validate-test-finding.test.ts).
  *   - MISSING-COVERAGE class (cites a siblingMapping, not an inspected
- *     test): SIG-128 — reject `glue-covered-by-helper` first when the
- *     pack marks `finding.path` helper-covered with status "all" (changed
- *     logic fully delegates to same-PR tested helpers); otherwise keep iff
- *     `citesRealMissingCoverage`; else reject `uncited-missing-coverage`.
- *     The finding must require a concrete `path`.
+ *     test): keep iff `citesRealMissingCoverage`; else reject
+ *     `uncited-missing-coverage`. The finding must require a concrete
+ *     `path`.
  *   - INSUFFICIENT-TEST class (cites an inspected test, not a sibling
  *     mapping): keep iff `namesConcreteTarget` AND not a bare
  *     "needs more tests"; else reject `vague-insufficient-test`. The
  *     finding must require a concrete `path`.
- *   - AMBIGUOUS (cites both, or neither): prefer KEEP (the SIG-113
- *     gate already required SOME real citation; an ambiguous shape is
- *     not a clear FP, so don't risk a false negative).
+ *   - AMBIGUOUS (cites both, or neither): prefer KEEP unless the
+ *     hoisted glue suppression fires above. The "neither" branch is the
+ *     SIG-113 keep-by-default fallback (no class signal, no FP shape).
  */
 export function evaluateTestFinding(
   finding: PrReviewFinding,
@@ -411,6 +418,28 @@ export function evaluateTestFinding(
   const missingClass =
     siblingMissingClass || (citesCoverageGapClass(finding) && !insufficientClass)
 
+  // SIG-166-1: structural orchestrator-glue suppression fires for EITHER
+  // the ->NONE sibling-mapping missing class OR the insufficient-test
+  // class on the SAME glue files (founder feedback on PR #144,
+  // 2026-05-23). Originally (SIG-128 + PR 6) the suppression was hoisted
+  // only inside the missing-class branch and scoped to siblingMissingClass,
+  // but the testing specialist over-fires the SAME orchestrator-glue FP
+  // shape via the insufficient-test class too — same helper-covered /
+  // structurally-glue sources, different citation kind. Scoping to
+  // `siblingMissingClass || insufficientClass` keeps the coverageGap-only
+  // class routing through `uncited-missing-coverage`, preserving the
+  // CodeRabbit-scoping invariant at
+  // tests/validate-test-finding.test.ts:399.
+  if (siblingMissingClass || insufficientClass) {
+    const helperCov = pack.helperCoverageBySource?.[finding.path.trim()]
+    if (helperCov?.status === "all") {
+      return { keep: false, reason: "glue-covered-by-helper" }
+    }
+    if (helperCov?.structurallyGlue === true) {
+      return { keep: false, reason: "glue-covered-by-structure" }
+    }
+  }
+
   // AMBIGUOUS: cites BOTH kinds, or NEITHER. Prefer keep (the FP-safe
   // crux) — the SIG-113 gate already required SOME real citation, and a
   // finding that straddles both classes (or fits neither cleanly) is not
@@ -419,28 +448,6 @@ export function evaluateTestFinding(
   if (missingClass === insufficientClass) return { keep: true }
 
   if (missingClass) {
-    // SIG-128: glue-covered suppression applies ONLY to the ->NONE
-    // sibling-mapping missing-coverage class (not coverageGap-class claims).
-    // A ->NONE missing-coverage finding on a source whose changed logic
-    // FULLY delegates to same-PR tested helpers (status "all") is the
-    // orchestrator-glue false positive. Reject it. `partial`/`none` are not
-    // suppressed at this gate (FP-safe — a genuinely-untested orchestrator
-    // still fires here).
-    if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.status === "all") {
-      return { keep: false, reason: "glue-covered-by-helper" }
-    }
-    // SIG-128 PR 6 (SIG-159 Bug 1 fix): structural orchestrator-glue
-    // suppression — independent of whether the delegated-to helpers are
-    // same-PR tested. Catches the PR #138 `scheduled` handler regression
-    // where the wrapper delegated to BOTH same-PR (`runIndexReconciliation`)
-    // AND pre-existing (`isIndexerEnabled`) helpers, giving status
-    // "partial" not "all". The structural check fires regardless of
-    // status. Tight thresholds (≤12 substantive lines + ≥50% delegation-
-    // shaped + ≥1 free-function call) keep the FN risk low — a
-    // genuinely-logic-heavy function survives.
-    if (siblingMissingClass && pack.helperCoverageBySource?.[finding.path.trim()]?.structurallyGlue === true) {
-      return { keep: false, reason: "glue-covered-by-structure" }
-    }
     // Missing-coverage claim. Admissible only when the cited mapping is
     // a real `siblingMapping:<finding.path>->NONE` in the pack (relevant
     // + the pack agrees the source is genuinely untested). A wrong-file

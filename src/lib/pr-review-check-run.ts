@@ -12,7 +12,7 @@
 // underlying review pipeline. The check is an indicator ON TOP OF
 // the real review — the review must always go through.
 
-import { GitHubClient } from "./github"
+import { GitHubClient, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
 import type { Env } from "../index"
 
@@ -43,6 +43,7 @@ const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set([
  *  Checks tab reads as "Sigilix is happy / done" to customers,
  *  whereas the `neutral` grey-circle looks like "didn't run". */
 export type SigilixCheckConclusion = "success" | "failure" | "skipped"
+const CHECK_ANNOTATION_BATCH_SIZE = 50
 
 interface InProgressCheckRun {
   id: number
@@ -149,6 +150,7 @@ export interface ReviewCheckMeta {
   event: "APPROVE" | "REQUEST_CHANGES"
   findingsCount: number
   surface?: "review" | "comment" | "skip-notice"
+  checkAnnotations?: CheckRunAnnotation[]
 }
 
 interface CompleteArgs {
@@ -187,6 +189,35 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
       event: "pr-review-check-run-complete-failed",
       owner: handle.owner, repo: handle.repo,
       check_run_id: handle.id, conclusion,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return
+  }
+
+  const annotations = reviewMeta?.checkAnnotations ?? []
+  if (annotations.length === 0) return
+  let posted = 0
+  try {
+    for (let i = 0; i < annotations.length; i += CHECK_ANNOTATION_BATCH_SIZE) {
+      const batch = annotations.slice(i, i + CHECK_ANNOTATION_BATCH_SIZE)
+      await handle.client.updateCheckRun(handle.owner, handle.repo, handle.id, {
+        output: {
+          ...output,
+          annotations: batch,
+        },
+      })
+      posted += batch.length
+    }
+    console.log(JSON.stringify({
+      event: "pr-review-check-run-annotations-posted",
+      owner: handle.owner, repo: handle.repo,
+      check_run_id: handle.id, annotations: posted,
+    }))
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-annotations-failed",
+      owner: handle.owner, repo: handle.repo,
+      check_run_id: handle.id, attempted: annotations.length, posted,
       err: err instanceof Error ? err.message : String(err),
     }))
   }

@@ -69,7 +69,7 @@ import {
   filterWithdrawnFindings,
   type WithdrawalRecord,
 } from "./review-withdrawal-store"
-import { GitHubClient, GitHubHttpError } from "./github"
+import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_SCHEMA } from "./schemas"
@@ -79,8 +79,9 @@ import {
   type CoverageRoles,
   type DeltaBadgeCounts,
   parsePrReviewResponse,
-  buildReviewSubmission,
+  buildBodyOnlyCheckAnnotations,
   buildFallbackSubmission,
+  buildReviewSubmissionWithMetadata,
   chooseReviewEvent,
   computeShadowGateDivergence,
   getProposedChangeScopeMismatch,
@@ -3583,7 +3584,7 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    const submission = buildReviewSubmission({
+    const submissionBuild = buildReviewSubmissionWithMetadata({
       verdict: submissionVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
@@ -3613,6 +3614,14 @@ export async function handlePrReviewEnsemble(
       // inline comment "on an empty line."
       addedLineTextByLine,
     })
+    const submission = submissionBuild.submission
+    const bodyOnlyAnnotations = submissionBuild.bodyOnlyAnnotations
+    const allFindingAnnotations = buildBodyOnlyCheckAnnotations([
+      ...submissionVerdict.findings,
+      ...renderableUnanchoredForSubmission,
+    ])
+    const checkAnnotationMeta = (annotations: CheckRunAnnotation[]) =>
+      annotations.length > 0 ? { checkAnnotations: annotations } : {}
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE
     // posting the new one, so the GitHub timeline renders cleanup-
@@ -3729,6 +3738,7 @@ export async function handlePrReviewEnsemble(
             event: effectiveEvent,
             findingsCount,
             surface: "comment",
+            ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
         // Comment fallback ALSO failed — `errored` is the truth.
@@ -3816,6 +3826,7 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "posted", cache, {
         event: effectiveEvent,
         findingsCount: inlineFindings,
+        ...checkAnnotationMeta(bodyOnlyAnnotations),
       })
     } catch (submitErr) {
       // Narrow the anchorless-retry fallback to GitHub HTTP 422 — that's
@@ -3870,6 +3881,7 @@ export async function handlePrReviewEnsemble(
             event: effectiveEvent,
             findingsCount,
             surface: "comment",
+            ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
         // Both inline submit AND comment fallback failed — rethrow
@@ -3942,6 +3954,7 @@ export async function handlePrReviewEnsemble(
             event: effectiveEvent,
             findingsCount,
             surface: "comment",
+            ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
         // Both anchorless submit AND comment fallback failed — rethrow
@@ -3986,6 +3999,7 @@ export async function handlePrReviewEnsemble(
             event: effectiveEvent,
             findingsCount,
             surface: "comment",
+            ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
         return finalize(telemetry, env, "errored", cache)
@@ -4050,6 +4064,7 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "posted", cache, {
         event: effectiveEvent,
         findingsCount: fallbackFindings,
+        ...checkAnnotationMeta(allFindingAnnotations),
       })
     } finally {
       // ARC-284: fire the submit phase event on every exit path —
@@ -6819,6 +6834,8 @@ export interface ReviewMeta {
   /** Default behavior when omitted is `"review"` (back-compat with
    *  Phase 3's `PrReviewMeta` shape). */
   surface?: "review" | "comment" | "skip-notice"
+  /** Body-only findings rendered as GitHub Checks annotations. */
+  checkAnnotations?: CheckRunAnnotation[]
 }
 
 export interface EnsembleResult {

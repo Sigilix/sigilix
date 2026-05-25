@@ -636,7 +636,7 @@ export class GitHubClient {
       startedAt?: string
       detailsUrl?: string
       externalId?: string
-      output?: { title: string; summary: string }
+      output?: CheckRunOutput
     },
   ): Promise<{ id: number }> {
     const payload: Record<string, unknown> = {
@@ -681,7 +681,7 @@ export class GitHubClient {
       status?: "queued" | "in_progress" | "completed"
       conclusion?: "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required"
       completedAt?: string
-      output?: { title: string; summary: string }
+      output?: CheckRunOutput
     },
   ): Promise<void> {
     const payload: Record<string, unknown> = {}
@@ -1537,6 +1537,22 @@ export interface SubmitReviewBody {
   /** Optional commit_id pin. Defaults to PR head. */
   commit_id?: string
   comments?: SubmitReviewComment[]
+}
+
+export interface CheckRunAnnotation {
+  path: string
+  start_line: number
+  end_line: number
+  annotation_level: "notice" | "warning" | "failure"
+  message: string
+  title?: string
+  raw_details?: string
+}
+
+export interface CheckRunOutput {
+  title: string
+  summary: string
+  annotations?: CheckRunAnnotation[]
 }
 
 /**

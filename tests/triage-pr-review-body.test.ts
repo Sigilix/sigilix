@@ -369,9 +369,11 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     })
     expect(body).not.toContain("### Fix Plan")
     expect(body).toContain("### Review Body Findings")
-    expect(body).toContain("Line 99 (critical, score 5)")
+    // SIG-216: meta tightened from `Line 99 (critical, score 5) ·
+    // \`src/bar.ts:99\`` to just `\`src/bar.ts:99\` · score 5`.
+    expect(body).toContain("`src/bar.ts:99` · score 5")
+    expect(body).not.toContain("(critical, score 5)")
     expect(body).toContain("body-only blocker")
-    expect(body).toContain("`src/bar.ts:99`")
   })
 
   it("SIG-202/SIG-5 — direct renderer routes non-line findings out of Fix Plan", () => {
@@ -393,9 +395,12 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).toMatch(/^## Sigilix: 1 finding$/m)
     expect(body).not.toContain("### Fix Plan")
     expect(body).toContain("### Review Body Findings")
-    expect(body).toContain("PR-level (critical, score 5)")
+    // SIG-216: pr-scope renders the bare path (no `:line`) + tightened
+    // `<anchor> · score N` meta — no "PR-level (critical, ...)" prefix.
+    expect(body).toContain("`src/bar.ts` · score 5")
+    expect(body).not.toContain("PR-level")
+    expect(body).not.toContain("(critical, score 5)")
     expect(body).toContain("pr-level blocker")
-    expect(body).toContain("`src/bar.ts`")
   })
 
   it("Variant I — REQUEST_CHANGES omits Fix Plan when no findings are score >= 4", () => {

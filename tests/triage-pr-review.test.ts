@@ -1842,9 +1842,13 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
-    expect(out.body).toContain("Comment-level (high, score 4)")
+    // SIG-216: meta line tightened to `<anchor> · score N` — the
+    // "Comment-level (high, score 4)" bracketed prefix is gone (the
+    // P1 badge already conveys severity, comment-scope is implicit
+    // from the path:line anchor with no inline thread).
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
+    expect(out.body).not.toContain("Comment-level")
     expect(out.body).toContain("dismiss command trusts the issue-comment author")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436`")
   })
 
   it("routes file-scoped findings to the review body with a file-level label", () => {
@@ -1871,9 +1875,15 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toContain("non-blocking finding")
     expect(out.body).toContain("### Review Body Findings")
-    expect(out.body).toContain("File-level (critical, score 5)")
+    // SIG-216: file-scope anchor is the bare path (no `:line`) and
+    // the meta line is just `<anchor> · score N` — no "File-level
+    // (critical, ...)" bracketed prefix. Asserting on the legacy
+    // `(critical, score 5)` parenthetical specifically (the verdict
+    // summary still contains the word "File-level" for unrelated
+    // reasons).
+    expect(out.body).toContain("`src/lib/github-mention.ts` · score 5")
+    expect(out.body).not.toContain("(critical, score 5)")
     expect(out.body).toContain("module-level lifecycle ordering is unsafe")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436`")
   })
 
   it("keeps suggestion-bearing non-line findings inline so the proposed fix is not dropped", () => {
@@ -1964,7 +1974,128 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).toContain("### Fix Plan")
     expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl is too short")
     expect(out.body).not.toContain("`src/lib/github-mention.ts:436` — `security`: dismiss command trusts")
-    expect(out.body).toContain("Comment-level (high, score 4)")
+    // SIG-216: body-only finding renders with the tightened
+    // `<anchor> · score N` meta — "Comment-level" prefix dropped.
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
+    expect(out.body).not.toContain("Comment-level")
+  })
+})
+
+// ── SIG-216 — clickable file:line anchor + tightened meta line ───────
+
+describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
+  // Use the same fixture shape as SIG-202: a body-only finding routed
+  // through `buildReviewSubmission`. The renderer is private, so we
+  // exercise it through the public path and assert on the rendered body.
+  const headSha = "deadbeefcafe1234567890abcdef1234567890ab"
+  const linkContext = { owner: "octo", repo: "demo", headSha } as const
+
+  const lineFinding: PrReviewFinding = {
+    path: "src/lib/foo.ts",
+    line: 42,
+    scope: "comment", // routes to body-only without needing an addedLineTextByLine miss
+    score: 4,
+    category: "logic",
+    headline: "missing null guard",
+    body: "Wrap with a guard before deref.",
+  }
+  const rangedLineFinding: PrReviewFinding = {
+    ...lineFinding,
+    startLine: 38,
+    line: 42,
+    headline: "missing null guard across the range",
+  }
+  const fileFinding: PrReviewFinding = {
+    ...lineFinding,
+    scope: "file",
+    score: 5,
+    headline: "module invariant unclear",
+  }
+  const prFinding: PrReviewFinding = {
+    ...lineFinding,
+    scope: "pr",
+    score: 3,
+    headline: "PR-wide policy gap",
+  }
+
+  const buildBody = (
+    f: PrReviewFinding,
+    ctx?: { owner: string; repo: string; headSha: string },
+  ): string => {
+    const args = {
+      verdict: {
+        summary: "One body-only finding.",
+        confidence: 3,
+        confidenceReason: "Fixture.",
+        findings: [f],
+      },
+      prAuthor: "alice",
+      headSha,
+      ...(ctx ? { linkContext: ctx } : {}),
+    }
+    return buildReviewSubmission(args).body
+  }
+
+  it("emits a clickable [path:line](github-blob-url) link when linkContext is threaded (line scope)", () => {
+    const body = buildBody(lineFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts:42](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts#L42)`,
+    )
+    // No backticked fallback for the anchor itself when linkContext is present.
+    expect(body).not.toContain("`src/lib/foo.ts:42`")
+  })
+
+  it("uses #L<startLine>-L<line> for ranged line-scope anchors", () => {
+    const body = buildBody(rangedLineFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts:38-42](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts#L38-L42)`,
+    )
+  })
+
+  it("renders file-scope as a bare-path link (no `:line`, no `#L`)", () => {
+    const body = buildBody(fileFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`,
+    )
+    expect(body).not.toContain(`/src/lib/foo.ts#L`)
+  })
+
+  it("renders pr-scope as a bare-path link (same as file scope)", () => {
+    const body = buildBody(prFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`,
+    )
+    expect(body).not.toContain(`/src/lib/foo.ts#L`)
+  })
+
+  it("falls back to the inline-code anchor when linkContext is omitted (back-compat)", () => {
+    const body = buildBody(lineFinding)
+    expect(body).toContain("`src/lib/foo.ts:42`")
+    // No markdown link form should leak through.
+    expect(body).not.toContain("](https://github.com/")
+  })
+
+  it("tightens the meta line to `<anchor> · score N` with no bracketed severity (line scope)", () => {
+    const body = buildBody(lineFinding)
+    expect(body).toContain("`src/lib/foo.ts:42` · score 4")
+    expect(body).not.toContain("(high, score 4)")
+    expect(body).not.toContain("Line 42")
+    expect(body).not.toContain("Comment-level")
+  })
+
+  it("tightens the meta line for pr-scope to `<path> · score N`", () => {
+    const body = buildBody(prFinding)
+    expect(body).toContain("`src/lib/foo.ts` · score 3")
+    expect(body).not.toContain("PR-level")
+  })
+
+  it("uses the U+00B7 middle-dot separator (not a bullet or asterisk)", () => {
+    const body = buildBody(lineFinding)
+    const expectedSeparator = " · "
+    expect(body).toContain(`\`src/lib/foo.ts:42\`${expectedSeparator}score 4`)
+    // Guard against accidental swap to alternative dots/bullets.
+    expect(body).not.toContain(" • score") // • bullet
+    expect(body).not.toContain(" * score")
   })
 })
 
@@ -2773,6 +2904,44 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("<summary>More Info</summary>")
     expect(out).toContain(body)
     expect(out).not.toContain(`${body}...`)
+  })
+
+  it("SIG-216: More Info preview snaps to the last whitespace boundary (no mid-character split)", () => {
+    // Real-world shape from PR #173: prose that runs slightly past the
+    // 500-char preview limit. The pre-SIG-216 slice landed mid-character
+    // of "chat" → preview "Add a unit test that mocks a c..." and the
+    // disclosure opened to "hat stream with known fixtures.". The fix
+    // walks back to the last whitespace inside the preview window so
+    // words remain intact across the boundary.
+    const prefix = "Add a unit test that mocks a "
+    const filler = "x".repeat(500 - prefix.length - "chat".length)
+    // body shape: <prefix><filler> chat stream with known fixtures.
+    // Whitespace position before the limit lands on the space after
+    // the filler, so the preview should end with the filler and the
+    // disclosure should start with "chat stream...".
+    const body = `${prefix}${filler} chat stream with known fixtures.`
+    const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).toContain("<summary>More Info</summary>")
+    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
+    expect(detailsMatch?.[1]).toBeDefined()
+    // Preview must NOT contain the partial-word splits the old logic produced.
+    expect(out).not.toContain("mocks a c...")
+    // Disclosure must start at the next word boundary, not mid-word.
+    expect(detailsMatch?.[1]).toMatch(/^chat stream with known fixtures\.$/)
+  })
+
+  it("SIG-216: falls back to a hard slice when the preview window has no whitespace (long token)", () => {
+    // The pre-existing 620-`x` test already covers the same code path
+    // implicitly; this test pins the contract explicitly so a future
+    // regression that drops the fallback branch fails loudly. A
+    // 620-character single token can't be split on a word boundary,
+    // so the function must still terminate via the hard slice.
+    const body = "y".repeat(620)
+    const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).toContain("<summary>More Info</summary>")
+    expect(out).toContain(`${"y".repeat(500)}...`)
+    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
+    expect(detailsMatch?.[1]).toBe("y".repeat(120))
   })
 
   it("strips AST markers from visible finding text and AI prompt", () => {

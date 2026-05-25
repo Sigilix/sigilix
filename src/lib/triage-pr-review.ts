@@ -782,6 +782,15 @@ interface BuildReviewArgs {
    * classify as non-substantive).
    */
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+  /**
+   * SIG-216: when supplied, body-only finding anchors render as
+   * clickable `[path:line](https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>)`
+   * Markdown links instead of the back-compat inline-code shape
+   * (`` `path:line` ``). Forwarded to `RenderBodyArgs.linkContext`.
+   * Optional — ensemble callers that haven't plumbed
+   * owner/repo through yet keep the inline-code rendering.
+   */
+  linkContext?: BodyFindingLinkContext
 }
 
 /**
@@ -956,6 +965,7 @@ export function buildReviewSubmissionWithMetadata({
   reviewable,
   addedLineTextByLine,
   eventOverride,
+  linkContext,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
   const {
     verdict,
@@ -987,6 +997,10 @@ export function buildReviewSubmissionWithMetadata({
   // fields, but it's cheaper / clearer to forward them unconditionally.
   if (typeof reviewCounter === "number") renderArgs.reviewCounter = reviewCounter
   if (retriggerUrl) renderArgs.retriggerUrl = retriggerUrl
+  // SIG-216: forward linkContext so body-only finding anchors render
+  // as clickable GitHub blob URLs. Omitted callers fall through to
+  // the back-compat inline-code anchor.
+  if (linkContext) renderArgs.linkContext = linkContext
   const body =
     event === "APPROVE"
       ? renderApproveBody(renderArgs)
@@ -1660,6 +1674,26 @@ export interface RenderBodyArgs {
    * retrigger CTA not rendered.
    */
   retriggerUrl?: string
+  /**
+   * SIG-216: when present, body-only finding anchors render as
+   * clickable `[path:line](https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>)`
+   * markdown links instead of the back-compat inline-code shape
+   * (`` `path:line` ``). Threaded through `renderBodyOnlyFindings`
+   * → `formatBodyFindingAnchor`. Callers that haven't plumbed
+   * owner/repo through (e.g. older unit tests) keep the
+   * inline-code rendering.
+   */
+  linkContext?: BodyFindingLinkContext
+}
+
+/**
+ * SIG-216: source-repo coordinates needed to build a GitHub blob
+ * URL for a body-only finding anchor.
+ */
+export interface BodyFindingLinkContext {
+  owner: string
+  repo: string
+  headSha: string
 }
 
 /**
@@ -1819,7 +1853,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     lines.push(BODY_ONLY_FINDINGS_HEADING)
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
-    lines.push(...renderBodyOnlyFindings(bodyOnlyFindings))
+    lines.push(...renderBodyOnlyFindings(bodyOnlyFindings, args.linkContext))
   }
 
   // Dismissal hint — REQUEST_CHANGES only, before the provenance
@@ -1986,12 +2020,47 @@ function formatBodyFindingLocation(f: PrReviewFinding): string {
   }
 }
 
-function formatBodyFindingAnchor(f: PrReviewFinding): string {
-  if (findingScope(f) === "pr") return `\`${f.path}\``
-  if (f.startLine != null && f.startLine !== f.line) {
-    return `\`${f.path}:${f.startLine}-${f.line}\``
+/**
+ * Render the path:line anchor for a body-only finding.
+ *
+ * Back-compat (no `linkContext`): emits the inline-code shape
+ * `` `path:line` `` so callers that haven't plumbed owner/repo/headSha
+ * (older tests, the check-annotation path which strips backticks) keep
+ * the prior rendering and don't break.
+ *
+ * SIG-216 (with `linkContext`): emits a clickable Markdown link
+ * `[path:line](https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>)`
+ * with NO backticks (Greptile-direction per Kimi R3) so a reviewer
+ * scanning the body can jump straight to the file at the reviewed SHA.
+ *
+ * URL shape by scope:
+ *   - `pr`   → file at HEAD, no line anchor
+ *   - `file` → same as `pr` (file-level, no line anchor)
+ *   - `line` with range → `#L<startLine>-L<line>`
+ *   - `line` single     → `#L<line>`
+ */
+function formatBodyFindingAnchor(
+  f: PrReviewFinding,
+  linkContext?: BodyFindingLinkContext,
+): string {
+  const scope = findingScope(f)
+  const isPrOrFile = scope === "pr" || scope === "file"
+  const label = isPrOrFile
+    ? f.path
+    : f.startLine != null && f.startLine !== f.line
+      ? `${f.path}:${f.startLine}-${f.line}`
+      : `${f.path}:${f.line}`
+  if (!linkContext) {
+    return `\`${label}\``
   }
-  return `\`${f.path}:${f.line}\``
+  const { owner, repo, headSha } = linkContext
+  const base = `https://github.com/${owner}/${repo}/blob/${headSha}/${f.path}`
+  const url = isPrOrFile
+    ? base
+    : f.startLine != null && f.startLine !== f.line
+      ? `${base}#L${f.startLine}-L${f.line}`
+      : `${base}#L${f.line}`
+  return `[${label}](${url})`
 }
 
 function formatBodyFindingSeverity(f: PrReviewFinding): string {
@@ -2011,23 +2080,36 @@ function formatFindingCategory(f: PrReviewFinding): string {
  * thread, a naked filename header looks like lost context rather than
  * a deliberate fallback surface.
  *
+ * SIG-216: the meta sub-line under each finding was tightened from
+ * `<location> (<severity>) · <anchor>` to just `<anchor> · score N`.
+ * "File-level" / "Comment-level" / "Line N" is implicit from the
+ * anchor shape; the bracketed severity duplicates the P0/P1/P2/P3
+ * badge that already prefixes the headline. The middle-dot separator
+ * is U+00B7 (`·`).
+ *
+ * `linkContext` (optional) makes the anchor a clickable GitHub blob
+ * URL; absent it the anchor falls back to the back-compat inline-code
+ * shape so callers that haven't plumbed owner/repo through don't
+ * break.
+ *
  * Returns an array of lines (caller joins with `\n`). Pure.
  */
-function renderBodyOnlyFindings(findings: PrReviewFinding[]): string[] {
+function renderBodyOnlyFindings(
+  findings: PrReviewFinding[],
+  linkContext?: BodyFindingLinkContext,
+): string[] {
   const sorted = [...findings].sort((a, b) =>
     b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
   )
   const lines: string[] = []
   for (const f of sorted) {
-    const location = formatBodyFindingLocation(f)
-    const severity = formatBodyFindingSeverity(f)
-    const anchor = formatBodyFindingAnchor(f)
+    const anchor = formatBodyFindingAnchor(f, linkContext)
     const anchorNote = f.anchorNote ? ` · ${f.anchorNote}` : ""
     const badge = severityBadgeForScore(f.score)
     const categoryBadge = categoryBadgeForFinding(f)
     lines.push("")
     lines.push(`- ${badge} ${categoryBadge} **${stripAstMarkers(f.headline)}**`)
-    lines.push(`  <sub>${location} (${severity}) · ${anchor}${anchorNote}</sub>`)
+    lines.push(`  <sub>${anchor} · score ${f.score}${anchorNote}</sub>`)
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -2166,8 +2248,22 @@ function stripAstMarkers(text: string): string {
 function formatFindingBodyMarkdown(body: string): string {
   const clean = stripAstMarkers(body)
   if (clean.length <= FINDING_BODY_PREVIEW_LIMIT) return clean
-  const preview = clean.slice(0, FINDING_BODY_PREVIEW_LIMIT).trimEnd()
-  const rest = clean.slice(preview.length).trimStart()
+  // SIG-216: word-boundary-aware truncation. Find the last whitespace
+  // in `[0, FINDING_BODY_PREVIEW_LIMIT)` so a body like
+  // "Add a unit test that mocks a chat stream..." becomes
+  // "Add a unit test that mocks a..." in the preview and
+  // "chat stream..." in the More Info disclosure — not the previous
+  // mid-character "...mocks a c" / "hat stream..." split. When the
+  // preview window contains no whitespace at all (artificial long
+  // single token), fall back to the hard character slice so the
+  // function still terminates.
+  const sliceEnd = (() => {
+    const hardSlice = clean.slice(0, FINDING_BODY_PREVIEW_LIMIT)
+    const lastWs = hardSlice.search(/\s\S*$/)
+    return lastWs > 0 ? lastWs : FINDING_BODY_PREVIEW_LIMIT
+  })()
+  const preview = clean.slice(0, sliceEnd).trimEnd()
+  const rest = clean.slice(sliceEnd).trimStart()
   return [
     `${preview}...`,
     "",

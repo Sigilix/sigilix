@@ -141,15 +141,21 @@ describe("buildFallbackBody", () => {
       line: 50,
     }
     const body = buildFallbackBody({ ...baseVerdict, findings: [ranged] }, [])
-    expect(body).toContain("Lines 40-50 (high, score 4)")
-    expect(body).not.toContain("Line 50 (")
+    // SIG-216: ranged anchor encodes the span in the path:line label
+    // itself; the meta line is just `<anchor> · score N` (no
+    // "Lines 40-50 (high, ...)" bracketed prefix).
+    expect(body).toContain("`src/lib/foo.ts:40-50` · score 4")
+    expect(body).not.toContain("(high, score 4)")
+    expect(body).not.toContain("Lines 40-50")
   })
 
   it("renders single-line target when startLine is omitted", () => {
     const single: PrReviewFinding = { ...baseFinding, line: 50 }
     const body = buildFallbackBody({ ...baseVerdict, findings: [single] }, [])
-    expect(body).toContain("Line 50 (high, score 4)")
-    expect(body).not.toContain("Lines ")
+    // SIG-216: single-line anchor is `path:line` + tightened meta.
+    expect(body).toContain("`src/lib/foo.ts:50` · score 4")
+    expect(body).not.toContain("(high, score 4)")
+    expect(body).not.toContain("Line 50 (")
   })
 
   it("includes category metadata next to the body-only anchor", () => {

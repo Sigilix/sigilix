@@ -69,6 +69,8 @@ export const STUB_QUIPS = [
   "Good findings can point to their proof.",
   "Review the behavior, not just the shape.",
   "If it matters, it should survive citation.",
+  "Scanning your diff like a lighthouse in fog. Clearer seas soon.",
+  "Read the change like the author was you at 2am. Often, it was.",
 ] as const
 
 export const STUB_ASCII_TEMPLATES = [

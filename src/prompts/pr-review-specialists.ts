@@ -502,6 +502,13 @@ export interface SpecialistInitialMessageCtx {
    */
   guidance?: string
   /**
+   * Path-scoped guidance resolved by the orchestrator from
+   * `sigilix.json.pathInstructions` and the PR's reviewable changed
+   * files. Pre-rendered so role-specific rules can be scoped before
+   * this prompt builder sees them.
+   */
+  pathInstructionsBlock?: string
+  /**
    * ARC-193: pre-rendered deterministic-check hits block. Injected
    * BEFORE the diff so the specialist sees these as authoritative
    * facts about lines the regex layer already flagged. Empty/absent
@@ -578,6 +585,10 @@ export function buildSpecialistInitialMessage(
   if (ctx.guidance && ctx.guidance.length > 0) {
     lines.push("[REPO GUIDANCE — applies to ALL specialists (from sigilix.json)]")
     lines.push(ctx.guidance)
+    lines.push("")
+  }
+  if (ctx.pathInstructionsBlock && ctx.pathInstructionsBlock.length > 0) {
+    lines.push(ctx.pathInstructionsBlock)
     lines.push("")
   }
   if (ctx.profile === "chill") {
@@ -661,6 +672,12 @@ export interface SynthesizerInitialMessageCtx {
    */
   guidance?: string
   /**
+   * Same matched path-scoped guidance the specialists saw. Synth uses
+   * it when merging/rescoring so path-local owner rules do not get
+   * lost during fan-in.
+   */
+  pathInstructionsBlock?: string
+  /**
    * ARC-182: same stack-context block the specialists saw. Synth uses
    * it to (a) preserve stackOrigin tags from specialists during
    * synthesis, and (b) adjudicate disagreement (e.g., two specialists
@@ -709,6 +726,10 @@ export function buildSynthesizerInitialMessage(
   if (ctx.guidance && ctx.guidance.length > 0) {
     lines.push("[REPO GUIDANCE (from sigilix.json)]")
     lines.push(ctx.guidance)
+    lines.push("")
+  }
+  if (ctx.pathInstructionsBlock && ctx.pathInstructionsBlock.length > 0) {
+    lines.push(ctx.pathInstructionsBlock)
     lines.push("")
   }
   // ARC-182: stack context goes BEFORE [DIFF] (matching specialist

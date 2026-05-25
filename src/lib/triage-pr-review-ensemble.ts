@@ -174,6 +174,8 @@ import {
   isPrOverviewEnabled,
   loadSigilixConfig,
   passesLabelGate,
+  renderPathInstructionsForPrompt,
+  resolvePathInstructionsForChangedPaths,
   resolveCostControlsConfig,
   resolveDocsReviewConfig,
   resolveCommandConfig,
@@ -1271,6 +1273,18 @@ export async function handlePrReviewEnsemble(
     const baseDiff = reviewedFiles.length === splitFiles.length && droppedTooLarge.length === 0
       ? fullDiff
       : batchToDiff(reviewedFiles)
+    const matchedPathInstructions = resolvePathInstructionsForChangedPaths(
+      sigilixConfig,
+      reviewedFiles.map((f) => f.path),
+    )
+    if (matchedPathInstructions.length > 0) {
+      console.log(JSON.stringify({
+        event: "pr-review-path-instructions-matched",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        instruction_count: matchedPathInstructions.length,
+        matched_file_count: new Set(matchedPathInstructions.flatMap((i) => i.matchedPaths)).size,
+      }))
+    }
     // ARC-273: hard cap on the diff string passed to specialists.
     // `packFilesIntoBatches` already bounds total-file budget; this
     // is a belt-and-suspenders char-level cap for pathological cases
@@ -2280,6 +2294,9 @@ export async function handlePrReviewEnsemble(
               : retrievalSnapshot,
         namespace,
         ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+        ...(matchedPathInstructions.length > 0
+          ? { pathInstructionsBlock: renderPathInstructionsForPrompt(matchedPathInstructions, role) }
+          : {}),
         ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
         ...(roleFacts.length > 0 ? { deterministicChecksBlock: roleFacts } : {}),
         ...(stackBlock.length > 0 ? { stackBlock } : {}),
@@ -2495,6 +2512,9 @@ export async function handlePrReviewEnsemble(
       diff,
       specialistVerdictsBlock: synthVerdictBlock,
       ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
+      ...(matchedPathInstructions.length > 0
+        ? { pathInstructionsBlock: renderPathInstructionsForPrompt(matchedPathInstructions) }
+        : {}),
       ...(stackBlock.length > 0 ? { stackBlock } : {}),
       // ARC-277: when one or more specialists didn't return, tell
       // synth which roles it's missing so it can constrain its

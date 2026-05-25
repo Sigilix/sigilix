@@ -9,7 +9,7 @@
 // (`tests/triage-pr-review-ensemble-merge-shortcut.test.ts`) so the
 // `vi.mock` calls there don't bleed into these pure-helper tests.
 
-import { describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   annotateWithConsensus,
   assignStableFindingIds,
@@ -2046,5 +2046,209 @@ describe("GRAPH_RPC_TIMEOUT_MS", () => {
 
   it("is well below RETRIEVAL_PREFLIGHT_TIMEOUT_MS so a timed-out graph RPC cannot consume the full preflight budget", () => {
     expect(GRAPH_RPC_TIMEOUT_MS).toBeLessThan(RETRIEVAL_PREFLIGHT_TIMEOUT_MS)
+  })
+})
+
+// SIG-216: post-emit scope normalization. LLM specialists sometimes
+// emit `scope: "file"` for findings that have a concrete `(path, line)`
+// AND that line falls within a reviewable diff hunk. The renderer
+// routes any non-line scope into the Review Body section, losing the
+// inline anchor (PR #173 regression). `validateForSubmission` flips
+// the anchorable shape back to `scope: "line"` before any scope-
+// dependent gate fires; PR-level, comment-scope, and non-anchorable
+// file findings are left alone.
+describe("validateForSubmission — SIG-216 scope normalization (file → line when anchorable)", () => {
+  const reviewable: ReviewableMap = new Map([
+    ["src/lib/foo.ts", [
+      { line: 42, side: "RIGHT" },
+      { line: 50, side: "RIGHT" },
+    ]],
+  ])
+
+  const specialistVerdicts = [
+    {
+      role: "logic" as const,
+      verdict: {
+        ...baseVerdict,
+        findings: [
+          { ...baseFinding, id: "logic-0", line: 42, score: 4 },
+        ],
+      },
+      elapsedMs: 100,
+    },
+  ]
+
+  function packSynth(finding: PrReviewFinding): {
+    verdict: PrReviewVerdict
+    provenance: SynthesizerProvenance
+  } {
+    return {
+      verdict: {
+        summary: "ok",
+        confidence: 4,
+        confidenceReason: "...",
+        findings: [finding],
+      },
+      provenance: {
+        findings: [{
+          sourceSpecialists: ["logic"],
+          sourceFindingIds: ["logic-0"],
+          action: "kept",
+          verifiedViaRetrieval: false,
+        }],
+        dropped: [],
+      },
+    }
+  }
+
+  let logSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    logSpy.mockRestore()
+  })
+
+  it("flips file → line when finding has (path, line) and line is in a hunk", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "file" }),
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.verdict.findings[0]?.scope).toBe("line")
+    expect(out.unanchoredFindings).toHaveLength(0)
+
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(1)
+    const payload = JSON.parse(flips[0]!) as Record<string, unknown>
+    expect(payload).toMatchObject({
+      event: "pr-review-scope-normalized-to-line",
+      fromScope: "file",
+      path: "src/lib/foo.ts",
+      line: 42,
+      category: "logic",
+    })
+  })
+
+  it("leaves pr scope alone even when line is in a hunk", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "pr" }),
+      reviewable,
+      specialistVerdicts,
+    })
+    // pr-scope findings are unanchorable by definition; the line
+    // validity check downstream routes them to unanchoredFindings.
+    expect(out.verdict.findings.find((f) => f.scope === "line")).toBeUndefined()
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  it("leaves comment scope alone even when line is in a hunk", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "comment" }),
+      reviewable,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings.find((f) => f.scope === "line")).toBeUndefined()
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  it("leaves file scope alone when line is not in any hunk (LLM's file-scope choice was right)", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 999, score: 4, scope: "file" }),
+      reviewable,
+      specialistVerdicts,
+    })
+    // Not anchorable to a hunk; the renderer's body-finding path is
+    // correct here. The scope stays "file" so the body section keeps
+    // it.
+    const unanchored = out.unanchoredFindings.find((f) => f.line === 999)
+    expect(unanchored?.scope).toBe("file")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  it("leaves file scope alone when path is not in the reviewable map", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        path: "src/lib/not-in-diff.ts",
+        line: 42,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable,
+      specialistVerdicts,
+    })
+    const unanchored = out.unanchoredFindings.find((f) => f.path === "src/lib/not-in-diff.ts")
+    expect(unanchored?.scope).toBe("file")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  it("leaves file scope alone when line is missing/invalid", () => {
+    // `line` typed as number, so simulate "missing" by feeding NaN
+    // (which the normalizer rejects via Number.isFinite). Cast through
+    // unknown to satisfy the typed-input surface used by callers that
+    // bypass schema validation.
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: Number.NaN,
+        score: 4,
+        scope: "file",
+      } as unknown as PrReviewFinding),
+      reviewable,
+      specialistVerdicts,
+    })
+    // The downstream line-validity check drops the finding into
+    // unanchoredFindings; the scope must remain "file" because the
+    // normalizer should not have flipped it.
+    const unanchored = out.unanchoredFindings[0]
+    expect(unanchored?.scope).toBe("file")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  it("is idempotent — applying normalization twice produces the same result", () => {
+    const first = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "file" }),
+      reviewable,
+      specialistVerdicts,
+    })
+    const flippedOnce = first.verdict.findings[0]
+    expect(flippedOnce?.scope).toBe("line")
+
+    // Re-pack the once-flipped finding (now scope: "line") and run it
+    // through the validator again. The normalizer's early return on
+    // already-line scope must leave it untouched and emit no flip
+    // telemetry the second time.
+    logSpy.mockClear()
+    const second = validateForSubmission({
+      synthOutput: packSynth({ ...flippedOnce! }),
+      reviewable,
+      specialistVerdicts,
+    })
+    const flippedTwice = second.verdict.findings[0]
+    expect(flippedTwice?.scope).toBe("line")
+    expect(flippedTwice).toEqual(flippedOnce)
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
   })
 })

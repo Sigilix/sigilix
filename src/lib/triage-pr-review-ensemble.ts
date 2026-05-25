@@ -85,6 +85,7 @@ import { PR_REVIEW_SCHEMA } from "./schemas"
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
+  type ReviewFindingScope,
   type CoverageRoles,
   type DeltaBadgeCounts,
   parsePrReviewResponse,
@@ -6117,6 +6118,46 @@ function backfillSecurityEvidenceFromSources(
   }
 }
 
+/**
+ * SIG-216: post-emit scope normalization. LLM specialists sometimes
+ * emit `scope: "file"` for findings that have a concrete `(path, line)`
+ * AND that line falls within a reviewable diff hunk. Those findings
+ * SHOULD anchor inline, not fall back to the Review Body section.
+ * Force `scope: "line"` for the anchorable shape so the renderer
+ * routes them inline.
+ *
+ * Out of scope: PR-level findings (no concrete path/line) and
+ * comment-scope findings (replies to existing comments) stay
+ * whatever the LLM emitted.
+ *
+ * Why post-emit not prompt: the prompt already says "use line when
+ * possible" but LLMs over-pick file. Belt-and-braces.
+ */
+function normalizeFindingScopeForAnchorability(
+  finding: PrReviewFinding,
+  reviewable: ReviewableMap,
+): PrReviewFinding {
+  // PR-level / comment-level findings: leave alone — they aren't
+  // anchorable by definition.
+  if (finding.scope === "pr" || finding.scope === "comment") return finding
+  // Already line-scoped: leave alone.
+  if (finding.scope === "line") return finding
+
+  // File-scoped (or scope omitted): check if it's actually anchorable.
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return finding
+  if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return finding
+
+  // Is the line in a reviewable hunk?
+  const anchorLines = reviewable.get(path)
+  if (!anchorLines) return finding
+  const lineInHunk = anchorLines.some((a) => a.line === finding.line)
+  if (!lineInHunk) return finding
+
+  // Force scope=line so the renderer routes inline.
+  return { ...finding, scope: "line" as const }
+}
+
 function selectSourceEvidenceForBackfill(
   finding: PrReviewFinding,
   sourceIds: readonly string[],
@@ -6584,6 +6625,29 @@ export function validateForSubmission(args: {
     // synth telemetry intact and never overwrites fields the synth
     // already provided.
     f = backfillSecurityEvidenceFromSources(f, sourceIds, sourceEvidenceById)
+
+    // SIG-216: normalize scope BEFORE any scope-dependent gates fire.
+    // LLM specialists sometimes emit `scope: "file"` for findings that
+    // have a concrete `(path, line)` AND that line falls in a reviewable
+    // hunk. The renderer routes any non-line scope into the Review Body
+    // section, which loses the inline anchor. Force `scope: "line"` for
+    // the anchorable shape so the renderer routes inline (PR #173
+    // regression class). Telemeter the flip so we can measure how often
+    // the LLM under-anchors; prompt tightening is a follow-up.
+    {
+      const fromScope: ReviewFindingScope | "undefined" = f.scope ?? "undefined"
+      const normalized = normalizeFindingScopeForAnchorability(f, reviewable)
+      if (normalized !== f) {
+        console.log(JSON.stringify({
+          event: "pr-review-scope-normalized-to-line",
+          fromScope,
+          path: f.path,
+          line: f.line,
+          category: f.category,
+        }))
+        f = normalized
+      }
+    }
 
     // ARC-156: vague-prefix filter. Drop findings whose headline OR
     // body starts with one of the VAGUE_PREFIXES words (case-

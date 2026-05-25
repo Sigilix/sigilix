@@ -427,7 +427,8 @@ You do not have a callable retrieval tool in this phase. For contested sev≥4 f
   (b) the original diff,
   (c) [RETRIEVAL SNAPSHOT],
   (d) [GRAPH CONTEXT], and
-  (e) [TESTING EVIDENCE] when present.
+  (e) [DYNAMIC REVIEW EVIDENCE], and
+  (f) [TESTING EVIDENCE] when present.
 If the supplied context is insufficient, lower confidence or drop the finding. Do not invent follow-up evidence.
 
 # OUTPUT (provenance-extended)
@@ -589,6 +590,14 @@ export interface SpecialistInitialMessageCtx {
    * zero-change for PRs where graph context is unavailable.
    */
   graphContext?: string
+  /**
+   * Dynamic evidence cards around changed symbols/regions, including local
+   * snippets, graph/retrieval relations, and test context. Injected adjacent
+   * to graph context because both are precomputed grounding, not findings.
+   *
+   * Empty/absent → block is not emitted.
+   */
+  dynamicEvidenceBlock?: string
 }
 
 export function buildSpecialistInitialMessage(
@@ -664,6 +673,9 @@ export function buildSpecialistInitialMessage(
   if (ctx.graphContext && ctx.graphContext.trim()) {
     lines.push("", "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]", ctx.graphContext.trim())
   }
+  if (ctx.dynamicEvidenceBlock && ctx.dynamicEvidenceBlock.trim()) {
+    lines.push("", ctx.dynamicEvidenceBlock.trim())
+  }
   lines.push(
     "",
     `[CODEBASE NAMESPACE FOR FOLLOW-UP retrieve_codebase CALLS]`,
@@ -730,6 +742,13 @@ export interface SynthesizerInitialMessageCtx {
    * PRs where graph context is unavailable.
    */
   graphContext?: string
+  /**
+   * Same dynamic evidence cards the specialists saw. Synth uses them only to
+   * adjudicate/merge specialist findings, not to invent findings by itself.
+   *
+   * Empty/absent → block is not emitted.
+   */
+  dynamicEvidenceBlock?: string
 }
 
 export function buildSynthesizerInitialMessage(
@@ -784,6 +803,9 @@ export function buildSynthesizerInitialMessage(
   // to pre-SIG-138.
   if (ctx.graphContext && ctx.graphContext.trim()) {
     lines.push("", "[GRAPH CONTEXT — dependency-graph neighbors of the changed code; additive, may be incomplete]", ctx.graphContext.trim())
+  }
+  if (ctx.dynamicEvidenceBlock && ctx.dynamicEvidenceBlock.trim()) {
+    lines.push("", ctx.dynamicEvidenceBlock.trim())
   }
   lines.push(
     "",

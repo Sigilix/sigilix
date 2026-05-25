@@ -2627,14 +2627,14 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(1)).toContain('alt="P3"')
   })
-  it("renders badges as compact outline chips for GitHub legibility (SIG-200, Kimi R2 SIG-216)", () => {
+  it("renders badges as 20x20 filled squares for GitHub legibility (SIG-200, Greptile-direction SIG-216)", () => {
     const out = severityBadgeForScore(3)
     expect(out).toContain('width="20"')
-    expect(out).toContain('height="13"')
+    expect(out).toContain('height="20"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260525-3/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260525-4/p2.svg`)
     expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {

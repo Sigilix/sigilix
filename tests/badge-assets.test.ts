@@ -15,7 +15,7 @@ function ctx(): ExecutionContext {
 }
 
 describe("badge assets (SIG-201)", () => {
-  it("serves a compact outline-only P2 priority chip from a public Worker route (Kimi R2)", async () => {
+  it("serves a 20x20 filled-square P2 priority chip from a public Worker route (Greptile-direction)", async () => {
     const res = handleBadgeAssetRoute(
       new Request(badgeAssetUrl("p2"))
     )
@@ -25,12 +25,14 @@ describe("badge assets (SIG-201)", () => {
     expect(res?.headers.get("cache-control")).toContain("immutable")
     const body = await res!.text()
     expect(body).toContain('aria-label="P2"')
-    expect(body).toContain('viewBox="0 0 20 13"')
-    // Outline-only: stroke + text both in the accent hue, no fill on the rect.
-    expect(body).toContain('stroke="#84CC16"')
-    expect(body).toContain('stroke-opacity="0.7"')
-    expect(body).toContain('fill="none"')
+    expect(body).toContain('viewBox="0 0 20 20"')
+    // Filled square: rect fill = accent hue, dark text on top. No stroke.
     expect(body).toContain('fill="#84CC16"')
+    expect(body).toContain('rx="1"')
+    expect(body).toContain('fill="#0B0C10"')
+    expect(body).not.toContain('fill="none"')
+    expect(body).not.toContain('stroke=')
+    expect(body).not.toContain('stroke-opacity')
     expect(body).toContain('text-anchor="middle"')
     expect(body).not.toContain("<image")
     expect(body).toContain("<text")
@@ -45,6 +47,9 @@ describe("badge assets (SIG-201)", () => {
     expect(res?.status).toBe(200)
     const body = await res!.text()
     expect(body).toContain('aria-label="SECURITY"')
+    // 20px-tall pill matches the priority badge height for visual unity.
+    expect(body).toContain('height="20"')
+    expect(body).toContain('rx="2"')
     // Hue identity preserved (magenta family) but desaturated/darkened for BG
     // and brightened for FG. Original accent #F0ABFC no longer appears verbatim.
     expect(body).not.toContain('#F0ABFC')
@@ -75,8 +80,8 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-3/p2.svg`)
-    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-3/security.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-4/p2.svg`)
+    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-4/security.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
   })
 

@@ -185,6 +185,60 @@ describe("buildDynamicReviewEvidencePack", () => {
     expect(pack.cards[0]?.testingContext.inspectedTestFiles).toEqual([])
   })
 
+  it("matches changed symbols whose names contain dollar signs", () => {
+    const filesByPath = new Map([
+      [
+        "src/dollar-symbols.ts",
+        [
+          "export function $parse(input: string): string {",
+          "  return input.trim()",
+          "}",
+          "",
+          "export function render$(input: string): string {",
+          "  return input.toUpperCase()",
+          "}",
+        ].join("\n"),
+      ],
+    ])
+    const changedLines: ChangedLines = new Map([["src/dollar-symbols.ts", new Set([2, 6])]])
+
+    const pack = buildDynamicReviewEvidencePack({
+      filesByPath,
+      changedLines,
+      reviewablePaths: ["src/dollar-symbols.ts"],
+      graphNodes: [{
+        path: "src/dollar-consumer.ts",
+        symbolId: null,
+        name: null,
+        hop: 1,
+        edgeKind: "import",
+      }],
+      retrievalChunks: [{
+        path: "src/dollar-consumer.ts",
+        lineStart: 20,
+        lineEnd: 24,
+        score: 0.9,
+        content: [
+          "const parsed = $parse(source)",
+          "const rendered = render$(parsed)",
+        ].join("\n"),
+      }],
+    })
+
+    const bySymbol = new Map(pack.cards.map((card) => [card.symbolName, card]))
+
+    expect(bySymbol.get("$parse")?.retrievalRefs[0]).toMatchObject({
+      path: "src/dollar-consumer.ts",
+      reason: "mentions changed symbol + graph-related",
+    })
+    expect(bySymbol.get("$parse")?.retrievalRefs[0]?.excerpt).toContain("$parse(source)")
+    expect(bySymbol.get("render$")?.retrievalRefs[0]).toMatchObject({
+      path: "src/dollar-consumer.ts",
+      reason: "mentions changed symbol + graph-related",
+    })
+    expect(bySymbol.get("render$")?.retrievalRefs[0]?.excerpt).toContain("render$(parsed)")
+  })
+
   it("falls back to a changed file-region card when no symbol is available", () => {
     const filesByPath = new Map([
       ["src/constants.ts", ["const one = 1", "const two = 2"].join("\n")],

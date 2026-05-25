@@ -66,9 +66,12 @@ import {
   dynamicReviewEvidenceEnabled,
   dynamicReviewEvidenceMode,
   renderDynamicReviewEvidenceBlock,
+  type DynamicReviewEvidenceEnv,
+  type DynamicReviewEvidenceMode,
+  type DynamicReviewEvidencePack,
 } from "./review-evidence-pack"
 import { embedText } from "./embeddings"
-import { buildAddedLineTextByLine, buildChangedLines } from "./ast-rules/diff-filter"
+import { buildAddedLineTextByLine, buildChangedLines, type ChangedLines } from "./ast-rules/diff-filter"
 import { mapWithConcurrency } from "./bounded-concurrency"
 import {
   loadWithdrawals,
@@ -423,6 +426,53 @@ export const GRAPH_RPC_TIMEOUT_MS = 2_500
 const GRAPH_BLAST_PROMPT_CAP = 4
 const SPECIALIST_VERDICT_TOKEN_CAP = 8_000
 const MAX_ADVISORY_NITS = 5
+
+export interface ResolveDynamicEvidencePromptBlockArgs {
+  env: DynamicReviewEvidenceEnv
+  filesByPath: ReadonlyMap<string, string>
+  changedLines: ChangedLines
+  reviewablePaths: readonly string[]
+  retrievalChunks: readonly RetrievedChunk[]
+  graphNodes: readonly GraphContextNode[]
+  blastCallerPaths: readonly string[]
+  blastDependentPaths: readonly string[]
+  testingEvidence: TestingEvidencePack | undefined
+}
+
+export interface ResolvedDynamicEvidencePromptBlock {
+  mode: DynamicReviewEvidenceMode
+  pack: DynamicReviewEvidencePack | null
+  rendered: string
+  promptBlock: string
+}
+
+export function resolveDynamicEvidencePromptBlock(
+  args: ResolveDynamicEvidencePromptBlockArgs,
+): ResolvedDynamicEvidencePromptBlock {
+  const mode = dynamicReviewEvidenceMode(args.env)
+  if (mode === "off") {
+    return { mode, pack: null, rendered: "", promptBlock: "" }
+  }
+
+  const pack = buildDynamicReviewEvidencePack({
+    filesByPath: args.filesByPath,
+    changedLines: args.changedLines,
+    reviewablePaths: args.reviewablePaths,
+    retrievalChunks: args.retrievalChunks,
+    graphNodes: args.graphNodes,
+    blastCallerPaths: args.blastCallerPaths,
+    blastDependentPaths: args.blastDependentPaths,
+    ...(args.testingEvidence !== undefined ? { testingEvidence: args.testingEvidence } : {}),
+  })
+  const rendered = renderDynamicReviewEvidenceBlock(pack)
+
+  return {
+    mode,
+    pack,
+    rendered,
+    promptBlock: mode === "post" ? rendered : "",
+  }
+}
 
 // Static budget invariant — guarantees the synth always has its full
 // 180s budget regardless of pre-flight + diff-parse + stale-head latency.
@@ -2282,20 +2332,20 @@ export async function handlePrReviewEnsemble(
     // changed symbols/regions that bundle local code, graph/retrieval
     // neighbors, and test context. Shadow mode computes coverage telemetry
     // only; post mode injects the cards into specialist + synth prompts.
-    const dynamicEvidenceMode = dynamicReviewEvidenceMode(env)
-    let dynamicEvidenceBlockForPrompt = ""
-    if (dynamicEvidenceMode !== "off") {
-      const dynamicEvidencePack = buildDynamicReviewEvidencePack({
-        filesByPath: astFilesByPath,
-        changedLines: buildChangedLines(diff),
-        reviewablePaths: filePaths,
-        retrievalChunks: sharedChunksForOverlap,
-        graphNodes: graphContextNodesForEvidence,
-        blastCallerPaths: graphBlastCallerPaths,
-        blastDependentPaths: graphBlastDependentPaths,
-        testingEvidence: testingEvidencePackWithCoverage,
-      })
-      const rendered = renderDynamicReviewEvidenceBlock(dynamicEvidencePack)
+    const dynamicEvidence = resolveDynamicEvidencePromptBlock({
+      env,
+      filesByPath: astFilesByPath,
+      changedLines: buildChangedLines(diff),
+      reviewablePaths: filePaths,
+      retrievalChunks: sharedChunksForOverlap,
+      graphNodes: graphContextNodesForEvidence,
+      blastCallerPaths: graphBlastCallerPaths,
+      blastDependentPaths: graphBlastDependentPaths,
+      testingEvidence: testingEvidencePackWithCoverage,
+    })
+    const dynamicEvidenceBlockForPrompt = dynamicEvidence.promptBlock
+    if (dynamicEvidence.pack !== null) {
+      const dynamicEvidencePack = dynamicEvidence.pack
       const cardsWithGraph = dynamicEvidencePack.cards.filter((c) => c.graphRelations.length > 0).length
       const cardsWithRetrieval = dynamicEvidencePack.cards.filter((c) => c.retrievalRefs.length > 0).length
       const cardsWithTesting = dynamicEvidencePack.cards.filter((c) =>
@@ -2306,18 +2356,15 @@ export async function handlePrReviewEnsemble(
       console.log(JSON.stringify({
         event: "pr-review-dynamic-evidence",
         owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        mode: dynamicEvidenceMode,
+        mode: dynamicEvidence.mode,
         files_scanned: dynamicEvidencePack.filesScanned,
         changed_files_with_sources: dynamicEvidencePack.changedFilesWithSources,
         cards: dynamicEvidencePack.cards.length,
         cards_with_graph: cardsWithGraph,
         cards_with_retrieval: cardsWithRetrieval,
         cards_with_testing: cardsWithTesting,
-        rendered_chars: rendered.length,
+        rendered_chars: dynamicEvidence.rendered.length,
       }))
-      if (dynamicEvidenceMode === "post") {
-        dynamicEvidenceBlockForPrompt = rendered
-      }
     }
 
     // SIG-108: build one message per role, injecting only that role's

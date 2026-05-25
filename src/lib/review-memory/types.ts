@@ -61,6 +61,14 @@ export interface ReviewMemorySignal {
   fid: string
   /** v1 ships only `dismissed-textual`; v2 may add `dismissed-reaction`, etc. */
   kind: "dismissed-textual"
+  /**
+   * SIG-173: optional canonical reason label from `@sigilix dismiss
+   * <reason>`. Absent on signals captured by the textual-dismissal
+   * pipeline (those reviewers didn't tag a reason). The activation count
+   * weights signals via `weightForReason(dismissReason)`; absent or
+   * unknown → weight 1.0 (existing behavior, no surprise softening).
+   */
+  dismissReason?: import("../dismiss-reasons").DismissReason
 }
 
 /**

@@ -288,7 +288,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
         commentId,
         reason: loopResult.reason,
       })
-      const response = await generate({
+      const { text: response } = await generate({
         model,
         prompt,
         apiKey: env.OLLAMA_API_KEY,
@@ -298,7 +298,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     }
   } else {
     log("ollama-start")
-    const response = await generate({
+    const { text: response } = await generate({
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,

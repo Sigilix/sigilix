@@ -43,6 +43,26 @@ interface OllamaStreamChunk {
   response?: string
   done?: boolean
   error?: string
+  // SIG-212: token usage counters. Present on the final `done: true`
+  // chunk per the Ollama API. Surface them on `GenerateResult.usage`
+  // so the ensemble's `model-attempt-completed` events can record
+  // per-call cost.
+  prompt_eval_count?: number
+  eval_count?: number
+}
+
+/** SIG-212: token usage surfaced on `GenerateResult` / `ChatResult`.
+ *  Fields are optional because non-Ollama providers may not surface
+ *  them; emitters should omit rather than zero-fill (zero would skew
+ *  aggregations). Shared by `ollama.ts` and `ollama-chat.ts`. */
+export interface LlmUsage {
+  inputTokens?: number
+  outputTokens?: number
+}
+
+export interface GenerateResult {
+  text: string
+  usage: LlmUsage
 }
 
 export async function generate({
@@ -52,7 +72,7 @@ export async function generate({
   temperature,
   timeoutMs = 600_000,
   format,
-}: GenerateArgs): Promise<string> {
+}: GenerateArgs): Promise<GenerateResult> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
@@ -93,6 +113,8 @@ export async function generate({
   }
 }
 
+
+
 /**
  * Read the NDJSON stream and accumulate the `response` field across
  * chunks. Each line in the stream is a JSON object like:
@@ -105,13 +127,23 @@ export async function generate({
  * values and return the result. If a chunk has an `error` field, we
  * throw — that propagates to the queue retry path.
  */
-async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<string> {
+async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<GenerateResult> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
   let accumulated = ""
   let done = false
   let saw = false
+  // SIG-212: Ollama emits the token counts on the final `done: true`
+  // chunk. Tracking them across all chunks is defensive — only the
+  // last non-zero values are used.
+  let promptEvalCount: number | undefined
+  let evalCount: number | undefined
+
+  const captureCounts = (chunk: OllamaStreamChunk): void => {
+    if (typeof chunk.prompt_eval_count === "number") promptEvalCount = chunk.prompt_eval_count
+    if (typeof chunk.eval_count === "number") evalCount = chunk.eval_count
+  }
 
   while (!done) {
     const { value, done: streamDone } = await reader.read()
@@ -140,6 +172,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<strin
       if (typeof chunk.response === "string") {
         accumulated += chunk.response
       }
+      captureCounts(chunk)
       if (chunk.done) done = true
     }
   }
@@ -151,6 +184,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<strin
       const chunk = JSON.parse(tail) as OllamaStreamChunk
       if (chunk.error) throw new Error(`Ollama stream error: ${chunk.error.slice(0, 500)}`)
       if (typeof chunk.response === "string") accumulated += chunk.response
+      captureCounts(chunk)
       saw = true
     } catch {
       // Ignored — incomplete final line, what we already accumulated is what we got.
@@ -160,5 +194,8 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<strin
   if (!saw) {
     throw new Error("Ollama stream produced no chunks")
   }
-  return accumulated
+  const usage: LlmUsage = {}
+  if (promptEvalCount !== undefined) usage.inputTokens = promptEvalCount
+  if (evalCount !== undefined) usage.outputTokens = evalCount
+  return { text: accumulated, usage }
 }

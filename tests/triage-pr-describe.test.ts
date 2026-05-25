@@ -31,8 +31,15 @@ vi.mock("../src/lib/github", async () => {
   }
 })
 
+// SIG-212: tests resolve `mockGenerate` to a raw string (the old
+// `generate()` return). After SIG-212 the helper returns `{ text,
+// usage }`. The wrapper adapts string-returning mocks so existing
+// `mockResolvedValue("...")` calls still work.
 vi.mock("../src/lib/ollama", () => ({
-  generate: (args: unknown) => mockGenerate(args),
+  generate: async (args: unknown) => {
+    const result = await mockGenerate(args)
+    return typeof result === "string" ? { text: result, usage: {} } : result
+  },
 }))
 
 vi.mock("../src/lib/sigilix-config", async () => {

@@ -21,6 +21,8 @@
 //   parse failures so the model gets a single retry on bad args instead of
 //   the whole loop dying as `chat_error`.
 
+import type { LlmUsage } from "./ollama"
+
 const OLLAMA_TURBO_URL = "https://ollama.com/api/chat"
 
 export interface ChatMessage {
@@ -90,6 +92,14 @@ export interface ChatResult {
   /** True iff `Array.isArray(message.tool_calls) && message.tool_calls.length > 0`.
    *  Empty array unambiguously means final-answer (no tool calls). */
   hasToolCalls: boolean
+  /** SIG-212: token usage as reported by Ollama's final stream chunk.
+   *  Optional on the type so test mocks and alternative `ChatResult`
+   *  producers don't have to provide it. The production `chat()` path
+   *  ALWAYS sets this field (possibly to `{}` when neither count was
+   *  reported), so callers in the ensemble can safely assume it
+   *  exists for real LLM round-trips. Aggregators treat each missing
+   *  field within `usage` as "no data," not zero. */
+  usage?: LlmUsage
 }
 
 /**
@@ -115,6 +125,11 @@ interface OllamaChatChunk {
   }
   done?: boolean
   error?: string
+  // SIG-212: token usage counters. Present on the final `done: true`
+  // chunk per the Ollama API. Mirrors the OllamaStreamChunk shape in
+  // `ollama.ts`.
+  prompt_eval_count?: number
+  eval_count?: number
 }
 
 export async function chat(args: ChatArgs): Promise<ChatResult> {
@@ -167,10 +182,11 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
       throw new Error("Ollama response missing body")
     }
 
-    const message = await accumulateStream(res.body)
+    const { message, usage } = await accumulateStream(res.body)
     return {
       message,
       hasToolCalls: Array.isArray(message.tool_calls) && message.tool_calls.length > 0,
+      usage,
     }
   } finally {
     clearTimeout(timer)
@@ -196,7 +212,7 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
  * If a chunk has an `error` field, throw — that propagates to the agent
  * loop's `chat_error` mapping.
  */
-async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<ChatMessage> {
+async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<{ message: ChatMessage; usage: LlmUsage }> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ""
@@ -204,6 +220,14 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<ChatM
   let lastToolCallsSnapshot: ToolCall[] | undefined = undefined
   let done = false
   let saw = false
+  // SIG-212: token usage counters from the final `done: true` chunk.
+  let promptEvalCount: number | undefined
+  let evalCount: number | undefined
+
+  const captureCounts = (chunk: OllamaChatChunk): void => {
+    if (typeof chunk.prompt_eval_count === "number") promptEvalCount = chunk.prompt_eval_count
+    if (typeof chunk.eval_count === "number") evalCount = chunk.eval_count
+  }
 
   while (!done) {
     const { value, done: streamDone } = await reader.read()
@@ -238,6 +262,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<ChatM
           lastToolCallsSnapshot = msg.tool_calls
         }
       }
+      captureCounts(chunk)
       if (chunk.done) done = true
     }
   }
@@ -253,6 +278,7 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<ChatM
         if (typeof msg.content === "string") accumulatedContent += msg.content
         if (Array.isArray(msg.tool_calls)) lastToolCallsSnapshot = msg.tool_calls
       }
+      captureCounts(chunk)
       saw = true
     } catch {
       // Ignored — incomplete final line.
@@ -263,10 +289,13 @@ async function accumulateStream(body: ReadableStream<Uint8Array>): Promise<ChatM
     throw new Error("Ollama stream produced no chunks")
   }
 
-  const out: ChatMessage = {
+  const message: ChatMessage = {
     role: "assistant",
     content: accumulatedContent,
   }
-  if (lastToolCallsSnapshot !== undefined) out.tool_calls = lastToolCallsSnapshot
-  return out
+  if (lastToolCallsSnapshot !== undefined) message.tool_calls = lastToolCallsSnapshot
+  const usage: LlmUsage = {}
+  if (promptEvalCount !== undefined) usage.inputTokens = promptEvalCount
+  if (evalCount !== undefined) usage.outputTokens = evalCount
+  return { message, usage }
 }

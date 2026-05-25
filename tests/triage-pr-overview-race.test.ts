@@ -46,8 +46,13 @@ vi.mock("../src/lib/github", async () => {
   }
 })
 
+// SIG-212: adapt legacy string-returning mockGenerate to the new
+// `{ text, usage }` return shape.
 vi.mock("../src/lib/ollama", () => ({
-  generate: (args: unknown) => mockGenerate(args),
+  generate: async (args: unknown) => {
+    const result = await mockGenerate(args)
+    return typeof result === "string" ? { text: result, usage: {} } : result
+  },
 }))
 
 import { handlePrOverview } from "../src/lib/triage-pr-overview"

@@ -203,12 +203,12 @@ export async function handlePrLabels(args: PrLabelArgs): Promise<void> {
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   let response: string
   try {
-    response = await generate({
+    ;({ text: response } = await generate({
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,
       format: PR_LABEL_SCHEMA as unknown as Record<string, unknown>,
-    })
+    }))
   } catch (err) {
     console.warn(JSON.stringify({
       event: "pr-labels-ollama-failed",

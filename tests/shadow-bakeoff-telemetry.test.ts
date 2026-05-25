@@ -62,6 +62,46 @@ describe("emitShadowAttempt", () => {
     expect(event).not.toHaveProperty("failureReason")
   })
 
+  it("includes inputTokens/outputTokens when supplied (SIG-212 token usage)", () => {
+    // SIG-212: shadow attempts mirror the prod `model-attempt-completed`
+    // token-usage shape so a single monitoring-app aggregation can join
+    // prod + shadow records on `(role, attemptKind, attemptIndex)` and
+    // sum token cost across both paths.
+    emitShadowAttempt(CTX, {
+      role: "synth",
+      attemptKind: "primary",
+      attemptIndex: 1,
+      model: "deepseek-v4-flash:cloud",
+      timeoutMs: 60_000,
+      startedAtMs: 1_000,
+      endedAtMs: 1_500,
+      elapsedMs: 500,
+      outcome: "ok",
+      inputTokens: 2048,
+      outputTokens: 256,
+    })
+    const event = lastLogged()
+    expect(event["inputTokens"]).toBe(2048)
+    expect(event["outputTokens"]).toBe(256)
+  })
+
+  it("omits token fields when not supplied (optional-field round-trip)", () => {
+    emitShadowAttempt(CTX, {
+      role: "synth",
+      attemptKind: "primary",
+      attemptIndex: 1,
+      model: "deepseek-v4-flash:cloud",
+      timeoutMs: 60_000,
+      startedAtMs: 1_000,
+      endedAtMs: 1_500,
+      elapsedMs: 500,
+      outcome: "ok",
+    })
+    const event = lastLogged()
+    expect(event).not.toHaveProperty("inputTokens")
+    expect(event).not.toHaveProperty("outputTokens")
+  })
+
   it("includes failureReason only when outcome is not ok", () => {
     emitShadowAttempt(CTX, {
       role: "tests", attemptKind: "fallback", attemptIndex: 2,

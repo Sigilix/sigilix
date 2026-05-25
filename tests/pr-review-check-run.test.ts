@@ -217,6 +217,148 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toBe("Review posted")
   })
 
+  it("appends body-only annotations to the completed check run in batches of 50", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+    const annotations = Array.from({ length: 51 }, (_, i) => ({
+      path: "src/app.ts",
+      start_line: i + 1,
+      end_line: i + 1,
+      annotation_level: "warning" as const,
+      title: `[P2] finding ${i + 1}`,
+      message: "Body-only finding",
+    }))
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 51,
+        checkAnnotations: annotations,
+      },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(3)
+    const completionPayload = mockUpdateCheckRun.mock.calls[0]![3] as { status: string; output: { annotations?: unknown[] } }
+    expect(completionPayload.status).toBe("completed")
+    expect(completionPayload.output.annotations).toBeUndefined()
+    const firstAnnotationPatch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: unknown[] } }
+    const secondAnnotationPatch = mockUpdateCheckRun.mock.calls[2]![3] as { output: { annotations: unknown[] } }
+    expect(firstAnnotationPatch.output.annotations).toHaveLength(50)
+    expect(secondAnnotationPatch.output.annotations).toHaveLength(1)
+    expect(firstAnnotationPatch.output.annotations[0]).toMatchObject({
+      path: "src/app.ts",
+      start_line: 1,
+      end_line: 1,
+      annotation_level: "warning",
+    })
+    expect(firstAnnotationPatch.output.annotations[49]).toMatchObject({
+      path: "src/app.ts",
+      start_line: 50,
+      end_line: 50,
+      annotation_level: "warning",
+    })
+    expect(secondAnnotationPatch.output.annotations[0]).toMatchObject({
+      path: "src/app.ts",
+      start_line: 51,
+      end_line: 51,
+      annotation_level: "warning",
+    })
+  })
+
+  it("does not fail completion when annotation posting fails", async () => {
+    mockUpdateCheckRun
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("HTTP 422 Validation Failed"))
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await expect(completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 1,
+        checkAnnotations: [{
+          path: "src/app.ts",
+          start_line: 10,
+          end_line: 10,
+          annotation_level: "warning",
+          title: "[P2] missing coverage",
+          message: "Body-only finding",
+        }],
+      },
+    })).resolves.toBeUndefined()
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("pr-review-check-run-annotations-failed"))
+  })
+
+  it("does not attempt annotation patches when the completion update fails", async () => {
+    mockUpdateCheckRun.mockRejectedValue(new Error("HTTP 422 Validation Failed"))
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await expect(completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 1,
+        checkAnnotations: [{
+          path: "src/app.ts",
+          start_line: 10,
+          end_line: 10,
+          annotation_level: "warning",
+          title: "[P2] missing coverage",
+          message: "Body-only finding",
+        }],
+      },
+    })).resolves.toBeUndefined()
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not fail completion when a later annotation batch fails", async () => {
+    mockUpdateCheckRun
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("HTTP 422 Validation Failed"))
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+    const annotations = Array.from({ length: 51 }, (_, i) => ({
+      path: "src/app.ts",
+      start_line: i + 1,
+      end_line: i + 1,
+      annotation_level: "warning" as const,
+      title: `[P2] finding ${i + 1}`,
+      message: "Body-only finding",
+    }))
+
+    await expect(completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 51,
+        checkAnnotations: annotations,
+      },
+    })).resolves.toBeUndefined()
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(3)
+    const firstAnnotationPatch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: unknown[] } }
+    const secondAnnotationPatch = mockUpdateCheckRun.mock.calls[2]![3] as { output: { annotations: unknown[] } }
+    expect(firstAnnotationPatch.output.annotations).toHaveLength(50)
+    expect(secondAnnotationPatch.output.annotations).toHaveLength(1)
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("pr-review-check-run-annotations-failed"))
+  })
+
   it("emits the `skipped` copy for stale-head conclusions", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })

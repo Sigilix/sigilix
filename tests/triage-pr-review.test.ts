@@ -4,7 +4,11 @@
 import { describe, expect, it } from "vitest"
 import {
   buildFallbackBody,
+  buildBodyOnlyCheckAnnotations,
   buildReviewSubmission,
+  buildReviewSubmissionWithMetadata,
+  CHECK_ANNOTATION_TEXT_LIMIT,
+  CHECK_ANNOTATION_TITLE_LIMIT,
   chooseReviewEvent,
   chooseReviewEventWithGate,
   computeGateScore,
@@ -1101,6 +1105,114 @@ describe("buildReviewSubmission", () => {
     const out = buildReviewSubmission({ verdict: v, prAuthor: "alice", headSha: "abc" })
     expect(out.comments?.[0]?.body).toContain("```suggestion")
     expect(out.comments?.[0]?.body).toContain("const x = a ?? b")
+  })
+
+  it("returns check annotations for findings rendered in the review body", () => {
+    const unanchored = {
+      ...baseFinding,
+      path: "src/body-only.ts",
+      line: 12,
+      score: 4,
+      category: "testing" as const,
+      headline: "missing integration coverage",
+      body: "The new branch has no integration coverage.",
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      unanchored: [unanchored],
+    })
+
+    expect(out.submission.body).toContain("### Review Body Findings")
+    expect(out.bodyOnlyFindings).toEqual([unanchored])
+    expect(out.bodyOnlyAnnotations).toEqual([
+      expect.objectContaining({
+        path: "src/body-only.ts",
+        start_line: 12,
+        end_line: 12,
+        annotation_level: "warning",
+        title: "[P1] testing: missing integration coverage",
+      }),
+    ])
+  })
+
+  it("routes broad-scope findings to body-only annotation metadata", () => {
+    const fileFinding = {
+      ...baseFinding,
+      scope: "file" as const,
+      score: 5,
+      headline: "module invariant is unclear",
+      body: "This is broader than one exact changed line.",
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: { ...verdict, findings: [fileFinding] },
+      prAuthor: "alice",
+      headSha: "abc",
+    })
+
+    expect(out.submission.comments).toBeUndefined()
+    expect(out.bodyOnlyFindings).toEqual([fileFinding])
+    expect(out.bodyOnlyAnnotations[0]).toMatchObject({
+      path: baseFinding.path,
+      annotation_level: "failure",
+      title: "[P0] logic: module invariant is unclear",
+    })
+  })
+})
+
+describe("buildBodyOnlyCheckAnnotations", () => {
+  it("sorts annotations by severity and preserves line ranges", () => {
+    const annotations = buildBodyOnlyCheckAnnotations([
+      { ...baseFinding, path: "b.ts", line: 20, score: 2, headline: "low" },
+      { ...baseFinding, path: "a.ts", startLine: 10, line: 14, score: 5, headline: "critical" },
+    ])
+
+    expect(annotations[0]).toMatchObject({
+      path: "a.ts",
+      start_line: 10,
+      end_line: 14,
+      annotation_level: "failure",
+      title: "[P0] logic: critical",
+    })
+    expect(annotations[1]).toMatchObject({
+      path: "b.ts",
+      start_line: 20,
+      end_line: 20,
+      annotation_level: "notice",
+      title: "[P3] logic: low",
+    })
+  })
+
+  it("drops findings that cannot map to a check-run annotation location", () => {
+    const annotations = buildBodyOnlyCheckAnnotations([
+      { ...baseFinding, path: "", line: 20, headline: "missing path" },
+      { ...baseFinding, path: "src/app.ts", line: 0, headline: "missing line" },
+      { ...baseFinding, path: "src/app.ts", line: -5, headline: "negative line" },
+      { ...baseFinding, path: "src/valid.ts", line: 7, headline: "valid" },
+    ])
+
+    expect(annotations).toHaveLength(1)
+    expect(annotations[0]).toMatchObject({
+      path: "src/valid.ts",
+      start_line: 7,
+      end_line: 7,
+    })
+  })
+
+  it("truncates oversized annotation titles and messages to GitHub-safe limits", () => {
+    const annotations = buildBodyOnlyCheckAnnotations([
+      {
+        ...baseFinding,
+        headline: "x".repeat(400),
+        body: "y".repeat(70000),
+      },
+    ])
+
+    expect(annotations[0]!.title).toHaveLength(CHECK_ANNOTATION_TITLE_LIMIT)
+    expect(annotations[0]!.title!.endsWith("…")).toBe(true)
+    expect(annotations[0]!.message).toHaveLength(CHECK_ANNOTATION_TEXT_LIMIT)
+    expect(annotations[0]!.message.endsWith("…")).toBe(true)
   })
 })
 

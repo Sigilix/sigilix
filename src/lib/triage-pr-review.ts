@@ -30,6 +30,7 @@
 // (`renderApproveBody` / `renderRequestChangesBody`),
 // `parsePrReviewResponse`, and the related sanitizers.
 import {
+  type CheckRunAnnotation,
   type SubmitReviewBody,
   type SubmitReviewComment,
 } from "./github"
@@ -749,7 +750,17 @@ interface BuildReviewArgs {
  * own confidenceReason so a reviewer skimming the PR sees OpenClaw's
  * read at a glance. Pure — exported for tests.
  */
-export function buildReviewSubmission({
+export function buildReviewSubmission(args: BuildReviewArgs): SubmitReviewBody {
+  return buildReviewSubmissionWithMetadata(args).submission
+}
+
+export interface ReviewSubmissionBuildResult {
+  submission: SubmitReviewBody
+  bodyOnlyFindings: PrReviewFinding[]
+  bodyOnlyAnnotations: CheckRunAnnotation[]
+}
+
+export function buildReviewSubmissionWithMetadata({
   verdict: rawVerdict,
   // `prAuthor` is still part of the public args shape (older
   // call sites pass it) but ARC-281's renderers don't take it —
@@ -766,7 +777,7 @@ export function buildReviewSubmission({
   retriggerUrl,
   reviewable,
   addedLineTextByLine,
-}: BuildReviewArgs): SubmitReviewBody {
+}: BuildReviewArgs): ReviewSubmissionBuildResult {
   // ARC-156 follow-up: sanitize every prose field for GitHub
   // rendering BEFORE downstream renderers see the verdict. Wraps
   // un-backticked HTML/JSX tags in backticks so an unclosed `<kbd>`
@@ -942,7 +953,11 @@ export function buildReviewSubmission({
     commit_id: headSha,
   }
   if (comments.length > 0) submission.comments = comments
-  return submission
+  return {
+    submission,
+    bodyOnlyFindings: unanchored,
+    bodyOnlyAnnotations: buildBodyOnlyCheckAnnotations(unanchored),
+  }
 }
 
 interface BuildFallbackArgs {
@@ -1880,6 +1895,61 @@ function renderBodyOnlyFindings(findings: PrReviewFinding[]): string[] {
   return lines
 }
 
+export const CHECK_ANNOTATION_TEXT_LIMIT = 60000
+export const CHECK_ANNOTATION_TITLE_LIMIT = 240
+
+export function buildBodyOnlyCheckAnnotations(findings: PrReviewFinding[]): CheckRunAnnotation[] {
+  const sorted = [...findings].sort((a, b) =>
+    b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
+  )
+  return sorted
+    .filter((f) => f.path.trim().length > 0 && Number.isFinite(f.line) && f.line > 0)
+    .map((f) => {
+      const start = Math.max(1, Math.min(f.startLine ?? f.line, f.line))
+      const end = Math.max(start, Math.max(f.startLine ?? f.line, f.line))
+      const category = formatFindingCategory(f)
+      const priority = severityLabelForScore(f.score)
+      const anchor = formatBodyFindingAnchor(f).replace(/`/g, "")
+      const location = formatBodyFindingLocation(f)
+      const title = truncateCheckAnnotationText(
+        `[${priority}] ${category}: ${stripAstMarkers(f.headline)}`,
+        CHECK_ANNOTATION_TITLE_LIMIT,
+      )
+      const message = truncateCheckAnnotationText(
+        [
+          formatFindingBodyMarkdown(f.body),
+          "",
+          `${location} (${formatBodyFindingSeverity(f)}) · ${anchor}${f.anchorNote ? ` · ${f.anchorNote}` : ""}`,
+        ].join("\n"),
+        CHECK_ANNOTATION_TEXT_LIMIT,
+      )
+      const rawDetails = formatBodyFindingSuggestedChange(f)
+      const annotation: CheckRunAnnotation = {
+        path: f.path,
+        start_line: start,
+        end_line: end,
+        annotation_level: checkAnnotationLevelForScore(f.score),
+        title,
+        message,
+      }
+      if (rawDetails) {
+        annotation.raw_details = truncateCheckAnnotationText(rawDetails, CHECK_ANNOTATION_TEXT_LIMIT)
+      }
+      return annotation
+    })
+}
+
+function checkAnnotationLevelForScore(score: number): CheckRunAnnotation["annotation_level"] {
+  if (score >= 5) return "failure"
+  if (score >= 3) return "warning"
+  return "notice"
+}
+
+function truncateCheckAnnotationText(value: string, max: number): string {
+  const clean = stripAstMarkers(value).trim()
+  return clean.length <= max ? clean : `${clean.slice(0, max - 1)}…`
+}
+
 /**
  * SIG-101: severity badge prefix on inline finding comments. Scores
  * map to Greptile-style P0/P1/P2 priority tags so a reviewer scanning
@@ -1911,11 +1981,17 @@ function severityBadgeImg(label: "P0" | "P1" | "P2" | "P3", file: "p0" | "p1" | 
   return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${SEVERITY_BADGE_WIDTH}" height="${SEVERITY_BADGE_HEIGHT}"></a>`
 }
 
+export function severityLabelForScore(score: number): "P0" | "P1" | "P2" | "P3" {
+  if (score >= 5) return "P0"
+  if (score >= 4) return "P1"
+  if (score >= 3) return "P2"
+  return "P3"
+}
+
 export function severityBadgeForScore(score: number): string {
-  if (score >= 5) return severityBadgeImg("P0", "p0")
-  if (score >= 4) return severityBadgeImg("P1", "p1")
-  if (score >= 3) return severityBadgeImg("P2", "p2")
-  return severityBadgeImg("P3", "p3")
+  const label = severityLabelForScore(score)
+  const file = label.toLowerCase() as "p0" | "p1" | "p2" | "p3"
+  return severityBadgeImg(label, file)
 }
 
 function stripAstMarkers(text: string): string {

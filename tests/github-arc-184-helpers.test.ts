@@ -288,6 +288,40 @@ describe("updateCheckRun (ARC-258)", () => {
     expect(body.output).toEqual({ title: "Review posted", summary: "Sigilix posted a review." })
   })
 
+  it("PATCHes check-run annotations in the output payload", async () => {
+    let captured: { body: unknown } | null = null
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_req, init) => {
+      const body = init?.body ? JSON.parse(init.body as string) : null
+      captured = { body }
+      return jsonResp({ id: 555 })
+    })
+    const c = newClient()
+    await c.updateCheckRun("o", "r", 555, {
+      output: {
+        title: "Review posted",
+        summary: "Sigilix posted a review.",
+        annotations: [
+          {
+            path: "src/app.ts",
+            start_line: 10,
+            end_line: 12,
+            annotation_level: "warning",
+            title: "[P2] testing: missing coverage",
+            message: "Add a regression test for this branch.",
+          },
+        ],
+      },
+    })
+    const body = captured!.body as { output: { annotations: unknown[] } }
+    expect(body.output.annotations).toHaveLength(1)
+    expect(body.output.annotations[0]).toMatchObject({
+      path: "src/app.ts",
+      start_line: 10,
+      end_line: 12,
+      annotation_level: "warning",
+    })
+  })
+
   it("omits fields entirely when not provided (partial updates allowed)", async () => {
     let captured: { body: unknown } | null = null
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_req, init) => {

@@ -1431,6 +1431,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     })
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toContain("structural concern with the file")
+    expect(out.body).toContain("(line moved — see file at `abc`)")
   })
 
   it("walk-forward: a suggestion-bearing finding bypasses walk-forward (preserves the fix)", () => {
@@ -2289,7 +2290,9 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     const out = formatFindingComment(fnd({ score: 5, headline: "deref crash" }), 5)
     expect(out).toContain('alt="P0"')
     expect(out).toContain(badgeAssetUrl("p0"))
-    expect(out).toContain("**logic:** deref crash")
+    expect(out).toContain("**deref crash**")
+    expect(out).toContain("_category: logic_")
+    expect(out).toContain("_severity: P0 critical (5/5)_")
   })
 
   it("prefixes the P1 badge img on score-4 findings", () => {
@@ -2324,7 +2327,7 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).toContain("</details>")
     // The headline + badge + confidence suffix stay OUTSIDE the
     // details block so a reviewer skimming can still triage.
-    const headIdx = out.indexOf("**logic:**")
+    const headIdx = out.indexOf("**missing null guard")
     const detailsIdx = out.indexOf("<details>")
     expect(headIdx).toBeGreaterThan(-1)
     expect(detailsIdx).toBeGreaterThan(headIdx)
@@ -2343,6 +2346,42 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
   it("preserves the inline-finding marker as the first line", () => {
     const out = formatFindingComment(fnd({ score: 4 }), 4)
     expect(out.split("\n")[0]).toBe("<!-- sigilix:pr-review-finding -->")
+  })
+
+  it("renders five distinct severity text weights even though scores 1-2 share the P3 asset", () => {
+    expect(formatFindingComment(fnd({ score: 5 }), 5)).toContain("_severity: P0 critical (5/5)_")
+    expect(formatFindingComment(fnd({ score: 4 }), 5)).toContain("_severity: P1 high (4/5)_")
+    expect(formatFindingComment(fnd({ score: 3 }), 5)).toContain("_severity: P2 medium (3/5)_")
+    expect(formatFindingComment(fnd({ score: 2 }), 5)).toContain("_severity: P3 low (2/5)_")
+    expect(formatFindingComment(fnd({ score: 1 }), 5)).toContain("_severity: P3 info (1/5)_")
+  })
+
+  it("truncates long bodies with a show-more affordance", () => {
+    const body = "x".repeat(620)
+    const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).toContain("<summary>Show more</summary>")
+    expect(out).toContain(`${"x".repeat(500)}...`)
+  })
+
+  it("does not truncate bodies exactly at the 500-character boundary", () => {
+    const body = "x".repeat(500)
+    const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).not.toContain("<summary>Show more</summary>")
+    expect(out).toContain(body)
+    expect(out).not.toContain(`${body}...`)
+  })
+
+  it("strips AST markers from visible finding text and AI prompt", () => {
+    const out = formatFindingComment(
+      fnd({
+        headline: "bad cache <!-- ast/cache-rule/abc -->",
+        body: "Fix the cache. <!-- ast/cache-rule/body --><!-- ast/cache-rule/second -->",
+      }),
+      5,
+    )
+    expect(out).toContain("**bad cache**")
+    expect(out).toContain("Fix the cache.")
+    expect(out).not.toContain("ast/cache-rule")
   })
 })
 

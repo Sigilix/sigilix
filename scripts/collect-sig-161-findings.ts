@@ -172,6 +172,13 @@ const FINDING_MARKER = /<!--\s*sigilix:pr-review-finding\s*-->/
 const HEADING_RE =
   /^(?:[^\s]+\s+P\d\s+·\s+)?\*\*([a-z-]+):\*\*\s+(.+?)\s+·\s+_confidence:\s+(\d)\/5_\s*$/m
 
+// SIG-15: current renderer shape. Headline is first-class and category
+// moved into the metadata line:
+//   <img ... alt="P1" ...> **Some headline**
+//   _category: testing_ · _severity: P1 high (4/5)_ · _confidence: 3/5_
+const HEADING_V2_RE =
+  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*\n_category:\s*([a-z-]+)_\s+·\s+_severity:\s+P\d\s+[a-z]+\s+\(\d\/5\)_\s+·\s+_confidence:\s+(\d)\/5_\s*$/m
+
 // Parse the embedded marker, e.g.
 //   <!-- sigilix:fid:6133bdb79f7b71af:cat:tests:sev:warning:path:a2a171449d86 -->
 const MARKER_RE =
@@ -199,6 +206,7 @@ function parseFinding(args: {
   if (!comment.user || comment.user.login !== SIGILIX_BOT) return null
   if (!FINDING_MARKER.test(comment.body)) return null
 
+  const headingV2Match = HEADING_V2_RE.exec(comment.body)
   const headingMatch = HEADING_RE.exec(comment.body)
   const markerMatch = MARKER_RE.exec(comment.body)
 
@@ -222,7 +230,14 @@ function parseFinding(args: {
     createdAt: comment.created_at,
   }
 
-  if (headingMatch) {
+  if (headingV2Match) {
+    row.category = headingV2Match[2]
+    row.headline = headingV2Match[1]
+    const confRaw = Number(headingV2Match[3])
+    if (Number.isFinite(confRaw) && confRaw >= 1 && confRaw <= 5) {
+      row.confidence = confRaw
+    }
+  } else if (headingMatch) {
     row.category = headingMatch[1]
     row.headline = headingMatch[2]
     const confRaw = Number(headingMatch[3])
@@ -243,6 +258,7 @@ function parseFinding(args: {
   // trailing marker line. The labeler reads this verbatim.
   row.body = comment.body
     .replace(FINDING_MARKER, "")
+    .replace(HEADING_V2_RE, "")
     .replace(HEADING_RE, "")
     .replace(MARKER_RE, "")
     .trim()

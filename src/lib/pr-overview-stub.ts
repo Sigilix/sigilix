@@ -71,14 +71,35 @@ export const STUB_QUIPS = [
   "If it matters, it should survive citation.",
 ] as const
 
-function quipIndex(prNumber: number, headSha: string): number {
+export const STUB_ASCII_TEMPLATES = [
+  "signal-box",
+  "small-lamp",
+  "steady-bridge",
+  "star-map",
+  "patch-garden",
+  "quiet-compass",
+  "tiny-poem",
+  "proof-lab",
+] as const
+
+type StubAsciiTemplate = (typeof STUB_ASCII_TEMPLATES)[number]
+
+function stubKeyHash(prNumber: number, headSha: string): number {
   let hash = 2166136261
   const input = `${prNumber}:${headSha}`
   for (let i = 0; i < input.length; i++) {
     hash ^= input.charCodeAt(i)
     hash = Math.imul(hash, 16777619) >>> 0
   }
-  return hash % STUB_QUIPS.length
+  return hash
+}
+
+function quipIndex(prNumber: number, headSha: string): number {
+  return stubKeyHash(prNumber, headSha) % STUB_QUIPS.length
+}
+
+function templateIndex(prNumber: number, headSha: string): number {
+  return Math.floor(stubKeyHash(prNumber, headSha) / STUB_QUIPS.length) % STUB_ASCII_TEMPLATES.length
 }
 
 export function selectPrOverviewStubQuip(args: {
@@ -88,21 +109,90 @@ export function selectPrOverviewStubQuip(args: {
   return STUB_QUIPS[quipIndex(args.prNumber, args.headSha)]!
 }
 
-function renderStubFlourish(quip: string): string {
-  const width = Math.max(46, quip.length + 2)
-  const line = "_".repeat(width + 1)
-  const dash = "-".repeat(width + 1)
-  const paddedQuip = quip.padEnd(width - 2, " ")
+export function selectPrOverviewStubAsciiTemplate(args: {
+  prNumber: number
+  headSha: string
+}): StubAsciiTemplate {
+  return STUB_ASCII_TEMPLATES[templateIndex(args.prNumber, args.headSha)]!
+}
+
+function centerText(text: string, width: number): string {
+  if (text.length >= width) return text.slice(0, width)
+  const left = Math.floor((width - text.length) / 2)
+  return `${" ".repeat(left)}${text}`.padEnd(width, " ")
+}
+
+function frameLines(lines: readonly string[], width = 58): string {
+  const border = `+${"-".repeat(width + 2)}+`
   return [
-    `  ${line}`,
-    ` < ${paddedQuip} >`,
-    `  ${dash}`,
-    "        \\\\",
-    "         \\\\      /\\",
-    "          \\\\    /__\\",
-    "             [ SIGILIX ]",
-    "              \\____/",
+    border,
+    ...lines.map((line) => `| ${centerText(line, width)} |`),
+    border,
   ].join("\n")
+}
+
+function renderStubFlourish(template: StubAsciiTemplate, quip: string): string {
+  switch (template) {
+    case "signal-box":
+      return frameLines([
+        "SIGILIX REVIEW SIGNAL",
+        "",
+        quip,
+        "",
+        "[ diff ] -> [ reason ] -> [ review ]",
+      ])
+    case "small-lamp":
+      return frameLines([
+        "    .",
+        "   /|\\",
+        "  /_|_\\    small light, sharp sight",
+        "    |",
+        quip,
+      ])
+    case "steady-bridge":
+      return frameLines([
+        "source === proof === patch",
+        "====[ review bridge ]====",
+        quip,
+        "cross slowly; ship cleanly",
+      ])
+    case "star-map":
+      return frameLines([
+        "       *        .",
+        "  .       [ SIGILIX ]       *",
+        "      trace the changed stars",
+        quip,
+      ])
+    case "patch-garden":
+      return frameLines([
+        "  _ _ _",
+        " | patch |  water with tests",
+        " | proof |  prune with care",
+        quip,
+      ])
+    case "quiet-compass":
+      return frameLines([
+        "        N",
+        "    W --+-- E",
+        "        S",
+        quip,
+        "direction: changed behavior",
+      ])
+    case "tiny-poem":
+      return frameLines([
+        "Tiny diff, steady hand.",
+        "A line can move a land.",
+        quip,
+      ])
+    case "proof-lab":
+      return frameLines([
+        "[ hypothesis ]",
+        "      + evidence",
+        "      + changed lines",
+        "      = review note",
+        quip,
+      ])
+  }
 }
 
 export function buildPrOverviewStubBody(args: {
@@ -110,6 +200,7 @@ export function buildPrOverviewStubBody(args: {
   headSha: string
 }): string {
   const quip = selectPrOverviewStubQuip(args)
+  const template = selectPrOverviewStubAsciiTemplate(args)
   return `${OVERVIEW_MARKER}
 
 ${STUB_V2_MARKER}
@@ -119,7 +210,7 @@ ${STUB_V2_MARKER}
 You'll see a structured overview here in 30-90 seconds.
 
 \`\`\`text
-${renderStubFlourish(quip)}
+${renderStubFlourish(template, quip)}
 \`\`\``
 }
 

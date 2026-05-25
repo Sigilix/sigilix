@@ -6760,10 +6760,12 @@ export function validateForSubmission(args: {
     // Line validity + side derivation
     const side = deriveSide(reviewable, f.path, f.line)
     if (!side) {
-      const repairedLine = findRepairableInlineAnchor({ finding: f, reviewable, addedLineTextByLine })
+      const repairedLine =
+        f.startLine == null
+          ? findRepairableInlineAnchor({ finding: f, reviewable, addedLineTextByLine })
+          : null
       if (repairedLine !== null) {
-        const { startLine: _dropStartLine, ...rest } = f
-        cleanFindings.push({ ...rest, line: repairedLine })
+        cleanFindings.push({ ...f, line: repairedLine })
         if (provenance) cleanFindingProvenance.push(provenance)
         remappedInvalidLineToInline++
         continue

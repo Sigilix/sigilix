@@ -117,6 +117,7 @@ describe("retrieve_codebase", () => {
     )
     expect(result).toEqual({
       ok: true,
+      repo: "rubberfit",
       chunks: [
         {
           path: "src/foo.ts",
@@ -235,6 +236,56 @@ describe("retrieve_codebase", () => {
     expect(mockRetrieveChunks).toHaveBeenCalledWith(
       expect.objectContaining({ teamKey: "arc-and-anchor/sigilix/__branch__/h646576" }),
     )
+  })
+
+  it("resolves a human branch argument to the encoded branch namespace (SIG-207)", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: [
+        "arc-and-anchor/sigilix",
+        "arc-and-anchor/sigilix/__branch__/h646576",
+      ],
+    })
+    const result = (await tool!.execute(
+      { query: "index producer", repo: "arc-and-anchor/sigilix", branch: "dev" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; repo?: string }
+
+    expect(result.ok).toBe(true)
+    expect(result.repo).toBe("arc-and-anchor/sigilix/__branch__/h646576")
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(
+      expect.objectContaining({ teamKey: "arc-and-anchor/sigilix/__branch__/h646576" }),
+    )
+  })
+
+  it("returns branch choices when a requested branch is not indexed (SIG-207)", async () => {
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: [
+        "arc-and-anchor/sigilix",
+        "arc-and-anchor/sigilix/__branch__/h646576",
+      ],
+    })
+    const result = (await tool!.execute(
+      { query: "index producer", repo: "sigilix", branch: "release" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string; availableBranches: Array<{ repo: string; branch: string; namespace: string }> }
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain("branch 'release' is not indexed")
+    expect(result.availableBranches).toEqual([
+      {
+        repo: "arc-and-anchor/sigilix",
+        branch: "dev",
+        namespace: "arc-and-anchor/sigilix/__branch__/h646576",
+      },
+    ])
+    expect(mockRetrieveChunks).not.toHaveBeenCalled()
   })
 
   it("resolves a bare repo to its <owner>/<repo> namespace when unique (SIG-132 back-compat)", async () => {

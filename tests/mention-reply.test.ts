@@ -444,12 +444,13 @@ describe("buildAgentInitialUserMessage", () => {
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix', 'arc-and-anchor/sigilix/__branch__/h646576'")
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix', 'arc-and-anchor/sigilix' branch 'dev'")
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
-    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
     expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
-    expect(out).toContain("pick a different namespace from the list")
-    expect(out).toContain("branch indexes look like 'owner/repo/__branch__/hex-encoded-branch'")
+    expect(out).toContain("pick a different repo or branch from the list")
+    expect(out).toContain("call retrieve_codebase with repo '<owner>/<repo>' and branch '<name>'")
+    expect(out).not.toContain("__branch__/h646576")
   })
 
   it("caps the prompt-visible namespace list without dropping the default repo", () => {
@@ -506,8 +507,8 @@ describe("buildAgentInitialUserMessage", () => {
 
     expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
     expect(out).toContain("[DEFAULT REPO] (none configured)")
-    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
-    expect(out).toContain("Pick the one that matches the issue's subject")
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
+    expect(out).toContain("Pick the indexed choice that matches the issue's subject")
     expect(out).toContain("If none clearly fits")
   })
 

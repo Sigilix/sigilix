@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest"
 
 import {
   branchStateRepo,
+  decodeBranchName,
   encodeBranchName,
   isBranchStateRepo,
+  parseBranchNamespace,
   isTrackedLongLivedBranch,
   parseTrackedBranches,
   resolveIndexTarget,
@@ -15,6 +17,19 @@ describe("index branch helpers", () => {
       "h666561747572652f5349472d3335206272616e6368206177617265",
     )
     expect(branchStateRepo("sigilix", "feature/SIG-35")).toBe("sigilix/__branch__/h666561747572652f5349472d3335")
+  })
+
+  it("decodes branch state namespaces back to human branch names", () => {
+    expect(decodeBranchName("h646576")).toBe("dev")
+    expect(decodeBranchName("h666561747572652f5349472d3335")).toBe("feature/SIG-35")
+    expect(decodeBranchName("not-hex")).toBeNull()
+    expect(parseBranchNamespace("arc-and-anchor/sigilix/__branch__/h646576")).toEqual({
+      owner: "arc-and-anchor",
+      repo: "sigilix",
+      branch: "dev",
+      namespace: "arc-and-anchor/sigilix/__branch__/h646576",
+    })
+    expect(parseBranchNamespace("arc-and-anchor/sigilix")).toBeNull()
   })
 
   it("keeps branch encodings collision-free under lowercased namespaces", () => {

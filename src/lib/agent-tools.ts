@@ -21,6 +21,7 @@
 //     loop's catch can map it to `wall_clock_exceeded`.
 
 import { fetchPullRequestContext } from "./github-pr-context"
+import { parseBranchNamespace } from "./index-branch"
 import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
 import { GitHubClient } from "./github"
@@ -102,7 +103,12 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         repo: {
           type: "string",
           description:
-            "Repository namespace (lowercased), `<owner>/<repo>` for default branch or `<owner>/<repo>/__branch__/<hexEncodedBranch>` for branch indexes. A bare repo name is also accepted and resolves when it uniquely matches an allowed namespace.",
+            "Repository namespace (lowercased), `<owner>/<repo>` for the default branch. A bare repo name is also accepted and resolves when it uniquely matches an allowed namespace.",
+        },
+        branch: {
+          type: "string",
+          description:
+            "Optional human Git branch name, such as `dev` or `feature/foo`. Use this with `repo: '<owner>/<repo>'` when the indexed namespace list includes that branch.",
         },
       },
       required: ["query", "repo"],
@@ -110,6 +116,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
     async execute(args, signal): Promise<unknown> {
       const query = typeof args.query === "string" ? args.query : ""
       const repo = typeof args.repo === "string" ? args.repo : ""
+      const branch = typeof args.branch === "string" ? args.branch.trim() : ""
       if (!query || !repo) {
         return { ok: false, error: "retrieve_codebase requires non-empty `query` and `repo` strings" }
       }
@@ -150,14 +157,30 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
           }
         }
         const allowed = new Set(namespaceUniverse)
-        if (!allowed.has(namespace)) {
+        if (branch.length > 0) {
+          const resolvedBranch = resolveBranchNamespace(namespaceUniverse, namespace, branch)
+          if (resolvedBranch.ok) {
+            namespace = resolvedBranch.namespace
+          } else {
+            return {
+              ok: false,
+              error: resolvedBranch.error,
+              allowedRepos: namespaceUniverse,
+              availableBranches: resolvedBranch.availableBranches,
+            }
+          }
+        } else if (!allowed.has(namespace)) {
           // SIG-132 back-compat: the model may pass a bare repo (no
           // owner). Resolve it to a namespace IFF it uniquely matches
-          // the `<repo>` segment of exactly one allowed namespace. Branch
+          // the `<repo>` segment of exactly one default-branch namespace. Branch
           // namespaces require an exact namespace because branch names are
-          // not unique or reliably encoded from natural language.
+          // not unique or reliably encoded from natural language unless
+          // the caller supplies the explicit `branch` argument above.
           const matches = namespaceUniverse.filter(
-            (ns) => ns.slice(ns.indexOf("/") + 1) === namespace,
+            (ns) => {
+              const parts = ns.split("/")
+              return parts.length === 2 && parts[1] === namespace
+            },
           )
           if (matches.length === 1) {
             namespace = matches[0] as string
@@ -191,6 +214,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         : undefined
       return {
         ok: true,
+        repo: namespace,
         chunks: chunks.map((c) => ({
           path: c.path,
           lineStart: c.lineStart,
@@ -202,6 +226,52 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         ...(noChunksMessage ? { message: noChunksMessage } : {}),
       }
     },
+  }
+}
+
+interface BranchChoice {
+  repo: string
+  branch: string
+  namespace: string
+}
+
+type BranchResolution =
+  | { ok: true; namespace: string }
+  | { ok: false; error: string; availableBranches: BranchChoice[] }
+
+function resolveBranchNamespace(
+  namespaceUniverse: string[],
+  requestedRepo: string,
+  requestedBranch: string,
+): BranchResolution {
+  const branchChoices = namespaceUniverse
+    .map((ns) => parseBranchNamespace(ns))
+    .filter((ns): ns is NonNullable<ReturnType<typeof parseBranchNamespace>> => ns !== null)
+    .map((ns): BranchChoice => ({
+      repo: `${ns.owner}/${ns.repo}`,
+      branch: ns.branch,
+      namespace: ns.namespace,
+    }))
+
+  const repoMatches = branchChoices.filter((choice) =>
+    requestedRepo === choice.repo ||
+    requestedRepo === choice.repo.slice(choice.repo.indexOf("/") + 1) ||
+    requestedRepo === choice.namespace,
+  )
+
+  const exactBranch = repoMatches.filter((choice) => choice.branch === requestedBranch)
+  if (exactBranch.length === 1) return { ok: true, namespace: exactBranch[0]!.namespace }
+
+  const foldedBranch = repoMatches.filter(
+    (choice) => choice.branch.toLowerCase() === requestedBranch.toLowerCase(),
+  )
+  if (foldedBranch.length === 1) return { ok: true, namespace: foldedBranch[0]!.namespace }
+
+  const availableBranches = repoMatches.length > 0 ? repoMatches : branchChoices
+  return {
+    ok: false,
+    error: `branch '${requestedBranch}' is not indexed for repo '${requestedRepo}'`,
+    availableBranches,
   }
 }
 

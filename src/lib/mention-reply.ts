@@ -29,6 +29,7 @@ import { runAgentLoop } from "./agent-loop"
 import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
+import { parseBranchNamespace } from "./index-branch"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
 // Note: no HTML-comment marker in the rendered body. Linear renders
@@ -518,19 +519,19 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
   }
   const hiddenUniverseCount = Math.max(0, universe.length - visibleUniverse.length)
   const universeText = visibleUniverse.length > 0
-    ? `${visibleUniverse.map((r) => `'${r}'`).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
+    ? `${visibleUniverse.map(formatIndexedNamespaceForPrompt).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
     : "(none configured)"
   let repoLine: string
   if (ctx.repo && universe.length > 1) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different namespace from the list when the issue is clearly about another repo or branch (branch indexes look like 'owner/repo/__branch__/hex-encoded-branch'). Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. The indexed choices are: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different repo or branch from the list when the issue is clearly about it. For entries shown as branch '<name>', call retrieve_codebase with repo '<owner>/<repo>' and branch '<name>' instead of the internal branch namespace. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.repo) {
     repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo && universe.length > 0) {
-    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that default repo is not indexed yet. You may call retrieve_codebase only for indexed namespaces: ${universeText}. Pick one only if it clearly matches the issue's subject; if the question is about '${ctx.mappedRepo}', explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that default repo is not indexed yet. You may call retrieve_codebase only for indexed choices: ${universeText}. Pick one only if it clearly matches the issue's subject; for branch entries, pass repo '<owner>/<repo>' and branch '<name>'. If the question is about '${ctx.mappedRepo}', explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo) {
     repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that repo does not have an index manifest yet. Do not call retrieve_codebase; explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
   } else if (universe.length > 0) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument naming one of the indexed namespaces: ${universeText}. Pick the one that matches the issue's subject. If none clearly fits, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. Pick the indexed choice that matches the issue's subject: ${universeText}. If none clearly fits, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt.`
   } else {
     repoLine = "No GitHub repo mapping is configured for this Linear team, so do not call retrieve_codebase. Answer from the issue and thread context only; if repo context is required, say the Linear team needs a GitHub repo mapping before code retrieval can run. Final answer is the JSON shape defined by the system prompt."
   }
@@ -552,6 +553,12 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
     repoLine,
   ]
   return lines.join("\n")
+}
+
+function formatIndexedNamespaceForPrompt(namespace: string): string {
+  const branch = parseBranchNamespace(namespace)
+  if (!branch) return `'${namespace}'`
+  return `'${branch.owner}/${branch.repo}' branch '${branch.branch}'`
 }
 
 interface LinkedPrFetchResult {

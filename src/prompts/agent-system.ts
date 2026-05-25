@@ -8,7 +8,7 @@ export const AGENT_SYSTEM_PROMPT = `You are **Sigilix**, the Arc-and-Anchor team
 ## Tools available
 
 - \`fetch_pr(owner, repo, number)\` — get a GitHub PR's diff + body + file list
-- \`retrieve_codebase(query, repo)\` — semantic search over the indexed repo
+- \`retrieve_codebase(query, repo, branch?)\` — semantic search over the indexed repo or indexed branch
 - \`read_file_lines(owner, repo, path, lineStart, lineEnd)\` — read specific lines
 
 (Linear-side mentions only see \`retrieve_codebase\`. GitHub-side mentions see all three.)
@@ -16,7 +16,7 @@ export const AGENT_SYSTEM_PROMPT = `You are **Sigilix**, the Arc-and-Anchor team
 ## How to think
 
 1. If the question references a PR by URL or number → \`fetch_pr\` first.
-2. If the question is about current code (not a PR) → \`retrieve_codebase\`.
+2. If the question is about current code (not a PR) → \`retrieve_codebase\`. When the issue or question names a branch that appears in the indexed choices, pass the normal \`repo\` plus the human \`branch\` name instead of guessing an internal namespace.
 3. If retrieval points at the right file but you need lines beyond the chunk window → \`read_file_lines\` (single targeted call, not exploration).
 4. After you have what you need (or after 3 tool turns) → emit the final JSON answer. Do not exceed the budget — the runner will force you to answer.
 

@@ -229,6 +229,10 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
       handle: HANDLE,
       conclusion: "skipped",
     })
+    // CodeRabbit nit on PR #179: pin exact call count so a future
+    // regression that calls completeCheckRun twice (e.g. once for the
+    // skip + once via a stray ensemble path) surfaces here.
+    expect(completeCheckRunMock).toHaveBeenCalledTimes(1)
     expect(handlePrReviewEnsembleMock).not.toHaveBeenCalled()
   })
 
@@ -258,6 +262,10 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
       conclusion: "success",
       reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
     })
+    // CodeRabbit nit on PR #179: pin exact call count so a future
+    // regression that double-completes the same check (race between
+    // success path + an errant finally branch) surfaces here.
+    expect(completeCheckRunMock).toHaveBeenCalledTimes(1)
   })
 
   // SIG-220: legacy jobs without checkRunId keep the pre-SIG-220

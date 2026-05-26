@@ -127,17 +127,40 @@ export class PrReviewRunDO extends DurableObject<Env> {
     //     skip branch now closes the check it doesn't own. Watchdog
     //     terminal failure also closes via `attachExistingCheckRun`.
     //
-    // Best-effort: a null result (creds missing, GitHub 5xx, etc.)
-    // leaves `checkRunId` undefined on RunState; the dispatcher
+    // Sigilix bot P2 PERF catch on PR #179: wrap the create call in a
+    // `Promise.race` with a 3s timeout. The webhook awaits `/enqueue`
+    // (see `src/do/webhook-enqueue.ts:123`) so an unbounded GitHub
+    // API hang here would couple the webhook ack to GitHub's
+    // latency and could approach the 10s redelivery threshold under
+    // degradation. A timeout resolves to `null`, which the existing
+    // dispatcher-side fallback (`startInProgressCheckRun`) handles
+    // exactly like a creds-missing / 5xx outcome.
+    //
+    // Best-effort: a null result (creds missing, GitHub 5xx, timeout,
+    // etc.) leaves `checkRunId` undefined on RunState; the dispatcher
     // falls back to its own `startInProgressCheckRun` exactly like
     // legacy queue messages.
-    const checkRun = await startInProgressCheckRun({
-      env: this.env,
-      owner: body.owner,
-      repo: body.repo,
-      headSha: body.headSha,
-      installationId: body.installationId,
-    })
+    const CHECK_RUN_CREATE_TIMEOUT_MS = 3_000
+    const checkRun = await Promise.race([
+      startInProgressCheckRun({
+        env: this.env,
+        owner: body.owner,
+        repo: body.repo,
+        headSha: body.headSha,
+        installationId: body.installationId,
+      }),
+      new Promise<null>((resolve) => {
+        setTimeout(() => {
+          console.warn(JSON.stringify({
+            event: "pr-review-check-run-create-timeout",
+            owner: body.owner, repo: body.repo, prNumber: body.prNumber,
+            head_sha: body.headSha.slice(0, 7),
+            timeout_ms: CHECK_RUN_CREATE_TIMEOUT_MS,
+          }))
+          resolve(null)
+        }, CHECK_RUN_CREATE_TIMEOUT_MS)
+      }),
+    ])
 
     const runId = crypto.randomUUID()
     const newState: RunState = {

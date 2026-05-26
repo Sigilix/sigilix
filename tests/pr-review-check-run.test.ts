@@ -44,6 +44,7 @@ vi.mock("../src/lib/github", async () => {
 
 import {
   CHECK_RUN_NAME,
+  attachExistingCheckRun,
   completeCheckRun,
   startInProgressCheckRun,
 } from "../src/lib/pr-review-check-run"
@@ -115,6 +116,54 @@ describe("startInProgressCheckRun", () => {
 
     expect(handle).toBeNull()
     expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
+  })
+})
+
+// SIG-220: direct unit coverage for the new `attachExistingCheckRun`
+// helper. The DO + dispatcher integration tests mock this function
+// out, so its real error paths (missing creds, token-acquisition
+// failure) would otherwise ride along untested. These exercises pin
+// the contract: ALL failure modes return null (never throw), and the
+// happy path returns a handle pointing at the threaded checkRunId.
+describe("SIG-220: attachExistingCheckRun", () => {
+  const attachBaseArgs = {
+    owner: "Arc-and-Anchor",
+    repo: "sigilix",
+    installationId: 99,
+    checkRunId: 4242,
+  }
+
+  it("returns a handle carrying the threaded checkRunId on the happy path", async () => {
+    const env = makeEnv()
+    const handle = await attachExistingCheckRun({ env, ...attachBaseArgs })
+
+    expect(handle).not.toBeNull()
+    expect(handle!.id).toBe(4242)
+    expect(handle!.owner).toBe("Arc-and-Anchor")
+    expect(handle!.repo).toBe("sigilix")
+    // Token acquisition is the only side effect — no createCheckRun
+    // call, no listCheckRuns; we're attaching, not creating.
+    expect(mockGetInstallationToken).toHaveBeenCalledTimes(1)
+    expect(mockCreateCheckRun).not.toHaveBeenCalled()
+    expect(mockListCheckRunsForRef).not.toHaveBeenCalled()
+  })
+
+  it("returns null (no throw) when credentials are missing — dispatcher fallback covers this", async () => {
+    const env = makeEnv({ credentials: false })
+    const handle = await attachExistingCheckRun({ env, ...attachBaseArgs })
+
+    expect(handle).toBeNull()
+    expect(mockGetInstallationToken).not.toHaveBeenCalled()
+  })
+
+  it("returns null (no throw) when getInstallationToken rejects — best-effort contract", async () => {
+    mockGetInstallationToken.mockRejectedValueOnce(new Error("HTTP 503 token endpoint down"))
+    const env = makeEnv()
+    const handle = await attachExistingCheckRun({ env, ...attachBaseArgs })
+
+    expect(handle).toBeNull()
+    expect(mockGetInstallationToken).toHaveBeenCalledTimes(1)
+    expect(mockCreateCheckRun).not.toHaveBeenCalled()
   })
 
   it("returns null (no throw) on any other createCheckRun failure", async () => {

@@ -96,16 +96,16 @@ Each lever is rated by (a) impact on end-to-end latency or perceived latency and
 
 **Status**: not shipping.
 
-### Lever 5 — synchronous `startInProgressCheckRun` at webhook time
+### Lever 5 — create the check upstream in the DO's `handleEnqueue`
 
-**Surface**: `src/index.ts:1208` (current dispatcher-level call) → moved to `src/index.ts:~2230` (webhook handler, before `enqueuePrReviewJob`).
+**Surface**: `src/index.ts:1208` (current dispatcher-level call) → moved into `PrReviewRunDO.handleEnqueue` (`src/do/pr-review-run.ts`) on the `create | supersede` paths, and the resulting `checkRunId` is threaded through `RunState` + the pr-review queue message + the retry-alarm requeue.
 
-**What**: today the "Sigilix · In progress" check is created at the dispatcher level — after the queue consumer dequeues the `pr-review` message. The webhook → queue → consumer → dispatcher chain costs 2–30s of perceived latency before the customer sees any signal in the GitHub UI. Moving check creation to webhook time means the check appears in ≤ 5s, gated only by the GitHub API round-trip.
+**What**: today the "Sigilix · In progress" check is created at the dispatcher level — after the queue consumer dequeues the `pr-review` message. The webhook → queue → consumer → dispatcher chain costs 2–30s of perceived latency before the customer sees any signal in the GitHub UI. The naive fix — call `startInProgressCheckRun` directly inside the worker fetch handler — would orphan checks on three branches (DO dedupe of webhook replays, the pause/ignore gate, the dispatcher's sensitive-repo skip). Creating the check INSIDE `handleEnqueue` once `decideEnqueueAction` returns `create | supersede` avoids all three: pause/ignore + dedupe never reach this code, and the dispatcher's sensitive-repo branch + the watchdog's terminal-failure path get explicit tear-down calls.
 
 **Trade-offs**:
-- The webhook handler does an extra GitHub API call (~500ms–1s) before returning 200. Still well under GitHub's 10s ack threshold.
-- The `checkRunId` has to thread through the queue message into the dispatcher so the existing `completeCheckRun` call closes the right row.
-- Orphan risk: if the queue consumer never runs (dead worker, etc.), the check stays `in_progress` forever. Mitigation: the existing `cancelStaleInProgressChecks` cleans up on the next push; the very-rare case of "PR pushed once, queue dead" is not worth a watchdog cron in v1. If it becomes a real problem, a cron sweeping in-progress checks older than 15m can be added in a follow-up.
+- The DO's `/enqueue` route (which the webhook already awaits, see `src/do/webhook-enqueue.ts:123`) does an extra GitHub API call (~500ms–1s) before returning. Still well under GitHub's 10s ack threshold; wrapped in a `Promise.race` with a 3s timeout so GitHub API degradation can't push the webhook ack past the redelivery threshold.
+- The `checkRunId` has to thread through `RunState` + the pr-review queue message into the dispatcher so the existing `completeCheckRun` call closes the right row.
+- Orphan risk: if the queue consumer never runs (dead worker, etc.), the check stays `in_progress` until the DO's watchdog terminal-failure path fires and closes it (now wired in this PR). The existing `cancelStaleInProgressChecks` also cleans up on the next push to the same head SHA.
 
 **Recommendation**: **ship this lever first.** Highest perceived-latency win, lowest implementation risk, no model-quality risk.
 
@@ -117,12 +117,12 @@ Each lever is rated by (a) impact on end-to-end latency or perceived latency and
 
 ### This PR (SIG-220)
 
-Lever 5 only. The latency budget doc lands here; the code change moves `startInProgressCheckRun` from `dispatchJob` to the webhook handler and threads `checkRunId` through the queue message.
+Lever 5 only. The latency budget doc lands here; the code change moves `startInProgressCheckRun` from `dispatchJob` into `PrReviewRunDO.handleEnqueue` (on the `create | supersede` paths) and threads `checkRunId` through `RunState` + the pr-review queue message + the retry-alarm requeue. The new `attachExistingCheckRun` helper in `src/lib/pr-review-check-run.ts` lets the dispatcher + watchdog rebuild a check-run handle off the installation id.
 
 **Acceptance**:
 - Next push triggers the Sigilix Check within ~5s in the GitHub UI.
 - Existing pipeline behavior unchanged for legacy queue messages without `checkRunId` (backwards-compatible fallback in the dispatcher).
-- Regression test in `tests/pr-review-check-run.test.ts` covering the "dispatcher attaches to existing check run instead of creating" path.
+- Regression tests in `tests/do-pr-review-sig-220-check-init.test.ts` (DO `handleEnqueue` create/supersede/dedupe + retry-alarm forwarding + watchdog terminal closure) and `tests/dispatch-job-check-run-lifecycle.test.ts` (dispatcher attach-vs-create branching + sensitive-repo skip closing the upstream check).
 
 ### Follow-ups (not in this PR)
 

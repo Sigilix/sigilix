@@ -51,7 +51,11 @@ import {
   buildSpecialistInitialMessage,
   buildSynthesizerInitialMessage,
 } from "../src/prompts/pr-review-specialists"
-import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
+import {
+  buildReviewSubmissionWithMetadata,
+  type PrReviewVerdict,
+  type PrReviewFinding,
+} from "../src/lib/triage-pr-review"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 import type { Env } from "../src/index"
 
@@ -2250,5 +2254,140 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
       .map((c) => (typeof c[0] === "string" ? c[0] : ""))
       .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
     expect(flips).toHaveLength(0)
+  })
+
+  // SIG-216 fix-up: the scope-normalization predicate now requires a
+  // RIGHT-side anchor. A LEFT-only diff position (deleted line) was
+  // previously flipping the scope, then `buildReviewSubmission` would
+  // always emit `side: "RIGHT"` → primary submit 422'd. The downstream
+  // `deriveSide` still finds LEFT and treats the finding as line-valid
+  // (so it lands in `verdict.findings`, not `unanchoredFindings`), but
+  // the scope MUST remain "file" so the renderer routes it to the body
+  // section rather than emitting an inline comment that would 422.
+  it("leaves file scope alone when the matching anchor is LEFT-only (deleted-line position)", () => {
+    const leftOnlyReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 42, side: "LEFT" }, // deleted line — anchorable but not on RIGHT
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({ ...baseFinding, line: 42, score: 4, scope: "file" }),
+      reviewable: leftOnlyReviewable,
+      specialistVerdicts,
+    })
+    // Find the finding in EITHER bucket — scope must remain "file"
+    // wherever it ends up, because flipping to "line" would route it
+    // through the inline-comment path which always emits side=RIGHT.
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("file")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  // SIG-216 fix-up: multi-line findings need BOTH endpoints on RIGHT
+  // hunks for the flip to be safe — a partial overlap would 422 on
+  // submit (GitHub validates both anchors on multi-line review comments).
+  it("leaves file scope alone for multi-line findings when startLine is not in a RIGHT-side hunk", () => {
+    const partialReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        // `line: 42` is RIGHT-anchorable, but `startLine: 38` is not.
+        { line: 42, side: "RIGHT" },
+        { line: 50, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: partialReviewable,
+      specialistVerdicts,
+    })
+    // `line: 42` is line-valid (RIGHT-anchorable), so the finding
+    // lands in `verdict.findings`. The scope must NOT have flipped to
+    // "line" because `startLine: 38` isn't a valid RIGHT anchor —
+    // submitting it as a multi-line inline review comment would 422.
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("file")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  it("flips file → line for multi-line findings when BOTH startLine AND line are in RIGHT-side hunks", () => {
+    const bothRightReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 38, side: "RIGHT" },
+        { line: 42, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: bothRightReviewable,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.verdict.findings[0]?.scope).toBe("line")
+  })
+})
+
+// SIG-216 fix-up: the production review path now threads `linkContext`
+// through `buildReviewSubmissionWithMetadata` (was test-only previously).
+// This invariant pins the call-shape so real PR reviews render the
+// clickable GitHub blob URL for body-only finding anchors instead of
+// the back-compat inline-code shape.
+describe("buildReviewSubmissionWithMetadata — SIG-216 linkContext threading from ensemble", () => {
+  it("emits a clickable [path:line](https://github.com/...) link when linkContext is supplied", () => {
+    const headSha = "deadbeefcafe1234567890abcdef1234567890ab"
+    const bodyFinding: PrReviewFinding = {
+      path: "src/lib/foo.ts",
+      line: 42,
+      // scope=comment routes to the body-only renderer regardless of
+      // reviewable-map presence (matches the test pattern in
+      // tests/triage-pr-review.test.ts:1986).
+      scope: "comment",
+      score: 4,
+      category: "logic",
+      headline: "missing null guard",
+      body: "Wrap with a guard before deref.",
+    }
+    const result = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "One body-only finding.",
+        confidence: 3,
+        confidenceReason: "Fixture.",
+        findings: [bodyFinding],
+      },
+      prAuthor: "alice",
+      headSha,
+      // Exact shape the ensemble now threads at the call site in
+      // src/lib/triage-pr-review-ensemble.ts (search for "linkContext:"
+      // inside the buildReviewSubmissionWithMetadata call).
+      linkContext: { owner: "octo", repo: "demo", headSha },
+    })
+    const body = result.submission.body ?? ""
+    // The body anchor MUST be a clickable markdown link to a GitHub
+    // blob URL at the reviewed SHA — NOT the back-compat
+    // `\`path:line\`` inline-code shape.
+    expect(body).toMatch(
+      /\[[^\]]*src\/lib\/foo\.ts:42[^\]]*\]\(https:\/\/github\.com\/octo\/demo\/blob\/[0-9a-f]+\/src\/lib\/foo\.ts#L42\)/,
+    )
+    expect(body).not.toContain("`src/lib/foo.ts:42`")
   })
 })

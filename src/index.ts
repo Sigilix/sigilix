@@ -657,14 +657,24 @@ export type JobMessage =
  *
  * Rules (matches the routing in handleGitHubWebhook):
  *   - Drafts and unsupported actions get nothing.
- *   - pr-overview always fires for opened/synchronize/reopened/ready_for_review.
- *   - pr-review fires the same EXCEPT `reopened` (closing+reopening
- *     a PR doesn't change the diff, so re-reviewing would be noise).
+ *   - SIG-216: the `overview` boolean NO LONGER controls when the
+ *     pr-overview comment renders. The overview comment is now posted
+ *     inline by `handlePrReviewEnsemble` immediately before the review
+ *     submit (CodeRabbit-style Walkthrough-then-Review). The boolean
+ *     gates only the legacy `loadSigilixConfig` warmup + the
+ *     `pr-labels` enqueue path that consumes it. Treat it as "fire the
+ *     opt-in / labelling side effects" rather than "render the
+ *     overview" — true for opened/synchronize/reopened/ready_for_review.
+ *   - pr-review fires for the same actions EXCEPT `reopened` (closing
+ *     + reopening a PR doesn't change the diff, so re-reviewing would
+ *     be noise). The inline overview rides along with each review, so
+ *     `reopened` PRs intentionally get neither.
  *   - When OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES=on, PRs from a
  *     dev/develop/staging branch into main/master/release skip the
  *     pr-review job entirely (dev→main is a release-promotion of
  *     already-reviewed code; re-reviewing doubles spend + adds noise).
- *     pr-overview still fires so the release PR gets a summary blurb.
+ *     The `overview: true` flag still fires so the release PR still
+ *     gets its side-effect pass (labels + warmup).
  */
 export function decidePullRequestJobs(args: {
   action: string

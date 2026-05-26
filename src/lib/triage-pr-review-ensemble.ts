@@ -206,7 +206,11 @@ import {
   type PerfBudgetsHit,
 } from "./perf-budgets"
 import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
-import { handlePrOverview, type PrOverviewReviewContext } from "./triage-pr-overview"
+import {
+  handlePrOverview,
+  type PrOverviewArgs,
+  type PrOverviewReviewContext,
+} from "./triage-pr-overview"
 import {
   runDocsCoverageCheck,
   renderDocsCoverageForPrompt,
@@ -607,6 +611,35 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
       `consumer past the 900s ceiling → worker hard-killed → message re-delivered.`,
   )
 }
+
+// ─── SIG-216 fix-up: inline-overview budgeting ───────────────────────────
+//
+// The inline pr-overview call inside `handlePrReviewEnsemble` (added in
+// SIG-216) runs an additional Ollama generate ON TOP of the ensemble's
+// 895s orchestrator budget. The full review handler must finish inside
+// the 900s `CF_QUEUE_CONSUMER_CEILING_MS` queue-consumer wall — a stalled
+// overview can otherwise push the consumer past the platform ceiling,
+// leaving the queue message in the in_progress state and triggering a
+// re-delivery + duplicate review.
+//
+// Floor: when the remaining review budget drops below this, skip the
+// inline overview entirely. The overview will fire on the next push or
+// can be re-attempted via warmup. 30s reserves enough room for the
+// post-overview stale-head re-check + submitReview round-trip + the
+// finally cleanup paths.
+export const INLINE_OVERVIEW_MIN_BUDGET_MS = 30_000
+
+// Ceiling: even on a generous budget surplus, cap the inline overview
+// wall-time at 90s so a single slow overview can never starve the rest
+// of the submit pipeline. Matches the same order-of-magnitude as a
+// SPECIALIST_TIMEOUT_MS attempt.
+export const INLINE_OVERVIEW_MAX_BUDGET_MS = 90_000
+
+// Reserved tail for the post-overview stale-head re-check (~1s),
+// `submitReview` GitHub roundtrip (~3-10s typical, allow headroom for
+// 422 + fallback), and the `dismissPriorSigilixReviews` call ahead of
+// it. Subtracted from the wall-clock budget the inline overview gets.
+const INLINE_OVERVIEW_SUBMIT_RESERVE_MS = 30_000
 
 // ─── SIG-138 Phase 2: graph-retrieval pure helpers ────────────────────────
 //
@@ -3767,6 +3800,13 @@ export async function handlePrReviewEnsemble(
       // `}`, blank line) route to the summary body instead of an
       // inline comment "on an empty line."
       addedLineTextByLine,
+      // SIG-216 fix-up: thread the source-repo coordinates so the
+      // body-only finding anchors render as clickable Markdown links
+      // (`[path:line](https://github.com/...blob/<sha>/<path>#L<line>)`)
+      // in production. Pre-fix-up the clickable-link path was test-only
+      // because the ensemble didn't pass `linkContext`, so real PR
+      // reviews fell back to the back-compat inline-code anchor.
+      linkContext: { owner, repo, headSha },
     })
     const submission = submissionBuild.submission
     const bodyOnlyAnnotations = submissionBuild.bodyOnlyAnnotations
@@ -3793,11 +3833,25 @@ export async function handlePrReviewEnsemble(
     // `handlePrOverview` so a sibling queued run (legacy warmup
     // refresh, etc.) on this SHA can't block us.
     //
-    // Best-effort: every failure mode inside `handlePrOverview` is
-    // already swallowed + logged by the handler itself; the outer
-    // try/catch here is defense in depth against an unexpected
-    // sync-throw so a hypothetical bug in the overview path can't
-    // take down the review submit. The customer still gets the
+    // Budgeting (SIG-216 fix-up): wrap the call in `Promise.race`
+    // against the REMAINING review budget so a stalled overview
+    // can't push the queue consumer past CF_QUEUE_CONSUMER_CEILING_MS
+    // and trigger a worker hard-kill + message re-delivery. Capped
+    // at INLINE_OVERVIEW_MAX_BUDGET_MS even on a budget surplus so
+    // the overview never eats more than its fair share. When
+    // remaining budget falls under INLINE_OVERVIEW_MIN_BUDGET_MS we
+    // skip the inline render entirely — the overview can fire on
+    // the next push.
+    //
+    // Retry policy (SIG-216 fix-up): single retry on transient
+    // failures (timeouts / 502 / 503 / 504 / fetch-failed /
+    // budget-exceeded). Pre-SIG-216 the queue consumer gave
+    // MAX_RETRIES=3 on Ollama transients; the inline path had zero.
+    // One retry only — bounded by the same Promise.race budget so
+    // we can't blow the wall-clock even on a double attempt.
+    //
+    // Best-effort: even after the single retry, a failure here
+    // NEVER blocks the review submit. The customer still gets the
     // review even if the overview comment fails to land.
     if (isPrOverviewEnabled(sigilixConfig)) {
       const overviewStartMs = Date.now()
@@ -3814,26 +3868,86 @@ export async function handlePrReviewEnsemble(
         ]),
         verdict: primaryEvent,
       }
-      try {
-        await handlePrOverview({
-          owner, repo, prNumber, headSha, installationId, env,
-          force: true,
-          reviewContext: overviewReviewContext,
-        })
+      // Reserve INLINE_OVERVIEW_SUBMIT_RESERVE_MS for the submitReview
+      // GitHub roundtrip + the post-overview stale-head re-check that
+      // follows; the overview itself gets whatever's left up to
+      // INLINE_OVERVIEW_MAX_BUDGET_MS.
+      const elapsedMs = Date.now() - startMs
+      const remainingBudgetMs = Math.max(
+        0,
+        CF_QUEUE_CONSUMER_CEILING_MS - elapsedMs - INLINE_OVERVIEW_SUBMIT_RESERVE_MS,
+      )
+      const overviewBudgetMs = Math.min(remainingBudgetMs, INLINE_OVERVIEW_MAX_BUDGET_MS)
+      if (overviewBudgetMs < INLINE_OVERVIEW_MIN_BUDGET_MS) {
         console.log(JSON.stringify({
-          event: "pr-review-inline-overview-posted",
+          event: "pr-review-inline-overview-skipped-budget",
           owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          elapsed_ms: Date.now() - overviewStartMs,
-          findings_count: overviewReviewContext.findingsCount,
-          verdict: overviewReviewContext.verdict,
+          remaining_budget_ms: remainingBudgetMs,
+          threshold_ms: INLINE_OVERVIEW_MIN_BUDGET_MS,
         }))
+      } else {
+        try {
+          await runInlineOverviewWithRetry({
+            owner, repo, prNumber, headSha, installationId, env,
+            force: true,
+            reviewContext: overviewReviewContext,
+          }, overviewBudgetMs)
+          console.log(JSON.stringify({
+            event: "pr-review-inline-overview-posted",
+            owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+            elapsed_ms: Date.now() - overviewStartMs,
+            budget_ms: overviewBudgetMs,
+            findings_count: overviewReviewContext.findingsCount,
+            verdict: overviewReviewContext.verdict,
+          }))
+        } catch (err) {
+          console.error(JSON.stringify({
+            event: "pr-review-inline-overview-failed",
+            owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+            elapsed_ms: Date.now() - overviewStartMs,
+            budget_ms: overviewBudgetMs,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
+
+      // SIG-216 fix-up: re-check the PR head AFTER the inline overview.
+      // The upstream stale-head guard #2 ran hundreds of LOC + an Ollama
+      // call ago; `force: true` on the overview bypasses its own
+      // re-checks. A new commit landing in that window would otherwise
+      // get the OLD review submitted against a STALE head. Fail-closed
+      // on lookup error — matches the existing guard pattern.
+      try {
+        const metaPostOverview = await client.getPullRequest(owner, repo, prNumber)
+        if (metaPostOverview.head?.sha && metaPostOverview.head.sha !== headSha) {
+          telemetry.fellBackReason = "stale_head_after_inline_overview"
+          console.log(JSON.stringify({
+            event: "pr-review-stale-head-after-inline-overview",
+            owner, repo, prNumber,
+            queued_head_sha: headSha.slice(0, 7),
+            current_head_sha: metaPostOverview.head.sha.slice(0, 7),
+          }))
+          await handleStaleHead({
+            env, owner, repo, prNumber, installationId,
+            queuedHeadSha: headSha,
+            currentHeadSha: metaPostOverview.head.sha,
+            baseSha: metaPostOverview.base?.sha ?? null,
+            depth: staleHeadRequeueDepth,
+            source: "ensemble-after-inline-overview",
+          })
+          return finalize(telemetry, env, "stale_head", cache)
+        }
       } catch (err) {
-        console.error(JSON.stringify({
-          event: "pr-review-inline-overview-failed",
+        // Fail-closed: uncertain head state → abort the submit rather
+        // than risk shipping a stale review. Matches Codex's pattern in
+        // `triage-pr-overview.ts`.
+        console.warn(JSON.stringify({
+          event: "pr-review-stale-recheck-failed-aborted",
           owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          elapsed_ms: Date.now() - overviewStartMs,
           err: err instanceof Error ? err.message : String(err),
         }))
+        telemetry.fellBackReason = "stale_head_recheck_failed"
+        return finalize(telemetry, env, "errored", cache)
       }
     }
 
@@ -6178,6 +6292,52 @@ function backfillSecurityEvidenceFromSources(
 }
 
 /**
+ * SIG-216 fix-up: run the inline pr-overview with a single retry on
+ * transient errors, bounded by `budgetMs` per attempt.
+ *
+ * Why two attempts and not three: the pre-SIG-216 queue consumer gave
+ * `MAX_RETRIES = 3` on Ollama transient failures because the consumer
+ * could afford the wall-time. The inline path runs inside the same
+ * review handler that's already against the queue-consumer ceiling
+ * (`CF_QUEUE_CONSUMER_CEILING_MS`), so a single retry is the most we
+ * can fit without risking the wall-clock blowing past the platform cap.
+ *
+ * Transient classification matches the queue consumer's heuristic +
+ * the budget-exceeded signal raised by the per-attempt `Promise.race`.
+ * Non-transient errors propagate immediately to the caller.
+ */
+async function runInlineOverviewWithRetry(
+  args: PrOverviewArgs,
+  budgetMs: number,
+): Promise<void> {
+  const attempt = async (): Promise<void> =>
+    Promise.race([
+      handlePrOverview(args),
+      new Promise<void>((_resolve, reject) => {
+        setTimeout(
+          () => reject(new Error("inline-overview-budget-exceeded")),
+          budgetMs,
+        )
+      }),
+    ])
+  try {
+    await attempt()
+    return
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const transient = /budget-exceeded|timeout|abort|503|502|504|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg)
+    if (!transient) throw err
+    console.log(JSON.stringify({
+      event: "pr-review-inline-overview-retry",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+      head_sha: args.headSha.slice(0, 7),
+      err: msg.slice(0, 200),
+    }))
+    await attempt()
+  }
+}
+
+/**
  * SIG-216: post-emit scope normalization. LLM specialists sometimes
  * emit `scope: "file"` for findings that have a concrete `(path, line)`
  * AND that line falls within a reviewable diff hunk. Those findings
@@ -6191,6 +6351,14 @@ function backfillSecurityEvidenceFromSources(
  *
  * Why post-emit not prompt: the prompt already says "use line when
  * possible" but LLMs over-pick file. Belt-and-braces.
+ *
+ * SIG-216 fix-up: the predicate requires a RIGHT-side anchor (was:
+ * any side). For a file-scoped finding on a DELETED line, a LEFT-only
+ * diff position was previously passing the predicate → scope flipped
+ * to "line" → validation accepted side=LEFT but `buildReviewSubmission`
+ * always emits inline comments with `side: "RIGHT"` → primary submit
+ * 422'd. For multi-line findings (startLine != line) both endpoints
+ * must be on RIGHT-side hunks before the flip is safe.
  */
 function normalizeFindingScopeForAnchorability(
   finding: PrReviewFinding,
@@ -6210,8 +6378,31 @@ function normalizeFindingScopeForAnchorability(
   // Is the line in a reviewable hunk?
   const anchorLines = reviewable.get(path)
   if (!anchorLines) return finding
-  const lineInHunk = anchorLines.some((a) => a.line === finding.line)
+  // SIG-216 fix-up: require RIGHT-side anchorability. A LEFT-only
+  // position is reviewable (you CAN anchor a comment on a deleted
+  // line), but `buildReviewSubmission` always emits inline comments
+  // with `side: "RIGHT"` → a LEFT-only flip would 422 on submit and
+  // force the anchorless fallback. Treat LEFT-only as non-anchorable
+  // for the scope flip; the renderer's body-finding path is correct
+  // for those.
+  const lineInHunk = anchorLines.some(
+    (a) => a.line === finding.line && a.side === "RIGHT",
+  )
   if (!lineInHunk) return finding
+  // For a multi-line finding (`startLine` set, distinct from `line`),
+  // BOTH endpoints must be on RIGHT-side hunks before the flip is
+  // safe — GitHub's multi-line review comment shape needs both
+  // anchors valid or it 422s.
+  if (
+    typeof finding.startLine === "number" &&
+    Number.isFinite(finding.startLine) &&
+    finding.startLine !== finding.line
+  ) {
+    const startLineInHunk = anchorLines.some(
+      (a) => a.line === finding.startLine && a.side === "RIGHT",
+    )
+    if (!startLineInHunk) return finding
+  }
 
   // Force scope=line so the renderer routes inline.
   return { ...finding, scope: "line" as const }

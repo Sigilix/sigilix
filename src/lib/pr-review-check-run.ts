@@ -161,11 +161,12 @@ export interface ReviewCheckMeta {
   findingsCount: number
   surface?: "review" | "comment" | "skip-notice"
   /**
-   * SIG-216: still threaded by the ensemble but no longer posted.
+   * @deprecated SIG-216 — `completeCheckRun` no longer posts these.
    * GitHub renders the annotation `message` field as plain text,
    * which butchers our markdown finding bodies. The field stays on
    * the interface for back-compat with the producer in
-   * `triage-pr-review-ensemble.ts`; `completeCheckRun` drops it.
+   * `triage-pr-review-ensemble.ts`; the consumer drops it. Remove
+   * once the producer stops threading it.
    */
   checkAnnotations?: CheckRunAnnotation[]
   /**

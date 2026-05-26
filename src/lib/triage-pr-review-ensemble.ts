@@ -1381,7 +1381,18 @@ export async function handlePrReviewEnsemble(
           run_on_labels: [...costControls.runOnLabels],
         }))
         telemetry.fellBackReason = "label_gate_skip"
-        return finalize(telemetry, env, "skipped", cache)
+        // SIG-224 Phase 0 follow-along: thread `reviewMeta` so the
+        // Check Run renders "Approved — no issues found · Sigilix
+        // approved · [View PR]" instead of falling through to the
+        // legacy "Review posted · [View review]" title that links to
+        // a nonexistent review. Same shape as the empty-router branch
+        // below — both are "we successfully reviewed and chose not to
+        // run specialists." The customer-visible effect: green check,
+        // honest "View PR" link, no broken review URL.
+        return finalize(telemetry, env, "skipped", cache, {
+          event: "APPROVE",
+          findingsCount: 0,
+        })
       }
     }
 
@@ -1531,13 +1542,35 @@ export async function handlePrReviewEnsemble(
     telemetry.routerDecision = router
 
     if (router.specialists.length === 0) {
-      // Router said "no specialists for this PR." Skip ensemble entirely.
-      // Pre-ARC-280 this fell through to Phase 3; post-ARC-280 the
-      // skip-notice helper posts a customer-visible "couldn't review"
-      // comment so the path isn't silent.
+      // Router said "no specialists apply to this PR" — e.g. docs-only
+      // with no executable fenced code blocks (see ensemble-router.ts
+      // `decideSpecialists` for the rule taxonomy).
+      //
+      // SIG-224 Phase 0: this used to call `bailWithSkipNotice` →
+      // "Couldn't review — see PR comment" + a yellow check, which is
+      // wrong semantics. "No specialists apply" is a successful review,
+      // not a failure. Thread `event: "APPROVE" + findingsCount: 0` so
+      // the Check Run renders the existing `"Approved — no issues found"`
+      // title (`pr-review-check-run.ts:382-387`) instead of falling
+      // through to the legacy "Review posted · View review" title that
+      // links to a nonexistent review. The dispatcher maps `"skipped"
+      // → "success"` via `src/index.ts:1297`.
+      //
+      // "APPROVE" is a slight semantic stretch (we didn't run a review;
+      // we determined no review was needed), but the customer-visible
+      // effect is correct: green check, "Sigilix approved", link points
+      // at the PR conversation tab, no broken review URL.
+      //
+      // Pre-req for SIG-225 (Phase 1 shadow dispatcher) — once the
+      // dynamic dispatcher starts skipping legitimately-not-applicable
+      // specialists more often, this path will fire more often, and the
+      // wrong "couldn't review" surface would be customer-visible noise.
       telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
-      return bailWithSkipNotice("router_no_specialists")
+      return finalize(telemetry, env, "skipped", cache, {
+        event: "APPROVE",
+        findingsCount: 0,
+      })
     }
 
     // ─── Pre-flight retrieval snapshot ─────────────────────────

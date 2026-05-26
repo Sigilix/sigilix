@@ -30,10 +30,18 @@ describe("badge assets (SIG-201)", () => {
     expect(body).toContain('viewBox="0 0 20 20"')
     // Filled square: rect fill = accent hue, dark glyph on top. No stroke.
     expect(body).toContain('fill="#84CC16"')
-    // Founder direction 2026-05-26 + Kimi K2.6 spec: sharp-edged badges
-    // share a hairline-relief radius (rx=0.5) so the corners read square
-    // without aliasing on low-DPI displays. Was rx=1 pre-fix.
-    expect(body).toContain('rx="0.5"')
+    // Founder direction 2026-05-26 (round two) + Kimi K2.6 follow-up:
+    // rx=0 + `shape-rendering="crispEdges"` SCOPED TO THE RECT. The prior
+    // rx=0.5 hairline-relief still read as visibly rounded when the badge
+    // was upscaled (~2px of anti-aliased corner survived the zoom).
+    // crisp-edge pixel snapping solves the 1x aliasing concern that drove
+    // the original 0.5 compromise. Glyph keeps default rendering so letter
+    // shapes still anti-alias for legibility.
+    expect(body).toContain('rx="0" fill="#84CC16" shape-rendering="crispEdges"')
+    expect(body).not.toContain('rx="0.5"')
+    // The crisp-edge hint MUST NOT leak onto the glyph path — letter
+    // anti-aliasing matters for legibility at 20×20.
+    expect(body).not.toMatch(/<path[^>]*shape-rendering="crispEdges"/)
     // Path-baked glyph (Geist Mono Medium @ 9.5px) replaces the live <text>
     // element. Color is the SIG-216 spec value #0A0A0A.
     expect(body).toContain('fill="#0A0A0A"')
@@ -61,11 +69,13 @@ describe("badge assets (SIG-201)", () => {
     expect(body).toContain('aria-label="SECURITY"')
     // 20px-tall pill matches the priority badge height for visual unity.
     expect(body).toContain('height="20"')
-    // Founder direction 2026-05-26 + Kimi K2.6 spec: category pill now
-    // shares the priority badge's rx=0.5 instead of the prior rx=2.
-    // Hierarchy is carried by color value alone (figure/ground), not
-    // by corner softness.
-    expect(body).toContain('rx="0.5"')
+    // Category pill matches the priority badge geometry: rx=0 +
+    // crisp-edge pixel snapping on the rect. See `renderBadgeSvg` test
+    // above for the founder-direction rationale.
+    expect(body).toContain('rx="0"')
+    expect(body).toContain('shape-rendering="crispEdges"')
+    expect(body).not.toContain('rx="0.5"')
+    expect(body).not.toMatch(/<path[^>]*shape-rendering="crispEdges"/)
     // Hue identity preserved (magenta family) but desaturated/darkened for BG
     // and brightened for FG. Original accent #F0ABFC no longer appears verbatim.
     expect(body).not.toContain('#F0ABFC')
@@ -100,8 +110,8 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-2/p2.svg`)
-    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-2/security.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-3/p2.svg`)
+    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-3/security.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
   })
 

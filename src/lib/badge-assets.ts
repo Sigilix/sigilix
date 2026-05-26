@@ -1,5 +1,6 @@
 import { BADGE_GLYPH_PATHS, type BadgeGlyphPath } from "./badge-glyph-paths"
 import {
+  BADGE_DISPLAY_SCALE,
   CATEGORY_BADGE_HEIGHT,
   PRIORITY_BADGE_HEIGHT,
   PRIORITY_BADGE_WIDTH,
@@ -223,10 +224,24 @@ export function badgeAssetUrl(name: ReviewBadgeAssetName): string {
 }
 
 export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; height: number } {
-  if (name in BADGE_STYLES) return { width: PRIORITY_BADGE_WIDTH, height: PRIORITY_BADGE_HEIGHT }
+  // Returns the `<img>` tag DISPLAY size (intentionally larger than
+  // the SVG intrinsic geometry by `BADGE_DISPLAY_SCALE` so downstream
+  // bitmap zoom / screenshot consumers have more source pixels to
+  // interpolate from — see `BADGE_DISPLAY_SCALE` docstring for the
+  // diagnostic story). The SVG content is unchanged; the browser
+  // scales the viewBox to whatever size the IMG tag requests.
+  if (name in BADGE_STYLES) {
+    return {
+      width: Math.round(PRIORITY_BADGE_WIDTH * BADGE_DISPLAY_SCALE),
+      height: Math.round(PRIORITY_BADGE_HEIGHT * BADGE_DISPLAY_SCALE),
+    }
+  }
   return {
-    width: categoryBadgeWidth(CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label),
-    height: CATEGORY_BADGE_HEIGHT,
+    width: Math.round(
+      categoryBadgeWidth(CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label)
+        * BADGE_DISPLAY_SCALE,
+    ),
+    height: Math.round(CATEGORY_BADGE_HEIGHT * BADGE_DISPLAY_SCALE),
   }
 }
 

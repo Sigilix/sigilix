@@ -218,14 +218,24 @@ export interface Env {
   OPENCLAW_ENSEMBLE_ROUTER_ENABLED?: string
 
   // SIG-226 (SIG-224 Phase 1) — dynamic specialist dispatcher mode.
-  //   - "off"     (default): dispatcher disabled, no telemetry, no LLM call
-  //   - "shadow": dispatcher computes picks + emits telemetry, but the
-  //               orchestrator still uses the legacy `decideSpecialists`
-  //               result for fan-out. Used to collect false-negative
-  //               ground truth on protected roles (security + logic)
-  //               before Phase 2/3 graduates to enforcement.
-  //   - "enforce" (Phase 3+): the dispatcher's picks REPLACE the legacy
-  //               router's picks for fan-out. Not honored in Phase 1.
+  //   - "off"           (default): dispatcher disabled, no telemetry,
+  //                      no LLM call.
+  //   - "shadow":        dispatcher runs rules + LLM + emits telemetry,
+  //                      but the orchestrator still uses the legacy
+  //                      `decideSpecialists` result for fan-out. Used
+  //                      to collect false-negative ground truth on
+  //                      protected roles (security + logic) before
+  //                      Phase 2b / 3 graduates to LLM enforcement.
+  //   - "enforce_rules": SIG-227a. Dispatcher runs the RULE LAYER only
+  //                      (no LLM call, ~0ms overhead) and its picks
+  //                      REPLACE `router.specialists` for fan-out.
+  //                      Activates the new safe-skip rules
+  //                      (lockfile-only, .d.ts-only, test-files-only)
+  //                      that the legacy router doesn't have. Strict
+  //                      superset of the legacy router's safe-skip
+  //                      coverage; fan-out only shrinks or stays equal.
+  //   - "enforce" (Phase 2b/3+): full LLM enforcement. Logged but not
+  //                      honored in Phase 1 / 227a.
   // See `docs/specs/2026-05-26-sig-224-dispatcher-architecture.md`.
   OPENCLAW_DYNAMIC_DISPATCHER_MODE?: string
 

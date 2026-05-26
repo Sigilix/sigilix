@@ -4032,12 +4032,18 @@ export async function handlePrReviewEnsemble(
     // ~30 min budget on Standard usage model). Most reviews will
     // still post the overview first because the review submit
     // takes 3-10s while the overview takes 22-60s — but ordering
-    // is no longer guaranteed. Fail-closed: if `args.ctx` is missing
+    // is no longer guaranteed.
+    //
+    // Test fallback (CodeRabbit catch): if `args.ctx` is missing
     // (unit-test callers only — every production queue dispatch
     // provides ctx, including the slash-command rerun path which
-    // re-enters `queue()` and gets a fresh ctx), fall back to the
-    // pre-SIG-233 inline-await behavior so the overview still posts
-    // (slower but preserved).
+    // re-enters `queue()` and gets a fresh ctx), the submit-block
+    // `finally` falls back to `await overviewPromise` inline. NOTE:
+    // this is NOT the pre-SIG-233 inline-before-submit ordering —
+    // ctx-less callers also see submit-then-overview on the GitHub
+    // timeline now. The function still blocks until the overview
+    // resolves before returning, so tests asserting on the return
+    // value (the only thing unit tests check) behave identically.
     //
     // The previous post-overview stale-head re-check moves to a
     // pre-submit re-check below — same guard, different gate.
@@ -4270,6 +4276,11 @@ export async function handlePrReviewEnsemble(
           submitPath: "inline-anchored",
         })
         if (fallback.ok) {
+          // SIG-233 (CodeRabbit catch): flip BEFORE any post-customer-
+          // visible-post bookkeeping so a throw in `persistReviewCounter`
+          // can't suppress the background overview after the comment
+          // already landed on GitHub.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           // SIG-89 note: comment-fallback paths intentionally do NOT
@@ -4279,7 +4290,6 @@ export async function handlePrReviewEnsemble(
           // dispatch. Same rationale at all four `surface: "comment"`
           // return sites below.
           await fallbackCommentAffordance.persistReviewCounter()
-          submitYieldedReview = true  // SIG-233: fire overview from finally
           return finalize(telemetry, env, "posted", cache, {
             event: fallbackCommentSubmission.event,
             findingsCount,
@@ -4290,6 +4300,13 @@ export async function handlePrReviewEnsemble(
         // Comment fallback ALSO failed — `errored` is the truth.
         return finalize(telemetry, env, "errored", cache)
       }
+      // SIG-233 (CodeRabbit catch): the GitHub-side submit already
+      // succeeded AND was verified. Flip BEFORE the follow-up awaits
+      // (persistReviewCounter / writeReviewManifestForEnsemble /
+      // recordReviewedDiffHash / maybePostAstAutoInline) so a throw
+      // in any of them can't suppress the overview after the customer
+      // already has a posted review.
+      submitYieldedReview = true
       await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
       // ARC-258 follow-up: dismiss any stale Sigilix reviews from
@@ -4360,7 +4377,9 @@ export async function handlePrReviewEnsemble(
       // "Approved — no issues found" vs "N findings posted".
       const inlineFindings =
         submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-      submitYieldedReview = true  // SIG-233: fire overview from finally
+      // SIG-233: submitYieldedReview was already set above immediately
+      // after `verified` resolved — kept here as a no-op signpost so
+      // the 6 posted-return sites are still 1:1 with the flag.
       return finalize(telemetry, env, "posted", cache, {
         event: submission.event,
         findingsCount: inlineFindings,
@@ -4418,10 +4437,13 @@ export async function handlePrReviewEnsemble(
           submitPath: "inline-anchored-error",
         })
         if (commentFallback.ok) {
+          // SIG-233 (CodeRabbit catch): flip BEFORE the persistReviewCounter
+          // await so a KV/storage throw can't suppress the overview after
+          // the comment-fallback landed on GitHub.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           await fallbackBodyOnlyAffordance.persistReviewCounter()
-          submitYieldedReview = true  // SIG-233: fire overview from finally
           return finalize(telemetry, env, "posted", cache, {
             event: fallbackBodyOnly.event,
             findingsCount,
@@ -4498,10 +4520,12 @@ export async function handlePrReviewEnsemble(
           submitPath: "anchorless-fallback-error",
         })
         if (commentFallback.ok) {
+          // SIG-233 (CodeRabbit catch): same rationale as the other
+          // comment-fallback paths — flip BEFORE persistReviewCounter.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           await fallbackAffordance.persistReviewCounter()
-          submitYieldedReview = true  // SIG-233: fire overview from finally
           return finalize(telemetry, env, "posted", cache, {
             event: fallback.event,
             findingsCount,
@@ -4545,10 +4569,12 @@ export async function handlePrReviewEnsemble(
           submitPath: "anchorless-fallback",
         })
         if (commentFallback.ok) {
+          // SIG-233 (CodeRabbit catch): same rationale as the other
+          // comment-fallback paths — flip BEFORE persistReviewCounter.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           await fallbackAffordance.persistReviewCounter()
-          submitYieldedReview = true  // SIG-233: fire overview from finally
           return finalize(telemetry, env, "posted", cache, {
             event: fallback.event,
             findingsCount,
@@ -4558,6 +4584,10 @@ export async function handlePrReviewEnsemble(
         }
         return finalize(telemetry, env, "errored", cache)
       }
+      // SIG-233 (CodeRabbit catch): anchorless fallback submit succeeded
+      // and verified. Mirror the primary path — flip BEFORE the follow-
+      // up bookkeeping awaits so a throw can't suppress the overview.
+      submitYieldedReview = true
       await fallbackAffordance.persistReviewCounter()
       telemetry.submitted = true
       // ARC-287: post-submit dismissPriorSigilixReviews call removed
@@ -4606,7 +4636,9 @@ export async function handlePrReviewEnsemble(
       // path — the anchorless fallback is still a posted review.
       const fallbackFindings =
         submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
-      submitYieldedReview = true  // SIG-233: fire overview from finally
+      // SIG-233: submitYieldedReview was already set above immediately
+      // after the anchorless verify resolved — kept here as a no-op
+      // signpost so the 6 posted-return sites stay 1:1 with the flag.
       return finalize(telemetry, env, "posted", cache, {
         event: fallback.event,
         findingsCount: fallbackFindings,

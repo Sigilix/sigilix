@@ -1151,6 +1151,14 @@ export async function findExistingOverviewCommentId(
 ): Promise<number | null> {
   for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
     const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
+    // SIG-216 CR fix-up: terminate on the empty page rather than
+    // `items.length < per_page`. The `< 100` check coupled this loop
+    // to `listIssueCommentsPage`'s per_page=100 default — changing
+    // that constant (e.g. tuning for rate limits) would silently
+    // break pagination here. Empty-page termination is the only
+    // universally safe signal; the cost is at most one extra
+    // empty-page fetch when the comment count is an exact multiple
+    // of per_page, which is bounded by MAX_COMMENT_SCAN_PAGES anyway.
     if (items.length === 0) return null
     for (const c of items) {
       if (typeof c.body !== "string") continue
@@ -1161,9 +1169,6 @@ export async function findExistingOverviewCommentId(
         return c.id
       }
     }
-    // GitHub returns < per_page when there are no more pages; stop
-    // before issuing another round trip we know will be empty.
-    if (items.length < 100) return null
   }
   // Hard cap hit — pathological PR with >500 comments and no marker
   // in the first 500. Treat as "not found" so the stub create path
@@ -1196,6 +1201,8 @@ export async function findExistingOverviewComment(
 ): Promise<{ id: number; body: string } | null> {
   for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
     const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
+    // SIG-216 CR fix-up: same empty-page termination as
+    // `findExistingOverviewCommentId` — decouples from per_page=100.
     if (items.length === 0) return null
     for (const c of items) {
       if (typeof c.body !== "string") continue
@@ -1203,7 +1210,6 @@ export async function findExistingOverviewComment(
         return { id: c.id, body: c.body }
       }
     }
-    if (items.length < 100) return null
   }
   console.warn(JSON.stringify({
     event: "pr-overview-comment-scan-capped",

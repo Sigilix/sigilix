@@ -139,6 +139,12 @@ describe("generate() — external abort signal (SIG-216)", () => {
     // raises no error on either the result or the listener path.
     mockFetchOnceOk("clean-output")
     const ctl = new AbortController()
+    // SIG-216 CR fix-up: spy on removeEventListener to PROVE the
+    // finally-block detached the listener. The bare
+    // "post-resolve abort() doesn't throw" assertion doesn't catch
+    // a missed cleanup — the local controller is GC'd along with
+    // the function scope anyway, so the bug would silently pass.
+    const removeSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener")
     const result = await generate({
       model: FAKE_MODEL,
       prompt: "ok",
@@ -146,9 +152,11 @@ describe("generate() — external abort signal (SIG-216)", () => {
       signal: ctl.signal,
     })
     expect(result).toBe("clean-output")
-    // Post-resolve abort must be a no-op from the caller's POV.
-    // (Vitest will fail the test on unhandled rejection / throw.)
+    expect(removeSpy).toHaveBeenCalled()
+    // Defensive belt-and-braces: post-resolve abort must remain a
+    // no-op from the caller's POV. (Vitest fails on unhandled throw.)
     expect(() => ctl.abort()).not.toThrow()
+    removeSpy.mockRestore()
   })
 })
 

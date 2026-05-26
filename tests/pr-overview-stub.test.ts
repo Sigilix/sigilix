@@ -599,20 +599,50 @@ describe("postPrOverviewStubIfNeeded — marker scan short-circuit + cap (Sigili
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
   })
 
-  it("stops paginating early when a page returns fewer than 100 comments (no marker)", async () => {
+  it("stops paginating after the next page comes back empty (no marker)", async () => {
     const { kv } = makeKvStub()
-    // Page 1 has 50 items — GitHub signals "no more pages" via the
-    // partial page. Helper should NOT request page 2.
+    // SIG-216 CR fix-up: termination is now `items.length === 0`, not
+    // `items.length < per_page`, so a partial first page is followed by
+    // ONE additional empty-page fetch — bounded, predictable, and
+    // decoupled from listIssueCommentsPage's per_page default.
     const partialPage = Array.from({ length: 50 }, (_, i) => ({
       id: 6000 + i,
       body: `comment ${i}`,
     }))
-    mockListIssueCommentsPage.mockResolvedValueOnce(partialPage)
+    mockListIssueCommentsPage
+      .mockResolvedValueOnce(partialPage)
+      .mockResolvedValueOnce([])
 
     const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
 
     expect(out.kind).toBe("posted")
-    expect(mockListIssueCommentsPage).toHaveBeenCalledOnce()
+    expect(mockListIssueCommentsPage).toHaveBeenCalledTimes(2)
+    expect(mockListIssueCommentsPage.mock.calls[1]![3]).toBe(2)
+  })
+
+  it("terminates after the empty page when the first page is full (no marker)", async () => {
+    const { kv } = makeKvStub()
+    // SIG-216 CR fix-up regression-pin: a FULL first page followed by
+    // an EMPTY second page must terminate the loop after the empty
+    // fetch — proves we no longer rely on `items.length < 100` as
+    // an end-of-pagination signal. Without this pin a future change
+    // back to the per_page-coupled check would pass the suite.
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({
+      id: 7100 + i,
+      body: `unrelated comment ${i}`,
+    }))
+    mockListIssueCommentsPage
+      .mockResolvedValueOnce(fullPage)
+      .mockResolvedValueOnce([])
+
+    const out = await postPrOverviewStubIfNeeded({ ...args, env: makeEnv(kv) })
+
+    expect(out.kind).toBe("posted")
+    // Exactly TWO calls — full page, then empty page (terminator).
+    // Crucially NOT 5 (the MAX_COMMENT_SCAN_PAGES cap), which would
+    // signal the empty-page short-circuit failed to fire.
+    expect(mockListIssueCommentsPage).toHaveBeenCalledTimes(2)
+    expect(mockListIssueCommentsPage.mock.calls[1]![3]).toBe(2)
   })
 
   it("finds a marker on a later page when earlier pages don't have it", async () => {

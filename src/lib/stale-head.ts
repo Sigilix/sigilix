@@ -49,6 +49,7 @@ export type StaleHeadGuardSource =
   | "phase3"
   | "ensemble-before-fanout"
   | "ensemble-after-review"
+  | "ensemble-after-inline-overview"
 
 export interface HandleStaleHeadArgs {
   env: Env

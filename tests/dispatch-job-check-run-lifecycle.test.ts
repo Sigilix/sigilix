@@ -92,7 +92,9 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "success",
-      reviewMeta,
+      // SIG-216: dispatcher now threads prNumber into reviewMeta so the
+      // check-run summary can render the `[View review](pr-url)` link.
+      reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
     })
   })
 
@@ -118,7 +120,8 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "failure",
-      reviewMeta,
+      // SIG-216: prNumber threaded into reviewMeta by the dispatcher.
+      reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
     })
   })
 
@@ -170,7 +173,8 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "failure",
-      reviewMeta,
+      // SIG-216: prNumber threaded into reviewMeta by the dispatcher.
+      reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
     })
   })
 
@@ -222,7 +226,8 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: null,
       conclusion: "success",
-      reviewMeta: { event: "APPROVE", findingsCount: 0 },
+      // SIG-216: prNumber threaded into reviewMeta by the dispatcher.
+      reviewMeta: { event: "APPROVE", findingsCount: 0, prNumber: job.prNumber },
     })
   })
 })

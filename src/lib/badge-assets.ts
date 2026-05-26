@@ -62,27 +62,110 @@ export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
 export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
-const BADGE_ASSET_VERSION = "v20260525-2"
+const BADGE_ASSET_VERSION = "v20260525-4"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
-const BADGE_HEIGHT = 18
-const PRIORITY_BADGE_WIDTH = 24
+
+// Greptile-direction priority badge: 20x20 filled square (rx=1). Matches the
+// Greptile bot's annotation-badge genre for instant recognizability while we
+// keep Sigilix's live Geist Mono text instead of path-baked glyphs.
+const PRIORITY_BADGE_WIDTH = 20
+const PRIORITY_BADGE_HEIGHT = 20
+
+// Category pill matches the priority badge height (20px) for visual unity,
+// mirroring Greptile's same-height priority+category pairing. Slightly more
+// rounded corners (rx=2 vs priority's rx=1) mark it as the secondary badge.
+const CATEGORY_BADGE_HEIGHT = 20
+
+// Priority text color: near-black on bright accent fill (dark-on-bright for
+// AA contrast across the P0..P3 palette).
+const PRIORITY_TEXT_COLOR = "#0B0C10"
+
+// Kimi R2 treatment knobs for the category pill: figure/ground hierarchy
+// is created by remapping the brand-hue accents to a deep BG + bright text
+// at fixed saturation/lightness. Hue identity is preserved across all 9
+// categories — only S/L change.
+const CATEGORY_BG_SATURATION = 0.12
+const CATEGORY_BG_LIGHTNESS = 0.18
+const CATEGORY_TEXT_SATURATION = 0.65
+const CATEGORY_TEXT_LIGHTNESS = 0.85
 
 function categoryBadgeWidth(label: string): number {
-  return Math.ceil(label.length * 6.1 + 12)
+  // Geist Mono 9.5px @ 600 metrics: ~6.5px advance + 16px horizontal padding.
+  return Math.ceil(label.length * 6.5 + 16)
+}
+
+// Color math kept inline (no helper module) since it's used only here and the
+// applyHsl helper keeps the accent table readable as "base hue + treatment".
+function hexToHsl(hex: string): { h: number; s: number; l: number } {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex)
+  if (!m || !m[1]) throw new Error(`badge-assets: invalid hex ${hex}`)
+  const int = parseInt(m[1], 16)
+  const r = ((int >> 16) & 0xff) / 255
+  const g = ((int >> 8) & 0xff) / 255
+  const b = (int & 0xff) / 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  if (max === min) return { h: 0, s: 0, l }
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  switch (max) {
+    case r:
+      h = ((g - b) / d + (g < b ? 6 : 0)) * 60
+      break
+    case g:
+      h = ((b - r) / d + 2) * 60
+      break
+    default:
+      h = ((r - g) / d + 4) * 60
+      break
+  }
+  return { h, s, l }
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const hp = h / 60
+  const x = c * (1 - Math.abs((hp % 2) - 1))
+  let r = 0
+  let g = 0
+  let b = 0
+  if (hp >= 0 && hp < 1) [r, g, b] = [c, x, 0]
+  else if (hp < 2) [r, g, b] = [x, c, 0]
+  else if (hp < 3) [r, g, b] = [0, c, x]
+  else if (hp < 4) [r, g, b] = [0, x, c]
+  else if (hp < 5) [r, g, b] = [x, 0, c]
+  else [r, g, b] = [c, 0, x]
+  const m = l - c / 2
+  const toHex = (v: number): string => {
+    const n = Math.round((v + m) * 255)
+    return Math.max(0, Math.min(255, n)).toString(16).padStart(2, "0")
+  }
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`.toUpperCase()
+}
+
+function applyHsl(baseHex: string, targetSaturation: number, targetLightness: number): string {
+  const { h } = hexToHsl(baseHex)
+  return hslToHex(h, targetSaturation, targetLightness)
 }
 
 function renderBadgeSvg(style: (typeof BADGE_STYLES)[BadgeAssetName]): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PRIORITY_BADGE_WIDTH} ${BADGE_HEIGHT}" width="${PRIORITY_BADGE_WIDTH}" height="${BADGE_HEIGHT}" role="img" aria-label="${style.label}">
-  <rect x="0.5" y="0.5" width="${PRIORITY_BADGE_WIDTH - 1}" height="${BADGE_HEIGHT - 1}" rx="3.5" fill="${style.accent}" stroke="#FFFFFF" stroke-opacity="0.22"/>
-  <text x="${PRIORITY_BADGE_WIDTH / 2}" y="12.35" text-anchor="middle" fill="#0B0C10" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="10.2" font-weight="750">${style.label}</text>
+  // 20x20 filled square with rx=1 — Greptile-direction geometry. Accent fill
+  // at 100%, dark text for AA contrast. No stroke (drops the prior outline).
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PRIORITY_BADGE_WIDTH} ${PRIORITY_BADGE_HEIGHT}" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
+  <rect x="0" y="0" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" rx="1" fill="${style.accent}"/>
+  <text x="${PRIORITY_BADGE_WIDTH / 2}" y="13.5" text-anchor="middle" fill="${PRIORITY_TEXT_COLOR}" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="9.5" font-weight="600" letter-spacing="0.02em">${style.label}</text>
 </svg>`
 }
 
 function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBadgeAssetName]): string {
   const width = categoryBadgeWidth(style.label)
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${BADGE_HEIGHT}" width="${width}" height="${BADGE_HEIGHT}" role="img" aria-label="${style.label}">
-  <rect x="0.5" y="0.5" width="${width - 1}" height="${BADGE_HEIGHT - 1}" rx="2.75" fill="${style.accent}" stroke="#FFFFFF" stroke-opacity="0.18"/>
-  <text x="${width / 2}" y="12.35" text-anchor="middle" fill="#0B0C10" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="9.8" font-weight="650" letter-spacing="1.1">${style.label}</text>
+  const bg = applyHsl(style.accent, CATEGORY_BG_SATURATION, CATEGORY_BG_LIGHTNESS)
+  const fg = applyHsl(style.accent, CATEGORY_TEXT_SATURATION, CATEGORY_TEXT_LIGHTNESS)
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${CATEGORY_BADGE_HEIGHT}" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
+  <rect x="0" y="0" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" rx="2" fill="${bg}"/>
+  <text x="${width / 2}" y="13.5" text-anchor="middle" fill="${fg}" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="9.5" font-weight="600" letter-spacing="0.02em">${style.label}</text>
 </svg>`
 }
 
@@ -107,10 +190,10 @@ export function badgeAssetUrl(name: ReviewBadgeAssetName): string {
 }
 
 export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; height: number } {
-  if (name in BADGE_STYLES) return { width: PRIORITY_BADGE_WIDTH, height: BADGE_HEIGHT }
+  if (name in BADGE_STYLES) return { width: PRIORITY_BADGE_WIDTH, height: PRIORITY_BADGE_HEIGHT }
   return {
     width: categoryBadgeWidth(CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label),
-    height: BADGE_HEIGHT,
+    height: CATEGORY_BADGE_HEIGHT,
   }
 }
 

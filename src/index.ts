@@ -69,7 +69,6 @@ import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
-import { postPrOverviewStubIfNeeded } from "./lib/pr-overview-stub"
 import {
   postDraftPrSkipNotice,
   supersedeDraftPrSkipNotice,
@@ -659,14 +658,24 @@ export type JobMessage =
  *
  * Rules (matches the routing in handleGitHubWebhook):
  *   - Drafts and unsupported actions get nothing.
- *   - pr-overview always fires for opened/synchronize/reopened/ready_for_review.
- *   - pr-review fires the same EXCEPT `reopened` (closing+reopening
- *     a PR doesn't change the diff, so re-reviewing would be noise).
+ *   - SIG-216: the `overview` boolean NO LONGER controls when the
+ *     pr-overview comment renders. The overview comment is now posted
+ *     inline by `handlePrReviewEnsemble` immediately before the review
+ *     submit (CodeRabbit-style Walkthrough-then-Review). The boolean
+ *     gates only the legacy `loadSigilixConfig` warmup + the
+ *     `pr-labels` enqueue path that consumes it. Treat it as "fire the
+ *     opt-in / labelling side effects" rather than "render the
+ *     overview" — true for opened/synchronize/reopened/ready_for_review.
+ *   - pr-review fires for the same actions EXCEPT `reopened` (closing
+ *     + reopening a PR doesn't change the diff, so re-reviewing would
+ *     be noise). The inline overview rides along with each review, so
+ *     `reopened` PRs intentionally get neither.
  *   - When OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES=on, PRs from a
  *     dev/develop/staging branch into main/master/release skip the
  *     pr-review job entirely (dev→main is a release-promotion of
  *     already-reviewed code; re-reviewing doubles spend + adds noise).
- *     pr-overview still fires so the release PR gets a summary blurb.
+ *     The `overview: true` flag still fires so the release PR still
+ *     gets its side-effect pass (labels + warmup).
  */
 export function decidePullRequestJobs(args: {
   action: string
@@ -1248,10 +1257,18 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // returned before assigning one (shouldn't happen with the
           // current branches, but defensive). Map it to `failure` so
           // the check doesn't hang in_progress.
+          // SIG-216: thread prNumber into reviewMeta so the check-run
+          // summary can render the `[View review](pr-url)` link. When
+          // the ensemble didn't return a reviewMeta (degraded paths),
+          // the summary degrades to the link-less fallback — that's
+          // intentional, not worth scaffolding a synthetic reviewMeta.
+          const reviewMetaForComplete = reviewMeta !== undefined
+            ? { ...reviewMeta, prNumber: job.prNumber }
+            : undefined
           await completeCheckRun({
             handle: checkRun,
             conclusion: conclusion ?? "failure",
-            ...(reviewMeta !== undefined ? { reviewMeta } : {}),
+            ...(reviewMetaForComplete !== undefined ? { reviewMeta: reviewMetaForComplete } : {}),
           })
           // SIG-119: flush collected validator-rejection telemetry once.
           // Non-fatal — a metrics failure must never affect the review.
@@ -2019,26 +2036,22 @@ async function handleGitHubWebhook(
     const headSha = pr.head?.sha ?? ""
     if (!headSha) return new Response("missing head sha\n", { status: 400 })
 
-    // SIG-84: load sigilix.json BEFORE any enqueue so the
-    // overview-enable gate can short-circuit both the stub-post and
-    // the pr-overview queue send for opt-OUT customers. Best-effort:
-    // `loadSigilixConfig` never throws — missing/invalid config
-    // resolves to `EMPTY_CONFIG`, which has `overview === undefined`,
-    // which `isPrOverviewEnabled` treats as enabled (default-on per
-    // Codex Q5).
+    // SIG-216: drop-the-stub pattern. The pre-review stub sticky +
+    // the standalone pr-overview queue dispatch are GONE — overview
+    // is now rendered inline by the ensemble immediately before
+    // `submitReview`, so the two comments land in the same time
+    // window (CodeRabbit-style Walkthrough-then-Review ordering).
     //
-    // Built once and threaded through every gate below. The pr-review
-    // ensemble re-loads it later at the head SHA to read the rest of
-    // the schema — two loads is acceptable given (a) the webhook path
-    // ONLY needs the overview flag, and (b) the second load happens
-    // ~30s later in a separate queue consumer (sharing state across
-    // those would require a KV roundtrip per webhook anyway).
-    //
-    // Sigilix #5 follow-up: build ONE GitHubClient here, reuse it for
-    // both `loadSigilixConfig` AND `postPrOverviewStubIfNeeded`. The
-    // installation token has TTL ~1h so reuse within a single webhook
-    // invocation is safe. Saves one `getInstallationToken` round-trip
-    // per delivery.
+    // We still load sigilix.json + build the GitHub client here for
+    // (a) the `ready_for_review` draft-skip supersede call below and
+    // (b) future webhook-time gates. Best-effort: `loadSigilixConfig`
+    // never throws — missing/invalid config resolves to
+    // `EMPTY_CONFIG`, which has `overview === undefined`, which
+    // `isPrOverviewEnabled` treats as enabled (default-on per Codex
+    // Q5). The pr-review ensemble re-loads the config at the head
+    // SHA itself to read the rest of the schema (and to gate the
+    // inline overview render on overview.enabled), so a failure here
+    // is non-blocking.
     let webhookSigilixConfig: Awaited<ReturnType<typeof loadSigilixConfig>> | null = null
     let webhookClient: GitHubClient | null = null
     if (decision.overview || decision.review) {
@@ -2052,10 +2065,10 @@ async function handleGitHubWebhook(
         webhookClient = new GitHubClient({ token })
         webhookSigilixConfig = await loadSigilixConfig(webhookClient, owner, repo, headSha)
       } catch (err) {
-        // Auth + config-load failures here mean we can't gate. Default
-        // to current behavior (overview enabled) so a transient blip
-        // doesn't drop a feature — the stub-post helper has its own
-        // best-effort error handling.
+        // Auth + config-load failures here are non-blocking: the
+        // ensemble re-loads config at the head SHA and gates the
+        // inline overview render itself; the draft-skip supersede
+        // is best-effort.
         console.warn(JSON.stringify({
           event: "pr-overview-webhook-config-load-failed",
           owner, repo, prNumber, head_sha: headSha.slice(0, 7),
@@ -2084,55 +2097,15 @@ async function handleGitHubWebhook(
       }
     }
 
-    if (decision.overview && overviewEnabled) {
-      // SIG-84: post the stub sticky synchronously BEFORE enqueueing
-      // the heavy pr-overview job, so the comment is on the PR
-      // timeline before the parallel pr-review consumer reaches its
-      // submit step (~30s later). Awaited rather than ctx.waitUntil'd
-      // — if we returned 202 before the stub posted, the review job
-      // could race past it.
+    if (decision.overview && !overviewEnabled) {
+      // SIG-216: customer opted out of pr-overview via
+      // `sigilix.overview.enabled = false`. The ensemble's inline
+      // overview render is gated on the same flag — log here so the
+      // disable signal stays visible at webhook time.
       //
-      // Best-effort: the helper NEVER throws. A failed stub-post
-      // yields the same backwards ordering as pre-SIG-84 for that one
-      // delivery; the review-side 2s wait covers transient KV write
-      // delays, and GitHub redelivery would re-enter the idempotent
-      // path. Net: no regression on the failure mode.
-      //
-      // Sigilix #5 follow-up: pass the already-built `webhookClient`
-      // so the helper doesn't re-call `getInstallationToken` inside
-      // itself. The client is null only if the config-load block
-      // above hit an auth failure; in that case the stub-post is
-      // skipped (the review-side wait will time out at 2s — same
-      // degraded mode as a stub-post failure).
-      if (webhookClient !== null) {
-        await postPrOverviewStubIfNeeded({
-          env, owner, repo, prNumber, headSha, installationId,
-          client: webhookClient,
-        })
-      } else {
-        console.warn(JSON.stringify({
-          event: "pr-overview-stub-skipped-no-client",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        }))
-      }
-
-      await env.OPENCLAW_JOBS.send({
-        type: "pr-overview",
-        owner,
-        repo,
-        prNumber,
-        headSha,
-        installationId,
-      })
-    } else if (decision.overview && !overviewEnabled) {
-      // SIG-84: customer opted out of pr-overview via
-      // `sigilix.overview.enabled = false`. Skip BOTH the stub-post
-      // and the pr-overview queue enqueue — leaving the queue send in
-      // would cost an Ollama call for a comment we'd never post.
-      //
-      // SIG-90: pr-labels is now ENQUEUED INDEPENDENTLY below
-      // (founder direction "labels should exist"). It is NOT gated
-      // by overview.enabled.
+      // SIG-90: pr-labels is ENQUEUED INDEPENDENTLY below (founder
+      // direction "labels should exist"). It is NOT gated by
+      // overview.enabled.
       console.log(JSON.stringify({
         event: "pr-overview-skipped-disabled",
         owner, repo, prNumber, head_sha: headSha.slice(0, 7),
@@ -2147,6 +2120,30 @@ async function handleGitHubWebhook(
     if (decision.overview) {
       await env.OPENCLAW_JOBS.send({
         type: "pr-labels",
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+      })
+    }
+    // SIG-216 + this fix-up — overview normally runs inline inside the
+    // review handler (drop-the-stub pattern: the two comments land in
+    // the same window). But when the review is skipped
+    // (`decision.overview && !decision.review`, e.g. release-branch
+    // gate via OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES), the ensemble
+    // never fires, so the inline overview never lands. Restore the
+    // legacy standalone `pr-overview` queue dispatch for that branch
+    // ONLY — when both decisions are true, the inline path remains
+    // the single source of truth.
+    //
+    // Skipped when the config disables overview (`overviewEnabled`
+    // is the result of `isPrOverviewEnabled` against the head-SHA
+    // config loaded above). The corresponding telemetry event
+    // `pr-overview-skipped-disabled` already fired up the file.
+    if (decision.overview && !decision.review && overviewEnabled) {
+      await env.OPENCLAW_JOBS.send({
+        type: "pr-overview",
         owner,
         repo,
         prNumber,

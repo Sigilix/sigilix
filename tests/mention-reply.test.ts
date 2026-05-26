@@ -242,14 +242,55 @@ describe("resolveLinearAgentRepoScope", () => {
     })
   })
 
-  it("locks Linear agent retrieval to none when there is no team repo owner", async () => {
-    const env = makeEnv(["repo-index-manifest:acme/sigilix"])
+  it("returns empty availableRepos when the workspace has no team-repo mappings configured", async () => {
+    // SIG-221: without OPENCLAW_TEAM_GITHUB_REPO_MAP we have no way to
+    // know which owners this Linear workspace can see, so we fail safe.
+    const env = makeEnv(["repo-index-manifest:acme/api"])
     await expect(resolveLinearAgentRepoScope(env, null)).resolves.toEqual({
       repo: null,
       mappedRepo: null,
       availableRepos: [],
       status: "unmapped",
     })
+  })
+
+  it("SIG-221: unmapped team falls back to workspace-known owners from the team-repo map", async () => {
+    // The workspace has a team-repo map (so we know which GitHub owners
+    // it can see), but the SPECIFIC team firing this mention isn't
+    // mapped. The agent should still see the workspace's indexed repos.
+    const env = {
+      ...makeEnv([
+        "repo-index-manifest:acme/api",
+        "repo-index-manifest:acme/web",
+        "repo-index-manifest:other/private", // different owner, should NOT leak
+      ]),
+      OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+        SIG: { owner: "acme", repo: "api" },
+        ENG: { owner: "acme", repo: "web" },
+      }),
+    }
+
+    await expect(resolveLinearAgentRepoScope(env, null)).resolves.toEqual({
+      repo: null,
+      mappedRepo: null,
+      availableRepos: ["acme/api", "acme/web"],
+      status: "unmapped",
+    })
+  })
+
+  it("SIG-221: unmapped fallback deduplicates owners across multiple team mappings", async () => {
+    const env = {
+      ...makeEnv(["repo-index-manifest:acme/api", "repo-index-manifest:acme/web"]),
+      OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+        T1: { owner: "acme", repo: "api" },
+        T2: { owner: "ACME", repo: "web" }, // case-different but same owner
+        T3: { owner: "acme", repo: "api" }, // duplicate
+      }),
+    }
+
+    const scope = await resolveLinearAgentRepoScope(env, null)
+    expect(scope.availableRepos).toEqual(["acme/api", "acme/web"])
+    expect(scope.status).toBe("unmapped")
   })
 
   it("keeps tenant repos available but clears the default when it is not indexed", async () => {
@@ -358,26 +399,44 @@ describe("linearRetrievalTeamKey", () => {
 
 describe("renderCodebaseRetrievalStatus", () => {
   it("distinguishes every repo-scope status branch", () => {
-    expect(renderCodebaseRetrievalStatus({
+    // SIG-221: unmapped + no indexed repos no longer claims "no access" —
+    // surface a softer "indexing may be in progress" framing.
+    const unmappedEmpty = renderCodebaseRetrievalStatus({
       repo: null,
       mappedRepo: null,
       availableRepos: [],
       status: "unmapped",
-    }, 0)).toContain("No GitHub repo mapping")
+    }, 0)
+    expect(unmappedEmpty).toContain("No indexed repos are available")
+    expect(unmappedEmpty).not.toContain("No GitHub repo mapping")
 
-    expect(renderCodebaseRetrievalStatus({
+    // SIG-221: unmapped + indexed repos available — agent can still pick.
+    const unmappedWithRepos = renderCodebaseRetrievalStatus({
+      repo: null,
+      mappedRepo: null,
+      availableRepos: ["sigilix/sigilix", "sigilix/docs"],
+      status: "unmapped",
+    }, 0)
+    expect(unmappedWithRepos).toContain("2 indexed repo(s) available")
+    expect(unmappedWithRepos).toContain("'sigilix/sigilix'")
+    expect(unmappedWithRepos).not.toContain("No GitHub repo mapping")
+
+    // SIG-221: mapped but neither default nor other repos indexed — soft framing.
+    const mappedNothingIndexed = renderCodebaseRetrievalStatus({
       repo: null,
       mappedRepo: "sigilix/sigilix",
       availableRepos: [],
       status: "mapped_not_indexed",
-    }, 0)).toContain("does not have an index manifest yet")
+    }, 0)
+    expect(mappedNothingIndexed).toContain("no indexed repos are available")
+    expect(mappedNothingIndexed).not.toContain("does not have an index manifest yet")
 
     expect(renderCodebaseRetrievalStatus({
       repo: null,
       mappedRepo: "sigilix/sigilix",
       availableRepos: ["sigilix/docs"],
       status: "mapped_default_not_indexed",
-    }, 0)).toContain("default repo is not indexed yet")
+    }, 0)).toContain("not indexed yet")
 
     expect(renderCodebaseRetrievalStatus({
       repo: "sigilix/sigilix",
@@ -404,7 +463,7 @@ describe("buildAgentInitialUserMessage", () => {
     question: "Can this see other tenants?",
   }
 
-  it("tells unmapped teams not to call retrieve_codebase", () => {
+  it("SIG-221: unmapped team with no indexed repos falls back to issue context without claiming 'no access'", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: null,
@@ -416,12 +475,16 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("[INDEXED REPOS] (none configured)")
     expect(out).toContain("[DEFAULT REPO] (none configured)")
     expect(out).toContain("[MAPPED REPO] (none configured)")
-    expect(out).toContain("No GitHub repo mapping is configured for this Linear team")
-    expect(out).toContain("do not call retrieve_codebase")
+    expect(out).toContain("No indexed repos are available")
+    expect(out).toContain("Answer from the issue and thread context only")
+    // SIG-221: removed hard gates that previously instructed the LLM
+    // not to call retrieve_codebase or claimed the team needs a mapping.
+    expect(out).not.toContain("do not call retrieve_codebase")
+    expect(out).not.toContain("Linear team needs a GitHub repo mapping")
     expect(out).not.toContain("lowercased repo name")
   })
 
-  it("describes configured repos as owner/repo namespaces", () => {
+  it("SIG-221: single indexed repo names it as the default soft prior", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: "arc-and-anchor/sigilix",
@@ -432,7 +495,11 @@ describe("buildAgentInitialUserMessage", () => {
 
     expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/sigilix'")
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
-    expect(out).toContain("lowercased owner/repo namespace 'arc-and-anchor/sigilix'")
+    // SIG-221: single-repo prompt now uses the unified universe-aware
+    // variant — the default is named as a soft prior but the agent
+    // still gets the indexed-list framing for consistency.
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
+    expect(out).toContain("default for this Linear team is 'arc-and-anchor/sigilix'")
   })
 
   it("describes multiple indexed repos and names the default namespace", async () => {
@@ -457,7 +524,9 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
     expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
-    expect(out).toContain("pick a different repo from the list when the issue is clearly about it")
+    // SIG-221: default is a soft prior — agent picks a different repo when
+    // the question is about one.
+    expect(out).toContain("pick a different repo from the list when the question is about one")
     expect(out).toContain("For entries marked '(non-default branch index)', never pass the internal __branch__ namespace")
     expect(out).toContain("only pass a human branch name if the user explicitly provides one")
     expect(out).not.toContain(`__branch__/${encodedDev}`)
@@ -518,11 +587,14 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix'")
     expect(out).toContain("[DEFAULT REPO] (none configured)")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
-    expect(out).toContain("Pick the indexed choice that matches the issue's subject")
-    expect(out).toContain("If none clearly fits")
+    expect(out).toContain("Pick the indexed choice that best matches the issue's subject")
+    expect(out).toContain("If no choice clearly fits")
+    // SIG-221: when the LLM can't pick, offer the indexed list to the user
+    // (disambiguation flow) rather than silently abstaining.
+    expect(out).toContain("offer the user the indexed list to pick from")
   })
 
-  it("distinguishes a mapped repo that is not indexed yet", () => {
+  it("SIG-221: mapped repo not indexed and no other repos falls back to issue context", () => {
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: null,
@@ -533,7 +605,35 @@ describe("buildAgentInitialUserMessage", () => {
 
     expect(out).toContain("[MAPPED REPO] arc-and-anchor/sigilix")
     expect(out).toContain("[DEFAULT REPO] (not indexed: arc-and-anchor/sigilix)")
-    expect(out).toContain("does not have an index manifest yet")
-    expect(out).toContain("mapped but not indexed yet")
+    expect(out).toContain("indexing may be in progress")
+    expect(out).toContain("Answer from the issue and thread context only")
+    // SIG-221: the hard "Do not call retrieve_codebase" gate is removed.
+    // When the universe is empty there's nothing to call, but we no
+    // longer frame it as an access denial.
+    expect(out).not.toContain("Do not call retrieve_codebase")
+    expect(out).not.toContain("does not have an index manifest yet")
+  })
+
+  it("SIG-221: mapped repo not indexed but other indexed repos are available — agent picks from list", () => {
+    // Generic fixture org names — production resolves these dynamically
+    // from the OPENCLAW_TEAM_GITHUB_REPO_MAP env binding + KV manifest list,
+    // so the test asserts the formatting logic, not any real customer's repos.
+    const out = buildAgentInitialUserMessage({
+      ...base,
+      repo: null,
+      mappedRepo: "acme/api",
+      availableRepos: ["acme/web", "acme/docs"],
+      repoStatus: "mapped_default_not_indexed",
+    })
+
+    expect(out).toContain("[MAPPED REPO] acme/api")
+    expect(out).toContain("[DEFAULT REPO] (not indexed: acme/api)")
+    expect(out).toContain("[INDEXED REPOS] 'acme/web', 'acme/docs'")
+    expect(out).toContain("retrieve_codebase takes a 'repo' argument")
+    expect(out).toContain("'acme/api' but that repo is not indexed yet")
+    expect(out).toContain("pick whichever indexed choice best matches")
+    // SIG-221: no hard gate even when the mapped repo isn't indexed.
+    expect(out).not.toContain("do not call retrieve_codebase")
+    expect(out).not.toContain("Do not call retrieve_codebase")
   })
 })

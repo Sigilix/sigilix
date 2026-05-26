@@ -3,8 +3,10 @@ import {
   badgeAssetUrl,
   getBadgeSvg,
   handleBadgeAssetRoute,
+  lookupGlyph,
   PUBLIC_BADGE_BASE_URL,
 } from "../src/lib/badge-assets"
+import { BADGE_GLYPH_PATHS } from "../src/lib/badge-glyph-paths"
 import worker, { type Env } from "../src/index"
 
 function ctx(): ExecutionContext {
@@ -15,7 +17,7 @@ function ctx(): ExecutionContext {
 }
 
 describe("badge assets (SIG-201)", () => {
-  it("serves a 20x20 filled-square P2 priority chip from a public Worker route (Greptile-direction)", async () => {
+  it("serves a 20x20 filled-square P2 priority chip with a path-baked glyph (SIG-216)", async () => {
     const res = handleBadgeAssetRoute(
       new Request(badgeAssetUrl("p2"))
     )
@@ -26,20 +28,27 @@ describe("badge assets (SIG-201)", () => {
     const body = await res!.text()
     expect(body).toContain('aria-label="P2"')
     expect(body).toContain('viewBox="0 0 20 20"')
-    // Filled square: rect fill = accent hue, dark text on top. No stroke.
+    // Filled square: rect fill = accent hue, dark glyph on top. No stroke.
     expect(body).toContain('fill="#84CC16"')
     expect(body).toContain('rx="1"')
-    expect(body).toContain('fill="#0B0C10"')
+    // Path-baked glyph (Geist Mono Medium @ 9.5px) replaces the live <text>
+    // element. Color is the SIG-216 spec value #0A0A0A.
+    expect(body).toContain('fill="#0A0A0A"')
+    expect(body).toContain('<path d="')
+    expect(body).not.toContain("<text")
+    expect(body).not.toContain('font-family')
+    expect(body).not.toContain('font-size')
+    expect(body).not.toContain('font-weight')
+    expect(body).not.toContain('letter-spacing')
+    expect(body).not.toContain('text-anchor')
     expect(body).not.toContain('fill="none"')
     expect(body).not.toContain('stroke=')
     expect(body).not.toContain('stroke-opacity')
-    expect(body).toContain('text-anchor="middle"')
     expect(body).not.toContain("<image")
-    expect(body).toContain("<text")
     expect(body).toBe(getBadgeSvg("p2"))
   })
 
-  it("serves low-saturation filled category chips for specialist labels (Kimi R2)", async () => {
+  it("serves low-saturation filled category chips for specialist labels (Kimi R2 + SIG-216 path-bake)", async () => {
     const res = handleBadgeAssetRoute(
       new Request(badgeAssetUrl("security"))
     )
@@ -55,9 +64,13 @@ describe("badge assets (SIG-201)", () => {
     expect(body).not.toContain('#F0ABFC')
     expect(body).toContain('fill="#322833"') // BG @ S=12% L=18%, hue 295
     expect(body).toContain('fill="#EAC0F2"') // FG @ S=65% L=85%, hue 295
-    expect(body).toContain('letter-spacing="0.02em"')
-    expect(body).toContain('font-size="9.5"')
-    expect(body).toContain('font-weight="600"')
+    // SIG-216 path-bake: no <text>, no font attrs — just a <path>.
+    expect(body).toContain('<path d="')
+    expect(body).not.toContain("<text")
+    expect(body).not.toContain('font-family')
+    expect(body).not.toContain('font-size')
+    expect(body).not.toContain('font-weight')
+    expect(body).not.toContain('letter-spacing')
     expect(body).toBe(getBadgeSvg("security"))
   })
 
@@ -80,9 +93,61 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-4/p2.svg`)
-    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260525-4/security.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-1/p2.svg`)
+    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-1/security.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
+  })
+
+  // Sigilix bot P1 (PR #176): structural sanity for the path-baked
+  // glyph table. Guards against (a) shipping a regeneration that
+  // dropped a label, (b) corrupted `d` strings, and (c) adding a new
+  // label without re-running `pnpm regenerate-badge-paths`.
+  describe("BADGE_GLYPH_PATHS structural sanity (SIG-216 fix-up)", () => {
+    const EXPECTED_LABELS = [
+      "P0",
+      "P1",
+      "P2",
+      "P3",
+      "TESTING",
+      "SECURITY",
+      "LOGIC",
+      "PERF",
+      "ERROR",
+      "COMPLEXITY",
+      "STYLE",
+      "SYNTAX",
+      "DOCS",
+    ] as const
+
+    it("has an entry for every expected label", () => {
+      for (const label of EXPECTED_LABELS) {
+        expect(BADGE_GLYPH_PATHS[label]).toBeDefined()
+      }
+    })
+
+    it("every entry's `d` is non-empty and starts with a valid SVG Move command", () => {
+      for (const label of EXPECTED_LABELS) {
+        const entry = BADGE_GLYPH_PATHS[label]!
+        expect(entry.d.length).toBeGreaterThan(0)
+        expect(entry.d).toMatch(/^M[0-9. -]+/)
+      }
+    })
+
+    it("every entry's width and height are positive numbers", () => {
+      for (const label of EXPECTED_LABELS) {
+        const entry = BADGE_GLYPH_PATHS[label]!
+        expect(entry.width).toBeGreaterThan(0)
+        expect(entry.height).toBeGreaterThan(0)
+      }
+    })
+
+    it("lookupGlyph('P0') returns the P0 entry", () => {
+      expect(lookupGlyph("P0")).toBe(BADGE_GLYPH_PATHS["P0"])
+    })
+
+    it("lookupGlyph throws on an unknown label so a forgotten regeneration surfaces in tests", () => {
+      expect(() => lookupGlyph("NONEXISTENT_LABEL")).toThrow(/no baked glyph/)
+    })
   })
 
   it("routes badge assets before env validation so broken config cannot break GitHub images", async () => {

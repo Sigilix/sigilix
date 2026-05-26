@@ -44,15 +44,17 @@ const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set([
  *  `timed_out` (which we don't use). The REST primitive in
  *  `github.ts` keeps the wide union for forward compatibility.
  *
- *  SIG-216 (founder sign-off 2026-05-25): the conclusion sent to
- *  GitHub is ALWAYS coerced to `neutral` (see `completeCheckRun`).
- *  Dispatcher call sites still thread their internal signal
- *  (`success`/`failure`/`skipped`) so the title/summary mapping in
- *  `renderOutputForConclusion` can pick the right copy + telemetry
- *  log lines stay legible — but the customer-visible conclusion is
- *  uniform. Sigilix is advisory: P1-P3 findings should never gate
- *  branch protection, and even a P0 surfaces via the inline review
- *  comment, not the Check run. */
+ *  SIG-216 follow-up (founder feedback on PR #176, 2026-05-25): the
+ *  Check run signals EXECUTION HEALTH ("did the bot run?"), not
+ *  findings count. Industry advisory-bot convention (CodeRabbit,
+ *  Greptile) is `success` regardless of findings; review state lives
+ *  in the GitHub native review object (APPROVE / COMMENT /
+ *  REQUEST_CHANGES). Mapping in `completeCheckRun`:
+ *    - `success` → wire `success` (green check, bot ran cleanly)
+ *    - `failure` → wire `neutral` (bot errored, ambiguous; reserve
+ *      wire `failure` for future opt-in P0 gates)
+ *    - `skipped` → wire `neutral` (bot couldn't review — legit
+ *      ambiguous state, e.g. stale head). */
 export type SigilixCheckConclusion = "success" | "failure" | "skipped"
 
 interface InProgressCheckRun {
@@ -199,13 +201,18 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
     owner: handle.owner,
     repo: handle.repo,
   })
-  // SIG-216 (founder sign-off 2026-05-25): conclusion is always
-  // `neutral` regardless of the dispatcher's internal signal. P1-P3
-  // findings are advisory; only a P0 would warrant `failure`, and
-  // even then it's surfaced via the inline review comment, not the
-  // Check run. The dispatcher's `conclusion` arg is preserved for
-  // title/summary rendering + log telemetry only.
-  const wireConclusion = "neutral" as const
+  // SIG-216 follow-up (founder feedback on PR #176, 2026-05-25):
+  // Kimi K2.6 (UI design authority) confirmed industry convention —
+  // the Check run signals EXECUTION HEALTH, not findings count.
+  // CodeRabbit + Greptile both emit `success` regardless of findings;
+  // review state lives in the GitHub native review object
+  // (APPROVE / COMMENT / REQUEST_CHANGES). Reserve `neutral` for
+  // skips/errors (ambiguous "did the bot run?" state). Reserve wire
+  // `failure` for future opt-in P0 gates.
+  const wireConclusion: "success" | "neutral" =
+    conclusion === "success" ? "success"
+    : conclusion === "failure" ? "neutral"  // errored — ambiguous, not failing the check
+    : "neutral"                              // skipped — legit ambiguous
   try {
     await handle.client.updateCheckRun(handle.owner, handle.repo, handle.id, {
       status: "completed",

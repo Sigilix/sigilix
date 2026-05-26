@@ -198,11 +198,12 @@ describe("completeCheckRun", () => {
     expect(mockUpdateCheckRun).not.toHaveBeenCalled()
   })
 
-  // SIG-216: conclusion sent to GitHub is always `neutral` (Greptile
-  // direction — Sigilix is advisory, never gates branch protection).
-  // The dispatcher's internal signal (`success`/`failure`/`skipped`)
-  // is preserved only for title/summary rendering + log telemetry.
-  it("transitions to completed with `neutral` conclusion and customer-facing output copy", async () => {
+  // SIG-216 follow-up (founder feedback on PR #176, 2026-05-25 +
+  // Kimi K2.6 sign-off): success internal signal → wire `success`
+  // (green check). Check run signals EXECUTION HEALTH, not findings
+  // count. Industry convention (CodeRabbit, Greptile); review state
+  // lives in the GitHub native review object.
+  it("transitions to completed with `success` conclusion and customer-facing output copy", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -217,7 +218,7 @@ describe("completeCheckRun", () => {
     expect(checkRunId).toBe(7777)
     const p = payload as { status: string; conclusion: string; output: { title: string; summary: string } }
     expect(p.status).toBe("completed")
-    expect(p.conclusion).toBe("neutral")
+    expect(p.conclusion).toBe("success")
     expect(p.output.title).toBe("Review posted")
   })
 
@@ -256,9 +257,10 @@ describe("completeCheckRun", () => {
     expect(completionPayload.output.annotations).toBeUndefined()
   })
 
-  // SIG-216: wire conclusion is `neutral` regardless of dispatcher
-  // signal. The title still differentiates so customers see "Review
-  // skipped (stale head)" in the Checks tab.
+  // SIG-216 follow-up (PR #176): skipped internal signal → wire
+  // `neutral` (legit ambiguous "bot couldn't review" state). Title
+  // still differentiates so customers see "Review skipped (stale
+  // head)" in the Checks tab.
   it("emits the stale-head title with `neutral` conclusion for stale-head dispatcher signal", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
@@ -273,10 +275,10 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toContain("stale head")
   })
 
-  // SIG-216: error-path dispatcher signal still renders "Review
-  // failed" title for diagnostic visibility, but the wire
-  // conclusion is `neutral` — P0 surfaces via the inline review
-  // comment, not the Check run.
+  // SIG-216 follow-up (PR #176): failure internal signal → wire
+  // `neutral` (bot errored = ambiguous, not a hard gate). Title
+  // renders "Review failed" for diagnostic visibility; reserve wire
+  // `failure` for future opt-in P0 gates.
   it("emits the `failed` title with `neutral` conclusion on the error path", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
@@ -444,8 +446,8 @@ describe("completeCheckRun", () => {
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { conclusion: string; output: { title: string; summary: string } }
-    // SIG-216: wire conclusion is `neutral` regardless; the title +
-    // summary carry the diagnostic surface info.
+    // SIG-216 follow-up (PR #176): failure internal signal → wire
+    // `neutral`; title + summary carry the diagnostic surface info.
     expect(p.conclusion).toBe("neutral")
     expect(p.output.title).toBe("Couldn't post review — see PR comment")
     expect(p.output.summary).toContain("GitHub silently rejected")
@@ -481,8 +483,8 @@ describe("completeCheckRun", () => {
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { conclusion: string; output: { title: string; summary: string } }
-    // SIG-216: wire conclusion is `neutral` regardless; the title +
-    // summary carry the diagnostic surface info.
+    // SIG-216 follow-up (PR #176): failure internal signal → wire
+    // `neutral`; title + summary carry the diagnostic surface info.
     expect(p.conclusion).toBe("neutral")
     expect(p.output.title).toBe("Couldn't review — see PR comment")
     expect(p.output.summary).toContain("couldn't generate a review")

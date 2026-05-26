@@ -2288,10 +2288,13 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
     expect(flips).toHaveLength(0)
   })
 
-  // SIG-216 fix-up: multi-line findings need BOTH endpoints on RIGHT
-  // hunks for the flip to be safe — a partial overlap would 422 on
-  // submit (GitHub validates both anchors on multi-line review comments).
-  it("leaves file scope alone for multi-line findings when startLine is not in a RIGHT-side hunk", () => {
+  // SIG-216 follow-up: multi-line findings now flip when ANY line in
+  // the inclusive [startLine, line] range is in a RIGHT-side hunk.
+  // GitHub accepts multi-line inline comments via start_line + line
+  // even when only the middle of the range is in the diff. The prior
+  // strict-bounds check over-suppressed (PR #175 dogfood: a 15-line
+  // finding range with the diff in the middle got routed to body).
+  it("flips file → line for multi-line findings when only `line` is in a RIGHT-side hunk (relaxed any-line-in-range)", () => {
     const partialReviewable: ReviewableMap = new Map([
       ["src/lib/foo.ts", [
         // `line: 42` is RIGHT-anchorable, but `startLine: 38` is not.
@@ -2310,18 +2313,12 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
       reviewable: partialReviewable,
       specialistVerdicts,
     })
-    // `line: 42` is line-valid (RIGHT-anchorable), so the finding
-    // lands in `verdict.findings`. The scope must NOT have flipped to
-    // "line" because `startLine: 38` isn't a valid RIGHT anchor —
-    // submitting it as a multi-line inline review comment would 422.
-    const matching =
-      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
-      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
-    expect(matching?.scope).toBe("file")
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.verdict.findings[0]?.scope).toBe("line")
     const flips = logSpy.mock.calls
       .map((c) => (typeof c[0] === "string" ? c[0] : ""))
       .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
-    expect(flips).toHaveLength(0)
+    expect(flips).toHaveLength(1)
   })
 
   it("flips file → line for multi-line findings when BOTH startLine AND line are in RIGHT-side hunks", () => {
@@ -2344,6 +2341,292 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
     })
     expect(out.verdict.findings).toHaveLength(1)
     expect(out.verdict.findings[0]?.scope).toBe("line")
+  })
+
+  // SIG-216 follow-up regression: PR #175 dogfood case — a 15-line
+  // finding (`src/lib/index-delete.ts:429-444`) where the PR added
+  // lines 432-438 in the middle of the range. Neither endpoint is in
+  // the diff, but the middle is. Must flip inline.
+  it("flips file → line for multi-line findings when only middle lines are in RIGHT-side hunks (PR #175 case)", () => {
+    const middleOnlyReviewable: ReviewableMap = new Map([
+      ["src/lib/index-delete.ts", [
+        { line: 432, side: "RIGHT" },
+        { line: 433, side: "RIGHT" },
+        { line: 434, side: "RIGHT" },
+        { line: 435, side: "RIGHT" },
+        { line: 436, side: "RIGHT" },
+        { line: 437, side: "RIGHT" },
+        { line: 438, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        path: "src/lib/index-delete.ts",
+        line: 444,
+        startLine: 429,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: middleOnlyReviewable,
+      specialistVerdicts,
+    })
+    // Option A (SIG-216 follow-up): the normalizer flipped scope to
+    // "line" because the middle of the [429, 444] range overlaps the
+    // diff, AND the line-validity check now uses `findRangeAwareAnchor`
+    // to rewrite f.line/f.startLine to the actually-anchorable subrange
+    // ([432, 438]) so the inline POST won't 422. The finding MUST land
+    // in `verdict.findings` with scope:"line" and MUST NOT appear in
+    // `unanchoredFindings`.
+    expect(
+      out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts"),
+    ).toBeUndefined()
+    const matching = out.verdict.findings.find((f) => f.path === "src/lib/index-delete.ts")
+    expect(matching).toBeDefined()
+    expect(matching?.scope).toBe("line")
+    // Endpoints rewritten to the in-diff subrange: last RIGHT anchor
+    // (438) is the new `line` (bottom of underline); first RIGHT anchor
+    // (432) is the new `start_line` (top).
+    expect(matching?.line).toBe(438)
+    expect(matching?.startLine).toBe(432)
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(1)
+  })
+
+  // PR #176 CR follow-up: the range-aware rewrite must run BEFORE
+  // `deriveSide` so that the rewritten endpoints (not the stale
+  // originals) drive subsequent validation. Same PR #175 dogfood
+  // shape — neither endpoint is anchorable, only middle lines are —
+  // but this case asserts the rewrite happens up-front (the finding
+  // lands in `verdict.findings` with rewritten endpoints AND
+  // `remappedInvalidLineToInline` increments) rather than slipping
+  // through `deriveSide` against the stale `startLine: 429`.
+  it("rewrites multi-line endpoints BEFORE deriveSide so unanchorable startLine can't slip through (PR #176 CR follow-up)", () => {
+    const middleOnlyReviewable: ReviewableMap = new Map([
+      ["src/lib/index-delete.ts", [
+        { line: 432, side: "RIGHT" },
+        { line: 433, side: "RIGHT" },
+        { line: 434, side: "RIGHT" },
+        { line: 435, side: "RIGHT" },
+        { line: 436, side: "RIGHT" },
+        { line: 437, side: "RIGHT" },
+        { line: 438, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        path: "src/lib/index-delete.ts",
+        line: 444,
+        startLine: 429,
+        score: 4,
+        scope: "line",
+      }),
+      reviewable: middleOnlyReviewable,
+      specialistVerdicts,
+    })
+    expect(
+      out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts"),
+    ).toBeUndefined()
+    const matching = out.verdict.findings.find((f) => f.path === "src/lib/index-delete.ts")
+    expect(matching).toBeDefined()
+    // Rewritten to the in-diff subrange — NOT the stale originals
+    // (line: 444, startLine: 429), which would 422 on `start_line`.
+    expect(matching?.line).toBe(438)
+    expect(matching?.startLine).toBe(432)
+    expect(matching?.line).not.toBe(444)
+    expect(matching?.startLine).not.toBe(429)
+    // The rewrite happened, so the counter increments exactly once.
+    expect(out.remappedInvalidLineToInline).toBe(1)
+  })
+
+  it("flips file → line for multi-line findings when only `startLine` is in a RIGHT-side hunk", () => {
+    const startOnlyReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        // `startLine: 38` is RIGHT-anchorable, but `line: 42` is not.
+        { line: 38, side: "RIGHT" },
+        { line: 50, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: startOnlyReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("line")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(1)
+  })
+
+  it("leaves file scope alone for multi-line findings when NEITHER endpoint NOR any middle line is in a RIGHT-side hunk", () => {
+    const noOverlapReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        // Range [38, 42] has nothing overlapping the reviewable lines.
+        { line: 100, side: "RIGHT" },
+        { line: 101, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: noOverlapReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("file")
+    const flips = logSpy.mock.calls
+      .map((c) => (typeof c[0] === "string" ? c[0] : ""))
+      .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
+    expect(flips).toHaveLength(0)
+  })
+
+  // CR MAJOR (PR #176): the predicate previously walked the numeric
+  // [startLine, line] range, which is O(N*M) and unbounded — a finding
+  // with `startLine: 1, line: 999999` would loop a million times per
+  // anchor check. Pivoted to a single-pass scan over the (small)
+  // anchorLines array. These tests pin the post-fix behaviour AND act
+  // as a regression guard against any future revert that would
+  // reintroduce the quadratic walk.
+  it("flips file → line for an extreme-range finding (startLine: 1, line: 999999) when one anchor lands inside the range", () => {
+    const sparseReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        // One RIGHT anchor at line 500 inside the giant [1, 999999] range.
+        { line: 500, side: "RIGHT" },
+      ]],
+    ])
+    const start = performance.now()
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 999999,
+        startLine: 1,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: sparseReviewable,
+      specialistVerdicts,
+    })
+    const elapsedMs = performance.now() - start
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("line")
+    // Generous bound — the post-fix single-pass scan finishes in well
+    // under a millisecond. The prior numeric-range walk would have
+    // iterated ~1M times per finding and taken hundreds of ms.
+    expect(elapsedMs).toBeLessThan(500)
+  })
+
+  it("returns false when the path has no anchor entries (empty anchorLines map miss)", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        path: "src/lib/unreviewed.ts",
+        line: 42,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable, // map keyed by "src/lib/foo.ts" — no entry for unreviewed.ts
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/unreviewed.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/unreviewed.ts")
+    expect(matching?.scope).toBe("file")
+  })
+
+  it("returns false when every anchor is LEFT-side (RIGHT-side filter holds)", () => {
+    const leftOnlyReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 40, side: "LEFT" },
+        { line: 41, side: "LEFT" },
+        { line: 42, side: "LEFT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 40,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: leftOnlyReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("file")
+  })
+
+  it("returns false when every RIGHT anchor sits outside the range", () => {
+    const outsideRangeReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 10, side: "RIGHT" },
+        { line: 100, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: outsideRangeReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("file")
+  })
+
+  it("returns true when a single RIGHT anchor sits inside the range", () => {
+    const insideRangeReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 5, side: "LEFT" },
+        { line: 40, side: "RIGHT" }, // inside [38, 42]
+        { line: 100, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: insideRangeReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("line")
   })
 })
 

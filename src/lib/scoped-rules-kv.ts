@@ -91,9 +91,11 @@ export async function readScopedRulesManifest(
  * Convenience: read + compile to matcher-ready form. Returns an empty
  * compiled manifest when the record is missing, invalid, or
  * unreadable (KV throw) so the orchestrator can treat the "no scoped
- * rules" path uniformly. KV-error case emits telemetry so dashboards
- * can surface persistent KV trouble even though the review didn't
- * fail.
+ * rules" path uniformly. KV-error AND invalid-record cases emit
+ * telemetry so dashboards can surface persistent KV trouble (kv-error)
+ * OR a poisoned/malformed record (invalid) even though the review
+ * didn't fail. Without the invalid-branch warning, a corrupted record
+ * silently degrades to "no scoped rules" with no audit trail.
  */
 export async function loadCompiledScopedRulesManifest(
   env: Env,
@@ -109,6 +111,12 @@ export async function loadCompiledScopedRulesManifest(
       event: "scoped-rules-manifest-read-failed",
       owner, repo,
       err: result.err,
+    }))
+  } else if (result.kind === "invalid") {
+    console.warn(JSON.stringify({
+      event: "scoped-rules-manifest-invalid",
+      owner, repo,
+      reason: result.reason,
     }))
   }
   return { perDirectoryRules: [], globRules: [] }

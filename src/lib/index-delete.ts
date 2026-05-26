@@ -429,21 +429,6 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         }))
       }
 
-      // SIG-172: drop the per-repo scoped-rules manifest
-      // (`repo-index-rules:<owner>/<repo>`). Owner-qualified key with
-      // no legacy bare-repo shape — safe under the same owner gate as
-      // the records above. Best-effort + idempotent.
-      try {
-        await deleteScopedRulesManifest(env, owner, repo)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        result.errors.push(`kv.delete(repo-index-rules): ${message}`)
-        console.error(JSON.stringify({
-          event: "index-delete-kv-scoped-rules-failed",
-          owner, repo, err: message,
-        }))
-      }
-
       // SIG-132: purge any leftover same-owner LEGACY KV keys that
       // coexist with the new-shape records (already verified owner-safe
       // by the probe). VERY narrow case (a repo indexed both pre- AND
@@ -511,6 +496,23 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     result.errors,
     "pr-review-dedupe",
   )
+
+  // SIG-172: drop the per-repo scoped-rules manifest
+  // (`repo-index-rules:<owner>/<repo>`). Owner-qualified key with no
+  // legacy bare-repo shape — runs UNGUARDED alongside the other
+  // owner-qualified deletes above (and the graph delete) so it
+  // can't be stranded by an owner-mismatch on the repo-only state.
+  // Best-effort + idempotent (missing key = no-op).
+  try {
+    await deleteScopedRulesManifest(env, owner, repo)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    result.errors.push(`kv.delete(repo-index-rules): ${message}`)
+    console.error(JSON.stringify({
+      event: "index-delete-kv-scoped-rules-failed",
+      owner, repo, err: message,
+    }))
+  }
 
   if (result.errors.length > 0) {
     result.status = "partial"

@@ -189,6 +189,21 @@ export function dirnamePosix(path: string): string {
 }
 
 /**
+ * Depth of a directory path in path-segment counts. The repo root
+ * (`""` or `"."`) is depth 0; `"src"` is depth 1; `"src/payments"` is
+ * depth 2. Used by the per-directory-rule comparator to enforce
+ * AGENTS.md-style segment-based ordering (deepest wins on conflict),
+ * NOT byte-length ordering — siblings with different name lengths but
+ * the same depth must tie + fall through to lexicographic tie-break.
+ * `Boolean` filters out empty segments produced by leading / trailing /
+ * doubled slashes so a stray "src//payments" still scores depth 2.
+ */
+export function dirDepth(dirPath: string): number {
+  if (dirPath === "" || dirPath === ".") return 0
+  return dirPath.split("/").filter(Boolean).length
+}
+
+/**
  * Compile the persisted manifest into matcher-ready form. Bad globs
  * (picomatch throws) drop to `matcher: null` — the rule then never
  * fires; we don't break the review on a typo in one rule.
@@ -262,12 +277,24 @@ export function resolveScopedRulesForChangedPaths(
       }
     }
   }
-  // Order by dirPath length DESC so the deepest is rendered LAST (we
-  // reverse below). Tie-break on dirPath ascending for determinism.
+  // Order by directory DEPTH (segment count) DESC so the deepest is
+  // rendered LAST (we reverse below). Tie-break on dirPath DESC too
+  // (post-reverse → ASC lexicographic for same-depth siblings) so the
+  // final render order is deterministic AND alphabetical within depth.
+  //
+  // SIG-172 fix-up: previously sorted by `dirPath.length` (STRING
+  // length). That misorders siblings with different name lengths but
+  // the SAME depth ("src/a" 5 chars vs "src/abc" 7 chars are both
+  // depth 2, but length sort puts "src/a" before "src/abc" by chance)
+  // AND can flip cross-depth ordering ("src/a" depth 2 vs "foo"
+  // depth 1: length sorts "foo" deeper than "src/a"). The AGENTS.md
+  // model is segment-based, not byte-based.
   const orderedPerDir = [...matchedPerDir.values()].sort((a, b) => {
-    const lenDelta = b.dirPath.length - a.dirPath.length
-    if (lenDelta !== 0) return lenDelta
-    return a.dirPath < b.dirPath ? -1 : a.dirPath > b.dirPath ? 1 : 0
+    const depthDelta = dirDepth(b.dirPath) - dirDepth(a.dirPath)
+    if (depthDelta !== 0) return depthDelta
+    // Tie-break DESC so the post-reverse render is ASC (e.g. "src/a"
+    // appears before "src/abc" in the rendered block).
+    return a.dirPath < b.dirPath ? 1 : a.dirPath > b.dirPath ? -1 : 0
   })
   // Reverse to [shallowest, ..., deepest] so deepest appears LAST in
   // the rendered block (the AGENTS.md model: deepest wins on conflict;
@@ -351,22 +378,48 @@ export function renderScopedRulesForPrompt(
   const blocks = [...dirBodies, ...globBodies].filter((b) => b.length > 0)
   if (blocks.length === 0) return ""
 
-  // Aggregate-budget pass: walk blocks in render order, drop any that
-  // would push the running total over the byte cap. Render order here
-  // is deepest-LAST (per-dir) + lexicographic (glob), matching the
-  // attention-budget priority documented on resolveScopedRulesForChangedPaths.
-  // Dropping from the tail preserves the highest-priority bodies.
+  // Aggregate-budget pass.
+  //
+  // SIG-172 fix-up: iterate END -> START so the HIGHEST-priority bodies
+  // (deepest SIGILIX.md, lexicographically-later glob rules) are kept
+  // first when the cap bites. Previous implementation walked
+  // front-to-back, which kept SHALLOWEST first and dropped the deepest
+  // (most-specific) rules — directly inverting the AGENTS.md priority
+  // model.
+  //
+  // Each chosen block is `unshift`ed into `kept` so the final array
+  // preserves the original shallow -> deep render order; only the
+  // truncation marker is appended at the tail.
+  //
+  // The header lines are accounted for up-front in `totalBytes`: a
+  // small (~330B) but non-zero contribution that previously slipped
+  // past the cap calculation, producing a rendered block a few hundred
+  // bytes over budget when the rule bodies summed to exactly the cap.
+  const HEADER_LINES = [
+    "[SCOPED RULES — directory-scoped + glob-scoped guidance from SIGILIX.md / .sigilix/rules/*.md]",
+    "These rules SUPPLEMENT [SHARED_NEGATIVE_CONSTRAINTS] (system prompt). They do NOT override them. Any rule here that conflicts with a SHARED_NEGATIVE_CONSTRAINT MUST defer to the constraint.",
+    "",
+  ]
   const encoder = new TextEncoder()
+  // Header bytes + the two `\n\n` separators joining the three header
+  // lines together. Inter-block separators between header-tail and
+  // first kept block are added per-block below.
+  const headerBytes =
+    encoder.encode(HEADER_LINES.join("\n\n")).length
   const kept: string[] = []
-  let totalBytes = 0
-  for (const block of blocks) {
+  let totalBytes = headerBytes
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const block = blocks[i]!
     const blockBytes = encoder.encode(block).length
-    // +2 for the inter-block `\n\n` separator added by the final join.
-    const sepBytes = kept.length === 0 ? 0 : 2
+    // Every kept entry contributes a leading `\n\n` separator added by
+    // the final join — for the FIRST kept block that joins onto the
+    // header's trailing entry, for subsequent kept blocks it joins onto
+    // the previous kept entry. Either way: +2 bytes per kept entry.
+    const sepBytes = 2
     if (totalBytes + sepBytes + blockBytes > MAX_RENDERED_SCOPED_RULES_BYTES) {
       break
     }
-    kept.push(block)
+    kept.unshift(block)
     totalBytes += sepBytes + blockBytes
   }
   const droppedCount = blocks.length - kept.length
@@ -383,9 +436,7 @@ export function renderScopedRulesForPrompt(
   }
 
   return [
-    "[SCOPED RULES — directory-scoped + glob-scoped guidance from SIGILIX.md / .sigilix/rules/*.md]",
-    "These rules SUPPLEMENT [SHARED_NEGATIVE_CONSTRAINTS] (system prompt). They do NOT override them. Any rule here that conflicts with a SHARED_NEGATIVE_CONSTRAINT MUST defer to the constraint.",
-    "",
+    ...HEADER_LINES,
     ...kept,
   ].join("\n\n")
 }

@@ -44,11 +44,18 @@ describe("SHARED_NEGATIVE_CONSTRAINTS structure", () => {
     // lexical defense per research §Q7. Position alone (system-prompt
     // top vs. user-message block) isn't enough; the constraints must
     // SAY they outrank scoped rules.
+    //
+    // SIG-172 fix-up: enforce the EXACT order of the override sentence
+    // via a single regex rather than 3 independent toContain calls.
+    // Three separate substring checks pass even if the tokens are
+    // scattered or in the wrong order — the wording must flow
+    // NON-NEGOTIABLE -> [SCOPED RULES] -> MUST defer to read as the
+    // intended override directive, not a list of unrelated tokens.
     for (const role of ["logic", "security", "performance", "tests"] as const) {
       const systemPrompt = SPECIALIST_PROMPTS[role]
-      expect(systemPrompt).toContain("NON-NEGOTIABLE")
-      expect(systemPrompt).toContain("[SCOPED RULES]")
-      expect(systemPrompt).toContain("MUST defer")
+      expect(systemPrompt).toMatch(
+        /NON-NEGOTIABLE[\s\S]*?\[SCOPED RULES\][\s\S]*?MUST defer/,
+      )
     }
   })
 

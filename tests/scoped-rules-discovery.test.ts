@@ -284,6 +284,36 @@ describe("resolveScopedRulesForChangedPaths — closest-ancestor (SIGILIX.md)", 
     expect(idxDeep).toBeGreaterThan(idxRoot)
   })
 
+  // SIG-172 fix-up: the per-directory comparator must sort by directory
+  // DEPTH (segment count), not string length. Siblings with different
+  // name lengths but the SAME depth must tie + fall through to
+  // lexicographic order — a length-sort would shuffle them by name byte
+  // count, producing nondeterministic-feeling ordering for repos like
+  // `src/a` + `src/abc`.
+  it("sorts per-directory rules by depth (segments), not string length, with lexicographic tie-break", () => {
+    const manifest = compileScopedRulesManifest(buildScopedRulesManifest([
+      // Root + two same-depth siblings of different name lengths.
+      { path: "SIGILIX.md", content: "ROOT" },
+      { path: "src/a/SIGILIX.md", content: "SRC-A" },
+      { path: "src/abc/SIGILIX.md", content: "SRC-ABC" },
+    ]))
+    // Two changed files, one under each sibling, so both fire.
+    const selection = resolveScopedRulesForChangedPaths(manifest, [
+      "src/a/file.ts",
+      "src/abc/file.ts",
+    ])
+    // Expected render order: shallowest first (root depth 0), then the
+    // two same-depth siblings in lexicographic order. A length-sort
+    // would put `src/a` before `src/abc` for an unrelated reason
+    // (shorter string) and could flip cross-depth pairs (e.g. a depth-1
+    // "foo" vs a depth-2 "src/a").
+    expect(selection.perDirectoryRules.map((r) => r.dirPath)).toEqual([
+      "",
+      "src/a",
+      "src/abc",
+    ])
+  })
+
   it("dedupes ancestor SIGILIX.md when multiple changed files share it", () => {
     // Two changed files both under src/payments share the same
     // src/payments/SIGILIX.md. The deduped manifest must contain
@@ -481,41 +511,55 @@ describe("renderScopedRulesForPrompt", () => {
   // SIG-172 M1 (fix-up) — aggregate byte cap defends the prompt budget
   // when a handful of in-range (<= MAX_RULE_FILE_BYTES) rule files
   // combine to exceed the per-block budget.
-  it("caps the rendered block at MAX_RENDERED_SCOPED_RULES_BYTES and emits truncation telemetry", async () => {
+  //
+  // SIG-172 fix-up: the cap now drops the SHALLOWEST entries
+  // (lowest priority under AGENTS.md model) and KEEPS the deepest, AND
+  // the preamble byte count is included in the budget so the rendered
+  // block stays under the cap including header bytes.
+  it("caps the rendered block at MAX_RENDERED_SCOPED_RULES_BYTES (including preamble) and emits truncation telemetry; deepest rules are KEPT, shallowest are dropped", async () => {
     const { MAX_RENDERED_SCOPED_RULES_BYTES } = await import("../src/lib/scoped-rules")
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
     // Build 6 per-directory rules of 4KB each = 24KB raw, well past
     // the 16KB cap. Use distinct dir paths so dedup doesn't collapse
-    // them. Order is shallowest-first per the selection contract; the
-    // cap drops from the tail (lower-priority shallower rules).
+    // them. Per the selection contract order is shallowest -> deepest,
+    // so the LAST entries are the highest-priority rules; the cap must
+    // drop from the FRONT (shallowest first) to preserve AGENTS.md
+    // deepest-wins priority.
     const big = "x".repeat(4 * 1024)
     const perDirectoryRules = [
-      { dirPath: "a/b/c/d", body: big }, // deepest — kept
-      { dirPath: "a/b/c", body: big },
-      { dirPath: "a/b", body: big },
-      { dirPath: "a", body: big },
-      { dirPath: "z/y/x", body: big },
-      { dirPath: "", body: big },        // shallowest — dropped first
+      { dirPath: "", body: `ROOT-${big}` },          // shallowest — dropped first
+      { dirPath: "z/y/x", body: `ZYX-${big}` },
+      { dirPath: "a", body: `A-${big}` },
+      { dirPath: "a/b", body: `AB-${big}` },
+      { dirPath: "a/b/c", body: `ABC-${big}` },
+      { dirPath: "a/b/c/d", body: `ABCD-${big}` },   // deepest — kept
     ]
     const rendered = renderScopedRulesForPrompt({
       perDirectoryRules,
       globRules: [],
     })
-    // Bytes including the header lines + truncation marker — assert the
-    // rule-body payload stays under the cap (slack of a few hundred
-    // bytes for the static header is irrelevant here because we cap on
-    // the BLOCKS budget, not header+blocks; header lives outside the
-    // counted total per the implementation).
     const renderedBytes = new TextEncoder().encode(rendered).length
-    // Header is small (~330 bytes); 16KB cap + small header + marker
-    // line should still leave us well under 17KB total.
-    expect(renderedBytes).toBeLessThan(MAX_RENDERED_SCOPED_RULES_BYTES + 2 * 1024)
+    // Preamble is now counted toward the cap, so the rendered block
+    // (preamble + kept bodies + separators) must stay UNDER the cap
+    // ignoring the truncation marker line. A few-hundred-byte marker
+    // is appended after the cap-bound loop, so allow a small slack.
+    expect(renderedBytes).toBeLessThan(MAX_RENDERED_SCOPED_RULES_BYTES + 512)
     expect(rendered).toContain("scoped rules truncated at")
+    // Deepest entries are KEPT.
+    expect(rendered).toContain("ABCD-")
+    expect(rendered).toContain("ABC-")
+    // Shallowest entries are DROPPED.
+    expect(rendered).not.toContain("ROOT-")
     const events = warnSpy.mock.calls.map((c) => JSON.parse(c[0] as string))
     const truncated = events.find((e) => e.event === "scoped-rules-block-truncated")
     expect(truncated).toBeDefined()
     expect(truncated.droppedCount).toBeGreaterThan(0)
     expect(truncated.capBytes).toBe(MAX_RENDERED_SCOPED_RULES_BYTES)
+    // renderedBytes telemetry reflects the actual byte count of the
+    // rendered output minus the truncation marker (which is appended
+    // after the cap math).
+    expect(typeof truncated.renderedBytes).toBe("number")
+    expect(truncated.renderedBytes).toBeLessThanOrEqual(MAX_RENDERED_SCOPED_RULES_BYTES)
     warnSpy.mockRestore()
   })
 

@@ -7218,43 +7218,55 @@ export function validateForSubmission(args: {
       continue
     }
 
-    // Line validity + side derivation
-    const side = deriveSide(reviewable, f.path, f.line)
+    // Line validity + side derivation.
+    //
+    // SIG-216 follow-up (Option A): a multi-line finding whose ENDPOINT
+    // isn't in any RIGHT-side hunk may still be inline-anchorable if
+    // the MIDDLE of the [startLine, line] range overlaps the diff. The
+    // scope-normalizer already flipped scope:"line" for this case; the
+    // half-measure was leaving f.line pointing at the original
+    // unreviewable line so the downstream POST to GitHub would 422.
+    // Rewrite both endpoints to the actually-anchorable subrange (last
+    // RIGHT anchor becomes new `line`, first RIGHT anchor becomes new
+    // `start_line`) so isCommentAnchorable passes and the inline POST
+    // succeeds. PR #175 dogfood class.
+    //
+    // PR #176 CR follow-up: run the range-aware rewrite FIRST so that
+    // `deriveSide` (and any subsequent validation) sees the rewritten
+    // endpoints rather than the stale originals. A multi-line finding
+    // whose original `startLine` is unanchorable would otherwise slip
+    // through to a `start_line` 422 on the GitHub inline POST.
+    const rangeAnchor = findRangeAwareAnchor(reviewable, f)
+    let workingFinding: PrReviewFinding = f
+    let rewroteRange = false
+    if (rangeAnchor !== null) {
+      // Drop the original `startLine` and re-apply only when the helper
+      // returned a distinct top-of-underline anchor; otherwise the
+      // stale original (outside the actually-anchorable subrange)
+      // would fail `isCommentAnchorable` and the inline POST would
+      // 422 on `start_line`.
+      const { startLine: _originalStartLine, ...rest } = f
+      void _originalStartLine
+      workingFinding =
+        rangeAnchor.startLine !== undefined
+          ? { ...rest, line: rangeAnchor.line, startLine: rangeAnchor.startLine }
+          : { ...rest, line: rangeAnchor.line }
+      // Only count an actual rewrite (anchor differs from the original
+      // endpoints) so the counter isn't inflated for findings whose
+      // original anchor was already valid and matched by the helper.
+      rewroteRange =
+        workingFinding.line !== f.line ||
+        workingFinding.startLine !== f.startLine
+    }
+
+    const side = deriveSide(reviewable, workingFinding.path, workingFinding.line)
     if (!side) {
-      // SIG-216 follow-up (Option A): a multi-line finding whose ENDPOINT
-      // isn't in any RIGHT-side hunk may still be inline-anchorable if
-      // the MIDDLE of the [startLine, line] range overlaps the diff. The
-      // scope-normalizer already flipped scope:"line" for this case; the
-      // half-measure was leaving f.line pointing at the original
-      // unreviewable line so the downstream POST to GitHub would 422.
-      // Rewrite both endpoints to the actually-anchorable subrange (last
-      // RIGHT anchor becomes new `line`, first RIGHT anchor becomes new
-      // `start_line`) so isCommentAnchorable passes and the inline POST
-      // succeeds. PR #175 dogfood class.
-      const rangeAnchor = findRangeAwareAnchor(reviewable, f)
-      if (rangeAnchor !== null) {
-        // Drop the original `startLine` and re-apply only when the helper
-        // returned a distinct top-of-underline anchor; otherwise the
-        // stale original (outside the actually-anchorable subrange)
-        // would fail `isCommentAnchorable` and the inline POST would
-        // 422 on `start_line`.
-        const { startLine: _originalStartLine, ...rest } = f
-        void _originalStartLine
-        const rewritten: PrReviewFinding =
-          rangeAnchor.startLine !== undefined
-            ? { ...rest, line: rangeAnchor.line, startLine: rangeAnchor.startLine }
-            : { ...rest, line: rangeAnchor.line }
-        cleanFindings.push(rewritten)
-        if (provenance) cleanFindingProvenance.push(provenance)
-        remappedInvalidLineToInline++
-        continue
-      }
       const repairedLine =
-        f.startLine == null
-          ? findRepairableInlineAnchor({ finding: f, reviewable, addedLineTextByLine })
+        workingFinding.startLine == null
+          ? findRepairableInlineAnchor({ finding: workingFinding, reviewable, addedLineTextByLine })
           : null
       if (repairedLine !== null) {
-        cleanFindings.push({ ...f, line: repairedLine })
+        cleanFindings.push({ ...workingFinding, line: repairedLine })
         if (provenance) cleanFindingProvenance.push(provenance)
         remappedInvalidLineToInline++
         continue
@@ -7263,10 +7275,11 @@ export function validateForSubmission(args: {
       // Preserve for submit-fallback. Inline anchoring would fail here,
       // but the finding's *content* is still actionable when posted as
       // free-form markdown in the body of an anchorless review.
-      unanchoredFindings.push(f)
+      unanchoredFindings.push(workingFinding)
       continue
     }
-    cleanFindings.push(f)
+    cleanFindings.push(workingFinding)
+    if (rewroteRange) remappedInvalidLineToInline++
     // ARC-189: keep the per-clean-finding provenance aligned by index
     // for the ensemble caller's marker-emission step. `provenance` is
     // narrowed by the hallucination guard above (sourceIds.length >= 1

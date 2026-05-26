@@ -2395,6 +2395,53 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
     expect(flips).toHaveLength(1)
   })
 
+  // PR #176 CR follow-up: the range-aware rewrite must run BEFORE
+  // `deriveSide` so that the rewritten endpoints (not the stale
+  // originals) drive subsequent validation. Same PR #175 dogfood
+  // shape — neither endpoint is anchorable, only middle lines are —
+  // but this case asserts the rewrite happens up-front (the finding
+  // lands in `verdict.findings` with rewritten endpoints AND
+  // `remappedInvalidLineToInline` increments) rather than slipping
+  // through `deriveSide` against the stale `startLine: 429`.
+  it("rewrites multi-line endpoints BEFORE deriveSide so unanchorable startLine can't slip through (PR #176 CR follow-up)", () => {
+    const middleOnlyReviewable: ReviewableMap = new Map([
+      ["src/lib/index-delete.ts", [
+        { line: 432, side: "RIGHT" },
+        { line: 433, side: "RIGHT" },
+        { line: 434, side: "RIGHT" },
+        { line: 435, side: "RIGHT" },
+        { line: 436, side: "RIGHT" },
+        { line: 437, side: "RIGHT" },
+        { line: 438, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        path: "src/lib/index-delete.ts",
+        line: 444,
+        startLine: 429,
+        score: 4,
+        scope: "line",
+      }),
+      reviewable: middleOnlyReviewable,
+      specialistVerdicts,
+    })
+    expect(
+      out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts"),
+    ).toBeUndefined()
+    const matching = out.verdict.findings.find((f) => f.path === "src/lib/index-delete.ts")
+    expect(matching).toBeDefined()
+    // Rewritten to the in-diff subrange — NOT the stale originals
+    // (line: 444, startLine: 429), which would 422 on `start_line`.
+    expect(matching?.line).toBe(438)
+    expect(matching?.startLine).toBe(432)
+    expect(matching?.line).not.toBe(444)
+    expect(matching?.startLine).not.toBe(429)
+    // The rewrite happened, so the counter increments exactly once.
+    expect(out.remappedInvalidLineToInline).toBe(1)
+  })
+
   it("flips file → line for multi-line findings when only `startLine` is in a RIGHT-side hunk", () => {
     const startOnlyReviewable: ReviewableMap = new Map([
       ["src/lib/foo.ts", [

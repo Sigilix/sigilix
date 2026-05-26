@@ -162,6 +162,15 @@ export interface SigilixCommentMarker {
   sev: ReviewMemorySeverityLabel
   /** sha12 hex (12 chars) of the repo-relative path. */
   pathSha12: string
+  /**
+   * SIG-170: optional location-class tag distinguishing inline review
+   * comments from body-fallback comments. Absent on pre-SIG-170 markers
+   * (back-compat): callers treat absence as `"inline"`. Present-but-
+   * unknown values are accepted by `extractSigilixMarker` and surfaced
+   * verbatim for forward-compat — the dismissal pipeline only consults
+   * `fid`/`cat` and never branches on `loc`.
+   */
+  loc?: "inline" | "unanchored"
 }
 
 /**

@@ -32,6 +32,7 @@
     "acorn-walk": "8.3.4",
     "fflate": "0.8.2",
     "jsonrepair": "^3.14.0",
+    "picomatch": "^4.0.4",
     "semver": "7.6.3"
   }
 }

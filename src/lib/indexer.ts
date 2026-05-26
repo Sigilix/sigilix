@@ -74,6 +74,8 @@ import {
 } from "./chunk-core"
 import { chunkFileAst, jsTsExtOf } from "./ast-chunker"
 import { resolveIndexTarget, isBranchStateRepo } from "./index-branch"
+import { walkScopedRuleFiles } from "./scoped-rules"
+import { writeScopedRulesManifest } from "./scoped-rules-kv"
 
 // SIG-131: re-export the chunking primitives so existing consumers that
 // import them from "./indexer" (branch-retrieval.ts, tests/indexer-pure)
@@ -410,6 +412,38 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     total_entries: tree.tree.length,
     indexable_files: indexableFiles.length,
   }))
+
+  // SIG-172: enumerate SIGILIX.md + .sigilix/rules/*.md at any depth
+  // and persist the manifest separately from the vector index. Runs
+  // only on the default-branch bootstrap (branch indexes share the
+  // default branch's rules; the per-PR review path reads the
+  // repo-level key). Best-effort — never fails the index job, because
+  // vectors are the load-bearing artifact and scoped rules are
+  // additive prompt context.
+  //
+  // SIG-172 M2 (fix-up): the rule-file walk + content fetches can take
+  // seconds on a large repo. An older overlapping bootstrap that
+  // started before a newer run (and thus lost the lease at writeActiveRun
+  // above) could still reach the writeScopedRulesManifest call AFTER
+  // the newer run had finalised its own scoped-rules manifest, and
+  // clobber it with stale rules. Gate the WRITE behind the same lease
+  // check that protects persistManifest / persistVectorIds. The walk +
+  // fetches are still attempted (cheap to throw away), but the actual
+  // KV write only happens if this run still holds the lease.
+  if (target.isDefault) {
+    try {
+      await persistScopedRulesManifest({
+        env, client, owner, repo, headSha, runId, stateRepo,
+        treeEntries: tree.tree,
+      })
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "scoped-rules-manifest-write-failed",
+        owner, repo, run_id: runId,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+  }
 
   const totalFiles = indexableFiles.length
   if (totalFiles === 0) {
@@ -1229,6 +1263,89 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     path_count: Object.keys(outcome.vectors.byPath).length,
   }))
   return { proceed: true }
+}
+
+// ---------------------------------------------------------------------
+// SIG-172: scoped-rules manifest discovery + persistence
+// ---------------------------------------------------------------------
+
+interface PersistScopedRulesArgs {
+  env: Env
+  client: GitHubClient
+  owner: string
+  repo: string
+  /** Run id from the bootstrap context — gated by `leaseAllows`
+   *  before the KV write so an older run can't clobber a newer one. */
+  runId: string
+  /** Branch-scoped repo key for the lease check — matches what
+   *  `writeActiveRun` keyed on (i.e. `target.stateRepo`). */
+  stateRepo: string
+  headSha: string
+  treeEntries: ReadonlyArray<TreeEntry>
+}
+
+/**
+ * Enumerate SIGILIX.md + .sigilix/rules/*.md at any depth from the
+ * already-fetched repo tree, fetch their content via the same
+ * installation token used for indexing, and persist the manifest to
+ * KV under `repo-index-rules:<owner>/<repo>`.
+ *
+ * Best-effort per file fetch: a single failed file is dropped + logged
+ * rather than failing the whole manifest. The KV write itself does
+ * throw on failure so the caller's try/catch records it as a non-
+ * fatal indexer event.
+ *
+ * Empty rule set still writes the manifest — gives the orchestrator a
+ * clean "no rules configured" signal vs. "indexer hasn't run yet"
+ * (KV-missing).
+ *
+ * SIG-172 M2 (fix-up): the KV write is gated by the active-run lease
+ * (same `shouldFinalize(activeRunId, runId)` check the manifest +
+ * vectors writes use). The fetch loop still runs — small in absolute
+ * cost, and the lease may flip between fetch and write — but the
+ * write itself is suppressed when this run has been superseded. An
+ * older overlapping run completing its rule walk after a newer run
+ * had already finalised its scoped-rules manifest would otherwise
+ * overwrite the newer rules with stale content.
+ */
+async function persistScopedRulesManifest(args: PersistScopedRulesArgs): Promise<void> {
+  const { env, client, owner, repo, runId, stateRepo, headSha, treeEntries } = args
+  const ruleFiles = walkScopedRuleFiles(treeEntries)
+  const entries: Array<{ path: string; content: string }> = []
+  for (const file of ruleFiles) {
+    let content: string | null = null
+    try {
+      content = await client.getFileContent(owner, repo, file.path, headSha)
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "scoped-rules-file-fetch-failed",
+        owner, repo, path: file.path,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      continue
+    }
+    if (content === null) continue
+    entries.push({ path: file.path, content })
+  }
+  // SIG-172 M2 (fix-up): lease check immediately before the write so
+  // a slow rule-file walk can't outlive its run-id ownership.
+  if (!(await leaseAllows(env, owner, stateRepo, runId))) {
+    console.warn(JSON.stringify({
+      event: "scoped-rules-manifest-skip-superseded",
+      owner, repo, run_id: runId,
+      file_count: entries.length,
+    }))
+    return
+  }
+  const manifest = await writeScopedRulesManifest(env, owner, repo, entries)
+  console.log(JSON.stringify({
+    event: "scoped-rules-manifest-written",
+    owner, repo,
+    head_sha: headSha,
+    file_count: entries.length,
+    per_directory_rules: manifest.perDirectoryRules.length,
+    glob_rules: manifest.globRules.length,
+  }))
 }
 
 // ---------------------------------------------------------------------

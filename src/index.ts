@@ -96,6 +96,7 @@ import {
   completeCheckRun,
   type SigilixCheckConclusion,
 } from "./lib/pr-review-check-run"
+import { postPrOverviewStubIfNeeded } from "./lib/pr-overview-stub"
 import {
   deleteRepoIndex,
   handleInstallReposRemoved,
@@ -2082,22 +2083,40 @@ async function handleGitHubWebhook(
     const headSha = pr.head?.sha ?? ""
     if (!headSha) return new Response("missing head sha\n", { status: 400 })
 
-    // SIG-216: drop-the-stub pattern. The pre-review stub sticky +
-    // the standalone pr-overview queue dispatch are GONE — overview
-    // is now rendered inline by the ensemble immediately before
-    // `submitReview`, so the two comments land in the same time
-    // window (CodeRabbit-style Walkthrough-then-Review ordering).
+    // SIG-219 restoration of the pre-review "Reviewing…" sticky:
+    //
+    // SIG-216 originally dropped the stub-post entirely under the
+    // theory that the inline overview render inside the ensemble
+    // (immediately before `submitReview`) would land both comments
+    // in the same time window — CodeRabbit-style Walkthrough +
+    // Review.
+    //
+    // Founder feedback (2026-05-26): the WANTED UX is closer to
+    // CodeRabbit's actual behavior — a sticky "Reviewing…" comment
+    // appears immediately on push and MORPHS into the overview when
+    // the models finish, rather than appearing only at the end.
+    // SIG-216 lost that "reviewing" affordance entirely. Restore
+    // the stub-post here so:
+    //
+    //   1. The "Reviewing…" sticky lands within the webhook ack
+    //      window (~sub-second).
+    //   2. The inline overview path inside `handlePrReviewEnsemble`
+    //      finds the stub via its existing `scanComments` + PATCH
+    //      logic and rewrites the body in place — no second
+    //      comment is created, no ordering wait is needed.
+    //   3. The SIG-216 win (no separate `pr-overview` queue job
+    //      stretching wall-clock by ~30s) is preserved: we only
+    //      dispatch the standalone pr-overview job for the
+    //      review-skipped branch below, exactly as before.
     //
     // We still load sigilix.json + build the GitHub client here for
-    // (a) the `ready_for_review` draft-skip supersede call below and
-    // (b) future webhook-time gates. Best-effort: `loadSigilixConfig`
-    // never throws — missing/invalid config resolves to
-    // `EMPTY_CONFIG`, which has `overview === undefined`, which
-    // `isPrOverviewEnabled` treats as enabled (default-on per Codex
-    // Q5). The pr-review ensemble re-loads the config at the head
-    // SHA itself to read the rest of the schema (and to gate the
-    // inline overview render on overview.enabled), so a failure here
-    // is non-blocking.
+    // the `ready_for_review` draft-skip supersede call below, the
+    // stub-post itself, and future webhook-time gates. Best-effort:
+    // `loadSigilixConfig` never throws — missing/invalid config
+    // resolves to `EMPTY_CONFIG`, which has `overview === undefined`,
+    // which `isPrOverviewEnabled` treats as enabled (default-on per
+    // Codex Q5). The pr-review ensemble re-loads the config at the
+    // head SHA itself, so a failure here is non-blocking.
     let webhookSigilixConfig: Awaited<ReturnType<typeof loadSigilixConfig>> | null = null
     let webhookClient: GitHubClient | null = null
     if (decision.overview || decision.review) {
@@ -2269,6 +2288,79 @@ async function handleGitHubWebhook(
       }
       if (skipNoopMerge) {
         return new Response("queued\n", { status: 202 })
+      }
+      // SIG-219: post the "Reviewing…" sticky in the background so it
+      // lands on the PR timeline within ~1s of the webhook ack
+      // without blocking the ack itself. The inline overview path
+      // inside `handlePrReviewEnsemble` will find the marker comment
+      // via its `scanComments` + PATCH logic when the ensemble
+      // completes (minutes later) and morph the body in place — no
+      // second comment is created, no ordering barrier is required.
+      //
+      // Sigilix bot P2 PERF catch on PR #180: the original
+      // implementation was `await postPrOverviewStubIfNeeded(...)`
+      // on the webhook response path. That call does 2–4 sequential
+      // network round-trips (KV idempotency read, GitHub
+      // `listComments` marker scan, GitHub POST on first delivery,
+      // KV flag write) for ~400–1500ms typical and multi-second
+      // under API spikes. The repo's perf rules target ~50ms for the
+      // webhook ack — `ctx.waitUntil` lets the work continue after
+      // the 202 returns. There's no race with the inline overview's
+      // own `scanComments`: the review handler doesn't run that
+      // scan until after specialist fan-out + synth (minutes), long
+      // after the stub-post has landed.
+      //
+      // Placement: AFTER the noop-merge skip-short-circuit (so a
+      // diff-identical synchronize push doesn't flash an orphan
+      // "Reviewing…" sticky that never updates), BEFORE the queue
+      // enqueue (so the stub-post is queued first; ordering doesn't
+      // matter for correctness but reads better in logs).
+      //
+      // Best-effort throughout: `postPrOverviewStubIfNeeded` returns
+      // a structured outcome but never throws. The KV flag + marker
+      // scan make a second webhook delivery for the same
+      // (owner, repo, prNumber, headSha) idempotent — webhook
+      // redelivery, an internal 5xx with retry, and rapid double
+      // pushes all converge on a single sticky.
+      //
+      // Gates:
+      //   - `overviewEnabled` — opt-out customers don't get a stub.
+      //   - `webhookClient !== null` — auth succeeded; otherwise
+      //     skip the stub-post and let the inline overview path
+      //     POST a fresh comment from scratch when the ensemble
+      //     runs.
+      if (overviewEnabled && webhookClient !== null) {
+        ctx.waitUntil(
+          postPrOverviewStubIfNeeded({
+            env,
+            owner,
+            repo,
+            prNumber,
+            headSha,
+            installationId,
+            client: webhookClient,
+          }).then((stubOutcome) => {
+            console.log(JSON.stringify({
+              event: "pr-overview-stub-outcome",
+              owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+              outcome: stubOutcome.kind,
+              ...("commentId" in stubOutcome ? { comment_id: stubOutcome.commentId } : {}),
+              ...("reason" in stubOutcome ? { reason: stubOutcome.reason } : {}),
+              ...("phase" in stubOutcome ? { phase: stubOutcome.phase } : {}),
+            }))
+          }).catch((err) => {
+            // `postPrOverviewStubIfNeeded` is structured-outcome
+            // (never throws), but the `.then` callback above could
+            // technically throw (JSON.stringify on a circular object,
+            // etc.). Catch + log so a deferred error can't propagate
+            // up to the runtime and surface as an unhandled rejection.
+            console.warn(JSON.stringify({
+              event: "pr-overview-stub-deferred-failed",
+              owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+              err: err instanceof Error ? err.message : String(err),
+            }))
+          }),
+        )
       }
       // SIG-174: automatic webhook reviews always route through the
       // DO-backed post path. Awaited (NOT ctx.waitUntil) so a DO

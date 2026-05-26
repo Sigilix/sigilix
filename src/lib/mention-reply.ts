@@ -457,26 +457,33 @@ export function renderPrUnavailable(f: LinkedPrFailure): string {
   return `<pr_unavailable ${attrs} />`
 }
 
+/**
+ * SIG-221: status copy no longer frames the team→repo mapping as a hard
+ * access gate. When the team has no mapping (or the mapped repo isn't
+ * indexed yet) but OTHER repos are indexed for the org, we surface
+ * those as available choices instead of telling the user "no access".
+ * Mapping is a soft prior, not a precondition.
+ */
 export function renderCodebaseRetrievalStatus(
   scope: LinearAgentRepoScope,
   chunkCount: number,
 ): string {
-  if (scope.status === "unmapped") {
-    return "No GitHub repo mapping is configured for this Linear team. Repo-context answers require an explicit team-to-repo mapping."
-  }
-  if (scope.status === "mapped_not_indexed" && scope.mappedRepo) {
-    return `The Linear team maps to '${scope.mappedRepo}', but that repo does not have an index manifest yet.`
-  }
-  if (scope.status === "mapped_default_not_indexed" && scope.mappedRepo) {
-    return `The Linear team maps to '${scope.mappedRepo}', but that default repo is not indexed yet. Indexed repos available for this owner: ${scope.availableRepos.map((r) => `'${r}'`).join(", ")}.`
-  }
   if (scope.repo && chunkCount === 0) {
     return `Repo '${scope.repo}' is indexed, but retrieval returned no relevant chunks for this question.`
   }
   if (scope.repo) {
     return `Retrieved ${chunkCount} relevant codebase chunk(s) from '${scope.repo}'.`
   }
-  return "No codebase retrieval namespace was available for this Linear mention."
+  if (scope.availableRepos.length > 0 && scope.mappedRepo) {
+    return `The Linear team's default '${scope.mappedRepo}' is not indexed yet, but ${scope.availableRepos.length} indexed repo(s) are available for retrieval: ${scope.availableRepos.map((r) => `'${r}'`).join(", ")}.`
+  }
+  if (scope.availableRepos.length > 0) {
+    return `${scope.availableRepos.length} indexed repo(s) available for retrieval: ${scope.availableRepos.map((r) => `'${r}'`).join(", ")}. The agent will pick based on the issue and question.`
+  }
+  if (scope.mappedRepo) {
+    return `The Linear team maps to '${scope.mappedRepo}', but no indexed repos are available for this org yet (indexing may be in progress).`
+  }
+  return "No indexed repos are available for this Linear org yet (indexing may be in progress)."
 }
 
 interface AgentInitialMessageCtx {
@@ -521,19 +528,26 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
   const universeText = visibleUniverse.length > 0
     ? `${visibleUniverse.map(formatIndexedNamespaceForPrompt).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
     : "(none configured)"
+  // SIG-221: collapsed six prompt variants into three, with no hard
+  // "do not call retrieve_codebase" gates. Whenever the indexed
+  // universe has at least one entry, the agent may always call
+  // retrieve_codebase and pick from the list — the team→repo
+  // mapping (when set) becomes a SOFT prior, not a precondition.
+  // Mirrors how Jira / Notion / Cursor surface code-aware agents:
+  // the model infers the relevant repo from issue + question, with
+  // any configured default as a starting point.
   let repoLine: string
-  if (ctx.repo && universe.length > 1) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. The indexed choices are: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different repo from the list when the issue is clearly about it. For entries marked '(non-default branch index)', never pass the internal __branch__ namespace; only pass a human branch name if the user explicitly provides one. Final answer is the JSON shape defined by the system prompt.`
-  } else if (ctx.repo) {
-    repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
-  } else if (ctx.mappedRepo && universe.length > 0) {
-    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that default repo is not indexed yet. You may call retrieve_codebase only for indexed choices: ${universeText}. Pick one only if it clearly matches the issue's subject. For entries marked '(non-default branch index)', do not pass the internal __branch__ namespace; only pass a human branch name if the user explicitly provides one. If the question is about '${ctx.mappedRepo}', explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
+  if (universe.length > 0) {
+    const defaultHint = ctx.repo
+      ? ` The default for this Linear team is '${ctx.repo}' — start there if the issue doesn't clearly point elsewhere, but pick a different repo from the list when the question is about one.`
+      : ctx.mappedRepo
+        ? ` The Linear team maps to '${ctx.mappedRepo}' but that repo is not indexed yet; pick whichever indexed choice best matches the issue's subject. If the question is specifically about '${ctx.mappedRepo}', mention that it's mapped but not indexed yet.`
+        : " Pick the indexed choice that best matches the issue's subject and the question."
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. The indexed choices are: ${universeText}.${defaultHint} For entries marked '(non-default branch index)', never pass the internal __branch__ namespace; only pass a human branch name if the user explicitly provides one. If multiple repos look plausible, you may call retrieve_codebase on each and synthesize. If no choice clearly fits and you can't tell from the issue, return a final answer that says you don't have enough information and offer the user the indexed list to pick from. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo) {
-    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that repo does not have an index manifest yet. Do not call retrieve_codebase; explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
-  } else if (universe.length > 0) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. Pick the indexed choice that matches the issue's subject: ${universeText}. If none clearly fits, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but no indexed repos are available for this org yet (indexing may be in progress). Answer from the issue and thread context only — retrieve_codebase has no namespaces to search. If repo context is essential to the question, mention that the codebase index is still being built. Final answer is the JSON shape defined by the system prompt.`
   } else {
-    repoLine = "No GitHub repo mapping is configured for this Linear team, so do not call retrieve_codebase. Answer from the issue and thread context only; if repo context is required, say the Linear team needs a GitHub repo mapping before code retrieval can run. Final answer is the JSON shape defined by the system prompt."
+    repoLine = "No indexed repos are available for this Linear org yet (indexing may be in progress). Answer from the issue and thread context only — retrieve_codebase has no namespaces to search. If repo context is essential to the question, mention that the codebase index is still being built. Final answer is the JSON shape defined by the system prompt."
   }
   const lines: string[] = [
     "[SURFACE] Linear issue comment",

@@ -146,18 +146,20 @@ new_sqlite_classes = ["GraphMetricsDO"]
 # put` instead — `[vars]` is for values that are safe to commit and
 # need a default at deploy time.
 [vars]
-# ARC-283 Phase B1b: enabled for `synth` role on 2026-05-18 — highest
-# customer-impact role per Codex ARC-292 analysis (PR #97 demo). Shadow
-# verdicts are NEVER posted; comparison telemetry lives in CF Logs via
-# the `shadow-verdict-comparison` event. Per-role rollout order per
-# docs/ops/shadow-bakeoff.md acceptance criteria:
-#   1. synth (active)
-#   2. security,tests (queued)
-#   3. performance fallback (queued)
-#   4. logic fallback (queued)
-# Flip back to "" to disable; flip to "synth,security" etc. to enable
-# additional roles per the rollout plan.
-SHADOW_BAKEOFF_ROLES = "synth"
+# SIG-234 (2026-05-26): bake-off DISABLED because production now runs
+# the lineup that the bake-off was validating. The bake-off candidate
+# config in `src/lib/shadow-bakeoff-config.ts` is preserved as a
+# code-level record of Codex's ARC-292 analysis; flip back to a
+# non-empty CSV ("synth", "synth,security,tests", etc.) to bake-off
+# against the OLD lineup or a future candidate set. Empty string =
+# bake-off off, no shadow telemetry, no extra LLM spend per review.
+#
+# Historical (pre-SIG-234): ARC-283 Phase B1b shipped on 2026-05-18
+# with `synth` role enabled for bake-off, with `security,tests`,
+# `performance`, `logic` queued. SIG-234 graduated the entire lineup
+# directly (informed by format-compatibility curl-tests against
+# Ollama Cloud); the bake-off no longer has a current target.
+SHADOW_BAKEOFF_ROLES = ""
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the

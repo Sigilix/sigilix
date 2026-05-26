@@ -338,12 +338,20 @@ const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 // second-attempt and killing the cross-provider fallback before it
 // could fire.
 //
-// Sized to fit `2 primary attempts (2×90s) + retry backoff (~1s) +
-// 1 cross-provider fallback attempt (~80s, kimi-k2.5:cloud)` = 261s,
-// rounded up to 270s for slack. The static invariant test below
-// regression-guards this so a future "tighten for headroom" change
-// can't silently re-break the fallback firing.
-export const SPECIALIST_TIMEOUT_MS = 270_000
+// SIG-234 (2026-05-26): tightened 270s → 185s. The new lineup
+// retires `deepseek-v4-pro:cloud` from the logic primary slot
+// (was the 100-270s wall-time floor). New primaries fit a
+// realistic worst case of 3 attempts × 60s per-attempt cap = 180s,
+// rounded up to 185s for the 1s inter-attempt retry-backoff slack
+// asserted by the budget-invariant test below. The pre-tighten 270s
+// was a comfort budget for the v4-pro slow path; with v4-flash +
+// qwen3-coder-next + minimax-m2.5 + glm-5.1, we don't need it. The
+// static invariant test regression-guards the budget arithmetic.
+//
+// Pre-SIG-234 history: sized to fit `2 primary attempts (2×90s) +
+// retry backoff (~1s) + 1 cross-provider fallback attempt (~80s,
+// kimi-k2.5:cloud)` = 261s, rounded up to 270s for slack.
+export const SPECIALIST_TIMEOUT_MS = 185_000
 // ARC-283: synth budget bumped from 180s → 420s after PR #93's own
 // review timed out at 180s on a 900-line diff + 27 new tests.
 // Sigilix's product positioning is "yes cost more time for BETTER,
@@ -934,27 +942,43 @@ export interface ModelConfig {
 }
 
 export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
+  // SIG-234 lineup swap (2026-05-26): all 5 specialist + synth roles
+  // now use UNIQUE primary models per the founder's 4+1 constraint.
+  // Driven by Codex's ARC-292 lineup proposal + Ollama-format-
+  // compatibility validation (curl-tested each candidate with a
+  // JSON-schema-constrained prompt; `mistral-large-3:675b-cloud`,
+  // `glm-4.6:cloud`, and `deepseek-v3.1:671b-cloud` ALL wrap output
+  // in ```json``` markdown fences and are NOT used). The slow logic
+  // primary (deepseek-v4-pro:cloud at 100-270s) is demoted to
+  // security + tests fallback — kept reachable for its reasoning
+  // capability without anchoring wall-time.
   logic: {
-    primary: "deepseek-v4-pro:cloud",
-    // Phase 4a.1: dropped 2 → 1. Two retries at ~80s each = 240s of primary
-    // attempts, exceeds the original 180s specialist budget. One retry +
-    // cross-provider fallback gives better resilience per unit time,
-    // validated by shadow telemetry showing 12/15 logic runs hit "Operation
-    // aborted" at 90s wall.
-    //
-    // Phase 4a.3 (ARC-171): specialist budget extended to 270s. Two
-    // retries (3 primary attempts ≈ 270s at the 90s/attempt observed
-    // in Phase 4a.2 telemetry, + backoffs) would exceed the new budget
-    // too, so retries=1 stays. The new headroom funds the cross-
-    // provider fallback (kimi-k2.5:cloud) which Phase 4a.2 telemetry
-    // proved was being killed by the 180s wall before it could fire.
+    // Was `deepseek-v4-pro:cloud` (100-270s). `deepseek-v4-flash:cloud`
+    // keeps the V4 reasoning lineage + 1M context at 45-95s. Codex's
+    // explicit speed/quality tradeoff — expect some loss on the
+    // hardest cross-file logic bugs; if shadow telemetry shows
+    // protected-role FN regression, roll back via wrangler.toml
+    // [vars] (one-line revert, no code change).
+    primary: "deepseek-v4-flash:cloud",
     retries: 1,
-    fallback: "kimi-k2.5:cloud",  // Moonshot — different infra than DeepSeek
+    // Moonshot — cross-provider from DeepSeek. Same fallback family
+    // as performance below; concentrates Moonshot risk on logic +
+    // perf simultaneously (logic + perf primaries are independent,
+    // so a Moonshot outage degrades at most 2 of 5 roles).
+    fallback: "kimi-k2.5:cloud",
   },
   security: {
-    primary: "deepseek-v4-flash:cloud",  // known-working family member
+    // Coder-model territory: vulnerability patterns are mostly
+    // syntax / dataflow recognition, not frontier reasoning. Qwen3-
+    // Coder-Next is tuned for agentic coding workflows and the
+    // primary needs to be DIFFERENT from tests (which now uses
+    // MiniMax) so the 4+1 unique constraint holds.
+    primary: "qwen3-coder-next:cloud",
     retries: 1,
-    fallback: "qwen3-coder-next:cloud",  // cross-provider
+    // `deepseek-v4-pro:cloud` recycled here — the slow but capable
+    // reasoning model now lives on fallback paths so its latency
+    // doesn't anchor the critical path. Cross-provider from Qwen.
+    fallback: "deepseek-v4-pro:cloud",
   },
   performance: {
     // Phase 4a.1: glm-5.1 promoted from fallback → primary.
@@ -965,30 +989,37 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // minimax-m2.1's 80% (12/15 with 3 timeouts). Findings depth holds
     // up — glm-5.1 averages 1.08 findings/verdict (vs 0.92), with 18%
     // longer body text per finding. The latency tradeoff is real
-    // (glm-5.1 p95 = 144s vs minimax = 86s) but well under the Phase
-    // 4a.3 270s specialist budget. Full analysis in
+    // (glm-5.1 p95 = 144s) but well under the new tightened 185s
+    // specialist budget. Full analysis in
     // `.claude/research/arc-167/_report.md`.
     primary: "glm-5.1:cloud",
     retries: 1,
-    // Cross-provider fallback retained — kimi-k2.5 same family as logic's
-    // fallback so we know it's reachable. Concentrates Moonshot risk on the
-    // logic + perf fallback paths simultaneously (noted in v2 risk register).
+    // Cross-provider fallback retained — kimi-k2.5 same family as
+    // logic's fallback so we know it's reachable.
     fallback: "kimi-k2.5:cloud",
   },
   tests: {
-    primary: "deepseek-v4-flash:cloud",
+    // MiniMax M2.5 — agentic-code / test-workflow model per Codex's
+    // ARC-292 analysis. Format-tested clean (~40-90s). Was
+    // `deepseek-v4-flash:cloud` which collided with security's
+    // primary in the old lineup (violated the 4+1 unique constraint
+    // even pre-this-swap).
+    primary: "minimax-m2.5:cloud",
     retries: 1,
-    // Reuses qwen3-coder-next:cloud as the cross-provider fallback
-    // rather than devstral-small-2:24b:cloud — the size tag (`24b`)
-    // and the cloud-routing tag (`cloud`) don't compose in Ollama's
-    // syntax (same gotcha that broke `qwen3-coder:30b:cloud`).
-    // qwen3-coder-next has no size tag baked in, so `:cloud` works.
-    fallback: "qwen3-coder-next:cloud",
+    // `deepseek-v4-pro:cloud` reused as fallback — cross-provider
+    // from MiniMax, proven on reasoning tasks.
+    fallback: "deepseek-v4-pro:cloud",
   },
 }
 
 export const SYNTHESIZER_CONFIG: ModelConfig = {
-  primary: "kimi-k2.6:cloud",
+  // SIG-234 lineup swap (2026-05-26): synth primary moves to
+  // `gpt-oss:120b-cloud` — open-weight, medium-usage, removes
+  // Moonshot from the customer-visible critical merge path entirely.
+  // Format-tested clean (1.3s on a small prompt; expected 25-75s on
+  // a 4-verdict synth payload). Codex's HIGHEST-priority swap per
+  // ARC-292: "Moonshot capacity dip burned 6m16s on PR #97."
+  primary: "gpt-oss:120b-cloud",
   retries: 1,
   // ARC-291 (PR #97 hot-fix): swap fallback from kimi-k2.5 → DeepSeek
   // family. Pre-this-fix the fallback was kimi-k2.5:cloud — SAME

@@ -553,10 +553,21 @@ const SPECIALIST_ROLES = ["logic", "security", "performance", "tests"] as const 
  * extend this set so user configs can reference it.
  */
 export const KNOWN_MODELS: ReadonlySet<string> = new Set([
-  "glm-5.1:cloud",
-  "kimi-k2.6:cloud",
-  "qwen3-coder:480b-cloud",
-  "deepseek-v4-pro:cloud",
+  // Active primaries + fallbacks in SIG-234 lineup. Validated via
+  // curl-format-test against `/api/chat`; only models that returned
+  // schema-clean JSON (no ```json``` markdown-fenced output) are
+  // listed. CodeRabbit M1 on PR #186 fix: dropped `kimi-k2.6:cloud`
+  // because it's no longer referenced after the synth swap to
+  // `gpt-oss:120b-cloud`. `deepseek-v4-pro:cloud` STAYS because it's
+  // still the cross-provider fallback for security + tests.
+  "glm-5.1:cloud",            // performance primary
+  "kimi-k2.5:cloud",          // logic + performance fallback
+  "qwen3-coder:480b-cloud",   // reserved for per-repo overrides
+  "qwen3-coder-next:cloud",   // security primary
+  "deepseek-v4-pro:cloud",    // security + tests fallback (recycled)
+  "deepseek-v4-flash:cloud",  // logic primary, synth fallback
+  "minimax-m2.5:cloud",       // tests primary
+  "gpt-oss:120b-cloud",       // synth primary
 ])
 
 export const EMPTY_CONFIG: SigilixConfig = {}

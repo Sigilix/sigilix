@@ -68,10 +68,10 @@ three independent voices. Predicted winner held up.
    }
    ```
 
-4. Filed in Linear:
-   - SIG-225 (Phase 1 — shadow dispatcher).
-   - SIG-226 (Phase 2 — partial-coverage synth prompt).
-   - SIG-227 (Phase 3 — enforcement + SIG-220 Lever 1 follow-up).
+4. Filed in Linear (SIG-225 was already taken by an unrelated Linear-threading bug — the dispatcher follow-ups landed at 226/227/228 instead):
+   - [SIG-226](https://linear.app/sigilix/issue/SIG-226) (Phase 1 — shadow dispatcher).
+   - [SIG-227](https://linear.app/sigilix/issue/SIG-227) (Phase 2 — partial-coverage synth prompt + non-protected enforcement).
+   - [SIG-228](https://linear.app/sigilix/issue/SIG-228) (Phase 3 — protected-role enforcement + SIG-220 Lever 1 follow-up).
 
 ---
 

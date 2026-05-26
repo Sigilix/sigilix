@@ -636,24 +636,17 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
 // leaving the queue message in the in_progress state and triggering a
 // re-delivery + duplicate review.
 //
-// Floor: when the remaining review budget drops below this, skip the
-// inline overview entirely. The overview will fire on the next push or
-// can be re-attempted via warmup. 30s reserves enough room for the
-// post-overview stale-head re-check + submitReview round-trip + the
-// finally cleanup paths.
-export const INLINE_OVERVIEW_MIN_BUDGET_MS = 30_000
-
-// Ceiling: even on a generous budget surplus, cap the inline overview
-// wall-time at 90s so a single slow overview can never starve the rest
-// of the submit pipeline. Matches the same order-of-magnitude as a
+// SIG-233 (2026-05-26): the overview now fires from `ctx.waitUntil`
+// AFTER submitReview returns, so it no longer shares the orchestrator's
+// wall-clock budget with the rest of the submit pipeline. The pre-
+// SIG-233 INLINE_OVERVIEW_MIN_BUDGET_MS / INLINE_OVERVIEW_SUBMIT_RESERVE_MS
+// floor + reserve constants were dropped along with that path.
+// INLINE_OVERVIEW_MAX_BUDGET_MS is now the only bound — it caps the
+// background overview's own LLM round-trip so a slow generate can't
+// hold the worker's waitUntil lifetime open for arbitrarily long.
+// Ceiling matches the same order-of-magnitude as a
 // SPECIALIST_TIMEOUT_MS attempt.
 export const INLINE_OVERVIEW_MAX_BUDGET_MS = 90_000
-
-// Reserved tail for the post-overview stale-head re-check (~1s),
-// `submitReview` GitHub roundtrip (~3-10s typical, allow headroom for
-// 422 + fallback), and the `dismissPriorSigilixReviews` call ahead of
-// it. Subtracted from the wall-clock budget the inline overview gets.
-const INLINE_OVERVIEW_SUBMIT_RESERVE_MS = 30_000
 
 // ─── SIG-138 Phase 2: graph-retrieval pure helpers ────────────────────────
 //
@@ -1093,6 +1086,18 @@ export interface EnsembleHandlerArgs {
    * callers (tests).
    */
   graphMetricsSink?: GraphRetrievalSample[]
+  /**
+   * SIG-233: Cloudflare Workers `ExecutionContext`, threaded from the
+   * queue consumer (`src/index.ts::queue`). When present, the
+   * orchestrator fires the inline overview comment via
+   * `ctx.waitUntil(...)` AFTER `submitReview` returns instead of
+   * blocking the customer-visible critical path on it (saves ~28s
+   * per review). Optional so tests can omit it; when absent, the
+   * overview still posts but is awaited inline (the pre-SIG-233
+   * behavior — slower but preserved for callers that aren't queue-
+   * driven).
+   */
+  ctx?: ExecutionContext
 }
 
 export interface SubmissionAffordance {
@@ -4012,47 +4017,46 @@ export async function handlePrReviewEnsemble(
     const checkAnnotationMeta = (annotations: CheckRunAnnotation[]) =>
       annotations.length > 0 ? { checkAnnotations: annotations } : {}
 
-    // ─── SIG-216: post the overview comment IMMEDIATELY before the
-    // review submit so the two GitHub timeline entries land in the
-    // same time window (CodeRabbit-style Walkthrough-then-Review).
-    // The overview is informed by the review's verdict — we pass
-    // findingsCount + severity + category breakdown + the chosen
-    // event so the model can summarize "what reviewer concluded"
-    // instead of running blind. Gated on `overview.enabled` per the
-    // same `sigilixConfig` the ensemble loaded earlier; opted-out
-    // customers skip the inline render.
+    // ─── SIG-233: overview moved OFF the critical path.
     //
-    // Awaited (not `ctx.waitUntil`) so the overview comment is
-    // GUARANTEED on the PR timeline before `submitReview` fires.
+    // History: SIG-216 put the inline overview comment IMMEDIATELY
+    // BEFORE the review submit to preserve CodeRabbit's
+    // "Walkthrough-then-Review" GitHub timeline ordering. That
+    // added ~28s of inline `await` on every review (telemetry
+    // confirmed on PR #176: `pr-review-inline-overview-posted
+    // elapsed_ms=28548`).
+    //
+    // SIG-233 trades the ordering guarantee for the latency win.
+    // The overview now fires AFTER `submitReview` returns via
+    // `args.ctx?.waitUntil(...)` (queue-consumer-extended lifetime;
+    // ~30 min budget on Standard usage model). Most reviews will
+    // still post the overview first because the review submit
+    // takes 3-10s while the overview takes 22-60s — but ordering
+    // is no longer guaranteed.
+    //
+    // Test fallback (CodeRabbit catch): if `args.ctx` is missing
+    // (unit-test callers only — every production queue dispatch
+    // provides ctx, including the slash-command rerun path which
+    // re-enters `queue()` and gets a fresh ctx), the submit-block
+    // `finally` falls back to `await overviewPromise` inline. NOTE:
+    // this is NOT the pre-SIG-233 inline-before-submit ordering —
+    // ctx-less callers also see submit-then-overview on the GitHub
+    // timeline now. The function still blocks until the overview
+    // resolves before returning, so tests asserting on the return
+    // value (the only thing unit tests check) behave identically.
+    //
+    // The previous post-overview stale-head re-check moves to a
+    // pre-submit re-check below — same guard, different gate.
+    // Customers with overview disabled now ALSO get the stale-head
+    // re-check (pre-SIG-233 the check was gated on
+    // `isPrOverviewEnabled`, which was a coverage hole).
+    //
     // `skipDedupe: true` bypasses the per-(PR, headSha) KV dedupe
-    // lock inside `handlePrOverview` so a sibling queued run (legacy
-    // warmup refresh, etc.) on this SHA can't block us — but does
-    // NOT bypass the in-handler stale-head guards (those still fire
-    // on this path, catching head moves that landed during the
-    // review's own Ollama window). SIG-216 fix-up swap from
-    // `force: true` (which historically bypassed both).
-    //
-    // Budgeting (SIG-216 fix-up): the overview runs against the
-    // REMAINING review budget so a stalled overview can't push the
-    // handler past ORCHESTRATOR_TIMEOUT_MS (the wall the orchestrator
-    // itself aborts on). Capped at INLINE_OVERVIEW_MAX_BUDGET_MS even
-    // on a budget surplus so the overview never eats more than its
-    // fair share. When remaining budget falls under
-    // INLINE_OVERVIEW_MIN_BUDGET_MS we skip the inline render entirely
-    // — the overview can fire on the next push.
-    //
-    // Retry policy (SIG-216 fix-up): single retry on transient
-    // failures (timeouts / 502 / 503 / 504 / fetch-failed /
-    // budget-exceeded). Pre-SIG-216 the queue consumer gave
-    // MAX_RETRIES=3 on Ollama transients; the inline path had zero.
-    // One retry only — bounded by the same Promise.race budget so
-    // we can't blow the wall-clock even on a double attempt.
-    //
-    // Best-effort: even after the single retry, a failure here
-    // NEVER blocks the review submit. The customer still gets the
-    // review even if the overview comment fails to land.
+    // lock inside `handlePrOverview` so a sibling queued run can't
+    // block us — but does NOT bypass the in-handler stale-head
+    // guards (those still fire on this path).
+    let pendingOverviewBuild: { context: PrOverviewReviewContext; budgetMs: number } | null = null
     if (isPrOverviewEnabled(sigilixConfig)) {
-      const overviewStartMs = Date.now()
       const overviewReviewContext: PrOverviewReviewContext = {
         findingsCount:
           submissionVerdict.findings.length + renderableUnanchoredForSubmission.length,
@@ -4066,96 +4070,104 @@ export async function handlePrReviewEnsemble(
         ]),
         verdict: primaryEvent,
       }
-      // Reserve INLINE_OVERVIEW_SUBMIT_RESERVE_MS for the submitReview
-      // GitHub roundtrip + the post-overview stale-head re-check that
-      // follows; the overview itself gets whatever's left up to
-      // INLINE_OVERVIEW_MAX_BUDGET_MS.
-      //
-      // SIG-216 fix-up (CR catch): budget against ORCHESTRATOR_TIMEOUT_MS,
-      // not CF_QUEUE_CONSUMER_CEILING_MS. The orchestrator's own
-      // wall-clock is the actual bound on this handler — the platform
-      // ceiling is wider (CF_QUEUE_CONSUMER_CEILING_MS - ORCHESTRATOR_TIMEOUT_MS
-      // is the grace pad reserved for finalize/cleanup). Using the
-      // wider ceiling could push the overview past the orchestrator's
-      // own abort and burn the grace pad too.
-      const elapsedMs = Date.now() - startMs
-      const remainingBudgetMs = Math.max(
-        0,
-        ORCHESTRATOR_TIMEOUT_MS - elapsedMs - INLINE_OVERVIEW_SUBMIT_RESERVE_MS,
-      )
-      const overviewBudgetMs = Math.min(remainingBudgetMs, INLINE_OVERVIEW_MAX_BUDGET_MS)
-      if (overviewBudgetMs < INLINE_OVERVIEW_MIN_BUDGET_MS) {
+      // Budget cap — the overview runs in ctx.waitUntil so it's no
+      // longer racing the orchestrator's wall clock for the customer-
+      // visible result. INLINE_OVERVIEW_MAX_BUDGET_MS caps the
+      // overview's own LLM round-trip so a stuck Ollama can't burn
+      // the entire ctx.waitUntil window.
+      pendingOverviewBuild = {
+        context: overviewReviewContext,
+        budgetMs: INLINE_OVERVIEW_MAX_BUDGET_MS,
+      }
+    }
+
+    // ─── Pre-submit stale-head re-check ─────────────────────────
+    // SIG-216 originally bolted this onto the post-overview path
+    // because the overview consumed ~28s and gave head-moves a wide
+    // window. SIG-233 moves overview off the critical path, so this
+    // check moves to its semantically-correct position: immediately
+    // before `submitReview`. Fail-closed: uncertain head state →
+    // abort rather than risk shipping a stale review.
+    try {
+      const metaPreSubmit = await client.getPullRequest(owner, repo, prNumber)
+      if (metaPreSubmit.head?.sha && metaPreSubmit.head.sha !== headSha) {
+        telemetry.fellBackReason = "stale_head_pre_submit"
         console.log(JSON.stringify({
-          event: "pr-review-inline-overview-skipped-budget",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          remaining_budget_ms: remainingBudgetMs,
-          threshold_ms: INLINE_OVERVIEW_MIN_BUDGET_MS,
+          event: "pr-review-stale-head-pre-submit",
+          owner, repo, prNumber,
+          queued_head_sha: headSha.slice(0, 7),
+          current_head_sha: metaPreSubmit.head.sha.slice(0, 7),
         }))
-      } else {
+        await handleStaleHead({
+          env, owner, repo, prNumber, installationId,
+          queuedHeadSha: headSha,
+          currentHeadSha: metaPreSubmit.head.sha,
+          baseSha: metaPreSubmit.base?.sha ?? null,
+          depth: staleHeadRequeueDepth,
+          source: "ensemble-pre-submit",
+        })
+        return finalize(telemetry, env, "stale_head", cache)
+      }
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "pr-review-stale-recheck-failed-aborted",
+        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      telemetry.fellBackReason = "stale_head_recheck_failed"
+      return finalize(telemetry, env, "errored", cache)
+    }
+
+    // SIG-233 background-overview firing helper. Captures the closure
+    // state needed to post the overview comment AFTER submitReview
+    // succeeds. Two dispatch paths:
+    //   - queue caller with `args.ctx` → `ctx.waitUntil(...)` —
+    //     orchestrator returns immediately; ~30-min ctx budget
+    //     keeps the overview alive in the background.
+    //   - test caller without `args.ctx` → inline `await` so the
+    //     pre-SIG-233 behavior is preserved (no behavior change for
+    //     unit tests that don't mock ExecutionContext).
+    // Either way the helper is best-effort — a thrown overview will
+    // NEVER fail the review submission.
+    let submitYieldedReview = false
+    const fireBackgroundOverview = async (): Promise<void> => {
+      if (pendingOverviewBuild === null) return
+      const overviewBuild = pendingOverviewBuild
+      const overviewStartMs = Date.now()
+      const overviewPromise = (async () => {
         try {
           await runInlineOverviewWithRetry({
             owner, repo, prNumber, headSha, installationId, env,
             skipDedupe: true,
-            reviewContext: overviewReviewContext,
-          }, overviewBudgetMs)
+            reviewContext: overviewBuild.context,
+          }, overviewBuild.budgetMs)
           console.log(JSON.stringify({
             event: "pr-review-inline-overview-posted",
             owner, repo, prNumber, head_sha: headSha.slice(0, 7),
             elapsed_ms: Date.now() - overviewStartMs,
-            budget_ms: overviewBudgetMs,
-            findings_count: overviewReviewContext.findingsCount,
-            verdict: overviewReviewContext.verdict,
+            budget_ms: overviewBuild.budgetMs,
+            findings_count: overviewBuild.context.findingsCount,
+            verdict: overviewBuild.context.verdict,
           }))
         } catch (err) {
           console.error(JSON.stringify({
             event: "pr-review-inline-overview-failed",
             owner, repo, prNumber, head_sha: headSha.slice(0, 7),
             elapsed_ms: Date.now() - overviewStartMs,
-            budget_ms: overviewBudgetMs,
+            budget_ms: overviewBuild.budgetMs,
             err: err instanceof Error ? err.message : String(err),
           }))
         }
-      }
-
-      // SIG-216 fix-up: re-check the PR head AFTER the inline overview.
-      // Belt-and-braces with the in-overview guards: the overview's own
-      // pre-Ollama + pre-write guards (which now fire on the inline
-      // path since we use `skipDedupe`, not `force`) catch head moves
-      // BEFORE / DURING the overview's Ollama call; this re-check
-      // catches moves landing AFTER the overview returns, before the
-      // review submit. Both layers are intentional — different windows.
-      // Fail-closed on lookup error — matches the existing guard pattern.
-      try {
-        const metaPostOverview = await client.getPullRequest(owner, repo, prNumber)
-        if (metaPostOverview.head?.sha && metaPostOverview.head.sha !== headSha) {
-          telemetry.fellBackReason = "stale_head_after_inline_overview"
-          console.log(JSON.stringify({
-            event: "pr-review-stale-head-after-inline-overview",
-            owner, repo, prNumber,
-            queued_head_sha: headSha.slice(0, 7),
-            current_head_sha: metaPostOverview.head.sha.slice(0, 7),
-          }))
-          await handleStaleHead({
-            env, owner, repo, prNumber, installationId,
-            queuedHeadSha: headSha,
-            currentHeadSha: metaPostOverview.head.sha,
-            baseSha: metaPostOverview.base?.sha ?? null,
-            depth: staleHeadRequeueDepth,
-            source: "ensemble-after-inline-overview",
-          })
-          return finalize(telemetry, env, "stale_head", cache)
-        }
-      } catch (err) {
-        // Fail-closed: uncertain head state → abort the submit rather
-        // than risk shipping a stale review. Matches Codex's pattern in
-        // `triage-pr-overview.ts`.
-        console.warn(JSON.stringify({
-          event: "pr-review-stale-recheck-failed-aborted",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-          err: err instanceof Error ? err.message : String(err),
-        }))
-        telemetry.fellBackReason = "stale_head_recheck_failed"
-        return finalize(telemetry, env, "errored", cache)
+      })()
+      if (args.ctx !== undefined) {
+        // Queue-driven prod path — overview lives in the worker's
+        // waitUntil window, off the customer-visible critical path.
+        args.ctx.waitUntil(overviewPromise)
+      } else {
+        // Test / direct caller path — preserve the pre-SIG-233
+        // inline-await behavior so non-mocked tests don't have to
+        // chase a fire-and-forget promise.
+        await overviewPromise
       }
     }
 
@@ -4264,6 +4276,11 @@ export async function handlePrReviewEnsemble(
           submitPath: "inline-anchored",
         })
         if (fallback.ok) {
+          // SIG-233 (CodeRabbit catch): flip BEFORE any post-customer-
+          // visible-post bookkeeping so a throw in `persistReviewCounter`
+          // can't suppress the background overview after the comment
+          // already landed on GitHub.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           // SIG-89 note: comment-fallback paths intentionally do NOT
@@ -4283,6 +4300,13 @@ export async function handlePrReviewEnsemble(
         // Comment fallback ALSO failed — `errored` is the truth.
         return finalize(telemetry, env, "errored", cache)
       }
+      // SIG-233 (CodeRabbit catch): the GitHub-side submit already
+      // succeeded AND was verified. Flip BEFORE the follow-up awaits
+      // (persistReviewCounter / writeReviewManifestForEnsemble /
+      // recordReviewedDiffHash / maybePostAstAutoInline) so a throw
+      // in any of them can't suppress the overview after the customer
+      // already has a posted review.
+      submitYieldedReview = true
       await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
       // ARC-258 follow-up: dismiss any stale Sigilix reviews from
@@ -4338,19 +4362,24 @@ export async function handlePrReviewEnsemble(
       // falls back to dispatch instead of skipping. The helper
       // swallows internally.
       await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // SIG-216: post-submit `pr-overview` refresh enqueue removed.
-      // The overview is now rendered INLINE earlier in this handler
-      // (right before `dismissPriorSigilixReviews`), informed by the
-      // same submissionVerdict the review is built from — so there's
-      // no stale-warmup-callout to clear and nothing for a separate
-      // queue job to add. ARC-258's post-review refresh use case is
-      // subsumed by the inline render.
+      // SIG-216 + SIG-233: post-submit `pr-overview` refresh enqueue
+      // removed. The overview is dispatched from the submit-block
+      // `finally` clause once `submitYieldedReview` is set —
+      // `ctx.waitUntil` in production, inline `await` in tests
+      // (back-compat fallback). Informed by the same submissionVerdict
+      // the review is built from, so there's no stale-warmup-callout
+      // to clear and nothing for a separate queue job to add.
+      // ARC-258's post-review refresh use case is subsumed by this
+      // background render.
       await maybePostAstAutoInline()
       // ARC-276: signal the customer-visible verdict back to the
       // dispatcher so the Sigilix Check Run title can render
       // "Approved — no issues found" vs "N findings posted".
       const inlineFindings =
         submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
+      // SIG-233: submitYieldedReview was already set above immediately
+      // after `verified` resolved — kept here as a no-op signpost so
+      // the 6 posted-return sites are still 1:1 with the flag.
       return finalize(telemetry, env, "posted", cache, {
         event: submission.event,
         findingsCount: inlineFindings,
@@ -4408,6 +4437,10 @@ export async function handlePrReviewEnsemble(
           submitPath: "inline-anchored-error",
         })
         if (commentFallback.ok) {
+          // SIG-233 (CodeRabbit catch): flip BEFORE the persistReviewCounter
+          // await so a KV/storage throw can't suppress the overview after
+          // the comment-fallback landed on GitHub.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           await fallbackBodyOnlyAffordance.persistReviewCounter()
@@ -4487,6 +4520,9 @@ export async function handlePrReviewEnsemble(
           submitPath: "anchorless-fallback-error",
         })
         if (commentFallback.ok) {
+          // SIG-233 (CodeRabbit catch): same rationale as the other
+          // comment-fallback paths — flip BEFORE persistReviewCounter.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           await fallbackAffordance.persistReviewCounter()
@@ -4533,6 +4569,9 @@ export async function handlePrReviewEnsemble(
           submitPath: "anchorless-fallback",
         })
         if (commentFallback.ok) {
+          // SIG-233 (CodeRabbit catch): same rationale as the other
+          // comment-fallback paths — flip BEFORE persistReviewCounter.
+          submitYieldedReview = true
           const findingsCount =
             submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
           await fallbackAffordance.persistReviewCounter()
@@ -4545,6 +4584,10 @@ export async function handlePrReviewEnsemble(
         }
         return finalize(telemetry, env, "errored", cache)
       }
+      // SIG-233 (CodeRabbit catch): anchorless fallback submit succeeded
+      // and verified. Mirror the primary path — flip BEFORE the follow-
+      // up bookkeeping awaits so a throw can't suppress the overview.
+      submitYieldedReview = true
       await fallbackAffordance.persistReviewCounter()
       telemetry.submitted = true
       // ARC-287: post-submit dismissPriorSigilixReviews call removed
@@ -4582,22 +4625,44 @@ export async function handlePrReviewEnsemble(
       // noop-merge skip on the next synchronize. Same best-effort
       // semantics as the lastReviewedSha write above.
       await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // SIG-216: post-submit `pr-overview` refresh enqueue removed
-      // here too — same rationale as the primary inline-anchored
-      // submit path above. The overview already ran inline at the
-      // top of the submit block, before the 422 fallback was even
-      // considered, so the comment is already on the timeline.
+      // SIG-216 + SIG-233: post-submit `pr-overview` refresh enqueue
+      // removed here too — same rationale as the primary inline-
+      // anchored submit path above. The overview fires from the
+      // submit-block `finally` once `submitYieldedReview` is set on
+      // this return path, via `ctx.waitUntil` (or inline await in
+      // tests).
       await maybePostAstAutoInline()
       // ARC-276: same reviewMeta plumbing as the inline-anchored
       // path — the anchorless fallback is still a posted review.
       const fallbackFindings =
         submissionVerdict.findings.length + renderableUnanchoredForSubmission.length
+      // SIG-233: submitYieldedReview was already set above immediately
+      // after the anchorless verify resolved — kept here as a no-op
+      // signpost so the 6 posted-return sites stay 1:1 with the flag.
       return finalize(telemetry, env, "posted", cache, {
         event: fallback.event,
         findingsCount: fallbackFindings,
         ...checkAnnotationMeta(allFindingAnnotations),
       })
     } finally {
+      // SIG-233: fire the background overview ONLY when a review
+      // actually got posted (any of the 6 posted-return sites set
+      // `submitYieldedReview = true`). Skipping on submit-throw +
+      // post-submit-error paths keeps the overview from posting next
+      // to a "Sigilix couldn't review" surface. `fireBackgroundOverview`
+      // is best-effort — never re-throws — so a degenerate overview
+      // can't break the submit phase telemetry below.
+      if (submitYieldedReview) {
+        try {
+          await fireBackgroundOverview()
+        } catch (err) {
+          console.error(JSON.stringify({
+            event: "pr-review-inline-overview-fire-failed",
+            owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
       // ARC-284: fire the submit phase event on every exit path —
       // inline-anchored success, inline-anchored verify-fail (comment
       // fallback), 422 → anchorless fallback success, 422 → fallback

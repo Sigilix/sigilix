@@ -1,3 +1,5 @@
+import { BADGE_GLYPH_PATHS, type BadgeGlyphPath } from "./badge-glyph-paths"
+
 const BADGE_STYLES = {
   p0: {
     label: "P0",
@@ -62,12 +64,14 @@ export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
 export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
-const BADGE_ASSET_VERSION = "v20260525-4"
+const BADGE_ASSET_VERSION = "v20260526-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Greptile-direction priority badge: 20x20 filled square (rx=1). Matches the
-// Greptile bot's annotation-badge genre for instant recognizability while we
-// keep Sigilix's live Geist Mono text instead of path-baked glyphs.
+// Greptile bot's annotation-badge genre for instant recognizability. SIG-216
+// follow-up: glyph is path-baked (Geist Mono Medium @ 9.5px, frozen via
+// opentype.js into src/lib/badge-glyph-paths.ts) so rendering is
+// pixel-perfect regardless of the viewer's installed fonts.
 const PRIORITY_BADGE_WIDTH = 20
 const PRIORITY_BADGE_HEIGHT = 20
 
@@ -77,8 +81,8 @@ const PRIORITY_BADGE_HEIGHT = 20
 const CATEGORY_BADGE_HEIGHT = 20
 
 // Priority text color: near-black on bright accent fill (dark-on-bright for
-// AA contrast across the P0..P3 palette).
-const PRIORITY_TEXT_COLOR = "#0B0C10"
+// AA contrast across the P0..P3 palette). SIG-216 spec value (Kimi K2.6).
+const PRIORITY_TEXT_COLOR = "#0A0A0A"
 
 // Kimi R2 treatment knobs for the category pill: figure/ground hierarchy
 // is created by remapping the brand-hue accents to a deep BG + bright text
@@ -150,12 +154,28 @@ function applyHsl(baseHex: string, targetSaturation: number, targetLightness: nu
   return hslToHex(h, targetSaturation, targetLightness)
 }
 
+function lookupGlyph(label: string): BadgeGlyphPath {
+  const glyph = BADGE_GLYPH_PATHS[label]
+  if (!glyph) {
+    // Indicates a label was added to BADGE_STYLES / CATEGORY_BADGE_STYLES
+    // without re-running `pnpm regenerate-badge-paths`. Fail loud at
+    // construction time so the missing-glyph bug shows up in tests, not
+    // in a deployed badge that silently renders an empty rect.
+    throw new Error(`badge-assets: no baked glyph for label ${label} — run \`pnpm regenerate-badge-paths\``)
+  }
+  return glyph
+}
+
 function renderBadgeSvg(style: (typeof BADGE_STYLES)[BadgeAssetName]): string {
   // 20x20 filled square with rx=1 — Greptile-direction geometry. Accent fill
-  // at 100%, dark text for AA contrast. No stroke (drops the prior outline).
+  // at 100%, dark glyph for AA contrast. No stroke (drops the prior outline).
+  // SIG-216: glyph is path-baked at generation time (translation already
+  // applied to the coordinates), so the SVG carries no <text>, no font
+  // attrs, and no transform — just one <path>.
+  const glyph = lookupGlyph(style.label)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PRIORITY_BADGE_WIDTH} ${PRIORITY_BADGE_HEIGHT}" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
   <rect x="0" y="0" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" rx="1" fill="${style.accent}"/>
-  <text x="${PRIORITY_BADGE_WIDTH / 2}" y="13.5" text-anchor="middle" fill="${PRIORITY_TEXT_COLOR}" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="9.5" font-weight="600" letter-spacing="0.02em">${style.label}</text>
+  <path d="${glyph.d}" fill="${PRIORITY_TEXT_COLOR}"/>
 </svg>`
 }
 
@@ -163,9 +183,10 @@ function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBa
   const width = categoryBadgeWidth(style.label)
   const bg = applyHsl(style.accent, CATEGORY_BG_SATURATION, CATEGORY_BG_LIGHTNESS)
   const fg = applyHsl(style.accent, CATEGORY_TEXT_SATURATION, CATEGORY_TEXT_LIGHTNESS)
+  const glyph = lookupGlyph(style.label)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${CATEGORY_BADGE_HEIGHT}" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
   <rect x="0" y="0" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" rx="2" fill="${bg}"/>
-  <text x="${width / 2}" y="13.5" text-anchor="middle" fill="${fg}" font-family="Geist Mono, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="9.5" font-weight="600" letter-spacing="0.02em">${style.label}</text>
+  <path d="${glyph.d}" fill="${fg}"/>
 </svg>`
 }
 

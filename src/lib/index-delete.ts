@@ -57,6 +57,7 @@ import {
 } from "./repo-index-vectors"
 import { activeRunKey } from "./repo-index-active-run"
 import { deleteGraph } from "./repo-graph-client"
+import { deleteScopedRulesManifest } from "./scoped-rules-kv"
 
 const VECTORIZE_DELETE_BATCH = 1000
 const KV_LIST_PAGE_LIMIT = 1000
@@ -425,6 +426,21 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
         console.error(JSON.stringify({
           event: "index-delete-kv-active-run-failed",
           owner, repo, key: activeRunKey(owner, repo), err: message,
+        }))
+      }
+
+      // SIG-172: drop the per-repo scoped-rules manifest
+      // (`repo-index-rules:<owner>/<repo>`). Owner-qualified key with
+      // no legacy bare-repo shape — safe under the same owner gate as
+      // the records above. Best-effort + idempotent.
+      try {
+        await deleteScopedRulesManifest(env, owner, repo)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        result.errors.push(`kv.delete(repo-index-rules): ${message}`)
+        console.error(JSON.stringify({
+          event: "index-delete-kv-scoped-rules-failed",
+          owner, repo, err: message,
         }))
       }
 

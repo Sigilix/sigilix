@@ -201,6 +201,11 @@ import {
   type SigilixProfile,
 } from "./sigilix-config"
 import {
+  renderScopedRulesForPrompt,
+  resolveScopedRulesForChangedPaths,
+} from "./scoped-rules"
+import { loadCompiledScopedRulesManifest } from "./scoped-rules-kv"
+import {
   runPerfBudgetsCheck,
   renderPerfBudgetsForPrompt,
   type PerfBudgetsHit,
@@ -1416,6 +1421,26 @@ export async function handlePrReviewEnsemble(
         matched_file_count: new Set(matchedPathInstructions.flatMap((i) => i.matchedPaths)).size,
       }))
     }
+    // SIG-172: load the per-repo scoped-rules manifest (SIGILIX.md +
+    // .sigilix/rules/*.md, persisted at index time) and pick the
+    // rules that apply to this PR's changed files. Closest-ancestor
+    // walk + glob matching. Cached compiled matchers are reused
+    // across roles in this run (one matcher build per PR, not per
+    // changed file).
+    const scopedRulesManifest = await loadCompiledScopedRulesManifest(env, owner, repo)
+    const scopedRuleSelection = resolveScopedRulesForChangedPaths(
+      scopedRulesManifest,
+      reviewedFiles.map((f) => f.path),
+    )
+    const scopedRulesBlock = renderScopedRulesForPrompt(scopedRuleSelection)
+    if (scopedRulesBlock.length > 0) {
+      console.log(JSON.stringify({
+        event: "pr-review-scoped-rules-matched",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        per_directory_rules: scopedRuleSelection.perDirectoryRules.length,
+        glob_rules: scopedRuleSelection.globRules.length,
+      }))
+    }
     // ARC-273: hard cap on the diff string passed to specialists.
     // `packFilesIntoBatches` already bounds total-file budget; this
     // is a belt-and-suspenders char-level cap for pathological cases
@@ -2473,6 +2498,12 @@ export async function handlePrReviewEnsemble(
         ...(sigilixConfig.guidance ? { guidance: sigilixConfig.guidance } : {}),
         ...(matchedPathInstructions.length > 0
           ? { pathInstructionsBlock: renderPathInstructionsForPrompt(matchedPathInstructions, role) }
+          : {}),
+        // SIG-172: directory-scoped + glob-scoped rules. Same block
+        // for every role (no per-role splitting in v1) — the rules
+        // are written by the repo owner with all four lenses in mind.
+        ...(scopedRulesBlock.length > 0
+          ? { scopedRulesBlock }
           : {}),
         ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
         ...(roleFacts.length > 0 ? { deterministicChecksBlock: roleFacts } : {}),

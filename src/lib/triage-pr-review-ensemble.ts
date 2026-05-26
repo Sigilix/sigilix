@@ -6418,9 +6418,27 @@ async function runInlineOverviewWithRetry(
  * diff position was previously passing the predicate → scope flipped
  * to "line" → validation accepted side=LEFT but `buildReviewSubmission`
  * always emits inline comments with `side: "RIGHT"` → primary submit
- * 422'd. For multi-line findings (startLine != line) both endpoints
- * must be on RIGHT-side hunks before the flip is safe.
+ * 422'd.
+ *
+ * SIG-216 follow-up: relax the strict both-bounds check for multi-line
+ * findings. ANY line in the inclusive [startLine, line] range being in
+ * a RIGHT-side hunk is sufficient to anchor inline. GitHub accepts
+ * multi-line inline comments via start_line + line even when only the
+ * middle of the range is in the diff. The prior strict-bounds check
+ * over-suppressed (PR #175 dogfood: a 15-line finding range with the
+ * diff in the middle got routed to body).
  */
+function isAnyLineInRightHunk(
+  anchorLines: ReadonlyArray<{ line: number; side: "LEFT" | "RIGHT" }>,
+  startLine: number,
+  endLine: number,
+): boolean {
+  for (let line = startLine; line <= endLine; line++) {
+    if (anchorLines.some((a) => a.line === line && a.side === "RIGHT")) return true
+  }
+  return false
+}
+
 function normalizeFindingScopeForAnchorability(
   finding: PrReviewFinding,
   reviewable: ReviewableMap,
@@ -6439,31 +6457,27 @@ function normalizeFindingScopeForAnchorability(
   // Is the line in a reviewable hunk?
   const anchorLines = reviewable.get(path)
   if (!anchorLines) return finding
-  // SIG-216 fix-up: require RIGHT-side anchorability. A LEFT-only
-  // position is reviewable (you CAN anchor a comment on a deleted
-  // line), but `buildReviewSubmission` always emits inline comments
-  // with `side: "RIGHT"` → a LEFT-only flip would 422 on submit and
-  // force the anchorless fallback. Treat LEFT-only as non-anchorable
-  // for the scope flip; the renderer's body-finding path is correct
-  // for those.
-  const lineInHunk = anchorLines.some(
-    (a) => a.line === finding.line && a.side === "RIGHT",
-  )
-  if (!lineInHunk) return finding
-  // For a multi-line finding (`startLine` set, distinct from `line`),
-  // BOTH endpoints must be on RIGHT-side hunks before the flip is
-  // safe — GitHub's multi-line review comment shape needs both
-  // anchors valid or it 422s.
-  if (
-    typeof finding.startLine === "number" &&
-    Number.isFinite(finding.startLine) &&
-    finding.startLine !== finding.line
-  ) {
-    const startLineInHunk = anchorLines.some(
-      (a) => a.line === finding.startLine && a.side === "RIGHT",
-    )
-    if (!startLineInHunk) return finding
-  }
+
+  // SIG-216 follow-up: relax the strict both-bounds check. ANY line in
+  // the inclusive [startLine, endLine] range being in a RIGHT-side hunk
+  // is sufficient to anchor inline. GitHub accepts multi-line inline
+  // comments via start_line + line even when only the middle of the
+  // range is in the diff. Prior strict-bounds check over-suppressed
+  // (PR #175 dogfood: 15-line finding range with diff in the middle
+  // got routed to body).
+  //
+  // LEFT-only positions remain non-anchorable for the scope flip
+  // because `buildReviewSubmission` always emits inline comments with
+  // `side: "RIGHT"` → a LEFT-only flip would 422 on submit. The
+  // RIGHT-side filter inside isAnyLineInRightHunk handles that.
+  const endLine = finding.line
+  const startLine =
+    typeof finding.startLine === "number" && Number.isFinite(finding.startLine)
+      ? finding.startLine
+      : endLine
+  const lo = Math.min(startLine, endLine)
+  const hi = Math.max(startLine, endLine)
+  if (!isAnyLineInRightHunk(anchorLines, lo, hi)) return finding
 
   // Force scope=line so the renderer routes inline.
   return { ...finding, scope: "line" as const }

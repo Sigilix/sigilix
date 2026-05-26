@@ -21,6 +21,7 @@ import {
   type LinkedPrFailure,
 } from "../src/lib/mention-reply"
 import type { PrContext } from "../src/lib/github-pr-context"
+import { encodeBranchName } from "../src/lib/index-branch"
 
 function basePr(overrides: Partial<PrContext> = {}): PrContext {
   return {
@@ -214,9 +215,12 @@ describe("resolveLinearAgentRepoScope", () => {
   }
 
   it("scopes Linear agent availableRepos to the requesting tenant owner", async () => {
+    // SIG-218: bounded-length encoded branch segment.
+    const encodedDev = await encodeBranchName("dev")
+    const branchRepo = `arc-and-anchor/sigilix/__branch__/${encodedDev}`
     const env = makeEnv([
       "repo-index-manifest:arc-and-anchor/sigilix",
-      "repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576",
+      `repo-index-manifest:${branchRepo}`,
       "repo-index-manifest:arc-and-anchor/rubberfit",
       "repo-index-manifest:acme/sigilix",
     ])
@@ -232,7 +236,7 @@ describe("resolveLinearAgentRepoScope", () => {
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
-        "arc-and-anchor/sigilix/__branch__/h646576",
+        branchRepo,
       ],
       status: "mapped_indexed",
     })
@@ -431,7 +435,12 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("lowercased owner/repo namespace 'arc-and-anchor/sigilix'")
   })
 
-  it("describes multiple indexed repos and names the default namespace", () => {
+  it("describes multiple indexed repos and names the default namespace", async () => {
+    // SIG-218: branch segment is a 64-bit hash; human branch name is no
+    // longer recoverable from the namespace, so the prompt renders the
+    // structural shape "(non-default branch index)" instead of "branch 'dev'".
+    const encodedDev = await encodeBranchName("dev")
+    const branchRepo = `arc-and-anchor/sigilix/__branch__/${encodedDev}`
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: "arc-and-anchor/sigilix",
@@ -439,18 +448,19 @@ describe("buildAgentInitialUserMessage", () => {
       availableRepos: [
         "arc-and-anchor/rubberfit",
         "arc-and-anchor/sigilix",
-        "arc-and-anchor/sigilix/__branch__/h646576",
+        branchRepo,
       ],
       repoStatus: "mapped_indexed",
     })
 
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix', 'arc-and-anchor/sigilix' branch 'dev'")
+    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/sigilix', 'arc-and-anchor/sigilix' (non-default branch index)")
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
     expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
-    expect(out).toContain("pick a different repo or branch from the list")
-    expect(out).toContain("call retrieve_codebase with repo '<owner>/<repo>' and branch '<name>'")
-    expect(out).not.toContain("__branch__/h646576")
+    expect(out).toContain("pick a different repo from the list when the issue is clearly about it")
+    expect(out).toContain("For entries marked '(non-default branch index)', never pass the internal __branch__ namespace")
+    expect(out).toContain("only pass a human branch name if the user explicitly provides one")
+    expect(out).not.toContain(`__branch__/${encodedDev}`)
   })
 
   it("caps the prompt-visible namespace list without dropping the default repo", () => {

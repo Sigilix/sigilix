@@ -20,6 +20,7 @@ import {
   computeRunId,
   graphIndexEnabled,
   shouldCommitGraph,
+  shouldSkipForLength,
   effectiveChunkerVersion,
   splitOversizedWindow,
   walkIndexableFiles,
@@ -503,5 +504,30 @@ describe("effectiveChunkerVersion (SIG-131)", () => {
   it("is 2 when AST chunking off, 3 when on", () => {
     expect(effectiveChunkerVersion(false)).toBe(2)
     expect(effectiveChunkerVersion(true)).toBe(3)
+  })
+})
+
+describe("shouldSkipForLength (SIG-218 defense)", () => {
+  // The guard fires inside embedBatch when either the namespace or the
+  // chunk id would exceed Vectorize's 64-byte cap. 60 leaves a safety
+  // margin. The bounded-length encodeBranchName fix keeps real namespaces
+  // well under that, but this guard catches any future code path that
+  // forgets to encode.
+  it("passes legitimate-length namespace + id", () => {
+    expect(shouldSkipForLength("a".repeat(48), "arc-and-anchor/sigilix")).toBe(false)
+  })
+
+  it("trips when the namespace exceeds 60 chars", () => {
+    expect(shouldSkipForLength("a".repeat(48), "a".repeat(80))).toBe(true)
+  })
+
+  it("trips when the id exceeds 60 chars (extreme safety net)", () => {
+    expect(shouldSkipForLength("a".repeat(80), "arc-and-anchor/sigilix")).toBe(true)
+  })
+
+  it("does not trip at the 60-char boundary (only > 60 is skipped)", () => {
+    expect(shouldSkipForLength("a".repeat(60), "a".repeat(60))).toBe(false)
+    expect(shouldSkipForLength("a".repeat(61), "ns")).toBe(true)
+    expect(shouldSkipForLength("id", "a".repeat(61))).toBe(true)
   })
 })

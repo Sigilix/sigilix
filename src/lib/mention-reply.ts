@@ -523,11 +523,11 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
     : "(none configured)"
   let repoLine: string
   if (ctx.repo && universe.length > 1) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. The indexed choices are: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different repo or branch from the list when the issue is clearly about it. For entries shown as branch '<name>', call retrieve_codebase with repo '<owner>/<repo>' and branch '<name>' instead of the internal branch namespace. Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. The indexed choices are: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different repo from the list when the issue is clearly about it. For entries marked '(non-default branch index)', never pass the internal __branch__ namespace; only pass a human branch name if the user explicitly provides one. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.repo) {
     repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo && universe.length > 0) {
-    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that default repo is not indexed yet. You may call retrieve_codebase only for indexed choices: ${universeText}. Pick one only if it clearly matches the issue's subject; for branch entries, pass repo '<owner>/<repo>' and branch '<name>'. If the question is about '${ctx.mappedRepo}', explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that default repo is not indexed yet. You may call retrieve_codebase only for indexed choices: ${universeText}. Pick one only if it clearly matches the issue's subject. For entries marked '(non-default branch index)', do not pass the internal __branch__ namespace; only pass a human branch name if the user explicitly provides one. If the question is about '${ctx.mappedRepo}', explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo) {
     repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that repo does not have an index manifest yet. Do not call retrieve_codebase; explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
   } else if (universe.length > 0) {
@@ -556,9 +556,13 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
 }
 
 function formatIndexedNamespaceForPrompt(namespace: string): string {
-  const branch = parseBranchNamespace(namespace)
-  if (!branch) return `'${namespace}'`
-  return `'${branch.owner}/${branch.repo}' branch '${branch.branch}'`
+  const parsed = parseBranchNamespace(namespace)
+  if (!parsed) return `'${namespace}'`
+  // SIG-218: the encoded branch segment is a 64-bit hash of the original
+  // branch name; the human-readable branch can no longer be recovered from
+  // the namespace alone. Display the structural shape so the model knows
+  // this is a non-default branch index without claiming a specific name.
+  return `'${parsed.owner}/${parsed.repo}' (non-default branch index)`
 }
 
 interface LinkedPrFetchResult {

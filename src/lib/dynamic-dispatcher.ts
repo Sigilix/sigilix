@@ -159,14 +159,25 @@ const PROTECTED_ROLES: ReadonlySet<SpecialistRole> = new Set(["security", "logic
 interface RuleLayerResult {
   forcedRoles: Set<SpecialistRole>
   safeSkipRoles: Set<SpecialistRole>
-  /** Audit trail per fired pattern. */
-  reasons: string[]
+  /** Per-role reason attribution. Keyed by role; values are the
+   *  reason strings that fired for THAT role (not a shared global
+   *  list). CodeRabbit M1 fix: prior shared `reasons: string[]`
+   *  leaked unrelated rule attributions into every forced role's
+   *  audit trail in `buildPerRoleVotes`. */
+  roleReasons: Map<SpecialistRole, string[]>
 }
 
 /**
  * Pure rule layer. No I/O, no env reads beyond what the caller
  * passes in via `inputs`. Returns the forced + safe-skip role sets
- * plus a human-readable reason list for telemetry.
+ * plus per-role reason attribution for telemetry.
+ *
+ * NOTE: `repoConfig.dispatcher.force` is NOT consumed here —
+ * `decideSpecialistsDynamic` reads it directly into `repoConfigForced`
+ * to preserve layer separation (rule layer vs repo overrides).
+ * `safetyNet.additionalPatterns` IS consumed here because those are
+ * the per-repo extensions of the global safety net, which is rule-
+ * layer territory.
  *
  * Exported for unit testing — the orchestrator goes through
  * `decideSpecialistsDynamic`.
@@ -177,7 +188,13 @@ export function computeRuleLayer(
   const { signals, classified, commitMessage, repoConfig } = inputs
   const forced = new Set<SpecialistRole>()
   const safeSkip = new Set<SpecialistRole>()
-  const reasons: string[] = []
+  const roleReasons = new Map<SpecialistRole, string[]>()
+
+  const recordReason = (role: SpecialistRole, reason: string): void => {
+    const existing = roleReasons.get(role)
+    if (existing) existing.push(reason)
+    else roleReasons.set(role, [reason])
+  }
 
   const paths = signals.paths
   const lowerPaths = paths.map((p) => p.toLowerCase())
@@ -191,8 +208,10 @@ export function computeRuleLayer(
     const hasSuspiciousFences = signals.diffText === undefined
       || diffContainsExecutableMarkdownFences(signals.diffText)
     if (!hasSuspiciousFences) {
-      for (const role of ALL_SPECIALISTS) safeSkip.add(role)
-      reasons.push("docs_only_no_executable_fences")
+      for (const role of ALL_SPECIALISTS) {
+        safeSkip.add(role)
+        recordReason(role, "docs_only_no_executable_fences")
+      }
       // Path-level safety overrides happen after — they can still
       // FORCE a role back on (e.g. a docs PR that touches
       // `.github/workflows/deploy.md` should still get security).
@@ -202,36 +221,40 @@ export function computeRuleLayer(
   // ─── CSS-only shortcut ───
   if (fileTypes.allCssOnly) {
     forced.add("performance")
+    recordReason("performance", "css_only_perf_only")
     for (const role of ALL_SPECIALISTS) {
-      if (role !== "performance") safeSkip.add(role)
+      if (role !== "performance") {
+        safeSkip.add(role)
+        recordReason(role, "css_only_safe_skip")
+      }
     }
-    reasons.push("css_only_perf_only")
   }
 
   // ─── Global security force patterns ───
   if (anyMatchesPath(lowerPaths, GLOBAL_SECURITY_PATH_PATTERNS)) {
     forced.add("security")
-    reasons.push("security_path_pattern")
+    recordReason("security", "security_path_pattern")
   }
   if (touchesPackagesOrLockfile(lowerPaths)) {
     forced.add("security")
-    reasons.push("supply_chain_lockfile")
+    recordReason("security", "supply_chain_lockfile")
   }
   // Content-level security forces (regex on added diff lines).
   if (signals.diffText && CONTENT_SECURITY_PATTERNS.some((re) => re.test(signals.diffText ?? ""))) {
     forced.add("security")
-    reasons.push("security_content_pattern")
+    recordReason("security", "security_content_pattern")
   }
 
   // ─── Global logic force patterns ───
   if (anyMatchesPath(lowerPaths, GLOBAL_LOGIC_PATH_PATTERNS)) {
     forced.add("logic")
-    reasons.push("logic_path_pattern")
+    recordReason("logic", "logic_path_pattern")
   }
   if (touchesMigrationsOrSchema(lowerPaths)) {
     forced.add("security")
     forced.add("logic")
-    reasons.push("schema_or_migration")
+    recordReason("security", "schema_or_migration")
+    recordReason("logic", "schema_or_migration")
   }
   // Behavior-change keywords in commit message on source files.
   if (
@@ -239,28 +262,25 @@ export function computeRuleLayer(
     && BEHAVIOR_CHANGE_RE.test(commitMessage)
   ) {
     forced.add("logic")
-    reasons.push("source_change_with_behavior_commit")
-  }
-
-  // ─── Per-repo dispatcher.force ───
-  const dispatcherConfig: DispatcherConfig | undefined = repoConfig.dispatcher
-  if (dispatcherConfig?.force) {
-    for (const role of dispatcherConfig.force) {
-      forced.add(role)
-    }
-    if (dispatcherConfig.force.length > 0) {
-      reasons.push(`repo_config_force=${dispatcherConfig.force.join(",")}`)
-    }
+    recordReason("logic", "source_change_with_behavior_commit")
   }
 
   // ─── Per-repo additionalPatterns (purely additive) ───
+  // Note: `dispatcher.force` is intentionally NOT consumed here.
+  // `decideSpecialistsDynamic` reads it directly into
+  // `repoConfigForced` so the layer-attribution telemetry stays
+  // clean (rule layer vs repo override vs LLM).
+  const dispatcherConfig: DispatcherConfig | undefined = repoConfig.dispatcher
   if (dispatcherConfig?.safetyNet?.additionalPatterns) {
-    const hits = matchAdditionalPatterns(paths, dispatcherConfig.safetyNet.additionalPatterns)
-    for (const role of hits) {
+    const hitsByRole = matchAdditionalPatterns(
+      paths,
+      dispatcherConfig.safetyNet.additionalPatterns,
+    )
+    for (const [role, matchedGlobs] of hitsByRole) {
       forced.add(role)
-    }
-    if (hits.size > 0) {
-      reasons.push(`repo_additional_patterns=${[...hits].join(",")}`)
+      for (const glob of matchedGlobs) {
+        recordReason(role, `repo_additional_pattern=${glob}`)
+      }
     }
   }
 
@@ -272,7 +292,12 @@ export function computeRuleLayer(
   // adds security. Force wins.
   for (const role of forced) safeSkip.delete(role)
 
-  return { forcedRoles: forced, safeSkipRoles: safeSkip, reasons }
+  // When forced wins over safe-skip, the safe-skip reasons stay in
+  // `roleReasons` because they're still an honest audit trail of
+  // what the rules computed before the resolution. The role's
+  // `action` in `buildPerRoleVotes` is the truth — reasons explain
+  // why all the layers voted what they voted.
+  return { forcedRoles: forced, safeSkipRoles: safeSkip, roleReasons }
 }
 
 // ─── Tier 2 — LLM classifier ──────────────────────────────────────────
@@ -455,13 +480,24 @@ function parseLlmAnswer(raw: string): { specialists: SpecialistRole[]; confidenc
       if (!specialists.includes(v)) specialists.push(v)
     }
   }
+  // CodeRabbit M2 fix: reject schema-mismatched payloads (missing /
+  // non-integer / out-of-range confidence; missing / non-string
+  // reasoning) instead of defaulting them. Defaulting masked
+  // malformed LLM output as `ok` and let it influence the dispatch
+  // for ambiguous non-protected roles, breaking the file's fail-
+  // closed contract.
   const confRaw = rec.confidence
-  const confidence: 1 | 2 | 3 | 4 | 5 =
-    typeof confRaw === "number" && confRaw >= 1 && confRaw <= 5 && Number.isInteger(confRaw)
-      ? (confRaw as 1 | 2 | 3 | 4 | 5)
-      : 3
-  const reasoning =
-    typeof rec.reasoning === "string" ? rec.reasoning.slice(0, 500) : ""
+  if (
+    typeof confRaw !== "number" ||
+    !Number.isInteger(confRaw) ||
+    confRaw < 1 ||
+    confRaw > 5 ||
+    typeof rec.reasoning !== "string"
+  ) {
+    return null
+  }
+  const confidence = confRaw as 1 | 2 | 3 | 4 | 5
+  const reasoning = rec.reasoning.slice(0, 500)
   return { specialists, confidence, reasoning }
 }
 
@@ -659,12 +695,25 @@ function buildPerRoleVotes(args: {
   const llmPickSet = new Set(args.llm.picks)
   for (const role of ALL_SPECIALISTS) {
     const reasons: string[] = []
+    // CodeRabbit M1 fix: pull reasons from the per-role attribution
+    // map. Previously we copied the entire shared `rules.reasons`
+    // list into every forced role's audit trail, which leaked
+    // unrelated rule attribution across roles in shadow telemetry.
+    const perRoleRuleReasons = args.rules.roleReasons.get(role)
     if (args.rules.forcedRoles.has(role)) {
       reasons.push("rules_forced")
-      reasons.push(...args.rules.reasons)
+      if (perRoleRuleReasons) reasons.push(...perRoleRuleReasons)
     }
     if (args.repoConfigForced.has(role)) reasons.push("repo_config_force")
-    if (args.rules.safeSkipRoles.has(role)) reasons.push("rules_safe_skip")
+    if (args.rules.safeSkipRoles.has(role)) {
+      reasons.push("rules_safe_skip")
+      // Safe-skip reasons (docs_only / css_only) are also per-role;
+      // include them when the role wasn't ALSO forced (force-wins
+      // collision case already added the force reasons above).
+      if (perRoleRuleReasons && !args.rules.forcedRoles.has(role)) {
+        reasons.push(...perRoleRuleReasons)
+      }
+    }
     if (args.ambiguous.has(role)) {
       reasons.push(`llm_outcome=${args.llm.outcome}`)
       reasons.push(llmPickSet.has(role) ? "llm_says_run" : "llm_says_skip")
@@ -686,7 +735,17 @@ function composeReasoning(
   repoConfigForced: ReadonlySet<SpecialistRole>,
 ): string {
   const parts: string[] = []
-  if (rules.reasons.length > 0) parts.push(`rules: ${rules.reasons.join("; ")}`)
+  if (rules.roleReasons.size > 0) {
+    // Flatten the per-role reason map into a top-level summary
+    // string. Each role's reasons are grouped under the role name so
+    // the top-level dispatcher reasoning stays readable for shadow
+    // telemetry while still distinguishing per-role attribution.
+    const grouped: string[] = []
+    for (const [role, reasons] of rules.roleReasons) {
+      if (reasons.length > 0) grouped.push(`${role}=${reasons.join(",")}`)
+    }
+    if (grouped.length > 0) parts.push(`rules[${grouped.join(" ; ")}]`)
+  }
   if (repoConfigForced.size > 0) parts.push(`repo_force: ${[...repoConfigForced].join(",")}`)
   parts.push(`llm[${llm.outcome}, conf=${llm.confidence}]: ${truncate(llm.reasoning, 200)}`)
   return parts.join(" | ")
@@ -902,8 +961,8 @@ function diffContainsExecutableMarkdownFences(diff: string): boolean {
 function matchAdditionalPatterns(
   paths: readonly string[],
   patterns: readonly DispatcherSafetyNetPattern[],
-): Set<SpecialistRole> {
-  const hits = new Set<SpecialistRole>()
+): Map<SpecialistRole, string[]> {
+  const hitsByRole = new Map<SpecialistRole, string[]>()
   for (const pat of patterns) {
     let re: RegExp
     try {
@@ -914,10 +973,12 @@ function matchAdditionalPatterns(
       continue
     }
     if (paths.some((p) => re.test(p))) {
-      hits.add(pat.role)
+      const existing = hitsByRole.get(pat.role)
+      if (existing) existing.push(pat.glob)
+      else hitsByRole.set(pat.role, [pat.glob])
     }
   }
-  return hits
+  return hitsByRole
 }
 
 function extractDiffSample(diff: string, maxLines: number): string {

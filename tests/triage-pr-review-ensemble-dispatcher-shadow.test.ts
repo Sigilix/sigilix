@@ -155,6 +155,20 @@ afterEach(() => {
   errorSpy.mockRestore()
 })
 
+function isDispatcherCall(arg: unknown): boolean {
+  if (!arg || typeof arg !== "object") return false
+  const messages = (arg as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return false
+  for (const m of messages) {
+    if (!m || typeof m !== "object") continue
+    const content = (m as { content?: unknown }).content
+    if (typeof content === "string" && content.includes("specialist-dispatcher")) {
+      return true
+    }
+  }
+  return false
+}
+
 function findLoggedEvent(eventName: string): Record<string, unknown> | undefined {
   for (const call of logSpy.mock.calls) {
     const arg = call[0]
@@ -228,8 +242,16 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     expect((event?.layerVotes as Record<string, unknown>).llmOutcome).toBe("ok")
 
     // Dispatcher chat() should have used the in-fleet flash model.
-    const dispatcherCall = mockChat.mock.calls[0]?.[0] as { model: string } | undefined
-    expect(dispatcherCall?.model).toBe("deepseek-v4-flash:cloud")
+    // CodeRabbit nit fix: locate the call by content (not by index)
+    // so unrelated orchestration changes that add chat() calls
+    // before the dispatcher don't break this assertion. The
+    // dispatcher's system prompt has the unique
+    // "specialist-dispatcher" identifier; the tests specialist
+    // (which also uses `deepseek-v4-flash:cloud`) does not.
+    const dispatcherCall = mockChat.mock.calls.find((call) => isDispatcherCall(call[0]))
+    expect(dispatcherCall).toBeDefined()
+    const arg = dispatcherCall?.[0] as { model: string } | undefined
+    expect(arg?.model).toBe("deepseek-v4-flash:cloud")
   })
 
   it("does NOT emit dispatcher telemetry when mode is off/absent", async () => {
@@ -258,6 +280,15 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     })
 
     expect(findLoggedEvent("dispatcher-shadow-decision")).toBeUndefined()
+    // CodeRabbit minor fix: also assert the dispatcher's LLM was
+    // never invoked, so a future change that accidentally fires the
+    // dispatcher when mode is off can't pass this test silently.
+    // The dispatcher's system prompt has a unique
+    // "specialist-dispatcher" identifier — the tests specialist
+    // shares `deepseek-v4-flash:cloud` so model name alone is not a
+    // valid discriminator.
+    const dispatcherCalls = mockChat.mock.calls.filter((call) => isDispatcherCall(call[0]))
+    expect(dispatcherCalls).toHaveLength(0)
   })
 
   it("logs enforce-mode-not-honored when mode=enforce (Phase 1 safety)", async () => {

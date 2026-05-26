@@ -91,7 +91,12 @@ describe("computeRuleLayer — docs-only shortcut", () => {
     expect([...result.safeSkipRoles].sort()).toEqual(
       ["logic", "performance", "security", "tests"]
     )
-    expect(result.reasons).toContain("docs_only_no_executable_fences")
+    // Per-role reason attribution: docs-only-no-fences fires on every
+    // role. Code-review M1 fix: reasons are tracked per role now,
+    // not in a global shared list.
+    for (const role of ["logic", "performance", "security", "tests"] as const) {
+      expect(result.roleReasons.get(role)).toContain("docs_only_no_executable_fences")
+    }
   })
 
   it("does NOT safe-skip when docs diff contains executable fenced YAML", () => {
@@ -323,7 +328,14 @@ describe("computeRuleLayer — logic force patterns", () => {
 })
 
 describe("computeRuleLayer — per-repo dispatcher config", () => {
-  it("respects sigilix.json::dispatcher.force adding security + logic", () => {
+  it("does NOT consume sigilix.json::dispatcher.force (separation of concerns)", () => {
+    // Code-review M1: `dispatcher.force` is a REPO OVERRIDE, not a
+    // rule-layer signal. `computeRuleLayer` intentionally ignores it
+    // so per-layer telemetry stays attributable. The top-level
+    // `decideSpecialistsDynamic` reads `dispatcher.force` separately
+    // into `layerVotes.repoConfigForced`. Coverage of the actual
+    // force-include behavior lives under
+    // `decideSpecialistsDynamic — mode=shadow, rules decide everything`.
     const result = computeRuleLayer({
       signals: {
         paths: ["src/lib/foo.ts"],
@@ -335,8 +347,11 @@ describe("computeRuleLayer — per-repo dispatcher config", () => {
         dispatcher: { force: ["security", "logic"] },
       },
     })
-    expect(result.forcedRoles.has("security")).toBe(true)
-    expect(result.forcedRoles.has("logic")).toBe(true)
+    // Rule layer is silent — no rule-driven force fired.
+    expect(result.forcedRoles.has("security")).toBe(false)
+    expect(result.forcedRoles.has("logic")).toBe(false)
+    expect(result.roleReasons.get("security")).toBeUndefined()
+    expect(result.roleReasons.get("logic")).toBeUndefined()
   })
 
   it("applies sigilix.json::dispatcher.safetyNet.additionalPatterns globs", () => {
@@ -393,9 +408,11 @@ describe("computeRuleLayer — per-repo dispatcher config", () => {
       },
     })
     // Malformed glob is silently skipped — neither forced nor crashed.
-    // (There may be other forces from the file path, but not from the
-    // malformed pattern.)
-    expect(result.reasons).not.toContain("repo_additional_patterns=security")
+    // (Per-role reasons map has no entry for `security` from the
+    // pattern; other patterns / paths may have populated it, but
+    // not via the malformed `[unclosed` glob.)
+    const securityReasons = result.roleReasons.get("security") ?? []
+    expect(securityReasons.some((r) => r.includes("repo_additional_pattern="))).toBe(false)
   })
 })
 

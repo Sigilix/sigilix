@@ -1556,37 +1556,52 @@ export async function handlePrReviewEnsemble(
     // shadow overhead per review.
     const dispatcherMode = env.OPENCLAW_DYNAMIC_DISPATCHER_MODE
     if (dispatcherMode === "shadow" || dispatcherMode === "enforce") {
-      const dispatcherClassified = classifyDiffFiles(filePaths)
-      const dispatcherCommitMessage = `${meta.title}\n\n${meta.body ?? ""}`
-      const dispatcherDecision = await decideSpecialistsDynamic({
-        signals: { paths: filePaths, totalLinesChanged, diffText: diff },
-        classified: dispatcherClassified,
-        commitMessage: dispatcherCommitMessage,
-        repoConfig: sigilixConfig,
-        env,
-        signal: orchCtrl.signal,
-      })
-      // Hold on the telemetry object so the KV-backed metrics
-      // endpoints can aggregate shadow-window stats (per-role
-      // agreement rates, p50/p95/p99 dispatcher overhead, etc.) —
-      // Phase 2/3 graduation depends on this.
-      telemetry.dispatcherDecision = dispatcherDecision
-      console.log(JSON.stringify({
-        event: "dispatcher-shadow-decision",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
-        mode: dispatcherMode,
-        routerSpecialists: router.specialists,
-        dispatcherSpecialists: dispatcherDecision.specialists,
-        perRole: dispatcherDecision.perRole,
-        layerVotes: dispatcherDecision.layerVotes,
-        reasoning: dispatcherDecision.reasoning,
-        elapsedMs: dispatcherDecision.elapsedMs,
-      }))
-      if (dispatcherMode === "enforce") {
-        console.warn(JSON.stringify({
-          event: "dispatcher-enforce-mode-not-honored-in-phase-1",
+      // CodeRabbit M3 fix: shadow-only work runs in a try/catch so an
+      // unexpected throw inside the dispatcher (defense-in-depth on
+      // top of `decideSpecialistsDynamic`'s never-throw contract)
+      // can't poison the legacy review pipeline. Failure here is
+      // logged + swallowed — the orchestrator continues with
+      // `router.specialists` for fan-out.
+      try {
+        const dispatcherClassified = classifyDiffFiles(filePaths)
+        const dispatcherCommitMessage = `${meta.title}\n\n${meta.body ?? ""}`
+        const dispatcherDecision = await decideSpecialistsDynamic({
+          signals: { paths: filePaths, totalLinesChanged, diffText: diff },
+          classified: dispatcherClassified,
+          commitMessage: dispatcherCommitMessage,
+          repoConfig: sigilixConfig,
+          env,
+          signal: orchCtrl.signal,
+        })
+        // Hold on the telemetry object so the KV-backed metrics
+        // endpoints can aggregate shadow-window stats (per-role
+        // agreement rates, p50/p95/p99 dispatcher overhead, etc.) —
+        // Phase 2/3 graduation depends on this.
+        telemetry.dispatcherDecision = dispatcherDecision
+        console.log(JSON.stringify({
+          event: "dispatcher-shadow-decision",
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          note: "enforcement ships in SIG-227 (non-protected) + SIG-228 (protected)",
+          mode: dispatcherMode,
+          routerSpecialists: router.specialists,
+          dispatcherSpecialists: dispatcherDecision.specialists,
+          perRole: dispatcherDecision.perRole,
+          layerVotes: dispatcherDecision.layerVotes,
+          reasoning: dispatcherDecision.reasoning,
+          elapsedMs: dispatcherDecision.elapsedMs,
+        }))
+        if (dispatcherMode === "enforce") {
+          console.warn(JSON.stringify({
+            event: "dispatcher-enforce-mode-not-honored-in-phase-1",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            note: "enforcement ships in SIG-227 (non-protected) + SIG-228 (protected)",
+          }))
+        }
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "dispatcher-shadow-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+          note: "dispatcher threw unexpectedly; legacy router still drives fan-out",
         }))
       }
     }

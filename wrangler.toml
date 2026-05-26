@@ -182,6 +182,31 @@ SHADOW_BAKEOFF_ROLES = "synth"
 OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
 
+# SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
+# shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
+# been dormant since Phase 4a "baseline data collection" for months.
+# Enabling it activates the deterministic shortcuts that the SIG-226
+# shadow dispatcher's rule layer also relies on:
+#
+#   docs-only-no-executable-fences → run 0 specialists (green check,
+#     no comment) — was 5-8min total, becomes ~10s
+#   CSS-only → run only `performance` — was 5-8min, becomes ~120s
+#   auth/lockfile/schema/migration paths → force security (no skip;
+#     additive to the default "all four run" behavior)
+#
+# Pre-req fix landed in PR #182 (SIG-224 Phase 0): the
+# `router.specialists.length === 0` branch now finalizes as "skipped
+# → success" (green check, no comment) instead of the prior
+# "bailWithSkipNotice" → "Couldn't review · see PR comment" yellow
+# check. Without that fix, docs-only PRs would have rendered a
+# customer-visible "Couldn't review" comment when the flag flipped.
+#
+# Rollback: flip back to "off" or remove this line. No data migration,
+# no schema change. Worst-case observable regression: a docs-only-no-
+# fences PR shows a "Sigilix · Approved — no issues found" check with
+# no inline findings (which is correct for a docs PR).
+OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
+
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.
 #               Identical behavior to pre-SIG-161. This is the PR 4a default.

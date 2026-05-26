@@ -556,9 +556,13 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
 }
 
 function formatIndexedNamespaceForPrompt(namespace: string): string {
-  const branch = parseBranchNamespace(namespace)
-  if (!branch) return `'${namespace}'`
-  return `'${branch.owner}/${branch.repo}' branch '${branch.branch}'`
+  const parsed = parseBranchNamespace(namespace)
+  if (!parsed) return `'${namespace}'`
+  // SIG-218: the encoded branch segment is a 64-bit hash of the original
+  // branch name; the human-readable branch can no longer be recovered from
+  // the namespace alone. Display the structural shape so the model knows
+  // this is a non-default branch index without claiming a specific name.
+  return `'${parsed.owner}/${parsed.repo}' (non-default branch index)`
 }
 
 interface LinkedPrFetchResult {

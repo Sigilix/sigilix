@@ -319,7 +319,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     }))
     return
   }
-  const target = resolveIndexTarget({
+  const target = await resolveIndexTarget({
     owner,
     repo,
     defaultBranch: repoMeta.default_branch,
@@ -654,7 +654,7 @@ async function handleShardJob(
       note: "legacy shard missing defaultBranch; using sentinel",
     }))
   }
-  const target = resolveIndexTarget({
+  const target = await resolveIndexTarget({
     owner,
     repo,
     defaultBranch: resolvedDefaultBranch ?? "__default_unknown__",
@@ -1045,6 +1045,21 @@ async function embedBatch(
     const chunk = chunks[i]!
     const vec = vectors[i]!
     const id = await chunkId(namespace, chunk)
+    // SIG-218 defense: Vectorize hard-caps namespace + id at 64 bytes; the
+    // bounded-length encodeBranchName fix keeps `namespace` well under that
+    // for every legitimate path, but log + skip if anything constructs a
+    // long namespace via another code path. 60 leaves a safety margin.
+    if (namespace.length > 60 || id.length > 60) {
+      console.error(JSON.stringify({
+        event: "vector-upsert-length-exceeded",
+        namespaceLength: namespace.length,
+        idLength: id.length,
+        namespaceSample: namespace.slice(0, 32),
+        idSample: id.slice(0, 16),
+        path: chunk.path,
+      }))
+      continue
+    }
     out.push({
       id,
       values: vec,

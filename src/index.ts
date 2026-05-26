@@ -1611,7 +1611,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // state machine.
       return handleIndexRepoJob({ job, env })
     case "delete-repo-index": {
-      const repoState = job.branch ? branchStateRepo(job.repo, job.branch) : job.repo
+      const repoState = job.branch ? await branchStateRepo(job.repo, job.branch) : job.repo
       const result = await deleteRepoIndex({
         env,
         owner: job.owner,

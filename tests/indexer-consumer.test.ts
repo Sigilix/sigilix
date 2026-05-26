@@ -82,6 +82,7 @@ import { activeRunKey } from "../src/lib/repo-index-active-run"
 import { scopedRulesKey } from "../src/lib/scoped-rules-kv"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
 import { CHUNKER_VERSION } from "../src/lib/indexer"
+import { encodeBranchName } from "../src/lib/index-branch"
 import type { Env, JobMessage } from "../src/index"
 
 interface Sent {
@@ -220,26 +221,30 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
 
     expect(mockGetBranch).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", "dev")
     expect(sent).toHaveLength(0)
+    // SIG-218: branch segment is now `h` + 16-hex sha256(branch) prefix.
+    const encodedDev = await encodeBranchName("dev")
+    const branchRepo = `sigilix/__branch__/${encodedDev}`
+    const branchNamespace = `arc-and-anchor/${branchRepo}`
     const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap(
       (call) => call[0] as Array<{ namespace?: string }>,
     )
     expect(upsertedRecords.length).toBeGreaterThan(0)
     for (const rec of upsertedRecords) {
-      expect(rec.namespace).toBe("arc-and-anchor/sigilix/__branch__/h646576")
+      expect(rec.namespace).toBe(branchNamespace)
     }
     expect(mockWriteFileGraph).not.toHaveBeenCalled()
     expect(mockCommitGraph).not.toHaveBeenCalled()
 
     expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
-    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix/__branch__/h646576"))
+    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", branchRepo))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
-      expect(parsed.repo).toBe("sigilix/__branch__/h646576")
+      expect(parsed.repo).toBe(branchRepo)
       expect(parsed.actualRepo).toBe("sigilix")
       expect(parsed.branch).toBe("dev")
       expect(parsed.defaultBranch).toBe("main")
-      expect(parsed.namespace).toBe("arc-and-anchor/sigilix/__branch__/h646576")
+      expect(parsed.namespace).toBe(branchNamespace)
       expect(parsed.fileCount).toBe(1)
     }
   })

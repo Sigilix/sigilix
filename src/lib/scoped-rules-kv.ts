@@ -28,6 +28,7 @@ export type ReadResult =
   | { kind: "ok"; manifest: ScopedRulesManifest }
   | { kind: "missing" }
   | { kind: "invalid"; reason: "json-parse" | "shape" }
+  | { kind: "kv-error"; err: string }
 
 function isScopedRulesManifest(value: unknown): value is ScopedRulesManifest {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
@@ -54,13 +55,25 @@ function isScopedRulesManifest(value: unknown): value is ScopedRulesManifest {
  * Read + validate the scoped-rules manifest from KV. Tagged result so
  * the caller (the ensemble) can decide to log + fall through to an
  * empty manifest without breaking the review on a malformed record.
+ *
+ * SIG-172 H3 (fix-up): the KV `get` itself can throw (transient
+ * Cloudflare KV outage, auth rotation, etc.). Catch + tag as
+ * `kv-error` so the loader can fall through to an empty manifest
+ * without erroring the whole review — scoped rules are additive
+ * context, so a missing/invalid/unreadable record must NEVER fail
+ * the review.
  */
 export async function readScopedRulesManifest(
   env: Env,
   owner: string,
   repo: string,
 ): Promise<ReadResult> {
-  const raw = await env.OPENCLAW_STATE.get(scopedRulesKey(owner, repo))
+  let raw: string | null
+  try {
+    raw = await env.OPENCLAW_STATE.get(scopedRulesKey(owner, repo))
+  } catch (err) {
+    return { kind: "kv-error", err: err instanceof Error ? err.message : String(err) }
+  }
   if (raw === null) return { kind: "missing" }
   let parsed: unknown
   try {
@@ -76,8 +89,11 @@ export async function readScopedRulesManifest(
 
 /**
  * Convenience: read + compile to matcher-ready form. Returns an empty
- * compiled manifest when the record is missing or invalid so the
- * orchestrator can treat the "no scoped rules" path uniformly.
+ * compiled manifest when the record is missing, invalid, or
+ * unreadable (KV throw) so the orchestrator can treat the "no scoped
+ * rules" path uniformly. KV-error case emits telemetry so dashboards
+ * can surface persistent KV trouble even though the review didn't
+ * fail.
  */
 export async function loadCompiledScopedRulesManifest(
   env: Env,
@@ -87,6 +103,13 @@ export async function loadCompiledScopedRulesManifest(
   const result = await readScopedRulesManifest(env, owner, repo)
   if (result.kind === "ok") {
     return compileScopedRulesManifest(result.manifest)
+  }
+  if (result.kind === "kv-error") {
+    console.warn(JSON.stringify({
+      event: "scoped-rules-manifest-read-failed",
+      owner, repo,
+      err: result.err,
+    }))
   }
   return { perDirectoryRules: [], globRules: [] }
 }

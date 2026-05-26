@@ -28,21 +28,41 @@
 //      the marker-scan fallback covers TTL'd entries on rare-edit PRs.
 //   4. Withdrawal short-circuits the upsert before any GitHub call
 //      (CodeQL/Semgrep model — research §Q4).
-//   5. Race protection: the existing PrReviewRunDO single-flight from
-//      ARC-190 already gates concurrent runs on `(owner, repo,
-//      prNumber, headSha)` via `decideEnqueueAction`'s `dedupe-active`,
-//      so two upsert callers for the same fingerprint on the same head
-//      cannot interleave. Across-head races (rapid `synchronize` storm
-//      that supersedes) are bounded by the marker-scan fallback: the
-//      second writer reads the first's marker on cache miss and
-//      PATCHes instead of double-posting.
+//   5. Race-protection model (SIG-170 H1 fix-up: docstring corrected,
+//      behaviour unchanged):
 //
-// Telemetry events (per spec):
-//   - `upsert.hit_marker_via_kv`       — KV cache hit → PATCH
-//   - `upsert.hit_marker_via_scan`     — KV miss, marker found by scan → PATCH + backfill KV
-//   - `upsert.miss_created`            — KV miss + scan miss → POST + write KV
-//   - `upsert.withdrawn_skipped`       — fingerprint matches withdrawal → no GitHub call
-//   - `upsert.race_detected`           — KV held a stale id; scan returned a fresher one
+//      - Same-SHA re-entry: bounded by the existing PrReviewRunDO
+//        single-flight from ARC-190 (`decideEnqueueAction` returns
+//        `dedupe-active`). The DO key is (owner, repo, prNumber,
+//        headSha), so two writers on the same head cannot interleave.
+//
+//      - Across-SHA `synchronize` storm: NOT bounded. The DO key
+//        includes headSha, so two writers on different SHAs of the
+//        same PR can both miss KV AND both miss the marker scan (the
+//        first writer's POST hasn't completed before the second
+//        writer's scan reads). Net: 2 comments on this push, which
+//        the dismissal pipeline + the next push's marker scan
+//        converge to 1 on the subsequent run. Acceptable trade-off
+//        — widening the DO key to (owner, repo, prNumber) for the
+//        upsert phase would serialise ALL upserts on a busy PR and
+//        reduce parallelism more than the rare double-post warrants.
+//
+//      - Stale-KV recovery (the actual case the `*-stale-kv-recovered`
+//        event fires on): when a cached comment id becomes invalid
+//        (the comment was deleted by a reviewer or a sweep, or a
+//        prior writer rewrote KV), the marker scan returns a fresher
+//        live id and we PATCH that one. Emits the recovery telemetry
+//        so dashboards can flag the self-heal — the upsert succeeded
+//        but the cache was lying.
+//
+// Telemetry events (SIG-170 H1 fix-up: all renamed to the
+// `unanchored-comment-upsert-*` kebab-case prefix so dashboards key
+// off a single greppable namespace):
+//   - `unanchored-comment-upsert-hit-kv`               — KV cache hit → PATCH
+//   - `unanchored-comment-upsert-hit-scan`             — KV miss, marker found by scan → PATCH + backfill KV
+//   - `unanchored-comment-upsert-miss-created`         — KV miss + scan miss → POST + write KV
+//   - `unanchored-comment-upsert-withdrawn-skipped`    — fingerprint matches withdrawal → no GitHub call
+//   - `unanchored-comment-upsert-stale-kv-recovered`   — KV held a stale id; scan returned a fresher one
 
 import type { Env } from "../index"
 import type { GitHubClient } from "./github"
@@ -277,7 +297,7 @@ export async function upsertUnanchoredComment(
       withdrawals,
     )
     if (suppressed.length > 0) {
-      emit("upsert.withdrawn_skipped", tag)
+      emit("unanchored-comment-upsert-withdrawn-skipped", tag)
       return { outcome: "withdrawn_skipped", fingerprint }
     }
   }
@@ -296,7 +316,7 @@ export async function upsertUnanchoredComment(
   if (cachedId !== null) {
     try {
       await client.updateIssueComment(owner, repo, cachedId, body)
-      emit("upsert.hit_marker_via_kv", { ...tag, comment_id: cachedId })
+      emit("unanchored-comment-upsert-hit-kv", { ...tag, comment_id: cachedId })
       // Refresh TTL so an actively-edited fingerprint doesn't expire
       // mid-PR. Same id, same key — just resets the 7-day clock.
       await writeKvCachedCommentId(env, key, cachedId)
@@ -333,20 +353,25 @@ export async function upsertUnanchoredComment(
     // If KV held a DIFFERENT id than the scan found, a concurrent
     // writer beat us — record the race and converge on the scan's id
     // (the comment that actually exists right now).
-    const isRace = cachedId !== null && cachedId !== scannedId
-    if (isRace) {
-      emit("upsert.race_detected", {
+    const isStaleKvRecovery = cachedId !== null && cachedId !== scannedId
+    if (isStaleKvRecovery) {
+      // SIG-170 H1 (fix-up): renamed from `upsert.race_detected`.
+      // This fires when KV held a stale id and the scan returned a
+      // fresher one — i.e. self-healing the cache, NOT detecting a
+      // concurrent first-write race (across-SHA double-posts aren't
+      // bounded; see the model docstring at the top of this file).
+      emit("unanchored-comment-upsert-stale-kv-recovered", {
         ...tag, kv_comment_id: cachedId, scan_comment_id: scannedId,
       })
     }
     await client.updateIssueComment(owner, repo, scannedId, body)
-    emit("upsert.hit_marker_via_scan", {
+    emit("unanchored-comment-upsert-hit-scan", {
       ...tag, comment_id: scannedId,
-      ...(isRace ? { recovered_from_race: true } : {}),
+      ...(isStaleKvRecovery ? { recovered_from_stale_kv: true } : {}),
     })
     await writeKvCachedCommentId(env, key, scannedId)
     return {
-      outcome: isRace ? "race_detected" : "hit_marker_via_scan",
+      outcome: isStaleKvRecovery ? "race_detected" : "hit_marker_via_scan",
       fingerprint,
       commentId: scannedId,
     }
@@ -368,6 +393,6 @@ export async function upsertUnanchoredComment(
     return { outcome: "miss_created", fingerprint }
   }
   await writeKvCachedCommentId(env, key, commentId)
-  emit("upsert.miss_created", { ...tag, comment_id: commentId })
+  emit("unanchored-comment-upsert-miss-created", { ...tag, comment_id: commentId })
   return { outcome: "miss_created", fingerprint, commentId }
 }

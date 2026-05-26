@@ -325,7 +325,7 @@ describe("upsertUnanchoredComment — withdrawal short-circuit", () => {
     expect(client.updateCalls).toHaveLength(0)
     // Telemetry surfaced.
     const events = logSpy.mock.calls.map((c) => JSON.parse(c[0] as string).event)
-    expect(events).toContain("upsert.withdrawn_skipped")
+    expect(events).toContain("unanchored-comment-upsert-withdrawn-skipped")
   })
 })
 

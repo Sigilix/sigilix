@@ -19,7 +19,7 @@
 //     glob, malformed frontmatter (falls back to body-only), and
 //     trailing whitespace.
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import {
   ancestorDirs,
@@ -33,6 +33,12 @@ import {
   resolveScopedRulesForChangedPaths,
   walkScopedRuleFiles,
 } from "../src/lib/scoped-rules"
+import {
+  loadCompiledScopedRulesManifest,
+  readScopedRulesManifest,
+  scopedRulesKey,
+} from "../src/lib/scoped-rules-kv"
+import type { Env } from "../src/index"
 
 describe("parseRuleFrontmatter", () => {
   it("returns the body verbatim when no frontmatter is present", () => {
@@ -92,6 +98,46 @@ describe("parseRuleFrontmatter", () => {
     // isn't populated and `glob` stays undefined.
     expect(result.glob).toBeUndefined()
     expect(result.body).toBe("body")
+  })
+
+  // SIG-172 H1 (fix-up) — CRLF + lone-CR line endings are normalised
+  // BEFORE matching. A Windows-authored .sigilix/rules/*.md previously
+  // fell through to body-only mode AND leaked its raw YAML header into
+  // the LLM prompt.
+  it("parses CRLF (\\r\\n) line-ended frontmatter correctly", () => {
+    const text = "---\r\nglob: src/**/*.ts\r\n---\r\nBody text here."
+    const result = parseRuleFrontmatter(text)
+    expect(result.glob).toBe("src/**/*.ts")
+    expect(result.body).toBe("Body text here.")
+  })
+
+  it("parses lone-CR (\\r) line-ended frontmatter correctly", () => {
+    // Classic-Mac line endings are vanishingly rare in practice but
+    // the normalisation is cheap and the fix-up brief asked for it.
+    const text = "---\rglob: src/**/*.ts\r---\rBody text here."
+    const result = parseRuleFrontmatter(text)
+    expect(result.glob).toBe("src/**/*.ts")
+    expect(result.body).toBe("Body text here.")
+  })
+
+  it("parses frontmatter-only files (no body after the closing delim)", () => {
+    // `---\nfoo: bar\n---` with no trailing newline + no body —
+    // previously fell through to body-only because the regex required
+    // a trailing `\n([\s\S]*)`. Now the trailing newline + body capture
+    // is optional, so this returns the parsed field + empty body.
+    const text = "---\nglob: src/**/*.ts\n---"
+    const result = parseRuleFrontmatter(text)
+    expect(result.glob).toBe("src/**/*.ts")
+    expect(result.body).toBe("")
+  })
+
+  it("parses frontmatter-only files with trailing newline (no body) correctly", () => {
+    // `---\nfoo: bar\n---\n` (closing delim followed by a newline but
+    // nothing else). Should yield empty body, not body===text.
+    const text = "---\nglob: src/**/*.ts\n---\n"
+    const result = parseRuleFrontmatter(text)
+    expect(result.glob).toBe("src/**/*.ts")
+    expect(result.body).toBe("")
   })
 })
 
@@ -339,13 +385,16 @@ describe("resolveScopedRulesForChangedPaths — glob rules (.sigilix/rules/*.md)
     ])
   })
 
-  it("bad globs (compile failures) are treated as no-frontmatter and fire repo-wide", () => {
-    // picomatch tolerates most strings; this test uses a `glob: ` that
-    // picomatch happens to accept literally. The behavior we actually
-    // need to defend is: if compileScopedRulesManifest fell into the
-    // `matcher: null` catch branch, the rule still ships in the
-    // selection (it doesn't silently disappear). We exercise the
-    // path by constructing the manifest directly with `matcher: null`.
+  it("bad globs (compile failures) are suppressed (don't fire) — typo'd globs would otherwise leak repo-wide", () => {
+    // SIG-172 H2 (fix-up): renamed from the prior misleading title.
+    // The assertion already checks the correct behavior (suppress, not
+    // fire); the comment + title were inverted.
+    //
+    // Picomatch is permissive — most "weird" strings still compile.
+    // We exercise the documented matcher:null+non-null-glob branch by
+    // constructing the resolved manifest directly. The lower-level
+    // compile-failure telemetry test exercises the real catch branch
+    // via a non-string `glob` cast through unknown.
     const selection = resolveScopedRulesForChangedPaths(
       {
         perDirectoryRules: [],
@@ -365,6 +414,35 @@ describe("resolveScopedRulesForChangedPaths — glob rules (.sigilix/rules/*.md)
     // suppress (otherwise typo'd globs leak repo-wide). But for
     // glob:null + matcher:null (no frontmatter) it MUST fire. Confirm:
     expect(selection.globRules).toHaveLength(0)
+  })
+
+  it("compileScopedRulesManifest emits `scoped-rules-glob-compile-failed` telemetry when picomatch throws", () => {
+    // SIG-172 H2 (fix-up). Picomatch throws on non-string input
+    // ("Expected pattern to be a non-empty string"). We coerce a
+    // non-string glob through unknown so the catch branch runs even
+    // though `ScopedRulesManifest` types `glob` as `string | null`.
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const manifest = compileScopedRulesManifest({
+      perDirectoryRules: [],
+      globRules: [
+        {
+          rulePath: ".sigilix/rules/typo.md",
+          // The runtime call into picomatch throws on a non-string —
+          // simulating a manifest that drifted from the schema (or a
+          // future schema extension that landed a non-string value).
+          glob: 123 as unknown as string,
+          body: "Body.",
+        },
+      ],
+    })
+    expect(manifest.globRules).toHaveLength(1)
+    expect(manifest.globRules[0]!.matcher).toBeNull()
+    const events = warnSpy.mock.calls.map((c) => JSON.parse(c[0] as string))
+    const compileFailed = events.find((e) => e.event === "scoped-rules-glob-compile-failed")
+    expect(compileFailed).toBeDefined()
+    expect(compileFailed.rulePath).toBe(".sigilix/rules/typo.md")
+    expect(typeof compileFailed.err).toBe("string")
+    warnSpy.mockRestore()
   })
 })
 
@@ -398,5 +476,111 @@ describe("renderScopedRulesForPrompt", () => {
     expect(rendered).toContain("[SCOPED RULES")
     expect(rendered).toContain("SHARED_NEGATIVE_CONSTRAINTS")
     expect(rendered.toUpperCase()).toContain("MUST DEFER")
+  })
+
+  // SIG-172 M1 (fix-up) — aggregate byte cap defends the prompt budget
+  // when a handful of in-range (<= MAX_RULE_FILE_BYTES) rule files
+  // combine to exceed the per-block budget.
+  it("caps the rendered block at MAX_RENDERED_SCOPED_RULES_BYTES and emits truncation telemetry", async () => {
+    const { MAX_RENDERED_SCOPED_RULES_BYTES } = await import("../src/lib/scoped-rules")
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    // Build 6 per-directory rules of 4KB each = 24KB raw, well past
+    // the 16KB cap. Use distinct dir paths so dedup doesn't collapse
+    // them. Order is shallowest-first per the selection contract; the
+    // cap drops from the tail (lower-priority shallower rules).
+    const big = "x".repeat(4 * 1024)
+    const perDirectoryRules = [
+      { dirPath: "a/b/c/d", body: big }, // deepest — kept
+      { dirPath: "a/b/c", body: big },
+      { dirPath: "a/b", body: big },
+      { dirPath: "a", body: big },
+      { dirPath: "z/y/x", body: big },
+      { dirPath: "", body: big },        // shallowest — dropped first
+    ]
+    const rendered = renderScopedRulesForPrompt({
+      perDirectoryRules,
+      globRules: [],
+    })
+    // Bytes including the header lines + truncation marker — assert the
+    // rule-body payload stays under the cap (slack of a few hundred
+    // bytes for the static header is irrelevant here because we cap on
+    // the BLOCKS budget, not header+blocks; header lives outside the
+    // counted total per the implementation).
+    const renderedBytes = new TextEncoder().encode(rendered).length
+    // Header is small (~330 bytes); 16KB cap + small header + marker
+    // line should still leave us well under 17KB total.
+    expect(renderedBytes).toBeLessThan(MAX_RENDERED_SCOPED_RULES_BYTES + 2 * 1024)
+    expect(rendered).toContain("scoped rules truncated at")
+    const events = warnSpy.mock.calls.map((c) => JSON.parse(c[0] as string))
+    const truncated = events.find((e) => e.event === "scoped-rules-block-truncated")
+    expect(truncated).toBeDefined()
+    expect(truncated.droppedCount).toBeGreaterThan(0)
+    expect(truncated.capBytes).toBe(MAX_RENDERED_SCOPED_RULES_BYTES)
+    warnSpy.mockRestore()
+  })
+
+  it("does NOT emit truncation telemetry when the block fits under the cap", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    renderScopedRulesForPrompt({
+      perDirectoryRules: [{ dirPath: "src", body: "Small body." }],
+      globRules: [],
+    })
+    const events = warnSpy.mock.calls.map((c) => JSON.parse(c[0] as string))
+    expect(events.find((e) => e.event === "scoped-rules-block-truncated")).toBeUndefined()
+    warnSpy.mockRestore()
+  })
+})
+
+// SIG-172 H3 (fix-up) — KV-read failure must NEVER fail the review.
+// `readScopedRulesManifest` tags the throw as `kv-error`;
+// `loadCompiledScopedRulesManifest` emits the read-failed telemetry
+// event + returns an empty compiled manifest so the orchestrator
+// falls through to the "no scoped rules" path.
+describe("scoped-rules KV read fails open on transient errors", () => {
+  function makeEnvWithFailingGet(message: string): Env {
+    return {
+      OPENCLAW_STATE: {
+        get: async (_key: string) => {
+          throw new Error(message)
+        },
+      } as unknown as KVNamespace,
+    } as unknown as Env
+  }
+
+  it("readScopedRulesManifest tags KV throws as kind=kv-error (does not propagate)", async () => {
+    const env = makeEnvWithFailingGet("KV outage")
+    const result = await readScopedRulesManifest(env, "Arc-and-Anchor", "sigilix")
+    expect(result.kind).toBe("kv-error")
+    if (result.kind === "kv-error") {
+      expect(result.err).toContain("KV outage")
+    }
+  })
+
+  it("loadCompiledScopedRulesManifest returns an empty manifest + emits telemetry on KV throw", async () => {
+    const env = makeEnvWithFailingGet("transient KV failure")
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    const compiled = await loadCompiledScopedRulesManifest(env, "Arc-and-Anchor", "sigilix")
+    // Empty manifest — orchestrator treats this as "no scoped rules
+    // configured", same as the missing/invalid cases.
+    expect(compiled.perDirectoryRules).toEqual([])
+    expect(compiled.globRules).toEqual([])
+    // Telemetry surfaced so dashboards see persistent KV trouble even
+    // though no review failed.
+    const events = warnSpy.mock.calls.map((c) => JSON.parse(c[0] as string))
+    const readFailed = events.find((e) => e.event === "scoped-rules-manifest-read-failed")
+    expect(readFailed).toBeDefined()
+    expect(readFailed.owner).toBe("Arc-and-Anchor")
+    expect(readFailed.repo).toBe("sigilix")
+    expect(typeof readFailed.err).toBe("string")
+    warnSpy.mockRestore()
+  })
+
+  it("scopedRulesKey lowercases owner/repo so the read uses the canonical key", () => {
+    // Sanity that the imported helper still produces the documented
+    // shape — pinning the key contract so a future rename to the KV
+    // prefix doesn't silently drift between writer + reader.
+    expect(scopedRulesKey("Arc-and-Anchor", "Sigilix")).toBe(
+      "repo-index-rules:arc-and-anchor/sigilix",
+    )
   })
 })

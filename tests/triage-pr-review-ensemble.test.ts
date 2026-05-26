@@ -2371,16 +2371,24 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
       reviewable: middleOnlyReviewable,
       specialistVerdicts,
     })
-    // The finding's `line: 444` is not a RIGHT-side anchor by itself,
-    // so the downstream line-validity check routes it to
-    // `unanchoredFindings`. What we're asserting is that the
-    // normalizer flipped the scope to "line" because the middle of
-    // the [429, 444] range overlaps the diff — GitHub will accept the
-    // multi-line inline anchor.
-    const matching =
-      out.verdict.findings.find((f) => f.path === "src/lib/index-delete.ts") ??
-      out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts")
+    // Option A (SIG-216 follow-up): the normalizer flipped scope to
+    // "line" because the middle of the [429, 444] range overlaps the
+    // diff, AND the line-validity check now uses `findRangeAwareAnchor`
+    // to rewrite f.line/f.startLine to the actually-anchorable subrange
+    // ([432, 438]) so the inline POST won't 422. The finding MUST land
+    // in `verdict.findings` with scope:"line" and MUST NOT appear in
+    // `unanchoredFindings`.
+    expect(
+      out.unanchoredFindings.find((f) => f.path === "src/lib/index-delete.ts"),
+    ).toBeUndefined()
+    const matching = out.verdict.findings.find((f) => f.path === "src/lib/index-delete.ts")
+    expect(matching).toBeDefined()
     expect(matching?.scope).toBe("line")
+    // Endpoints rewritten to the in-diff subrange: last RIGHT anchor
+    // (438) is the new `line` (bottom of underline); first RIGHT anchor
+    // (432) is the new `start_line` (top).
+    expect(matching?.line).toBe(438)
+    expect(matching?.startLine).toBe(432)
     const flips = logSpy.mock.calls
       .map((c) => (typeof c[0] === "string" ? c[0] : ""))
       .filter((s) => s.includes("pr-review-scope-normalized-to-line"))

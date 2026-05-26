@@ -6530,6 +6530,71 @@ function hasStructuredFixForInlineRepair(finding: PrReviewFinding): boolean {
   return deletion || replace
 }
 
+/**
+ * SIG-216 follow-up (Option A): when a multi-line finding's `line`
+ * endpoint isn't in any RIGHT-side hunk but the scope-normalizer
+ * flipped it to scope:"line" because the MIDDLE of the range overlaps
+ * the diff, find an actually-anchorable RIGHT position inside the
+ * inclusive [startLine, line] range so the inline POST won't 422.
+ *
+ * Without this rewrite, the half-measure shipped in
+ * `normalizeFindingScopeForAnchorability` would flip the scope but
+ * leave `f.line = 444` pointing at a non-reviewable line —
+ * `deriveSide` at the line-validity check fails, the finding routes to
+ * `unanchoredFindings` anyway. PR #175 dogfood class.
+ *
+ * GitHub multi-line inline-comment semantics: `line` is the bottom of
+ * the visible underline; `start_line` is the top. Both must be on the
+ * diff (`isCommentAnchorable`). When neither original endpoint
+ * survives, we pick the LAST RIGHT anchor in range as the new `line`
+ * (closest to the original bottom) and the FIRST RIGHT anchor as the
+ * new `start_line` when distinct.
+ *
+ * Returns null when (a) the finding is single-line (caller falls
+ * through to the existing single-line repair / unanchored routing),
+ * (b) no RIGHT anchor exists inside the range, or (c) the finding has
+ * no usable `path`/`line`. Pure.
+ */
+function findRangeAwareAnchor(
+  reviewable: ReviewableMap,
+  finding: PrReviewFinding,
+): { line: number; startLine?: number } | null {
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return null
+  if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return null
+  const hasMultiLine =
+    typeof finding.startLine === "number" &&
+    Number.isFinite(finding.startLine) &&
+    finding.startLine !== finding.line
+  if (!hasMultiLine) return null
+
+  const anchors = reviewable.get(path)
+  if (!anchors || anchors.length === 0) return null
+
+  const endLine = finding.line
+  const startLine = finding.startLine as number
+  const lo = Math.min(startLine, endLine)
+  const hi = Math.max(startLine, endLine)
+
+  // Single-pass scan: pick the FIRST and LAST RIGHT-side anchor inside
+  // the inclusive [lo, hi] range. Last = closest to the original bottom
+  // (becomes the new `line`); first = top of the underline
+  // (becomes the new `start_line` if distinct from `line`).
+  let firstLine: number | null = null
+  let lastLine: number | null = null
+  for (const a of anchors) {
+    if (a.side !== "RIGHT") continue
+    if (a.line < lo || a.line > hi) continue
+    if (firstLine === null || a.line < firstLine) firstLine = a.line
+    if (lastLine === null || a.line > lastLine) lastLine = a.line
+  }
+  if (lastLine === null || firstLine === null) return null
+
+  return firstLine < lastLine
+    ? { line: lastLine, startLine: firstLine }
+    : { line: lastLine }
+}
+
 function findRepairableInlineAnchor(args: {
   finding: PrReviewFinding
   reviewable: ReviewableMap
@@ -7156,6 +7221,34 @@ export function validateForSubmission(args: {
     // Line validity + side derivation
     const side = deriveSide(reviewable, f.path, f.line)
     if (!side) {
+      // SIG-216 follow-up (Option A): a multi-line finding whose ENDPOINT
+      // isn't in any RIGHT-side hunk may still be inline-anchorable if
+      // the MIDDLE of the [startLine, line] range overlaps the diff. The
+      // scope-normalizer already flipped scope:"line" for this case; the
+      // half-measure was leaving f.line pointing at the original
+      // unreviewable line so the downstream POST to GitHub would 422.
+      // Rewrite both endpoints to the actually-anchorable subrange (last
+      // RIGHT anchor becomes new `line`, first RIGHT anchor becomes new
+      // `start_line`) so isCommentAnchorable passes and the inline POST
+      // succeeds. PR #175 dogfood class.
+      const rangeAnchor = findRangeAwareAnchor(reviewable, f)
+      if (rangeAnchor !== null) {
+        // Drop the original `startLine` and re-apply only when the helper
+        // returned a distinct top-of-underline anchor; otherwise the
+        // stale original (outside the actually-anchorable subrange)
+        // would fail `isCommentAnchorable` and the inline POST would
+        // 422 on `start_line`.
+        const { startLine: _originalStartLine, ...rest } = f
+        void _originalStartLine
+        const rewritten: PrReviewFinding =
+          rangeAnchor.startLine !== undefined
+            ? { ...rest, line: rangeAnchor.line, startLine: rangeAnchor.startLine }
+            : { ...rest, line: rangeAnchor.line }
+        cleanFindings.push(rewritten)
+        if (provenance) cleanFindingProvenance.push(provenance)
+        remappedInvalidLineToInline++
+        continue
+      }
       const repairedLine =
         f.startLine == null
           ? findRepairableInlineAnchor({ finding: f, reviewable, addedLineTextByLine })

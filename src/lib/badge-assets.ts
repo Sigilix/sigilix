@@ -1,4 +1,10 @@
 import { BADGE_GLYPH_PATHS, type BadgeGlyphPath } from "./badge-glyph-paths"
+import {
+  CATEGORY_BADGE_HEIGHT,
+  PRIORITY_BADGE_HEIGHT,
+  PRIORITY_BADGE_WIDTH,
+  categoryBadgeWidth,
+} from "./badge-geometry"
 
 const BADGE_STYLES = {
   p0: {
@@ -67,18 +73,13 @@ export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.
 const BADGE_ASSET_VERSION = "v20260526-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
-// Greptile-direction priority badge: 20x20 filled square (rx=1). Matches the
-// Greptile bot's annotation-badge genre for instant recognizability. SIG-216
-// follow-up: glyph is path-baked (Geist Mono Medium @ 9.5px, frozen via
-// opentype.js into src/lib/badge-glyph-paths.ts) so rendering is
-// pixel-perfect regardless of the viewer's installed fonts.
-const PRIORITY_BADGE_WIDTH = 20
-const PRIORITY_BADGE_HEIGHT = 20
-
-// Category pill matches the priority badge height (20px) for visual unity,
-// mirroring Greptile's same-height priority+category pairing. Slightly more
-// rounded corners (rx=2 vs priority's rx=1) mark it as the secondary badge.
-const CATEGORY_BADGE_HEIGHT = 20
+// Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,
+// categoryBadgeWidth) lives in `./badge-geometry` so the offline glyph-path
+// generator (scripts/generate-badge-glyph-paths.ts) shares the same numbers.
+// Glyph is path-baked (Geist Mono Medium @ 9.5px, frozen via opentype.js into
+// src/lib/badge-glyph-paths.ts) so rendering is pixel-perfect regardless of
+// the viewer's installed fonts. Category pill uses slightly more rounded
+// corners (rx=2 vs priority's rx=1) to mark it as the secondary badge.
 
 // Priority text color: near-black on bright accent fill (dark-on-bright for
 // AA contrast across the P0..P3 palette). SIG-216 spec value (Kimi K2.6).
@@ -92,11 +93,6 @@ const CATEGORY_BG_SATURATION = 0.12
 const CATEGORY_BG_LIGHTNESS = 0.18
 const CATEGORY_TEXT_SATURATION = 0.65
 const CATEGORY_TEXT_LIGHTNESS = 0.85
-
-function categoryBadgeWidth(label: string): number {
-  // Geist Mono 9.5px @ 600 metrics: ~6.5px advance + 16px horizontal padding.
-  return Math.ceil(label.length * 6.5 + 16)
-}
 
 // Color math kept inline (no helper module) since it's used only here and the
 // applyHsl helper keeps the accent table readable as "base hue + treatment".

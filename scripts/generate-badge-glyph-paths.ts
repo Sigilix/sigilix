@@ -28,6 +28,13 @@ import { fileURLToPath } from "node:url"
 
 import opentype from "opentype.js"
 
+import {
+  CATEGORY_BADGE_HEIGHT,
+  PRIORITY_BADGE_HEIGHT,
+  PRIORITY_BADGE_WIDTH,
+  categoryBadgeWidth,
+} from "../src/lib/badge-geometry"
+
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(HERE, "..")
 const FONT_PATH = resolve(REPO_ROOT, "assets/fonts/GeistMono-Medium.ttf")
@@ -36,20 +43,10 @@ const OUTPUT_PATH = resolve(REPO_ROOT, "src/lib/badge-glyph-paths.ts")
 // Source geometry per Kimi spec.
 const FONT_SIZE = 9.5
 
-// Badge geometry — MUST stay in sync with the constants in
-// src/lib/badge-assets.ts. The renderer reads `width` / `height` from
-// the generated module to position each glyph, so changing these here
-// without changing them there will produce mis-centered badges.
-const PRIORITY_BADGE_WIDTH = 20
-const PRIORITY_BADGE_HEIGHT = 20
-const CATEGORY_BADGE_HEIGHT = 20
-
-// Category pill width formula — must match `categoryBadgeWidth` in
-// src/lib/badge-assets.ts. Kept here so the generator can pre-compute
-// the centering translation without importing the worker module.
-function categoryBadgeWidth(label: string): number {
-  return Math.ceil(label.length * 6.5 + 16)
-}
+// Badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,
+// categoryBadgeWidth) is imported from src/lib/badge-geometry so the
+// generator and the runtime renderer in src/lib/badge-assets.ts share
+// one source of truth — no centering drift if a value changes.
 
 const PRIORITY_LABELS = ["P0", "P1", "P2", "P3"] as const
 const CATEGORY_LABELS = [

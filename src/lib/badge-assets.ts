@@ -70,7 +70,7 @@ export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
 export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
-const BADGE_ASSET_VERSION = "v20260526-3"
+const BADGE_ASSET_VERSION = "v20260526-4"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,

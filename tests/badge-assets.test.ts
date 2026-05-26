@@ -110,8 +110,8 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-3/p2.svg`)
-    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-3/security.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-4/p2.svg`)
+    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-4/security.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
   })
 

@@ -160,6 +160,7 @@ import {
   type SpecialistRole,
   type RouterDecision,
 } from "./ensemble-router"
+import { decideSpecialistsDynamic } from "./dynamic-dispatcher"
 import {
   createRetrievalCache,
   type RetrievalCacheStats,
@@ -1540,6 +1541,70 @@ export async function handlePrReviewEnsemble(
     // shortcut.
     const router = decideSpecialists({ paths: filePaths, totalLinesChanged, diffText: diff }, env)
     telemetry.routerDecision = router
+
+    // ─── SIG-226 / SIG-224 Phase 1 — shadow dispatcher ─────────
+    // Default mode = "off" → the whole block is a no-op (single env
+    // string compare). In "shadow" the dynamic dispatcher computes
+    // its would-be picks alongside the legacy router; telemetry
+    // captures the deltas so we can compute false-negative rates on
+    // protected roles before Phase 2/3 graduates to enforcement.
+    // Fan-out still uses `router.specialists` from line above —
+    // shadow mode never changes runtime behavior. `enforce` is logged
+    // but not honored in Phase 1 (Phase 2 / SIG-227 wires non-
+    // protected enforcement; Phase 3 / SIG-228 wires protected
+    // enforcement). The dispatcher's internal 8s timeout caps the
+    // shadow overhead per review.
+    const dispatcherMode = env.OPENCLAW_DYNAMIC_DISPATCHER_MODE
+    if (dispatcherMode === "shadow" || dispatcherMode === "enforce") {
+      // CodeRabbit M3 fix: shadow-only work runs in a try/catch so an
+      // unexpected throw inside the dispatcher (defense-in-depth on
+      // top of `decideSpecialistsDynamic`'s never-throw contract)
+      // can't poison the legacy review pipeline. Failure here is
+      // logged + swallowed — the orchestrator continues with
+      // `router.specialists` for fan-out.
+      try {
+        const dispatcherClassified = classifyDiffFiles(filePaths)
+        const dispatcherCommitMessage = `${meta.title}\n\n${meta.body ?? ""}`
+        const dispatcherDecision = await decideSpecialistsDynamic({
+          signals: { paths: filePaths, totalLinesChanged, diffText: diff },
+          classified: dispatcherClassified,
+          commitMessage: dispatcherCommitMessage,
+          repoConfig: sigilixConfig,
+          env,
+          signal: orchCtrl.signal,
+        })
+        // Hold on the telemetry object so the KV-backed metrics
+        // endpoints can aggregate shadow-window stats (per-role
+        // agreement rates, p50/p95/p99 dispatcher overhead, etc.) —
+        // Phase 2/3 graduation depends on this.
+        telemetry.dispatcherDecision = dispatcherDecision
+        console.log(JSON.stringify({
+          event: "dispatcher-shadow-decision",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: dispatcherMode,
+          routerSpecialists: router.specialists,
+          dispatcherSpecialists: dispatcherDecision.specialists,
+          perRole: dispatcherDecision.perRole,
+          layerVotes: dispatcherDecision.layerVotes,
+          reasoning: dispatcherDecision.reasoning,
+          elapsedMs: dispatcherDecision.elapsedMs,
+        }))
+        if (dispatcherMode === "enforce") {
+          console.warn(JSON.stringify({
+            event: "dispatcher-enforce-mode-not-honored-in-phase-1",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            note: "enforcement ships in SIG-227 (non-protected) + SIG-228 (protected)",
+          }))
+        }
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "dispatcher-shadow-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+          note: "dispatcher threw unexpectedly; legacy router still drives fan-out",
+        }))
+      }
+    }
 
     if (router.specialists.length === 0) {
       // Router said "no specialists apply to this PR" — e.g. docs-only
@@ -7401,6 +7466,20 @@ interface EnsembleTelemetry {
   fellBackReason?: string
   internalError?: string
   routerDecision: RouterDecision | null
+  /**
+   * SIG-226 / SIG-224 Phase 1: shadow-mode dispatcher decision blob.
+   * Populated only when `OPENCLAW_DYNAMIC_DISPATCHER_MODE` is set to
+   * `shadow` or `enforce`. Always absent in default-off mode so the
+   * existing telemetry consumers don't see noise.
+   *
+   * Held on the telemetry object (rather than just `console.log`-ed)
+   * so the existing KV-backed metrics endpoints (`/metrics/validation`,
+   * `/metrics/graph`) can compute shadow-window stats — p50/p95/p99
+   * dispatcher overhead, per-role agreement rates between rule layer
+   * and LLM, false-negative rates on protected roles. Phase 2/3
+   * graduation criteria depend on these aggregates.
+   */
+  dispatcherDecision?: import("./dynamic-dispatcher").DispatcherDecision
   /**
    * ARC-277: populated when 1 ≤ specialist-success-count < dispatched-count.
    * Records which roles came back and which didn't so post-rollout

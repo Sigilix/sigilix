@@ -4,13 +4,18 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  buildPrompt,
   formatOverviewComment,
   mergeCachedAndFreshRows,
   parseOverviewResponse,
+  renderReviewContextBlock,
   scopedDiffFromMisses,
+  type PromptCtx,
+  type PrOverviewReviewContext,
   type PrOverviewVerdict,
 } from "../src/lib/triage-pr-overview"
 import type { CachedFileRow } from "../src/lib/pr-overview-file-cache"
+import type { PrCommit, PullRequestMeta } from "../src/lib/github"
 
 describe("parseOverviewResponse", () => {
   const valid: PrOverviewVerdict = {
@@ -568,5 +573,156 @@ describe("formatOverviewComment — SIG-99 polish rendering", () => {
     expect(labels).toBeGreaterThan(confidence)
     expect(reviewers).toBeGreaterThan(labels)
     expect(related).toBeGreaterThan(reviewers)
+  })
+})
+
+// ─── SIG-216 — reviewContext prompt code paths ───────────────────────
+//
+// PR #174 / commit 12af29f added a `reviewContext` arg to `buildPrompt`
+// + a `renderReviewContextBlock` helper. The original PR shipped without
+// direct test coverage on those code paths — Sigilix's bot caught the
+// gap as a P1 testing finding. These tests pin the deterministic
+// rendering + the prompt's REVIEW VERDICT block presence/absence.
+
+describe("renderReviewContextBlock", () => {
+  it("renders all four severity tiers with correct counts when all are present", () => {
+    const ctx: PrOverviewReviewContext = {
+      findingsCount: 10,
+      severityBreakdown: { P0: 1, P1: 2, P2: 3, P3: 4 },
+      categoryBreakdown: { logic: 5 },
+      verdict: "REQUEST_CHANGES",
+    }
+    const block = renderReviewContextBlock(ctx)
+    expect(block).toContain("By severity: P0=1, P1=2, P2=3, P3=4")
+  })
+
+  it("only renders non-zero severity tiers when some are sparse (P1 + P3 only)", () => {
+    const ctx: PrOverviewReviewContext = {
+      findingsCount: 3,
+      severityBreakdown: { P0: 0, P1: 1, P2: 0, P3: 2 },
+      categoryBreakdown: { logic: 3 },
+      verdict: "COMMENT",
+    }
+    const block = renderReviewContextBlock(ctx)
+    expect(block).toContain("By severity: P1=1, P3=2")
+    expect(block).not.toContain("P0=")
+    expect(block).not.toContain("P2=")
+  })
+
+  it("renders categories in deterministic alphabetical order regardless of input order", () => {
+    const ctx: PrOverviewReviewContext = {
+      findingsCount: 6,
+      severityBreakdown: { P1: 6 },
+      // Insert in non-alpha order on purpose.
+      categoryBreakdown: { security: 1, logic: 2, accessibility: 3 },
+      verdict: "REQUEST_CHANGES",
+    }
+    const block = renderReviewContextBlock(ctx)
+    expect(block).toContain("By category: accessibility=3, logic=2, security=1")
+  })
+
+  it("renders '(none)' for both lines when all counts are zero", () => {
+    // Pin the actual behavior: the helper always renders the 4-line
+    // block but substitutes '(none)' for empty severity / category maps.
+    const ctx: PrOverviewReviewContext = {
+      findingsCount: 0,
+      severityBreakdown: { P0: 0, P1: 0, P2: 0, P3: 0 },
+      categoryBreakdown: { logic: 0 },
+      verdict: "APPROVE",
+    }
+    const block = renderReviewContextBlock(ctx)
+    expect(block).toContain("Verdict: APPROVE")
+    expect(block).toContain("Findings: 0")
+    expect(block).toContain("By severity: (none)")
+    expect(block).toContain("By category: (none)")
+  })
+
+  it("renders the structural verdict + findings header lines verbatim", () => {
+    const ctx: PrOverviewReviewContext = {
+      findingsCount: 7,
+      severityBreakdown: { P1: 7 },
+      categoryBreakdown: { logic: 7 },
+      verdict: "REQUEST_CHANGES",
+    }
+    const block = renderReviewContextBlock(ctx)
+    // Pin the rendered shape so the prompt diff stays stable.
+    expect(block).toBe(
+      [
+        "Verdict: REQUEST_CHANGES",
+        "Findings: 7",
+        "By severity: P1=7",
+        "By category: logic=7",
+      ].join("\n"),
+    )
+  })
+})
+
+describe("buildPrompt — reviewContext threading (SIG-216)", () => {
+  const meta: PullRequestMeta = {
+    number: 42,
+    title: "Add the widget",
+    body: "Closes #41. Adds a widget.",
+    user: { login: "octocat" },
+    head: { sha: "abc123", ref: "feat/widget" },
+    base: { sha: "def456", ref: "main" },
+  }
+  const newCommits: PrCommit[] = [
+    { sha: "abc1234567", message: "feat: add widget" },
+  ]
+  const baseCtx: PromptCtx = {
+    prNumber: 42,
+    meta,
+    diff: "diff --git a/src/foo.ts b/src/foo.ts\n@@ -1 +1 @@\n-x\n+y",
+    newCommits,
+    isFirstRun: true,
+  }
+
+  it("appends the [REVIEW VERDICT ...] block when reviewContext is present (REQUEST_CHANGES)", () => {
+    const reviewContext: PrOverviewReviewContext = {
+      findingsCount: 5,
+      severityBreakdown: { P1: 3, P2: 2 },
+      categoryBreakdown: { logic: 5 },
+      verdict: "REQUEST_CHANGES",
+    }
+    const prompt = buildPrompt({ ...baseCtx, reviewContext })
+    expect(prompt).toContain("[REVIEW VERDICT")
+    expect(prompt).toContain("Verdict: REQUEST_CHANGES")
+    expect(prompt).toContain("Findings: 5")
+    expect(prompt).toContain("By severity: P1=3, P2=2")
+  })
+
+  it("appends the [REVIEW VERDICT ...] block for APPROVE verdicts", () => {
+    const reviewContext: PrOverviewReviewContext = {
+      findingsCount: 0,
+      severityBreakdown: {},
+      categoryBreakdown: {},
+      verdict: "APPROVE",
+    }
+    const prompt = buildPrompt({ ...baseCtx, reviewContext })
+    expect(prompt).toContain("[REVIEW VERDICT")
+    expect(prompt).toContain("Verdict: APPROVE")
+  })
+
+  it("appends the [REVIEW VERDICT ...] block for COMMENT verdicts", () => {
+    const reviewContext: PrOverviewReviewContext = {
+      findingsCount: 2,
+      severityBreakdown: { P3: 2 },
+      categoryBreakdown: { style: 2 },
+      verdict: "COMMENT",
+    }
+    const prompt = buildPrompt({ ...baseCtx, reviewContext })
+    expect(prompt).toContain("[REVIEW VERDICT")
+    expect(prompt).toContain("Verdict: COMMENT")
+  })
+
+  it("omits the [REVIEW VERDICT] block entirely when reviewContext is absent (back-compat)", () => {
+    // The warmup-driven path + any legacy queue-dispatched run omits
+    // reviewContext. SIG-216 explicitly preserves the pre-existing
+    // prompt shape for those callers — must not contain the new block.
+    const prompt = buildPrompt(baseCtx)
+    expect(prompt).not.toContain("[REVIEW VERDICT")
+    expect(prompt).not.toContain("Verdict:")
+    expect(prompt).not.toContain("By severity:")
+    expect(prompt).not.toContain("By category:")
   })
 })

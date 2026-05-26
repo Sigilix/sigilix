@@ -552,7 +552,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   }
 }
 
-interface PromptCtx {
+export interface PromptCtx {
   prNumber: number
   meta: PullRequestMeta
   diff: string
@@ -567,7 +567,7 @@ interface PromptCtx {
   reviewContext?: PrOverviewReviewContext
 }
 
-function buildPrompt(ctx: PromptCtx): string {
+export function buildPrompt(ctx: PromptCtx): string {
   const commitsBlock = ctx.newCommits
     .map((c) => `- ${c.sha?.slice(0, 7) ?? "?"} ${c.message?.split("\n")[0] ?? ""}`)
     .join("\n")
@@ -611,7 +611,7 @@ function buildPrompt(ctx: PromptCtx): string {
  * tokens. Severity / category orderings are deterministic so prompt
  * diffs stay stable.
  */
-function renderReviewContextBlock(ctx: PrOverviewReviewContext): string {
+export function renderReviewContextBlock(ctx: PrOverviewReviewContext): string {
   const sevEntries = Object.entries(ctx.severityBreakdown)
     .filter(([, n]) => typeof n === "number" && n > 0)
     .sort(([a], [b]) => a.localeCompare(b))

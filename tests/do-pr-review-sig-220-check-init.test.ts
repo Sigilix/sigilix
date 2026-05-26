@@ -206,7 +206,10 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
   it("create path with check-create timeout (>3s): RunState omits checkRunId + emits create-timeout warning", async () => {
     vi.useFakeTimers()
     try {
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      // CodeRabbit catch on PR #179: reuse the module-level
+      // `consoleWarnSpy` set in beforeEach. A local spy shadows the
+      // outer one and `afterEach` only restores the outer — the
+      // shadow would leak into the next test.
       // startSpy resolves only after a long-enough delay that the 3s
       // timeout wins the Promise.race. The actual returned handle
       // never lands on RunState — null wins via the timeout path.
@@ -239,7 +242,7 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
       expect("checkRunId" in msg).toBe(false)
 
       // The timeout branch logged its diagnostic event.
-      const timeoutLogged = warnSpy.mock.calls.some((call) => {
+      const timeoutLogged = consoleWarnSpy.mock.calls.some((call) => {
         const arg = call[0]
         if (typeof arg !== "string") return false
         try {

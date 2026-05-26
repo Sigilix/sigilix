@@ -236,6 +236,32 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(handlePrReviewEnsembleMock).not.toHaveBeenCalled()
   })
 
+  // Sigilix bot catch on PR #179: the sensitive-repo skip branch
+  // calls attachExistingCheckRun then completeCheckRun, but the
+  // existing test only covered the happy-path attach (returns
+  // HANDLE). If attach fails (token revoked, GitHub down) it
+  // returns null, and completeCheckRun must no-op on a null handle.
+  // This pins that contract on the sensitive-repo path specifically.
+  it("SIG-220: sensitive-repo skip WITH checkRunId + null attach handle → completeCheckRun(handle: null) no-ops gracefully", async () => {
+    isRepoSensitiveMock.mockReturnValue(true)
+    attachExistingCheckRunMock.mockResolvedValueOnce(null)
+    const jobWithCheck: JobMessage = { ...job, checkRunId: 4242 }
+
+    await dispatchJob(jobWithCheck, makeEnv())
+
+    expect(startInProgressCheckRunMock).not.toHaveBeenCalled()
+    expect(attachExistingCheckRunMock).toHaveBeenCalledTimes(1)
+    // completeCheckRun is still invoked — its own no-op-on-null-handle
+    // contract is the safety net. Pin the call shape so a future
+    // refactor that swaps the order (e.g. early-return on null attach,
+    // skipping completeCheckRun entirely) gets caught.
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: null,
+      conclusion: "skipped",
+    })
+    expect(completeCheckRunMock).toHaveBeenCalledTimes(1)
+  })
+
   // SIG-220: when the DO threaded a checkRunId, the dispatcher attaches
   // to the existing row instead of creating a duplicate.
   it("SIG-220: job.checkRunId present → uses attachExistingCheckRun, NOT startInProgressCheckRun", async () => {

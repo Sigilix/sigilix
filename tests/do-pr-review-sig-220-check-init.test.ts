@@ -196,6 +196,65 @@ describe("SIG-220 — PrReviewRunDO.handleEnqueue creates the check upstream", (
     expect("checkRunId" in msg).toBe(false)
   })
 
+  // Sigilix bot catch on PR #179 (after the 76e44ce timer-cleanup
+  // fixup): the Promise.race with the 3s timeout — added in 6dd6548
+  // to bound the GitHub API call against the webhook ack budget —
+  // was untested. The mock startSpy resolves immediately, so the
+  // timeout branch (warning emission + null fallback) never fired.
+  // This pins the timeout path with vitest fake timers + a startSpy
+  // that resolves AFTER the 3s timeout would have won the race.
+  it("create path with check-create timeout (>3s): RunState omits checkRunId + emits create-timeout warning", async () => {
+    vi.useFakeTimers()
+    try {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+      // startSpy resolves only after a long-enough delay that the 3s
+      // timeout wins the Promise.race. The actual returned handle
+      // never lands on RunState — null wins via the timeout path.
+      startSpy.mockImplementationOnce(() => new Promise((resolve) => {
+        setTimeout(() => resolve({
+          id: 11111,
+          client: {} as unknown,
+          owner: "Arc-and-Anchor",
+          repo: "sigilix",
+        }), 10_000)
+      }))
+
+      const queue: QueueState = { sent: [] }
+      const env = makeEnv(queue)
+      const ds = makeDoState()
+      const instance = new PrReviewRunDO(ds.ctx, env)
+
+      const resPromise = postJson(instance, "/enqueue", makeEnqueueReq())
+      // Advance past the 3s timeout — the timer-backed null resolution
+      // fires BEFORE the simulated 10s startSpy resolution.
+      await vi.advanceTimersByTimeAsync(3_500)
+      const res = await resPromise
+      expect(res.status).toBe(200)
+
+      // RunState + queue message both omit checkRunId on the timeout
+      // path — the dispatcher's legacy fallback covers null id.
+      const stored = ds.store.get("state") as RunState
+      expect("checkRunId" in stored).toBe(false)
+      const msg = queue.sent[0] as Record<string, unknown>
+      expect("checkRunId" in msg).toBe(false)
+
+      // The timeout branch logged its diagnostic event.
+      const timeoutLogged = warnSpy.mock.calls.some((call) => {
+        const arg = call[0]
+        if (typeof arg !== "string") return false
+        try {
+          const parsed = JSON.parse(arg) as { event?: string }
+          return parsed.event === "pr-review-check-run-create-timeout"
+        } catch {
+          return false
+        }
+      })
+      expect(timeoutLogged).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("dedupe-active path does NOT call startInProgressCheckRun (no orphan check on webhook replay)", async () => {
     const queue: QueueState = { sent: [] }
     const env = makeEnv(queue)

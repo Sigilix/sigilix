@@ -19,6 +19,11 @@ import type {
   StatusResponse,
 } from "./types"
 import { resolveDoConfig } from "./config"
+import {
+  attachExistingCheckRun,
+  completeCheckRun,
+  startInProgressCheckRun,
+} from "../lib/pr-review-check-run"
 
 // ─── Class ────────────────────────────────────────────────────
 
@@ -106,6 +111,34 @@ export class PrReviewRunDO extends DurableObject<Env> {
       })
     }
 
+    // SIG-220: create the customer-visible "Sigilix · In progress"
+    // check synchronously, BEFORE persisting RunState + enqueueing.
+    // Pre-SIG-220 the dispatcher did this after the consumer dequeued
+    // → check appeared in the GitHub UI 5–30s after push. Now it
+    // appears within the webhook-ack window (~1–2s).
+    //
+    // Codex architecture review on PR #178 follow-up:
+    //   - Creating HERE (post-decideEnqueueAction = create | supersede)
+    //     is strictly better than creating in the worker fetch handler:
+    //     dedupe paths never produce orphan checks, pause/ignore
+    //     never produce orphan checks (those branches don't reach
+    //     this code path).
+    //   - sensitive-repo skip is dispatcher-side — the dispatcher's
+    //     skip branch now closes the check it doesn't own. Watchdog
+    //     terminal failure also closes via `attachExistingCheckRun`.
+    //
+    // Best-effort: a null result (creds missing, GitHub 5xx, etc.)
+    // leaves `checkRunId` undefined on RunState; the dispatcher
+    // falls back to its own `startInProgressCheckRun` exactly like
+    // legacy queue messages.
+    const checkRun = await startInProgressCheckRun({
+      env: this.env,
+      owner: body.owner,
+      repo: body.repo,
+      headSha: body.headSha,
+      installationId: body.installationId,
+    })
+
     const runId = crypto.randomUUID()
     const newState: RunState = {
       schemaVersion: 1,
@@ -127,6 +160,10 @@ export class PrReviewRunDO extends DurableObject<Env> {
       ...(body.staleHeadRequeueDepth !== undefined
         ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
         : {}),
+      // SIG-220: persist the upstream-created check id so the
+      // consumer + watchdog can close it. Undefined if creation
+      // failed (best-effort dispatcher fallback applies).
+      ...(checkRun !== null ? { checkRunId: checkRun.id } : {}),
     }
 
     // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
@@ -151,6 +188,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
       ...(body.staleHeadRequeueDepth !== undefined
         ? { staleHeadRequeueDepth: body.staleHeadRequeueDepth }
         : {}),
+      // SIG-220: forward the upstream-created check id so the
+      // dispatcher attaches instead of creating a duplicate.
+      ...(checkRun !== null ? { checkRunId: checkRun.id } : {}),
     })
 
     emit("do-review-enqueued", {
@@ -427,6 +467,14 @@ export class PrReviewRunDO extends DurableObject<Env> {
       ...(state.staleHeadRequeueDepth !== undefined
         ? { staleHeadRequeueDepth: state.staleHeadRequeueDepth }
         : {}),
+      // SIG-220: forward the upstream-created check id on retries too
+      // so the retry consumer attaches to the same check the original
+      // attempt set up (`startInProgressCheckRun` cancels stale checks
+      // by head_sha so a duplicate-create on retry would be idempotent,
+      // but attaching is one fewer GitHub call).
+      ...(state.checkRunId !== undefined
+        ? { checkRunId: state.checkRunId }
+        : {}),
     })
     const watchdogAt = Date.now() + config.watchdogMs
     const updated: RunState = {
@@ -493,9 +541,27 @@ export class PrReviewRunDO extends DurableObject<Env> {
           }
         }
       }
+      // SIG-220: terminal watchdog failure ⇒ the consumer never
+      // reported result, so the upstream-created check is still
+      // `in_progress`. Close it as `failure` (wire-mapped to
+      // `neutral` per the SIG-216 advisory-bot convention in
+      // `completeCheckRun`). Best-effort; null handle on token
+      // failure is a no-op. If `checkRunId` is undefined (creation
+      // failed at enqueue time), nothing to close.
+      if (state.checkRunId !== undefined) {
+        const handle = await attachExistingCheckRun({
+          env: this.env,
+          owner: state.owner,
+          repo: state.repo,
+          installationId: state.installationId,
+          checkRunId: state.checkRunId,
+        })
+        await completeCheckRun({ handle, conclusion: "failure" })
+      }
       emit("do-review-watchdog-terminal", {
         owner: state.owner, repo: state.repo, prNumber: state.prNumber,
         runId: state.runId, attempts: state.attempts,
+        ...(state.checkRunId !== undefined ? { checkRunId: state.checkRunId } : {}),
       })
       return
     }

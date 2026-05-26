@@ -137,6 +137,55 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
 }
 
 /**
+ * SIG-220: rebuild an `InProgressCheckRun` handle when the check was
+ * already created upstream (e.g. inside `PrReviewRunDO.handleEnqueue`
+ * on the webhook hot-path so the customer sees the Check appear in
+ * the GitHub UI within ~1–2s of push) and the dispatcher / watchdog
+ * just needs to close it. Returns `null` on any GitHub-token failure
+ * — caller treats null the same as "no check to update."
+ *
+ * Why not just hold the InProgressCheckRun in-memory until the
+ * dispatcher fires? Because the consumer is a fresh worker invocation
+ * (queue handler), not the same isolate that created the check, so
+ * the client instance + token would not survive the hop. We rebuild
+ * a fresh client off the installation id we already have.
+ */
+export interface AttachArgs {
+  env: Env
+  owner: string
+  repo: string
+  installationId: number
+  checkRunId: number
+}
+
+export async function attachExistingCheckRun(args: AttachArgs): Promise<InProgressCheckRun | null> {
+  const { env, owner, repo, installationId, checkRunId } = args
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-attach-skip-missing-creds",
+      owner, repo, check_run_id: checkRunId, installation_id: installationId,
+    }))
+    return null
+  }
+  try {
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    return { id: checkRunId, client: new GitHubClient({ token }), owner, repo }
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-attach-failed",
+      owner, repo, check_run_id: checkRunId, installation_id: installationId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return null
+  }
+}
+
+/**
  * ARC-276: payload threaded from the dispatcher's posted-path so the
  * Check Run title can render the customer-visible verdict (Approved
  * vs N findings). Only meaningful when `conclusion === "success"`

@@ -25,11 +25,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const {
   handlePrReviewEnsembleMock,
   startInProgressCheckRunMock,
+  attachExistingCheckRunMock,
   completeCheckRunMock,
   isRepoSensitiveMock,
 } = vi.hoisted(() => ({
   handlePrReviewEnsembleMock: vi.fn(),
   startInProgressCheckRunMock: vi.fn(),
+  attachExistingCheckRunMock: vi.fn(),
   completeCheckRunMock: vi.fn(),
   isRepoSensitiveMock: vi.fn(() => false),
 }))
@@ -39,6 +41,7 @@ vi.mock("../src/lib/triage-pr-review-ensemble", () => ({
 }))
 vi.mock("../src/lib/pr-review-check-run", () => ({
   startInProgressCheckRun: startInProgressCheckRunMock,
+  attachExistingCheckRun: attachExistingCheckRunMock,
   completeCheckRun: completeCheckRunMock,
 }))
 vi.mock("../src/lib/repo-policy", async () => {
@@ -70,6 +73,7 @@ const HANDLE = { id: 7777 } as never
 beforeEach(() => {
   handlePrReviewEnsembleMock.mockReset()
   startInProgressCheckRunMock.mockReset().mockResolvedValue(HANDLE)
+  attachExistingCheckRunMock.mockReset().mockResolvedValue(HANDLE)
   completeCheckRunMock.mockReset().mockResolvedValue(undefined)
   isRepoSensitiveMock.mockReset().mockReturnValue(false)
   vi.spyOn(console, "log").mockImplementation(() => undefined)
@@ -192,14 +196,85 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     })
   })
 
-  it("sensitive-repo skip → NO check created (we early-return before start)", async () => {
+  it("sensitive-repo skip (legacy job, no checkRunId) → NO check operations", async () => {
     isRepoSensitiveMock.mockReturnValue(true)
 
     await dispatchJob(job, makeEnv())
 
     expect(startInProgressCheckRunMock).not.toHaveBeenCalled()
+    expect(attachExistingCheckRunMock).not.toHaveBeenCalled()
     expect(completeCheckRunMock).not.toHaveBeenCalled()
     expect(handlePrReviewEnsembleMock).not.toHaveBeenCalled()
+  })
+
+  // SIG-220: when the DO created the customer-visible check upstream
+  // (so the user already sees "Sigilix · In progress" in the GitHub
+  // UI), the dispatcher's sensitive-repo skip must close that check —
+  // otherwise it hangs in_progress forever.
+  it("SIG-220: sensitive-repo skip WITH checkRunId → attach + completeCheckRun(skipped)", async () => {
+    isRepoSensitiveMock.mockReturnValue(true)
+    const jobWithCheck: JobMessage = { ...job, checkRunId: 4242 }
+
+    await dispatchJob(jobWithCheck, makeEnv())
+
+    expect(startInProgressCheckRunMock).not.toHaveBeenCalled()
+    expect(attachExistingCheckRunMock).toHaveBeenCalledTimes(1)
+    expect(attachExistingCheckRunMock.mock.calls[0]![0]).toMatchObject({
+      owner: job.owner,
+      repo: job.repo,
+      installationId: job.installationId,
+      checkRunId: 4242,
+    })
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: HANDLE,
+      conclusion: "skipped",
+    })
+    expect(handlePrReviewEnsembleMock).not.toHaveBeenCalled()
+  })
+
+  // SIG-220: when the DO threaded a checkRunId, the dispatcher attaches
+  // to the existing row instead of creating a duplicate.
+  it("SIG-220: job.checkRunId present → uses attachExistingCheckRun, NOT startInProgressCheckRun", async () => {
+    const reviewMeta = { event: "APPROVE" as const, findingsCount: 0 }
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta,
+    })
+
+    const jobWithCheck: JobMessage = { ...job, checkRunId: 9001 }
+    await dispatchJob(jobWithCheck, makeEnv())
+
+    expect(startInProgressCheckRunMock).not.toHaveBeenCalled()
+    expect(attachExistingCheckRunMock).toHaveBeenCalledTimes(1)
+    expect(attachExistingCheckRunMock.mock.calls[0]![0]).toMatchObject({
+      owner: job.owner,
+      repo: job.repo,
+      installationId: job.installationId,
+      checkRunId: 9001,
+    })
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: HANDLE,
+      conclusion: "success",
+      reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
+    })
+  })
+
+  // SIG-220: legacy jobs without checkRunId keep the pre-SIG-220
+  // dispatcher-time create path. Backwards-compat for in-flight queue
+  // messages during deploy + slash-command reruns that raw-send to
+  // OPENCLAW_JOBS without going through the DO.
+  it("SIG-220: job WITHOUT checkRunId → falls back to startInProgressCheckRun (legacy)", async () => {
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta: { event: "APPROVE", findingsCount: 0 },
+    })
+
+    await dispatchJob(job, makeEnv())  // job has no checkRunId
+
+    expect(startInProgressCheckRunMock).toHaveBeenCalledTimes(1)
+    expect(attachExistingCheckRunMock).not.toHaveBeenCalled()
   })
 
   it("throw mid-pipeline → completeCheckRun(failure) AND error re-throws", async () => {

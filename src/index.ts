@@ -91,6 +91,7 @@ import {
 } from "./lib/index-producer"
 import { handleIndexRepoJob } from "./lib/indexer"
 import {
+  attachExistingCheckRun,
   startInProgressCheckRun,
   completeCheckRun,
   type SigilixCheckConclusion,
@@ -458,6 +459,22 @@ export type JobMessage =
        * preserve the count and don't bypass the cap.
        */
       staleHeadRequeueDepth?: number
+      /**
+       * SIG-220: GitHub check-run id created upstream in
+       * `PrReviewRunDO.handleEnqueue` so the "Sigilix · In progress"
+       * row appears in the GitHub UI within ~1–2s of webhook
+       * receipt instead of waiting for the queue consumer to
+       * dequeue (5–30s).
+       *
+       * When set, the dispatcher calls `attachExistingCheckRun` to
+       * rebuild the handle off the installation id. When absent
+       * (legacy queue messages pre-deploy, slash-command reruns
+       * that raw-send without going through the DO, stale-head
+       * helper paths that haven't been updated yet), the
+       * dispatcher falls back to its own `startInProgressCheckRun`
+       * exactly like the pre-SIG-220 behavior.
+       */
+      checkRunId?: number
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that
@@ -1197,21 +1214,50 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             repo: job.repo,
             prNumber: job.prNumber,
           }))
+          // SIG-220: when the DO created the check upstream (so the
+          // user already sees "Sigilix · In progress" in the GitHub
+          // UI) and the dispatcher then skips for a sensitive-repo
+          // policy, we must close the check ourselves — otherwise
+          // it hangs `in_progress` forever. Map to `skipped` (wire
+          // `neutral`) per the existing advisory-bot convention.
+          // No-op when `checkRunId` is absent (legacy messages or
+          // upstream create failed → no orphan to close).
+          if (job.checkRunId !== undefined) {
+            const handle = await attachExistingCheckRun({
+              env,
+              owner: job.owner,
+              repo: job.repo,
+              installationId: job.installationId,
+              checkRunId: job.checkRunId,
+            })
+            await completeCheckRun({ handle, conclusion: "skipped" })
+          }
           return
         }
-        // ARC-258: customer-visible "Sigilix · In progress" check run.
-        // Created here at the dispatcher level (not inside the
-        // handler) so the lifecycle is uniform across all ensemble
-        // outcomes. Best-effort: a null handle means no check was
-        // created (creds missing, 403 from missing perms, etc.) and
-        // the completion call below becomes a no-op.
-        const checkRun = await startInProgressCheckRun({
-          env,
-          owner: job.owner,
-          repo: job.repo,
-          headSha: job.headSha,
-          installationId: job.installationId,
-        })
+        // SIG-220: when the upstream `PrReviewRunDO.handleEnqueue`
+        // created the customer-visible check (the new fast path —
+        // visible to the user within ~1–2s of push), the dispatcher
+        // ATTACHES to that existing row instead of creating a new
+        // one. Fallback (legacy queue messages without `checkRunId`,
+        // slash-command reruns, stale-head helper requeues) keeps
+        // the pre-SIG-220 dispatcher-time create path — best-effort
+        // throughout; a null handle means the completion below is
+        // a no-op.
+        const checkRun = job.checkRunId !== undefined
+          ? await attachExistingCheckRun({
+              env,
+              owner: job.owner,
+              repo: job.repo,
+              installationId: job.installationId,
+              checkRunId: job.checkRunId,
+            })
+          : await startInProgressCheckRun({
+              env,
+              owner: job.owner,
+              repo: job.repo,
+              headSha: job.headSha,
+              installationId: job.installationId,
+            })
         let conclusion: SigilixCheckConclusion | null = null
         // ARC-276: capture the customer-visible review verdict +
         // findings count on the posted path so the Check Run title

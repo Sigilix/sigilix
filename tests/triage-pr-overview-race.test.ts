@@ -25,6 +25,12 @@ const mockGenerate = vi.fn()
 // the walkthrough cache. Default to an empty list — the race tests
 // don't care about per-file caching; they assert dedupe/race behavior.
 const mockListPullRequestFiles = vi.fn(async () => [])
+// SIG-216 CR fix-up: the read-after-write idempotency rescan
+// (`findExistingOverviewComment`) calls `listIssueCommentsPage`.
+// Default the page mock to an empty array so the existing tests
+// — which expect a clean POST when both scans see no marker —
+// land in the create branch with the final rescan returning null.
+const mockListIssueCommentsPage = vi.fn(async () => [])
 
 vi.mock("../src/lib/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -39,6 +45,7 @@ vi.mock("../src/lib/github", async () => {
       getPullRequestDiff: (...args: unknown[]) => mockGetPullRequestDiff(...args),
       getPullRequestCommits: (...args: unknown[]) => mockGetPullRequestCommits(...args),
       listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
+      listIssueCommentsPage: (...args: unknown[]) => mockListIssueCommentsPage(...args),
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
       listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
@@ -101,6 +108,8 @@ beforeEach(() => {
   mockGetPullRequestDiff.mockClear()
   mockGetPullRequestCommits.mockClear()
   mockListIssueComments.mockClear()
+  mockListIssueCommentsPage.mockClear()
+  mockListIssueCommentsPage.mockImplementation(async () => [])
   mockCreateIssueComment.mockClear()
   mockUpdateIssueComment.mockClear()
   mockGenerate.mockClear()
@@ -238,5 +247,80 @@ describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {
 
     expect(mockGenerate).not.toHaveBeenCalled()
     expect(mockCreateIssueComment).not.toHaveBeenCalled()
+  })
+})
+
+// SIG-216 CR fix-up — read-after-write idempotency on the create
+// path. `runInlineOverviewWithRetry` retries `handlePrOverview` end-
+// to-end with `skipDedupe: true`. If attempt #1's
+// `createIssueComment` succeeded server-side but the response failed
+// transiently, attempt #2's pre-Ollama + post-Ollama `scanComments`
+// snapshots may both still miss the just-written marker (KV / list-
+// comments propagation lag). A final targeted rescan immediately
+// before the POST catches that case and switches to PATCH.
+describe("handlePrOverview — final-rescan idempotency on create (SIG-216)", () => {
+  it("PATCHes when both scanComments snapshots miss the marker but the final rescan finds it (retry race)", async () => {
+    // Both `listIssueComments` calls (pre-Ollama + post-Ollama) see
+    // an empty list — the marker hadn't propagated yet. The final
+    // targeted rescan (`listIssueCommentsPage`, page 1) DOES see
+    // the marker — that's the just-written-but-not-yet-listable
+    // comment from a retried attempt #1. Asserts: PATCH on the
+    // discovered id, NO duplicate POST.
+    mockListIssueComments.mockResolvedValue([])
+    mockListIssueCommentsPage.mockResolvedValueOnce([
+      { id: 4242, body: "<!-- sigilix:pr-overview -->\nfrom attempt #1" },
+    ])
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv), skipDedupe: true })
+
+    expect(mockGenerate).toHaveBeenCalledOnce()
+    // Both scanComments snapshots ran (pre-Ollama + post-Ollama).
+    expect(mockListIssueComments).toHaveBeenCalledTimes(2)
+    // The final rescan fired once (page 1, short-circuited on the
+    // marker hit before any further pages).
+    expect(mockListIssueCommentsPage).toHaveBeenCalledTimes(1)
+    expect(mockUpdateIssueComment).toHaveBeenCalledOnce()
+    expect(mockUpdateIssueComment.mock.calls[0]![2]).toBe(4242)
+    expect(mockCreateIssueComment).not.toHaveBeenCalled()
+  })
+
+  it("emits pr-overview-final-rescan-found-marker telemetry on the race-hit path", async () => {
+    mockListIssueComments.mockResolvedValue([])
+    mockListIssueCommentsPage.mockResolvedValueOnce([
+      { id: 8181, body: "<!-- sigilix:pr-overview -->\nfrom attempt #1" },
+    ])
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv), skipDedupe: true })
+
+    const log = logSpy.mock.calls
+      .map((c) => String(c[0]))
+      .find((s) => s.includes("pr-overview-final-rescan-found-marker"))
+    expect(log).toBeDefined()
+    const parsed = JSON.parse(log!)
+    expect(parsed.owner).toBe("acme")
+    expect(parsed.repo).toBe("site")
+    expect(parsed.prNumber).toBe(73)
+    expect(parsed.foundCommentId).toBe(8181)
+    logSpy.mockRestore()
+  })
+
+  it("POSTs once when every rescan (pre-Ollama, post-Ollama, AND final) sees no marker (no race)", async () => {
+    // Normal create path: nothing exists, nothing surfaces in any
+    // of the three reads. POST should fire exactly once.
+    mockListIssueComments.mockResolvedValue([])
+    mockListIssueCommentsPage.mockResolvedValue([])
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv) })
+
+    expect(mockListIssueComments).toHaveBeenCalledTimes(2)
+    // Final rescan still fires before the POST, but finds nothing
+    // → falls through to the actual create call.
+    expect(mockListIssueCommentsPage).toHaveBeenCalled()
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+    expect(mockUpdateIssueComment).not.toHaveBeenCalled()
   })
 })

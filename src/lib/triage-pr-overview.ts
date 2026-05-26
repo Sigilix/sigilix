@@ -552,11 +552,40 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
         `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
       )
     } else {
-      const created = await client.createIssueComment(owner, repo, prNumber, body)
-      since("comment-created")
-      console.log(
-        `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
-      )
+      // SIG-216 CR fix-up: read-after-write idempotency. The
+      // `runInlineOverviewWithRetry` path may retry after a transient
+      // `createIssueComment` failure where the comment DID write
+      // server-side but the response failed (network hiccup,
+      // GitHub 5xx after commit). With `skipDedupe: true` the KV
+      // dedupe lock is bypassed, and the post-Ollama re-scan above
+      // races against KV / list-comments propagation — a marker
+      // written ~milliseconds ago by attempt #1 may not yet show
+      // up in attempt #2's `listIssueComments` snapshot. One final
+      // targeted rescan immediately before the POST catches that
+      // case: if the marker exists, switch to PATCH instead of
+      // double-posting.
+      const finalRescan = await findExistingOverviewComment(client, owner, repo, prNumber)
+      if (finalRescan?.id != null) {
+        console.log(JSON.stringify({
+          event: "pr-overview-final-rescan-found-marker",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          foundCommentId: finalRescan.id,
+        }))
+        await client.updateIssueComment(owner, repo, finalRescan.id, body)
+        since("comment-updated")
+        console.log(
+          `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup}, via=final-rescan)`
+        )
+      } else {
+        const created = await client.createIssueComment(owner, repo, prNumber, body)
+        since("comment-created")
+        console.log(
+          `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
+        )
+      }
     }
 
     // ARC-263: write fresh per-file rows to the cache. The misses

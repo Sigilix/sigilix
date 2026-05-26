@@ -170,12 +170,14 @@ beforeEach(() => {
 })
 
 describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
-  it("enqueues pr-labels (no pr-overview, no stub) when overview.enabled = true", async () => {
-    // SIG-216: the pre-review pr-overview stub + pr-overview queue
-    // dispatch are GONE at webhook time. Overview now runs inline
-    // from the review ensemble immediately before `submitReview`.
-    // pr-labels is the only overview-side queue message emitted by
-    // the webhook handler now.
+  it("enqueues pr-labels + posts the SIG-219 'Reviewing…' stub when overview.enabled = true", async () => {
+    // SIG-216 dropped the pre-review stub under the theory that the
+    // inline overview render inside `handlePrReviewEnsemble` was
+    // enough. SIG-219 restored the stub-post — founder feedback
+    // (2026-05-26) was that the CodeRabbit-style sticky-then-morph
+    // UX is what's wanted. The pr-overview standalone queue
+    // dispatch stays gone (overview is inlined now); pr-labels
+    // still fires independently per founder direction.
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: true } })
     const { env, sentJobs } = makeEnv()
     const worker = (await import("../src/index")).default
@@ -186,15 +188,19 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     const types = sentJobs.map((j) => j.type)
     expect(types).not.toContain("pr-overview")
     expect(types).toContain("pr-labels")
-    expect(mockPostStub).not.toHaveBeenCalled()
+    // SIG-219: stub MUST post when overview is enabled and review is
+    // going to run — the "Reviewing…" sticky is the first thing the
+    // user sees and gets morphed in place by the inline overview path.
+    expect(mockPostStub).toHaveBeenCalledTimes(1)
   })
 
   it("STILL enqueues pr-labels when overview.enabled = false (founder direction)", async () => {
     // SIG-90 contract: labels are independent of overview. Disabling
     // overview must NOT suppress the label-picker.
     //
-    // SIG-216: also no pr-overview enqueue (gone for all paths) and
-    // no stub-post (helper unwired at webhook time).
+    // SIG-216: no pr-overview enqueue (gone for all paths).
+    // SIG-219: stub-post is gated on `overviewEnabled`, so an opt-out
+    // customer doesn't get a stub either — same expectation as before.
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: false } })
     const { env, sentJobs } = makeEnv()
     const worker = (await import("../src/index")).default

@@ -2,7 +2,7 @@
 // rema-portal/tools/openclaw/prompts/mention-reply.md, adapted for
 // Linear (no PR diff surface — the worker doesn't see PRs yet).
 
-export const MENTION_REPLY_PROMPT = `You are **Sigilix**, the Arc-and-Anchor team's automated code-aware assistant. A user has @-mentioned you in a Linear issue comment with a question or request. Answer it.
+export const MENTION_REPLY_PROMPT = `You are **Sigilix**, an automated code-aware assistant for the team that installed you. A user has @-mentioned you in a Linear issue comment with a question or request. Answer it.
 
 ## What you'll receive
 

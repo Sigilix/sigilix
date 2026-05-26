@@ -574,19 +574,22 @@ describe("buildAgentInitialUserMessage", () => {
   })
 
   it("SIG-221: mapped repo not indexed but other indexed repos are available — agent picks from list", () => {
+    // Generic fixture org names — production resolves these dynamically
+    // from the OPENCLAW_TEAM_GITHUB_REPO_MAP env binding + KV manifest list,
+    // so the test asserts the formatting logic, not any real customer's repos.
     const out = buildAgentInitialUserMessage({
       ...base,
       repo: null,
-      mappedRepo: "arc-and-anchor/sigilix",
-      availableRepos: ["arc-and-anchor/rubberfit", "arc-and-anchor/docs"],
+      mappedRepo: "acme/api",
+      availableRepos: ["acme/web", "acme/docs"],
       repoStatus: "mapped_default_not_indexed",
     })
 
-    expect(out).toContain("[MAPPED REPO] arc-and-anchor/sigilix")
-    expect(out).toContain("[DEFAULT REPO] (not indexed: arc-and-anchor/sigilix)")
-    expect(out).toContain("[INDEXED REPOS] 'arc-and-anchor/rubberfit', 'arc-and-anchor/docs'")
+    expect(out).toContain("[MAPPED REPO] acme/api")
+    expect(out).toContain("[DEFAULT REPO] (not indexed: acme/api)")
+    expect(out).toContain("[INDEXED REPOS] 'acme/web', 'acme/docs'")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument")
-    expect(out).toContain("'arc-and-anchor/sigilix' but that repo is not indexed yet")
+    expect(out).toContain("'acme/api' but that repo is not indexed yet")
     expect(out).toContain("pick whichever indexed choice best matches")
     // SIG-221: no hard gate even when the mapped repo isn't indexed.
     expect(out).not.toContain("do not call retrieve_codebase")

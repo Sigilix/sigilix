@@ -70,7 +70,7 @@ export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
 export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
-const BADGE_ASSET_VERSION = "v20260526-1"
+const BADGE_ASSET_VERSION = "v20260526-2"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,
@@ -163,25 +163,35 @@ export function lookupGlyph(label: string): BadgeGlyphPath {
 }
 
 function renderBadgeSvg(style: (typeof BADGE_STYLES)[BadgeAssetName]): string {
-  // 20x20 filled square with rx=1 — Greptile-direction geometry. Accent fill
-  // at 100%, dark glyph for AA contrast. No stroke (drops the prior outline).
+  // 20x20 filled square with rx=0.5 — founder direction 2026-05-26
+  // (Kimi K2.6 spec): drop from rx=1 to the hairline-relief value so
+  // both badges share a unified sharp-edged language. The 0.5 keeps
+  // the corner from rendering aliased on low-DPI displays without
+  // reading as "rounded" — pure square reads jagged at 1x in some
+  // browsers, per the design review. Accent fill at 100%, dark glyph
+  // for AA contrast. No stroke (drops the prior outline).
   // SIG-216: glyph is path-baked at generation time (translation already
   // applied to the coordinates), so the SVG carries no <text>, no font
   // attrs, and no transform — just one <path>.
   const glyph = lookupGlyph(style.label)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PRIORITY_BADGE_WIDTH} ${PRIORITY_BADGE_HEIGHT}" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
-  <rect x="0" y="0" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" rx="1" fill="${style.accent}"/>
+  <rect x="0" y="0" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" rx="0.5" fill="${style.accent}"/>
   <path d="${glyph.d}" fill="${PRIORITY_TEXT_COLOR}"/>
 </svg>`
 }
 
 function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBadgeAssetName]): string {
+  // Category pill drops from rx=2 to rx=0.5 to match the priority
+  // badge — same founder direction + Kimi spec. The prior rx=2 was
+  // explicitly "slightly more rounded… to mark it as the secondary
+  // badge," but founder direction 2026-05-26 is that the figure/ground
+  // hierarchy now relies on color value alone, not corner softness.
   const width = categoryBadgeWidth(style.label)
   const bg = applyHsl(style.accent, CATEGORY_BG_SATURATION, CATEGORY_BG_LIGHTNESS)
   const fg = applyHsl(style.accent, CATEGORY_TEXT_SATURATION, CATEGORY_TEXT_LIGHTNESS)
   const glyph = lookupGlyph(style.label)
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${CATEGORY_BADGE_HEIGHT}" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
-  <rect x="0" y="0" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" rx="2" fill="${bg}"/>
+  <rect x="0" y="0" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" rx="0.5" fill="${bg}"/>
   <path d="${glyph.d}" fill="${fg}"/>
 </svg>`
 }

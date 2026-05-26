@@ -261,15 +261,27 @@ export function computeRuleLayer(
   // ─── SIG-227a — test-files-only shortcut ───
   // Pure test-coverage-add PR: every diffed file is a test file
   // (`*.test.*`, `*.spec.*`, `__tests__/**` per `diff-file-classify`).
-  // No source under review, so security and perf have no surface to
-  // evaluate. Logic stays on (test correctness IS logic; e.g.,
-  // assertion-order bugs, mock-vs-prod divergence) plus the tests
-  // specialist obviously.
+  //
+  // Safe-skip `performance` ONLY. Earlier draft also safe-skipped
+  // `security`, but Sigilix bot finding on PR #185 correctly flagged
+  // this: test files COMMONLY contain hardcoded API keys, mock
+  // credentials, integration-test tokens that look real, and JWTs
+  // with hardcoded payloads. Skipping security would silently route
+  // accidental secret commits past the review pipeline.
+  //
+  // Wall-time impact of leaving security on: minimal. Logic still
+  // dominates the critical path (~100-270s on `deepseek-v4-pro`),
+  // and security on `deepseek-v4-flash` (~30-60s) finishes first in
+  // parallel — costs only tokens, not wall-time. The wall-time win
+  // from this shortcut comes from skipping performance (which has
+  // genuinely no surface on test diffs).
+  //
+  // Logic stays on (test correctness IS logic; assertion-order
+  // bugs, mock-vs-prod divergence) plus the tests specialist
+  // obviously.
   if (fileTypes.allTestFilesOnly) {
-    for (const role of ["security", "performance"] as const) {
-      safeSkip.add(role)
-      recordReason(role, "test_files_only_safe_skip")
-    }
+    safeSkip.add("performance")
+    recordReason("performance", "test_files_only_safe_skip_perf")
   }
 
   // ─── Global security force patterns ───

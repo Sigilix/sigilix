@@ -291,6 +291,73 @@ describe("handlePrReviewEnsemble — dispatcher shadow mode (SIG-226)", () => {
     expect(dispatcherCalls).toHaveLength(0)
   })
 
+  it("SIG-232 / enforce_rules mode replaces router.specialists with dispatcher picks + preserves legacyRouterDecision", async () => {
+    // PR #185 bot finding: the enforce_rules wire-in
+    // (`triage-pr-review-ensemble.ts:1595` block) and the
+    // `legacyRouterDecision` telemetry preservation lacked
+    // orchestrator-boundary coverage. This test pins:
+    //   1. mode=enforce_rules emits the `dispatcher-shadow-decision`
+    //      event (shared with shadow mode).
+    //   2. NO LLM call (rules-only path; dispatcher's flash model is
+    //      never invoked).
+    //   3. `telemetry.routerDecision` is overwritten with the
+    //      dispatcher's picks (drives downstream fan-out).
+    //   4. `telemetry.legacyRouterDecision` preserves the legacy
+    //      `decideSpecialists` result for /metrics/validation delta
+    //      computation.
+    mockGetPullRequest.mockResolvedValueOnce({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+      title: "docs: tweak",
+      body: "",
+    })
+    // Docs-only-no-fences → rule layer safe-skips all 4 → dispatcher
+    // picks = [].
+    const DOCS_ONLY_DIFF = `diff --git a/README.md b/README.md
+index abc1234..def5678 100644
+--- a/README.md
++++ b/README.md
+@@ -1 +1,2 @@
+ # Sigilix
++New plain prose line.
+`
+    mockGetPullRequestDiff.mockResolvedValueOnce(DOCS_ONLY_DIFF)
+    mockListOpenPullRequests.mockResolvedValueOnce([])
+    mockGetFileContent.mockResolvedValueOnce(null)
+    // Specialist chat() will reject if called — proves no fan-out
+    // actually starts on the empty-router path.
+    mockChat.mockRejectedValue(new Error("test boundary"))
+
+    await handlePrReviewEnsemble({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 5004,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env: makeEnv({ OPENCLAW_DYNAMIC_DISPATCHER_MODE: "enforce_rules" } as unknown as Env),
+    })
+
+    const event = findLoggedEvent("dispatcher-shadow-decision")
+    expect(event).toBeDefined()
+    expect(event?.mode).toBe("enforce_rules")
+    // Dispatcher's rule-layer decided: docs-only-no-fences → no
+    // specialists. Both router.specialists (overwritten) AND
+    // dispatcherSpecialists in telemetry are empty.
+    expect((event?.dispatcherSpecialists as string[])).toEqual([])
+    // Rule-layer-only path — dispatcher never invoked the LLM.
+    expect((event?.layerVotes as Record<string, unknown>).llmOutcome).toBe(
+      "skipped_rules_only_mode",
+    )
+    // No call with the dispatcher's `specialist-dispatcher` system
+    // prompt fired (rules-only mode skips the LLM entirely).
+    const dispatcherCalls = mockChat.mock.calls.filter((call) =>
+      isDispatcherCall(call[0]),
+    )
+    expect(dispatcherCalls).toHaveLength(0)
+  })
+
   it("logs enforce-mode-not-honored when mode=enforce (Phase 1 safety)", async () => {
     mockGetPullRequest.mockResolvedValueOnce({
       head: { sha: HEAD_SHA },

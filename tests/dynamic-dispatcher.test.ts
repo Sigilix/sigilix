@@ -278,7 +278,15 @@ describe("computeRuleLayer — SIG-227a new safe-skip shortcuts", () => {
   })
 
   describe("test-files-only", () => {
-    it("safe-skips security + performance (no source under review)", () => {
+    it("safe-skips ONLY performance — security stays on for secret-leakage protection", () => {
+      // Sigilix bot finding on PR #185: test files commonly contain
+      // hardcoded API keys, mock credentials, integration-test
+      // tokens, JWTs with hardcoded payloads. Skipping security on
+      // test-only PRs would silently route accidental secret
+      // commits past the review pipeline. Earlier draft also safe-
+      // skipped security; this revision keeps security on. Wall-
+      // time impact is negligible because logic still runs in
+      // parallel and dominates the critical path.
       const result = computeRuleLayer({
         signals: {
           paths: ["tests/foo.test.ts", "tests/bar.test.ts"],
@@ -291,11 +299,13 @@ describe("computeRuleLayer — SIG-227a new safe-skip shortcuts", () => {
         commitMessage: "test: add coverage for foo + bar",
         repoConfig: EMPTY_CONFIG,
       })
-      expect(result.safeSkipRoles.has("security")).toBe(true)
       expect(result.safeSkipRoles.has("performance")).toBe(true)
-      // Logic stays on — assertion correctness IS logic. Tests
-      // stays on for the obvious reason (tests reviewing tests).
+      // Security stays ON — protects against hardcoded test creds /
+      // tokens / API keys that look real.
+      expect(result.safeSkipRoles.has("security")).toBe(false)
+      // Logic stays on — assertion correctness IS logic.
       expect(result.safeSkipRoles.has("logic")).toBe(false)
+      // Tests stays on for the obvious reason.
       expect(result.safeSkipRoles.has("tests")).toBe(false)
     })
 
@@ -973,7 +983,10 @@ describe("decideSpecialistsDynamic — SIG-227a enforce_rules mode", () => {
     expect(mockChat).not.toHaveBeenCalled()
   })
 
-  it("returns [logic, tests] for test-files-only diffs WITHOUT calling the LLM", async () => {
+  it("returns [logic, security, tests] for test-files-only diffs WITHOUT calling the LLM", async () => {
+    // Per the bot-flagged fix: security stays ON for test-only PRs
+    // to catch hardcoded creds / tokens in test fixtures. Only perf
+    // is safe-skipped.
     const decision = await decideSpecialistsDynamic({
       signals: { paths: ["tests/foo.test.ts"], totalLinesChanged: 30 },
       classified: [{ path: "tests/foo.test.ts", kind: "test", testsSibling: null, sourceSibling: null }],
@@ -981,7 +994,7 @@ describe("decideSpecialistsDynamic — SIG-227a enforce_rules mode", () => {
       repoConfig: EMPTY_CONFIG,
       env: envEnforceRules(),
     })
-    expect([...decision.specialists].sort()).toEqual(["logic", "tests"])
+    expect([...decision.specialists].sort()).toEqual(["logic", "security", "tests"])
     expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
     expect(mockChat).not.toHaveBeenCalled()
   })
@@ -1013,6 +1026,10 @@ describe("decideSpecialistsDynamic — SIG-227a enforce_rules mode", () => {
     // adds security.
     expect(decision.specialists).toEqual(["security"])
     expect(decision.layerVotes.repoConfigForced).toEqual(["security"])
+    // CR nit: pin that enforce_rules still skips LLM classification
+    // even when `dispatcher.force` overrides the rule layer.
+    expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
+    expect(mockChat).not.toHaveBeenCalled()
   })
 })
 

@@ -30,7 +30,10 @@ describe("badge assets (SIG-201)", () => {
     expect(body).toContain('viewBox="0 0 20 20"')
     // Filled square: rect fill = accent hue, dark glyph on top. No stroke.
     expect(body).toContain('fill="#84CC16"')
-    expect(body).toContain('rx="1"')
+    // Founder direction 2026-05-26 + Kimi K2.6 spec: sharp-edged badges
+    // share a hairline-relief radius (rx=0.5) so the corners read square
+    // without aliasing on low-DPI displays. Was rx=1 pre-fix.
+    expect(body).toContain('rx="0.5"')
     // Path-baked glyph (Geist Mono Medium @ 9.5px) replaces the live <text>
     // element. Color is the SIG-216 spec value #0A0A0A.
     expect(body).toContain('fill="#0A0A0A"')
@@ -58,7 +61,11 @@ describe("badge assets (SIG-201)", () => {
     expect(body).toContain('aria-label="SECURITY"')
     // 20px-tall pill matches the priority badge height for visual unity.
     expect(body).toContain('height="20"')
-    expect(body).toContain('rx="2"')
+    // Founder direction 2026-05-26 + Kimi K2.6 spec: category pill now
+    // shares the priority badge's rx=0.5 instead of the prior rx=2.
+    // Hierarchy is carried by color value alone (figure/ground), not
+    // by corner softness.
+    expect(body).toContain('rx="0.5"')
     // Hue identity preserved (magenta family) but desaturated/darkened for BG
     // and brightened for FG. Original accent #F0ABFC no longer appears verbatim.
     expect(body).not.toContain('#F0ABFC')
@@ -93,8 +100,8 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-1/p2.svg`)
-    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-1/security.svg`)
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-2/p2.svg`)
+    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-2/security.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
   })
 

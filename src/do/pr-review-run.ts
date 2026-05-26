@@ -141,6 +141,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
     // falls back to its own `startInProgressCheckRun` exactly like
     // legacy queue messages.
     const CHECK_RUN_CREATE_TIMEOUT_MS = 3_000
+    // CodeRabbit catch on PR #179 fixup: capture the timer handle so we
+    // can clear it after `startInProgressCheckRun` wins the race.
+    // Otherwise the warning fires (and the timer leaks) on every
+    // successful create — spurious telemetry + needless resource use.
+    let createTimeoutId: ReturnType<typeof setTimeout> | undefined
     const checkRun = await Promise.race([
       startInProgressCheckRun({
         env: this.env,
@@ -150,7 +155,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
         installationId: body.installationId,
       }),
       new Promise<null>((resolve) => {
-        setTimeout(() => {
+        createTimeoutId = setTimeout(() => {
           console.warn(JSON.stringify({
             event: "pr-review-check-run-create-timeout",
             owner: body.owner, repo: body.repo, prNumber: body.prNumber,
@@ -161,6 +166,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
         }, CHECK_RUN_CREATE_TIMEOUT_MS)
       }),
     ])
+    if (createTimeoutId !== undefined) clearTimeout(createTimeoutId)
 
     const runId = crypto.randomUUID()
     const newState: RunState = {

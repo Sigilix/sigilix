@@ -1570,29 +1570,35 @@ export async function handlePrReviewEnsemble(
     // CR PR #35 catch: pass diffText so the router can content-aware
     // check markdown fenced code blocks before taking the docs-only
     // shortcut.
-    const router = decideSpecialists({ paths: filePaths, totalLinesChanged, diffText: diff }, env)
+    let router = decideSpecialists({ paths: filePaths, totalLinesChanged, diffText: diff }, env)
     telemetry.routerDecision = router
 
-    // ─── SIG-226 / SIG-224 Phase 1 — shadow dispatcher ─────────
+    // ─── SIG-226 / SIG-224 Phase 1 — dispatcher (shadow + enforce_rules) ─
     // Default mode = "off" → the whole block is a no-op (single env
-    // string compare). In "shadow" the dynamic dispatcher computes
-    // its would-be picks alongside the legacy router; telemetry
-    // captures the deltas so we can compute false-negative rates on
-    // protected roles before Phase 2/3 graduates to enforcement.
-    // Fan-out still uses `router.specialists` from line above —
-    // shadow mode never changes runtime behavior. `enforce` is logged
-    // but not honored in Phase 1 (Phase 2 / SIG-227 wires non-
-    // protected enforcement; Phase 3 / SIG-228 wires protected
-    // enforcement). The dispatcher's internal 8s timeout caps the
-    // shadow overhead per review.
+    // string compare).
+    //
+    // Modes:
+    //   "shadow"        — dispatcher computes picks + LLM call, but the
+    //                     legacy router still drives fan-out. Pure data
+    //                     collection for SIG-227b / SIG-228 graduation.
+    //   "enforce_rules" — SIG-227a. Dispatcher runs the RULE LAYER only
+    //                     (no LLM call, 0s overhead) and its picks
+    //                     REPLACE `router.specialists` for fan-out.
+    //                     Activates the new safe-skip rules
+    //                     (lockfile-only, .d.ts-only, test-files-only)
+    //                     that the legacy router doesn't have.
+    //   "enforce"       — Phase 2/3 (SIG-227b / SIG-228). Dispatcher
+    //                     runs rules + LLM and the picks drive fan-out.
+    //                     Logged but not yet honored in Phase 1 / 227a.
+    //
+    // Dispatcher is wrapped in try/catch so a defense-in-depth throw
+    // can't poison the legacy review pipeline (CR M3 fix from PR #183).
     const dispatcherMode = env.OPENCLAW_DYNAMIC_DISPATCHER_MODE
-    if (dispatcherMode === "shadow" || dispatcherMode === "enforce") {
-      // CodeRabbit M3 fix: shadow-only work runs in a try/catch so an
-      // unexpected throw inside the dispatcher (defense-in-depth on
-      // top of `decideSpecialistsDynamic`'s never-throw contract)
-      // can't poison the legacy review pipeline. Failure here is
-      // logged + swallowed — the orchestrator continues with
-      // `router.specialists` for fan-out.
+    if (
+      dispatcherMode === "shadow"
+      || dispatcherMode === "enforce"
+      || dispatcherMode === "enforce_rules"
+    ) {
       try {
         const dispatcherClassified = classifyDiffFiles(filePaths)
         const dispatcherCommitMessage = `${meta.title}\n\n${meta.body ?? ""}`
@@ -1604,10 +1610,6 @@ export async function handlePrReviewEnsemble(
           env,
           signal: orchCtrl.signal,
         })
-        // Hold on the telemetry object so the KV-backed metrics
-        // endpoints can aggregate shadow-window stats (per-role
-        // agreement rates, p50/p95/p99 dispatcher overhead, etc.) —
-        // Phase 2/3 graduation depends on this.
         telemetry.dispatcherDecision = dispatcherDecision
         console.log(JSON.stringify({
           event: "dispatcher-shadow-decision",
@@ -1620,11 +1622,44 @@ export async function handlePrReviewEnsemble(
           reasoning: dispatcherDecision.reasoning,
           elapsedMs: dispatcherDecision.elapsedMs,
         }))
+        if (dispatcherMode === "enforce_rules") {
+          // SIG-227a: rules-only enforcement. Replace the legacy
+          // router's picks with the dispatcher's.
+          //
+          // Safe-skip COVERAGE is a strict superset: the dispatcher
+          // adds lockfile-only, .d.ts-only, and test-files-only on
+          // top of the legacy router's docs-only-no-fences and CSS-
+          // only. So for PRs that hit a safe-skip case, the dispatcher
+          // matches OR shrinks the fan-out vs the legacy router.
+          //
+          // END-TO-END behavior on shape+force collisions differs.
+          // Example: a docs-only PR that ALSO touches an auth path
+          // (e.g. `auth-spec.md`). Legacy router: `forced.size > 0`
+          // → docs shortcut is SKIPPED → all 4 specialists run.
+          // Dispatcher: docs safe-skip fires → security force adds
+          // security back → fan-out = `{security}` only. This is
+          // intentionally more aggressive — a markdown change to an
+          // auth spec doesn't need logic/perf/tests review — but it
+          // IS a behavior change reviewers will see in shadow
+          // telemetry.
+          //
+          // CodeRabbit M1 fix: preserve the legacy router decision
+          // on `telemetry.legacyRouterDecision` so `/metrics/validation`
+          // can compute the "would-have-fanned-out vs actually-fanned-
+          // out" delta. The console.log captures both sides too.
+          telemetry.legacyRouterDecision = router
+          router = {
+            specialists: dispatcherDecision.specialists,
+            reason: `dispatcher_enforce_rules:${dispatcherDecision.reasoning.slice(0, 200)}`,
+            routerEnabled: true,
+          }
+          telemetry.routerDecision = router
+        }
         if (dispatcherMode === "enforce") {
           console.warn(JSON.stringify({
             event: "dispatcher-enforce-mode-not-honored-in-phase-1",
             owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            note: "enforcement ships in SIG-227 (non-protected) + SIG-228 (protected)",
+            note: "full enforcement (LLM-decided non-protected + protected) ships in SIG-227b + SIG-228; use mode=enforce_rules for rules-only enforcement available today",
           }))
         }
       } catch (err) {
@@ -7497,6 +7532,16 @@ interface EnsembleTelemetry {
   fellBackReason?: string
   internalError?: string
   routerDecision: RouterDecision | null
+  /**
+   * SIG-227a: when `OPENCLAW_DYNAMIC_DISPATCHER_MODE === "enforce_rules"`,
+   * `routerDecision` above is overwritten with the dispatcher's picks
+   * because those drive fan-out. The legacy `decideSpecialists` result
+   * is preserved here so `/metrics/validation` can compute
+   * "would-have-been-fanned-out vs actually-fanned-out" deltas across
+   * the enforce_rules window. Absent when mode is `off`/`shadow`/`enforce`
+   * (only `enforce_rules` does the routerDecision swap).
+   */
+  legacyRouterDecision?: RouterDecision
   /**
    * SIG-226 / SIG-224 Phase 1: shadow-mode dispatcher decision blob.
    * Populated only when `OPENCLAW_DYNAMIC_DISPATCHER_MODE` is set to

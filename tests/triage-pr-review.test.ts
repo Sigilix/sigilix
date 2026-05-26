@@ -2860,10 +2860,15 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(1)).toContain('alt="P3"')
   })
-  it("renders badges as 20x20 filled squares for GitHub legibility (SIG-200, Greptile-direction SIG-216)", () => {
+  it("renders badges with 32×32 IMG display dimensions (1.6× scale over the 20×20 SVG viewBox; SIG-200, Greptile-direction SIG-216, Kimi K2.6 bitmap-zoom fix)", () => {
+    // The SVG content stays viewBox=20×20 (glyphs are path-baked for
+    // that space) but the IMG tag DISPLAYS at 32×32 so downstream
+    // bitmap consumers (screenshot tools, chat previews, browser
+    // zoom) have 64×64 device-pixel source to interpolate from
+    // instead of 40×40. Keeps corners visually crisp through zoom.
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="20"')
-    expect(out).toContain('height="20"')
+    expect(out).toContain('width="32"')
+    expect(out).toContain('height="32"')
   })
   it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
     const out = severityBadgeForScore(3)

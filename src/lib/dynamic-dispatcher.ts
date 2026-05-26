@@ -69,6 +69,8 @@ export type DispatcherLlmOutcome =
   | "invalid_json"
   | "disabled"           // OLLAMA_CHAT_ENABLE=off OR mode=off
   | "skipped_no_ambiguous"  // rules decided everything
+  | "skipped_rules_only_mode"  // SIG-227a: mode=enforce_rules
+                               // intentionally bypasses the LLM
   | "no_api_key"
   | "chat_error"         // any chat() throw other than abort: HTTP error,
                          // stream error, missing body, etc. Renamed from
@@ -203,7 +205,7 @@ export function computeRuleLayer(
   // Matches existing `ensemble-router.ts::decideSpecialists` semantics:
   // pure-docs (.md/.mdx/.txt/.rst/.adoc) AND no executable fenced
   // blocks in the added diff lines → no specialist applies.
-  const fileTypes = classifyFileTypes(paths)
+  const fileTypes = classifyFileTypes(paths, classified)
   if (fileTypes.allDocsOnly) {
     const hasSuspiciousFences = signals.diffText === undefined
       || diffContainsExecutableMarkdownFences(signals.diffText)
@@ -228,6 +230,58 @@ export function computeRuleLayer(
         recordReason(role, "css_only_safe_skip")
       }
     }
+  }
+
+  // ─── SIG-227a — lockfile-only shortcut ───
+  // Pure dep-bump PR: every diffed file is a lockfile, no source /
+  // config / docs / test changes. `touchesPackagesOrLockfile` below
+  // also force-includes `security` for supply-chain review, so the
+  // skip set is safe — security still runs.
+  if (fileTypes.allLockfilesOnly) {
+    for (const role of ALL_SPECIALISTS) {
+      if (role !== "security") {
+        safeSkip.add(role)
+        recordReason(role, "lockfile_only_safe_skip")
+      }
+    }
+  }
+
+  // ─── SIG-227a — .d.ts-only shortcut ───
+  // Pure TypeScript declaration changes describe types; runtime
+  // behavior isn't affected, so security/logic/perf have nothing to
+  // find. Keep tests on the lineup because type-only changes can
+  // still affect assertion shape in dependent tests.
+  if (fileTypes.allDtsOnly) {
+    for (const role of ["security", "logic", "performance"] as const) {
+      safeSkip.add(role)
+      recordReason(role, "dts_only_safe_skip")
+    }
+  }
+
+  // ─── SIG-227a — test-files-only shortcut ───
+  // Pure test-coverage-add PR: every diffed file is a test file
+  // (`*.test.*`, `*.spec.*`, `__tests__/**` per `diff-file-classify`).
+  //
+  // Safe-skip `performance` ONLY. Earlier draft also safe-skipped
+  // `security`, but Sigilix bot finding on PR #185 correctly flagged
+  // this: test files COMMONLY contain hardcoded API keys, mock
+  // credentials, integration-test tokens that look real, and JWTs
+  // with hardcoded payloads. Skipping security would silently route
+  // accidental secret commits past the review pipeline.
+  //
+  // Wall-time impact of leaving security on: minimal. Logic still
+  // dominates the critical path (~100-270s on `deepseek-v4-pro`),
+  // and security on `deepseek-v4-flash` (~30-60s) finishes first in
+  // parallel — costs only tokens, not wall-time. The wall-time win
+  // from this shortcut comes from skipping performance (which has
+  // genuinely no surface on test diffs).
+  //
+  // Logic stays on (test correctness IS logic; assertion-order
+  // bugs, mock-vs-prod divergence) plus the tests specialist
+  // obviously.
+  if (fileTypes.allTestFilesOnly) {
+    safeSkip.add("performance")
+    recordReason("performance", "test_files_only_safe_skip_perf")
   }
 
   // ─── Global security force patterns ───
@@ -575,9 +629,15 @@ export async function decideSpecialistsDynamic(
 ): Promise<DispatcherDecision> {
   const t0 = Date.now()
   const mode = inputs.env.OPENCLAW_DYNAMIC_DISPATCHER_MODE
-  if (mode !== "shadow" && mode !== "enforce") {
+  if (mode !== "shadow" && mode !== "enforce" && mode !== "enforce_rules") {
     return makeDisabledDecision(t0)
   }
+  // SIG-227a: `enforce_rules` runs the rule layer ONLY (no LLM call)
+  // and uses its picks for fan-out. The orchestrator wires this in
+  // by replacing `router.specialists` with this decision's picks.
+  // Ambiguous roles (not forced + not safe-skipped) default to RUN
+  // — the same conservative behavior as the legacy router.
+  const rulesOnly = mode === "enforce_rules"
 
   // ─── Tier 1 ───
   const rules = computeRuleLayer(inputs)
@@ -591,8 +651,21 @@ export async function decideSpecialistsDynamic(
   }
 
   // ─── Tier 2 ───
+  // SIG-227a: enforce_rules mode skips the LLM entirely — protected
+  // ambiguous roles default to RUN per the reconciler's existing
+  // consensus-to-skip semantic. The synthetic LLM result here makes
+  // downstream reconcile/telemetry treat ambiguous non-protected
+  // roles as "run by default" (picks = all ambiguous) since the rule
+  // layer didn't actively safe-skip them.
   let llm: LlmClassifierResult
-  if (ambiguous.size === 0) {
+  if (rulesOnly) {
+    llm = {
+      outcome: "skipped_rules_only_mode",
+      picks: [...ambiguous],
+      confidence: 5,
+      reasoning: "rules_only_mode_no_llm_call",
+    }
+  } else if (ambiguous.size === 0) {
     llm = {
       outcome: "skipped_no_ambiguous",
       picks: [],
@@ -756,19 +829,83 @@ function composeReasoning(
 const DOCS_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".rst", ".adoc"])
 const CSS_EXTENSIONS = new Set([".css", ".scss", ".sass", ".less"])
 
-function classifyFileTypes(paths: readonly string[]): { allDocsOnly: boolean; allCssOnly: boolean } {
-  if (paths.length === 0) return { allDocsOnly: false, allCssOnly: false }
+interface FileTypeBuckets {
+  allDocsOnly: boolean
+  allCssOnly: boolean
+  /** SIG-227a: every diffed file is a lockfile (no source / config /
+   *  test changes). Lockfile-only PRs are dep bumps — security gets
+   *  forced for supply-chain review, but logic/perf/tests have
+   *  nothing to grip on. */
+  allLockfilesOnly: boolean
+  /** SIG-227a: every diffed file is a TypeScript declaration file
+   *  (`.d.ts`). Type-only changes describe types; runtime behavior
+   *  isn't affected, so security/logic/perf have nothing to find.
+   *  Tests stay on the lineup because type-only changes can still
+   *  affect assertion shape. */
+  allDtsOnly: boolean
+  /** SIG-227a: every diffed file is a test file (`*.test.*`,
+   *  `*.spec.*`, `__tests__/**`, etc. — see
+   *  `diff-file-classify::isTestPath`). Test-only PRs add coverage
+   *  for code that ISN'T changing — security/perf have no surface
+   *  to evaluate. Logic stays on (test correctness IS logic) plus
+   *  tests-specialist obviously. */
+  allTestFilesOnly: boolean
+}
+
+function classifyFileTypes(
+  paths: readonly string[],
+  classified: readonly ClassifiedDiffFile[],
+): FileTypeBuckets {
+  if (paths.length === 0) {
+    return {
+      allDocsOnly: false,
+      allCssOnly: false,
+      allLockfilesOnly: false,
+      allDtsOnly: false,
+      allTestFilesOnly: false,
+    }
+  }
   let docs = 0
   let css = 0
+  let lockfiles = 0
+  let dts = 0
   for (const p of paths) {
     const ext = extOf(p)
     if (DOCS_EXTENSIONS.has(ext)) docs++
     else if (CSS_EXTENSIONS.has(ext)) css++
+    if (isLockfile(p)) lockfiles++
+    if (isDtsFile(p)) dts++
   }
+  // Test-only detection comes from the `classified` file kinds since
+  // `diff-file-classify` already encodes the canonical "is this a
+  // test file" decision (matches `*.test.*`, `*.spec.*`, `tests/**`,
+  // `__tests__/**` — see `isTestPath` in that module).
+  const testCount = classified.filter((f) => f.kind === "test").length
   return {
     allDocsOnly: docs === paths.length,
     allCssOnly: css === paths.length,
+    allLockfilesOnly: lockfiles === paths.length,
+    allDtsOnly: dts === paths.length,
+    allTestFilesOnly: classified.length > 0 && testCount === classified.length,
   }
+}
+
+function isLockfile(path: string): boolean {
+  const name = (path.split("/").pop() ?? path).toLowerCase()
+  return (
+    name === "package-lock.json" ||
+    name === "yarn.lock" ||
+    name === "pnpm-lock.yaml" ||
+    name === "cargo.lock" ||
+    name === "go.sum" ||
+    name === "poetry.lock" ||
+    name === "gemfile.lock" ||
+    name === "composer.lock"
+  )
+}
+
+function isDtsFile(path: string): boolean {
+  return /\.d\.[cm]?ts$/i.test(path)
 }
 
 function extOf(path: string): string {
@@ -851,8 +988,15 @@ const GLOBAL_SECURITY_PATH_PATTERNS: readonly RegExp[] = [
 const GLOBAL_LOGIC_PATH_PATTERNS: readonly RegExp[] = [
   // Parsers, serializers, regex / state-machine code
   /\b(parser|parsers|serialize(?:r)?|deserialize(?:r)?|regex|state[-_]?machine)\b/,
-  // Retry / cache / queue / concurrency primitives
-  /\b(retry|backoff|cache(?!\.test)|queue(?!\.test)|lock|mutex|semaphore|concurren\w*)\b/,
+  // Retry / cache / queue / concurrency primitives.
+  // `lock\w+` (REQUIRES a continuation word-char after `lock`) catches
+  // real concurrency code — `LockManager`, `Locking`, `locker`,
+  // `locked-state`, `Locks` — without matching BARE `lock` in
+  // lockfile basenames (`package-lock.json`, `cargo.lock`). The
+  // hyphen/dot in those filenames is a word boundary, so `lock\w+`
+  // requires at least one continuation character and won't fire on a
+  // bare `lock` token. SIG-227a code-review L1 tightening.
+  /\b(retry|backoff|cache(?!\.test)|queue(?!\.test)|lock\w+|mutex|semaphore|concurren\w*)\b/,
   // Billing / payments / public API contracts
   /(?:^|\/)(billing|payment|payments|stripe|invoice|invoices)\//,
   /(?:^|\/)(api|routes?|public)\//,
@@ -900,17 +1044,11 @@ function touchesPackagesOrLockfile(lowerPaths: readonly string[]): boolean {
     const name = p.split("/").pop() ?? p
     return (
       name === "package.json" ||
-      name === "package-lock.json" ||
-      name === "yarn.lock" ||
-      name === "pnpm-lock.yaml" ||
       name === "cargo.toml" ||
-      name === "cargo.lock" ||
       name === "go.mod" ||
-      name === "go.sum" ||
       name === "requirements.txt" ||
       name === "pyproject.toml" ||
-      name === "poetry.lock" ||
-      name === "gemfile.lock"
+      isLockfile(p)
     )
   })
 }

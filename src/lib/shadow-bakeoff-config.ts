@@ -33,57 +33,52 @@ const SHADOW_ROLES: ReadonlySet<ShadowRole> = new Set([
  *
  * Codex's bake-off priority order (drives which roles are enabled
  * first via `SHADOW_BAKEOFF_ROLES` env in prod):
- *   1. synth     — most customer-impactful failure mode (PR #97).
- *   2. tests + security — high false-positive risk on coder swap.
- *   3. performance fallback — ARC-167 already defends prod primary.
- *   4. logic fallback — keep prod primary, swap kimi-k2.5 → glm-5.1.
+ *   1. logic     — current wall-time floor; test the V4-Flash tradeoff.
+ *   2. synth     — remove Moonshot from the customer-visible critical path.
+ *   3. tests + security — coder/agent models with distinct primaries.
+ *   4. performance fallback — ARC-167 already defends prod primary.
  */
 export const SHADOW_BAKEOFF_LINEUP: Record<ShadowRole, ModelConfig> = {
-  // Logic: keep deepseek-v4-pro primary (reasoning IS the job), swap
-  // the kimi-k2.5 fallback → glm-5.1 (Z.AI infra has better
-  // reliability profile in ARC-167 data; same family as performance
-  // primary, so we know it's reachable on Ollama Turbo).
+  // Logic: move from DeepSeek V4-Pro → V4-Flash to attack the current
+  // 100-270s bottleneck. This is an explicit speed/quality bake-off:
+  // V4-Flash keeps the 1M context window and V4-series reasoning stack
+  // while cutting active parameters sharply.
   logic: {
-    primary: "deepseek-v4-pro:cloud",
+    primary: "deepseek-v4-flash:cloud",
     retries: 1,
-    fallback: "glm-5.1:cloud",
+    fallback: "mistral-large-3:675b-cloud",
   },
-  // Security: swap deepseek-v4-flash → qwen3-coder-next primary.
-  // Coder-model territory: vulnerability patterns are mostly syntax /
-  // dataflow recognition, not frontier reasoning. DeepSeek demoted to
-  // fallback. Different provider family so cross-provider invariant
-  // holds.
+  // Security: vulnerability patterns are mostly syntax/dataflow
+  // recognition. Qwen3-Coder-Next is tuned for agentic coding workflows,
+  // and using it here keeps security distinct from tests and logic.
   security: {
     primary: "qwen3-coder-next:cloud",
     retries: 1,
-    fallback: "deepseek-v4-flash:cloud",
+    fallback: "deepseek-v3.1:671b-cloud",
   },
   // Performance: keep glm-5.1 primary (defended by ARC-167: 100%
-  // success, +18% findings depth). Swap kimi-k2.5 fallback →
-  // qwen3-coder-next so the fallback isn't Moonshot (kimi-k2.5 had
-  // poor reliability in fallback role per Codex's analysis).
+  // success, +18% findings depth). The bake-off only changes fallback.
   performance: {
     primary: "glm-5.1:cloud",
     retries: 1,
-    fallback: "qwen3-coder-next:cloud",
+    fallback: "kimi-k2.5:cloud",
   },
-  // Tests: same swap as security. Test-gap detection is coder-model
-  // territory (missing branches, brittle assertions, coverage holes).
-  // qwen primary, DeepSeek fallback.
+  // Tests: use a different agentic-code model from security so the
+  // ensemble no longer has two roles anchored to the same model ID.
+  // MiniMax M2.5 is fast enough to stay off the critical path and has
+  // strong coding-agent evidence.
   tests: {
-    primary: "qwen3-coder-next:cloud",
+    primary: "minimax-m2.5:cloud",
     retries: 1,
-    fallback: "deepseek-v4-flash:cloud",
+    fallback: "qwen3-coder:480b-cloud",
   },
-  // Synth: HIGHEST-PRIORITY swap. Remove Moonshot from the critical
-  // customer-visible merge step (PR #97 burned 6m16s when kimi-k2.6
-  // hit a Moonshot-wide capacity dip). DeepSeek-v4-flash already
-  // proven on security + tests specialists in prod. qwen fallback
-  // keeps cross-provider invariant.
+  // Synth: replace Kimi K2.6 with gpt-oss 120B so the final merge step
+  // is medium-usage, open-weight, and separate from every specialist.
+  // This keeps the customer-visible role off Moonshot capacity.
   synth: {
-    primary: "deepseek-v4-flash:cloud",
+    primary: "gpt-oss:120b-cloud",
     retries: 1,
-    fallback: "qwen3-coder-next:cloud",
+    fallback: "glm-4.6:cloud",
   },
 }
 

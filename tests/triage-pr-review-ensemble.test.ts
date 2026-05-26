@@ -891,7 +891,11 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // non-starter. Sigilix's own PR #94 self-review caught a 5s
     // overshoot (pre-flight not budgeted into headroom); these
     // values are the post-catch corrected set.
-    expect(SPECIALIST_TIMEOUT_MS).toBe(270_000)
+    // SIG-234 (2026-05-26): SPECIALIST_TIMEOUT_MS tightened 270 → 180
+    // after the lineup swap retired `deepseek-v4-pro:cloud` from the
+    // logic primary (it was the 100-270s wall-time floor). New
+    // primaries fit 3 × 60s = 180s realistic max.
+    expect(SPECIALIST_TIMEOUT_MS).toBe(185_000)
     expect(SYNTHESIZER_TIMEOUT_MS).toBe(420_000)
     expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBe(160_000)
     expect(RESERVED_HEADROOM_MS).toBe(195_000)
@@ -925,22 +929,15 @@ describe("Phase 4a.3 — timeout schedule", () => {
     expect(ORCHESTRATOR_TIMEOUT_MS).toBeLessThan(900_000)
   })
 
-  it("specialist budget accommodates 2 primary attempts + 1 fallback at observed latencies", () => {
-    // Phase 4a.3 (ARC-171) intent: logic specialist gets enough budget
-    // for runWithRetryAndFallback to fire BOTH retries (2 primary
-    // attempts) AND the cross-provider fallback within a single
-    // SPECIALIST_TIMEOUT_MS window. Phase 4a.2 telemetry observed
-    // ~90s per primary attempt on deepseek-v4-pro:cloud and the
-    // fallback (kimi-k2.5:cloud) at a roughly comparable shape.
-    //
-    // Regression guard: if a future change tightens SPECIALIST_TIMEOUT_MS
-    // below the budget needed for `2 * attempt + backoff + fallback`,
-    // the cross-provider fallback would silently stop firing — the
-    // exact failure mode that motivated this rebalance.
-    const observedPrimaryAttemptMs = 90_000  // PR #45 record, n=1
+  it("specialist budget accommodates 2 primary attempts + 1 fallback at PER_ATTEMPT_TIMEOUT_MS cap (SIG-234 tightening)", () => {
+    // SIG-234 (2026-05-26): the prior 270s budget was sized for
+    // `deepseek-v4-pro:cloud` at ~90s/attempt. After the lineup swap
+    // retired v4-pro from the logic primary, the new primaries all
+    // respect PER_ATTEMPT_TIMEOUT_MS (60s) cleanly. Budget = 3 * 60s
+    // = 180s. The regression guard still bounds the floor (so a
+    // future tighten can't silently break fallback firing).
     const retryBackoffMs = 1_000
-    const fallbackAttemptMs = 80_000  // conservative kimi-k2.5 estimate
-    const minBudget = 2 * observedPrimaryAttemptMs + retryBackoffMs + fallbackAttemptMs
+    const minBudget = 3 * PER_ATTEMPT_TIMEOUT_MS + retryBackoffMs
     expect(SPECIALIST_TIMEOUT_MS).toBeGreaterThanOrEqual(minBudget)
   })
 
@@ -954,33 +951,50 @@ describe("Phase 4a.3 — timeout schedule", () => {
   })
 })
 
-describe("Phase 4a.1 — model lineup", () => {
-  it("logic specialist runs deepseek-v4-pro:cloud with 1 retry + kimi-k2.5 fallback", () => {
-    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
-    // Phase 4a.1: dropped from 2 → 1. Two retries × 80s primary attempt
-    // exceeds the 180s specialist budget; one retry + cross-provider
-    // fallback gives better resilience per unit time.
+describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
+  it("logic specialist runs deepseek-v4-flash:cloud primary + kimi-k2.5 cross-provider fallback", () => {
+    // SIG-234: was `deepseek-v4-pro:cloud` (100-270s, the wall-time
+    // floor). v4-flash is the same V4 reasoning family at 45-95s.
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-flash:cloud")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
     expect(SPECIALIST_CONFIGS.logic.fallback).toBe("kimi-k2.5:cloud")
   })
 
-  it("performance specialist runs glm-5.1:cloud (Phase 4a.1 promotion) with kimi-k2.5 fallback", () => {
-    // Shadow telemetry: glm-5.1 won 6/12 perf fallback runs while
-    // minimax-m2.1 was unreliable. Promoting glm-5.1 to primary makes
-    // the perf specialist match the success-path of the shadow data.
+  it("performance specialist runs glm-5.1:cloud (ARC-167 retained) with kimi-k2.5 fallback", () => {
     expect(SPECIALIST_CONFIGS.performance.primary).toBe("glm-5.1:cloud")
     expect(SPECIALIST_CONFIGS.performance.fallback).toBe("kimi-k2.5:cloud")
     expect(SPECIALIST_CONFIGS.performance.retries).toBe(1)
   })
 
-  it("security and tests specialists keep deepseek-v4-flash:cloud (PR #37 fix retained)", () => {
-    expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek-v4-flash:cloud")
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek-v4-flash:cloud")
-    expect(SPECIALIST_CONFIGS.security.fallback).toBe("qwen3-coder-next:cloud")
-    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("qwen3-coder-next:cloud")
+  it("security specialist swaps to qwen3-coder-next:cloud (Qwen coder model) + deepseek-v4-pro fallback", () => {
+    // SIG-234: was `deepseek-v4-flash:cloud` (which collided with
+    // tests primary — violated the 4+1 unique constraint).
+    expect(SPECIALIST_CONFIGS.security.primary).toBe("qwen3-coder-next:cloud")
+    expect(SPECIALIST_CONFIGS.security.fallback).toBe("deepseek-v4-pro:cloud")
+    expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
   })
 
-  it("synthesizer uses kimi-k2.6 primary + DeepSeek-flash cross-provider fallback (ARC-291)", () => {
+  it("tests specialist swaps to minimax-m2.5:cloud + deepseek-v4-pro fallback", () => {
+    // SIG-234: was `deepseek-v4-flash:cloud` (collided with security).
+    // MiniMax M2.5 is an agentic-code / test-workflow model per
+    // Codex's ARC-292 analysis.
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m2.5:cloud")
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("deepseek-v4-pro:cloud")
+    expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
+  })
+
+  it("all 5 primaries are unique model identifiers (founder's 4+1 unique constraint)", () => {
+    const primaries = [
+      SPECIALIST_CONFIGS.logic.primary,
+      SPECIALIST_CONFIGS.security.primary,
+      SPECIALIST_CONFIGS.performance.primary,
+      SPECIALIST_CONFIGS.tests.primary,
+      SYNTHESIZER_CONFIG.primary,
+    ]
+    expect(new Set(primaries).size).toBe(5)
+  })
+
+  it("synthesizer uses gpt-oss:120b primary + DeepSeek-flash cross-provider fallback (SIG-234)", () => {
     // ARC-291 (PR #97 hot-fix): synth fallback was kimi-k2.5:cloud
     // (same Moonshot provider as primary). When Moonshot had a bad
     // few minutes, both primary AND fallback failed identically →
@@ -992,7 +1006,10 @@ describe("Phase 4a.1 — model lineup", () => {
     // was the outlier. Switched to deepseek-v4-flash (proven primary
     // on security + tests specialists, different provider, fails
     // independently from Moonshot).
-    expect(SYNTHESIZER_CONFIG.primary).toBe("kimi-k2.6:cloud")
+    // SIG-234 (2026-05-26): synth primary moved kimi-k2.6 →
+    // gpt-oss:120b. Removes Moonshot from the customer-visible
+    // critical merge path entirely. Cross-provider fallback retained.
+    expect(SYNTHESIZER_CONFIG.primary).toBe("gpt-oss:120b-cloud")
     expect(SYNTHESIZER_CONFIG.fallback).toBe("deepseek-v4-flash:cloud")
     expect(SYNTHESIZER_CONFIG.retries).toBe(1)
     // Cross-provider invariant: synth primary and fallback MUST NOT

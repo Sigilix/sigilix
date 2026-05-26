@@ -553,10 +553,19 @@ const SPECIALIST_ROLES = ["logic", "security", "performance", "tests"] as const 
  * extend this set so user configs can reference it.
  */
 export const KNOWN_MODELS: ReadonlySet<string> = new Set([
+  // Existing prod / fallback models.
   "glm-5.1:cloud",
+  "kimi-k2.5:cloud",
   "kimi-k2.6:cloud",
   "qwen3-coder:480b-cloud",
+  "qwen3-coder-next:cloud",
   "deepseek-v4-pro:cloud",
+  "deepseek-v4-flash:cloud",
+  // SIG-234 lineup swap (2026-05-26): new primaries that pass
+  // Ollama-Cloud-format compatibility tests (curl-tested with a
+  // JSON-schema-constrained prompt; clean JSON output).
+  "minimax-m2.5:cloud",
+  "gpt-oss:120b-cloud",
 ])
 
 export const EMPTY_CONFIG: SigilixConfig = {}

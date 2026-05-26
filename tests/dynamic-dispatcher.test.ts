@@ -133,6 +133,216 @@ describe("computeRuleLayer — docs-only shortcut", () => {
   })
 })
 
+describe("computeRuleLayer — SIG-227a new safe-skip shortcuts", () => {
+  describe("lockfile-only", () => {
+    it("safe-skips logic/perf/tests + force-includes security (supply-chain)", () => {
+      const paths = ["package-lock.json"]
+      const result = computeRuleLayer({
+        signals: { paths, totalLinesChanged: 80 },
+        classified: [{ path: "package-lock.json", kind: "config", testsSibling: null, sourceSibling: null }],
+        commitMessage: "chore: bump deps",
+        repoConfig: EMPTY_CONFIG,
+      })
+      expect(result.forcedRoles.has("security")).toBe(true)
+      expect(result.safeSkipRoles.has("logic")).toBe(true)
+      expect(result.safeSkipRoles.has("performance")).toBe(true)
+      expect(result.safeSkipRoles.has("tests")).toBe(true)
+      // Security never safe-skipped (forced wins).
+      expect(result.safeSkipRoles.has("security")).toBe(false)
+    })
+
+    it("matches yarn.lock + pnpm-lock.yaml + cargo.lock + go.sum + poetry.lock + gemfile.lock + composer.lock", () => {
+      const lockfileNames = [
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "Cargo.lock",
+        "go.sum",
+        "poetry.lock",
+        "Gemfile.lock",
+        "composer.lock",
+      ]
+      for (const name of lockfileNames) {
+        const result = computeRuleLayer({
+          signals: { paths: [name], totalLinesChanged: 50 },
+          // Lockfiles are classified as `config` by
+          // `diff-file-classify::CONFIG_FILE_RE`; mirror that here so
+          // the fixture tracks the real classifier output (code-
+          // review L3).
+          classified: [{ path: name, kind: "config", testsSibling: null, sourceSibling: null }],
+          commitMessage: "chore",
+          repoConfig: EMPTY_CONFIG,
+        })
+        expect(result.safeSkipRoles.has("logic")).toBe(true)
+        expect(result.safeSkipRoles.has("performance")).toBe(true)
+        expect(result.safeSkipRoles.has("tests")).toBe(true)
+        expect(result.forcedRoles.has("security")).toBe(true)
+      }
+    })
+
+    it("does NOT safe-skip when source files are also touched", () => {
+      const result = computeRuleLayer({
+        signals: {
+          paths: ["package-lock.json", "src/lib/foo.ts"],
+          totalLinesChanged: 90,
+        },
+        classified: [
+          { path: "package-lock.json", kind: "config", testsSibling: null, sourceSibling: null },
+          { path: "src/lib/foo.ts", kind: "source", testsSibling: null, sourceSibling: null },
+        ],
+        commitMessage: "chore: bump deps + foo refactor",
+        repoConfig: EMPTY_CONFIG,
+      })
+      // Security still forced via lockfile, but logic/perf/tests are
+      // NOT safe-skipped because the source file might need review.
+      expect(result.forcedRoles.has("security")).toBe(true)
+      expect(result.safeSkipRoles.has("logic")).toBe(false)
+      expect(result.safeSkipRoles.has("performance")).toBe(false)
+      expect(result.safeSkipRoles.has("tests")).toBe(false)
+    })
+  })
+
+  describe(".d.ts-only", () => {
+    it("safe-skips security/logic/perf + keeps tests (assertion-shape can shift)", () => {
+      const result = computeRuleLayer({
+        signals: {
+          paths: ["src/types/foo.d.ts", "src/types/bar.d.ts"],
+          totalLinesChanged: 12,
+        },
+        classified: [
+          { path: "src/types/foo.d.ts", kind: "other", testsSibling: null, sourceSibling: null },
+          { path: "src/types/bar.d.ts", kind: "other", testsSibling: null, sourceSibling: null },
+        ],
+        commitMessage: "types: tighten generic constraints",
+        repoConfig: EMPTY_CONFIG,
+      })
+      expect(result.safeSkipRoles.has("security")).toBe(true)
+      expect(result.safeSkipRoles.has("logic")).toBe(true)
+      expect(result.safeSkipRoles.has("performance")).toBe(true)
+      expect(result.safeSkipRoles.has("tests")).toBe(false)
+    })
+
+    it("matches .d.mts and .d.cts extensions", () => {
+      for (const ext of [".d.ts", ".d.mts", ".d.cts"]) {
+        const path = `src/types/foo${ext}`
+        const result = computeRuleLayer({
+          signals: { paths: [path], totalLinesChanged: 3 },
+          classified: [{ path, kind: "other", testsSibling: null, sourceSibling: null }],
+          commitMessage: "types",
+          repoConfig: EMPTY_CONFIG,
+        })
+        expect(result.safeSkipRoles.has("security")).toBe(true)
+        expect(result.safeSkipRoles.has("logic")).toBe(true)
+      }
+    })
+
+    it("re-adds security via path force when .d.ts file ALSO matches a security pattern (collision)", () => {
+      // Code-review L4: .d.ts shortcut safe-skips security, but the
+      // auth-path pattern force-adds it back. Pin the
+      // "forced-wins-over-safe-skip" semantic for the collision.
+      const result = computeRuleLayer({
+        signals: {
+          paths: ["src/types/auth-types.d.ts"],
+          totalLinesChanged: 4,
+        },
+        classified: [{ path: "src/types/auth-types.d.ts", kind: "config", testsSibling: null, sourceSibling: null }],
+        commitMessage: "types: auth-related types",
+        repoConfig: EMPTY_CONFIG,
+      })
+      // .d.ts safe-skip says: skip security/logic/perf
+      // auth-pattern force says: run security
+      // → security wins (force beats safe-skip in the final pass)
+      expect(result.forcedRoles.has("security")).toBe(true)
+      expect(result.safeSkipRoles.has("security")).toBe(false)
+      // logic + perf were safe-skipped by .d.ts and not forced back
+      expect(result.safeSkipRoles.has("logic")).toBe(true)
+      expect(result.safeSkipRoles.has("performance")).toBe(true)
+    })
+
+    it("does NOT safe-skip when a .ts (non-d.ts) source file is in the same diff", () => {
+      const result = computeRuleLayer({
+        signals: {
+          paths: ["src/types/foo.d.ts", "src/lib/foo.ts"],
+          totalLinesChanged: 10,
+        },
+        classified: [
+          { path: "src/types/foo.d.ts", kind: "other", testsSibling: null, sourceSibling: null },
+          { path: "src/lib/foo.ts", kind: "source", testsSibling: null, sourceSibling: null },
+        ],
+        commitMessage: "feat: foo + types",
+        repoConfig: EMPTY_CONFIG,
+      })
+      expect(result.safeSkipRoles.has("security")).toBe(false)
+      expect(result.safeSkipRoles.has("logic")).toBe(false)
+      expect(result.safeSkipRoles.has("performance")).toBe(false)
+    })
+  })
+
+  describe("test-files-only", () => {
+    it("safe-skips security + performance (no source under review)", () => {
+      const result = computeRuleLayer({
+        signals: {
+          paths: ["tests/foo.test.ts", "tests/bar.test.ts"],
+          totalLinesChanged: 40,
+        },
+        classified: [
+          { path: "tests/foo.test.ts", kind: "test", testsSibling: null, sourceSibling: null },
+          { path: "tests/bar.test.ts", kind: "test", testsSibling: null, sourceSibling: null },
+        ],
+        commitMessage: "test: add coverage for foo + bar",
+        repoConfig: EMPTY_CONFIG,
+      })
+      expect(result.safeSkipRoles.has("security")).toBe(true)
+      expect(result.safeSkipRoles.has("performance")).toBe(true)
+      // Logic stays on — assertion correctness IS logic. Tests
+      // stays on for the obvious reason (tests reviewing tests).
+      expect(result.safeSkipRoles.has("logic")).toBe(false)
+      expect(result.safeSkipRoles.has("tests")).toBe(false)
+    })
+
+    it("neither lockfile-only NOR .d.ts-only fires on a mixed diff (defense in depth)", () => {
+      // Code-review L4: mixed-shortcut case. Diff has one lockfile +
+      // one .d.ts → BOTH `allLockfilesOnly` and `allDtsOnly` are
+      // false, so neither shortcut fires. Security still force-
+      // included via the lockfile supply-chain pattern; everything
+      // else stays ambiguous (defaults to RUN in enforce_rules).
+      const result = computeRuleLayer({
+        signals: {
+          paths: ["package-lock.json", "src/types/foo.d.ts"],
+          totalLinesChanged: 50,
+        },
+        classified: [
+          { path: "package-lock.json", kind: "config", testsSibling: null, sourceSibling: null },
+          { path: "src/types/foo.d.ts", kind: "config", testsSibling: null, sourceSibling: null },
+        ],
+        commitMessage: "chore: deps + types",
+        repoConfig: EMPTY_CONFIG,
+      })
+      expect(result.forcedRoles.has("security")).toBe(true)
+      // No safe-skip — both shortcuts require purity.
+      expect(result.safeSkipRoles.has("logic")).toBe(false)
+      expect(result.safeSkipRoles.has("performance")).toBe(false)
+      expect(result.safeSkipRoles.has("tests")).toBe(false)
+    })
+
+    it("does NOT safe-skip when source files are also touched", () => {
+      const result = computeRuleLayer({
+        signals: {
+          paths: ["src/lib/foo.ts", "tests/foo.test.ts"],
+          totalLinesChanged: 30,
+        },
+        classified: [
+          { path: "src/lib/foo.ts", kind: "source", testsSibling: "tests/foo.test.ts", sourceSibling: null },
+          { path: "tests/foo.test.ts", kind: "test", testsSibling: null, sourceSibling: "src/lib/foo.ts" },
+        ],
+        commitMessage: "feat: foo with tests",
+        repoConfig: EMPTY_CONFIG,
+      })
+      expect(result.safeSkipRoles.has("security")).toBe(false)
+      expect(result.safeSkipRoles.has("performance")).toBe(false)
+    })
+  })
+})
+
 describe("computeRuleLayer — CSS-only shortcut", () => {
   it("forces performance + safe-skips the other three", () => {
     const result = computeRuleLayer({
@@ -698,6 +908,111 @@ describe("decideSpecialistsDynamic — telemetry shape", () => {
     })
     expect(decision.elapsedMs).toBeGreaterThanOrEqual(0)
     expect(Number.isFinite(decision.elapsedMs)).toBe(true)
+  })
+})
+
+describe("decideSpecialistsDynamic — SIG-227a enforce_rules mode", () => {
+  function envEnforceRules(overrides: Partial<DispatcherEnv> = {}): DispatcherEnv {
+    return {
+      OLLAMA_API_KEY: "fake-key",
+      OLLAMA_CHAT_ENABLE: "on",
+      OPENCLAW_DYNAMIC_DISPATCHER_MODE: "enforce_rules",
+      ...overrides,
+    }
+  }
+
+  it("returns empty specialists for docs-only-no-fences diffs WITHOUT calling the LLM", async () => {
+    const decision = await decideSpecialistsDynamic({
+      signals: { paths: ["README.md"], totalLinesChanged: 3, diffText: "+ a note" },
+      classified: classifiedFor(["README.md"]),
+      commitMessage: "docs: update",
+      repoConfig: EMPTY_CONFIG,
+      env: envEnforceRules(),
+    })
+    expect(decision.specialists).toEqual([])
+    expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  it("returns only [performance] for CSS-only diffs WITHOUT calling the LLM", async () => {
+    const decision = await decideSpecialistsDynamic({
+      signals: { paths: ["src/styles/main.css"], totalLinesChanged: 10, diffText: "+ .foo {}" },
+      classified: [{ path: "src/styles/main.css", kind: "other", testsSibling: null, sourceSibling: null }],
+      commitMessage: "style: tweak",
+      repoConfig: EMPTY_CONFIG,
+      env: envEnforceRules(),
+    })
+    expect(decision.specialists).toEqual(["performance"])
+    expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  it("returns only [security] for lockfile-only diffs WITHOUT calling the LLM", async () => {
+    const decision = await decideSpecialistsDynamic({
+      signals: { paths: ["package-lock.json"], totalLinesChanged: 80 },
+      classified: [{ path: "package-lock.json", kind: "config", testsSibling: null, sourceSibling: null }],
+      commitMessage: "chore: bump",
+      repoConfig: EMPTY_CONFIG,
+      env: envEnforceRules(),
+    })
+    expect(decision.specialists).toEqual(["security"])
+    expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  it("returns only [tests] for pure .d.ts-only diffs WITHOUT calling the LLM", async () => {
+    const decision = await decideSpecialistsDynamic({
+      signals: { paths: ["src/types/foo.d.ts"], totalLinesChanged: 5 },
+      classified: [{ path: "src/types/foo.d.ts", kind: "other", testsSibling: null, sourceSibling: null }],
+      commitMessage: "types",
+      repoConfig: EMPTY_CONFIG,
+      env: envEnforceRules(),
+    })
+    expect(decision.specialists).toEqual(["tests"])
+    expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  it("returns [logic, tests] for test-files-only diffs WITHOUT calling the LLM", async () => {
+    const decision = await decideSpecialistsDynamic({
+      signals: { paths: ["tests/foo.test.ts"], totalLinesChanged: 30 },
+      classified: [{ path: "tests/foo.test.ts", kind: "test", testsSibling: null, sourceSibling: null }],
+      commitMessage: "test: add foo coverage",
+      repoConfig: EMPTY_CONFIG,
+      env: envEnforceRules(),
+    })
+    expect([...decision.specialists].sort()).toEqual(["logic", "tests"])
+    expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  it("returns ALL_SPECIALISTS for a normal source diff (ambiguous default to RUN, no LLM consulted)", async () => {
+    const decision = await decideSpecialistsDynamic({
+      signals: { paths: ["src/lib/foo.ts"], totalLinesChanged: 30, diffText: "+ new code" },
+      classified: classifiedFor(["src/lib/foo.ts"]),
+      commitMessage: "feat: foo",
+      repoConfig: EMPTY_CONFIG,
+      env: envEnforceRules(),
+    })
+    expect([...decision.specialists].sort()).toEqual(["logic", "performance", "security", "tests"])
+    expect(decision.layerVotes.llmOutcome).toBe("skipped_rules_only_mode")
+    expect(mockChat).not.toHaveBeenCalled()
+  })
+
+  it("respects sigilix.json::dispatcher.force in enforce_rules mode", async () => {
+    const decision = await decideSpecialistsDynamic({
+      signals: { paths: ["README.md"], totalLinesChanged: 3, diffText: "+ note" },
+      classified: classifiedFor(["README.md"]),
+      commitMessage: "docs",
+      repoConfig: {
+        dispatcher: { force: ["security"] },
+      },
+      env: envEnforceRules(),
+    })
+    // Docs-only would normally have empty fan-out, but repo force
+    // adds security.
+    expect(decision.specialists).toEqual(["security"])
+    expect(decision.layerVotes.repoConfigForced).toEqual(["security"])
   })
 })
 

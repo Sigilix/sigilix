@@ -417,7 +417,7 @@ export interface SigilixConfig {
   /**
    * SIG-224: per-repo dispatcher configuration. Phase 0 surface — the
    * schema lands here for forward-compat, but no call site consumes
-   * `dispatcher.*` yet. Phase 1 (SIG-225) wires the shadow dispatcher
+   * `dispatcher.*` yet. Phase 1 (SIG-226) wires the shadow dispatcher
    * to read `force` + `safetyNet.additionalPatterns`.
    *
    * Fields (all optional, all additive — the global safety net cannot
@@ -650,7 +650,7 @@ const DISPATCHER_MAX_ADDITIONAL_PATTERNS = 50
  * writing the field (keeps the resulting `SigilixConfig` minimal).
  *
  * Phase 0 (SIG-224) ships the schema only — no call site consumes the
- * parsed value yet. Phase 1 (SIG-225) wires the shadow dispatcher.
+ * parsed value yet. Phase 1 (SIG-226) wires the shadow dispatcher.
  */
 function parseDispatcherConfig(v: unknown): DispatcherConfig | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined

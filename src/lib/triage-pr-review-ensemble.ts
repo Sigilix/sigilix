@@ -3112,7 +3112,7 @@ export async function handlePrReviewEnsemble(
           evidenceId: finding.evidenceId ?? null,
           category: finding.category,
         }))
-        args.validationSink?.push({ gate: "security", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "security", reason: info.reason, dropped: info.dropped })
       },
       // SIG-111: thread the tests-finding specificity gate mode +
       // telemetry through. Default `shadow` — counts/telemeters the
@@ -3139,7 +3139,7 @@ export async function handlePrReviewEnsemble(
           evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
           category: finding.category,
         }))
-        args.validationSink?.push({ gate: "tests", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "tests", reason: info.reason, dropped: info.dropped })
       },
       // SIG-109: thread the logic evidence + mode. Evidence is built
       // PR-A-contained — added-line text from the FULL PR diff +
@@ -3165,7 +3165,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
-        args.validationSink?.push({ gate: "logic", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "logic", reason: info.reason, dropped: info.dropped })
       },
       // SIG-110: thread perf evidence + mode. Evidence is the same
       // changed-line text + the roleHint:performance AST findings. Default
@@ -3190,7 +3190,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
-        args.validationSink?.push({ gate: "perf", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "perf", reason: info.reason, dropped: info.dropped })
       },
     })
     if (telemetry.synthesizer) {

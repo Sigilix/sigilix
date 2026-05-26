@@ -6433,8 +6433,15 @@ function isAnyLineInRightHunk(
   startLine: number,
   endLine: number,
 ): boolean {
-  for (let line = startLine; line <= endLine; line++) {
-    if (anchorLines.some((a) => a.line === line && a.side === "RIGHT")) return true
+  // CR (PR #176): walking the numeric [startLine, endLine] range is
+  // O(N*M) where N = range size and M = anchorLines.length. A malformed
+  // finding (e.g. `startLine: 1, line: 999999`) would loop a million
+  // times. Single-pass scan over the (typically small) anchorLines is
+  // O(M) and unbounded-range-safe.
+  for (const a of anchorLines) {
+    if (a.side === "RIGHT" && a.line >= startLine && a.line <= endLine) {
+      return true
+    }
   }
   return false
 }

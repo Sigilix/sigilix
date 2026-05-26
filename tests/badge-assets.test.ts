@@ -3,8 +3,10 @@ import {
   badgeAssetUrl,
   getBadgeSvg,
   handleBadgeAssetRoute,
+  lookupGlyph,
   PUBLIC_BADGE_BASE_URL,
 } from "../src/lib/badge-assets"
+import { BADGE_GLYPH_PATHS } from "../src/lib/badge-glyph-paths"
 import worker, { type Env } from "../src/index"
 
 function ctx(): ExecutionContext {
@@ -94,6 +96,58 @@ describe("badge assets (SIG-201)", () => {
     expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-1/p2.svg`)
     expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-1/security.svg`)
     expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
+  })
+
+  // Sigilix bot P1 (PR #176): structural sanity for the path-baked
+  // glyph table. Guards against (a) shipping a regeneration that
+  // dropped a label, (b) corrupted `d` strings, and (c) adding a new
+  // label without re-running `pnpm regenerate-badge-paths`.
+  describe("BADGE_GLYPH_PATHS structural sanity (SIG-216 fix-up)", () => {
+    const EXPECTED_LABELS = [
+      "P0",
+      "P1",
+      "P2",
+      "P3",
+      "TESTING",
+      "SECURITY",
+      "LOGIC",
+      "PERF",
+      "ERROR",
+      "COMPLEXITY",
+      "STYLE",
+      "SYNTAX",
+      "DOCS",
+    ] as const
+
+    it("has an entry for every expected label", () => {
+      for (const label of EXPECTED_LABELS) {
+        expect(BADGE_GLYPH_PATHS[label]).toBeDefined()
+      }
+    })
+
+    it("every entry's `d` is non-empty and starts with a valid SVG Move command", () => {
+      for (const label of EXPECTED_LABELS) {
+        const entry = BADGE_GLYPH_PATHS[label]!
+        expect(entry.d.length).toBeGreaterThan(0)
+        expect(entry.d).toMatch(/^M[0-9. -]+/)
+      }
+    })
+
+    it("every entry's width and height are positive numbers", () => {
+      for (const label of EXPECTED_LABELS) {
+        const entry = BADGE_GLYPH_PATHS[label]!
+        expect(entry.width).toBeGreaterThan(0)
+        expect(entry.height).toBeGreaterThan(0)
+      }
+    })
+
+    it("lookupGlyph('P0') returns the P0 entry", () => {
+      expect(lookupGlyph("P0")).toBe(BADGE_GLYPH_PATHS["P0"])
+    })
+
+    it("lookupGlyph throws on an unknown label so a forgotten regeneration surfaces in tests", () => {
+      expect(() => lookupGlyph("NONEXISTENT_LABEL")).toThrow(/no baked glyph/)
+    })
   })
 
   it("routes badge assets before env validation so broken config cannot break GitHub images", async () => {

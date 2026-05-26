@@ -154,7 +154,7 @@ function applyHsl(baseHex: string, targetSaturation: number, targetLightness: nu
   return hslToHex(h, targetSaturation, targetLightness)
 }
 
-function lookupGlyph(label: string): BadgeGlyphPath {
+export function lookupGlyph(label: string): BadgeGlyphPath {
   const glyph = BADGE_GLYPH_PATHS[label]
   if (!glyph) {
     // Indicates a label was added to BADGE_STYLES / CATEGORY_BADGE_STYLES

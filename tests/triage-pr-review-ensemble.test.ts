@@ -2444,6 +2444,135 @@ describe("validateForSubmission — SIG-216 scope normalization (file → line w
       .filter((s) => s.includes("pr-review-scope-normalized-to-line"))
     expect(flips).toHaveLength(0)
   })
+
+  // CR MAJOR (PR #176): the predicate previously walked the numeric
+  // [startLine, line] range, which is O(N*M) and unbounded — a finding
+  // with `startLine: 1, line: 999999` would loop a million times per
+  // anchor check. Pivoted to a single-pass scan over the (small)
+  // anchorLines array. These tests pin the post-fix behaviour AND act
+  // as a regression guard against any future revert that would
+  // reintroduce the quadratic walk.
+  it("flips file → line for an extreme-range finding (startLine: 1, line: 999999) when one anchor lands inside the range", () => {
+    const sparseReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        // One RIGHT anchor at line 500 inside the giant [1, 999999] range.
+        { line: 500, side: "RIGHT" },
+      ]],
+    ])
+    const start = performance.now()
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 999999,
+        startLine: 1,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: sparseReviewable,
+      specialistVerdicts,
+    })
+    const elapsedMs = performance.now() - start
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("line")
+    // Generous bound — the post-fix single-pass scan finishes in well
+    // under a millisecond. The prior numeric-range walk would have
+    // iterated ~1M times per finding and taken hundreds of ms.
+    expect(elapsedMs).toBeLessThan(500)
+  })
+
+  it("returns false when the path has no anchor entries (empty anchorLines map miss)", () => {
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        path: "src/lib/unreviewed.ts",
+        line: 42,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable, // map keyed by "src/lib/foo.ts" — no entry for unreviewed.ts
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/unreviewed.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/unreviewed.ts")
+    expect(matching?.scope).toBe("file")
+  })
+
+  it("returns false when every anchor is LEFT-side (RIGHT-side filter holds)", () => {
+    const leftOnlyReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 40, side: "LEFT" },
+        { line: 41, side: "LEFT" },
+        { line: 42, side: "LEFT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 40,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: leftOnlyReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("file")
+  })
+
+  it("returns false when every RIGHT anchor sits outside the range", () => {
+    const outsideRangeReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 10, side: "RIGHT" },
+        { line: 100, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: outsideRangeReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("file")
+  })
+
+  it("returns true when a single RIGHT anchor sits inside the range", () => {
+    const insideRangeReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [
+        { line: 5, side: "LEFT" },
+        { line: 40, side: "RIGHT" }, // inside [38, 42]
+        { line: 100, side: "RIGHT" },
+      ]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: packSynth({
+        ...baseFinding,
+        line: 42,
+        startLine: 38,
+        score: 4,
+        scope: "file",
+      }),
+      reviewable: insideRangeReviewable,
+      specialistVerdicts,
+    })
+    const matching =
+      out.verdict.findings.find((f) => f.path === "src/lib/foo.ts") ??
+      out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(matching?.scope).toBe("line")
+  })
 })
 
 // SIG-216 fix-up: the production review path now threads `linkContext`

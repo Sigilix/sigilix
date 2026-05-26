@@ -22,7 +22,11 @@ import { MENTION_REPLY_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
 import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
-import { listIndexedRepos, parseTeamGithubRepo } from "./github-installation"
+import {
+  listIndexedRepos,
+  listTeamRepoMappings,
+  parseTeamGithubRepo,
+} from "./github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
 import { escapeXmlAttribute, escapeXmlText } from "./xml-escape"
 import { runAgentLoop } from "./agent-loop"
@@ -64,11 +68,44 @@ export function linearRetrievalTeamKey(
 }
 
 export async function resolveLinearAgentRepoScope(
-  env: { OPENCLAW_STATE: KVNamespace },
+  env: { OPENCLAW_STATE: KVNamespace; OPENCLAW_TEAM_GITHUB_REPO_MAP?: string | undefined },
   teamRepo: { owner: string; repo: string } | null,
 ): Promise<LinearAgentRepoScope> {
   if (!teamRepo) {
-    return { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" }
+    // SIG-221: an unmapped Linear team should still see the workspace's
+    // indexed codebase. Derive the workspace's known GitHub owners from
+    // OPENCLAW_TEAM_GITHUB_REPO_MAP — every owner that ANY team in the
+    // map points at is in-scope for this Linear workspace. This keeps
+    // the tenant boundary (a workspace can't see an owner it has zero
+    // team-mappings for) while removing the per-team mapping gate.
+    const knownOwners = new Set<string>()
+    for (const { owner } of listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP)) {
+      knownOwners.add(owner.toLowerCase())
+    }
+    if (knownOwners.size === 0) {
+      return { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" }
+    }
+    const fallbackAvailable = new Set<string>()
+    for (const owner of knownOwners) {
+      try {
+        for (const repo of await listIndexedRepos(env, { owner, includeBranches: true })) {
+          fallbackAvailable.add(repo)
+        }
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "linear-agent-repo-scope-list-failed",
+          owner,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
+    const availableRepos = Array.from(fallbackAvailable).sort((a, b) => a.localeCompare(b))
+    return {
+      repo: null,
+      mappedRepo: null,
+      availableRepos,
+      status: "unmapped",
+    }
   }
   const defaultRepo = indexNamespace(teamRepo.owner, teamRepo.repo)
   const available = new Set<string>()

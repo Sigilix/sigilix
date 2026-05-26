@@ -242,14 +242,55 @@ describe("resolveLinearAgentRepoScope", () => {
     })
   })
 
-  it("locks Linear agent retrieval to none when there is no team repo owner", async () => {
-    const env = makeEnv(["repo-index-manifest:acme/sigilix"])
+  it("returns empty availableRepos when the workspace has no team-repo mappings configured", async () => {
+    // SIG-221: without OPENCLAW_TEAM_GITHUB_REPO_MAP we have no way to
+    // know which owners this Linear workspace can see, so we fail safe.
+    const env = makeEnv(["repo-index-manifest:acme/api"])
     await expect(resolveLinearAgentRepoScope(env, null)).resolves.toEqual({
       repo: null,
       mappedRepo: null,
       availableRepos: [],
       status: "unmapped",
     })
+  })
+
+  it("SIG-221: unmapped team falls back to workspace-known owners from the team-repo map", async () => {
+    // The workspace has a team-repo map (so we know which GitHub owners
+    // it can see), but the SPECIFIC team firing this mention isn't
+    // mapped. The agent should still see the workspace's indexed repos.
+    const env = {
+      ...makeEnv([
+        "repo-index-manifest:acme/api",
+        "repo-index-manifest:acme/web",
+        "repo-index-manifest:other/private", // different owner, should NOT leak
+      ]),
+      OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+        SIG: { owner: "acme", repo: "api" },
+        ENG: { owner: "acme", repo: "web" },
+      }),
+    }
+
+    await expect(resolveLinearAgentRepoScope(env, null)).resolves.toEqual({
+      repo: null,
+      mappedRepo: null,
+      availableRepos: ["acme/api", "acme/web"],
+      status: "unmapped",
+    })
+  })
+
+  it("SIG-221: unmapped fallback deduplicates owners across multiple team mappings", async () => {
+    const env = {
+      ...makeEnv(["repo-index-manifest:acme/api", "repo-index-manifest:acme/web"]),
+      OPENCLAW_TEAM_GITHUB_REPO_MAP: JSON.stringify({
+        T1: { owner: "acme", repo: "api" },
+        T2: { owner: "ACME", repo: "web" }, // case-different but same owner
+        T3: { owner: "acme", repo: "api" }, // duplicate
+      }),
+    }
+
+    const scope = await resolveLinearAgentRepoScope(env, null)
+    expect(scope.availableRepos).toEqual(["acme/api", "acme/web"])
+    expect(scope.status).toBe("unmapped")
   })
 
   it("keeps tenant repos available but clears the default when it is not indexed", async () => {

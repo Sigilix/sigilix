@@ -457,8 +457,9 @@ describe("buildAgentInitialUserMessage", () => {
     expect(out).toContain("[DEFAULT REPO] arc-and-anchor/sigilix")
     expect(out).toContain("retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument")
     expect(out).toContain("The default for this Linear team is 'arc-and-anchor/sigilix'")
-    expect(out).toContain("pick a different repo or branch from the list")
-    expect(out).toContain("call retrieve_codebase with repo '<owner>/<repo>' and branch '<name>'")
+    expect(out).toContain("pick a different repo from the list when the issue is clearly about it")
+    expect(out).toContain("For entries marked '(non-default branch index)', never pass the internal __branch__ namespace")
+    expect(out).toContain("only pass a human branch name if the user explicitly provides one")
     expect(out).not.toContain(`__branch__/${encodedDev}`)
   })
 

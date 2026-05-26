@@ -298,6 +298,79 @@ describe("retrieve_codebase", () => {
     expect(mockRetrieveChunks).not.toHaveBeenCalled()
   })
 
+  it("resolves a mixed-case branch via case-folding fallback (SIG-218)", async () => {
+    // The branch namespace is encoded from the lowercased branch name.
+    // When the asker passes a mixed-case branch, exact-encoded lookup
+    // misses; the fallback re-encodes from the lowercased form and
+    // matches.
+    mockRetrieveChunks.mockResolvedValue([])
+    const encodedLower = await encodeBranchName("my-branch")
+    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedLower}`
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: [
+        "arc-and-anchor/sigilix",
+        branchNs,
+      ],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "arc-and-anchor/sigilix", branch: "My-Branch" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; repo?: string }
+
+    expect(result.ok).toBe(true)
+    expect(result.repo).toBe(branchNs)
+    expect(mockRetrieveChunks).toHaveBeenCalledWith(
+      expect.objectContaining({ teamKey: branchNs }),
+    )
+  })
+
+  it("resolves an ALL-CAPS branch via case-folding fallback (SIG-218)", async () => {
+    mockRetrieveChunks.mockResolvedValue([])
+    const encodedLower = await encodeBranchName("my-branch")
+    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedLower}`
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: [
+        "arc-and-anchor/sigilix",
+        branchNs,
+      ],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "arc-and-anchor/sigilix", branch: "MY-BRANCH" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; repo?: string }
+
+    expect(result.ok).toBe(true)
+    expect(result.repo).toBe(branchNs)
+  })
+
+  it("rejects a nonexistent branch even after case-folding (SIG-218)", async () => {
+    const encodedLower = await encodeBranchName("my-branch")
+    const branchNs = `arc-and-anchor/sigilix/__branch__/${encodedLower}`
+    const [tool] = createAgentTools({
+      env: makeEnv(),
+      surface: "linear-mention",
+      allowedRepos: [
+        "arc-and-anchor/sigilix",
+        branchNs,
+      ],
+    })
+    const result = (await tool!.execute(
+      { query: "x", repo: "arc-and-anchor/sigilix", branch: "Nonexistent-Branch" },
+      new AbortController().signal,
+      new Map(),
+    )) as { ok: boolean; error: string }
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain("branch 'Nonexistent-Branch' is not indexed")
+    expect(mockRetrieveChunks).not.toHaveBeenCalled()
+  })
+
   it("resolves a bare repo to its <owner>/<repo> namespace when unique (SIG-132 back-compat)", async () => {
     mockRetrieveChunks.mockResolvedValue([])
     const [tool] = createAgentTools({

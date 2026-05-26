@@ -1034,6 +1034,16 @@ interface VectorizeRecord {
   metadata: Record<string, string | number>
 }
 
+/**
+ * SIG-218 defense: Vectorize hard-caps namespace + id at 64 bytes; the
+ * bounded-length encodeBranchName fix keeps `namespace` well under that
+ * for every legitimate path, but log + skip if anything constructs a
+ * long namespace via another code path. 60 leaves a safety margin.
+ */
+export function shouldSkipForLength(id: string, namespace: string): boolean {
+  return namespace.length > 60 || id.length > 60
+}
+
 async function embedBatch(
   env: Env,
   chunks: ReadonlyArray<Chunk>,
@@ -1045,11 +1055,7 @@ async function embedBatch(
     const chunk = chunks[i]!
     const vec = vectors[i]!
     const id = await chunkId(namespace, chunk)
-    // SIG-218 defense: Vectorize hard-caps namespace + id at 64 bytes; the
-    // bounded-length encodeBranchName fix keeps `namespace` well under that
-    // for every legitimate path, but log + skip if anything constructs a
-    // long namespace via another code path. 60 leaves a safety margin.
-    if (namespace.length > 60 || id.length > 60) {
+    if (shouldSkipForLength(id, namespace)) {
       console.error(JSON.stringify({
         event: "vector-upsert-length-exceeded",
         namespaceLength: namespace.length,

@@ -3829,19 +3829,22 @@ export async function handlePrReviewEnsemble(
     //
     // Awaited (not `ctx.waitUntil`) so the overview comment is
     // GUARANTEED on the PR timeline before `submitReview` fires.
-    // `force: true` bypasses the per-(PR, headSha) dedupe inside
-    // `handlePrOverview` so a sibling queued run (legacy warmup
-    // refresh, etc.) on this SHA can't block us.
+    // `skipDedupe: true` bypasses the per-(PR, headSha) KV dedupe
+    // lock inside `handlePrOverview` so a sibling queued run (legacy
+    // warmup refresh, etc.) on this SHA can't block us — but does
+    // NOT bypass the in-handler stale-head guards (those still fire
+    // on this path, catching head moves that landed during the
+    // review's own Ollama window). SIG-216 fix-up swap from
+    // `force: true` (which historically bypassed both).
     //
-    // Budgeting (SIG-216 fix-up): wrap the call in `Promise.race`
-    // against the REMAINING review budget so a stalled overview
-    // can't push the queue consumer past CF_QUEUE_CONSUMER_CEILING_MS
-    // and trigger a worker hard-kill + message re-delivery. Capped
-    // at INLINE_OVERVIEW_MAX_BUDGET_MS even on a budget surplus so
-    // the overview never eats more than its fair share. When
-    // remaining budget falls under INLINE_OVERVIEW_MIN_BUDGET_MS we
-    // skip the inline render entirely — the overview can fire on
-    // the next push.
+    // Budgeting (SIG-216 fix-up): the overview runs against the
+    // REMAINING review budget so a stalled overview can't push the
+    // handler past ORCHESTRATOR_TIMEOUT_MS (the wall the orchestrator
+    // itself aborts on). Capped at INLINE_OVERVIEW_MAX_BUDGET_MS even
+    // on a budget surplus so the overview never eats more than its
+    // fair share. When remaining budget falls under
+    // INLINE_OVERVIEW_MIN_BUDGET_MS we skip the inline render entirely
+    // — the overview can fire on the next push.
     //
     // Retry policy (SIG-216 fix-up): single retry on transient
     // failures (timeouts / 502 / 503 / 504 / fetch-failed /
@@ -3872,10 +3875,18 @@ export async function handlePrReviewEnsemble(
       // GitHub roundtrip + the post-overview stale-head re-check that
       // follows; the overview itself gets whatever's left up to
       // INLINE_OVERVIEW_MAX_BUDGET_MS.
+      //
+      // SIG-216 fix-up (CR catch): budget against ORCHESTRATOR_TIMEOUT_MS,
+      // not CF_QUEUE_CONSUMER_CEILING_MS. The orchestrator's own
+      // wall-clock is the actual bound on this handler — the platform
+      // ceiling is wider (CF_QUEUE_CONSUMER_CEILING_MS - ORCHESTRATOR_TIMEOUT_MS
+      // is the grace pad reserved for finalize/cleanup). Using the
+      // wider ceiling could push the overview past the orchestrator's
+      // own abort and burn the grace pad too.
       const elapsedMs = Date.now() - startMs
       const remainingBudgetMs = Math.max(
         0,
-        CF_QUEUE_CONSUMER_CEILING_MS - elapsedMs - INLINE_OVERVIEW_SUBMIT_RESERVE_MS,
+        ORCHESTRATOR_TIMEOUT_MS - elapsedMs - INLINE_OVERVIEW_SUBMIT_RESERVE_MS,
       )
       const overviewBudgetMs = Math.min(remainingBudgetMs, INLINE_OVERVIEW_MAX_BUDGET_MS)
       if (overviewBudgetMs < INLINE_OVERVIEW_MIN_BUDGET_MS) {
@@ -3889,7 +3900,7 @@ export async function handlePrReviewEnsemble(
         try {
           await runInlineOverviewWithRetry({
             owner, repo, prNumber, headSha, installationId, env,
-            force: true,
+            skipDedupe: true,
             reviewContext: overviewReviewContext,
           }, overviewBudgetMs)
           console.log(JSON.stringify({
@@ -3912,11 +3923,13 @@ export async function handlePrReviewEnsemble(
       }
 
       // SIG-216 fix-up: re-check the PR head AFTER the inline overview.
-      // The upstream stale-head guard #2 ran hundreds of LOC + an Ollama
-      // call ago; `force: true` on the overview bypasses its own
-      // re-checks. A new commit landing in that window would otherwise
-      // get the OLD review submitted against a STALE head. Fail-closed
-      // on lookup error — matches the existing guard pattern.
+      // Belt-and-braces with the in-overview guards: the overview's own
+      // pre-Ollama + pre-write guards (which now fire on the inline
+      // path since we use `skipDedupe`, not `force`) catch head moves
+      // BEFORE / DURING the overview's Ollama call; this re-check
+      // catches moves landing AFTER the overview returns, before the
+      // review submit. Both layers are intentional — different windows.
+      // Fail-closed on lookup error — matches the existing guard pattern.
       try {
         const metaPostOverview = await client.getPullRequest(owner, repo, prNumber)
         if (metaPostOverview.head?.sha && metaPostOverview.head.sha !== headSha) {
@@ -6298,9 +6311,9 @@ function backfillSecurityEvidenceFromSources(
  * Why two attempts and not three: the pre-SIG-216 queue consumer gave
  * `MAX_RETRIES = 3` on Ollama transient failures because the consumer
  * could afford the wall-time. The inline path runs inside the same
- * review handler that's already against the queue-consumer ceiling
- * (`CF_QUEUE_CONSUMER_CEILING_MS`), so a single retry is the most we
- * can fit without risking the wall-clock blowing past the platform cap.
+ * review handler that's already against the orchestrator's wall-clock
+ * (`ORCHESTRATOR_TIMEOUT_MS`), so a single retry is the most we
+ * can fit without risking the orchestrator's own abort firing.
  *
  * Transient classification matches the queue consumer's heuristic +
  * the budget-exceeded signal raised by the per-attempt `Promise.race`.
@@ -6308,18 +6321,34 @@ function backfillSecurityEvidenceFromSources(
  */
 async function runInlineOverviewWithRetry(
   args: PrOverviewArgs,
-  budgetMs: number,
+  totalBudgetMs: number,
 ): Promise<void> {
-  const attempt = async (): Promise<void> =>
-    Promise.race([
-      handlePrOverview(args),
-      new Promise<void>((_resolve, reject) => {
-        setTimeout(
-          () => reject(new Error("inline-overview-budget-exceeded")),
-          budgetMs,
-        )
-      }),
-    ])
+  // SIG-216 fix-up: ONE shared deadline across both attempts (was: a
+  // fresh per-attempt budget that could allow overlapping attempts on
+  // retry and let the wall-clock blow past the budget). Each attempt
+  // also gets its own AbortController so the in-flight Ollama fetch
+  // from the first attempt is actually cancelled when retry fires —
+  // otherwise the abandoned Promise burns CPU + network until the
+  // 600s default `generate` timeout.
+  const deadline = Date.now() + totalBudgetMs
+  const computeRemaining = (): number => Math.max(0, deadline - Date.now())
+
+  const attempt = async (): Promise<void> => {
+    const remainingMs = computeRemaining()
+    if (remainingMs <= 0) {
+      throw new Error("inline-overview-budget-exceeded")
+    }
+    const ctl = new AbortController()
+    const timeoutId = setTimeout(() => {
+      ctl.abort(new Error("inline-overview-budget-exceeded"))
+    }, remainingMs)
+    try {
+      await handlePrOverview({ ...args, abortSignal: ctl.signal })
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
   try {
     await attempt()
     return
@@ -6327,6 +6356,7 @@ async function runInlineOverviewWithRetry(
     const msg = err instanceof Error ? err.message : String(err)
     const transient = /budget-exceeded|timeout|abort|503|502|504|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg)
     if (!transient) throw err
+    if (computeRemaining() <= 0) throw err
     console.log(JSON.stringify({
       event: "pr-review-inline-overview-retry",
       owner: args.owner, repo: args.repo, prNumber: args.prNumber,

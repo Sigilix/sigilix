@@ -2099,6 +2099,108 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
   })
 })
 
+// ── SIG-216 fix-up — URL-encode path + escape markdown-special chars ──
+//
+// CodeRabbit catch on PR #174: the link builder previously interpolated
+// `f.path` raw into both the URL and the label. Filenames with spaces,
+// parens, or brackets produced broken markdown — a literal space in the
+// URL was rejected by GitHub, and a `]` in the label truncated the link
+// text. The fix-up URL-encodes each path segment with
+// `encodeURIComponent` (preserves `/` separators) and backslash-escapes
+// markdown-special chars in the label.
+
+describe("formatBodyFindingAnchor URL encoding + label escaping (SIG-216 fix-up)", () => {
+  const headSha = "deadbeefcafe1234567890abcdef1234567890ab"
+  const linkContext = { owner: "octo", repo: "demo", headSha } as const
+
+  const buildBody = (
+    f: PrReviewFinding,
+    ctx?: { owner: string; repo: string; headSha: string },
+  ): string => {
+    const args = {
+      verdict: {
+        summary: "One body-only finding.",
+        confidence: 3,
+        confidenceReason: "Fixture.",
+        findings: [f],
+      },
+      prAuthor: "alice",
+      headSha,
+      ...(ctx ? { linkContext: ctx } : {}),
+    }
+    return buildReviewSubmission(args).body
+  }
+
+  it("URL-encodes spaces in path segments (space → %20) without encoding the / separator", () => {
+    const f: PrReviewFinding = {
+      path: "src/with space.ts",
+      line: 7,
+      scope: "comment",
+      score: 4,
+      category: "logic",
+      headline: "needs attention",
+      body: "Reviewer note.",
+    }
+    const body = buildBody(f, linkContext)
+    expect(body).toContain(
+      `(https://github.com/octo/demo/blob/${headSha}/src/with%20space.ts#L7)`,
+    )
+    // Sanity: the `/` separator stayed literal.
+    expect(body).not.toContain("src%2Fwith")
+  })
+
+  it("URL-encodes parens in path segments (`(` → %28, `)` → %29)", () => {
+    const f: PrReviewFinding = {
+      path: "src/(generated)/foo.ts",
+      line: 12,
+      scope: "comment",
+      score: 3,
+      category: "logic",
+      headline: "h",
+      body: "b",
+    }
+    const body = buildBody(f, linkContext)
+    expect(body).toContain(
+      `(https://github.com/octo/demo/blob/${headSha}/src/%28generated%29/foo.ts#L12)`,
+    )
+  })
+
+  it("backslash-escapes brackets in the label so the markdown link doesn't truncate", () => {
+    const f: PrReviewFinding = {
+      path: "src/[id]/page.ts",
+      line: 3,
+      scope: "comment",
+      score: 4,
+      category: "logic",
+      headline: "h",
+      body: "b",
+    }
+    const body = buildBody(f, linkContext)
+    // Label-side: `[` and `]` are backslash-escaped so the markdown
+    // parser keeps the whole `src/[id]/page.ts:3` as visible text.
+    expect(body).toContain("[src/\\[id\\]/page.ts:3](")
+    // URL-side: the brackets are percent-encoded by encodeURIComponent.
+    expect(body).toContain(
+      `(https://github.com/octo/demo/blob/${headSha}/src/%5Bid%5D/page.ts#L3)`,
+    )
+  })
+
+  it("backslash-escapes parens in the label so the link-target parser doesn't get confused", () => {
+    const f: PrReviewFinding = {
+      path: "src/(group)/x.ts",
+      line: 5,
+      scope: "comment",
+      score: 3,
+      category: "logic",
+      headline: "h",
+      body: "b",
+    }
+    const body = buildBody(f, linkContext)
+    // Label-side: `(` and `)` escaped.
+    expect(body).toContain("[src/\\(group\\)/x.ts:5](")
+  })
+})
+
 // ── SIG-164 PR 5: comment-anchor + format-parity helpers ─────────
 
 describe("isCommentAnchorable (SIG-164 PR 5)", () => {

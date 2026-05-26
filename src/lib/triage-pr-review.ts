@@ -2053,14 +2053,49 @@ function formatBodyFindingAnchor(
   if (!linkContext) {
     return `\`${label}\``
   }
+  // SIG-216 fix-up: URL-encode each path segment + markdown-escape the
+  // label. Filenames with spaces / parens / brackets otherwise produce
+  // broken markdown links (a literal space in the URL is rejected by
+  // GitHub; a `]` in the label truncates the link text). Segment-wise
+  // encoding (not whole-path) preserves the `/` separators.
   const { owner, repo, headSha } = linkContext
-  const base = `https://github.com/${owner}/${repo}/blob/${headSha}/${f.path}`
+  const encodedPath = encodePathSegments(f.path)
+  const base = `https://github.com/${owner}/${repo}/blob/${headSha}/${encodedPath}`
   const url = isPrOrFile
     ? base
     : f.startLine != null && f.startLine !== f.line
       ? `${base}#L${f.startLine}-L${f.line}`
       : `${base}#L${f.line}`
-  return `[${label}](${url})`
+  return `[${escapeMarkdownLinkLabel(label)}](${url})`
+}
+
+/**
+ * SIG-216 fix-up: URL-encode each path segment individually so `/`
+ * separators stay intact. `encodeURIComponent` on the whole path would
+ * turn `/` into `%2F`, breaking the blob URL.
+ *
+ * We also explicitly encode `(` → `%28` and `)` → `%29`. RFC 3986
+ * leaves parens unreserved so `encodeURIComponent` doesn't touch them
+ * — but parens are markdown's link-target delimiter (`](url)`), so a
+ * raw `)` inside the URL terminates the link prematurely. Encoding
+ * them is harmless on the GitHub side (it accepts either) and
+ * mandatory for the markdown round-trip.
+ */
+function encodePathSegments(p: string): string {
+  return p
+    .split("/")
+    .map((seg) => encodeURIComponent(seg).replace(/\(/g, "%28").replace(/\)/g, "%29"))
+    .join("/")
+}
+
+/**
+ * SIG-216 fix-up: backslash-escape markdown-special chars in a link
+ * label so paths containing `[`, `]`, `(`, `)`, or `\` render as
+ * literal text instead of truncating the link or opening a nested
+ * group.
+ */
+function escapeMarkdownLinkLabel(text: string): string {
+  return text.replace(/([\\[\]()])/g, "\\$1")
 }
 
 function formatBodyFindingSeverity(f: PrReviewFinding): string {

@@ -125,13 +125,50 @@ export interface PrOverviewArgs {
    * legacy queue-dispatched overview runs).
    */
   reviewContext?: PrOverviewReviewContext
+  /**
+   * SIG-216 fix-up: bypass the per-(PR, headSha) KV dedupe lock
+   * WITHOUT bypassing the stale-head guards. Used by the inline-from-
+   * review path so a sibling queued run's lock can't block us, while
+   * still aborting if the head moves during the Ollama window. Prefer
+   * this over `force` for new callers — `force` bypasses both, which
+   * is only correct for the legacy review-success refresh path that
+   * has already been validated against the live head.
+   */
+  skipDedupe?: boolean
+  /**
+   * SIG-216 fix-up: optional external abort signal threaded through
+   * to the Ollama `generate` call. The inline-overview retry helper
+   * passes a per-attempt controller so the first attempt's in-flight
+   * fetch can actually be cancelled when the second attempt fires
+   * (otherwise overlapping attempts burn budget against the same
+   * deadline). Absent on queue-driven calls.
+   */
+  abortSignal?: AbortSignal
 }
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
 
 export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env, force, reviewContext } = args
+  const {
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    installationId,
+    env,
+    force,
+    reviewContext,
+    skipDedupe,
+    abortSignal,
+  } = args
+  // SIG-216 fix-up: `force` historically bypassed BOTH the KV dedupe
+  // lock AND the in-handler stale-head guards. We've split those
+  // semantics: `skipDedupe` (preferred for the inline-from-review
+  // path) bypasses only the dedupe lock; `force` (kept for legacy
+  // queue-driven post-review refresh callers) still bypasses both.
+  // `bypassDedupe` is the union — read at every dedupe-lock site.
+  const bypassDedupe = skipDedupe === true || force === true
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-overview] ${label} +${Date.now() - t0}ms`, {
@@ -152,12 +189,13 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   // try/finally below — queue retries can re-attempt without being
   // blocked by a stale lock.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
-  // ARC-258 follow-up: `force === true` bypasses the dedupe so the
-  // pr-review success path can refresh the overview within the
-  // same headSha (the initial run's 5-min lock would otherwise
-  // suppress the refresh). Webhook-driven enqueues omit `force`
-  // and keep the duplicate-comment guard intact.
-  if (!force && (await env.OPENCLAW_STATE.get(dedupeKey))) {
+  // ARC-258 follow-up + SIG-216 fix-up: `bypassDedupe` (set by
+  // `skipDedupe: true` from the inline-from-review path OR
+  // `force: true` from the legacy refresh path) skips the dedupe
+  // lock check + write so a sibling queued run's lock can't
+  // suppress the refresh. Webhook-driven enqueues set neither and
+  // keep the duplicate-comment guard intact.
+  if (!bypassDedupe && (await env.OPENCLAW_STATE.get(dedupeKey))) {
     console.log(JSON.stringify({
       event: "pr-overview-skipped",
       dedupe_system: "kv",
@@ -166,7 +204,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     }))
     return
   }
-  if (!force) {
+  if (!bypassDedupe) {
     await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
       expirationTtl: DEDUPE_TTL_SECONDS,
     })
@@ -259,10 +297,16 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     //      trying to prevent (the overview comment moving backwards).
     //
     // Mirrors the pattern at `triage-pr-review-ensemble.ts:864`.
-    // `force === true` callers (post-review refresh) bypass: that
-    // path is fired by the review SUCCESS handler with the live head
-    // SHA already in hand, and the goal there is to drop the stale
-    // warmup callout from the most-recent overview.
+    // `force === true` callers (legacy post-review refresh) bypass:
+    // that path is fired by the review SUCCESS handler with the
+    // live head SHA already in hand, and the goal there is to drop
+    // the stale warmup callout from the most-recent overview.
+    // SIG-216 fix-up: the inline-from-review path now uses
+    // `skipDedupe: true` (not `force`), so this guard FIRES on the
+    // inline path — catching head moves that landed during the
+    // review's own Ollama window. The ensemble's post-overview
+    // re-check is the belt-and-braces layer that catches moves
+    // landing AFTER this overview call returns.
     if (!force && meta.head?.sha && meta.head.sha !== headSha) {
       console.log(JSON.stringify({
         event: "pr-overview-stale-head-before-ollama",
@@ -357,11 +401,15 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
 
     const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
     since("ollama-start")
+    // SIG-216 fix-up: thread the optional external abort signal into
+    // the Ollama call so the inline-overview retry helper can cancel
+    // the in-flight first attempt before launching the second.
     const response = await generate({
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,
       format: PR_OVERVIEW_SCHEMA as unknown as Record<string, unknown>,
+      ...(abortSignal ? { signal: abortSignal } : {}),
     })
     since("ollama-done")
 
@@ -457,6 +505,13 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // bounded to the path that actually writes — `force`-mode callers
     // bypass since they're invoked by the ensemble on the live head
     // (already guarded by the ensemble's stale-head guard #2).
+    // SIG-216 fix-up: the inline-from-review path now uses
+    // `skipDedupe: true` (not `force`), so this guard fires on it
+    // too — catching head moves between Ollama-done and the comment
+    // write. The ensemble adds a third re-check after this whole
+    // call returns (post-overview), so all three Ollama windows
+    // (review specialists', overview's, and the gap between) are
+    // covered.
     if (!force) {
       try {
         const metaCheck = await client.getPullRequest(owner, repo, prNumber)
@@ -544,9 +599,10 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // retry can attempt again. Without this, the first failure leaves
     // a 5-min lock that blocks every retry until it expires.
     //
-    // Force-mode runs don't set the lock (see above), so don't release
-    // it either — we'd risk stomping a sibling non-force run's lock.
-    if (!force) {
+    // Bypass-mode runs (force OR skipDedupe) don't set the lock above,
+    // so don't release it either — we'd risk stomping a sibling
+    // non-bypass run's lock.
+    if (!bypassDedupe) {
       await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
     }
   }

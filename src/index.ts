@@ -2121,6 +2121,30 @@ async function handleGitHubWebhook(
         installationId,
       })
     }
+    // SIG-216 + this fix-up — overview normally runs inline inside the
+    // review handler (drop-the-stub pattern: the two comments land in
+    // the same window). But when the review is skipped
+    // (`decision.overview && !decision.review`, e.g. release-branch
+    // gate via OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES), the ensemble
+    // never fires, so the inline overview never lands. Restore the
+    // legacy standalone `pr-overview` queue dispatch for that branch
+    // ONLY — when both decisions are true, the inline path remains
+    // the single source of truth.
+    //
+    // Skipped when the config disables overview (`overviewEnabled`
+    // is the result of `isPrOverviewEnabled` against the head-SHA
+    // config loaded above). The corresponding telemetry event
+    // `pr-overview-skipped-disabled` already fired up the file.
+    if (decision.overview && !decision.review && overviewEnabled) {
+      await env.OPENCLAW_JOBS.send({
+        type: "pr-overview",
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+      })
+    }
     // pr-review fires on `opened`, `ready_for_review`, AND `synchronize`
     // so the bot keeps verifying after each fix push (and can flip to
     // APPROVE when the diff is clean). The consumer carries a per-

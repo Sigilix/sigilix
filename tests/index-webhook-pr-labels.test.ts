@@ -315,11 +315,14 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     const res = await worker.fetch(req, env as never, ctx as never)
 
     expect(res.status).toBe(202)
-    // SIG-216: pr-overview is no longer enqueued at webhook time — it
-    // runs inline from the ensemble's review-post path. Only pr-labels
-    // remains on the webhook-side queue dispatch for overview-relevant
-    // events.
-    expect(sentJobs.map((j) => j.type)).toEqual(["pr-labels"])
+    // SIG-216: pr-overview normally runs inline from the ensemble's
+    // review-post path (no separate webhook-time enqueue). SIG-216
+    // CR fix-up: when the review is SKIPPED
+    // (`OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES=on` here →
+    // `decision.review=false` while `decision.overview=true`), the
+    // ensemble never fires, so we re-enqueue a standalone pr-overview
+    // job so the overview still lands.
+    expect(sentJobs.map((j) => j.type).sort()).toEqual(["pr-labels", "pr-overview"])
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
     expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledOnce()
     expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({

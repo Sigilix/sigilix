@@ -338,14 +338,15 @@ const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 // second-attempt and killing the cross-provider fallback before it
 // could fire.
 //
-// SIG-234 (2026-05-26): tightened 270s → 180s. The new lineup
+// SIG-234 (2026-05-26): tightened 270s → 185s. The new lineup
 // retires `deepseek-v4-pro:cloud` from the logic primary slot
 // (was the 100-270s wall-time floor). New primaries fit a
-// realistic worst case of 3 attempts × 60s per-attempt cap = 180s.
-// The pre-tighten 270s was a comfort budget for the v4-pro slow
-// path; with v4-flash + qwen3-coder-next + minimax-m2.5 + glm-5.1,
-// we don't need it. The static invariant test below regression-
-// guards the budget arithmetic.
+// realistic worst case of 3 attempts × 60s per-attempt cap = 180s,
+// rounded up to 185s for the 1s inter-attempt retry-backoff slack
+// asserted by the budget-invariant test below. The pre-tighten 270s
+// was a comfort budget for the v4-pro slow path; with v4-flash +
+// qwen3-coder-next + minimax-m2.5 + glm-5.1, we don't need it. The
+// static invariant test regression-guards the budget arithmetic.
 //
 // Pre-SIG-234 history: sized to fit `2 primary attempts (2×90s) +
 // retry backoff (~1s) + 1 cross-provider fallback attempt (~80s,
@@ -988,7 +989,7 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // minimax-m2.1's 80% (12/15 with 3 timeouts). Findings depth holds
     // up — glm-5.1 averages 1.08 findings/verdict (vs 0.92), with 18%
     // longer body text per finding. The latency tradeoff is real
-    // (glm-5.1 p95 = 144s) but well under the new tightened 180s
+    // (glm-5.1 p95 = 144s) but well under the new tightened 185s
     // specialist budget. Full analysis in
     // `.claude/research/arc-167/_report.md`.
     primary: "glm-5.1:cloud",

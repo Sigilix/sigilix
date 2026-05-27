@@ -2247,7 +2247,14 @@ const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 function badgeImg(file: ReviewBadgeAssetName): string {
   const { width, height } = badgeAssetSize(file)
   const label = badgeAssetLabel(file)
-  return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${width}" height="${height}"></a>`
+  // Bare <img> — NO <a> wrap. GitHub Primer CSS targets anchor-wrapped
+  // images in markdown comments (`.markdown-body a > img`) with
+  // `border-radius` + `overflow: hidden`, which clipped the SVG's
+  // sharp corners after rasterization. SVG itself was rx=0 +
+  // crispEdges; the rounding was added by GitHub's link-card styling.
+  // Greptile renders bare <img> and gets perfectly square badges on
+  // the same surface. Kimi K2.6 sign-off 2026-05-26 round 4.
+  return `<img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${width}" height="${height}">`
 }
 
 function severityBadgeImg(file: "p0" | "p1" | "p2" | "p3"): string {

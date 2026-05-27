@@ -14,23 +14,21 @@ export const PRIORITY_BADGE_HEIGHT = 20
 
 /**
  * Multiplier applied at the `<img>` tag DISPLAY size (not the SVG
- * viewBox). Kimi K2.6 follow-up (2026-05-26 round 3): the founder's
- * screenshots kept showing rounded badge corners even with rx=0 +
- * shape-rendering="crispEdges" baked in. Diagnosis: bitmap
- * interpolation downstream of the SVG render — a 20×20 SVG rasters
- * to 40×40 device pixels on retina, and any further bitmap zoom (in
- * a screenshot tool, chat preview, browser zoom) bilinear-smears the
- * hard 90° corner into a 2-3 pixel gradient that reads as rounded.
+ * viewBox). Held at **1.0** after Kimi K2.6 round-4 diagnosis
+ * (2026-05-26): the founder's "still rounded" screenshots were NOT
+ * caused by bitmap interpolation on upscale — they were caused by
+ * GitHub Primer CSS applying `border-radius` to anchor-wrapped images
+ * in markdown comments. The SVG was always rendering sharp; the
+ * surrounding `<a>` container clipped the corners. Real fix: drop
+ * the `<a>` wrap (see `badgeImg` in `triage-pr-review.ts`).
  *
- * Fix: render the IMG tag at 1.6× the SVG intrinsic size (20×20 → 32×32
- * for priority badges; category badge height 20 → 32). The SVG
- * renderer still produces a crisp square at the new display size (it
- * rescales the viewBox; glyphs stay positioned correctly because
- * they're stored in viewBox units). Downstream bitmap consumers now
- * get a 64×64 device-pixel source to interpolate from instead of
- * 40×40, so the corner stays visually sharp through reasonable zoom.
+ * The prior 1.6× scale bloated the badges relative to comment text
+ * without actually fixing the rounding. Holding at 1.0 keeps the
+ * constant in place as a future hook (e.g. if a downstream surface
+ * needs a higher-density source asset) without anchoring the wrong
+ * fix in the production rendering path.
  */
-export const BADGE_DISPLAY_SCALE = 1.6
+export const BADGE_DISPLAY_SCALE = 1.0
 
 // Category pill matches the priority badge height (20px) for visual unity,
 // mirroring Greptile's same-height priority+category pairing.

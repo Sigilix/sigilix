@@ -153,7 +153,8 @@ export class LinearClient {
    * backstop that bypasses both failure modes.
    */
   async getCommentParents(
-    issueId: string
+    issueId: string,
+    opts?: { signal?: AbortSignal }
   ): Promise<Array<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null }>> {
     const query = /* GraphQL */ `
       query CommentParents($id: String!) {
@@ -178,7 +179,7 @@ export class LinearClient {
           }>
         }
       } | null
-    }>(query, { id: issueId })
+    }>(query, { id: issueId }, opts?.signal)
     const nodes = data.issue?.comments.nodes ?? []
     return nodes.map((n) => ({
       id: n.id,
@@ -196,7 +197,8 @@ export class LinearClient {
    * no body, no surrounding thread.
    */
   async getCommentAuthor(
-    commentId: string
+    commentId: string,
+    opts?: { signal?: AbortSignal }
   ): Promise<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null } | null> {
     const query = /* GraphQL */ `
       query CommentAuthor($id: String!) {
@@ -213,7 +215,7 @@ export class LinearClient {
         parent: { id: string } | null
         user: { name: string | null; displayName: string | null } | null
       } | null
-    }>(query, { id: commentId })
+    }>(query, { id: commentId }, opts?.signal)
     const c = data.comment
     if (!c) return null
     return { id: c.id, parentId: c.parent?.id ?? null, user: c.user }
@@ -365,15 +367,24 @@ export class LinearClient {
     await this.gql(mutation, { id: commentId, input: { body } })
   }
 
-  private async gql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-    const res = await fetch(LINEAR_GRAPHQL, {
+  private async gql<T>(
+    query: string,
+    variables: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    const init: RequestInit = {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: this.authHeader,
       },
       body: JSON.stringify({ query, variables }),
-    })
+    }
+    // Only set `signal` when explicitly provided. `exactOptionalPropertyTypes`
+    // rejects `signal: undefined` literals; gating the assignment keeps the
+    // existing zero-signal call sites unchanged.
+    if (signal) init.signal = signal
+    const res = await fetch(LINEAR_GRAPHQL, init)
     if (!res.ok) {
       const text = await res.text()
       throw new Error(`Linear HTTP ${res.status}: ${text.slice(0, 500)}`)

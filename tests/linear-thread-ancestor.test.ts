@@ -68,14 +68,36 @@ describe("commentHasSigilixAncestor", () => {
     expect(commentHasSigilixAncestor({ startParentId: "a", comments })).toBe(false)
   })
 
-  it("matches isBotHandle on either displayName or name (displayName preferred)", () => {
-    // displayName="Sigilix Bot" → not a bot handle; name="sigilix[bot]" SHOULD match.
-    // Verifies the displayName-then-name fallback in the helper.
-    const comments: LinearThreadComment[] = [
+  it("matches isBotHandle on either displayName or name (displayName preferred, name fallback)", () => {
+    // CR catch (PR #196): previous fixture had displayName: null which
+    // SHORT-CIRCUITED to name without exercising the displayName-first
+    // preference. Real assertion: when displayName is set but NOT a bot
+    // handle, AND name IS a bot handle, the displayName-first lookup
+    // should return false (because helper uses `displayName ?? name`).
+    // Then a second case with displayName=bot, name=null proves the
+    // displayName path works on its own.
+
+    // Case 1: displayName takes precedence — non-bot displayName means
+    // we never see the bot handle on name. SHOULD return false.
+    const comments1: LinearThreadComment[] = [
+      { id: "s1", parentId: null, user: { name: "sigilix[bot]", displayName: "Sigilix Bot" } },
+      human("u2", "s1"),
+    ]
+    expect(commentHasSigilixAncestor({ startParentId: "s1", comments: comments1 })).toBe(false)
+
+    // Case 2: displayName=null falls back to name — SHOULD return true.
+    const comments2: LinearThreadComment[] = [
       { id: "s1", parentId: null, user: { name: "sigilix[bot]", displayName: null } },
       human("u2", "s1"),
     ]
-    expect(commentHasSigilixAncestor({ startParentId: "s1", comments })).toBe(true)
+    expect(commentHasSigilixAncestor({ startParentId: "s1", comments: comments2 })).toBe(true)
+
+    // Case 3: displayName=bot handle takes precedence — SHOULD return true.
+    const comments3: LinearThreadComment[] = [
+      { id: "s1", parentId: null, user: { name: "danny", displayName: "sigilix[bot]" } },
+      human("u2", "s1"),
+    ]
+    expect(commentHasSigilixAncestor({ startParentId: "s1", comments: comments3 })).toBe(true)
   })
 
   it("matches every legacy bot-handle alias the cross-platform isBotHandle accepts", () => {

@@ -1869,15 +1869,26 @@ async function handleLinearWebhook(
       // on every webhook in a Linear API outage.
       const parentId = payload.data.parentId
       const issueId = payload.data.issueId
+      // Hard 2s timeout per GraphQL call so the webhook never blocks
+      // longer than Linear's webhook ack window. Sigilix bot + CodeRabbit
+      // both flagged P1 on PR #196: an indefinite hang would miss the
+      // ack deadline and cause Linear to redeliver, fanning out
+      // duplicate work through the queue. AbortError is caught by the
+      // existing try-blocks and falls closed to "no mention" — same
+      // path as any other GraphQL error.
       try {
         const linear = new LinearClient(await buildLinearAuth(env))
-        const comments = await linear.getCommentParents(issueId)
+        const comments = await linear.getCommentParents(issueId, {
+          signal: AbortSignal.timeout(2000),
+        })
         if (commentHasSigilixAncestor({ startParentId: parentId, comments })) {
           triggerReason = "thread-followup"
         } else {
           // Pass-1 miss → direct parent lookup. Cheap (single comment).
           try {
-            const parent = await linear.getCommentAuthor(parentId)
+            const parent = await linear.getCommentAuthor(parentId, {
+              signal: AbortSignal.timeout(2000),
+            })
             const parentLogin =
               parent?.user?.displayName ?? parent?.user?.name ?? null
             if (isBotHandle(parentLogin)) {

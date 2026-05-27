@@ -156,11 +156,22 @@ export function sanitizeDispatcherMetadata(args: {
   const sampleSet = new Set<string>()
   const addSample = (match: string): void => {
     if (sampleSet.size >= 8) return
-    // SAFETY: values are bounded to the literal phrases in
-    // INJECTION_TRIGGERS — `match` comes from INJECTION_TRIGGER_RE
-    // which is a closed alternation of compiled triggers. Safe to
-    // emit verbatim into `dispatcher-prompt-sanitized` telemetry.
-    sampleSet.add(match.toLowerCase())
+    // Sigilix bot P1 (PR #193 score-4 finding): `match` derives from
+    // INJECTION_TRIGGER_RE — bounded to the closed alternation of
+    // trigger phrases — but the `[\s*_`~]+` flex-separator added per
+    // CR H1/H2 means a captured match like `"ignore\n**previous"`
+    // can include user-supplied whitespace/markdown chars BETWEEN
+    // words. Normalize to a canonical lowercase form (collapse the
+    // flex-separator runs to a single ASCII space + trim) so the
+    // `dispatcher-prompt-sanitized` telemetry's `sampleTriggers`
+    // field contains ONLY the literal phrase shape, never raw user
+    // input. Dashboard sees `"ignore previous"` regardless of how
+    // the attacker formatted it.
+    const canonical = match
+      .toLowerCase()
+      .replace(/[\s*_`~]+/g, " ")
+      .trim()
+    sampleSet.add(canonical)
   }
 
   let titleRoleTokenHits = 0

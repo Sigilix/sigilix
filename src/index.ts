@@ -396,6 +396,22 @@ export interface Env {
   // behavior.
   OPENCLAW_SYNTH_BYPASS_ENABLED?: string
 
+  // SIG-235 — min-specialists early exit. Three-state rollout:
+  //   "off"     — default; fan-out waits for ALL dispatched specialists
+  //               to settle (legacy `Promise.allSettled` semantics).
+  //   "shadow"  — fan-out STILL waits for all, but emits
+  //               `ensemble-min-specialists-early-exit-would-fire`
+  //               telemetry the moment `N-1` of `N` specialists return
+  //               successfully + `savedMsIfEnforced` so we can size the
+  //               win before enforcing.
+  //   "on"      — fires synth as soon as `N-1` of `N` specialists return
+  //               successfully; aborts the laggard role's outstanding
+  //               attempts via per-role AbortController. Synth runs on
+  //               the partial input with the existing `[DEGRADED COVERAGE]`
+  //               block. Late verdicts from the cancelled role are logged
+  //               (`ensemble-late-verdict-discarded`) but discarded.
+  OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

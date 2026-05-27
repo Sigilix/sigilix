@@ -2870,19 +2870,20 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
     expect(out).toContain('width="20"')
     expect(out).toContain('height="20"')
   })
-  it("uses the GitHub raw badge host so GitHub's `js-gh-image-fallback` JS doesn't inject border-radius (SIG-238)", () => {
-    // SIG-238 round-5 fix: badge host moved from
-    // `sigilix.dan-martinezjulio.workers.dev` (Camo-proxied → JS
-    // injects `border-radius: 6px`) to `raw.githubusercontent.com`
-    // (same-origin → no Camo, no JS injection).
-    //
-    // CR catch (PR #192): assert via `BADGE_ASSET_VERSION` rather
-    // than the literal version string so a future bump doesn't break
-    // this test as a side-effect.
+  it("uses the workers.dev badge host (SIG-238 round-5 revert — private-repo raw URL 404s)", () => {
+    // SIG-238 PR #192 tried to swap this to raw.githubusercontent.com
+    // to bypass GitHub's `js-gh-image-fallback` JS (which injects
+    // border-radius on Camo-proxied images). The swap failed because
+    // the Sigilix/sigilix repo is PRIVATE — raw.githubusercontent.com
+    // 404s on private repos for unauthenticated requests, so GitHub's
+    // markdown image renderer (which fetches anonymously) got 404s
+    // and only rendered the alt-text fallback. Reverted to workers.dev
+    // so badges actually load; rounded corners are a known limitation
+    // pending a public asset-repo follow-up.
     const out = severityBadgeForScore(3)
     expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
-    expect(out).toContain("raw.githubusercontent.com/Sigilix/sigilix")
-    expect(out).not.toContain("sigilix.dan-martinezjulio.workers.dev")
+    expect(out).toContain("sigilix.dan-martinezjulio.workers.dev")
+    expect(out).not.toContain("raw.githubusercontent.com")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {
     expect(severityBadgeForScore(6)).toContain('alt="P0"')

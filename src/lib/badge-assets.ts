@@ -69,43 +69,40 @@ export type BadgeAssetName = keyof typeof BADGE_STYLES
 export type CategoryBadgeAssetName = keyof typeof CATEGORY_BADGE_STYLES
 export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
-// SIG-238 (2026-05-26): host moved from `sigilix.dan-martinezjulio.workers.dev`
-// → `raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges`.
+// SIG-238 (2026-05-26 round-5): reverted to the workers.dev host.
 //
-// Root cause (empirical, verified via founder's DevTools inspection on
-// PR #191 + Kimi K2.6 round-5 diagnosis): GitHub's `js-gh-image-fallback`
-// client-side JS targets images that are PROXIED THROUGH CAMO — every
-// external `<img src>` in markdown comments gets a `border-radius: 6px`
-// + `background-color: var(--bgColor-muted)` inline style injected by
-// that script. The SVG itself was always rendering with sharp corners
-// (`rx=0` + `crispEdges`, curl-verified); the rounding came from the
-// container element.
+// The PR #192 attempt swapped this to
+// `raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges` to
+// bypass GitHub's `js-gh-image-fallback` JS (which injects
+// `border-radius: 6px` + `background-color: var(--bgColor-muted)` on
+// Camo-proxied images). Verified via `gh api /markdown` that
+// raw.githubusercontent.com URLs render WITHOUT those injected
+// styles — but the markdown API doesn't actually fetch the image,
+// so the failure mode only surfaced at browser render time:
 //
-// Tried + failed (round 1-4):
-//   1. `rx=0` baked into the rect
-//   2. `rx=0` + `shape-rendering="crispEdges"`
-//   3. `BADGE_DISPLAY_SCALE = 1.6` to render at 32x32
-//   4. Drop the `<a href>` anchor wrap (Kimi K2.6 round-4 hypothesis
-//      that Primer styled `.markdown-body a > img` — turned out wrong;
-//      GitHub strips `style` attrs from user-provided HTML so we
-//      couldn't override `border-radius:0` either)
+//   **The Sigilix/sigilix repo is private**, and
+//   `raw.githubusercontent.com` 404s on private repos for
+//   unauthenticated requests. GitHub's markdown image renderer
+//   fetches anonymously → 404 → alt-text fallback. Founder saw
+//   "P1 SECURITY" as bare blue link-styled text instead of badges.
 //
-// What worked: raw.githubusercontent.com URLs are same-origin to
-// github.com, do NOT go through the Camo proxy, and the
-// `js-gh-image-fallback` script's selector doesn't fire on them.
-// Verified via `gh api /markdown` test: the rendered HTML for a
-// raw.githubusercontent.com URL contains only
-// `style="max-width: 100%; height: auto; max-height: 20px;"` — no
-// `border-radius`, no `background-color` — while a Camo-proxied
-// workers.dev URL renders into a `data-canonical-src`-wrapped element
-// that picks up the full Primer image-fallback styling.
+// Reverted to workers.dev for now. Rounded corners come back
+// (annoying, known limitation) but the badges actually LOAD.
 //
-// Build-time dependency: every badge in `BADGE_SVGS` must be
-// pre-rendered to a file at `assets/badges/<BADGE_ASSET_VERSION>/<name>.svg`
-// and committed to the repo. Run `pnpm tsx scripts/generate-static-badges.ts`
-// after any visual change (color / glyph / dimensions) AND every time
-// `BADGE_ASSET_VERSION` is bumped.
-export const PUBLIC_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges"
+// Real-fix paths for a follow-up ticket:
+//   1. Make a PUBLIC `Sigilix/sigilix-badges` repo, mirror the
+//      assets there, point the host at the public-repo's raw URL.
+//      Solves both rounding (no Camo) and loading (public = no 404).
+//   2. Cloudflare Pages with a custom domain that the GitHub JS
+//      doesn't treat as Camo-eligible. Possibly avoids the rounding;
+//      needs empirical test.
+//   3. Switch to GitHub-native badge primitives (e.g. shields.io
+//      style) that render via different markup path.
+//
+// The committed `assets/badges/v20260527-1/*.svg` files stay (PR #192
+// shipped them) — they're unused for now but cheap to keep + needed
+// if we revisit option 1.
+export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
 /**
  * SIG-238: kept as a back-compat anchor so the Worker keeps serving

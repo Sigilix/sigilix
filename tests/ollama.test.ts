@@ -171,3 +171,59 @@ describe("generate() — back-compat without signal", () => {
     expect(text).toBe("no-signal-output")
   })
 })
+
+describe("generate() — token usage capture (SIG-212)", () => {
+  // Mirror of the chat() coverage in tests/ollama-chat.test.ts. The
+  // accumulateStream helper in src/lib/ollama.ts is structurally
+  // identical to chat()'s — same captureCounts pattern, same final-
+  // chunk-only emission contract from Ollama Turbo — so the same
+  // regression classes apply.
+  function mockFetchOnceWithChunks(chunks: string[]): void {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+      return {
+        ok: true,
+        status: 200,
+        body: makeStream(chunks),
+        text: async () => "",
+      } as unknown as Response
+    })
+  }
+
+  it("captures prompt_eval_count + eval_count from the final stream chunk", async () => {
+    mockFetchOnceWithChunks([
+      JSON.stringify({ response: "out", done: false }),
+      JSON.stringify({ response: "", done: true, prompt_eval_count: 1234, eval_count: 567 }),
+    ])
+    const { usage } = await generate({
+      model: FAKE_MODEL,
+      prompt: "test",
+      apiKey: FAKE_API_KEY,
+    })
+    expect(usage).toEqual({ inputTokens: 1234, outputTokens: 567 })
+  })
+
+  it("returns empty usage object when token counters are absent", async () => {
+    mockFetchOnceWithChunks([
+      JSON.stringify({ response: "ok", done: true }),
+    ])
+    const { usage } = await generate({
+      model: FAKE_MODEL,
+      prompt: "test",
+      apiKey: FAKE_API_KEY,
+    })
+    expect(usage).toEqual({})
+  })
+
+  it("captures only outputTokens when only eval_count is reported (partial usage)", async () => {
+    mockFetchOnceWithChunks([
+      JSON.stringify({ response: "ok", done: true, eval_count: 567 }),
+    ])
+    const { usage } = await generate({
+      model: FAKE_MODEL,
+      prompt: "test",
+      apiKey: FAKE_API_KEY,
+    })
+    expect(usage).toEqual({ outputTokens: 567 })
+    expect(usage).not.toHaveProperty("inputTokens")
+  })
+})

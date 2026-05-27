@@ -427,3 +427,69 @@ describe("chat() — request shape", () => {
     expect((captured.options as { temperature: number }).temperature).toBe(0)
   })
 })
+
+describe("chat() — token usage capture (SIG-212)", () => {
+  // The capture path: Ollama emits `prompt_eval_count` + `eval_count` on
+  // the final `done: true` chunk; accumulateStream translates those into
+  // ChatResult.usage.{inputTokens, outputTokens}. Without these tests, a
+  // field-rename in the Ollama API or a regression in captureCounts
+  // silently zeros downstream token data while every other test passes.
+  it("captures prompt_eval_count + eval_count from the final stream chunk", async () => {
+    mockFetchOnce(
+      makeStream([
+        JSON.stringify({ message: { role: "assistant", content: "hi" }, done: false }),
+        JSON.stringify({
+          message: { role: "assistant", content: "" },
+          done: true,
+          prompt_eval_count: 1234,
+          eval_count: 567,
+        }),
+      ])
+    )
+    const result = await chat({
+      model: FAKE_MODEL,
+      apiKey: FAKE_API_KEY,
+      messages: [{ role: "user", content: "test" }],
+    })
+    expect(result.usage).toEqual({ inputTokens: 1234, outputTokens: 567 })
+  })
+
+  it("returns empty usage object when token counters are absent (non-Ollama / degenerate response)", async () => {
+    mockFetchOnce(
+      makeStream([
+        JSON.stringify({ message: { role: "assistant", content: "ok" }, done: true }),
+      ])
+    )
+    const result = await chat({
+      model: FAKE_MODEL,
+      apiKey: FAKE_API_KEY,
+      messages: [],
+    })
+    // Empty object, NOT undefined and NOT zero-filled. Downstream
+    // aggregators distinguish "absent" (no provider data) from a real
+    // zero count.
+    expect(result.usage).toEqual({})
+  })
+
+  it("captures only inputTokens when only prompt_eval_count is reported (partial usage)", async () => {
+    // Defensive: Ollama could report one counter but not the other on a
+    // degenerate response. The shape must omit the missing field rather
+    // than zero-fill, per LlmUsage semantics.
+    mockFetchOnce(
+      makeStream([
+        JSON.stringify({
+          message: { role: "assistant", content: "ok" },
+          done: true,
+          prompt_eval_count: 1234,
+        }),
+      ])
+    )
+    const result = await chat({
+      model: FAKE_MODEL,
+      apiKey: FAKE_API_KEY,
+      messages: [],
+    })
+    expect(result.usage).toEqual({ inputTokens: 1234 })
+    expect(result.usage).not.toHaveProperty("outputTokens")
+  })
+})

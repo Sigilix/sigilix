@@ -19,7 +19,7 @@ function ctx(): ExecutionContext {
 }
 
 describe("badge assets (SIG-201)", () => {
-  it("serves a 32x32 padded P2 priority chip with a 20x20 inset rect + translated glyph (SIG-238 r7)", async () => {
+  it("serves a 20x20 P2 priority chip with hairline gutter + rx=1 (SIG-238 r9)", async () => {
     const res = handleBadgeAssetRoute(
       new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
     )
@@ -29,33 +29,28 @@ describe("badge assets (SIG-201)", () => {
     expect(res?.headers.get("cache-control")).toContain("immutable")
     const body = await res!.text()
     expect(body).toContain('aria-label="P2"')
-    // SIG-238 round-7 (Kimi K2.6 spec 2026-05-27): visible 20×20 rect lives
-    // INSIDE a 32×32 padded viewBox so GitHub Primer's border-radius clips
-    // the transparent margin instead of the colored corner. Round 4's
-    // "drop the <a> wrap" was necessary but insufficient — Primer rounds
-    // bare <img> too now. Geometry padding is the only stable fix because
-    // inline `style` is sanitizer-stripped.
-    expect(body).toContain('viewBox="0 0 32 32"')
-    expect(body).toContain('width="32"')
-    expect(body).toContain('height="32"')
-    // Visible rect is INSET at (6, 6) and STILL 20×20 — glyph paths are
-    // baked for that coord space + repositioned by the wrapping <g>.
-    expect(body).toContain('x="6" y="6" width="20" height="20"')
-    // Filled square: rect fill = accent hue, dark glyph on top. No stroke.
+    // SIG-238 r9: viewBox = native priority dims. The rect is shrunk
+    // by a sub-pixel gutter (0.488px) and given rx=1 so the SVG owns
+    // subtle corner rounding; combined with `<a href="#">` wrap + no
+    // IMG width/height in the bot HTML, this defeats Primer's bubble
+    // rule.
+    expect(body).toContain('viewBox="0 0 20 20"')
+    expect(body).toContain('width="20"')
+    expect(body).toContain('height="20"')
+    // Outer <svg fill="none"> matches Greptile — no implicit white bg.
+    expect(body).toMatch(/<svg[^>]*\sfill="none"/)
+    // Rect is 19.512x19.512 (hairline gutter), at default x=0 y=0,
+    // with rx=1 + accent color fill. No shape-rendering attribute.
+    expect(body).toContain('width="19.512"')
+    expect(body).toContain('height="19.512"')
+    expect(body).toContain('rx="1"')
     expect(body).toContain('fill="#84CC16"')
-    // rx=0 + crispEdges SCOPED TO THE RECT preserved from round 2.
-    expect(body).toContain('rx="0" fill="#84CC16" shape-rendering="crispEdges"')
+    // No <g translate> wrap any more (r7 era artifact).
+    expect(body).not.toContain('<g transform="translate')
+    // No crispEdges anywhere — the rx=1 owns the corner curve.
+    expect(body).not.toContain('shape-rendering="crispEdges"')
     expect(body).not.toContain('rx="0.5"')
-    // Crisp-edge hint MUST NOT leak onto the glyph path — letter anti-
-    // aliasing matters for legibility.
-    expect(body).not.toMatch(/<path[^>]*shape-rendering="crispEdges"/)
-    // Glyph wrapped in <g translate(6 6)> so its baked (0,0)-(20,20)
-    // coords land inside the inset rect. Without the translate, the
-    // glyph would render in the top-left transparent margin, off the
-    // colored rect.
-    expect(body).toContain('<g transform="translate(6 6)">')
-    // Path-baked glyph (Geist Mono Medium @ 9.5px) replaces the live <text>
-    // element. Color is the SIG-216 spec value #0A0A0A.
+    // Path-baked glyph (Geist Mono Medium @ 9.5px) still ships unchanged.
     expect(body).toContain('fill="#0A0A0A"')
     expect(body).toContain('<path d="')
     expect(body).not.toContain("<text")
@@ -64,7 +59,6 @@ describe("badge assets (SIG-201)", () => {
     expect(body).not.toContain('font-weight')
     expect(body).not.toContain('letter-spacing')
     expect(body).not.toContain('text-anchor')
-    expect(body).not.toContain('fill="none"')
     expect(body).not.toContain('stroke=')
     expect(body).not.toContain('stroke-opacity')
     expect(body).not.toContain("<image")
@@ -79,20 +73,16 @@ describe("badge assets (SIG-201)", () => {
     expect(res?.status).toBe(200)
     const body = await res!.text()
     expect(body).toContain('aria-label="SECURITY"')
-    // SIG-238 round-7: visible pill is still 20px tall + categoryBadgeWidth
-    // wide, but wrapped in a 12px-padded viewBox. Outer height = 32; the
-    // INNER rect attributes pin the visible-pill geometry.
-    expect(body).toContain('height="32"')
-    expect(body).toContain('y="6"')
+    // SIG-238 r9: category pill drops the r7 padded viewBox; native
+    // dims, hairline gutter, rx=1 owns the corner curve. Outer
+    // height = CATEGORY_BADGE_HEIGHT = 20.
     expect(body).toContain('height="20"')
-    // Category pill matches the priority badge geometry: rx=0 +
-    // crisp-edge pixel snapping on the rect. See `renderBadgeSvg` test
-    // above for the founder-direction rationale.
-    expect(body).toContain('rx="0"')
-    expect(body).toContain('shape-rendering="crispEdges"')
+    expect(body).toMatch(/<svg[^>]*\sfill="none"/)
+    expect(body).toContain('rx="1"')
     expect(body).not.toContain('rx="0.5"')
-    expect(body).not.toMatch(/<path[^>]*shape-rendering="crispEdges"/)
-    expect(body).toContain('<g transform="translate(6 6)">')
+    expect(body).not.toContain('rx="0"')
+    expect(body).not.toContain('shape-rendering="crispEdges"')
+    expect(body).not.toContain('<g transform="translate')
     // Hue identity preserved (magenta family) but desaturated/darkened for BG
     // and brightened for FG. Original accent #F0ABFC no longer appears verbatim.
     expect(body).not.toContain('#F0ABFC')

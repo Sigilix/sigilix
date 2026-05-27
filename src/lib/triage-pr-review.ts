@@ -42,7 +42,7 @@ import {
 } from "./diff-positions"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
-import { badgeAssetLabel, badgeAssetSize, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
+import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
 // rendered by `renderStackParenthetical`. The original helper still
@@ -2245,16 +2245,18 @@ const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
 const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 
 function badgeImg(file: ReviewBadgeAssetName): string {
-  const { width, height } = badgeAssetSize(file)
   const label = badgeAssetLabel(file)
-  // Bare <img> — NO <a> wrap. GitHub Primer CSS targets anchor-wrapped
-  // images in markdown comments (`.markdown-body a > img`) with
-  // `border-radius` + `overflow: hidden`, which clipped the SVG's
-  // sharp corners after rasterization. SVG itself was rx=0 +
-  // crispEdges; the rounding was added by GitHub's link-card styling.
-  // Greptile renders bare <img> and gets perfectly square badges on
-  // the same surface. Kimi K2.6 sign-off 2026-05-26 round 4.
-  return `<img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${width}" height="${height}">`
+  // SIG-238 r9 pattern. Empirical: this combo defeats Primer's bubble
+  // rule on github.com PR comments. Specifically:
+  //   - `<a href="#">` WRAP (we used to drop this per r4; that
+  //     diagnosis was wrong — the anchor is REQUIRED, not harmful).
+  //   - `<img>` with `align="top"` and NO explicit width/height. The
+  //     missing dimensions appear to suppress whichever Primer CSS
+  //     rule paints `bgColor-muted` under the image (the "bubble"
+  //     visible in r7).
+  // Why this works: not fully understood — empirical. See
+  // `badge-geometry.ts:BADGE_PADDING_PX` for r4-through-r9 history.
+  return `<a href="#"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top"></a>`
 }
 
 function severityBadgeImg(file: "p0" | "p1" | "p2" | "p3"): string {

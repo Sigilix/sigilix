@@ -40,32 +40,49 @@ export function categoryBadgeWidth(label: string): number {
 }
 
 /**
- * SIG-238 round-7 (Kimi K2.6 spec, 2026-05-27): transparent inset wrapped
- * around the colored badge rect inside the SVG so GitHub's Primer CSS
- * `.markdown-body img { border-radius: ~6px }` clips the TRANSPARENT
- * margin instead of the visible rect.
+ * SIG-238 round-9 (2026-05-27): retired the r7 transparent inset.
  *
- * Round 4's "drop the <a> wrap → use bare <img>" fix was necessary but
- * INSUFFICIENT: Primer's stylesheet was tightened (some recent revision)
- * to apply border-radius to ALL .markdown-body img, not just anchor-
- * wrapped ones. The 2026-05-26 founder screenshot showed P1 + PERF
- * still visibly rounded despite bare <img> + rx=0 SVG + crispEdges.
+ * History — what rounds 4 and 7 got wrong:
+ *   - r4: "Primer rounds `a > img`, switch to bare `<img>`."
+ *     Founder's 2026-05-26 screenshot showed badges STILL rounded
+ *     with bare `<img>` + rx=0 — diagnosis was wrong.
+ *   - r7: "Add 6px transparent inset so CSS rounding clips margin
+ *     not rect." That DID give sharp colored corners but exposed
+ *     Primer's `background-color: var(--bgColor-muted)` rule —
+ *     the transparent margin showed the bg through it, creating a
+ *     visible rounded "bubble" frame around each badge.
+ *   - r8: "Revert to round-6 with rounded corners." Rejected because
+ *     founder already vetoed rounded corners in r4.
  *
- * 6px exceeds GitHub's observed ~6px radius with zero safety margin —
- * Kimi's exact spec; no extra pixel needed because the rect is INSET,
- * not bleeding. Inline `style` strip-by-sanitizer makes a CSS override
- * non-viable; the geometry change is the only stable surface.
+ * What actually works (empirical):
+ *   - SVG: viewBox=20x20, rect width=19.512 height=19.512 rx=1,
+ *     fill="none" on outer svg. Tiny ~0.5px transparent gutter +
+ *     intentional 1px rx that the SVG itself OWNS.
+ *   - HTML: `<a href="#"><img alt src align="top"></a>` with NO
+ *     explicit width/height attributes. The anchor-wrap + missing
+ *     dimensions suppress whichever Primer rule was painting the
+ *     bubble around our bare-img badges.
  *
- * Trade-offs (per Kimi r7):
- *   - Vertical baseline: the +12px height shifts the badge's visual
- *     center up vs the adjacent text line (`align="top"` preserves
- *     top-alignment; the gap is at the bottom).
- *   - Repo size: +600 bytes total across 13 glyphs — negligible.
- *   - HiDPI: 32px is divisible by 16; slightly cleaner pixel snapping
- *     than the prior 20px on 2× displays.
- *   - Glyph paths: UNCHANGED — paths are wrapped in `<g translate(6 6)>`
- *     at render time so the baked Geist Mono geometry doesn't need
- *     re-baking. Future glyph regeneration (`generate-badge-glyph-paths`)
- *     stays at the original 20x20 coordinate space.
+ * `BADGE_PADDING_PX = 0` retires the r7 transparent inset. The new
+ * load-bearing constants are the gutter + the anchor wrap; encoded in
+ * `renderBadgeSvg` / `renderCategoryBadgeSvg` directly.
  */
-export const BADGE_PADDING_PX = 6
+export const BADGE_PADDING_PX = 0
+
+/**
+ * Sub-pixel transparent gutter between the colored rect and the SVG's
+ * viewBox boundary (0.488px = 20 - 19.512). Small enough that the
+ * colored rect appears full-bleed at any reasonable zoom; combined
+ * with the `<a>` wrap + missing IMG width/height, this is the
+ * geometry recipe that defeats Primer's border-radius bubble effect
+ * on github.com PR comments.
+ */
+export const BADGE_GUTTER_PX = 0.488
+
+/**
+ * Corner radius on the SVG rect itself — 1px. Small enough to look
+ * square at glance but large enough that the SVG OWNS the corner
+ * rounding so Primer's CSS doesn't have a chance to add its own
+ * larger radius.
+ */
+export const BADGE_RECT_RX = 1

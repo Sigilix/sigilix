@@ -810,14 +810,16 @@ interface LinearWebhookPayload {
     description?: string
     body?: string
     team?: { key?: string }
-    /** SIG-225 diagnostics: capture `user.id` if Linear populates it
-     *  on the Comment.create webhook. The leading hypothesis for the
-     *  double-post bug is that Linear sets `data.user` to the OAuth
-     *  app OWNER's identity for bot-authored comments, not the bot's
-     *  own. Logging the id alongside displayName/name in the trigger
-     *  path gives us the evidence we need to decide if an Option-A
-     *  `user.id === bot_viewer_id` filter would be the right follow-up
-     *  on top of the deterministic commentId tracker. */
+    /** SIG-225: `user.id` is included so the trigger log can emit a
+     *  presence-only `userIdPresent: !!payload.data.user?.id` flag
+     *  without exposing raw identity values. The leading hypothesis
+     *  for the double-post bug is that Linear sets `data.user` to
+     *  the OAuth app OWNER's identity for bot-authored comments,
+     *  not the bot's own. A presence flag is enough to decide if
+     *  an Option-A `user.id === bot_viewer_id` filter would be the
+     *  right follow-up on top of the deterministic commentId
+     *  tracker; the raw value would be a PII leak in production
+     *  logs (Sigilix bot + CodeRabbit flagged this on PR #201). */
     user?: { id?: string; displayName?: string; name?: string }
     /** SIG-225: when a Comment.create event is a thread reply, Linear
      *  populates `parentId` with the parent comment's id. Used by the
@@ -1970,12 +1972,20 @@ async function handleLinearWebhook(
     console.log("linear comment trigger", {
       reason: triggerReason,
       commentId: payload.data.id,
-      // SIG-225 diagnostics: capture the user subtree so post-deploy
-      // log scrapes can compare what Linear sends on real user
-      // Comment.create vs. the bot's own re-fire. Confirms or rules
-      // out the "data.user = OAuth app owner" hypothesis for the
-      // Option-A id-based filter follow-up.
-      user: payload.data.user ?? null,
+      // SIG-225 diagnostics — presence-only, NO raw identity values.
+      // Sigilix bot + CodeRabbit flagged the prior `user:
+      // payload.data.user` log on PR #201 as a PII leak into
+      // Cloudflare Logs. Boolean shape flags + the isBotHandle
+      // verdict are enough to confirm or rule out the "data.user =
+      // OAuth app owner" hypothesis without exposing the actual
+      // displayName/name/id values. If the tracker misses a self-
+      // re-fire, we'll see `reason: triggerReason` with
+      // `userIdPresent: true` + `isBotHandleMatch: false` and know
+      // Option A (`user.id === bot_viewer_id`) is the right Layer 2.
+      userIdPresent: !!payload.data.user?.id,
+      userDisplayNamePresent: !!payload.data.user?.displayName,
+      userNamePresent: !!payload.data.user?.name,
+      isBotHandleMatch: isBotHandle(author),
     })
     await env.OPENCLAW_JOBS.send({
       type: "linear-mention",

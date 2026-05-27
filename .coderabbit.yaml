@@ -22,7 +22,18 @@ reviews:
       enabled: true
     github-checks:
       enabled: true
-      timeout_ms: 90000
+      # 2026-05-27 (PR #204): CodeRabbit emitted "Stopped waiting for
+      # pipeline failures after 30000ms" despite the 90000 already set
+      # here. Bumped to 180000 (3 min) — the practical upper bound that
+      # matches our actual end-to-end CI duration (vitest ~16s + Workers
+      # build ~30-60s + lint + Sigilix bot review can stack to 2-3 min on
+      # cold-cache deploys). The CR warning suggests their 30s window is
+      # a hardcoded floor below the schema-honored upper cap; bumping
+      # this raises the cap. If timeouts persist, escalate to CR support
+      # rather than chasing the YAML further — the alternative is
+      # `@coderabbitai review` after CI completes (their suggested
+      # workaround in the warning message).
+      timeout_ms: 180000
   auto_review:
     enabled: true
     drafts: false

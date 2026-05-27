@@ -13,6 +13,7 @@ import { requireBearerToken } from "./auth-bearer"
 import { resolveRepoInstallationId } from "./github-app"
 import { runIndexBackfill } from "./index-backfill"
 import { runIndexReconciliation } from "./index-reconciliation"
+import { migrateInstallToRepoId } from "./index-migrate-to-repo-id"
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -89,6 +90,61 @@ export async function handleAdminBackfillRoute(request: Request, env: Env): Prom
   const dryRun = new URL(request.url).searchParams.get("dryRun") === "true"
   const summary = await runIndexBackfill(env, { dryRun })
   return json(summary, 200)
+}
+
+/**
+ * SIG-243 Phase 3: POST /admin/migrate-to-repo-id?installationId=N —
+ * bearer-auth one-shot migration that walks every repo of one
+ * installation, reads its legacy manifest, fetches the GitHub repo
+ * ID via the API, and re-writes the manifest with `githubRepoId`
+ * populated. The re-write fires Phase 2's dual-write, populating the
+ * new `repo-tenant:{id}` and `repo-vectors:{id}` keys (the latter
+ * lands when the next push triggers a fresh vectors write — manifest
+ * migration alone doesn't touch the vectors record).
+ *
+ * Idempotent: re-running on already-migrated repos is a no-op + cheap
+ * GitHub API check that returns `already-migrated`.
+ *
+ * Per-repo errors don't abort the batch. The response carries a
+ * structured summary so the operator can re-run on the specific
+ * `failed` repos.
+ */
+export async function handleAdminMigrateToRepoIdRoute(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const token = env.OPENCLAW_ADMIN_TOKEN
+  if (!token) {
+    return json({ error: "admin_endpoint_not_configured" }, 503)
+  }
+  if (!(await requireBearerToken(request, token))) {
+    return json({ error: "unauthorized" }, 401)
+  }
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    return json({ error: "github_app_not_configured" }, 503)
+  }
+
+  const installationIdRaw = new URL(request.url).searchParams.get("installationId")?.trim()
+  const installationId =
+    installationIdRaw === undefined || installationIdRaw === null || installationIdRaw === ""
+      ? NaN
+      : Number(installationIdRaw)
+  if (!Number.isInteger(installationId) || installationId <= 0) {
+    return json({ error: "missing_or_invalid_installation_id", detail: "pass ?installationId=N" }, 400)
+  }
+
+  try {
+    const summary = await migrateInstallToRepoId(env, installationId)
+    return json(summary, 200)
+  } catch (err) {
+    return json(
+      {
+        error: "migration_failed",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    )
+  }
 }
 
 /**

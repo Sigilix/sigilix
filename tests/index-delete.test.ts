@@ -231,6 +231,107 @@ describe("deleteRepoIndex — happy path", () => {
   })
 })
 
+// ─── deleteRepoIndex — SIG-243 Phase 2b tenant-key cleanup ─────────────
+
+describe("deleteRepoIndex — SIG-243 tenant-key cleanup gate", () => {
+  it("deletes repo-tenant:{id} + repo-vectors:{id} on default-branch uninstall when githubRepoId is set", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest({ githubRepoId: 808247824 })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors({ githubRepoId: 808247824 })),
+    )
+    store.set("repo-tenant:808247824", "{}")
+    store.set("repo-vectors:808247824", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    // Legacy keys gone — existing behavior.
+    expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    expect(store.has(repoIndexVectorsKey("Arc-and-Anchor", "sigilix"))).toBe(false)
+    // NEW: tenant keys also cleaned up.
+    expect(store.has("repo-tenant:808247824")).toBe(false)
+    expect(store.has("repo-vectors:808247824")).toBe(false)
+  })
+
+  it("does NOT delete tenant keys when the delete targets branch-scoped state (CR PR #203 regression guard)", async () => {
+    // Branch-scoped state repos use the `<repo>/__branch__/<hash>`
+    // marker. The writers ONLY populate tenant keys for the
+    // canonical default-branch record, so a branch delete must
+    // never wipe the repo-wide tenant keys. Even if a stale or
+    // malformed branch manifest happens to carry githubRepoId,
+    // the delete handler's branch-gate must skip the cleanup.
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix/__branch__/h646576"),
+      JSON.stringify(manifest({
+        repo: "sigilix/__branch__/h646576",
+        actualRepo: "sigilix",
+        branch: "feature/something",
+        githubRepoId: 808247824, // would-be-bug: branch manifest carrying ID
+      })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix/__branch__/h646576"),
+      JSON.stringify(vectors({
+        repo: "sigilix/__branch__/h646576",
+        githubRepoId: 808247824,
+      })),
+    )
+    // Canonical default-branch tenant keys exist — these MUST NOT
+    // be touched by the branch-scoped delete.
+    store.set("repo-tenant:808247824", "{\"canonical\":true}")
+    store.set("repo-vectors:808247824", "{\"canonical\":true}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix/__branch__/h646576",
+      reason: "pr-branch-closed",
+    })
+
+    expect(result.status).toBe("complete")
+    // Tenant keys survive — the canonical default-branch record
+    // for this repo is intact.
+    expect(store.get("repo-tenant:808247824")).toBe("{\"canonical\":true}")
+    expect(store.get("repo-vectors:808247824")).toBe("{\"canonical\":true}")
+  })
+
+  it("does not touch tenant keys for pre-Phase-2 legacy records without githubRepoId", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest()), // no githubRepoId field
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors()),
+    )
+    // A pre-existing canonical tenant key for a different repo with the
+    // same hypothetical ID (defensive — shouldn't happen in practice).
+    store.set("repo-tenant:99999999", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    // No tenant key derived → no tenant deletes attempted.
+    expect(store.has("repo-tenant:99999999")).toBe(true)
+  })
+})
+
 // ─── deleteRepoIndex — cross-tenant guard ──────────────────────────────
 
 describe("deleteRepoIndex — cross-tenant guard", () => {

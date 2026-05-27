@@ -112,15 +112,23 @@ export class GitHubClient {
   async getRepository(
     owner: string,
     repo: string,
-  ): Promise<{ default_branch: string } | null> {
+  ): Promise<{ default_branch: string; id: number | undefined } | null> {
     try {
-      const res = await this.restGet<{ default_branch?: string }>(
+      const res = await this.restGet<{ default_branch?: string; id?: number }>(
         `/repos/${owner}/${repo}`,
       )
       if (typeof res.default_branch !== "string" || res.default_branch.length === 0) {
         return null
       }
-      return { default_branch: res.default_branch }
+      // SIG-243 Phase 3: capture the immutable repository ID alongside
+      // the default branch. Consumers that don't care can ignore it;
+      // the admin migration endpoint uses it to backfill
+      // `githubRepoId` on legacy manifests.
+      const id =
+        typeof res.id === "number" && Number.isInteger(res.id) && res.id > 0
+          ? res.id
+          : undefined
+      return { default_branch: res.default_branch, id }
     } catch (error) {
       if (error instanceof GitHubHttpError && error.status === 404) return null
       throw error

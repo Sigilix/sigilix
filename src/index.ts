@@ -66,7 +66,7 @@ import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
-import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute } from "./lib/admin-index-route"
+import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute, handleAdminMigrateToRepoIdRoute } from "./lib/admin-index-route"
 import { runIndexReconciliation } from "./lib/index-reconciliation"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
@@ -1035,6 +1035,14 @@ export default {
     // enqueues repos with no manifest in KV.
     if (request.method === "POST" && url.pathname === "/admin/index-reconcile") {
       return handleAdminReconcileRoute(request, env)
+    }
+
+    // SIG-243 Phase 3: authenticated migration endpoint to backfill the
+    // immutable `githubRepoId` field on every legacy manifest under one
+    // installation. Re-writing the manifest fires Phase 2's dual-write,
+    // populating the new `repo-tenant:{id}` key. Idempotent.
+    if (request.method === "POST" && url.pathname === "/admin/migrate-to-repo-id") {
+      return handleAdminMigrateToRepoIdRoute(request, env)
     }
 
     if (request.method === "POST" && url.pathname === "/linear/webhook") {

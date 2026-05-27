@@ -45,6 +45,7 @@ import {
   readRepoIndexManifest,
   repoIndexManifestKey,
   REPO_INDEX_MANIFEST_PREFIX,
+  repoTenantKey,
   type ReadResult as ManifestReadResult,
 } from "./repo-index-manifest"
 import {
@@ -53,6 +54,7 @@ import {
   parseRepoIndexVectors,
   readRepoIndexVectors,
   repoIndexVectorsKey,
+  repoVectorsTenantKey,
   type ReadResult as VectorsReadResult,
 } from "./repo-index-vectors"
 import { activeRunKey } from "./repo-index-active-run"
@@ -409,6 +411,60 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
           console.error(JSON.stringify({
             event: "index-delete-kv-manifest-failed",
             owner, repo, key: manifestKeyName, err: message,
+          }))
+        }
+      }
+
+      // SIG-243 Phase 2b: delete the new tenant-scoped KV records too
+      // (`repo-tenant:{id}` for the manifest, `repo-vectors:{id}` for
+      // the chunk-id ledger). Reads the immutable `githubRepoId` from
+      // EITHER the manifest or the vectors record — both carry the
+      // same value once Phase 1+2 has stamped them. Best-effort +
+      // idempotent (missing key = no-op). Skipped for pre-Phase-2
+      // legacy records that lack the field (those have no new-key
+      // counterpart to clean up).
+      //
+      // CR PR #203 — gate on DEFAULT-BRANCH state, mirroring the
+      // writer's contract. The tenant keys are only populated for
+      // default-branch records (`writeRepoIndexManifest`'s
+      // `manifest.branch === undefined` gate + `writeRepoIndexVectors`'s
+      // `!repo.includes("/__branch__/")` gate). A branch-scoped
+      // delete (e.g. `pr-branch-closed`) MUST NOT touch the tenant
+      // keys — the writer never populated them for that branch state,
+      // and the tenant keys hold the canonical default-branch record
+      // which a branch delete must never wipe.
+      const isBranchScopedState =
+        (manifestRead.kind === "ok" && manifestRead.manifest.branch !== undefined) ||
+        (vectorsRead.kind === "ok" && vectorsRead.vectors.repo.includes("/__branch__/"))
+      const tenantRepoId = isBranchScopedState
+        ? null
+        : (manifestRead.kind === "ok" && typeof manifestRead.manifest.githubRepoId === "number"
+            ? manifestRead.manifest.githubRepoId
+            : null) ??
+          (vectorsRead.kind === "ok" && typeof vectorsRead.vectors.githubRepoId === "number"
+            ? vectorsRead.vectors.githubRepoId
+            : null)
+      if (typeof tenantRepoId === "number" && Number.isInteger(tenantRepoId) && tenantRepoId > 0) {
+        const newManifestKey = repoTenantKey(tenantRepoId)
+        const newVectorsKey = repoVectorsTenantKey(tenantRepoId)
+        try {
+          await env.OPENCLAW_STATE.delete(newManifestKey)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          result.errors.push(`kv.delete(repo-tenant): ${message}`)
+          console.error(JSON.stringify({
+            event: "index-delete-kv-tenant-manifest-failed",
+            owner, repo, key: newManifestKey, err: message,
+          }))
+        }
+        try {
+          await env.OPENCLAW_STATE.delete(newVectorsKey)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          result.errors.push(`kv.delete(repo-vectors): ${message}`)
+          console.error(JSON.stringify({
+            event: "index-delete-kv-tenant-vectors-failed",
+            owner, repo, key: newVectorsKey, err: message,
           }))
         }
       }

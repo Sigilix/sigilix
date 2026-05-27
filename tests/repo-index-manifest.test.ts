@@ -11,6 +11,8 @@ import {
   legacyRepoIndexManifestKey,
   readRepoIndexManifest,
   repoIndexManifestKey,
+  REPO_TENANT_PREFIX,
+  repoTenantKey,
   writeRepoIndexManifest,
   type RepoIndexManifestV1,
 } from "../src/lib/repo-index-manifest"
@@ -80,6 +82,17 @@ describe("legacyRepoIndexManifestKey", () => {
   })
 })
 
+describe("repoTenantKey (SIG-243 Phase 2)", () => {
+  it("keys by the immutable GitHub repository ID", () => {
+    expect(repoTenantKey(808247824)).toBe("repo-tenant:808247824")
+    expect(repoTenantKey(1)).toBe("repo-tenant:1")
+  })
+
+  it("exports the prefix for KV-scan callers", () => {
+    expect(REPO_TENANT_PREFIX).toBe("repo-tenant:")
+  })
+})
+
 describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
   it("round-trips a valid manifest under the <owner>/<repo> key", async () => {
     const { kv, store } = makeKvStub()
@@ -127,6 +140,83 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     const broken = { ...SAMPLE_MANIFEST } as Partial<RepoIndexManifestV1>
     delete broken.headSha
     store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(broken))
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    expect(result.kind).toBe("invalid")
+    if (result.kind === "invalid") {
+      expect(result.reason).toBe("shape")
+    }
+  })
+
+  it("round-trips a manifest with githubRepoId set (SIG-243 Phase 1)", async () => {
+    // SIG-243: optional immutable identifier added in Phase 1. Reads must
+    // preserve it across the round trip so Phase 2 can dual-write under
+    // the new repo-tenant:{id} key.
+    const { kv } = makeKvStub()
+    const withId: RepoIndexManifestV1 = { ...SAMPLE_MANIFEST, githubRepoId: 808247824 }
+    await writeRepoIndexManifest(makeEnv(kv), withId)
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") {
+      expect(result.manifest.githubRepoId).toBe(808247824)
+      expect(result.manifest).toEqual(withId)
+    }
+  })
+
+  it("reads a legacy manifest without githubRepoId as valid (additive field)", async () => {
+    // SIG-243: githubRepoId is optional during Phase 1 + 2 so the
+    // millions of existing manifests in production keep parsing.
+    // Phase 3's backfill is what populates the field for legacy
+    // records; until then, absence is legitimate.
+    const { kv } = makeKvStub()
+    await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
+    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "Sigilix")
+    expect(result.kind).toBe("ok")
+    if (result.kind === "ok") {
+      expect(result.manifest.githubRepoId).toBeUndefined()
+    }
+  })
+
+  it("dual-writes to the new repo-tenant:{id} key when githubRepoId is set (SIG-243 Phase 2)", async () => {
+    // SIG-243: Phase 2's dual-write writes the SAME payload to both
+    // the legacy `repo-index-manifest:owner/repo` key (unchanged)
+    // AND the new `repo-tenant:{githubRepoId}` key. Phase 3 will
+    // flip reads to the new key with the legacy as fallback.
+    const { kv, store } = makeKvStub()
+    const withId: RepoIndexManifestV1 = { ...SAMPLE_MANIFEST, githubRepoId: 808247824 }
+    await writeRepoIndexManifest(makeEnv(kv), withId)
+    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-tenant:808247824")).toBe(true)
+
+    // Both keys contain identical payloads — the new key isn't a
+    // pointer; it's a sibling write so Phase 3's read-switch is a
+    // pure code change with no data migration needed.
+    const legacyValue = store.get("repo-index-manifest:arc-and-anchor/sigilix")
+    const newValue = store.get("repo-tenant:808247824")
+    expect(newValue).toBe(legacyValue)
+  })
+
+  it("does NOT write the repo-tenant:{id} key when githubRepoId is absent (legacy path)", async () => {
+    // SIG-243: legacy manifests (without githubRepoId) only write to
+    // the original key. Phase 3's admin backfill is what populates
+    // the new key for these records by reading them, looking up the
+    // repo ID via the GitHub API, and re-writing through this
+    // writer with the ID set.
+    const { kv, store } = makeKvStub()
+    await writeRepoIndexManifest(makeEnv(kv), SAMPLE_MANIFEST)
+    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix")).toBe(true)
+    const tenantKeys = [...store.keys()].filter((k) => k.startsWith("repo-tenant:"))
+    expect(tenantKeys).toEqual([])
+  })
+
+  it("rejects githubRepoId of wrong type (must be number when present)", async () => {
+    // Defense-in-depth: a stale write path passing a string would
+    // poison the new keying for that repo. Validate the shape.
+    const { kv, store } = makeKvStub()
+    const broken = { ...SAMPLE_MANIFEST, githubRepoId: "not-a-number" }
+    store.set(
+      "repo-index-manifest:arc-and-anchor/sigilix",
+      JSON.stringify(broken),
+    )
     const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
     expect(result.kind).toBe("invalid")
     if (result.kind === "invalid") {

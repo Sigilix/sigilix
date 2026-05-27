@@ -332,6 +332,53 @@ describe("maybeEnqueuePushIndexJob — happy path", () => {
     })
   })
 
+  it("attaches githubRepoId to the queue message when the push payload included repository.id (SIG-243 Phase 1)", async () => {
+    // SIG-243: GitHub's immutable repository ID is captured at the
+    // webhook entry point and threaded through to the queue message
+    // so the consumer can persist it on the manifest. Phase 4
+    // promotes the field to the canonical KV key.
+    const { env, sent, kv } = makeEnv()
+    seedManifest(kv)
+    mockGetRepository.mockResolvedValue({ default_branch: "main" })
+    const outcome = await maybeEnqueuePushIndexJob({
+      env, ...baseArgs,
+      repoId: 808247824,
+      ref: "refs/heads/main",
+      after: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    })
+    expect(outcome).toEqual({ enqueued: true, reason: "push" })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toEqual({
+      type: "index-repo",
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      githubRepoId: 808247824,
+      installationId: 99,
+      reason: "push",
+    })
+  })
+
+  it("omits githubRepoId from the queue message when the push payload had no repository.id (legacy / fallback)", async () => {
+    // SIG-243: legacy webhook deliveries (replayed pre-Phase-1) and
+    // non-push code paths that haven't been wired yet leave repoId
+    // undefined. The producer must NOT land `githubRepoId: undefined`
+    // on the queue message — that would fail the consumer's type
+    // guard if it ever became strict-required in a later phase, and
+    // it pollutes the message shape pointlessly.
+    const { env, sent, kv } = makeEnv()
+    seedManifest(kv)
+    mockGetRepository.mockResolvedValue({ default_branch: "main" })
+    const outcome = await maybeEnqueuePushIndexJob({
+      env, ...baseArgs,
+      repoId: undefined,
+      ref: "refs/heads/main",
+      after: "b".repeat(40),
+    })
+    expect(outcome).toEqual({ enqueued: true, reason: "push" })
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).not.toHaveProperty("githubRepoId")
+  })
+
   it("honors a non-`main` default branch", async () => {
     const { env, sent, kv } = makeEnv()
     seedManifest(kv)

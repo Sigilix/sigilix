@@ -138,6 +138,53 @@ describe("enqueueIndexJobsForRepos", () => {
     }
   })
 
+  it("carries entry.id as githubRepoId on the queue message (SIG-243 Phase 1)", async () => {
+    // SIG-243: install / installation_repositories webhook payloads
+    // include `id` per repo. The producer forwards it onto the queue
+    // message so bootstrap manifests carry the canonical immutable
+    // identifier from their first write.
+    const { env, sent } = makeEnv()
+    const reposWithIds = [
+      { id: 808247824, name: "sigilix", full_name: "Sigilix/sigilix" },
+      { id: 980123456, name: "rubberfit", full_name: "Rubberfit/rubberfit" },
+    ]
+    await enqueueIndexJobsForRepos({
+      env,
+      installationId: 99,
+      repositories: reposWithIds,
+      reason: "install",
+    })
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toEqual({
+      type: "index-repo",
+      owner: "Sigilix",
+      repo: "sigilix",
+      githubRepoId: 808247824,
+      installationId: 99,
+      reason: "install",
+    })
+    if (sent[1]?.type === "index-repo") {
+      expect(sent[1].githubRepoId).toBe(980123456)
+    }
+  })
+
+  it("omits githubRepoId when the entry has no id (legacy synthetic entries)", async () => {
+    // SIG-243: reconciliation cron synthesises InstallRepoEntry from
+    // a KV scan of `repo-index-manifest:*` keys and has no `id`
+    // available (Phase 3 backfill resolves it via GitHub API). The
+    // producer must NOT land `githubRepoId: undefined` on the queue.
+    const { env, sent } = makeEnv()
+    await enqueueIndexJobsForRepos({
+      env,
+      installationId: 1,
+      repositories: baseRepos,
+      reason: "install-repos-added",
+    })
+    for (const msg of sent) {
+      expect(msg).not.toHaveProperty("githubRepoId")
+    }
+  })
+
   it("skips invalid full_name entries with telemetry, continues with the rest", async () => {
     const { env, sent } = makeEnv()
     const result = await enqueueIndexJobsForRepos({

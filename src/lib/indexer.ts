@@ -295,6 +295,11 @@ export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
 
 async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void> {
   const { owner, repo, installationId, reason } = job
+  // SIG-243 Phase 1: forward the immutable repo ID from the queue
+  // message to persistManifest so the new manifest record carries
+  // `githubRepoId`. Legacy in-flight messages (no field) flow through
+  // as undefined; the field is omitted from the manifest in that case.
+  const githubRepoId = job.githubRepoId
   const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
@@ -461,7 +466,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       return
     }
     await persistManifest({
-      env, owner, repo, stateRepo, namespace, headSha, runId,
+      env, owner, repo, githubRepoId, stateRepo, namespace, headSha, runId,
       branch: target.isDefault ? null : target.branch,
       defaultBranch: target.defaultBranch,
       fileCount: 0, chunkCount: 0, shardCount: 1,
@@ -530,7 +535,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       return
     }
     await enqueueNextShard(env, {
-      owner, repo, installationId, reason,
+      owner, repo, githubRepoId, installationId, reason,
       ...(target.isDefault ? {} : { branch: target.branch }),
       lo: MAX_FILES_PER_JOB,
       hi: Math.min(MAX_FILES_PER_JOB * 2, totalFiles),
@@ -558,7 +563,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     return
   }
   await persistManifest({
-    env, owner, repo, stateRepo, namespace, headSha, runId,
+    env, owner, repo, githubRepoId, stateRepo, namespace, headSha, runId,
     branch: target.isDefault ? null : target.branch,
     defaultBranch: target.defaultBranch,
     fileCount: sliceHi, chunkCount, shardCount: 1,
@@ -644,6 +649,11 @@ async function handleShardJob(
   env: Env,
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
+  // SIG-243 Phase 1: shard messages carry the parent run's
+  // githubRepoId so the final manifest write at the end of the chain
+  // stamps it correctly. Bootstrap (`handleBootstrapJob`) forwards
+  // it into the first shard message via `enqueueShard` below.
+  const githubRepoId = job.githubRepoId
   const resolvedDefaultBranch = shard.defaultBranch ?? job.branch ?? null
   if (resolvedDefaultBranch === null) {
     console.warn(JSON.stringify({
@@ -788,7 +798,7 @@ async function handleShardJob(
       return
     }
     await persistManifest({
-      env, owner, repo, stateRepo, namespace,
+      env, owner, repo, githubRepoId, stateRepo, namespace,
       branch: target.isDefault ? null : target.branch,
       defaultBranch: target.defaultBranch,
       headSha: shard.headSha, runId: shard.runId,
@@ -847,7 +857,7 @@ async function handleShardJob(
     return
   }
   await enqueueNextShard(env, {
-    owner, repo, installationId, reason,
+    owner, repo, githubRepoId, installationId, reason,
     ...(target.isDefault ? {} : { branch: target.branch }),
     lo: shard.hi,
     hi: Math.min(shard.hi + MAX_FILES_PER_JOB, shard.totalFiles),
@@ -1089,6 +1099,14 @@ async function embedBatch(
 interface EnqueueNextShardArgs {
   owner: string
   repo: string
+  /**
+   * SIG-243 Phase 1: parent run's immutable GitHub repo ID. Forwarded
+   * onto every shard continuation so the manifest write at the end of
+   * the chain stamps the field correctly. Optional during the
+   * transition — undefined for legacy bootstrap runs that predate
+   * Phase 1.
+   */
+  githubRepoId: number | undefined
   installationId: number
   reason: IndexRepoMessage["reason"]
   branch?: string
@@ -1108,6 +1126,12 @@ async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Promise<v
     type: "index-repo",
     owner: args.owner,
     repo: args.repo,
+    // SIG-243 Phase 1: forward the parent run's GitHub repo ID onto
+    // every shard. Conditional spread keeps the queue message tight
+    // under exactOptionalPropertyTypes.
+    ...(typeof args.githubRepoId === "number" && Number.isFinite(args.githubRepoId)
+      ? { githubRepoId: args.githubRepoId }
+      : {}),
     installationId: args.installationId,
     reason: args.reason,
     ...(args.branch ? { branch: args.branch } : {}),
@@ -1137,6 +1161,17 @@ interface PersistManifestArgs {
   owner: string
   /** Actual GitHub repo name. */
   repo: string
+  /**
+   * SIG-243 Phase 1: immutable GitHub repository ID, captured at the
+   * webhook entry point and threaded through the queue message + the
+   * indexer pipeline. Optional during Phases 1 and 2 — legacy queue
+   * messages predating Phase 1 omit the field, and bootstrap / install
+   * / reconciliation paths that haven't been wired yet pass it as
+   * undefined. The manifest persists it when present so Phase 3's
+   * backfill knows which records still need the lookup. Phase 4
+   * promotes it to the canonical KV key.
+   */
+  githubRepoId: number | undefined
   /** State repo used for KV manifests/vectors. Branch indexes use repo/__branch__/... */
   stateRepo: string
   namespace: string
@@ -1177,6 +1212,12 @@ async function persistManifest(args: PersistManifestArgs): Promise<void> {
   }
   if (args.branch !== null) {
     manifest.branch = args.branch
+  }
+  // SIG-243 Phase 1: persist the immutable repo ID when the queue
+  // message carried it. Conditional spread keeps the manifest shape
+  // tight under exactOptionalPropertyTypes.
+  if (typeof args.githubRepoId === "number" && Number.isFinite(args.githubRepoId)) {
+    manifest.githubRepoId = args.githubRepoId
   }
   try {
     await writeRepoIndexManifest(args.env, manifest)

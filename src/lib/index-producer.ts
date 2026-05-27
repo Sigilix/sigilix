@@ -46,6 +46,18 @@ export interface InstallRepoEntry {
    *  trusting any `payload.repository.owner.login` (installation-scoped
    *  events have no top-level repository field). */
   full_name?: string | undefined
+  /**
+   * SIG-243 Phase 1: GitHub's immutable repository ID from the
+   * `installation` / `installation_repositories` webhook payload
+   * (`repositories[].id` / `repositories_added[].id`). Forwarded onto
+   * the queue message so bootstrap manifests carry the canonical ID
+   * from their first write. Optional during the transition: legacy
+   * paths that build `InstallRepoEntry` synthetically (e.g. the
+   * reconciliation cron parsing a `full_name` from a KV scan) leave
+   * it undefined, in which case Phase 3's backfill resolves it via a
+   * single GitHub API call.
+   */
+  id?: number | undefined
 }
 
 export interface EnqueueIndexJobsResult {
@@ -118,10 +130,19 @@ export async function enqueueIndexJobsForRepos(args: {
     }
 
     try {
+      // SIG-243 Phase 1: forward repo_id when the install /
+      // installation_repositories webhook carried it. Legacy
+      // synthetic entries (cron parsing full_name from a KV scan)
+      // omit the field; consumer treats it as undefined and skips
+      // the manifest field, which Phase 3 backfills.
+      const repoEntryId = entry.id
       await env.OPENCLAW_JOBS.send({
         type: "index-repo",
         owner,
         repo,
+        ...(typeof repoEntryId === "number" && Number.isFinite(repoEntryId)
+          ? { githubRepoId: repoEntryId }
+          : {}),
         installationId,
         reason,
       })
@@ -164,6 +185,14 @@ export interface MaybeEnqueuePushIndexJobArgs {
   env: Env
   owner: string
   repo: string
+  /**
+   * SIG-243 Phase 1: GitHub's immutable repository ID from
+   * `payload.repository.id` on the push webhook. Optional during the
+   * Phase 1 + 2 transition so older callers (manual reconciliation
+   * paths) still compile; the consumer falls back gracefully when the
+   * field is absent.
+   */
+  repoId: number | undefined
   installationId: number
   /** `payload.ref` from the push webhook (e.g. `"refs/heads/main"`). */
   ref: string | undefined
@@ -198,7 +227,7 @@ const BRANCH_REF_PREFIX = "refs/heads/"
 export async function maybeEnqueuePushIndexJob(
   args: MaybeEnqueuePushIndexJobArgs,
 ): Promise<PushEnqueueOutcome> {
-  const { env, owner, repo, installationId, ref, after } = args
+  const { env, owner, repo, repoId, installationId, ref, after } = args
 
   if (typeof ref !== "string" || !ref.startsWith(BRANCH_REF_PREFIX)) {
     console.log(JSON.stringify({
@@ -340,6 +369,7 @@ export async function maybeEnqueuePushIndexJob(
       type: "index-repo"
       owner: string
       repo: string
+      githubRepoId?: number
       installationId: number
       reason: "push"
       branch?: string
@@ -349,6 +379,13 @@ export async function maybeEnqueuePushIndexJob(
       repo,
       installationId,
       reason: "push",
+    }
+    // SIG-243 Phase 1: include the immutable repo ID when the webhook
+    // payload carried it. Omitted via conditional spread so the field
+    // doesn't land as `undefined` on the queue message under
+    // exactOptionalPropertyTypes.
+    if (typeof repoId === "number" && Number.isFinite(repoId)) {
+      message.githubRepoId = repoId
     }
     if (branchToIndex) message.branch = branchToIndex
     await env.OPENCLAW_JOBS.send(message)

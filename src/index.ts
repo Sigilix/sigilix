@@ -1848,29 +1848,55 @@ async function handleLinearWebhook(
     if (bodyMentionsBot(body, triggers)) {
       triggerReason = "mention"
     } else if (payload.data.parentId && payload.data.issueId) {
-      // SIG-225 thread-walk path. Costs one GraphQL call per non-mention
-      // thread reply (top-level comments without @ skip this — no parentId).
-      // Fails closed on any error: a thrown call returns "no mention" and
-      // the user's reply isn't routed to Sigilix. Acceptable trade-off
-      // because the legacy @-mention path is unaffected by any failure here.
+      // SIG-225 thread-walk path. Top-level comments without @ skip this
+      // entirely — no `parentId`. Two-pass to defeat the two failure
+      // modes the snapshot can hit:
+      //
+      //   PASS 1 (cheap):  `getCommentParents(issueId)` returns up to
+      //     100 most-recently-updated comments; helper walks the chain.
+      //     Covers ~all real-world threads in one GraphQL call.
+      //
+      //   PASS 2 (backstop, only on pass-1 miss): direct
+      //     `getCommentAuthor(parentId)` lookup of just the parent.
+      //     Defeats (a) deep threads where the chain reaches past 100
+      //     comments, and (b) replica-lag races where the user replies
+      //     within ~1s of Sigilix's post and the snapshot hasn't caught
+      //     up. Code-reviewer P1 catches on PR #196.
+      //
+      // Any thrown error in EITHER pass falls through to "no mention"
+      // so the legacy @-mention path is unaffected. We accept the
+      // miss — a missed thread-followup is better than a queue spend
+      // on every webhook in a Linear API outage.
+      const parentId = payload.data.parentId
+      const issueId = payload.data.issueId
       try {
         const linear = new LinearClient(await buildLinearAuth(env))
-        const comments = await linear.getCommentParents(payload.data.issueId)
-        if (
-          commentHasSigilixAncestor({
-            startParentId: payload.data.parentId,
-            comments,
-          })
-        ) {
+        const comments = await linear.getCommentParents(issueId)
+        if (commentHasSigilixAncestor({ startParentId: parentId, comments })) {
           triggerReason = "thread-followup"
+        } else {
+          // Pass-1 miss → direct parent lookup. Cheap (single comment).
+          try {
+            const parent = await linear.getCommentAuthor(parentId)
+            const parentLogin =
+              parent?.user?.displayName ?? parent?.user?.name ?? null
+            if (isBotHandle(parentLogin)) {
+              triggerReason = "thread-followup"
+            }
+          } catch (err) {
+            console.warn("sig-225 parent-lookup failed", {
+              commentId: payload.data.id,
+              parentId,
+              err: String(err),
+            })
+          }
         }
       } catch (err) {
         console.warn("sig-225 thread-walk failed", {
           commentId: payload.data.id,
-          issueId: payload.data.issueId,
+          issueId,
           err: String(err),
         })
-        // Intentional fall-through: triggerReason stays null → "no mention".
       }
     }
 

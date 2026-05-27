@@ -24,11 +24,20 @@ export interface LinearAuthEnv {
   LINEAR_OAUTH_CLIENT_ID?: string
   LINEAR_OAUTH_CLIENT_SECRET?: string
   LINEAR_API_KEY: string
-  OPENCLAW_STATE: KVNamespace
+  /** Only required when OAuth client_credentials are configured —
+   *  `getAppActorToken` uses it to cache the actor token. The
+   *  API-key fallback path never touches it. Optional here so a
+   *  caller that knows it's API-key-only can pass a minimal env. */
+  OPENCLAW_STATE?: KVNamespace
 }
 
 export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
   if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
+    if (!env.OPENCLAW_STATE) {
+      throw new Error(
+        "buildLinearAuth: OAuth client_credentials configured but OPENCLAW_STATE KV binding is missing"
+      )
+    }
     const token = await getAppActorToken(
       env.OPENCLAW_STATE,
       env.LINEAR_OAUTH_CLIENT_ID,
@@ -132,10 +141,16 @@ export class LinearClient {
    * (no labels, no creator, no body, no description). The result
    * feeds `commentHasSigilixAncestor` from `linear-thread-ancestor.ts`.
    *
-   * `first: 100` is wider than `getIssue`'s 50 because a long-running
-   * thread can stack replies past Linear's default page size; if the
-   * parent chain runs past 100 comments the helper falls closed
-   * (returns false → no implicit trigger) by design.
+   * `orderBy: updatedAt` is CRITICAL — Linear's default connection
+   * ordering returns OLDEST 100 first, which silently omits every
+   * recent Sigilix reply on any thread past 100 comments and breaks
+   * the trigger entirely. Code-reviewer P1 catch on PR #196.
+   *
+   * When the parent chain runs past 100 comments OR a freshly-posted
+   * comment hasn't propagated to the read replica yet (replica-lag
+   * race), the helper falls closed (returns false). The webhook
+   * caller has a second-pass `getComment(parentId)` direct-lookup
+   * backstop that bypasses both failure modes.
    */
   async getCommentParents(
     issueId: string
@@ -143,7 +158,7 @@ export class LinearClient {
     const query = /* GraphQL */ `
       query CommentParents($id: String!) {
         issue(id: $id) {
-          comments(first: 100) {
+          comments(first: 100, orderBy: updatedAt) {
             nodes {
               id
               parent { id }
@@ -170,6 +185,38 @@ export class LinearClient {
       parentId: n.parent?.id ?? null,
       user: n.user,
     }))
+  }
+
+  /**
+   * SIG-225 P1 fix — direct single-comment lookup. The backstop for
+   * the `getCommentParents` snapshot walk: if the parent chain runs
+   * past the 100-comment page OR Linear's read replica hasn't surfaced
+   * a freshly-posted comment yet, the webhook caller hits this to
+   * resolve the IMMEDIATE parent's author. One narrow GraphQL call —
+   * no body, no surrounding thread.
+   */
+  async getCommentAuthor(
+    commentId: string
+  ): Promise<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null } | null> {
+    const query = /* GraphQL */ `
+      query CommentAuthor($id: String!) {
+        comment(id: $id) {
+          id
+          parent { id }
+          user { name displayName }
+        }
+      }
+    `
+    const data = await this.gql<{
+      comment: {
+        id: string
+        parent: { id: string } | null
+        user: { name: string | null; displayName: string | null } | null
+      } | null
+    }>(query, { id: commentId })
+    const c = data.comment
+    if (!c) return null
+    return { id: c.id, parentId: c.parent?.id ?? null, user: c.user }
   }
 
   /** Fetch issue + recent comments. Used for triage dedupe + context. */

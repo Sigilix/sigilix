@@ -38,3 +38,34 @@ export function categoryBadgeWidth(label: string): number {
   // Geist Mono 9.5px @ 600 metrics: ~6.5px advance + 16px horizontal padding.
   return Math.ceil(label.length * 6.5 + 16)
 }
+
+/**
+ * SIG-238 round-7 (Kimi K2.6 spec, 2026-05-27): transparent inset wrapped
+ * around the colored badge rect inside the SVG so GitHub's Primer CSS
+ * `.markdown-body img { border-radius: ~6px }` clips the TRANSPARENT
+ * margin instead of the visible rect.
+ *
+ * Round 4's "drop the <a> wrap → use bare <img>" fix was necessary but
+ * INSUFFICIENT: Primer's stylesheet was tightened (some recent revision)
+ * to apply border-radius to ALL .markdown-body img, not just anchor-
+ * wrapped ones. The 2026-05-26 founder screenshot showed P1 + PERF
+ * still visibly rounded despite bare <img> + rx=0 SVG + crispEdges.
+ *
+ * 6px exceeds GitHub's observed ~6px radius with zero safety margin —
+ * Kimi's exact spec; no extra pixel needed because the rect is INSET,
+ * not bleeding. Inline `style` strip-by-sanitizer makes a CSS override
+ * non-viable; the geometry change is the only stable surface.
+ *
+ * Trade-offs (per Kimi r7):
+ *   - Vertical baseline: the +12px height shifts the badge's visual
+ *     center up vs the adjacent text line (`align="top"` preserves
+ *     top-alignment; the gap is at the bottom).
+ *   - Repo size: +600 bytes total across 13 glyphs — negligible.
+ *   - HiDPI: 32px is divisible by 16; slightly cleaner pixel snapping
+ *     than the prior 20px on 2× displays.
+ *   - Glyph paths: UNCHANGED — paths are wrapped in `<g translate(6 6)>`
+ *     at render time so the baked Geist Mono geometry doesn't need
+ *     re-baking. Future glyph regeneration (`generate-badge-glyph-paths`)
+ *     stays at the original 20x20 coordinate space.
+ */
+export const BADGE_PADDING_PX = 6

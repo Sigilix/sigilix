@@ -1,6 +1,7 @@
 import { BADGE_GLYPH_PATHS, type BadgeGlyphPath } from "./badge-glyph-paths"
 import {
   BADGE_DISPLAY_SCALE,
+  BADGE_PADDING_PX,
   CATEGORY_BADGE_HEIGHT,
   PRIORITY_BADGE_HEIGHT,
   PRIORITY_BADGE_WIDTH,
@@ -120,13 +121,18 @@ export const PUBLIC_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/
  */
 export const LEGACY_WORKER_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
 
-// SIG-238 (2026-05-26): bumped from v20260526-4 → v20260527-1 alongside
-// the URL-host switch from workers.dev (Camo-proxied) to
-// raw.githubusercontent.com (same-origin). The SVG bytes are identical
-// to v20260526-4 (rx=0 + crispEdges); the version bump exists only to
-// bust GitHub's image cache so old comments aren't stuck pointing at
-// the prior URL pattern.
-export const BADGE_ASSET_VERSION = "v20260527-1"
+// SIG-238 round-7 (2026-05-27): bumped v20260527-1 → v20260528-1 for
+// Kimi K2.6's transparent-inset spec. SVG bytes change shape: viewBox
+// grows by 2×BADGE_PADDING_PX on each axis, the visible rect is inset
+// at (PADDING, PADDING), and the glyph wraps in a `<g translate>` so
+// CSS rounding on the outer img clips the transparent margin instead
+// of the colored rect. Founder's 2026-05-26 screenshot proved round-4's
+// drop-the-<a>-wrap fix was insufficient: Primer's stylesheet now
+// rounds bare <img> too, so geometry padding is the load-bearing fix.
+// Bot dimensions returned by `badgeAssetSize()` also grow to match;
+// every old comment keeps pointing at v20260527-1 (which still works
+// since the SVGs are immutable per-tag in the glyphs repo).
+export const BADGE_ASSET_VERSION = "v20260528-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,
@@ -219,42 +225,40 @@ export function lookupGlyph(label: string): BadgeGlyphPath {
 }
 
 function renderBadgeSvg(style: (typeof BADGE_STYLES)[BadgeAssetName]): string {
-  // 20x20 filled square with rx=0 — founder direction 2026-05-26 (round
-  // two): the prior rx=0.5 hairline-relief value still read as visibly
-  // rounded when the badge was zoomed (~2px of anti-aliased rounding on
-  // the corner survives the upscale). Kimi K2.6 follow-up spec: rx=0
-  // + `shape-rendering="crispEdges"` SCOPED TO THE RECT solves the
-  // founder's "still rounded" perception AND the 1x aliasing concern
-  // that drove the original 0.5 compromise — `crispEdges` forces
-  // pixel-snapped rendering on the rectangle so the renderer rounds to
-  // whole pixels rather than anti-aliasing a hairline curve. The glyph
-  // path is left with the default `shape-rendering` (i.e. `auto`) so
-  // letter shapes still anti-alias for legibility. Accent fill at 100%,
-  // dark glyph for AA contrast. No stroke (drops the prior outline).
-  // SIG-216: glyph is path-baked at generation time (translation already
-  // applied to the coordinates), so the SVG carries no <text>, no font
-  // attrs, and no transform — just one <path>.
+  // Visible rect stays at PRIORITY_BADGE_WIDTH × PRIORITY_BADGE_HEIGHT
+  // (the coord space the baked Geist Mono glyph paths target) but the
+  // outer SVG viewBox grows by 2×BADGE_PADDING_PX on each axis so the
+  // colored rect lives INSET by `BADGE_PADDING_PX` on every side. The
+  // glyph is wrapped in `<g transform="translate(...)">` so its baked
+  // coordinates land at the same visual position inside the new larger
+  // viewport. Trade-offs + history in `badge-geometry.ts:BADGE_PADDING_PX`.
+  // rx=0 + crispEdges preserved on the rect; glyph keeps default
+  // shape-rendering for legibility (per Kimi K2.6 round-2 spec).
   const glyph = lookupGlyph(style.label)
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${PRIORITY_BADGE_WIDTH} ${PRIORITY_BADGE_HEIGHT}" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
-  <rect x="0" y="0" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" rx="0" fill="${style.accent}" shape-rendering="crispEdges"/>
-  <path d="${glyph.d}" fill="${PRIORITY_TEXT_COLOR}"/>
+  const p = BADGE_PADDING_PX
+  const outerW = PRIORITY_BADGE_WIDTH + p * 2
+  const outerH = PRIORITY_BADGE_HEIGHT + p * 2
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${outerW} ${outerH}" width="${outerW}" height="${outerH}" role="img" aria-label="${style.label}">
+  <rect x="${p}" y="${p}" width="${PRIORITY_BADGE_WIDTH}" height="${PRIORITY_BADGE_HEIGHT}" rx="0" fill="${style.accent}" shape-rendering="crispEdges"/>
+  <g transform="translate(${p} ${p})"><path d="${glyph.d}" fill="${PRIORITY_TEXT_COLOR}"/></g>
 </svg>`
 }
 
 function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBadgeAssetName]): string {
-  // Category pill drops to rx=0 + `shape-rendering="crispEdges"` on
-  // the rect, matching the priority badge (see `renderBadgeSvg`
-  // above for the rationale: founder rejected the prior rx=0.5
-  // hairline-relief as still visibly rounded at zoom; Kimi K2.6
-  // follow-up spec is rx=0 with crisp-edge pixel snapping on the
-  // rect only, glyph keeps default anti-aliasing for legibility).
+  // Same padded-viewBox pattern as `renderBadgeSvg` above — visible
+  // pill stays at `width × CATEGORY_BADGE_HEIGHT` to preserve the baked
+  // glyph coordinates; outer viewBox grows by 2×BADGE_PADDING_PX so
+  // CSS rounding on the outer img clips transparent margin only.
   const width = categoryBadgeWidth(style.label)
   const bg = applyHsl(style.accent, CATEGORY_BG_SATURATION, CATEGORY_BG_LIGHTNESS)
   const fg = applyHsl(style.accent, CATEGORY_TEXT_SATURATION, CATEGORY_TEXT_LIGHTNESS)
   const glyph = lookupGlyph(style.label)
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${CATEGORY_BADGE_HEIGHT}" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" role="img" aria-label="${style.label}">
-  <rect x="0" y="0" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" rx="0" fill="${bg}" shape-rendering="crispEdges"/>
-  <path d="${glyph.d}" fill="${fg}"/>
+  const p = BADGE_PADDING_PX
+  const outerW = width + p * 2
+  const outerH = CATEGORY_BADGE_HEIGHT + p * 2
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${outerW} ${outerH}" width="${outerW}" height="${outerH}" role="img" aria-label="${style.label}">
+  <rect x="${p}" y="${p}" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" rx="0" fill="${bg}" shape-rendering="crispEdges"/>
+  <g transform="translate(${p} ${p})"><path d="${glyph.d}" fill="${fg}"/></g>
 </svg>`
 }
 
@@ -279,24 +283,28 @@ export function badgeAssetUrl(name: ReviewBadgeAssetName): string {
 }
 
 export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; height: number } {
-  // Returns the `<img>` tag DISPLAY size (intentionally larger than
-  // the SVG intrinsic geometry by `BADGE_DISPLAY_SCALE` so downstream
-  // bitmap zoom / screenshot consumers have more source pixels to
-  // interpolate from — see `BADGE_DISPLAY_SCALE` docstring for the
-  // diagnostic story). The SVG content is unchanged; the browser
-  // scales the viewBox to whatever size the IMG tag requests.
+  // Returns the `<img>` tag DISPLAY size. Must match the SVG INTRINSIC
+  // viewBox (visible rect + 2×BADGE_PADDING_PX padding on each axis),
+  // otherwise the browser scales the padding non-uniformly and either
+  // shrinks the visible rect (img smaller than intrinsic) or stretches
+  // the transparent margin out where CSS rounding can't reach the
+  // colored edge anymore (img larger than intrinsic). 1:1 keeps the
+  // padding doing its load-bearing CSS-clip-absorption job.
+  // BADGE_DISPLAY_SCALE = 1.0 held; the constant remains as a future
+  // hook (see badge-geometry.ts) but applies to the OUTER dims now.
+  const p2 = BADGE_PADDING_PX * 2
   if (name in BADGE_STYLES) {
     return {
-      width: Math.round(PRIORITY_BADGE_WIDTH * BADGE_DISPLAY_SCALE),
-      height: Math.round(PRIORITY_BADGE_HEIGHT * BADGE_DISPLAY_SCALE),
+      width: Math.round((PRIORITY_BADGE_WIDTH + p2) * BADGE_DISPLAY_SCALE),
+      height: Math.round((PRIORITY_BADGE_HEIGHT + p2) * BADGE_DISPLAY_SCALE),
     }
   }
   return {
     width: Math.round(
-      categoryBadgeWidth(CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label)
+      (categoryBadgeWidth(CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label) + p2)
         * BADGE_DISPLAY_SCALE,
     ),
-    height: Math.round(CATEGORY_BADGE_HEIGHT * BADGE_DISPLAY_SCALE),
+    height: Math.round((CATEGORY_BADGE_HEIGHT + p2) * BADGE_DISPLAY_SCALE),
   }
 }
 

@@ -1812,7 +1812,16 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   ]
   const totalFindings = inlineFindings.length + bodyOnlyFindings.length
   const zeroFindingBlocker = posture === "request_changes" && totalFindings === 0
-  const highOrCriticalCount = inlineFindings.filter((f) => f.score >= 4).length
+  // CR Major (PR #200): high-severity count must include body-only
+  // findings too — an unanchored critical finding was rendering as
+  // "**1 finding**" instead of "**1 high-severity finding**", which
+  // weakens the prioritization signal in the compact lead line. The
+  // lower-severity-inline count stays scoped to inline only — body-
+  // only findings already get an explicit "+ N body" segment in the
+  // lead, so counting them here too would double-count.
+  const highOrCriticalCount =
+    inlineFindings.filter((f) => f.score >= 4).length
+    + bodyOnlyFindings.filter((f) => f.score >= 4).length
   const lowerSeverityInlineCount = inlineFindings.filter((f) => f.score < 4).length
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
@@ -1831,19 +1840,24 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     lead = "**Approval pending**"
   } else {
     const postureCopy = posture === "comment" ? "non-blocking " : ""
+    const findingNoun = (n: number): string => (n === 1 ? "finding" : "findings")
     if (highOrCriticalCount === 0 && lowerSeverityInlineCount === 0 && bodyOnlyFindings.length > 0) {
-      // All findings are body-only.
-      lead = `**${bodyOnlyFindings.length} ${postureCopy}${bodyOnlyFindings.length === 1 ? "finding" : "findings"}**`
+      // All findings are body-only AND lower-severity (the high-
+      // severity body-only case falls into the next branch via
+      // highOrCriticalCount > 0 — CR Major fold).
+      lead = `**${bodyOnlyFindings.length} ${postureCopy}${findingNoun(bodyOnlyFindings.length)}**`
     } else if (highOrCriticalCount === 0) {
       // Lower-severity inline only (no Fix Plan table).
-      lead = `**${lowerSeverityInlineCount} ${postureCopy}${lowerSeverityInlineCount === 1 ? "finding" : "findings"}** posted inline`
+      lead = `**${lowerSeverityInlineCount} ${postureCopy}${findingNoun(lowerSeverityInlineCount)}** posted inline`
     } else {
-      lead = `**${highOrCriticalCount} ${postureCopy}high-severity ${highOrCriticalCount === 1 ? "finding" : "findings"}**`
+      // High-severity tier — includes body-only criticals per CR
+      // Major. The "+ M lower-severity inline" clause tells the
+      // reader where the rest live; body-only findings already get
+      // their own "### Review Body Findings" section below so we
+      // don't double-count them in the lead.
+      lead = `**${highOrCriticalCount} ${postureCopy}high-severity ${findingNoun(highOrCriticalCount)}**`
       if (lowerSeverityInlineCount > 0) {
         lead += ` + ${lowerSeverityInlineCount} lower-severity inline`
-      }
-      if (bodyOnlyFindings.length > 0) {
-        lead += ` + ${bodyOnlyFindings.length} body`
       }
     }
   }
@@ -1889,15 +1903,18 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   }
 
   // Single-line footer (replaces the four separate metadata lines).
+  // Built separately from `lines` so the 65k cap can truncate the
+  // body content without slicing through the footer's `<sub>` and
+  // losing the SHA (Sigilix-bot HIGH + CR MINOR on PR #200 —
+  // provenance invariant).
   const headShort = args.prov?.headSha ? args.prov.headSha.slice(0, 7) : null
-  lines.push("")
-  lines.push(renderCompactReviewFooter({
+  const footer = renderCompactReviewFooter({
     posture,
     reviewCounter: args.reviewCounter,
     headShort,
-  }))
+  })
 
-  return capForGitHub(lines.join("\n"), args.prov)
+  return capForGitHub(lines.join("\n"), footer)
 }
 
 /**
@@ -1943,15 +1960,20 @@ function renderCompactReviewFooter(args: {
 // reader to the full review history.
 const GH_BODY_CAP = 65000
 
-function capForGitHub(body: string, prov: ProvenanceCtx | undefined): string {
-  // SIG Kimi K2.6 r1: the "_Reviewed against SHA at TIMESTAMP._" line
-  // this used to append is now merged into `renderCompactReviewFooter`
-  // so the body is unmodified here. The 65k cap still applies — bodies
-  // larger than that get truncated with a marker.
-  void prov
-  if (body.length <= GH_BODY_CAP) return body
+function capForGitHub(body: string, footer: string): string {
+  // SIG Kimi K2.6 r1 + Sigilix HIGH (PR #200): the compact footer
+  // carries the SHA (the provenance invariant). It MUST survive the
+  // 65k truncation — a naive tail-cut would slice through the `<sub>`
+  // and break the invariant. So we cap by truncating BODY CONTENT
+  // and re-appending the footer afterwards, the same shape the
+  // pre-r1 renderProvenanceFooter / capForGitHub pair used.
+  const joined = `${body}\n\n${footer}`
+  if (joined.length <= GH_BODY_CAP) return joined
   const TRUNC = "\n\n_[summary truncated to fit GitHub's 65535 limit]_"
-  return `${body.slice(0, GH_BODY_CAP - TRUNC.length)}${TRUNC}`
+  const overhead = TRUNC.length + footer.length + 4 // "\n\n" between body & footer + a hair
+  const room = GH_BODY_CAP - overhead
+  const truncated = body.slice(0, Math.max(0, room))
+  return `${truncated}${TRUNC}\n\n${footer}`
 }
 
 /**

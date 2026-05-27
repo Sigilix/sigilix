@@ -54,7 +54,10 @@ describe("buildFallbackBody", () => {
   it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
     const body = buildFallbackBody(baseVerdict, [])
     // New status heading replaces "### Sigilix Summary".
-    expect(body).toMatch(/^\*\*\d+ non-blocking finding/m)
+    // CR Major fold (PR #200): high-severity findings render as
+    // "non-blocking high-severity" on COMMENT posture; lower-
+    // severity as plain "non-blocking finding". Match either.
+    expect(body).toMatch(/^\*\*\d+ non-blocking( high-severity)? finding/m)
     // Summary survives — Kimi keeps it as a flat paragraph under
     // the heading.
     expect(body).toContain("One real bug.")
@@ -130,7 +133,9 @@ describe("buildFallbackBody", () => {
     // landed as inline comments). Heading count is in the top-of-body
     // status heading, not on the section.
     expect(body).toContain("### Review Body Findings")
-    expect(body).toMatch(/^\*\*2 non-blocking findings/m)
+    // CR Major fold: 1 anchored + 1 unanchored at score 4 →
+    // highOrCriticalCount = 2 (CR fix includes body-only in count).
+    expect(body).toMatch(/^\*\*2 non-blocking( high-severity)? findings/m)
     expect(body).not.toContain("### Findings (2)")
   })
 

@@ -350,10 +350,14 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).toContain("`src/bar.ts:99`")
     expect(body).not.toContain("**src/bar.ts**")
     expect(body).toContain("could not anchor")
-    // SIG Kimi r1: lead line says "**1 high-severity finding** + 1 body"
-    // — the anchored critical goes in the Fix Plan table, the
-    // unanchored P2 lives in the body-only section.
-    expect(body).toMatch(/^\*\*1 high-severity finding\*\* \+ 1 body/m)
+    // SIG Kimi r1 + CR Major fold: lead line says "**1 high-severity
+    // finding**" — the anchored critical goes in the Fix Plan table,
+    // the unanchored P2 (score < 4) lives in the body-only section
+    // below. No "+ 1 body" suffix because the body-only section is
+    // its own surface; only LOWER-severity inline findings get a
+    // dedicated lead clause ("+ M lower-severity inline").
+    expect(body).toMatch(/^\*\*1 high-severity finding\*\*/m)
+    expect(body).not.toMatch(/\+ \d+ body/)
   })
 
   it("SIG-5 — body-only high findings are prominent but omitted from Fix Plan", () => {
@@ -379,6 +383,30 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).toContain("body-only blocker")
   })
 
+  it("CR Major (PR #200) — lead-line counts body-only high-severity findings", () => {
+    // Pre-fix: the lead line only counted inlineFindings, so an
+    // unanchored CRITICAL finding rendered as "**1 finding**"
+    // instead of "**1 high-severity finding**", weakening the
+    // prioritization signal in the compact summary. Fix: include
+    // bodyOnlyFindings with score>=4 in highOrCriticalCount.
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [] }),
+      unanchored: [
+        finding({ path: "src/bar.ts", line: 99, headline: "unanchored critical", score: 5 }),
+      ],
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    // High-severity tier copy must fire even though there are zero
+    // inline findings — the unanchored critical IS the signal.
+    expect(body).toMatch(/^\*\*1 high-severity finding\*\*/m)
+    // The body-only section is where the actual finding lives —
+    // no separate "+ 1 body" clause in the lead (would double-count
+    // the same finding the high-severity tier already represents).
+    expect(body).toContain("### Review Body Findings")
+    expect(body).toContain("unanchored critical")
+  })
+
   it("SIG-202/SIG-5 — direct renderer routes non-line findings out of Fix Plan", () => {
     const body = renderRequestChangesBody({
       verdict: verdict({
@@ -395,9 +423,11 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    // SIG Kimi r1: PR-scope finding (no line anchor) → body-only.
-    // Lead reads "**1 finding**" since no Fix Plan applies.
-    expect(body).toMatch(/^\*\*1 finding\*\*/m)
+    // SIG Kimi r1 + CR Major fold (PR #200): PR-scope critical
+    // (score 5) routes to body-only. CR's fix made `highOrCriticalCount`
+    // include body-only findings too, so the lead now reads
+    // "**1 high-severity finding**" — the critical IS the signal.
+    expect(body).toMatch(/^\*\*1 high-severity finding\*\*/m)
     expect(body).not.toContain("### Fix Plan")
     expect(body).toContain("### Review Body Findings")
     // SIG-216: pr-scope renders the bare path (no `:line`) + tightened

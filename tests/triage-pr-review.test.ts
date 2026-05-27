@@ -1651,7 +1651,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     })
     expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("non-blocking finding")
+    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
     expect(out.body).toContain("lacks integration tests")
   })
 
@@ -1844,7 +1844,7 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 
     expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("non-blocking finding")
+    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
     // SIG-216: meta line tightened to `<anchor> · score N` — the
@@ -1878,7 +1878,7 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 
     expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("non-blocking finding")
+    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
     expect(out.body).toContain("### Review Body Findings")
     // SIG-216: file-scope anchor is the bare path (no `:line`) and
     // the meta line is just `<anchor> · score N` — no "File-level
@@ -2752,13 +2752,13 @@ describe("provenance footer (ARC-184)", () => {
     expect(body.length).toBeLessThanOrEqual(65000)
     // Truncation marker is present
     expect(body).toContain("[summary truncated to fit GitHub's 65535 limit]")
-    // SIG Kimi r1: SHA-in-footer survives truncation — it's at the
-    // END of the body so the truncator preserves it. The dedicated
-    // `_Reviewed against `SHA` at TS._` line was retired with the
-    // compact-footer redesign.
-    // (When a body is truncated mid-content the `<sub>` footer may
-    // be cut, so this assertion is content-presence, not a tail
-    // match. The truncation marker is the load-bearing invariant.)
+    // Sigilix-bot HIGH + CR MINOR (PR #200): SHA-in-compact-footer
+    // survives truncation. `capForGitHub` truncates BODY content and
+    // re-appends the footer so the `<sub>...`SHA`</sub>` is never
+    // sliced. This is the post-r1 equivalent of the
+    // "_Reviewed against `SHA` at TS._" invariant from ARC-184.
+    expect(body).toContain("`abc1234`")
+    expect(body.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
   })
 })
 

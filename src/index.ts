@@ -468,7 +468,20 @@ export interface Env {
  */
 export type JobMessage =
   | { type: "linear-triage"; issueId: string }
-  | { type: "linear-mention"; commentId: string }
+  | {
+      type: "linear-mention"
+      commentId: string
+      /** SIG-225 follow-up: the consumer (`handleMention`) has its own
+       *  `bodyMentionsBot` gate as defense-in-depth that fails closed
+       *  on any comment without an `@-mention` — including the new
+       *  thread-followup trigger added by SIG-225 round 1. Producers
+       *  tag jobs with the reason the webhook decided to enqueue so
+       *  the consumer can route correctly. Absent (undefined) on any
+       *  pre-SIG-225 in-flight jobs that get redelivered — the consumer
+       *  treats absent as `"mention"` to preserve the legacy behavior
+       *  on those messages. */
+      triggerReason?: "mention" | "thread-followup"
+    }
   | {
       type: "pr-overview"
       owner: string
@@ -1189,7 +1202,12 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
     case "linear-triage":
       return triageIssue(job.issueId, env)
     case "linear-mention":
-      return handleMention(job.commentId, env)
+      return handleMention(job.commentId, env, {
+        // Defaults to "mention" when triggerReason is absent — covers
+        // any pre-SIG-225 in-flight job that gets redelivered after a
+        // deploy and never carried the field.
+        triggerReason: job.triggerReason ?? "mention",
+      })
     case "pr-overview":
       return handlePrOverview({
         owner: job.owner,
@@ -1919,7 +1937,11 @@ async function handleLinearWebhook(
       reason: triggerReason,
       commentId: payload.data.id,
     })
-    await env.OPENCLAW_JOBS.send({ type: "linear-mention", commentId: payload.data.id })
+    await env.OPENCLAW_JOBS.send({
+      type: "linear-mention",
+      commentId: payload.data.id,
+      triggerReason,
+    })
     return new Response("queued\n", { status: 202 })
   }
 

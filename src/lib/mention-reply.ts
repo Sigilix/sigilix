@@ -154,10 +154,30 @@ interface MentionVerdict {
   abstain: boolean
 }
 
-export async function handleMention(commentId: string, env: Env): Promise<void> {
+export interface HandleMentionOpts {
+  /** SIG-225 — the reason the producer enqueued this job. The consumer
+   *  uses it to decide whether to enforce the body-must-@-mention-us
+   *  gate (`"mention"` path, today's default) or skip it (`"thread-
+   *  followup"` path — the founder replied inside a thread Sigilix has
+   *  already posted in, so no `@` is required). Defaults to `"mention"`
+   *  if absent so existing callers and any redelivered pre-SIG-225
+   *  jobs keep the legacy behavior. */
+  triggerReason?: "mention" | "thread-followup"
+}
+
+export async function handleMention(
+  commentId: string,
+  env: Env,
+  opts: HandleMentionOpts = {},
+): Promise<void> {
   const t0 = Date.now()
+  const triggerReason = opts.triggerReason ?? "mention"
   const log = (label: string, extra?: Record<string, unknown>): void => {
-    console.log(`[mention] ${label} +${Date.now() - t0}ms`, { commentId, ...extra })
+    console.log(`[mention] ${label} +${Date.now() - t0}ms`, {
+      commentId,
+      triggerReason,
+      ...extra,
+    })
   }
 
   log("start")
@@ -186,16 +206,34 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     return
   }
 
-  // Skip if the comment doesn't actually mention us. handleMention is
-  // also called from the manual-trigger route which doesn't pre-check,
-  // so this is the authoritative gate.
+  // SIG-225 follow-up — gate logic depends on triggerReason:
+  //
+  //   "mention" (legacy + default): the body MUST contain an @-mention.
+  //     This is the authoritative defense-in-depth gate that protected
+  //     the consumer from spurious queue messages when the producer's
+  //     pre-check was the only filter.
+  //
+  //   "thread-followup" (SIG-225): the producer (webhook handler) has
+  //     ALREADY verified the comment is a reply inside a thread Sigilix
+  //     authored, via the parent-chain walk. The body intentionally has
+  //     no @-mention — that's the whole point of the SIG-225 trigger.
+  //     Enforcing the gate here would unconditionally drop every
+  //     thread-followup job, which is exactly the bug the founder hit
+  //     on the first prod test of SIG-225.
+  //
+  // The strip step is skipped on thread-followup too — there's no
+  // mention to strip, so the full body becomes the question.
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
-  if (!bodyMentionsBot(data.body, triggers)) {
-    log("no-mention")
-    return
+  let fullQuestion: string
+  if (triggerReason === "thread-followup") {
+    fullQuestion = data.body.trim()
+  } else {
+    if (!bodyMentionsBot(data.body, triggers)) {
+      log("no-mention")
+      return
+    }
+    fullQuestion = stripMentionFromBody(data.body, triggers)
   }
-
-  const fullQuestion = stripMentionFromBody(data.body, triggers)
   const question = fullQuestion.slice(0, LIMITS.questionChars)
   if (!question) {
     log("empty-question-after-strip")

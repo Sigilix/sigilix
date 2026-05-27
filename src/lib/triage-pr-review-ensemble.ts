@@ -2903,14 +2903,31 @@ export async function handlePrReviewEnsemble(
       const settledResults = new Map<SpecialistRole, PromiseSettledResult<SpecialistRunResult>>()
       // Each pending promise carries its role so Promise.race can
       // identify which one resolved without an index lookup.
-      const pending = new Map<SpecialistRole, Promise<{ role: SpecialistRole; result: PromiseSettledResult<SpecialistRunResult> }>>(
-        rolePromises.map((rp) => [rp.role, rp.promise.then((result) => ({ role: rp.role, result }))]),
-      )
+      //
+      // CodeRabbit catch (Major): the tracked-promise SELF-REMOVES
+      // from `pending` in its `.then(...)` (microtask 1) so by the
+      // time `Promise.race(...)` resumes the loop (microtask 2),
+      // `pending` accurately reflects "still in-flight" — never
+      // "in-flight OR just-settled-this-tick-but-not-yet-consumed."
+      // Without this, a microtask burst where multiple specialists
+      // resolve simultaneously can race-pick role A, leave already-
+      // resolved roles B/C in `pending`, hit the early-exit threshold,
+      // abort B/C via their AbortControllers, and synthesize null
+      // verdicts for them — silently dropping real verdicts.
+      const pending = new Map<SpecialistRole, Promise<{ role: SpecialistRole; result: PromiseSettledResult<SpecialistRunResult> }>>()
+      for (const rp of rolePromises) {
+        const tracked = rp.promise.then((result) => {
+          pending.delete(rp.role)
+          return { role: rp.role, result }
+        })
+        pending.set(rp.role, tracked)
+      }
       const N = router.specialists.length
       const quorumThreshold = N - 1
       while (pending.size > 0) {
         const settled = await Promise.race(pending.values())
-        pending.delete(settled.role)
+        // `pending.delete(settled.role)` already happened in the
+        // `.then` above — `settledResults.set` records the result.
         settledResults.set(settled.role, settled.result)
 
         const succeededCount = Array.from(settledResults.values()).filter(

@@ -187,6 +187,10 @@ import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
 import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
+  maybeEmitLogicPromptBudget,
+  parseLogicPromptBudgetMode,
+} from "./logic-prompt-budget"
+import {
   isPrOverviewEnabled,
   loadSigilixConfig,
   passesLabelGate,
@@ -2819,6 +2823,14 @@ export async function handlePrReviewEnsemble(
     const perSpecialistEnd = new Map<string, number>()
     for (const role of router.specialists) perSpecialistStart.set(role, Date.now())
 
+    // SIG-236 — parse the logic-prompt-budget mode once per ensemble
+    // so the per-role map below doesn't re-read env. `off` (the
+    // default) skips the measurement+emit entirely. `shadow` /
+    // `enforce` emit `logic-prompt-budget` telemetry once per
+    // ensemble run with the logic role's full prompt size + per-
+    // section breakdown.
+    const logicPromptBudgetMode = parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET)
+
     // SIG-235 — min-specialists early exit. Build per-role
     // AbortControllers (mirroring the shadow path above) so the
     // quorum collector can cancel a single laggard's outstanding
@@ -2842,6 +2854,31 @@ export async function handlePrReviewEnsemble(
       const ctrl = new AbortController()
       prodSpecialistAbortControllers.set(role, ctrl)
       const composedSignal = composeSignals(orchCtrl.signal, ctrl.signal)
+      // SIG-236: build the initialMessage ONCE per role so the
+      // logic-prompt-budget measurement sees exactly what runSpecialist
+      // sees, and we don't waste a second messageForRole + appendRoleRule
+      // pass.
+      const initialMessage = appendRoleRule(messageForRole(role), role, sigilixConfig)
+      if (role === "logic") {
+        // Belt-and-suspenders try/catch (CR catch on PR #191): the helper
+        // already wraps its own body in try/catch (see
+        // `maybeEmitLogicPromptBudget` in `logic-prompt-budget.ts`), but
+        // instrumentation MUST NOT be able to break the fan-out path
+        // even if a future refactor removes the inner guard.
+        try {
+          maybeEmitLogicPromptBudget({
+            mode: logicPromptBudgetMode,
+            prompt: initialMessage,
+            owner, repo, prNumber, headSha,
+          })
+        } catch (err) {
+          console.warn(JSON.stringify({
+            event: "logic-prompt-budget-call-site-error",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            message: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
       const promise = withComposedTimeout(
         // Use the composed signal `withComposedTimeout` provides — it
         // aborts on EITHER the per-specialist 270s timer OR the outer
@@ -2855,7 +2892,7 @@ export async function handlePrReviewEnsemble(
           systemPrompt: SPECIALIST_PROMPTS[role],
           // SIG-113: tests specialist gets the testing-evidence
           // block; other specialists get the classification block.
-          initialMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
+          initialMessage,
           chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
           signal,
           // ARC-283 Phase B1b: thread the orchestrator's perfCtx

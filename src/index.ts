@@ -2812,8 +2812,13 @@ async function handleGitHubWebhook(
       // payload and thread it to the producer. The producer attaches
       // it to the queue message; the consumer persists it on the
       // manifest. Falls back to `undefined` (treated as legacy) if a
-      // webhook arrives without the field.
-      repoId: typeof payload.repository?.id === "number" ? payload.repository.id : undefined,
+      // webhook arrives without the field. Number.isFinite filters
+      // NaN/Infinity at the entry point, matching the downstream
+      // validation in the producer + manifest write helpers.
+      repoId:
+        typeof payload.repository?.id === "number" && Number.isFinite(payload.repository.id)
+          ? payload.repository.id
+          : undefined,
       installationId,
       ref: typeof payload.ref === "string" ? payload.ref : undefined,
       after: typeof payload.after === "string" ? payload.after : undefined,

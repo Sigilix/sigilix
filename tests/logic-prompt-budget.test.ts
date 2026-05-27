@@ -141,6 +141,29 @@ describe("measureLogicPrompt — section detection + span counting", () => {
     expect(m.sections.graphContext.tokens).toBeGreaterThan(m.sections.symbolRetrieval.tokens)
   })
 
+  it("does NOT false-positive on marker-like literals mid-line (CR Major anchor fix — 2026-05-26)", () => {
+    // CodeRabbit's catch: before this fix, four markers (graphContext,
+    // symbolRetrieval, dynamicEvidence, deterministicChecks) matched
+    // anywhere in the body via `\b` alone. A diff editing this very
+    // file — or a user docstring — could contain a marker-like literal
+    // mid-line and skew section telemetry. All six are now anchored
+    // to start-of-line via `^...` + `/m`.
+    const promptWithMidLineLiterals = [
+      "[DIFF]",
+      "+ const fakeRef = \"[GRAPH CONTEXT — embedded in a string literal]\"",
+      "+ // prose mentioning [DETERMINISTIC CHECKS — in a comment] mid-line",
+      "+ console.log(\"[LOGIC SYMBOL CONTEXT — string literal\")",
+      "+ // edited review-evidence-pack.ts to handle [DYNAMIC REVIEW EVIDENCE",
+    ].join("\n")
+    const m = measureLogicPrompt(promptWithMidLineLiterals)
+    // Only [DIFF] should detect (the only marker on its own line).
+    expect(m.sections.diff.present).toBe(true)
+    expect(m.sections.graphContext.present).toBe(false)
+    expect(m.sections.symbolRetrieval.present).toBe(false)
+    expect(m.sections.deterministicChecks.present).toBe(false)
+    expect(m.sections.dynamicEvidence.present).toBe(false)
+  })
+
   it("detects ALL SIX section markers in a representative logic prompt (regression guard for marker drift — C1)", () => {
     // Code-reviewer's C1: the previous marker set missed 3 of 6 actual
     // headers. This integration-shaped test exercises all six markers

@@ -100,15 +100,20 @@ export function estimateTokens(text: string): number {
 // literal in the user's diff.
 const PROMPT_SECTION_MARKERS = {
   diff: /^\[DIFF\]$/m,
-  graphContext: /\[GRAPH CONTEXT\b/,
+  graphContext: /^\[GRAPH CONTEXT\b/m,
   // SIG-121's symbol retrieval is merged into the [RETRIEVAL
   // SNAPSHOT] block via mergeLogicSnapshot — the header it actually
   // emits is `[LOGIC SYMBOL CONTEXT`, NOT the originally-assumed
   // `[SYMBOL RETRIEVAL]`. Reviewer caught the marker drift.
-  symbolRetrieval: /\[LOGIC SYMBOL CONTEXT\b/,
+  symbolRetrieval: /^\[LOGIC SYMBOL CONTEXT\b/m,
   vectorizeRetrieval: /^\[RETRIEVAL SNAPSHOT\]$/m,
-  dynamicEvidence: /\[DYNAMIC REVIEW EVIDENCE\b/,
-  deterministicChecks: /\[DETERMINISTIC CHECKS\b/,
+  dynamicEvidence: /^\[DYNAMIC REVIEW EVIDENCE\b/m,
+  deterministicChecks: /^\[DETERMINISTIC CHECKS\b/m,
+  // CodeRabbit Major (2026-05-26): all six markers now anchored to
+  // start-of-line via `^...` + `/m` flag. Without anchoring, a diff
+  // body that happens to mention a marker-like literal (e.g. a code
+  // comment editing this very file, a user-authored docstring) would
+  // false-positive into the section count and skew shadow telemetry.
 } as const
 
 export type PromptSectionLabel = keyof typeof PROMPT_SECTION_MARKERS

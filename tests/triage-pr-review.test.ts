@@ -2870,19 +2870,19 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
     expect(out).toContain('width="20"')
     expect(out).toContain('height="20"')
   })
-  it("uses the GitHub raw badge host so GitHub's `js-gh-image-fallback` JS doesn't inject border-radius (SIG-238)", () => {
-    // SIG-238 round-5 fix: badge host moved from
-    // `sigilix.dan-martinezjulio.workers.dev` (Camo-proxied → JS
-    // injects `border-radius: 6px`) to `raw.githubusercontent.com`
-    // (same-origin → no Camo, no JS injection).
-    //
-    // CR catch (PR #192): assert via `BADGE_ASSET_VERSION` rather
-    // than the literal version string so a future bump doesn't break
-    // this test as a side-effect.
+  it("uses the public Sigilix/sigilix-glyphs raw host so GitHub's js-gh-image-fallback doesn't inject border-radius (SIG-238 round-6)", () => {
+    // SIG-238 round-6 = the actual fix. Tonight we created
+    // `Sigilix/sigilix-glyphs` (PUBLIC) and pushed the 13 glyph SVGs
+    // there under the version tag. The URL pattern
+    // `raw.githubusercontent.com/Sigilix/sigilix-glyphs/<version>/<name>.svg`
+    // bypasses Camo (same-origin to github.com) AND loads anonymously
+    // (public repo). Verified via `gh api /markdown` on the live URL
+    // — no Camo proxy, no `border-radius`, no `background-color`.
     const out = severityBadgeForScore(3)
     expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
-    expect(out).toContain("raw.githubusercontent.com/Sigilix/sigilix")
+    expect(out).toContain("raw.githubusercontent.com/Sigilix/sigilix-glyphs")
     expect(out).not.toContain("sigilix.dan-martinezjulio.workers.dev")
+    expect(out).not.toContain("Sigilix/sigilix/main")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {
     expect(severityBadgeForScore(6)).toContain('alt="P0"')

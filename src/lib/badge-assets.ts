@@ -69,43 +69,46 @@ export type BadgeAssetName = keyof typeof BADGE_STYLES
 export type CategoryBadgeAssetName = keyof typeof CATEGORY_BADGE_STYLES
 export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
-// SIG-238 (2026-05-26): host moved from `sigilix.dan-martinezjulio.workers.dev`
-// → `raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges`.
+// SIG-238 (2026-05-26 round-6 — THE ACTUAL FIX):
+// host = `raw.githubusercontent.com/Sigilix/sigilix-glyphs`, a
+// SEPARATE PUBLIC GitHub repo created tonight specifically to host
+// the glyph SVGs. Tag-based versioning: each `BADGE_ASSET_VERSION`
+// bump corresponds to a git tag in `Sigilix/sigilix-glyphs`, and the
+// URL pulls the SVG from that immutable ref.
 //
-// Root cause (empirical, verified via founder's DevTools inspection on
-// PR #191 + Kimi K2.6 round-5 diagnosis): GitHub's `js-gh-image-fallback`
-// client-side JS targets images that are PROXIED THROUGH CAMO — every
-// external `<img src>` in markdown comments gets a `border-radius: 6px`
-// + `background-color: var(--bgColor-muted)` inline style injected by
-// that script. The SVG itself was always rendering with sharp corners
-// (`rx=0` + `crispEdges`, curl-verified); the rounding came from the
-// container element.
+// Why this works when prior 5 iterations didn't:
 //
-// Tried + failed (round 1-4):
-//   1. `rx=0` baked into the rect
-//   2. `rx=0` + `shape-rendering="crispEdges"`
-//   3. `BADGE_DISPLAY_SCALE = 1.6` to render at 32x32
-//   4. Drop the `<a href>` anchor wrap (Kimi K2.6 round-4 hypothesis
-//      that Primer styled `.markdown-body a > img` — turned out wrong;
-//      GitHub strips `style` attrs from user-provided HTML so we
-//      couldn't override `border-radius:0` either)
+//   1. **No Camo proxy.** GitHub's image renderer treats
+//      `*.githubusercontent.com` hosts as same-origin and skips the
+//      Camo proxy. Empirically verified via `gh api /markdown` —
+//      raw.githubusercontent.com URLs render as bare `<img>` with
+//      only responsive sizing, no `border-radius`, no
+//      `background-color`. Camo-proxied URLs (workers.dev, sigilix.ai,
+//      sigilix.github.io — all tested 2026-05-26) get
+//      `data-canonical-src` wrapped + the `js-gh-image-fallback` JS
+//      injects rounding at render time.
+//   2. **No 404.** PR #192's first attempt pointed at
+//      `Sigilix/sigilix/main` — the same repo, which is PRIVATE, so
+//      raw.githubusercontent.com 404s for anonymous fetches.
+//      `Sigilix/sigilix-glyphs` is intentionally **public** for
+//      exactly this reason — the only thing in the repo is glyph
+//      SVGs, no proprietary code.
 //
-// What worked: raw.githubusercontent.com URLs are same-origin to
-// github.com, do NOT go through the Camo proxy, and the
-// `js-gh-image-fallback` script's selector doesn't fire on them.
-// Verified via `gh api /markdown` test: the rendered HTML for a
-// raw.githubusercontent.com URL contains only
-// `style="max-width: 100%; height: auto; max-height: 20px;"` — no
-// `border-radius`, no `background-color` — while a Camo-proxied
-// workers.dev URL renders into a `data-canonical-src`-wrapped element
-// that picks up the full Primer image-fallback styling.
+// Prior failed attempts (all addressed by this approach):
+//   1. SVG `rx=0` baked into the rect → js-gh-image-fallback overrode
+//   2. `rx=0` + `shape-rendering="crispEdges"` → same
+//   3. `BADGE_DISPLAY_SCALE = 1.6` → bloated, still rounded
+//   4. Drop the `<a href>` anchor wrap → still rounded (the
+//      js-gh-image-fallback class lives on the `<img>` directly)
+//   5. raw.githubusercontent.com on the PRIVATE Sigilix/sigilix repo
+//      → 404s, badges didn't load at all
 //
-// Build-time dependency: every badge in `BADGE_SVGS` must be
-// pre-rendered to a file at `assets/badges/<BADGE_ASSET_VERSION>/<name>.svg`
-// and committed to the repo. Run `pnpm tsx scripts/generate-static-badges.ts`
-// after any visual change (color / glyph / dimensions) AND every time
-// `BADGE_ASSET_VERSION` is bumped.
-export const PUBLIC_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges"
+// Build-time dependency: every `BADGE_ASSET_VERSION` bump requires
+// mirroring the corresponding `assets/badges/<version>/*.svg` files
+// to the public glyphs repo AND tagging that commit with the same
+// version string. See `Sigilix/sigilix-glyphs` README for the
+// upstream workflow.
+export const PUBLIC_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/sigilix-glyphs"
 
 /**
  * SIG-238: kept as a back-compat anchor so the Worker keeps serving

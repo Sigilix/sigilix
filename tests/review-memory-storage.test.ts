@@ -82,6 +82,25 @@ describe("buildKey", () => {
       }),
     ).toBe(`review-memory:acme/site:path:${SAMPLE_SHA256}:cat:tests`)
   })
+
+  it("accepts the SIG-247 Phase 0 'architecture' category in both scopes", () => {
+    // The literal-union extension to ReviewMemoryCategory was the
+    // smallest possible v0 change; verify it threads through buildKey
+    // without runtime drift. Today's specialist over-fires include
+    // architectural-misunderstanding patterns (PR #202 "tenant
+    // isolation", PR #203 "ownership validation") — the dismissals
+    // need a category to land under, and "architecture" is it.
+    expect(
+      buildKey("acme", "site", { kind: "category", category: "architecture" }),
+    ).toBe("review-memory:acme/site:cat:architecture")
+    expect(
+      buildKey("acme", "site", {
+        kind: "path-category",
+        category: "architecture",
+        pathSha256: SAMPLE_SHA256,
+      }),
+    ).toBe(`review-memory:acme/site:path:${SAMPLE_SHA256}:cat:architecture`)
+  })
 })
 
 // ─── readMemory ──────────────────────────────────────────────
@@ -198,6 +217,48 @@ describe("appendSignal", () => {
     expect(stored.schemaVersion).toBe(1)
     expect(stored.category).toBe("logic")
     expect(stored.lastUpdatedTs).toBeDefined()
+  })
+
+  it("round-trips a signal with SIG-247 Phase 0 claims field (forward-compat)", async () => {
+    // SIG-247 Phase 0 added `claims?: ReviewMemoryClaim[]` to the
+    // ReviewMemorySignal schema. Phase 2 will ship the extractor that
+    // produces these claims; for now the storage layer must accept and
+    // round-trip them so Phase 2 writers don't have to coordinate a
+    // schema migration. Test verifies: write a signal with claims,
+    // read it back, claims are present + identical.
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const signal: ReviewMemorySignal = {
+      ts: new Date().toISOString(),
+      prNumber: 203,
+      commentId: 3314239053,
+      fid: "f00fa1234567890b",
+      kind: "dismissed-textual",
+      claims: [
+        {
+          id: "cl_abc123",
+          type: "auth-gate-is-boundary",
+          confidence: 0.9,
+          extractorVersion: 1,
+        },
+      ],
+    }
+    await appendSignal(env, owner, repo, scope, signal)
+    const stored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
+    expect(stored.signals).toHaveLength(1)
+    expect(stored.signals[0].claims).toEqual(signal.claims)
+  })
+
+  it("round-trips a signal WITHOUT claims (legacy + Phase 0 capture path)", async () => {
+    // Until Phase 2 ships the extractor, all signals written by the
+    // existing capture path will have NO `claims` field. The storage
+    // layer must not reject or default-populate them — `claims`
+    // remains undefined on read.
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    await appendSignal(env, owner, repo, scope, makeSignal())
+    const stored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
+    expect(stored.signals[0].claims).toBeUndefined()
   })
 
   it("path-scope record carries pathSha256 in the value (full digest, not truncated)", async () => {

@@ -24,12 +24,14 @@ export type ReviewMemoryCategory =
   | "logic"
   | "performance"
   | "tests"
+  | "architecture"
 
 export const ALL_REVIEW_MEMORY_CATEGORIES: readonly ReviewMemoryCategory[] = [
   "security",
   "logic",
   "performance",
   "tests",
+  "architecture",
 ]
 
 export type ReviewMemorySeverityLabel = "info" | "warning" | "error"
@@ -39,6 +41,41 @@ export const ALL_REVIEW_MEMORY_SEVERITIES: readonly ReviewMemorySeverityLabel[] 
   "warning",
   "error",
 ]
+
+/**
+ * SIG-247 Phase 0: forward-compat enum vocabulary for structured
+ * claims extracted from a dismissal reply. Phase 2 implements the
+ * extractor; this type is shipped now so the storage schema can
+ * accept and round-trip records that Phase 2 writers will produce
+ * without a schema break.
+ *
+ * The Codex consult recommended Option C (structured claims, never
+ * raw text) as the privacy-preserving learning surface. Each claim
+ * is enum-bounded — no free-text fields that could carry PII. Phase 2
+ * adds the LLM-side extractor that maps a dismissal reply into one
+ * or more of these claims; Phase 3+ uses them at injection time.
+ *
+ * v0 ships a single `type` enum + bounded scope fields. The vocabulary
+ * grows by telemetry-tuned expansion, not by ad-hoc additions.
+ */
+export interface ReviewMemoryClaim {
+  /** Stable per-claim id — sha16 of the claim's canonical form. */
+  id: string
+  /** Enum-bounded claim type. v0 starts narrow; expands per SIG-244 bake-off data. */
+  type:
+    | "auth-gate-is-boundary"
+    | "structural-glue-not-test-target"
+    | "globally-unique-id-is-tenant-isolation"
+    | "rethrowing-catch-not-swallowed"
+  /**
+   * Confidence 0.0-1.0 from the extractor. Used at activation-time
+   * weighting — low-confidence claims need more independent signals
+   * to activate.
+   */
+  confidence: number
+  /** Schema/version of the extractor that produced this claim. */
+  extractorVersion: number
+}
 
 /**
  * One captured dismissal signal. Stored inside
@@ -69,6 +106,16 @@ export interface ReviewMemorySignal {
    * unknown → weight 1.0 (existing behavior, no surprise softening).
    */
   dismissReason?: import("../dismiss-reasons").DismissReason
+  /**
+   * SIG-247 Phase 0 forward-compat: structured claims extracted from
+   * the dismissal reply text. Optional and absent on all signals
+   * written before Phase 2 ships the extractor. The signal record's
+   * privacy contract is unchanged — no free-text payload, only an
+   * enum-bounded claim shape per `ReviewMemoryClaim`. Phase 3+ uses
+   * the claims at injection time so the bot can soften the SPECIFIC
+   * pattern the team dismissed, not just the category as a whole.
+   */
+  claims?: ReviewMemoryClaim[]
 }
 
 /**

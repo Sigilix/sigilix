@@ -467,14 +467,15 @@ export interface DispatcherSafetyNetPattern {
 /**
  * ARC-189: re-exported from `review-memory/types.ts` so the config
  * surface declares the categories without `sigilix-config.ts` pulling
- * the entire review-memory type chain. Same 4-value literal union as
- * `ReviewMemoryCategory`.
+ * the entire review-memory type chain. Same literal union as
+ * `ReviewMemoryCategory`. SIG-247 Phase 0 added `"architecture"`.
  */
 export type ReviewMemoryCategoryRef =
   | "security"
   | "logic"
   | "performance"
   | "tests"
+  | "architecture"
 
 /**
  * ARC-188: re-exported from `sarif-evidence/types.ts` so the config
@@ -1550,13 +1551,25 @@ const REVIEW_MEMORY_CATEGORIES: ReadonlySet<ReviewMemoryCategoryRef> = new Set([
   "logic",
   "performance",
   "tests",
+  "architecture",
 ])
 
+/**
+ * SIG-247 Phase 0: default now covers ALL 5 specialist categories.
+ * Was `["performance", "tests"]` until 2026-05-27; the narrower
+ * default missed the three patterns where the bot's specialists
+ * over-fire most often (security architectural-misunderstanding,
+ * logic chunker-windowing hallucination, architecture cross-tenant
+ * confusion — all surfaced by today's PR #202/#203 dogfooding).
+ * Wider capture defaults are the prerequisite for the learning loop
+ * to accumulate signal on the categories that actually need it.
+ */
 const DEFAULT_REVIEW_MEMORY_CATEGORIES: ReadonlyArray<ReviewMemoryCategoryRef> = [
   "security",
   "logic",
   "performance",
   "tests",
+  "architecture",
 ]
 
 /**
@@ -1566,7 +1579,8 @@ const DEFAULT_REVIEW_MEMORY_CATEGORIES: ReadonlyArray<ReviewMemoryCategoryRef> =
  * Locked defaults (spec §5.1):
  *   - enabled: false  (default OFF — opposite of every other scanner)
  *   - captureOnly: false
- *   - categories: ALL 4 (empty array also resolves to all 4)
+ *   - categories: ALL 5 (empty array also resolves to all 5) — SIG-247
+ *                 Phase 0 expanded from 4 to include "architecture"
  *   - maxInjectedMemories: 5
  *   - minSignalThreshold: 3
  *   - maxSignalAgeDays: 90

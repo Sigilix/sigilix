@@ -5687,6 +5687,9 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
           elapsedMs: info.endedAtMs - info.startedAtMs,
           outcome,
           ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+          // SIG-212: forward token usage from runWithRetryAndFallback.
+          ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
+          ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
         })
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
@@ -5741,6 +5744,13 @@ export interface AttemptCallbackInfo {
    *  `runWithRetryAndFallback` returns as its top-level
    *  `failureReason` for the final outcome. */
   failureReason?: string
+  /** SIG-212: token usage reported by the underlying `chat()` call.
+   *  Present whenever the LLM round-trip completed (success OR parse-
+   *  failure — the model still consumed tokens producing the unparseable
+   *  output). Absent on exception paths (HTTP error, timeout, abort)
+   *  where no tokens were exchanged. */
+  inputTokens?: number
+  outputTokens?: number
 }
 
 export async function runWithRetryAndFallback<T>(args: {
@@ -5837,6 +5847,10 @@ export async function runWithRetryAndFallback<T>(args: {
       endedAtMs: Date.now(),
       verdictOk: outcome.verdict !== null,
       ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+      // SIG-212: forward token usage from attemptChat. Present on
+      // both success and parse-failure; absent on HTTP/timeout/abort.
+      ...(outcome.inputTokens !== undefined ? { inputTokens: outcome.inputTokens } : {}),
+      ...(outcome.outputTokens !== undefined ? { outputTokens: outcome.outputTokens } : {}),
     })
     if (outcome.verdict !== null) {
       return {
@@ -5898,6 +5912,9 @@ export async function runWithRetryAndFallback<T>(args: {
       endedAtMs: Date.now(),
       verdictOk: outcome.verdict !== null,
       ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+      // SIG-212: forward token usage on the fallback path too.
+      ...(outcome.inputTokens !== undefined ? { inputTokens: outcome.inputTokens } : {}),
+      ...(outcome.outputTokens !== undefined ? { outputTokens: outcome.outputTokens } : {}),
     })
     if (outcome.verdict !== null) {
       return {
@@ -5954,7 +5971,17 @@ async function attemptChat<T>(args: {
   format: Record<string, unknown> | undefined
   parseAnswer: (content: string) => T | null
   parseFailureLabel: string
-}): Promise<{ verdict: T | null; failureReason?: string; failureRawAnswer?: string }> {
+}): Promise<{
+  verdict: T | null
+  failureReason?: string
+  failureRawAnswer?: string
+  // SIG-212: usage is present on BOTH success and parse-failure paths
+  // (chat() round-trip completed, model consumed tokens producing the
+  // output — even if that output didn't parse). Absent on the
+  // exception path where no tokens were exchanged.
+  inputTokens?: number
+  outputTokens?: number
+}> {
   try {
     const result = await chat({
       model: args.model,
@@ -5965,15 +5992,24 @@ async function attemptChat<T>(args: {
       ...(args.format ? { format: args.format } : {}),
       temperature: 0,
     })
+    // SIG-212: capture token usage from chat()'s result. Forward on
+    // BOTH success and parse-failure paths so cost telemetry stays
+    // accurate even when the model produced unparseable output.
+    // `usage` is optional on ChatResult to keep test mocks lightweight;
+    // the production accumulator always returns `usage: {...}`.
+    const usagePayload: { inputTokens?: number; outputTokens?: number } = {}
+    if (result.usage?.inputTokens !== undefined) usagePayload.inputTokens = result.usage.inputTokens
+    if (result.usage?.outputTokens !== undefined) usagePayload.outputTokens = result.usage.outputTokens
     const verdict = args.parseAnswer(result.message.content)
     if (!verdict) {
       return {
         verdict: null,
         failureReason: args.parseFailureLabel,
         failureRawAnswer: result.message.content.slice(0, 32_000),
+        ...usagePayload,
       }
     }
-    return { verdict }
+    return { verdict, ...usagePayload }
   } catch (e) {
     return {
       verdict: null,
@@ -6201,6 +6237,9 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
           elapsedMs: info.endedAtMs - info.startedAtMs,
           outcome: outcomeLabel,
           ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+          // SIG-212: forward token usage on the synth path too.
+          ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
+          ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
         })
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw

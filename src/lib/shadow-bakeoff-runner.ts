@@ -140,6 +140,11 @@ export async function runShadowSpecialist(args: SpecialistShadowArgs): Promise<S
         elapsedMs: info.endedAtMs - info.startedAtMs,
         outcome: classifyOutcome(info.verdictOk, info.failureReason),
         ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+        // SIG-212: forward token usage to the shadow event so analyzers
+        // can join prod + shadow attempts on the same correlation tuple
+        // AND aggregate token cost across both paths.
+        ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
+        ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
       })
     },
   })
@@ -213,6 +218,9 @@ export async function runShadowSynth(args: SynthShadowArgs): Promise<ShadowRunRe
         elapsedMs: info.endedAtMs - info.startedAtMs,
         outcome: classifyOutcome(info.verdictOk, info.failureReason),
         ...(info.failureReason !== undefined ? { failureReason: info.failureReason } : {}),
+        // SIG-212: forward token usage on the shadow synth path too.
+        ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
+        ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
       })
     },
   })

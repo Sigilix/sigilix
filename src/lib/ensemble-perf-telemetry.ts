@@ -143,6 +143,16 @@ export interface ModelAttemptEvent {
    *  parse-failure label, etc.) — same string `runWithRetryAndFallback`
    *  surfaces in its `failureReason` return. */
   failureReason?: string
+  /** SIG-212: token usage reported by Ollama on the final stream chunk
+   *  (`prompt_eval_count`). Optional because providers that don't
+   *  surface counts should omit rather than zero-fill — downstream
+   *  aggregators treat absent as "no data," not zero. Typically present
+   *  on successful attempts; failed attempts (timeout / parse error) may
+   *  legitimately have no count. */
+  inputTokens?: number
+  /** SIG-212: token usage reported by Ollama (`eval_count`). Same
+   *  optionality semantics as `inputTokens`. */
+  outputTokens?: number
 }
 
 export function emitModelAttempt(ctx: EnsembleRunCtx, info: ModelAttemptEvent): void {

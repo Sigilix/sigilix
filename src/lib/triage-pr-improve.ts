@@ -223,7 +223,7 @@ export async function handlePrImprove(args: TriagePrImproveArgs): Promise<void> 
     for (const m of modelChain) {
       modelUsed = m
       try {
-        const response = await generate({
+        const { text: response } = await generate({
           model: m,
           prompt,
           apiKey: env.OLLAMA_API_KEY,

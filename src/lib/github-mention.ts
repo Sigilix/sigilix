@@ -420,7 +420,11 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
         commentId,
         reason: loopResult.reason,
       })
-      const response = await generate({
+      // SIG-212: `generate()` now returns `{ text, usage }`; this caller
+      // only needs the text. Token-usage telemetry is wired through the
+      // ensemble path (`runWithRetryAndFallback` → `emitModelAttempt`),
+      // not this single-shot mention path.
+      const { text: response } = await generate({
         model,
         prompt,
         apiKey: env.OLLAMA_API_KEY,
@@ -430,7 +434,7 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
     }
   } else {
     since("ollama-start")
-    const response = await generate({
+    const { text: response } = await generate({
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,

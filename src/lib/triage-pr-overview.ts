@@ -411,7 +411,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // SIG-216 fix-up: thread the optional external abort signal into
     // the Ollama call so the inline-overview retry helper can cancel
     // the in-flight first attempt before launching the second.
-    const response = await generate({
+    const { text: response } = await generate({
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,

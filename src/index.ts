@@ -2812,11 +2812,14 @@ async function handleGitHubWebhook(
       // payload and thread it to the producer. The producer attaches
       // it to the queue message; the consumer persists it on the
       // manifest. Falls back to `undefined` (treated as legacy) if a
-      // webhook arrives without the field. Number.isFinite filters
-      // NaN/Infinity at the entry point, matching the downstream
-      // validation in the producer + manifest write helpers.
+      // webhook arrives without the field. GitHub repo IDs are strictly
+      // positive integers; the guard rejects 0 / negative / non-integer
+      // / NaN / Infinity at the entry point so a spoofed or malformed
+      // payload can't land an invalid `repo-tenant:0` key downstream.
       repoId:
-        typeof payload.repository?.id === "number" && Number.isFinite(payload.repository.id)
+        typeof payload.repository?.id === "number" &&
+        Number.isInteger(payload.repository.id) &&
+        payload.repository.id > 0
           ? payload.repository.id
           : undefined,
       installationId,

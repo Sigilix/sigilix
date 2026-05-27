@@ -134,13 +134,15 @@ export async function enqueueIndexJobsForRepos(args: {
       // installation_repositories webhook carried it. Legacy
       // synthetic entries (cron parsing full_name from a KV scan)
       // omit the field; consumer treats it as undefined and skips
-      // the manifest field, which Phase 3 backfills.
+      // the manifest field, which Phase 3 backfills. Positive-integer
+      // guard matches every other producer site — rejects 0 / negative
+      // / non-integer.
       const repoEntryId = entry.id
       await env.OPENCLAW_JOBS.send({
         type: "index-repo",
         owner,
         repo,
-        ...(typeof repoEntryId === "number" && Number.isFinite(repoEntryId)
+        ...(typeof repoEntryId === "number" && Number.isInteger(repoEntryId) && repoEntryId > 0
           ? { githubRepoId: repoEntryId }
           : {}),
         installationId,
@@ -383,8 +385,11 @@ export async function maybeEnqueuePushIndexJob(
     // SIG-243 Phase 1: include the immutable repo ID when the webhook
     // payload carried it. Omitted via conditional spread so the field
     // doesn't land as `undefined` on the queue message under
-    // exactOptionalPropertyTypes.
-    if (typeof repoId === "number" && Number.isFinite(repoId)) {
+    // exactOptionalPropertyTypes. Only positive integers are accepted
+    // — GitHub repo IDs are strictly `>= 1`, so a zero / negative /
+    // non-integer signal a spoofed or stale payload and must not poison
+    // the new `repo-tenant:{id}` key.
+    if (typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0) {
       message.githubRepoId = repoId
     }
     if (branchToIndex) message.branch = branchToIndex

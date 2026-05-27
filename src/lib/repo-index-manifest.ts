@@ -99,8 +99,10 @@ export interface RepoIndexManifestV1 {
    * Phase 4 ships, this becomes the canonical key
    * (`repo-tenant:{githubRepoId}`) and `owner` + `repo` above are
    * downgraded to cached display state. The field is required to be a
-   * number when present; a stale writer passing a string would poison
-   * the new keying for that record.
+   * positive integer when present — GitHub repo IDs are strictly `>= 1`
+   * — so a stale writer passing a string, a float, zero, or a negative
+   * value would poison the new keying for that record and is rejected
+   * at the type-guard boundary.
    */
   githubRepoId?: number
   /** Default-branch commit SHA at index time. */
@@ -174,7 +176,10 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   if (o.defaultBranch !== undefined && (typeof o.defaultBranch !== "string" || o.defaultBranch.length === 0)) return false
   if (o.namespace !== undefined && (typeof o.namespace !== "string" || o.namespace.length === 0)) return false
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
-  if (o.githubRepoId !== undefined && (typeof o.githubRepoId !== "number" || !Number.isFinite(o.githubRepoId))) return false
+  if (
+    o.githubRepoId !== undefined &&
+    (typeof o.githubRepoId !== "number" || !Number.isInteger(o.githubRepoId) || o.githubRepoId <= 0)
+  ) return false
   if (typeof o.headSha !== "string" || o.headSha.length === 0) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
   if (typeof o.fileCount !== "number") return false
@@ -241,15 +246,27 @@ export function parseRepoIndexManifest(raw: string): ReadResult {
  * Retry is safe: bootstrap freshness-skips on the next attempt if everything
  * already landed, and vector chunk ids are content-addressed.
  *
- * SIG-243 Phase 2: when the manifest carries `githubRepoId`, ALSO write the
- * same payload under the new immutable `repo-tenant:{id}` key. The two
- * writes are serial — if the legacy write succeeds and the new write
- * throws, the legacy index is intact and the queue retries the shard.
- * If the new write succeeds but the legacy write fails (write-order is
- * legacy-first, so this branch can't happen today), the next reconciliation
- * tick re-establishes parity. The dual-write succeeded event is emitted
- * only when both writes landed so post-deploy log scraping can measure
- * Phase 2 coverage before Phase 3 flips the read path.
+ * SIG-243 Phase 2: when the manifest is a DEFAULT-BRANCH manifest AND it
+ * carries a positive integer `githubRepoId`, ALSO write the same payload
+ * under the new immutable `repo-tenant:{id}` key. Two narrow gates:
+ *
+ *   - DEFAULT-BRANCH ONLY (`manifest.branch === undefined`): the new key
+ *     does NOT carry branch state (a global Phase 4 design will), so a
+ *     branch-scoped manifest would overwrite the default-branch
+ *     manifest at the same `repo-tenant:{id}` key. Phase 4 introduces
+ *     branch-aware keying; until then, branch manifests stay legacy-only.
+ *
+ *   - POSITIVE INTEGER ID (`>= 1`): GitHub repo IDs are strictly
+ *     positive integers. Rejecting zero / negative / non-integer values
+ *     blocks invalid keys like `repo-tenant:0` from landing in KV.
+ *
+ * Both writes are serial — if the legacy write succeeds and the new
+ * write throws, the legacy index is intact and the queue retries the
+ * shard (the surrounding `persistManifest` in indexer.ts rethrows on
+ * any error from this function, see :1232). The dual-write-succeeded
+ * event is emitted only when both writes landed so post-deploy log
+ * scraping can measure Phase 2 coverage before Phase 3 flips the read
+ * path.
  */
 export async function writeRepoIndexManifest(
   env: Env,
@@ -260,7 +277,13 @@ export async function writeRepoIndexManifest(
     JSON.stringify(manifest),
     { expirationTtl: TTL_SECONDS },
   )
-  if (typeof manifest.githubRepoId === "number" && Number.isFinite(manifest.githubRepoId)) {
+  const isDefaultBranchManifest = manifest.branch === undefined
+  if (
+    isDefaultBranchManifest &&
+    typeof manifest.githubRepoId === "number" &&
+    Number.isInteger(manifest.githubRepoId) &&
+    manifest.githubRepoId > 0
+  ) {
     await env.OPENCLAW_STATE.put(
       repoTenantKey(manifest.githubRepoId),
       JSON.stringify(manifest),

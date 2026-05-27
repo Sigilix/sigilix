@@ -1128,8 +1128,9 @@ async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Promise<v
     repo: args.repo,
     // SIG-243 Phase 1: forward the parent run's GitHub repo ID onto
     // every shard. Conditional spread keeps the queue message tight
-    // under exactOptionalPropertyTypes.
-    ...(typeof args.githubRepoId === "number" && Number.isFinite(args.githubRepoId)
+    // under exactOptionalPropertyTypes. Positive-integer guard matches
+    // every other producer site.
+    ...(typeof args.githubRepoId === "number" && Number.isInteger(args.githubRepoId) && args.githubRepoId > 0
       ? { githubRepoId: args.githubRepoId }
       : {}),
     installationId: args.installationId,
@@ -1215,8 +1216,13 @@ async function persistManifest(args: PersistManifestArgs): Promise<void> {
   }
   // SIG-243 Phase 1: persist the immutable repo ID when the queue
   // message carried it. Conditional spread keeps the manifest shape
-  // tight under exactOptionalPropertyTypes.
-  if (typeof args.githubRepoId === "number" && Number.isFinite(args.githubRepoId)) {
+  // tight under exactOptionalPropertyTypes. Positive-integer guard
+  // matches the type-guard in repo-index-manifest.ts.
+  if (
+    typeof args.githubRepoId === "number" &&
+    Number.isInteger(args.githubRepoId) &&
+    args.githubRepoId > 0
+  ) {
     manifest.githubRepoId = args.githubRepoId
   }
   try {

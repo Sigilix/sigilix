@@ -208,20 +208,83 @@ describe("writeRepoIndexManifest / readRepoIndexManifest round-trip", () => {
     expect(tenantKeys).toEqual([])
   })
 
-  it("rejects githubRepoId of wrong type (must be number when present)", async () => {
-    // Defense-in-depth: a stale write path passing a string would
-    // poison the new keying for that repo. Validate the shape.
+  it("does NOT dual-write branch-scoped manifests to repo-tenant:{id} (CR PR #202 finding)", async () => {
+    // SIG-243 Phase 2: the `repo-tenant:{id}` key does not carry
+    // branch state. If a branch-scoped manifest dual-wrote there, it
+    // would overwrite the canonical default-branch record for the
+    // same repo. Phase 4 introduces branch-aware keying; until then,
+    // branch manifests stay on the legacy key only.
     const { kv, store } = makeKvStub()
-    const broken = { ...SAMPLE_MANIFEST, githubRepoId: "not-a-number" }
-    store.set(
-      "repo-index-manifest:arc-and-anchor/sigilix",
-      JSON.stringify(broken),
-    )
-    const result = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
-    expect(result.kind).toBe("invalid")
-    if (result.kind === "invalid") {
-      expect(result.reason).toBe("shape")
+    const branchManifest: RepoIndexManifestV1 = {
+      ...SAMPLE_MANIFEST,
+      repo: "sigilix/__branch__/h646576",
+      actualRepo: "sigilix",
+      branch: "feature/something",
+      githubRepoId: 808247824,
     }
+    await writeRepoIndexManifest(makeEnv(kv), branchManifest)
+    // Legacy key writes (branch state lives under the branch-state
+    // namespace).
+    expect(store.has("repo-index-manifest:arc-and-anchor/sigilix/__branch__/h646576")).toBe(true)
+    // New key NOT written — would have stomped the default-branch
+    // manifest for the same repo ID.
+    expect(store.has("repo-tenant:808247824")).toBe(false)
+  })
+
+  it("does NOT dual-write when githubRepoId is zero (invalid GitHub repo ID)", async () => {
+    // SIG-243: GitHub repository IDs are strictly positive integers.
+    // A spoofed or malformed payload landing zero must not be
+    // accepted at the writer — that would land an invalid
+    // `repo-tenant:0` key in KV.
+    const { kv, store } = makeKvStub()
+    const zeroId = { ...SAMPLE_MANIFEST, githubRepoId: 0 } as RepoIndexManifestV1
+    await writeRepoIndexManifest(makeEnv(kv), zeroId)
+    expect(store.has("repo-tenant:0")).toBe(false)
+  })
+
+  it("does NOT dual-write when githubRepoId is negative", async () => {
+    const { kv, store } = makeKvStub()
+    const negativeId = { ...SAMPLE_MANIFEST, githubRepoId: -1 } as RepoIndexManifestV1
+    await writeRepoIndexManifest(makeEnv(kv), negativeId)
+    expect(store.has("repo-tenant:-1")).toBe(false)
+  })
+
+  it("does NOT dual-write when githubRepoId is a non-integer float", async () => {
+    const { kv, store } = makeKvStub()
+    const floatId = { ...SAMPLE_MANIFEST, githubRepoId: 808247824.5 } as RepoIndexManifestV1
+    await writeRepoIndexManifest(makeEnv(kv), floatId)
+    const tenantKeys = [...store.keys()].filter((k) => k.startsWith("repo-tenant:"))
+    expect(tenantKeys).toEqual([])
+  })
+
+  it("rejects githubRepoId of wrong type (must be a positive integer when present)", async () => {
+    // Defense-in-depth: stale or spoofed write paths landing a
+    // non-positive-integer value would poison the new keying for
+    // that repo. Validate the shape at read time.
+    const { kv, store } = makeKvStub()
+    const stringId = { ...SAMPLE_MANIFEST, githubRepoId: "not-a-number" }
+    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(stringId))
+    const r1 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    expect(r1.kind).toBe("invalid")
+    if (r1.kind === "invalid") expect(r1.reason).toBe("shape")
+
+    // Zero is not a valid GitHub repo ID.
+    const zeroId = { ...SAMPLE_MANIFEST, githubRepoId: 0 }
+    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(zeroId))
+    const r2 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    expect(r2.kind).toBe("invalid")
+
+    // Negative integers are not valid GitHub repo IDs.
+    const negId = { ...SAMPLE_MANIFEST, githubRepoId: -5 }
+    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(negId))
+    const r3 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    expect(r3.kind).toBe("invalid")
+
+    // Non-integer floats are not valid.
+    const floatId = { ...SAMPLE_MANIFEST, githubRepoId: 808247824.5 }
+    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(floatId))
+    const r4 = await readRepoIndexManifest(makeEnv(kv), "Arc-and-Anchor", "sigilix")
+    expect(r4.kind).toBe("invalid")
   })
 
   it("writeRepoIndexManifest propagates the KV.put error (SIG-156 PR3 hardening)", async () => {

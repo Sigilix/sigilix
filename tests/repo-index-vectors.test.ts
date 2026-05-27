@@ -53,6 +53,152 @@ describe("repoIndexVectorsKey", () => {
   })
 })
 
+describe("writeRepoIndexVectors — SIG-243 Phase 2b dual-write", () => {
+  it("dual-writes to repo-vectors:{id} on default-branch state with positive integer id", async () => {
+    const { kv, store } = makeKvStub()
+    const withId: RepoIndexVectorsV1 = { ...SAMPLE_VECTORS, githubRepoId: 808247824 }
+    const ok = await writeRepoIndexVectors(makeEnv(kv), withId)
+    expect(ok).toBe(true)
+    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-vectors:808247824")).toBe(true)
+    expect(store.get("repo-vectors:808247824")).toBe(store.get("repo-index-vectors:arc-and-anchor/sigilix"))
+  })
+
+  it("does NOT dual-write when githubRepoId is absent (legacy path)", async () => {
+    const { kv, store } = makeKvStub()
+    await writeRepoIndexVectors(makeEnv(kv), SAMPLE_VECTORS)
+    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
+    expect([...store.keys()].filter((k) => k.startsWith("repo-vectors:"))).toEqual([])
+  })
+
+  it("does NOT dual-write branch-scoped vector records to repo-vectors:{id}", async () => {
+    // Branch state repos use `<repo>/__branch__/<hash>` as the `repo`
+    // field. The new key has no branch differentiation, so writing
+    // a branch record there would overwrite the default-branch
+    // canonical record for the same repo ID.
+    const { kv, store } = makeKvStub()
+    const branchState: RepoIndexVectorsV1 = {
+      ...SAMPLE_VECTORS,
+      repo: "sigilix/__branch__/h646576",
+      githubRepoId: 808247824,
+    }
+    await writeRepoIndexVectors(makeEnv(kv), branchState)
+    expect(store.has("repo-vectors:808247824")).toBe(false)
+  })
+
+  it("does NOT dual-write when githubRepoId is zero / negative / non-integer", async () => {
+    const { kv, store } = makeKvStub()
+    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: 0 } as RepoIndexVectorsV1)
+    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: -1 } as RepoIndexVectorsV1)
+    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: 1.5 } as RepoIndexVectorsV1)
+    expect([...store.keys()].filter((k) => k.startsWith("repo-vectors:"))).toEqual([])
+  })
+})
+
+describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
+  it("preserves existing githubRepoId across a continuation shard that omits it", async () => {
+    // Real production scenario: bootstrap shard carries githubRepoId
+    // from the install webhook + stamps it on the vectors record.
+    // A continuation shard (legacy in-flight queue message, or a
+    // code path that hasn't been wired) arrives with no
+    // `githubRepoId` on its message. The merge must NOT drop the
+    // stored ID. Without this preservation, the next dual-write
+    // would no-op (no ID present → branch-gate skip) and the
+    // canonical record at `repo-tenant:{id}` would go stale.
+    const { computeMerge } = await import("../src/lib/repo-index-vectors")
+    const existing = {
+      kind: "ok" as const,
+      vectors: {
+        v: 1 as const,
+        owner: "Arc-and-Anchor",
+        repo: "sigilix",
+        githubRepoId: 808247824,
+        runId: "0123456789abcdef",
+        byPath: { "src/a.ts": ["aaa"] },
+      },
+    }
+    const outcome = computeMerge({
+      existing,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      githubRepoId: undefined, // continuation shard didn't carry it
+      runId: "0123456789abcdef", // same run as the stored record
+      idsByPathSlice: { "src/b.ts": ["bbb"] },
+      activeRunId: "0123456789abcdef",
+    })
+    expect(outcome.action).toBe("extended")
+    if (outcome.action === "extended") {
+      expect(outcome.vectors.githubRepoId).toBe(808247824)
+    }
+  })
+
+  it("prefers incoming githubRepoId over the existing stored value when both are present", async () => {
+    // Defensive: if the migration endpoint updates the ID on a
+    // record (in theory it never should — IDs are immutable — but
+    // if a repo were re-keyed by GitHub support, the incoming
+    // wins). Sanity check that the merge respects the most-recent
+    // signal.
+    const { computeMerge } = await import("../src/lib/repo-index-vectors")
+    const existing = {
+      kind: "ok" as const,
+      vectors: {
+        v: 1 as const,
+        owner: "Arc-and-Anchor",
+        repo: "sigilix",
+        githubRepoId: 999999999,
+        runId: "0123456789abcdef",
+        byPath: {},
+      },
+    }
+    const outcome = computeMerge({
+      existing,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      githubRepoId: 808247824,
+      runId: "0123456789abcdef",
+      idsByPathSlice: {},
+      activeRunId: "0123456789abcdef",
+    })
+    expect(outcome.action).toBe("extended")
+    if (outcome.action === "extended") {
+      expect(outcome.vectors.githubRepoId).toBe(808247824)
+    }
+  })
+
+  it("treats invalid existing githubRepoId (0 / negative / non-integer) as absent", async () => {
+    // Defense-in-depth: a corrupt record with a stored zero / float
+    // shouldn't propagate that invalid value into the new merge.
+    // The merge effectively drops the field, the next dual-write
+    // skips, and Phase 3 migration is the path to re-stamp the
+    // correct ID.
+    const { computeMerge } = await import("../src/lib/repo-index-vectors")
+    const corrupt = {
+      kind: "ok" as const,
+      vectors: {
+        v: 1 as const,
+        owner: "Arc-and-Anchor",
+        repo: "sigilix",
+        githubRepoId: 0,
+        runId: "0123456789abcdef",
+        byPath: { "x.ts": ["aaa"] },
+      },
+    }
+    const outcome = computeMerge({
+      existing: corrupt,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      githubRepoId: undefined,
+      runId: "0123456789abcdef",
+      idsByPathSlice: {},
+      activeRunId: "0123456789abcdef",
+    })
+    expect(outcome.action).toBe("extended")
+    if (outcome.action === "extended") {
+      expect(outcome.vectors.githubRepoId).toBeUndefined()
+    }
+  })
+})
+
 describe("read/write round-trip", () => {
   it("round-trips a valid record", async () => {
     const { kv } = makeKvStub()

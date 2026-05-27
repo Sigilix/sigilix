@@ -45,6 +45,14 @@ export interface RepoIndexVectorsV1 {
    * smashed by an unrelated uninstall.
    */
   owner: string
+  /**
+   * SIG-243 Phase 2b: GitHub's immutable repository ID, mirroring the
+   * field added to `RepoIndexManifestV1`. Optional during the Phase 1-2
+   * transition; the indexer copies it from the manifest write so the
+   * vectors record carries the same canonical identifier. Phase 4
+   * promotes it to the canonical KV key (`repo-vectors:{id}`).
+   */
+  githubRepoId?: number
   /** Stable per-run id (matches `repo-index-manifest:<owner>/<repo>`'s runId). */
   runId: string
   /** Path → ordered list of chunk ids for that path. */
@@ -73,12 +81,30 @@ export function legacyRepoIndexVectorsKey(repo: string): string {
   return `${KV_KEY_PREFIX}${repo.toLowerCase()}`
 }
 
+/**
+ * SIG-243 Phase 2b: canonical key for the new identity layer, keyed by
+ * GitHub's immutable repository ID. Mirrors `repoTenantKey` in
+ * repo-index-manifest. Phase 5 cleanup deletes the legacy
+ * `repo-index-vectors:<owner>/<repo>` key after the safety window;
+ * until then, the indexer dual-writes to both keys.
+ */
+export const REPO_VECTORS_TENANT_PREFIX = "repo-vectors:"
+export function repoVectorsTenantKey(githubRepoId: number): string {
+  return `${REPO_VECTORS_TENANT_PREFIX}${githubRepoId}`
+}
+
 function isRepoIndexVectorsV1(value: unknown): value is RepoIndexVectorsV1 {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const o = value as Record<string, unknown>
   if (o.v !== 1) return false
   if (typeof o.repo !== "string" || o.repo.length === 0) return false
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
+  if (
+    o.githubRepoId !== undefined &&
+    (typeof o.githubRepoId !== "number" ||
+      !Number.isInteger(o.githubRepoId) ||
+      o.githubRepoId <= 0)
+  ) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
   if (!o.byPath || typeof o.byPath !== "object" || Array.isArray(o.byPath)) return false
   for (const [path, ids] of Object.entries(o.byPath as Record<string, unknown>)) {
@@ -131,6 +157,25 @@ export function parseRepoIndexVectors(raw: string): ReadResult {
  * fresh manifest if the vectors write failed. Otherwise the manifest
  * makes the repo look fully indexed while future uninstall can't
  * locate the vectors to delete (silent retention bug).
+ *
+ * SIG-243 Phase 2b: ALSO write to the new `repo-vectors:{id}` key
+ * when TWO gates pass — DEFAULT-BRANCH state (the `repo` field
+ * doesn't include the `/__branch__/` marker that branch-scoped state
+ * repos use) AND `githubRepoId` is a positive integer. Branch-scoped
+ * vectors stay legacy-only because the new key has no branch
+ * differentiation; Phase 4 adds branch-aware keying. Positive-integer
+ * guard mirrors `writeRepoIndexManifest` (rejects 0 / negative /
+ * non-integer) so a spoofed payload can't land an invalid
+ * `repo-vectors:0` key.
+ *
+ * The two writes are serial: legacy first, new second. If the new
+ * write throws, the function returns false (same contract as before),
+ * the caller refuses to write a fresh manifest, and the queue retries
+ * the shard idempotently. The Vectorize embeddings themselves are
+ * NOT duplicated; they continue to live under the legacy `<owner>/
+ * <repo>` namespace (set in chunk metadata at upsert time). Phase 4
+ * adds the namespace-by-repo_id read path; Phase 5 cleanup deletes
+ * the legacy KV key.
  */
 export async function writeRepoIndexVectors(
   env: Env,
@@ -142,6 +187,25 @@ export async function writeRepoIndexVectors(
       JSON.stringify(vectors),
       { expirationTtl: TTL_SECONDS },
     )
+    const isDefaultBranchState = !vectors.repo.includes("/__branch__/")
+    if (
+      isDefaultBranchState &&
+      typeof vectors.githubRepoId === "number" &&
+      Number.isInteger(vectors.githubRepoId) &&
+      vectors.githubRepoId > 0
+    ) {
+      await env.OPENCLAW_STATE.put(
+        repoVectorsTenantKey(vectors.githubRepoId),
+        JSON.stringify(vectors),
+        { expirationTtl: TTL_SECONDS },
+      )
+      console.log(JSON.stringify({
+        event: "dual-write-succeeded-vectors",
+        key_legacy: repoIndexVectorsKey(vectors.owner, vectors.repo),
+        key_new: repoVectorsTenantKey(vectors.githubRepoId),
+        github_repo_id: vectors.githubRepoId,
+      }))
+    }
     return true
   } catch {
     return false
@@ -152,8 +216,21 @@ export async function deleteRepoIndexVectors(
   env: Env,
   owner: string,
   repo: string,
+  githubRepoId?: number,
 ): Promise<void> {
   await env.OPENCLAW_STATE.delete(repoIndexVectorsKey(owner, repo))
+  // SIG-243 Phase 2b / CR Major: also delete the tenant-scoped record
+  // so uninstall doesn't orphan the new `repo-vectors:{id}` ledger
+  // alongside the legacy key cleanup. Positive-integer guard mirrors
+  // the writer side; callers thread the ID from the manifest they
+  // just deleted (see index-delete.ts).
+  if (
+    typeof githubRepoId === "number" &&
+    Number.isInteger(githubRepoId) &&
+    githubRepoId > 0
+  ) {
+    await env.OPENCLAW_STATE.delete(repoVectorsTenantKey(githubRepoId))
+  }
 }
 
 /**
@@ -220,6 +297,14 @@ export interface MergeArgs {
   existing: ReadResult
   owner: string
   repo: string
+  /**
+   * SIG-243 Phase 2b: immutable GitHub repo ID copied from the queue
+   * message / manifest. Threaded through the merge so the resulting
+   * `RepoIndexVectorsV1` carries the canonical ID and the writer
+   * dual-writes to the new `repo-vectors:{id}` key. Optional during
+   * the Phase 1+2 transition; absent on legacy in-flight shard runs.
+   */
+  githubRepoId: number | undefined
   runId: string
   idsByPathSlice: Record<string, string[]>
   /**
@@ -250,8 +335,34 @@ export interface MergeArgs {
  *     so future deletes have an id list to walk)
  */
 export function computeMerge(args: MergeArgs): MergeOutcome {
-  const { existing, owner, repo, runId, idsByPathSlice, activeRunId } = args
+  const { existing, owner, repo, githubRepoId, runId, idsByPathSlice, activeRunId } = args
   const sliceByPath = normalizeByPath(idsByPathSlice)
+  // SIG-243 Phase 2b: preserve `githubRepoId` across continuation
+  // shards. The bootstrap shard captures the ID from the queue
+  // message and writes it onto the vectors record. A continuation
+  // shard's queue message may legitimately omit `githubRepoId`
+  // (legacy in-flight message, or an older code path that hasn't
+  // been wired yet). On that continuation, prefer the INCOMING ID
+  // if present, otherwise fall back to the EXISTING stored ID so
+  // the merge doesn't silently drop a valid identifier mid-chain.
+  // Positive-integer guard matches every other producer + writer
+  // site (rejects 0 / negative / non-integer / NaN / Infinity).
+  const normalizedIncomingRepoId =
+    typeof githubRepoId === "number" &&
+    Number.isInteger(githubRepoId) &&
+    githubRepoId > 0
+      ? githubRepoId
+      : undefined
+  const normalizedExistingRepoId =
+    existing.kind === "ok" &&
+    typeof existing.vectors.githubRepoId === "number" &&
+    Number.isInteger(existing.vectors.githubRepoId) &&
+    existing.vectors.githubRepoId > 0
+      ? existing.vectors.githubRepoId
+      : undefined
+  const effectiveRepoId = normalizedIncomingRepoId ?? normalizedExistingRepoId
+  const repoIdSpread: { githubRepoId?: number } =
+    effectiveRepoId !== undefined ? { githubRepoId: effectiveRepoId } : {}
 
   // SIG-136: a lease owned by a DIFFERENT run supersedes this slice — reject
   // BEFORE create/overwrite so a stale run can't clobber a newer run's data.
@@ -262,13 +373,13 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
   if (existing.kind === "missing") {
     return {
       action: "created",
-      vectors: { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: sliceByPath },
+      vectors: { v: 1, owner, repo: repo.toLowerCase(), ...repoIdSpread, runId, byPath: sliceByPath },
     }
   }
   if (existing.kind === "invalid") {
     return {
       action: "invalid-overwrite",
-      vectors: { v: 1, owner, repo: repo.toLowerCase(), runId, byPath: sliceByPath },
+      vectors: { v: 1, owner, repo: repo.toLowerCase(), ...repoIdSpread, runId, byPath: sliceByPath },
     }
   }
 
@@ -282,6 +393,7 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
         v: 1,
         owner,
         repo: repo.toLowerCase(),
+        ...repoIdSpread,
         runId,
         byPath: setUnion(cur.byPath, sliceByPath),
       },
@@ -297,7 +409,7 @@ export function computeMerge(args: MergeArgs): MergeOutcome {
     return {
       action: "superseded",
       vectors: {
-        v: 1, owner, repo: repo.toLowerCase(), runId,
+        v: 1, owner, repo: repo.toLowerCase(), ...repoIdSpread, runId,
         byPath: setUnion(cur.byPath, sliceByPath),
       },
     }

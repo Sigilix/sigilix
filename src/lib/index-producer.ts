@@ -280,6 +280,16 @@ export async function maybeEnqueuePushIndexJob(
   let defaultBranch: string | null = null
   let branchPolicyLookupFailed = false
   let client: GitHubClient | null = null
+  // SIG-243 Phase 1 / CR Major: prefer the webhook payload's
+  // `repository.id` if it landed, but fall back to the API result
+  // below when the webhook field was missing. The API lookup happens
+  // anyway for the default-branch policy check, so this is a
+  // zero-cost fallback that prevents push-driven refreshes from
+  // silently dropping `githubRepoId`.
+  let effectiveRepoId =
+    typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0
+      ? repoId
+      : undefined
   try {
     const token = await getInstallationToken({
       kv: env.OPENCLAW_STATE,
@@ -291,6 +301,13 @@ export async function maybeEnqueuePushIndexJob(
     const repoMeta = await client.getRepository(owner, repo)
     if (repoMeta) {
       defaultBranch = repoMeta.default_branch
+      // SIG-243 Phase 1 / CR Major fallback: if the webhook payload
+      // omitted `repository.id` (legacy delivery), use the API
+      // result. Positive-integer guard is already applied inside
+      // `getRepository`.
+      if (effectiveRepoId === undefined && typeof repoMeta.id === "number") {
+        effectiveRepoId = repoMeta.id
+      }
     } else {
       // 404 → repo gone. Don't enqueue; the consumer would fail too
       // and the push doesn't represent live state worth indexing.
@@ -382,15 +399,14 @@ export async function maybeEnqueuePushIndexJob(
       installationId,
       reason: "push",
     }
-    // SIG-243 Phase 1: include the immutable repo ID when the webhook
-    // payload carried it. Omitted via conditional spread so the field
-    // doesn't land as `undefined` on the queue message under
-    // exactOptionalPropertyTypes. Only positive integers are accepted
-    // — GitHub repo IDs are strictly `>= 1`, so a zero / negative /
-    // non-integer signal a spoofed or stale payload and must not poison
-    // the new `repo-tenant:{id}` key.
-    if (typeof repoId === "number" && Number.isInteger(repoId) && repoId > 0) {
-      message.githubRepoId = repoId
+    // SIG-243 Phase 1: include the immutable repo ID. Prefer the
+    // webhook payload's value (captured at handler entry) but fall
+    // back to the GitHub API result above when the webhook field was
+    // missing (CR Major: legacy deliveries dropping `githubRepoId`
+    // silently). Already validated as positive integer above; this
+    // is the spread under exactOptionalPropertyTypes.
+    if (effectiveRepoId !== undefined) {
+      message.githubRepoId = effectiveRepoId
     }
     if (branchToIndex) message.branch = branchToIndex
     await env.OPENCLAW_JOBS.send(message)

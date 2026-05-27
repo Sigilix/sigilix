@@ -510,7 +510,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
   // SIG-136: the run lease was claimed early (right after the freshness
   // gate, before processSlice) so a stale run can't clobber it late.
   const vectorsResult = await persistVectorIds({
-    env, owner, repo: stateRepo, runId, idsByPathSlice: idsByPath,
+    env, owner, repo: stateRepo, githubRepoId, runId, idsByPathSlice: idsByPath,
     isBootstrap: true,
   })
   if (!vectorsResult.proceed) {
@@ -767,7 +767,7 @@ async function handleShardJob(
   })
 
   const vectorsResult = await persistVectorIds({
-    env, owner, repo: stateRepo,
+    env, owner, repo: stateRepo, githubRepoId,
     runId: shard.runId,
     idsByPathSlice: idsByPath,
     isBootstrap: false,
@@ -1245,6 +1245,14 @@ interface PersistVectorIdsArgs {
   env: Env
   owner: string
   repo: string
+  /**
+   * SIG-243 Phase 2b: immutable GitHub repo ID from the queue
+   * message. Forwarded into the merge so the resulting vectors
+   * record carries the field and `writeRepoIndexVectors` dual-writes
+   * to `repo-vectors:{id}`. Optional during the Phase 1+2
+   * transition — undefined on legacy in-flight shard runs.
+   */
+  githubRepoId: number | undefined
   runId: string
   idsByPathSlice: Record<string, string[]>
   /**
@@ -1277,7 +1285,7 @@ interface PersistVectorIdsArgs {
  * are idempotent (content-addressed chunk ids).
  */
 async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: boolean }> {
-  const { env, owner, repo, runId, idsByPathSlice, isBootstrap } = args
+  const { env, owner, repo, githubRepoId, runId, idsByPathSlice, isBootstrap } = args
   const existing = await readRepoIndexVectors(env, owner, repo)
   const activeRunId = await readActiveRunId(env, owner, repo)
 
@@ -1285,6 +1293,7 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     existing,
     owner,
     repo,
+    githubRepoId,
     runId,
     idsByPathSlice,
     activeRunId,

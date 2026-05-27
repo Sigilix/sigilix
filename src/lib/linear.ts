@@ -5,7 +5,39 @@
 // every call is an explicit issue or comment update rather than a
 // project-level field write.
 
+import { getAppActorToken } from "./linear-oauth"
+
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
+
+/**
+ * Build the Linear auth credential. Prefers OAuth `client_credentials`
+ * (so comments post under the Sigilix bot identity, not a human owner)
+ * and falls back to a personal API key when OAuth isn't configured.
+ *
+ * Extracted from `triage.ts` + `mention-reply.ts` when SIG-225's
+ * webhook-side thread-walk became the 3rd call site that needed it.
+ * Single source of truth — if the auth pick logic changes, it changes
+ * once. `LinearAuthEnv` is the minimum env slice this helper needs so
+ * the call site doesn't need to pass the full `Env`.
+ */
+export interface LinearAuthEnv {
+  LINEAR_OAUTH_CLIENT_ID?: string
+  LINEAR_OAUTH_CLIENT_SECRET?: string
+  LINEAR_API_KEY: string
+  OPENCLAW_STATE: KVNamespace
+}
+
+export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
+  if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
+    const token = await getAppActorToken(
+      env.OPENCLAW_STATE,
+      env.LINEAR_OAUTH_CLIENT_ID,
+      env.LINEAR_OAUTH_CLIENT_SECRET
+    )
+    return { oauthToken: token }
+  }
+  return { apiKey: env.LINEAR_API_KEY }
+}
 
 export interface LinearIssue {
   id: string
@@ -91,6 +123,53 @@ export class LinearClient {
     `
     const data = await this.gql<{ comment: LinearCommentWithIssue | null }>(query, { id: commentId })
     return data.comment
+  }
+
+  /**
+   * SIG-225 — fetch JUST the parent + author for an issue's recent
+   * comments. Used by the webhook's in-thread-reply trigger path to
+   * walk the parent chain without paying the full `getIssue` cost
+   * (no labels, no creator, no body, no description). The result
+   * feeds `commentHasSigilixAncestor` from `linear-thread-ancestor.ts`.
+   *
+   * `first: 100` is wider than `getIssue`'s 50 because a long-running
+   * thread can stack replies past Linear's default page size; if the
+   * parent chain runs past 100 comments the helper falls closed
+   * (returns false → no implicit trigger) by design.
+   */
+  async getCommentParents(
+    issueId: string
+  ): Promise<Array<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null }>> {
+    const query = /* GraphQL */ `
+      query CommentParents($id: String!) {
+        issue(id: $id) {
+          comments(first: 100) {
+            nodes {
+              id
+              parent { id }
+              user { name displayName }
+            }
+          }
+        }
+      }
+    `
+    const data = await this.gql<{
+      issue: {
+        comments: {
+          nodes: Array<{
+            id: string
+            parent: { id: string } | null
+            user: { name: string | null; displayName: string | null } | null
+          }>
+        }
+      } | null
+    }>(query, { id: issueId })
+    const nodes = data.issue?.comments.nodes ?? []
+    return nodes.map((n) => ({
+      id: n.id,
+      parentId: n.parent?.id ?? null,
+      user: n.user,
+    }))
   }
 
   /** Fetch issue + recent comments. Used for triage dedupe + context. */

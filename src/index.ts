@@ -40,6 +40,8 @@ import { shouldQueueReviewThreadReply } from "./lib/review-thread-reply"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
+import { LinearClient, buildLinearAuth } from "./lib/linear"
+import { commentHasSigilixAncestor } from "./lib/linear-thread-ancestor"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handlePrLabels } from "./lib/triage-pr-labels"
@@ -795,6 +797,17 @@ interface LinearWebhookPayload {
     body?: string
     team?: { key?: string }
     user?: { displayName?: string; name?: string }
+    /** SIG-225: when a Comment.create event is a thread reply, Linear
+     *  populates `parentId` with the parent comment's id. Used by the
+     *  in-thread-reply trigger path so users don't need to re-@-mention
+     *  Sigilix on every back-and-forth inside a thread Sigilix has
+     *  already commented in. Absent on top-level comments. */
+    parentId?: string
+    /** SIG-225: issue id the comment belongs to. Needed to look up the
+     *  issue's recent comments + walk the parent chain to verify the
+     *  ancestor is Sigilix-authored. Linear's Comment.create webhook
+     *  populates `issueId` directly. */
+    issueId?: string
   }
   webhookTimestamp: number
 }
@@ -1804,23 +1817,71 @@ async function handleLinearWebhook(
     return new Response("queued\n", { status: 202 })
   }
 
-  // Comment.create with @-mention → enqueue mention-reply pipeline.
-  // Pre-check the body before queueing — most comments don't @ us, and
-  // we don't want to spend Queue messages on no-op invocations.
+  // Comment.create → enqueue mention-reply pipeline if EITHER:
+  //   (a) body explicitly @-mentions Sigilix (legacy "fresh thread" path), or
+  //   (b) SIG-225: the comment is a reply inside a thread Sigilix has
+  //       already posted in — implicit follow-up trigger, no @ needed.
+  //
+  // (b) lifts the conversational friction founders hit when they reply
+  // multiple times to a Sigilix answer in the same thread and have to
+  // re-type `@sigilix` on every turn. Top-level (no parent) comments
+  // still require explicit @-mention — we don't fire on every new
+  // comment in any Sigilix-touched issue.
   if (payload.type === "Comment" && payload.action === "create") {
-    const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
-    const body = payload.data.body ?? ""
-    if (!bodyMentionsBot(body, triggers)) {
-      return new Response("no mention\n", { status: 200 })
-    }
     const author =
       payload.data.user?.displayName ?? payload.data.user?.name ?? null
-    // Self-author guard. Shared isBotHandle() helper (src/lib/mention.ts)
-    // is the single source of truth for the strict pattern — same check
-    // runs again inside handleMention() for defense in depth.
+
+    // Self-author guard runs FIRST — regardless of trigger path, Sigilix
+    // must never reply to its own comments (would loop). Moved above the
+    // mention check (was below in legacy code) so the SIG-225 thread-walk
+    // path also gets it without duplication. Shared isBotHandle() helper
+    // is the single source of truth; defense-in-depth same check runs
+    // again inside handleMention().
     if (isBotHandle(author)) {
       return new Response("skip self\n", { status: 200 })
     }
+
+    const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
+    const body = payload.data.body ?? ""
+
+    let triggerReason: "mention" | "thread-followup" | null = null
+    if (bodyMentionsBot(body, triggers)) {
+      triggerReason = "mention"
+    } else if (payload.data.parentId && payload.data.issueId) {
+      // SIG-225 thread-walk path. Costs one GraphQL call per non-mention
+      // thread reply (top-level comments without @ skip this — no parentId).
+      // Fails closed on any error: a thrown call returns "no mention" and
+      // the user's reply isn't routed to Sigilix. Acceptable trade-off
+      // because the legacy @-mention path is unaffected by any failure here.
+      try {
+        const linear = new LinearClient(await buildLinearAuth(env))
+        const comments = await linear.getCommentParents(payload.data.issueId)
+        if (
+          commentHasSigilixAncestor({
+            startParentId: payload.data.parentId,
+            comments,
+          })
+        ) {
+          triggerReason = "thread-followup"
+        }
+      } catch (err) {
+        console.warn("sig-225 thread-walk failed", {
+          commentId: payload.data.id,
+          issueId: payload.data.issueId,
+          err: String(err),
+        })
+        // Intentional fall-through: triggerReason stays null → "no mention".
+      }
+    }
+
+    if (!triggerReason) {
+      return new Response("no mention\n", { status: 200 })
+    }
+
+    console.log("linear comment trigger", {
+      reason: triggerReason,
+      commentId: payload.data.id,
+    })
     await env.OPENCLAW_JOBS.send({ type: "linear-mention", commentId: payload.data.id })
     return new Response("queued\n", { status: 202 })
   }

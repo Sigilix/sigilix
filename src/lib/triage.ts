@@ -7,8 +7,7 @@
 // the PR-side worker which still has access to repo checkouts).
 
 import { generate } from "./ollama"
-import { LinearClient, estimateToPoints, severityToPriority } from "./linear"
-import { getAppActorToken } from "./linear-oauth"
+import { LinearClient, buildLinearAuth, estimateToPoints, severityToPriority } from "./linear"
 import { getMarker, setMarker } from "./dedupe"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { ISSUE_TRIAGE_SCHEMA } from "./schemas"
@@ -47,7 +46,7 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   }
 
   since("start")
-  const linear = new LinearClient(await buildAuth(env))
+  const linear = new LinearClient(await buildLinearAuth(env))
   since("auth-ready")
 
   const issue = await linear.getIssue(issueId)
@@ -239,24 +238,6 @@ function parseVerdict(text: string): Verdict | null {
     body,
     improvedDescription,
   }
-}
-
-/**
- * Build the auth credential the LinearClient uses. Prefers OAuth client_credentials
- * (gives bot identity in comment author) and falls back to a personal API key
- * when OAuth isn't configured. Personal-key mode posts comments under the
- * human owner of the key, which is fine for dev/setup but not the prod path.
- */
-async function buildAuth(env: Env): Promise<{ apiKey: string } | { oauthToken: string }> {
-  if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
-    const token = await getAppActorToken(
-      env.OPENCLAW_STATE,
-      env.LINEAR_OAUTH_CLIENT_ID,
-      env.LINEAR_OAUTH_CLIENT_SECRET
-    )
-    return { oauthToken: token }
-  }
-  return { apiKey: env.LINEAR_API_KEY }
 }
 
 /**

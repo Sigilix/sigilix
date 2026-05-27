@@ -69,40 +69,46 @@ export type BadgeAssetName = keyof typeof BADGE_STYLES
 export type CategoryBadgeAssetName = keyof typeof CATEGORY_BADGE_STYLES
 export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
-// SIG-238 (2026-05-26 round-5): reverted to the workers.dev host.
+// SIG-238 (2026-05-26 round-6 — THE ACTUAL FIX):
+// host = `raw.githubusercontent.com/Sigilix/sigilix-glyphs`, a
+// SEPARATE PUBLIC GitHub repo created tonight specifically to host
+// the glyph SVGs. Tag-based versioning: each `BADGE_ASSET_VERSION`
+// bump corresponds to a git tag in `Sigilix/sigilix-glyphs`, and the
+// URL pulls the SVG from that immutable ref.
 //
-// The PR #192 attempt swapped this to
-// `raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges` to
-// bypass GitHub's `js-gh-image-fallback` JS (which injects
-// `border-radius: 6px` + `background-color: var(--bgColor-muted)` on
-// Camo-proxied images). Verified via `gh api /markdown` that
-// raw.githubusercontent.com URLs render WITHOUT those injected
-// styles — but the markdown API doesn't actually fetch the image,
-// so the failure mode only surfaced at browser render time:
+// Why this works when prior 5 iterations didn't:
 //
-//   **The Sigilix/sigilix repo is private**, and
-//   `raw.githubusercontent.com` 404s on private repos for
-//   unauthenticated requests. GitHub's markdown image renderer
-//   fetches anonymously → 404 → alt-text fallback. Founder saw
-//   "P1 SECURITY" as bare blue link-styled text instead of badges.
+//   1. **No Camo proxy.** GitHub's image renderer treats
+//      `*.githubusercontent.com` hosts as same-origin and skips the
+//      Camo proxy. Empirically verified via `gh api /markdown` —
+//      raw.githubusercontent.com URLs render as bare `<img>` with
+//      only responsive sizing, no `border-radius`, no
+//      `background-color`. Camo-proxied URLs (workers.dev, sigilix.ai,
+//      sigilix.github.io — all tested 2026-05-26) get
+//      `data-canonical-src` wrapped + the `js-gh-image-fallback` JS
+//      injects rounding at render time.
+//   2. **No 404.** PR #192's first attempt pointed at
+//      `Sigilix/sigilix/main` — the same repo, which is PRIVATE, so
+//      raw.githubusercontent.com 404s for anonymous fetches.
+//      `Sigilix/sigilix-glyphs` is intentionally **public** for
+//      exactly this reason — the only thing in the repo is glyph
+//      SVGs, no proprietary code.
 //
-// Reverted to workers.dev for now. Rounded corners come back
-// (annoying, known limitation) but the badges actually LOAD.
+// Prior failed attempts (all addressed by this approach):
+//   1. SVG `rx=0` baked into the rect → js-gh-image-fallback overrode
+//   2. `rx=0` + `shape-rendering="crispEdges"` → same
+//   3. `BADGE_DISPLAY_SCALE = 1.6` → bloated, still rounded
+//   4. Drop the `<a href>` anchor wrap → still rounded (the
+//      js-gh-image-fallback class lives on the `<img>` directly)
+//   5. raw.githubusercontent.com on the PRIVATE Sigilix/sigilix repo
+//      → 404s, badges didn't load at all
 //
-// Real-fix paths for a follow-up ticket:
-//   1. Make a PUBLIC `Sigilix/sigilix-badges` repo, mirror the
-//      assets there, point the host at the public-repo's raw URL.
-//      Solves both rounding (no Camo) and loading (public = no 404).
-//   2. Cloudflare Pages with a custom domain that the GitHub JS
-//      doesn't treat as Camo-eligible. Possibly avoids the rounding;
-//      needs empirical test.
-//   3. Switch to GitHub-native badge primitives (e.g. shields.io
-//      style) that render via different markup path.
-//
-// The committed `assets/badges/v20260527-1/*.svg` files stay (PR #192
-// shipped them) — they're unused for now but cheap to keep + needed
-// if we revisit option 1.
-export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
+// Build-time dependency: every `BADGE_ASSET_VERSION` bump requires
+// mirroring the corresponding `assets/badges/<version>/*.svg` files
+// to the public glyphs repo AND tagging that commit with the same
+// version string. See `Sigilix/sigilix-glyphs` README for the
+// upstream workflow.
+export const PUBLIC_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/sigilix-glyphs"
 
 /**
  * SIG-238: kept as a back-compat anchor so the Worker keeps serving

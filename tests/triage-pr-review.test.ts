@@ -2870,20 +2870,19 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
     expect(out).toContain('width="20"')
     expect(out).toContain('height="20"')
   })
-  it("uses the workers.dev badge host (SIG-238 round-5 revert — private-repo raw URL 404s)", () => {
-    // SIG-238 PR #192 tried to swap this to raw.githubusercontent.com
-    // to bypass GitHub's `js-gh-image-fallback` JS (which injects
-    // border-radius on Camo-proxied images). The swap failed because
-    // the Sigilix/sigilix repo is PRIVATE — raw.githubusercontent.com
-    // 404s on private repos for unauthenticated requests, so GitHub's
-    // markdown image renderer (which fetches anonymously) got 404s
-    // and only rendered the alt-text fallback. Reverted to workers.dev
-    // so badges actually load; rounded corners are a known limitation
-    // pending a public asset-repo follow-up.
+  it("uses the public Sigilix/sigilix-glyphs raw host so GitHub's js-gh-image-fallback doesn't inject border-radius (SIG-238 round-6)", () => {
+    // SIG-238 round-6 = the actual fix. Tonight we created
+    // `Sigilix/sigilix-glyphs` (PUBLIC) and pushed the 13 glyph SVGs
+    // there under the version tag. The URL pattern
+    // `raw.githubusercontent.com/Sigilix/sigilix-glyphs/<version>/<name>.svg`
+    // bypasses Camo (same-origin to github.com) AND loads anonymously
+    // (public repo). Verified via `gh api /markdown` on the live URL
+    // — no Camo proxy, no `border-radius`, no `background-color`.
     const out = severityBadgeForScore(3)
     expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
-    expect(out).toContain("sigilix.dan-martinezjulio.workers.dev")
-    expect(out).not.toContain("raw.githubusercontent.com")
+    expect(out).toContain("raw.githubusercontent.com/Sigilix/sigilix-glyphs")
+    expect(out).not.toContain("sigilix.dan-martinezjulio.workers.dev")
+    expect(out).not.toContain("Sigilix/sigilix/main")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {
     expect(severityBadgeForScore(6)).toContain('alt="P0"')

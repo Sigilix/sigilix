@@ -111,18 +111,18 @@ describe("badge assets (SIG-201)", () => {
     expect(handleBadgeAssetRoute(new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/constructor.svg`))).toBeNull()
   })
 
-  it("builds workers.dev image URLs at the current asset version (SIG-238 round-5 revert)", () => {
-    // SIG-238 PR #192 tried raw.githubusercontent.com to bypass
-    // GitHub's `js-gh-image-fallback` rounding. That worked structurally
-    // but FAILED operationally: the Sigilix/sigilix repo is PRIVATE
-    // so raw.githubusercontent.com 404s for anonymous fetches (which
-    // is how GitHub's markdown image renderer pulls images). Reverted
-    // to workers.dev so badges load; rounded corners remain as a known
-    // limitation pending a public-asset-repo follow-up.
+  it("builds Sigilix/sigilix-glyphs raw URLs at the current asset version (SIG-238 round-6 — the actual fix)", () => {
+    // SIG-238 round-6: badge host is now `Sigilix/sigilix-glyphs`
+    // (a separate PUBLIC repo for the glyph SVGs only). Tag-based
+    // versioning: each BADGE_ASSET_VERSION bump = a new git tag in
+    // sigilix-glyphs containing the corresponding SVGs. The URL
+    // bypasses Camo (same-origin to github.com) AND loads anonymously
+    // (public repo).
     expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
     expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/security.svg`)
-    expect(badgeAssetUrl("p2")).toContain("sigilix.dan-martinezjulio.workers.dev")
-    expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
+    expect(badgeAssetUrl("p2")).toContain("raw.githubusercontent.com/Sigilix/sigilix-glyphs")
+    expect(badgeAssetUrl("p2")).not.toContain("sigilix.dan-martinezjulio.workers.dev")
+    expect(badgeAssetUrl("p2")).not.toContain("Sigilix/sigilix/main")
   })
 
   // Sigilix bot P1 (PR #176): structural sanity for the path-baked

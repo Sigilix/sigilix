@@ -233,6 +233,28 @@ OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 # is unset there).
 OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
 
+# SIG-235 — min-specialists early exit. Three-state rollout:
+#   "off"     — fan-out waits for ALL dispatched specialists to settle.
+#   "shadow"  — fan-out STILL waits for all, but emits
+#               `ensemble-min-specialists-early-exit-would-fire`
+#               telemetry the moment N-1 of N specialists return. Used
+#               to size the win + validate the cancel pattern without
+#               actually changing fan-out semantics. SHIPPING IN THIS
+#               STATE FIRST so we have a validation window before
+#               enforcing.
+#   "on"      — cancels laggard role(s) via per-role AbortController
+#               and proceeds to synth as soon as N-1 of N succeed.
+#               Synth runs on the partial input with the existing
+#               [DEGRADED COVERAGE] block. Late verdicts from the
+#               cancelled role are logged (`ensemble-late-verdict-
+#               discarded`) but discarded — the synth has already run.
+#
+# Rollout plan: ship "shadow" → bake 1-2 days / 50+ reviews → flip "on"
+# in a follow-up one-line PR. Rollback = flip back to "off"; per-role
+# AbortControllers are added in either mode, but the cancel logic only
+# fires on "on", so flipping back is safe.
+OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
+
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.
 #               Identical behavior to pre-SIG-161. This is the PR 4a default.

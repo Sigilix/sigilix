@@ -685,6 +685,30 @@ export function isSynthBypassEnabled(env: Env): boolean {
 }
 
 /**
+ * SIG-235 — min-specialists early exit mode parser. Returns one of:
+ *   - "off"    (default): fan-out waits for ALL specialists to settle
+ *   - "shadow"           : fan-out waits for all, BUT logs would-fire
+ *   - "on"               : fires synth as soon as N-1 of N succeed,
+ *                          cancels the laggard's outstanding ladder
+ *
+ * Case-insensitive, whitespace-tolerant. Unknown / unset values default
+ * to "off" so a misconfigured env never silently changes fan-out semantics.
+ *
+ * Extracted as a pure helper so unit tests can pin the parser without
+ * spinning up the orchestrator.
+ */
+export type MinSpecialistsEarlyExitMode = "off" | "shadow" | "on"
+
+export function parseMinSpecialistsEarlyExitMode(
+  raw: string | undefined,
+): MinSpecialistsEarlyExitMode {
+  const v = (raw ?? "").trim().toLowerCase()
+  if (v === "shadow") return "shadow"
+  if (v === "on") return "on"
+  return "off"
+}
+
+/**
  * SIG-228 Phase 3c: pure eligibility predicate, extracted so unit tests
  * can pin the gate without spinning up the full ensemble. Returns true
  * iff ALL of:
@@ -2787,41 +2811,220 @@ export async function handlePrReviewEnsemble(
     }
 
     // ARC-284: track per-specialist start time so the fanout summary
-    // can name the slowest role. The Promise.allSettled below waits
-    // for ALL to settle, so we measure each role's elapsed independent
-    // of the gating slowest one.
+    // can name the slowest role. The fan-out below waits for ALL to
+    // settle by default; SIG-235 quorum collector below opt-in
+    // early-exits when `N-1` of `N` succeed.
     const fanoutStartMs = Date.now()
     const perSpecialistStart = new Map<string, number>()
     const perSpecialistEnd = new Map<string, number>()
     for (const role of router.specialists) perSpecialistStart.set(role, Date.now())
-    const specialistResults = await Promise.allSettled(
-      router.specialists.map((role) =>
-        withComposedTimeout(
-          // Use the composed signal `withComposedTimeout` provides — it
-          // aborts on EITHER the per-specialist 270s timer OR the outer
-          // orch abort. Passing `orchCtrl.signal` directly only cancels
-          // the await wrapper, leaving the in-flight model fetch alive
-          // until the outer 490s wall fires (CR catch on PR #42).
-          (signal) => runSpecialist({
-            role,
-            apiKey: env.OLLAMA_API_KEY,
-            systemPrompt: SPECIALIST_PROMPTS[role],
-            // SIG-113: tests specialist gets the testing-evidence
-            // block; other specialists get the classification block.
-            initialMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
-            chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-            signal,
-            // ARC-283 Phase B1b: thread the orchestrator's perfCtx
-            // through so per-attempt `model-attempt-completed` events
-            // share correlation fields with the surrounding ensemble
-            // telemetry.
-            perfCtx,
-          }),
-          SPECIALIST_TIMEOUT_MS,
-          orchCtrl.signal,
-        ).finally(() => perSpecialistEnd.set(role, Date.now())),
-      ),
-    )
+
+    // SIG-235 — min-specialists early exit. Build per-role
+    // AbortControllers (mirroring the shadow path above) so the
+    // quorum collector can cancel a single laggard's outstanding
+    // attempts without affecting the others. composeSignals fires on
+    // EITHER orchCtrl OR the per-role controller — same pattern as
+    // the shadow path so the ladder cancels cleanly mid-attempt.
+    const earlyExitMode = parseMinSpecialistsEarlyExitMode(env.OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT)
+    const prodSpecialistAbortControllers = new Map<SpecialistRole, AbortController>()
+    // Tracks roles whose perSpecialistEnd has been frozen at the early-
+    // exit cancel point. Used by the `.finally()` below to skip
+    // overwriting an already-recorded end-time if the cancelled
+    // promise eventually settles (race-hardening for any future await
+    // between fan-out and `computeSpecialistFanoutSummary`).
+    const earlyExitCancelledRoles = new Set<SpecialistRole>()
+    type RolePromise = {
+      role: SpecialistRole
+      ctrl: AbortController
+      promise: Promise<PromiseSettledResult<SpecialistRunResult>>
+    }
+    const rolePromises: RolePromise[] = router.specialists.map((role) => {
+      const ctrl = new AbortController()
+      prodSpecialistAbortControllers.set(role, ctrl)
+      const composedSignal = composeSignals(orchCtrl.signal, ctrl.signal)
+      const promise = withComposedTimeout(
+        // Use the composed signal `withComposedTimeout` provides — it
+        // aborts on EITHER the per-specialist 270s timer OR the outer
+        // orch abort OR the per-role early-exit abort. Passing
+        // `orchCtrl.signal` directly only cancels the await wrapper,
+        // leaving the in-flight model fetch alive until the outer
+        // 490s wall fires (CR catch on PR #42).
+        (signal) => runSpecialist({
+          role,
+          apiKey: env.OLLAMA_API_KEY,
+          systemPrompt: SPECIALIST_PROMPTS[role],
+          // SIG-113: tests specialist gets the testing-evidence
+          // block; other specialists get the classification block.
+          initialMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
+          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+          signal,
+          // ARC-283 Phase B1b: thread the orchestrator's perfCtx
+          // through so per-attempt `model-attempt-completed` events
+          // share correlation fields with the surrounding ensemble
+          // telemetry.
+          perfCtx,
+        }),
+        SPECIALIST_TIMEOUT_MS,
+        composedSignal,
+      ).finally(() => {
+        // M2 race-hardening: only record end-time if the role's
+        // end-time wasn't already frozen by the early-exit synthetic
+        // entry. Today's flow is synchronous from fan-out to fanout-
+        // summary so the race doesn't fire, but this prevents a
+        // future await from triggering a late-set overwrite.
+        if (!earlyExitCancelledRoles.has(role)) {
+          perSpecialistEnd.set(role, Date.now())
+        }
+        prodSpecialistAbortControllers.delete(role)
+      }).then(
+        (value): PromiseSettledResult<SpecialistRunResult> => ({ status: "fulfilled", value }),
+        (reason): PromiseSettledResult<SpecialistRunResult> => ({ status: "rejected", reason }),
+      )
+      return { role, ctrl, promise }
+    })
+
+    // SIG-235 quorum collector. Drains role promises one at a time;
+    // when `N-1` of `N` have returned a non-null verdict AND mode is
+    // "on", cancels the remaining role(s) and continues to synth.
+    // Late verdicts from cancelled roles are logged + discarded.
+    //
+    // Modes:
+    //   off    — pure Promise.all (legacy semantics, default)
+    //   shadow — wait for all, but log when early-exit WOULD have fired
+    //   on     — cancel laggard + proceed to synth as soon as N-1 succeed
+    let specialistResults: PromiseSettledResult<SpecialistRunResult>[]
+    let earlyExitFiredAtMs: number | null = null
+    let cancelledRolesAtExit: SpecialistRole[] = []
+    let earlyExitWouldFireAtMs: number | null = null
+    if (earlyExitMode === "off") {
+      // Legacy: wait for everyone.
+      specialistResults = await Promise.all(rolePromises.map((rp) => rp.promise))
+    } else {
+      const settledResults = new Map<SpecialistRole, PromiseSettledResult<SpecialistRunResult>>()
+      // Each pending promise carries its role so Promise.race can
+      // identify which one resolved without an index lookup.
+      const pending = new Map<SpecialistRole, Promise<{ role: SpecialistRole; result: PromiseSettledResult<SpecialistRunResult> }>>(
+        rolePromises.map((rp) => [rp.role, rp.promise.then((result) => ({ role: rp.role, result }))]),
+      )
+      const N = router.specialists.length
+      const quorumThreshold = N - 1
+      while (pending.size > 0) {
+        const settled = await Promise.race(pending.values())
+        pending.delete(settled.role)
+        settledResults.set(settled.role, settled.result)
+
+        const succeededCount = Array.from(settledResults.values()).filter(
+          (r) => r.status === "fulfilled" && r.value.verdict !== null,
+        ).length
+
+        if (succeededCount >= quorumThreshold && pending.size > 0) {
+          const nowMs = Date.now()
+          if (earlyExitMode === "on") {
+            earlyExitFiredAtMs = nowMs
+            cancelledRolesAtExit = Array.from(pending.keys())
+            // Abort the laggards' AbortControllers — composedSignal
+            // propagates the cancel into the in-flight attempt.
+            for (const rp of rolePromises) {
+              if (pending.has(rp.role)) {
+                rp.ctrl.abort()
+                // Background watcher for the late-verdict-discard
+                // event. Doesn't block the synth path.
+                rp.promise
+                  .then((result) => {
+                    if (result.status === "fulfilled" && result.value.verdict !== null) {
+                      console.log(JSON.stringify({
+                        event: "ensemble-late-verdict-discarded",
+                        owner, repo, prNumber,
+                        role: rp.role,
+                        attemptsUsed: result.value.attemptsUsed,
+                        modelUsed: result.value.modelUsed,
+                      }))
+                    }
+                  })
+                  .catch(() => { /* discard cancellation errors */ })
+              }
+            }
+            break
+          } else if (earlyExitMode === "shadow" && earlyExitWouldFireAtMs === null) {
+            // Shadow: log the would-fire and keep awaiting. Only the
+            // FIRST time the threshold is crossed (subsequent settles
+            // would also satisfy `>= quorumThreshold` and we don't
+            // need duplicate events).
+            earlyExitWouldFireAtMs = nowMs
+            console.log(JSON.stringify({
+              event: "ensemble-min-specialists-early-exit-would-fire",
+              owner, repo, prNumber,
+              mode: "shadow",
+              succeededRoles: Array.from(settledResults.entries())
+                .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
+                .map(([role]) => role),
+              pendingRoles: Array.from(pending.keys()),
+              dispatchedRoles: router.specialists,
+              elapsedMsSinceFanoutStart: nowMs - fanoutStartMs,
+            }))
+          }
+        }
+      }
+
+      // Reassemble into router.specialists order so downstream
+      // `collectSpecialistVerdicts(roles, results, ...)` zips correctly.
+      // Cancelled-but-not-settled roles (only possible in "on" mode
+      // after early-exit) get a synthetic null-verdict entry so the
+      // [DEGRADED COVERAGE] block fires the same way as a legitimate
+      // ladder-exhaust failure.
+      //
+      // `failureReason: "early_exit_aborted"` is intentional — the
+      // collector's `timedOut: /abort/i || /timeout/i` regex at
+      // `collectSpecialistVerdicts` line ~6327 catches it, so these
+      // cancellations land in the same telemetry bucket as legitimate
+      // timer/parent-signal aborts. Lets the `/metrics/validation`
+      // dashboard treat early-exit cancels like timeouts (which they
+      // structurally are — primary started but was forcibly stopped).
+      //
+      // `attemptsUsed: 1` is a conservative MINIMUM (CR catch). The
+      // cancelled promise may have spent 1-3 attempts (primary +
+      // optional retry + optional fallback) before the cancel
+      // propagated, but synth-firing immediately means we can't
+      // await the real count without losing the wall-time win that
+      // motivates early-exit. Charging 1 acknowledges the primary
+      // definitely started; undercount risk on retry/fallback paths
+      // is bounded by the role's `maxAttempts()` and the daily-budget
+      // gate already has slack from the worst-case
+      // `MAX_CALLS_PER_ENSEMBLE_RUN` reservation.
+      specialistResults = router.specialists.map((role) => {
+        const r = settledResults.get(role)
+        if (r !== undefined) return r
+        earlyExitCancelledRoles.add(role)
+        const startMs = perSpecialistStart.get(role) ?? Date.now()
+        const nowMs = Date.now()
+        perSpecialistEnd.set(role, nowMs)
+        return {
+          status: "fulfilled" as const,
+          value: {
+            verdict: null,
+            modelUsed: SPECIALIST_CONFIGS[role].primary,
+            attemptsUsed: 1,
+            elapsedMs: nowMs - startMs,
+            failureReason: "early_exit_aborted",
+          } satisfies SpecialistRunResult,
+        }
+      })
+
+      if (earlyExitFiredAtMs !== null) {
+        const succeededRoles = Array.from(settledResults.entries())
+          .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
+          .map(([role]) => role)
+        console.log(JSON.stringify({
+          event: "ensemble-min-specialists-early-exit-fired",
+          owner, repo, prNumber,
+          mode: "on",
+          succeededRoles,
+          cancelledRoles: cancelledRolesAtExit,
+          dispatchedRoles: router.specialists,
+          elapsedMsAtFire: earlyExitFiredAtMs - fanoutStartMs,
+        }))
+      }
+    }
     const fanoutEndMs = Date.now()
     emitPhaseCompleted(perfCtx, "specialist_fanout", fanoutStartMs, fanoutEndMs)
 

@@ -498,8 +498,6 @@ const BODY_ONLY_FINDINGS_HEADING = "### Review Body Findings"
 const BODY_ONLY_FINDINGS_EXPLANATION =
   "<sub>These findings are shown in the review body because GitHub only supports PR review comments on diff lines, or because the finding is broader than one exact changed line.</sub>"
 
-const DISMISSAL_HINT =
-  "To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread."
 
 
 
@@ -1780,6 +1778,33 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
 type FindingsReviewPosture = "request_changes" | "comment"
 
 function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewPosture): string {
+  // SIG (Kimi K2.6 r1, 2026-05-27): compact redesign. Founder feedback:
+  // the prior shape (H2 "Sigilix: N findings" + H3 "Fix Plan" + bold
+  // severity subheading + bullets + 4 separate footer lines) had ~10
+  // lines of chrome around 1 line of content for a single-finding
+  // review. The "N findings" count in the header also didn't match
+  // the Fix Plan count (Fix Plan shows score>=4 only) — readers had
+  // no idea where lower-severity findings went.
+  //
+  // New shape (Kimi spec):
+  //   <!-- sigilix:pr-review -->
+  //
+  //   **N high-severity findings** [+ M lower-severity inline] · coverage: ...
+  //
+  //   <summary paragraph>
+  //
+  //   | Severity | Location | Issue |
+  //   |:---|:---|:---|
+  //   | **High (4)** | `path:line` | category: headline |
+  //
+  //   <sub>Dismiss: `@sigilix dismiss` · Re-run: `/sigilix review` · Review #N · `sha`</sub>
+  //
+  // The H2/H3 headings are gone (GitHub already shows "Bot requested
+  // changes" at the comment top), the Fix Plan severity subheading is
+  // collapsed into a table row, and all 4 footer lines merge into one
+  // `<sub>`. Body-only findings still get a separate section because
+  // their failure mode (no inline thread possible) needs the
+  // explanation copy.
   const inlineFindings = args.verdict.findings.filter((f) => findingScope(f) === "line")
   const bodyOnlyFindings = [
     ...(args.unanchored ?? []),
@@ -1787,41 +1812,61 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   ]
   const totalFindings = inlineFindings.length + bodyOnlyFindings.length
   const zeroFindingBlocker = posture === "request_changes" && totalFindings === 0
+  // CR Major (PR #200): high-severity count must include body-only
+  // findings too — an unanchored critical finding was rendering as
+  // "**1 finding**" instead of "**1 high-severity finding**", which
+  // weakens the prioritization signal in the compact lead line. The
+  // lower-severity-inline count stays scoped to inline only — body-
+  // only findings already get an explicit "+ N body" segment in the
+  // lead, so counting them here too would double-count.
+  const highOrCriticalCount =
+    inlineFindings.filter((f) => f.score >= 4).length
+    + bodyOnlyFindings.filter((f) => f.score >= 4).length
+  const lowerSeverityInlineCount = inlineFindings.filter((f) => f.score < 4).length
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
-  // Heading: "## Sigilix: N [non-blocking ]finding[s][ · since last review]".
-  // 2026-05-23 rebrand: Δ glyph (triangle) removed; literal "since
-  // last review" copy in its place. See `renderDeltaBadge` for the
-  // matching badge-line change.
-  const findingNoun = totalFindings === 1 ? "finding" : "findings"
+  // Lead line — compact, bold, with coverage inlined. Drops the H2
+  // heading entirely (the comment-header above already says "Sigilix
+  // Bot requested changes" — a second H2 was redundant).
   const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
-  const deltaSuffix = deltaBadge ? " · since last review" : ""
-  const postureCopy = posture === "comment" ? "non-blocking " : ""
-  lines.push(
-    zeroFindingBlocker
-      ? "## Sigilix: approval pending"
-      : `## Sigilix: ${totalFindings} ${postureCopy}${findingNoun}${deltaSuffix}`,
-  )
-
-  // Changes-badge line — directly under heading, before coverage and
-  // summary. Only present when delta has signal.
-  if (deltaBadge) {
-    lines.push("")
-    lines.push(deltaBadge)
-  }
-
-  // Coverage line — full or degraded variant; absent when no
-  // coverage args supplied (back-compat).
   const coverageLine = args.coverage ? renderCoverageLine(args.coverage) : null
-  if (coverageLine) {
-    lines.push("")
-    lines.push(coverageLine)
+  // Strip the `**Coverage:**` prefix from the coverage line so we can
+  // inline-append it after the lead. `renderCoverageLine` always emits
+  // `**Coverage:** <rest>`, so the prefix strip is a stable contract.
+  const coverageInline = coverageLine ? coverageLine.replace(/^\*\*Coverage:\*\* /, "coverage: ") : null
+  let lead: string
+  if (zeroFindingBlocker) {
+    lead = "**Approval pending**"
+  } else {
+    const postureCopy = posture === "comment" ? "non-blocking " : ""
+    const findingNoun = (n: number): string => (n === 1 ? "finding" : "findings")
+    if (highOrCriticalCount === 0 && lowerSeverityInlineCount === 0 && bodyOnlyFindings.length > 0) {
+      // All findings are body-only AND lower-severity (the high-
+      // severity body-only case falls into the next branch via
+      // highOrCriticalCount > 0 — CR Major fold).
+      lead = `**${bodyOnlyFindings.length} ${postureCopy}${findingNoun(bodyOnlyFindings.length)}**`
+    } else if (highOrCriticalCount === 0) {
+      // Lower-severity inline only (no Fix Plan table).
+      lead = `**${lowerSeverityInlineCount} ${postureCopy}${findingNoun(lowerSeverityInlineCount)}** posted inline`
+    } else {
+      // High-severity tier — includes body-only criticals per CR
+      // Major. The "+ M lower-severity inline" clause tells the
+      // reader where the rest live; body-only findings already get
+      // their own "### Review Body Findings" section below so we
+      // don't double-count them in the lead.
+      lead = `**${highOrCriticalCount} ${postureCopy}high-severity ${findingNoun(highOrCriticalCount)}**`
+      if (lowerSeverityInlineCount > 0) {
+        lead += ` + ${lowerSeverityInlineCount} lower-severity inline`
+      }
+    }
   }
+  const leadParts: string[] = [lead]
+  if (deltaBadge) leadParts.push(deltaBadge.replace(/^\*\*Changes:\*\* /, "since last review: "))
+  if (coverageInline) leadParts.push(coverageInline)
+  lines.push(leadParts.join(" · "))
 
-  // Summary paragraph (with optional stack-context parenthetical
-  // appended to the LAST paragraph so it visually attaches to the
-  // text rather than floating on its own line).
+  // Summary paragraph (with optional stack-context parenthetical).
   const stackParen = renderStackParenthetical(args.stack)
   const summary = stackParen
     ? `${args.verdict.summary.trimEnd()} ${stackParen}`
@@ -1836,18 +1881,19 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   }
   lines.push(summary)
 
-  // Fix Plan — only inline findings. Body-only findings appear in the
-  // section below so the plan never promises a file:line with no inline
-  // review thread.
-  const fixPlan = renderFixPlan(inlineFindings)
-  if (fixPlan) {
+  // Fix Plan as a compact table. Only inline findings (body-only have
+  // their own section below). Returns null when no findings at
+  // score>=4, in which case the table is omitted entirely.
+  const fixPlanTable = renderFixPlanTable(inlineFindings)
+  if (fixPlanTable) {
     lines.push("")
-    lines.push(fixPlan)
+    lines.push(fixPlanTable)
   }
 
-  // Body-only findings — unanchored or non-line-scoped set, rendered
-  // as compact standalone entries. Avoid file-only headings: they read
-  // like orphaned inline comments when GitHub cannot create a thread.
+  // Body-only findings — unanchored or non-line-scoped set. Same
+  // section as before (explanation copy is load-bearing — these are
+  // findings GitHub can't anchor to a diff line, so the reader needs
+  // to know why they're not inline review threads).
   if (bodyOnlyFindings.length > 0) {
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_HEADING)
@@ -1856,44 +1902,52 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     lines.push(...renderBodyOnlyFindings(bodyOnlyFindings, args.linkContext))
   }
 
-  // Dismissal hint — REQUEST_CHANGES only, before the provenance
-  // footer.
-  if (posture === "request_changes") {
-    lines.push("")
-    lines.push(DISMISSAL_HINT)
-  }
+  // Single-line footer (replaces the four separate metadata lines).
+  // Built separately from `lines` so the 65k cap can truncate the
+  // body content without slicing through the footer's `<sub>` and
+  // losing the SHA (Sigilix-bot HIGH + CR MINOR on PR #200 —
+  // provenance invariant).
+  const headShort = args.prov?.headSha ? args.prov.headSha.slice(0, 7) : null
+  const footer = renderCompactReviewFooter({
+    posture,
+    reviewCounter: args.reviewCounter,
+    headShort,
+  })
 
-  // SIG-101: retrigger hint. The original Greptile-style
-  // `[🔄 Re-run review](URL)` button was dropped on founder feedback
-  // 2026-05-19 — it read as visual noise inside the request-changes
-  // body. The `<sub>` hint line remains as the discoverability
-  // affordance: it tells the reader that re-running is a thing they
-  // can do, without occupying header-weight real estate. GitHub
-  // doesn't support pre-filled comment bodies on existing PRs, so a
-  // URL-link wouldn't have actually triggered the rerun anyway.
-  if (posture === "request_changes" && args.retriggerUrl) {
-    lines.push("")
-    lines.push("<sub>Comment `/sigilix review` on this PR to re-run on the current head.</sub>")
-  }
+  return capForGitHub(lines.join("\n"), footer)
+}
 
-  // SIG-101: per-PR review counter footer. 1-indexed (first review
-  // is `#1`). The `last rendered` timestamp is the SAME wall-clock
-  // value `renderProvenanceFooter` uses, so the two footers stay in
-  // sync. APPROVE bodies render marker-only per SIG-94 and skip
-  // this; only REQUEST_CHANGES bodies surface the counter.
-  if (
-    posture === "request_changes" &&
-    typeof args.reviewCounter === "number" &&
-    args.reviewCounter > 0
-  ) {
-    const counterTs = new Date(args.prov?.nowMs ?? Date.now()).toISOString()
-    lines.push("")
-    lines.push(
-      `_Sigilix · Review #${args.reviewCounter} for this PR · last rendered ${counterTs}._`,
-    )
+/**
+ * SIG (Kimi K2.6 r1): one-line footer that merges what used to be FOUR
+ * separate metadata lines at the bottom of the review body — dismiss
+ * hint, re-run hint, Review #N counter, "Reviewed against SHA at
+ * TIMESTAMP" provenance. One `<sub>` block keeps the body lightweight
+ * while preserving every piece of info the prior multi-line shape
+ * provided.
+ *
+ * The timestamp is dropped because the GitHub comment header already
+ * shows the "N minutes ago" timestamp at the top of the rendered
+ * comment — two timestamps in the body for the same event was
+ * redundant. The SHA stays because it's the only piece of info NOT
+ * available from GitHub's chrome.
+ */
+function renderCompactReviewFooter(args: {
+  posture: FindingsReviewPosture
+  reviewCounter: number | undefined
+  headShort: string | null
+}): string {
+  const parts: string[] = []
+  if (args.posture === "request_changes") {
+    parts.push("Dismiss: `@sigilix dismiss` in a review thread")
   }
-
-  return capForGitHub(lines.join("\n"), args.prov)
+  parts.push("Re-run: `/sigilix review`")
+  if (typeof args.reviewCounter === "number" && args.reviewCounter > 0) {
+    parts.push(`Review #${args.reviewCounter}`)
+  }
+  if (args.headShort) {
+    parts.push(`\`${args.headShort}\``)
+  }
+  return `<sub>${parts.join(" · ")}</sub>`
 }
 
 // ARC-184: provenance footer + writer-side 65k cap.
@@ -1906,28 +1960,20 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
 // reader to the full review history.
 const GH_BODY_CAP = 65000
 
-function renderProvenanceFooter(prov: ProvenanceCtx | undefined): string | null {
-  if (!prov || !prov.headSha) return null
-  const headShort = prov.headSha.slice(0, 7)
-  const ts = new Date(prov.nowMs ?? Date.now()).toISOString()
-  return `_Reviewed against \`${headShort}\` at ${ts}._`
-}
-
-function capForGitHub(body: string, prov: ProvenanceCtx | undefined): string {
-  const footer = renderProvenanceFooter(prov)
-  // Always append the footer (or omit when there's no provenance ctx,
-  // for backwards compatibility with callers that don't provide one).
-  if (!footer) return body
-  const withFooter = `${body}\n\n${footer}\n`
-  if (withFooter.length <= GH_BODY_CAP) return withFooter
-  // Truncate the body content (NOT the footer) and append a pointer
-  // marker. The footer is appended below so the reader still sees
-  // which head SHA the review was generated against.
+function capForGitHub(body: string, footer: string): string {
+  // SIG Kimi K2.6 r1 + Sigilix HIGH (PR #200): the compact footer
+  // carries the SHA (the provenance invariant). It MUST survive the
+  // 65k truncation — a naive tail-cut would slice through the `<sub>`
+  // and break the invariant. So we cap by truncating BODY CONTENT
+  // and re-appending the footer afterwards, the same shape the
+  // pre-r1 renderProvenanceFooter / capForGitHub pair used.
+  const joined = `${body}\n\n${footer}`
+  if (joined.length <= GH_BODY_CAP) return joined
   const TRUNC = "\n\n_[summary truncated to fit GitHub's 65535 limit]_"
-  const overhead = TRUNC.length + footer.length + 4 // 4 = "\n\n" before footer + "\n" tail
+  const overhead = TRUNC.length + footer.length + 4 // "\n\n" between body & footer + a hair
   const room = GH_BODY_CAP - overhead
   const truncated = body.slice(0, Math.max(0, room))
-  return `${truncated}${TRUNC}\n\n${footer}\n`
+  return `${truncated}${TRUNC}\n\n${footer}`
 }
 
 /**
@@ -1979,6 +2025,51 @@ export function renderFixPlan(findings: PrReviewFinding[]): string | null {
     lines.push("")
     lines.push(`**High (score 4)** — ${high.length} ${high.length === 1 ? "finding" : "findings"}`)
     for (const f of high) lines.push(formatFixPlanRow(f))
+  }
+  return lines.join("\n")
+}
+
+/**
+ * SIG (Kimi K2.6 r1): Fix Plan in compact table form. Replaces the
+ * H3 heading + per-severity subheading + bullet list shape with a
+ * single markdown table. ~50% less vertical space per row.
+ *
+ * Critical (score 5) and High (score 4) findings only — same filter
+ * as `renderFixPlan`. Lower-severity findings are referenced in the
+ * lead-line "+ N lower-severity inline" copy so the reader knows
+ * where they went without surfacing them in the table.
+ *
+ * Pure — exported for tests.
+ */
+export function renderFixPlanTable(findings: PrReviewFinding[]): string | null {
+  const eligible = findings
+    .filter((f) => f.score >= 4)
+    .sort((a, b) => {
+      // Critical first, then high. Within each severity, sort by
+      // path/line so the table is stable across runs.
+      if (a.score !== b.score) return b.score - a.score
+      if (a.path !== b.path) return a.path < b.path ? -1 : 1
+      return a.line - b.line
+    })
+  if (eligible.length === 0) return null
+
+  const lines: string[] = [
+    "| Severity | Location | Issue |",
+    "|:---|:---|:---|",
+  ]
+  for (const f of eligible) {
+    const range = f.startLine != null && f.startLine !== f.line
+      ? `${f.path}:${f.startLine}-${f.line}`
+      : `${f.path}:${f.line}`
+    const cleanHeadline = stripAstMarkers(f.headline)
+    // Escape the pipe in headlines so a finding that says "use a | b"
+    // doesn't collapse the table. Hand the reader a safer message and
+    // a slightly longer truncation budget since each row is only one
+    // line tall (vs prior bullet that could wrap visually).
+    const safeHeadline = cleanHeadline.replace(/\|/g, "\\|")
+    const headline = safeHeadline.length > 160 ? `${safeHeadline.slice(0, 157)}…` : safeHeadline
+    const severityLabel = f.score >= 5 ? "**Critical (5)**" : "**High (4)**"
+    lines.push(`| ${severityLabel} | \`${range}\` | \`${formatFindingCategory(f)}\`: ${headline} |`)
   }
   return lines.join("\n")
 }

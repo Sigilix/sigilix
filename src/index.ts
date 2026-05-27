@@ -704,6 +704,16 @@ export type JobMessage =
       type: "index-repo"
       owner: string
       repo: string
+      /**
+       * SIG-243 Phase 1: GitHub's immutable integer repository ID,
+       * captured at the webhook handler and threaded through the
+       * producer + consumer. Optional during Phase 1 + Phase 2 so
+       * legacy in-flight messages (and message types not yet on the
+       * new path) still dispatch cleanly; consumers persist it on
+       * the manifest when present. Becomes the canonical key in
+       * Phase 4 (`repo-tenant:{githubRepoId}`).
+       */
+      githubRepoId?: number
       installationId: number
       reason:
         | "install"
@@ -809,7 +819,16 @@ interface LinearWebhookPayload {
     title?: string
     description?: string
     body?: string
-    team?: { key?: string }
+    /** SIG-243: `team.id` is Linear's immutable UUID for the team. Stable
+     *  across team-key renames + team-name changes — unlike `team.key`
+     *  above, which Linear admins can change at will. Captured in every
+     *  Linear webhook handler so Phase 4 can replace the global static
+     *  `OPENCLAW_TEAM_GITHUB_REPO_MAP` JSON keyed by mutable team prefix
+     *  with a per-tenant KV binding (`linear-binding:{linearTeamUuid}`)
+     *  keyed by this UUID. The `key` field stays as cached display state
+     *  during the transition (Phase 1+2 still reads through the legacy
+     *  env-var path). */
+    team?: { id?: string; key?: string }
     /** SIG-225: `user.id` is included so the trigger log can emit a
      *  presence-only `userIdPresent: !!payload.data.user?.id` flag
      *  without exposing raw identity values. The leading hypothesis
@@ -845,8 +864,21 @@ interface GitHubWebhookPayload {
     account?: { login?: string; type?: string }
   }
   repository?: {
+    /** SIG-243: GitHub's immutable integer ID for the repository. Stable
+     *  across rename, transfer, and ownership changes — unlike `name` +
+     *  `owner.login` above, both of which mutate. Captured in every
+     *  webhook handler so Phase 2+ can key by this instead of the
+     *  mutable string pair. */
+    id?: number
     name?: string
-    owner?: { login?: string }
+    owner?: {
+      login?: string
+      /** SIG-243: owner ID is also immutable across rename. Less load-
+       *  bearing than `repository.id` (one repo can't move between
+       *  orgs without the App being re-installed) but captured for
+       *  observability + future tenant-scoping. */
+      id?: number
+    }
   }
   pull_request?: {
     number?: number
@@ -895,13 +927,17 @@ interface GitHubWebhookPayload {
   // is the initial set on `installation.created`. `repositories_added[]`
   // is the delta on `installation_repositories.added`. Both share the
   // same entry shape (we only consume `full_name`, formatted "owner/repo").
-  repositories?: Array<{ name?: string; full_name?: string }>
-  repositories_added?: Array<{ name?: string; full_name?: string }>
+  // SIG-243 Phase 1: GitHub's installation / installation_repositories
+  // webhook payloads include an `id` (immutable integer) per repo
+  // alongside `name` + `full_name`. Captured so the bootstrap queue
+  // message carries the canonical ID from its first write.
+  repositories?: Array<{ id?: number; name?: string; full_name?: string }>
+  repositories_added?: Array<{ id?: number; name?: string; full_name?: string }>
   // ARC-238: `installation_repositories.removed` carries the delta;
   // `installation.deleted` does NOT carry a repo list (repos are
   // already gone) — the delete handler discovers affected repos by
   // walking `repo-index-manifest:` records and filtering by owner.
-  repositories_removed?: Array<{ name?: string; full_name?: string }>
+  repositories_removed?: Array<{ id?: number; name?: string; full_name?: string }>
   // ARC-237 / SIG-35: `push` event fields. Default-branch pushes refresh
   // the compatibility index. Tracked long-lived branches and active PR
   // head branches refresh isolated branch-scoped indexes. Branch deletes
@@ -2772,6 +2808,20 @@ async function handleGitHubWebhook(
       env,
       owner,
       repo,
+      // SIG-243 Phase 1: capture the immutable repo ID from the push
+      // payload and thread it to the producer. The producer attaches
+      // it to the queue message; the consumer persists it on the
+      // manifest. Falls back to `undefined` (treated as legacy) if a
+      // webhook arrives without the field. GitHub repo IDs are strictly
+      // positive integers; the guard rejects 0 / negative / non-integer
+      // / NaN / Infinity at the entry point so a spoofed or malformed
+      // payload can't land an invalid `repo-tenant:0` key downstream.
+      repoId:
+        typeof payload.repository?.id === "number" &&
+        Number.isInteger(payload.repository.id) &&
+        payload.repository.id > 0
+          ? payload.repository.id
+          : undefined,
       installationId,
       ref: typeof payload.ref === "string" ? payload.ref : undefined,
       after: typeof payload.after === "string" ? payload.after : undefined,

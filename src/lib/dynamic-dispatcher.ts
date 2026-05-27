@@ -443,11 +443,38 @@ async function callLlmClassifier(args: {
   args.signal?.addEventListener("abort", onExternalAbort, { once: true })
   if (args.signal?.aborted) internalCtrl.abort()
 
+  // SIG-230 CR Major (PR #193): commitMessage is the dual-channel
+  // bypass risk — the rule layer needs it (BEHAVIOR_CHANGE_RE keyword
+  // check, safe), but the LLM path must NEVER see the raw value.
+  // Derive title/body here from prTitle/prBody (sanitized envelope)
+  // OR from a commitMessage fallback split, then pass ONLY the
+  // derived title/body into buildLlmMessages — which therefore can't
+  // accidentally leak commitMessage into the prompt template.
+  //
+  // CR Major #2: split-with-limit-2 dropped paragraphs 3+ from the
+  // fallback body. .exec() + slice keeps every paragraph past the
+  // first blank line.
+  let fallbackTitle = args.commitMessage
+  let fallbackBody = ""
+  const blankLineMatch = /\n\s*\n/.exec(args.commitMessage)
+  if (blankLineMatch !== null) {
+    fallbackTitle = args.commitMessage.slice(0, blankLineMatch.index)
+    fallbackBody = args.commitMessage.slice(blankLineMatch.index + blankLineMatch[0].length)
+  }
+  const titleForLlm = args.prTitle ?? fallbackTitle
+  const bodyForLlm = args.prBody ?? fallbackBody
+
   // SIG-230: build messages + sanitized metadata together; fire the
   // onSanitized callback so the orchestrator can emit telemetry
   // BEFORE the LLM call (so we see what was stripped even if the
   // chat() throws).
-  const built = buildLlmMessages(args)
+  const built = buildLlmMessages({
+    signals: args.signals,
+    classified: args.classified,
+    prTitle: titleForLlm,
+    prBody: bodyForLlm,
+    ambiguous: args.ambiguous,
+  })
   if (args.onSanitized) {
     try {
       args.onSanitized(built.sanitized)
@@ -513,10 +540,17 @@ async function callLlmClassifier(args: {
 function buildLlmMessages(args: {
   signals: DiffSignals
   classified: readonly ClassifiedDiffFile[]
-  /** SIG-230: separate fields for `<pr_metadata>` wrapping. */
-  prTitle?: string
-  prBody?: string
-  commitMessage: string
+  /**
+   * SIG-230 CR Major (PR #193): builder takes title/body ONLY — NEVER
+   * the raw `commitMessage`. The caller (`callLlmClassifier`) derives
+   * these from `prTitle`/`prBody` or the commitMessage fallback split
+   * BEFORE invoking. This removes the dual-channel bypass surface: a
+   * future contributor can't accidentally drop `args.commitMessage`
+   * back into the user-message template (the old SIG-226 pattern)
+   * because the parameter no longer exists on this function.
+   */
+  prTitle: string
+  prBody: string
   ambiguous: readonly SpecialistRole[]
 }): { messages: Array<{ role: "system" | "user"; content: string }>; sanitized: SanitizedMetadata } {
   const fileSummary = args.classified.slice(0, DIFF_SNIPPET_MAX_FILES).map((f) => {
@@ -534,22 +568,18 @@ function buildLlmMessages(args: {
     : "(diff text unavailable)"
 
   // SIG-230: sanitize + wrap PR title/body before they enter the
-  // LLM prompt. When the caller didn't supply prTitle/prBody (unit
-  // tests that don't exercise the LLM-path-with-meta variant), fall
-  // back to splitting commitMessage at the first blank line — same
-  // shape as the orchestrator's `${meta.title}\n\n${meta.body}`
-  // composition.
-  const fallbackSplit = args.commitMessage.split(/\n\s*\n/, 2)
-  const titleForLlm = args.prTitle ?? fallbackSplit[0] ?? ""
-  const bodyForLlm = args.prBody ?? fallbackSplit[1] ?? ""
+  // LLM prompt. Title/body are already derived by the caller (from
+  // prTitle/prBody or the commitMessage fallback split); this
+  // function ONLY sees the sanitized envelope inputs.
+  //
   // CR Low #4 (PR #193): sanitize FIRST, truncate AFTER — so a worst-
   // case adversarial input of 399 chars of injection triggers gets
   // collapsed to `[REDACTED]` markers FIRST, then the truncate cap
   // applies to the post-redaction string. Original order risked
   // letting redaction inflation push the prompt past the cap.
   const { block: metadataBlock, sanitized } = buildSanitizedMetadataBlock({
-    title: titleForLlm,
-    body: bodyForLlm,
+    title: args.prTitle,
+    body: args.prBody,
   })
   // `metadataBlock` is the truncate target — apply caps to the
   // wrapped block per-field by re-sanitizing with truncated inputs.

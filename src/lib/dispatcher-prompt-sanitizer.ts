@@ -91,13 +91,27 @@ const ROLE_TOKEN_RE = new RegExp(`\\b(${ROLE_TOKENS.join("|")})\\b`, "gi")
  * `` ` ``, `~`) inside trigger phrases — `ignore\nprevious`,
  * `ignore **previous** instructions`, etc. all hit the same pattern.
  *
- * CR Major (PR #193): added per H1 + H2. Single-space-only matching
- * left every multi-word trigger trivially evadable.
+ * Each compiled trigger is wrapped in non-word-character lookarounds
+ * so the regex matches only on token boundaries. Without these,
+ * `system:` would substring-match inside `ecosystem:`, and `act as`
+ * would match inside `interact as` — false positives that erroneously
+ * trip the role-token redaction gate on benign engineering language
+ * and pollute the `dispatcher-prompt-sanitized` telemetry signal.
+ *
+ * CR catches folded:
+ *  - PR #193 H1 + H2 (added per-word flex-separator)
+ *  - PR #193 Major (added boundary lookarounds — this comment block)
  */
 function compileTrigger(phrase: string): string {
-  return phrase
+  const inner = phrase
     .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
     .replace(/ /g, "[\\s*_`~]+")
+  // `(?<!\w)` requires the char before the match (if any) to be a
+  // non-word char (whitespace, punctuation, start-of-string). `(?!\w)`
+  // requires the char after the match (if any) to be a non-word char.
+  // Together they form a token-boundary check that's tolerant of the
+  // trigger ending in `:` (which `\b` would mishandle).
+  return `(?<!\\w)${inner}(?!\\w)`
 }
 const INJECTION_TRIGGER_RE = new RegExp(
   `(${INJECTION_TRIGGERS.map(compileTrigger).join("|")})`,

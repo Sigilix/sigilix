@@ -125,6 +125,73 @@ describe("emitModelAttempt", () => {
     expect(lastLogged()["failureReason"]).toBe("HTTP 503")
   })
 
+  it("includes inputTokens/outputTokens when supplied (SIG-212 token usage)", () => {
+    // SIG-212: pin that token usage round-trips through the emitter. The
+    // monitoring app's cost dashboard joins on `(model, role,
+    // attemptIndex, inputTokens, outputTokens)`, so a future refactor
+    // that drops these fields would silently break the cost metric.
+    emitModelAttempt(CTX, {
+      phase: "specialist",
+      role: "logic",
+      attemptKind: "primary",
+      attemptIndex: 1,
+      model: "deepseek-v4-pro:cloud",
+      timeoutMs: 85_000,
+      startedAtMs: 100,
+      endedAtMs: 200,
+      elapsedMs: 100,
+      outcome: "ok",
+      inputTokens: 1234,
+      outputTokens: 567,
+    })
+    const event = lastLogged()
+    expect(event["inputTokens"]).toBe(1234)
+    expect(event["outputTokens"]).toBe(567)
+  })
+
+  it("omits token fields when not supplied (optional-field round-trip)", () => {
+    // Non-Ollama providers and exception-path attempts both legitimately
+    // omit token counts. The JSON output MUST distinguish "absent" from
+    // "zero" so downstream aggregators don't conflate them.
+    emitModelAttempt(CTX, {
+      phase: "specialist",
+      role: "logic",
+      attemptKind: "primary",
+      attemptIndex: 1,
+      model: "deepseek-v4-pro:cloud",
+      timeoutMs: 85_000,
+      startedAtMs: 100,
+      endedAtMs: 200,
+      elapsedMs: 100,
+      outcome: "ok",
+    })
+    const event = lastLogged()
+    expect(event).not.toHaveProperty("inputTokens")
+    expect(event).not.toHaveProperty("outputTokens")
+  })
+
+  it("includes only the token field that was supplied (one-sided round-trip)", () => {
+    // Defensive: Ollama could theoretically report `prompt_eval_count`
+    // but not `eval_count` (or vice versa) on a degenerate response.
+    // Each field is independently optional.
+    emitModelAttempt(CTX, {
+      phase: "specialist",
+      role: "logic",
+      attemptKind: "primary",
+      attemptIndex: 1,
+      model: "deepseek-v4-pro:cloud",
+      timeoutMs: 85_000,
+      startedAtMs: 100,
+      endedAtMs: 200,
+      elapsedMs: 100,
+      outcome: "ok",
+      inputTokens: 1234,
+    })
+    const event = lastLogged()
+    expect(event["inputTokens"]).toBe(1234)
+    expect(event).not.toHaveProperty("outputTokens")
+  })
+
   it("stamps every field on the ModelAttemptEvent (CR PR #95 catch — pin full shape)", () => {
     emitModelAttempt(CTX, {
       phase: "synth",

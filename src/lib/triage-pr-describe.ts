@@ -551,12 +551,16 @@ export async function handlePrDescribe(args: TriagePrDescribeArgs): Promise<void
     for (const m of modelChain) {
       modelUsed = m
       try {
-        response = await generate({
+        // SIG-212: `generate()` now returns `{ text, usage }`; this caller
+        // only consumes the text. The describe path doesn't emit
+        // `model-attempt-completed` telemetry today (its own logging is
+        // structured separately), so usage is intentionally discarded.
+        response = (await generate({
           model: m,
           prompt,
           apiKey: env.OLLAMA_API_KEY,
           format: PR_DESCRIBE_SCHEMA as unknown as Record<string, unknown>,
-        })
+        })).text
         break
       } catch (err) {
         lastErr = err

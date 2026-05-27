@@ -48,6 +48,14 @@ export interface ShadowAttemptEvent {
   outcome: ShadowAttemptOutcome
   /** Present when outcome ≠ ok. */
   failureReason?: string
+  /** SIG-212: token usage reported by Ollama (`prompt_eval_count`).
+   *  Mirrors the prod `model-attempt-completed` event so log analyzers
+   *  can join shadow + prod attempts on `(role, attemptKind,
+   *  attemptIndex)` AND aggregate token usage across both. Optional —
+   *  absent when the provider didn't surface a count. */
+  inputTokens?: number
+  /** SIG-212: token usage reported by Ollama (`eval_count`). */
+  outputTokens?: number
 }
 
 export function emitShadowAttempt(ctx: EnsembleRunCtx, info: ShadowAttemptEvent): void {

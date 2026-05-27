@@ -11,6 +11,24 @@ main = "src/index.ts"
 compatibility_date = "2025-01-15"
 compatibility_flags = ["nodejs_compat"]
 
+# Workers Trace Events Logpush opt-in — required for the
+# sigilix-trace-events-r2 Logpush job (R2 bucket: sigilix-telemetry)
+# to receive any data. Without this, the Worker emits zero records
+# to the workers_trace_events dataset and the Logpush job pushes
+# empty batches. Independent from the [observability] block below:
+# both subscribe to the same upstream Trace Events stream but are
+# billed separately (Logpush is a paid add-on; Workers Logs is
+# included in Workers Paid).
+logpush = true
+
+# Workers Logs — in-dashboard searchable log viewer with 7-day
+# retention. Mirror of the dashboard Observability toggle; wrangler
+# is the source of truth at deploy time, so toggling in the dashboard
+# alone would be reverted on next `wrangler deploy`.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 # Standard usage model — Bundled gives ctx.waitUntil() only ~30s of
 # wall-clock budget after the response, which Ollama Turbo blows past
 # routinely (its calls take 30-90s for a description rewrite). On
@@ -409,14 +427,19 @@ OPENCLAW_GATE = "shadow"
 [triggers]
 crons = ["0 */6 * * *"]
 
-# Cloudflare Workers Logs — keep the full Workers Observability product
-# disabled (it costs per-event ingest) but turn on `invocation_logs` so
-# every webhook delivery still produces a head-sampled request line that
-# `wrangler tail` and the dashboard can show. Without this, the Worker
-# fires silently and triage failures are invisible.
+# Workers Logs subsection — pairs with the top-level [observability]
+# block at the top of this file. `enabled = true` opts log events
+# into the searchable Workers Logs dataset (7-day retention).
+# `invocation_logs = true` adds a synthetic per-invocation request
+# line so webhook deliveries are visible even when triage emits
+# nothing — invaluable for "did the webhook even arrive?" debugging.
+# Required for the monitoring-app initiative: the sigilix-trace-
+# events-r2 Logpush job subscribes to the same upstream Trace Events
+# stream that the parent [observability] block enables.
 [observability.logs]
-enabled = false
+enabled = true
 invocation_logs = true
+head_sampling_rate = 1
 
 # Environment-specific overrides go below as `[env.production]`,
 # `[env.staging]`, etc. The default config above is what `wrangler deploy`

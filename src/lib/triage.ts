@@ -89,7 +89,7 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
 
   const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
   since("ollama-start")
-  const response = await generate({
+  const { text: response } = await generate({
     model,
     prompt,
     apiKey: env.OLLAMA_API_KEY,

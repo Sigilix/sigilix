@@ -2946,9 +2946,12 @@ export async function handlePrReviewEnsemble(
     // `synthInputVerdicts` is hoisted out so both the bypass path AND
     // the synth path read the same truncated verdicts. `truncateVerdictToTokens`
     // sorts findings by score DESC and pops from the end, so major
-    // findings always survive truncation as long as any space remains —
-    // the bypass score-gate evaluated on the truncated verdict is
-    // functionally equivalent to evaluating on the original.
+    // findings always survive truncation as long as any space remains.
+    // The bypass eligibility check below intentionally reads from the
+    // UNTRUNCATED `succeeded` array (not `synthInputVerdicts`) so that a
+    // hypothetical extreme-token-pressure case dropping a `score >= 4`
+    // finding can't sneak past the bypass gate — CR phase-end catch on
+    // PR #188.
     const synthInputVerdicts = buildSynthInputVerdicts(succeeded)
 
     // Bypass eligibility: dispatched-count gate + succeeded-count gate
@@ -2958,6 +2961,9 @@ export async function handlePrReviewEnsemble(
     // customer expected multiple perspectives; we MUST run synth there
     // so it can render the `[DEGRADED COVERAGE]` block and acknowledge
     // the gap.
+    //
+    // Evaluated against the untruncated `succeeded` array — see the
+    // hoist comment above on `synthInputVerdicts` for why.
     //
     // HARD-DISABLE the bypass whenever synth shadow bake-off is
     // configured for this run. Otherwise flipping the bypass on would
@@ -2971,7 +2977,7 @@ export async function handlePrReviewEnsemble(
       isSynthBypassEligible(
         env,
         router.specialists.length,
-        synthInputVerdicts,
+        succeeded,
       )
 
     // Hoisted from the original synth section below so the bypass
@@ -7769,7 +7775,7 @@ interface EnsembleTelemetry {
    * SIG-228 Phase 3c: populated when the synth-bypass single-specialist
    * hot path fired (dispatcher returned 1 specialist + no major-severity
    * findings + `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`). When present,
-   * `synthesizer.model` is the bypass sentinel and `synthesizer.elapsedMs`
+   * `synthesizer.modelUsed` is the bypass sentinel and `synthesizer.elapsedMs`
    * reflects the bypass synth-construction time (near-zero), so post-
    * rollout analysis can compute the wall-time saved vs the legacy
    * synth path. Absent on the synth path (default) AND when the flag

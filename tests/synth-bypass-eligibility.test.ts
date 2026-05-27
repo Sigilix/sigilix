@@ -7,9 +7,10 @@
 //
 // Bypass fires iff:
 //   1. `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"` (case-insensitive, trimmed)
-//   2. Exactly 1 specialist returned a non-null verdict
-//   3. None of that specialist's findings have `score >= 4`
-// All three must hold simultaneously. Any falsy condition routes to the
+//   2. Dispatcher narrowed to exactly 1 specialist (`dispatchedCount === 1`)
+//   3. Exactly 1 specialist returned a non-null verdict
+//   4. None of that specialist's findings have `score >= 4`
+// All four must hold simultaneously. Any falsy condition routes to the
 // legacy synth path so the synth LLM still runs.
 
 import { describe, expect, it } from "vitest"
@@ -73,15 +74,15 @@ describe("isSynthBypassEligible — bypass gate semantics", () => {
 
   describe("flag-off paths — bypass disabled regardless of input", () => {
     it("returns false when the flag is absent, even on the otherwise-happy path", () => {
-      expect(isSynthBypassEligible(envWith(undefined), findings(1, 2, 3))).toBe(false)
+      expect(isSynthBypassEligible(envWith(undefined), 1, findings(1, 2, 3))).toBe(false)
     })
 
     it("returns false when the flag is \"off\"", () => {
-      expect(isSynthBypassEligible(envWith("off"), findings(1, 2))).toBe(false)
+      expect(isSynthBypassEligible(envWith("off"), 1, findings(1, 2))).toBe(false)
     })
 
     it("returns false when the flag has any other value (e.g. shadow)", () => {
-      expect(isSynthBypassEligible(envWith("shadow"), findings(1))).toBe(false)
+      expect(isSynthBypassEligible(envWith("shadow"), 1, findings(1))).toBe(false)
     })
   })
 

@@ -952,12 +952,22 @@ describe("Phase 4a.3 — timeout schedule", () => {
 })
 
 describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
-  it("logic specialist runs deepseek-v4-flash:cloud primary + kimi-k2.5 cross-provider fallback", () => {
-    // SIG-234: was `deepseek-v4-pro:cloud` (100-270s, the wall-time
-    // floor). v4-flash is the same V4 reasoning family at 45-95s.
+  it("logic specialist runs deepseek-v4-flash:cloud primary with no retries and no fallback (2026-05-26 telemetry-driven trim)", () => {
+    // SIG-234 (2026-05-26 round 2): production telemetry on PR #188
+    // showed both deepseek-v4-flash AND the prior kimi-k2.5 fallback
+    // hit exactly 60_000ms (PER_ATTEMPT_TIMEOUT_MS) on every review.
+    // Codex diagnostic: logic's prompt shape (full retrieval + graph
+    // + symbol context) is uniquely expensive; the issue is prompt-
+    // driven, not model-driven. Retry + fallback ladder was 100%
+    // waste, burning 180s while the customer got the same `[DEGRADED
+    // COVERAGE]` result either way.
+    //
+    // Trimmed to 1-attempt-only so logic caps at 60s; saves 120s per
+    // review until structural fixes land (min-specialists early exit
+    // + surgical prompt-budget on logic).
     expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-flash:cloud")
-    expect(SPECIALIST_CONFIGS.logic.retries).toBe(1)
-    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("kimi-k2.5:cloud")
+    expect(SPECIALIST_CONFIGS.logic.retries).toBe(0)
+    expect(SPECIALIST_CONFIGS.logic.fallback).toBe(null)
   })
 
   it("performance specialist runs glm-5.1:cloud (ARC-167 retained) with kimi-k2.5 fallback", () => {
@@ -1024,7 +1034,7 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(fallbackFamily).not.toBe(primaryFamily)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (18 after ARC-278/279 retry reservation)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (16 after 2026-05-26 logic-ladder trim)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves
     // before admitting a PR, so the regression must assert against it
     // directly — not against a hand-calc that would silently drift if
@@ -1034,17 +1044,15 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     // is intentionally NOT counted here.
     //
     // Worst-case model calls per ensemble run:
-    //   logic:       primary + 1 retry + fallback = 3
-    //   security:    primary + 1 retry + fallback = 3
-    //   performance: primary + 1 retry + fallback = 3
-    //   tests:       primary + 1 retry + fallback = 3
-    //   synth:       primary + 1 retry + fallback = 3 (attempt 1)
-    //   synth retry: primary + 1 retry + fallback = 3 (ARC-278 retry path,
-    //                fires when attempt 1 fails timeout/parse/provenance)
-    //   total: 18.  Pre-ARC-278 was 15; the extra 3 reserves the
-    //   ARC-278 retry path so the daily budget can't overshoot when
-    //   the retry kicks in.
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(18)
+    //   logic:       primary only (no retry, no fallback)     = 1
+    //   security:    primary + 1 retry + fallback             = 3
+    //   performance: primary + 1 retry + fallback             = 3
+    //   tests:       primary + 1 retry + fallback             = 3
+    //   synth:       primary + 1 retry + fallback             = 3 (attempt 1)
+    //   synth retry: primary + 1 retry + fallback             = 3 (ARC-278
+    //                retry path, fires when attempt 1 fails)
+    //   total: 16.  Down from 18 (pre-2026-05-26 logic-ladder trim).
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(16)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

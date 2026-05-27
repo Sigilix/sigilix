@@ -999,18 +999,24 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // capability without anchoring wall-time.
   logic: {
     // Was `deepseek-v4-pro:cloud` (100-270s). `deepseek-v4-flash:cloud`
-    // keeps the V4 reasoning lineage + 1M context at 45-95s. Codex's
-    // explicit speed/quality tradeoff — expect some loss on the
-    // hardest cross-file logic bugs; if shadow telemetry shows
-    // protected-role FN regression, roll back via wrangler.toml
-    // [vars] (one-line revert, no code change).
+    // keeps the V4 reasoning lineage + 1M context.
     primary: "deepseek-v4-flash:cloud",
-    retries: 1,
-    // Moonshot — cross-provider from DeepSeek. Same fallback family
-    // as performance below; concentrates Moonshot risk on logic +
-    // perf simultaneously (logic + perf primaries are independent,
-    // so a Moonshot outage degrades at most 2 of 5 roles).
-    fallback: "kimi-k2.5:cloud",
+    // 2026-05-26 Codex/measurement: production telemetry on PR #188
+    // showed deepseek-v4-flash + kimi-k2.5 (the prior fallback) BOTH
+    // hit exactly 60_000ms (PER_ATTEMPT_TIMEOUT_MS) on every review.
+    // The retry/fallback ladder was 100% waste — 180s burned, logic
+    // verdict never returned, customer got `[DEGRADED COVERAGE]` either
+    // way. Codex diagnostic: logic's prompt shape (full retrieval +
+    // graph + symbol context) is uniquely expensive; the issue is
+    // prompt-driven, not model-driven, so swapping fallbacks alone
+    // wouldn't help.
+    //
+    // Tactical fix: `retries: 0` + `fallback: null` → logic gets 1
+    // attempt only, caps at 60s instead of 180s. Saves 120s/review.
+    // Real fix is min-specialists early exit (structural) + surgical
+    // prompt-budget on logic (see SIG-220 latency budget doc).
+    retries: 0,
+    fallback: null,
   },
   security: {
     // Coder-model territory: vulnerability patterns are mostly

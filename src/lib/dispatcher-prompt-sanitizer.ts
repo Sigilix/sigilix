@@ -85,7 +85,29 @@ const INJECTION_TRIGGERS = [
 const ROLE_TOKEN_RE = new RegExp(`\\b(${ROLE_TOKENS.join("|")})\\b`, "gi")
 
 /**
- * Compile each multi-word trigger so any sequence of `[\s*_\`~]+`
+ * Flex-separator character class — the chars accepted between words
+ * inside a multi-word trigger. ONE source of truth, used in two
+ * places that MUST stay in sync (CR Major catch, PR #195):
+ *
+ *   1. `compileTrigger` — builds INJECTION_TRIGGER_RE by joining
+ *      trigger words with this class (string form) so adversarial
+ *      separators (whitespace + markdown emphasis tokens) still match.
+ *   2. `addSample` — collapses runs of this same class (regex form)
+ *      to a single ASCII space when canonicalizing captured matches
+ *      for the `dispatcher-prompt-sanitized` telemetry. If the two
+ *      ever diverge, the canonical form could leak user-controlled
+ *      chars OR drop chars that were never matched.
+ *
+ * Both the string form (`FLEX_SEPARATOR_CLASS`) and the precompiled
+ * global-replace regex (`FLEX_SEPARATOR_RE`) are derived from the
+ * same intent — the regex literal matches exactly what the class
+ * source string encodes.
+ */
+const FLEX_SEPARATOR_CLASS = "[\\s*_`~]+"
+const FLEX_SEPARATOR_RE = /[\s*_`~]+/g
+
+/**
+ * Compile each multi-word trigger so any sequence of `FLEX_SEPARATOR_CLASS`
  * is accepted between words. Catches attacks that interpose whitespace
  * (`\n`, `\t`, CRLF) or common markdown emphasis tokens (`**`, `_`,
  * `` ` ``, `~`) inside trigger phrases — `ignore\nprevious`,
@@ -101,11 +123,13 @@ const ROLE_TOKEN_RE = new RegExp(`\\b(${ROLE_TOKENS.join("|")})\\b`, "gi")
  * CR catches folded:
  *  - PR #193 H1 + H2 (added per-word flex-separator)
  *  - PR #193 Major (added boundary lookarounds — this comment block)
+ *  - PR #195 Major (extracted FLEX_SEPARATOR_CLASS — was duplicated
+ *    here + in addSample, drift would silently break canonicalization)
  */
 function compileTrigger(phrase: string): string {
   const inner = phrase
     .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    .replace(/ /g, "[\\s*_`~]+")
+    .replace(/ /g, FLEX_SEPARATOR_CLASS)
   // `(?<!\w)` requires the char before the match (if any) to be a
   // non-word char (whitespace, punctuation, start-of-string). `(?!\w)`
   // requires the char after the match (if any) to be a non-word char.
@@ -156,11 +180,22 @@ export function sanitizeDispatcherMetadata(args: {
   const sampleSet = new Set<string>()
   const addSample = (match: string): void => {
     if (sampleSet.size >= 8) return
-    // SAFETY: values are bounded to the literal phrases in
-    // INJECTION_TRIGGERS — `match` comes from INJECTION_TRIGGER_RE
-    // which is a closed alternation of compiled triggers. Safe to
-    // emit verbatim into `dispatcher-prompt-sanitized` telemetry.
-    sampleSet.add(match.toLowerCase())
+    // Sigilix bot P1 (PR #193 score-4 finding): `match` derives from
+    // INJECTION_TRIGGER_RE — bounded to the closed alternation of
+    // trigger phrases — but the `[\s*_`~]+` flex-separator added per
+    // CR H1/H2 means a captured match like `"ignore\n**previous"`
+    // can include user-supplied whitespace/markdown chars BETWEEN
+    // words. Normalize to a canonical lowercase form (collapse the
+    // flex-separator runs to a single ASCII space + trim) so the
+    // `dispatcher-prompt-sanitized` telemetry's `sampleTriggers`
+    // field contains ONLY the literal phrase shape, never raw user
+    // input. Dashboard sees `"ignore previous"` regardless of how
+    // the attacker formatted it.
+    const canonical = match
+      .toLowerCase()
+      .replace(FLEX_SEPARATOR_RE, " ")
+      .trim()
+    sampleSet.add(canonical)
   }
 
   let titleRoleTokenHits = 0

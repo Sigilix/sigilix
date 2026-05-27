@@ -3,8 +3,10 @@ import {
   badgeAssetUrl,
   getBadgeSvg,
   handleBadgeAssetRoute,
+  LEGACY_WORKER_BADGE_BASE_URL,
   lookupGlyph,
   PUBLIC_BADGE_BASE_URL,
+  BADGE_ASSET_VERSION,
 } from "../src/lib/badge-assets"
 import { BADGE_GLYPH_PATHS } from "../src/lib/badge-glyph-paths"
 import worker, { type Env } from "../src/index"
@@ -19,7 +21,7 @@ function ctx(): ExecutionContext {
 describe("badge assets (SIG-201)", () => {
   it("serves a 20x20 filled-square P2 priority chip with a path-baked glyph (SIG-216)", async () => {
     const res = handleBadgeAssetRoute(
-      new Request(badgeAssetUrl("p2"))
+      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
     )
 
     expect(res?.status).toBe(200)
@@ -61,7 +63,7 @@ describe("badge assets (SIG-201)", () => {
 
   it("serves low-saturation filled category chips for specialist labels (Kimi R2 + SIG-216 path-bake)", async () => {
     const res = handleBadgeAssetRoute(
-      new Request(badgeAssetUrl("security"))
+      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/security.svg`)
     )
 
     expect(res?.status).toBe(200)
@@ -91,9 +93,9 @@ describe("badge assets (SIG-201)", () => {
     expect(body).toBe(getBadgeSvg("security"))
   })
 
-  it("supports HEAD for external image probes without returning a body", async () => {
+  it("supports HEAD for external image probes without returning a body (worker self-serve path)", async () => {
     const res = handleBadgeAssetRoute(
-      new Request(`${PUBLIC_BADGE_BASE_URL}/p1.svg`, { method: "HEAD" })
+      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p1.svg`, { method: "HEAD" })
     )
 
     expect(res?.status).toBe(200)
@@ -101,18 +103,23 @@ describe("badge assets (SIG-201)", () => {
   })
 
   it("ignores non-badge paths so the main router can 404 them", () => {
-    expect(handleBadgeAssetRoute(new Request(`${PUBLIC_BADGE_BASE_URL}/p4.svg`))).toBeNull()
-    expect(handleBadgeAssetRoute(new Request(`${PUBLIC_BADGE_BASE_URL}/p2.png`))).toBeNull()
+    expect(handleBadgeAssetRoute(new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p4.svg`))).toBeNull()
+    expect(handleBadgeAssetRoute(new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p2.png`))).toBeNull()
   })
 
   it("rejects prototype property names instead of serving inherited values", () => {
-    expect(handleBadgeAssetRoute(new Request(`${PUBLIC_BADGE_BASE_URL}/constructor.svg`))).toBeNull()
+    expect(handleBadgeAssetRoute(new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/constructor.svg`))).toBeNull()
   })
 
-  it("builds unauthenticated HTTPS image URLs", () => {
-    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-4/p2.svg`)
-    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/v20260526-4/security.svg`)
-    expect(badgeAssetUrl("p2")).not.toContain("raw.githubusercontent.com")
+  it("builds raw.githubusercontent.com image URLs at the current asset version (SIG-238)", () => {
+    // SIG-238: badge host moved to raw.githubusercontent.com so
+    // GitHub's `js-gh-image-fallback` JS doesn't inject border-radius.
+    // Version bumped to v20260527-1 to bust GitHub's image cache for
+    // the prior URL pattern.
+    expect(badgeAssetUrl("p2")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
+    expect(badgeAssetUrl("security")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/security.svg`)
+    expect(badgeAssetUrl("p2")).toContain("raw.githubusercontent.com/Sigilix/sigilix")
+    expect(badgeAssetUrl("p2")).not.toContain("sigilix.dan-martinezjulio.workers.dev")
   })
 
   // Sigilix bot P1 (PR #176): structural sanity for the path-baked
@@ -177,7 +184,7 @@ describe("badge assets (SIG-201)", () => {
     } as Partial<Env> as Env
 
     const res = await worker.fetch(
-      new Request(`${PUBLIC_BADGE_BASE_URL}/p2.svg`),
+      new Request(`${LEGACY_WORKER_BADGE_BASE_URL}/p2.svg`),
       env,
       ctx(),
     )

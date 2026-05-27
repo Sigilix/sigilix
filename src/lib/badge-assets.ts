@@ -69,9 +69,61 @@ export type BadgeAssetName = keyof typeof BADGE_STYLES
 export type CategoryBadgeAssetName = keyof typeof CATEGORY_BADGE_STYLES
 export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
 
-export const PUBLIC_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
+// SIG-238 (2026-05-26): host moved from `sigilix.dan-martinezjulio.workers.dev`
+// → `raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges`.
+//
+// Root cause (empirical, verified via founder's DevTools inspection on
+// PR #191 + Kimi K2.6 round-5 diagnosis): GitHub's `js-gh-image-fallback`
+// client-side JS targets images that are PROXIED THROUGH CAMO — every
+// external `<img src>` in markdown comments gets a `border-radius: 6px`
+// + `background-color: var(--bgColor-muted)` inline style injected by
+// that script. The SVG itself was always rendering with sharp corners
+// (`rx=0` + `crispEdges`, curl-verified); the rounding came from the
+// container element.
+//
+// Tried + failed (round 1-4):
+//   1. `rx=0` baked into the rect
+//   2. `rx=0` + `shape-rendering="crispEdges"`
+//   3. `BADGE_DISPLAY_SCALE = 1.6` to render at 32x32
+//   4. Drop the `<a href>` anchor wrap (Kimi K2.6 round-4 hypothesis
+//      that Primer styled `.markdown-body a > img` — turned out wrong;
+//      GitHub strips `style` attrs from user-provided HTML so we
+//      couldn't override `border-radius:0` either)
+//
+// What worked: raw.githubusercontent.com URLs are same-origin to
+// github.com, do NOT go through the Camo proxy, and the
+// `js-gh-image-fallback` script's selector doesn't fire on them.
+// Verified via `gh api /markdown` test: the rendered HTML for a
+// raw.githubusercontent.com URL contains only
+// `style="max-width: 100%; height: auto; max-height: 20px;"` — no
+// `border-radius`, no `background-color` — while a Camo-proxied
+// workers.dev URL renders into a `data-canonical-src`-wrapped element
+// that picks up the full Primer image-fallback styling.
+//
+// Build-time dependency: every badge in `BADGE_SVGS` must be
+// pre-rendered to a file at `assets/badges/<BADGE_ASSET_VERSION>/<name>.svg`
+// and committed to the repo. Run `pnpm tsx scripts/generate-static-badges.ts`
+// after any visual change (color / glyph / dimensions) AND every time
+// `BADGE_ASSET_VERSION` is bumped.
+export const PUBLIC_BADGE_BASE_URL = "https://raw.githubusercontent.com/Sigilix/sigilix/main/assets/badges"
 
-const BADGE_ASSET_VERSION = "v20260526-4"
+/**
+ * SIG-238: kept as a back-compat anchor so the Worker keeps serving
+ * older PR comments whose `<img src>` still points at the prior host.
+ * The runtime `badgeAssetUrl()` ONLY emits raw.githubusercontent.com
+ * URLs (the new pattern); this constant is purely for tests that
+ * exercise the `handleBadgeAssetRoute(...)` self-serve path against
+ * the original Workers route.
+ */
+export const LEGACY_WORKER_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.workers.dev/assets/badges"
+
+// SIG-238 (2026-05-26): bumped from v20260526-4 → v20260527-1 alongside
+// the URL-host switch from workers.dev (Camo-proxied) to
+// raw.githubusercontent.com (same-origin). The SVG bytes are identical
+// to v20260526-4 (rx=0 + crispEdges); the version bump exists only to
+// bust GitHub's image cache so old comments aren't stuck pointing at
+// the prior URL pattern.
+export const BADGE_ASSET_VERSION = "v20260527-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,

@@ -314,6 +314,13 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
         queued_head_sha: headSha.slice(0, 7),
         current_head_sha: meta.head.sha.slice(0, 7),
       }))
+      // SIG-237: unified skipped-with-reason event.
+      console.log(JSON.stringify({
+        event: "pr-overview-skipped-with-reason",
+        reason: "stale_head_before_ollama",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        current_head_sha: meta.head.sha.slice(0, 7),
+      }))
       return
     }
 
@@ -415,12 +422,17 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
 
     const verdict = parseOverviewResponse(response)
     if (!verdict) {
-      console.error("pr-overview verdict did not parse", {
-        owner,
-        repo,
-        prNumber,
+      // SIG-237: surface this as a structured event so on-call can
+      // grep `pr-overview-skipped-with-reason` for every silent
+      // stub-stays-stuck case. The previous `console.error` printed
+      // to logs but wasn't queryable as a structured event.
+      console.log(JSON.stringify({
+        event: "pr-overview-skipped-with-reason",
+        reason: "verdict_parse_failed",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
         responseLength: response.length,
-      })
+        responseHead: response.slice(0, 200),
+      }))
       return
     }
 
@@ -522,6 +534,14 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
             queued_head_sha: headSha.slice(0, 7),
             current_head_sha: metaCheck.head.sha.slice(0, 7),
           }))
+          // SIG-237: also emit the unified skipped-with-reason event
+          // so the dashboard can count stub-stays-stuck cases in a
+          // single query rather than joining several event names.
+          console.log(JSON.stringify({
+            event: "pr-overview-skipped-with-reason",
+            reason: "stale_head_before_write",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          }))
           return
         }
       } catch (err) {
@@ -539,6 +559,13 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
           event: "pr-overview-stale-recheck-failed-aborted",
           owner, repo, prNumber,
           queued_head_sha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        // SIG-237: unified skipped-with-reason event.
+        console.log(JSON.stringify({
+          event: "pr-overview-skipped-with-reason",
+          reason: "stale_recheck_failed",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
           err: err instanceof Error ? err.message : String(err),
         }))
         return

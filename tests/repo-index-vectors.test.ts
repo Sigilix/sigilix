@@ -53,6 +53,48 @@ describe("repoIndexVectorsKey", () => {
   })
 })
 
+describe("writeRepoIndexVectors — SIG-243 Phase 2b dual-write", () => {
+  it("dual-writes to repo-vectors:{id} on default-branch state with positive integer id", async () => {
+    const { kv, store } = makeKvStub()
+    const withId: RepoIndexVectorsV1 = { ...SAMPLE_VECTORS, githubRepoId: 808247824 }
+    const ok = await writeRepoIndexVectors(makeEnv(kv), withId)
+    expect(ok).toBe(true)
+    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
+    expect(store.has("repo-vectors:808247824")).toBe(true)
+    expect(store.get("repo-vectors:808247824")).toBe(store.get("repo-index-vectors:arc-and-anchor/sigilix"))
+  })
+
+  it("does NOT dual-write when githubRepoId is absent (legacy path)", async () => {
+    const { kv, store } = makeKvStub()
+    await writeRepoIndexVectors(makeEnv(kv), SAMPLE_VECTORS)
+    expect(store.has("repo-index-vectors:arc-and-anchor/sigilix")).toBe(true)
+    expect([...store.keys()].filter((k) => k.startsWith("repo-vectors:"))).toEqual([])
+  })
+
+  it("does NOT dual-write branch-scoped vector records to repo-vectors:{id}", async () => {
+    // Branch state repos use `<repo>/__branch__/<hash>` as the `repo`
+    // field. The new key has no branch differentiation, so writing
+    // a branch record there would overwrite the default-branch
+    // canonical record for the same repo ID.
+    const { kv, store } = makeKvStub()
+    const branchState: RepoIndexVectorsV1 = {
+      ...SAMPLE_VECTORS,
+      repo: "sigilix/__branch__/h646576",
+      githubRepoId: 808247824,
+    }
+    await writeRepoIndexVectors(makeEnv(kv), branchState)
+    expect(store.has("repo-vectors:808247824")).toBe(false)
+  })
+
+  it("does NOT dual-write when githubRepoId is zero / negative / non-integer", async () => {
+    const { kv, store } = makeKvStub()
+    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: 0 } as RepoIndexVectorsV1)
+    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: -1 } as RepoIndexVectorsV1)
+    await writeRepoIndexVectors(makeEnv(kv), { ...SAMPLE_VECTORS, githubRepoId: 1.5 } as RepoIndexVectorsV1)
+    expect([...store.keys()].filter((k) => k.startsWith("repo-vectors:"))).toEqual([])
+  })
+})
+
 describe("read/write round-trip", () => {
   it("round-trips a valid record", async () => {
     const { kv } = makeKvStub()

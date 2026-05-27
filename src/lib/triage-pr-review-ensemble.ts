@@ -1685,6 +1685,12 @@ export async function handlePrReviewEnsemble(
           signals: { paths: filePaths, totalLinesChanged, diffText: diff },
           classified: dispatcherClassified,
           commitMessage: dispatcherCommitMessage,
+          // SIG-230: thread separated title/body through so the LLM
+          // prompt sees them inside the `<pr_metadata>` envelope. The
+          // sanitizer + envelope are the two-layer defense against
+          // prompt-injection in PR titles/bodies.
+          prTitle: meta.title,
+          prBody: meta.body ?? "",
           repoConfig: sigilixConfig,
           env,
           signal: orchCtrl.signal,

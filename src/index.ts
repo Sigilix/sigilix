@@ -11,13 +11,10 @@
 // GITHUB_WEBHOOK_SECRET (sha256= prefix).
 //
 // Long-running work (Ollama Turbo calls, 30-90s typical) runs in a
-// Cloudflare Queue consumer instead of `ctx.waitUntil()` on the fetch
-// handler. The 30-second `waitUntil` cap applies to the fetch handler
-// only — queue consumers and scheduled handlers extend their invocation
-// lifetime to settle `waitUntil` promises (used by SIG-156 reconcile
-// cron and SIG-233 background overview, both well under the platform
-// budget). Queue consumers get up to 15 minutes per invocation, which
-// is plenty for the LLM round-trips themselves.
+// Cloudflare Queue consumer instead of `ctx.waitUntil()`. The 30-second
+// waitUntil cap is hard-coded by the Workers runtime (not configurable
+// on any plan), so any long-running task must be deferred. Queue
+// consumers get up to 15 minutes per invocation, which is plenty.
 //
 // Flow:
 //   webhook arrives → fetch handler verifies + parses → enqueues a
@@ -1046,15 +1043,11 @@ export default {
    * the failure is visible in Workers Logs as `dropped` instead of
    * blending into the regular retry chatter.
    */
-  async queue(batch: MessageBatch<JobMessage>, env: Env, ctx: ExecutionContext): Promise<void> {
+  async queue(batch: MessageBatch<JobMessage>, env: Env): Promise<void> {
     const MAX_RETRIES = 3
     for (const message of batch.messages) {
       try {
-        // SIG-233: thread ctx through so the orchestrator can fire
-        // the inline overview comment via ctx.waitUntil after
-        // submitReview (saves ~28s on the customer-visible critical
-        // path per review).
-        await dispatchJob(message.body, env, ctx)
+        await dispatchJob(message.body, env)
         message.ack()
       } catch (error) {
         const isFinalAttempt = message.attempts > MAX_RETRIES
@@ -1137,7 +1130,7 @@ async function postSlashCommandAck(
   )
 }
 
-export async function dispatchJob(job: JobMessage, env: Env, ctx?: ExecutionContext): Promise<void> {
+export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
       return triageIssue(job.issueId, env)
@@ -1219,13 +1212,6 @@ export async function dispatchJob(job: JobMessage, env: Env, ctx?: ExecutionCont
         ...(job.staleHeadRequeueDepth !== undefined
           ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth }
           : {}),
-        // SIG-233: ctx is threaded from the queue consumer so the
-        // orchestrator can fire the inline overview via
-        // ctx.waitUntil(...) after submitReview, off the customer-
-        // visible critical path. Optional under `EnsembleHandlerArgs`
-        // so test callers can omit it (overview falls back to inline
-        // await when ctx is missing).
-        ...(ctx !== undefined ? { ctx } : {}),
       }
       return runPrReviewWithDoCallback(job, env, async () => {
         // ARC-258 follow-up: warmup signaling now lives inside the

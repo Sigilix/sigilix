@@ -49,14 +49,7 @@ export type StaleHeadGuardSource =
   | "phase3"
   | "ensemble-before-fanout"
   | "ensemble-after-review"
-  // SIG-233: pre-submit re-check (replaces the previous post-overview
-  // re-check that fired right before submitReview). The label is
-  // semantically the same guard, just moved out of the overview-
-  // enabled gate so it ALWAYS fires before submit. The pre-SIG-233
-  // `"ensemble-after-inline-overview"` source was dropped along with
-  // the inline overview path; archived telemetry queries can still
-  // reference it as a historical literal.
-  | "ensemble-pre-submit"
+  | "ensemble-after-inline-overview"
 
 export interface HandleStaleHeadArgs {
   env: Env

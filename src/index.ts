@@ -412,6 +412,20 @@ export interface Env {
   //               (`ensemble-late-verdict-discarded`) but discarded.
   OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT?: string
 
+  // SIG-236 — surgical prompt-budget for the logic specialist. Three-
+  // state rollout:
+  //   "off"     — default; no telemetry, no truncation.
+  //   "shadow"  — measure the constructed logic prompt's per-section
+  //               size + emit `logic-prompt-budget` telemetry; the
+  //               prompt passes through untouched. Used to size the
+  //               enforce-mode cuts before flipping.
+  //   "enforce" — NOT YET IMPLEMENTED. Behaves like "shadow" but
+  //               records `mode: "enforce-pending"` in the event so
+  //               dashboards can flag a premature flip. The actual
+  //               truncation lands in a follow-up PR informed by
+  //               shadow data.
+  OPENCLAW_LOGIC_PROMPT_BUDGET?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

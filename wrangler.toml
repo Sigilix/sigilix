@@ -255,6 +255,28 @@ OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
 # fires on "on", so flipping back is safe.
 OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
 
+# SIG-236 — surgical prompt-budget telemetry for the logic specialist.
+# Three-state rollout:
+#   "off"     — no telemetry, no truncation (default).
+#   "shadow"  — measure the constructed logic prompt's per-section size
+#               + emit `logic-prompt-budget` telemetry; the prompt
+#               passes through untouched. Used to size the enforce-mode
+#               cuts before flipping. SHIPPING IN THIS STATE FIRST so
+#               we have ~24-48h / 30+ logic-dispatched PRs of data
+#               before designing the actual cuts.
+#   "enforce" — NOT YET IMPLEMENTED. Currently behaves like shadow but
+#               records `mode: "enforce-pending"` in the event so a
+#               premature flip is observable. The actual truncation
+#               + per-role schema with `findings.maxItems: 3-4` lands
+#               in a follow-up PR informed by shadow data.
+#
+# Codex-recommended target cap: 6_000 input tokens (vs current
+# unbounded). Logic's prompt is empirically uniquely-expensive — same
+# 60s timeout on two different model families on PR #188 — and trimming
+# graph context + symbol retrieval + Vectorize retrieval should let
+# models actually return a verdict.
+OPENCLAW_LOGIC_PROMPT_BUDGET = "shadow"
+
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.
 #               Identical behavior to pre-SIG-161. This is the PR 4a default.

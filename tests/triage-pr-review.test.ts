@@ -33,7 +33,7 @@ import {
   type PrReviewFinding,
   type PrReviewVerdict,
 } from "../src/lib/triage-pr-review"
-import { badgeAssetUrl, PUBLIC_BADGE_BASE_URL } from "../src/lib/badge-assets"
+import { badgeAssetUrl, BADGE_ASSET_VERSION, PUBLIC_BADGE_BASE_URL } from "../src/lib/badge-assets"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
 const baseFinding: PrReviewFinding = {
@@ -2874,11 +2874,13 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
     // SIG-238 round-5 fix: badge host moved from
     // `sigilix.dan-martinezjulio.workers.dev` (Camo-proxied → JS
     // injects `border-radius: 6px`) to `raw.githubusercontent.com`
-    // (same-origin → no Camo, no JS injection). The version bump from
-    // v20260526-4 → v20260527-1 busts GitHub's image cache for the
-    // old URL pattern.
+    // (same-origin → no Camo, no JS injection).
+    //
+    // CR catch (PR #192): assert via `BADGE_ASSET_VERSION` rather
+    // than the literal version string so a future bump doesn't break
+    // this test as a side-effect.
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260527-1/p2.svg`)
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
     expect(out).toContain("raw.githubusercontent.com/Sigilix/sigilix")
     expect(out).not.toContain("sigilix.dan-martinezjulio.workers.dev")
   })

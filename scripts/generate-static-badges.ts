@@ -24,24 +24,12 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { BADGE_ASSET_VERSION, getBadgeSvg, type ReviewBadgeAssetName } from "../src/lib/badge-assets"
+import { ALL_BADGE_NAMES, BADGE_ASSET_VERSION, getBadgeSvg } from "../src/lib/badge-assets"
 
-// Exhaustive list — keep in sync with `BADGE_SVGS` keys in `badge-assets.ts`.
-const ALL_BADGES: readonly ReviewBadgeAssetName[] = [
-  "p0",
-  "p1",
-  "p2",
-  "p3",
-  "logic",
-  "security",
-  "performance",
-  "error-handling",
-  "testing",
-  "complexity",
-  "style",
-  "syntax",
-  "docs",
-] as const
+// CR catch (PR #192): sourced from `BADGE_SVGS` at runtime via the
+// `ALL_BADGE_NAMES` export so this script cannot silently drift if a
+// new badge is added to `BADGE_SVGS` without a matching entry here.
+const ALL_BADGES = ALL_BADGE_NAMES
 
 function repoRoot(): string {
   // ESM-compatible __dirname: this file lives at scripts/, repo root

@@ -426,12 +426,19 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       // grep `pr-overview-skipped-with-reason` for every silent
       // stub-stays-stuck case. The previous `console.error` printed
       // to logs but wasn't queryable as a structured event.
+      //
+      // CR catch (PR #192): the `responseHead` field intentionally
+      // omitted — the Ollama response can contain repo / diff /
+      // source-code content from the prompt, and shipping it into
+      // structured telemetry would leak customer code into
+      // Cloudflare Logs. `responseLength` alone is enough to size
+      // the failure mode; the actual content can be retrieved via
+      // `console.error` line below if needed for one-off debugging.
       console.log(JSON.stringify({
         event: "pr-overview-skipped-with-reason",
         reason: "verdict_parse_failed",
         owner, repo, prNumber, headSha: headSha.slice(0, 7),
         responseLength: response.length,
-        responseHead: response.slice(0, 200),
       }))
       return
     }

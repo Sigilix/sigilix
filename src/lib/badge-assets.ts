@@ -306,6 +306,17 @@ export function getBadgeSvg(name: ReviewBadgeAssetName): string {
   return BADGE_SVGS[name]
 }
 
+/**
+ * SIG-238 (CR catch): exhaustive list of badge names sourced from
+ * `BADGE_SVGS` itself, so `scripts/generate-static-badges.ts` cannot
+ * silently drift if a new badge is added to `BADGE_SVGS` without a
+ * matching entry in the generator script. Keys are `ReviewBadgeAssetName`
+ * by construction — the `Object.keys` typing is widened to `string[]`
+ * at runtime, so we narrow it back via `as readonly ReviewBadgeAssetName[]`.
+ */
+export const ALL_BADGE_NAMES: readonly ReviewBadgeAssetName[] =
+  Object.keys(BADGE_SVGS) as readonly ReviewBadgeAssetName[]
+
 export function handleBadgeAssetRoute(request: Request): Response | null {
   if (request.method !== "GET" && request.method !== "HEAD") return null
   const { pathname } = new URL(request.url)

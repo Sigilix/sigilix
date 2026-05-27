@@ -9,6 +9,7 @@
 
 import { generate } from "./ollama"
 import { LinearClient, buildLinearAuth } from "./linear"
+import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
 import {
   bodyMentionsBot,
   getMentionTriggers,
@@ -264,6 +265,17 @@ export async function handleMention(
     return
   }
 
+  // SIG-225 — queue-consumer self-filter: catches the case where the
+  // webhook handler raced past `isBotAuthoredComment` because of
+  // Cloudflare KV's cross-POP eventual-consistency window. By the
+  // time the consumer runs the queue-delivery delay has typically
+  // surpassed propagation, so the stamp is visible here even if it
+  // wasn't at webhook time.
+  if (await isBotAuthoredComment(env.OPENCLAW_STATE, commentId)) {
+    log("skip-bot-authored-tracker")
+    return
+  }
+
   const linear = new LinearClient(await buildLinearAuth(env))
   const data = await linear.getCommentWithIssue(commentId)
   log("comment-fetched")
@@ -444,6 +456,16 @@ export async function handleMention(
   const replyParentId = resolveReplyParentId(data)
   const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
   log("reply-posted", { newCommentId, replyParentId: replyParentId ?? null })
+
+  // SIG-225: stamp the bot-authored commentId so Linear's
+  // Comment.create webhook for THIS new reply is filtered as self by
+  // the webhook handler. Was the entire fix point of SIG-225 — the
+  // legacy `isBotHandle(displayName)` filter missed when Linear set
+  // data.user to the OAuth app owner instead of the bot, and the
+  // SIG-225 thread-walk re-fired the bot into its own previous
+  // thread. Best-effort — failure is logged and swallowed inside the
+  // helper so the user-facing reply is never blocked.
+  await markBotAuthoredComment(env.OPENCLAW_STATE, newCommentId)
 
   // Mark KV so re-deliveries of the same Comment.create event don't
   // produce a duplicate reply. 30-day TTL — webhooks from Linear get

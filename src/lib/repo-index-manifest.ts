@@ -90,6 +90,21 @@ export interface RepoIndexManifestV1 {
    * pre-migration records.
    */
   owner: string
+  /**
+   * SIG-243: the GitHub repository's immutable integer identifier
+   * (`payload.repository.id` in every webhook). Optional during Phase 1
+   * + Phase 2 so the millions of legacy manifests already in production
+   * keep parsing without a forced migration; Phase 3 backfills the
+   * field for every legacy record by querying the GitHub API. Once
+   * Phase 4 ships, this becomes the canonical key
+   * (`repo-tenant:{githubRepoId}`) and `owner` + `repo` above are
+   * downgraded to cached display state. The field is required to be a
+   * positive integer when present — GitHub repo IDs are strictly `>= 1`
+   * — so a stale writer passing a string, a float, zero, or a negative
+   * value would poison the new keying for that record and is rejected
+   * at the type-guard boundary.
+   */
+  githubRepoId?: number
   /** Default-branch commit SHA at index time. */
   headSha: string
   /** Stable per-run id — sha256(owner|repo|headSha|modelId|chunkerVersion).slice(0,16). */
@@ -139,6 +154,18 @@ export function legacyRepoIndexManifestKey(repo: string): string {
   return `${KV_KEY_PREFIX}${repo.toLowerCase()}`
 }
 
+/**
+ * SIG-243 Phase 2: canonical key for the new identity layer, keyed by
+ * GitHub's immutable repository ID. Replaces the mutable
+ * `repo-index-manifest:<owner>/<repo>` key in Phase 4 once Phase 3's
+ * backfill completes. Until then, the indexer dual-writes to BOTH this
+ * key and the legacy key so a Phase 3 read-switch is safe.
+ */
+export const REPO_TENANT_PREFIX = "repo-tenant:"
+export function repoTenantKey(githubRepoId: number): string {
+  return `${REPO_TENANT_PREFIX}${githubRepoId}`
+}
+
 function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false
   const o = value as Record<string, unknown>
@@ -149,6 +176,10 @@ function isRepoIndexManifestV1(value: unknown): value is RepoIndexManifestV1 {
   if (o.defaultBranch !== undefined && (typeof o.defaultBranch !== "string" || o.defaultBranch.length === 0)) return false
   if (o.namespace !== undefined && (typeof o.namespace !== "string" || o.namespace.length === 0)) return false
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
+  if (
+    o.githubRepoId !== undefined &&
+    (typeof o.githubRepoId !== "number" || !Number.isInteger(o.githubRepoId) || o.githubRepoId <= 0)
+  ) return false
   if (typeof o.headSha !== "string" || o.headSha.length === 0) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
   if (typeof o.fileCount !== "number") return false
@@ -214,6 +245,28 @@ export function parseRepoIndexManifest(raw: string): ReadResult {
  * skipped the push-webhook bootstrap path (which requires a prior manifest).
  * Retry is safe: bootstrap freshness-skips on the next attempt if everything
  * already landed, and vector chunk ids are content-addressed.
+ *
+ * SIG-243 Phase 2: when the manifest is a DEFAULT-BRANCH manifest AND it
+ * carries a positive integer `githubRepoId`, ALSO write the same payload
+ * under the new immutable `repo-tenant:{id}` key. Two narrow gates:
+ *
+ *   - DEFAULT-BRANCH ONLY (`manifest.branch === undefined`): the new key
+ *     does NOT carry branch state (a global Phase 4 design will), so a
+ *     branch-scoped manifest would overwrite the default-branch
+ *     manifest at the same `repo-tenant:{id}` key. Phase 4 introduces
+ *     branch-aware keying; until then, branch manifests stay legacy-only.
+ *
+ *   - POSITIVE INTEGER ID (`>= 1`): GitHub repo IDs are strictly
+ *     positive integers. Rejecting zero / negative / non-integer values
+ *     blocks invalid keys like `repo-tenant:0` from landing in KV.
+ *
+ * Both writes are serial — if the legacy write succeeds and the new
+ * write throws, the legacy index is intact and the queue retries the
+ * shard (the surrounding `persistManifest` in indexer.ts rethrows on
+ * any error from this function, see :1232). The dual-write-succeeded
+ * event is emitted only when both writes landed so post-deploy log
+ * scraping can measure Phase 2 coverage before Phase 3 flips the read
+ * path.
  */
 export async function writeRepoIndexManifest(
   env: Env,
@@ -224,6 +277,25 @@ export async function writeRepoIndexManifest(
     JSON.stringify(manifest),
     { expirationTtl: TTL_SECONDS },
   )
+  const isDefaultBranchManifest = manifest.branch === undefined
+  if (
+    isDefaultBranchManifest &&
+    typeof manifest.githubRepoId === "number" &&
+    Number.isInteger(manifest.githubRepoId) &&
+    manifest.githubRepoId > 0
+  ) {
+    await env.OPENCLAW_STATE.put(
+      repoTenantKey(manifest.githubRepoId),
+      JSON.stringify(manifest),
+      { expirationTtl: TTL_SECONDS },
+    )
+    console.log(JSON.stringify({
+      event: "dual-write-succeeded",
+      key_legacy: repoIndexManifestKey(manifest.owner, manifest.repo),
+      key_new: repoTenantKey(manifest.githubRepoId),
+      github_repo_id: manifest.githubRepoId,
+    }))
+  }
 }
 
 /**

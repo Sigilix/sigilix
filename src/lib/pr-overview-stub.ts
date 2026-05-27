@@ -1,5 +1,44 @@
 // SIG-84 — synchronous review-in-progress stub for the pr-overview sticky.
 //
+// ─── SIG-219 restoration (2026-05-26) ─────────────────────────────────
+//
+// SIG-216 (2026-05-25) DEPRECATED this file under the theory that the
+// inline overview render inside `handlePrReviewEnsemble` would land
+// the overview comment and the formal review in the same time window,
+// removing the need for a pre-review "Reviewing…" sticky.
+//
+// Founder feedback after dogfooding SIG-216: the WANTED UX is closer
+// to CodeRabbit — a sticky comment appears immediately on push saying
+// "Reviewing…" (with the ASCII flourish), and MORPHS into the overview
+// when the models finish. SIG-216 lost that affordance entirely.
+//
+// SIG-219 restores the webhook-time stub-post. The new pipeline:
+//
+//   1. Webhook fires → `postPrOverviewStubIfNeeded` lands the
+//      "Reviewing…" sticky within the webhook ack window (sub-second).
+//   2. Review ensemble runs in parallel (the SIG-216 win — no
+//      synchronous wait barrier).
+//   3. Inline overview path inside `handlePrReviewEnsemble` finds
+//      the stub via its existing `scanComments` + PATCH logic and
+//      rewrites the body in place — no second comment, no ordering
+//      barrier needed.
+//
+// The SIG-216 deprecation comments below are KEPT for history. The
+// `waitForPrOverviewStub` helper REMAINS unwired (the new inline path
+// removes the need for a wait barrier — the inline render itself is
+// the synchronization point now).
+//
+// ─── SIG-216 deprecation rationale (historical, no longer active) ─────
+//
+// SIG-216 dropped this entire pre-review-stub pattern in favor of an
+// inline overview render inside the ensemble. The ordering guarantee
+// was preserved by serializing the overview generation onto the
+// review handler's critical path — no separate queue job, no wait
+// barrier, no stub. SIG-219 keeps the inline render but layers the
+// stub back on top so users see a "Reviewing…" sticky immediately.
+//
+// ─── Pre-SIG-216 design (kept for context) ──────────────────────────
+//
 // Founder direction (post-PR #100): the pr-overview sticky comment was
 // posting ~30s AFTER the `pr-review` event on every PR push because
 // both ran as independent parallel queue consumers. Reads backwards —
@@ -11,6 +50,8 @@
 // Ollama call completes (~30s later). The review handler waits on a
 // short KV-flag-keyed barrier before submitting, so the overview's
 // comment id is guaranteed to be on the PR timeline before the review.
+// (SIG-219 keeps the stub-post; the barrier wait is NOT restored — the
+// inline overview render inside the ensemble handles ordering.)
 //
 // Helper contract:
 //   - Idempotent: a second webhook delivery for the same
@@ -69,6 +110,8 @@ export const STUB_QUIPS = [
   "Good findings can point to their proof.",
   "Review the behavior, not just the shape.",
   "If it matters, it should survive citation.",
+  "Scanning your diff like a lighthouse in fog. Clearer seas soon.",
+  "Read the change like the author was you at 2am. Often, it was.",
 ] as const
 
 export const STUB_ASCII_TEMPLATES = [

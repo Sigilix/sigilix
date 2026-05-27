@@ -42,7 +42,7 @@ import {
 } from "./diff-positions"
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
-import { badgeAssetLabel, badgeAssetSize, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
+import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
 // rendered by `renderStackParenthetical`. The original helper still
@@ -498,8 +498,6 @@ const BODY_ONLY_FINDINGS_HEADING = "### Review Body Findings"
 const BODY_ONLY_FINDINGS_EXPLANATION =
   "<sub>These findings are shown in the review body because GitHub only supports PR review comments on diff lines, or because the finding is broader than one exact changed line.</sub>"
 
-const DISMISSAL_HINT =
-  "To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread."
 
 
 
@@ -782,6 +780,15 @@ interface BuildReviewArgs {
    * classify as non-substantive).
    */
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
+  /**
+   * SIG-216: when supplied, body-only finding anchors render as
+   * clickable `[path:line](https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>)`
+   * Markdown links instead of the back-compat inline-code shape
+   * (`` `path:line` ``). Forwarded to `RenderBodyArgs.linkContext`.
+   * Optional — ensemble callers that haven't plumbed
+   * owner/repo through yet keep the inline-code rendering.
+   */
+  linkContext?: BodyFindingLinkContext
 }
 
 /**
@@ -956,6 +963,7 @@ export function buildReviewSubmissionWithMetadata({
   reviewable,
   addedLineTextByLine,
   eventOverride,
+  linkContext,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
   const {
     verdict,
@@ -987,6 +995,10 @@ export function buildReviewSubmissionWithMetadata({
   // fields, but it's cheaper / clearer to forward them unconditionally.
   if (typeof reviewCounter === "number") renderArgs.reviewCounter = reviewCounter
   if (retriggerUrl) renderArgs.retriggerUrl = retriggerUrl
+  // SIG-216: forward linkContext so body-only finding anchors render
+  // as clickable GitHub blob URLs. Omitted callers fall through to
+  // the back-compat inline-code anchor.
+  if (linkContext) renderArgs.linkContext = linkContext
   const body =
     event === "APPROVE"
       ? renderApproveBody(renderArgs)
@@ -1660,6 +1672,26 @@ export interface RenderBodyArgs {
    * retrigger CTA not rendered.
    */
   retriggerUrl?: string
+  /**
+   * SIG-216: when present, body-only finding anchors render as
+   * clickable `[path:line](https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>)`
+   * markdown links instead of the back-compat inline-code shape
+   * (`` `path:line` ``). Threaded through `renderBodyOnlyFindings`
+   * → `formatBodyFindingAnchor`. Callers that haven't plumbed
+   * owner/repo through (e.g. older unit tests) keep the
+   * inline-code rendering.
+   */
+  linkContext?: BodyFindingLinkContext
+}
+
+/**
+ * SIG-216: source-repo coordinates needed to build a GitHub blob
+ * URL for a body-only finding anchor.
+ */
+export interface BodyFindingLinkContext {
+  owner: string
+  repo: string
+  headSha: string
 }
 
 /**
@@ -1746,6 +1778,33 @@ export function renderRequestChangesBody(args: RenderBodyArgs): string {
 type FindingsReviewPosture = "request_changes" | "comment"
 
 function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewPosture): string {
+  // SIG (Kimi K2.6 r1, 2026-05-27): compact redesign. Founder feedback:
+  // the prior shape (H2 "Sigilix: N findings" + H3 "Fix Plan" + bold
+  // severity subheading + bullets + 4 separate footer lines) had ~10
+  // lines of chrome around 1 line of content for a single-finding
+  // review. The "N findings" count in the header also didn't match
+  // the Fix Plan count (Fix Plan shows score>=4 only) — readers had
+  // no idea where lower-severity findings went.
+  //
+  // New shape (Kimi spec):
+  //   <!-- sigilix:pr-review -->
+  //
+  //   **N high-severity findings** [+ M lower-severity inline] · coverage: ...
+  //
+  //   <summary paragraph>
+  //
+  //   | Severity | Location | Issue |
+  //   |:---|:---|:---|
+  //   | **High (4)** | `path:line` | category: headline |
+  //
+  //   <sub>Dismiss: `@sigilix dismiss` · Re-run: `/sigilix review` · Review #N · `sha`</sub>
+  //
+  // The H2/H3 headings are gone (GitHub already shows "Bot requested
+  // changes" at the comment top), the Fix Plan severity subheading is
+  // collapsed into a table row, and all 4 footer lines merge into one
+  // `<sub>`. Body-only findings still get a separate section because
+  // their failure mode (no inline thread possible) needs the
+  // explanation copy.
   const inlineFindings = args.verdict.findings.filter((f) => findingScope(f) === "line")
   const bodyOnlyFindings = [
     ...(args.unanchored ?? []),
@@ -1753,41 +1812,61 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   ]
   const totalFindings = inlineFindings.length + bodyOnlyFindings.length
   const zeroFindingBlocker = posture === "request_changes" && totalFindings === 0
+  // CR Major (PR #200): high-severity count must include body-only
+  // findings too — an unanchored critical finding was rendering as
+  // "**1 finding**" instead of "**1 high-severity finding**", which
+  // weakens the prioritization signal in the compact lead line. The
+  // lower-severity-inline count stays scoped to inline only — body-
+  // only findings already get an explicit "+ N body" segment in the
+  // lead, so counting them here too would double-count.
+  const highOrCriticalCount =
+    inlineFindings.filter((f) => f.score >= 4).length
+    + bodyOnlyFindings.filter((f) => f.score >= 4).length
+  const lowerSeverityInlineCount = inlineFindings.filter((f) => f.score < 4).length
 
   const lines: string[] = [SIGILIX_REVIEW_MARKER, ""]
 
-  // Heading: "## Sigilix: N [non-blocking ]finding[s][ · since last review]".
-  // 2026-05-23 rebrand: Δ glyph (triangle) removed; literal "since
-  // last review" copy in its place. See `renderDeltaBadge` for the
-  // matching badge-line change.
-  const findingNoun = totalFindings === 1 ? "finding" : "findings"
+  // Lead line — compact, bold, with coverage inlined. Drops the H2
+  // heading entirely (the comment-header above already says "Sigilix
+  // Bot requested changes" — a second H2 was redundant).
   const deltaBadge = args.delta ? renderDeltaBadge(args.delta) : null
-  const deltaSuffix = deltaBadge ? " · since last review" : ""
-  const postureCopy = posture === "comment" ? "non-blocking " : ""
-  lines.push(
-    zeroFindingBlocker
-      ? "## Sigilix: approval pending"
-      : `## Sigilix: ${totalFindings} ${postureCopy}${findingNoun}${deltaSuffix}`,
-  )
-
-  // Changes-badge line — directly under heading, before coverage and
-  // summary. Only present when delta has signal.
-  if (deltaBadge) {
-    lines.push("")
-    lines.push(deltaBadge)
-  }
-
-  // Coverage line — full or degraded variant; absent when no
-  // coverage args supplied (back-compat).
   const coverageLine = args.coverage ? renderCoverageLine(args.coverage) : null
-  if (coverageLine) {
-    lines.push("")
-    lines.push(coverageLine)
+  // Strip the `**Coverage:**` prefix from the coverage line so we can
+  // inline-append it after the lead. `renderCoverageLine` always emits
+  // `**Coverage:** <rest>`, so the prefix strip is a stable contract.
+  const coverageInline = coverageLine ? coverageLine.replace(/^\*\*Coverage:\*\* /, "coverage: ") : null
+  let lead: string
+  if (zeroFindingBlocker) {
+    lead = "**Approval pending**"
+  } else {
+    const postureCopy = posture === "comment" ? "non-blocking " : ""
+    const findingNoun = (n: number): string => (n === 1 ? "finding" : "findings")
+    if (highOrCriticalCount === 0 && lowerSeverityInlineCount === 0 && bodyOnlyFindings.length > 0) {
+      // All findings are body-only AND lower-severity (the high-
+      // severity body-only case falls into the next branch via
+      // highOrCriticalCount > 0 — CR Major fold).
+      lead = `**${bodyOnlyFindings.length} ${postureCopy}${findingNoun(bodyOnlyFindings.length)}**`
+    } else if (highOrCriticalCount === 0) {
+      // Lower-severity inline only (no Fix Plan table).
+      lead = `**${lowerSeverityInlineCount} ${postureCopy}${findingNoun(lowerSeverityInlineCount)}** posted inline`
+    } else {
+      // High-severity tier — includes body-only criticals per CR
+      // Major. The "+ M lower-severity inline" clause tells the
+      // reader where the rest live; body-only findings already get
+      // their own "### Review Body Findings" section below so we
+      // don't double-count them in the lead.
+      lead = `**${highOrCriticalCount} ${postureCopy}high-severity ${findingNoun(highOrCriticalCount)}**`
+      if (lowerSeverityInlineCount > 0) {
+        lead += ` + ${lowerSeverityInlineCount} lower-severity inline`
+      }
+    }
   }
+  const leadParts: string[] = [lead]
+  if (deltaBadge) leadParts.push(deltaBadge.replace(/^\*\*Changes:\*\* /, "since last review: "))
+  if (coverageInline) leadParts.push(coverageInline)
+  lines.push(leadParts.join(" · "))
 
-  // Summary paragraph (with optional stack-context parenthetical
-  // appended to the LAST paragraph so it visually attaches to the
-  // text rather than floating on its own line).
+  // Summary paragraph (with optional stack-context parenthetical).
   const stackParen = renderStackParenthetical(args.stack)
   const summary = stackParen
     ? `${args.verdict.summary.trimEnd()} ${stackParen}`
@@ -1802,64 +1881,73 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   }
   lines.push(summary)
 
-  // Fix Plan — only inline findings. Body-only findings appear in the
-  // section below so the plan never promises a file:line with no inline
-  // review thread.
-  const fixPlan = renderFixPlan(inlineFindings)
-  if (fixPlan) {
+  // Fix Plan as a compact table. Only inline findings (body-only have
+  // their own section below). Returns null when no findings at
+  // score>=4, in which case the table is omitted entirely.
+  const fixPlanTable = renderFixPlanTable(inlineFindings)
+  if (fixPlanTable) {
     lines.push("")
-    lines.push(fixPlan)
+    lines.push(fixPlanTable)
   }
 
-  // Body-only findings — unanchored or non-line-scoped set, rendered
-  // as compact standalone entries. Avoid file-only headings: they read
-  // like orphaned inline comments when GitHub cannot create a thread.
+  // Body-only findings — unanchored or non-line-scoped set. Same
+  // section as before (explanation copy is load-bearing — these are
+  // findings GitHub can't anchor to a diff line, so the reader needs
+  // to know why they're not inline review threads).
   if (bodyOnlyFindings.length > 0) {
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_HEADING)
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
-    lines.push(...renderBodyOnlyFindings(bodyOnlyFindings))
+    lines.push(...renderBodyOnlyFindings(bodyOnlyFindings, args.linkContext))
   }
 
-  // Dismissal hint — REQUEST_CHANGES only, before the provenance
-  // footer.
-  if (posture === "request_changes") {
-    lines.push("")
-    lines.push(DISMISSAL_HINT)
-  }
+  // Single-line footer (replaces the four separate metadata lines).
+  // Built separately from `lines` so the 65k cap can truncate the
+  // body content without slicing through the footer's `<sub>` and
+  // losing the SHA (Sigilix-bot HIGH + CR MINOR on PR #200 —
+  // provenance invariant).
+  const headShort = args.prov?.headSha ? args.prov.headSha.slice(0, 7) : null
+  const footer = renderCompactReviewFooter({
+    posture,
+    reviewCounter: args.reviewCounter,
+    headShort,
+  })
 
-  // SIG-101: retrigger hint. The original Greptile-style
-  // `[🔄 Re-run review](URL)` button was dropped on founder feedback
-  // 2026-05-19 — it read as visual noise inside the request-changes
-  // body. The `<sub>` hint line remains as the discoverability
-  // affordance: it tells the reader that re-running is a thing they
-  // can do, without occupying header-weight real estate. GitHub
-  // doesn't support pre-filled comment bodies on existing PRs, so a
-  // URL-link wouldn't have actually triggered the rerun anyway.
-  if (posture === "request_changes" && args.retriggerUrl) {
-    lines.push("")
-    lines.push("<sub>Comment `/sigilix review` on this PR to re-run on the current head.</sub>")
-  }
+  return capForGitHub(lines.join("\n"), footer)
+}
 
-  // SIG-101: per-PR review counter footer. 1-indexed (first review
-  // is `#1`). The `last rendered` timestamp is the SAME wall-clock
-  // value `renderProvenanceFooter` uses, so the two footers stay in
-  // sync. APPROVE bodies render marker-only per SIG-94 and skip
-  // this; only REQUEST_CHANGES bodies surface the counter.
-  if (
-    posture === "request_changes" &&
-    typeof args.reviewCounter === "number" &&
-    args.reviewCounter > 0
-  ) {
-    const counterTs = new Date(args.prov?.nowMs ?? Date.now()).toISOString()
-    lines.push("")
-    lines.push(
-      `_Sigilix · Review #${args.reviewCounter} for this PR · last rendered ${counterTs}._`,
-    )
+/**
+ * SIG (Kimi K2.6 r1): one-line footer that merges what used to be FOUR
+ * separate metadata lines at the bottom of the review body — dismiss
+ * hint, re-run hint, Review #N counter, "Reviewed against SHA at
+ * TIMESTAMP" provenance. One `<sub>` block keeps the body lightweight
+ * while preserving every piece of info the prior multi-line shape
+ * provided.
+ *
+ * The timestamp is dropped because the GitHub comment header already
+ * shows the "N minutes ago" timestamp at the top of the rendered
+ * comment — two timestamps in the body for the same event was
+ * redundant. The SHA stays because it's the only piece of info NOT
+ * available from GitHub's chrome.
+ */
+function renderCompactReviewFooter(args: {
+  posture: FindingsReviewPosture
+  reviewCounter: number | undefined
+  headShort: string | null
+}): string {
+  const parts: string[] = []
+  if (args.posture === "request_changes") {
+    parts.push("Dismiss: `@sigilix dismiss` in a review thread")
   }
-
-  return capForGitHub(lines.join("\n"), args.prov)
+  parts.push("Re-run: `/sigilix review`")
+  if (typeof args.reviewCounter === "number" && args.reviewCounter > 0) {
+    parts.push(`Review #${args.reviewCounter}`)
+  }
+  if (args.headShort) {
+    parts.push(`\`${args.headShort}\``)
+  }
+  return `<sub>${parts.join(" · ")}</sub>`
 }
 
 // ARC-184: provenance footer + writer-side 65k cap.
@@ -1872,28 +1960,20 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
 // reader to the full review history.
 const GH_BODY_CAP = 65000
 
-function renderProvenanceFooter(prov: ProvenanceCtx | undefined): string | null {
-  if (!prov || !prov.headSha) return null
-  const headShort = prov.headSha.slice(0, 7)
-  const ts = new Date(prov.nowMs ?? Date.now()).toISOString()
-  return `_Reviewed against \`${headShort}\` at ${ts}._`
-}
-
-function capForGitHub(body: string, prov: ProvenanceCtx | undefined): string {
-  const footer = renderProvenanceFooter(prov)
-  // Always append the footer (or omit when there's no provenance ctx,
-  // for backwards compatibility with callers that don't provide one).
-  if (!footer) return body
-  const withFooter = `${body}\n\n${footer}\n`
-  if (withFooter.length <= GH_BODY_CAP) return withFooter
-  // Truncate the body content (NOT the footer) and append a pointer
-  // marker. The footer is appended below so the reader still sees
-  // which head SHA the review was generated against.
+function capForGitHub(body: string, footer: string): string {
+  // SIG Kimi K2.6 r1 + Sigilix HIGH (PR #200): the compact footer
+  // carries the SHA (the provenance invariant). It MUST survive the
+  // 65k truncation — a naive tail-cut would slice through the `<sub>`
+  // and break the invariant. So we cap by truncating BODY CONTENT
+  // and re-appending the footer afterwards, the same shape the
+  // pre-r1 renderProvenanceFooter / capForGitHub pair used.
+  const joined = `${body}\n\n${footer}`
+  if (joined.length <= GH_BODY_CAP) return joined
   const TRUNC = "\n\n_[summary truncated to fit GitHub's 65535 limit]_"
-  const overhead = TRUNC.length + footer.length + 4 // 4 = "\n\n" before footer + "\n" tail
+  const overhead = TRUNC.length + footer.length + 4 // "\n\n" between body & footer + a hair
   const room = GH_BODY_CAP - overhead
   const truncated = body.slice(0, Math.max(0, room))
-  return `${truncated}${TRUNC}\n\n${footer}\n`
+  return `${truncated}${TRUNC}\n\n${footer}`
 }
 
 /**
@@ -1949,6 +2029,51 @@ export function renderFixPlan(findings: PrReviewFinding[]): string | null {
   return lines.join("\n")
 }
 
+/**
+ * SIG (Kimi K2.6 r1): Fix Plan in compact table form. Replaces the
+ * H3 heading + per-severity subheading + bullet list shape with a
+ * single markdown table. ~50% less vertical space per row.
+ *
+ * Critical (score 5) and High (score 4) findings only — same filter
+ * as `renderFixPlan`. Lower-severity findings are referenced in the
+ * lead-line "+ N lower-severity inline" copy so the reader knows
+ * where they went without surfacing them in the table.
+ *
+ * Pure — exported for tests.
+ */
+export function renderFixPlanTable(findings: PrReviewFinding[]): string | null {
+  const eligible = findings
+    .filter((f) => f.score >= 4)
+    .sort((a, b) => {
+      // Critical first, then high. Within each severity, sort by
+      // path/line so the table is stable across runs.
+      if (a.score !== b.score) return b.score - a.score
+      if (a.path !== b.path) return a.path < b.path ? -1 : 1
+      return a.line - b.line
+    })
+  if (eligible.length === 0) return null
+
+  const lines: string[] = [
+    "| Severity | Location | Issue |",
+    "|:---|:---|:---|",
+  ]
+  for (const f of eligible) {
+    const range = f.startLine != null && f.startLine !== f.line
+      ? `${f.path}:${f.startLine}-${f.line}`
+      : `${f.path}:${f.line}`
+    const cleanHeadline = stripAstMarkers(f.headline)
+    // Escape the pipe in headlines so a finding that says "use a | b"
+    // doesn't collapse the table. Hand the reader a safer message and
+    // a slightly longer truncation budget since each row is only one
+    // line tall (vs prior bullet that could wrap visually).
+    const safeHeadline = cleanHeadline.replace(/\|/g, "\\|")
+    const headline = safeHeadline.length > 160 ? `${safeHeadline.slice(0, 157)}…` : safeHeadline
+    const severityLabel = f.score >= 5 ? "**Critical (5)**" : "**High (4)**"
+    lines.push(`| ${severityLabel} | \`${range}\` | \`${formatFindingCategory(f)}\`: ${headline} |`)
+  }
+  return lines.join("\n")
+}
+
 function formatFixPlanRow(f: PrReviewFinding): string {
   const range = f.startLine != null && f.startLine !== f.line
     ? `${f.path}:${f.startLine}-${f.line}`
@@ -1986,12 +2111,82 @@ function formatBodyFindingLocation(f: PrReviewFinding): string {
   }
 }
 
-function formatBodyFindingAnchor(f: PrReviewFinding): string {
-  if (findingScope(f) === "pr") return `\`${f.path}\``
-  if (f.startLine != null && f.startLine !== f.line) {
-    return `\`${f.path}:${f.startLine}-${f.line}\``
+/**
+ * Render the path:line anchor for a body-only finding.
+ *
+ * Back-compat (no `linkContext`): emits the inline-code shape
+ * `` `path:line` `` so callers that haven't plumbed owner/repo/headSha
+ * (older tests, the check-annotation path which strips backticks) keep
+ * the prior rendering and don't break.
+ *
+ * SIG-216 (with `linkContext`): emits a clickable Markdown link
+ * `[path:line](https://github.com/<owner>/<repo>/blob/<sha>/<path>#L<line>)`
+ * with NO backticks (Greptile-direction per Kimi R3) so a reviewer
+ * scanning the body can jump straight to the file at the reviewed SHA.
+ *
+ * URL shape by scope:
+ *   - `pr`   → file at HEAD, no line anchor
+ *   - `file` → same as `pr` (file-level, no line anchor)
+ *   - `line` with range → `#L<startLine>-L<line>`
+ *   - `line` single     → `#L<line>`
+ */
+function formatBodyFindingAnchor(
+  f: PrReviewFinding,
+  linkContext?: BodyFindingLinkContext,
+): string {
+  const scope = findingScope(f)
+  const isPrOrFile = scope === "pr" || scope === "file"
+  const label = isPrOrFile
+    ? f.path
+    : f.startLine != null && f.startLine !== f.line
+      ? `${f.path}:${f.startLine}-${f.line}`
+      : `${f.path}:${f.line}`
+  if (!linkContext) {
+    return `\`${label}\``
   }
-  return `\`${f.path}:${f.line}\``
+  // SIG-216 fix-up: URL-encode each path segment + markdown-escape the
+  // label. Filenames with spaces / parens / brackets otherwise produce
+  // broken markdown links (a literal space in the URL is rejected by
+  // GitHub; a `]` in the label truncates the link text). Segment-wise
+  // encoding (not whole-path) preserves the `/` separators.
+  const { owner, repo, headSha } = linkContext
+  const encodedPath = encodePathSegments(f.path)
+  const base = `https://github.com/${owner}/${repo}/blob/${headSha}/${encodedPath}`
+  const url = isPrOrFile
+    ? base
+    : f.startLine != null && f.startLine !== f.line
+      ? `${base}#L${f.startLine}-L${f.line}`
+      : `${base}#L${f.line}`
+  return `[${escapeMarkdownLinkLabel(label)}](${url})`
+}
+
+/**
+ * SIG-216 fix-up: URL-encode each path segment individually so `/`
+ * separators stay intact. `encodeURIComponent` on the whole path would
+ * turn `/` into `%2F`, breaking the blob URL.
+ *
+ * We also explicitly encode `(` → `%28` and `)` → `%29`. RFC 3986
+ * leaves parens unreserved so `encodeURIComponent` doesn't touch them
+ * — but parens are markdown's link-target delimiter (`](url)`), so a
+ * raw `)` inside the URL terminates the link prematurely. Encoding
+ * them is harmless on the GitHub side (it accepts either) and
+ * mandatory for the markdown round-trip.
+ */
+function encodePathSegments(p: string): string {
+  return p
+    .split("/")
+    .map((seg) => encodeURIComponent(seg).replace(/\(/g, "%28").replace(/\)/g, "%29"))
+    .join("/")
+}
+
+/**
+ * SIG-216 fix-up: backslash-escape markdown-special chars in a link
+ * label so paths containing `[`, `]`, `(`, `)`, or `\` render as
+ * literal text instead of truncating the link or opening a nested
+ * group.
+ */
+function escapeMarkdownLinkLabel(text: string): string {
+  return text.replace(/([\\[\]()])/g, "\\$1")
 }
 
 function formatBodyFindingSeverity(f: PrReviewFinding): string {
@@ -2011,23 +2206,36 @@ function formatFindingCategory(f: PrReviewFinding): string {
  * thread, a naked filename header looks like lost context rather than
  * a deliberate fallback surface.
  *
+ * SIG-216: the meta sub-line under each finding was tightened from
+ * `<location> (<severity>) · <anchor>` to just `<anchor> · score N`.
+ * "File-level" / "Comment-level" / "Line N" is implicit from the
+ * anchor shape; the bracketed severity duplicates the P0/P1/P2/P3
+ * badge that already prefixes the headline. The middle-dot separator
+ * is U+00B7 (`·`).
+ *
+ * `linkContext` (optional) makes the anchor a clickable GitHub blob
+ * URL; absent it the anchor falls back to the back-compat inline-code
+ * shape so callers that haven't plumbed owner/repo through don't
+ * break.
+ *
  * Returns an array of lines (caller joins with `\n`). Pure.
  */
-function renderBodyOnlyFindings(findings: PrReviewFinding[]): string[] {
+function renderBodyOnlyFindings(
+  findings: PrReviewFinding[],
+  linkContext?: BodyFindingLinkContext,
+): string[] {
   const sorted = [...findings].sort((a, b) =>
     b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
   )
   const lines: string[] = []
   for (const f of sorted) {
-    const location = formatBodyFindingLocation(f)
-    const severity = formatBodyFindingSeverity(f)
-    const anchor = formatBodyFindingAnchor(f)
+    const anchor = formatBodyFindingAnchor(f, linkContext)
     const anchorNote = f.anchorNote ? ` · ${f.anchorNote}` : ""
     const badge = severityBadgeForScore(f.score)
     const categoryBadge = categoryBadgeForFinding(f)
     lines.push("")
     lines.push(`- ${badge} ${categoryBadge} **${stripAstMarkers(f.headline)}**`)
-    lines.push(`  <sub>${location} (${severity}) · ${anchor}${anchorNote}</sub>`)
+    lines.push(`  <sub>${anchor} · score ${f.score}${anchorNote}</sub>`)
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -2128,9 +2336,18 @@ const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
 const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 
 function badgeImg(file: ReviewBadgeAssetName): string {
-  const { width, height } = badgeAssetSize(file)
   const label = badgeAssetLabel(file)
-  return `<a href="https://sigilix.ai"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top" width="${width}" height="${height}"></a>`
+  // SIG-238 r9 pattern. Empirical: this combo defeats Primer's bubble
+  // rule on github.com PR comments. Specifically:
+  //   - `<a href="#">` WRAP (we used to drop this per r4; that
+  //     diagnosis was wrong — the anchor is REQUIRED, not harmful).
+  //   - `<img>` with `align="top"` and NO explicit width/height. The
+  //     missing dimensions appear to suppress whichever Primer CSS
+  //     rule paints `bgColor-muted` under the image (the "bubble"
+  //     visible in r7).
+  // Why this works: not fully understood — empirical. See
+  // `badge-geometry.ts:BADGE_PADDING_PX` for r4-through-r9 history.
+  return `<a href="#"><img alt="${label}" src="${badgeAssetUrl(file)}" align="top"></a>`
 }
 
 function severityBadgeImg(file: "p0" | "p1" | "p2" | "p3"): string {
@@ -2166,8 +2383,22 @@ function stripAstMarkers(text: string): string {
 function formatFindingBodyMarkdown(body: string): string {
   const clean = stripAstMarkers(body)
   if (clean.length <= FINDING_BODY_PREVIEW_LIMIT) return clean
-  const preview = clean.slice(0, FINDING_BODY_PREVIEW_LIMIT).trimEnd()
-  const rest = clean.slice(preview.length).trimStart()
+  // SIG-216: word-boundary-aware truncation. Find the last whitespace
+  // in `[0, FINDING_BODY_PREVIEW_LIMIT)` so a body like
+  // "Add a unit test that mocks a chat stream..." becomes
+  // "Add a unit test that mocks a..." in the preview and
+  // "chat stream..." in the More Info disclosure — not the previous
+  // mid-character "...mocks a c" / "hat stream..." split. When the
+  // preview window contains no whitespace at all (artificial long
+  // single token), fall back to the hard character slice so the
+  // function still terminates.
+  const sliceEnd = (() => {
+    const hardSlice = clean.slice(0, FINDING_BODY_PREVIEW_LIMIT)
+    const lastWs = hardSlice.search(/\s\S*$/)
+    return lastWs > 0 ? lastWs : FINDING_BODY_PREVIEW_LIMIT
+  })()
+  const preview = clean.slice(0, sliceEnd).trimEnd()
+  const rest = clean.slice(sliceEnd).trimStart()
   return [
     `${preview}...`,
     "",

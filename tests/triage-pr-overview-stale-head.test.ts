@@ -22,6 +22,11 @@ const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 const mockGenerate = vi.fn()
 const mockListPullRequestFiles = vi.fn(async () => [])
+// SIG-216 CR fix-up: the read-after-write idempotency rescan
+// (`findExistingOverviewComment`) calls `listIssueCommentsPage`.
+// Default to empty so the stale-head tests' create-path runs land
+// in the create branch with the final rescan returning null.
+const mockListIssueCommentsPage = vi.fn(async () => [])
 
 vi.mock("../src/lib/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
@@ -36,6 +41,7 @@ vi.mock("../src/lib/github", async () => {
       getPullRequestDiff: (...args: unknown[]) => mockGetPullRequestDiff(...args),
       getPullRequestCommits: (...args: unknown[]) => mockGetPullRequestCommits(...args),
       listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
+      listIssueCommentsPage: (...args: unknown[]) => mockListIssueCommentsPage(...args),
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
       listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
@@ -107,6 +113,8 @@ beforeEach(() => {
   mockGetPullRequestDiff.mockClear()
   mockGetPullRequestCommits.mockClear()
   mockListIssueComments.mockClear()
+  mockListIssueCommentsPage.mockClear()
+  mockListIssueCommentsPage.mockImplementation(async () => [])
   mockCreateIssueComment.mockClear()
   mockUpdateIssueComment.mockClear()
   mockGenerate.mockClear()

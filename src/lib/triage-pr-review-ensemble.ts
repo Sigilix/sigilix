@@ -85,6 +85,7 @@ import { PR_REVIEW_SCHEMA } from "./schemas"
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
+  type ReviewFindingScope,
   type CoverageRoles,
   type DeltaBadgeCounts,
   parsePrReviewResponse,
@@ -159,6 +160,7 @@ import {
   type SpecialistRole,
   type RouterDecision,
 } from "./ensemble-router"
+import { decideSpecialistsDynamic } from "./dynamic-dispatcher"
 import {
   createRetrievalCache,
   type RetrievalCacheStats,
@@ -185,6 +187,10 @@ import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
 import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
+  maybeEmitLogicPromptBudget,
+  parseLogicPromptBudgetMode,
+} from "./logic-prompt-budget"
+import {
   isPrOverviewEnabled,
   loadSigilixConfig,
   passesLabelGate,
@@ -200,12 +206,21 @@ import {
   type SigilixProfile,
 } from "./sigilix-config"
 import {
+  renderScopedRulesForPrompt,
+  resolveScopedRulesForChangedPaths,
+} from "./scoped-rules"
+import { loadCompiledScopedRulesManifest } from "./scoped-rules-kv"
+import {
   runPerfBudgetsCheck,
   renderPerfBudgetsForPrompt,
   type PerfBudgetsHit,
 } from "./perf-budgets"
 import { ingestCoverage, renderCoverageGapBlock } from "./coverage-ingest"
-import { waitForPrOverviewStub } from "./pr-overview-stub"
+import {
+  handlePrOverview,
+  type PrOverviewArgs,
+  type PrOverviewReviewContext,
+} from "./triage-pr-overview"
 import {
   runDocsCoverageCheck,
   renderDocsCoverageForPrompt,
@@ -327,12 +342,20 @@ const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 // second-attempt and killing the cross-provider fallback before it
 // could fire.
 //
-// Sized to fit `2 primary attempts (2×90s) + retry backoff (~1s) +
-// 1 cross-provider fallback attempt (~80s, kimi-k2.5:cloud)` = 261s,
-// rounded up to 270s for slack. The static invariant test below
-// regression-guards this so a future "tighten for headroom" change
-// can't silently re-break the fallback firing.
-export const SPECIALIST_TIMEOUT_MS = 270_000
+// SIG-234 (2026-05-26): tightened 270s → 185s. The new lineup
+// retires `deepseek-v4-pro:cloud` from the logic primary slot
+// (was the 100-270s wall-time floor). New primaries fit a
+// realistic worst case of 3 attempts × 60s per-attempt cap = 180s,
+// rounded up to 185s for the 1s inter-attempt retry-backoff slack
+// asserted by the budget-invariant test below. The pre-tighten 270s
+// was a comfort budget for the v4-pro slow path; with v4-flash +
+// qwen3-coder-next + minimax-m2.5 + glm-5.1, we don't need it. The
+// static invariant test regression-guards the budget arithmetic.
+//
+// Pre-SIG-234 history: sized to fit `2 primary attempts (2×90s) +
+// retry backoff (~1s) + 1 cross-provider fallback attempt (~80s,
+// kimi-k2.5:cloud)` = 261s, rounded up to 270s for slack.
+export const SPECIALIST_TIMEOUT_MS = 185_000
 // ARC-283: synth budget bumped from 180s → 420s after PR #93's own
 // review timed out at 180s on a 900-line diff + 27 new tests.
 // Sigilix's product positioning is "yes cost more time for BETTER,
@@ -607,6 +630,35 @@ if (SHADOW_FINALIZE_GRACE_MS + ORCHESTRATOR_TIMEOUT_MS > CF_QUEUE_CONSUMER_CEILI
   )
 }
 
+// ─── SIG-216 fix-up: inline-overview budgeting ───────────────────────────
+//
+// The inline pr-overview call inside `handlePrReviewEnsemble` (added in
+// SIG-216) runs an additional Ollama generate ON TOP of the ensemble's
+// 895s orchestrator budget. The full review handler must finish inside
+// the 900s `CF_QUEUE_CONSUMER_CEILING_MS` queue-consumer wall — a stalled
+// overview can otherwise push the consumer past the platform ceiling,
+// leaving the queue message in the in_progress state and triggering a
+// re-delivery + duplicate review.
+//
+// Floor: when the remaining review budget drops below this, skip the
+// inline overview entirely. The overview will fire on the next push or
+// can be re-attempted via warmup. 30s reserves enough room for the
+// post-overview stale-head re-check + submitReview round-trip + the
+// finally cleanup paths.
+export const INLINE_OVERVIEW_MIN_BUDGET_MS = 30_000
+
+// Ceiling: even on a generous budget surplus, cap the inline overview
+// wall-time at 90s so a single slow overview can never starve the rest
+// of the submit pipeline. Matches the same order-of-magnitude as a
+// SPECIALIST_TIMEOUT_MS attempt.
+export const INLINE_OVERVIEW_MAX_BUDGET_MS = 90_000
+
+// Reserved tail for the post-overview stale-head re-check (~1s),
+// `submitReview` GitHub roundtrip (~3-10s typical, allow headroom for
+// 422 + fallback), and the `dismissPriorSigilixReviews` call ahead of
+// it. Subtracted from the wall-clock budget the inline overview gets.
+const INLINE_OVERVIEW_SUBMIT_RESERVE_MS = 30_000
+
 // ─── SIG-138 Phase 2: graph-retrieval pure helpers ────────────────────────
 //
 // Exported for unit-testing (no DO/network access — pure env-flag reads
@@ -623,6 +675,75 @@ export const BLAST_RADIUS_RESOLUTION_READY = true
 export function graphRetrievalEnabled(env: Env): boolean {
   const v = (env.OPENCLAW_GRAPH_RETRIEVAL ?? "").trim().toLowerCase()
   return v === "shadow" || v === "post"
+}
+
+/**
+ * SIG-228 Phase 3c: returns true when `OPENCLAW_SYNTH_BYPASS_ENABLED` is
+ * `"on"`. Default-off keeps the always-synth legacy behavior in dev/test
+ * and in any production environment where the flag was never flipped.
+ * Production wrangler.toml ships this `"on"` so the bypass fires for
+ * single-specialist no-major reviews (the dispatcher's hot path).
+ */
+export function isSynthBypassEnabled(env: Env): boolean {
+  return (env.OPENCLAW_SYNTH_BYPASS_ENABLED ?? "").trim().toLowerCase() === "on"
+}
+
+/**
+ * SIG-235 — min-specialists early exit mode parser. Returns one of:
+ *   - "off"    (default): fan-out waits for ALL specialists to settle
+ *   - "shadow"           : fan-out waits for all, BUT logs would-fire
+ *   - "on"               : fires synth as soon as N-1 of N succeed,
+ *                          cancels the laggard's outstanding ladder
+ *
+ * Case-insensitive, whitespace-tolerant. Unknown / unset values default
+ * to "off" so a misconfigured env never silently changes fan-out semantics.
+ *
+ * Extracted as a pure helper so unit tests can pin the parser without
+ * spinning up the orchestrator.
+ */
+export type MinSpecialistsEarlyExitMode = "off" | "shadow" | "on"
+
+export function parseMinSpecialistsEarlyExitMode(
+  raw: string | undefined,
+): MinSpecialistsEarlyExitMode {
+  const v = (raw ?? "").trim().toLowerCase()
+  if (v === "shadow") return "shadow"
+  if (v === "on") return "on"
+  return "off"
+}
+
+/**
+ * SIG-228 Phase 3c: pure eligibility predicate, extracted so unit tests
+ * can pin the gate without spinning up the full ensemble. Returns true
+ * iff ALL of:
+ *
+ *   1. `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`.
+ *   2. The DISPATCHER decided to fan out to exactly 1 specialist
+ *      (`dispatchedCount === 1`). The hot path is "router narrowed
+ *      to 1 on purpose" — NOT "router fanned out to N, only 1 came
+ *      back." The latter is a degraded-coverage run and MUST run
+ *      synth so it can render the `[DEGRADED COVERAGE]` block.
+ *   3. Exactly 1 candidate verdict came back non-null (sanity-check;
+ *      the only way this differs from #2 is if the single dispatched
+ *      specialist itself failed, which makes the bypass impossible).
+ *   4. None of that candidate's findings have `score >= 4`.
+ *
+ * The score-gate semantics match `score >= 4` as the "major/critical"
+ * threshold used across the codebase
+ * (`triage-pr-review.ts:1961, 2103`). The orchestrator's inline bypass
+ * branch reads the predicate verbatim — keep these in sync.
+ */
+export function isSynthBypassEligible(
+  env: Env,
+  dispatchedCount: number,
+  candidates: ReadonlyArray<{ verdict: { findings: ReadonlyArray<{ score: number }> } | null }>,
+): boolean {
+  if (!isSynthBypassEnabled(env)) return false
+  if (dispatchedCount !== 1) return false
+  if (candidates.length !== 1) return false
+  const sole = candidates[0]
+  if (!sole || !sole.verdict) return false
+  return sole.verdict.findings.every((f) => f.score < 4)
 }
 
 /**
@@ -894,27 +1015,49 @@ export interface ModelConfig {
 }
 
 export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
+  // SIG-234 lineup swap (2026-05-26): all 5 specialist + synth roles
+  // now use UNIQUE primary models per the founder's 4+1 constraint.
+  // Driven by Codex's ARC-292 lineup proposal + Ollama-format-
+  // compatibility validation (curl-tested each candidate with a
+  // JSON-schema-constrained prompt; `mistral-large-3:675b-cloud`,
+  // `glm-4.6:cloud`, and `deepseek-v3.1:671b-cloud` ALL wrap output
+  // in ```json``` markdown fences and are NOT used). The slow logic
+  // primary (deepseek-v4-pro:cloud at 100-270s) is demoted to
+  // security + tests fallback — kept reachable for its reasoning
+  // capability without anchoring wall-time.
   logic: {
-    primary: "deepseek-v4-pro:cloud",
-    // Phase 4a.1: dropped 2 → 1. Two retries at ~80s each = 240s of primary
-    // attempts, exceeds the original 180s specialist budget. One retry +
-    // cross-provider fallback gives better resilience per unit time,
-    // validated by shadow telemetry showing 12/15 logic runs hit "Operation
-    // aborted" at 90s wall.
+    // Was `deepseek-v4-pro:cloud` (100-270s). `deepseek-v4-flash:cloud`
+    // keeps the V4 reasoning lineage + 1M context.
+    primary: "deepseek-v4-flash:cloud",
+    // 2026-05-26 Codex/measurement: production telemetry on PR #188
+    // showed deepseek-v4-flash + kimi-k2.5 (the prior fallback) BOTH
+    // hit exactly 60_000ms (PER_ATTEMPT_TIMEOUT_MS) on every review.
+    // The retry/fallback ladder was 100% waste — 180s burned, logic
+    // verdict never returned, customer got `[DEGRADED COVERAGE]` either
+    // way. Codex diagnostic: logic's prompt shape (full retrieval +
+    // graph + symbol context) is uniquely expensive; the issue is
+    // prompt-driven, not model-driven, so swapping fallbacks alone
+    // wouldn't help.
     //
-    // Phase 4a.3 (ARC-171): specialist budget extended to 270s. Two
-    // retries (3 primary attempts ≈ 270s at the 90s/attempt observed
-    // in Phase 4a.2 telemetry, + backoffs) would exceed the new budget
-    // too, so retries=1 stays. The new headroom funds the cross-
-    // provider fallback (kimi-k2.5:cloud) which Phase 4a.2 telemetry
-    // proved was being killed by the 180s wall before it could fire.
-    retries: 1,
-    fallback: "kimi-k2.5:cloud",  // Moonshot — different infra than DeepSeek
+    // Tactical fix: `retries: 0` + `fallback: null` → logic gets 1
+    // attempt only, caps at 60s instead of 180s. Saves 120s/review.
+    // Real fix is min-specialists early exit (structural) + surgical
+    // prompt-budget on logic (see SIG-220 latency budget doc).
+    retries: 0,
+    fallback: null,
   },
   security: {
-    primary: "deepseek-v4-flash:cloud",  // known-working family member
+    // Coder-model territory: vulnerability patterns are mostly
+    // syntax / dataflow recognition, not frontier reasoning. Qwen3-
+    // Coder-Next is tuned for agentic coding workflows and the
+    // primary needs to be DIFFERENT from tests (which now uses
+    // MiniMax) so the 4+1 unique constraint holds.
+    primary: "qwen3-coder-next:cloud",
     retries: 1,
-    fallback: "qwen3-coder-next:cloud",  // cross-provider
+    // `deepseek-v4-pro:cloud` recycled here — the slow but capable
+    // reasoning model now lives on fallback paths so its latency
+    // doesn't anchor the critical path. Cross-provider from Qwen.
+    fallback: "deepseek-v4-pro:cloud",
   },
   performance: {
     // Phase 4a.1: glm-5.1 promoted from fallback → primary.
@@ -925,30 +1068,37 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // minimax-m2.1's 80% (12/15 with 3 timeouts). Findings depth holds
     // up — glm-5.1 averages 1.08 findings/verdict (vs 0.92), with 18%
     // longer body text per finding. The latency tradeoff is real
-    // (glm-5.1 p95 = 144s vs minimax = 86s) but well under the Phase
-    // 4a.3 270s specialist budget. Full analysis in
+    // (glm-5.1 p95 = 144s) but well under the new tightened 185s
+    // specialist budget. Full analysis in
     // `.claude/research/arc-167/_report.md`.
     primary: "glm-5.1:cloud",
     retries: 1,
-    // Cross-provider fallback retained — kimi-k2.5 same family as logic's
-    // fallback so we know it's reachable. Concentrates Moonshot risk on the
-    // logic + perf fallback paths simultaneously (noted in v2 risk register).
+    // Cross-provider fallback retained — kimi-k2.5 same family as
+    // logic's fallback so we know it's reachable.
     fallback: "kimi-k2.5:cloud",
   },
   tests: {
-    primary: "deepseek-v4-flash:cloud",
+    // MiniMax M2.5 — agentic-code / test-workflow model per Codex's
+    // ARC-292 analysis. Format-tested clean (~40-90s). Was
+    // `deepseek-v4-flash:cloud` which collided with security's
+    // primary in the old lineup (violated the 4+1 unique constraint
+    // even pre-this-swap).
+    primary: "minimax-m2.5:cloud",
     retries: 1,
-    // Reuses qwen3-coder-next:cloud as the cross-provider fallback
-    // rather than devstral-small-2:24b:cloud — the size tag (`24b`)
-    // and the cloud-routing tag (`cloud`) don't compose in Ollama's
-    // syntax (same gotcha that broke `qwen3-coder:30b:cloud`).
-    // qwen3-coder-next has no size tag baked in, so `:cloud` works.
-    fallback: "qwen3-coder-next:cloud",
+    // `deepseek-v4-pro:cloud` reused as fallback — cross-provider
+    // from MiniMax, proven on reasoning tasks.
+    fallback: "deepseek-v4-pro:cloud",
   },
 }
 
 export const SYNTHESIZER_CONFIG: ModelConfig = {
-  primary: "kimi-k2.6:cloud",
+  // SIG-234 lineup swap (2026-05-26): synth primary moves to
+  // `gpt-oss:120b-cloud` — open-weight, medium-usage, removes
+  // Moonshot from the customer-visible critical merge path entirely.
+  // Format-tested clean (1.3s on a small prompt; expected 25-75s on
+  // a 4-verdict synth payload). Codex's HIGHEST-priority swap per
+  // ARC-292: "Moonshot capacity dip burned 6m16s on PR #97."
+  primary: "gpt-oss:120b-cloud",
   retries: 1,
   // ARC-291 (PR #97 hot-fix): swap fallback from kimi-k2.5 → DeepSeek
   // family. Pre-this-fix the fallback was kimi-k2.5:cloud — SAME
@@ -1342,7 +1492,18 @@ export async function handlePrReviewEnsemble(
           run_on_labels: [...costControls.runOnLabels],
         }))
         telemetry.fellBackReason = "label_gate_skip"
-        return finalize(telemetry, env, "skipped", cache)
+        // SIG-224 Phase 0 follow-along: thread `reviewMeta` so the
+        // Check Run renders "Approved — no issues found · Sigilix
+        // approved · [View PR]" instead of falling through to the
+        // legacy "Review posted · [View review]" title that links to
+        // a nonexistent review. Same shape as the empty-router branch
+        // below — both are "we successfully reviewed and chose not to
+        // run specialists." The customer-visible effect: green check,
+        // honest "View PR" link, no broken review URL.
+        return finalize(telemetry, env, "skipped", cache, {
+          event: "APPROVE",
+          findingsCount: 0,
+        })
       }
     }
 
@@ -1380,6 +1541,26 @@ export async function handlePrReviewEnsemble(
         owner, repo, prNumber, headSha: headSha.slice(0, 7),
         instruction_count: matchedPathInstructions.length,
         matched_file_count: new Set(matchedPathInstructions.flatMap((i) => i.matchedPaths)).size,
+      }))
+    }
+    // SIG-172: load the per-repo scoped-rules manifest (SIGILIX.md +
+    // .sigilix/rules/*.md, persisted at index time) and pick the
+    // rules that apply to this PR's changed files. Closest-ancestor
+    // walk + glob matching. Cached compiled matchers are reused
+    // across roles in this run (one matcher build per PR, not per
+    // changed file).
+    const scopedRulesManifest = await loadCompiledScopedRulesManifest(env, owner, repo)
+    const scopedRuleSelection = resolveScopedRulesForChangedPaths(
+      scopedRulesManifest,
+      reviewedFiles.map((f) => f.path),
+    )
+    const scopedRulesBlock = renderScopedRulesForPrompt(scopedRuleSelection)
+    if (scopedRulesBlock.length > 0) {
+      console.log(JSON.stringify({
+        event: "pr-review-scoped-rules-matched",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        per_directory_rules: scopedRuleSelection.perDirectoryRules.length,
+        glob_rules: scopedRuleSelection.globRules.length,
       }))
     }
     // ARC-273: hard cap on the diff string passed to specialists.
@@ -1468,17 +1649,144 @@ export async function handlePrReviewEnsemble(
     // CR PR #35 catch: pass diffText so the router can content-aware
     // check markdown fenced code blocks before taking the docs-only
     // shortcut.
-    const router = decideSpecialists({ paths: filePaths, totalLinesChanged, diffText: diff }, env)
+    let router = decideSpecialists({ paths: filePaths, totalLinesChanged, diffText: diff }, env)
     telemetry.routerDecision = router
 
+    // ─── SIG-226 / SIG-224 Phase 1 — dispatcher (shadow + enforce_rules) ─
+    // Default mode = "off" → the whole block is a no-op (single env
+    // string compare).
+    //
+    // Modes:
+    //   "shadow"        — dispatcher computes picks + LLM call, but the
+    //                     legacy router still drives fan-out. Pure data
+    //                     collection for SIG-227b / SIG-228 graduation.
+    //   "enforce_rules" — SIG-227a. Dispatcher runs the RULE LAYER only
+    //                     (no LLM call, 0s overhead) and its picks
+    //                     REPLACE `router.specialists` for fan-out.
+    //                     Activates the new safe-skip rules
+    //                     (lockfile-only, .d.ts-only, test-files-only)
+    //                     that the legacy router doesn't have.
+    //   "enforce"       — Phase 2/3 (SIG-227b / SIG-228). Dispatcher
+    //                     runs rules + LLM and the picks drive fan-out.
+    //                     Logged but not yet honored in Phase 1 / 227a.
+    //
+    // Dispatcher is wrapped in try/catch so a defense-in-depth throw
+    // can't poison the legacy review pipeline (CR M3 fix from PR #183).
+    const dispatcherMode = env.OPENCLAW_DYNAMIC_DISPATCHER_MODE
+    if (
+      dispatcherMode === "shadow"
+      || dispatcherMode === "enforce"
+      || dispatcherMode === "enforce_rules"
+    ) {
+      try {
+        const dispatcherClassified = classifyDiffFiles(filePaths)
+        const dispatcherCommitMessage = `${meta.title}\n\n${meta.body ?? ""}`
+        const dispatcherDecision = await decideSpecialistsDynamic({
+          signals: { paths: filePaths, totalLinesChanged, diffText: diff },
+          classified: dispatcherClassified,
+          commitMessage: dispatcherCommitMessage,
+          // SIG-230: thread separated title/body through so the LLM
+          // prompt sees them inside the `<pr_metadata>` envelope. The
+          // sanitizer + envelope are the two-layer defense against
+          // prompt-injection in PR titles/bodies.
+          prTitle: meta.title,
+          prBody: meta.body ?? "",
+          repoConfig: sigilixConfig,
+          env,
+          signal: orchCtrl.signal,
+        })
+        telemetry.dispatcherDecision = dispatcherDecision
+        console.log(JSON.stringify({
+          event: "dispatcher-shadow-decision",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: dispatcherMode,
+          routerSpecialists: router.specialists,
+          dispatcherSpecialists: dispatcherDecision.specialists,
+          perRole: dispatcherDecision.perRole,
+          layerVotes: dispatcherDecision.layerVotes,
+          reasoning: dispatcherDecision.reasoning,
+          elapsedMs: dispatcherDecision.elapsedMs,
+        }))
+        if (dispatcherMode === "enforce_rules") {
+          // SIG-227a: rules-only enforcement. Replace the legacy
+          // router's picks with the dispatcher's.
+          //
+          // Safe-skip COVERAGE is a strict superset: the dispatcher
+          // adds lockfile-only, .d.ts-only, and test-files-only on
+          // top of the legacy router's docs-only-no-fences and CSS-
+          // only. So for PRs that hit a safe-skip case, the dispatcher
+          // matches OR shrinks the fan-out vs the legacy router.
+          //
+          // END-TO-END behavior on shape+force collisions differs.
+          // Example: a docs-only PR that ALSO touches an auth path
+          // (e.g. `auth-spec.md`). Legacy router: `forced.size > 0`
+          // → docs shortcut is SKIPPED → all 4 specialists run.
+          // Dispatcher: docs safe-skip fires → security force adds
+          // security back → fan-out = `{security}` only. This is
+          // intentionally more aggressive — a markdown change to an
+          // auth spec doesn't need logic/perf/tests review — but it
+          // IS a behavior change reviewers will see in shadow
+          // telemetry.
+          //
+          // CodeRabbit M1 fix: preserve the legacy router decision
+          // on `telemetry.legacyRouterDecision` so `/metrics/validation`
+          // can compute the "would-have-fanned-out vs actually-fanned-
+          // out" delta. The console.log captures both sides too.
+          telemetry.legacyRouterDecision = router
+          router = {
+            specialists: dispatcherDecision.specialists,
+            reason: `dispatcher_enforce_rules:${dispatcherDecision.reasoning.slice(0, 200)}`,
+            routerEnabled: true,
+          }
+          telemetry.routerDecision = router
+        }
+        if (dispatcherMode === "enforce") {
+          console.warn(JSON.stringify({
+            event: "dispatcher-enforce-mode-not-honored-in-phase-1",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            note: "full enforcement (LLM-decided non-protected + protected) ships in SIG-227b + SIG-228; use mode=enforce_rules for rules-only enforcement available today",
+          }))
+        }
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "dispatcher-shadow-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+          note: "dispatcher threw unexpectedly; legacy router still drives fan-out",
+        }))
+      }
+    }
+
     if (router.specialists.length === 0) {
-      // Router said "no specialists for this PR." Skip ensemble entirely.
-      // Pre-ARC-280 this fell through to Phase 3; post-ARC-280 the
-      // skip-notice helper posts a customer-visible "couldn't review"
-      // comment so the path isn't silent.
+      // Router said "no specialists apply to this PR" — e.g. docs-only
+      // with no executable fenced code blocks (see ensemble-router.ts
+      // `decideSpecialists` for the rule taxonomy).
+      //
+      // SIG-224 Phase 0: this used to call `bailWithSkipNotice` →
+      // "Couldn't review — see PR comment" + a yellow check, which is
+      // wrong semantics. "No specialists apply" is a successful review,
+      // not a failure. Thread `event: "APPROVE" + findingsCount: 0` so
+      // the Check Run renders the existing `"Approved — no issues found"`
+      // title (`pr-review-check-run.ts:382-387`) instead of falling
+      // through to the legacy "Review posted · View review" title that
+      // links to a nonexistent review. The dispatcher maps `"skipped"
+      // → "success"` via `src/index.ts:1297`.
+      //
+      // "APPROVE" is a slight semantic stretch (we didn't run a review;
+      // we determined no review was needed), but the customer-visible
+      // effect is correct: green check, "Sigilix approved", link points
+      // at the PR conversation tab, no broken review URL.
+      //
+      // Pre-req for SIG-225 (Phase 1 shadow dispatcher) — once the
+      // dynamic dispatcher starts skipping legitimately-not-applicable
+      // specialists more often, this path will fire more often, and the
+      // wrong "couldn't review" surface would be customer-visible noise.
       telemetry.fellBackToPhase3 = false  // ARC-280: Phase 3 deleted; this flag is now always false on every path
       telemetry.fellBackReason = "router_no_specialists"
-      return bailWithSkipNotice("router_no_specialists")
+      return finalize(telemetry, env, "skipped", cache, {
+        event: "APPROVE",
+        findingsCount: 0,
+      })
     }
 
     // ─── Pre-flight retrieval snapshot ─────────────────────────
@@ -2440,6 +2748,12 @@ export async function handlePrReviewEnsemble(
         ...(matchedPathInstructions.length > 0
           ? { pathInstructionsBlock: renderPathInstructionsForPrompt(matchedPathInstructions, role) }
           : {}),
+        // SIG-172: directory-scoped + glob-scoped rules. Same block
+        // for every role (no per-role splitting in v1) — the rules
+        // are written by the repo owner with all four lenses in mind.
+        ...(scopedRulesBlock.length > 0
+          ? { scopedRulesBlock }
+          : {}),
         ...(sigilixConfig.profile ? { profile: sigilixConfig.profile } : {}),
         ...(roleFacts.length > 0 ? { deterministicChecksBlock: roleFacts } : {}),
         ...(stackBlock.length > 0 ? { stackBlock } : {}),
@@ -2507,41 +2821,270 @@ export async function handlePrReviewEnsemble(
     }
 
     // ARC-284: track per-specialist start time so the fanout summary
-    // can name the slowest role. The Promise.allSettled below waits
-    // for ALL to settle, so we measure each role's elapsed independent
-    // of the gating slowest one.
+    // can name the slowest role. The fan-out below waits for ALL to
+    // settle by default; SIG-235 quorum collector below opt-in
+    // early-exits when `N-1` of `N` succeed.
     const fanoutStartMs = Date.now()
     const perSpecialistStart = new Map<string, number>()
     const perSpecialistEnd = new Map<string, number>()
     for (const role of router.specialists) perSpecialistStart.set(role, Date.now())
-    const specialistResults = await Promise.allSettled(
-      router.specialists.map((role) =>
-        withComposedTimeout(
-          // Use the composed signal `withComposedTimeout` provides — it
-          // aborts on EITHER the per-specialist 270s timer OR the outer
-          // orch abort. Passing `orchCtrl.signal` directly only cancels
-          // the await wrapper, leaving the in-flight model fetch alive
-          // until the outer 490s wall fires (CR catch on PR #42).
-          (signal) => runSpecialist({
-            role,
-            apiKey: env.OLLAMA_API_KEY,
-            systemPrompt: SPECIALIST_PROMPTS[role],
-            // SIG-113: tests specialist gets the testing-evidence
-            // block; other specialists get the classification block.
-            initialMessage: appendRoleRule(messageForRole(role), role, sigilixConfig),
-            chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-            signal,
-            // ARC-283 Phase B1b: thread the orchestrator's perfCtx
-            // through so per-attempt `model-attempt-completed` events
-            // share correlation fields with the surrounding ensemble
-            // telemetry.
-            perfCtx,
-          }),
-          SPECIALIST_TIMEOUT_MS,
-          orchCtrl.signal,
-        ).finally(() => perSpecialistEnd.set(role, Date.now())),
-      ),
-    )
+
+    // SIG-236 — parse the logic-prompt-budget mode once per ensemble
+    // so the per-role map below doesn't re-read env. `off` (the
+    // default) skips the measurement+emit entirely. `shadow` /
+    // `enforce` emit `logic-prompt-budget` telemetry once per
+    // ensemble run with the logic role's full prompt size + per-
+    // section breakdown.
+    const logicPromptBudgetMode = parseLogicPromptBudgetMode(env.OPENCLAW_LOGIC_PROMPT_BUDGET)
+
+    // SIG-235 — min-specialists early exit. Build per-role
+    // AbortControllers (mirroring the shadow path above) so the
+    // quorum collector can cancel a single laggard's outstanding
+    // attempts without affecting the others. composeSignals fires on
+    // EITHER orchCtrl OR the per-role controller — same pattern as
+    // the shadow path so the ladder cancels cleanly mid-attempt.
+    const earlyExitMode = parseMinSpecialistsEarlyExitMode(env.OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT)
+    const prodSpecialistAbortControllers = new Map<SpecialistRole, AbortController>()
+    // Tracks roles whose perSpecialistEnd has been frozen at the early-
+    // exit cancel point. Used by the `.finally()` below to skip
+    // overwriting an already-recorded end-time if the cancelled
+    // promise eventually settles (race-hardening for any future await
+    // between fan-out and `computeSpecialistFanoutSummary`).
+    const earlyExitCancelledRoles = new Set<SpecialistRole>()
+    type RolePromise = {
+      role: SpecialistRole
+      ctrl: AbortController
+      promise: Promise<PromiseSettledResult<SpecialistRunResult>>
+    }
+    const rolePromises: RolePromise[] = router.specialists.map((role) => {
+      const ctrl = new AbortController()
+      prodSpecialistAbortControllers.set(role, ctrl)
+      const composedSignal = composeSignals(orchCtrl.signal, ctrl.signal)
+      // SIG-236: build the initialMessage ONCE per role so the
+      // logic-prompt-budget measurement sees exactly what runSpecialist
+      // sees, and we don't waste a second messageForRole + appendRoleRule
+      // pass.
+      const initialMessage = appendRoleRule(messageForRole(role), role, sigilixConfig)
+      if (role === "logic") {
+        // Belt-and-suspenders try/catch (CR catch on PR #191): the helper
+        // already wraps its own body in try/catch (see
+        // `maybeEmitLogicPromptBudget` in `logic-prompt-budget.ts`), but
+        // instrumentation MUST NOT be able to break the fan-out path
+        // even if a future refactor removes the inner guard.
+        try {
+          maybeEmitLogicPromptBudget({
+            mode: logicPromptBudgetMode,
+            prompt: initialMessage,
+            owner, repo, prNumber, headSha,
+          })
+        } catch (err) {
+          console.warn(JSON.stringify({
+            event: "logic-prompt-budget-call-site-error",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            message: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
+      const promise = withComposedTimeout(
+        // Use the composed signal `withComposedTimeout` provides — it
+        // aborts on EITHER the per-specialist 270s timer OR the outer
+        // orch abort OR the per-role early-exit abort. Passing
+        // `orchCtrl.signal` directly only cancels the await wrapper,
+        // leaving the in-flight model fetch alive until the outer
+        // 490s wall fires (CR catch on PR #42).
+        (signal) => runSpecialist({
+          role,
+          apiKey: env.OLLAMA_API_KEY,
+          systemPrompt: SPECIALIST_PROMPTS[role],
+          // SIG-113: tests specialist gets the testing-evidence
+          // block; other specialists get the classification block.
+          initialMessage,
+          chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+          signal,
+          // ARC-283 Phase B1b: thread the orchestrator's perfCtx
+          // through so per-attempt `model-attempt-completed` events
+          // share correlation fields with the surrounding ensemble
+          // telemetry.
+          perfCtx,
+        }),
+        SPECIALIST_TIMEOUT_MS,
+        composedSignal,
+      ).finally(() => {
+        // M2 race-hardening: only record end-time if the role's
+        // end-time wasn't already frozen by the early-exit synthetic
+        // entry. Today's flow is synchronous from fan-out to fanout-
+        // summary so the race doesn't fire, but this prevents a
+        // future await from triggering a late-set overwrite.
+        if (!earlyExitCancelledRoles.has(role)) {
+          perSpecialistEnd.set(role, Date.now())
+        }
+        prodSpecialistAbortControllers.delete(role)
+      }).then(
+        (value): PromiseSettledResult<SpecialistRunResult> => ({ status: "fulfilled", value }),
+        (reason): PromiseSettledResult<SpecialistRunResult> => ({ status: "rejected", reason }),
+      )
+      return { role, ctrl, promise }
+    })
+
+    // SIG-235 quorum collector. Drains role promises one at a time;
+    // when `N-1` of `N` have returned a non-null verdict AND mode is
+    // "on", cancels the remaining role(s) and continues to synth.
+    // Late verdicts from cancelled roles are logged + discarded.
+    //
+    // Modes:
+    //   off    — pure Promise.all (legacy semantics, default)
+    //   shadow — wait for all, but log when early-exit WOULD have fired
+    //   on     — cancel laggard + proceed to synth as soon as N-1 succeed
+    let specialistResults: PromiseSettledResult<SpecialistRunResult>[]
+    let earlyExitFiredAtMs: number | null = null
+    let cancelledRolesAtExit: SpecialistRole[] = []
+    let earlyExitWouldFireAtMs: number | null = null
+    if (earlyExitMode === "off") {
+      // Legacy: wait for everyone.
+      specialistResults = await Promise.all(rolePromises.map((rp) => rp.promise))
+    } else {
+      const settledResults = new Map<SpecialistRole, PromiseSettledResult<SpecialistRunResult>>()
+      // Each pending promise carries its role so Promise.race can
+      // identify which one resolved without an index lookup.
+      //
+      // CodeRabbit catch (Major): the tracked-promise SELF-REMOVES
+      // from `pending` in its `.then(...)` (microtask 1) so by the
+      // time `Promise.race(...)` resumes the loop (microtask 2),
+      // `pending` accurately reflects "still in-flight" — never
+      // "in-flight OR just-settled-this-tick-but-not-yet-consumed."
+      // Without this, a microtask burst where multiple specialists
+      // resolve simultaneously can race-pick role A, leave already-
+      // resolved roles B/C in `pending`, hit the early-exit threshold,
+      // abort B/C via their AbortControllers, and synthesize null
+      // verdicts for them — silently dropping real verdicts.
+      const pending = new Map<SpecialistRole, Promise<{ role: SpecialistRole; result: PromiseSettledResult<SpecialistRunResult> }>>()
+      for (const rp of rolePromises) {
+        const tracked = rp.promise.then((result) => {
+          pending.delete(rp.role)
+          return { role: rp.role, result }
+        })
+        pending.set(rp.role, tracked)
+      }
+      const N = router.specialists.length
+      const quorumThreshold = N - 1
+      while (pending.size > 0) {
+        const settled = await Promise.race(pending.values())
+        // `pending.delete(settled.role)` already happened in the
+        // `.then` above — `settledResults.set` records the result.
+        settledResults.set(settled.role, settled.result)
+
+        const succeededCount = Array.from(settledResults.values()).filter(
+          (r) => r.status === "fulfilled" && r.value.verdict !== null,
+        ).length
+
+        if (succeededCount >= quorumThreshold && pending.size > 0) {
+          const nowMs = Date.now()
+          if (earlyExitMode === "on") {
+            earlyExitFiredAtMs = nowMs
+            cancelledRolesAtExit = Array.from(pending.keys())
+            // Abort the laggards' AbortControllers — composedSignal
+            // propagates the cancel into the in-flight attempt.
+            for (const rp of rolePromises) {
+              if (pending.has(rp.role)) {
+                rp.ctrl.abort()
+                // Background watcher for the late-verdict-discard
+                // event. Doesn't block the synth path.
+                rp.promise
+                  .then((result) => {
+                    if (result.status === "fulfilled" && result.value.verdict !== null) {
+                      console.log(JSON.stringify({
+                        event: "ensemble-late-verdict-discarded",
+                        owner, repo, prNumber,
+                        role: rp.role,
+                        attemptsUsed: result.value.attemptsUsed,
+                        modelUsed: result.value.modelUsed,
+                      }))
+                    }
+                  })
+                  .catch(() => { /* discard cancellation errors */ })
+              }
+            }
+            break
+          } else if (earlyExitMode === "shadow" && earlyExitWouldFireAtMs === null) {
+            // Shadow: log the would-fire and keep awaiting. Only the
+            // FIRST time the threshold is crossed (subsequent settles
+            // would also satisfy `>= quorumThreshold` and we don't
+            // need duplicate events).
+            earlyExitWouldFireAtMs = nowMs
+            console.log(JSON.stringify({
+              event: "ensemble-min-specialists-early-exit-would-fire",
+              owner, repo, prNumber,
+              mode: "shadow",
+              succeededRoles: Array.from(settledResults.entries())
+                .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
+                .map(([role]) => role),
+              pendingRoles: Array.from(pending.keys()),
+              dispatchedRoles: router.specialists,
+              elapsedMsSinceFanoutStart: nowMs - fanoutStartMs,
+            }))
+          }
+        }
+      }
+
+      // Reassemble into router.specialists order so downstream
+      // `collectSpecialistVerdicts(roles, results, ...)` zips correctly.
+      // Cancelled-but-not-settled roles (only possible in "on" mode
+      // after early-exit) get a synthetic null-verdict entry so the
+      // [DEGRADED COVERAGE] block fires the same way as a legitimate
+      // ladder-exhaust failure.
+      //
+      // `failureReason: "early_exit_aborted"` is intentional — the
+      // collector's `timedOut: /abort/i || /timeout/i` regex at
+      // `collectSpecialistVerdicts` line ~6327 catches it, so these
+      // cancellations land in the same telemetry bucket as legitimate
+      // timer/parent-signal aborts. Lets the `/metrics/validation`
+      // dashboard treat early-exit cancels like timeouts (which they
+      // structurally are — primary started but was forcibly stopped).
+      //
+      // `attemptsUsed: 1` is a conservative MINIMUM (CR catch). The
+      // cancelled promise may have spent 1-3 attempts (primary +
+      // optional retry + optional fallback) before the cancel
+      // propagated, but synth-firing immediately means we can't
+      // await the real count without losing the wall-time win that
+      // motivates early-exit. Charging 1 acknowledges the primary
+      // definitely started; undercount risk on retry/fallback paths
+      // is bounded by the role's `maxAttempts()` and the daily-budget
+      // gate already has slack from the worst-case
+      // `MAX_CALLS_PER_ENSEMBLE_RUN` reservation.
+      specialistResults = router.specialists.map((role) => {
+        const r = settledResults.get(role)
+        if (r !== undefined) return r
+        earlyExitCancelledRoles.add(role)
+        const startMs = perSpecialistStart.get(role) ?? Date.now()
+        const nowMs = Date.now()
+        perSpecialistEnd.set(role, nowMs)
+        return {
+          status: "fulfilled" as const,
+          value: {
+            verdict: null,
+            modelUsed: SPECIALIST_CONFIGS[role].primary,
+            attemptsUsed: 1,
+            elapsedMs: nowMs - startMs,
+            failureReason: "early_exit_aborted",
+          } satisfies SpecialistRunResult,
+        }
+      })
+
+      if (earlyExitFiredAtMs !== null) {
+        const succeededRoles = Array.from(settledResults.entries())
+          .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
+          .map(([role]) => role)
+        console.log(JSON.stringify({
+          event: "ensemble-min-specialists-early-exit-fired",
+          owner, repo, prNumber,
+          mode: "on",
+          succeededRoles,
+          cancelledRoles: cancelledRolesAtExit,
+          dispatchedRoles: router.specialists,
+          elapsedMsAtFire: earlyExitFiredAtMs - fanoutStartMs,
+        }))
+      }
+    }
     const fanoutEndMs = Date.now()
     emitPhaseCompleted(perfCtx, "specialist_fanout", fanoutStartMs, fanoutEndMs)
 
@@ -2650,8 +3193,147 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    // ─── Synthesizer ───────────────────────────────────────────
+    // ─── SIG-228 Phase 3c: synth-bypass single-specialist hot path ─
+    //
+    // When the dispatcher returns exactly 1 specialist AND none of
+    // that specialist's findings have `score >= 4` (major/critical),
+    // skip the synthesizer LLM round-trip entirely. The specialist's
+    // verdict IS the submission verdict — there's no cross-specialist
+    // consensus to compute, and no major-severity finding that
+    // benefits from synth-level rewriting.
+    //
+    // Saves ~15-25s on the hot path (the typical synth elapsed window
+    // on `gpt-oss:120b-cloud`). Flag-gated behind
+    // `OPENCLAW_SYNTH_BYPASS_ENABLED`; default-off in dev/test,
+    // default-on in production (wrangler.toml).
+    //
+    // Reaches here only AFTER the `succeeded.length === 0` bail above
+    // (line ~2894) — the bypass branch's `synthInputVerdicts[0]!`
+    // assertion is safe by construction. If the order is ever flipped,
+    // re-add a guard on the bypass branch.
+    //
+    // `synthInputVerdicts` is hoisted out so both the bypass path AND
+    // the synth path read the same truncated verdicts. `truncateVerdictToTokens`
+    // sorts findings by score DESC and pops from the end, so major
+    // findings always survive truncation as long as any space remains.
+    // The bypass eligibility check below intentionally reads from the
+    // UNTRUNCATED `succeeded` array (not `synthInputVerdicts`) so that a
+    // hypothetical extreme-token-pressure case dropping a `score >= 4`
+    // finding can't sneak past the bypass gate — CR phase-end catch on
+    // PR #188.
     const synthInputVerdicts = buildSynthInputVerdicts(succeeded)
+
+    // Bypass eligibility: dispatched-count gate + succeeded-count gate
+    // both live in the helper. The hot path is "dispatcher narrowed to
+    // 1 specialist on purpose" — NOT "dispatcher fanned out to N, only
+    // 1 returned." The latter is a degraded-coverage run where the
+    // customer expected multiple perspectives; we MUST run synth there
+    // so it can render the `[DEGRADED COVERAGE]` block and acknowledge
+    // the gap.
+    //
+    // Evaluated against the untruncated `succeeded` array — see the
+    // hoist comment above on `synthInputVerdicts` for why.
+    //
+    // HARD-DISABLE the bypass whenever synth shadow bake-off is
+    // configured for this run. Otherwise flipping the bypass on would
+    // silently halve the shadow synth signal on the bypass-eligible
+    // population — exactly the cohort the bake-off measures. The
+    // shadow comparator matters more than the bypass perf win during
+    // the bake-off window; flip `SHADOW_BAKEOFF_ROLES` back to "" to
+    // re-enable bypass.
+    const synthBypassEligible =
+      !shadowEnabledRoles.has("synth") &&
+      isSynthBypassEligible(
+        env,
+        router.specialists.length,
+        succeeded,
+      )
+
+    // Hoisted from the original synth section below so the bypass
+    // path can populate them too — the post-synth validation code
+    // reads from one source of truth regardless of which branch fired.
+    //
+    // `synthStartMs` is captured inside each branch so the metric stays
+    // apples-to-apples vs pre-SIG-228 telemetry: synth branch starts
+    // its clock right before the LLM call, bypass branch right before
+    // its near-zero construction. Otherwise the synth-path elapsedMs
+    // would silently accrete prompt-building + review-memory-lookup
+    // time and overstate the bypass savings on rollout dashboards.
+    let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
+    let synthStartMs: number
+    let synthAttemptsUsed = 0
+    let synthRetryUsed = false
+    let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
+
+    if (synthBypassEligible) {
+      synthStartMs = Date.now()
+      // Bypass: construct a synth-equivalent output directly from the
+      // single specialist's truncated verdict. The provenance entries
+      // declare every kept finding as sourced from that one specialist
+      // with `action: "kept"` — the only legal shape when synth never
+      // ran. The `modelUsed` sentinel lets telemetry consumers
+      // distinguish bypass elapsed-ms from real synth elapsed-ms.
+      //
+      // Known tradeoffs (M2/M3 from code-reviewer): the bypass also
+      // skips synth's contextual signals — AST supersession (drops
+      // specialist findings that share `(path, line, role_hint)` with
+      // a deterministic AST entry), SARIF Fix-Plan ordering, GRAPH
+      // CONTEXT contradiction, REVIEW MEMORY softening, and the
+      // unified PR-wide summary rewrite. On the 1-role no-major hot
+      // path those signals are typically empty or low-signal; on a
+      // 1-role + populated-AST/SARIF/memory PR they would actually
+      // do useful work. Worth filing a follow-up to either disable
+      // bypass when those blocks are non-empty OR fold a minimal
+      // post-bypass supersession pass.
+      const sole = synthInputVerdicts[0]!
+      const verdict = sole.verdict
+      synthOutput = {
+        verdict,
+        provenance: {
+          findings: verdict.findings.map((f) => ({
+            sourceSpecialists: [sole.role],
+            sourceFindingIds: [f.id],
+            action: "kept" as const,
+            verifiedViaRetrieval: false,
+          })),
+          dropped: [],
+        },
+        // `elapsedMs: 0` here is overwritten by `synthEntry.elapsedMs =
+        // Date.now() - synthStartMs` below; kept as a defensive stub
+        // so callers reading `synthOutput.elapsedMs` directly (vs
+        // via the telemetry entry) never see undefined.
+        elapsedMs: 0,
+        modelUsed: "synth-bypass-single-specialist",
+        attemptsUsed: 0,
+      }
+      telemetry.synthBypass = {
+        reason: "single_specialist_no_major",
+        specialistRole: sole.role,
+        findingCount: verdict.findings.length,
+      }
+      // Set reviewMemory + synthRetry explicitly for telemetry parity
+      // with the synth path — bypass produces a shape that rollout
+      // dashboards can filter for without ambiguity.
+      // `reason: "retrieval-disabled-config"` is the closest
+      // ReviewMemorySkipReason that captures "the bypass path
+      // skipped review memory by configuration choice" (the synth-
+      // bypass IS a configuration choice).
+      telemetry.reviewMemory = {
+        skipped: true,
+        reason: "retrieval-disabled-config",
+        findingsCount: 0,
+      }
+      telemetry.synthRetry = { used: false, outcome: "n/a" }
+      console.log(JSON.stringify({
+        event: "ensemble-synth-bypassed",
+        owner, repo, prNumber,
+        role: sole.role,
+        findingCount: verdict.findings.length,
+      }))
+    } else {
+      synthStartMs = Date.now()
+
+    // ─── Synthesizer ───────────────────────────────────────────
     const synthVerdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts)
     const synthMessage = buildSynthesizerInitialMessage({
       prNumber,
@@ -2731,13 +3413,11 @@ export async function handlePrReviewEnsemble(
     // timer bubbles to the outer catch and is recorded as
     // `internalError: "Operation aborted"` with `synthesizer: null` —
     // the spec promised `synthesizer.timedOut: true` for this case.
-    let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
-    const synthStartMs = Date.now()
-    // ARC-278: track whether we ran the retry attempt + how it went,
-    // for post-rollout telemetry analysis. `n/a` means the first
-    // attempt succeeded; the other values record the retry's outcome.
-    let synthRetryUsed = false
-    let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
+    //
+    // SIG-228 Phase 3c: `synthOutput`, `synthStartMs`, `synthRetryUsed`,
+    // `synthRetryOutcome` + `synthAttemptsUsed` are now declared in
+    // outer scope (just before the bypass-or-synth branch above) so
+    // both paths populate the same identifiers.
     // ARC-278 (CR catch on PR #90): runSynthesizer wraps
     // runWithRetryAndFallback, which already does its own internal
     // primary+retry+fallback. So `attempt.attemptsUsed` from a single
@@ -2746,7 +3426,9 @@ export async function handlePrReviewEnsemble(
     // never returned attemptsUsed at all — treat as 1).
     // This feeds `finalize()`'s daily-budget charge; under-counting
     // here would under-charge the budget and over-count head-room.
-    let synthAttemptsUsed = 0
+    //
+    // SIG-228 Phase 3c: hoisted to outer scope (see comment block at
+    // the top of the bypass-or-synth branch above).
     try {
       // ARC-185: per-PR commands.review.{prompt.addendum, model.{primary,
       // fallbacks}} override. Specialists left untouched on the v3.1
@@ -2958,6 +3640,8 @@ export async function handlePrReviewEnsemble(
       telemetry.fellBackReason = "synth_timeout"
       return bailWithSkipNotice("synth_timeout")
     }
+    } // SIG-228 Phase 3c: close the `else { /* synth path */ }` opened
+      // above the prompt-building block.
 
     // Phase 4a.2: withComposedTimeout no longer throws when its own
     // timer or the orch signal aborts an abort-aware factory — it
@@ -3232,39 +3916,17 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "stale_head", cache)
     }
 
-    // ─── SIG-84: wait for the pr-overview stub ─────────────────
+    // ─── SIG-216: overview-then-submit ordering ────────────────
     //
-    // The webhook handler posts a "Reviewing…" stub for the
-    // pr-overview sticky synchronously BEFORE enqueueing this review
-    // job (see `postPrOverviewStubIfNeeded` in pr-overview-stub.ts).
-    // Polling for the KV flag here means the overview comment id is
-    // guaranteed to be on the PR timeline before we call
-    // `submitReview` below — fixes the founder-flagged backwards
-    // ordering (review approves first, overview lands ~30s later).
-    //
-    // 2s ceiling per Codex Q1 sign-off — covers the worst-case
-    // cross-region KV propagation delay without meaningfully slowing
-    // the review pipeline (overall review budget is 60s+). On the
-    // happy path the flag is already present from a fast-first-read,
-    // so the wait is ~0ms.
-    //
-    // Codex Q5 tweak: skip the wait entirely when the customer has
-    // opted OUT of pr-overview — there's no stub to wait for, and
-    // burning up to 2s of review time on a non-existent comment
-    // would be pure latency for no UX gain.
-    if (isPrOverviewEnabled(sigilixConfig)) {
-      const stubWaitStartMs = Date.now()
-      const stubOutcome = await waitForPrOverviewStub({
-        env, owner, repo, prNumber, headSha,
-      })
-      console.log(JSON.stringify({
-        event: "pr-review-overview-stub-wait",
-        owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        outcome: stubOutcome.kind,
-        waited_ms: stubOutcome.waitedMs,
-        elapsed_ms: Date.now() - stubWaitStartMs,
-      }))
-    }
+    // Pre-SIG-216 the overview ran as its own queue job kicked off
+    // by the push webhook and a "Reviewing…" stub was synchronously
+    // posted at webhook time so the review-side wait gate could line
+    // it up ahead of `submitReview`. Founder direction 2026-05-25:
+    // drop the stub-first pattern; the overview comment now lands
+    // immediately BEFORE the review comment in this same handler
+    // invocation, CodeRabbit-style. See `runInlineOverview` below
+    // (called once the submission verdict is final, just before the
+    // pre-submit dismiss + `submitReview`).
 
     // ─── Submit ────────────────────────────────────────────────
     // GitHub validates every inline anchor and rejects the entire review
@@ -3788,6 +4450,13 @@ export async function handlePrReviewEnsemble(
       // `}`, blank line) route to the summary body instead of an
       // inline comment "on an empty line."
       addedLineTextByLine,
+      // SIG-216 fix-up: thread the source-repo coordinates so the
+      // body-only finding anchors render as clickable Markdown links
+      // (`[path:line](https://github.com/...blob/<sha>/<path>#L<line>)`)
+      // in production. Pre-fix-up the clickable-link path was test-only
+      // because the ensemble didn't pass `linkContext`, so real PR
+      // reviews fell back to the back-compat inline-code anchor.
+      linkContext: { owner, repo, headSha },
     })
     const submission = submissionBuild.submission
     const bodyOnlyAnnotations = submissionBuild.bodyOnlyAnnotations
@@ -3797,6 +4466,153 @@ export async function handlePrReviewEnsemble(
     ])
     const checkAnnotationMeta = (annotations: CheckRunAnnotation[]) =>
       annotations.length > 0 ? { checkAnnotations: annotations } : {}
+
+    // ─── SIG-216: post the overview comment IMMEDIATELY before the
+    // review submit so the two GitHub timeline entries land in the
+    // same time window (CodeRabbit-style Walkthrough-then-Review).
+    // The overview is informed by the review's verdict — we pass
+    // findingsCount + severity + category breakdown + the chosen
+    // event so the model can summarize "what reviewer concluded"
+    // instead of running blind. Gated on `overview.enabled` per the
+    // same `sigilixConfig` the ensemble loaded earlier; opted-out
+    // customers skip the inline render.
+    //
+    // Awaited (not `ctx.waitUntil`) so the overview comment is
+    // GUARANTEED on the PR timeline before `submitReview` fires.
+    // `skipDedupe: true` bypasses the per-(PR, headSha) KV dedupe
+    // lock inside `handlePrOverview` so a sibling queued run (legacy
+    // warmup refresh, etc.) on this SHA can't block us — but does
+    // NOT bypass the in-handler stale-head guards (those still fire
+    // on this path, catching head moves that landed during the
+    // review's own Ollama window). SIG-216 fix-up swap from
+    // `force: true` (which historically bypassed both).
+    //
+    // Budgeting (SIG-216 fix-up): the overview runs against the
+    // REMAINING review budget so a stalled overview can't push the
+    // handler past ORCHESTRATOR_TIMEOUT_MS (the wall the orchestrator
+    // itself aborts on). Capped at INLINE_OVERVIEW_MAX_BUDGET_MS even
+    // on a budget surplus so the overview never eats more than its
+    // fair share. When remaining budget falls under
+    // INLINE_OVERVIEW_MIN_BUDGET_MS we skip the inline render entirely
+    // — the overview can fire on the next push.
+    //
+    // Retry policy (SIG-216 fix-up): single retry on transient
+    // failures (timeouts / 502 / 503 / 504 / fetch-failed /
+    // budget-exceeded). Pre-SIG-216 the queue consumer gave
+    // MAX_RETRIES=3 on Ollama transients; the inline path had zero.
+    // One retry only — bounded by the same Promise.race budget so
+    // we can't blow the wall-clock even on a double attempt.
+    //
+    // Best-effort: even after the single retry, a failure here
+    // NEVER blocks the review submit. The customer still gets the
+    // review even if the overview comment fails to land.
+    if (isPrOverviewEnabled(sigilixConfig)) {
+      const overviewStartMs = Date.now()
+      const overviewReviewContext: PrOverviewReviewContext = {
+        findingsCount:
+          submissionVerdict.findings.length + renderableUnanchoredForSubmission.length,
+        severityBreakdown: countBySeverity([
+          ...submissionVerdict.findings,
+          ...renderableUnanchoredForSubmission,
+        ]),
+        categoryBreakdown: countByCategory([
+          ...submissionVerdict.findings,
+          ...renderableUnanchoredForSubmission,
+        ]),
+        verdict: primaryEvent,
+      }
+      // Reserve INLINE_OVERVIEW_SUBMIT_RESERVE_MS for the submitReview
+      // GitHub roundtrip + the post-overview stale-head re-check that
+      // follows; the overview itself gets whatever's left up to
+      // INLINE_OVERVIEW_MAX_BUDGET_MS.
+      //
+      // SIG-216 fix-up (CR catch): budget against ORCHESTRATOR_TIMEOUT_MS,
+      // not CF_QUEUE_CONSUMER_CEILING_MS. The orchestrator's own
+      // wall-clock is the actual bound on this handler — the platform
+      // ceiling is wider (CF_QUEUE_CONSUMER_CEILING_MS - ORCHESTRATOR_TIMEOUT_MS
+      // is the grace pad reserved for finalize/cleanup). Using the
+      // wider ceiling could push the overview past the orchestrator's
+      // own abort and burn the grace pad too.
+      const elapsedMs = Date.now() - startMs
+      const remainingBudgetMs = Math.max(
+        0,
+        ORCHESTRATOR_TIMEOUT_MS - elapsedMs - INLINE_OVERVIEW_SUBMIT_RESERVE_MS,
+      )
+      const overviewBudgetMs = Math.min(remainingBudgetMs, INLINE_OVERVIEW_MAX_BUDGET_MS)
+      if (overviewBudgetMs < INLINE_OVERVIEW_MIN_BUDGET_MS) {
+        console.log(JSON.stringify({
+          event: "pr-review-inline-overview-skipped-budget",
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+          remaining_budget_ms: remainingBudgetMs,
+          threshold_ms: INLINE_OVERVIEW_MIN_BUDGET_MS,
+        }))
+      } else {
+        try {
+          await runInlineOverviewWithRetry({
+            owner, repo, prNumber, headSha, installationId, env,
+            skipDedupe: true,
+            reviewContext: overviewReviewContext,
+          }, overviewBudgetMs)
+          console.log(JSON.stringify({
+            event: "pr-review-inline-overview-posted",
+            owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+            elapsed_ms: Date.now() - overviewStartMs,
+            budget_ms: overviewBudgetMs,
+            findings_count: overviewReviewContext.findingsCount,
+            verdict: overviewReviewContext.verdict,
+          }))
+        } catch (err) {
+          console.error(JSON.stringify({
+            event: "pr-review-inline-overview-failed",
+            owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+            elapsed_ms: Date.now() - overviewStartMs,
+            budget_ms: overviewBudgetMs,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }
+      }
+
+      // SIG-216 fix-up: re-check the PR head AFTER the inline overview.
+      // Belt-and-braces with the in-overview guards: the overview's own
+      // pre-Ollama + pre-write guards (which now fire on the inline
+      // path since we use `skipDedupe`, not `force`) catch head moves
+      // BEFORE / DURING the overview's Ollama call; this re-check
+      // catches moves landing AFTER the overview returns, before the
+      // review submit. Both layers are intentional — different windows.
+      // Fail-closed on lookup error — matches the existing guard pattern.
+      try {
+        const metaPostOverview = await client.getPullRequest(owner, repo, prNumber)
+        if (metaPostOverview.head?.sha && metaPostOverview.head.sha !== headSha) {
+          telemetry.fellBackReason = "stale_head_after_inline_overview"
+          console.log(JSON.stringify({
+            event: "pr-review-stale-head-after-inline-overview",
+            owner, repo, prNumber,
+            queued_head_sha: headSha.slice(0, 7),
+            current_head_sha: metaPostOverview.head.sha.slice(0, 7),
+          }))
+          await handleStaleHead({
+            env, owner, repo, prNumber, installationId,
+            queuedHeadSha: headSha,
+            currentHeadSha: metaPostOverview.head.sha,
+            baseSha: metaPostOverview.base?.sha ?? null,
+            depth: staleHeadRequeueDepth,
+            source: "ensemble-after-inline-overview",
+          })
+          return finalize(telemetry, env, "stale_head", cache)
+        }
+      } catch (err) {
+        // Fail-closed: uncertain head state → abort the submit rather
+        // than risk shipping a stale review. Matches Codex's pattern in
+        // `triage-pr-overview.ts`.
+        console.warn(JSON.stringify({
+          event: "pr-review-stale-recheck-failed-aborted",
+          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        telemetry.fellBackReason = "stale_head_recheck_failed"
+        return finalize(telemetry, env, "errored", cache)
+      }
+    }
 
     // ARC-287 (pre-SIG-85): dismiss prior Sigilix reviews BEFORE
     // posting the new one, so the GitHub timeline renders cleanup-
@@ -3977,25 +4793,13 @@ export async function handlePrReviewEnsemble(
       // falls back to dispatch instead of skipping. The helper
       // swallows internally.
       await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // ARC-258 follow-up: enqueue a forced pr-overview refresh so
-      // any stale warmup-callout marker in the sticky body gets
-      // cleared. `force: true` bypasses the per-headSha dedupe so
-      // the refresh runs within the same headSha as the initial
-      // overview render (5-min lock would otherwise suppress it).
-      // Best-effort: failure doesn't affect the review status.
-      try {
-        await env.OPENCLAW_JOBS.send({
-          type: "pr-overview",
-          owner, repo, prNumber, headSha, installationId,
-          force: true,
-        })
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-overview-refresh-enqueue-failed",
-          owner, repo, prNumber,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // SIG-216: post-submit `pr-overview` refresh enqueue removed.
+      // The overview is now rendered INLINE earlier in this handler
+      // (right before `dismissPriorSigilixReviews`), informed by the
+      // same submissionVerdict the review is built from — so there's
+      // no stale-warmup-callout to clear and nothing for a separate
+      // queue job to add. ARC-258's post-review refresh use case is
+      // subsumed by the inline render.
       await maybePostAstAutoInline()
       // ARC-276: signal the customer-visible verdict back to the
       // dispatcher so the Sigilix Check Run title can render
@@ -4233,22 +5037,11 @@ export async function handlePrReviewEnsemble(
       // noop-merge skip on the next synchronize. Same best-effort
       // semantics as the lastReviewedSha write above.
       await recordReviewedDiffHash(env, owner, repo, prNumber, fullPrDiff, headSha)
-      // ARC-258 follow-up: forced pr-overview refresh on the 422
-      // fallback success path too — same rationale as the primary
-      // submit (clear any stale warmup callout in the sticky body).
-      try {
-        await env.OPENCLAW_JOBS.send({
-          type: "pr-overview",
-          owner, repo, prNumber, headSha, installationId,
-          force: true,
-        })
-      } catch (err) {
-        console.warn(JSON.stringify({
-          event: "pr-overview-refresh-enqueue-failed",
-          owner, repo, prNumber,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
+      // SIG-216: post-submit `pr-overview` refresh enqueue removed
+      // here too — same rationale as the primary inline-anchored
+      // submit path above. The overview already ran inline at the
+      // top of the submit block, before the 422 fallback was even
+      // considered, so the comment is already on the timeline.
       await maybePostAstAutoInline()
       // ARC-276: same reviewMeta plumbing as the inline-anchored
       // path — the anchorless fallback is still a posted review.
@@ -4622,6 +5415,50 @@ function countLines(diff: string): number {
     else if (line.startsWith("-") && !line.startsWith("---")) n++
   }
   return n
+}
+
+/**
+ * SIG-216: bucket a finding's score (1-5) into the same P0/P1/P2/P3
+ * severity tiers the review body uses (`severityBadgeImg` in
+ * `triage-pr-review.ts`) so the overview prompt and the review body
+ * speak the same language. Pure.
+ */
+function severityTier(score: number): "P0" | "P1" | "P2" | "P3" {
+  if (score >= 5) return "P0"
+  if (score === 4) return "P1"
+  if (score === 3) return "P2"
+  return "P3"
+}
+
+/**
+ * SIG-216: count findings by P0/P1/P2/P3 severity tier for the
+ * `reviewContext.severityBreakdown` passed into `handlePrOverview`.
+ * Empty buckets are omitted so the prompt stays compact. Pure.
+ */
+function countBySeverity(
+  findings: readonly { score: number }[],
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const f of findings) {
+    const tier = severityTier(f.score)
+    out[tier] = (out[tier] ?? 0) + 1
+  }
+  return out
+}
+
+/**
+ * SIG-216: count findings by `FindingCategory` for the
+ * `reviewContext.categoryBreakdown` passed into `handlePrOverview`.
+ * Empty buckets are omitted so the prompt stays compact. Pure.
+ */
+function countByCategory(
+  findings: readonly { category: string }[],
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const f of findings) {
+    out[f.category] = (out[f.category] ?? 0) + 1
+  }
+  return out
 }
 
 /** Single-page cap on `listPullRequestReviews`. Reviews are returned
@@ -6156,6 +6993,161 @@ function backfillSecurityEvidenceFromSources(
   }
 }
 
+/**
+ * SIG-216 fix-up: run the inline pr-overview with a single retry on
+ * transient errors, bounded by `budgetMs` per attempt.
+ *
+ * Why two attempts and not three: the pre-SIG-216 queue consumer gave
+ * `MAX_RETRIES = 3` on Ollama transient failures because the consumer
+ * could afford the wall-time. The inline path runs inside the same
+ * review handler that's already against the orchestrator's wall-clock
+ * (`ORCHESTRATOR_TIMEOUT_MS`), so a single retry is the most we
+ * can fit without risking the orchestrator's own abort firing.
+ *
+ * Transient classification matches the queue consumer's heuristic +
+ * the budget-exceeded signal raised by the per-attempt `Promise.race`.
+ * Non-transient errors propagate immediately to the caller.
+ */
+async function runInlineOverviewWithRetry(
+  args: PrOverviewArgs,
+  totalBudgetMs: number,
+): Promise<void> {
+  // SIG-216 fix-up: ONE shared deadline across both attempts (was: a
+  // fresh per-attempt budget that could allow overlapping attempts on
+  // retry and let the wall-clock blow past the budget). Each attempt
+  // also gets its own AbortController so the in-flight Ollama fetch
+  // from the first attempt is actually cancelled when retry fires —
+  // otherwise the abandoned Promise burns CPU + network until the
+  // 600s default `generate` timeout.
+  const deadline = Date.now() + totalBudgetMs
+  const computeRemaining = (): number => Math.max(0, deadline - Date.now())
+
+  const attempt = async (): Promise<void> => {
+    const remainingMs = computeRemaining()
+    if (remainingMs <= 0) {
+      throw new Error("inline-overview-budget-exceeded")
+    }
+    const ctl = new AbortController()
+    const timeoutId = setTimeout(() => {
+      ctl.abort(new Error("inline-overview-budget-exceeded"))
+    }, remainingMs)
+    try {
+      await handlePrOverview({ ...args, abortSignal: ctl.signal })
+    } finally {
+      clearTimeout(timeoutId)
+    }
+  }
+
+  try {
+    await attempt()
+    return
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const transient = /budget-exceeded|timeout|abort|503|502|504|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg)
+    if (!transient) throw err
+    if (computeRemaining() <= 0) throw err
+    console.log(JSON.stringify({
+      event: "pr-review-inline-overview-retry",
+      owner: args.owner, repo: args.repo, prNumber: args.prNumber,
+      head_sha: args.headSha.slice(0, 7),
+      err: msg.slice(0, 200),
+    }))
+    await attempt()
+  }
+}
+
+/**
+ * SIG-216: post-emit scope normalization. LLM specialists sometimes
+ * emit `scope: "file"` for findings that have a concrete `(path, line)`
+ * AND that line falls within a reviewable diff hunk. Those findings
+ * SHOULD anchor inline, not fall back to the Review Body section.
+ * Force `scope: "line"` for the anchorable shape so the renderer
+ * routes them inline.
+ *
+ * Out of scope: PR-level findings (no concrete path/line) and
+ * comment-scope findings (replies to existing comments) stay
+ * whatever the LLM emitted.
+ *
+ * Why post-emit not prompt: the prompt already says "use line when
+ * possible" but LLMs over-pick file. Belt-and-braces.
+ *
+ * SIG-216 fix-up: the predicate requires a RIGHT-side anchor (was:
+ * any side). For a file-scoped finding on a DELETED line, a LEFT-only
+ * diff position was previously passing the predicate → scope flipped
+ * to "line" → validation accepted side=LEFT but `buildReviewSubmission`
+ * always emits inline comments with `side: "RIGHT"` → primary submit
+ * 422'd.
+ *
+ * SIG-216 follow-up: relax the strict both-bounds check for multi-line
+ * findings. ANY line in the inclusive [startLine, line] range being in
+ * a RIGHT-side hunk is sufficient to anchor inline. GitHub accepts
+ * multi-line inline comments via start_line + line even when only the
+ * middle of the range is in the diff. The prior strict-bounds check
+ * over-suppressed (PR #175 dogfood: a 15-line finding range with the
+ * diff in the middle got routed to body).
+ */
+function isAnyLineInRightHunk(
+  anchorLines: ReadonlyArray<{ line: number; side: "LEFT" | "RIGHT" }>,
+  startLine: number,
+  endLine: number,
+): boolean {
+  // CR (PR #176): walking the numeric [startLine, endLine] range is
+  // O(N*M) where N = range size and M = anchorLines.length. A malformed
+  // finding (e.g. `startLine: 1, line: 999999`) would loop a million
+  // times. Single-pass scan over the (typically small) anchorLines is
+  // O(M) and unbounded-range-safe.
+  for (const a of anchorLines) {
+    if (a.side === "RIGHT" && a.line >= startLine && a.line <= endLine) {
+      return true
+    }
+  }
+  return false
+}
+
+function normalizeFindingScopeForAnchorability(
+  finding: PrReviewFinding,
+  reviewable: ReviewableMap,
+): PrReviewFinding {
+  // PR-level / comment-level findings: leave alone — they aren't
+  // anchorable by definition.
+  if (finding.scope === "pr" || finding.scope === "comment") return finding
+  // Already line-scoped: leave alone.
+  if (finding.scope === "line") return finding
+
+  // File-scoped (or scope omitted): check if it's actually anchorable.
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return finding
+  if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return finding
+
+  // Is the line in a reviewable hunk?
+  const anchorLines = reviewable.get(path)
+  if (!anchorLines) return finding
+
+  // SIG-216 follow-up: relax the strict both-bounds check. ANY line in
+  // the inclusive [startLine, endLine] range being in a RIGHT-side hunk
+  // is sufficient to anchor inline. GitHub accepts multi-line inline
+  // comments via start_line + line even when only the middle of the
+  // range is in the diff. Prior strict-bounds check over-suppressed
+  // (PR #175 dogfood: 15-line finding range with diff in the middle
+  // got routed to body).
+  //
+  // LEFT-only positions remain non-anchorable for the scope flip
+  // because `buildReviewSubmission` always emits inline comments with
+  // `side: "RIGHT"` → a LEFT-only flip would 422 on submit. The
+  // RIGHT-side filter inside isAnyLineInRightHunk handles that.
+  const endLine = finding.line
+  const startLine =
+    typeof finding.startLine === "number" && Number.isFinite(finding.startLine)
+      ? finding.startLine
+      : endLine
+  const lo = Math.min(startLine, endLine)
+  const hi = Math.max(startLine, endLine)
+  if (!isAnyLineInRightHunk(anchorLines, lo, hi)) return finding
+
+  // Force scope=line so the renderer routes inline.
+  return { ...finding, scope: "line" as const }
+}
+
 function selectSourceEvidenceForBackfill(
   finding: PrReviewFinding,
   sourceIds: readonly string[],
@@ -6194,6 +7186,71 @@ function hasStructuredFixForInlineRepair(finding: PrReviewFinding): boolean {
     typeof replacement === "string" &&
     replacement.length > 0
   return deletion || replace
+}
+
+/**
+ * SIG-216 follow-up (Option A): when a multi-line finding's `line`
+ * endpoint isn't in any RIGHT-side hunk but the scope-normalizer
+ * flipped it to scope:"line" because the MIDDLE of the range overlaps
+ * the diff, find an actually-anchorable RIGHT position inside the
+ * inclusive [startLine, line] range so the inline POST won't 422.
+ *
+ * Without this rewrite, the half-measure shipped in
+ * `normalizeFindingScopeForAnchorability` would flip the scope but
+ * leave `f.line = 444` pointing at a non-reviewable line —
+ * `deriveSide` at the line-validity check fails, the finding routes to
+ * `unanchoredFindings` anyway. PR #175 dogfood class.
+ *
+ * GitHub multi-line inline-comment semantics: `line` is the bottom of
+ * the visible underline; `start_line` is the top. Both must be on the
+ * diff (`isCommentAnchorable`). When neither original endpoint
+ * survives, we pick the LAST RIGHT anchor in range as the new `line`
+ * (closest to the original bottom) and the FIRST RIGHT anchor as the
+ * new `start_line` when distinct.
+ *
+ * Returns null when (a) the finding is single-line (caller falls
+ * through to the existing single-line repair / unanchored routing),
+ * (b) no RIGHT anchor exists inside the range, or (c) the finding has
+ * no usable `path`/`line`. Pure.
+ */
+function findRangeAwareAnchor(
+  reviewable: ReviewableMap,
+  finding: PrReviewFinding,
+): { line: number; startLine?: number } | null {
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return null
+  if (typeof finding.line !== "number" || !Number.isFinite(finding.line)) return null
+  const hasMultiLine =
+    typeof finding.startLine === "number" &&
+    Number.isFinite(finding.startLine) &&
+    finding.startLine !== finding.line
+  if (!hasMultiLine) return null
+
+  const anchors = reviewable.get(path)
+  if (!anchors || anchors.length === 0) return null
+
+  const endLine = finding.line
+  const startLine = finding.startLine as number
+  const lo = Math.min(startLine, endLine)
+  const hi = Math.max(startLine, endLine)
+
+  // Single-pass scan: pick the FIRST and LAST RIGHT-side anchor inside
+  // the inclusive [lo, hi] range. Last = closest to the original bottom
+  // (becomes the new `line`); first = top of the underline
+  // (becomes the new `start_line` if distinct from `line`).
+  let firstLine: number | null = null
+  let lastLine: number | null = null
+  for (const a of anchors) {
+    if (a.side !== "RIGHT") continue
+    if (a.line < lo || a.line > hi) continue
+    if (firstLine === null || a.line < firstLine) firstLine = a.line
+    if (lastLine === null || a.line > lastLine) lastLine = a.line
+  }
+  if (lastLine === null || firstLine === null) return null
+
+  return firstLine < lastLine
+    ? { line: lastLine, startLine: firstLine }
+    : { line: lastLine }
 }
 
 function findRepairableInlineAnchor(args: {
@@ -6624,6 +7681,29 @@ export function validateForSubmission(args: {
     // already provided.
     f = backfillSecurityEvidenceFromSources(f, sourceIds, sourceEvidenceById)
 
+    // SIG-216: normalize scope BEFORE any scope-dependent gates fire.
+    // LLM specialists sometimes emit `scope: "file"` for findings that
+    // have a concrete `(path, line)` AND that line falls in a reviewable
+    // hunk. The renderer routes any non-line scope into the Review Body
+    // section, which loses the inline anchor. Force `scope: "line"` for
+    // the anchorable shape so the renderer routes inline (PR #173
+    // regression class). Telemeter the flip so we can measure how often
+    // the LLM under-anchors; prompt tightening is a follow-up.
+    {
+      const fromScope: ReviewFindingScope | "undefined" = f.scope ?? "undefined"
+      const normalized = normalizeFindingScopeForAnchorability(f, reviewable)
+      if (normalized !== f) {
+        console.log(JSON.stringify({
+          event: "pr-review-scope-normalized-to-line",
+          fromScope,
+          path: f.path,
+          line: f.line,
+          category: f.category,
+        }))
+        f = normalized
+      }
+    }
+
     // ARC-156: vague-prefix filter. Drop findings whose headline OR
     // body starts with one of the VAGUE_PREFIXES words (case-
     // sensitive, word-boundary). Runs BEFORE score-1 demotion so a
@@ -6796,15 +7876,55 @@ export function validateForSubmission(args: {
       continue
     }
 
-    // Line validity + side derivation
-    const side = deriveSide(reviewable, f.path, f.line)
+    // Line validity + side derivation.
+    //
+    // SIG-216 follow-up (Option A): a multi-line finding whose ENDPOINT
+    // isn't in any RIGHT-side hunk may still be inline-anchorable if
+    // the MIDDLE of the [startLine, line] range overlaps the diff. The
+    // scope-normalizer already flipped scope:"line" for this case; the
+    // half-measure was leaving f.line pointing at the original
+    // unreviewable line so the downstream POST to GitHub would 422.
+    // Rewrite both endpoints to the actually-anchorable subrange (last
+    // RIGHT anchor becomes new `line`, first RIGHT anchor becomes new
+    // `start_line`) so isCommentAnchorable passes and the inline POST
+    // succeeds. PR #175 dogfood class.
+    //
+    // PR #176 CR follow-up: run the range-aware rewrite FIRST so that
+    // `deriveSide` (and any subsequent validation) sees the rewritten
+    // endpoints rather than the stale originals. A multi-line finding
+    // whose original `startLine` is unanchorable would otherwise slip
+    // through to a `start_line` 422 on the GitHub inline POST.
+    const rangeAnchor = findRangeAwareAnchor(reviewable, f)
+    let workingFinding: PrReviewFinding = f
+    let rewroteRange = false
+    if (rangeAnchor !== null) {
+      // Drop the original `startLine` and re-apply only when the helper
+      // returned a distinct top-of-underline anchor; otherwise the
+      // stale original (outside the actually-anchorable subrange)
+      // would fail `isCommentAnchorable` and the inline POST would
+      // 422 on `start_line`.
+      const { startLine: _originalStartLine, ...rest } = f
+      void _originalStartLine
+      workingFinding =
+        rangeAnchor.startLine !== undefined
+          ? { ...rest, line: rangeAnchor.line, startLine: rangeAnchor.startLine }
+          : { ...rest, line: rangeAnchor.line }
+      // Only count an actual rewrite (anchor differs from the original
+      // endpoints) so the counter isn't inflated for findings whose
+      // original anchor was already valid and matched by the helper.
+      rewroteRange =
+        workingFinding.line !== f.line ||
+        workingFinding.startLine !== f.startLine
+    }
+
+    const side = deriveSide(reviewable, workingFinding.path, workingFinding.line)
     if (!side) {
       const repairedLine =
-        f.startLine == null
-          ? findRepairableInlineAnchor({ finding: f, reviewable, addedLineTextByLine })
+        workingFinding.startLine == null
+          ? findRepairableInlineAnchor({ finding: workingFinding, reviewable, addedLineTextByLine })
           : null
       if (repairedLine !== null) {
-        cleanFindings.push({ ...f, line: repairedLine })
+        cleanFindings.push({ ...workingFinding, line: repairedLine })
         if (provenance) cleanFindingProvenance.push(provenance)
         remappedInvalidLineToInline++
         continue
@@ -6813,10 +7933,11 @@ export function validateForSubmission(args: {
       // Preserve for submit-fallback. Inline anchoring would fail here,
       // but the finding's *content* is still actionable when posted as
       // free-form markdown in the body of an anchorless review.
-      unanchoredFindings.push(f)
+      unanchoredFindings.push(workingFinding)
       continue
     }
-    cleanFindings.push(f)
+    cleanFindings.push(workingFinding)
+    if (rewroteRange) remappedInvalidLineToInline++
     // ARC-189: keep the per-clean-finding provenance aligned by index
     // for the ensemble caller's marker-emission step. `provenance` is
     // narrowed by the hallucination guard above (sourceIds.length >= 1
@@ -6906,6 +8027,30 @@ interface EnsembleTelemetry {
   internalError?: string
   routerDecision: RouterDecision | null
   /**
+   * SIG-227a: when `OPENCLAW_DYNAMIC_DISPATCHER_MODE === "enforce_rules"`,
+   * `routerDecision` above is overwritten with the dispatcher's picks
+   * because those drive fan-out. The legacy `decideSpecialists` result
+   * is preserved here so `/metrics/validation` can compute
+   * "would-have-been-fanned-out vs actually-fanned-out" deltas across
+   * the enforce_rules window. Absent when mode is `off`/`shadow`/`enforce`
+   * (only `enforce_rules` does the routerDecision swap).
+   */
+  legacyRouterDecision?: RouterDecision
+  /**
+   * SIG-226 / SIG-224 Phase 1: shadow-mode dispatcher decision blob.
+   * Populated only when `OPENCLAW_DYNAMIC_DISPATCHER_MODE` is set to
+   * `shadow` or `enforce`. Always absent in default-off mode so the
+   * existing telemetry consumers don't see noise.
+   *
+   * Held on the telemetry object (rather than just `console.log`-ed)
+   * so the existing KV-backed metrics endpoints (`/metrics/validation`,
+   * `/metrics/graph`) can compute shadow-window stats — p50/p95/p99
+   * dispatcher overhead, per-role agreement rates between rule layer
+   * and LLM, false-negative rates on protected roles. Phase 2/3
+   * graduation criteria depend on these aggregates.
+   */
+  dispatcherDecision?: import("./dynamic-dispatcher").DispatcherDecision
+  /**
    * ARC-277: populated when 1 ≤ specialist-success-count < dispatched-count.
    * Records which roles came back and which didn't so post-rollout
    * telemetry analysis can compute degraded-vs-full-coverage rates
@@ -6933,6 +8078,21 @@ interface EnsembleTelemetry {
   synthRetry?: {
     used: boolean
     outcome: SynthAttemptOutcome | "n/a" | "exhausted-budget"
+  }
+  /**
+   * SIG-228 Phase 3c: populated when the synth-bypass single-specialist
+   * hot path fired (dispatcher returned 1 specialist + no major-severity
+   * findings + `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`). When present,
+   * `synthesizer.modelUsed` is the bypass sentinel and `synthesizer.elapsedMs`
+   * reflects the bypass synth-construction time (near-zero), so post-
+   * rollout analysis can compute the wall-time saved vs the legacy
+   * synth path. Absent on the synth path (default) AND when the flag
+   * is off.
+   */
+  synthBypass?: {
+    reason: "single_specialist_no_major"
+    specialistRole: SpecialistRole
+    findingCount: number
   }
   specialistVerdicts: Array<{
     role: SpecialistRole

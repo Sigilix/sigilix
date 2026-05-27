@@ -2,36 +2,40 @@ import { indexNamespace } from "./repo-index-manifest"
 
 export const BRANCH_STATE_SEGMENT = "__branch__"
 
+/** Length of the hex hash suffix in encoded branch segments (64-bit truncation). */
+const BRANCH_HASH_HEX_LEN = 16
+/** Encoded segment shape: literal "h" + BRANCH_HASH_HEX_LEN hex chars. */
+const ENCODED_BRANCH_REGEX = new RegExp(`^h[0-9a-f]{${BRANCH_HASH_HEX_LEN}}$`)
+
 /**
- * Encode a Git branch into a stable KV / namespace path segment. The
- * wider repo-index namespace is lowercased for tenant isolation, so the
- * branch segment must use a lowercase collision-free encoding rather
- * than a case-sensitive URL encoding.
+ * SIG-218: bounded-length hash of the branch name. The prior implementation
+ * encoded the branch as `h` + utf8-as-hex (linear length growth in branch
+ * name), which blew the Vectorize 64-byte namespace cap on any branch
+ * longer than ~20 chars — every PR review on such a branch crashed the
+ * queue consumer with VECTOR_UPSERT_ERROR (40013).
+ *
+ * 64-bit SHA-256 truncation gives effectively-zero collision risk within
+ * a single repo's branch space. Trade-off: irreversible — the original
+ * branch name cannot be recovered from the encoded form. Callers that
+ * need the branch name must carry it separately (e.g. in the KV manifest
+ * — `RepoIndexManifestV1.branch` — or the message payload), not extract
+ * it from the namespace.
  */
-export function encodeBranchName(branch: string): string {
-  const bytes = new TextEncoder().encode(branch.trim())
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")
-  return `h${hex}`
+export async function encodeBranchName(branch: string): Promise<string> {
+  return `h${await sha256HexPrefix(branch.trim(), BRANCH_HASH_HEX_LEN)}`
 }
 
-export function decodeBranchName(encoded: string): string | null {
-  const value = encoded.trim()
-  if (!/^h(?:[0-9a-f]{2})+$/i.test(value)) return null
-  const hex = value.slice(1)
-  const bytes = new Uint8Array(hex.length / 2)
-  for (let i = 0; i < bytes.length; i++) {
-    bytes[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16)
-  }
-  try {
-    const branch = new TextDecoder("utf-8", { fatal: true, ignoreBOM: false }).decode(bytes).trim()
-    return branch.length > 0 ? branch : null
-  } catch {
-    return null
-  }
+/**
+ * Validator for the bounded-length encoded branch segment. Replaces the
+ * pre-SIG-218 `decodeBranchName` which returned the recovered branch name;
+ * the hash is now irreversible so only structural validity can be checked.
+ */
+export function isValidEncodedBranch(encoded: string): boolean {
+  return ENCODED_BRANCH_REGEX.test(encoded.trim())
 }
 
-export function branchStateRepo(repo: string, branch: string): string {
-  return `${repo}/${BRANCH_STATE_SEGMENT}/${encodeBranchName(branch)}`
+export async function branchStateRepo(repo: string, branch: string): Promise<string> {
+  return `${repo}/${BRANCH_STATE_SEGMENT}/${await encodeBranchName(branch)}`
 }
 
 export function isBranchStateRepo(repo: string): boolean {
@@ -44,7 +48,13 @@ export function isBranchStateRepo(repo: string): boolean {
 export interface BranchNamespace {
   owner: string
   repo: string
-  branch: string
+  /**
+   * SIG-218: the encoded (hashed) branch segment, NOT the original branch
+   * name. The hash is irreversible — callers that need the human branch
+   * name must read it from the KV manifest (`RepoIndexManifestV1.branch`)
+   * or thread it through from where the namespace was originally constructed.
+   */
+  encodedBranch: string
   namespace: string
 }
 
@@ -53,12 +63,11 @@ export function parseBranchNamespace(namespace: string): BranchNamespace | null 
   if (parts.length !== 4) return null
   const [owner, repo, segment, encodedBranch] = parts
   if (!owner || !repo || segment !== BRANCH_STATE_SEGMENT || !encodedBranch) return null
-  const branch = decodeBranchName(encodedBranch)
-  if (!branch) return null
+  if (!isValidEncodedBranch(encodedBranch)) return null
   return {
     owner,
     repo,
-    branch,
+    encodedBranch,
     namespace: `${owner}/${repo}/${BRANCH_STATE_SEGMENT}/${encodedBranch}`,
   }
 }
@@ -78,15 +87,15 @@ export interface IndexTarget {
   isDefault: boolean
 }
 
-export function resolveIndexTarget(args: {
+export async function resolveIndexTarget(args: {
   owner: string
   repo: string
   defaultBranch: string
   branch?: string | undefined
-}): IndexTarget {
+}): Promise<IndexTarget> {
   const branch = (args.branch?.trim() || args.defaultBranch).trim()
   const isDefault = branch === args.defaultBranch
-  const stateRepo = isDefault ? args.repo : branchStateRepo(args.repo, branch)
+  const stateRepo = isDefault ? args.repo : await branchStateRepo(args.repo, branch)
   return {
     repo: args.repo,
     defaultBranch: args.defaultBranch,
@@ -120,4 +129,16 @@ export function isTrackedLongLivedBranch(
   configuredBranches: string | undefined,
 ): boolean {
   return parseTrackedBranches(configuredBranches).has(branch.trim().toLowerCase())
+}
+
+// Local SHA-256 hex helper — mirrors `sha256HexPrefix` in `indexer.ts` and
+// `security-evidence-manifest.ts`. Inlined here (rather than imported) to
+// avoid a circular dep with `indexer.ts`, which already imports this file.
+async function sha256HexPrefix(input: string, length: number): Promise<string> {
+  const bytes = new TextEncoder().encode(input)
+  const buf = await crypto.subtle.digest("SHA-256", bytes)
+  const hex = Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("")
+  return hex.slice(0, length)
 }

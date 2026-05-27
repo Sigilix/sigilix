@@ -16,6 +16,13 @@ import { GitHubClient, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
 import type { Env } from "../index"
 
+// SIG-216 (founder sign-off 2026-05-25): Sigilix follows Greptile's
+// pattern of NOT posting Check annotations. GitHub renders the
+// annotation `message` field as PLAIN TEXT, so our markdown-formatted
+// finding bodies (with <details>, **bold**, badge <img> tags) dump
+// literally with raw HTML visible. Findings live in the PR review
+// thread instead; the Check run is advisory-only and links back.
+
 /** Name used for the Check Run — renders in the PR's Checks tab.
  *  Kept short ("Sigilix") since the row already carries the
  *  in_progress/completed status; "Sigilix Review" was redundant.
@@ -37,13 +44,18 @@ const KNOWN_CHECK_NAMES: ReadonlySet<string> = new Set([
  *  `timed_out` (which we don't use). The REST primitive in
  *  `github.ts` keeps the wide union for forward compatibility.
  *
- *  Founder preference (PR #80 follow-up): `success` for posted
- *  reviews instead of `neutral`. Sigilix's check is still
- *  informational (we don't block merges), but green ✓ in the
- *  Checks tab reads as "Sigilix is happy / done" to customers,
- *  whereas the `neutral` grey-circle looks like "didn't run". */
+ *  SIG-216 follow-up (founder feedback on PR #176, 2026-05-25): the
+ *  Check run signals EXECUTION HEALTH ("did the bot run?"), not
+ *  findings count. Industry advisory-bot convention (CodeRabbit,
+ *  Greptile) is `success` regardless of findings; review state lives
+ *  in the GitHub native review object (APPROVE / COMMENT /
+ *  REQUEST_CHANGES). Mapping in `completeCheckRun`:
+ *    - `success` → wire `success` (green check, bot ran cleanly)
+ *    - `failure` → wire `neutral` (bot errored, ambiguous; reserve
+ *      wire `failure` for future opt-in P0 gates)
+ *    - `skipped` → wire `neutral` (bot couldn't review — legit
+ *      ambiguous state, e.g. stale head). */
 export type SigilixCheckConclusion = "success" | "failure" | "skipped"
-const CHECK_ANNOTATION_BATCH_SIZE = 50
 
 interface InProgressCheckRun {
   id: number
@@ -125,6 +137,55 @@ export async function startInProgressCheckRun(args: CreateArgs): Promise<InProgr
 }
 
 /**
+ * SIG-220: rebuild an `InProgressCheckRun` handle when the check was
+ * already created upstream (e.g. inside `PrReviewRunDO.handleEnqueue`
+ * on the webhook hot-path so the customer sees the Check appear in
+ * the GitHub UI within ~1–2s of push) and the dispatcher / watchdog
+ * just needs to close it. Returns `null` on any GitHub-token failure
+ * — caller treats null the same as "no check to update."
+ *
+ * Why not just hold the InProgressCheckRun in-memory until the
+ * dispatcher fires? Because the consumer is a fresh worker invocation
+ * (queue handler), not the same isolate that created the check, so
+ * the client instance + token would not survive the hop. We rebuild
+ * a fresh client off the installation id we already have.
+ */
+export interface AttachArgs {
+  env: Env
+  owner: string
+  repo: string
+  installationId: number
+  checkRunId: number
+}
+
+export async function attachExistingCheckRun(args: AttachArgs): Promise<InProgressCheckRun | null> {
+  const { env, owner, repo, installationId, checkRunId } = args
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-attach-skip-missing-creds",
+      owner, repo, check_run_id: checkRunId, installation_id: installationId,
+    }))
+    return null
+  }
+  try {
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    return { id: checkRunId, client: new GitHubClient({ token }), owner, repo }
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-attach-failed",
+      owner, repo, check_run_id: checkRunId, installation_id: installationId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+    return null
+  }
+}
+
+/**
  * ARC-276: payload threaded from the dispatcher's posted-path so the
  * Check Run title can render the customer-visible verdict (Approved
  * vs N findings). Only meaningful when `conclusion === "success"`
@@ -150,7 +211,21 @@ export interface ReviewCheckMeta {
   event: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
   findingsCount: number
   surface?: "review" | "comment" | "skip-notice"
+  /**
+   * @deprecated SIG-216 — `completeCheckRun` no longer posts these.
+   * GitHub renders the annotation `message` field as plain text,
+   * which butchers our markdown finding bodies. The field stays on
+   * the interface for back-compat with the producer in
+   * `triage-pr-review-ensemble.ts`; the consumer drops it. Remove
+   * once the producer stops threading it.
+   */
   checkAnnotations?: CheckRunAnnotation[]
+  /**
+   * SIG-216: PR number used to build the `[View review]` link in
+   * the Check run summary. Optional so legacy callers without the
+   * PR number in scope still get a sensible (link-less) summary.
+   */
+  prNumber?: number
 }
 
 interface CompleteArgs {
@@ -171,56 +246,52 @@ interface CompleteArgs {
 export async function completeCheckRun(args: CompleteArgs): Promise<void> {
   const { handle, conclusion, reviewMeta } = args
   if (handle === null) return
-  const output = renderOutputForConclusion(conclusion, reviewMeta)
+  const output = renderOutputForConclusion(conclusion, reviewMeta, {
+    owner: handle.owner,
+    repo: handle.repo,
+  })
+  // SIG-216 follow-up (founder feedback on PR #176, 2026-05-25):
+  // Kimi K2.6 (UI design authority) confirmed industry convention —
+  // the Check run signals EXECUTION HEALTH, not findings count.
+  // CodeRabbit + Greptile both emit `success` regardless of findings;
+  // review state lives in the GitHub native review object
+  // (APPROVE / COMMENT / REQUEST_CHANGES). Reserve `neutral` for
+  // skips/errors (ambiguous "did the bot run?" state). Reserve wire
+  // `failure` for future opt-in P0 gates.
+  const wireConclusion: "success" | "neutral" =
+    conclusion === "success" ? "success"
+    : conclusion === "failure" ? "neutral"  // errored — ambiguous, not failing the check
+    : "neutral"                              // skipped — legit ambiguous
   try {
     await handle.client.updateCheckRun(handle.owner, handle.repo, handle.id, {
       status: "completed",
-      conclusion,
+      conclusion: wireConclusion,
       completedAt: new Date().toISOString(),
       output,
     })
     console.log(JSON.stringify({
       event: "pr-review-check-run-completed",
       owner: handle.owner, repo: handle.repo,
-      check_run_id: handle.id, conclusion,
+      check_run_id: handle.id, conclusion: wireConclusion,
+      internal_conclusion: conclusion,
     }))
   } catch (err) {
     console.warn(JSON.stringify({
       event: "pr-review-check-run-complete-failed",
       owner: handle.owner, repo: handle.repo,
-      check_run_id: handle.id, conclusion,
+      check_run_id: handle.id, conclusion: wireConclusion,
+      internal_conclusion: conclusion,
       err: err instanceof Error ? err.message : String(err),
     }))
     return
   }
 
-  const annotations = reviewMeta?.checkAnnotations ?? []
-  if (annotations.length === 0) return
-  let posted = 0
-  try {
-    for (let i = 0; i < annotations.length; i += CHECK_ANNOTATION_BATCH_SIZE) {
-      const batch = annotations.slice(i, i + CHECK_ANNOTATION_BATCH_SIZE)
-      await handle.client.updateCheckRun(handle.owner, handle.repo, handle.id, {
-        output: {
-          ...output,
-          annotations: batch,
-        },
-      })
-      posted += batch.length
-    }
-    console.log(JSON.stringify({
-      event: "pr-review-check-run-annotations-posted",
-      owner: handle.owner, repo: handle.repo,
-      check_run_id: handle.id, annotations: posted,
-    }))
-  } catch (err) {
-    console.warn(JSON.stringify({
-      event: "pr-review-check-run-annotations-failed",
-      owner: handle.owner, repo: handle.repo,
-      check_run_id: handle.id, attempted: annotations.length, posted,
-      err: err instanceof Error ? err.message : String(err),
-    }))
-  }
+  // SIG-216: Check annotations are NOT posted. GitHub renders the
+  // annotation `message` field as plain text, so our markdown
+  // finding bodies (with <details>, **bold**, badge <img> tags)
+  // dump literally with raw HTML visible. Findings live in the PR
+  // review thread; the Check summary links there. The annotation
+  // batching loop that previously ran here was removed for SIG-216.
 }
 
 /**
@@ -288,40 +359,46 @@ async function cancelStaleInProgressChecks(args: {
  * Exported for direct unit tests of the title/summary mapping.
  * The dispatcher calls `completeCheckRun` which wraps this, but the
  * pure mapping is the contract that ARC-276 codifies.
+ *
+ * SIG-216: the success-path summary is now the Greptile-direction
+ * one-liner "N suggestion(s) · [View review](pr-url)". The PR URL
+ * is built from `repoCoords` + `reviewMeta.prNumber`; legacy
+ * callers without those fields get a link-less variant. The verbose
+ * "open the conversation tab and check annotations" copy was
+ * removed — annotations are no longer posted.
  */
 export function renderOutputForConclusion(
   conclusion: SigilixCheckConclusion,
   reviewMeta?: ReviewCheckMeta,
+  repoCoords?: { owner: string; repo: string },
 ): { title: string; summary: string } {
+  const prReviewUrl = buildPrReviewUrl(repoCoords, reviewMeta?.prNumber)
   switch (conclusion) {
     case "success":
-      // ARC-276: when the dispatcher threads `reviewMeta`, the Check
-      // Run title reflects the verdict directly. Without it (e.g.,
-      // legacy callers + dedupe-hit skip paths), the generic
-      // "Review posted" copy still applies.
+      // ARC-276 + SIG-216: when the dispatcher threads `reviewMeta`,
+      // the Check Run title reflects the verdict directly. The
+      // summary collapses to a single line pointing at the PR
+      // conversation tab.
       if (reviewMeta) {
         if (reviewMeta.event === "APPROVE") {
           return {
             title: "Approved — no issues found",
-            summary: "Sigilix reviewed this PR with the four-specialist ensemble and posted an APPROVE review. Open the conversation tab to read the summary.",
+            summary: buildApprovedSummary(prReviewUrl),
           }
         }
         const n = reviewMeta.findingsCount
         const noun = n === 1 ? "finding" : "findings"
-        if (reviewMeta.event === "COMMENT") {
-          return {
-            title: `${n} non-blocking ${noun} posted`,
-            summary: `Sigilix reviewed this PR and posted a COMMENT review with ${n} non-blocking ${noun}. Open the conversation tab and check annotations for body-only findings.`,
-          }
-        }
+        const title = reviewMeta.event === "COMMENT"
+          ? `${n} non-blocking ${noun} posted`
+          : `${n} ${noun} — changes requested`
         return {
-          title: `${n} ${noun} — changes requested`,
-          summary: `Sigilix reviewed this PR and posted a REQUEST_CHANGES review with ${n} ${noun}. Open the conversation tab to view inline comments.`,
+          title,
+          summary: buildFindingsSummary(n, prReviewUrl),
         }
       }
       return {
         title: "Review posted",
-        summary: "Sigilix posted a review on this PR. Open the conversation tab to view inline findings.",
+        summary: buildLegacyPostedSummary(prReviewUrl),
       }
     case "skipped":
       return {
@@ -356,4 +433,53 @@ export function renderOutputForConclusion(
         summary: "Sigilix encountered an error while reviewing this PR. Re-trigger with `/sigilix review` or contact support.",
       }
   }
+}
+
+/**
+ * SIG-216: build the canonical GitHub PR URL used in the Check run
+ * summary's `[View review]` link. Returns `null` when owner/repo or
+ * PR number are missing (legacy callers) so the caller can render a
+ * link-less fallback.
+ */
+function buildPrReviewUrl(
+  repoCoords: { owner: string; repo: string } | undefined,
+  prNumber: number | undefined,
+): string | null {
+  if (!repoCoords || typeof prNumber !== "number" || !Number.isFinite(prNumber)) {
+    return null
+  }
+  return `https://github.com/${repoCoords.owner}/${repoCoords.repo}/pull/${prNumber}`
+}
+
+/**
+ * SIG-216: Greptile-direction one-liner for the approve-only path.
+ * "Sigilix approved · [View PR](url)" when we can link, plain text
+ * otherwise.
+ */
+function buildApprovedSummary(prReviewUrl: string | null): string {
+  return prReviewUrl
+    ? `Sigilix approved · [View PR](${prReviewUrl})`
+    : "Sigilix approved"
+}
+
+/**
+ * SIG-216: Greptile-direction one-liner for the findings-posted
+ * path. "N suggestion(s) · [View review](url)" when we can link,
+ * plain text otherwise.
+ */
+function buildFindingsSummary(findingsCount: number, prReviewUrl: string | null): string {
+  const noun = findingsCount === 1 ? "suggestion" : "suggestions"
+  const head = `${findingsCount} ${noun}`
+  return prReviewUrl ? `${head} · [View review](${prReviewUrl})` : head
+}
+
+/**
+ * SIG-216: legacy "we don't know the verdict" path (no reviewMeta).
+ * Avoids fabricating a misleading "0 suggestions" line; instead
+ * emits a neutral pointer at the PR.
+ */
+function buildLegacyPostedSummary(prReviewUrl: string | null): string {
+  return prReviewUrl
+    ? `Sigilix posted a review · [View review](${prReviewUrl})`
+    : "Sigilix posted a review"
 }

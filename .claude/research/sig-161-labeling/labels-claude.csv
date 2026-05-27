@@ -1,0 +1,77 @@
+findingId,label,labelReason,labelerInitials,labelDate
+03babcf2a90e4471,TP,Real fan-out waste — `Promise.allSettled` over all test files before `applyTestFileContentCaps` discards most; concrete I/O cost on test-heavy PRs.,cc,2026-05-25
+0cd9d704080e3fb1,TP,"Same root cause as the prior finding — unbounded concurrent fetches before cap, plus a concrete Workers subrequest-limit risk; bounded sequential fix is correct.",cc,2026-05-25
+a4bf875a545b61d4,FP,Orchestrator-wrapper coverage ask on `handlePrReviewEnsemble` where helpers are tested; SIG-208 explicitly suppresses this pattern.,cc,2026-05-25
+d426c4075a8ecaad,TP,New `cweId`/`evidenceId` extraction in `parsePrReviewResponse` is a pure parser branch with no test; legitimate coverage gap.,cc,2026-05-25
+314eaa04706dfd0e,FP,Bot itself flags the saving as `~10–50ms` modest microtask yields — useless-but-correct micro-optimization on a non-hot path.,cc,2026-05-25
+e929bc8fa99cc655,TP,Schema additions for new optional fields gate the parsing contract; small but legitimate validation test gap.,cc,2026-05-25
+5d097548800309b5,FP,"Trivial env-var plumbing test for `OPENCLAW_SECURITY_VALIDATOR_MODE`; reading + passing an env field is config glue, not testable branching.",cc,2026-05-25
+535681fce5e0b918,FP,"Orchestrator-wrapper coverage ask on `handlePrReviewEnsemble` (manifest building, per-role caching) where helpers have tests; SIG-208 territory.",cc,2026-05-25
+2fed4db3f482e535,FP,"Duplicate of the prior env-var finding for `OPENCLAW_SECURITY_VALIDATOR_MODE`; trivial config plumbing, not a real test gap.",cc,2026-05-25
+71398b243e80a7bc,TP,"`downloadArtifactZip` ships with security-critical redirect, protocol enforcement, and byte-cap branches; existing fake client bypasses the method entirely.",cc,2026-05-25
+2c3d1fa70ce73eb6,TP,Untrusted LCOV path rendered verbatim into the LLM prompt is a real prompt-injection surface; gating off-by-default doesn't make the claim wrong.,cc,2026-05-25
+6608eefc2d955938,FP,Coverage ingestion in `handlePrReviewEnsemble` is orchestrator-wrapper around tested helpers; SIG-208 suppresses this shape.,cc,2026-05-25
+3613c3f46b3d8218,TP,`resolveCoverageConfig` is a branching config resolver (off/opt-in/partial overrides) with no tests; real coverage gap on a new pure helper.,cc,2026-05-25
+aebe29c585f53db1,TP,Real defense-in-depth gap — traversal check on `SF:` paths doesn't decode `%2e%2e`; fix is small and the attacker model (malicious LCOV) is realistic.,cc,2026-05-25
+2fcdf11a455c747d,FP,Same coverage orchestrator-wiring concern in `handlePrReviewEnsemble` as the earlier finding; SIG-208 wrapper suppression.,cc,2026-05-25
+43eee5cf707a9cbb,TP,Logic evidence gate inside `validateForSubmission` has three branching modes (shadow/enforce/no-op) and a telemetry callback; gate logic itself is untested.,cc,2026-05-25
+82d36569f94a2f74,FP,"Hallucinated secret — preview `good…ored` matches the JSON identifier `""good-blocking-io""` in `perf-examples.json`, not a real token.",cc,2026-05-25
+5e1ea1543156858f,FP,"Orchestrator-wrapper coverage ask on `handlePrReviewEnsemble` perf wiring; pure modules tested, SIG-208 suppresses the integration ask.",cc,2026-05-25
+8ba6a43d4944fb6c,FP,Duplicate orchestrator-wrapper ask on the same perf retrieval/perf-budgets wiring; SIG-208 wrapper suppression.,cc,2026-05-25
+bdb27ef27ae0b258,FP,Third duplicate orchestrator-wrapper ask on the same `handlePrReviewEnsemble` perf wiring; SIG-208 wrapper suppression.,cc,2026-05-25
+731f524981de1982,FP,"Hallucinated secret — preview `flag…atal` in a markdown plan doc almost certainly matches an env-var name fragment, not a real credential.",cc,2026-05-25
+f370cfc26e034d37,FP,"Hallucinated secret — preview `OPEN…R_PR` is the env-var prefix `OPENCLAW_…_PR`, not a real token in the symbol-retrieval wiring.",cc,2026-05-25
+bde47907a0acaf98,FP,Orchestrator-wrapper ask on `handlePrReviewEnsemble` symbol-retrieval wiring; pure `symbol-retrieval.ts` helpers tested per the body itself.,cc,2026-05-25
+0046c714bbdcb009,FP,Duplicate orchestrator-wrapper ask on the same symbol-retrieval wiring; SIG-208 wrapper suppression.,cc,2026-05-25
+546e0461b91130d7,FP,"Third duplicate of the symbol-retrieval wiring coverage ask; same wrapper pattern, helpers already tested.",cc,2026-05-25
+87d500faaa5c6400,TP,`prepareBranchSet` adds a defensive `vectors.length !== chunks.length` early-return that has no test; new untested branch in the diff.,cc,2026-05-25
+51294a38ce6f7f25,TP,Per-row UPDATE loop on `file_edges`/`call_edges` is a concrete N+1 SQL pattern at the documented 100k-edge scale on a DO with CPU limits; batched fix is correct.,cc,2026-05-25
+1ee1be3cb1330635,TP,Loading the full symbol/path universe into memory in `commitGraphVersion` is a real scaling risk for monorepos and warrants a cap or streaming approach.,cc,2026-05-25
+5a8e690a9e434d64,TP,"`RepoGraphDO` is a new SQLite-backed DO with schema, transactions, version flips, and GC — non-trivial logic with `siblingMapping:NONE`; real coverage gap.",cc,2026-05-25
+2109711da4e2eb43,FP,"DO methods are reachable only via in-Worker bindings; the bot itself notes the DO relies on its caller, and ""add a signed token"" is architectural taste, not a real exposure.",cc,2026-05-25
+a29a2cba2ecfc765,FP,Body itself says `graphContextFor`/`blastRadiusFor` are thin wrappers over a tested DO; testing pure delegate stubs is the useless-but-correct anti-pattern.,cc,2026-05-25
+5771cb48ecf9e3f0,TP,`blastRadius` missing-symbol and no-callers cases are real edge cases for a method that resolves user input against the graph; small but valid test gap.,cc,2026-05-25
+736fa6b1cbf85a2a,TP,"`contextForVectorHits` boundary cases (zero caps, unresolved edges, no-outgoing seeds) are real BFS-correctness branches missing tests.",cc,2026-05-25
+6517b9deae97e5a1,FP,Body overstates — the sibling test file already covers `blastRadius`/`contextForVectorHits` happy paths; this duplicates the more specific edge-case findings.,cc,2026-05-25
+028fd1af9ee757f0,TP,Conditional `[GRAPH CONTEXT]` block in `buildSpecialistInitialMessage`/`buildSynthesizerInitialMessage` is real prompt-rendering logic with no test covering presence/order.,cc,2026-05-25
+47c4f60019dede64,TP,`blastRadiusByNames` is a new SQL+resolution method with name-collision and path-scoping branches and no sibling test file in this PR; real coverage gap.,cc,2026-05-25
+32c05afdf7f082d9,FP,Orchestrator-wrapper ask on `handlePrReviewEnsemble` graph-metrics push; SIG-208 wrapper-suppression territory.,cc,2026-05-25
+c4cb81ac6cce2a7c,FP,Orchestrator-wrapper ask on `dispatchJob` flush around a tested DO; wrapping a tested DO call with try/catch is wrapper-shape suppression.,cc,2026-05-25
+ca9d22a5fcab26d4,TP,`appendVectorCoverage` doing a full ledger read+union+write before every batch is a concrete write-amplification + race that the author already acknowledges as MVP debt.,cc,2026-05-25
+fc594b37486c8089,TP,Same KV write-amplification pattern in `appendVectorCoverage` — concrete O(k·n) cost confirmed by the author's MVP caveat; legitimate perf flag.,cc,2026-05-25
+27dd94ecbb8f3499,TP,"`resolveRepoInstallationId` contract says null on failure, but `res.json()` on a non-JSON 200 body throws; real contract violation that the caller doesn't catch.",cc,2026-05-25
+3a026686e6ca8f2c,TP,Slug-validation regex returns 400 for invalid characters but no test exercises that branch; small but real missing test on a new validation path.,cc,2026-05-25
+a1e201e08787a4db,TP,Same slug-validation test gap — pure validation branch on the new admin route is testable and currently uncovered.,cc,2026-05-25
+2459bb35fe314b2a,TP,"New `scheduled` cron handler is a new entry point with three branches (gate-off, gate-on, error caught) and no test file at all — genuine new-entry-point gap.",cc,2026-05-25
+bcf740f8eb3cdfa4,FP,Body itself says the cron runs on a 6-hour tick and parallelizing is purely cosmetic; useless-but-correct micro-optimization off the hot path.,cc,2026-05-25
+49fccad80b009d3b,TP,Duplicate of the prior `scheduled` cron coverage gap — same valid claim about an untested new entry point.,cc,2026-05-25
+2147496c45ee78d5,TP,New concede branch in `handleGithubMention` plus the new helper `findOriginalFindingBody` is new logic with no test exercising the marker-scan or KV write.,cc,2026-05-25
+a88f0909f06b29d7,TP,Withdrawal filter + `keepIndex` parallel-array alignment is new index-arithmetic logic with subtle off-by-one risk and no test coverage.,cc,2026-05-25
+79eedab6bac25f21,TP,`findOriginalFindingBody` returns the first marker-matching entry regardless of author; attacker can plant a marker comment and corrupt the withdrawal snapshot.,cc,2026-05-25
+101ba71355c63ebd,TP,Same concede-trigger coverage gap on a multi-branch new code path; helper `findOriginalFindingBody` itself is new and untested.,cc,2026-05-25
+c7dcb2ff5cb98950,TP,Same withdrawal-filter index-alignment gap; complex parallel-array bookkeeping with no test is a legitimate regression risk.,cc,2026-05-25
+abb305873276380d,TP,"New `kind` coercion branches in `parsePrReviewResponse` (delete+empty, delete+non-empty, replace/insert, fallback) are pure parser logic with no test.",cc,2026-05-25
+45766f315262e0af,FP,Asserting a literal string appears in a prompt constant is the brittle-test anti-pattern; prompt-content coverage doesn't catch real regressions.,cc,2026-05-25
+ebf7c2148064941b,TP,Same `kind` coercion gap — four parser branches in `parsePrReviewResponse` and zero tests exercise them.,cc,2026-05-25
+8c3ffac6dd2c6b4a,TP,`isCommentAnchorable` gating `start_line` in `buildReviewSubmission` is a real production branch that existing tests never reach.,cc,2026-05-25
+19a1935dc80e55d3,borderline,Bot flags its own secret-scanner FPs on the calibration script and asks for suppression comments; correct identification but low operational value.,cc,2026-05-25
+bf8a69093fa4d87a,TP,Real correctness bug — `sourceIds[0]!` with vacuous `every` guard lets empty arrays slip through and write `undefined` into a `string` field.,cc,2026-05-25
+e39ccaf0c6c9b1b1,TP,Same `sourceFindingIds[0]!` non-null-assertion bug; explicit length guard is the correct fix.,cc,2026-05-25
+a38d9a98611b415c,TP,`parseReviewDismissDedupeRecord`/`serialize…` are new multi-branch parser/serializer functions in the critical dismiss path with no tests.,cc,2026-05-25
+3d99f68f41c6f3de,FP,"Orchestrator-wrapper coverage ask on `handleGithubMention` dismiss flow; helpers are tested per the body itself, SIG-208 territory.",cc,2026-05-25
+8460e764347c3b7d,FP,Body itself notes `crypto.randomUUID` is always available on Workers and the fallback is dead code; useless-but-correct concern.,cc,2026-05-25
+38257345c0728f2d,TP,`formatReviewDismissReply` has four pure branches but only one is tested; real coverage gap on a pure formatter.,cc,2026-05-25
+90381af4e99b9463,TP,`buildAgentInitialUserMessage` has four pure `repoLine` branches and only two are tested; real coverage gap on a pure helper.,cc,2026-05-25
+1426779a62d58665,FP,Duplicate orchestrator-wrapper ask on the same `handleGithubMention` dismiss orchestration; helpers tested per the body.,cc,2026-05-25
+f692017d9228046a,TP,Same `buildAgentInitialUserMessage` branch-coverage gap — multi-repo branch is a pure-function path with no test.,cc,2026-05-25
+42507c25efefec2f,borderline,"Real design-level claim that any commenter can dismiss the bot review, but PR description marks the permissive behavior as intentional.",cc,2026-05-25
+0d04791560b127f8,TP,"Real ordering bug — SIG-202 scope routing fires before the SIG-127 `suggestedReplacement` check, silently dropping inline suggestions on `scope:""file""` findings.",cc,2026-05-25
+189d0b65bf424998,FP,"Outdated JSDoc comment fix — pure documentation nit, not a code defect; useless-but-correct per the guide's edge-case rubric.",cc,2026-05-25
+0a7de5320eb07c67,TP,Real validation gap — `startLine > line` is not rejected and would produce an inverted range that GitHub rejects with 422 on the whole review.,cc,2026-05-25
+915c3d8e2f5dc8d8,TP,"`maybeEnqueuePullRequestBranchIndexJobs` adds a new pull_request webhook branch with same-repo, draft, action, and merged-base conditions; legitimately untested.",cc,2026-05-25
+a10afa57772c80ac,TP,`branchHasOpenSameRepoPr` issuing up to 2 GitHub API calls per untracked-branch push is a concrete rate-limit risk; 5000 req/hr cap is plausibly hit on CI-heavy installs.,cc,2026-05-25
+6998cbb57678319b,FP,"Orchestrator-wrapper coverage ask on `handlePrReviewEnsemble` dynamic-evidence wiring; pack builder tested, SIG-208 wrapper territory.",cc,2026-05-25
+fb03194885422108,FP,"Body itself notes `renderNumberedSnippet` handles the off-by-one gracefully with `?? """"`; useless-but-correct cosmetic concern.",cc,2026-05-25
+c94ceadf2f90d21a,TP,`containsIdentifier` recompiles `RegExp` on every call inside `buildRetrievalRefs` and `chunkExcerpt` loops; concrete per-card waste in the synchronous pre-fan-out path.,cc,2026-05-25
+013c8da2eae86c7f,FP,"Trivial env-var type-presence test ask; reading a flag field is config glue, not testable branching.",cc,2026-05-25
+55f65f7c840ec6b9,FP,Bot itself acknowledges the duplicate `buildReviewSubmissionWithMetadata` call is sub-ms vs 35–180s LLM calls; useless-but-correct micro-optimization.,cc,2026-05-25

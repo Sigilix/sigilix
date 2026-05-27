@@ -63,6 +63,26 @@ export interface RunState {
    * Undefined / absent means depth 0.
    */
   staleHeadRequeueDepth?: number
+  /**
+   * SIG-220: GitHub check-run id, set by `handleEnqueue` on the
+   * `create | supersede` path (the dispatcher-time creation that
+   * pre-SIG-220 ran inside `dispatchJob` is now an upstream
+   * best-effort call so the "Sigilix · In progress" check appears
+   * within ~1–2s of webhook receipt instead of 5–30s).
+   *
+   * Threaded into the consumer via the queue message and into the
+   * retry-alarm-generated queue message via `handleRetryAlarm` —
+   * both let the dispatcher / consumer use `attachExistingCheckRun`
+   * instead of creating a duplicate. Also used by the watchdog
+   * terminal-failure path to close the check on a dead consumer.
+   *
+   * Undefined when:
+   *   - the upstream create failed (best-effort; dispatcher falls
+   *     back to creating a check at dispatch time)
+   *   - the run pre-dates SIG-220 and was queued without an id
+   *     (legacy-message migration path; same fallback applies)
+   */
+  checkRunId?: number
 }
 
 /** Spec §4.2 — frozen snapshot retained in history (FIFO-capped per `historyLimit`). */

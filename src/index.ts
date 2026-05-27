@@ -40,6 +40,9 @@ import { shouldQueueReviewThreadReply } from "./lib/review-thread-reply"
 import { getInstallationToken } from "./lib/github-app"
 import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
+import { LinearClient, buildLinearAuth } from "./lib/linear"
+import { commentHasSigilixAncestor } from "./lib/linear-thread-ancestor"
+import { isBotAuthoredComment } from "./lib/bot-authored-comments"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handlePrLabels } from "./lib/triage-pr-labels"
@@ -69,7 +72,6 @@ import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
 import { captureReviewFeedback } from "./lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
-import { postPrOverviewStubIfNeeded } from "./lib/pr-overview-stub"
 import {
   postDraftPrSkipNotice,
   supersedeDraftPrSkipNotice,
@@ -92,10 +94,12 @@ import {
 } from "./lib/index-producer"
 import { handleIndexRepoJob } from "./lib/indexer"
 import {
+  attachExistingCheckRun,
   startInProgressCheckRun,
   completeCheckRun,
   type SigilixCheckConclusion,
 } from "./lib/pr-review-check-run"
+import { postPrOverviewStubIfNeeded } from "./lib/pr-overview-stub"
 import {
   deleteRepoIndex,
   handleInstallReposRemoved,
@@ -215,6 +219,28 @@ export interface Env {
   // baseline-data-collection mode reviewers wanted for Phase 4a.
   // Phase 4b activation = flag-flip, no code change.
   OPENCLAW_ENSEMBLE_ROUTER_ENABLED?: string
+
+  // SIG-226 (SIG-224 Phase 1) — dynamic specialist dispatcher mode.
+  //   - "off"           (default): dispatcher disabled, no telemetry,
+  //                      no LLM call.
+  //   - "shadow":        dispatcher runs rules + LLM + emits telemetry,
+  //                      but the orchestrator still uses the legacy
+  //                      `decideSpecialists` result for fan-out. Used
+  //                      to collect false-negative ground truth on
+  //                      protected roles (security + logic) before
+  //                      Phase 2b / 3 graduates to LLM enforcement.
+  //   - "enforce_rules": SIG-227a. Dispatcher runs the RULE LAYER only
+  //                      (no LLM call, ~0ms overhead) and its picks
+  //                      REPLACE `router.specialists` for fan-out.
+  //                      Activates the new safe-skip rules
+  //                      (lockfile-only, .d.ts-only, test-files-only)
+  //                      that the legacy router doesn't have. Strict
+  //                      superset of the legacy router's safe-skip
+  //                      coverage; fan-out only shrinks or stays equal.
+  //   - "enforce" (Phase 2b/3+): full LLM enforcement. Logged but not
+  //                      honored in Phase 1 / 227a.
+  // See `docs/specs/2026-05-26-sig-224-dispatcher-architecture.md`.
+  OPENCLAW_DYNAMIC_DISPATCHER_MODE?: string
 
   // When "on", PRs from a dev-style branch (dev/develop/staging/...)
   // into a release-style branch (main/master/release/...) skip the
@@ -362,6 +388,47 @@ export interface Env {
   // specialist + synth prompts. Any other value keeps it off.
   OPENCLAW_DYNAMIC_REVIEW_EVIDENCE?: string
 
+  // SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
+  // skip the synthesizer LLM call entirely if the dispatcher returned
+  // exactly 1 specialist AND none of that specialist's findings have
+  // `score >= 4` (major/critical). The specialist's verdict becomes the
+  // submission directly. Saves ~15-25s on the hot path; safe by
+  // construction (no cross-specialist consensus to compute, no
+  // major-severity findings that benefit from synth-level rewriting).
+  // Any other value (including unset) keeps the legacy always-synth
+  // behavior.
+  OPENCLAW_SYNTH_BYPASS_ENABLED?: string
+
+  // SIG-235 — min-specialists early exit. Three-state rollout:
+  //   "off"     — default; fan-out waits for ALL dispatched specialists
+  //               to settle (legacy `Promise.allSettled` semantics).
+  //   "shadow"  — fan-out STILL waits for all, but emits
+  //               `ensemble-min-specialists-early-exit-would-fire`
+  //               telemetry the moment `N-1` of `N` specialists return
+  //               successfully + `savedMsIfEnforced` so we can size the
+  //               win before enforcing.
+  //   "on"      — fires synth as soon as `N-1` of `N` specialists return
+  //               successfully; aborts the laggard role's outstanding
+  //               attempts via per-role AbortController. Synth runs on
+  //               the partial input with the existing `[DEGRADED COVERAGE]`
+  //               block. Late verdicts from the cancelled role are logged
+  //               (`ensemble-late-verdict-discarded`) but discarded.
+  OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT?: string
+
+  // SIG-236 — surgical prompt-budget for the logic specialist. Three-
+  // state rollout:
+  //   "off"     — default; no telemetry, no truncation.
+  //   "shadow"  — measure the constructed logic prompt's per-section
+  //               size + emit `logic-prompt-budget` telemetry; the
+  //               prompt passes through untouched. Used to size the
+  //               enforce-mode cuts before flipping.
+  //   "enforce" — NOT YET IMPLEMENTED. Behaves like "shadow" but
+  //               records `mode: "enforce-pending"` in the event so
+  //               dashboards can flag a premature flip. The actual
+  //               truncation lands in a follow-up PR informed by
+  //               shadow data.
+  OPENCLAW_LOGIC_PROMPT_BUDGET?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via
@@ -402,7 +469,20 @@ export interface Env {
  */
 export type JobMessage =
   | { type: "linear-triage"; issueId: string }
-  | { type: "linear-mention"; commentId: string }
+  | {
+      type: "linear-mention"
+      commentId: string
+      /** SIG-225 follow-up: the consumer (`handleMention`) has its own
+       *  `bodyMentionsBot` gate as defense-in-depth that fails closed
+       *  on any comment without an `@-mention` — including the new
+       *  thread-followup trigger added by SIG-225 round 1. Producers
+       *  tag jobs with the reason the webhook decided to enqueue so
+       *  the consumer can route correctly. Absent (undefined) on any
+       *  pre-SIG-225 in-flight jobs that get redelivered — the consumer
+       *  treats absent as `"mention"` to preserve the legacy behavior
+       *  on those messages. */
+      triggerReason?: "mention" | "thread-followup"
+    }
   | {
       type: "pr-overview"
       owner: string
@@ -459,6 +539,22 @@ export type JobMessage =
        * preserve the count and don't bypass the cap.
        */
       staleHeadRequeueDepth?: number
+      /**
+       * SIG-220: GitHub check-run id created upstream in
+       * `PrReviewRunDO.handleEnqueue` so the "Sigilix · In progress"
+       * row appears in the GitHub UI within ~1–2s of webhook
+       * receipt instead of waiting for the queue consumer to
+       * dequeue (5–30s).
+       *
+       * When set, the dispatcher calls `attachExistingCheckRun` to
+       * rebuild the handle off the installation id. When absent
+       * (legacy queue messages pre-deploy, slash-command reruns
+       * that raw-send without going through the DO, stale-head
+       * helper paths that haven't been updated yet), the
+       * dispatcher falls back to its own `startInProgressCheckRun`
+       * exactly like the pre-SIG-220 behavior.
+       */
+      checkRunId?: number
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that
@@ -608,6 +704,16 @@ export type JobMessage =
       type: "index-repo"
       owner: string
       repo: string
+      /**
+       * SIG-243 Phase 1: GitHub's immutable integer repository ID,
+       * captured at the webhook handler and threaded through the
+       * producer + consumer. Optional during Phase 1 + Phase 2 so
+       * legacy in-flight messages (and message types not yet on the
+       * new path) still dispatch cleanly; consumers persist it on
+       * the manifest when present. Becomes the canonical key in
+       * Phase 4 (`repo-tenant:{githubRepoId}`).
+       */
+      githubRepoId?: number
       installationId: number
       reason:
         | "install"
@@ -659,14 +765,24 @@ export type JobMessage =
  *
  * Rules (matches the routing in handleGitHubWebhook):
  *   - Drafts and unsupported actions get nothing.
- *   - pr-overview always fires for opened/synchronize/reopened/ready_for_review.
- *   - pr-review fires the same EXCEPT `reopened` (closing+reopening
- *     a PR doesn't change the diff, so re-reviewing would be noise).
+ *   - SIG-216: the `overview` boolean NO LONGER controls when the
+ *     pr-overview comment renders. The overview comment is now posted
+ *     inline by `handlePrReviewEnsemble` immediately before the review
+ *     submit (CodeRabbit-style Walkthrough-then-Review). The boolean
+ *     gates only the legacy `loadSigilixConfig` warmup + the
+ *     `pr-labels` enqueue path that consumes it. Treat it as "fire the
+ *     opt-in / labelling side effects" rather than "render the
+ *     overview" — true for opened/synchronize/reopened/ready_for_review.
+ *   - pr-review fires for the same actions EXCEPT `reopened` (closing
+ *     + reopening a PR doesn't change the diff, so re-reviewing would
+ *     be noise). The inline overview rides along with each review, so
+ *     `reopened` PRs intentionally get neither.
  *   - When OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES=on, PRs from a
  *     dev/develop/staging branch into main/master/release skip the
  *     pr-review job entirely (dev→main is a release-promotion of
  *     already-reviewed code; re-reviewing doubles spend + adds noise).
- *     pr-overview still fires so the release PR gets a summary blurb.
+ *     The `overview: true` flag still fires so the release PR still
+ *     gets its side-effect pass (labels + warmup).
  */
 export function decidePullRequestJobs(args: {
   action: string
@@ -703,8 +819,38 @@ interface LinearWebhookPayload {
     title?: string
     description?: string
     body?: string
-    team?: { key?: string }
-    user?: { displayName?: string; name?: string }
+    /** SIG-243: `team.id` is Linear's immutable UUID for the team. Stable
+     *  across team-key renames + team-name changes — unlike `team.key`
+     *  above, which Linear admins can change at will. Captured in every
+     *  Linear webhook handler so Phase 4 can replace the global static
+     *  `OPENCLAW_TEAM_GITHUB_REPO_MAP` JSON keyed by mutable team prefix
+     *  with a per-tenant KV binding (`linear-binding:{linearTeamUuid}`)
+     *  keyed by this UUID. The `key` field stays as cached display state
+     *  during the transition (Phase 1+2 still reads through the legacy
+     *  env-var path). */
+    team?: { id?: string; key?: string }
+    /** SIG-225: `user.id` is included so the trigger log can emit a
+     *  presence-only `userIdPresent: !!payload.data.user?.id` flag
+     *  without exposing raw identity values. The leading hypothesis
+     *  for the double-post bug is that Linear sets `data.user` to
+     *  the OAuth app OWNER's identity for bot-authored comments,
+     *  not the bot's own. A presence flag is enough to decide if
+     *  an Option-A `user.id === bot_viewer_id` filter would be the
+     *  right follow-up on top of the deterministic commentId
+     *  tracker; the raw value would be a PII leak in production
+     *  logs (Sigilix bot + CodeRabbit flagged this on PR #201). */
+    user?: { id?: string; displayName?: string; name?: string }
+    /** SIG-225: when a Comment.create event is a thread reply, Linear
+     *  populates `parentId` with the parent comment's id. Used by the
+     *  in-thread-reply trigger path so users don't need to re-@-mention
+     *  Sigilix on every back-and-forth inside a thread Sigilix has
+     *  already commented in. Absent on top-level comments. */
+    parentId?: string
+    /** SIG-225: issue id the comment belongs to. Needed to look up the
+     *  issue's recent comments + walk the parent chain to verify the
+     *  ancestor is Sigilix-authored. Linear's Comment.create webhook
+     *  populates `issueId` directly. */
+    issueId?: string
   }
   webhookTimestamp: number
 }
@@ -718,8 +864,21 @@ interface GitHubWebhookPayload {
     account?: { login?: string; type?: string }
   }
   repository?: {
+    /** SIG-243: GitHub's immutable integer ID for the repository. Stable
+     *  across rename, transfer, and ownership changes — unlike `name` +
+     *  `owner.login` above, both of which mutate. Captured in every
+     *  webhook handler so Phase 2+ can key by this instead of the
+     *  mutable string pair. */
+    id?: number
     name?: string
-    owner?: { login?: string }
+    owner?: {
+      login?: string
+      /** SIG-243: owner ID is also immutable across rename. Less load-
+       *  bearing than `repository.id` (one repo can't move between
+       *  orgs without the App being re-installed) but captured for
+       *  observability + future tenant-scoping. */
+      id?: number
+    }
   }
   pull_request?: {
     number?: number
@@ -768,13 +927,17 @@ interface GitHubWebhookPayload {
   // is the initial set on `installation.created`. `repositories_added[]`
   // is the delta on `installation_repositories.added`. Both share the
   // same entry shape (we only consume `full_name`, formatted "owner/repo").
-  repositories?: Array<{ name?: string; full_name?: string }>
-  repositories_added?: Array<{ name?: string; full_name?: string }>
+  // SIG-243 Phase 1: GitHub's installation / installation_repositories
+  // webhook payloads include an `id` (immutable integer) per repo
+  // alongside `name` + `full_name`. Captured so the bootstrap queue
+  // message carries the canonical ID from its first write.
+  repositories?: Array<{ id?: number; name?: string; full_name?: string }>
+  repositories_added?: Array<{ id?: number; name?: string; full_name?: string }>
   // ARC-238: `installation_repositories.removed` carries the delta;
   // `installation.deleted` does NOT carry a repo list (repos are
   // already gone) — the delete handler discovers affected repos by
   // walking `repo-index-manifest:` records and filtering by owner.
-  repositories_removed?: Array<{ name?: string; full_name?: string }>
+  repositories_removed?: Array<{ id?: number; name?: string; full_name?: string }>
   // ARC-237 / SIG-35: `push` event fields. Default-branch pushes refresh
   // the compatibility index. Tracked long-lived branches and active PR
   // head branches refresh isolated branch-scoped indexes. Branch deletes
@@ -1086,7 +1249,12 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
     case "linear-triage":
       return triageIssue(job.issueId, env)
     case "linear-mention":
-      return handleMention(job.commentId, env)
+      return handleMention(job.commentId, env, {
+        // Defaults to "mention" when triggerReason is absent — covers
+        // any pre-SIG-225 in-flight job that gets redelivered after a
+        // deploy and never carried the field.
+        triggerReason: job.triggerReason ?? "mention",
+      })
     case "pr-overview":
       return handlePrOverview({
         owner: job.owner,
@@ -1188,21 +1356,50 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             repo: job.repo,
             prNumber: job.prNumber,
           }))
+          // SIG-220: when the DO created the check upstream (so the
+          // user already sees "Sigilix · In progress" in the GitHub
+          // UI) and the dispatcher then skips for a sensitive-repo
+          // policy, we must close the check ourselves — otherwise
+          // it hangs `in_progress` forever. Map to `skipped` (wire
+          // `neutral`) per the existing advisory-bot convention.
+          // No-op when `checkRunId` is absent (legacy messages or
+          // upstream create failed → no orphan to close).
+          if (job.checkRunId !== undefined) {
+            const handle = await attachExistingCheckRun({
+              env,
+              owner: job.owner,
+              repo: job.repo,
+              installationId: job.installationId,
+              checkRunId: job.checkRunId,
+            })
+            await completeCheckRun({ handle, conclusion: "skipped" })
+          }
           return
         }
-        // ARC-258: customer-visible "Sigilix · In progress" check run.
-        // Created here at the dispatcher level (not inside the
-        // handler) so the lifecycle is uniform across all ensemble
-        // outcomes. Best-effort: a null handle means no check was
-        // created (creds missing, 403 from missing perms, etc.) and
-        // the completion call below becomes a no-op.
-        const checkRun = await startInProgressCheckRun({
-          env,
-          owner: job.owner,
-          repo: job.repo,
-          headSha: job.headSha,
-          installationId: job.installationId,
-        })
+        // SIG-220: when the upstream `PrReviewRunDO.handleEnqueue`
+        // created the customer-visible check (the new fast path —
+        // visible to the user within ~1–2s of push), the dispatcher
+        // ATTACHES to that existing row instead of creating a new
+        // one. Fallback (legacy queue messages without `checkRunId`,
+        // slash-command reruns, stale-head helper requeues) keeps
+        // the pre-SIG-220 dispatcher-time create path — best-effort
+        // throughout; a null handle means the completion below is
+        // a no-op.
+        const checkRun = job.checkRunId !== undefined
+          ? await attachExistingCheckRun({
+              env,
+              owner: job.owner,
+              repo: job.repo,
+              installationId: job.installationId,
+              checkRunId: job.checkRunId,
+            })
+          : await startInProgressCheckRun({
+              env,
+              owner: job.owner,
+              repo: job.repo,
+              headSha: job.headSha,
+              installationId: job.installationId,
+            })
         let conclusion: SigilixCheckConclusion | null = null
         // ARC-276: capture the customer-visible review verdict +
         // findings count on the posted path so the Check Run title
@@ -1248,10 +1445,18 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           // returned before assigning one (shouldn't happen with the
           // current branches, but defensive). Map it to `failure` so
           // the check doesn't hang in_progress.
+          // SIG-216: thread prNumber into reviewMeta so the check-run
+          // summary can render the `[View review](pr-url)` link. When
+          // the ensemble didn't return a reviewMeta (degraded paths),
+          // the summary degrades to the link-less fallback — that's
+          // intentional, not worth scaffolding a synthetic reviewMeta.
+          const reviewMetaForComplete = reviewMeta !== undefined
+            ? { ...reviewMeta, prNumber: job.prNumber }
+            : undefined
           await completeCheckRun({
             handle: checkRun,
             conclusion: conclusion ?? "failure",
-            ...(reviewMeta !== undefined ? { reviewMeta } : {}),
+            ...(reviewMetaForComplete !== undefined ? { reviewMeta: reviewMetaForComplete } : {}),
           })
           // SIG-119: flush collected validator-rejection telemetry once.
           // Non-fatal — a metrics failure must never affect the review.
@@ -1594,7 +1799,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // state machine.
       return handleIndexRepoJob({ job, env })
     case "delete-repo-index": {
-      const repoState = job.branch ? branchStateRepo(job.repo, job.branch) : job.repo
+      const repoState = job.branch ? await branchStateRepo(job.repo, job.branch) : job.repo
       const result = await deleteRepoIndex({
         env,
         owner: job.owner,
@@ -1677,24 +1882,152 @@ async function handleLinearWebhook(
     return new Response("queued\n", { status: 202 })
   }
 
-  // Comment.create with @-mention → enqueue mention-reply pipeline.
-  // Pre-check the body before queueing — most comments don't @ us, and
-  // we don't want to spend Queue messages on no-op invocations.
+  // Comment.create → enqueue mention-reply pipeline if EITHER:
+  //   (a) body explicitly @-mentions Sigilix (legacy "fresh thread" path), or
+  //   (b) SIG-225: the comment is a reply inside a thread Sigilix has
+  //       already posted in — implicit follow-up trigger, no @ needed.
+  //
+  // (b) lifts the conversational friction founders hit when they reply
+  // multiple times to a Sigilix answer in the same thread and have to
+  // re-type `@sigilix` on every turn. Top-level (no parent) comments
+  // still require explicit @-mention — we don't fire on every new
+  // comment in any Sigilix-touched issue.
   if (payload.type === "Comment" && payload.action === "create") {
-    const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
-    const body = payload.data.body ?? ""
-    if (!bodyMentionsBot(body, triggers)) {
-      return new Response("no mention\n", { status: 200 })
-    }
     const author =
       payload.data.user?.displayName ?? payload.data.user?.name ?? null
-    // Self-author guard. Shared isBotHandle() helper (src/lib/mention.ts)
-    // is the single source of truth for the strict pattern — same check
-    // runs again inside handleMention() for defense in depth.
-    if (isBotHandle(author)) {
+
+    // SIG-225 — primary self-filter: the bot stamps every commentId
+    // it creates in KV at post-time (see markBotAuthoredComment in
+    // triage.ts + mention-reply.ts). If Linear's Comment.create
+    // webhook for THIS comment arrives, we recognize the id and skip.
+    // Deterministic — no dependency on what Linear puts in data.user.
+    //
+    // Why this layer exists: PR #196/#198/#200 shipped the thread-
+    // followup trigger, and the bot started looping in prod because
+    // the displayName-based isBotHandle() filter missed when Linear
+    // populated data.user with the OAuth app owner's identity instead
+    // of the bot's. The legacy filter stays as the cold-cache backstop
+    // (Cloudflare KV is eventually consistent — a put from the queue
+    // worker may not be visible on a different POP for ~60s).
+    if (await isBotAuthoredComment(env.OPENCLAW_STATE, payload.data.id)) {
+      console.log("linear comment skip self", {
+        reason: "bot-authored-tracker",
+        commentId: payload.data.id,
+      })
       return new Response("skip self\n", { status: 200 })
     }
-    await env.OPENCLAW_JOBS.send({ type: "linear-mention", commentId: payload.data.id })
+
+    // Self-author guard runs FIRST — regardless of trigger path, Sigilix
+    // must never reply to its own comments (would loop). Moved above the
+    // mention check (was below in legacy code) so the SIG-225 thread-walk
+    // path also gets it without duplication. Shared isBotHandle() helper
+    // is the single source of truth; defense-in-depth same check runs
+    // again inside handleMention().
+    if (isBotHandle(author)) {
+      console.log("linear comment skip self", {
+        reason: "is-bot-handle",
+        commentId: payload.data.id,
+      })
+      return new Response("skip self\n", { status: 200 })
+    }
+
+    const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
+    const body = payload.data.body ?? ""
+
+    let triggerReason: "mention" | "thread-followup" | null = null
+    if (bodyMentionsBot(body, triggers)) {
+      triggerReason = "mention"
+    } else if (payload.data.parentId && payload.data.issueId) {
+      // SIG-225 thread-walk path. Top-level comments without @ skip this
+      // entirely — no `parentId`. Two-pass to defeat the two failure
+      // modes the snapshot can hit:
+      //
+      //   PASS 1 (cheap):  `getCommentParents(issueId)` returns up to
+      //     100 most-recently-updated comments; helper walks the chain.
+      //     Covers ~all real-world threads in one GraphQL call.
+      //
+      //   PASS 2 (backstop, only on pass-1 miss): direct
+      //     `getCommentAuthor(parentId)` lookup of just the parent.
+      //     Defeats (a) deep threads where the chain reaches past 100
+      //     comments, and (b) replica-lag races where the user replies
+      //     within ~1s of Sigilix's post and the snapshot hasn't caught
+      //     up. Code-reviewer P1 catches on PR #196.
+      //
+      // Any thrown error in EITHER pass falls through to "no mention"
+      // so the legacy @-mention path is unaffected. We accept the
+      // miss — a missed thread-followup is better than a queue spend
+      // on every webhook in a Linear API outage.
+      const parentId = payload.data.parentId
+      const issueId = payload.data.issueId
+      // Hard 2s timeout per GraphQL call so the webhook never blocks
+      // longer than Linear's webhook ack window. Sigilix bot + CodeRabbit
+      // both flagged P1 on PR #196: an indefinite hang would miss the
+      // ack deadline and cause Linear to redeliver, fanning out
+      // duplicate work through the queue. AbortError is caught by the
+      // existing try-blocks and falls closed to "no mention" — same
+      // path as any other GraphQL error.
+      try {
+        const linear = new LinearClient(await buildLinearAuth(env))
+        const comments = await linear.getCommentParents(issueId, {
+          signal: AbortSignal.timeout(2000),
+        })
+        if (commentHasSigilixAncestor({ startParentId: parentId, comments })) {
+          triggerReason = "thread-followup"
+        } else {
+          // Pass-1 miss → direct parent lookup. Cheap (single comment).
+          try {
+            const parent = await linear.getCommentAuthor(parentId, {
+              signal: AbortSignal.timeout(2000),
+            })
+            const parentLogin =
+              parent?.user?.displayName ?? parent?.user?.name ?? null
+            if (isBotHandle(parentLogin)) {
+              triggerReason = "thread-followup"
+            }
+          } catch (err) {
+            console.warn("sig-225 parent-lookup failed", {
+              commentId: payload.data.id,
+              parentId,
+              err: String(err),
+            })
+          }
+        }
+      } catch (err) {
+        console.warn("sig-225 thread-walk failed", {
+          commentId: payload.data.id,
+          issueId,
+          err: String(err),
+        })
+      }
+    }
+
+    if (!triggerReason) {
+      return new Response("no mention\n", { status: 200 })
+    }
+
+    console.log("linear comment trigger", {
+      reason: triggerReason,
+      commentId: payload.data.id,
+      // SIG-225 diagnostics — presence-only, NO raw identity values.
+      // Sigilix bot + CodeRabbit flagged the prior `user:
+      // payload.data.user` log on PR #201 as a PII leak into
+      // Cloudflare Logs. Boolean shape flags + the isBotHandle
+      // verdict are enough to confirm or rule out the "data.user =
+      // OAuth app owner" hypothesis without exposing the actual
+      // displayName/name/id values. If the tracker misses a self-
+      // re-fire, we'll see `reason: triggerReason` with
+      // `userIdPresent: true` + `isBotHandleMatch: false` and know
+      // Option A (`user.id === bot_viewer_id`) is the right Layer 2.
+      userIdPresent: !!payload.data.user?.id,
+      userDisplayNamePresent: !!payload.data.user?.displayName,
+      userNamePresent: !!payload.data.user?.name,
+      isBotHandleMatch: isBotHandle(author),
+    })
+    await env.OPENCLAW_JOBS.send({
+      type: "linear-mention",
+      commentId: payload.data.id,
+      triggerReason,
+    })
     return new Response("queued\n", { status: 202 })
   }
 
@@ -2019,26 +2352,40 @@ async function handleGitHubWebhook(
     const headSha = pr.head?.sha ?? ""
     if (!headSha) return new Response("missing head sha\n", { status: 400 })
 
-    // SIG-84: load sigilix.json BEFORE any enqueue so the
-    // overview-enable gate can short-circuit both the stub-post and
-    // the pr-overview queue send for opt-OUT customers. Best-effort:
+    // SIG-219 restoration of the pre-review "Reviewing…" sticky:
+    //
+    // SIG-216 originally dropped the stub-post entirely under the
+    // theory that the inline overview render inside the ensemble
+    // (immediately before `submitReview`) would land both comments
+    // in the same time window — CodeRabbit-style Walkthrough +
+    // Review.
+    //
+    // Founder feedback (2026-05-26): the WANTED UX is closer to
+    // CodeRabbit's actual behavior — a sticky "Reviewing…" comment
+    // appears immediately on push and MORPHS into the overview when
+    // the models finish, rather than appearing only at the end.
+    // SIG-216 lost that "reviewing" affordance entirely. Restore
+    // the stub-post here so:
+    //
+    //   1. The "Reviewing…" sticky lands within the webhook ack
+    //      window (~sub-second).
+    //   2. The inline overview path inside `handlePrReviewEnsemble`
+    //      finds the stub via its existing `scanComments` + PATCH
+    //      logic and rewrites the body in place — no second
+    //      comment is created, no ordering wait is needed.
+    //   3. The SIG-216 win (no separate `pr-overview` queue job
+    //      stretching wall-clock by ~30s) is preserved: we only
+    //      dispatch the standalone pr-overview job for the
+    //      review-skipped branch below, exactly as before.
+    //
+    // We still load sigilix.json + build the GitHub client here for
+    // the `ready_for_review` draft-skip supersede call below, the
+    // stub-post itself, and future webhook-time gates. Best-effort:
     // `loadSigilixConfig` never throws — missing/invalid config
     // resolves to `EMPTY_CONFIG`, which has `overview === undefined`,
     // which `isPrOverviewEnabled` treats as enabled (default-on per
-    // Codex Q5).
-    //
-    // Built once and threaded through every gate below. The pr-review
-    // ensemble re-loads it later at the head SHA to read the rest of
-    // the schema — two loads is acceptable given (a) the webhook path
-    // ONLY needs the overview flag, and (b) the second load happens
-    // ~30s later in a separate queue consumer (sharing state across
-    // those would require a KV roundtrip per webhook anyway).
-    //
-    // Sigilix #5 follow-up: build ONE GitHubClient here, reuse it for
-    // both `loadSigilixConfig` AND `postPrOverviewStubIfNeeded`. The
-    // installation token has TTL ~1h so reuse within a single webhook
-    // invocation is safe. Saves one `getInstallationToken` round-trip
-    // per delivery.
+    // Codex Q5). The pr-review ensemble re-loads the config at the
+    // head SHA itself, so a failure here is non-blocking.
     let webhookSigilixConfig: Awaited<ReturnType<typeof loadSigilixConfig>> | null = null
     let webhookClient: GitHubClient | null = null
     if (decision.overview || decision.review) {
@@ -2052,10 +2399,10 @@ async function handleGitHubWebhook(
         webhookClient = new GitHubClient({ token })
         webhookSigilixConfig = await loadSigilixConfig(webhookClient, owner, repo, headSha)
       } catch (err) {
-        // Auth + config-load failures here mean we can't gate. Default
-        // to current behavior (overview enabled) so a transient blip
-        // doesn't drop a feature — the stub-post helper has its own
-        // best-effort error handling.
+        // Auth + config-load failures here are non-blocking: the
+        // ensemble re-loads config at the head SHA and gates the
+        // inline overview render itself; the draft-skip supersede
+        // is best-effort.
         console.warn(JSON.stringify({
           event: "pr-overview-webhook-config-load-failed",
           owner, repo, prNumber, head_sha: headSha.slice(0, 7),
@@ -2084,55 +2431,15 @@ async function handleGitHubWebhook(
       }
     }
 
-    if (decision.overview && overviewEnabled) {
-      // SIG-84: post the stub sticky synchronously BEFORE enqueueing
-      // the heavy pr-overview job, so the comment is on the PR
-      // timeline before the parallel pr-review consumer reaches its
-      // submit step (~30s later). Awaited rather than ctx.waitUntil'd
-      // — if we returned 202 before the stub posted, the review job
-      // could race past it.
+    if (decision.overview && !overviewEnabled) {
+      // SIG-216: customer opted out of pr-overview via
+      // `sigilix.overview.enabled = false`. The ensemble's inline
+      // overview render is gated on the same flag — log here so the
+      // disable signal stays visible at webhook time.
       //
-      // Best-effort: the helper NEVER throws. A failed stub-post
-      // yields the same backwards ordering as pre-SIG-84 for that one
-      // delivery; the review-side 2s wait covers transient KV write
-      // delays, and GitHub redelivery would re-enter the idempotent
-      // path. Net: no regression on the failure mode.
-      //
-      // Sigilix #5 follow-up: pass the already-built `webhookClient`
-      // so the helper doesn't re-call `getInstallationToken` inside
-      // itself. The client is null only if the config-load block
-      // above hit an auth failure; in that case the stub-post is
-      // skipped (the review-side wait will time out at 2s — same
-      // degraded mode as a stub-post failure).
-      if (webhookClient !== null) {
-        await postPrOverviewStubIfNeeded({
-          env, owner, repo, prNumber, headSha, installationId,
-          client: webhookClient,
-        })
-      } else {
-        console.warn(JSON.stringify({
-          event: "pr-overview-stub-skipped-no-client",
-          owner, repo, prNumber, head_sha: headSha.slice(0, 7),
-        }))
-      }
-
-      await env.OPENCLAW_JOBS.send({
-        type: "pr-overview",
-        owner,
-        repo,
-        prNumber,
-        headSha,
-        installationId,
-      })
-    } else if (decision.overview && !overviewEnabled) {
-      // SIG-84: customer opted out of pr-overview via
-      // `sigilix.overview.enabled = false`. Skip BOTH the stub-post
-      // and the pr-overview queue enqueue — leaving the queue send in
-      // would cost an Ollama call for a comment we'd never post.
-      //
-      // SIG-90: pr-labels is now ENQUEUED INDEPENDENTLY below
-      // (founder direction "labels should exist"). It is NOT gated
-      // by overview.enabled.
+      // SIG-90: pr-labels is ENQUEUED INDEPENDENTLY below (founder
+      // direction "labels should exist"). It is NOT gated by
+      // overview.enabled.
       console.log(JSON.stringify({
         event: "pr-overview-skipped-disabled",
         owner, repo, prNumber, head_sha: headSha.slice(0, 7),
@@ -2147,6 +2454,30 @@ async function handleGitHubWebhook(
     if (decision.overview) {
       await env.OPENCLAW_JOBS.send({
         type: "pr-labels",
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        installationId,
+      })
+    }
+    // SIG-216 + this fix-up — overview normally runs inline inside the
+    // review handler (drop-the-stub pattern: the two comments land in
+    // the same window). But when the review is skipped
+    // (`decision.overview && !decision.review`, e.g. release-branch
+    // gate via OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES), the ensemble
+    // never fires, so the inline overview never lands. Restore the
+    // legacy standalone `pr-overview` queue dispatch for that branch
+    // ONLY — when both decisions are true, the inline path remains
+    // the single source of truth.
+    //
+    // Skipped when the config disables overview (`overviewEnabled`
+    // is the result of `isPrOverviewEnabled` against the head-SHA
+    // config loaded above). The corresponding telemetry event
+    // `pr-overview-skipped-disabled` already fired up the file.
+    if (decision.overview && !decision.review && overviewEnabled) {
+      await env.OPENCLAW_JOBS.send({
+        type: "pr-overview",
         owner,
         repo,
         prNumber,
@@ -2226,6 +2557,79 @@ async function handleGitHubWebhook(
       }
       if (skipNoopMerge) {
         return new Response("queued\n", { status: 202 })
+      }
+      // SIG-219: post the "Reviewing…" sticky in the background so it
+      // lands on the PR timeline within ~1s of the webhook ack
+      // without blocking the ack itself. The inline overview path
+      // inside `handlePrReviewEnsemble` will find the marker comment
+      // via its `scanComments` + PATCH logic when the ensemble
+      // completes (minutes later) and morph the body in place — no
+      // second comment is created, no ordering barrier is required.
+      //
+      // Sigilix bot P2 PERF catch on PR #180: the original
+      // implementation was `await postPrOverviewStubIfNeeded(...)`
+      // on the webhook response path. That call does 2–4 sequential
+      // network round-trips (KV idempotency read, GitHub
+      // `listComments` marker scan, GitHub POST on first delivery,
+      // KV flag write) for ~400–1500ms typical and multi-second
+      // under API spikes. The repo's perf rules target ~50ms for the
+      // webhook ack — `ctx.waitUntil` lets the work continue after
+      // the 202 returns. There's no race with the inline overview's
+      // own `scanComments`: the review handler doesn't run that
+      // scan until after specialist fan-out + synth (minutes), long
+      // after the stub-post has landed.
+      //
+      // Placement: AFTER the noop-merge skip-short-circuit (so a
+      // diff-identical synchronize push doesn't flash an orphan
+      // "Reviewing…" sticky that never updates), BEFORE the queue
+      // enqueue (so the stub-post is queued first; ordering doesn't
+      // matter for correctness but reads better in logs).
+      //
+      // Best-effort throughout: `postPrOverviewStubIfNeeded` returns
+      // a structured outcome but never throws. The KV flag + marker
+      // scan make a second webhook delivery for the same
+      // (owner, repo, prNumber, headSha) idempotent — webhook
+      // redelivery, an internal 5xx with retry, and rapid double
+      // pushes all converge on a single sticky.
+      //
+      // Gates:
+      //   - `overviewEnabled` — opt-out customers don't get a stub.
+      //   - `webhookClient !== null` — auth succeeded; otherwise
+      //     skip the stub-post and let the inline overview path
+      //     POST a fresh comment from scratch when the ensemble
+      //     runs.
+      if (overviewEnabled && webhookClient !== null) {
+        ctx.waitUntil(
+          postPrOverviewStubIfNeeded({
+            env,
+            owner,
+            repo,
+            prNumber,
+            headSha,
+            installationId,
+            client: webhookClient,
+          }).then((stubOutcome) => {
+            console.log(JSON.stringify({
+              event: "pr-overview-stub-outcome",
+              owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+              outcome: stubOutcome.kind,
+              ...("commentId" in stubOutcome ? { comment_id: stubOutcome.commentId } : {}),
+              ...("reason" in stubOutcome ? { reason: stubOutcome.reason } : {}),
+              ...("phase" in stubOutcome ? { phase: stubOutcome.phase } : {}),
+            }))
+          }).catch((err) => {
+            // `postPrOverviewStubIfNeeded` is structured-outcome
+            // (never throws), but the `.then` callback above could
+            // technically throw (JSON.stringify on a circular object,
+            // etc.). Catch + log so a deferred error can't propagate
+            // up to the runtime and surface as an unhandled rejection.
+            console.warn(JSON.stringify({
+              event: "pr-overview-stub-deferred-failed",
+              owner, repo, prNumber, head_sha: headSha.slice(0, 7),
+              err: err instanceof Error ? err.message : String(err),
+            }))
+          }),
+        )
       }
       // SIG-174: automatic webhook reviews always route through the
       // DO-backed post path. Awaited (NOT ctx.waitUntil) so a DO
@@ -2404,6 +2808,20 @@ async function handleGitHubWebhook(
       env,
       owner,
       repo,
+      // SIG-243 Phase 1: capture the immutable repo ID from the push
+      // payload and thread it to the producer. The producer attaches
+      // it to the queue message; the consumer persists it on the
+      // manifest. Falls back to `undefined` (treated as legacy) if a
+      // webhook arrives without the field. GitHub repo IDs are strictly
+      // positive integers; the guard rejects 0 / negative / non-integer
+      // / NaN / Infinity at the entry point so a spoofed or malformed
+      // payload can't land an invalid `repo-tenant:0` key downstream.
+      repoId:
+        typeof payload.repository?.id === "number" &&
+        Number.isInteger(payload.repository.id) &&
+        payload.repository.id > 0
+          ? payload.repository.id
+          : undefined,
       installationId,
       ref: typeof payload.ref === "string" ? payload.ref : undefined,
       after: typeof payload.after === "string" ? payload.after : undefined,

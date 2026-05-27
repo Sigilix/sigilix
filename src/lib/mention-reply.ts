@@ -8,8 +8,8 @@
 // scan is the fallback for cold-cache scenarios.
 
 import { generate } from "./ollama"
-import { LinearClient } from "./linear"
-import { getAppActorToken } from "./linear-oauth"
+import { LinearClient, buildLinearAuth } from "./linear"
+import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
 import {
   bodyMentionsBot,
   getMentionTriggers,
@@ -22,7 +22,11 @@ import { MENTION_REPLY_SCHEMA } from "./schemas"
 import type { Env } from "../index"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
 import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
-import { listIndexedRepos, parseTeamGithubRepo } from "./github-installation"
+import {
+  listIndexedRepos,
+  listTeamRepoMappings,
+  parseTeamGithubRepo,
+} from "./github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
 import { escapeXmlAttribute, escapeXmlText } from "./xml-escape"
 import { runAgentLoop } from "./agent-loop"
@@ -64,11 +68,44 @@ export function linearRetrievalTeamKey(
 }
 
 export async function resolveLinearAgentRepoScope(
-  env: { OPENCLAW_STATE: KVNamespace },
+  env: { OPENCLAW_STATE: KVNamespace; OPENCLAW_TEAM_GITHUB_REPO_MAP?: string | undefined },
   teamRepo: { owner: string; repo: string } | null,
 ): Promise<LinearAgentRepoScope> {
   if (!teamRepo) {
-    return { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" }
+    // SIG-221: an unmapped Linear team should still see the workspace's
+    // indexed codebase. Derive the workspace's known GitHub owners from
+    // OPENCLAW_TEAM_GITHUB_REPO_MAP — every owner that ANY team in the
+    // map points at is in-scope for this Linear workspace. This keeps
+    // the tenant boundary (a workspace can't see an owner it has zero
+    // team-mappings for) while removing the per-team mapping gate.
+    const knownOwners = new Set<string>()
+    for (const { owner } of listTeamRepoMappings(env.OPENCLAW_TEAM_GITHUB_REPO_MAP)) {
+      knownOwners.add(owner.toLowerCase())
+    }
+    if (knownOwners.size === 0) {
+      return { repo: null, mappedRepo: null, availableRepos: [], status: "unmapped" }
+    }
+    const fallbackAvailable = new Set<string>()
+    for (const owner of knownOwners) {
+      try {
+        for (const repo of await listIndexedRepos(env, { owner, includeBranches: true })) {
+          fallbackAvailable.add(repo)
+        }
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "linear-agent-repo-scope-list-failed",
+          owner,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
+    const availableRepos = Array.from(fallbackAvailable).sort((a, b) => a.localeCompare(b))
+    return {
+      repo: null,
+      mappedRepo: null,
+      availableRepos,
+      status: "unmapped",
+    }
   }
   const defaultRepo = indexNamespace(teamRepo.owner, teamRepo.repo)
   const available = new Set<string>()
@@ -118,10 +155,104 @@ interface MentionVerdict {
   abstain: boolean
 }
 
-export async function handleMention(commentId: string, env: Env): Promise<void> {
+export interface HandleMentionOpts {
+  /** SIG-225 — the reason the producer enqueued this job. The consumer
+   *  uses it to decide whether to enforce the body-must-@-mention-us
+   *  gate (`"mention"` path, today's default) or skip it (`"thread-
+   *  followup"` path — the founder replied inside a thread Sigilix has
+   *  already posted in, so no `@` is required). Defaults to `"mention"`
+   *  if absent so existing callers and any redelivered pre-SIG-225
+   *  jobs keep the legacy behavior. */
+  triggerReason?: "mention" | "thread-followup"
+}
+
+/**
+ * SIG-225 — pure gate-decision helper extracted from `handleMention` so
+ * the branching is unit-testable without a Linear/KV/Ollama/GitHub mock
+ * stack. The consumer (`handleMention`) calls this exactly once after
+ * fetching the comment and uses the result to decide whether to
+ * short-circuit at `[mention] no-mention` or continue with the
+ * extracted question text.
+ *
+ * Routes:
+ *   "mention" (legacy + default): the body MUST `bodyMentionsBot()`.
+ *     This is the authoritative defense-in-depth gate that protected
+ *     the consumer from spurious queue messages when the producer's
+ *     pre-check was the only filter. If the body has no @-mention,
+ *     returns `{ skip: "no-mention" }` and the caller bails.
+ *
+ *   "thread-followup" (SIG-225): the producer (webhook handler) has
+ *     ALREADY verified the comment is a reply inside a thread Sigilix
+ *     authored, via the parent-chain walk. The body intentionally has
+ *     no @-mention — that's the whole point of the SIG-225 trigger.
+ *     Enforcing the @-gate here would unconditionally drop every
+ *     thread-followup job, which is exactly the bug the founder hit
+ *     on the first prod test of SIG-225 (see commit `5bba8d6`). The
+ *     strip step is skipped too — there's no mention to strip, so the
+ *     full body (trimmed) becomes the question.
+ */
+export type MentionQuestionGate =
+  | { skip: "no-mention" }
+  | { skip: null; fullQuestion: string }
+
+export function resolveMentionQuestion(args: {
+  triggerReason: "mention" | "thread-followup"
+  body: string
+  triggers: ReturnType<typeof getMentionTriggers>
+}): MentionQuestionGate {
+  if (args.triggerReason === "thread-followup") {
+    return { skip: null, fullQuestion: args.body.trim() }
+  }
+  if (!bodyMentionsBot(args.body, args.triggers)) {
+    return { skip: "no-mention" }
+  }
+  return { skip: null, fullQuestion: stripMentionFromBody(args.body, args.triggers) }
+}
+
+/**
+ * SIG-225 follow-up — pure helper that resolves the parent comment id
+ * the bot should reply UNDER, given the source comment data fetched
+ * via `LinearClient.getCommentWithIssue`.
+ *
+ * Contract:
+ *   - source has `parent: { id: "X" }` → returns "X"  (thread reply)
+ *   - source has `parent: null`        → returns undefined (top-level)
+ *   - source has `parent: { id: "" }`  → returns undefined (defensive)
+ *
+ * Linear's thread model is FLAT: every reply in a thread shares the
+ * same parentId (= the thread-root comment's id). Using the SOURCE
+ * comment's parentId — NOT its own id — makes the bot's reply a
+ * sibling of the user's reply under the same thread root, which is
+ * how Linear's UI renders nested conversations.
+ *
+ * Extracted from `handleMention` so the branching is unit-testable
+ * without a Linear/KV/Ollama/GitHub mock stack — addresses Sigilix
+ * bot's "handleMention threading logic lacks test coverage" finding
+ * on PR #200 by giving the plumbing a directly-testable surface.
+ */
+export interface ResolveReplyParentSource {
+  parent: { id: string } | null
+}
+
+export function resolveReplyParentId(source: ResolveReplyParentSource): string | undefined {
+  const id = source.parent?.id
+  if (typeof id !== "string" || id.length === 0) return undefined
+  return id
+}
+
+export async function handleMention(
+  commentId: string,
+  env: Env,
+  opts: HandleMentionOpts = {},
+): Promise<void> {
   const t0 = Date.now()
+  const triggerReason = opts.triggerReason ?? "mention"
   const log = (label: string, extra?: Record<string, unknown>): void => {
-    console.log(`[mention] ${label} +${Date.now() - t0}ms`, { commentId, ...extra })
+    console.log(`[mention] ${label} +${Date.now() - t0}ms`, {
+      commentId,
+      triggerReason,
+      ...extra,
+    })
   }
 
   log("start")
@@ -134,7 +265,18 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     return
   }
 
-  const linear = new LinearClient(await buildAuth(env))
+  // SIG-225 — queue-consumer self-filter: catches the case where the
+  // webhook handler raced past `isBotAuthoredComment` because of
+  // Cloudflare KV's cross-POP eventual-consistency window. By the
+  // time the consumer runs the queue-delivery delay has typically
+  // surpassed propagation, so the stamp is visible here even if it
+  // wasn't at webhook time.
+  if (await isBotAuthoredComment(env.OPENCLAW_STATE, commentId)) {
+    log("skip-bot-authored-tracker")
+    return
+  }
+
+  const linear = new LinearClient(await buildLinearAuth(env))
   const data = await linear.getCommentWithIssue(commentId)
   log("comment-fetched")
   if (!data) {
@@ -150,16 +292,13 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     return
   }
 
-  // Skip if the comment doesn't actually mention us. handleMention is
-  // also called from the manual-trigger route which doesn't pre-check,
-  // so this is the authoritative gate.
   const triggers = getMentionTriggers(env.OPENCLAW_MENTION_TRIGGERS)
-  if (!bodyMentionsBot(data.body, triggers)) {
+  const gate = resolveMentionQuestion({ triggerReason, body: data.body, triggers })
+  if (gate.skip === "no-mention") {
     log("no-mention")
     return
   }
-
-  const fullQuestion = stripMentionFromBody(data.body, triggers)
+  const fullQuestion = gate.fullQuestion
   const question = fullQuestion.slice(0, LIMITS.questionChars)
   if (!question) {
     log("empty-question-after-strip")
@@ -314,8 +453,19 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
   }
 
   const body = formatReply({ verdict, askerHandle })
-  const newCommentId = await linear.createComment(data.issue.id, body)
-  log("reply-posted", { newCommentId })
+  const replyParentId = resolveReplyParentId(data)
+  const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
+  log("reply-posted", { newCommentId, replyParentId: replyParentId ?? null })
+
+  // SIG-225: stamp the bot-authored commentId so Linear's
+  // Comment.create webhook for THIS new reply is filtered as self by
+  // the webhook handler. Was the entire fix point of SIG-225 — the
+  // legacy `isBotHandle(displayName)` filter missed when Linear set
+  // data.user to the OAuth app owner instead of the bot, and the
+  // SIG-225 thread-walk re-fired the bot into its own previous
+  // thread. Best-effort — failure is logged and swallowed inside the
+  // helper so the user-facing reply is never blocked.
+  await markBotAuthoredComment(env.OPENCLAW_STATE, newCommentId)
 
   // Mark KV so re-deliveries of the same Comment.create event don't
   // produce a duplicate reply. 30-day TTL — webhooks from Linear get
@@ -457,26 +607,33 @@ export function renderPrUnavailable(f: LinkedPrFailure): string {
   return `<pr_unavailable ${attrs} />`
 }
 
+/**
+ * SIG-221: status copy no longer frames the team→repo mapping as a hard
+ * access gate. When the team has no mapping (or the mapped repo isn't
+ * indexed yet) but OTHER repos are indexed for the org, we surface
+ * those as available choices instead of telling the user "no access".
+ * Mapping is a soft prior, not a precondition.
+ */
 export function renderCodebaseRetrievalStatus(
   scope: LinearAgentRepoScope,
   chunkCount: number,
 ): string {
-  if (scope.status === "unmapped") {
-    return "No GitHub repo mapping is configured for this Linear team. Repo-context answers require an explicit team-to-repo mapping."
-  }
-  if (scope.status === "mapped_not_indexed" && scope.mappedRepo) {
-    return `The Linear team maps to '${scope.mappedRepo}', but that repo does not have an index manifest yet.`
-  }
-  if (scope.status === "mapped_default_not_indexed" && scope.mappedRepo) {
-    return `The Linear team maps to '${scope.mappedRepo}', but that default repo is not indexed yet. Indexed repos available for this owner: ${scope.availableRepos.map((r) => `'${r}'`).join(", ")}.`
-  }
   if (scope.repo && chunkCount === 0) {
     return `Repo '${scope.repo}' is indexed, but retrieval returned no relevant chunks for this question.`
   }
   if (scope.repo) {
     return `Retrieved ${chunkCount} relevant codebase chunk(s) from '${scope.repo}'.`
   }
-  return "No codebase retrieval namespace was available for this Linear mention."
+  if (scope.availableRepos.length > 0 && scope.mappedRepo) {
+    return `The Linear team's default '${scope.mappedRepo}' is not indexed yet, but ${scope.availableRepos.length} indexed repo(s) are available for retrieval: ${scope.availableRepos.map((r) => `'${r}'`).join(", ")}.`
+  }
+  if (scope.availableRepos.length > 0) {
+    return `${scope.availableRepos.length} indexed repo(s) available for retrieval: ${scope.availableRepos.map((r) => `'${r}'`).join(", ")}. The agent will pick based on the issue and question.`
+  }
+  if (scope.mappedRepo) {
+    return `The Linear team maps to '${scope.mappedRepo}', but no indexed repos are available for this org yet (indexing may be in progress).`
+  }
+  return "No indexed repos are available for this Linear org yet (indexing may be in progress)."
 }
 
 interface AgentInitialMessageCtx {
@@ -521,19 +678,26 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
   const universeText = visibleUniverse.length > 0
     ? `${visibleUniverse.map(formatIndexedNamespaceForPrompt).join(", ")}${hiddenUniverseCount > 0 ? `, ... (+${hiddenUniverseCount} more)` : ""}`
     : "(none configured)"
+  // SIG-221: collapsed six prompt variants into three, with no hard
+  // "do not call retrieve_codebase" gates. Whenever the indexed
+  // universe has at least one entry, the agent may always call
+  // retrieve_codebase and pick from the list — the team→repo
+  // mapping (when set) becomes a SOFT prior, not a precondition.
+  // Mirrors how Jira / Notion / Cursor surface code-aware agents:
+  // the model infers the relevant repo from issue + question, with
+  // any configured default as a starting point.
   let repoLine: string
-  if (ctx.repo && universe.length > 1) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. The indexed choices are: ${universeText}. The default for this Linear team is '${ctx.repo}', but pick a different repo or branch from the list when the issue is clearly about it. For entries shown as branch '<name>', call retrieve_codebase with repo '<owner>/<repo>' and branch '<name>' instead of the internal branch namespace. Final answer is the JSON shape defined by the system prompt.`
-  } else if (ctx.repo) {
-    repoLine = `Use your tools to gather context as needed. The retrieve_codebase tool's namespace for this issue is the lowercased owner/repo namespace '${ctx.repo}'. Final answer is the JSON shape defined by the system prompt.`
-  } else if (ctx.mappedRepo && universe.length > 0) {
-    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that default repo is not indexed yet. You may call retrieve_codebase only for indexed choices: ${universeText}. Pick one only if it clearly matches the issue's subject; for branch entries, pass repo '<owner>/<repo>' and branch '<name>'. If the question is about '${ctx.mappedRepo}', explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
+  if (universe.length > 0) {
+    const defaultHint = ctx.repo
+      ? ` The default for this Linear team is '${ctx.repo}' — start there if the issue doesn't clearly point elsewhere, but pick a different repo from the list when the question is about one.`
+      : ctx.mappedRepo
+        ? ` The Linear team maps to '${ctx.mappedRepo}' but that repo is not indexed yet; pick whichever indexed choice best matches the issue's subject. If the question is specifically about '${ctx.mappedRepo}', mention that it's mapped but not indexed yet.`
+        : " Pick the indexed choice that best matches the issue's subject and the question."
+    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. The indexed choices are: ${universeText}.${defaultHint} For entries marked '(non-default branch index)', never pass the internal __branch__ namespace; only pass a human branch name if the user explicitly provides one. If multiple repos look plausible, you may call retrieve_codebase on each and synthesize. If no choice clearly fits and you can't tell from the issue, return a final answer that says you don't have enough information and offer the user the indexed list to pick from. Final answer is the JSON shape defined by the system prompt.`
   } else if (ctx.mappedRepo) {
-    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but that repo does not have an index manifest yet. Do not call retrieve_codebase; explain that the repo is mapped but not indexed yet. Final answer is the JSON shape defined by the system prompt.`
-  } else if (universe.length > 0) {
-    repoLine = `Use your tools to gather context as needed. retrieve_codebase takes a 'repo' argument and an optional human 'branch' argument. Pick the indexed choice that matches the issue's subject: ${universeText}. If none clearly fits, return a final answer that says you don't have enough information. Final answer is the JSON shape defined by the system prompt.`
+    repoLine = `The Linear team maps to '${ctx.mappedRepo}', but no indexed repos are available for this org yet (indexing may be in progress). Answer from the issue and thread context only — retrieve_codebase has no namespaces to search. If repo context is essential to the question, mention that the codebase index is still being built. Final answer is the JSON shape defined by the system prompt.`
   } else {
-    repoLine = "No GitHub repo mapping is configured for this Linear team, so do not call retrieve_codebase. Answer from the issue and thread context only; if repo context is required, say the Linear team needs a GitHub repo mapping before code retrieval can run. Final answer is the JSON shape defined by the system prompt."
+    repoLine = "No indexed repos are available for this Linear org yet (indexing may be in progress). Answer from the issue and thread context only — retrieve_codebase has no namespaces to search. If repo context is essential to the question, mention that the codebase index is still being built. Final answer is the JSON shape defined by the system prompt."
   }
   const lines: string[] = [
     "[SURFACE] Linear issue comment",
@@ -556,9 +720,13 @@ export function buildAgentInitialUserMessage(ctx: AgentInitialMessageCtx): strin
 }
 
 function formatIndexedNamespaceForPrompt(namespace: string): string {
-  const branch = parseBranchNamespace(namespace)
-  if (!branch) return `'${namespace}'`
-  return `'${branch.owner}/${branch.repo}' branch '${branch.branch}'`
+  const parsed = parseBranchNamespace(namespace)
+  if (!parsed) return `'${namespace}'`
+  // SIG-218: the encoded branch segment is a 64-bit hash of the original
+  // branch name; the human-readable branch can no longer be recovered from
+  // the namespace alone. Display the structural shape so the model knows
+  // this is a non-default branch index without claiming a specific name.
+  return `'${parsed.owner}/${parsed.repo}' (non-default branch index)`
 }
 
 interface LinkedPrFetchResult {
@@ -642,14 +810,3 @@ function formatReply({ verdict, askerHandle }: FormatArgs): string {
   return lines.join("\n")
 }
 
-async function buildAuth(env: Env): Promise<{ apiKey: string } | { oauthToken: string }> {
-  if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
-    const token = await getAppActorToken(
-      env.OPENCLAW_STATE,
-      env.LINEAR_OAUTH_CLIENT_ID,
-      env.LINEAR_OAUTH_CLIENT_SECRET
-    )
-    return { oauthToken: token }
-  }
-  return { apiKey: env.LINEAR_API_KEY }
-}

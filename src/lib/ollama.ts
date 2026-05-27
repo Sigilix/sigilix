@@ -37,6 +37,16 @@ interface GenerateArgs {
    * Reference: https://docs.ollama.com/structured-outputs
    */
   format?: Record<string, unknown>
+  /**
+   * SIG-216 fix-up: optional external abort signal. Aborting this
+   * signal aborts the in-flight fetch (cancels the streaming read)
+   * so the caller can reclaim wall-clock when a higher-level deadline
+   * fires — e.g. the inline-overview retry helper cancelling the
+   * first attempt before launching the second. Combined with the
+   * existing `timeoutMs` via a linked controller; whichever fires
+   * first wins.
+   */
+  signal?: AbortSignal
 }
 
 interface OllamaStreamChunk {
@@ -72,9 +82,22 @@ export async function generate({
   temperature,
   timeoutMs = 600_000,
   format,
+  signal,
 }: GenerateArgs): Promise<GenerateResult> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
+  // SIG-216 fix-up: link the external abort signal (if any) into the
+  // local controller so the in-flight fetch cancels when either the
+  // local timeout OR the external deadline fires.
+  let externalAbortHandler: (() => void) | null = null
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort(signal.reason as unknown)
+    } else {
+      externalAbortHandler = (): void => controller.abort(signal.reason as unknown)
+      signal.addEventListener("abort", externalAbortHandler, { once: true })
+    }
+  }
 
   // Default temperature: 0 when format is set (deterministic JSON),
   // 0.2 otherwise (mild creativity for free-form prose).
@@ -110,6 +133,9 @@ export async function generate({
     return await accumulateStream(res.body)
   } finally {
     clearTimeout(timer)
+    if (signal && externalAbortHandler) {
+      signal.removeEventListener("abort", externalAbortHandler)
+    }
   }
 }
 

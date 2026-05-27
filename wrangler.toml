@@ -146,18 +146,20 @@ new_sqlite_classes = ["GraphMetricsDO"]
 # put` instead — `[vars]` is for values that are safe to commit and
 # need a default at deploy time.
 [vars]
-# ARC-283 Phase B1b: enabled for `synth` role on 2026-05-18 — highest
-# customer-impact role per Codex ARC-292 analysis (PR #97 demo). Shadow
-# verdicts are NEVER posted; comparison telemetry lives in CF Logs via
-# the `shadow-verdict-comparison` event. Per-role rollout order per
-# docs/ops/shadow-bakeoff.md acceptance criteria:
-#   1. synth (active)
-#   2. security,tests (queued)
-#   3. performance fallback (queued)
-#   4. logic fallback (queued)
-# Flip back to "" to disable; flip to "synth,security" etc. to enable
-# additional roles per the rollout plan.
-SHADOW_BAKEOFF_ROLES = "synth"
+# SIG-234 (2026-05-26): bake-off DISABLED because production now runs
+# the lineup that the bake-off was validating. The bake-off candidate
+# config in `src/lib/shadow-bakeoff-config.ts` is preserved as a
+# code-level record of Codex's ARC-292 analysis; flip back to a
+# non-empty CSV ("synth", "synth,security,tests", etc.) to bake-off
+# against the OLD lineup or a future candidate set. Empty string =
+# bake-off off, no shadow telemetry, no extra LLM spend per review.
+#
+# Historical (pre-SIG-234): ARC-283 Phase B1b shipped on 2026-05-18
+# with `synth` role enabled for bake-off, with `security,tests`,
+# `performance`, `logic` queued. SIG-234 graduated the entire lineup
+# directly (informed by format-compatibility curl-tests against
+# Ollama Cloud); the bake-off no longer has a current target.
+SHADOW_BAKEOFF_ROLES = ""
 
 # SIG-138 code/dependency graph (Greptile-parity). Both default OFF.
 #   OPENCLAW_GRAPH_INDEX     "off" | "shadow" | "on"  — graph WRITER in the
@@ -181,6 +183,99 @@ SHADOW_BAKEOFF_ROLES = "synth"
 # "on" and "shadow" identically, so no behavior change there).
 OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
+
+# SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
+# shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
+# been dormant since Phase 4a "baseline data collection" for months.
+# Enabling it activates the deterministic shortcuts that the SIG-226
+# shadow dispatcher's rule layer also relies on:
+#
+#   docs-only-no-executable-fences → run 0 specialists (green check,
+#     no comment) — was 5-8min total, becomes ~10s
+#   CSS-only → run only `performance` — was 5-8min, becomes ~120s
+#   auth/lockfile/schema/migration paths → force security (no skip;
+#     additive to the default "all four run" behavior)
+#
+# Pre-req fix landed in PR #182 (SIG-224 Phase 0): the
+# `router.specialists.length === 0` branch now finalizes as "skipped
+# → success" (green check, no comment) instead of the prior
+# "bailWithSkipNotice" → "Couldn't review · see PR comment" yellow
+# check. Without that fix, docs-only PRs would have rendered a
+# customer-visible "Couldn't review" comment when the flag flipped.
+#
+# Rollback: flip back to "off" or remove this line. No data migration,
+# no schema change. Worst-case observable regression: a docs-only-no-
+# fences PR shows a "Sigilix · Approved — no issues found" check with
+# no inline findings (which is correct for a docs PR).
+OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
+
+# SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
+# the orchestrator skips the synthesizer LLM round-trip entirely when
+# the dispatcher returns exactly 1 specialist AND none of that
+# specialist's findings have `score >= 4` (major/critical). The
+# specialist's verdict becomes the submission directly. Saves ~15-25s
+# on the hot path (the typical `gpt-oss:120b-cloud` synth elapsed
+# window).
+#
+# Bypass eligibility ladder (helper: `isSynthBypassEligible`):
+#   1. This flag === "on"
+#   2. `SHADOW_BAKEOFF_ROLES` does NOT include "synth" (so the
+#      bake-off signal on the bypass-eligible cohort isn't halved)
+#   3. Dispatcher narrowed to exactly 1 specialist on purpose
+#   4. Exactly 1 specialist verdict came back non-null
+#   5. No finding has `score >= 4`
+#
+# Safe by construction: no cross-specialist consensus to compute on the
+# 1-role path, and the score-gate keeps anything major routed through
+# the full synth pipeline so synth-level severity rewriting still fires
+# when it matters. Rollback: flip to "off" or remove this line — no
+# schema change, no migration. Default-off in dev/test (the env var
+# is unset there).
+OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
+
+# SIG-235 — min-specialists early exit. Three-state rollout:
+#   "off"     — fan-out waits for ALL dispatched specialists to settle.
+#   "shadow"  — fan-out STILL waits for all, but emits
+#               `ensemble-min-specialists-early-exit-would-fire`
+#               telemetry the moment N-1 of N specialists return. Used
+#               to size the win + validate the cancel pattern without
+#               actually changing fan-out semantics. SHIPPING IN THIS
+#               STATE FIRST so we have a validation window before
+#               enforcing.
+#   "on"      — cancels laggard role(s) via per-role AbortController
+#               and proceeds to synth as soon as N-1 of N succeed.
+#               Synth runs on the partial input with the existing
+#               [DEGRADED COVERAGE] block. Late verdicts from the
+#               cancelled role are logged (`ensemble-late-verdict-
+#               discarded`) but discarded — the synth has already run.
+#
+# Rollout plan: ship "shadow" → bake 1-2 days / 50+ reviews → flip "on"
+# in a follow-up one-line PR. Rollback = flip back to "off"; per-role
+# AbortControllers are added in either mode, but the cancel logic only
+# fires on "on", so flipping back is safe.
+OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
+
+# SIG-236 — surgical prompt-budget telemetry for the logic specialist.
+# Three-state rollout:
+#   "off"     — no telemetry, no truncation (default).
+#   "shadow"  — measure the constructed logic prompt's per-section size
+#               + emit `logic-prompt-budget` telemetry; the prompt
+#               passes through untouched. Used to size the enforce-mode
+#               cuts before flipping. SHIPPING IN THIS STATE FIRST so
+#               we have ~24-48h / 30+ logic-dispatched PRs of data
+#               before designing the actual cuts.
+#   "enforce" — NOT YET IMPLEMENTED. Currently behaves like shadow but
+#               records `mode: "enforce-pending"` in the event so a
+#               premature flip is observable. The actual truncation
+#               + per-role schema with `findings.maxItems: 3-4` lands
+#               in a follow-up PR informed by shadow data.
+#
+# Codex-recommended target cap: 6_000 input tokens (vs current
+# unbounded). Logic's prompt is empirically uniquely-expensive — same
+# 60s timeout on two different model families on PR #188 — and trimming
+# graph context + symbol retrieval + Vectorize retrieval should let
+# models actually return a verdict.
+OPENCLAW_LOGIC_PROMPT_BUDGET = "shadow"
 
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.

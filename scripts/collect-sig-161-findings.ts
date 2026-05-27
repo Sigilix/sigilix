@@ -176,14 +176,24 @@ const HEADING_RE =
 // moved into the metadata line:
 //   <img ... alt="P1" ...> **Some headline**
 //   _category: testing_ · _severity: P1 high (4/5)_ · _confidence: 3/5_
+//
+// 2026-05-26 (SIG-234 follow-up, Kimi K2.6 round-4): the surrounding
+// `<a href="https://sigilix.ai">...</a>` anchor was dropped to fix
+// GitHub Primer CSS clipping the badge corners — historical comments
+// MAY still have the anchor wrap, so the `<a>` parts are now
+// independently optional rather than wrapping the img as a group.
 const HEADING_V2_RE =
-  /^(?:<a\b[^>]*>\s*<img\b[^>]*alt="P\d"[^>]*>\s*<\/a>\s*)?\*\*(.+?)\*\*\s*\r?\n_category:\s*([a-z-]+)_\s+·\s+_severity:\s+P\d\s+[a-z]+\s+\(\d\/5\)_\s+·\s+_confidence:\s+(\d)\/5_\s*(?:\r?\n|$)/
+  /^(?:(?:<a\b[^>]*>\s*)?<img\b[^>]*alt="P\d"[^>]*>(?:\s*<\/a>)?\s*)?\*\*(.+?)\*\*\s*\r?\n_category:\s*([a-z-]+)_\s+·\s+_severity:\s+P\d\s+[a-z]+\s+\(\d\/5\)_\s+·\s+_confidence:\s+(\d)\/5_\s*(?:\r?\n|$)/
 
 // SIG-35 follow-up: current renderer shape keeps visible comments
 // quieter. Category/severity come from the stable fid marker and
 // confidence is hidden in its own machine-readable marker.
+//
+// Same SIG-234 follow-up: anchor wrap is independently optional so
+// both pre-2026-05-26 (anchor-wrapped) and post-2026-05-26 (bare
+// <img>) comment shapes round-trip through the parser.
 const HEADING_V3_RE =
-  /^(?:(?:<a\b[^>]*>\s*<img\b[^>]*>\s*<\/a>\s*)+)?\*\*(.+?)\*\*\s*(?:\r?\n|$)/
+  /^(?:(?:<a\b[^>]*>\s*)?<img\b[^>]*>(?:\s*<\/a>)?\s*)+?\*\*(.+?)\*\*\s*(?:\r?\n|$)/
 
 const CATEGORY_MARKER_RE =
   /<!--\s*sigilix:category:([a-z-]+)\s*-->/

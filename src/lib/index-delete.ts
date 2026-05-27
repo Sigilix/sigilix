@@ -57,6 +57,7 @@ import {
 } from "./repo-index-vectors"
 import { activeRunKey } from "./repo-index-active-run"
 import { deleteGraph } from "./repo-graph-client"
+import { deleteScopedRulesManifest } from "./scoped-rules-kv"
 
 const VECTORIZE_DELETE_BATCH = 1000
 const KV_LIST_PAGE_LIMIT = 1000
@@ -495,6 +496,23 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     result.errors,
     "pr-review-dedupe",
   )
+
+  // SIG-172: drop the per-repo scoped-rules manifest
+  // (`repo-index-rules:<owner>/<repo>`). Owner-qualified key with no
+  // legacy bare-repo shape — runs UNGUARDED alongside the other
+  // owner-qualified deletes above (and the graph delete) so it
+  // can't be stranded by an owner-mismatch on the repo-only state.
+  // Best-effort + idempotent (missing key = no-op).
+  try {
+    await deleteScopedRulesManifest(env, owner, repo)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    result.errors.push(`kv.delete(repo-index-rules): ${message}`)
+    console.error(JSON.stringify({
+      event: "index-delete-kv-scoped-rules-failed",
+      owner, repo, err: message,
+    }))
+  }
 
   if (result.errors.length > 0) {
     result.status = "partial"

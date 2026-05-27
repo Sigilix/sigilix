@@ -54,7 +54,10 @@ describe("buildFallbackBody", () => {
   it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
     const body = buildFallbackBody(baseVerdict, [])
     // New status heading replaces "### Sigilix Summary".
-    expect(body).toMatch(/^## Sigilix: \d+ non-blocking finding/m)
+    // CR Major fold (PR #200): high-severity findings render as
+    // "non-blocking high-severity" on COMMENT posture; lower-
+    // severity as plain "non-blocking finding". Match either.
+    expect(body).toMatch(/^\*\*\d+ non-blocking( high-severity)? finding/m)
     // Summary survives — Kimi keeps it as a flat paragraph under
     // the heading.
     expect(body).toContain("One real bug.")
@@ -130,7 +133,9 @@ describe("buildFallbackBody", () => {
     // landed as inline comments). Heading count is in the top-of-body
     // status heading, not on the section.
     expect(body).toContain("### Review Body Findings")
-    expect(body).toMatch(/^## Sigilix: 2 non-blocking findings/m)
+    // CR Major fold: 1 anchored + 1 unanchored at score 4 →
+    // highOrCriticalCount = 2 (CR fix includes body-only in count).
+    expect(body).toMatch(/^\*\*2 non-blocking( high-severity)? findings/m)
     expect(body).not.toContain("### Findings (2)")
   })
 
@@ -141,15 +146,21 @@ describe("buildFallbackBody", () => {
       line: 50,
     }
     const body = buildFallbackBody({ ...baseVerdict, findings: [ranged] }, [])
-    expect(body).toContain("Lines 40-50 (high, score 4)")
-    expect(body).not.toContain("Line 50 (")
+    // SIG-216: ranged anchor encodes the span in the path:line label
+    // itself; the meta line is just `<anchor> · score N` (no
+    // "Lines 40-50 (high, ...)" bracketed prefix).
+    expect(body).toContain("`src/lib/foo.ts:40-50` · score 4")
+    expect(body).not.toContain("(high, score 4)")
+    expect(body).not.toContain("Lines 40-50")
   })
 
   it("renders single-line target when startLine is omitted", () => {
     const single: PrReviewFinding = { ...baseFinding, line: 50 }
     const body = buildFallbackBody({ ...baseVerdict, findings: [single] }, [])
-    expect(body).toContain("Line 50 (high, score 4)")
-    expect(body).not.toContain("Lines ")
+    // SIG-216: single-line anchor is `path:line` + tightened meta.
+    expect(body).toContain("`src/lib/foo.ts:50` · score 4")
+    expect(body).not.toContain("(high, score 4)")
+    expect(body).not.toContain("Line 50 (")
   })
 
   it("includes category metadata next to the body-only anchor", () => {
@@ -239,7 +250,7 @@ describe("buildFallbackSubmission", () => {
       eventOverride: "REQUEST_CHANGES",
     })
     expect(submission.event).toBe("REQUEST_CHANGES")
-    expect(submission.body).toContain("To dismiss this review")
+    expect(submission.body).toContain("Dismiss: `@sigilix dismiss`")
   })
 
   it("renders approval-pending copy when a zero-finding policy blocker forces REQUEST_CHANGES", () => {
@@ -256,7 +267,7 @@ describe("buildFallbackSubmission", () => {
     })
 
     expect(submission.event).toBe("REQUEST_CHANGES")
-    expect(submission.body).toMatch(/^## Sigilix: approval pending/m)
+    expect(submission.body).toMatch(/^\*\*Approval pending\*\*/m)
     expect(submission.body).toContain("unresolved policy-level blocker")
     expect(submission.body).not.toContain("0 findings")
   })
@@ -356,7 +367,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     })
     expect(submission.body).not.toContain("Review Body Findings")
     expect(submission.body).not.toMatch(/inline below/i)
-    expect(submission.body).toMatch(/^## Sigilix: 1 finding/m)
+    expect(submission.body).toMatch(/^\*\*1 high-severity finding/m)
   })
 })
 

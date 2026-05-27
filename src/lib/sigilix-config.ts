@@ -414,6 +414,54 @@ export interface SigilixConfig {
     bundleSizeBudgetKb?: number
     hotPaths?: string[]
   }
+  /**
+   * SIG-224: per-repo dispatcher configuration. Phase 0 surface — the
+   * schema lands here for forward-compat, but no call site consumes
+   * `dispatcher.*` yet. Phase 1 (SIG-226) wires the shadow dispatcher
+   * to read `force` + `safetyNet.additionalPatterns`.
+   *
+   * Fields (all optional, all additive — the global safety net cannot
+   * be removed via this surface):
+   *   - `force`: specialists that ALWAYS run for this repo regardless
+   *     of the dispatcher's picks. Useful for repos where every PR
+   *     must be reviewed by, e.g., security. Maximum of 4 entries
+   *     (the role set is closed); unknown role names are dropped at
+   *     parse time.
+   *   - `safetyNet.additionalPatterns`: per-repo additive entries to
+   *     the rule-based safety net. Each entry forces the named role
+   *     when any changed file matches the glob. Cannot DELETE the
+   *     code-owned global patterns — additive only by design (recall
+   *     guarantees are organizational policy, not customer-tunable).
+   *     Maximum of 50 entries.
+   *
+   * See `docs/specs/2026-05-26-sig-224-dispatcher-architecture.md`
+   * for the full design + the phase plan that gates `dispatcher.*`
+   * consumption.
+   *
+   * Example:
+   *   "dispatcher": {
+   *     "force": ["security", "logic"],
+   *     "safetyNet": {
+   *       "additionalPatterns": [
+   *         { "glob": "src/billing/<gs>", "role": "logic" },
+   *         { "glob": "src/auth-custom/<gs>", "role": "security" }
+   *       ]
+   *     }
+   *   }
+   */
+  dispatcher?: DispatcherConfig
+}
+
+export interface DispatcherConfig {
+  force?: SpecialistRole[]
+  safetyNet?: {
+    additionalPatterns?: DispatcherSafetyNetPattern[]
+  }
+}
+
+export interface DispatcherSafetyNetPattern {
+  glob: string
+  role: SpecialistRole
 }
 
 /**
@@ -505,10 +553,21 @@ const SPECIALIST_ROLES = ["logic", "security", "performance", "tests"] as const 
  * extend this set so user configs can reference it.
  */
 export const KNOWN_MODELS: ReadonlySet<string> = new Set([
-  "glm-5.1:cloud",
-  "kimi-k2.6:cloud",
-  "qwen3-coder:480b-cloud",
-  "deepseek-v4-pro:cloud",
+  // Active primaries + fallbacks in SIG-234 lineup. Validated via
+  // curl-format-test against `/api/chat`; only models that returned
+  // schema-clean JSON (no ```json``` markdown-fenced output) are
+  // listed. CodeRabbit M1 on PR #186 fix: dropped `kimi-k2.6:cloud`
+  // because it's no longer referenced after the synth swap to
+  // `gpt-oss:120b-cloud`. `deepseek-v4-pro:cloud` STAYS because it's
+  // still the cross-provider fallback for security + tests.
+  "glm-5.1:cloud",            // performance primary
+  "kimi-k2.5:cloud",          // logic + performance fallback
+  "qwen3-coder:480b-cloud",   // reserved for per-repo overrides
+  "qwen3-coder-next:cloud",   // security primary
+  "deepseek-v4-pro:cloud",    // security + tests fallback (recycled)
+  "deepseek-v4-flash:cloud",  // logic primary, synth fallback
+  "minimax-m2.5:cloud",       // tests primary
+  "gpt-oss:120b-cloud",       // synth primary
 ])
 
 export const EMPTY_CONFIG: SigilixConfig = {}
@@ -588,6 +647,64 @@ function parsePathInstructions(v: unknown): SigilixPathInstruction[] {
     if (out.length >= PATH_INSTRUCTIONS_MAX_ENTRIES) break
   }
   return out
+}
+
+const SPECIALIST_ROLE_SET: ReadonlySet<SpecialistRole> = new Set(SPECIALIST_ROLES)
+
+const DISPATCHER_MAX_ADDITIONAL_PATTERNS = 50
+
+/**
+ * SIG-224: parse the optional `dispatcher` block of `sigilix.json`.
+ * Fail-open like the rest of the config parser — bad entries are
+ * dropped silently, missing fields default to undefined. Returns
+ * undefined when nothing parseable remains so the caller can skip
+ * writing the field (keeps the resulting `SigilixConfig` minimal).
+ *
+ * Phase 0 (SIG-224) ships the schema only — no call site consumes the
+ * parsed value yet. Phase 1 (SIG-226) wires the shadow dispatcher.
+ */
+function parseDispatcherConfig(v: unknown): DispatcherConfig | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
+  const rec = v as Record<string, unknown>
+  const out: DispatcherConfig = {}
+
+  if (Array.isArray(rec.force)) {
+    const force: SpecialistRole[] = []
+    const seen = new Set<SpecialistRole>()
+    for (const entry of rec.force) {
+      if (typeof entry !== "string") continue
+      const trimmed = entry.trim() as SpecialistRole
+      if (!SPECIALIST_ROLE_SET.has(trimmed)) continue
+      if (seen.has(trimmed)) continue
+      seen.add(trimmed)
+      force.push(trimmed)
+    }
+    if (force.length > 0) out.force = force
+  }
+
+  if (rec.safetyNet && typeof rec.safetyNet === "object" && !Array.isArray(rec.safetyNet)) {
+    const sn = rec.safetyNet as Record<string, unknown>
+    if (Array.isArray(sn.additionalPatterns)) {
+      const patterns: DispatcherSafetyNetPattern[] = []
+      for (const entry of sn.additionalPatterns) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue
+        const e = entry as Record<string, unknown>
+        if (typeof e.glob !== "string") continue
+        const glob = e.glob.trim()
+        if (glob.length === 0) continue
+        if (typeof e.role !== "string") continue
+        const role = e.role.trim() as SpecialistRole
+        if (!SPECIALIST_ROLE_SET.has(role)) continue
+        patterns.push({ glob, role })
+        if (patterns.length >= DISPATCHER_MAX_ADDITIONAL_PATTERNS) break
+      }
+      if (patterns.length > 0) {
+        out.safetyNet = { additionalPatterns: patterns }
+      }
+    }
+  }
+
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /**
@@ -1149,6 +1266,13 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     }
     if (Object.keys(pbOut).length > 0) out.perfBudgets = pbOut
   }
+  // SIG-224: dispatcher parsing. Fail-open like every other section —
+  // bad entries are dropped silently. The schema lands here so users
+  // can write `dispatcher.*` ahead of Phase 1 wiring; Phase 0 ignores
+  // the parsed value but does NOT reject it. See
+  // `docs/specs/2026-05-26-sig-224-dispatcher-architecture.md`.
+  const dispatcher = parseDispatcherConfig(obj.dispatcher)
+  if (dispatcher !== undefined) out.dispatcher = dispatcher
   return { ok: true, config: out }
 }
 

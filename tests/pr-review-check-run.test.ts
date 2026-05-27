@@ -44,6 +44,7 @@ vi.mock("../src/lib/github", async () => {
 
 import {
   CHECK_RUN_NAME,
+  attachExistingCheckRun,
   completeCheckRun,
   startInProgressCheckRun,
 } from "../src/lib/pr-review-check-run"
@@ -115,6 +116,54 @@ describe("startInProgressCheckRun", () => {
 
     expect(handle).toBeNull()
     expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
+  })
+})
+
+// SIG-220: direct unit coverage for the new `attachExistingCheckRun`
+// helper. The DO + dispatcher integration tests mock this function
+// out, so its real error paths (missing creds, token-acquisition
+// failure) would otherwise ride along untested. These exercises pin
+// the contract: ALL failure modes return null (never throw), and the
+// happy path returns a handle pointing at the threaded checkRunId.
+describe("SIG-220: attachExistingCheckRun", () => {
+  const attachBaseArgs = {
+    owner: "Arc-and-Anchor",
+    repo: "sigilix",
+    installationId: 99,
+    checkRunId: 4242,
+  }
+
+  it("returns a handle carrying the threaded checkRunId on the happy path", async () => {
+    const env = makeEnv()
+    const handle = await attachExistingCheckRun({ env, ...attachBaseArgs })
+
+    expect(handle).not.toBeNull()
+    expect(handle!.id).toBe(4242)
+    expect(handle!.owner).toBe("Arc-and-Anchor")
+    expect(handle!.repo).toBe("sigilix")
+    // Token acquisition is the only side effect — no createCheckRun
+    // call, no listCheckRuns; we're attaching, not creating.
+    expect(mockGetInstallationToken).toHaveBeenCalledTimes(1)
+    expect(mockCreateCheckRun).not.toHaveBeenCalled()
+    expect(mockListCheckRunsForRef).not.toHaveBeenCalled()
+  })
+
+  it("returns null (no throw) when credentials are missing — dispatcher fallback covers this", async () => {
+    const env = makeEnv({ credentials: false })
+    const handle = await attachExistingCheckRun({ env, ...attachBaseArgs })
+
+    expect(handle).toBeNull()
+    expect(mockGetInstallationToken).not.toHaveBeenCalled()
+  })
+
+  it("returns null (no throw) when getInstallationToken rejects — best-effort contract", async () => {
+    mockGetInstallationToken.mockRejectedValueOnce(new Error("HTTP 503 token endpoint down"))
+    const env = makeEnv()
+    const handle = await attachExistingCheckRun({ env, ...attachBaseArgs })
+
+    expect(handle).toBeNull()
+    expect(mockGetInstallationToken).toHaveBeenCalledTimes(1)
+    expect(mockCreateCheckRun).not.toHaveBeenCalled()
   })
 
   it("returns null (no throw) on any other createCheckRun failure", async () => {
@@ -198,7 +247,12 @@ describe("completeCheckRun", () => {
     expect(mockUpdateCheckRun).not.toHaveBeenCalled()
   })
 
-  it("transitions to completed with `success` and customer-facing output copy", async () => {
+  // SIG-216 follow-up (founder feedback on PR #176, 2026-05-25 +
+  // Kimi K2.6 sign-off): success internal signal → wire `success`
+  // (green check). Check run signals EXECUTION HEALTH, not findings
+  // count. Industry convention (CodeRabbit, Greptile); review state
+  // lives in the GitHub native review object.
+  it("transitions to completed with `success` conclusion and customer-facing output copy", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -217,7 +271,12 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toBe("Review posted")
   })
 
-  it("appends body-only annotations to the completed check run in batches of 50", async () => {
+  // SIG-216: Check annotations are NOT posted (GitHub renders the
+  // `message` field as plain text, butchering markdown finding
+  // bodies). Even when the ensemble threads `checkAnnotations` on
+  // reviewMeta, only the single completion PATCH fires — no
+  // follow-up annotation batches.
+  it("does NOT post annotation batches even when reviewMeta carries checkAnnotations (SIG-216)", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -241,125 +300,17 @@ describe("completeCheckRun", () => {
       },
     })
 
-    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(3)
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1)
     const completionPayload = mockUpdateCheckRun.mock.calls[0]![3] as { status: string; output: { annotations?: unknown[] } }
     expect(completionPayload.status).toBe("completed")
     expect(completionPayload.output.annotations).toBeUndefined()
-    const firstAnnotationPatch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: unknown[] } }
-    const secondAnnotationPatch = mockUpdateCheckRun.mock.calls[2]![3] as { output: { annotations: unknown[] } }
-    expect(firstAnnotationPatch.output.annotations).toHaveLength(50)
-    expect(secondAnnotationPatch.output.annotations).toHaveLength(1)
-    expect(firstAnnotationPatch.output.annotations[0]).toMatchObject({
-      path: "src/app.ts",
-      start_line: 1,
-      end_line: 1,
-      annotation_level: "warning",
-    })
-    expect(firstAnnotationPatch.output.annotations[49]).toMatchObject({
-      path: "src/app.ts",
-      start_line: 50,
-      end_line: 50,
-      annotation_level: "warning",
-    })
-    expect(secondAnnotationPatch.output.annotations[0]).toMatchObject({
-      path: "src/app.ts",
-      start_line: 51,
-      end_line: 51,
-      annotation_level: "warning",
-    })
   })
 
-  it("does not fail completion when annotation posting fails", async () => {
-    mockUpdateCheckRun
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("HTTP 422 Validation Failed"))
-    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
-    const env = makeEnv()
-    const handle = await startInProgressCheckRun({ env, ...baseArgs })
-
-    await expect(completeCheckRun({
-      handle,
-      conclusion: "success",
-      reviewMeta: {
-        event: "REQUEST_CHANGES",
-        findingsCount: 1,
-        checkAnnotations: [{
-          path: "src/app.ts",
-          start_line: 10,
-          end_line: 10,
-          annotation_level: "warning",
-          title: "[P2] missing coverage",
-          message: "Body-only finding",
-        }],
-      },
-    })).resolves.toBeUndefined()
-
-    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("pr-review-check-run-annotations-failed"))
-  })
-
-  it("does not attempt annotation patches when the completion update fails", async () => {
-    mockUpdateCheckRun.mockRejectedValue(new Error("HTTP 422 Validation Failed"))
-    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
-    const env = makeEnv()
-    const handle = await startInProgressCheckRun({ env, ...baseArgs })
-
-    await expect(completeCheckRun({
-      handle,
-      conclusion: "success",
-      reviewMeta: {
-        event: "REQUEST_CHANGES",
-        findingsCount: 1,
-        checkAnnotations: [{
-          path: "src/app.ts",
-          start_line: 10,
-          end_line: 10,
-          annotation_level: "warning",
-          title: "[P2] missing coverage",
-          message: "Body-only finding",
-        }],
-      },
-    })).resolves.toBeUndefined()
-
-    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1)
-  })
-
-  it("does not fail completion when a later annotation batch fails", async () => {
-    mockUpdateCheckRun
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("HTTP 422 Validation Failed"))
-    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
-    const env = makeEnv()
-    const handle = await startInProgressCheckRun({ env, ...baseArgs })
-    const annotations = Array.from({ length: 51 }, (_, i) => ({
-      path: "src/app.ts",
-      start_line: i + 1,
-      end_line: i + 1,
-      annotation_level: "warning" as const,
-      title: `[P2] finding ${i + 1}`,
-      message: "Body-only finding",
-    }))
-
-    await expect(completeCheckRun({
-      handle,
-      conclusion: "success",
-      reviewMeta: {
-        event: "REQUEST_CHANGES",
-        findingsCount: 51,
-        checkAnnotations: annotations,
-      },
-    })).resolves.toBeUndefined()
-
-    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(3)
-    const firstAnnotationPatch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: unknown[] } }
-    const secondAnnotationPatch = mockUpdateCheckRun.mock.calls[2]![3] as { output: { annotations: unknown[] } }
-    expect(firstAnnotationPatch.output.annotations).toHaveLength(50)
-    expect(secondAnnotationPatch.output.annotations).toHaveLength(1)
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("pr-review-check-run-annotations-failed"))
-  })
-
-  it("emits the `skipped` copy for stale-head conclusions", async () => {
+  // SIG-216 follow-up (PR #176): skipped internal signal → wire
+  // `neutral` (legit ambiguous "bot couldn't review" state). Title
+  // still differentiates so customers see "Review skipped (stale
+  // head)" in the Checks tab.
+  it("emits the stale-head title with `neutral` conclusion for stale-head dispatcher signal", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -369,11 +320,15 @@ describe("completeCheckRun", () => {
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { conclusion: string; output: { title: string; summary: string } }
-    expect(p.conclusion).toBe("skipped")
+    expect(p.conclusion).toBe("neutral")
     expect(p.output.title).toContain("stale head")
   })
 
-  it("emits the `failure` copy on the error path", async () => {
+  // SIG-216 follow-up (PR #176): failure internal signal → wire
+  // `neutral` (bot errored = ambiguous, not a hard gate). Title
+  // renders "Review failed" for diagnostic visibility; reserve wire
+  // `failure` for future opt-in P0 gates.
+  it("emits the `failed` title with `neutral` conclusion on the error path", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -383,7 +338,7 @@ describe("completeCheckRun", () => {
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { conclusion: string; output: { title: string } }
-    expect(p.conclusion).toBe("failure")
+    expect(p.conclusion).toBe("neutral")
     expect(p.output.title).toContain("failed")
   })
 
@@ -399,9 +354,12 @@ describe("completeCheckRun", () => {
     await expect(completeCheckRun({ handle, conclusion: "success" })).resolves.toBeUndefined()
   })
 
-  // ARC-276: when the dispatcher threads `reviewMeta`, the Check Run
-  // title reflects the verdict directly.
-  it("renders the APPROVE title when reviewMeta says APPROVE + 0 findings", async () => {
+  // ARC-276 + SIG-216: when the dispatcher threads `reviewMeta`, the
+  // Check Run title reflects the verdict directly. SIG-216 collapsed
+  // the summary to the Greptile-direction one-liner; the
+  // "APPROVE"/"REQUEST_CHANGES"/"COMMENT" verb is no longer in the
+  // summary text but the title still distinguishes verdicts.
+  it("renders the APPROVE title + `Sigilix approved` summary when reviewMeta says APPROVE + 0 findings", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -410,16 +368,18 @@ describe("completeCheckRun", () => {
     await completeCheckRun({
       handle,
       conclusion: "success",
-      reviewMeta: { event: "APPROVE", findingsCount: 0 },
+      reviewMeta: { event: "APPROVE", findingsCount: 0, prNumber: 42 },
     })
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("Approved — no issues found")
-    expect(p.output.summary).toContain("APPROVE")
+    expect(p.output.summary).toBe(
+      "Sigilix approved · [View PR](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+    )
   })
 
-  it("renders the REQUEST_CHANGES title with findings count when reviewMeta says REQUEST_CHANGES", async () => {
+  it("renders the REQUEST_CHANGES title + Greptile-direction findings summary when reviewMeta says REQUEST_CHANGES", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -428,17 +388,18 @@ describe("completeCheckRun", () => {
     await completeCheckRun({
       handle,
       conclusion: "success",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3 },
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3, prNumber: 42 },
     })
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("3 findings — changes requested")
-    expect(p.output.summary).toContain("REQUEST_CHANGES")
-    expect(p.output.summary).toContain("3 findings")
+    expect(p.output.summary).toBe(
+      "3 suggestions · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+    )
   })
 
-  it("renders the COMMENT title with non-blocking findings count", async () => {
+  it("renders the COMMENT title + Greptile-direction findings summary with non-blocking count", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -447,17 +408,18 @@ describe("completeCheckRun", () => {
     await completeCheckRun({
       handle,
       conclusion: "success",
-      reviewMeta: { event: "COMMENT", findingsCount: 2 },
+      reviewMeta: { event: "COMMENT", findingsCount: 2, prNumber: 42 },
     })
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("2 non-blocking findings posted")
-    expect(p.output.summary).toContain("COMMENT")
-    expect(p.output.summary).toContain("non-blocking")
+    expect(p.output.summary).toBe(
+      "2 suggestions · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+    )
   })
 
-  it("singularizes the title when REQUEST_CHANGES has exactly 1 finding", async () => {
+  it("singularizes the title and summary when REQUEST_CHANGES has exactly 1 finding", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -466,12 +428,36 @@ describe("completeCheckRun", () => {
     await completeCheckRun({
       handle,
       conclusion: "success",
-      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 1 },
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 1, prNumber: 42 },
     })
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
-    const p = payload as { output: { title: string } }
+    const p = payload as { output: { title: string; summary: string } }
     expect(p.output.title).toBe("1 finding — changes requested")
+    // SIG-216: singular "suggestion" in the Greptile-direction summary too.
+    expect(p.output.summary).toBe(
+      "1 suggestion · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+    )
+  })
+
+  // SIG-216: when no prNumber is threaded (legacy producer that
+  // hasn't been updated), the summary degrades gracefully to a
+  // link-less form rather than producing a broken markdown link.
+  it("falls back to the link-less summary form when reviewMeta lacks `prNumber`", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 2 },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { summary: string } }
+    expect(p.output.summary).toBe("2 suggestions")
   })
 
   it("falls back to the generic 'Review posted' title when reviewMeta is omitted on success", async () => {
@@ -509,7 +495,9 @@ describe("completeCheckRun", () => {
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { conclusion: string; output: { title: string; summary: string } }
-    expect(p.conclusion).toBe("failure")
+    // SIG-216 follow-up (PR #176): failure internal signal → wire
+    // `neutral`; title + summary carry the diagnostic surface info.
+    expect(p.conclusion).toBe("neutral")
     expect(p.output.title).toBe("Couldn't post review — see PR comment")
     expect(p.output.summary).toContain("GitHub silently rejected")
     expect(p.output.summary).toContain("PR comment")
@@ -544,7 +532,9 @@ describe("completeCheckRun", () => {
 
     const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
     const p = payload as { conclusion: string; output: { title: string; summary: string } }
-    expect(p.conclusion).toBe("failure")
+    // SIG-216 follow-up (PR #176): failure internal signal → wire
+    // `neutral`; title + summary carry the diagnostic surface info.
+    expect(p.conclusion).toBe("neutral")
     expect(p.output.title).toBe("Couldn't review — see PR comment")
     expect(p.output.summary).toContain("couldn't generate a review")
     expect(p.output.summary).toContain("PR comment")

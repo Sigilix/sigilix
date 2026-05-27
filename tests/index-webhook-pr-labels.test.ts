@@ -170,7 +170,14 @@ beforeEach(() => {
 })
 
 describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
-  it("enqueues pr-labels alongside pr-overview when overview.enabled = true", async () => {
+  it("enqueues pr-labels + posts the SIG-219 'Reviewing…' stub when overview.enabled = true", async () => {
+    // SIG-216 dropped the pre-review stub under the theory that the
+    // inline overview render inside `handlePrReviewEnsemble` was
+    // enough. SIG-219 restored the stub-post — founder feedback
+    // (2026-05-26) was that the CodeRabbit-style sticky-then-morph
+    // UX is what's wanted. The pr-overview standalone queue
+    // dispatch stays gone (overview is inlined now); pr-labels
+    // still fires independently per founder direction.
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: true } })
     const { env, sentJobs } = makeEnv()
     const worker = (await import("../src/index")).default
@@ -179,14 +186,21 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
 
     expect(res.status).toBe(202)
     const types = sentJobs.map((j) => j.type)
-    expect(types).toContain("pr-overview")
+    expect(types).not.toContain("pr-overview")
     expect(types).toContain("pr-labels")
-    expect(mockPostStub).toHaveBeenCalledOnce()
+    // SIG-219: stub MUST post when overview is enabled and review is
+    // going to run — the "Reviewing…" sticky is the first thing the
+    // user sees and gets morphed in place by the inline overview path.
+    expect(mockPostStub).toHaveBeenCalledTimes(1)
   })
 
   it("STILL enqueues pr-labels when overview.enabled = false (founder direction)", async () => {
     // SIG-90 contract: labels are independent of overview. Disabling
     // overview must NOT suppress the label-picker.
+    //
+    // SIG-216: no pr-overview enqueue (gone for all paths).
+    // SIG-219: stub-post is gated on `overviewEnabled`, so an opt-out
+    // customer doesn't get a stub either — same expectation as before.
     mockLoadSigilixConfig.mockResolvedValueOnce({ overview: { enabled: false } })
     const { env, sentJobs } = makeEnv()
     const worker = (await import("../src/index")).default
@@ -195,8 +209,6 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
 
     expect(res.status).toBe(202)
     const types = sentJobs.map((j) => j.type)
-    // Overview is OFF — the heavy pr-overview job + the stub-post both
-    // skip. But pr-labels still fires.
     expect(types).not.toContain("pr-overview")
     expect(types).toContain("pr-labels")
     expect(mockPostStub).not.toHaveBeenCalled()
@@ -309,7 +321,14 @@ describe("pull_request webhook → pr-labels queue dispatch (SIG-90)", () => {
     const res = await worker.fetch(req, env as never, ctx as never)
 
     expect(res.status).toBe(202)
-    expect(sentJobs.map((j) => j.type)).toEqual(["pr-overview", "pr-labels"])
+    // SIG-216: pr-overview normally runs inline from the ensemble's
+    // review-post path (no separate webhook-time enqueue). SIG-216
+    // CR fix-up: when the review is SKIPPED
+    // (`OPENCLAW_PR_REVIEW_SKIP_RELEASE_BRANCHES=on` here →
+    // `decision.review=false` while `decision.overview=true`), the
+    // ensemble never fires, so we re-enqueue a standalone pr-overview
+    // job so the overview still lands.
+    expect(sentJobs.map((j) => j.type).sort()).toEqual(["pr-labels", "pr-overview"])
     expect(mockEnqueuePrReviewJob).not.toHaveBeenCalled()
     expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledOnce()
     expect(mockSupersedeDraftSkipNotice).toHaveBeenCalledWith(expect.objectContaining({

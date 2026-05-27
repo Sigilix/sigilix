@@ -377,9 +377,17 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
     expect(mockGetPullRequestDiff).not.toHaveBeenCalled()
   })
 
-  it("does NOT touch pr-overview path (still dispatches stub + queue)", async () => {
-    // The skip is review-only. pr-overview is cheap + a no-op merge
-    // is still a meaningful timeline event worth a fresh sticky.
+  it("does NOT touch the pr-labels dispatch + does NOT post the SIG-219 stub on noop-merge skip", async () => {
+    // The noop-merge skip is review-only — the label-picker still
+    // runs because labels are a separate product capability.
+    //
+    // SIG-216: pr-overview standalone queue dispatch is gone for ALL
+    // webhook paths (the overview now runs inline from the ensemble).
+    // SIG-219: the "Reviewing…" stub-post is placed AFTER the
+    // noop-merge skip-short-circuit specifically so a diff-identical
+    // synchronize push doesn't flash an orphan sticky that never
+    // updates. This test pins that ordering: pr-labels DOES fire
+    // (independent of the noop-merge skip), but the stub does NOT.
     const priorHash = await computeDiffHash(CURRENT_DIFF)
     const { env, sentJobs } = makeEnv({
       [`pr-review-diff-hash:${OWNER}/${REPO}#${PR_NUMBER}`]: JSON.stringify({
@@ -392,10 +400,8 @@ describe("synchronize webhook → noop-merge skip (SIG-89)", () => {
 
     await postSynchronizeWebhook(worker, env)
 
-    // Both the stub-post helper + the pr-overview queue dispatch
-    // still fire on the no-op-merge skip path.
-    expect(mockPostStub).toHaveBeenCalledOnce()
-    expect(sentJobs.map((j) => j.type)).toContain("pr-overview")
+    expect(mockPostStub).not.toHaveBeenCalled()
+    expect(sentJobs.map((j) => j.type)).not.toContain("pr-overview")
     expect(sentJobs.map((j) => j.type)).toContain("pr-labels")
   })
 })

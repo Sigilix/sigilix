@@ -33,7 +33,7 @@ import {
   type PrReviewFinding,
   type PrReviewVerdict,
 } from "../src/lib/triage-pr-review"
-import { badgeAssetUrl, PUBLIC_BADGE_BASE_URL } from "../src/lib/badge-assets"
+import { badgeAssetUrl, BADGE_ASSET_VERSION, PUBLIC_BADGE_BASE_URL } from "../src/lib/badge-assets"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 
 const baseFinding: PrReviewFinding = {
@@ -778,10 +778,13 @@ describe("renderCommentBody (SIG-161)", () => {
     expect(body).toContain("<!-- sigilix:pr-review -->")
   })
 
-  it("uses non-blocking heading copy instead of blocker framing (SIG-167)", () => {
+  it("uses non-blocking lead copy instead of blocker framing (SIG-167)", () => {
+    // SIG Kimi r1: lead line carries "non-blocking finding(s)" tag
+    // on COMMENT posture. The default `verdict` here has 1 finding
+    // with score 3 (medium) → "lower-severity inline only" branch.
     const body = renderCommentBody({ verdict })
-    expect(body).toMatch(/^## Sigilix: 1 non-blocking finding$/m)
-    expect(body).not.toMatch(/^## Sigilix: 1 finding$/m)
+    expect(body).toMatch(/^\*\*1 non-blocking finding\*\*/m)
+    expect(body).not.toMatch(/^\*\*1 finding\*\*/m)
   })
 
   it("omits the dismissal hint because COMMENT has no verdict to dismiss (SIG-167)", () => {
@@ -828,9 +831,11 @@ describe("renderCommentBody (SIG-161)", () => {
         carriedOverCount: 0,
       },
     })
-    // The Changes line is the post-rebrand evidence that `delta` flowed
-    // through (was `Δ` pre-2026-05-23 rebrand).
-    expect(body).toContain("**Changes:** +1 new")
+    // SIG Kimi r1: delta now inlines onto the lead line as
+    // "since last review: +1 new" (the old "**Changes:** +1 new"
+    // standalone line is gone). Evidence that `delta` flowed
+    // through is the presence of the inlined fragment.
+    expect(body).toContain("since last review: +1 new")
   })
 })
 
@@ -1162,14 +1167,14 @@ describe("buildReviewSubmission", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     // The REQUEST_CHANGES path on `verdict` (which has findings) MUST
     // emit the count heading, not the marker-only APPROVE body.
-    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
+    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
   })
 
   it("ARC-281: REQUEST_CHANGES body has the new heading + dropped legacy strings", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("<!-- sigilix:pr-review -->")
     // New status heading replaces "### Sigilix Summary" entirely.
-    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
+    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
     // Summary still appears — but as its own paragraph, not under a
     // header.
     expect(out.body).toContain(verdict.summary)
@@ -1183,7 +1188,7 @@ describe("buildReviewSubmission", () => {
     expect(out.body).not.toContain("**Confidence:**")
     expect(out.body).not.toContain("max score")
     // Dismissal hint is now required on REQUEST_CHANGES.
-    expect(out.body).toContain("To dismiss this review")
+    expect(out.body).toContain("Dismiss: `@sigilix dismiss`")
     expect(out.body).toContain("@sigilix dismiss")
   })
 
@@ -1206,7 +1211,7 @@ describe("buildReviewSubmission", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).not.toMatch(/inline below/i)
     // The count IS in the heading though.
-    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
+    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
   })
 
   it("omits the count + Fix Plan + dismissal hint when there are zero findings (APPROVE path)", () => {
@@ -1328,7 +1333,7 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
-    expect(out.submission.body).toContain("To dismiss this review")
+    expect(out.submission.body).toContain("Dismiss: `@sigilix dismiss`")
   })
 
   it("ignores unsafe non-blocking event overrides even if a caller casts around the type", () => {
@@ -1341,7 +1346,7 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toHaveLength(1)
-    expect(out.submission.body).toMatch(/^## Sigilix: 1 finding/m)
+    expect(out.submission.body).toMatch(/^\*\*1 (high-severity|finding)/m)
   })
 
   it("renders approval-pending copy for forced blockers with no rendered findings", () => {
@@ -1360,7 +1365,7 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
-    expect(out.submission.body).toMatch(/^## Sigilix: approval pending/m)
+    expect(out.submission.body).toMatch(/^\*\*Approval pending\*\*/m)
     expect(out.submission.body).toContain("unresolved policy-level blocker")
     expect(out.submission.body).toContain("Approval validation still has an unresolved policy blocker.")
     expect(out.submission.body).not.toContain("0 findings")
@@ -1646,7 +1651,7 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     })
     expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("non-blocking finding")
+    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
     expect(out.body).toContain("lacks integration tests")
   })
 
@@ -1839,12 +1844,16 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 
     expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("non-blocking finding")
+    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
-    expect(out.body).toContain("Comment-level (high, score 4)")
+    // SIG-216: meta line tightened to `<anchor> · score N` — the
+    // "Comment-level (high, score 4)" bracketed prefix is gone (the
+    // P1 badge already conveys severity, comment-scope is implicit
+    // from the path:line anchor with no inline thread).
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
+    expect(out.body).not.toContain("Comment-level")
     expect(out.body).toContain("dismiss command trusts the issue-comment author")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436`")
   })
 
   it("routes file-scoped findings to the review body with a file-level label", () => {
@@ -1869,11 +1878,17 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 
     expect(out.event).toBe("COMMENT")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toContain("non-blocking finding")
+    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
     expect(out.body).toContain("### Review Body Findings")
-    expect(out.body).toContain("File-level (critical, score 5)")
+    // SIG-216: file-scope anchor is the bare path (no `:line`) and
+    // the meta line is just `<anchor> · score N` — no "File-level
+    // (critical, ...)" bracketed prefix. Asserting on the legacy
+    // `(critical, score 5)` parenthetical specifically (the verdict
+    // summary still contains the word "File-level" for unrelated
+    // reasons).
+    expect(out.body).toContain("`src/lib/github-mention.ts` · score 5")
+    expect(out.body).not.toContain("(critical, score 5)")
     expect(out.body).toContain("module-level lifecycle ordering is unsafe")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436`")
   })
 
   it("keeps suggestion-bearing non-line findings inline so the proposed fix is not dropped", () => {
@@ -1902,8 +1917,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should stay localized")
     expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
-    expect(out.body).toContain("### Fix Plan")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should stay localized")
+    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should stay localized |")
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
@@ -1934,8 +1949,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should be removed")
     expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
-    expect(out.body).toContain("### Fix Plan")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should be removed")
+    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should be removed |")
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
@@ -1961,10 +1976,233 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     })
 
     expect(out.comments).toHaveLength(1)
-    expect(out.body).toContain("### Fix Plan")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl is too short")
-    expect(out.body).not.toContain("`src/lib/github-mention.ts:436` — `security`: dismiss command trusts")
-    expect(out.body).toContain("Comment-level (high, score 4)")
+    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl is too short |")
+    expect(out.body).not.toContain("`security`: dismiss command trusts")
+    // SIG-216: body-only finding renders with the tightened
+    // `<anchor> · score N` meta — "Comment-level" prefix dropped.
+    expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
+    expect(out.body).not.toContain("Comment-level")
+  })
+})
+
+// ── SIG-216 — clickable file:line anchor + tightened meta line ───────
+
+describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
+  // Use the same fixture shape as SIG-202: a body-only finding routed
+  // through `buildReviewSubmission`. The renderer is private, so we
+  // exercise it through the public path and assert on the rendered body.
+  const headSha = "deadbeefcafe1234567890abcdef1234567890ab"
+  const linkContext = { owner: "octo", repo: "demo", headSha } as const
+
+  const lineFinding: PrReviewFinding = {
+    path: "src/lib/foo.ts",
+    line: 42,
+    scope: "comment", // routes to body-only without needing an addedLineTextByLine miss
+    score: 4,
+    category: "logic",
+    headline: "missing null guard",
+    body: "Wrap with a guard before deref.",
+  }
+  const rangedLineFinding: PrReviewFinding = {
+    ...lineFinding,
+    startLine: 38,
+    line: 42,
+    headline: "missing null guard across the range",
+  }
+  const fileFinding: PrReviewFinding = {
+    ...lineFinding,
+    scope: "file",
+    score: 5,
+    headline: "module invariant unclear",
+  }
+  const prFinding: PrReviewFinding = {
+    ...lineFinding,
+    scope: "pr",
+    score: 3,
+    headline: "PR-wide policy gap",
+  }
+
+  const buildBody = (
+    f: PrReviewFinding,
+    ctx?: { owner: string; repo: string; headSha: string },
+  ): string => {
+    const args = {
+      verdict: {
+        summary: "One body-only finding.",
+        confidence: 3,
+        confidenceReason: "Fixture.",
+        findings: [f],
+      },
+      prAuthor: "alice",
+      headSha,
+      ...(ctx ? { linkContext: ctx } : {}),
+    }
+    return buildReviewSubmission(args).body
+  }
+
+  it("emits a clickable [path:line](github-blob-url) link when linkContext is threaded (line scope)", () => {
+    const body = buildBody(lineFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts:42](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts#L42)`,
+    )
+    // No backticked fallback for the anchor itself when linkContext is present.
+    expect(body).not.toContain("`src/lib/foo.ts:42`")
+  })
+
+  it("uses #L<startLine>-L<line> for ranged line-scope anchors", () => {
+    const body = buildBody(rangedLineFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts:38-42](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts#L38-L42)`,
+    )
+  })
+
+  it("renders file-scope as a bare-path link (no `:line`, no `#L`)", () => {
+    const body = buildBody(fileFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`,
+    )
+    expect(body).not.toContain(`/src/lib/foo.ts#L`)
+  })
+
+  it("renders pr-scope as a bare-path link (same as file scope)", () => {
+    const body = buildBody(prFinding, linkContext)
+    expect(body).toContain(
+      `[src/lib/foo.ts](https://github.com/octo/demo/blob/${headSha}/src/lib/foo.ts)`,
+    )
+    expect(body).not.toContain(`/src/lib/foo.ts#L`)
+  })
+
+  it("falls back to the inline-code anchor when linkContext is omitted (back-compat)", () => {
+    const body = buildBody(lineFinding)
+    expect(body).toContain("`src/lib/foo.ts:42`")
+    // No markdown link form should leak through.
+    expect(body).not.toContain("](https://github.com/")
+  })
+
+  it("tightens the meta line to `<anchor> · score N` with no bracketed severity (line scope)", () => {
+    const body = buildBody(lineFinding)
+    expect(body).toContain("`src/lib/foo.ts:42` · score 4")
+    expect(body).not.toContain("(high, score 4)")
+    expect(body).not.toContain("Line 42")
+    expect(body).not.toContain("Comment-level")
+  })
+
+  it("tightens the meta line for pr-scope to `<path> · score N`", () => {
+    const body = buildBody(prFinding)
+    expect(body).toContain("`src/lib/foo.ts` · score 3")
+    expect(body).not.toContain("PR-level")
+  })
+
+  it("uses the U+00B7 middle-dot separator (not a bullet or asterisk)", () => {
+    const body = buildBody(lineFinding)
+    const expectedSeparator = " · "
+    expect(body).toContain(`\`src/lib/foo.ts:42\`${expectedSeparator}score 4`)
+    // Guard against accidental swap to alternative dots/bullets.
+    expect(body).not.toContain(" • score") // • bullet
+    expect(body).not.toContain(" * score")
+  })
+})
+
+// ── SIG-216 fix-up — URL-encode path + escape markdown-special chars ──
+//
+// CodeRabbit catch on PR #174: the link builder previously interpolated
+// `f.path` raw into both the URL and the label. Filenames with spaces,
+// parens, or brackets produced broken markdown — a literal space in the
+// URL was rejected by GitHub, and a `]` in the label truncated the link
+// text. The fix-up URL-encodes each path segment with
+// `encodeURIComponent` (preserves `/` separators) and backslash-escapes
+// markdown-special chars in the label.
+
+describe("formatBodyFindingAnchor URL encoding + label escaping (SIG-216 fix-up)", () => {
+  const headSha = "deadbeefcafe1234567890abcdef1234567890ab"
+  const linkContext = { owner: "octo", repo: "demo", headSha } as const
+
+  const buildBody = (
+    f: PrReviewFinding,
+    ctx?: { owner: string; repo: string; headSha: string },
+  ): string => {
+    const args = {
+      verdict: {
+        summary: "One body-only finding.",
+        confidence: 3,
+        confidenceReason: "Fixture.",
+        findings: [f],
+      },
+      prAuthor: "alice",
+      headSha,
+      ...(ctx ? { linkContext: ctx } : {}),
+    }
+    return buildReviewSubmission(args).body
+  }
+
+  it("URL-encodes spaces in path segments (space → %20) without encoding the / separator", () => {
+    const f: PrReviewFinding = {
+      path: "src/with space.ts",
+      line: 7,
+      scope: "comment",
+      score: 4,
+      category: "logic",
+      headline: "needs attention",
+      body: "Reviewer note.",
+    }
+    const body = buildBody(f, linkContext)
+    expect(body).toContain(
+      `(https://github.com/octo/demo/blob/${headSha}/src/with%20space.ts#L7)`,
+    )
+    // Sanity: the `/` separator stayed literal.
+    expect(body).not.toContain("src%2Fwith")
+  })
+
+  it("URL-encodes parens in path segments (`(` → %28, `)` → %29)", () => {
+    const f: PrReviewFinding = {
+      path: "src/(generated)/foo.ts",
+      line: 12,
+      scope: "comment",
+      score: 3,
+      category: "logic",
+      headline: "h",
+      body: "b",
+    }
+    const body = buildBody(f, linkContext)
+    expect(body).toContain(
+      `(https://github.com/octo/demo/blob/${headSha}/src/%28generated%29/foo.ts#L12)`,
+    )
+  })
+
+  it("backslash-escapes brackets in the label so the markdown link doesn't truncate", () => {
+    const f: PrReviewFinding = {
+      path: "src/[id]/page.ts",
+      line: 3,
+      scope: "comment",
+      score: 4,
+      category: "logic",
+      headline: "h",
+      body: "b",
+    }
+    const body = buildBody(f, linkContext)
+    // Label-side: `[` and `]` are backslash-escaped so the markdown
+    // parser keeps the whole `src/[id]/page.ts:3` as visible text.
+    expect(body).toContain("[src/\\[id\\]/page.ts:3](")
+    // URL-side: the brackets are percent-encoded by encodeURIComponent.
+    expect(body).toContain(
+      `(https://github.com/octo/demo/blob/${headSha}/src/%5Bid%5D/page.ts#L3)`,
+    )
+  })
+
+  it("backslash-escapes parens in the label so the link-target parser doesn't get confused", () => {
+    const f: PrReviewFinding = {
+      path: "src/(group)/x.ts",
+      line: 5,
+      scope: "comment",
+      score: 3,
+      category: "logic",
+      headline: "h",
+      body: "b",
+    }
+    const body = buildBody(f, linkContext)
+    // Label-side: `(` and `)` escaped.
+    expect(body).toContain("[src/\\(group\\)/x.ts:5](")
   })
 })
 
@@ -2450,14 +2688,18 @@ describe("provenance footer (ARC-184)", () => {
     expect(body).not.toContain("_Reviewed against")
   })
 
-  it("REQUEST_CHANGES body still ends with the provenance footer (ARC-184 invariant)", () => {
+  it("REQUEST_CHANGES body still ends with the SHA in the compact footer (ARC-184 invariant)", () => {
+    // SIG Kimi r1: the separate "_Reviewed against `SHA` at TS._"
+    // line merged into the single `<sub>` footer alongside dismiss
+    // + re-run + Review #N. The SHA invariant is preserved — it's
+    // still the last identifier in the body — just inline now. The
+    // timestamp was dropped (GitHub already shows comment-creation
+    // time at the top of the comment header).
     const out = buildReviewSubmission({
       verdict: verdictWithFinding, prAuthor: "alice", headSha: HEAD, nowMs: NOW,
     })
     const body = out.body ?? ""
-    expect(body).toMatch(
-      /_Reviewed against `abc1234` at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\._\s*$/,
-    )
+    expect(body.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
   })
 
   it("buildFallbackBody APPROVE path is marker-only (ARC-293)", () => {
@@ -2465,13 +2707,15 @@ describe("provenance footer (ARC-184)", () => {
     expect(out).toBe("<!-- sigilix:pr-review -->\n")
   })
 
-  it("buildFallbackBody REQUEST_CHANGES path still ends with the provenance footer", () => {
-    const expected = `_Reviewed against \`abc1234\` at ${new Date(NOW).toISOString()}._`
+  it("buildFallbackBody REQUEST_CHANGES path still ends with the SHA in the compact footer", () => {
+    // SIG Kimi r1: the per-body "_Reviewed against `SHA` at TS._"
+    // line is now merged into the single `<sub>` footer. The SHA
+    // remains the last identifier in the body.
     const out = buildFallbackBody(
       verdictWithFinding, [], { headSha: HEAD, nowMs: NOW },
       undefined, undefined, undefined, undefined, undefined, "REQUEST_CHANGES",
     )
-    expect(out.trimEnd().endsWith(expected)).toBe(true)
+    expect(out.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
   })
 
   it("body is well under 65000 chars on a small fixture", () => {
@@ -2506,10 +2750,15 @@ describe("provenance footer (ARC-184)", () => {
     const out = buildReviewSubmission({ verdict: huge, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
     const body = out.body ?? ""
     expect(body.length).toBeLessThanOrEqual(65000)
-    // Footer survived
-    expect(body).toMatch(/_Reviewed against `abc1234` at .+\._/)
     // Truncation marker is present
     expect(body).toContain("[summary truncated to fit GitHub's 65535 limit]")
+    // Sigilix-bot HIGH + CR MINOR (PR #200): SHA-in-compact-footer
+    // survives truncation. `capForGitHub` truncates BODY content and
+    // re-appends the footer so the `<sub>...`SHA`</sub>` is never
+    // sliced. This is the post-r1 equivalent of the
+    // "_Reviewed against `SHA` at TS._" invariant from ARC-184.
+    expect(body).toContain("`abc1234`")
+    expect(body.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
   })
 })
 
@@ -2627,15 +2876,32 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(1)).toContain('alt="P3"')
   })
-  it("renders badges as compact taller chips for GitHub legibility (SIG-200)", () => {
+  it("renders badges as <a href=\"#\"><img></a> with NO explicit width/height (SIG-238 r9)", () => {
+    // SIG-238 round-9 pattern. Empirically this combo (a-wrap +
+    // missing dimensions) defeats Primer's bubble rule. r4 (drop
+    // a-wrap) + r7 (32×32 transparent inset) both lost.
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="24"')
-    expect(out).toContain('height="18"')
+    expect(out).toMatch(/<a href="#"><img\s/)
+    expect(out).toContain('align="top"')
+    expect(out).toContain("</a>")
+    // Critical absence: explicit IMG width/height. Greptile omits both
+    // — adding them re-introduces the bubble on github.com PR comments.
+    expect(out).not.toMatch(/<img[^>]*\swidth=/)
+    expect(out).not.toMatch(/<img[^>]*\sheight=/)
   })
-  it("uses the public Worker badge host, not private GitHub raw assets (SIG-201)", () => {
+  it("uses the public Sigilix/sigilix-glyphs raw host so GitHub's js-gh-image-fallback doesn't inject border-radius (SIG-238 round-6)", () => {
+    // SIG-238 round-6 = the actual fix. Tonight we created
+    // `Sigilix/sigilix-glyphs` (PUBLIC) and pushed the 13 glyph SVGs
+    // there under the version tag. The URL pattern
+    // `raw.githubusercontent.com/Sigilix/sigilix-glyphs/<version>/<name>.svg`
+    // bypasses Camo (same-origin to github.com) AND loads anonymously
+    // (public repo). Verified via `gh api /markdown` on the live URL
+    // — no Camo proxy, no `border-radius`, no `background-color`.
     const out = severityBadgeForScore(3)
-    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/v20260525-2/p2.svg`)
-    expect(out).not.toContain("raw.githubusercontent.com/Sigilix/sigilix")
+    expect(out).toContain(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/p2.svg`)
+    expect(out).toContain("raw.githubusercontent.com/Sigilix/sigilix-glyphs")
+    expect(out).not.toContain("sigilix.dan-martinezjulio.workers.dev")
+    expect(out).not.toContain("Sigilix/sigilix/main")
   })
   it("treats super-high scores as P0 (defensive clamp)", () => {
     expect(severityBadgeForScore(6)).toContain('alt="P0"')
@@ -2773,6 +3039,44 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("<summary>More Info</summary>")
     expect(out).toContain(body)
     expect(out).not.toContain(`${body}...`)
+  })
+
+  it("SIG-216: More Info preview snaps to the last whitespace boundary (no mid-character split)", () => {
+    // Real-world shape from PR #173: prose that runs slightly past the
+    // 500-char preview limit. The pre-SIG-216 slice landed mid-character
+    // of "chat" → preview "Add a unit test that mocks a c..." and the
+    // disclosure opened to "hat stream with known fixtures.". The fix
+    // walks back to the last whitespace inside the preview window so
+    // words remain intact across the boundary.
+    const prefix = "Add a unit test that mocks a "
+    const filler = "x".repeat(500 - prefix.length - "chat".length)
+    // body shape: <prefix><filler> chat stream with known fixtures.
+    // Whitespace position before the limit lands on the space after
+    // the filler, so the preview should end with the filler and the
+    // disclosure should start with "chat stream...".
+    const body = `${prefix}${filler} chat stream with known fixtures.`
+    const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).toContain("<summary>More Info</summary>")
+    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
+    expect(detailsMatch?.[1]).toBeDefined()
+    // Preview must NOT contain the partial-word splits the old logic produced.
+    expect(out).not.toContain("mocks a c...")
+    // Disclosure must start at the next word boundary, not mid-word.
+    expect(detailsMatch?.[1]).toMatch(/^chat stream with known fixtures\.$/)
+  })
+
+  it("SIG-216: falls back to a hard slice when the preview window has no whitespace (long token)", () => {
+    // The pre-existing 620-`x` test already covers the same code path
+    // implicitly; this test pins the contract explicitly so a future
+    // regression that drops the fallback branch fails loudly. A
+    // 620-character single token can't be split on a word boundary,
+    // so the function must still terminate via the hard slice.
+    const body = "y".repeat(620)
+    const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).toContain("<summary>More Info</summary>")
+    expect(out).toContain(`${"y".repeat(500)}...`)
+    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
+    expect(detailsMatch?.[1]).toBe("y".repeat(120))
   })
 
   it("strips AST markers from visible finding text and AI prompt", () => {
@@ -2938,57 +3242,73 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
     findings: [{ ...baseFinding, score: 4, category: "logic" }],
   }
 
-  it("renders the retrigger sub-text hint when retriggerUrl is supplied (founder pulled the visible button 2026-05-19)", () => {
-    const body = renderRequestChangesBody({
-      verdict,
-      retriggerUrl: "https://github.com/owner/repo/pull/42",
-    })
-    expect(body).toContain("Comment `/sigilix review`")
-    // The Greptile-style `[🔄 Re-run review](URL)` button was dropped
-    // on founder feedback — visual noise inside the body.
+  it("renders the re-run hint as part of the compact footer (always present, no retriggerUrl gate)", () => {
+    // SIG Kimi r1: the re-run hint moved from an optional `<sub>` line
+    // (gated on retriggerUrl) into the single `<sub>` footer that's
+    // always emitted. The Greptile-style `[🔄 Re-run review](URL)`
+    // button was dropped on founder feedback long before r1.
+    const body = renderRequestChangesBody({ verdict })
+    expect(body).toContain("Re-run: `/sigilix review`")
     expect(body).not.toContain("[🔄 Re-run review]")
     expect(body).not.toContain("🔄 Re-run review")
   })
 
-  it("renders the counter footer line when reviewCounter is supplied", () => {
+  it("renders the Review #N counter in the compact footer when supplied", () => {
+    // SIG Kimi r1: the dedicated `_Sigilix · Review #N for this PR ·
+    // last rendered TS._` line collapsed into the single footer. The
+    // standalone timestamp was dropped — GitHub already shows the
+    // comment-creation timestamp at the top of the comment header.
     const body = renderRequestChangesBody({
       verdict,
       reviewCounter: 3,
       prov: { headSha: "abc1234", nowMs: 1747547318000 },
     })
-    expect(body).toMatch(/_Sigilix · Review #3 for this PR · last rendered 2025-05-18T05:48:38\.000Z\._/)
+    expect(body).toContain("Review #3")
+    // Old "last rendered TIMESTAMP" line MUST be gone — dropped per
+    // founder complaint that the body had two timestamps for the
+    // same event.
+    expect(body).not.toContain("last rendered")
+    expect(body).not.toMatch(/_Sigilix · Review #3/)
   })
 
-  it("renders BOTH retrigger hint + counter when both are supplied", () => {
+  it("renders dismiss + re-run + counter + SHA together in the single compact footer", () => {
+    // SIG Kimi r1: all four pieces of metadata that used to occupy
+    // separate lines now live in one `<sub>` block separated by `·`.
     const body = renderRequestChangesBody({
       verdict,
-      retriggerUrl: "https://github.com/owner/repo/pull/42",
       reviewCounter: 1,
       prov: { headSha: "abc1234", nowMs: 1747547318000 },
     })
-    expect(body).toContain("Comment `/sigilix review`")
-    expect(body).toContain("Review #1 for this PR")
+    expect(body).toMatch(
+      /<sub>Dismiss: `@sigilix dismiss` in a review thread · Re-run: `\/sigilix review` · Review #1 · `abc1234`<\/sub>/,
+    )
   })
 
-  it("omits both when neither field is supplied (back-compat)", () => {
+  it("omits the Review #N segment when reviewCounter is absent (other footer pieces still present)", () => {
+    // Re-run hint is now ALWAYS present (no retriggerUrl gate in r1)
+    // — only the Review #N counter is conditional.
     const body = renderRequestChangesBody({ verdict })
-    expect(body).not.toContain("Comment `/sigilix review`")
+    expect(body).toContain("Re-run: `/sigilix review`")
     expect(body).not.toContain("Review #")
   })
 
-  it("orders retrigger hint before counter; counter sits above the provenance footer", () => {
+  it("orders Dismiss · Re-run · Review #N · SHA inside the compact footer (single line)", () => {
+    // The prior multi-line ordering invariant (hint above counter,
+    // counter above provenance) collapses into left-to-right order
+    // inside the single `<sub>` block.
     const body = renderRequestChangesBody({
       verdict,
-      retriggerUrl: "https://github.com/owner/repo/pull/42",
       reviewCounter: 7,
       prov: { headSha: "deadbeef0000", nowMs: 1747547318000 },
     })
-    const hintIdx = body.indexOf("Comment `/sigilix review`")
+    const dismissIdx = body.indexOf("Dismiss:")
+    const rerunIdx = body.indexOf("Re-run:")
     const counterIdx = body.indexOf("Review #7")
-    const provIdx = body.indexOf("_Reviewed against")
-    expect(hintIdx).toBeGreaterThan(-1)
-    expect(counterIdx).toBeGreaterThan(hintIdx)
-    expect(provIdx).toBeGreaterThan(counterIdx)
+    const shaIdx = body.indexOf("`deadbee`")
+    expect(dismissIdx).toBeGreaterThan(-1)
+    expect(rerunIdx).toBeGreaterThan(dismissIdx)
+    expect(counterIdx).toBeGreaterThan(rerunIdx)
+    expect(shaIdx).toBeGreaterThan(counterIdx)
   })
 
   it("ignores reviewCounter <= 0 (defensive — counter should always be >= 1)", () => {

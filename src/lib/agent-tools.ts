@@ -21,7 +21,7 @@
 //     loop's catch can map it to `wall_clock_exceeded`.
 
 import { fetchPullRequestContext } from "./github-pr-context"
-import { parseBranchNamespace } from "./index-branch"
+import { encodeBranchName, parseBranchNamespace } from "./index-branch"
 import { indexNamespace } from "./repo-index-manifest"
 import { retrieveChunks, type RetrievedChunk } from "./retrieval"
 import { GitHubClient } from "./github"
@@ -158,7 +158,7 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
         }
         const allowed = new Set(namespaceUniverse)
         if (branch.length > 0) {
-          const resolvedBranch = resolveBranchNamespace(namespaceUniverse, namespace, branch)
+          const resolvedBranch = await resolveBranchNamespace(namespaceUniverse, namespace, branch)
           if (resolvedBranch.ok) {
             namespace = resolvedBranch.namespace
           } else {
@@ -231,7 +231,12 @@ function makeRetrieveCodebase(ctx: AgentToolsContext): AgentTool {
 
 interface BranchChoice {
   repo: string
-  branch: string
+  /**
+   * SIG-218: encoded (hashed) branch segment, not the human branch name.
+   * The hash is irreversible — surfaces that need to display branch names
+   * must source them from a separate channel (e.g. the KV manifest).
+   */
+  encodedBranch: string
   namespace: string
 }
 
@@ -239,17 +244,17 @@ type BranchResolution =
   | { ok: true; namespace: string }
   | { ok: false; error: string; availableBranches: BranchChoice[] }
 
-function resolveBranchNamespace(
+async function resolveBranchNamespace(
   namespaceUniverse: string[],
   requestedRepo: string,
   requestedBranch: string,
-): BranchResolution {
+): Promise<BranchResolution> {
   const branchChoices = namespaceUniverse
     .map((ns) => parseBranchNamespace(ns))
     .filter((ns): ns is NonNullable<ReturnType<typeof parseBranchNamespace>> => ns !== null)
     .map((ns): BranchChoice => ({
       repo: `${ns.owner}/${ns.repo}`,
-      branch: ns.branch,
+      encodedBranch: ns.encodedBranch,
       namespace: ns.namespace,
     }))
 
@@ -259,12 +264,19 @@ function resolveBranchNamespace(
     requestedRepo === choice.namespace,
   )
 
-  const exactBranch = repoMatches.filter((choice) => choice.branch === requestedBranch)
+  // SIG-218: match on the bounded-length hash of the requested branch.
+  // The encoded form is `encodeBranchName(branch.trim())` — same trim +
+  // hash that the indexer applies when constructing the namespace. Case-
+  // folding mirrors the prior behaviour (encode lowercased fallback).
+  const trimmed = requestedBranch.trim()
+  const exactEncoded = await encodeBranchName(trimmed)
+  const exactBranch = repoMatches.filter((choice) => choice.encodedBranch === exactEncoded)
   if (exactBranch.length === 1) return { ok: true, namespace: exactBranch[0]!.namespace }
 
-  const foldedBranch = repoMatches.filter(
-    (choice) => choice.branch.toLowerCase() === requestedBranch.toLowerCase(),
-  )
+  const foldedEncoded = trimmed === trimmed.toLowerCase()
+    ? exactEncoded
+    : await encodeBranchName(trimmed.toLowerCase())
+  const foldedBranch = repoMatches.filter((choice) => choice.encodedBranch === foldedEncoded)
   if (foldedBranch.length === 1) return { ok: true, namespace: foldedBranch[0]!.namespace }
 
   const availableBranches = repoMatches.length > 0 ? repoMatches : branchChoices

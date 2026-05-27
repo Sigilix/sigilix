@@ -79,8 +79,10 @@ import {
 } from "../src/lib/repo-index-manifest"
 import { repoIndexVectorsKey, type RepoIndexVectorsV1 } from "../src/lib/repo-index-vectors"
 import { activeRunKey } from "../src/lib/repo-index-active-run"
+import { scopedRulesKey } from "../src/lib/scoped-rules-kv"
 import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
 import { CHUNKER_VERSION } from "../src/lib/indexer"
+import { encodeBranchName } from "../src/lib/index-branch"
 import type { Env, JobMessage } from "../src/index"
 
 interface Sent {
@@ -219,26 +221,30 @@ describe("handleIndexRepoJob — bootstrap happy path (single shard)", () => {
 
     expect(mockGetBranch).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", "dev")
     expect(sent).toHaveLength(0)
+    // SIG-218: branch segment is now `h` + 16-hex sha256(branch) prefix.
+    const encodedDev = await encodeBranchName("dev")
+    const branchRepo = `sigilix/__branch__/${encodedDev}`
+    const branchNamespace = `arc-and-anchor/${branchRepo}`
     const upsertedRecords = mockVectorizeUpsert.mock.calls.flatMap(
       (call) => call[0] as Array<{ namespace?: string }>,
     )
     expect(upsertedRecords.length).toBeGreaterThan(0)
     for (const rec of upsertedRecords) {
-      expect(rec.namespace).toBe("arc-and-anchor/sigilix/__branch__/h646576")
+      expect(rec.namespace).toBe(branchNamespace)
     }
     expect(mockWriteFileGraph).not.toHaveBeenCalled()
     expect(mockCommitGraph).not.toHaveBeenCalled()
 
     expect(kv.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
-    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", "sigilix/__branch__/h646576"))
+    const stored = kv.get(repoIndexManifestKey("Arc-and-Anchor", branchRepo))
     expect(stored).toBeTruthy()
     if (stored) {
       const parsed = JSON.parse(stored) as RepoIndexManifestV1
-      expect(parsed.repo).toBe("sigilix/__branch__/h646576")
+      expect(parsed.repo).toBe(branchRepo)
       expect(parsed.actualRepo).toBe("sigilix")
       expect(parsed.branch).toBe("dev")
       expect(parsed.defaultBranch).toBe("main")
-      expect(parsed.namespace).toBe("arc-and-anchor/sigilix/__branch__/h646576")
+      expect(parsed.namespace).toBe(branchNamespace)
       expect(parsed.fileCount).toBe(1)
     }
   })
@@ -849,5 +855,71 @@ describe("handleIndexRepoJob — ARC-238 B3 invariant: vectors-write failure blo
     // written the manifest; non-final would have enqueued).
     expect(store.has(repoIndexManifestKey("Arc-and-Anchor", "sigilix"))).toBe(false)
     expect(sent).toHaveLength(0)
+  })
+})
+
+// SIG-172 M2 (fix-up) — `persistScopedRulesManifest` is gated by the
+// active-run lease (same `shouldFinalize` check that protects
+// `persistManifest` + `persistVectorIds`). An older overlapping
+// bootstrap whose rule-file walk completes AFTER a newer run has
+// taken the lease must NOT clobber the newer run's scoped-rules
+// manifest with stale rule content.
+describe("handleIndexRepoJob — scoped-rules write yields to a newer run", () => {
+  it("does NOT write the scoped-rules manifest when the lease has been taken by a newer run mid-walk", async () => {
+    // Tree includes a SIGILIX.md plus a normal source file so the
+    // bootstrap still has shape; the scoped-rules walk + write are
+    // the only thing we care about here.
+    mockGetRepoTree.mockResolvedValue({
+      tree: [
+        { path: "SIGILIX.md", type: "blob", size: 100 },
+        { path: "src/index.ts", type: "blob", size: 100 },
+      ],
+      truncated: false,
+    })
+
+    const { env, kv } = makeEnv()
+    const owner = "Arc-and-Anchor"
+    const repo = "sigilix"
+
+    // Hook the rule-file content fetch: when the indexer pulls
+    // SIGILIX.md (the per-rule-file step inside persistScopedRulesManifest),
+    // simulate a competing newer bootstrap claiming the lease before
+    // the current run reaches its leaseAllows check at the write site.
+    mockGetFileContent.mockImplementation(async (_o, _r, path: string) => {
+      if (path === "SIGILIX.md") {
+        // Overwrite the active-run lease with a fresher runId. This
+        // is the in-the-wild scenario: a second `writeActiveRun` from
+        // a newer bootstrap landing while THIS run was mid-fetch.
+        kv.set(activeRunKey(owner, repo), JSON.stringify({
+          v: 1, runId: "newer-run-supersedes", startedAt: new Date().toISOString(),
+        }))
+        return `# Repo-root SIGILIX.md\nbody`
+      }
+      return `// content of ${path}\nconsole.log("hi")`
+    })
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
+    await handleIndexRepoJob({ job: bootstrapJob(), env })
+
+    // The KV write for the scoped-rules manifest MUST NOT have
+    // landed: an older run cannot clobber the newer run's rules.
+    expect(kv.has(scopedRulesKey(owner, repo))).toBe(false)
+
+    // The skip-superseded telemetry MUST have fired so dashboards
+    // can see that the rule walk was thrown away (rather than
+    // silently dropped).
+    const events = warnSpy.mock.calls.map((c) => {
+      try { return JSON.parse(c[0] as string) } catch { return null }
+    })
+    warnSpy.mockRestore()
+    const skipped = events.find((e) => e && e.event === "scoped-rules-manifest-skip-superseded")
+    expect(skipped).toBeDefined()
+    expect(skipped.owner).toBe(owner)
+    expect(skipped.repo).toBe(repo)
+    // file_count records what WOULD have been written — sanity that
+    // the SIGILIX.md walk did reach the entry-build stage before the
+    // lease check suppressed the write.
+    expect(typeof skipped.file_count).toBe("number")
+    expect(skipped.file_count).toBeGreaterThanOrEqual(1)
   })
 })

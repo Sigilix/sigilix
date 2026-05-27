@@ -476,9 +476,9 @@ describe("SPECIALIST_PROMPTS.tests grounding", () => {
     expect(SPECIALIST_PROMPTS.tests).toContain("DROPPED")
   })
 
-  it("retains the test-specialist primary model config (regression guard)", () => {
-    // Don't accidentally swap models in this PR; SIG-113 is a prompt +
-    // input + validator fix, not a model change.
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek-v4-flash:cloud")
+  it("test-specialist primary model is set (regression guard, SIG-234 lineup)", () => {
+    // SIG-234 (2026-05-26): swapped from deepseek-v4-flash to
+    // minimax-m2.5 as part of the 4+1 unique-primary lineup.
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m2.5:cloud")
   })
 })

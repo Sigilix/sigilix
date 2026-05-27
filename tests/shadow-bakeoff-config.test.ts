@@ -40,6 +40,11 @@ describe("SHADOW_BAKEOFF_LINEUP", () => {
     }
   })
 
+  it("uses a unique primary model for each shadow role", () => {
+    const primaries = Object.values(SHADOW_BAKEOFF_LINEUP).map((config) => config.primary)
+    expect(new Set(primaries).size).toBe(primaries.length)
+  })
+
   it("differs from the production lineup on at least one role (otherwise shadow is pointless)", () => {
     const differs = (a: { primary: string; fallback: string | null }, b: { primary: string; fallback: string | null }) =>
       a.primary !== b.primary || a.fallback !== b.fallback

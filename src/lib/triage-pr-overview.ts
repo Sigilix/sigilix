@@ -79,6 +79,23 @@ export interface PrOverviewVerdict {
   mermaidDiagram?: string
 }
 
+/**
+ * SIG-216: review-time context passed in by `handlePrReviewEnsemble`
+ * when the overview is being rendered inline with the review post.
+ * When present, the prompt builder appends a short paragraph informing
+ * the model of the review's findings so the overview body can reflect
+ * the verdict ("3 P1 + 2 P2 concerns surfaced" vs the generic
+ * review-independent framing). Omitted by warmup-driven enqueues and
+ * any other path that runs the overview without an associated review
+ * — those fall back to the pre-SIG-216 prompt.
+ */
+export interface PrOverviewReviewContext {
+  findingsCount: number
+  severityBreakdown: Record<string, number>
+  categoryBreakdown: Record<string, number>
+  verdict: "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
+}
+
 export interface PrOverviewArgs {
   owner: string
   repo: string
@@ -93,15 +110,65 @@ export interface PrOverviewArgs {
    * the per-(PR, headSha) dedupe (set by the initial pr-overview
    * run earlier in the same headSha) would suppress the refresh.
    * Webhook-driven calls omit this flag and keep dedupe intact.
+   *
+   * SIG-216: under the new ordering the ensemble passes `force: true`
+   * + a `reviewContext` together so the inline-from-review render
+   * bypasses any KV lock a prior queued run may have set.
    */
   force?: boolean
+  /**
+   * SIG-216: optional review-time finding context. When present, the
+   * prompt builder appends a paragraph summarizing the review's
+   * verdict + finding mix so the overview body can be informed by
+   * what the review actually surfaced. Absent → existing
+   * review-independent prompt (back-compat for warmup-driven and any
+   * legacy queue-dispatched overview runs).
+   */
+  reviewContext?: PrOverviewReviewContext
+  /**
+   * SIG-216 fix-up: bypass the per-(PR, headSha) KV dedupe lock
+   * WITHOUT bypassing the stale-head guards. Used by the inline-from-
+   * review path so a sibling queued run's lock can't block us, while
+   * still aborting if the head moves during the Ollama window. Prefer
+   * this over `force` for new callers — `force` bypasses both, which
+   * is only correct for the legacy review-success refresh path that
+   * has already been validated against the live head.
+   */
+  skipDedupe?: boolean
+  /**
+   * SIG-216 fix-up: optional external abort signal threaded through
+   * to the Ollama `generate` call. The inline-overview retry helper
+   * passes a per-attempt controller so the first attempt's in-flight
+   * fetch can actually be cancelled when the second attempt fires
+   * (otherwise overlapping attempts burn budget against the same
+   * deadline). Absent on queue-driven calls.
+   */
+  abortSignal?: AbortSignal
 }
 
 const DEDUPE_PREFIX = "pr-overview:"
 const DEDUPE_TTL_SECONDS = 300
 
 export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
-  const { owner, repo, prNumber, headSha, installationId, env, force } = args
+  const {
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    installationId,
+    env,
+    force,
+    reviewContext,
+    skipDedupe,
+    abortSignal,
+  } = args
+  // SIG-216 fix-up: `force` historically bypassed BOTH the KV dedupe
+  // lock AND the in-handler stale-head guards. We've split those
+  // semantics: `skipDedupe` (preferred for the inline-from-review
+  // path) bypasses only the dedupe lock; `force` (kept for legacy
+  // queue-driven post-review refresh callers) still bypasses both.
+  // `bypassDedupe` is the union — read at every dedupe-lock site.
+  const bypassDedupe = skipDedupe === true || force === true
   const t0 = Date.now()
   const since = (label: string): void => {
     console.log(`[pr-overview] ${label} +${Date.now() - t0}ms`, {
@@ -122,12 +189,13 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
   // try/finally below — queue retries can re-attempt without being
   // blocked by a stale lock.
   const dedupeKey = `${DEDUPE_PREFIX}${owner}/${repo}#${prNumber}@${headSha}`
-  // ARC-258 follow-up: `force === true` bypasses the dedupe so the
-  // pr-review success path can refresh the overview within the
-  // same headSha (the initial run's 5-min lock would otherwise
-  // suppress the refresh). Webhook-driven enqueues omit `force`
-  // and keep the duplicate-comment guard intact.
-  if (!force && (await env.OPENCLAW_STATE.get(dedupeKey))) {
+  // ARC-258 follow-up + SIG-216 fix-up: `bypassDedupe` (set by
+  // `skipDedupe: true` from the inline-from-review path OR
+  // `force: true` from the legacy refresh path) skips the dedupe
+  // lock check + write so a sibling queued run's lock can't
+  // suppress the refresh. Webhook-driven enqueues set neither and
+  // keep the duplicate-comment guard intact.
+  if (!bypassDedupe && (await env.OPENCLAW_STATE.get(dedupeKey))) {
     console.log(JSON.stringify({
       event: "pr-overview-skipped",
       dedupe_system: "kv",
@@ -136,7 +204,7 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     }))
     return
   }
-  if (!force) {
+  if (!bypassDedupe) {
     await env.OPENCLAW_STATE.put(dedupeKey, String(Date.now()), {
       expirationTtl: DEDUPE_TTL_SECONDS,
     })
@@ -229,15 +297,28 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     //      trying to prevent (the overview comment moving backwards).
     //
     // Mirrors the pattern at `triage-pr-review-ensemble.ts:864`.
-    // `force === true` callers (post-review refresh) bypass: that
-    // path is fired by the review SUCCESS handler with the live head
-    // SHA already in hand, and the goal there is to drop the stale
-    // warmup callout from the most-recent overview.
+    // `force === true` callers (legacy post-review refresh) bypass:
+    // that path is fired by the review SUCCESS handler with the
+    // live head SHA already in hand, and the goal there is to drop
+    // the stale warmup callout from the most-recent overview.
+    // SIG-216 fix-up: the inline-from-review path now uses
+    // `skipDedupe: true` (not `force`), so this guard FIRES on the
+    // inline path — catching head moves that landed during the
+    // review's own Ollama window. The ensemble's post-overview
+    // re-check is the belt-and-braces layer that catches moves
+    // landing AFTER this overview call returns.
     if (!force && meta.head?.sha && meta.head.sha !== headSha) {
       console.log(JSON.stringify({
         event: "pr-overview-stale-head-before-ollama",
         owner, repo, prNumber,
         queued_head_sha: headSha.slice(0, 7),
+        current_head_sha: meta.head.sha.slice(0, 7),
+      }))
+      // SIG-237: unified skipped-with-reason event.
+      console.log(JSON.stringify({
+        event: "pr-overview-skipped-with-reason",
+        reason: "stale_head_before_ollama",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
         current_head_sha: meta.head.sha.slice(0, 7),
       }))
       return
@@ -322,26 +403,43 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       diff: promptDiff,
       newCommits: recentCommits,
       isFirstRun: existingBeforeModel == null,
+      ...(reviewContext ? { reviewContext } : {}),
     })
 
     const model = env.OPENCLAW_MODEL ?? DEFAULT_MODEL
     since("ollama-start")
+    // SIG-216 fix-up: thread the optional external abort signal into
+    // the Ollama call so the inline-overview retry helper can cancel
+    // the in-flight first attempt before launching the second.
     const { text: response } = await generate({
       model,
       prompt,
       apiKey: env.OLLAMA_API_KEY,
       format: PR_OVERVIEW_SCHEMA as unknown as Record<string, unknown>,
+      ...(abortSignal ? { signal: abortSignal } : {}),
     })
     since("ollama-done")
 
     const verdict = parseOverviewResponse(response)
     if (!verdict) {
-      console.error("pr-overview verdict did not parse", {
-        owner,
-        repo,
-        prNumber,
+      // SIG-237: surface this as a structured event so on-call can
+      // grep `pr-overview-skipped-with-reason` for every silent
+      // stub-stays-stuck case. The previous `console.error` printed
+      // to logs but wasn't queryable as a structured event.
+      //
+      // CR catch (PR #192): the `responseHead` field intentionally
+      // omitted — the Ollama response can contain repo / diff /
+      // source-code content from the prompt, and shipping it into
+      // structured telemetry would leak customer code into
+      // Cloudflare Logs. `responseLength` alone is enough to size
+      // the failure mode; the actual content can be retrieved via
+      // `console.error` line below if needed for one-off debugging.
+      console.log(JSON.stringify({
+        event: "pr-overview-skipped-with-reason",
+        reason: "verdict_parse_failed",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
         responseLength: response.length,
-      })
+      }))
       return
     }
 
@@ -415,17 +513,24 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // ─── SIG-84: stale-head guard #2 (pre-write) ────────────────────
     //
     // Re-check the PR head right before the write. The Ollama call took
-    // 10-30s; a new commit may have landed in that window. Without this,
-    // the OLD head's walkthrough would overwrite either:
-    //   (a) the NEW head's `_Reviewing…_` stub (just posted at webhook
-    //       time by `postPrOverviewStubIfNeeded`), or
-    //   (b) the NEW head's already-rendered walkthrough (if the new
-    //       head's overview happened to complete first).
-    // Either way the comment moves backwards from the customer's
-    // perspective. Cheap (one extra `getPullRequest` round-trip) and
+    // 10-30s; a new commit may have landed in that window. Without
+    // this, the OLD head's walkthrough would overwrite the NEW head's
+    // already-rendered walkthrough (if the new head's overview
+    // happened to complete first), moving the comment backwards from
+    // the customer's perspective. SIG-216 drop-the-stub pattern: there
+    // is no longer a pre-review stub at webhook time to clobber, but
+    // the head-moved-during-Ollama race against a sibling overview run
+    // remains. Cheap (one extra `getPullRequest` round-trip) and
     // bounded to the path that actually writes — `force`-mode callers
-    // bypass since they're invoked by the review SUCCESS path on the
-    // live head.
+    // bypass since they're invoked by the ensemble on the live head
+    // (already guarded by the ensemble's stale-head guard #2).
+    // SIG-216 fix-up: the inline-from-review path now uses
+    // `skipDedupe: true` (not `force`), so this guard fires on it
+    // too — catching head moves between Ollama-done and the comment
+    // write. The ensemble adds a third re-check after this whole
+    // call returns (post-overview), so all three Ollama windows
+    // (review specialists', overview's, and the gap between) are
+    // covered.
     if (!force) {
       try {
         const metaCheck = await client.getPullRequest(owner, repo, prNumber)
@@ -435,6 +540,14 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
             owner, repo, prNumber,
             queued_head_sha: headSha.slice(0, 7),
             current_head_sha: metaCheck.head.sha.slice(0, 7),
+          }))
+          // SIG-237: also emit the unified skipped-with-reason event
+          // so the dashboard can count stub-stays-stuck cases in a
+          // single query rather than joining several event names.
+          console.log(JSON.stringify({
+            event: "pr-overview-skipped-with-reason",
+            reason: "stale_head_before_write",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
           }))
           return
         }
@@ -455,6 +568,13 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
           queued_head_sha: headSha.slice(0, 7),
           err: err instanceof Error ? err.message : String(err),
         }))
+        // SIG-237: unified skipped-with-reason event.
+        console.log(JSON.stringify({
+          event: "pr-overview-skipped-with-reason",
+          reason: "stale_recheck_failed",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          err: err instanceof Error ? err.message : String(err),
+        }))
         return
       }
     }
@@ -466,11 +586,40 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
         `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
       )
     } else {
-      const created = await client.createIssueComment(owner, repo, prNumber, body)
-      since("comment-created")
-      console.log(
-        `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
-      )
+      // SIG-216 CR fix-up: read-after-write idempotency. The
+      // `runInlineOverviewWithRetry` path may retry after a transient
+      // `createIssueComment` failure where the comment DID write
+      // server-side but the response failed (network hiccup,
+      // GitHub 5xx after commit). With `skipDedupe: true` the KV
+      // dedupe lock is bypassed, and the post-Ollama re-scan above
+      // races against KV / list-comments propagation — a marker
+      // written ~milliseconds ago by attempt #1 may not yet show
+      // up in attempt #2's `listIssueComments` snapshot. One final
+      // targeted rescan immediately before the POST catches that
+      // case: if the marker exists, switch to PATCH instead of
+      // double-posting.
+      const finalRescan = await findExistingOverviewComment(client, owner, repo, prNumber)
+      if (finalRescan?.id != null) {
+        console.log(JSON.stringify({
+          event: "pr-overview-final-rescan-found-marker",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          foundCommentId: finalRescan.id,
+        }))
+        await client.updateIssueComment(owner, repo, finalRescan.id, body)
+        since("comment-updated")
+        console.log(
+          `pr-overview updated on ${owner}/${repo}#${prNumber} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup}, via=final-rescan)`
+        )
+      } else {
+        const created = await client.createIssueComment(owner, repo, prNumber, body)
+        since("comment-created")
+        console.log(
+          `pr-overview created on ${owner}/${repo}#${prNumber} as comment ${created.id} (confidence=${verdict.confidence}/5, ${verdict.files.length} files, warmup=${warmup})`
+        )
+      }
     }
 
     // ARC-263: write fresh per-file rows to the cache. The misses
@@ -513,23 +662,31 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
     // retry can attempt again. Without this, the first failure leaves
     // a 5-min lock that blocks every retry until it expires.
     //
-    // Force-mode runs don't set the lock (see above), so don't release
-    // it either — we'd risk stomping a sibling non-force run's lock.
-    if (!force) {
+    // Bypass-mode runs (force OR skipDedupe) don't set the lock above,
+    // so don't release it either — we'd risk stomping a sibling
+    // non-bypass run's lock.
+    if (!bypassDedupe) {
       await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
     }
   }
 }
 
-interface PromptCtx {
+export interface PromptCtx {
   prNumber: number
   meta: PullRequestMeta
   diff: string
   newCommits: PrCommit[]
   isFirstRun: boolean
+  /**
+   * SIG-216: when this overview run is paired with a review post,
+   * the ensemble passes the verdict + finding mix so the prompt can
+   * tell the model what the reviewer concluded. Absent on
+   * review-independent runs (warmup-driven, etc.).
+   */
+  reviewContext?: PrOverviewReviewContext
 }
 
-function buildPrompt(ctx: PromptCtx): string {
+export function buildPrompt(ctx: PromptCtx): string {
   const commitsBlock = ctx.newCommits
     .map((c) => `- ${c.sha?.slice(0, 7) ?? "?"} ${c.message?.split("\n")[0] ?? ""}`)
     .join("\n")
@@ -552,10 +709,46 @@ function buildPrompt(ctx: PromptCtx): string {
     "[DIFF]",
     truncate(ctx.diff, LIMITS.prDiff),
     "",
+  ]
+  if (ctx.reviewContext) {
+    sections.push(
+      "[REVIEW VERDICT — Sigilix's specialist review of this same head is being posted alongside your overview. Weave the findings into your summary so the two comments land as one coherent signal; do NOT enumerate the findings (the reviewer can read them inline).]",
+      renderReviewContextBlock(ctx.reviewContext),
+      "",
+    )
+  }
+  sections.push(
     "[OUTPUT]",
     "Return only the JSON object. No prose, no Markdown fence, no array.",
-  ]
+  )
   return sections.join("\n")
+}
+
+/**
+ * SIG-216: render the review-time context for the prompt. Compact —
+ * one line per dimension so the model can scan it without spending
+ * tokens. Severity / category orderings are deterministic so prompt
+ * diffs stay stable.
+ */
+export function renderReviewContextBlock(ctx: PrOverviewReviewContext): string {
+  const sevEntries = Object.entries(ctx.severityBreakdown)
+    .filter(([, n]) => typeof n === "number" && n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+  const catEntries = Object.entries(ctx.categoryBreakdown)
+    .filter(([, n]) => typeof n === "number" && n > 0)
+    .sort(([a], [b]) => a.localeCompare(b))
+  const sevLine = sevEntries.length > 0
+    ? sevEntries.map(([k, n]) => `${k}=${n}`).join(", ")
+    : "(none)"
+  const catLine = catEntries.length > 0
+    ? catEntries.map(([k, n]) => `${k}=${n}`).join(", ")
+    : "(none)"
+  return [
+    `Verdict: ${ctx.verdict}`,
+    `Findings: ${ctx.findingsCount}`,
+    `By severity: ${sevLine}`,
+    `By category: ${catLine}`,
+  ].join("\n")
 }
 
 function truncate(value: string, max: number, marker = "\n[…truncated…]"): string {
@@ -992,6 +1185,14 @@ export async function findExistingOverviewCommentId(
 ): Promise<number | null> {
   for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
     const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
+    // SIG-216 CR fix-up: terminate on the empty page rather than
+    // `items.length < per_page`. The `< 100` check coupled this loop
+    // to `listIssueCommentsPage`'s per_page=100 default — changing
+    // that constant (e.g. tuning for rate limits) would silently
+    // break pagination here. Empty-page termination is the only
+    // universally safe signal; the cost is at most one extra
+    // empty-page fetch when the comment count is an exact multiple
+    // of per_page, which is bounded by MAX_COMMENT_SCAN_PAGES anyway.
     if (items.length === 0) return null
     for (const c of items) {
       if (typeof c.body !== "string") continue
@@ -1002,9 +1203,6 @@ export async function findExistingOverviewCommentId(
         return c.id
       }
     }
-    // GitHub returns < per_page when there are no more pages; stop
-    // before issuing another round trip we know will be empty.
-    if (items.length < 100) return null
   }
   // Hard cap hit — pathological PR with >500 comments and no marker
   // in the first 500. Treat as "not found" so the stub create path
@@ -1037,6 +1235,8 @@ export async function findExistingOverviewComment(
 ): Promise<{ id: number; body: string } | null> {
   for (let page = 1; page <= MAX_COMMENT_SCAN_PAGES; page += 1) {
     const items = await client.listIssueCommentsPage(owner, repo, prNumber, page)
+    // SIG-216 CR fix-up: same empty-page termination as
+    // `findExistingOverviewCommentId` — decouples from per_page=100.
     if (items.length === 0) return null
     for (const c of items) {
       if (typeof c.body !== "string") continue
@@ -1044,7 +1244,6 @@ export async function findExistingOverviewComment(
         return { id: c.id, body: c.body }
       }
     }
-    if (items.length < 100) return null
   }
   console.warn(JSON.stringify({
     event: "pr-overview-comment-scan-capped",

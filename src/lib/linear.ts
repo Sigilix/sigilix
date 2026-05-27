@@ -5,7 +5,48 @@
 // every call is an explicit issue or comment update rather than a
 // project-level field write.
 
+import { getAppActorToken } from "./linear-oauth"
+
 const LINEAR_GRAPHQL = "https://api.linear.app/graphql"
+
+/**
+ * Build the Linear auth credential. Prefers OAuth `client_credentials`
+ * (so comments post under the Sigilix bot identity, not a human owner)
+ * and falls back to a personal API key when OAuth isn't configured.
+ *
+ * Extracted from `triage.ts` + `mention-reply.ts` when SIG-225's
+ * webhook-side thread-walk became the 3rd call site that needed it.
+ * Single source of truth — if the auth pick logic changes, it changes
+ * once. `LinearAuthEnv` is the minimum env slice this helper needs so
+ * the call site doesn't need to pass the full `Env`.
+ */
+export interface LinearAuthEnv {
+  LINEAR_OAUTH_CLIENT_ID?: string
+  LINEAR_OAUTH_CLIENT_SECRET?: string
+  LINEAR_API_KEY: string
+  /** Only required when OAuth client_credentials are configured —
+   *  `getAppActorToken` uses it to cache the actor token. The
+   *  API-key fallback path never touches it. Optional here so a
+   *  caller that knows it's API-key-only can pass a minimal env. */
+  OPENCLAW_STATE?: KVNamespace
+}
+
+export async function buildLinearAuth(env: LinearAuthEnv): Promise<LinearAuth> {
+  if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
+    if (!env.OPENCLAW_STATE) {
+      throw new Error(
+        "buildLinearAuth: OAuth client_credentials configured but OPENCLAW_STATE KV binding is missing"
+      )
+    }
+    const token = await getAppActorToken(
+      env.OPENCLAW_STATE,
+      env.LINEAR_OAUTH_CLIENT_ID,
+      env.LINEAR_OAUTH_CLIENT_SECRET
+    )
+    return { oauthToken: token }
+  }
+  return { apiKey: env.LINEAR_API_KEY }
+}
 
 export interface LinearIssue {
   id: string
@@ -23,6 +64,12 @@ export interface LinearCommentWithIssue {
   id: string
   body: string
   user: { name: string | null; displayName: string | null } | null
+  /** SIG-225 follow-up: parent comment id when this comment is a
+   *  thread reply, null on top-level comments. Threaded by Linear
+   *  via `parent: Comment` (we project to id-only here since the
+   *  caller never needs the parent body/user — only its existence
+   *  + id for the createComment(... parentId) pass-through). */
+  parent: { id: string } | null
   issue: {
     id: string
     identifier: string
@@ -71,6 +118,7 @@ export class LinearClient {
           id
           body
           user { name displayName }
+          parent { id }
           issue {
             id
             identifier
@@ -91,6 +139,93 @@ export class LinearClient {
     `
     const data = await this.gql<{ comment: LinearCommentWithIssue | null }>(query, { id: commentId })
     return data.comment
+  }
+
+  /**
+   * SIG-225 — fetch JUST the parent + author for an issue's recent
+   * comments. Used by the webhook's in-thread-reply trigger path to
+   * walk the parent chain without paying the full `getIssue` cost
+   * (no labels, no creator, no body, no description). The result
+   * feeds `commentHasSigilixAncestor` from `linear-thread-ancestor.ts`.
+   *
+   * `orderBy: updatedAt` is CRITICAL — Linear's default connection
+   * ordering returns OLDEST 100 first, which silently omits every
+   * recent Sigilix reply on any thread past 100 comments and breaks
+   * the trigger entirely. Code-reviewer P1 catch on PR #196.
+   *
+   * When the parent chain runs past 100 comments OR a freshly-posted
+   * comment hasn't propagated to the read replica yet (replica-lag
+   * race), the helper falls closed (returns false). The webhook
+   * caller has a second-pass `getComment(parentId)` direct-lookup
+   * backstop that bypasses both failure modes.
+   */
+  async getCommentParents(
+    issueId: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<Array<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null }>> {
+    const query = /* GraphQL */ `
+      query CommentParents($id: String!) {
+        issue(id: $id) {
+          comments(first: 100, orderBy: updatedAt) {
+            nodes {
+              id
+              parent { id }
+              user { name displayName }
+            }
+          }
+        }
+      }
+    `
+    const data = await this.gql<{
+      issue: {
+        comments: {
+          nodes: Array<{
+            id: string
+            parent: { id: string } | null
+            user: { name: string | null; displayName: string | null } | null
+          }>
+        }
+      } | null
+    }>(query, { id: issueId }, opts?.signal)
+    const nodes = data.issue?.comments.nodes ?? []
+    return nodes.map((n) => ({
+      id: n.id,
+      parentId: n.parent?.id ?? null,
+      user: n.user,
+    }))
+  }
+
+  /**
+   * SIG-225 P1 fix — direct single-comment lookup. The backstop for
+   * the `getCommentParents` snapshot walk: if the parent chain runs
+   * past the 100-comment page OR Linear's read replica hasn't surfaced
+   * a freshly-posted comment yet, the webhook caller hits this to
+   * resolve the IMMEDIATE parent's author. One narrow GraphQL call —
+   * no body, no surrounding thread.
+   */
+  async getCommentAuthor(
+    commentId: string,
+    opts?: { signal?: AbortSignal }
+  ): Promise<{ id: string; parentId: string | null; user: { name: string | null; displayName: string | null } | null } | null> {
+    const query = /* GraphQL */ `
+      query CommentAuthor($id: String!) {
+        comment(id: $id) {
+          id
+          parent { id }
+          user { name displayName }
+        }
+      }
+    `
+    const data = await this.gql<{
+      comment: {
+        id: string
+        parent: { id: string } | null
+        user: { name: string | null; displayName: string | null } | null
+      } | null
+    }>(query, { id: commentId }, opts?.signal)
+    const c = data.comment
+    if (!c) return null
+    return { id: c.id, parentId: c.parent?.id ?? null, user: c.user }
   }
 
   /** Fetch issue + recent comments. Used for triage dedupe + context. */
@@ -213,8 +348,15 @@ export class LinearClient {
     await this.gql(mutation, { id: issueId, input })
   }
 
-  /** Create a new comment on an issue. Returns the comment ID. */
-  async createComment(issueId: string, body: string): Promise<string> {
+  /** Create a new comment on an issue. Returns the comment ID.
+   *
+   *  SIG-225 follow-up: optional `parentId` makes the new comment a
+   *  REPLY inside an existing thread instead of a top-level post. Used
+   *  by `handleMention` when responding to a thread-followup trigger —
+   *  the bot's reply should land in the same thread as the founder's
+   *  reply, not at issue-root. Top-level callers (triage, manual
+   *  trigger) keep the legacy two-arg call. */
+  async createComment(issueId: string, body: string, parentId?: string): Promise<string> {
     const mutation = /* GraphQL */ `
       mutation CommentCreate($input: CommentCreateInput!) {
         commentCreate(input: $input) {
@@ -223,8 +365,10 @@ export class LinearClient {
         }
       }
     `
+    const input: { issueId: string; body: string; parentId?: string } = { issueId, body }
+    if (parentId) input.parentId = parentId
     const data = await this.gql<{ commentCreate: { comment: { id: string } } }>(mutation, {
-      input: { issueId, body },
+      input,
     })
     return data.commentCreate.comment.id
   }
@@ -239,15 +383,24 @@ export class LinearClient {
     await this.gql(mutation, { id: commentId, input: { body } })
   }
 
-  private async gql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-    const res = await fetch(LINEAR_GRAPHQL, {
+  private async gql<T>(
+    query: string,
+    variables: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    const init: RequestInit = {
       method: "POST",
       headers: {
         "content-type": "application/json",
         authorization: this.authHeader,
       },
       body: JSON.stringify({ query, variables }),
-    })
+    }
+    // Only set `signal` when explicitly provided. `exactOptionalPropertyTypes`
+    // rejects `signal: undefined` literals; gating the assignment keeps the
+    // existing zero-signal call sites unchanged.
+    if (signal) init.signal = signal
+    const res = await fetch(LINEAR_GRAPHQL, init)
     if (!res.ok) {
       const text = await res.text()
       throw new Error(`Linear HTTP ${res.status}: ${text.slice(0, 500)}`)

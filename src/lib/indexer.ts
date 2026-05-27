@@ -74,6 +74,8 @@ import {
 } from "./chunk-core"
 import { chunkFileAst, jsTsExtOf } from "./ast-chunker"
 import { resolveIndexTarget, isBranchStateRepo } from "./index-branch"
+import { walkScopedRuleFiles } from "./scoped-rules"
+import { writeScopedRulesManifest } from "./scoped-rules-kv"
 
 // SIG-131: re-export the chunking primitives so existing consumers that
 // import them from "./indexer" (branch-retrieval.ts, tests/indexer-pure)
@@ -293,6 +295,11 @@ export async function handleIndexRepoJob(args: ConsumerArgs): Promise<void> {
 
 async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void> {
   const { owner, repo, installationId, reason } = job
+  // SIG-243 Phase 1: forward the immutable repo ID from the queue
+  // message to persistManifest so the new manifest record carries
+  // `githubRepoId`. Legacy in-flight messages (no field) flow through
+  // as undefined; the field is omitted from the manifest in that case.
+  const githubRepoId = job.githubRepoId
   const astOn = astChunkingEnabled(env)
 
   if (isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)) {
@@ -317,7 +324,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     }))
     return
   }
-  const target = resolveIndexTarget({
+  const target = await resolveIndexTarget({
     owner,
     repo,
     defaultBranch: repoMeta.default_branch,
@@ -411,6 +418,38 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     indexable_files: indexableFiles.length,
   }))
 
+  // SIG-172: enumerate SIGILIX.md + .sigilix/rules/*.md at any depth
+  // and persist the manifest separately from the vector index. Runs
+  // only on the default-branch bootstrap (branch indexes share the
+  // default branch's rules; the per-PR review path reads the
+  // repo-level key). Best-effort — never fails the index job, because
+  // vectors are the load-bearing artifact and scoped rules are
+  // additive prompt context.
+  //
+  // SIG-172 M2 (fix-up): the rule-file walk + content fetches can take
+  // seconds on a large repo. An older overlapping bootstrap that
+  // started before a newer run (and thus lost the lease at writeActiveRun
+  // above) could still reach the writeScopedRulesManifest call AFTER
+  // the newer run had finalised its own scoped-rules manifest, and
+  // clobber it with stale rules. Gate the WRITE behind the same lease
+  // check that protects persistManifest / persistVectorIds. The walk +
+  // fetches are still attempted (cheap to throw away), but the actual
+  // KV write only happens if this run still holds the lease.
+  if (target.isDefault) {
+    try {
+      await persistScopedRulesManifest({
+        env, client, owner, repo, headSha, runId, stateRepo,
+        treeEntries: tree.tree,
+      })
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "scoped-rules-manifest-write-failed",
+        owner, repo, run_id: runId,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+    }
+  }
+
   const totalFiles = indexableFiles.length
   if (totalFiles === 0) {
     // Empty repo (or all-filtered). Write a manifest so we don't
@@ -427,7 +466,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       return
     }
     await persistManifest({
-      env, owner, repo, stateRepo, namespace, headSha, runId,
+      env, owner, repo, githubRepoId, stateRepo, namespace, headSha, runId,
       branch: target.isDefault ? null : target.branch,
       defaultBranch: target.defaultBranch,
       fileCount: 0, chunkCount: 0, shardCount: 1,
@@ -496,7 +535,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
       return
     }
     await enqueueNextShard(env, {
-      owner, repo, installationId, reason,
+      owner, repo, githubRepoId, installationId, reason,
       ...(target.isDefault ? {} : { branch: target.branch }),
       lo: MAX_FILES_PER_JOB,
       hi: Math.min(MAX_FILES_PER_JOB * 2, totalFiles),
@@ -524,7 +563,7 @@ async function handleBootstrapJob(job: IndexRepoMessage, env: Env): Promise<void
     return
   }
   await persistManifest({
-    env, owner, repo, stateRepo, namespace, headSha, runId,
+    env, owner, repo, githubRepoId, stateRepo, namespace, headSha, runId,
     branch: target.isDefault ? null : target.branch,
     defaultBranch: target.defaultBranch,
     fileCount: sliceHi, chunkCount, shardCount: 1,
@@ -610,6 +649,11 @@ async function handleShardJob(
   env: Env,
 ): Promise<void> {
   const { owner, repo, installationId, reason } = job
+  // SIG-243 Phase 1: shard messages carry the parent run's
+  // githubRepoId so the final manifest write at the end of the chain
+  // stamps it correctly. Bootstrap (`handleBootstrapJob`) forwards
+  // it into the first shard message via `enqueueShard` below.
+  const githubRepoId = job.githubRepoId
   const resolvedDefaultBranch = shard.defaultBranch ?? job.branch ?? null
   if (resolvedDefaultBranch === null) {
     console.warn(JSON.stringify({
@@ -620,7 +664,7 @@ async function handleShardJob(
       note: "legacy shard missing defaultBranch; using sentinel",
     }))
   }
-  const target = resolveIndexTarget({
+  const target = await resolveIndexTarget({
     owner,
     repo,
     defaultBranch: resolvedDefaultBranch ?? "__default_unknown__",
@@ -754,7 +798,7 @@ async function handleShardJob(
       return
     }
     await persistManifest({
-      env, owner, repo, stateRepo, namespace,
+      env, owner, repo, githubRepoId, stateRepo, namespace,
       branch: target.isDefault ? null : target.branch,
       defaultBranch: target.defaultBranch,
       headSha: shard.headSha, runId: shard.runId,
@@ -813,7 +857,7 @@ async function handleShardJob(
     return
   }
   await enqueueNextShard(env, {
-    owner, repo, installationId, reason,
+    owner, repo, githubRepoId, installationId, reason,
     ...(target.isDefault ? {} : { branch: target.branch }),
     lo: shard.hi,
     hi: Math.min(shard.hi + MAX_FILES_PER_JOB, shard.totalFiles),
@@ -1000,6 +1044,16 @@ interface VectorizeRecord {
   metadata: Record<string, string | number>
 }
 
+/**
+ * SIG-218 defense: Vectorize hard-caps namespace + id at 64 bytes; the
+ * bounded-length encodeBranchName fix keeps `namespace` well under that
+ * for every legitimate path, but log + skip if anything constructs a
+ * long namespace via another code path. 60 leaves a safety margin.
+ */
+export function shouldSkipForLength(id: string, namespace: string): boolean {
+  return namespace.length > 60 || id.length > 60
+}
+
 async function embedBatch(
   env: Env,
   chunks: ReadonlyArray<Chunk>,
@@ -1011,6 +1065,17 @@ async function embedBatch(
     const chunk = chunks[i]!
     const vec = vectors[i]!
     const id = await chunkId(namespace, chunk)
+    if (shouldSkipForLength(id, namespace)) {
+      console.error(JSON.stringify({
+        event: "vector-upsert-length-exceeded",
+        namespaceLength: namespace.length,
+        idLength: id.length,
+        namespaceSample: namespace.slice(0, 32),
+        idSample: id.slice(0, 16),
+        path: chunk.path,
+      }))
+      continue
+    }
     out.push({
       id,
       values: vec,
@@ -1034,6 +1099,14 @@ async function embedBatch(
 interface EnqueueNextShardArgs {
   owner: string
   repo: string
+  /**
+   * SIG-243 Phase 1: parent run's immutable GitHub repo ID. Forwarded
+   * onto every shard continuation so the manifest write at the end of
+   * the chain stamps the field correctly. Optional during the
+   * transition — undefined for legacy bootstrap runs that predate
+   * Phase 1.
+   */
+  githubRepoId: number | undefined
   installationId: number
   reason: IndexRepoMessage["reason"]
   branch?: string
@@ -1053,6 +1126,13 @@ async function enqueueNextShard(env: Env, args: EnqueueNextShardArgs): Promise<v
     type: "index-repo",
     owner: args.owner,
     repo: args.repo,
+    // SIG-243 Phase 1: forward the parent run's GitHub repo ID onto
+    // every shard. Conditional spread keeps the queue message tight
+    // under exactOptionalPropertyTypes. Positive-integer guard matches
+    // every other producer site.
+    ...(typeof args.githubRepoId === "number" && Number.isInteger(args.githubRepoId) && args.githubRepoId > 0
+      ? { githubRepoId: args.githubRepoId }
+      : {}),
     installationId: args.installationId,
     reason: args.reason,
     ...(args.branch ? { branch: args.branch } : {}),
@@ -1082,6 +1162,17 @@ interface PersistManifestArgs {
   owner: string
   /** Actual GitHub repo name. */
   repo: string
+  /**
+   * SIG-243 Phase 1: immutable GitHub repository ID, captured at the
+   * webhook entry point and threaded through the queue message + the
+   * indexer pipeline. Optional during Phases 1 and 2 — legacy queue
+   * messages predating Phase 1 omit the field, and bootstrap / install
+   * / reconciliation paths that haven't been wired yet pass it as
+   * undefined. The manifest persists it when present so Phase 3's
+   * backfill knows which records still need the lookup. Phase 4
+   * promotes it to the canonical KV key.
+   */
+  githubRepoId: number | undefined
   /** State repo used for KV manifests/vectors. Branch indexes use repo/__branch__/... */
   stateRepo: string
   namespace: string
@@ -1122,6 +1213,17 @@ async function persistManifest(args: PersistManifestArgs): Promise<void> {
   }
   if (args.branch !== null) {
     manifest.branch = args.branch
+  }
+  // SIG-243 Phase 1: persist the immutable repo ID when the queue
+  // message carried it. Conditional spread keeps the manifest shape
+  // tight under exactOptionalPropertyTypes. Positive-integer guard
+  // matches the type-guard in repo-index-manifest.ts.
+  if (
+    typeof args.githubRepoId === "number" &&
+    Number.isInteger(args.githubRepoId) &&
+    args.githubRepoId > 0
+  ) {
+    manifest.githubRepoId = args.githubRepoId
   }
   try {
     await writeRepoIndexManifest(args.env, manifest)
@@ -1229,6 +1331,89 @@ async function persistVectorIds(args: PersistVectorIdsArgs): Promise<{ proceed: 
     path_count: Object.keys(outcome.vectors.byPath).length,
   }))
   return { proceed: true }
+}
+
+// ---------------------------------------------------------------------
+// SIG-172: scoped-rules manifest discovery + persistence
+// ---------------------------------------------------------------------
+
+interface PersistScopedRulesArgs {
+  env: Env
+  client: GitHubClient
+  owner: string
+  repo: string
+  /** Run id from the bootstrap context — gated by `leaseAllows`
+   *  before the KV write so an older run can't clobber a newer one. */
+  runId: string
+  /** Branch-scoped repo key for the lease check — matches what
+   *  `writeActiveRun` keyed on (i.e. `target.stateRepo`). */
+  stateRepo: string
+  headSha: string
+  treeEntries: ReadonlyArray<TreeEntry>
+}
+
+/**
+ * Enumerate SIGILIX.md + .sigilix/rules/*.md at any depth from the
+ * already-fetched repo tree, fetch their content via the same
+ * installation token used for indexing, and persist the manifest to
+ * KV under `repo-index-rules:<owner>/<repo>`.
+ *
+ * Best-effort per file fetch: a single failed file is dropped + logged
+ * rather than failing the whole manifest. The KV write itself does
+ * throw on failure so the caller's try/catch records it as a non-
+ * fatal indexer event.
+ *
+ * Empty rule set still writes the manifest — gives the orchestrator a
+ * clean "no rules configured" signal vs. "indexer hasn't run yet"
+ * (KV-missing).
+ *
+ * SIG-172 M2 (fix-up): the KV write is gated by the active-run lease
+ * (same `shouldFinalize(activeRunId, runId)` check the manifest +
+ * vectors writes use). The fetch loop still runs — small in absolute
+ * cost, and the lease may flip between fetch and write — but the
+ * write itself is suppressed when this run has been superseded. An
+ * older overlapping run completing its rule walk after a newer run
+ * had already finalised its scoped-rules manifest would otherwise
+ * overwrite the newer rules with stale content.
+ */
+async function persistScopedRulesManifest(args: PersistScopedRulesArgs): Promise<void> {
+  const { env, client, owner, repo, runId, stateRepo, headSha, treeEntries } = args
+  const ruleFiles = walkScopedRuleFiles(treeEntries)
+  const entries: Array<{ path: string; content: string }> = []
+  for (const file of ruleFiles) {
+    let content: string | null = null
+    try {
+      content = await client.getFileContent(owner, repo, file.path, headSha)
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "scoped-rules-file-fetch-failed",
+        owner, repo, path: file.path,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      continue
+    }
+    if (content === null) continue
+    entries.push({ path: file.path, content })
+  }
+  // SIG-172 M2 (fix-up): lease check immediately before the write so
+  // a slow rule-file walk can't outlive its run-id ownership.
+  if (!(await leaseAllows(env, owner, stateRepo, runId))) {
+    console.warn(JSON.stringify({
+      event: "scoped-rules-manifest-skip-superseded",
+      owner, repo, run_id: runId,
+      file_count: entries.length,
+    }))
+    return
+  }
+  const manifest = await writeScopedRulesManifest(env, owner, repo, entries)
+  console.log(JSON.stringify({
+    event: "scoped-rules-manifest-written",
+    owner, repo,
+    head_sha: headSha,
+    file_count: entries.length,
+    per_directory_rules: manifest.perDirectoryRules.length,
+    glob_rules: manifest.globRules.length,
+  }))
 }
 
 // ---------------------------------------------------------------------

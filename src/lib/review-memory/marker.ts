@@ -132,6 +132,11 @@ export function markerSeverityFromScore(score: number): ReviewMemorySeverityLabe
 /**
  * Build the canonical marker string. Caller appends to the comment
  * body on its own line at the end (typically after a blank line).
+ *
+ * SIG-170: `loc` is an optional tag (`inline` | `unanchored`). When
+ * omitted the marker keeps the pre-SIG-170 shape (`fid:cat:sev:path`)
+ * so legacy parsers continue to recognize it without a flag flip.
+ * When provided the marker appends `:loc:<value>` after `path`.
  */
 export async function buildSigilixMarker(args: {
   ruleId: string | null
@@ -140,6 +145,7 @@ export async function buildSigilixMarker(args: {
   headline: string
   category: ReviewMemoryCategory
   severity: ReviewMemorySeverityLabel
+  loc?: "inline" | "unanchored"
 }): Promise<string> {
   const fid = await computeFid({
     ruleId: args.ruleId,
@@ -149,11 +155,19 @@ export async function buildSigilixMarker(args: {
   })
   const fullPathHash = await computePathSha256(args.path)
   const pathSha12 = truncateHashHex(fullPathHash, PATH_HEX_WIDTH)
-  return `<!-- sigilix:fid:${fid}:cat:${args.category}:sev:${args.severity}:path:${pathSha12} -->`
+  const base = `<!-- sigilix:fid:${fid}:cat:${args.category}:sev:${args.severity}:path:${pathSha12}`
+  return args.loc !== undefined ? `${base}:loc:${args.loc} -->` : `${base} -->`
 }
 
+// SIG-170: marker is grammar-extended with an optional `:loc:<value>`
+// trailer. The `loc` segment is captured non-greedily and made
+// optional so legacy 4-segment markers (`fid:cat:sev:path`) still
+// match — preserving the dismissal-pipeline contract from PR #142 +
+// SIG-173.
 const MARKER_REGEX =
-  /<!-- sigilix:fid:([0-9a-f]{16}):cat:([a-z]+):sev:([a-z]+):path:([0-9a-f]{12}) -->/g
+  /<!-- sigilix:fid:([0-9a-f]{16}):cat:([a-z]+):sev:([a-z]+):path:([0-9a-f]{12})(?::loc:([a-z]+))? -->/g
+
+const KNOWN_LOC_VALUES: ReadonlySet<string> = new Set(["inline", "unanchored"])
 
 /**
  * Parse the LAST sigilix marker from a comment body. Returns null on
@@ -176,14 +190,125 @@ export function extractSigilixMarker(
     last = match
   }
   if (!last) return null
-  const [, fid, cat, sev, pathSha12] = last
+  const [, fid, cat, sev, pathSha12, locRaw] = last
   if (!fid || !cat || !sev || !pathSha12) return null
   if (!CATEGORY_SET.has(cat as ReviewMemoryCategory)) return null
   if (!SEVERITY_SET.has(sev as ReviewMemorySeverityLabel)) return null
+  // SIG-170: only surface `loc` when it matches a known value. Unknown
+  // values are silently dropped (forward-compat with future location
+  // classes); the marker is still considered well-formed because the
+  // dismissal pipeline only branches on `fid`/`cat`/`sev`.
+  const loc = locRaw && KNOWN_LOC_VALUES.has(locRaw)
+    ? (locRaw as "inline" | "unanchored")
+    : undefined
   return {
     fid,
     cat: cat as ReviewMemoryCategory,
     sev: sev as ReviewMemorySeverityLabel,
     pathSha12,
+    ...(loc ? { loc } : {}),
   }
+}
+
+// ─── SIG-170: unanchored-finding fingerprint helpers ───────────────
+
+/**
+ * Normalise a finding body for fingerprint stability across prompt-
+ * template tweaks. Lowercase + collapse runs of whitespace to a single
+ * space + strip trailing punctuation. Goal (per research §Q2 + §Recommendation
+ * #2): wording shifts that don't change the underlying claim should NOT
+ * rotate the fingerprint and orphan the in-place comment.
+ *
+ * Pure — exported for tests.
+ */
+export function normaliseBodyForFingerprint(body: string): string {
+  return body
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.!?,;:]+$/u, "")
+}
+
+/**
+ * SIG-170: stable 16-hex content fingerprint for unanchored / body-
+ * fallback findings. Inputs (per research §Recommendation #2):
+ *
+ *   ruleId | category | path | normalisedBody
+ *
+ * - `ruleId` (the existing `evidenceId` on `PrReviewFinding` when
+ *   present) — the same Semgrep / CodeQL precedent the inline marker
+ *   uses; nulls canonicalise to the `"none"` sentinel.
+ * - `category` — narrows collisions when ruleId is absent.
+ * - `path` — repo-relative path (the only positional anchor the
+ *   "unanchored" case has).
+ * - `normalisedBody` — `normaliseBodyForFingerprint(body)`; survives
+ *   case / whitespace / trailing-punctuation drift from prompt tweaks.
+ *
+ * DELIBERATELY EXCLUDED:
+ *   - raw `line` — defeats the whole point of unanchored (the line
+ *     moved or disappeared; including it rotates the fingerprint on
+ *     every push that touches the file).
+ *   - raw `bodySnippet(0, 80)` — rotates every prompt-template tweak.
+ *
+ * 16 hex chars (64 bits) matches reviewdog + CodeQL + the existing
+ * inline-marker `fid` width.
+ */
+export async function computeUnanchoredFingerprint(args: {
+  ruleId: string | null | undefined
+  category: ReviewMemoryCategory
+  path: string
+  body: string
+}): Promise<string> {
+  const ruleId = args.ruleId ?? RULE_ID_NULL_SENTINEL
+  const path = args.path.trim()
+  const normalisedBody = normaliseBodyForFingerprint(args.body)
+  const canonical = `${ruleId}|${args.category}|${path}|${normalisedBody}`
+  const full = await sha256Hex(canonical)
+  return truncateHashHex(full, FID_HEX_WIDTH)
+}
+
+/**
+ * SIG-170: build a marker for an unanchored / body-fallback comment.
+ * Differs from `buildSigilixMarker` in two ways:
+ *
+ *   1. `fid` is computed via `computeUnanchoredFingerprint` (content-
+ *      based) rather than line-anchored — survives line drift.
+ *   2. The `:loc:unanchored` tag is always emitted, so the upsert
+ *      pipeline can distinguish unanchored comments from inline ones
+ *      during marker-scan recovery.
+ *
+ * The dismissal pipeline (PR #142 + SIG-173) finds these markers via
+ * the same `extractSigilixMarker` parser — the only contract change is
+ * the optional `loc` field on the returned `SigilixCommentMarker`.
+ */
+export async function buildSigilixUnanchoredMarker(args: {
+  ruleId: string | null | undefined
+  category: ReviewMemoryCategory
+  severity: ReviewMemorySeverityLabel
+  path: string
+  body: string
+}): Promise<{ marker: string; fingerprint: string }> {
+  const fingerprint = await computeUnanchoredFingerprint({
+    ruleId: args.ruleId,
+    category: args.category,
+    path: args.path,
+    body: args.body,
+  })
+  const fullPathHash = await computePathSha256(args.path)
+  const pathSha12 = truncateHashHex(fullPathHash, PATH_HEX_WIDTH)
+  const marker = `<!-- sigilix:fid:${fingerprint}:cat:${args.category}:sev:${args.severity}:path:${pathSha12}:loc:unanchored -->`
+  return { marker, fingerprint }
+}
+
+/**
+ * SIG-170: scan a comment body for a sigilix marker and return the
+ * `fid` field. Thin convenience over `extractSigilixMarker` so the
+ * upsert's marker-scan recovery doesn't need to import the parser
+ * directly. Returns null when no well-formed marker is present.
+ *
+ * Pure — exported for tests.
+ */
+export function findFingerprintInCommentBody(body: string): string | null {
+  const parsed = extractSigilixMarker(body)
+  return parsed ? parsed.fid : null
 }

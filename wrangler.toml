@@ -217,6 +217,14 @@ OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 # on the hot path (the typical `gpt-oss:120b-cloud` synth elapsed
 # window).
 #
+# Bypass eligibility ladder (helper: `isSynthBypassEligible`):
+#   1. This flag === "on"
+#   2. `SHADOW_BAKEOFF_ROLES` does NOT include "synth" (so the
+#      bake-off signal on the bypass-eligible cohort isn't halved)
+#   3. Dispatcher narrowed to exactly 1 specialist on purpose
+#   4. Exactly 1 specialist verdict came back non-null
+#   5. No finding has `score >= 4`
+#
 # Safe by construction: no cross-specialist consensus to compute on the
 # 1-role path, and the score-gate keeps anything major routed through
 # the full synth pipeline so synth-level severity rewriting still fires

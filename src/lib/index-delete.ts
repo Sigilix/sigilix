@@ -423,13 +423,27 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
       // idempotent (missing key = no-op). Skipped for pre-Phase-2
       // legacy records that lack the field (those have no new-key
       // counterpart to clean up).
-      const tenantRepoId =
-        (manifestRead.kind === "ok" && typeof manifestRead.manifest.githubRepoId === "number"
-          ? manifestRead.manifest.githubRepoId
-          : null) ??
-        (vectorsRead.kind === "ok" && typeof vectorsRead.vectors.githubRepoId === "number"
-          ? vectorsRead.vectors.githubRepoId
-          : null)
+      //
+      // CR PR #203 — gate on DEFAULT-BRANCH state, mirroring the
+      // writer's contract. The tenant keys are only populated for
+      // default-branch records (`writeRepoIndexManifest`'s
+      // `manifest.branch === undefined` gate + `writeRepoIndexVectors`'s
+      // `!repo.includes("/__branch__/")` gate). A branch-scoped
+      // delete (e.g. `pr-branch-closed`) MUST NOT touch the tenant
+      // keys — the writer never populated them for that branch state,
+      // and the tenant keys hold the canonical default-branch record
+      // which a branch delete must never wipe.
+      const isBranchScopedState =
+        (manifestRead.kind === "ok" && manifestRead.manifest.branch !== undefined) ||
+        (vectorsRead.kind === "ok" && vectorsRead.vectors.repo.includes("/__branch__/"))
+      const tenantRepoId = isBranchScopedState
+        ? null
+        : (manifestRead.kind === "ok" && typeof manifestRead.manifest.githubRepoId === "number"
+            ? manifestRead.manifest.githubRepoId
+            : null) ??
+          (vectorsRead.kind === "ok" && typeof vectorsRead.vectors.githubRepoId === "number"
+            ? vectorsRead.vectors.githubRepoId
+            : null)
       if (typeof tenantRepoId === "number" && Number.isInteger(tenantRepoId) && tenantRepoId > 0) {
         const newManifestKey = repoTenantKey(tenantRepoId)
         const newVectorsKey = repoVectorsTenantKey(tenantRepoId)

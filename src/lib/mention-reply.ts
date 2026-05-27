@@ -208,6 +208,37 @@ export function resolveMentionQuestion(args: {
   return { skip: null, fullQuestion: stripMentionFromBody(args.body, args.triggers) }
 }
 
+/**
+ * SIG-225 follow-up — pure helper that resolves the parent comment id
+ * the bot should reply UNDER, given the source comment data fetched
+ * via `LinearClient.getCommentWithIssue`.
+ *
+ * Contract:
+ *   - source has `parent: { id: "X" }` → returns "X"  (thread reply)
+ *   - source has `parent: null`        → returns undefined (top-level)
+ *   - source has `parent: { id: "" }`  → returns undefined (defensive)
+ *
+ * Linear's thread model is FLAT: every reply in a thread shares the
+ * same parentId (= the thread-root comment's id). Using the SOURCE
+ * comment's parentId — NOT its own id — makes the bot's reply a
+ * sibling of the user's reply under the same thread root, which is
+ * how Linear's UI renders nested conversations.
+ *
+ * Extracted from `handleMention` so the branching is unit-testable
+ * without a Linear/KV/Ollama/GitHub mock stack — addresses Sigilix
+ * bot's "handleMention threading logic lacks test coverage" finding
+ * on PR #200 by giving the plumbing a directly-testable surface.
+ */
+export interface ResolveReplyParentSource {
+  parent: { id: string } | null
+}
+
+export function resolveReplyParentId(source: ResolveReplyParentSource): string | undefined {
+  const id = source.parent?.id
+  if (typeof id !== "string" || id.length === 0) return undefined
+  return id
+}
+
 export async function handleMention(
   commentId: string,
   env: Env,
@@ -410,18 +441,7 @@ export async function handleMention(
   }
 
   const body = formatReply({ verdict, askerHandle })
-  // SIG-225 follow-up: if the source comment is itself a thread reply
-  // (has a parentId), the bot's response should nest inside the SAME
-  // thread instead of posting top-level. Use the SOURCE COMMENT's
-  // parent id (NOT the source comment's own id) so the bot's reply
-  // becomes a sibling of the user's reply under the same thread root,
-  // matching the natural threading model — Linear's threads are flat
-  // (parent = thread root, all replies share the same parentId).
-  //
-  // On the mention path (top-level @-mention with no parent), this is
-  // null and the call falls back to a top-level post — legacy
-  // behavior preserved.
-  const replyParentId = data.parent?.id
+  const replyParentId = resolveReplyParentId(data)
   const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
   log("reply-posted", { newCommentId, replyParentId: replyParentId ?? null })
 

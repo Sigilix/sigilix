@@ -145,13 +145,13 @@ describe("generate() — external abort signal (SIG-216)", () => {
     // a missed cleanup — the local controller is GC'd along with
     // the function scope anyway, so the bug would silently pass.
     const removeSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener")
-    const result = await generate({
+    const { text } = await generate({
       model: FAKE_MODEL,
       prompt: "ok",
       apiKey: FAKE_API_KEY,
       signal: ctl.signal,
     })
-    expect(result).toBe("clean-output")
+    expect(text).toBe("clean-output")
     expect(removeSpy).toHaveBeenCalled()
     // Defensive belt-and-braces: post-resolve abort must remain a
     // no-op from the caller's POV. (Vitest fails on unhandled throw.)
@@ -163,11 +163,11 @@ describe("generate() — external abort signal (SIG-216)", () => {
 describe("generate() — back-compat without signal", () => {
   it("works exactly as before when no signal is passed", async () => {
     mockFetchOnceOk("no-signal-output")
-    const result = await generate({
+    const { text } = await generate({
       model: FAKE_MODEL,
       prompt: "ok",
       apiKey: FAKE_API_KEY,
     })
-    expect(result).toBe("no-signal-output")
+    expect(text).toBe("no-signal-output")
   })
 })

@@ -2860,15 +2860,20 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(1)).toContain('alt="P3"')
   })
-  it("renders badges at intrinsic 20×20 IMG display dimensions (Kimi K2.6 round-4 2026-05-26: dropped the 1.6× scale that was compensating for the wrong root cause)", () => {
-    // The prior 1.6× scale was added to defeat what we thought was
-    // bitmap-zoom interpolation rounding the corners; turned out the
-    // rounding was GitHub Primer CSS clipping the anchor-wrapped img.
-    // With the <a> wrap removed (see `badgeImg`), 20×20 renders sharp
-    // and matches Greptile's visual weight relative to comment text.
+  it("renders badges at the padded 32×32 IMG display dimensions (SIG-238 r7 — Kimi K2.6 2026-05-27)", () => {
+    // SIG-238 round-7: outer IMG dimensions now include the 6px
+    // transparent inset on each side, so the badge is 32×32 instead of
+    // the prior 20×20. The COLORED rect inside the SVG is still 20×20
+    // — the dimension growth is purely the transparent margin that
+    // absorbs GitHub Primer's `border-radius` CSS on `.markdown-body img`.
+    // Round 4's "drop the <a> wrap → use bare <img>" assumed Primer only
+    // rounded `a > img`; founder's 2026-05-26 screenshot proved Primer
+    // now rounds bare <img> too. Geometry padding is the load-bearing
+    // fix; the IMG dims must match the SVG intrinsic viewBox to keep
+    // the browser from scaling the padding non-uniformly.
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="20"')
-    expect(out).toContain('height="20"')
+    expect(out).toContain('width="32"')
+    expect(out).toContain('height="32"')
   })
   it("uses the public Sigilix/sigilix-glyphs raw host so GitHub's js-gh-image-fallback doesn't inject border-radius (SIG-238 round-6)", () => {
     // SIG-238 round-6 = the actual fix. Tonight we created

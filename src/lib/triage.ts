@@ -9,6 +9,7 @@
 import { generate } from "./ollama"
 import { LinearClient, buildLinearAuth, estimateToPoints, severityToPriority } from "./linear"
 import { getMarker, setMarker } from "./dedupe"
+import { markBotAuthoredComment } from "./bot-authored-comments"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { ISSUE_TRIAGE_SCHEMA } from "./schemas"
 import type { Env } from "../index"
@@ -113,6 +114,10 @@ export async function triageIssue(issueId: string, env: Env): Promise<void> {
   } else {
     commentId = await linear.createComment(issue.id, body)
   }
+  // SIG-225: stamp every bot-authored commentId so Linear's
+  // Comment.create webhook for THIS comment is filtered as self.
+  // Best-effort — KV failure is logged and swallowed inside the helper.
+  await markBotAuthoredComment(env.OPENCLAW_STATE, commentId)
   await setMarker(env.OPENCLAW_STATE, issue.id, commentId)
   since("comment-posted")
 

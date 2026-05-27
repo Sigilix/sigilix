@@ -42,6 +42,7 @@ import { GitHubClient } from "./lib/github"
 import { verifyLinearWebhook } from "./lib/webhook-verify"
 import { LinearClient, buildLinearAuth } from "./lib/linear"
 import { commentHasSigilixAncestor } from "./lib/linear-thread-ancestor"
+import { isBotAuthoredComment } from "./lib/bot-authored-comments"
 import { verifyGitHubWebhook } from "./lib/github-webhook-verify"
 import { handlePrOverview } from "./lib/triage-pr-overview"
 import { handlePrLabels } from "./lib/triage-pr-labels"
@@ -809,7 +810,15 @@ interface LinearWebhookPayload {
     description?: string
     body?: string
     team?: { key?: string }
-    user?: { displayName?: string; name?: string }
+    /** SIG-225 diagnostics: capture `user.id` if Linear populates it
+     *  on the Comment.create webhook. The leading hypothesis for the
+     *  double-post bug is that Linear sets `data.user` to the OAuth
+     *  app OWNER's identity for bot-authored comments, not the bot's
+     *  own. Logging the id alongside displayName/name in the trigger
+     *  path gives us the evidence we need to decide if an Option-A
+     *  `user.id === bot_viewer_id` filter would be the right follow-up
+     *  on top of the deterministic commentId tracker. */
+    user?: { id?: string; displayName?: string; name?: string }
     /** SIG-225: when a Comment.create event is a thread reply, Linear
      *  populates `parentId` with the parent comment's id. Used by the
      *  in-thread-reply trigger path so users don't need to re-@-mention
@@ -1849,6 +1858,27 @@ async function handleLinearWebhook(
     const author =
       payload.data.user?.displayName ?? payload.data.user?.name ?? null
 
+    // SIG-225 — primary self-filter: the bot stamps every commentId
+    // it creates in KV at post-time (see markBotAuthoredComment in
+    // triage.ts + mention-reply.ts). If Linear's Comment.create
+    // webhook for THIS comment arrives, we recognize the id and skip.
+    // Deterministic — no dependency on what Linear puts in data.user.
+    //
+    // Why this layer exists: PR #196/#198/#200 shipped the thread-
+    // followup trigger, and the bot started looping in prod because
+    // the displayName-based isBotHandle() filter missed when Linear
+    // populated data.user with the OAuth app owner's identity instead
+    // of the bot's. The legacy filter stays as the cold-cache backstop
+    // (Cloudflare KV is eventually consistent — a put from the queue
+    // worker may not be visible on a different POP for ~60s).
+    if (await isBotAuthoredComment(env.OPENCLAW_STATE, payload.data.id)) {
+      console.log("linear comment skip self", {
+        reason: "bot-authored-tracker",
+        commentId: payload.data.id,
+      })
+      return new Response("skip self\n", { status: 200 })
+    }
+
     // Self-author guard runs FIRST — regardless of trigger path, Sigilix
     // must never reply to its own comments (would loop). Moved above the
     // mention check (was below in legacy code) so the SIG-225 thread-walk
@@ -1856,6 +1886,10 @@ async function handleLinearWebhook(
     // is the single source of truth; defense-in-depth same check runs
     // again inside handleMention().
     if (isBotHandle(author)) {
+      console.log("linear comment skip self", {
+        reason: "is-bot-handle",
+        commentId: payload.data.id,
+      })
       return new Response("skip self\n", { status: 200 })
     }
 
@@ -1936,6 +1970,12 @@ async function handleLinearWebhook(
     console.log("linear comment trigger", {
       reason: triggerReason,
       commentId: payload.data.id,
+      // SIG-225 diagnostics: capture the user subtree so post-deploy
+      // log scrapes can compare what Linear sends on real user
+      // Comment.create vs. the bot's own re-fire. Confirms or rules
+      // out the "data.user = OAuth app owner" hypothesis for the
+      // Option-A id-based filter follow-up.
+      user: payload.data.user ?? null,
     })
     await env.OPENCLAW_JOBS.send({
       type: "linear-mention",

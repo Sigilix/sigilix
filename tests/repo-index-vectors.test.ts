@@ -159,6 +159,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
       idsByPathSlice: {},
       activeRunId: "0123456789abcdef",
     })
+    expect(outcome.action).toBe("extended")
     if (outcome.action === "extended") {
       expect(outcome.vectors.githubRepoId).toBe(808247824)
     }
@@ -191,6 +192,7 @@ describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
       idsByPathSlice: {},
       activeRunId: "0123456789abcdef",
     })
+    expect(outcome.action).toBe("extended")
     if (outcome.action === "extended") {
       expect(outcome.vectors.githubRepoId).toBeUndefined()
     }

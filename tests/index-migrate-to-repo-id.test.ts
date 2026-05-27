@@ -139,6 +139,49 @@ describe("migrateOneRepo — outcome state machine", () => {
     expect(outcome.detail).toContain("KV transient")
   })
 
+  it("re-reads the manifest right before write (TOCTOU) and prefers the freshest stored snapshot", async () => {
+    // SIG-243 Phase 3 / CR Critical: a concurrent push + index run
+    // could land a new manifest (with new headSha/runId) between
+    // the initial read and the migration write. Without re-read,
+    // the naive `{...manifest, githubRepoId}` would clobber the
+    // newer state. This test simulates that race by mutating the
+    // stored manifest between the initial read and the second read
+    // inside migrateOneRepo.
+    const { kv, store } = makeKvStub()
+    store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))
+    let getCalls = 0
+    const client = makeClient(async () => {
+      // After the initial manifest read inside migrateOneRepo, but
+      // before the GitHub API call returns, simulate a concurrent
+      // re-index landing — bump `headSha` and `runId` in KV.
+      getCalls += 1
+      if (getCalls === 1) {
+        store.set(
+          "repo-index-manifest:arc-and-anchor/sigilix",
+          JSON.stringify({
+            ...SAMPLE_MANIFEST,
+            headSha: "f".repeat(40),
+            runId: "fedcba9876543210",
+            fileCount: 99,
+          }),
+        )
+      }
+      return { default_branch: "main", id: 808247824 }
+    })
+    const outcome = await migrateOneRepo(makeEnv(kv), client, "Arc-and-Anchor", "sigilix")
+    expect(outcome.status).toBe("migrated")
+
+    // The written manifest preserves the FRESHER headSha + runId
+    // (from the simulated concurrent re-index) and only patches the
+    // githubRepoId field on top. The original "a".repeat(40) headSha
+    // must NOT be on the post-write record.
+    const written = JSON.parse(store.get("repo-tenant:808247824")!)
+    expect(written.headSha).toBe("f".repeat(40))
+    expect(written.runId).toBe("fedcba9876543210")
+    expect(written.fileCount).toBe(99)
+    expect(written.githubRepoId).toBe(808247824)
+  })
+
   it("idempotent: re-running on a just-migrated repo returns 'already-migrated' without re-fetching from GitHub", async () => {
     const { kv, store } = makeKvStub()
     store.set("repo-index-manifest:arc-and-anchor/sigilix", JSON.stringify(SAMPLE_MANIFEST))

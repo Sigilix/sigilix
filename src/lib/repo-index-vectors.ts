@@ -216,8 +216,21 @@ export async function deleteRepoIndexVectors(
   env: Env,
   owner: string,
   repo: string,
+  githubRepoId?: number,
 ): Promise<void> {
   await env.OPENCLAW_STATE.delete(repoIndexVectorsKey(owner, repo))
+  // SIG-243 Phase 2b / CR Major: also delete the tenant-scoped record
+  // so uninstall doesn't orphan the new `repo-vectors:{id}` ledger
+  // alongside the legacy key cleanup. Positive-integer guard mirrors
+  // the writer side; callers thread the ID from the manifest they
+  // just deleted (see index-delete.ts).
+  if (
+    typeof githubRepoId === "number" &&
+    Number.isInteger(githubRepoId) &&
+    githubRepoId > 0
+  ) {
+    await env.OPENCLAW_STATE.delete(repoVectorsTenantKey(githubRepoId))
+  }
 }
 
 /**

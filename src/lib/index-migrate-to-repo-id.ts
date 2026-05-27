@@ -86,6 +86,19 @@ export async function migrateInstallToRepoId(
     env.GITHUB_PRIVATE_KEY,
     installationId,
   )
+  // SIG-243 Phase 3 / CR Major: refuse to "succeed" on a partial
+  // listing. If the GitHub repos listing was truncated (rate limit,
+  // MAX_PAGES cap, transient 5xx mid-pagination), the operator must
+  // re-run rather than be misled by a clean-looking summary that
+  // skipped the tail. The throw bubbles out as a 500 on the admin
+  // endpoint with the diagnostic detail.
+  if (!listing.complete) {
+    throw new Error(
+      `migrate-to-repo-id: repository listing incomplete for installation ${installationId} ` +
+        `(${listing.items.length} items observed before truncation); re-run after the underlying ` +
+        `pagination issue is resolved`,
+    )
+  }
   const fullNames = listing.items
 
   const client = await buildClient(env, installationId)
@@ -193,8 +206,51 @@ export async function migrateOneRepo(
     return { owner, repo, status: "github-no-id" }
   }
 
+  // SIG-243 Phase 3 / CR Critical: avoid TOCTOU clobber. Between the
+  // initial manifest read above and this write, a concurrent push +
+  // index run could have written a newer manifest with a new
+  // `headSha`/`runId`/file counts. The naive `{...manifest, githubRepoId}`
+  // would discard that newer state. Re-read the latest manifest
+  // immediately before the write and patch only the `githubRepoId`
+  // field onto the freshest snapshot.
+  let latestManifest = manifest
   try {
-    await writeRepoIndexManifest(env, { ...manifest, githubRepoId: repoMeta.id })
+    const latest = await readRepoIndexManifest(env, owner, repo)
+    if (latest.kind === "missing") {
+      // Manifest disappeared between the initial read and now (e.g.,
+      // uninstall fired mid-migration). Skip rather than re-create.
+      return { owner, repo, status: "manifest-missing" }
+    }
+    if (latest.kind === "invalid") {
+      return { owner, repo, status: "manifest-invalid", detail: latest.reason }
+    }
+    // Already-migrated check on the FRESH manifest — another caller may
+    // have stamped the ID in the race window (e.g. concurrent migration
+    // run, or a push triggered re-index that landed first).
+    if (
+      typeof latest.manifest.githubRepoId === "number" &&
+      Number.isInteger(latest.manifest.githubRepoId) &&
+      latest.manifest.githubRepoId > 0
+    ) {
+      return {
+        owner,
+        repo,
+        status: "already-migrated",
+        githubRepoId: latest.manifest.githubRepoId,
+      }
+    }
+    latestManifest = latest.manifest
+  } catch (err) {
+    return {
+      owner,
+      repo,
+      status: "kv-write-failed",
+      detail: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  try {
+    await writeRepoIndexManifest(env, { ...latestManifest, githubRepoId: repoMeta.id })
   } catch (err) {
     return {
       owner,

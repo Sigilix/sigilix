@@ -8,8 +8,7 @@
 // scan is the fallback for cold-cache scenarios.
 
 import { generate } from "./ollama"
-import { LinearClient } from "./linear"
-import { getAppActorToken } from "./linear-oauth"
+import { LinearClient, buildLinearAuth } from "./linear"
 import {
   bodyMentionsBot,
   getMentionTriggers,
@@ -171,7 +170,7 @@ export async function handleMention(commentId: string, env: Env): Promise<void> 
     return
   }
 
-  const linear = new LinearClient(await buildAuth(env))
+  const linear = new LinearClient(await buildLinearAuth(env))
   const data = await linear.getCommentWithIssue(commentId)
   log("comment-fetched")
   if (!data) {
@@ -697,14 +696,3 @@ function formatReply({ verdict, askerHandle }: FormatArgs): string {
   return lines.join("\n")
 }
 
-async function buildAuth(env: Env): Promise<{ apiKey: string } | { oauthToken: string }> {
-  if (env.LINEAR_OAUTH_CLIENT_ID && env.LINEAR_OAUTH_CLIENT_SECRET) {
-    const token = await getAppActorToken(
-      env.OPENCLAW_STATE,
-      env.LINEAR_OAUTH_CLIENT_ID,
-      env.LINEAR_OAUTH_CLIENT_SECRET
-    )
-    return { oauthToken: token }
-  }
-  return { apiKey: env.LINEAR_API_KEY }
-}

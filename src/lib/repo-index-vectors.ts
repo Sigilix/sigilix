@@ -99,7 +99,12 @@ function isRepoIndexVectorsV1(value: unknown): value is RepoIndexVectorsV1 {
   if (o.v !== 1) return false
   if (typeof o.repo !== "string" || o.repo.length === 0) return false
   if (typeof o.owner !== "string" || o.owner.length === 0) return false
-  if (o.githubRepoId !== undefined && (typeof o.githubRepoId !== "number" || !Number.isFinite(o.githubRepoId))) return false
+  if (
+    o.githubRepoId !== undefined &&
+    (typeof o.githubRepoId !== "number" ||
+      !Number.isInteger(o.githubRepoId) ||
+      o.githubRepoId <= 0)
+  ) return false
   if (typeof o.runId !== "string" || o.runId.length === 0) return false
   if (!o.byPath || typeof o.byPath !== "object" || Array.isArray(o.byPath)) return false
   for (const [path, ids] of Object.entries(o.byPath as Record<string, unknown>)) {
@@ -319,13 +324,32 @@ export interface MergeArgs {
 export function computeMerge(args: MergeArgs): MergeOutcome {
   const { existing, owner, repo, githubRepoId, runId, idsByPathSlice, activeRunId } = args
   const sliceByPath = normalizeByPath(idsByPathSlice)
-  // SIG-243 Phase 2b: build the optional repo-ID spread once so every
-  // branch below carries the field consistently under
-  // exactOptionalPropertyTypes.
+  // SIG-243 Phase 2b: preserve `githubRepoId` across continuation
+  // shards. The bootstrap shard captures the ID from the queue
+  // message and writes it onto the vectors record. A continuation
+  // shard's queue message may legitimately omit `githubRepoId`
+  // (legacy in-flight message, or an older code path that hasn't
+  // been wired yet). On that continuation, prefer the INCOMING ID
+  // if present, otherwise fall back to the EXISTING stored ID so
+  // the merge doesn't silently drop a valid identifier mid-chain.
+  // Positive-integer guard matches every other producer + writer
+  // site (rejects 0 / negative / non-integer / NaN / Infinity).
+  const normalizedIncomingRepoId =
+    typeof githubRepoId === "number" &&
+    Number.isInteger(githubRepoId) &&
+    githubRepoId > 0
+      ? githubRepoId
+      : undefined
+  const normalizedExistingRepoId =
+    existing.kind === "ok" &&
+    typeof existing.vectors.githubRepoId === "number" &&
+    Number.isInteger(existing.vectors.githubRepoId) &&
+    existing.vectors.githubRepoId > 0
+      ? existing.vectors.githubRepoId
+      : undefined
+  const effectiveRepoId = normalizedIncomingRepoId ?? normalizedExistingRepoId
   const repoIdSpread: { githubRepoId?: number } =
-    typeof githubRepoId === "number" && Number.isFinite(githubRepoId)
-      ? { githubRepoId }
-      : {}
+    effectiveRepoId !== undefined ? { githubRepoId: effectiveRepoId } : {}
 
   // SIG-136: a lease owned by a DIFFERENT run supersedes this slice — reject
   // BEFORE create/overwrite so a stale run can't clobber a newer run's data.

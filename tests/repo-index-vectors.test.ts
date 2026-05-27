@@ -95,6 +95,108 @@ describe("writeRepoIndexVectors — SIG-243 Phase 2b dual-write", () => {
   })
 })
 
+describe("computeMerge — SIG-243 Phase 2b githubRepoId retention", () => {
+  it("preserves existing githubRepoId across a continuation shard that omits it", async () => {
+    // Real production scenario: bootstrap shard carries githubRepoId
+    // from the install webhook + stamps it on the vectors record.
+    // A continuation shard (legacy in-flight queue message, or a
+    // code path that hasn't been wired) arrives with no
+    // `githubRepoId` on its message. The merge must NOT drop the
+    // stored ID. Without this preservation, the next dual-write
+    // would no-op (no ID present → branch-gate skip) and the
+    // canonical record at `repo-tenant:{id}` would go stale.
+    const { computeMerge } = await import("../src/lib/repo-index-vectors")
+    const existing = {
+      kind: "ok" as const,
+      vectors: {
+        v: 1 as const,
+        owner: "Arc-and-Anchor",
+        repo: "sigilix",
+        githubRepoId: 808247824,
+        runId: "0123456789abcdef",
+        byPath: { "src/a.ts": ["aaa"] },
+      },
+    }
+    const outcome = computeMerge({
+      existing,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      githubRepoId: undefined, // continuation shard didn't carry it
+      runId: "0123456789abcdef", // same run as the stored record
+      idsByPathSlice: { "src/b.ts": ["bbb"] },
+      activeRunId: "0123456789abcdef",
+    })
+    expect(outcome.action).toBe("extended")
+    if (outcome.action === "extended") {
+      expect(outcome.vectors.githubRepoId).toBe(808247824)
+    }
+  })
+
+  it("prefers incoming githubRepoId over the existing stored value when both are present", async () => {
+    // Defensive: if the migration endpoint updates the ID on a
+    // record (in theory it never should — IDs are immutable — but
+    // if a repo were re-keyed by GitHub support, the incoming
+    // wins). Sanity check that the merge respects the most-recent
+    // signal.
+    const { computeMerge } = await import("../src/lib/repo-index-vectors")
+    const existing = {
+      kind: "ok" as const,
+      vectors: {
+        v: 1 as const,
+        owner: "Arc-and-Anchor",
+        repo: "sigilix",
+        githubRepoId: 999999999,
+        runId: "0123456789abcdef",
+        byPath: {},
+      },
+    }
+    const outcome = computeMerge({
+      existing,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      githubRepoId: 808247824,
+      runId: "0123456789abcdef",
+      idsByPathSlice: {},
+      activeRunId: "0123456789abcdef",
+    })
+    if (outcome.action === "extended") {
+      expect(outcome.vectors.githubRepoId).toBe(808247824)
+    }
+  })
+
+  it("treats invalid existing githubRepoId (0 / negative / non-integer) as absent", async () => {
+    // Defense-in-depth: a corrupt record with a stored zero / float
+    // shouldn't propagate that invalid value into the new merge.
+    // The merge effectively drops the field, the next dual-write
+    // skips, and Phase 3 migration is the path to re-stamp the
+    // correct ID.
+    const { computeMerge } = await import("../src/lib/repo-index-vectors")
+    const corrupt = {
+      kind: "ok" as const,
+      vectors: {
+        v: 1 as const,
+        owner: "Arc-and-Anchor",
+        repo: "sigilix",
+        githubRepoId: 0,
+        runId: "0123456789abcdef",
+        byPath: { "x.ts": ["aaa"] },
+      },
+    }
+    const outcome = computeMerge({
+      existing: corrupt,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      githubRepoId: undefined,
+      runId: "0123456789abcdef",
+      idsByPathSlice: {},
+      activeRunId: "0123456789abcdef",
+    })
+    if (outcome.action === "extended") {
+      expect(outcome.vectors.githubRepoId).toBeUndefined()
+    }
+  })
+})
+
 describe("read/write round-trip", () => {
   it("round-trips a valid record", async () => {
     const { kv } = makeKvStub()

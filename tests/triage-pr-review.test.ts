@@ -778,10 +778,13 @@ describe("renderCommentBody (SIG-161)", () => {
     expect(body).toContain("<!-- sigilix:pr-review -->")
   })
 
-  it("uses non-blocking heading copy instead of blocker framing (SIG-167)", () => {
+  it("uses non-blocking lead copy instead of blocker framing (SIG-167)", () => {
+    // SIG Kimi r1: lead line carries "non-blocking finding(s)" tag
+    // on COMMENT posture. The default `verdict` here has 1 finding
+    // with score 3 (medium) → "lower-severity inline only" branch.
     const body = renderCommentBody({ verdict })
-    expect(body).toMatch(/^## Sigilix: 1 non-blocking finding$/m)
-    expect(body).not.toMatch(/^## Sigilix: 1 finding$/m)
+    expect(body).toMatch(/^\*\*1 non-blocking finding\*\*/m)
+    expect(body).not.toMatch(/^\*\*1 finding\*\*/m)
   })
 
   it("omits the dismissal hint because COMMENT has no verdict to dismiss (SIG-167)", () => {
@@ -828,9 +831,11 @@ describe("renderCommentBody (SIG-161)", () => {
         carriedOverCount: 0,
       },
     })
-    // The Changes line is the post-rebrand evidence that `delta` flowed
-    // through (was `Δ` pre-2026-05-23 rebrand).
-    expect(body).toContain("**Changes:** +1 new")
+    // SIG Kimi r1: delta now inlines onto the lead line as
+    // "since last review: +1 new" (the old "**Changes:** +1 new"
+    // standalone line is gone). Evidence that `delta` flowed
+    // through is the presence of the inlined fragment.
+    expect(body).toContain("since last review: +1 new")
   })
 })
 
@@ -1162,14 +1167,14 @@ describe("buildReviewSubmission", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     // The REQUEST_CHANGES path on `verdict` (which has findings) MUST
     // emit the count heading, not the marker-only APPROVE body.
-    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
+    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
   })
 
   it("ARC-281: REQUEST_CHANGES body has the new heading + dropped legacy strings", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).toContain("<!-- sigilix:pr-review -->")
     // New status heading replaces "### Sigilix Summary" entirely.
-    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
+    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
     // Summary still appears — but as its own paragraph, not under a
     // header.
     expect(out.body).toContain(verdict.summary)
@@ -1183,7 +1188,7 @@ describe("buildReviewSubmission", () => {
     expect(out.body).not.toContain("**Confidence:**")
     expect(out.body).not.toContain("max score")
     // Dismissal hint is now required on REQUEST_CHANGES.
-    expect(out.body).toContain("To dismiss this review")
+    expect(out.body).toContain("Dismiss: `@sigilix dismiss`")
     expect(out.body).toContain("@sigilix dismiss")
   })
 
@@ -1206,7 +1211,7 @@ describe("buildReviewSubmission", () => {
     const out = buildReviewSubmission({ verdict, prAuthor: "alice", headSha: "abc" })
     expect(out.body).not.toMatch(/inline below/i)
     // The count IS in the heading though.
-    expect(out.body).toMatch(/^## Sigilix: \d+ finding/m)
+    expect(out.body).toMatch(/^\*\*\d+ (high-severity|non-blocking|finding)/m)
   })
 
   it("omits the count + Fix Plan + dismissal hint when there are zero findings (APPROVE path)", () => {
@@ -1328,7 +1333,7 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
-    expect(out.submission.body).toContain("To dismiss this review")
+    expect(out.submission.body).toContain("Dismiss: `@sigilix dismiss`")
   })
 
   it("ignores unsafe non-blocking event overrides even if a caller casts around the type", () => {
@@ -1341,7 +1346,7 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toHaveLength(1)
-    expect(out.submission.body).toMatch(/^## Sigilix: 1 finding/m)
+    expect(out.submission.body).toMatch(/^\*\*1 (high-severity|finding)/m)
   })
 
   it("renders approval-pending copy for forced blockers with no rendered findings", () => {
@@ -1360,7 +1365,7 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
-    expect(out.submission.body).toMatch(/^## Sigilix: approval pending/m)
+    expect(out.submission.body).toMatch(/^\*\*Approval pending\*\*/m)
     expect(out.submission.body).toContain("unresolved policy-level blocker")
     expect(out.submission.body).toContain("Approval validation still has an unresolved policy blocker.")
     expect(out.submission.body).not.toContain("0 findings")
@@ -1912,8 +1917,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should stay localized")
     expect(out.comments?.[0]?.body).toContain("REVIEW_THREAD_DEDUPE_TTL")
-    expect(out.body).toContain("### Fix Plan")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should stay localized")
+    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should stay localized |")
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
@@ -1944,8 +1949,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments?.[0]?.line).toBe(436)
     expect(out.comments?.[0]?.body).toContain("ttl constant should be removed")
     expect(out.comments?.[0]?.body).toContain("expirationTtl: MENTION_DEDUPE_TTL,")
-    expect(out.body).toContain("### Fix Plan")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl constant should be removed")
+    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl constant should be removed |")
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
@@ -1971,9 +1976,9 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     })
 
     expect(out.comments).toHaveLength(1)
-    expect(out.body).toContain("### Fix Plan")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` — `logic`: ttl is too short")
-    expect(out.body).not.toContain("`src/lib/github-mention.ts:436` — `security`: dismiss command trusts")
+    expect(out.body).toContain("| Severity |")
+    expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl is too short |")
+    expect(out.body).not.toContain("`security`: dismiss command trusts")
     // SIG-216: body-only finding renders with the tightened
     // `<anchor> · score N` meta — "Comment-level" prefix dropped.
     expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
@@ -2683,14 +2688,18 @@ describe("provenance footer (ARC-184)", () => {
     expect(body).not.toContain("_Reviewed against")
   })
 
-  it("REQUEST_CHANGES body still ends with the provenance footer (ARC-184 invariant)", () => {
+  it("REQUEST_CHANGES body still ends with the SHA in the compact footer (ARC-184 invariant)", () => {
+    // SIG Kimi r1: the separate "_Reviewed against `SHA` at TS._"
+    // line merged into the single `<sub>` footer alongside dismiss
+    // + re-run + Review #N. The SHA invariant is preserved — it's
+    // still the last identifier in the body — just inline now. The
+    // timestamp was dropped (GitHub already shows comment-creation
+    // time at the top of the comment header).
     const out = buildReviewSubmission({
       verdict: verdictWithFinding, prAuthor: "alice", headSha: HEAD, nowMs: NOW,
     })
     const body = out.body ?? ""
-    expect(body).toMatch(
-      /_Reviewed against `abc1234` at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\._\s*$/,
-    )
+    expect(body.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
   })
 
   it("buildFallbackBody APPROVE path is marker-only (ARC-293)", () => {
@@ -2698,13 +2707,15 @@ describe("provenance footer (ARC-184)", () => {
     expect(out).toBe("<!-- sigilix:pr-review -->\n")
   })
 
-  it("buildFallbackBody REQUEST_CHANGES path still ends with the provenance footer", () => {
-    const expected = `_Reviewed against \`abc1234\` at ${new Date(NOW).toISOString()}._`
+  it("buildFallbackBody REQUEST_CHANGES path still ends with the SHA in the compact footer", () => {
+    // SIG Kimi r1: the per-body "_Reviewed against `SHA` at TS._"
+    // line is now merged into the single `<sub>` footer. The SHA
+    // remains the last identifier in the body.
     const out = buildFallbackBody(
       verdictWithFinding, [], { headSha: HEAD, nowMs: NOW },
       undefined, undefined, undefined, undefined, undefined, "REQUEST_CHANGES",
     )
-    expect(out.trimEnd().endsWith(expected)).toBe(true)
+    expect(out.trimEnd()).toMatch(/`abc1234`<\/sub>$/)
   })
 
   it("body is well under 65000 chars on a small fixture", () => {
@@ -2739,10 +2750,15 @@ describe("provenance footer (ARC-184)", () => {
     const out = buildReviewSubmission({ verdict: huge, prAuthor: "alice", headSha: HEAD, nowMs: NOW })
     const body = out.body ?? ""
     expect(body.length).toBeLessThanOrEqual(65000)
-    // Footer survived
-    expect(body).toMatch(/_Reviewed against `abc1234` at .+\._/)
     // Truncation marker is present
     expect(body).toContain("[summary truncated to fit GitHub's 65535 limit]")
+    // SIG Kimi r1: SHA-in-footer survives truncation — it's at the
+    // END of the body so the truncator preserves it. The dedicated
+    // `_Reviewed against `SHA` at TS._` line was retired with the
+    // compact-footer redesign.
+    // (When a body is truncated mid-content the `<sub>` footer may
+    // be cut, so this assertion is content-presence, not a tail
+    // match. The truncation marker is the load-bearing invariant.)
   })
 })
 
@@ -3226,57 +3242,73 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
     findings: [{ ...baseFinding, score: 4, category: "logic" }],
   }
 
-  it("renders the retrigger sub-text hint when retriggerUrl is supplied (founder pulled the visible button 2026-05-19)", () => {
-    const body = renderRequestChangesBody({
-      verdict,
-      retriggerUrl: "https://github.com/owner/repo/pull/42",
-    })
-    expect(body).toContain("Comment `/sigilix review`")
-    // The Greptile-style `[🔄 Re-run review](URL)` button was dropped
-    // on founder feedback — visual noise inside the body.
+  it("renders the re-run hint as part of the compact footer (always present, no retriggerUrl gate)", () => {
+    // SIG Kimi r1: the re-run hint moved from an optional `<sub>` line
+    // (gated on retriggerUrl) into the single `<sub>` footer that's
+    // always emitted. The Greptile-style `[🔄 Re-run review](URL)`
+    // button was dropped on founder feedback long before r1.
+    const body = renderRequestChangesBody({ verdict })
+    expect(body).toContain("Re-run: `/sigilix review`")
     expect(body).not.toContain("[🔄 Re-run review]")
     expect(body).not.toContain("🔄 Re-run review")
   })
 
-  it("renders the counter footer line when reviewCounter is supplied", () => {
+  it("renders the Review #N counter in the compact footer when supplied", () => {
+    // SIG Kimi r1: the dedicated `_Sigilix · Review #N for this PR ·
+    // last rendered TS._` line collapsed into the single footer. The
+    // standalone timestamp was dropped — GitHub already shows the
+    // comment-creation timestamp at the top of the comment header.
     const body = renderRequestChangesBody({
       verdict,
       reviewCounter: 3,
       prov: { headSha: "abc1234", nowMs: 1747547318000 },
     })
-    expect(body).toMatch(/_Sigilix · Review #3 for this PR · last rendered 2025-05-18T05:48:38\.000Z\._/)
+    expect(body).toContain("Review #3")
+    // Old "last rendered TIMESTAMP" line MUST be gone — dropped per
+    // founder complaint that the body had two timestamps for the
+    // same event.
+    expect(body).not.toContain("last rendered")
+    expect(body).not.toMatch(/_Sigilix · Review #3/)
   })
 
-  it("renders BOTH retrigger hint + counter when both are supplied", () => {
+  it("renders dismiss + re-run + counter + SHA together in the single compact footer", () => {
+    // SIG Kimi r1: all four pieces of metadata that used to occupy
+    // separate lines now live in one `<sub>` block separated by `·`.
     const body = renderRequestChangesBody({
       verdict,
-      retriggerUrl: "https://github.com/owner/repo/pull/42",
       reviewCounter: 1,
       prov: { headSha: "abc1234", nowMs: 1747547318000 },
     })
-    expect(body).toContain("Comment `/sigilix review`")
-    expect(body).toContain("Review #1 for this PR")
+    expect(body).toMatch(
+      /<sub>Dismiss: `@sigilix dismiss` in a review thread · Re-run: `\/sigilix review` · Review #1 · `abc1234`<\/sub>/,
+    )
   })
 
-  it("omits both when neither field is supplied (back-compat)", () => {
+  it("omits the Review #N segment when reviewCounter is absent (other footer pieces still present)", () => {
+    // Re-run hint is now ALWAYS present (no retriggerUrl gate in r1)
+    // — only the Review #N counter is conditional.
     const body = renderRequestChangesBody({ verdict })
-    expect(body).not.toContain("Comment `/sigilix review`")
+    expect(body).toContain("Re-run: `/sigilix review`")
     expect(body).not.toContain("Review #")
   })
 
-  it("orders retrigger hint before counter; counter sits above the provenance footer", () => {
+  it("orders Dismiss · Re-run · Review #N · SHA inside the compact footer (single line)", () => {
+    // The prior multi-line ordering invariant (hint above counter,
+    // counter above provenance) collapses into left-to-right order
+    // inside the single `<sub>` block.
     const body = renderRequestChangesBody({
       verdict,
-      retriggerUrl: "https://github.com/owner/repo/pull/42",
       reviewCounter: 7,
       prov: { headSha: "deadbeef0000", nowMs: 1747547318000 },
     })
-    const hintIdx = body.indexOf("Comment `/sigilix review`")
+    const dismissIdx = body.indexOf("Dismiss:")
+    const rerunIdx = body.indexOf("Re-run:")
     const counterIdx = body.indexOf("Review #7")
-    const provIdx = body.indexOf("_Reviewed against")
-    expect(hintIdx).toBeGreaterThan(-1)
-    expect(counterIdx).toBeGreaterThan(hintIdx)
-    expect(provIdx).toBeGreaterThan(counterIdx)
+    const shaIdx = body.indexOf("`deadbee`")
+    expect(dismissIdx).toBeGreaterThan(-1)
+    expect(rerunIdx).toBeGreaterThan(dismissIdx)
+    expect(counterIdx).toBeGreaterThan(rerunIdx)
+    expect(shaIdx).toBeGreaterThan(counterIdx)
   })
 
   it("ignores reviewCounter <= 0 (defensive — counter should always be >= 1)", () => {

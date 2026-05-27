@@ -54,7 +54,7 @@ describe("buildFallbackBody", () => {
   it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
     const body = buildFallbackBody(baseVerdict, [])
     // New status heading replaces "### Sigilix Summary".
-    expect(body).toMatch(/^## Sigilix: \d+ non-blocking finding/m)
+    expect(body).toMatch(/^\*\*\d+ non-blocking finding/m)
     // Summary survives — Kimi keeps it as a flat paragraph under
     // the heading.
     expect(body).toContain("One real bug.")
@@ -130,7 +130,7 @@ describe("buildFallbackBody", () => {
     // landed as inline comments). Heading count is in the top-of-body
     // status heading, not on the section.
     expect(body).toContain("### Review Body Findings")
-    expect(body).toMatch(/^## Sigilix: 2 non-blocking findings/m)
+    expect(body).toMatch(/^\*\*2 non-blocking findings/m)
     expect(body).not.toContain("### Findings (2)")
   })
 
@@ -245,7 +245,7 @@ describe("buildFallbackSubmission", () => {
       eventOverride: "REQUEST_CHANGES",
     })
     expect(submission.event).toBe("REQUEST_CHANGES")
-    expect(submission.body).toContain("To dismiss this review")
+    expect(submission.body).toContain("Dismiss: `@sigilix dismiss`")
   })
 
   it("renders approval-pending copy when a zero-finding policy blocker forces REQUEST_CHANGES", () => {
@@ -262,7 +262,7 @@ describe("buildFallbackSubmission", () => {
     })
 
     expect(submission.event).toBe("REQUEST_CHANGES")
-    expect(submission.body).toMatch(/^## Sigilix: approval pending/m)
+    expect(submission.body).toMatch(/^\*\*Approval pending\*\*/m)
     expect(submission.body).toContain("unresolved policy-level blocker")
     expect(submission.body).not.toContain("0 findings")
   })
@@ -362,7 +362,7 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     })
     expect(submission.body).not.toContain("Review Body Findings")
     expect(submission.body).not.toMatch(/inline below/i)
-    expect(submission.body).toMatch(/^## Sigilix: 1 finding/m)
+    expect(submission.body).toMatch(/^\*\*1 high-severity finding/m)
   })
 })
 

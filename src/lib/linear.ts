@@ -64,6 +64,12 @@ export interface LinearCommentWithIssue {
   id: string
   body: string
   user: { name: string | null; displayName: string | null } | null
+  /** SIG-225 follow-up: parent comment id when this comment is a
+   *  thread reply, null on top-level comments. Threaded by Linear
+   *  via `parent: Comment` (we project to id-only here since the
+   *  caller never needs the parent body/user — only its existence
+   *  + id for the createComment(... parentId) pass-through). */
+  parent: { id: string } | null
   issue: {
     id: string
     identifier: string
@@ -112,6 +118,7 @@ export class LinearClient {
           id
           body
           user { name displayName }
+          parent { id }
           issue {
             id
             identifier
@@ -341,8 +348,15 @@ export class LinearClient {
     await this.gql(mutation, { id: issueId, input })
   }
 
-  /** Create a new comment on an issue. Returns the comment ID. */
-  async createComment(issueId: string, body: string): Promise<string> {
+  /** Create a new comment on an issue. Returns the comment ID.
+   *
+   *  SIG-225 follow-up: optional `parentId` makes the new comment a
+   *  REPLY inside an existing thread instead of a top-level post. Used
+   *  by `handleMention` when responding to a thread-followup trigger —
+   *  the bot's reply should land in the same thread as the founder's
+   *  reply, not at issue-root. Top-level callers (triage, manual
+   *  trigger) keep the legacy two-arg call. */
+  async createComment(issueId: string, body: string, parentId?: string): Promise<string> {
     const mutation = /* GraphQL */ `
       mutation CommentCreate($input: CommentCreateInput!) {
         commentCreate(input: $input) {
@@ -351,8 +365,10 @@ export class LinearClient {
         }
       }
     `
+    const input: { issueId: string; body: string; parentId?: string } = { issueId, body }
+    if (parentId) input.parentId = parentId
     const data = await this.gql<{ commentCreate: { comment: { id: string } } }>(mutation, {
-      input: { issueId, body },
+      input,
     })
     return data.commentCreate.comment.id
   }

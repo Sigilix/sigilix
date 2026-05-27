@@ -410,8 +410,20 @@ export async function handleMention(
   }
 
   const body = formatReply({ verdict, askerHandle })
-  const newCommentId = await linear.createComment(data.issue.id, body)
-  log("reply-posted", { newCommentId })
+  // SIG-225 follow-up: if the source comment is itself a thread reply
+  // (has a parentId), the bot's response should nest inside the SAME
+  // thread instead of posting top-level. Use the SOURCE COMMENT's
+  // parent id (NOT the source comment's own id) so the bot's reply
+  // becomes a sibling of the user's reply under the same thread root,
+  // matching the natural threading model — Linear's threads are flat
+  // (parent = thread root, all replies share the same parentId).
+  //
+  // On the mention path (top-level @-mention with no parent), this is
+  // null and the call falls back to a top-level post — legacy
+  // behavior preserved.
+  const replyParentId = data.parent?.id
+  const newCommentId = await linear.createComment(data.issue.id, body, replyParentId)
+  log("reply-posted", { newCommentId, replyParentId: replyParentId ?? null })
 
   // Mark KV so re-deliveries of the same Comment.create event don't
   // produce a duplicate reply. 30-day TTL — webhooks from Linear get

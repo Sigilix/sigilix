@@ -259,6 +259,9 @@ describe("renderApproveBody (ARC-293 / SIG-94)", () => {
 
 describe("renderRequestChangesBody (ARC-281)", () => {
   it("Variant D — REQUEST_CHANGES, fresh review with one anchored finding (full coverage)", () => {
+    // SIG (Kimi K2.6 r1 2026-05-27): compact redesign. Was H2 heading
+    // + H3 Fix Plan + bullet + 4 separate footer lines (10+ lines of
+    // chrome around 1 finding); now lead line + table + single footer.
     const body = renderRequestChangesBody({
       verdict: verdict({ findings: [finding({ score: 5, headline: "broken test" })] }),
       coverage: FULL,
@@ -267,21 +270,15 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).toBe([
       "<!-- sigilix:pr-review -->",
       "",
-      "## Sigilix: 1 finding",
-      "",
-      "**Coverage:** logic · security · performance · tests",
+      "**1 high-severity finding** · coverage: logic · security · performance · tests",
       "",
       "The PR adds a feature flag and a test.",
       "",
-      "### Fix Plan",
+      "| Severity | Location | Issue |",
+      "|:---|:---|:---|",
+      "| **Critical (5)** | `src/foo.ts:42` | `logic`: broken test |",
       "",
-      "**Critical (score 5)** — 1 finding",
-      "- `src/foo.ts:42` — `logic`: broken test",
-      "",
-      "To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread.",
-      "",
-      "_Reviewed against `abcdef1` at 2025-05-18T05:48:38.000Z._",
-      "",
+      "<sub>Dismiss: `@sigilix dismiss` in a review thread · Re-run: `/sigilix review` · `abcdef1`</sub>",
     ].join("\n"))
   })
 
@@ -295,13 +292,17 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       delta,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toMatch(/^## Sigilix: 2 findings · since last review$/m)
-    expect(body).toContain("**Changes:** +2 new · 3 likely-fixed")
+    // SIG Kimi r1: lead line carries "**2 high-severity findings**"
+    // + inlined delta + coverage on a single line. The previous
+    // 3-line block (H2 heading + Changes badge + Coverage line)
+    // collapses into one line with `·` separators.
+    expect(body).toMatch(/^\*\*2 high-severity findings\*\*/m)
+    expect(body).toContain("since last review: +2 new · 3 likely-fixed")
     // Body MUST NOT carry the Δ triangle glyph (2026-05-23 rebrand).
     expect(body).not.toContain("Δ")
-    // Badge line MUST appear before the coverage line per Kimi's spec.
-    const deltaIdx = body.indexOf("**Changes:**")
-    const coverageIdx = body.indexOf("**Coverage:**")
+    // Delta MUST appear before coverage on the lead line.
+    const deltaIdx = body.indexOf("since last review:")
+    const coverageIdx = body.indexOf("coverage:")
     expect(deltaIdx).toBeGreaterThan(-1)
     expect(coverageIdx).toBeGreaterThan(deltaIdx)
   })
@@ -312,7 +313,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       coverage: ONE_MISSING,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toContain("**Coverage:** logic · security · tests — _performance specialist unavailable_")
+    expect(body).toContain("coverage: logic · security · tests — _performance specialist unavailable_")
   })
 
   it("Variant G — REQUEST_CHANGES stacked appends `_(Stacked on #N)_` to the summary paragraph", () => {
@@ -349,8 +350,10 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).toContain("`src/bar.ts:99`")
     expect(body).not.toContain("**src/bar.ts**")
     expect(body).toContain("could not anchor")
-    // Heading count includes both.
-    expect(body).toMatch(/^## Sigilix: 2 findings/m)
+    // SIG Kimi r1: lead line says "**1 high-severity finding** + 1 body"
+    // — the anchored critical goes in the Fix Plan table, the
+    // unanchored P2 lives in the body-only section.
+    expect(body).toMatch(/^\*\*1 high-severity finding\*\* \+ 1 body/m)
   })
 
   it("SIG-5 — body-only high findings are prominent but omitted from Fix Plan", () => {
@@ -392,7 +395,9 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
-    expect(body).toMatch(/^## Sigilix: 1 finding$/m)
+    // SIG Kimi r1: PR-scope finding (no line anchor) → body-only.
+    // Lead reads "**1 finding**" since no Fix Plan applies.
+    expect(body).toMatch(/^\*\*1 finding\*\*/m)
     expect(body).not.toContain("### Fix Plan")
     expect(body).toContain("### Review Body Findings")
     // SIG-216: pr-scope renders the bare path (no `:line`) + tightened
@@ -417,21 +422,26 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       verdict: verdict({ findings: [finding()] }),
       coverage: FULL,
     })
-    expect(body).toContain("To dismiss this review, push new commits or comment `@sigilix dismiss` in a review thread.")
+    expect(body).toContain("Dismiss: `@sigilix dismiss` in a review thread")
     expect(body).not.toMatch(/✅|🎉|🤖|🪄/)
   })
 
-  it("REQUEST_CHANGES heading uses singular 'finding' for N=1 and plural for N=2+", () => {
+  it("REQUEST_CHANGES lead-line uses singular 'finding' for N=1 and plural for N=2+", () => {
+    // SIG Kimi r1: high-severity count (score >= 4) drives singular/
+    // plural copy on the lead line. Override default score (3) to 4
+    // so the tier-aware "high-severity finding(s)" copy fires; the
+    // singular/plural switch itself is the point of the test, not
+    // which tier the default finding lands in.
     const oneFinding = renderRequestChangesBody({
-      verdict: verdict({ findings: [finding()] }),
+      verdict: verdict({ findings: [finding({ score: 4 })] }),
       coverage: FULL,
     })
-    expect(oneFinding).toMatch(/^## Sigilix: 1 finding$/m)
+    expect(oneFinding).toMatch(/^\*\*1 high-severity finding\*\*/m)
     const manyFindings = renderRequestChangesBody({
-      verdict: verdict({ findings: [finding(), finding({ line: 99 })] }),
+      verdict: verdict({ findings: [finding({ score: 4 }), finding({ line: 99, score: 4 })] }),
       coverage: FULL,
     })
-    expect(manyFindings).toMatch(/^## Sigilix: 2 findings$/m)
+    expect(manyFindings).toMatch(/^\*\*2 high-severity findings\*\*/m)
   })
 
   it("Marker is line 1 and there's no leading whitespace (cross-renderer invisibility)", () => {

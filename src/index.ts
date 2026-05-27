@@ -385,6 +385,17 @@ export interface Env {
   // specialist + synth prompts. Any other value keeps it off.
   OPENCLAW_DYNAMIC_REVIEW_EVIDENCE?: string
 
+  // SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
+  // skip the synthesizer LLM call entirely if the dispatcher returned
+  // exactly 1 specialist AND none of that specialist's findings have
+  // `score >= 4` (major/critical). The specialist's verdict becomes the
+  // submission directly. Saves ~15-25s on the hot path; safe by
+  // construction (no cross-specialist consensus to compute, no
+  // major-severity findings that benefit from synth-level rewriting).
+  // Any other value (including unset) keeps the legacy always-synth
+  // behavior.
+  OPENCLAW_SYNTH_BYPASS_ENABLED?: string
+
   // ARC-234: customer-ready indexing pipeline feature flag. Default
   // "off" preserves the legacy `app-level event ignored` drop so the
   // producer ships dark. Operator flips to "on" via

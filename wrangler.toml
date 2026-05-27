@@ -209,6 +209,30 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # no inline findings (which is correct for a docs PR).
 OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 
+# SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
+# the orchestrator skips the synthesizer LLM round-trip entirely when
+# the dispatcher returns exactly 1 specialist AND none of that
+# specialist's findings have `score >= 4` (major/critical). The
+# specialist's verdict becomes the submission directly. Saves ~15-25s
+# on the hot path (the typical `gpt-oss:120b-cloud` synth elapsed
+# window).
+#
+# Bypass eligibility ladder (helper: `isSynthBypassEligible`):
+#   1. This flag === "on"
+#   2. `SHADOW_BAKEOFF_ROLES` does NOT include "synth" (so the
+#      bake-off signal on the bypass-eligible cohort isn't halved)
+#   3. Dispatcher narrowed to exactly 1 specialist on purpose
+#   4. Exactly 1 specialist verdict came back non-null
+#   5. No finding has `score >= 4`
+#
+# Safe by construction: no cross-specialist consensus to compute on the
+# 1-role path, and the score-gate keeps anything major routed through
+# the full synth pipeline so synth-level severity rewriting still fires
+# when it matters. Rollback: flip to "off" or remove this line — no
+# schema change, no migration. Default-off in dev/test (the env var
+# is unset there).
+OPENCLAW_SYNTH_BYPASS_ENABLED = "on"
+
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.
 #               Identical behavior to pre-SIG-161. This is the PR 4a default.

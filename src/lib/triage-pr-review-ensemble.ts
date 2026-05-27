@@ -674,6 +674,51 @@ export function graphRetrievalEnabled(env: Env): boolean {
 }
 
 /**
+ * SIG-228 Phase 3c: returns true when `OPENCLAW_SYNTH_BYPASS_ENABLED` is
+ * `"on"`. Default-off keeps the always-synth legacy behavior in dev/test
+ * and in any production environment where the flag was never flipped.
+ * Production wrangler.toml ships this `"on"` so the bypass fires for
+ * single-specialist no-major reviews (the dispatcher's hot path).
+ */
+export function isSynthBypassEnabled(env: Env): boolean {
+  return (env.OPENCLAW_SYNTH_BYPASS_ENABLED ?? "").trim().toLowerCase() === "on"
+}
+
+/**
+ * SIG-228 Phase 3c: pure eligibility predicate, extracted so unit tests
+ * can pin the gate without spinning up the full ensemble. Returns true
+ * iff ALL of:
+ *
+ *   1. `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`.
+ *   2. The DISPATCHER decided to fan out to exactly 1 specialist
+ *      (`dispatchedCount === 1`). The hot path is "router narrowed
+ *      to 1 on purpose" — NOT "router fanned out to N, only 1 came
+ *      back." The latter is a degraded-coverage run and MUST run
+ *      synth so it can render the `[DEGRADED COVERAGE]` block.
+ *   3. Exactly 1 candidate verdict came back non-null (sanity-check;
+ *      the only way this differs from #2 is if the single dispatched
+ *      specialist itself failed, which makes the bypass impossible).
+ *   4. None of that candidate's findings have `score >= 4`.
+ *
+ * The score-gate semantics match `score >= 4` as the "major/critical"
+ * threshold used across the codebase
+ * (`triage-pr-review.ts:1961, 2103`). The orchestrator's inline bypass
+ * branch reads the predicate verbatim — keep these in sync.
+ */
+export function isSynthBypassEligible(
+  env: Env,
+  dispatchedCount: number,
+  candidates: ReadonlyArray<{ verdict: { findings: ReadonlyArray<{ score: number }> } | null }>,
+): boolean {
+  if (!isSynthBypassEnabled(env)) return false
+  if (dispatchedCount !== 1) return false
+  if (candidates.length !== 1) return false
+  const sole = candidates[0]
+  if (!sole || !sole.verdict) return false
+  return sole.verdict.findings.every((f) => f.score < 4)
+}
+
+/**
  * Returns the effective graph-retrieval mode: "off" | "shadow" | "post".
  *
  * While BLAST_RADIUS_RESOLUTION_READY is false, a raw value of "post" is
@@ -954,18 +999,24 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // capability without anchoring wall-time.
   logic: {
     // Was `deepseek-v4-pro:cloud` (100-270s). `deepseek-v4-flash:cloud`
-    // keeps the V4 reasoning lineage + 1M context at 45-95s. Codex's
-    // explicit speed/quality tradeoff — expect some loss on the
-    // hardest cross-file logic bugs; if shadow telemetry shows
-    // protected-role FN regression, roll back via wrangler.toml
-    // [vars] (one-line revert, no code change).
+    // keeps the V4 reasoning lineage + 1M context.
     primary: "deepseek-v4-flash:cloud",
-    retries: 1,
-    // Moonshot — cross-provider from DeepSeek. Same fallback family
-    // as performance below; concentrates Moonshot risk on logic +
-    // perf simultaneously (logic + perf primaries are independent,
-    // so a Moonshot outage degrades at most 2 of 5 roles).
-    fallback: "kimi-k2.5:cloud",
+    // 2026-05-26 Codex/measurement: production telemetry on PR #188
+    // showed deepseek-v4-flash + kimi-k2.5 (the prior fallback) BOTH
+    // hit exactly 60_000ms (PER_ATTEMPT_TIMEOUT_MS) on every review.
+    // The retry/fallback ladder was 100% waste — 180s burned, logic
+    // verdict never returned, customer got `[DEGRADED COVERAGE]` either
+    // way. Codex diagnostic: logic's prompt shape (full retrieval +
+    // graph + symbol context) is uniquely expensive; the issue is
+    // prompt-driven, not model-driven, so swapping fallbacks alone
+    // wouldn't help.
+    //
+    // Tactical fix: `retries: 0` + `fallback: null` → logic gets 1
+    // attempt only, caps at 60s instead of 180s. Saves 120s/review.
+    // Real fix is min-specialists early exit (structural) + surgical
+    // prompt-budget on logic (see SIG-220 latency budget doc).
+    retries: 0,
+    fallback: null,
   },
   security: {
     // Coder-model territory: vulnerability patterns are mostly
@@ -2879,8 +2930,147 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
-    // ─── Synthesizer ───────────────────────────────────────────
+    // ─── SIG-228 Phase 3c: synth-bypass single-specialist hot path ─
+    //
+    // When the dispatcher returns exactly 1 specialist AND none of
+    // that specialist's findings have `score >= 4` (major/critical),
+    // skip the synthesizer LLM round-trip entirely. The specialist's
+    // verdict IS the submission verdict — there's no cross-specialist
+    // consensus to compute, and no major-severity finding that
+    // benefits from synth-level rewriting.
+    //
+    // Saves ~15-25s on the hot path (the typical synth elapsed window
+    // on `gpt-oss:120b-cloud`). Flag-gated behind
+    // `OPENCLAW_SYNTH_BYPASS_ENABLED`; default-off in dev/test,
+    // default-on in production (wrangler.toml).
+    //
+    // Reaches here only AFTER the `succeeded.length === 0` bail above
+    // (line ~2894) — the bypass branch's `synthInputVerdicts[0]!`
+    // assertion is safe by construction. If the order is ever flipped,
+    // re-add a guard on the bypass branch.
+    //
+    // `synthInputVerdicts` is hoisted out so both the bypass path AND
+    // the synth path read the same truncated verdicts. `truncateVerdictToTokens`
+    // sorts findings by score DESC and pops from the end, so major
+    // findings always survive truncation as long as any space remains.
+    // The bypass eligibility check below intentionally reads from the
+    // UNTRUNCATED `succeeded` array (not `synthInputVerdicts`) so that a
+    // hypothetical extreme-token-pressure case dropping a `score >= 4`
+    // finding can't sneak past the bypass gate — CR phase-end catch on
+    // PR #188.
     const synthInputVerdicts = buildSynthInputVerdicts(succeeded)
+
+    // Bypass eligibility: dispatched-count gate + succeeded-count gate
+    // both live in the helper. The hot path is "dispatcher narrowed to
+    // 1 specialist on purpose" — NOT "dispatcher fanned out to N, only
+    // 1 returned." The latter is a degraded-coverage run where the
+    // customer expected multiple perspectives; we MUST run synth there
+    // so it can render the `[DEGRADED COVERAGE]` block and acknowledge
+    // the gap.
+    //
+    // Evaluated against the untruncated `succeeded` array — see the
+    // hoist comment above on `synthInputVerdicts` for why.
+    //
+    // HARD-DISABLE the bypass whenever synth shadow bake-off is
+    // configured for this run. Otherwise flipping the bypass on would
+    // silently halve the shadow synth signal on the bypass-eligible
+    // population — exactly the cohort the bake-off measures. The
+    // shadow comparator matters more than the bypass perf win during
+    // the bake-off window; flip `SHADOW_BAKEOFF_ROLES` back to "" to
+    // re-enable bypass.
+    const synthBypassEligible =
+      !shadowEnabledRoles.has("synth") &&
+      isSynthBypassEligible(
+        env,
+        router.specialists.length,
+        succeeded,
+      )
+
+    // Hoisted from the original synth section below so the bypass
+    // path can populate them too — the post-synth validation code
+    // reads from one source of truth regardless of which branch fired.
+    //
+    // `synthStartMs` is captured inside each branch so the metric stays
+    // apples-to-apples vs pre-SIG-228 telemetry: synth branch starts
+    // its clock right before the LLM call, bypass branch right before
+    // its near-zero construction. Otherwise the synth-path elapsedMs
+    // would silently accrete prompt-building + review-memory-lookup
+    // time and overstate the bypass savings on rollout dashboards.
+    let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
+    let synthStartMs: number
+    let synthAttemptsUsed = 0
+    let synthRetryUsed = false
+    let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
+
+    if (synthBypassEligible) {
+      synthStartMs = Date.now()
+      // Bypass: construct a synth-equivalent output directly from the
+      // single specialist's truncated verdict. The provenance entries
+      // declare every kept finding as sourced from that one specialist
+      // with `action: "kept"` — the only legal shape when synth never
+      // ran. The `modelUsed` sentinel lets telemetry consumers
+      // distinguish bypass elapsed-ms from real synth elapsed-ms.
+      //
+      // Known tradeoffs (M2/M3 from code-reviewer): the bypass also
+      // skips synth's contextual signals — AST supersession (drops
+      // specialist findings that share `(path, line, role_hint)` with
+      // a deterministic AST entry), SARIF Fix-Plan ordering, GRAPH
+      // CONTEXT contradiction, REVIEW MEMORY softening, and the
+      // unified PR-wide summary rewrite. On the 1-role no-major hot
+      // path those signals are typically empty or low-signal; on a
+      // 1-role + populated-AST/SARIF/memory PR they would actually
+      // do useful work. Worth filing a follow-up to either disable
+      // bypass when those blocks are non-empty OR fold a minimal
+      // post-bypass supersession pass.
+      const sole = synthInputVerdicts[0]!
+      const verdict = sole.verdict
+      synthOutput = {
+        verdict,
+        provenance: {
+          findings: verdict.findings.map((f) => ({
+            sourceSpecialists: [sole.role],
+            sourceFindingIds: [f.id],
+            action: "kept" as const,
+            verifiedViaRetrieval: false,
+          })),
+          dropped: [],
+        },
+        // `elapsedMs: 0` here is overwritten by `synthEntry.elapsedMs =
+        // Date.now() - synthStartMs` below; kept as a defensive stub
+        // so callers reading `synthOutput.elapsedMs` directly (vs
+        // via the telemetry entry) never see undefined.
+        elapsedMs: 0,
+        modelUsed: "synth-bypass-single-specialist",
+        attemptsUsed: 0,
+      }
+      telemetry.synthBypass = {
+        reason: "single_specialist_no_major",
+        specialistRole: sole.role,
+        findingCount: verdict.findings.length,
+      }
+      // Set reviewMemory + synthRetry explicitly for telemetry parity
+      // with the synth path — bypass produces a shape that rollout
+      // dashboards can filter for without ambiguity.
+      // `reason: "retrieval-disabled-config"` is the closest
+      // ReviewMemorySkipReason that captures "the bypass path
+      // skipped review memory by configuration choice" (the synth-
+      // bypass IS a configuration choice).
+      telemetry.reviewMemory = {
+        skipped: true,
+        reason: "retrieval-disabled-config",
+        findingsCount: 0,
+      }
+      telemetry.synthRetry = { used: false, outcome: "n/a" }
+      console.log(JSON.stringify({
+        event: "ensemble-synth-bypassed",
+        owner, repo, prNumber,
+        role: sole.role,
+        findingCount: verdict.findings.length,
+      }))
+    } else {
+      synthStartMs = Date.now()
+
+    // ─── Synthesizer ───────────────────────────────────────────
     const synthVerdictBlock = renderSpecialistVerdictsForSynth(synthInputVerdicts)
     const synthMessage = buildSynthesizerInitialMessage({
       prNumber,
@@ -2960,13 +3150,11 @@ export async function handlePrReviewEnsemble(
     // timer bubbles to the outer catch and is recorded as
     // `internalError: "Operation aborted"` with `synthesizer: null` —
     // the spec promised `synthesizer.timedOut: true` for this case.
-    let synthOutput: Awaited<ReturnType<typeof runSynthesizer>> | undefined
-    const synthStartMs = Date.now()
-    // ARC-278: track whether we ran the retry attempt + how it went,
-    // for post-rollout telemetry analysis. `n/a` means the first
-    // attempt succeeded; the other values record the retry's outcome.
-    let synthRetryUsed = false
-    let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
+    //
+    // SIG-228 Phase 3c: `synthOutput`, `synthStartMs`, `synthRetryUsed`,
+    // `synthRetryOutcome` + `synthAttemptsUsed` are now declared in
+    // outer scope (just before the bypass-or-synth branch above) so
+    // both paths populate the same identifiers.
     // ARC-278 (CR catch on PR #90): runSynthesizer wraps
     // runWithRetryAndFallback, which already does its own internal
     // primary+retry+fallback. So `attempt.attemptsUsed` from a single
@@ -2975,7 +3163,9 @@ export async function handlePrReviewEnsemble(
     // never returned attemptsUsed at all — treat as 1).
     // This feeds `finalize()`'s daily-budget charge; under-counting
     // here would under-charge the budget and over-count head-room.
-    let synthAttemptsUsed = 0
+    //
+    // SIG-228 Phase 3c: hoisted to outer scope (see comment block at
+    // the top of the bypass-or-synth branch above).
     try {
       // ARC-185: per-PR commands.review.{prompt.addendum, model.{primary,
       // fallbacks}} override. Specialists left untouched on the v3.1
@@ -3187,6 +3377,8 @@ export async function handlePrReviewEnsemble(
       telemetry.fellBackReason = "synth_timeout"
       return bailWithSkipNotice("synth_timeout")
     }
+    } // SIG-228 Phase 3c: close the `else { /* synth path */ }` opened
+      // above the prompt-building block.
 
     // Phase 4a.2: withComposedTimeout no longer throws when its own
     // timer or the orch signal aborts an abort-aware factory — it
@@ -7584,6 +7776,21 @@ interface EnsembleTelemetry {
   synthRetry?: {
     used: boolean
     outcome: SynthAttemptOutcome | "n/a" | "exhausted-budget"
+  }
+  /**
+   * SIG-228 Phase 3c: populated when the synth-bypass single-specialist
+   * hot path fired (dispatcher returned 1 specialist + no major-severity
+   * findings + `OPENCLAW_SYNTH_BYPASS_ENABLED === "on"`). When present,
+   * `synthesizer.modelUsed` is the bypass sentinel and `synthesizer.elapsedMs`
+   * reflects the bypass synth-construction time (near-zero), so post-
+   * rollout analysis can compute the wall-time saved vs the legacy
+   * synth path. Absent on the synth path (default) AND when the flag
+   * is off.
+   */
+  synthBypass?: {
+    reason: "single_specialist_no_major"
+    specialistRole: SpecialistRole
+    findingCount: number
   }
   specialistVerdicts: Array<{
     role: SpecialistRole

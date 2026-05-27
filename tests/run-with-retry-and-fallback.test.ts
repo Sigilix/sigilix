@@ -470,25 +470,31 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
     }
   })
 
-  it("emits primary/retry/fallback sequence on logic specialist when primary + retry both 503", async () => {
-    // SPECIALIST_CONFIGS.logic = { primary: "deepseek-v4-pro:cloud",
-    // retries: 1, fallback: "kimi-k2.5:cloud" } — three mocked chat
-    // calls (primary 503, retry 503, fallback OK) → three emits:
+  it("emits primary/retry/fallback sequence on security specialist when primary + retry both 503", async () => {
+    // SPECIALIST_CONFIGS.security = { primary: "qwen3-coder-next:cloud",
+    // retries: 1, fallback: "deepseek-v4-pro:cloud" } — three mocked
+    // chat calls (primary 503, retry 503, fallback OK) → three emits:
     // primary/failed, retry/failed, fallback/ok. Pins both the
     // attemptKind sequence AND the model identity per attempt
     // (retry stays on primary model; fallback swaps).
+    //
+    // Switched from `logic` to `security` on 2026-05-26 because the
+    // logic config was trimmed to retries:0 + fallback:null after
+    // telemetry showed the logic ladder was 100% waste. `security`
+    // is the next role still exercising the full primary+retry+
+    // fallback ladder, so it's the right surface for this regression.
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
     try {
       mockChat
         .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
         .mockRejectedValueOnce(new Error("Ollama HTTP 503: upstream overload"))
         .mockResolvedValueOnce(ok(JSON.stringify({
-          summary: "logic verdict",
+          summary: "security verdict",
           confidence: 3,
           findings: [],
         })))
       const result = await runSpecialist({
-        role: "logic",
+        role: "security",
         apiKey: "test-key",
         systemPrompt: "system",
         initialMessage: "user",
@@ -497,7 +503,7 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         perfCtx,
       })
       expect(result.verdict).not.toBeNull()
-      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.logic.fallback)
+      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.security.fallback)
 
       const events = logSpy.mock.calls
         .map((c) => {
@@ -507,18 +513,18 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
         .filter((e): e is Record<string, unknown> =>
           e !== null
           && e["event"] === "model-attempt-completed"
-          && e["role"] === "logic",
+          && e["role"] === "security",
         )
       expect(events).toHaveLength(3)
       expect(events[0]?.["attemptKind"]).toBe("primary")
       expect(events[0]?.["outcome"]).toBe("failed")
-      expect(events[0]?.["model"]).toBe(SPECIALIST_CONFIGS.logic.primary)
+      expect(events[0]?.["model"]).toBe(SPECIALIST_CONFIGS.security.primary)
       expect(events[1]?.["attemptKind"]).toBe("retry")
       expect(events[1]?.["outcome"]).toBe("failed")
-      expect(events[1]?.["model"]).toBe(SPECIALIST_CONFIGS.logic.primary)
+      expect(events[1]?.["model"]).toBe(SPECIALIST_CONFIGS.security.primary)
       expect(events[2]?.["attemptKind"]).toBe("fallback")
       expect(events[2]?.["outcome"]).toBe("ok")
-      expect(events[2]?.["model"]).toBe(SPECIALIST_CONFIGS.logic.fallback)
+      expect(events[2]?.["model"]).toBe(SPECIALIST_CONFIGS.security.fallback)
     } finally {
       logSpy.mockRestore()
     }

@@ -110,7 +110,10 @@ describe("resolveReviewMemoryConfig — defaults + clamps", () => {
     expect(r).toEqual({
       enabled: false,
       captureOnly: false,
-      categories: ["security", "logic", "performance", "tests"],
+      // SIG-247 Phase 0: default categories expanded from 4 to 5
+      // (added "architecture"). Was ["security", "logic",
+      // "performance", "tests"] until 2026-05-27.
+      categories: ["security", "logic", "performance", "tests", "architecture"],
       maxInjectedMemories: 5,
       minSignalThreshold: 3,
       maxSignalAgeDays: 90,
@@ -121,7 +124,7 @@ describe("resolveReviewMemoryConfig — defaults + clamps", () => {
     const r = resolveReviewMemoryConfig({ reviewMemory: {} })
     expect(r.enabled).toBe(false)
     expect(r.captureOnly).toBe(false)
-    expect(r.categories).toEqual(["security", "logic", "performance", "tests"])
+    expect(r.categories).toEqual(["security", "logic", "performance", "tests", "architecture"])
   })
 
   it("captureOnly: true alone → captureOnly true, enabled false", () => {
@@ -130,9 +133,20 @@ describe("resolveReviewMemoryConfig — defaults + clamps", () => {
     expect(r.enabled).toBe(false)
   })
 
-  it("explicit categories: [] (empty) → all 4 defaults applied", () => {
+  it("explicit categories: [] (empty) → all 5 defaults applied (SIG-247 Phase 0)", () => {
     const r = resolveReviewMemoryConfig({ reviewMemory: { categories: [] } })
-    expect(r.categories).toEqual(["security", "logic", "performance", "tests"])
+    expect(r.categories).toEqual(["security", "logic", "performance", "tests", "architecture"])
+  })
+
+  it("recognizes 'architecture' as a valid category (SIG-247 Phase 0)", () => {
+    // Defense-in-depth: confirm the membership Set was extended too.
+    // Without the Set update, "architecture" would be silently dropped
+    // by the dedupe loop in parseSigilixConfig, even though the
+    // default-resolution path includes it.
+    const r = resolveReviewMemoryConfig({
+      reviewMemory: { categories: ["architecture", "security"] },
+    })
+    expect(r.categories).toEqual(["architecture", "security"])
   })
 
   it("explicit categories: subset → honored", () => {

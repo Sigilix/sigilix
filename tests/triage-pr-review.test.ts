@@ -2860,20 +2860,18 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   it("returns the P3 badge img for score 1 (was null pre-SIG-164)", () => {
     expect(severityBadgeForScore(1)).toContain('alt="P3"')
   })
-  it("renders badges at the padded 32×32 IMG display dimensions (SIG-238 r7 — Kimi K2.6 2026-05-27)", () => {
-    // SIG-238 round-7: outer IMG dimensions now include the 6px
-    // transparent inset on each side, so the badge is 32×32 instead of
-    // the prior 20×20. The COLORED rect inside the SVG is still 20×20
-    // — the dimension growth is purely the transparent margin that
-    // absorbs GitHub Primer's `border-radius` CSS on `.markdown-body img`.
-    // Round 4's "drop the <a> wrap → use bare <img>" assumed Primer only
-    // rounded `a > img`; founder's 2026-05-26 screenshot proved Primer
-    // now rounds bare <img> too. Geometry padding is the load-bearing
-    // fix; the IMG dims must match the SVG intrinsic viewBox to keep
-    // the browser from scaling the padding non-uniformly.
+  it("renders badges as <a href=\"#\"><img></a> with NO explicit width/height (SIG-238 r9)", () => {
+    // SIG-238 round-9 pattern. Empirically this combo (a-wrap +
+    // missing dimensions) defeats Primer's bubble rule. r4 (drop
+    // a-wrap) + r7 (32×32 transparent inset) both lost.
     const out = severityBadgeForScore(3)
-    expect(out).toContain('width="32"')
-    expect(out).toContain('height="32"')
+    expect(out).toMatch(/<a href="#"><img\s/)
+    expect(out).toContain('align="top"')
+    expect(out).toContain("</a>")
+    // Critical absence: explicit IMG width/height. Greptile omits both
+    // — adding them re-introduces the bubble on github.com PR comments.
+    expect(out).not.toMatch(/<img[^>]*\swidth=/)
+    expect(out).not.toMatch(/<img[^>]*\sheight=/)
   })
   it("uses the public Sigilix/sigilix-glyphs raw host so GitHub's js-gh-image-fallback doesn't inject border-radius (SIG-238 round-6)", () => {
     // SIG-238 round-6 = the actual fix. Tonight we created

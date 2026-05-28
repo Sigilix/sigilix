@@ -10,6 +10,8 @@
 import { describe, it, expect, vi } from "vitest"
 import {
   evaluateSecurityFinding,
+  evaluateScanFactDismissal,
+  isDismissibleFact,
   deriveSecurityBucket,
   parseSecurityValidatorMode,
 } from "../src/lib/validate-security-finding"
@@ -70,6 +72,75 @@ describe("deriveSecurityBucket", () => {
   it("returns null for a bare security category with no usable cweId", () => {
     expect(deriveSecurityBucket(finding({ cweId: undefined }))).toBeNull()
     expect(deriveSecurityBucket(finding({ cweId: "CWE-99999" }))).toBeNull()
+  })
+})
+
+describe("isDismissibleFact (SIG-282)", () => {
+  it("only warn-level secret-scan facts are dismissible by the analyst", () => {
+    expect(
+      isDismissibleFact(fact({ tool: "secret", severity: "warn", ruleId: "generic-high-entropy-token" })),
+    ).toBe(true)
+    // high-confidence provider hit — a real secret must NEVER be waved off
+    expect(
+      isDismissibleFact(fact({ tool: "secret", severity: "error", ruleId: "aws-access-key" })),
+    ).toBe(false)
+    // non-secret facts (sarif/depvuln/ast) are not analyst-refutable here
+    expect(isDismissibleFact(fact({ tool: "sarif" }))).toBe(false)
+    // a secret fact missing severity is treated as non-dismissible
+    expect(isDismissibleFact(fact({ tool: "secret", severity: undefined }))).toBe(false)
+  })
+})
+
+describe("evaluateScanFactDismissal (SIG-282)", () => {
+  const dismissible = fact({
+    evidenceId: "secret:generic-high-entropy-token:abc123abc123:18",
+    tool: "secret",
+    ruleId: "generic-high-entropy-token",
+    severity: "warn",
+    path: "src/ui/sri.ts",
+    line: 18,
+    cwe: "CWE-798",
+  })
+  const provider = fact({
+    evidenceId: "secret:aws-access-key:def456def456:42",
+    tool: "secret",
+    ruleId: "aws-access-key",
+    severity: "error",
+    path: "src/config.ts",
+    line: 42,
+    cwe: "CWE-798",
+  })
+
+  it("accepts a justified dismissal of a warn-level candidate (the SRI case)", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: dismissible.evidenceId, reason: "SRI integrity hash next to a jsdelivr CDN URL; public by design" },
+      manifestOf(dismissible),
+    )
+    expect(decision).toEqual({ accepted: true, ruleId: "generic-high-entropy-token" })
+  })
+
+  it("rejects a dismissal whose evidenceId does not resolve in the manifest", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: "secret:made-up:000000000000:1", reason: "looks fine to me, trust me" },
+      manifestOf(dismissible),
+    )
+    expect(decision).toEqual({ accepted: false, reason: "unknown-evidence-id", ruleId: null })
+  })
+
+  it("NEVER lets a high-confidence provider hit be waved off, even with a reason", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: provider.evidenceId, reason: "this AKIA key is just a placeholder test fixture, ignore" },
+      manifestOf(provider),
+    )
+    expect(decision).toEqual({ accepted: false, reason: "not-dismissible", ruleId: "aws-access-key" })
+  })
+
+  it("rejects a dismissal with no concrete justification", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: dismissible.evidenceId, reason: "nah" },
+      manifestOf(dismissible),
+    )
+    expect(decision).toEqual({ accepted: false, reason: "missing-justification", ruleId: "generic-high-entropy-token" })
   })
 })
 

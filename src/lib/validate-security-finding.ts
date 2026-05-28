@@ -30,7 +30,7 @@
 //   mode-agnostic; the orchestrator decides what to do with the
 //   verdict.
 
-import type { PrReviewFinding } from "./triage-pr-review"
+import type { PrReviewFinding, ScanFactDismissal } from "./triage-pr-review"
 import type { SecurityFact } from "./security-evidence-manifest"
 
 /**
@@ -156,6 +156,52 @@ export type SecurityDropReason =
   | "authz-none-without-justification" // NONE exemption without a body justification
   | "unsupported-scanner-covered" // sev>=4 in a scanner-covered bucket, no cwe + no auto-enrich match
   | "do-method-authz-trust-boundary" // SIG-141: authz finding on a DurableObject method — the binding is the trust boundary
+
+/**
+ * SIG-282: why an analyst false-positive dismissal was NOT accepted.
+ */
+export type ScanFactDismissalReason =
+  | "unknown-evidence-id" // evidenceId doesn't resolve in the manifest
+  | "not-dismissible" // high-confidence provider hit — a real secret must not be waved off
+  | "missing-justification" // no concrete code-grounded reason supplied
+
+export type ScanFactDismissalDecision =
+  | { accepted: true; ruleId: string | null }
+  | { accepted: false; reason: ScanFactDismissalReason; ruleId: string | null }
+
+/** Minimum chars for a dismissal reason to count as a justification. */
+const DISMISSAL_JUSTIFICATION_MIN_CHARS = 12
+
+/**
+ * SIG-282: is this deterministic fact one the analyst (LLM) may refute as
+ * a false positive? Only the noisy secret-scan candidate — the `warn`-
+ * severity generic catch-all. High-confidence provider hits
+ * (aws/github/stripe/… → `error` severity) are NEVER dismissible: a real
+ * `AKIA…` / `sk-…` key must not be waved off by judgment.
+ */
+export function isDismissibleFact(fact: SecurityFact): boolean {
+  return fact.tool === "secret" && fact.severity === "warn"
+}
+
+/**
+ * SIG-282: evaluate ONE analyst false-positive dismissal of a scan fact.
+ * Pure; the orchestrator emits telemetry and (shadow-first) decides what
+ * to do. Accepted only when the evidenceId resolves, the fact is
+ * dismissible, and a concrete reason is supplied.
+ */
+export function evaluateScanFactDismissal(
+  dismissal: ScanFactDismissal,
+  manifest: Map<string, SecurityFact>,
+): ScanFactDismissalDecision {
+  const fact = manifest.get((dismissal.evidenceId ?? "").trim())
+  if (!fact) return { accepted: false, reason: "unknown-evidence-id", ruleId: null }
+  const ruleId = fact.ruleId ?? null
+  if (!isDismissibleFact(fact)) return { accepted: false, reason: "not-dismissible", ruleId }
+  if ((dismissal.reason ?? "").trim().length < DISMISSAL_JUSTIFICATION_MIN_CHARS) {
+    return { accepted: false, reason: "missing-justification", ruleId }
+  }
+  return { accepted: true, ruleId }
+}
 
 /**
  * Pure decision for ONE security-applicable finding. The caller has

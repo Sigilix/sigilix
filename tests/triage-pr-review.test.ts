@@ -89,6 +89,38 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings).toHaveLength(1)
   })
 
+  it("SIG-282: parses dismissedScanFacts and drops malformed entries", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        dismissedScanFacts: [
+          { evidenceId: "secret:generic-high-entropy-token:abc:18", reason: "SRI hash next to a CDN URL; public" },
+          { evidenceId: "", reason: "no id" }, // dropped
+          { reason: "missing evidenceId" }, // dropped
+          { evidenceId: "secret:x:y:1" }, // dropped (no reason)
+          "not-an-object", // dropped
+        ],
+      })
+    )
+    expect(out?.dismissedScanFacts).toEqual([
+      { evidenceId: "secret:generic-high-entropy-token:abc:18", reason: "SRI hash next to a CDN URL; public" },
+    ])
+  })
+
+  it("SIG-282: omits dismissedScanFacts when the model emits none", () => {
+    expect(parsePrReviewResponse(JSON.stringify(valid))?.dismissedScanFacts).toBeUndefined()
+  })
+
+  it("SIG-282: reads per-finding independentAssessment", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{ ...baseFinding, independentAssessment: "Used as an Authorization header value" }],
+      })
+    )
+    expect(out?.findings[0]?.independentAssessment).toBe("Used as an Authorization header value")
+  })
+
   it("clamps score into 1-5", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({ ...valid, findings: [{ ...baseFinding, score: 4.6 }] })

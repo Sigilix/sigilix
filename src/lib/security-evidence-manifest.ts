@@ -49,6 +49,14 @@ export interface SecurityFact {
   /** CWE id when the fact carries one (e.g. "CWE-798" for a hardcoded
    *  secret). Absent for facts with no deterministic CWE mapping. */
   cwe?: string
+  /** SIG-282: source rule id (e.g. "generic-high-entropy-token",
+   *  "aws-access-key"). Lets the validator scope which facts the analyst
+   *  may refute as false positives. Absent for non-secret facts. */
+  ruleId?: string
+  /** SIG-282: scanner confidence for secret facts. "warn" = the noisy
+   *  generic catch-all (analyst-refutable); "error" = a high-confidence
+   *  provider hit (NEVER refutable). Absent for non-secret facts. */
+  severity?: "warn" | "error"
   /** One-line human summary rendered in the manifest block. */
   summary: string
 }
@@ -125,6 +133,10 @@ export async function buildSecurityFactManifest(args: {
       path: h.path,
       line: h.line,
       cwe: SECRET_CWE,
+      // SIG-282: carry rule id + severity so the validator can decide
+      // which candidates the analyst may refute (warn-level only).
+      ruleId: h.ruleId,
+      severity: h.severity,
       // L1 (code review): normalize so no embedded newline in an
       // untrusted field can forge a `- \`fake-id\`` manifest line.
       summary: normalizeSummary(`${h.category}/${h.ruleId} at ${h.path}:${h.line} (preview ${h.redactedPreview})`),

@@ -294,6 +294,12 @@ export interface PrReviewFinding {
    */
   evidenceId?: string
   /**
+   * SIG-282: optional one-line verification rationale the security
+   * specialist records when it adjudicates a scanner-backed finding
+   * (analyst note). Audit/telemetry only — no gate depends on it.
+   */
+  independentAssessment?: string
+  /**
    * SIG-110: complexity claim backing a performance finding — names the
    * changed loop/call and the input-growth source (e.g.
    * "O(n^2): rebuilds `acc` for each item in `rows`"). One of
@@ -362,11 +368,27 @@ export interface PrReviewFinding {
   gateScore?: number
 }
 
+/**
+ * SIG-282: an analyst (LLM) false-positive dismissal of a deterministic
+ * scanner candidate. `evidenceId` is a verbatim manifest id; `reason` is a
+ * one-line code-grounded justification. Reconciled against the manifest by
+ * `evaluateScanFactDismissal` (telemetry + safety rail).
+ */
+export interface ScanFactDismissal {
+  evidenceId: string
+  reason: string
+}
+
 export interface PrReviewVerdict {
   summary: string
   confidence: number
   confidenceReason: string
   findings: PrReviewFinding[]
+  /**
+   * SIG-282: scanner candidates the security specialist refuted as false
+   * positives (security-only; absent/empty for other specialists).
+   */
+  dismissedScanFacts?: ScanFactDismissal[]
 }
 
 function normalizeReviewFindingScope(raw: unknown): ReviewFindingScope | undefined {
@@ -612,6 +634,11 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (typeof finding.evidenceId === "string" && finding.evidenceId.trim().length > 0) {
       finalFinding.evidenceId = finding.evidenceId.trim()
     }
+    // SIG-282: optional analyst verification rationale on a scanner-backed
+    // finding. Audit/telemetry only.
+    if (typeof finding.independentAssessment === "string" && finding.independentAssessment.trim().length > 0) {
+      finalFinding.independentAssessment = finding.independentAssessment.trim()
+    }
     // SIG-110: read complexityEstimate + hotPathIdentifier (scalar
     // strings) when supplied. Both optional; the perf validator handles
     // absence.
@@ -658,7 +685,29 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (findings.length >= 8) break
   }
 
-  return { summary, confidence, confidenceReason, findings }
+  // SIG-282: parse the security specialist's explicit false-positive
+  // dismissals. Each needs a manifest evidenceId + a concrete reason;
+  // malformed entries are dropped. Reconciled against the manifest
+  // downstream by `evaluateScanFactDismissal`.
+  const dismissedScanFacts: ScanFactDismissal[] = []
+  if (Array.isArray(obj.dismissedScanFacts)) {
+    for (const d of obj.dismissedScanFacts as unknown[]) {
+      if (!d || typeof d !== "object") continue
+      const rec = d as Record<string, unknown>
+      const evidenceId = typeof rec.evidenceId === "string" ? rec.evidenceId.trim() : ""
+      const reason = typeof rec.reason === "string" ? rec.reason.trim() : ""
+      if (evidenceId && reason) dismissedScanFacts.push({ evidenceId, reason })
+      if (dismissedScanFacts.length >= 16) break
+    }
+  }
+
+  return {
+    summary,
+    confidence,
+    confidenceReason,
+    findings,
+    ...(dismissedScanFacts.length > 0 ? { dismissedScanFacts } : {}),
+  }
 }
 
 function normalizeFindingDetail(value: unknown): string | undefined {

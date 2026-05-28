@@ -279,6 +279,11 @@ export interface Env {
   // §5.2 truth table.
   OPENCLAW_REVIEW_MEMORY_ENABLED?: string
   OPENCLAW_REVIEW_MEMORY_CAPTURE?: string
+  // SIG-276 Phase 2: gates the write-time claim extractor (an extra
+  // per-PR classifier round-trip). Default off; `"on"` opts in. When
+  // off, findings emit markers with no `:claims:` segment (unchanged
+  // pre-Phase-2 behavior) and no model call is made.
+  OPENCLAW_REVIEW_MEMORY_CLAIMS?: string
 
   // ARC-189 one-shot deploy aid for the PROMPT_VERSION="1" → "2"
   // bump (Task 10b). When `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`

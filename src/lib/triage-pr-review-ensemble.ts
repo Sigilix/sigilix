@@ -280,10 +280,18 @@ import {
   categoryFromRoleHint,
   markerSeverityFromScore,
 } from "./review-memory/marker"
+import {
+  extractClaims,
+  CLAIM_EXTRACTION_SCHEMA,
+  type ClaimExtractionFinding,
+} from "./review-memory/claim-extractor"
 import { runReviewMemoryLookup } from "./review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
-import type { ReviewMemorySkipReason } from "./review-memory/types"
+import type {
+  ReviewMemoryClaimMarkerData,
+  ReviewMemorySkipReason,
+} from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
 import { checkIsPrMerged, submitMergedOnApprove } from "./merge-guard"
 import {
@@ -1126,6 +1134,23 @@ export const SYNTHESIZER_CONFIG: ModelConfig = {
   //   Total:           ~362s (180s × 2 outer attempts) → skip-notice
   fallback: "deepseek-v4-flash:cloud",
 }
+
+/**
+ * SIG-276 Phase 2: the write-time claim extractor. A cheap, single-shot
+ * classifier (no retry, no fallback) over the final findings — fail-open
+ * by design, so a capacity blip just yields no claims rather than burning
+ * the merge path. `deepseek-v4-flash:cloud` matches the logic specialist's
+ * proven format-clean primary.
+ */
+const CLAIM_EXTRACTOR_CONFIG: ModelConfig = {
+  primary: "deepseek-v4-flash:cloud",
+  retries: 0,
+  fallback: null,
+}
+/** Per-attempt cap for the claim extractor. Kept well under the
+ *  specialist budget — the classifier prompt is small and the call is
+ *  fail-open, so a slow model must not extend customer-visible latency. */
+const CLAIM_EXTRACTOR_TIMEOUT_MS = 25_000
 
 /** @deprecated kept for telemetry compatibility — derive from SPECIALIST_CONFIGS instead */
 const SPECIALIST_MODELS: Record<SpecialistRole, string> = {
@@ -4252,6 +4277,61 @@ export async function handlePrReviewEnsemble(
     // not the original pre-suppression set. Otherwise `buildReviewSubmission`
     // would index off-by-one when consulting `findingMarkers` for an inline
     // comment whose `originalIndex` survived suppression.
+    //
+    // SIG-276 Phase 2: extract write-time claims over the SAME filtered/
+    // ranked findings, so `claimsPerFinding[j]` aligns with the marker
+    // walk below. Gated behind OPENCLAW_REVIEW_MEMORY_CLAIMS (default off)
+    // so the extra per-PR classifier round-trip is opt-in. Fail-open: a
+    // classifier blip yields no claims rather than blocking the merge path
+    // or rotating a marker. The id-less claim data rides the marker;
+    // capture (PR B) recomputes each id before storing it on a signal.
+    const claimsEnabled = env.OPENCLAW_REVIEW_MEMORY_CLAIMS === "on"
+    const claimT0 = Date.now()
+    const claimsPerFinding: ReadonlyArray<readonly ReviewMemoryClaimMarkerData[]> = claimsEnabled
+      ? await extractClaims({
+          findings: filteredConsensusFindings.map(
+            (f): ClaimExtractionFinding => ({
+              headline: f.headline,
+              body: f.body,
+              category: f.category,
+            }),
+          ),
+          runClassifier: async (system, user) => {
+            if (!env.OLLAMA_API_KEY) return null
+            const res = await runWithRetryAndFallback<string>({
+              config: CLAIM_EXTRACTOR_CONFIG,
+              apiKey: env.OLLAMA_API_KEY,
+              messages: [
+                { role: "system", content: system },
+                { role: "user", content: user },
+              ],
+              signal: orchCtrl.signal,
+              chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+              format: CLAIM_EXTRACTION_SCHEMA as unknown as Record<string, unknown>,
+              parseAnswer: (content) => content,
+              parseFailureLabel: "claim_extractor_did_not_parse",
+              startedAt: Date.now(),
+              perAttemptTimeoutMs: CLAIM_EXTRACTOR_TIMEOUT_MS,
+            })
+            return res.verdict
+          },
+        })
+      : filteredConsensusFindings.map(() => [])
+    if (claimsEnabled) {
+      const claimsEmitted = claimsPerFinding.reduce((s, cs) => s + cs.length, 0)
+      console.log(
+        JSON.stringify({
+          event: "review-memory-claim-extracted",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          findingCount: filteredConsensusFindings.length,
+          claimsEmitted,
+          elapsedMs: Date.now() - claimT0,
+        }),
+      )
+    }
     const findingMarkers: Array<string | null> = await Promise.all(
       filteredConsensusFindings.map(async (f, j) => {
         const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
@@ -4263,6 +4343,7 @@ export async function handlePrReviewEnsemble(
           headline: f.headline,
           category: categoryFromRoleHint(sourceSpec),
           severity: markerSeverityFromScore(f.score),
+          claims: claimsPerFinding[j] ?? [],
         })
       }),
     )

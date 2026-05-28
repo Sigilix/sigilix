@@ -43,6 +43,7 @@ import {
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
+import { remediationForFinding } from "./validate-security-finding"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
 // rendered by `renderStackParenthetical`. The original helper still
@@ -294,6 +295,12 @@ export interface PrReviewFinding {
    */
   evidenceId?: string
   /**
+   * SIG-282: optional one-line verification rationale the security
+   * specialist records when it adjudicates a scanner-backed finding
+   * (analyst note). Audit/telemetry only — no gate depends on it.
+   */
+  independentAssessment?: string
+  /**
    * SIG-110: complexity claim backing a performance finding — names the
    * changed loop/call and the input-growth source (e.g.
    * "O(n^2): rebuilds `acc` for each item in `rows`"). One of
@@ -362,11 +369,27 @@ export interface PrReviewFinding {
   gateScore?: number
 }
 
+/**
+ * SIG-282: an analyst (LLM) false-positive dismissal of a deterministic
+ * scanner candidate. `evidenceId` is a verbatim manifest id; `reason` is a
+ * one-line code-grounded justification. Reconciled against the manifest by
+ * `evaluateScanFactDismissal` (telemetry + safety rail).
+ */
+export interface ScanFactDismissal {
+  evidenceId: string
+  reason: string
+}
+
 export interface PrReviewVerdict {
   summary: string
   confidence: number
   confidenceReason: string
   findings: PrReviewFinding[]
+  /**
+   * SIG-282: scanner candidates the security specialist refuted as false
+   * positives (security-only; absent/empty for other specialists).
+   */
+  dismissedScanFacts?: ScanFactDismissal[]
 }
 
 function normalizeReviewFindingScope(raw: unknown): ReviewFindingScope | undefined {
@@ -612,6 +635,11 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (typeof finding.evidenceId === "string" && finding.evidenceId.trim().length > 0) {
       finalFinding.evidenceId = finding.evidenceId.trim()
     }
+    // SIG-282: optional analyst verification rationale on a scanner-backed
+    // finding. Audit/telemetry only.
+    if (typeof finding.independentAssessment === "string" && finding.independentAssessment.trim().length > 0) {
+      finalFinding.independentAssessment = finding.independentAssessment.trim()
+    }
     // SIG-110: read complexityEstimate + hotPathIdentifier (scalar
     // strings) when supplied. Both optional; the perf validator handles
     // absence.
@@ -658,7 +686,29 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     if (findings.length >= 8) break
   }
 
-  return { summary, confidence, confidenceReason, findings }
+  // SIG-282: parse the security specialist's explicit false-positive
+  // dismissals. Each needs a manifest evidenceId + a concrete reason;
+  // malformed entries are dropped. Reconciled against the manifest
+  // downstream by `evaluateScanFactDismissal`.
+  const dismissedScanFacts: ScanFactDismissal[] = []
+  if (Array.isArray(obj.dismissedScanFacts)) {
+    for (const d of obj.dismissedScanFacts as unknown[]) {
+      if (!d || typeof d !== "object") continue
+      const rec = d as Record<string, unknown>
+      const evidenceId = typeof rec.evidenceId === "string" ? rec.evidenceId.trim() : ""
+      const reason = typeof rec.reason === "string" ? rec.reason.trim() : ""
+      if (evidenceId && reason) dismissedScanFacts.push({ evidenceId, reason })
+      if (dismissedScanFacts.length >= 16) break
+    }
+  }
+
+  return {
+    summary,
+    confidence,
+    confidenceReason,
+    findings,
+    ...(dismissedScanFacts.length > 0 ? { dismissedScanFacts } : {}),
+  }
 }
 
 function normalizeFindingDetail(value: unknown): string | undefined {
@@ -2861,6 +2911,15 @@ export function formatFindingComment(
       lines.push("")
       lines.push(structuredDetails)
     }
+  }
+  // SIG-282 Phase 3: append a deterministic, vetted remediation for a
+  // confirmed security finding, keyed by its CWE bucket — rather than
+  // relying on LLM-authored remediation prose. The model describes the
+  // problem (the body); the system supplies the standard fix guidance.
+  const remediation = remediationForFinding(finding)
+  if (remediation) {
+    lines.push("")
+    lines.push(`**Remediation:** ${remediation}`)
   }
   // SIG-164 PR 5: Greptile-style "Current / Proposed" illustrative
   // blocks. Always shown when we have enough diff context to render an

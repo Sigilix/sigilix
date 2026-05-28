@@ -467,7 +467,12 @@ describe("renderSecretHitsForPrompt", () => {
     expect(block).toContain("aws/aws-access-key")
     expect(block).toContain("length=20")
     expect(block).toContain("AKIA…MPLE")
-    expect(block).toContain("rotate")  // remediation hint
+    // SIG-282: hits are framed as CANDIDATES to verify, not authoritative
+    // secrets with a baked-in "rotate" remediation (that text moved to the
+    // deterministic per-CWE remediation applied only on a CONFIRMED finding).
+    expect(block).toContain("CANDIDATES")
+    expect(block).toContain("false positive")
+    expect(block).not.toContain("rotate")
   })
 
   it("never includes raw secret values in the rendered block", () => {

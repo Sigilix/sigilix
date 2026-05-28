@@ -346,19 +346,24 @@ export function runSecretScan(diff: string): SecretHit[] {
 
 /**
  * Render hits as a labeled prompt block. Empty hits → empty string
- * so the orchestrator can skip the block entirely. The block is
- * deliberately terse and authoritative; the security specialist
- * doesn't need to re-find these.
+ * so the orchestrator can skip the block entirely.
+ *
+ * SIG-282: hits are CANDIDATES from a regex pre-filter with a known
+ * false-positive rate — NOT authoritative facts. The security
+ * specialist triages each against the surrounding code (analyst
+ * model), so the framing invites verification rather than demanding
+ * escalation. Remediation text for a CONFIRMED secret is templated
+ * downstream (deterministic), not asserted here.
  */
 export function renderSecretHitsForPrompt(hits: SecretHit[]): string {
   if (hits.length === 0) return ""
-  const lines = ["[SECRET SCAN — pre-computed before LLM, treat as authoritative facts. Raw values redacted.]"]
+  const lines = ["[SECRET SCAN — regex pre-filter run before the LLM. These are CANDIDATES with a known false-positive rate, NOT confirmed secrets. Verify each against the surrounding code before reporting it. Raw values redacted.]"]
   for (const h of hits) {
     lines.push(
       `- [${h.severity.toUpperCase()}] ${h.path}:${h.line} (${h.category}/${h.ruleId}) length=${h.matchLength} preview=${h.redactedPreview}`,
     )
   }
   lines.push("")
-  lines.push("If any are real secrets, the PR must NOT merge until they are revoked + rotated. Recommend the author rotate immediately and rewrite history if the secret was committed.")
+  lines.push("Confirm a candidate only if the surrounding code shows it is a real credential (used as an auth token, passed to a client/SDK, sent in an Authorization header, or matching a known provider key format). If the code shows it is public-by-design — a Subresource-Integrity hash next to a CDN/asset URL, a lockfile integrity field, a git SHA, a documented example, or a test fixture — it is a false positive; do not report it.")
   return lines.join("\n")
 }

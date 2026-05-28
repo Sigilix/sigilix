@@ -89,6 +89,38 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings).toHaveLength(1)
   })
 
+  it("SIG-282: parses dismissedScanFacts and drops malformed entries", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        dismissedScanFacts: [
+          { evidenceId: "secret:generic-high-entropy-token:abc:18", reason: "SRI hash next to a CDN URL; public" },
+          { evidenceId: "", reason: "no id" }, // dropped
+          { reason: "missing evidenceId" }, // dropped
+          { evidenceId: "secret:x:y:1" }, // dropped (no reason)
+          "not-an-object", // dropped
+        ],
+      })
+    )
+    expect(out?.dismissedScanFacts).toEqual([
+      { evidenceId: "secret:generic-high-entropy-token:abc:18", reason: "SRI hash next to a CDN URL; public" },
+    ])
+  })
+
+  it("SIG-282: omits dismissedScanFacts when the model emits none", () => {
+    expect(parsePrReviewResponse(JSON.stringify(valid))?.dismissedScanFacts).toBeUndefined()
+  })
+
+  it("SIG-282: reads per-finding independentAssessment", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        findings: [{ ...baseFinding, independentAssessment: "Used as an Authorization header value" }],
+      })
+    )
+    expect(out?.findings[0]?.independentAssessment).toBe("Used as an Authorization header value")
+  })
+
   it("clamps score into 1-5", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({ ...valid, findings: [{ ...baseFinding, score: 4.6 }] })
@@ -2582,6 +2614,28 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     expect(out).not.toContain("**Current:**")
     expect(out).not.toContain("```suggestion")
     expect(out).toContain("<summary>Prompt To Fix With AI</summary>")
+  })
+
+  it("SIG-282: appends a deterministic remediation for a confirmed security finding", () => {
+    const f: PrReviewFinding = {
+      path: "src/config.ts", line: 12, score: 5,
+      category: "security", headline: "hardcoded API token committed",
+      body: "A live provider token is committed in source.",
+      cweId: "CWE-798",
+    }
+    const out = formatFindingComment(f, 5, reviewable, addedLines)
+    expect(out).toContain("**Remediation:**")
+    expect(out).toContain("revoke and rotate it now") // secrets-exposure template
+  })
+
+  it("SIG-282: does not append a remediation to non-security findings", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, score: 3,
+      category: "logic", headline: "off-by-one",
+      body: "loop bound is wrong.",
+    }
+    const out = formatFindingComment(f, 4, reviewable, addedLines)
+    expect(out).not.toContain("**Remediation:**")
   })
 
   it("renders structured examples, suggested fix shape, and test-gap sections", () => {

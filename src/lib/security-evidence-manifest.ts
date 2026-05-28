@@ -49,6 +49,14 @@ export interface SecurityFact {
   /** CWE id when the fact carries one (e.g. "CWE-798" for a hardcoded
    *  secret). Absent for facts with no deterministic CWE mapping. */
   cwe?: string
+  /** SIG-282: source rule id (e.g. "generic-high-entropy-token",
+   *  "aws-access-key"). Lets the validator scope which facts the analyst
+   *  may refute as false positives. Absent for non-secret facts. */
+  ruleId?: string
+  /** SIG-282: scanner confidence for secret facts. "warn" = the noisy
+   *  generic catch-all (analyst-refutable); "error" = a high-confidence
+   *  provider hit (NEVER refutable). Absent for non-secret facts. */
+  severity?: "warn" | "error"
   /** One-line human summary rendered in the manifest block. */
   summary: string
 }
@@ -125,6 +133,10 @@ export async function buildSecurityFactManifest(args: {
       path: h.path,
       line: h.line,
       cwe: SECRET_CWE,
+      // SIG-282: carry rule id + severity so the validator can decide
+      // which candidates the analyst may refute (warn-level only).
+      ruleId: h.ruleId,
+      severity: h.severity,
       // L1 (code review): normalize so no embedded newline in an
       // untrusted field can forge a `- \`fake-id\`` manifest line.
       summary: normalizeSummary(`${h.category}/${h.ruleId} at ${h.path}:${h.line} (preview ${h.redactedPreview})`),
@@ -199,13 +211,13 @@ function normalizeSummary(value: string): string {
 function renderManifest(manifest: Map<string, SecurityFact>): string {
   if (manifest.size === 0) return ""
   const lines: string[] = [
-    "[SECURITY EVIDENCE MANIFEST — cite the id in your finding's evidenceId field]",
-    "Each id below is a deterministic, pre-computed security fact. To make a sev>=4 security finding, copy the matching id VERBATIM into the finding's `evidenceId`. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO scanner can detect, set `evidenceId: \"NONE\"` and justify in the body why no deterministic check exists.",
+    "[SECURITY EVIDENCE MANIFEST — scanner-proposed candidates; the CWE is a PROPOSED classification, not a verdict]",
+    "Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding's `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO scanner can detect, set `evidenceId: \"NONE\"` and justify in the body why no deterministic check exists.",
     "",
   ]
   for (const fact of manifest.values()) {
     const loc = fact.line === null ? fact.path : `${fact.path}:${fact.line}`
-    const cwe = fact.cwe ? ` [${fact.cwe}]` : ""
+    const cwe = fact.cwe ? ` [proposed ${fact.cwe}]` : ""
     lines.push(`- \`${fact.evidenceId}\` — ${loc}${cwe}: ${fact.summary}`)
   }
   return lines.join("\n").trimEnd()

@@ -10,6 +10,10 @@
 import { describe, it, expect, vi } from "vitest"
 import {
   evaluateSecurityFinding,
+  evaluateScanFactDismissal,
+  isDismissibleFact,
+  remediationForFinding,
+  REMEDIATION_BY_BUCKET,
   deriveSecurityBucket,
   parseSecurityValidatorMode,
 } from "../src/lib/validate-security-finding"
@@ -70,6 +74,94 @@ describe("deriveSecurityBucket", () => {
   it("returns null for a bare security category with no usable cweId", () => {
     expect(deriveSecurityBucket(finding({ cweId: undefined }))).toBeNull()
     expect(deriveSecurityBucket(finding({ cweId: "CWE-99999" }))).toBeNull()
+  })
+})
+
+describe("isDismissibleFact (SIG-282)", () => {
+  it("only warn-level secret-scan facts are dismissible by the analyst", () => {
+    expect(
+      isDismissibleFact(fact({ tool: "secret", severity: "warn", ruleId: "generic-high-entropy-token" })),
+    ).toBe(true)
+    // high-confidence provider hit — a real secret must NEVER be waved off
+    expect(
+      isDismissibleFact(fact({ tool: "secret", severity: "error", ruleId: "aws-access-key" })),
+    ).toBe(false)
+    // non-secret facts (sarif/depvuln/ast) are not analyst-refutable here
+    expect(isDismissibleFact(fact({ tool: "sarif" }))).toBe(false)
+    // a secret fact missing severity is treated as non-dismissible
+    expect(isDismissibleFact(fact({ tool: "secret", severity: undefined }))).toBe(false)
+  })
+})
+
+describe("evaluateScanFactDismissal (SIG-282)", () => {
+  const dismissible = fact({
+    evidenceId: "secret:generic-high-entropy-token:abc123abc123:18",
+    tool: "secret",
+    ruleId: "generic-high-entropy-token",
+    severity: "warn",
+    path: "src/ui/sri.ts",
+    line: 18,
+    cwe: "CWE-798",
+  })
+  const provider = fact({
+    evidenceId: "secret:aws-access-key:def456def456:42",
+    tool: "secret",
+    ruleId: "aws-access-key",
+    severity: "error",
+    path: "src/config.ts",
+    line: 42,
+    cwe: "CWE-798",
+  })
+
+  it("accepts a justified dismissal of a warn-level candidate (the SRI case)", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: dismissible.evidenceId, reason: "SRI integrity hash next to a jsdelivr CDN URL; public by design" },
+      manifestOf(dismissible),
+    )
+    expect(decision).toEqual({ accepted: true, ruleId: "generic-high-entropy-token" })
+  })
+
+  it("rejects a dismissal whose evidenceId does not resolve in the manifest", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: "secret:made-up:000000000000:1", reason: "looks fine to me, trust me" },
+      manifestOf(dismissible),
+    )
+    expect(decision).toEqual({ accepted: false, reason: "unknown-evidence-id", ruleId: null })
+  })
+
+  it("NEVER lets a high-confidence provider hit be waved off, even with a reason", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: provider.evidenceId, reason: "this AKIA key is just a placeholder test fixture, ignore" },
+      manifestOf(provider),
+    )
+    expect(decision).toEqual({ accepted: false, reason: "not-dismissible", ruleId: "aws-access-key" })
+  })
+
+  it("rejects a dismissal with no concrete justification", () => {
+    const decision = evaluateScanFactDismissal(
+      { evidenceId: dismissible.evidenceId, reason: "nah" },
+      manifestOf(dismissible),
+    )
+    expect(decision).toEqual({ accepted: false, reason: "missing-justification", ruleId: "generic-high-entropy-token" })
+  })
+})
+
+describe("remediationForFinding / REMEDIATION_BY_BUCKET (SIG-282)", () => {
+  it("returns the bucket's vetted remediation for a classified security finding", () => {
+    expect(remediationForFinding(finding({ cweId: "CWE-798" }))).toBe(REMEDIATION_BY_BUCKET["secrets-exposure"])
+    expect(remediationForFinding(finding({ cweId: "CWE-89" }))).toBe(REMEDIATION_BY_BUCKET["injection"])
+  })
+
+  it("returns null for a non-security finding or an unclassified one", () => {
+    expect(remediationForFinding(finding({ category: "logic", cweId: "CWE-89" }))).toBeNull()
+    expect(remediationForFinding(finding({ cweId: undefined }))).toBeNull()
+    expect(remediationForFinding(finding({ cweId: "CWE-99999" }))).toBeNull()
+  })
+
+  it("defines a non-empty remediation for all 11 security buckets", () => {
+    const entries = Object.entries(REMEDIATION_BY_BUCKET)
+    expect(entries).toHaveLength(11)
+    for (const [, text] of entries) expect(text.length).toBeGreaterThan(20)
   })
 })
 

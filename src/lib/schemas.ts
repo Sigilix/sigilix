@@ -166,6 +166,10 @@ export const PR_REVIEW_SCHEMA = {
           //                justification).
           cweId: { type: "string" },
           evidenceId: { type: "string" },
+          // SIG-282: optional one-line rationale the security specialist
+          // records when it adjudicates a scanner-backed finding (analyst
+          // verification note). OPTIONAL; audit/telemetry only, no gate.
+          independentAssessment: { type: "string" },
           // SIG-110: per-finding performance-evidence fields, gated by
           // `evaluatePerfFinding` downstream. OPTIONAL (same staged-
           // rollout reasoning as the fields above) so specialists not yet
@@ -189,6 +193,22 @@ export const PR_REVIEW_SCHEMA = {
           },
         },
         required: ["path", "line", "scope", "score", "category", "headline", "body"],
+      },
+    },
+    // SIG-282: the security specialist records each scanner candidate it
+    // REFUTES here (instead of silently not emitting a finding) so the
+    // dismissal is auditable: { evidenceId (verbatim manifest id), reason }.
+    // OPTIONAL + security-only; other specialists leave it empty.
+    dismissedScanFacts: {
+      type: "array",
+      maxItems: 16,
+      items: {
+        type: "object",
+        properties: {
+          evidenceId: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["evidenceId", "reason"],
       },
     },
   },

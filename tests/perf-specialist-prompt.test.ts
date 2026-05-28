@@ -69,6 +69,32 @@ describe("performance specialist prompt", () => {
   })
 })
 
+describe("security specialist prompt — SIG-282 output fields", () => {
+  const prompt = SPECIALIST_PROMPTS.security
+
+  // The [OUTPUT SCHEMA] template (shared by all specialists) must DECLARE the
+  // two SIG-282 fields, not just mention them in prose — the model anchors on
+  // the example object, and both fields are only OPTIONAL in PR_REVIEW_SCHEMA,
+  // so an undeclared field is silently dropped and Phase 2 telemetry goes dark.
+  it("declares dismissedScanFacts and independentAssessment in the schema block", () => {
+    expect(prompt).toContain("dismissedScanFacts")
+    expect(prompt).toContain("independentAssessment")
+  })
+
+  it("keeps the analyst verify/refute mandate that drives those fields", () => {
+    expect(prompt).toContain("VERIFY THEM LIKE AN ANALYST")
+  })
+
+  // The [OUTPUT SCHEMA] block is shared across specialists, so the field names
+  // appear in every prompt; the SECURITY-only scoping is carried by the inline
+  // annotation, not by structural exclusion. Pin the annotation so a future
+  // edit can't quietly turn these into all-specialist fields.
+  it("annotates both fields as security-specialist-only", () => {
+    expect(prompt).toMatch(/dismissedScanFacts[\s\S]*?SECURITY specialist only/)
+    expect(prompt).toMatch(/independentAssessment[\s\S]*?category:"security"/)
+  })
+})
+
 describe("synthesizer prompt — perf field preservation", () => {
   it("preserves complexityEstimate + hotPathIdentifier from performance-* source findings", () => {
     expect(SYNTHESIZER_PROMPT).toContain("complexityEstimate")

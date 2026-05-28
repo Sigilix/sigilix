@@ -124,6 +124,7 @@ import {
 } from "./security-evidence-manifest"
 import {
   evaluateSecurityFinding,
+  evaluateScanFactDismissal,
   parseSecurityValidatorMode,
   deriveSecurityBucket,
   AUTHZ_BUCKET,
@@ -3137,6 +3138,28 @@ export async function handlePrReviewEnsemble(
       specialistResults,
       telemetry,
     )
+
+    // SIG-282 Phase 2: reconcile the security specialist's explicit
+    // false-positive dismissals against the manifest and emit telemetry.
+    // A dismissal is ACCEPTED only when its evidenceId resolves AND the
+    // underlying fact is a dismissible (warn-level) candidate; a dismissal
+    // aimed at a high-confidence provider hit is REJECTED + logged — a
+    // possible real-secret wave-off worth a human's attention. This is
+    // observability + a safety rail; Phase 1's framing already keeps the
+    // false-positive finding from being emitted.
+    const securityDismissals =
+      specialistVerdicts.find((v) => v.role === "security")?.verdict?.dismissedScanFacts ?? []
+    for (const d of securityDismissals) {
+      const decision = evaluateScanFactDismissal(d, securityManifest.manifest)
+      console.log(JSON.stringify({
+        event: "pr-review-scan-fact-dismissed",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        evidenceId: d.evidenceId,
+        ruleId: decision.ruleId,
+        accepted: decision.accepted,
+        rejectReason: decision.accepted ? null : decision.reason,
+      }))
+    }
 
     // ARC-283 Phase B1b — snapshot per-role prod outcomes for the
     // shadow comparison emit in `finally`. Only writes for roles

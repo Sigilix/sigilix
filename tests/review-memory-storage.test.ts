@@ -621,6 +621,48 @@ describe("unionRecords (pure, SIG-247 Phase 1)", () => {
     expect(unionRecords(b, a, scope)?.migratedAt).toBe(stamp)
   })
 
+  it("CR-Major (PR #206): malformed migratedAt loses to valid candidate (parse + validate)", () => {
+    // Raw-string compare would pick the wrong "earlier" on a
+    // malformed value (e.g., "garbage" < "2026-..." is engine-
+    // defined). Parse via Date.parse first; malformed degrades to
+    // "use the other side" rather than propagating bad data.
+    const validStamp = "2026-05-15T00:00:00.000Z"
+    const a: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [],
+      lastUpdatedTs: new Date().toISOString(),
+      migratedAt: "garbage-not-iso",
+    }
+    const b: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [],
+      lastUpdatedTs: new Date().toISOString(),
+      migratedAt: validStamp,
+    }
+    expect(unionRecords(a, b, scope)?.migratedAt).toBe(validStamp)
+    expect(unionRecords(b, a, scope)?.migratedAt).toBe(validStamp)
+  })
+
+  it("CR-Major (PR #206): both migratedAt malformed → omitted from result", () => {
+    const a: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [],
+      lastUpdatedTs: new Date().toISOString(),
+      migratedAt: "garbage",
+    }
+    const b: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [],
+      lastUpdatedTs: new Date().toISOString(),
+      migratedAt: "also-garbage",
+    }
+    expect(unionRecords(a, b, scope)?.migratedAt).toBeUndefined()
+  })
+
   it("SIG-247 Phase 1 PR B: union omits migratedAt when neither side has it", () => {
     const a: ReviewMemoryRecord = {
       schemaVersion: 1,

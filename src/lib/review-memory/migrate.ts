@@ -453,7 +453,11 @@ export async function migrateInstallReviewMemoryToRepoId(
         signalsCopied: 0,
         detail: "bad full_name",
       })
-      skipped += 1
+      // CR Major (PR #206): status is `kv-error`, so this counts as
+      // failed, not skipped. The prior `skipped += 1` misreported
+      // outcome totals and could hide real migration-data issues in
+      // operator dashboards.
+      failed += 1
       continue
     }
     const { owner, repo } = parsed

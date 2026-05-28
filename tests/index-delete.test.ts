@@ -452,6 +452,70 @@ describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
     expect(result.reviewMemoryKeys).toBe(1)
     expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
   })
+
+  it("CR-Critical (PR #206): does NOT delete review-memory:repo:<id>:* on owner mismatch", async () => {
+    // Owner-mismatch scenario: a delete fires for owner X but the
+    // manifest reports owner Y. The legacy review-memory keys are
+    // owner-qualified by X (safe to delete unguarded). But the new
+    // repo-id keyspace's id was sourced from manifest Y — using it
+    // would delete owner Y's review-memory data.
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest({ owner: "different-org", githubRepoId: 808247824 })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors({ owner: "different-org", githubRepoId: 808247824 })),
+    )
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:performance", "{}")
+    // Hypothetical foreign new-key — must NOT be deleted
+    store.set("review-memory:repo:808247824:cat:performance", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Legacy keys (owner-qualified by string) ARE deleted
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
+    expect(result.reviewMemoryKeys).toBe(1)
+    // New repo-id key (sourced from mismatched manifest) is preserved
+    expect(store.has("review-memory:repo:808247824:cat:performance")).toBe(true)
+  })
+
+  it("CR-Critical (PR #206): does NOT delete review-memory:repo:<id>:* on branch-scoped delete", async () => {
+    // A branch-scoped delete (e.g., pr-branch-closed) MUST NOT touch
+    // the default-branch tenant keys — the writer never populated
+    // repo-id review-memory keys for that branch state, and using
+    // the id from a branch-scoped manifest would clobber the
+    // canonical default-branch tenant's memory data.
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest({ branch: "feature-x", githubRepoId: 808247824 })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors({ githubRepoId: 808247824 })),
+    )
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:performance", "{}")
+    store.set("review-memory:repo:808247824:cat:performance", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "branch-deleted",
+    })
+
+    // Legacy keys (owner-qualified by string) ARE deleted
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
+    expect(result.reviewMemoryKeys).toBe(1)
+    // New repo-id key NOT touched — branch-scoped delete must not
+    // wipe the canonical default-branch tenant's memory.
+    expect(store.has("review-memory:repo:808247824:cat:performance")).toBe(true)
+  })
 })
 
 // ─── deleteRepoIndex — cross-tenant guard ──────────────────────────────

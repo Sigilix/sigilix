@@ -328,26 +328,38 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     vectorsRead.kind === "ok" && vectorsRead.vectors.owner !== owner
   const safeToTouchRepoOnlyState = !manifestOwnerMismatch && !vectorsOwnerMismatch
 
-  // SIG-247 Phase 1 PR B: extract the immutable repo.id once, outside
-  // the cross-tenant guard. Review-memory deletion runs regardless of
-  // owner mismatch — its keys are either owner-qualified (legacy) or
-  // immutable-id-keyed (new), so neither shares the cross-tenant
-  // collision risk that gates the repo-only state cleanup below.
-  // Source: manifest first (preferred), vectors fallback (when only
-  // the vectors record carries the field). Validates positive int.
+  // SIG-247 Phase 1 PR B: extract the immutable repo.id for review-
+  // memory cleanup. The legacy `review-memory:<owner>/<repo>:*`
+  // prefix is owner-qualified (safe to delete unguarded by the cross-
+  // tenant probe). But the new `review-memory:repo:<id>:*` prefix is
+  // keyed by the IMMUTABLE id — if we sourced the id from a manifest
+  // whose owner doesn't match the delete target, OR from a branch-
+  // scoped delete (where the writer never populated repo-id tenant
+  // keys), we could clobber an unrelated tenant's repo-id data.
+  //
+  // CR Critical (PR #206): gate the repo-id extraction on BOTH owner-
+  // safety AND default-branch-scope, mirroring the tenant-key writer
+  // contract at `repo-index-manifest.ts:280-298`. The branch-scope
+  // check mirrors the existing `isBranchScopedState` derivation at
+  // line 436-438 below.
+  const isBranchScopedStateForReviewMemory =
+    (manifestRead.kind === "ok" && manifestRead.manifest.branch !== undefined) ||
+    (vectorsRead.kind === "ok" && vectorsRead.vectors.repo.includes("/__branch__/"))
   const reviewMemoryRepoId =
-    (manifestRead.kind === "ok" &&
-    typeof manifestRead.manifest.githubRepoId === "number" &&
-    Number.isInteger(manifestRead.manifest.githubRepoId) &&
-    manifestRead.manifest.githubRepoId > 0
-      ? manifestRead.manifest.githubRepoId
-      : undefined) ??
-    (vectorsRead.kind === "ok" &&
-    typeof vectorsRead.vectors.githubRepoId === "number" &&
-    Number.isInteger(vectorsRead.vectors.githubRepoId) &&
-    vectorsRead.vectors.githubRepoId > 0
-      ? vectorsRead.vectors.githubRepoId
-      : undefined)
+    !safeToTouchRepoOnlyState || isBranchScopedStateForReviewMemory
+      ? undefined
+      : (manifestRead.kind === "ok" &&
+        typeof manifestRead.manifest.githubRepoId === "number" &&
+        Number.isInteger(manifestRead.manifest.githubRepoId) &&
+        manifestRead.manifest.githubRepoId > 0
+          ? manifestRead.manifest.githubRepoId
+          : undefined) ??
+        (vectorsRead.kind === "ok" &&
+        typeof vectorsRead.vectors.githubRepoId === "number" &&
+        Number.isInteger(vectorsRead.vectors.githubRepoId) &&
+        vectorsRead.vectors.githubRepoId > 0
+          ? vectorsRead.vectors.githubRepoId
+          : undefined)
 
   if (!safeToTouchRepoOnlyState) {
     console.warn(JSON.stringify({

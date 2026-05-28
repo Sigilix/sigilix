@@ -200,14 +200,31 @@ export function unionRecords(
   // Without this, every post-migration read-modify-write would
   // silently drop the sentinel, breaking Phase 5's "was this record
   // migrated?" advisory.
+  //
+  // CR Major (PR #206): parse + validate before comparing. Raw-string
+  // compare picks the wrong "earlier" on malformed ISO values
+  // (e.g., "garbage" < "2026-..." is engine-defined). Validate via
+  // Date.parse + Number.isFinite, then compare numerics. A malformed
+  // sentinel from a corrupt KV write degrades to "use the other
+  // side" rather than propagating bad data.
   const aMigratedAt = a.migratedAt
   const bMigratedAt = b.migratedAt
+  const aMigratedAtMs =
+    aMigratedAt !== undefined ? Date.parse(aMigratedAt) : NaN
+  const bMigratedAtMs =
+    bMigratedAt !== undefined ? Date.parse(bMigratedAt) : NaN
+  const aValid = Number.isFinite(aMigratedAtMs)
+  const bValid = Number.isFinite(bMigratedAtMs)
   const migratedAt =
-    aMigratedAt !== undefined && bMigratedAt !== undefined
-      ? aMigratedAt < bMigratedAt
+    aValid && bValid
+      ? aMigratedAtMs < bMigratedAtMs
         ? aMigratedAt
         : bMigratedAt
-      : (aMigratedAt ?? bMigratedAt)
+      : aValid
+        ? aMigratedAt
+        : bValid
+          ? bMigratedAt
+          : undefined
   const base: ReviewMemoryRecord = {
     schemaVersion: 1,
     category: scope.category,

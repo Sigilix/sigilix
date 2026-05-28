@@ -11,6 +11,7 @@ treat a mismatch as a true loss when it persists across all three.
 1. **Take a legacy snapshot per install.** For each installation ID,
    list every `review-memory:*` key under the LEGACY prefix and sum
    `signals[]` lengths:
+
    ```bash
    wrangler kv key list --binding OPENCLAW_STATE --prefix 'review-memory:' \
      | jq -r '.[].name' \
@@ -30,6 +31,7 @@ treat a mismatch as a true loss when it persists across all three.
 3. **Optional dry-run.** Invoke with `?dryRun=true` to confirm the
    migration's read-phase reports the expected counts without
    actually writing:
+
    ```bash
    curl -X POST \
      -H "Authorization: Bearer $OPENCLAW_ADMIN_TOKEN" \

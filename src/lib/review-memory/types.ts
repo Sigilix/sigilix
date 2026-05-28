@@ -123,13 +123,15 @@ export interface ReviewMemorySignal {
    */
   dismissReason?: import("../dismiss-reasons").DismissReason
   /**
-   * SIG-247 Phase 0 forward-compat: structured claims extracted from
-   * the dismissal reply text. Optional and absent on all signals
-   * written before Phase 2 ships the extractor. The signal record's
-   * privacy contract is unchanged — no free-text payload, only an
-   * enum-bounded claim shape per `ReviewMemoryClaim`. Phase 3+ uses
-   * the claims at injection time so the bot can soften the SPECIFIC
-   * pattern the team dismissed, not just the category as a whole.
+   * SIG-276 Phase 2: the write-time claims the dismissed finding
+   * asserted, copied off the parent comment's marker at capture time
+   * (PR B) with each `id` recomputed via `hydrateClaimIds`. These
+   * classify the BOT's finding, NOT the reviewer's reply text — the
+   * privacy contract is unchanged (enum-bounded, no free-text payload).
+   * Optional and absent on legacy/claimless markers and on signals
+   * written before the extractor shipped. Phase 3+ uses the claims at
+   * injection time so the bot can soften the SPECIFIC pattern the team
+   * dismissed, not just the category as a whole.
    */
   claims?: ReviewMemoryClaim[]
 }

@@ -66,12 +66,41 @@ function makeConfig(
   }
 }
 
-function makeClient(parentBody: string | null): GitHubClient {
-  const fn = vi.fn(async (_o: string, _r: string, _id: number) => {
-    if (parentBody === null) return null
-    return { id: 9001, body: parentBody }
-  })
-  return { getPullRequestReviewComment: fn } as unknown as GitHubClient
+function makeClient(
+  parentBody: string | null,
+  opts: {
+    /**
+     * SIG-247 Phase 1: parent comment author login. The capture path
+     * gates marker validation on isArcGithubLogin(parent.user?.login).
+     * Default `"sigilix[bot]"` keeps existing happy-path tests passing;
+     * a non-Sigilix login exercises the spoofing-hole guard.
+     */
+    authorLogin?: string
+    /**
+     * SIG-247 Phase 1: getRepository response used by the capture-time
+     * fallback path (when args.repoId is undefined). Default is a
+     * positive-integer id so dual-write paths fire without explicit
+     * repoId plumbing in every test.
+     */
+    repoId?: number
+  } = {},
+): GitHubClient {
+  const authorLogin = opts.authorLogin ?? "sigilix[bot]"
+  const repoId = opts.repoId ?? 555_000
+  const getPullRequestReviewComment = vi.fn(
+    async (_o: string, _r: string, _id: number) => {
+      if (parentBody === null) return null
+      return { id: 9001, body: parentBody, user: { login: authorLogin } }
+    },
+  )
+  const getRepository = vi.fn(async (_o: string, _r: string) => ({
+    default_branch: "main",
+    id: repoId,
+  }))
+  return {
+    getPullRequestReviewComment,
+    getRepository,
+  } as unknown as GitHubClient
 }
 
 const VALID_MARKER =
@@ -169,6 +198,74 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
       .map((args) => String(args[0]))
       .filter((s) => s.includes("review-memory-capture-written"))
     expect(events.length).toBeGreaterThan(0)
+  })
+
+  it("SIG-247 Phase 1: skips when parent comment is NOT authored by Sigilix App, even with valid marker", async () => {
+    // The marker parser is a pure body regex. Without an author
+    // check, any commenter could paste a valid marker into their own
+    // inline comment and reply "false positive" to themselves to write
+    // a dismissal signal. Phase 1 closes that hole by gating marker
+    // trust on isArcGithubLogin(parent.user?.login).
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Some review text\n\n${VALID_MARKER}`, {
+      authorLogin: "malicious-user",  // NOT a Sigilix login
+    })
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    expect(Array.from(store.keys())
+      .filter((k) => k.startsWith("review-memory:")).length).toBe(0)
+    const skipEvents = consoleSpy.mock.calls
+      .map((args) => String(args[0]))
+      .filter((s) => s.includes("parent-not-sigilix-author"))
+    expect(skipEvents.length).toBeGreaterThan(0)
+  })
+
+  it("SIG-247 Phase 1: dual-write keyspace populated when parent is Sigilix App", async () => {
+    // Default makeClient returns repoId=555000 so the capture path
+    // resolves a positive-integer id either from args or fallback.
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Some review text\n\n${VALID_MARKER}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    // Both legacy AND repo-id keyspaces populated for cat-scope
+    expect(store.has("review-memory:a/r:cat:performance")).toBe(true)
+    expect(store.has("review-memory:repo:555000:cat:performance")).toBe(true)
+    // Both populated for path-scope (path-sha derived inside capture)
+    const repoIdPathKeys = Array.from(store.keys()).filter((k) =>
+      k.startsWith("review-memory:repo:555000:path:"),
+    )
+    expect(repoIdPathKeys.length).toBe(1)
+  })
+
+  it("SIG-247 Phase 1: legacy-only path when getRepository returns null repo.id", async () => {
+    // Simulate a webhook with no repository.id AND a getRepository
+    // call that returns null (deleted repo / 404). Capture should
+    // gracefully degrade to legacy-only writes.
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Some review text\n\n${VALID_MARKER}`)
+    // Override getRepository to return null
+    ;(client as unknown as {
+      getRepository: ReturnType<typeof vi.fn>
+    }).getRepository = vi.fn(async () => null)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    expect(store.has("review-memory:a/r:cat:performance")).toBe(true)
+    const repoIdKeys = Array.from(store.keys()).filter((k) =>
+      k.startsWith("review-memory:repo:"),
+    )
+    expect(repoIdKeys.length).toBe(0)
   })
 
   it("skips when parent has no marker (not-a-reply-to-sigilix)", async () => {

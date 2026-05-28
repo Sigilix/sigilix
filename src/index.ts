@@ -555,6 +555,16 @@ export type JobMessage =
        * exactly like the pre-SIG-220 behavior.
        */
       checkRunId?: number
+      /**
+       * SIG-247 Phase 1: GitHub's immutable `repo.id`. Threaded from
+       * webhook payload → enqueuePrReviewJob → DO RunState → queue
+       * sends so the consumer can pass it to the review-memory lookup
+       * for dual-write/read-union semantics. Absent on legacy queue
+       * messages and slash-command raw-sends that pre-date Phase 1;
+       * the dispatcher then falls back to a `getRepository` lookup
+       * before invoking the review pipeline.
+       */
+      repoId?: number
     }
   // ARC-178: slash-command-driven re-review. Same shape as pr-review
   // but headSha is resolved at handler time (the comment that
@@ -1339,6 +1349,14 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         ...(job.staleHeadRequeueDepth !== undefined
           ? { staleHeadRequeueDepth: job.staleHeadRequeueDepth }
           : {}),
+        // SIG-247 Phase 1: thread the immutable repo.id into the
+        // review pipeline so the review-memory lookup hits BOTH the
+        // legacy and repo-id keyspaces. Webhook-driven jobs carry it
+        // when payload.repository.id is a positive integer; legacy
+        // queue messages and slash-command raw-sends omit it, in
+        // which case the ensemble falls back to a getRepository
+        // lookup at the lookup call site.
+        ...(job.repoId !== undefined ? { repoId: job.repoId } : {}),
       }
       return runPrReviewWithDoCallback(job, env, async () => {
         // ARC-258 follow-up: warmup signaling now lives inside the
@@ -1545,6 +1563,30 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           }))
           return
         }
+        // SIG-247 Phase 1: resolve the immutable repo.id before
+        // enqueuing so both silent warmup reruns AND user-typed slash
+        // reruns carry it through to the consumer. Without this, both
+        // rerun paths would fall back to legacy-only review-memory
+        // reads — defeating the transfer-proof property of Phase 1.
+        // Best-effort: a failed/null lookup falls back to undefined.
+        let rerunRepoId: number | undefined
+        try {
+          const repoMeta = await client.getRepository(job.owner, job.repo)
+          if (
+            repoMeta &&
+            typeof repoMeta.id === "number" &&
+            Number.isInteger(repoMeta.id) &&
+            repoMeta.id > 0
+          ) {
+            rerunRepoId = repoMeta.id
+          }
+        } catch (err) {
+          console.warn(JSON.stringify({
+            event: "pr-review-rerun-repo-id-fetch-failed",
+            err: err instanceof Error ? err.message : String(err),
+            ...tag,
+          }))
+        }
         // Post ack comment so the user knows the request was received.
         // Best-effort: a failed ack doesn't block the re-review.
         //
@@ -1617,6 +1659,10 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             installationId: job.installationId,
             // No webhook delivery — this is queue-internal.
             deliveryId: null,
+            // SIG-247 Phase 1: thread the repo.id so silent warmup
+            // reruns carry it into RunState + the consumer's
+            // review-memory lookup.
+            ...(rerunRepoId !== undefined ? { repoId: rerunRepoId } : {}),
           })
           if (!enq.ok) {
             // Codex MEDIUM on PR review: silent warmup reruns are
@@ -1651,6 +1697,11 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             prNumber: job.prNumber,
             headSha,
             installationId: job.installationId,
+            // SIG-247 Phase 1: slash-command raw-sends bypass the DO
+            // path, so they thread repoId directly into the JobMessage
+            // here. Consumer reads it into `baseArgs` and on into the
+            // ensemble's review-memory lookup.
+            ...(rerunRepoId !== undefined ? { repoId: rerunRepoId } : {}),
           }
           await env.OPENCLAW_JOBS.send(reviewMessage)
           // SIG-98 — telemetry so we can tell `/sigilix review` apart
@@ -2642,6 +2693,18 @@ async function handleGitHubWebhook(
       // SIG-174: automatic webhook reviews always route through the
       // DO-backed post path. Awaited (NOT ctx.waitUntil) so a DO
       // failure surfaces as 503 to GitHub for redelivery.
+      //
+      // SIG-247 Phase 1: extract the immutable repo.id from the
+      // webhook payload with the same positive-integer guard the
+      // push-indexer uses (line 2827-2832). Threads through to
+      // RunState + JobMessage so the consumer's review-memory lookup
+      // hits the dual-write keyspace.
+      const prReviewRepoId =
+        typeof payload.repository?.id === "number" &&
+        Number.isInteger(payload.repository.id) &&
+        payload.repository.id > 0
+          ? payload.repository.id
+          : undefined
       const enq = await enqueuePrReviewJob(env, {
         owner,
         repo,
@@ -2650,6 +2713,7 @@ async function handleGitHubWebhook(
         baseSha,
         installationId,
         deliveryId: request.headers.get("x-github-delivery"),
+        ...(prReviewRepoId !== undefined ? { repoId: prReviewRepoId } : {}),
       })
       if (!enq.ok) {
         return new Response("do enqueue failed\n", { status: 503 })
@@ -2771,6 +2835,18 @@ async function handleGitHubWebhook(
       typeof reviewMemoryComment.path === "string" &&
       typeof reviewMemoryPrNumber === "number"
     ) {
+      // SIG-247 Phase 1: capture the immutable repo ID from the webhook
+      // payload so review-memory writes land at both the legacy and
+      // repo-id keyspaces. Mirrors the push-indexer guard at
+      // line 2827-2832 — strictly positive integers only; any spoofed
+      // or malformed payload falls back to legacy-only via
+      // `captureReviewFeedback`'s `getRepository` fallback.
+      const reviewMemoryRepoId =
+        typeof payload.repository?.id === "number" &&
+        Number.isInteger(payload.repository.id) &&
+        payload.repository.id > 0
+          ? payload.repository.id
+          : undefined
       ctx.waitUntil(
         dispatchReviewMemoryCapture({
           env,
@@ -2786,6 +2862,9 @@ async function handleGitHubWebhook(
               ? { in_reply_to_id: reviewMemoryComment.in_reply_to_id }
               : {}),
           },
+          ...(reviewMemoryRepoId !== undefined
+            ? { repoId: reviewMemoryRepoId }
+            : {}),
         }),
       )
     }
@@ -2868,8 +2947,16 @@ async function dispatchReviewMemoryCapture(args: {
   prNumber: number
   installationId: number
   comment: { id: number; body: string; path: string; in_reply_to_id?: number }
+  /**
+   * SIG-247 Phase 1: GitHub's immutable repo.id from the webhook
+   * payload. When present and positive-integer, threads through to
+   * `appendSignal` for the dual-write keyspace. Absent on legacy /
+   * spoofed / malformed payloads; the capture path then falls back to
+   * a `getRepository` lookup before going legacy-only.
+   */
+  repoId?: number
 }): Promise<void> {
-  const { env, owner, repo, prNumber, installationId, comment } = args
+  const { env, owner, repo, prNumber, installationId, comment, repoId } = args
   try {
     if (env.OPENCLAW_REVIEW_MEMORY_CAPTURE !== "on") {
       // Cheap pre-flight: env-gate fails fast without paying the
@@ -2894,6 +2981,7 @@ async function dispatchReviewMemoryCapture(args: {
       env, client, owner, repo, prNumber,
       replyComment: comment,
       config,
+      ...(repoId !== undefined ? { repoId } : {}),
     })
   } catch (err) {
     console.log(JSON.stringify({

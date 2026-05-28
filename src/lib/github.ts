@@ -949,19 +949,43 @@ export class GitHubClient {
     owner: string,
     repo: string,
     commentId: number,
-  ): Promise<{ id: number; body: string; in_reply_to_id?: number } | null> {
+  ): Promise<
+    | {
+        id: number
+        body: string
+        in_reply_to_id?: number
+        /**
+         * SIG-247 Phase 1: parent comment author login (e.g. `sigilix[bot]`).
+         * The review-memory capture path gates marker validation on
+         * `isArcGithubLogin(user.login)` so a copied marker in a
+         * human-authored comment cannot trigger a false-positive
+         * dismissal capture.
+         */
+        user?: { login: string }
+      }
+    | null
+  > {
     try {
       const res = await this.restGet<{
         id: number
         body?: string | null
         in_reply_to_id?: number | null
+        user?: { login?: string | null } | null
       }>(`/repos/${owner}/${repo}/pulls/comments/${commentId}`)
-      const out: { id: number; body: string; in_reply_to_id?: number } = {
+      const out: {
+        id: number
+        body: string
+        in_reply_to_id?: number
+        user?: { login: string }
+      } = {
         id: res.id,
         body: res.body ?? "",
       }
       if (typeof res.in_reply_to_id === "number") {
         out.in_reply_to_id = res.in_reply_to_id
+      }
+      if (typeof res.user?.login === "string") {
+        out.user = { login: res.user.login }
       }
       return out
     } catch (error) {

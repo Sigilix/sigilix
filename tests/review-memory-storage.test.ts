@@ -3,9 +3,11 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import {
   buildKey,
+  buildRepoIdKey,
   readMemory,
   appendSignal,
   pruneStaleSignals,
+  unionRecords,
 } from "../src/lib/review-memory/storage"
 import type {
   ReviewMemoryRecord,
@@ -424,5 +426,426 @@ describe("pruneStaleSignals (pure)", () => {
     const r = rec([makeSignal({ ts: sixtyOneDaysOld })])
     const out = pruneStaleSignals(r, now, 60)  // hard 60d retention
     expect(out.signals.length).toBe(0)
+  })
+})
+
+// ─── SIG-247 Phase 1 — buildRepoIdKey ─────────────────────────
+
+describe("buildRepoIdKey (SIG-247 Phase 1)", () => {
+  it("category scope: review-memory:repo:<id>:cat:<category>", () => {
+    expect(
+      buildRepoIdKey(42, { kind: "category", category: "performance" }),
+    ).toBe("review-memory:repo:42:cat:performance")
+  })
+
+  it("path-category scope carries the full sha256 in the key", () => {
+    expect(
+      buildRepoIdKey(42, {
+        kind: "path-category",
+        category: "tests",
+        pathSha256: SAMPLE_SHA256,
+      }),
+    ).toBe(`review-memory:repo:42:path:${SAMPLE_SHA256}:cat:tests`)
+  })
+
+  it("accepts the SIG-247 Phase 0 'architecture' category", () => {
+    expect(
+      buildRepoIdKey(42, { kind: "category", category: "architecture" }),
+    ).toBe("review-memory:repo:42:cat:architecture")
+  })
+})
+
+// ─── SIG-247 Phase 1 — unionRecords (pure) ───────────────────
+
+describe("unionRecords (pure, SIG-247 Phase 1)", () => {
+  const scope: ReviewMemoryStorageScope = {
+    kind: "category",
+    category: "logic",
+  }
+
+  function rec(signals: ReviewMemorySignal[]): ReviewMemoryRecord {
+    return {
+      schemaVersion: 1,
+      category: "logic",
+      signals,
+      lastUpdatedTs: signals[signals.length - 1]?.ts
+        ?? new Date().toISOString(),
+    }
+  }
+
+  it("null + null → null", () => {
+    expect(unionRecords(null, null, scope)).toBeNull()
+  })
+
+  it("null + record → record", () => {
+    const r = rec([makeSignal({ commentId: 1 })])
+    expect(unionRecords(null, r, scope)).toEqual(r)
+  })
+
+  it("record + null → record", () => {
+    const r = rec([makeSignal({ commentId: 1 })])
+    expect(unionRecords(r, null, scope)).toEqual(r)
+  })
+
+  it("disjoint signal sets are concatenated + sorted ts desc", () => {
+    const tsA = new Date(Date.now() - 1000).toISOString()
+    const tsB = new Date(Date.now() - 500).toISOString()
+    const a = rec([makeSignal({ commentId: 1, ts: tsA })])
+    const b = rec([makeSignal({ commentId: 2, ts: tsB })])
+    const out = unionRecords(a, b, scope)
+    expect(out?.signals.map((s) => s.commentId)).toEqual([2, 1])
+  })
+
+  it("overlapping commentId: latest ts wins (deduped)", () => {
+    const olderTs = new Date(Date.now() - 1000).toISOString()
+    const newerTs = new Date(Date.now() - 500).toISOString()
+    const a = rec([makeSignal({ commentId: 7, ts: olderTs, prNumber: 1 })])
+    const b = rec([makeSignal({ commentId: 7, ts: newerTs, prNumber: 2 })])
+    const out = unionRecords(a, b, scope)
+    expect(out?.signals).toHaveLength(1)
+    expect(out?.signals[0]?.prNumber).toBe(2)
+    expect(out?.signals[0]?.ts).toBe(newerTs)
+  })
+
+  it("final sort is NaN-safe — malformed-ts signals pushed to end (CR-2)", () => {
+    // unionRecords' final .sort() must not return NaN, or
+    // Array.prototype.sort yields engine-defined ordering. Push
+    // malformed-ts signals to the end so the FIFO cap evicts them
+    // first when overflow happens.
+    const validNewer = new Date(Date.now() - 500).toISOString()
+    const validOlder = new Date(Date.now() - 5000).toISOString()
+    const a = rec([
+      makeSignal({ commentId: 1, ts: validOlder }),
+      makeSignal({ commentId: 2, ts: "garbage" }),
+    ])
+    const b = rec([
+      makeSignal({ commentId: 3, ts: validNewer }),
+    ])
+    const out = unionRecords(a, b, scope)
+    expect(out?.signals).toHaveLength(3)
+    // Order: validNewer (3), validOlder (1), garbage (2)
+    expect(out?.signals.map((s) => s.commentId)).toEqual([3, 1, 2])
+  })
+
+  it("overlapping commentId: NaN-existing-ts loses to valid candidate (code-reviewer M2)", () => {
+    // If an existing signal has a malformed ts (Date.parse → NaN),
+    // the prior `candidateTs > existingTs` always evaluates false,
+    // so the malformed signal would stick. Phase 1 prefers any
+    // candidate with a finite ts over a NaN existing.
+    const validTs = new Date().toISOString()
+    const a = rec([makeSignal({ commentId: 7, ts: "not-a-date", prNumber: 1 })])
+    const b = rec([makeSignal({ commentId: 7, ts: validTs, prNumber: 2 })])
+    const out = unionRecords(a, b, scope)
+    expect(out?.signals).toHaveLength(1)
+    expect(out?.signals[0]?.prNumber).toBe(2)
+    expect(out?.signals[0]?.ts).toBe(validTs)
+  })
+
+  it("caps to 50 newest after union", () => {
+    const baseMs = Date.now() - 60_000
+    const aSignals: ReviewMemorySignal[] = []
+    const bSignals: ReviewMemorySignal[] = []
+    for (let i = 0; i < 30; i++) {
+      aSignals.push(makeSignal({
+        commentId: 1000 + i,
+        ts: new Date(baseMs + i * 1000).toISOString(),
+      }))
+      bSignals.push(makeSignal({
+        commentId: 2000 + i,
+        ts: new Date(baseMs + (i + 30) * 1000).toISOString(),
+      }))
+    }
+    const out = unionRecords(rec(aSignals), rec(bSignals), scope)
+    expect(out?.signals).toHaveLength(50)
+    // Oldest 10 of aSignals (commentId 1000-1009) evicted.
+    expect(out?.signals.find((s) => s.commentId === 1000)).toBeUndefined()
+    expect(out?.signals.find((s) => s.commentId === 2029)).toBeDefined()
+  })
+
+  it("path-category scope: pathSha256 from scope wins on output", () => {
+    const pathScope: ReviewMemoryStorageScope = {
+      kind: "path-category",
+      category: "tests",
+      pathSha256: SAMPLE_SHA256,
+    }
+    const a: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "tests",
+      pathSha256: SAMPLE_SHA256,
+      signals: [makeSignal()],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    const out = unionRecords(a, null, pathScope)
+    expect(out?.pathSha256).toBe(SAMPLE_SHA256)
+  })
+
+  it("picks the most-recent lastUpdatedTs across inputs", () => {
+    const older = new Date(Date.now() - 1000).toISOString()
+    const newer = new Date(Date.now()).toISOString()
+    const a: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [],
+      lastUpdatedTs: older,
+    }
+    const b: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [],
+      lastUpdatedTs: newer,
+    }
+    expect(unionRecords(a, b, scope)?.lastUpdatedTs).toBe(newer)
+  })
+})
+
+// ─── SIG-247 Phase 1 — dual-write appendSignal ─────────────
+
+describe("appendSignal — SIG-247 Phase 1 dual-write", () => {
+  const owner = "acme"
+  const repo = "site"
+  const repoId = 12345
+  const scope: ReviewMemoryStorageScope = {
+    kind: "category",
+    category: "logic",
+  }
+
+  let consoleSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    consoleSpy.mockRestore()
+  })
+
+  it("writes BOTH legacy and repo-id keys when repoId is positive-integer", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const out = await appendSignal(
+      env, owner, repo, scope, makeSignal(), repoId,
+    )
+    expect(out.written).toBe(true)
+    expect(out.repoIdPresent).toBe(true)
+    expect(out.legacyWritten).toBe(true)
+    expect(out.newWritten).toBe(true)
+    expect(out.partialDualWrite).toBe(false)
+    expect(store.has(buildKey(owner, repo, scope))).toBe(true)
+    expect(store.has(buildRepoIdKey(repoId, scope))).toBe(true)
+  })
+
+  it("emits review-memory-dual-write-succeeded telemetry on both-write success", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    await appendSignal(env, owner, repo, scope, makeSignal(), repoId)
+    const events = consoleSpy.mock.calls
+      .map((args) => String(args[0]))
+      .filter((s) => s.includes("review-memory-dual-write-succeeded"))
+    expect(events.length).toBeGreaterThan(0)
+  })
+
+  it("emits review-memory-dual-write-failed (NOT -succeeded) when BOTH keys fail", async () => {
+    // Code-reviewer M1: if both writes fail, partialDualWrite is
+    // false (false !== false), so the prior implementation emitted
+    // -succeeded with legacy_written=false, new_written=false. Any
+    // dashboard counting -succeeded as a positive metric would
+    // overcount. Three-way event split makes both-fail explicit.
+    const { kv, failPut } = makeKvStub()
+    failPut.value = true
+    const env = makeEnv(kv)
+    const out = await appendSignal(env, owner, repo, scope, makeSignal(), repoId)
+    expect(out.written).toBe(false)
+    expect(out.legacyWritten).toBe(false)
+    expect(out.newWritten).toBe(false)
+    const all = consoleSpy.mock.calls.map((args) => String(args[0]))
+    expect(all.some((s) => s.includes("review-memory-dual-write-failed"))).toBe(true)
+    expect(all.some((s) => s.includes("review-memory-dual-write-succeeded"))).toBe(false)
+    expect(all.some((s) => s.includes("review-memory-dual-write-partial"))).toBe(false)
+  })
+
+  it("repoId=0 → legacy-only path, no dual-write telemetry", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const out = await appendSignal(env, owner, repo, scope, makeSignal(), 0)
+    expect(out.repoIdPresent).toBe(false)
+    expect(out.newWritten).toBe(false)
+    expect(out.legacyWritten).toBe(true)
+    expect(store.has(buildKey(owner, repo, scope))).toBe(true)
+    expect(store.has(buildRepoIdKey(0, scope))).toBe(false)
+    const events = consoleSpy.mock.calls
+      .map((args) => String(args[0]))
+      .filter((s) => s.includes("review-memory-dual-write"))
+    expect(events.length).toBe(0)
+  })
+
+  it("repoId=undefined → legacy-only path (back-compat)", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const out = await appendSignal(env, owner, repo, scope, makeSignal())
+    expect(out.repoIdPresent).toBe(false)
+    expect(store.has(buildKey(owner, repo, scope))).toBe(true)
+  })
+
+  it("repoId=-1 (invalid) → legacy-only path with positive-integer guard", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const out = await appendSignal(env, owner, repo, scope, makeSignal(), -1)
+    expect(out.repoIdPresent).toBe(false)
+    expect(store.has(buildRepoIdKey(-1, scope))).toBe(false)
+  })
+
+  it("idempotent on commentId: redundant write is a no-op + emits skipped_duplicate", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const signal = makeSignal({ commentId: 42 })
+    const first = await appendSignal(env, owner, repo, scope, signal, repoId)
+    expect(first.skippedDuplicate).toBe(false)
+    expect(first.signalCount).toBe(1)
+    const second = await appendSignal(env, owner, repo, scope, signal, repoId)
+    expect(second.skippedDuplicate).toBe(true)
+    expect(second.signalCount).toBe(1)  // unchanged
+    const stored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
+    expect(stored.signals).toHaveLength(1)
+  })
+
+  it("union read: legacy has signal A, new key has signal B → both persist post-write", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    // Seed legacy with signal A
+    const legacyRec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 1, ts: new Date(Date.now() - 1000).toISOString() })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    store.set(buildKey(owner, repo, scope), JSON.stringify(legacyRec))
+    // Seed new key with signal B
+    const newRec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 2, ts: new Date(Date.now() - 500).toISOString() })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    store.set(buildRepoIdKey(repoId, scope), JSON.stringify(newRec))
+    // Append signal C — read should union A+B+C, then write to both
+    await appendSignal(env, owner, repo, scope, makeSignal({ commentId: 3 }), repoId)
+    const legacyStored = JSON.parse(store.get(buildKey(owner, repo, scope))!)
+    const newStored = JSON.parse(store.get(buildRepoIdKey(repoId, scope))!)
+    expect(legacyStored.signals.map((s: ReviewMemorySignal) => s.commentId).sort())
+      .toEqual([1, 2, 3])
+    expect(newStored.signals.map((s: ReviewMemorySignal) => s.commentId).sort())
+      .toEqual([1, 2, 3])
+  })
+})
+
+// ─── SIG-247 Phase 1 — read-union readMemory ───────────────
+
+describe("readMemory — SIG-247 Phase 1 read-union", () => {
+  const owner = "acme"
+  const repo = "site"
+  const repoId = 12345
+  const scope: ReviewMemoryStorageScope = {
+    kind: "category",
+    category: "logic",
+  }
+
+  let consoleSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    consoleSpy.mockRestore()
+  })
+
+  it("repoId provided, only legacy populated → returns legacy record", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const rec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 1 })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    store.set(buildKey(owner, repo, scope), JSON.stringify(rec))
+    const out = await readMemory(env, owner, repo, scope, repoId)
+    expect(out?.signals).toHaveLength(1)
+    expect(out?.signals[0]?.commentId).toBe(1)
+  })
+
+  it("repoId provided, only new key populated → returns new record", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const rec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 2 })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    store.set(buildRepoIdKey(repoId, scope), JSON.stringify(rec))
+    const out = await readMemory(env, owner, repo, scope, repoId)
+    expect(out?.signals).toHaveLength(1)
+    expect(out?.signals[0]?.commentId).toBe(2)
+  })
+
+  it("both populated with disjoint signals → returns union", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const legacyRec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 1, ts: new Date(Date.now() - 1000).toISOString() })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    const newRec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 2, ts: new Date(Date.now() - 500).toISOString() })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    store.set(buildKey(owner, repo, scope), JSON.stringify(legacyRec))
+    store.set(buildRepoIdKey(repoId, scope), JSON.stringify(newRec))
+    const out = await readMemory(env, owner, repo, scope, repoId)
+    expect(out?.signals.map((s) => s.commentId).sort()).toEqual([1, 2])
+  })
+
+  it("repoId NOT provided → reads legacy only (back-compat)", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const legacyRec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 1 })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    const newRec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 999 })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    store.set(buildKey(owner, repo, scope), JSON.stringify(legacyRec))
+    store.set(buildRepoIdKey(repoId, scope), JSON.stringify(newRec))
+    const out = await readMemory(env, owner, repo, scope)
+    expect(out?.signals).toHaveLength(1)
+    expect(out?.signals[0]?.commentId).toBe(1)  // legacy only; new key ignored
+  })
+
+  it("both empty → returns null", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    const out = await readMemory(env, owner, repo, scope, repoId)
+    expect(out).toBeNull()
+  })
+
+  it("repoId=0 (invalid) → reads legacy only, ignores any new key", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv)
+    const newRec: ReviewMemoryRecord = {
+      schemaVersion: 1,
+      category: "logic",
+      signals: [makeSignal({ commentId: 999 })],
+      lastUpdatedTs: new Date().toISOString(),
+    }
+    store.set(buildRepoIdKey(0, scope), JSON.stringify(newRec))
+    const out = await readMemory(env, owner, repo, scope, 0)
+    expect(out).toBeNull()
   })
 })

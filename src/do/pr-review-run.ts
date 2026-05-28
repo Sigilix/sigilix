@@ -29,6 +29,22 @@ import {
 
 const STATE_KEY = "state"
 
+/**
+ * SIG-247 Phase 1 (CodeRabbit CR-1): defense-in-depth normalization
+ * for `repoId` at the DO trust boundary. The webhook handler validates
+ * `payload.repository.id` before enqueue, but the DO must not blindly
+ * trust the EnqueueRequest body — a buggy or malicious caller could
+ * post `NaN` / `0` / `-1` and poison the dual-write keyspace. Gate
+ * every persist + queue.send through this helper.
+ */
+function normalizeRepoId(repoId: number | undefined): number | undefined {
+  return typeof repoId === "number" &&
+    Number.isInteger(repoId) &&
+    repoId > 0
+    ? repoId
+    : undefined
+}
+
 function emit(event: string, fields: Record<string, unknown>): void {
   console.log(JSON.stringify({ event, dedupe_system: "do", ...fields }))
 }
@@ -193,6 +209,14 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // consumer + watchdog can close it. Undefined if creation
       // failed (best-effort dispatcher fallback applies).
       ...(checkRun !== null ? { checkRunId: checkRun.id } : {}),
+      // SIG-247 Phase 1: persist the immutable repo.id so retry-alarm
+      // queue messages preserve the dual-write keyspace target. Without
+      // this, retries silently lose the repo-id and fall back to
+      // legacy-only review-memory lookups. CR-1: normalize at the DO
+      // trust boundary — caller-provided values are not pre-validated.
+      ...(normalizeRepoId(body.repoId) !== undefined
+        ? { repoId: normalizeRepoId(body.repoId)! }
+        : {}),
     }
 
     // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
@@ -220,6 +244,12 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // SIG-220: forward the upstream-created check id so the
       // dispatcher attaches instead of creating a duplicate.
       ...(checkRun !== null ? { checkRunId: checkRun.id } : {}),
+      // SIG-247 Phase 1: forward immutable repo.id to the consumer so
+      // review-memory dual-write/read-union semantics apply on this run.
+      // CR-1: normalize at the DO trust boundary.
+      ...(normalizeRepoId(body.repoId) !== undefined
+        ? { repoId: normalizeRepoId(body.repoId)! }
+        : {}),
     })
 
     emit("do-review-enqueued", {
@@ -503,6 +533,14 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // but attaching is one fewer GitHub call).
       ...(state.checkRunId !== undefined
         ? { checkRunId: state.checkRunId }
+        : {}),
+      // SIG-247 Phase 1: rebuild from RunState INCLUDING the immutable
+      // repo.id so retry-alarm queue messages preserve dual-write
+      // semantics. Mirrors the staleHeadRequeueDepth pattern above.
+      // CR-1: re-normalize on read in case a pre-Phase-1-fix RunState
+      // persisted an invalid value.
+      ...(normalizeRepoId(state.repoId) !== undefined
+        ? { repoId: normalizeRepoId(state.repoId)! }
         : {}),
     })
     const watchdogAt = Date.now() + config.watchdogMs

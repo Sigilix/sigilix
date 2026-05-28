@@ -36,6 +36,7 @@ import type {
 } from "./types"
 import { categoryFromRoleHint as _unused } from "./marker"
 import { computePathSha256, extractSigilixMarker } from "./marker"
+import { isArcGithubLogin } from "../mention"
 import { parseDismissalSignal } from "./parse-dismissal"
 import { appendSignal } from "./storage"
 
@@ -66,6 +67,14 @@ interface CaptureArgs {
     path: string
   }
   config: ResolvedReviewMemoryConfig
+  /**
+   * SIG-247 Phase 1: GitHub's immutable `repo.id` for dual-write. When
+   * absent (legacy webhook payload, spoofed event, missing field),
+   * the capture path calls `client.getRepository(owner, repo)` before
+   * falling back to legacy-only writes — that fallback keeps the new
+   * keyspace populated even on rare payload-shape gaps.
+   */
+  repoId?: number
 }
 
 function emitTelemetry(event: string, fields: Record<string, unknown>): void {
@@ -87,6 +96,7 @@ function captureGateOpen(
  */
 export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   const { env, client, owner, repo, prNumber, replyComment, config } = args
+  let repoId = args.repoId
 
   // Step 1: ID resolution + non-reply early exit
   const replyCommentId = replyComment.id
@@ -132,6 +142,7 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
 
   // Step 4: Parent fetch
   let parentBody: string
+  let parentLogin: string | undefined
   try {
     const parent = await client.getPullRequestReviewComment(
       owner, repo, parentCommentId,
@@ -144,11 +155,27 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
       return
     }
     parentBody = parent.body
+    parentLogin = parent.user?.login
   } catch (err) {
     emitTelemetry("review-memory-capture-failed", {
       owner, repo, prNumber, commentId: replyCommentId,
       stage: "parent-fetch",
       err: err instanceof Error ? err.message : String(err),
+    })
+    return
+  }
+
+  // Step 4.5 (SIG-247 Phase 1): parent App-author gate. The marker
+  // parser is a pure body regex (marker.ts:167-211) — without an
+  // author check, any commenter can paste a valid marker into their
+  // own inline comment and reply "false positive" to themselves to
+  // write a dismissal signal. Require the parent comment to be
+  // authored by the Sigilix App before trusting its marker.
+  if (!isArcGithubLogin(parentLogin)) {
+    emitTelemetry("review-memory-capture-skipped", {
+      owner, repo, prNumber, commentId: replyCommentId,
+      reason: "parent-not-sigilix-author",
+      parent_login_present: parentLogin !== undefined,
     })
     return
   }
@@ -187,6 +214,35 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     // Continue: signal writes are still useful even if dedupe missed
   }
 
+  // Step 7.5 (SIG-247 Phase 1): resolve repoId for dual-write. The
+  // webhook handler passes `args.repoId` when `payload.repository.id`
+  // is a positive integer. On rare payload-shape gaps (legacy event,
+  // spoofed delivery, missing field), fall back to a one-call
+  // getRepository lookup — this keeps the new keyspace populated even
+  // when the payload is incomplete. Any fallback error degrades to
+  // legacy-only writes, never throws.
+  if (repoId === undefined) {
+    try {
+      const repoMeta = await client.getRepository(owner, repo)
+      if (
+        repoMeta &&
+        typeof repoMeta.id === "number" &&
+        Number.isInteger(repoMeta.id) &&
+        repoMeta.id > 0
+      ) {
+        repoId = repoMeta.id
+      }
+    } catch (err) {
+      emitTelemetry("review-memory-capture-failed", {
+        owner, repo, prNumber, commentId: replyCommentId,
+        stage: "repo-id-fallback",
+        err: err instanceof Error ? err.message : String(err),
+      })
+      // Continue with repoId still undefined — appendSignal degrades
+      // to legacy-only writes per its positive-integer guard.
+    }
+  }
+
   // Step 8: Parallel signal writes
   const signal: ReviewMemorySignal = {
     ts: new Date().toISOString(),
@@ -200,10 +256,12 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     appendSignal(env, owner, repo,
       { kind: "category", category: marker.cat },
       signal,
+      repoId,
     ),
     appendSignal(env, owner, repo,
       { kind: "path-category", category: marker.cat, pathSha256 },
       signal,
+      repoId,
     ),
   ])
   // Only emit `capture-written` for the scope(s) that actually
@@ -211,15 +269,30 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   // KV throw inside it.
   const catRes = settled[0]
   const pathRes = settled[1]
-  if (
-    (catRes?.status === "fulfilled" && catRes.value.written) ||
-    (pathRes?.status === "fulfilled" && pathRes.value.written)
-  ) {
+  const catValue =
+    catRes?.status === "fulfilled" ? catRes.value : undefined
+  const pathValue =
+    pathRes?.status === "fulfilled" ? pathRes.value : undefined
+  const catWritten = catValue?.written === true
+  const pathWritten = pathValue?.written === true
+  if (catWritten || pathWritten) {
     emitTelemetry("review-memory-capture-written", {
       owner, repo, prNumber, commentId: replyCommentId,
       category: marker.cat,
-      catWritten: catRes?.status === "fulfilled" && catRes.value.written,
-      pathWritten: pathRes?.status === "fulfilled" && pathRes.value.written,
+      catWritten,
+      pathWritten,
+      // SIG-247 Phase 1 canary fields
+      repo_id_present: repoId !== undefined,
+      legacy_written:
+        catValue?.legacyWritten === true ||
+        pathValue?.legacyWritten === true,
+      new_written:
+        catValue?.newWritten === true ||
+        pathValue?.newWritten === true,
+      partial_dual_write:
+        catValue?.partialDualWrite === true ||
+        pathValue?.partialDualWrite === true,
+      key_mode: repoId !== undefined ? "dual" : "legacy-only",
     })
   }
 }

@@ -16,8 +16,11 @@
 import type {
   ResolvedReviewMemoryConfig,
   ReviewMemoryCategory,
+  ReviewMemoryClaimType,
   ReviewMemoryFinding,
   ReviewMemoryRecord,
+  ReviewMemoryShadowClaim,
+  ReviewMemorySignal,
   ReviewMemorySkipReason,
 } from "./types"
 import { ALL_REVIEW_MEMORY_CATEGORIES } from "./types"
@@ -113,6 +116,78 @@ export function selectTopMemories(
   return copy.slice(0, maxN)
 }
 
+/**
+ * SIG-276 Phase 3: aggregate the write-time claims carried on a set of
+ * (already-recency-filtered) dismissal signals into per-claim-type
+ * shadow rows. PURE + telemetry-only.
+ *
+ * Counting rule (field-validation): `distinctPrCount` counts DISTINCT
+ * `signal.prNumber` carrying the type — never raw signal rows — so one
+ * noisy thread (many replies on one PR) cannot inflate a claim. Signals
+ * with no `claims` (legacy / claimless) contribute nothing. Output is
+ * sorted by `type` for deterministic telemetry + tests.
+ *
+ * MUST stay here (over `record.signals`) — `ReviewMemoryFinding` does
+ * not carry `signals[]` forward, so this cannot move to the match site.
+ */
+export function aggregateShadowClaims(
+  recent: readonly ReviewMemorySignal[],
+): ReviewMemoryShadowClaim[] {
+  interface Bucket {
+    prNumbers: Set<number>
+    signalCount: number
+    lastMs: number
+    lastTs: string
+    versions: Set<number>
+    confidences: number[]
+  }
+  const buckets = new Map<ReviewMemoryClaimType, Bucket>()
+  for (const signal of recent) {
+    const claims = signal.claims
+    if (!claims || claims.length === 0) continue
+    const seenThisSignal = new Set<ReviewMemoryClaimType>()
+    for (const claim of claims) {
+      // Count each signal at most once per type so every per-type
+      // aggregate (signalCount, distinctPrCount, AND rawConfidences /
+      // extractorVersions) is consistently per-(signal,type) — a finding
+      // that emitted the same type twice must not skew the corpus.
+      if (seenThisSignal.has(claim.type)) continue
+      seenThisSignal.add(claim.type)
+      let b = buckets.get(claim.type)
+      if (!b) {
+        b = {
+          prNumbers: new Set(),
+          signalCount: 0,
+          lastMs: -Infinity,
+          lastTs: "",
+          versions: new Set(),
+          confidences: [],
+        }
+        buckets.set(claim.type, b)
+      }
+      b.signalCount++
+      b.prNumbers.add(signal.prNumber)
+      b.versions.add(claim.extractorVersion)
+      b.confidences.push(claim.confidence)
+      const ts = Date.parse(signal.ts)
+      if (Number.isFinite(ts) && ts > b.lastMs) {
+        b.lastMs = ts
+        b.lastTs = signal.ts
+      }
+    }
+  }
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([type, b]) => ({
+      type,
+      distinctPrCount: b.prNumbers.size,
+      signalCount: b.signalCount,
+      lastSignalTs: b.lastTs,
+      extractorVersions: [...b.versions].sort((x, y) => x - y),
+      rawConfidences: b.confidences,
+    }))
+}
+
 function pickLastSignalTs(record: ReviewMemoryRecord): string {
   let bestMs = -Infinity
   let bestTs: string = record.lastUpdatedTs
@@ -167,6 +242,16 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
   const t0 = Date.now()
   const activeCats = categoriesActive(config)
   const findings: ReviewMemoryFinding[] = []
+  // SIG-276 Phase 3: third flag, default off. When on, attach telemetry-
+  // only `shadowClaims` to active memories (consumed only by the Site-2
+  // shadow matcher in the ensemble; never changes softening here). Also
+  // requires the CLAIMS flag — without it no incoming claims exist for the
+  // Site-2 matcher, so aggregating here would be unconsumed work. Keeping
+  // both flags here makes the gate symmetric with Site 2 (all-three-on),
+  // matching the documented invariant.
+  const claimShadowEnabled =
+    env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW === "on" &&
+    env.OPENCLAW_REVIEW_MEMORY_CLAIMS === "on"
 
   // Category-scope reads (one per active category)
   const catReads: Promise<ReviewMemoryRecord | null>[] = []
@@ -230,6 +315,9 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
       signalCount: recent.length,
       lastSignalTs: pickLastSignalTs(record),
       suggestedAction: "soften",
+      ...(claimShadowEnabled
+        ? { shadowClaims: aggregateShadowClaims(recent) }
+        : {}),
     })
   }
 
@@ -255,6 +343,9 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
       signalCount: recent.length,
       lastSignalTs: pickLastSignalTs(record),
       suggestedAction: "soften",
+      ...(claimShadowEnabled
+        ? { shadowClaims: aggregateShadowClaims(recent) }
+        : {}),
     })
   }
 

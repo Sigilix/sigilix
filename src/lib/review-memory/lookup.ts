@@ -25,6 +25,7 @@ import type {
 } from "./types"
 import { ALL_REVIEW_MEMORY_CATEGORIES } from "./types"
 import { computePathSha256 } from "./marker"
+import { resolveClaimShadowMode } from "./shadow-match"
 import { readMemory } from "./storage"
 import { weightedSignalCount } from "./dismissal-weights"
 import type { Env } from "../../index"
@@ -249,8 +250,10 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
   // Site-2 matcher, so aggregating here would be unconsumed work. Keeping
   // both flags here makes the gate symmetric with Site 2 (all-three-on),
   // matching the documented invariant.
+  // SIG-280: flag is now an enum {off,on,render,soften}; render/soften behave
+  // like `on` (shadow) in PR A. Any non-off mode runs the shadow aggregation.
   const claimShadowEnabled =
-    env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW === "on" &&
+    resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW) !== "off" &&
     env.OPENCLAW_REVIEW_MEMORY_CLAIMS === "on"
 
   // Category-scope reads (one per active category)

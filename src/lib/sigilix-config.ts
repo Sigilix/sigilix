@@ -248,6 +248,13 @@ export interface SigilixConfig {
     maxInjectedMemories?: number
     minSignalThreshold?: number
     maxSignalAgeDays?: number
+    /**
+     * SIG-280 Phase 4: per-repo opt-in for claim-driven softening. Strict-bool
+     * (literal `true` only). Default off. Phase 4 `soften` mode requires BOTH
+     * this AND env `OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW=soften`. Read-but-not-
+     * yet-enforced in PR A (the soften gate lands in Phase 4 PR C).
+     */
+    claimSoftening?: boolean
   }
   /**
    * ARC-265: customer-defined labels Sigilix's LLM may apply to PRs.
@@ -1113,6 +1120,13 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     if (typeof rmIn.maxSignalAgeDays === "number") {
       rmOut.maxSignalAgeDays = clamp(rmIn.maxSignalAgeDays, 7, 365)
     }
+    // SIG-280: strict-bool, mirroring enabled/captureOnly. Without this copy
+    // the field is dropped by the whitelist and `resolveReviewMemoryConfig`
+    // (which reads `cfg?.claimSoftening`) always sees false on the real
+    // sigilix.json load path (CodeRabbit catch on PR #210).
+    if (rmIn.claimSoftening === true || rmIn.claimSoftening === false) {
+      rmOut.claimSoftening = rmIn.claimSoftening
+    }
     if (Object.keys(rmOut).length > 0) {
       out.reviewMemory = rmOut
     }
@@ -1594,6 +1608,7 @@ export function resolveReviewMemoryConfig(
   maxInjectedMemories: number
   minSignalThreshold: number
   maxSignalAgeDays: number
+  claimSoftening: boolean
 } {
   const cfg = config?.reviewMemory
   const cats = cfg?.categories
@@ -1608,6 +1623,9 @@ export function resolveReviewMemoryConfig(
     maxInjectedMemories: cfg?.maxInjectedMemories ?? 5,
     minSignalThreshold: cfg?.minSignalThreshold ?? 3,
     maxSignalAgeDays: cfg?.maxSignalAgeDays ?? 90,
+    // SIG-280 Phase 4 PR A: strict-bool, default off. Surfaced for the
+    // Phase 4 soften gate; nothing reads it for behavior yet.
+    claimSoftening: cfg?.claimSoftening === true,
   }
 }
 

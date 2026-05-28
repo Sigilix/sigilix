@@ -278,6 +278,7 @@ import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import {
   buildSigilixMarker,
   categoryFromRoleHint,
+  computeFid,
   computePathSha256,
   markerSeverityFromScore,
 } from "./review-memory/marker"
@@ -288,6 +289,7 @@ import {
 } from "./review-memory/claim-extractor"
 import {
   shadowMatchReviewMemoryClaims,
+  resolveClaimShadowMode,
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { runReviewMemoryLookup } from "./review-memory/lookup"
@@ -4361,19 +4363,29 @@ export async function handlePrReviewEnsemble(
     // calibrates on. Gated: requires the shadow flag AND real claims
     // (claimsEnabled) AND a non-skipped lookup — otherwise a no-op.
     if (
-      env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW === "on" &&
+      resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW) !== "off" &&
       claimsEnabled &&
       shadowMemoriesForPhase3.length > 0
     ) {
       const shadowPathHashes = await Promise.all(
         filteredConsensusFindings.map((f) => computePathSha256(f.path)),
       )
+      // SIG-280: per-finding sha16 fid (same canonical form as the marker)
+      // becomes the OFFLINE join key linking this claim-matched finding to a
+      // later `review-memory-outcome` dismissal event.
+      const shadowFids = await Promise.all(
+        filteredConsensusFindings.map((f) =>
+          computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline }),
+        ),
+      )
       const shadowFindings: ShadowMatchFinding[] = filteredConsensusFindings.map(
-        (_f, j) => {
+        (f, j) => {
           const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
           return {
             category: sourceSpec ? categoryFromRoleHint(sourceSpec) : null,
             pathSha12: shadowPathHashes[j]?.slice(0, 12) ?? null,
+            fid: shadowFids[j] ?? "",
+            severityTier: severityTier(f.score),
             claims: (claimsPerFinding[j] ?? []).map((c) => ({
               type: c.type,
               extractorVersion: c.extractorVersion,
@@ -4389,17 +4401,33 @@ export async function handlePrReviewEnsemble(
       // meaningful Phase-4 DENOMINATOR — "shadow ran with active memories but
       // no finding's category overlapped" — so coverage is explicit rather
       // than inferred from the absence of an event.
-      console.log(
-        JSON.stringify({
-          event: "review-memory-claim-shadow",
-          owner,
-          repo,
-          prNumber,
-          headSha: headSha.slice(0, 7),
-          matchCount: shadowRows.length,
-          matches: shadowRows,
-        }),
-      )
+      const shadowEvent = {
+        event: "review-memory-claim-shadow",
+        owner,
+        repo,
+        prNumber,
+        headSha: headSha.slice(0, 7),
+        matchCount: shadowRows.length,
+        matches: shadowRows,
+      }
+      console.log(JSON.stringify(shadowEvent))
+      // SIG-280 PR A: ALSO persist the rows to a durable KV record so the
+      // offline calibration fit (which reads KV, not console logs) can read
+      // the claim-matched set — the NEGATIVE-class denominator. Each row's
+      // `fid` joins to the dismissal signals already in KV (same computeFid),
+      // which are the POSITIVE labels. Best-effort: never throws (this is
+      // telemetry on the review path); enum/numeric/bool + sha16 fid only.
+      try {
+        const reverseTs = String(9_999_999_999_999 - Date.now()).padStart(13, "0")
+        await env.OPENCLAW_STATE.put(
+          `review-memory-claim-shadow:${reverseTs}:${owner}/${repo}#${prNumber}:${headSha.slice(0, 7)}`,
+          JSON.stringify(shadowEvent),
+          { expirationTtl: 30 * 24 * 60 * 60 },
+        )
+      } catch {
+        // best-effort durable corpus write — losing one is acceptable; the
+        // console event still lands for live/Logpush observation.
+      }
     }
 
     const findingMarkers: Array<string | null> = await Promise.all(

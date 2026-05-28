@@ -26,6 +26,28 @@ import type {
  *  LABEL. Phase-4-tunable; it GATES NOTHING in Phase 3. */
 export const SHADOW_DISTINCT_PR_FLOOR = 2
 
+/**
+ * SIG-280 Phase 4: the `OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW` flag is now an
+ * enum. `on` keeps its Phase-3 meaning (shadow telemetry only). `render` and
+ * `soften` are RESERVED Phase-4 modes — in PR A they behave identically to
+ * `shadow` (the shadow pass runs; no render/soften behavior is wired yet).
+ * Any value not in the set (incl. absent) is `off`.
+ */
+export type ClaimShadowMode = "off" | "shadow" | "render" | "soften"
+
+export function resolveClaimShadowMode(raw: string | undefined): ClaimShadowMode {
+  switch (raw) {
+    case "on":
+      return "shadow"
+    case "render":
+      return "render"
+    case "soften":
+      return "soften"
+    default:
+      return "off"
+  }
+}
+
 /** Minimal incoming-claim view the matcher needs (from the id-less
  *  marker data on a to-be-emitted finding). */
 export interface ShadowMatchIncomingClaim {
@@ -33,17 +55,33 @@ export interface ShadowMatchIncomingClaim {
   extractorVersion: number
 }
 
+/** Severity tier of a finding (mirrors the ensemble's `severityTier`). */
+export type ShadowSeverityTier = "P0" | "P1" | "P2" | "P3"
+
 /** One incoming finding reduced to its match inputs. `category` is null
  *  when the finding has no resolvable specialist category (skip). */
 export interface ShadowMatchFinding {
   category: ReviewMemoryCategory | null
   /** sha12 of the finding's path; null when unavailable. */
   pathSha12: string | null
+  /**
+   * SIG-280: sha16 finding fingerprint (same `computeFid` as the marker).
+   * The OFFLINE join key — lets Phase-4 calibration match a claim-matched
+   * finding here against a later `review-memory-outcome:dismissed` event by
+   * the same fid. sha16, no PII.
+   */
+  fid: string
+  /** SIG-280: live severity tier (from the current score) — telemetry only. */
+  severityTier: ShadowSeverityTier
   claims: readonly ShadowMatchIncomingClaim[]
 }
 
 /** One telemetry row. Enum/number/boolean only — NO free-text (privacy §9). */
 export interface ShadowMatchRow {
+  /** SIG-280: the finding's sha16 fid — OFFLINE join key to the outcome event. */
+  fid: string
+  /** SIG-280: the finding's live severity tier — telemetry only. */
+  severityTier: ShadowSeverityTier
   /** The matched claim enum, or null for the `category-no-claim-match` tier. */
   claimType: ReviewMemoryClaimType | null
   matchedTier: "path-category" | "category" | "category-no-claim-match"
@@ -122,6 +160,8 @@ export function shadowMatchReviewMemoryClaims(args: {
       if (sc && tier) {
         matchedThisFinding = true
         rows.push({
+          fid: f.fid,
+          severityTier: f.severityTier,
           claimType: incoming.type,
           matchedTier: tier,
           distinctPrCount: sc.distinctPrCount,
@@ -139,6 +179,8 @@ export function shadowMatchReviewMemoryClaims(args: {
     // finding carried no claims). The precision question Phase 4 needs.
     if (categoryOnlyWouldAlsoFire && !matchedThisFinding) {
       rows.push({
+        fid: f.fid,
+        severityTier: f.severityTier,
         claimType: null,
         matchedTier: "category-no-claim-match",
         distinctPrCount: 0,

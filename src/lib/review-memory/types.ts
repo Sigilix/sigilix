@@ -259,6 +259,12 @@ export interface ResolvedReviewMemoryConfig {
   minSignalThreshold: number
   /** Clamped `[7, 365]`. Default 90. */
   maxSignalAgeDays: number
+  /**
+   * SIG-280 Phase 4: per-repo opt-in for claim-driven softening. Strict-bool,
+   * default false. Surfaced in PR A; the Phase 4 PR C soften gate consumes it
+   * (requires BOTH this AND env `OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW=soften`).
+   */
+  claimSoftening: boolean
 }
 
 /**

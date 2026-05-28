@@ -2616,6 +2616,28 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     expect(out).toContain("<summary>Prompt To Fix With AI</summary>")
   })
 
+  it("SIG-282: appends a deterministic remediation for a confirmed security finding", () => {
+    const f: PrReviewFinding = {
+      path: "src/config.ts", line: 12, score: 5,
+      category: "security", headline: "hardcoded API token committed",
+      body: "A live provider token is committed in source.",
+      cweId: "CWE-798",
+    }
+    const out = formatFindingComment(f, 5, reviewable, addedLines)
+    expect(out).toContain("**Remediation:**")
+    expect(out).toContain("revoke and rotate it now") // secrets-exposure template
+  })
+
+  it("SIG-282: does not append a remediation to non-security findings", () => {
+    const f: PrReviewFinding = {
+      path: "src/a.ts", line: 12, score: 3,
+      category: "logic", headline: "off-by-one",
+      body: "loop bound is wrong.",
+    }
+    const out = formatFindingComment(f, 4, reviewable, addedLines)
+    expect(out).not.toContain("**Remediation:**")
+  })
+
   it("renders structured examples, suggested fix shape, and test-gap sections", () => {
     const f: PrReviewFinding = {
       path: "src/a.ts", line: 12, score: 4,

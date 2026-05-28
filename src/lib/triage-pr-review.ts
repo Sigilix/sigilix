@@ -43,6 +43,7 @@ import {
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
+import { remediationForFinding } from "./validate-security-finding"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
 // rendered by `renderStackParenthetical`. The original helper still
@@ -2910,6 +2911,15 @@ export function formatFindingComment(
       lines.push("")
       lines.push(structuredDetails)
     }
+  }
+  // SIG-282 Phase 3: append a deterministic, vetted remediation for a
+  // confirmed security finding, keyed by its CWE bucket — rather than
+  // relying on LLM-authored remediation prose. The model describes the
+  // problem (the body); the system supplies the standard fix guidance.
+  const remediation = remediationForFinding(finding)
+  if (remediation) {
+    lines.push("")
+    lines.push(`**Remediation:** ${remediation}`)
   }
   // SIG-164 PR 5: Greptile-style "Current / Proposed" illustrative
   // blocks. Always shown when we have enough diff context to render an

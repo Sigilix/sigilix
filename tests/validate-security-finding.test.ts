@@ -12,6 +12,8 @@ import {
   evaluateSecurityFinding,
   evaluateScanFactDismissal,
   isDismissibleFact,
+  remediationForFinding,
+  REMEDIATION_BY_BUCKET,
   deriveSecurityBucket,
   parseSecurityValidatorMode,
 } from "../src/lib/validate-security-finding"
@@ -141,6 +143,25 @@ describe("evaluateScanFactDismissal (SIG-282)", () => {
       manifestOf(dismissible),
     )
     expect(decision).toEqual({ accepted: false, reason: "missing-justification", ruleId: "generic-high-entropy-token" })
+  })
+})
+
+describe("remediationForFinding / REMEDIATION_BY_BUCKET (SIG-282)", () => {
+  it("returns the bucket's vetted remediation for a classified security finding", () => {
+    expect(remediationForFinding(finding({ cweId: "CWE-798" }))).toBe(REMEDIATION_BY_BUCKET["secrets-exposure"])
+    expect(remediationForFinding(finding({ cweId: "CWE-89" }))).toBe(REMEDIATION_BY_BUCKET["injection"])
+  })
+
+  it("returns null for a non-security finding or an unclassified one", () => {
+    expect(remediationForFinding(finding({ category: "logic", cweId: "CWE-89" }))).toBeNull()
+    expect(remediationForFinding(finding({ cweId: undefined }))).toBeNull()
+    expect(remediationForFinding(finding({ cweId: "CWE-99999" }))).toBeNull()
+  })
+
+  it("defines a non-empty remediation for all 11 security buckets", () => {
+    const entries = Object.entries(REMEDIATION_BY_BUCKET)
+    expect(entries).toHaveLength(11)
+    for (const [, text] of entries) expect(text.length).toBeGreaterThan(20)
   })
 })
 

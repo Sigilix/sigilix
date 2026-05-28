@@ -141,6 +141,50 @@ export function deriveSecurityBucket(finding: PrReviewFinding): SecurityBucket |
 }
 
 /**
+ * SIG-282 Phase 3: vetted, deterministic remediation per security bucket.
+ * A CONFIRMED security finding's remediation comes from here (keyed by the
+ * finding's CWE → bucket) rather than from LLM-authored prose — so the fix
+ * guidance is consistent, reviewed, and never hallucinated/alarmist. The
+ * model describes the problem (the finding body); the system supplies the
+ * standard remediation.
+ */
+export const REMEDIATION_BY_BUCKET: Record<SecurityBucket, string> = {
+  injection:
+    "Treat all external input as untrusted: use parameterized queries / prepared statements (or the framework's safe API) and never build SQL, shell, or template strings by concatenation.",
+  xss:
+    "Escape untrusted data for the exact output context (HTML, attribute, JS, URL) at render time, prefer framework auto-escaping, and apply a Content-Security-Policy as defense in depth.",
+  "path-traversal":
+    "Resolve the path and confirm it stays within an allowed base directory (reject `..` and absolute paths); prefer an allow-list of known-safe names over user-supplied paths.",
+  deserialization:
+    "Do not deserialize untrusted data into arbitrary types. Use a safe format and validate against a strict schema; never run language-native object deserialization on external input.",
+  ssrf:
+    "Validate and allow-list the destination host/port before the request, resolve DNS and block private/link-local/loopback ranges, and do not follow redirects to untrusted hosts.",
+  "memory-safety":
+    "Bound every read/write to the allocation size, check for integer overflow before size/index arithmetic, and clear freed pointers to avoid use-after-free. Prefer safe buffer wrappers.",
+  "authn-access-control":
+    "Enforce an explicit authorization check on every request against the authenticated principal and the specific object being accessed (object-level authz), and fail closed when the check is missing.",
+  "secrets-exposure":
+    "Treat the value as compromised: revoke and rotate it now, remove it from source, and load it from a secret store or environment variable. If it was committed, rewrite history so it is not recoverable from git.",
+  "resource-exhaustion":
+    "Bound the work: cap input size, paginate or stream large results, and apply timeouts plus a concurrency/rate limit so a single request cannot exhaust memory, connections, or CPU.",
+  "unrestricted-upload":
+    "Validate uploads by content type and size, store them outside the web root under a generated name, and never execute or serve them as code.",
+  "input-validation":
+    "Validate input against a strict allow-list (type, length, format, range) at the trust boundary and reject anything that does not match, rather than sanitizing bad input.",
+}
+
+/**
+ * SIG-282 Phase 3: the deterministic remediation for a finding, or null
+ * when it isn't a security finding with a resolvable CWE bucket (then the
+ * renderer falls back to whatever the finding body already says).
+ */
+export function remediationForFinding(finding: PrReviewFinding): string | null {
+  if (finding.category !== "security") return null
+  const bucket = deriveSecurityBucket(finding)
+  return bucket ? REMEDIATION_BY_BUCKET[bucket] : null
+}
+
+/**
  * Result of evaluating one in-scope security finding. `keep:true` may
  * carry `enrich` — the manifest fact's evidenceId/cwe the orchestrator
  * should stamp onto the finding (auto-enrich path). `keep:false`

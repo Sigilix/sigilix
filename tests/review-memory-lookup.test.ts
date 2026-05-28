@@ -8,6 +8,7 @@ import {
   aggregateShadowClaims,
 } from "../src/lib/review-memory/lookup"
 import { buildKey } from "../src/lib/review-memory/storage"
+import { computePathSha256 } from "../src/lib/review-memory/marker"
 import type {
   ReviewMemoryRecord,
   ReviewMemorySignal,
@@ -66,9 +67,6 @@ function defaultConfig(
     ...over,
   }
 }
-
-const SAMPLE_PATH_SHA =
-  "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 
 function makeSignal(over: Partial<ReviewMemorySignal> = {}): ReviewMemorySignal {
   return {
@@ -233,33 +231,29 @@ describe("runReviewMemoryLookup — happy path", () => {
       makeSignal({ ts: isoDaysAgo(70), commentId: 2 }),
       makeSignal({ ts: isoDaysAgo(80), commentId: 3 }),
     ]
+    // Seed the record under the SAME sha the lookup will hash `path` to,
+    // so the record is genuinely READ and the assertion validates the
+    // 30-day recency rule — not a path-hash mismatch (CR PR #209 catch:
+    // the prior version seeded an unrelated sha so the record was never
+    // read and the test passed for the wrong reason).
+    const path = "tests/utils.ts"
+    const pathSha = await computePathSha256(path)
     store.set(
       buildKey("a", "r", {
         kind: "path-category",
         category: "tests",
-        pathSha256: SAMPLE_PATH_SHA,
+        pathSha256: pathSha,
       }),
-      JSON.stringify(rec("tests", signals, SAMPLE_PATH_SHA)),
+      JSON.stringify(rec("tests", signals, pathSha)),
     )
-    // Pre-resolve the same path to the same sha by passing it
-    // through. The lookup hashes `paths[]` internally to build keys.
-    // Use a different path that hashes to the same sha is impossible,
-    // so we use a known plaintext path that yields SAMPLE_PATH_SHA
-    // is also impossible — we instead seed BOTH sides directly.
-    // For this test, we stub the path argument that produces the sha
-    // by writing to the path-category key and seeing whether ANY
-    // path-scoped finding emerges.
     const r = await runReviewMemoryLookup({
       env, owner: "a", repo: "r", prNumber: 1,
-      paths: ["tests/utils.ts"],
+      paths: [path],
       config: defaultConfig(),
     })
     if (r.skipped) throw new Error("unexpected skip")
-    // The category-only key was NOT seeded so no category finding;
-    // path-scope can't produce a finding because the test path's
-    // sha256 doesn't match the seeded SAMPLE_PATH_SHA. So lookup
-    // should return 0 findings, proving the recency filter is
-    // implicitly required (no false-positive emerges).
+    // Record IS read now; path-scope still does NOT activate because no
+    // signal falls in the trailing 30d. category-only key was not seeded.
     expect(r.findings.length).toBe(0)
   })
 

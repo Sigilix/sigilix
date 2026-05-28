@@ -39,6 +39,7 @@ describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () =
   it("the shadow event truncates headSha to 7 chars (house style)", () => {
     // Within the shadow emit block, the headSha field uses the 7-char slice.
     const shadowIdx = ENSEMBLE.indexOf('event: "review-memory-claim-shadow"')
+    expect(shadowIdx).toBeGreaterThanOrEqual(0) // guard: -1 would slice misleadingly
     const window = ENSEMBLE.slice(shadowIdx, shadowIdx + 400)
     expect(window).toContain("headSha: headSha.slice(0, 7)")
   })

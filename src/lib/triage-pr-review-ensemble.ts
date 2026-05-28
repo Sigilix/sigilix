@@ -4385,19 +4385,21 @@ export async function handlePrReviewEnsemble(
         memories: shadowMemoriesForPhase3,
         findings: shadowFindings,
       })
-      if (shadowRows.length > 0) {
-        console.log(
-          JSON.stringify({
-            event: "review-memory-claim-shadow",
-            owner,
-            repo,
-            prNumber,
-            headSha: headSha.slice(0, 7),
-            matchCount: shadowRows.length,
-            matches: shadowRows,
-          }),
-        )
-      }
+      // Emit unconditionally (within the gate): a matchCount:0 event is a
+      // meaningful Phase-4 DENOMINATOR — "shadow ran with active memories but
+      // no finding's category overlapped" — so coverage is explicit rather
+      // than inferred from the absence of an event.
+      console.log(
+        JSON.stringify({
+          event: "review-memory-claim-shadow",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          matchCount: shadowRows.length,
+          matches: shadowRows,
+        }),
+      )
     }
 
     const findingMarkers: Array<string | null> = await Promise.all(

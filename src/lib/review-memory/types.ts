@@ -141,6 +141,21 @@ export interface ReviewMemoryRecord {
   signals: ReviewMemorySignal[]
   /** ISO-8601 UTC; refreshed on every write. */
   lastUpdatedTs: string
+  /**
+   * SIG-247 Phase 1 PR B: ISO-8601 UTC stamped by the migration helper
+   * when this record was first copied from the legacy keyspace into
+   * the new `repo:<id>` keyspace. Sticky across subsequent
+   * `appendSignal` + `unionRecords` cycles — the original timestamp is
+   * preserved on every write so Phase 5 cleanup can treat this as
+   * evidence the record went through migration BEFORE the cleanup
+   * window started.
+   *
+   * Absent on:
+   *   - records that were never migrated (pure capture-only writes
+   *     into the new keyspace post-Phase-1 deploy)
+   *   - legacy-key records (the sentinel only exists on the new key)
+   */
+  migratedAt?: string
 }
 
 /**

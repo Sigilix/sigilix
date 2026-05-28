@@ -83,6 +83,14 @@ export interface DeleteResult {
   manifestDeleted: boolean
   /** Whether the repo-index-vectors:* KV record was deleted (new or legacy key). */
   vectorsKvDeleted: boolean
+  /**
+   * SIG-247 Phase 1 PR B: count of review-memory:* keys deleted across
+   * BOTH the legacy `<owner>/<repo>` keyspace and the new `repo:<id>`
+   * keyspace. Both prefixes are owner-qualified (legacy by string,
+   * new by immutable id) — safe to delete unguarded by the owner
+   * probe that protects shared repo-only state.
+   */
+  reviewMemoryKeys: number
   /** Non-fatal errors (per-step) that should make the webhook return 5xx. */
   errors: string[]
 }
@@ -274,6 +282,7 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     prReviewDedupeKeys: 0,
     manifestDeleted: false,
     vectorsKvDeleted: false,
+    reviewMemoryKeys: 0,
     errors: [],
   }
 
@@ -318,6 +327,27 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
   const vectorsOwnerMismatch =
     vectorsRead.kind === "ok" && vectorsRead.vectors.owner !== owner
   const safeToTouchRepoOnlyState = !manifestOwnerMismatch && !vectorsOwnerMismatch
+
+  // SIG-247 Phase 1 PR B: extract the immutable repo.id once, outside
+  // the cross-tenant guard. Review-memory deletion runs regardless of
+  // owner mismatch — its keys are either owner-qualified (legacy) or
+  // immutable-id-keyed (new), so neither shares the cross-tenant
+  // collision risk that gates the repo-only state cleanup below.
+  // Source: manifest first (preferred), vectors fallback (when only
+  // the vectors record carries the field). Validates positive int.
+  const reviewMemoryRepoId =
+    (manifestRead.kind === "ok" &&
+    typeof manifestRead.manifest.githubRepoId === "number" &&
+    Number.isInteger(manifestRead.manifest.githubRepoId) &&
+    manifestRead.manifest.githubRepoId > 0
+      ? manifestRead.manifest.githubRepoId
+      : undefined) ??
+    (vectorsRead.kind === "ok" &&
+    typeof vectorsRead.vectors.githubRepoId === "number" &&
+    Number.isInteger(vectorsRead.vectors.githubRepoId) &&
+    vectorsRead.vectors.githubRepoId > 0
+      ? vectorsRead.vectors.githubRepoId
+      : undefined)
 
   if (!safeToTouchRepoOnlyState) {
     console.warn(JSON.stringify({
@@ -553,6 +583,33 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     "pr-review-dedupe",
   )
 
+  // SIG-247 Phase 1 PR B: drop review-memory state on repo delete /
+  // uninstall. Both prefixes:
+  //   - `review-memory:<owner>/<repo>:` — legacy keyspace (Phase 5
+  //     will delete the writers, but cleanup on delete is GDPR/SOC 2
+  //     compliance independent of the migration timeline)
+  //   - `review-memory:repo:<id>:` — new keyspace; deleted when we
+  //     have a verified positive `tenantRepoId` (sourced from the
+  //     manifest read above, mirroring the pattern at line 439-449)
+  //
+  // Both deletions are best-effort + idempotent (missing key = no-op).
+  // The legacy prefix is owner-qualified — safe to delete unguarded
+  // by the cross-tenant probe that protects shared repo-only state.
+  result.reviewMemoryKeys += await deleteKvPrefix(
+    env,
+    `review-memory:${owner}/${repo}:`,
+    result.errors,
+    "review-memory-legacy",
+  )
+  if (typeof reviewMemoryRepoId === "number" && reviewMemoryRepoId > 0) {
+    result.reviewMemoryKeys += await deleteKvPrefix(
+      env,
+      `review-memory:repo:${reviewMemoryRepoId}:`,
+      result.errors,
+      "review-memory-repo-id",
+    )
+  }
+
   // SIG-172: drop the per-repo scoped-rules manifest
   // (`repo-index-rules:<owner>/<repo>`). Owner-qualified key with no
   // legacy bare-repo shape — runs UNGUARDED alongside the other
@@ -590,6 +647,7 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     pr_review_dedupe_keys: result.prReviewDedupeKeys,
     manifest_deleted: result.manifestDeleted,
     vectors_kv_deleted: result.vectorsKvDeleted,
+    review_memory_keys: result.reviewMemoryKeys,
     error_count: result.errors.length,
   }))
 

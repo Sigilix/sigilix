@@ -14,6 +14,7 @@ import { resolveRepoInstallationId } from "./github-app"
 import { runIndexBackfill } from "./index-backfill"
 import { runIndexReconciliation } from "./index-reconciliation"
 import { migrateInstallToRepoId } from "./index-migrate-to-repo-id"
+import { migrateInstallReviewMemoryToRepoId } from "./review-memory/migrate"
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -135,6 +136,76 @@ export async function handleAdminMigrateToRepoIdRoute(
 
   try {
     const summary = await migrateInstallToRepoId(env, installationId)
+    return json(summary, 200)
+  } catch (err) {
+    return json(
+      {
+        error: "migration_failed",
+        detail: err instanceof Error ? err.message : String(err),
+      },
+      500,
+    )
+  }
+}
+
+/**
+ * SIG-247 Phase 1 PR B: POST /admin/migrate-review-memory-to-repo-id
+ * ?installationId=N[&dryRun=true] — bearer-auth one-shot migration
+ * for the review-memory keyspace. Parallel pattern to
+ * `handleAdminMigrateToRepoIdRoute` above but isolated blast radius
+ * (per Codex consult Option B — separate endpoint, not combined with
+ * the manifest migration).
+ *
+ * Walks every repo of one installation, lists existing legacy
+ * `review-memory:<owner>/<repo>:*` keys, fetches the immutable
+ * `repo.id` via GitHub, and writes UNIONED records to the new
+ * `review-memory:repo:<id>:*` keys with a `migratedAt` sentinel.
+ * Read-union-write, NOT overwrite — a naive copy would clobber
+ * dual-write captures that landed at the new key during the
+ * transition window (per DeepSeek consult).
+ *
+ * `?dryRun=true` runs the read-phase + union math without writing.
+ *
+ * Idempotent re-runs: records already carrying the `migratedAt`
+ * sentinel are classified `already-migrated` and not rewritten.
+ *
+ * Phase 5 cleanup (separate ticket) deletes legacy reads + writes
+ * after a 7-day safety window — this PR explicitly does NOT touch
+ * legacy keys.
+ */
+export async function handleAdminMigrateReviewMemoryToRepoIdRoute(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const token = env.OPENCLAW_ADMIN_TOKEN
+  if (!token) {
+    return json({ error: "admin_endpoint_not_configured" }, 503)
+  }
+  if (!(await requireBearerToken(request, token))) {
+    return json({ error: "unauthorized" }, 401)
+  }
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    return json({ error: "github_app_not_configured" }, 503)
+  }
+
+  const url = new URL(request.url)
+  const installationIdRaw = url.searchParams.get("installationId")?.trim()
+  const installationId =
+    installationIdRaw === undefined ||
+    installationIdRaw === null ||
+    installationIdRaw === ""
+      ? NaN
+      : Number(installationIdRaw)
+  if (!Number.isInteger(installationId) || installationId <= 0) {
+    return json(
+      { error: "missing_or_invalid_installation_id", detail: "pass ?installationId=N" },
+      400,
+    )
+  }
+  const dryRun = url.searchParams.get("dryRun") === "true"
+
+  try {
+    const summary = await migrateInstallReviewMemoryToRepoId(env, installationId, { dryRun })
     return json(summary, 200)
   } catch (err) {
     return json(

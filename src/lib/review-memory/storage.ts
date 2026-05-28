@@ -194,11 +194,26 @@ export function unionRecords(
     .slice(0, SIGNAL_FIFO_CAP)
   const lastUpdatedTs =
     a.lastUpdatedTs > b.lastUpdatedTs ? a.lastUpdatedTs : b.lastUpdatedTs
+  // SIG-247 Phase 1 PR B: preserve the `migratedAt` sentinel across
+  // union cycles. Pick the EARLIER of any present timestamps — this
+  // is the "first migrated" semantic, not "most-recently touched".
+  // Without this, every post-migration read-modify-write would
+  // silently drop the sentinel, breaking Phase 5's "was this record
+  // migrated?" advisory.
+  const aMigratedAt = a.migratedAt
+  const bMigratedAt = b.migratedAt
+  const migratedAt =
+    aMigratedAt !== undefined && bMigratedAt !== undefined
+      ? aMigratedAt < bMigratedAt
+        ? aMigratedAt
+        : bMigratedAt
+      : (aMigratedAt ?? bMigratedAt)
   const base: ReviewMemoryRecord = {
     schemaVersion: 1,
     category: scope.category,
     signals: merged,
     lastUpdatedTs,
+    ...(migratedAt !== undefined ? { migratedAt } : {}),
     ...(scope.kind === "path-category"
       ? { pathSha256: scope.pathSha256 }
       : {}),

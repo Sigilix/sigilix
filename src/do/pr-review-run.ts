@@ -193,6 +193,11 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // consumer + watchdog can close it. Undefined if creation
       // failed (best-effort dispatcher fallback applies).
       ...(checkRun !== null ? { checkRunId: checkRun.id } : {}),
+      // SIG-247 Phase 1: persist the immutable repo.id so retry-alarm
+      // queue messages preserve the dual-write keyspace target. Without
+      // this, retries silently lose the repo-id and fall back to
+      // legacy-only review-memory lookups.
+      ...(body.repoId !== undefined ? { repoId: body.repoId } : {}),
     }
 
     // CR PR #70 catch: arm the watchdog BEFORE OPENCLAW_JOBS.send.
@@ -220,6 +225,9 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // SIG-220: forward the upstream-created check id so the
       // dispatcher attaches instead of creating a duplicate.
       ...(checkRun !== null ? { checkRunId: checkRun.id } : {}),
+      // SIG-247 Phase 1: forward immutable repo.id to the consumer so
+      // review-memory dual-write/read-union semantics apply on this run.
+      ...(body.repoId !== undefined ? { repoId: body.repoId } : {}),
     })
 
     emit("do-review-enqueued", {
@@ -504,6 +512,10 @@ export class PrReviewRunDO extends DurableObject<Env> {
       ...(state.checkRunId !== undefined
         ? { checkRunId: state.checkRunId }
         : {}),
+      // SIG-247 Phase 1: rebuild from RunState INCLUDING the immutable
+      // repo.id so retry-alarm queue messages preserve dual-write
+      // semantics. Mirrors the staleHeadRequeueDepth pattern above.
+      ...(state.repoId !== undefined ? { repoId: state.repoId } : {}),
     })
     const watchdogAt = Date.now() + config.watchdogMs
     const updated: RunState = {

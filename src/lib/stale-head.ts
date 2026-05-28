@@ -77,6 +77,14 @@ export interface HandleStaleHeadArgs {
    */
   depth: number
   source: StaleHeadGuardSource
+  /**
+   * SIG-247 Phase 1: immutable repo.id threaded from EnsembleHandlerArgs.
+   * Forwarded to `enqueuePrReviewJob` on the auto-requeue path so the
+   * fresh attempt preserves dual-write semantics. Absent on legacy
+   * call sites that haven't been updated; the requeue then falls back
+   * to legacy-only review-memory lookups.
+   */
+  repoId?: number
 }
 
 export type StaleHeadOutcome =
@@ -103,7 +111,7 @@ export type StaleHeadOutcome =
  * message and trigger Cloudflare Queue retries on every stale-head.
  */
 export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleHeadOutcome> {
-  const { env, owner, repo, prNumber, installationId, queuedHeadSha, currentHeadSha, baseSha, depth, source } = args
+  const { env, owner, repo, prNumber, installationId, queuedHeadSha, currentHeadSha, baseSha, depth, source, repoId } = args
 
   console.log(JSON.stringify({
     event: "pr-review-stale-head",
@@ -143,6 +151,9 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
         installationId,
         deliveryId: null, // not a webhook delivery
         staleHeadRequeueDepth: depth + 1,
+        // SIG-247 Phase 1: thread the repo.id through the auto-requeue
+        // path so the fresh attempt preserves dual-write keyspace.
+        ...(repoId !== undefined ? { repoId } : {}),
       })
       if (result.ok) {
         console.log(JSON.stringify({

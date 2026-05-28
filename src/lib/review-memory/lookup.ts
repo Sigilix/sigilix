@@ -35,6 +35,14 @@ interface RunArgs {
   prNumber: number
   paths: readonly string[]
   config: ResolvedReviewMemoryConfig
+  /**
+   * SIG-247 Phase 1: GitHub's immutable `repo.id`. When present and
+   * positive-integer, every `readMemory` call performs a read-union
+   * across BOTH the legacy `<owner>/<repo>` keyspace AND the new
+   * `repo:<id>` keyspace, deduping signals by `commentId`. Absent on
+   * legacy callers — the lookup degrades to legacy-only reads.
+   */
+  repoId?: number
 }
 
 type RunResult =
@@ -133,7 +141,7 @@ function categoriesActive(
  * on the run path. Never throws.
  */
 export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
-  const { env, owner, repo, prNumber, paths, config } = args
+  const { env, owner, repo, prNumber, paths, config, repoId } = args
   // Gate: env-level retrieval flag
   if (env.OPENCLAW_REVIEW_MEMORY_ENABLED !== "on") {
     emitTelemetry("review-memory-lookup-skipped", {
@@ -166,7 +174,7 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
   for (const cat of ALL_REVIEW_MEMORY_CATEGORIES) {
     if (!activeCats.has(cat)) continue
     catReads.push(
-      readMemory(env, owner, repo, { kind: "category", category: cat }),
+      readMemory(env, owner, repo, { kind: "category", category: cat }, repoId),
     )
     catLookups.push(cat)
   }
@@ -188,7 +196,7 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
           kind: "path-category",
           category: cat,
           pathSha256: sha,
-        }),
+        }, repoId),
       )
       pathLookups.push({ category: cat, pathSha256: sha })
     }
@@ -257,6 +265,10 @@ export async function runReviewMemoryLookup(args: RunArgs): Promise<RunResult> {
     memoriesFound: findings.length,
     memoriesInjected: top.length,
     durationMs,
+    // SIG-247 Phase 1 canary fields — track migration-window read
+    // patterns so we can flip Phase 5 legacy-read cleanup safely.
+    repo_id_present: repoId !== undefined,
+    key_mode: repoId !== undefined ? "dual" : "legacy-only",
   })
   return { skipped: false, findings: top, durationMs }
 }

@@ -28,6 +28,13 @@ export interface PrReviewEnqueueArgs {
    * helper sets `prevDepth + 1` when re-enqueuing.
    */
   staleHeadRequeueDepth?: number
+  /**
+   * SIG-247 Phase 1: GitHub's immutable `repo.id` from
+   * `payload.repository.id`. Threaded through to RunState + every
+   * downstream queue message so review-memory lookups can use the
+   * transfer-proof keyspace.
+   */
+  repoId?: number
 }
 
 // SIG-98 note on slash-command reruns + the pause/ignore gate:
@@ -115,6 +122,7 @@ export async function enqueuePrReviewJob(
     ...(args.staleHeadRequeueDepth !== undefined
       ? { staleHeadRequeueDepth: args.staleHeadRequeueDepth }
       : {}),
+    ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
   }
   let response: Response
   try {

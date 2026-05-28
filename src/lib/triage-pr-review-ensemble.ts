@@ -1172,6 +1172,15 @@ export interface EnsembleHandlerArgs {
    * callers (tests).
    */
   graphMetricsSink?: GraphRetrievalSample[]
+  /**
+   * SIG-247 Phase 1: GitHub's immutable `repo.id`, threaded from
+   * the webhook payload via JobMessage → baseArgs → here. Passed
+   * to `runReviewMemoryLookup` so it reads BOTH the legacy and
+   * repo-id keyspaces with read-union semantics. Absent on legacy
+   * queue messages and slash-command raw-sends pre-SIG-247 Phase 1;
+   * the lookup falls back to legacy-only reads.
+   */
+  repoId?: number
 }
 
 export interface SubmissionAffordance {
@@ -1365,6 +1374,7 @@ export async function handlePrReviewEnsemble(
         baseSha: meta.base?.sha ?? null,
         depth: staleHeadRequeueDepth,
         source: "ensemble-before-fanout",
+        ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
       })
       return finalize(telemetry, env, "stale_head", cache)
     }
@@ -3386,6 +3396,12 @@ export async function handlePrReviewEnsemble(
       env, owner, repo, prNumber,
       paths: filePaths,
       config: reviewMemoryConfig,
+      // SIG-247 Phase 1: thread the immutable repo.id so the lookup
+      // hits the dual-write keyspace. When absent (legacy queue
+      // message / slash-command raw-send), the lookup degrades to
+      // legacy-only reads and the canary telemetry `key_mode` field
+      // surfaces the gap.
+      ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
     })
     const memoryBlock = reviewMemoryResult.skipped
       ? ""
@@ -3912,6 +3928,7 @@ export async function handlePrReviewEnsemble(
         baseSha: meta2.base?.sha ?? null,
         depth: staleHeadRequeueDepth,
         source: "ensemble-after-review",
+        ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
       })
       return finalize(telemetry, env, "stale_head", cache)
     }
@@ -4597,6 +4614,7 @@ export async function handlePrReviewEnsemble(
             baseSha: metaPostOverview.base?.sha ?? null,
             depth: staleHeadRequeueDepth,
             source: "ensemble-after-inline-overview",
+            ...(args.repoId !== undefined ? { repoId: args.repoId } : {}),
           })
           return finalize(telemetry, env, "stale_head", cache)
         }

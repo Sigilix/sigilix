@@ -83,6 +83,17 @@ export interface RunState {
    *     (legacy-message migration path; same fallback applies)
    */
   checkRunId?: number
+  /**
+   * SIG-247 Phase 1: GitHub's immutable `repo.id`. Persisted on RunState
+   * so DO retry-alarm-generated queue messages preserve the id across
+   * worker restarts. Threaded from `EnqueueRequest` → RunState → DO
+   * queue/retry sends → `JobMessage` → review pipeline → review-memory
+   * lookup so dual-write/read-union semantics apply on every PR review.
+   * Undefined when the webhook payload omitted `repository.id` or
+   * the integer guard rejected it; the lookup degrades to legacy-only
+   * reads in that case.
+   */
+  repoId?: number
 }
 
 /** Spec §4.2 — frozen snapshot retained in history (FIFO-capped per `historyLimit`). */
@@ -115,6 +126,14 @@ export interface EnqueueRequest {
    * alarm-generated queue messages.
    */
   staleHeadRequeueDepth?: number
+  /**
+   * SIG-247 Phase 1: GitHub's immutable `repo.id`. Webhook-originated
+   * enqueues set this when `payload.repository.id` is a positive
+   * integer; omitted on legacy / spoofed / malformed payloads. Passed
+   * through to RunState + queue message so review-memory dual-write
+   * lookups have it.
+   */
+  repoId?: number
 }
 
 export type EnqueueAction = "create" | "supersede" | "dedupe-active" | "dedupe-terminal"

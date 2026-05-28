@@ -99,7 +99,17 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
         getPullRequestReviewComment: vi.fn(async () => ({
           id: 1000 + i,
           body: parentBody,
+          // SIG-247 Phase 1: parent App-author check requires
+          // `isArcGithubLogin(user.login)` to pass for the marker to
+          // be trusted. Acceptance fixture simulates a real Sigilix
+          // bot-authored parent comment.
+          user: { login: "sigilix[bot]" },
         })),
+        // SIG-247 Phase 1: capture path falls back to getRepository
+        // when args.repoId is absent. Acceptance fixture pins a
+        // positive integer id so dual-write semantics are exercised
+        // end-to-end.
+        getRepository: vi.fn(async () => ({ default_branch: "main", id: 9_000_000 })),
       } as unknown as GitHubClient
       await captureReviewFeedback({
         env: sharedEnv,
@@ -192,7 +202,17 @@ describe("ARC-189 acceptance — 3-PR dismissal sequence → 4th PR memory injec
         getPullRequestReviewComment: vi.fn(async () => ({
           id: 1000 + i,
           body: parentBody,
+          // SIG-247 Phase 1: parent App-author check requires
+          // `isArcGithubLogin(user.login)` to pass for the marker to
+          // be trusted. Acceptance fixture simulates a real Sigilix
+          // bot-authored parent comment.
+          user: { login: "sigilix[bot]" },
         })),
+        // SIG-247 Phase 1: capture path falls back to getRepository
+        // when args.repoId is absent. Acceptance fixture pins a
+        // positive integer id so dual-write semantics are exercised
+        // end-to-end.
+        getRepository: vi.fn(async () => ({ default_branch: "main", id: 9_000_000 })),
       } as unknown as GitHubClient
       await captureReviewFeedback({
         env: sharedEnv,

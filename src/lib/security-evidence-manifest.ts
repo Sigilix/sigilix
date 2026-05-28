@@ -199,13 +199,13 @@ function normalizeSummary(value: string): string {
 function renderManifest(manifest: Map<string, SecurityFact>): string {
   if (manifest.size === 0) return ""
   const lines: string[] = [
-    "[SECURITY EVIDENCE MANIFEST — cite the id in your finding's evidenceId field]",
-    "Each id below is a deterministic, pre-computed security fact. To make a sev>=4 security finding, copy the matching id VERBATIM into the finding's `evidenceId`. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO scanner can detect, set `evidenceId: \"NONE\"` and justify in the body why no deterministic check exists.",
+    "[SECURITY EVIDENCE MANIFEST — scanner-proposed candidates; the CWE is a PROPOSED classification, not a verdict]",
+    "Each id below is a deterministic scanner hit with a PROPOSED CWE. The classification is a hypothesis to verify against the code, not an established fact. When you CONFIRM a sev>=4 security finding, copy the matching id VERBATIM into the finding's `evidenceId` to corroborate it. Inventing an id is rejected by the validator. For an access-control / IDOR / authz bug that NO scanner can detect, set `evidenceId: \"NONE\"` and justify in the body why no deterministic check exists.",
     "",
   ]
   for (const fact of manifest.values()) {
     const loc = fact.line === null ? fact.path : `${fact.path}:${fact.line}`
-    const cwe = fact.cwe ? ` [${fact.cwe}]` : ""
+    const cwe = fact.cwe ? ` [proposed ${fact.cwe}]` : ""
     lines.push(`- \`${fact.evidenceId}\` — ${loc}${cwe}: ${fact.summary}`)
   }
   return lines.join("\n").trimEnd()

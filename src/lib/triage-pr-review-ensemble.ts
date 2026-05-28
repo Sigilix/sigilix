@@ -4492,8 +4492,12 @@ export async function handlePrReviewEnsemble(
     // SIG-101/SIG-205: approval-readiness blockers can still force a
     // REQUEST_CHANGES review even though they render in the body. The
     // review counter itself is bumped later, after the renderer chooses
-    // the final event from the rendered surface, so ordinary body-only
-    // findings do not advance the request-changes sequence.
+    // the final event from the rendered surface, so body-only findings
+    // BELOW the blocker floor (score < 4) do not advance the
+    // request-changes sequence. SIG-281 PR A: a body-only finding of
+    // score >= 4 now DOES escalate the rendered event to REQUEST_CHANGES
+    // (the believability floor) and therefore advances the sequence,
+    // even without an approval-readiness blocker.
     if (approvalReadiness.blockers.length > 0) {
       console.warn(JSON.stringify({
         event: "pr-review-approval-readiness-blocked",

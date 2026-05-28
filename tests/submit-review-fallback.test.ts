@@ -54,10 +54,11 @@ describe("buildFallbackBody", () => {
   it("ARC-281: renders the new heading + summary; confidenceReason is intentionally dropped", () => {
     const body = buildFallbackBody(baseVerdict, [])
     // New status heading replaces "### Sigilix Summary".
-    // CR Major fold (PR #200): high-severity findings render as
-    // "non-blocking high-severity" on COMMENT posture; lower-
-    // severity as plain "non-blocking finding". Match either.
-    expect(body).toMatch(/^\*\*\d+ non-blocking( high-severity)? finding/m)
+    // SIG-281 PR A: baseFinding is score 4 (P1), so a body-only blocker
+    // now escalates to REQUEST_CHANGES posture — the heading is the
+    // blocking "high-severity finding" copy, with NO "non-blocking" prefix.
+    expect(body).toMatch(/^\*\*\d+ high-severity finding/m)
+    expect(body).not.toContain("non-blocking")
     // Summary survives — Kimi keeps it as a flat paragraph under
     // the heading.
     expect(body).toContain("One real bug.")
@@ -133,9 +134,11 @@ describe("buildFallbackBody", () => {
     // landed as inline comments). Heading count is in the top-of-body
     // status heading, not on the section.
     expect(body).toContain("### Review Body Findings")
-    // CR Major fold: 1 anchored + 1 unanchored at score 4 →
-    // highOrCriticalCount = 2 (CR fix includes body-only in count).
-    expect(body).toMatch(/^\*\*2 non-blocking( high-severity)? findings/m)
+    // SIG-281 PR A: 1 anchored + 1 unanchored, both score 4 (P1) and all
+    // body-only → 2 blockers → REQUEST_CHANGES posture, "high-severity
+    // findings" copy with no "non-blocking" prefix.
+    expect(body).toMatch(/^\*\*2 high-severity findings/m)
+    expect(body).not.toContain("non-blocking")
     expect(body).not.toContain("### Findings (2)")
   })
 
@@ -208,14 +211,27 @@ describe("buildFallbackSubmission", () => {
     expect(submission.comments).toBeUndefined()
   })
 
-  it("uses COMMENT when fallback findings are body-only by default", () => {
+  it("uses COMMENT when body-only fallback findings are sub-4 (nits don't block)", () => {
+    const submission = buildFallbackSubmission({
+      verdict: { ...baseVerdict, findings: [{ ...baseFinding, score: 3 }] },
+      unanchored: [],
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.event).toBe("COMMENT")
+  })
+
+  it("SIG-281 PR A: ESCALATES to REQUEST_CHANGES when a body-only fallback finding is a blocker (score >= 4)", () => {
+    // baseFinding is score 4 (P1). A real blocker that lands body-only
+    // (GitHub dropped the anchor) must still gate the merge — appearing
+    // in body text alone would otherwise surface as a green COMMENT.
     const submission = buildFallbackSubmission({
       verdict: baseVerdict,
       unanchored: [],
       prAuthor: null,
       headSha: "deadbeef",
     })
-    expect(submission.event).toBe("COMMENT")
+    expect(submission.event).toBe("REQUEST_CHANGES")
   })
 
   it("returns APPROVE when both anchored and unanchored are empty", () => {
@@ -228,9 +244,9 @@ describe("buildFallbackSubmission", () => {
     expect(submission.event).toBe("APPROVE")
   })
 
-  it("returns COMMENT when only unanchored findings exist (anchored empty)", () => {
+  it("returns COMMENT when only sub-4 unanchored findings exist (anchored empty)", () => {
     const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, line: 999, headline: "drift-flagged-but-line-out-of-diff" },
+      { ...baseFinding, score: 3, line: 999, headline: "drift-flagged-but-line-out-of-diff" },
     ]
     const submission = buildFallbackSubmission({
       verdict: { ...baseVerdict, findings: [] },
@@ -239,6 +255,19 @@ describe("buildFallbackSubmission", () => {
       headSha: "deadbeef",
     })
     expect(submission.event).toBe("COMMENT")
+  })
+
+  it("SIG-281 PR A: ESCALATES when only unanchored findings exist but one is a blocker (score >= 4)", () => {
+    const unanchored: PrReviewFinding[] = [
+      { ...baseFinding, score: 4, line: 999, headline: "real-P1-but-unanchorable" },
+    ]
+    const submission = buildFallbackSubmission({
+      verdict: { ...baseVerdict, findings: [] },
+      unanchored,
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.event).toBe("REQUEST_CHANGES")
   })
 
   it("preserves an explicit REQUEST_CHANGES override for policy blockers", () => {
@@ -332,9 +361,9 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     expect(submission.comments?.[0]?.line).toBe(42)
   })
 
-  it("uses COMMENT when findings only render in the review body", () => {
+  it("uses COMMENT when sub-4 findings only render in the review body", () => {
     const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, line: 999, headline: "blocking-but-unanchored" },
+      { ...baseFinding, score: 3, line: 999, headline: "nit-but-unanchored" },
     ]
     const submission = buildReviewSubmission({
       verdict: { ...baseVerdict, findings: [] },
@@ -343,6 +372,19 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       unanchored,
     })
     expect(submission.event).toBe("COMMENT")
+  })
+
+  it("SIG-281 PR A: ESCALATES to REQUEST_CHANGES when a body-only finding is a blocker (score >= 4)", () => {
+    const unanchored: PrReviewFinding[] = [
+      { ...baseFinding, score: 5, line: 999, headline: "real-P0-but-unanchorable" },
+    ]
+    const submission = buildReviewSubmission({
+      verdict: { ...baseVerdict, findings: [] },
+      prAuthor: null,
+      headSha: "deadbeef",
+      unanchored,
+    })
+    expect(submission.event).toBe("REQUEST_CHANGES")
   })
 
   it("APPROVE when both anchored and unanchored are empty", () => {

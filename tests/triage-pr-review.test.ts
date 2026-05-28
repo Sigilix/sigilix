@@ -332,11 +332,29 @@ describe("chooseReviewEventForRenderedFindings", () => {
     })).toBe("REQUEST_CHANGES")
   })
 
-  it("COMMENT when findings are visible only in the review body", () => {
+  it("COMMENT when body-only findings are all below the blocker floor (score < 4)", () => {
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [f(3), f(2)],
+    })).toBe("COMMENT")
+  })
+
+  // SIG-281 PR A — believability floor: a real blocker routed body-only (e.g.
+  // unanchorable, or demoted by later routing discipline) must STILL block.
+  // Appearing in body text does not gate the merge; only the review event does.
+  it("REQUEST_CHANGES when a body-only finding is a blocker (score >= 4)", () => {
     expect(chooseReviewEventForRenderedFindings({
       inlineFindings: [],
       bodyOnlyFindings: [f(5)],
-    })).toBe("COMMENT")
+    })).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [f(4)], // a lone P1 (exactly the floor) blocks on its own
+    })).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [f(2), f(4)], // one blocker among nits → still blocks
+    })).toBe("REQUEST_CHANGES")
   })
 
   it("REQUEST_CHANGES for unresolved Sigilix-authored items, but not competitor items", () => {
@@ -368,6 +386,8 @@ describe("previewReviewSubmissionEvent", () => {
       score: 4,
     }
 
+    // SIG-281 PR A: a body-only score>=4 (P1) blocker escalates to
+    // REQUEST_CHANGES; the preview must mirror that escalation.
     expect(previewReviewSubmissionEvent({
       verdict: {
         summary: "Body-only issue.",
@@ -375,6 +395,14 @@ describe("previewReviewSubmissionEvent", () => {
         confidenceReason: "Specific.",
         findings: [fileFinding],
       },
+      headSha: "abc",
+    })).toBe("REQUEST_CHANGES")
+  })
+
+  it("COMMENT for a body-only finding below the blocker floor (score < 4)", () => {
+    const fileFinding: PrReviewFinding = { ...baseFinding, scope: "file", score: 3 }
+    expect(previewReviewSubmissionEvent({
+      verdict: { summary: "Body-only nit.", confidence: 4, confidenceReason: "Specific.", findings: [fileFinding] },
       headSha: "abc",
     })).toBe("COMMENT")
   })
@@ -1306,7 +1334,10 @@ describe("buildReviewSubmission", () => {
       headSha: "abc",
     })
 
-    expect(out.submission.event).toBe("COMMENT")
+    // SIG-281 PR A: body-routed score-5 blocker → REQUEST_CHANGES (end-to-end
+    // through buildReviewSubmissionWithMetadata), but still body-routed (no
+    // inline comments). The merge gate now reflects the blocker.
+    expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
     expect(out.bodyOnlyFindings).toEqual([fileFinding])
     expect(out.bodyOnlyAnnotations[0]).toMatchObject({
@@ -1842,9 +1873,13 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    expect(out.event).toBe("COMMENT")
+    // SIG-281 PR A: comment-scoped score-4 (P1) blocker → REQUEST_CHANGES
+    // (request_changes posture, so the lead reads "high-severity finding",
+    // not "non-blocking"), but still body-routed (no inline thread).
+    expect(out.event).toBe("REQUEST_CHANGES")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
+    expect(out.body).toMatch(/high-severity finding/)
+    expect(out.body).not.toMatch(/non-blocking/)
     expect(out.body).toContain("### Review Body Findings")
     expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
     // SIG-216: meta line tightened to `<anchor> · score N` — the
@@ -1876,9 +1911,13 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
       addedLineTextByLine,
     })
 
-    expect(out.event).toBe("COMMENT")
+    // SIG-281 PR A: file-scoped score-5 (P0) blocker → REQUEST_CHANGES
+    // (request_changes posture → "high-severity finding", not "non-blocking"),
+    // still body-routed (no inline thread).
+    expect(out.event).toBe("REQUEST_CHANGES")
     expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
+    expect(out.body).toMatch(/high-severity finding/)
+    expect(out.body).not.toMatch(/non-blocking/)
     expect(out.body).toContain("### Review Body Findings")
     // SIG-216: file-scope anchor is the bare path (no `:line`) and
     // the meta line is just `<anchor> · score N` — no "File-level
@@ -2971,6 +3010,17 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("🔴")
     expect(out).not.toContain("🟠")
     expect(out).not.toContain("🟡")
+  })
+
+  it("SIG-281 PR A: collapses a low-confidence NIT (score<4) but NEVER a low-confidence P0/P1 (score>=4)", () => {
+    const SUMMARY = "Low-confidence finding — expand to read"
+    // score 2 (nit) + confidence 2 → collapsed (skim-clean), unchanged.
+    expect(formatFindingComment(fnd({ score: 2 }), 2)).toContain(SUMMARY)
+    // score 5 (P0) + confidence 2 → MUST render expanded; burying a P0 hurts
+    // believability more than the skim-noise the collapse saves.
+    expect(formatFindingComment(fnd({ score: 5 }), 2)).not.toContain(SUMMARY)
+    // score 4 (P1) + confidence 1 → expanded too.
+    expect(formatFindingComment(fnd({ score: 4 }), 1)).not.toContain(SUMMARY)
   })
 
   it("keeps confidence machine-readable without a visible metadata row", () => {

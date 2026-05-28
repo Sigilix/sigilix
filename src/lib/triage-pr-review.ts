@@ -1227,11 +1227,15 @@ export interface ChooseReviewEventForRenderedFindingsArgs {
  * Verdict gate for the final rendered surface.
  *
  * Inline review comments are blocking because GitHub places them on
- * changed code. Body-only findings are still surfaced, but they do
- * not create a misleading REQUEST_CHANGES review unless a separate
- * policy blocker explicitly overrides the event. This mirrors the
- * product expectation from competitor examples: off-diff/global
- * feedback remains visible without pretending it is an inline fix.
+ * changed code. Body-only findings of low/medium severity (score < 4)
+ * are surfaced as a non-blocking COMMENT — off-diff/global feedback
+ * stays visible without pretending it is an inline fix.
+ *
+ * SIG-281 PR A: a body-only finding of score >= 4 (P0/P1) DOES escalate
+ * to REQUEST_CHANGES. A real blocker can land body-only (no anchorable
+ * inline location, or demoted by the PR B/C routing discipline), and a
+ * markdown table row does not gate a merge — only the review event does.
+ * A separate policy blocker can still override the event upward.
  */
 export function chooseReviewEventForRenderedFindings(
   args: ChooseReviewEventForRenderedFindingsArgs,
@@ -1241,7 +1245,15 @@ export function chooseReviewEventForRenderedFindings(
   const sigilixOpenItems = filterToSigilixAuthored(args.openItems ?? [])
   if (sigilixOpenItems.length > 0) return "REQUEST_CHANGES"
 
-  return args.bodyOnlyFindings.length === 0 ? "APPROVE" : "COMMENT"
+  if (args.bodyOnlyFindings.length === 0) return "APPROVE"
+  // SIG-281 PR A — believability floor: a blocker (score >= 4 = P0/P1) that
+  // landed body-only (unanchorable inline, or demoted by the PR B/C routing
+  // discipline) must STILL block the merge. Appearing in body TEXT does not
+  // gate GitHub's merge — only the review event does — so without this a real
+  // P0 routed to the body would surface as a non-blocking COMMENT (green merge).
+  // Sub-4 body-only findings stay COMMENT (nits don't block).
+  if (args.bodyOnlyFindings.some((f) => f.score >= 4)) return "REQUEST_CHANGES"
+  return "COMMENT"
 }
 
 function chooseRenderedEventWithOverride(
@@ -2826,10 +2838,13 @@ export function formatFindingComment(
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
-  if (confidence <= 2) {
+  if (confidence <= 2 && finding.score < 4) {
     // Low-confidence findings collapse the body so the thread skims
     // cleanly. The headline + severity badge + confidence suffix stay
     // visible so a reviewer can still triage without expanding.
+    // SIG-281 PR A: but NEVER collapse a P0/P1 (score >= 4) — burying a
+    // high-severity finding behind `<details>` even at low confidence
+    // hurts believability more than the skim-noise it saves.
     lines.push("<details>")
     lines.push("<summary>Low-confidence finding — expand to read</summary>")
     lines.push("")

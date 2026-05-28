@@ -154,24 +154,28 @@ function genericFalsePositive(match: string, contextLine: string, matchOffset: n
   // keys (which can contain `/`) won't have a file extension after
   // them, so this doesn't suppress legit credentials.
   if (looksLikeFilePath(match, contextLine, matchOffset)) return true
-  // SIG-126: identifier / path / hyphenated-prose shapes — kebab ids,
-  // lower paths, slash-joined prose, SCREAMING_SNAKE env-var names,
-  // snake_case — tripped the 40+-char generic rule as P0 "secrets".
-  //
-  // FALSE-NEGATIVE GUARD (code-reviewer CRITICAL): segments must be
-  // PURELY ALPHABETIC (no digits). Single-case-alone is NOT enough — real
-  // single-case secret families with no dedicated provider rule contain
-  // digits in their random part and would otherwise be silently
-  // suppressed: DigitalOcean PATs (`dop_v1_<64 lowercase hex>`), npm
-  // tokens, lowercase-bodied Slack tokens. Requiring every segment to be
-  // `[a-z]+` / `[A-Z]+` keeps the dictionary-word identifier/prose
-  // suppression while letting any digit-bearing token (i.e. every real
-  // secret body) fall through to the generic flag. The tradeoff: a kebab
-  // id with a numeric segment (`arc-292-model`) is no longer suppressed —
-  // acceptable, since erring toward FLAGGING is the safe direction here.
+  // SIG-126: separator-segmented single-case identifier / path / prose shapes
+  // tripped the 40+-char generic rule as P0 "secrets". All PURELY ALPHABETIC
+  // (no digits) — real provider-less secret bodies contain digits, so these
+  // never suppress a real secret.
   if (/^[a-z]+([-/][a-z]+)+$/.test(match)) return true   // kebab / lower path / slash-prose
   if (/^[A-Z]+(_[A-Z]+)+$/.test(match)) return true       // SCREAMING_SNAKE
   if (/^[a-z]+(_[a-z]+)+$/.test(match)) return true       // lower snake_case
+  // SIG-251: extend the same single-case-identifier philosophy to the two
+  // separator-less / `=`-bearing shapes that slipped through — camelCase &
+  // PascalCase identifiers, and SCREAMING_SNAKE=lowercase env refs.
+  //
+  // FALSE-NEGATIVE GUARD (Codex cross-check): these are deliberately NARROW
+  // PURE-ALPHA identifier shapes, NOT a blanket "no-digit → suppress". A blanket
+  // no-digit rule would suppress real all-letter secrets — base32/TOTP seeds
+  // (`MFRGG…`, alphabet `A-Z2-7`, all-caps) and the ~0.1% of base64 tokens that
+  // happen to be digit-free. Those do NOT match these shapes: base32 is all-caps
+  // (fails camelCase/Pascal which need lowercase runs), and random base64 carries
+  // `/` + irregular casing (fails the clean identifier shapes) — so they still
+  // FIRE. The shapes only catch tokens with genuine identifier structure.
+  if (/^[a-z]+([A-Z][a-z]*)+$/.test(match)) return true   // camelCase identifier
+  if (/^([A-Z][a-z]+)+$/.test(match)) return true          // PascalCase identifier
+  if (/^[A-Z]+(_[A-Z]+)*=[a-z]+$/.test(match)) return true // SCREAMING_SNAKE=lowercase env ref
   return false
 }
 

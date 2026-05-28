@@ -266,6 +266,72 @@ describe("runSecretScan — SIG-126 identifier/path/prose-shape false-positive g
   })
 })
 
+describe("runSecretScan — SIG-251 camelCase + env-assignment false-positive gate", () => {
+  // Regression: PR #206 fired 5 P0s + PR #210 fired more, on no-digit tokens
+  // the SIG-126 shape guards missed (camelCase has no separators; NAME=value
+  // has an `=` outside the SCREAMING_SNAKE shape). Generalized guard: any
+  // generic match with NO digits is an identifier / path / env-ref / prose,
+  // never a real secret (real bodies contain digits — see FN tests below).
+
+  it("does NOT flag a 40+-char camelCase identifier (PR #206)", () => {
+    const hits = runSecretScan(mkDiff("src/index.ts", [
+      "async function handleAdminMigrateReviewMemoryToRepoIdRoute() {}",
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a PascalCase identifier", () => {
+    const hits = runSecretScan(mkDiff("src/index.ts", [
+      "class ReviewMemoryClaimShadowTelemetryAggregatorService {}",
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag an env-var NAME=value reference in a comment (PR #210 config.ts:254)", () => {
+    const hits = runSecretScan(mkDiff("src/lib/config.ts", [
+      "   * this AND env OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW=soften",
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a long SCREAMING_SNAKE shell var ref ($VAR — the 43-char name still matches the 40+ rule and is suppressed by the no-digit guard)", () => {
+    const hits = runSecretScan(mkDiff("scripts/deploy.sh", [
+      "printf on | wrangler secret put $OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW_ENABLED",
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  // FN-safety: a digit-bearing mixed-case token (the shape a real provider-less
+  // secret takes) MUST still fire — the camelCase/Pascal guards are pure-alpha.
+  it("STILL flags a digit-bearing mixed-case token with no separators", () => {
+    const hits = runSecretScan(mkDiff("config.ts", [
+      'const KEY = "handleAdmin9Migrate7Review3Memory2ToRepo8IdRoute1Xy"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeDefined()
+  })
+
+  // FN-safety (Codex cross-check — the reason we use narrow shapes, NOT a
+  // blanket "no-digit → suppress"): real ALL-LETTER secret formats MUST still
+  // fire. A blanket no-digit rule would have suppressed these.
+  it("STILL flags a base32/TOTP-style all-uppercase no-digit secret", () => {
+    // RFC base32 alphabet A-Z2-7; a real seed can be all letters. All-caps →
+    // matches NONE of the camelCase/Pascal/snake shapes → must fire.
+    const hits = runSecretScan(mkDiff("src/lib/totp.ts", [
+      'const SEED = "MFRGGZDFMZTWQYLEMZUGKZBANVXXEZLTMVZCAYTB"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeDefined()
+  })
+
+  it("STILL flags a digit-free base64 token (irregular casing + `/`)", () => {
+    // A 30-byte CSPRNG token base64-encoded, 40 chars, zero digits. Random
+    // casing + `/` → not a clean identifier shape → must fire.
+    const hits = runSecretScan(mkDiff("src/lib/auth.ts", [
+      'const TOKEN = "JuIqkUItYHsmxF/LCLfuzfTdvHOTHysg/tQs/yiK"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeDefined()
+  })
+})
+
 describe("runSecretScan — diff parsing semantics", () => {
   it("scans only added (+) lines, not deletions", () => {
     const diff = [

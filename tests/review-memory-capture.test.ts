@@ -6,7 +6,16 @@ import { buildKey } from "../src/lib/review-memory/storage"
 import type { Env } from "../src/index"
 import type { GitHubClient } from "../src/lib/github"
 import type { ResolvedReviewMemoryConfig } from "../src/lib/review-memory/types"
-import { computePathSha256 } from "../src/lib/review-memory/marker"
+import { computePathSha256, hydrateClaimIds } from "../src/lib/review-memory/marker"
+
+// SIG-276: wrap the real marker module so `hydrateClaimIds` defaults to the
+// real implementation (all other tests are unaffected) but can be forced to
+// reject for the hydrate-failure path test below.
+vi.mock("../src/lib/review-memory/marker", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../src/lib/review-memory/marker")>()
+  return { ...actual, hydrateClaimIds: vi.fn(actual.hydrateClaimIds) }
+})
 
 // ─── Test infra ──────────────────────────────────────────────
 
@@ -313,6 +322,162 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     })
     expect(Array.from(store.keys())
       .filter((k) => k.startsWith("review-memory:a/r:")).length).toBe(0)
+  })
+})
+
+// ─── Capture: SIG-276 claims ─────────────────────────────────
+
+describe("captureReviewFeedback — SIG-276 claims on signal", () => {
+  const MARKER_WITH_CLAIMS =
+    "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222:claims:structural-glue-not-test-target~85~1,auth-gate-is-boundary~60~1 -->"
+  const MARKER_MIXED_CLAIMS =
+    "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222:claims:future-unknown-claim~80~3,auth-gate-is-boundary~70~1 -->"
+
+  let consoleSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    consoleSpy.mockRestore()
+  })
+
+  it("attaches hydrated claims to BOTH category and path-scope signals", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Review text\n\n${MARKER_WITH_CLAIMS}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    const sig = catRecord.signals[0]
+    expect(sig.claims).toHaveLength(2)
+    expect(sig.claims[0]).toMatchObject({
+      type: "structural-glue-not-test-target",
+      confidence: 0.85,
+      extractorVersion: 1,
+    })
+    expect(sig.claims[0].id).toMatch(/^[0-9a-f]{16}$/)
+    expect(sig.claims[1]).toMatchObject({
+      type: "auth-gate-is-boundary",
+      confidence: 0.6,
+      extractorVersion: 1,
+    })
+    // Path-scope record carries the SAME hydrated claims (shared signal).
+    const pathKey = Array.from(store.keys()).find((k) =>
+      k.startsWith("review-memory:a/r:path:"),
+    )!
+    const pathRecord = JSON.parse(store.get(pathKey)!)
+    expect(pathRecord.signals[0].claims).toEqual(sig.claims)
+    // Dual-write repo-id keyspace carries the SAME claims — lock the contract
+    // that claims propagate to every scope the shared signal is written to.
+    const repoRecord = JSON.parse(
+      store.get("review-memory:repo:555000:cat:performance")!,
+    )
+    expect(repoRecord.signals[0].claims).toEqual(sig.claims)
+  })
+
+  it("omits the claims key when the marker carries none (legacy marker)", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Review text\n\n${VALID_MARKER}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    expect(catRecord.signals[0]).not.toHaveProperty("claims")
+  })
+
+  it("stores only the known claim when the marker mixes known + unknown types", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Review text\n\n${MARKER_MIXED_CLAIMS}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    const sig = catRecord.signals[0]
+    expect(sig.claims).toHaveLength(1)
+    expect(sig.claims[0].type).toBe("auth-gate-is-boundary")
+  })
+
+  it("capture-written telemetry reports claims metadata without leaking reply free-text", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Review text\n\n${MARKER_WITH_CLAIMS}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: {
+        id: 100,
+        body: "false positive SENTINEL_REPLY_TEXT",
+        in_reply_to_id: 50,
+        path: "src/lib/foo.ts",
+      },
+      config: makeConfig(),
+    })
+    const written = consoleSpy.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes("review-memory-capture-written"))!
+    const ev = JSON.parse(written)
+    expect(ev.claims_present).toBe(true)
+    expect(ev.claim_count).toBe(2)
+    expect(ev.claim_types).toContain("structural-glue-not-test-target")
+    expect(ev.claim_confidences).toContain(0.85)
+    // The reviewer's free text must never appear in ANY telemetry line —
+    // stringify EVERY console argument per call, not just the first.
+    const allLogs = consoleSpy.mock.calls
+      .map((a) => a.map(String).join(" "))
+      .join("\n")
+    expect(allLogs).not.toContain("SENTINEL_REPLY_TEXT")
+  })
+
+  it("reports claims_present=false for a legacy (claimless) marker", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Review text\n\n${VALID_MARKER}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    const written = consoleSpy.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes("review-memory-capture-written"))!
+    const ev = JSON.parse(written)
+    expect(ev.claims_present).toBe(false)
+    expect(ev.claim_count).toBe(0)
+  })
+
+  it("degrades to no claims + failure telemetry when hydrateClaimIds throws, but still writes the signal", async () => {
+    // Claims are additive: a hydration failure (e.g. crypto.subtle reject)
+    // must NOT cost the core dismissal-signal write (capture never throws).
+    vi.mocked(hydrateClaimIds).mockRejectedValueOnce(new Error("crypto boom"))
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Review text\n\n${MARKER_WITH_CLAIMS}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "false positive", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    // Core signal still written, just without claims.
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    expect(catRecord.signals).toHaveLength(1)
+    expect(catRecord.signals[0]).not.toHaveProperty("claims")
+    // Failure telemetry emitted with the claim-hydrate stage.
+    const failed = consoleSpy.mock.calls
+      .map((a) => a.map(String).join(" "))
+      .find(
+        (s) =>
+          s.includes("review-memory-capture-failed") &&
+          s.includes("claim-hydrate"),
+      )
+    expect(failed).toBeDefined()
   })
 })
 

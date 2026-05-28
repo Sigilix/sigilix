@@ -6,6 +6,8 @@ import {
   extractSigilixMarker,
   computeFid,
   computePathSha256,
+  computeClaimId,
+  hydrateClaimIds,
   truncateHashHex,
   categoryFromRoleHint,
   markerSeverityFromScore,
@@ -403,5 +405,78 @@ describe("markerSeverityFromScore — score → severity-tier banding", () => {
   })
   it("clamps out-of-range low (score 0) → info", () => {
     expect(markerSeverityFromScore(0)).toBe("info")
+  })
+})
+
+describe("SIG-276 PR B — claim id hydration", () => {
+  it("computeClaimId returns 16 lowercase hex chars", async () => {
+    const id = await computeClaimId({
+      type: "auth-gate-is-boundary",
+      confidence: 0.8,
+      extractorVersion: 1,
+    })
+    expect(id).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it("computeClaimId is stable for the same type+version and ignores confidence", async () => {
+    const a = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 1 })
+    const b = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.2, extractorVersion: 1 })
+    expect(a).toBe(b)
+  })
+
+  it("computeClaimId differs by type", async () => {
+    const a = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 1 })
+    const b = await computeClaimId({ type: "rethrowing-catch-not-swallowed", confidence: 0.8, extractorVersion: 1 })
+    expect(a).not.toBe(b)
+  })
+
+  it("computeClaimId differs by extractorVersion", async () => {
+    const a = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 1 })
+    const b = await computeClaimId({ type: "auth-gate-is-boundary", confidence: 0.8, extractorVersion: 2 })
+    expect(a).not.toBe(b)
+  })
+
+  it("hydrateClaimIds adds a 16-hex id and preserves the other fields", async () => {
+    const out = await hydrateClaimIds([
+      { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({
+      type: "auth-gate-is-boundary",
+      confidence: 0.7,
+      extractorVersion: 1,
+    })
+    expect(out[0]!.id).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it("hydrateClaimIds([]) returns []", async () => {
+    expect(await hydrateClaimIds([])).toEqual([])
+  })
+
+  it("round-trips marker claims → extract → hydrate into full claims", async () => {
+    const m = await buildSigilixMarker({
+      ruleId: null,
+      path: "src/x.ts",
+      line: 1,
+      headline: "h",
+      category: "tests",
+      severity: "warning",
+      claims: [{ type: "structural-glue-not-test-target", confidence: 0.9, extractorVersion: 1 }],
+    })
+    const parsed = extractSigilixMarker(m)
+    const hydrated = await hydrateClaimIds(parsed!.claims!)
+    const expectedId = await computeClaimId({
+      type: "structural-glue-not-test-target",
+      confidence: 0.9,
+      extractorVersion: 1,
+    })
+    expect(hydrated).toEqual([
+      {
+        id: expectedId,
+        type: "structural-glue-not-test-target",
+        confidence: 0.9,
+        extractorVersion: 1,
+      },
+    ])
   })
 })

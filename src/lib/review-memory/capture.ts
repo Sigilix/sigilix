@@ -32,10 +32,15 @@ import type { Env } from "../../index"
 import type { GitHubClient } from "../github"
 import type {
   ResolvedReviewMemoryConfig,
+  ReviewMemoryClaim,
   ReviewMemorySignal,
 } from "./types"
 import { categoryFromRoleHint as _unused } from "./marker"
-import { computePathSha256, extractSigilixMarker } from "./marker"
+import {
+  computePathSha256,
+  extractSigilixMarker,
+  hydrateClaimIds,
+} from "./marker"
 import { isArcGithubLogin } from "../mention"
 import { parseDismissalSignal } from "./parse-dismissal"
 import { appendSignal } from "./storage"
@@ -251,6 +256,30 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     fid: marker.fid,
     kind: dismissal.kind,
   }
+  // SIG-276 Phase 2: copy the finding's write-time claims (carried on the
+  // parent marker) onto the dismissal signal, recomputing each id. The
+  // SAME signal object is appended to both the category and path-scope
+  // records, so claims land on both. Absent on legacy/claimless markers —
+  // we omit the key entirely rather than store an empty array.
+  //
+  // Claims are ADDITIVE on top of the core dismissal signal. `hydrateClaimIds`
+  // awaits crypto.subtle (id = sha16); per this file's never-throws contract
+  // its failure must NOT abort the signal write, so we guard it and degrade
+  // to no claims + telemetry rather than letting it propagate past the
+  // appendSignal calls below.
+  let claims: ReviewMemoryClaim[] | undefined
+  if (marker.claims && marker.claims.length > 0) {
+    try {
+      claims = await hydrateClaimIds(marker.claims)
+    } catch (err) {
+      emitTelemetry("review-memory-capture-failed", {
+        owner, repo, prNumber, commentId: replyCommentId,
+        stage: "claim-hydrate",
+        err: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  if (claims) signal.claims = claims
   const pathSha256 = await computePathSha256(replyComment.path)
   const settled = await Promise.allSettled([
     appendSignal(env, owner, repo,
@@ -293,6 +322,14 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
         catValue?.partialDualWrite === true ||
         pathValue?.partialDualWrite === true,
       key_mode: repoId !== undefined ? "dual" : "legacy-only",
+      // SIG-276 Phase 2 canary fields. Enum types + raw (uncalibrated)
+      // confidences only — never reviewer/finding free-text. The raw
+      // confidence is logged deliberately so a later phase can calibrate
+      // it before it drives any softening (SIG-276 bake-off / Phase 4).
+      claims_present: claims !== undefined,
+      claim_count: claims?.length ?? 0,
+      claim_types: claims?.map((c) => c.type) ?? [],
+      claim_confidences: claims?.map((c) => c.confidence) ?? [],
     })
   }
 }

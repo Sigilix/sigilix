@@ -27,6 +27,7 @@
 
 import type {
   ReviewMemoryCategory,
+  ReviewMemoryClaim,
   ReviewMemoryClaimMarkerData,
   ReviewMemoryClaimType,
   ReviewMemorySeverityLabel,
@@ -171,6 +172,36 @@ export async function computeFid(args: {
  */
 export async function computePathSha256(path: string): Promise<string> {
   return sha256Hex(path)
+}
+
+/**
+ * SIG-276 PR B: deterministic claim id — sha16 of the canonical
+ * `extractorVersion:type` form. The id is NOT serialized into the marker
+ * (it's derivable), so the capture path recomputes it here before
+ * storing a claim on a signal. Confidence is deliberately excluded from
+ * the canonical form: two dismissals of the same claim type at the same
+ * extractor version share an id regardless of per-finding confidence, so
+ * Phase 3+ can group signals by claim identity.
+ */
+export async function computeClaimId(
+  claim: ReviewMemoryClaimMarkerData,
+): Promise<string> {
+  const canonical = `${claim.extractorVersion}:${claim.type}`
+  const full = await sha256Hex(canonical)
+  return truncateHashHex(full, FID_HEX_WIDTH)
+}
+
+/**
+ * SIG-276 PR B: hydrate id-less marker claim data into full
+ * `ReviewMemoryClaim`s by computing each `id`. Order-preserving; `[]`
+ * for an empty input.
+ */
+export async function hydrateClaimIds(
+  claims: ReadonlyArray<ReviewMemoryClaimMarkerData>,
+): Promise<ReviewMemoryClaim[]> {
+  return Promise.all(
+    claims.map(async (c) => ({ ...c, id: await computeClaimId(c) })),
+  )
 }
 
 /**

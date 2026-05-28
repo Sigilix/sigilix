@@ -284,6 +284,12 @@ export interface Env {
   // off, findings emit markers with no `:claims:` segment (unchanged
   // pre-Phase-2 behavior) and no model call is made.
   OPENCLAW_REVIEW_MEMORY_CLAIMS?: string
+  // SIG-276 Phase 3: gates the SHADOW-ONLY claim-match telemetry pass.
+  // Default off; `"on"` opts in. A no-op unless OPENCLAW_REVIEW_MEMORY_ENABLED
+  // AND OPENCLAW_REVIEW_MEMORY_CLAIMS are also on. NEVER changes softening —
+  // it only attaches telemetry `shadowClaims` in lookup and emits the
+  // `review-memory-claim-shadow` corpus the Phase-4 calibration consumes.
+  OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW?: string
 
   // ARC-189 one-shot deploy aid for the PROMPT_VERSION="1" → "2"
   // bump (Task 10b). When `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`

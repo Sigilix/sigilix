@@ -5,8 +5,10 @@ import {
   runReviewMemoryLookup,
   isMemoryActive,
   selectTopMemories,
+  aggregateShadowClaims,
 } from "../src/lib/review-memory/lookup"
 import { buildKey } from "../src/lib/review-memory/storage"
+import { computePathSha256 } from "../src/lib/review-memory/marker"
 import type {
   ReviewMemoryRecord,
   ReviewMemorySignal,
@@ -65,9 +67,6 @@ function defaultConfig(
     ...over,
   }
 }
-
-const SAMPLE_PATH_SHA =
-  "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 
 function makeSignal(over: Partial<ReviewMemorySignal> = {}): ReviewMemorySignal {
   return {
@@ -232,33 +231,29 @@ describe("runReviewMemoryLookup — happy path", () => {
       makeSignal({ ts: isoDaysAgo(70), commentId: 2 }),
       makeSignal({ ts: isoDaysAgo(80), commentId: 3 }),
     ]
+    // Seed the record under the SAME sha the lookup will hash `path` to,
+    // so the record is genuinely READ and the assertion validates the
+    // 30-day recency rule — not a path-hash mismatch (CR PR #209 catch:
+    // the prior version seeded an unrelated sha so the record was never
+    // read and the test passed for the wrong reason).
+    const path = "tests/utils.ts"
+    const pathSha = await computePathSha256(path)
     store.set(
       buildKey("a", "r", {
         kind: "path-category",
         category: "tests",
-        pathSha256: SAMPLE_PATH_SHA,
+        pathSha256: pathSha,
       }),
-      JSON.stringify(rec("tests", signals, SAMPLE_PATH_SHA)),
+      JSON.stringify(rec("tests", signals, pathSha)),
     )
-    // Pre-resolve the same path to the same sha by passing it
-    // through. The lookup hashes `paths[]` internally to build keys.
-    // Use a different path that hashes to the same sha is impossible,
-    // so we use a known plaintext path that yields SAMPLE_PATH_SHA
-    // is also impossible — we instead seed BOTH sides directly.
-    // For this test, we stub the path argument that produces the sha
-    // by writing to the path-category key and seeing whether ANY
-    // path-scoped finding emerges.
     const r = await runReviewMemoryLookup({
       env, owner: "a", repo: "r", prNumber: 1,
-      paths: ["tests/utils.ts"],
+      paths: [path],
       config: defaultConfig(),
     })
     if (r.skipped) throw new Error("unexpected skip")
-    // The category-only key was NOT seeded so no category finding;
-    // path-scope can't produce a finding because the test path's
-    // sha256 doesn't match the seeded SAMPLE_PATH_SHA. So lookup
-    // should return 0 findings, proving the recency filter is
-    // implicitly required (no false-positive emerges).
+    // Record IS read now; path-scope still does NOT activate because no
+    // signal falls in the trailing 30d. category-only key was not seeded.
     expect(r.findings.length).toBe(0)
   })
 
@@ -466,5 +461,148 @@ describe("selectTopMemories (pure)", () => {
 
   it("returns empty for empty input", () => {
     expect(selectTopMemories([], 5)).toEqual([])
+  })
+})
+
+// ─── SIG-276 Phase 3: aggregateShadowClaims (pure) ──────────────
+
+describe("aggregateShadowClaims (pure)", () => {
+  const claim = (
+    type: string,
+    confidence = 0.8,
+    extractorVersion = 1,
+  ) => ({ id: "x".repeat(16), type, confidence, extractorVersion }) as never
+
+  it("returns [] for no signals", () => {
+    expect(aggregateShadowClaims([])).toEqual([])
+  })
+
+  it("ignores signals with no claims (legacy / claimless)", () => {
+    const out = aggregateShadowClaims([
+      makeSignal({ prNumber: 1 }),
+      makeSignal({ prNumber: 2, claims: undefined }),
+    ])
+    expect(out).toEqual([])
+  })
+
+  it("buckets by claim type and counts DISTINCT prNumber, not raw signals", () => {
+    const out = aggregateShadowClaims([
+      makeSignal({ prNumber: 7, commentId: 1, claims: [claim("auth-gate-is-boundary")] }),
+      makeSignal({ prNumber: 7, commentId: 2, claims: [claim("auth-gate-is-boundary")] }),
+      makeSignal({ prNumber: 9, commentId: 3, claims: [claim("auth-gate-is-boundary")] }),
+    ])
+    expect(out).toHaveLength(1)
+    expect(out[0]!.type).toBe("auth-gate-is-boundary")
+    expect(out[0]!.distinctPrCount).toBe(2) // PRs 7 and 9
+    expect(out[0]!.signalCount).toBe(3) // three raw signals
+  })
+
+  it("separates distinct claim types into distinct buckets", () => {
+    const out = aggregateShadowClaims([
+      makeSignal({ prNumber: 1, claims: [claim("auth-gate-is-boundary"), claim("rethrowing-catch-not-swallowed")] }),
+    ])
+    expect(out.map((c) => c.type).sort()).toEqual([
+      "auth-gate-is-boundary",
+      "rethrowing-catch-not-swallowed",
+    ])
+  })
+
+  it("collects distinct extractorVersions and raw confidences", () => {
+    const out = aggregateShadowClaims([
+      makeSignal({ prNumber: 1, claims: [claim("auth-gate-is-boundary", 0.6, 1)] }),
+      makeSignal({ prNumber: 2, claims: [claim("auth-gate-is-boundary", 0.9, 2)] }),
+    ])
+    expect(out[0]!.extractorVersions.sort()).toEqual([1, 2])
+    expect(out[0]!.rawConfidences.sort()).toEqual([0.6, 0.9])
+  })
+
+  it("lastSignalTs is the most-recent signal carrying the type", () => {
+    const out = aggregateShadowClaims([
+      makeSignal({ prNumber: 1, ts: isoDaysAgo(40), claims: [claim("auth-gate-is-boundary")] }),
+      makeSignal({ prNumber: 2, ts: isoDaysAgo(2), claims: [claim("auth-gate-is-boundary")] }),
+    ])
+    // the most-recent (2-days-ago) signal, not the 40-days-ago one
+    expect(typeof out[0]!.lastSignalTs).toBe("string")
+    expect(Date.parse(out[0]!.lastSignalTs)).toBeGreaterThan(Date.parse(isoDaysAgo(10)))
+  })
+})
+
+// ─── SIG-276 Phase 3: lookup populates shadowClaims under the flag ──
+
+describe("runReviewMemoryLookup — shadowClaims flag", () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  })
+  afterEach(() => consoleSpy.mockRestore())
+
+  const claim = (type: string) =>
+    ({ id: "x".repeat(16), type, confidence: 0.8, extractorVersion: 1 }) as never
+
+  // The shadow pass requires ALL THREE flags on (ENABLED + CLAIMS +
+  // CLAIM_SHADOW). These tests toggle only CLAIM_SHADOW; CLAIMS stays on.
+  function envWithShadow(kv: Env["OPENCLAW_STATE"], shadow: "on" | undefined): Env {
+    return {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_REVIEW_MEMORY_ENABLED: "on",
+      OPENCLAW_REVIEW_MEMORY_CLAIMS: "on",
+      OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW: shadow,
+    } as unknown as Env
+  }
+
+  function activeCatRecord(): ReviewMemoryRecord {
+    return rec("logic", [
+      makeSignal({ prNumber: 1, commentId: 1, ts: isoDaysAgo(5), claims: [claim("structural-glue-not-test-target")] }),
+      makeSignal({ prNumber: 2, commentId: 2, ts: isoDaysAgo(6), claims: [claim("structural-glue-not-test-target")] }),
+      makeSignal({ prNumber: 3, commentId: 3, ts: isoDaysAgo(7), claims: [claim("structural-glue-not-test-target")] }),
+    ])
+  }
+
+  it("populates shadowClaims on active memories when the shadow flag is on", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(buildKey("a", "r", { kind: "category", category: "logic" }), JSON.stringify(activeCatRecord()))
+    const res = await runReviewMemoryLookup({
+      env: envWithShadow(kv, "on"),
+      owner: "a", repo: "r", prNumber: 50, paths: ["src/x.ts"],
+      config: defaultConfig(),
+    })
+    expect(res.skipped).toBe(false)
+    if (res.skipped) return
+    const cat = res.findings.find((f) => f.scope === "category" && f.category === "logic")!
+    expect(cat.shadowClaims).toBeDefined()
+    expect(cat.shadowClaims!.map((c) => c.type)).toContain("structural-glue-not-test-target")
+    expect(cat.shadowClaims![0]!.distinctPrCount).toBe(3)
+  })
+
+  it("does NOT populate shadowClaims when the shadow flag is off (default)", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(buildKey("a", "r", { kind: "category", category: "logic" }), JSON.stringify(activeCatRecord()))
+    const res = await runReviewMemoryLookup({
+      env: envWithShadow(kv, undefined),
+      owner: "a", repo: "r", prNumber: 50, paths: ["src/x.ts"],
+      config: defaultConfig(),
+    })
+    expect(res.skipped).toBe(false)
+    if (res.skipped) return
+    for (const f of res.findings) expect(f).not.toHaveProperty("shadowClaims")
+  })
+
+  it("does NOT populate shadowClaims when CLAIMS is off, even with CLAIM_SHADOW on (three-flag gate)", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(buildKey("a", "r", { kind: "category", category: "logic" }), JSON.stringify(activeCatRecord()))
+    const env = {
+      OPENCLAW_STATE: kv,
+      OPENCLAW_REVIEW_MEMORY_ENABLED: "on",
+      // OPENCLAW_REVIEW_MEMORY_CLAIMS intentionally OFF
+      OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW: "on",
+    } as unknown as Env
+    const res = await runReviewMemoryLookup({
+      env,
+      owner: "a", repo: "r", prNumber: 50, paths: ["src/x.ts"],
+      config: defaultConfig(),
+    })
+    expect(res.skipped).toBe(false)
+    if (res.skipped) return
+    for (const f of res.findings) expect(f).not.toHaveProperty("shadowClaims")
   })
 })

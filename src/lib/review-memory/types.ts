@@ -189,6 +189,29 @@ export type ReviewMemoryStorageScope =
     }
 
 /**
+ * SIG-276 Phase 3: a per-claim-type aggregate over the dismissal signals
+ * backing an active memory, computed by `aggregateShadowClaims` in
+ * `lookup.ts`. TELEMETRY-ONLY — it never drives softening in Phase 3
+ * (the shadow matcher reads it to emit the `review-memory-claim-shadow`
+ * corpus Phase 4 calibrates on). All fields are enum-bounded or numeric;
+ * NO free-text (privacy contract §9).
+ */
+export interface ReviewMemoryShadowClaim {
+  /** The matched claim enum (the stable match key — NOT the derived id). */
+  type: ReviewMemoryClaimType
+  /** DISTINCT `signal.prNumber` carrying this claim type — NOT raw signal rows. */
+  distinctPrCount: number
+  /** Raw count of signals carrying this claim type (for Phase-4 comparison). */
+  signalCount: number
+  /** ISO-8601 UTC of the most recent signal carrying this claim type. */
+  lastSignalTs: string
+  /** Distinct extractor versions seen for this type (telemetry; spots drift). */
+  extractorVersions: number[]
+  /** Raw (uncalibrated) confidences — telemetry ONLY, do NOT gate on these. */
+  rawConfidences: number[]
+}
+
+/**
  * One memory ready for prompt injection — the lookup-stage output.
  * `pathSha12` (the 12-hex truncation, matching the comment marker) is
  * present only on `scope: "path-category"` findings; ABSENT on
@@ -205,6 +228,14 @@ export interface ReviewMemoryFinding {
   /** ISO-8601 UTC of the most recent signal in the active window. */
   lastSignalTs: string
   suggestedAction: "soften"
+  /**
+   * SIG-276 Phase 3: per-claim-type aggregates over the signals backing
+   * this memory. Populated by `runReviewMemoryLookup` ONLY when the
+   * `OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW` flag is on; absent otherwise.
+   * TELEMETRY-ONLY — `render.ts` and `selectTopMemories` ignore it, and
+   * NOTHING in the posting path consumes it (it never changes softening).
+   */
+  shadowClaims?: ReviewMemoryShadowClaim[]
 }
 
 /**

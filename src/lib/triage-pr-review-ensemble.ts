@@ -278,6 +278,7 @@ import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import {
   buildSigilixMarker,
   categoryFromRoleHint,
+  computePathSha256,
   markerSeverityFromScore,
 } from "./review-memory/marker"
 import {
@@ -285,11 +286,16 @@ import {
   CLAIM_EXTRACTION_SCHEMA,
   type ClaimExtractionFinding,
 } from "./review-memory/claim-extractor"
+import {
+  shadowMatchReviewMemoryClaims,
+  type ShadowMatchFinding,
+} from "./review-memory/shadow-match"
 import { runReviewMemoryLookup } from "./review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type {
   ReviewMemoryClaimMarkerData,
+  ReviewMemoryFinding,
   ReviewMemorySkipReason,
 } from "./review-memory/types"
 import { handleStaleHead } from "./stale-head"
@@ -3299,6 +3305,11 @@ export async function handlePrReviewEnsemble(
     let synthAttemptsUsed = 0
     let synthRetryUsed = false
     let synthRetryOutcome: "n/a" | "ok" | "timeout" | "parse" | "provenance" | "exhausted-budget" = "n/a"
+    // SIG-276 Phase 3: the injected memories captured in the synth-path
+    // scope (where `reviewMemoryResult` is alive) so the Site-2 shadow
+    // matcher — which runs later, in the outer post-synth scope — can read
+    // them. Stays [] on the synth-bypass branch (no memory injection there).
+    let shadowMemoriesForPhase3: ReviewMemoryFinding[] = []
 
     if (synthBypassEligible) {
       synthStartMs = Date.now()
@@ -3431,6 +3442,13 @@ export async function handlePrReviewEnsemble(
     const memoryBlock = reviewMemoryResult.skipped
       ? ""
       : renderReviewMemoryForPrompt(reviewMemoryResult.findings)
+    // SIG-276 Phase 3: hand the injected memories (which carry telemetry
+    // `shadowClaims` when the shadow flag is on) to the outer-scope holder
+    // for the Site-2 shadow matcher. Telemetry-only; never affects the
+    // prompt or softening.
+    shadowMemoriesForPhase3 = reviewMemoryResult.skipped
+      ? []
+      : reviewMemoryResult.findings
     // Codex BLOCKING on plan v2: gate the append on memoryBlock
     // length, NOT sarifBlock length. The two blocks are independent.
     const synthMessageWithMemory = memoryBlock.length > 0
@@ -4332,6 +4350,58 @@ export async function handlePrReviewEnsemble(
         }),
       )
     }
+
+    // SIG-276 Phase 3 (Site 2): SHADOW-ONLY claim-match telemetry. Match
+    // each incoming finding's write-time claim TYPES against the active
+    // memories' `shadowClaims` (populated by lookup Site 1) and emit ONE
+    // aggregated `review-memory-claim-shadow` event per review. This pass
+    // is OBSERVATION-ONLY — its output is block-scoped and consumed by
+    // NOTHING below (no markers, no soften, no submission). It changes no
+    // score and posts no comment; it only generates the corpus Phase 4
+    // calibrates on. Gated: requires the shadow flag AND real claims
+    // (claimsEnabled) AND a non-skipped lookup — otherwise a no-op.
+    if (
+      env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW === "on" &&
+      claimsEnabled &&
+      shadowMemoriesForPhase3.length > 0
+    ) {
+      const shadowPathHashes = await Promise.all(
+        filteredConsensusFindings.map((f) => computePathSha256(f.path)),
+      )
+      const shadowFindings: ShadowMatchFinding[] = filteredConsensusFindings.map(
+        (_f, j) => {
+          const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
+          return {
+            category: sourceSpec ? categoryFromRoleHint(sourceSpec) : null,
+            pathSha12: shadowPathHashes[j]?.slice(0, 12) ?? null,
+            claims: (claimsPerFinding[j] ?? []).map((c) => ({
+              type: c.type,
+              extractorVersion: c.extractorVersion,
+            })),
+          }
+        },
+      )
+      const shadowRows = shadowMatchReviewMemoryClaims({
+        memories: shadowMemoriesForPhase3,
+        findings: shadowFindings,
+      })
+      // Emit unconditionally (within the gate): a matchCount:0 event is a
+      // meaningful Phase-4 DENOMINATOR — "shadow ran with active memories but
+      // no finding's category overlapped" — so coverage is explicit rather
+      // than inferred from the absence of an event.
+      console.log(
+        JSON.stringify({
+          event: "review-memory-claim-shadow",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          matchCount: shadowRows.length,
+          matches: shadowRows,
+        }),
+      )
+    }
+
     const findingMarkers: Array<string | null> = await Promise.all(
       filteredConsensusFindings.map(async (f, j) => {
         const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]

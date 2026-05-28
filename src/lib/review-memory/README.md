@@ -54,3 +54,61 @@ Findings with no source specialist (defensive — shouldn't happen post-hallucin
 - `src/lib/triage-pr-review.ts` — `buildReviewSubmission` accepts the per-finding `findingMarkers` array and appends each non-null entry to the inline comment body with a blank-line separator.
 - `src/lib/triage-pr-stale-mark.ts` — wires the `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` deploy-time stale-mark suppression (Task 11), which is logically part of the ARC-189 deploy story since the PROMPT_VERSION bump lands in Task 10b.
 - `src/lib/sigilix-config.ts` — adds the `reviewMemory` config block + `resolveReviewMemoryConfig` resolver. Strict-bool `enabled` + `captureOnly` (literal `true` only opts in). Clamps `maxInjectedMemories ∈ [1,10]` (default 5), `minSignalThreshold ∈ [2,20]` (default 3), `maxSignalAgeDays ∈ [7,365]` (default 90). `categories` array filtered + deduped against the 4-value literal union; empty array resolves to all 4.
+
+## SIG-276 — structured claims (Phases 2–3)
+
+A finding carries 0–3 enum-bounded **claims** classifying the *pattern it asserts*
+(`ReviewMemoryClaimType`, 4 values). The goal: generalize memory on the specific
+pattern a team rejects, not just `(category)` / `(path, category)`.
+
+**Phase 2 (capture, shipped):** a write-time classifier (`claim-extractor.ts`,
+gated `OPENCLAW_REVIEW_MEMORY_CLAIMS`) tags each finding; claims ride the marker's
+optional `:claims:type~confPct~ver` segment (`marker.ts`); on dismissal,
+`capture.ts` hydrates each `id = sha16("extractorVersion:type")` (`hydrateClaimIds`)
+onto `ReviewMemorySignal.claims[]`, stored on BOTH the category- and path-scope
+records. Raw (uncalibrated) confidence is stored deliberately so a later phase can
+calibrate it *before* it ever drives softening.
+
+**Phase 3 (SHADOW-ONLY lookup, this work):** observation-only claim matching that
+emits a telemetry corpus for Phase-4 calibration. **It changes no softening** — the
+posting path is byte-identical to pre-Phase-3.
+
+- **Three-flag gate.** The shadow pass is a no-op unless ALL of
+  `OPENCLAW_REVIEW_MEMORY_ENABLED`, `OPENCLAW_REVIEW_MEMORY_CLAIMS`, and the new
+  `OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW` (default off) are `"on"`. Off ⇒ zero added
+  latency, byte-identical behavior. The literal `"render"`/`"soften"` values of the
+  shadow flag are RESERVED for Phase 4 and not wired.
+- **Two sites — and WHY it must split.** `runReviewMemoryLookup` runs *before* the
+  synth prompt is assembled, but an incoming finding's claims (`claimsPerFinding`)
+  only exist *after* synth + consensus ranking. So matching cannot be one call:
+  - **Site 1 (`lookup.ts` `aggregateShadowClaims`)** aggregates the stored signals'
+    claims onto a telemetry-only `shadowClaims?` field on `ReviewMemoryFinding`
+    (only when the shadow flag is on, only on already-active memories).
+  - **Site 2 (`shadow-match.ts` `shadowMatchReviewMemoryClaims`, called from the
+    ensemble post-synth)** matches the incoming finding's claim types against those
+    `shadowClaims` and emits ONE `review-memory-claim-shadow` event per review.
+    Its output is block-scoped and consumed by NOTHING (a test asserts this).
+- **Match on `claim.type`, NOT `claim.id`.** `computeClaimId` folds `extractorVersion`
+  into the id, so id-matching would silently false-negative across an extractor
+  bump. We match on the stable enum and flag `version_mismatch` when the incoming
+  version is not in the stored set, so Phase 4 can measure the id-match's would-be
+  false-negative rate. (`version_mismatch` is uniformly false until the extractor
+  bumps past v1.)
+- **Counting rule:** `distinctPrCount` counts DISTINCT `signal.prNumber`, never raw
+  signal rows — one noisy thread cannot teach a repo-wide claim. Per-repo only
+  (inherited from the keyspace); never pooled across tenants.
+- **`wouldSoftenAtFloor`** (distinct-PR floor, default 2) is a Phase-4-tunable
+  telemetry LABEL — it GATES NOTHING in Phase 3.
+- **Architecture-category dead-zone (documented, not a bug).** `SpecialistRole` has
+  no `architecture`, so incoming findings never carry `category=architecture`; a
+  stored architecture-scope memory can never type-match. This benignly undercounts
+  the architecture corpus — Phase 4 must interpret architecture coverage with this
+  in mind.
+- **Lookup-output-type constraint.** `aggregateShadowClaims` MUST stay inside
+  `lookup.ts` over `record.signals` — it cannot move to the match site because
+  `ReviewMemoryFinding` does not carry `signals[]` forward.
+
+**Deferred to Phase 4:** calibrating raw confidence (isotonic/Platt) BEFORE any
+aggregation, a learned label model over dismissal outcomes, empirically picking the
+distinct-PR floor from the shadow corpus, and wiring the reserved `"render"`/
+`"soften"` activation modes. Phase 3 only generates the corpus.

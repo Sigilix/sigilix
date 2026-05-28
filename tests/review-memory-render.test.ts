@@ -30,6 +30,32 @@ describe("renderReviewMemoryForPrompt", () => {
     expect(out).toContain("→ soften")
   })
 
+  it("SIG-276 Phase 3: output is BYTE-IDENTICAL with shadowClaims present (privacy + believability)", () => {
+    const base = f({ category: "performance", signalCount: 4 })
+    const withShadow = f({
+      category: "performance",
+      signalCount: 4,
+      shadowClaims: [
+        {
+          type: "structural-glue-not-test-target",
+          distinctPrCount: 3,
+          signalCount: 4,
+          lastSignalTs: "2026-04-12T00:00:00Z",
+          extractorVersions: [1],
+          rawConfidences: [0.8, 0.9],
+        },
+      ],
+    })
+    // shadowClaims must NEVER reach the rendered prompt: no claim type, no
+    // confidence, no count leaks in.
+    expect(renderReviewMemoryForPrompt([withShadow])).toBe(
+      renderReviewMemoryForPrompt([base]),
+    )
+    expect(renderReviewMemoryForPrompt([withShadow])).not.toContain(
+      "structural-glue-not-test-target",
+    )
+  })
+
   it("renders pathSha12 for path-scoped findings, NOT raw paths", () => {
     const out = renderReviewMemoryForPrompt([
       f({

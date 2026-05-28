@@ -27,15 +27,23 @@
 
 import type {
   ReviewMemoryCategory,
+  ReviewMemoryClaimMarkerData,
+  ReviewMemoryClaimType,
   ReviewMemorySeverityLabel,
   SigilixCommentMarker,
 } from "./types"
-import { ALL_REVIEW_MEMORY_CATEGORIES, ALL_REVIEW_MEMORY_SEVERITIES } from "./types"
+import {
+  ALL_REVIEW_MEMORY_CATEGORIES,
+  ALL_REVIEW_MEMORY_CLAIM_TYPES,
+  ALL_REVIEW_MEMORY_SEVERITIES,
+} from "./types"
 import type { SpecialistRole } from "../ensemble-router"
 
 const FID_HEX_WIDTH = 16
 const PATH_HEX_WIDTH = 12
 const RULE_ID_NULL_SENTINEL = "none"
+/** SIG-276: at most 3 claims ride a marker (matches the extractor cap). */
+const MAX_MARKER_CLAIMS = 3
 
 const CATEGORY_SET: ReadonlySet<ReviewMemoryCategory> = new Set(
   ALL_REVIEW_MEMORY_CATEGORIES,
@@ -43,6 +51,79 @@ const CATEGORY_SET: ReadonlySet<ReviewMemoryCategory> = new Set(
 const SEVERITY_SET: ReadonlySet<ReviewMemorySeverityLabel> = new Set(
   ALL_REVIEW_MEMORY_SEVERITIES,
 )
+const CLAIM_TYPE_SET: ReadonlySet<ReviewMemoryClaimType> = new Set(
+  ALL_REVIEW_MEMORY_CLAIM_TYPES,
+)
+/** Strict decimal-only guard for the serialized confPct / version fields
+ *  — keeps `Number()` from accepting hex (`0x10`) or empty inputs on a
+ *  hand-corrupted marker, matching the serializer's decimal output. */
+const DECIMAL_RE = /^\d+$/
+
+function isClaimType(v: string): v is ReviewMemoryClaimType {
+  return (CLAIM_TYPE_SET as ReadonlySet<string>).has(v)
+}
+
+/**
+ * SIG-276: serialize up to {@link MAX_MARKER_CLAIMS} claims into the
+ * marker's `:claims:` payload. Each claim is `type~confPct~version`,
+ * joined by `,`. `confPct` is the confidence as an integer percent
+ * (0-100) so the payload stays regex-bounded and float-free. Unknown
+ * claim types and out-of-range fields are dropped defensively even
+ * though the extractor already validated — the marker is the durable
+ * record and must never carry a value the parser would reject.
+ */
+function serializeClaims(
+  claims: ReadonlyArray<ReviewMemoryClaimMarkerData>,
+): string {
+  return claims
+    .filter(
+      (c) =>
+        CLAIM_TYPE_SET.has(c.type) &&
+        c.confidence >= 0 &&
+        c.confidence <= 1 &&
+        Number.isInteger(c.extractorVersion) &&
+        c.extractorVersion >= 0,
+    )
+    .slice(0, MAX_MARKER_CLAIMS)
+    .map(
+      (c) =>
+        `${c.type}~${Math.round(c.confidence * 100)}~${c.extractorVersion}`,
+    )
+    .join(",")
+}
+
+/**
+ * SIG-276: parse the marker `:claims:` payload back into bounded claim
+ * data. Drops any entry with the wrong arity, an unknown type, or an
+ * out-of-range numeric field (forward-compat with future enum values,
+ * mirroring the `loc` precedent). Returns `undefined` when nothing
+ * survives so the caller can omit the `claims` key entirely.
+ */
+function parseClaimsSegment(
+  raw: string | undefined,
+): ReviewMemoryClaimMarkerData[] | undefined {
+  if (!raw) return undefined
+  const out: ReviewMemoryClaimMarkerData[] = []
+  for (const part of raw.split(",")) {
+    const seg = part.split("~")
+    if (seg.length !== 3) continue
+    const [type, pctRaw, verRaw] = seg
+    if (!type || !isClaimType(type)) continue
+    if (!pctRaw || !DECIMAL_RE.test(pctRaw)) continue
+    if (!verRaw || !DECIMAL_RE.test(verRaw)) continue
+    const pct = Number(pctRaw)
+    const ver = Number(verRaw)
+    if (!Number.isInteger(pct) || pct < 0 || pct > 100) continue
+    if (!Number.isInteger(ver) || ver < 0) continue
+    out.push({
+      type,
+      confidence: pct / 100,
+      extractorVersion: ver,
+    })
+    if (out.length >= MAX_MARKER_CLAIMS) break
+  }
+  return out.length > 0 ? out : undefined
+}
 
 function bytesToHex(bytes: Uint8Array): string {
   let out = ""
@@ -137,6 +218,12 @@ export function markerSeverityFromScore(score: number): ReviewMemorySeverityLabe
  * omitted the marker keeps the pre-SIG-170 shape (`fid:cat:sev:path`)
  * so legacy parsers continue to recognize it without a flag flip.
  * When provided the marker appends `:loc:<value>` after `path`.
+ *
+ * SIG-276: `claims` is an optional list of write-time finding
+ * classifications. When non-empty it appends a `:claims:<payload>`
+ * segment AFTER `loc`; the segment is omitted entirely when no claim
+ * survives serialization, so legacy/claimless markers are byte-identical
+ * to before.
  */
 export async function buildSigilixMarker(args: {
   ruleId: string | null
@@ -146,6 +233,7 @@ export async function buildSigilixMarker(args: {
   category: ReviewMemoryCategory
   severity: ReviewMemorySeverityLabel
   loc?: "inline" | "unanchored"
+  claims?: ReadonlyArray<ReviewMemoryClaimMarkerData>
 }): Promise<string> {
   const fid = await computeFid({
     ruleId: args.ruleId,
@@ -155,8 +243,13 @@ export async function buildSigilixMarker(args: {
   })
   const fullPathHash = await computePathSha256(args.path)
   const pathSha12 = truncateHashHex(fullPathHash, PATH_HEX_WIDTH)
-  const base = `<!-- sigilix:fid:${fid}:cat:${args.category}:sev:${args.severity}:path:${pathSha12}`
-  return args.loc !== undefined ? `${base}:loc:${args.loc} -->` : `${base} -->`
+  let body = `<!-- sigilix:fid:${fid}:cat:${args.category}:sev:${args.severity}:path:${pathSha12}`
+  if (args.loc !== undefined) body += `:loc:${args.loc}`
+  if (args.claims && args.claims.length > 0) {
+    const serialized = serializeClaims(args.claims)
+    if (serialized.length > 0) body += `:claims:${serialized}`
+  }
+  return `${body} -->`
 }
 
 // SIG-170: marker is grammar-extended with an optional `:loc:<value>`
@@ -164,8 +257,13 @@ export async function buildSigilixMarker(args: {
 // optional so legacy 4-segment markers (`fid:cat:sev:path`) still
 // match — preserving the dismissal-pipeline contract from PR #142 +
 // SIG-173.
+// SIG-276: a further optional `:claims:<payload>` trailer follows `loc`.
+// The payload char-class covers the serialized form
+// (`type~confPct~ver,...`): lowercase, digits, `~`, `,`, `-`. Both
+// optional groups stay non-capturing-prefixed so legacy 4- and
+// 5-segment markers continue to match unchanged.
 const MARKER_REGEX =
-  /<!-- sigilix:fid:([0-9a-f]{16}):cat:([a-z]+):sev:([a-z]+):path:([0-9a-f]{12})(?::loc:([a-z]+))? -->/g
+  /<!-- sigilix:fid:([0-9a-f]{16}):cat:([a-z]+):sev:([a-z]+):path:([0-9a-f]{12})(?::loc:([a-z]+))?(?::claims:([a-z0-9~,\-]+))? -->/g
 
 const KNOWN_LOC_VALUES: ReadonlySet<string> = new Set(["inline", "unanchored"])
 
@@ -190,7 +288,7 @@ export function extractSigilixMarker(
     last = match
   }
   if (!last) return null
-  const [, fid, cat, sev, pathSha12, locRaw] = last
+  const [, fid, cat, sev, pathSha12, locRaw, claimsRaw] = last
   if (!fid || !cat || !sev || !pathSha12) return null
   if (!CATEGORY_SET.has(cat as ReviewMemoryCategory)) return null
   if (!SEVERITY_SET.has(sev as ReviewMemorySeverityLabel)) return null
@@ -201,12 +299,18 @@ export function extractSigilixMarker(
   const loc = locRaw && KNOWN_LOC_VALUES.has(locRaw)
     ? (locRaw as "inline" | "unanchored")
     : undefined
+  // SIG-276: parse the optional claims payload. Malformed/unknown
+  // entries are dropped; an all-dropped payload yields `undefined` so
+  // the `claims` key is omitted entirely (keeps `toEqual` shape stable
+  // for claimless markers).
+  const claims = parseClaimsSegment(claimsRaw)
   return {
     fid,
     cat: cat as ReviewMemoryCategory,
     sev: sev as ReviewMemorySeverityLabel,
     pathSha12,
     ...(loc ? { loc } : {}),
+    ...(claims ? { claims } : {}),
   }
 }
 

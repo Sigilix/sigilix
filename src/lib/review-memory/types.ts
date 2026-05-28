@@ -43,30 +43,36 @@ export const ALL_REVIEW_MEMORY_SEVERITIES: readonly ReviewMemorySeverityLabel[] 
 ]
 
 /**
- * SIG-247 Phase 0: forward-compat enum vocabulary for structured
- * claims extracted from a dismissal reply. Phase 2 implements the
- * extractor; this type is shipped now so the storage schema can
- * accept and round-trip records that Phase 2 writers will produce
- * without a schema break.
+ * SIG-247 Phase 2 (SIG-276): enum-bounded vocabulary for structured
+ * claims that classify what a Sigilix finding ASSERTS. Claims are
+ * extracted at finding-WRITE time from the bot's own finding (NOT from
+ * the reviewer's dismissal reply — that would be low-coverage and would
+ * pull reviewer free-text into the webhook path, breaking the privacy
+ * contract). They ride the comment marker to the dismissal-capture path,
+ * where Phase 2 PR B copies them onto the signal so memory can generalize
+ * on the SPECIFIC pattern a team dismisses, not just its category.
  *
- * The Codex consult recommended Option C (structured claims, never
- * raw text) as the privacy-preserving learning surface. Each claim
- * is enum-bounded — no free-text fields that could carry PII. Phase 2
- * adds the LLM-side extractor that maps a dismissal reply into one
- * or more of these claims; Phase 3+ uses them at injection time.
- *
- * v0 ships a single `type` enum + bounded scope fields. The vocabulary
- * grows by telemetry-tuned expansion, not by ad-hoc additions.
+ * Each claim is enum-bounded — no free-text fields that could carry PII.
+ * The vocabulary grows by telemetry-tuned expansion, not ad-hoc additions.
  */
+export type ReviewMemoryClaimType =
+  | "auth-gate-is-boundary"
+  | "structural-glue-not-test-target"
+  | "globally-unique-id-is-tenant-isolation"
+  | "rethrowing-catch-not-swallowed"
+
+export const ALL_REVIEW_MEMORY_CLAIM_TYPES: readonly ReviewMemoryClaimType[] = [
+  "auth-gate-is-boundary",
+  "structural-glue-not-test-target",
+  "globally-unique-id-is-tenant-isolation",
+  "rethrowing-catch-not-swallowed",
+]
+
 export interface ReviewMemoryClaim {
-  /** Stable per-claim id — sha16 of the claim's canonical form. */
+  /** Stable per-claim id — sha16 of the canonical `extractorVersion:type` form. */
   id: string
   /** Enum-bounded claim type. v0 starts narrow; expands per SIG-244 bake-off data. */
-  type:
-    | "auth-gate-is-boundary"
-    | "structural-glue-not-test-target"
-    | "globally-unique-id-is-tenant-isolation"
-    | "rethrowing-catch-not-swallowed"
+  type: ReviewMemoryClaimType
   /**
    * Confidence 0.0-1.0 from the extractor. Used at activation-time
    * weighting — low-confidence claims need more independent signals
@@ -76,6 +82,16 @@ export interface ReviewMemoryClaim {
   /** Schema/version of the extractor that produced this claim. */
   extractorVersion: number
 }
+
+/**
+ * The serialized subset of a claim carried in the comment marker
+ * (SIG-276 Phase 2). The `id` is OMITTED on purpose: it is derivable
+ * from `extractorVersion:type` and is recomputed at capture time
+ * (PR B), so encoding it in the marker would just waste marker width.
+ * `buildSigilixMarker` serializes this shape; `extractSigilixMarker`
+ * parses it back.
+ */
+export type ReviewMemoryClaimMarkerData = Omit<ReviewMemoryClaim, "id">
 
 /**
  * One captured dismissal signal. Stored inside
@@ -233,6 +249,16 @@ export interface SigilixCommentMarker {
    * `fid`/`cat` and never branches on `loc`.
    */
   loc?: "inline" | "unanchored"
+  /**
+   * SIG-276 Phase 2: structured claims the finding asserted, serialized
+   * into the optional `:claims:` marker segment. Absent on pre-Phase-2
+   * markers and on findings the extractor produced no claim for. Carries
+   * the id-less `ReviewMemoryClaimMarkerData` shape; the capture path
+   * (PR B) recomputes each `id` before storing the claim on a signal.
+   * Unknown / malformed claim entries are dropped on parse (forward-compat
+   * with future enum values, mirroring the `loc` precedent).
+   */
+  claims?: ReviewMemoryClaimMarkerData[]
 }
 
 /**

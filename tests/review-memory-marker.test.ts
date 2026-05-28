@@ -204,6 +204,120 @@ describe("extractSigilixMarker — rejection paths", () => {
   })
 })
 
+describe("SIG-276 — claims marker segment (build + round-trip)", () => {
+  const base = {
+    ruleId: null,
+    path: "src/lib/foo.ts",
+    line: 42,
+    headline: "Helper has no test",
+    category: "tests" as const,
+    severity: "warning" as const,
+  }
+
+  it("appends a :claims: segment when claims are provided", async () => {
+    const m = await buildSigilixMarker({
+      ...base,
+      claims: [
+        { type: "structural-glue-not-test-target", confidence: 0.85, extractorVersion: 1 },
+      ],
+    })
+    expect(m).toContain(":claims:structural-glue-not-test-target~85~1")
+    expect(m.endsWith(" -->")).toBe(true)
+  })
+
+  it("omits the :claims: segment for an empty claims array", async () => {
+    const m = await buildSigilixMarker({ ...base, claims: [] })
+    expect(m).not.toContain(":claims:")
+  })
+
+  it("round-trips a single claim through build → extract", async () => {
+    const m = await buildSigilixMarker({
+      ...base,
+      claims: [
+        { type: "auth-gate-is-boundary", confidence: 0.6, extractorVersion: 1 },
+      ],
+    })
+    const parsed = extractSigilixMarker(m)
+    expect(parsed?.claims).toEqual([
+      { type: "auth-gate-is-boundary", confidence: 0.6, extractorVersion: 1 },
+    ])
+  })
+
+  it("round-trips multiple claims preserving order", async () => {
+    const m = await buildSigilixMarker({
+      ...base,
+      claims: [
+        { type: "structural-glue-not-test-target", confidence: 0.9, extractorVersion: 2 },
+        { type: "rethrowing-catch-not-swallowed", confidence: 0.55, extractorVersion: 2 },
+      ],
+    })
+    const parsed = extractSigilixMarker(m)
+    expect(parsed?.claims).toEqual([
+      { type: "structural-glue-not-test-target", confidence: 0.9, extractorVersion: 2 },
+      { type: "rethrowing-catch-not-swallowed", confidence: 0.55, extractorVersion: 2 },
+    ])
+  })
+
+  it("caps serialization at 3 claims even if more are passed", async () => {
+    const m = await buildSigilixMarker({
+      ...base,
+      claims: [
+        { type: "auth-gate-is-boundary", confidence: 0.9, extractorVersion: 1 },
+        { type: "structural-glue-not-test-target", confidence: 0.9, extractorVersion: 1 },
+        { type: "globally-unique-id-is-tenant-isolation", confidence: 0.9, extractorVersion: 1 },
+        { type: "rethrowing-catch-not-swallowed", confidence: 0.9, extractorVersion: 1 },
+      ],
+    })
+    const parsed = extractSigilixMarker(m)
+    expect(parsed?.claims).toHaveLength(3)
+  })
+
+  it("coexists with a :loc: segment (both parse)", async () => {
+    const m = await buildSigilixMarker({
+      ...base,
+      loc: "inline",
+      claims: [
+        { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
+      ],
+    })
+    const parsed = extractSigilixMarker(m)
+    expect(parsed?.loc).toBe("inline")
+    expect(parsed?.claims).toEqual([
+      { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
+    ])
+  })
+
+  it("legacy marker (no claims) parses WITHOUT a claims key", () => {
+    const body =
+      "<!-- sigilix:fid:abc1234567890def:cat:performance:sev:warning:path:d4e5f6a7b8c9 -->"
+    const parsed = extractSigilixMarker(body)
+    expect(parsed).toEqual({
+      fid: "abc1234567890def",
+      cat: "performance",
+      sev: "warning",
+      pathSha12: "d4e5f6a7b8c9",
+    })
+    expect(parsed).not.toHaveProperty("claims")
+  })
+
+  it("drops an unknown claim type on parse (forward-compat)", () => {
+    const body =
+      "<!-- sigilix:fid:abc1234567890def:cat:tests:sev:warning:path:d4e5f6a7b8c9:claims:future-claim-not-yet-known~80~3,auth-gate-is-boundary~70~1 -->"
+    const parsed = extractSigilixMarker(body)
+    expect(parsed?.claims).toEqual([
+      { type: "auth-gate-is-boundary", confidence: 0.7, extractorVersion: 1 },
+    ])
+  })
+
+  it("drops the whole claims key when every entry is malformed", () => {
+    const body =
+      "<!-- sigilix:fid:abc1234567890def:cat:tests:sev:warning:path:d4e5f6a7b8c9:claims:bogus~zz~q -->"
+    const parsed = extractSigilixMarker(body)
+    expect(parsed).not.toBeNull()
+    expect(parsed).not.toHaveProperty("claims")
+  })
+})
+
 describe("computeFid + computePathSha256 — primitives", () => {
   it("computeFid produces 16 lowercase hex chars", async () => {
     const fid = await computeFid({

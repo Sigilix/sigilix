@@ -66,7 +66,13 @@ import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
-import { handleAdminIndexRoute, handleAdminBackfillRoute, handleAdminReconcileRoute, handleAdminMigrateToRepoIdRoute } from "./lib/admin-index-route"
+import {
+  handleAdminIndexRoute,
+  handleAdminBackfillRoute,
+  handleAdminReconcileRoute,
+  handleAdminMigrateToRepoIdRoute,
+  handleAdminMigrateReviewMemoryToRepoIdRoute,
+} from "./lib/admin-index-route"
 import { runIndexReconciliation } from "./lib/index-reconciliation"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
@@ -1053,6 +1059,19 @@ export default {
     // populating the new `repo-tenant:{id}` key. Idempotent.
     if (request.method === "POST" && url.pathname === "/admin/migrate-to-repo-id") {
       return handleAdminMigrateToRepoIdRoute(request, env)
+    }
+
+    // SIG-247 Phase 1 PR B: authenticated migration endpoint for the
+    // review-memory keyspace. Walks every repo of one installation,
+    // lists legacy `review-memory:<owner>/<repo>:*` keys, fetches the
+    // immutable repo.id, and writes UNIONED records to the new
+    // `review-memory:repo:<id>:*` keys with a `migratedAt` sentinel.
+    // Supports ?dryRun=true. Idempotent re-runs.
+    if (
+      request.method === "POST" &&
+      url.pathname === "/admin/migrate-review-memory-to-repo-id"
+    ) {
+      return handleAdminMigrateReviewMemoryToRepoIdRoute(request, env)
     }
 
     if (request.method === "POST" && url.pathname === "/linear/webhook") {

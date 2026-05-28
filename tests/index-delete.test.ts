@@ -332,6 +332,192 @@ describe("deleteRepoIndex — SIG-243 tenant-key cleanup gate", () => {
   })
 })
 
+// ─── deleteRepoIndex — SIG-247 Phase 1 PR B review-memory cleanup ─────
+
+describe("deleteRepoIndex — SIG-247 Phase 1 review-memory cleanup", () => {
+  it("deletes the legacy review-memory:<owner>/<repo>:* prefix on uninstall", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest()),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors()),
+    )
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:performance", "{}")
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:logic", "{}")
+    store.set(
+      "review-memory:Arc-and-Anchor/sigilix:path:abc:cat:tests",
+      "{}",
+    )
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    expect(result.reviewMemoryKeys).toBe(3)
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:logic")).toBe(false)
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:path:abc:cat:tests")).toBe(false)
+  })
+
+  it("ALSO deletes the new review-memory:repo:<id>:* prefix when manifest carries githubRepoId", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest({ githubRepoId: 808247824 })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors({ githubRepoId: 808247824 })),
+    )
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:performance", "{}")
+    store.set("review-memory:repo:808247824:cat:performance", "{}")
+    store.set("review-memory:repo:808247824:cat:logic", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    expect(result.reviewMemoryKeys).toBe(3)  // 1 legacy + 2 new
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
+    expect(store.has("review-memory:repo:808247824:cat:performance")).toBe(false)
+    expect(store.has("review-memory:repo:808247824:cat:logic")).toBe(false)
+  })
+
+  it("does NOT delete review-memory:repo:<id>:* when no positive integer githubRepoId is on either record", async () => {
+    const { kv, store } = makeKvStub()
+    // Manifest exists but lacks githubRepoId (pre-Phase-2 record)
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest()),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors()),
+    )
+    // Hypothetical foreign new-key (e.g., a different repo's id that
+    // accidentally collided — defensive guard: must NOT delete)
+    store.set("review-memory:repo:99999999:cat:performance", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.status).toBe("complete")
+    // No legacy keys to delete, no foreign new-key delete
+    expect(result.reviewMemoryKeys).toBe(0)
+    expect(store.has("review-memory:repo:99999999:cat:performance")).toBe(true)
+  })
+
+  it("returns reviewMemoryKeys=0 when no review-memory state exists at all", async () => {
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest({ githubRepoId: 808247824 })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors({ githubRepoId: 808247824 })),
+    )
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+    expect(result.reviewMemoryKeys).toBe(0)
+  })
+
+  it("review-memory delete still runs even when manifest is missing (legacy keys are owner-qualified)", async () => {
+    // Edge case: a repo where indexer state never landed but
+    // review-memory captures DID accumulate. Should still clean up.
+    const { kv, store } = makeKvStub()
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:performance", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    expect(result.reviewMemoryKeys).toBe(1)
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
+  })
+
+  it("CR-Critical (PR #206): does NOT delete review-memory:repo:<id>:* on owner mismatch", async () => {
+    // Owner-mismatch scenario: a delete fires for owner X but the
+    // manifest reports owner Y. The legacy review-memory keys are
+    // owner-qualified by X (safe to delete unguarded). But the new
+    // repo-id keyspace's id was sourced from manifest Y — using it
+    // would delete owner Y's review-memory data.
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest({ owner: "different-org", githubRepoId: 808247824 })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors({ owner: "different-org", githubRepoId: 808247824 })),
+    )
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:performance", "{}")
+    // Hypothetical foreign new-key — must NOT be deleted
+    store.set("review-memory:repo:808247824:cat:performance", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "install-deleted",
+    })
+
+    // Legacy keys (owner-qualified by string) ARE deleted
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
+    expect(result.reviewMemoryKeys).toBe(1)
+    // New repo-id key (sourced from mismatched manifest) is preserved
+    expect(store.has("review-memory:repo:808247824:cat:performance")).toBe(true)
+  })
+
+  it("CR-Critical (PR #206): does NOT delete review-memory:repo:<id>:* on branch-scoped delete", async () => {
+    // A branch-scoped delete (e.g., pr-branch-closed) MUST NOT touch
+    // the default-branch tenant keys — the writer never populated
+    // repo-id review-memory keys for that branch state, and using
+    // the id from a branch-scoped manifest would clobber the
+    // canonical default-branch tenant's memory data.
+    const { kv, store } = makeKvStub()
+    store.set(
+      repoIndexManifestKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(manifest({ branch: "feature-x", githubRepoId: 808247824 })),
+    )
+    store.set(
+      repoIndexVectorsKey("Arc-and-Anchor", "sigilix"),
+      JSON.stringify(vectors({ githubRepoId: 808247824 })),
+    )
+    store.set("review-memory:Arc-and-Anchor/sigilix:cat:performance", "{}")
+    store.set("review-memory:repo:808247824:cat:performance", "{}")
+
+    const { env } = makeEnv({ kv })
+    const result = await deleteRepoIndex({
+      env, owner: "Arc-and-Anchor", repo: "sigilix",
+      reason: "branch-deleted",
+    })
+
+    // Legacy keys (owner-qualified by string) ARE deleted
+    expect(store.has("review-memory:Arc-and-Anchor/sigilix:cat:performance")).toBe(false)
+    expect(result.reviewMemoryKeys).toBe(1)
+    // New repo-id key NOT touched — branch-scoped delete must not
+    // wipe the canonical default-branch tenant's memory.
+    expect(store.has("review-memory:repo:808247824:cat:performance")).toBe(true)
+  })
+})
+
 // ─── deleteRepoIndex — cross-tenant guard ──────────────────────────────
 
 describe("deleteRepoIndex — cross-tenant guard", () => {

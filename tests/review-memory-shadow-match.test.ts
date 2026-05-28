@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest"
 import {
   shadowMatchReviewMemoryClaims,
+  resolveClaimShadowMode,
   SHADOW_DISTINCT_PR_FLOOR,
   type ShadowMatchFinding,
 } from "../src/lib/review-memory/shadow-match"
@@ -58,14 +59,56 @@ function finding(over: Partial<ShadowMatchFinding> = {}): ShadowMatchFinding {
   return {
     category: "logic",
     pathSha12: "aaaaaaaaaaaa",
+    fid: "abcd1234abcd1234",
+    severityTier: "P2",
     claims: [{ type: "structural-glue-not-test-target", extractorVersion: 1 }],
     ...over,
   }
 }
 
+describe("resolveClaimShadowMode (SIG-280 flag enum)", () => {
+  it("maps on→shadow, render→render, soften→soften, else→off", () => {
+    expect(resolveClaimShadowMode("on")).toBe("shadow")
+    expect(resolveClaimShadowMode("render")).toBe("render")
+    expect(resolveClaimShadowMode("soften")).toBe("soften")
+    expect(resolveClaimShadowMode("off")).toBe("off")
+    expect(resolveClaimShadowMode(undefined)).toBe("off")
+    expect(resolveClaimShadowMode("garbage")).toBe("off")
+  })
+  it("render and soften are non-off (so the shadow pass runs in PR A)", () => {
+    expect(resolveClaimShadowMode("render") !== "off").toBe(true)
+    expect(resolveClaimShadowMode("soften") !== "off").toBe(true)
+  })
+})
+
 describe("shadowMatchReviewMemoryClaims (pure)", () => {
   it("returns [] for no findings", () => {
     expect(shadowMatchReviewMemoryClaims({ memories: [], findings: [] })).toEqual([])
+  })
+
+  it("SIG-280: every emitted row carries the finding's fid + severityTier (tier 1/2)", () => {
+    const memories = [
+      pathMemory("logic", "aaaaaaaaaaaa", [shadowClaim({ type: "structural-glue-not-test-target" })]),
+    ]
+    const out = shadowMatchReviewMemoryClaims({
+      memories,
+      findings: [finding({ fid: "ffff0000ffff0000", severityTier: "P0" })],
+    })
+    expect(out).toHaveLength(1)
+    expect(out[0]!.fid).toBe("ffff0000ffff0000")
+    expect(out[0]!.severityTier).toBe("P0")
+  })
+
+  it("SIG-280: category-no-claim-match (tier 3) rows also carry fid + severityTier", () => {
+    const memories = [catMemory("logic", [shadowClaim({ type: "auth-gate-is-boundary" })])]
+    const out = shadowMatchReviewMemoryClaims({
+      memories,
+      findings: [finding({ fid: "1111222233334444", severityTier: "P1", claims: [] })],
+    })
+    expect(out).toHaveLength(1)
+    expect(out[0]!.matchedTier).toBe("category-no-claim-match")
+    expect(out[0]!.fid).toBe("1111222233334444")
+    expect(out[0]!.severityTier).toBe("P1")
   })
 
   it("skips a finding with null category", () => {
@@ -175,9 +218,9 @@ describe("shadowMatchReviewMemoryClaims (pure)", () => {
       ],
     })
     const ALLOWED = new Set([
-      "claimType", "matchedTier", "distinctPrCount", "signalCount",
-      "lastSignalTs", "categoryOnlyWouldAlsoFire", "wouldSoftenAtFloor",
-      "version_mismatch", "rawConfidences",
+      "fid", "severityTier", "claimType", "matchedTier", "distinctPrCount",
+      "signalCount", "lastSignalTs", "categoryOnlyWouldAlsoFire",
+      "wouldSoftenAtFloor", "version_mismatch", "rawConfidences",
     ])
     expect(out.length).toBeGreaterThan(0)
     for (const row of out) {

@@ -248,6 +248,13 @@ export interface SigilixConfig {
     maxInjectedMemories?: number
     minSignalThreshold?: number
     maxSignalAgeDays?: number
+    /**
+     * SIG-280 Phase 4: per-repo opt-in for claim-driven softening. Strict-bool
+     * (literal `true` only). Default off. Phase 4 `soften` mode requires BOTH
+     * this AND env `OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW=soften`. Read-but-not-
+     * yet-enforced in PR A (the soften gate lands in Phase 4 PR C).
+     */
+    claimSoftening?: boolean
   }
   /**
    * ARC-265: customer-defined labels Sigilix's LLM may apply to PRs.
@@ -1594,6 +1601,7 @@ export function resolveReviewMemoryConfig(
   maxInjectedMemories: number
   minSignalThreshold: number
   maxSignalAgeDays: number
+  claimSoftening: boolean
 } {
   const cfg = config?.reviewMemory
   const cats = cfg?.categories
@@ -1608,6 +1616,9 @@ export function resolveReviewMemoryConfig(
     maxInjectedMemories: cfg?.maxInjectedMemories ?? 5,
     minSignalThreshold: cfg?.minSignalThreshold ?? 3,
     maxSignalAgeDays: cfg?.maxSignalAgeDays ?? 90,
+    // SIG-280 Phase 4 PR A: strict-bool, default off. Surfaced for the
+    // Phase 4 soften gate; nothing reads it for behavior yet.
+    claimSoftening: cfg?.claimSoftening === true,
   }
 }
 

@@ -43,4 +43,13 @@ describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () =
     const window = ENSEMBLE.slice(shadowIdx, shadowIdx + 400)
     expect(window).toContain("headSha: headSha.slice(0, 7)")
   })
+
+  it("SIG-280: the durable shadow KV write lives in the Site-2 block (before the posting path)", () => {
+    const findingMarkersIdx = ENSEMBLE.indexOf("const findingMarkers")
+    const kvKeyIdx = ENSEMBLE.indexOf("review-memory-claim-shadow:${reverseTs}")
+    expect(kvKeyIdx).toBeGreaterThanOrEqual(0) // durable corpus record exists
+    expect(kvKeyIdx).toBeLessThan(findingMarkersIdx) // gated block, not posting path
+    // shadowEvent (the durable payload) must not leak into the posting path.
+    expect(ENSEMBLE.lastIndexOf("shadowEvent")).toBeLessThan(findingMarkersIdx)
+  })
 })

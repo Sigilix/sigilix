@@ -117,7 +117,18 @@ describe("resolveReviewMemoryConfig — defaults + clamps", () => {
       maxInjectedMemories: 5,
       minSignalThreshold: 3,
       maxSignalAgeDays: 90,
+      // SIG-280 Phase 4 PR A: strict-bool, default off. Surface only — no
+      // behavior wired off it yet (Phase 4 PR C's soften gate consumes it).
+      claimSoftening: false,
     })
+  })
+
+  it("SIG-280: claimSoftening is strict-bool — true only on literal true", () => {
+    expect(resolveReviewMemoryConfig({ reviewMemory: { claimSoftening: true } }).claimSoftening).toBe(true)
+    expect(resolveReviewMemoryConfig({ reviewMemory: { claimSoftening: false } }).claimSoftening).toBe(false)
+    expect(resolveReviewMemoryConfig({ reviewMemory: {} }).claimSoftening).toBe(false)
+    // non-true values do not enable (mirrors enabled/captureOnly polarity)
+    expect(resolveReviewMemoryConfig({ reviewMemory: { claimSoftening: "yes" as unknown as boolean } }).claimSoftening).toBe(false)
   })
 
   it("empty reviewMemory → defaults", () => {

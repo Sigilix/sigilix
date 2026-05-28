@@ -36,6 +36,19 @@ describe("parseSigilixConfig — reviewMemory shape", () => {
     })
   })
 
+  it("SIG-280: claimSoftening survives the parser → resolve round-trip (PR #210 CR catch)", () => {
+    // The earlier resolve test passed a RAW object to resolveReviewMemoryConfig,
+    // bypassing the parser whitelist — which had silently dropped the field.
+    // This exercises the REAL sigilix.json load path: parse → resolve.
+    const cfg = parse(JSON.stringify({ reviewMemory: { claimSoftening: true } }))
+    expect(cfg.reviewMemory?.claimSoftening).toBe(true)
+    expect(resolveReviewMemoryConfig(cfg).claimSoftening).toBe(true)
+    // strict-bool through the parser: a non-bool is dropped → resolves false
+    const cfg2 = parse(JSON.stringify({ reviewMemory: { claimSoftening: "yes" } }))
+    expect(cfg2.reviewMemory?.claimSoftening).toBeUndefined()
+    expect(resolveReviewMemoryConfig(cfg2).claimSoftening).toBe(false)
+  })
+
   it("strict-bool: truthy non-bool enabled is rejected", () => {
     const cfg = parse(
       JSON.stringify({ reviewMemory: { enabled: 1 } }),

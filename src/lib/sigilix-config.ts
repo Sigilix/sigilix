@@ -1120,6 +1120,13 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     if (typeof rmIn.maxSignalAgeDays === "number") {
       rmOut.maxSignalAgeDays = clamp(rmIn.maxSignalAgeDays, 7, 365)
     }
+    // SIG-280: strict-bool, mirroring enabled/captureOnly. Without this copy
+    // the field is dropped by the whitelist and `resolveReviewMemoryConfig`
+    // (which reads `cfg?.claimSoftening`) always sees false on the real
+    // sigilix.json load path (CodeRabbit catch on PR #210).
+    if (rmIn.claimSoftening === true || rmIn.claimSoftening === false) {
+      rmOut.claimSoftening = rmIn.claimSoftening
+    }
     if (Object.keys(rmOut).length > 0) {
       out.reviewMemory = rmOut
     }

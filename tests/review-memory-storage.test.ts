@@ -507,6 +507,26 @@ describe("unionRecords (pure, SIG-247 Phase 1)", () => {
     expect(out?.signals[0]?.ts).toBe(newerTs)
   })
 
+  it("final sort is NaN-safe — malformed-ts signals pushed to end (CR-2)", () => {
+    // unionRecords' final .sort() must not return NaN, or
+    // Array.prototype.sort yields engine-defined ordering. Push
+    // malformed-ts signals to the end so the FIFO cap evicts them
+    // first when overflow happens.
+    const validNewer = new Date(Date.now() - 500).toISOString()
+    const validOlder = new Date(Date.now() - 5000).toISOString()
+    const a = rec([
+      makeSignal({ commentId: 1, ts: validOlder }),
+      makeSignal({ commentId: 2, ts: "garbage" }),
+    ])
+    const b = rec([
+      makeSignal({ commentId: 3, ts: validNewer }),
+    ])
+    const out = unionRecords(a, b, scope)
+    expect(out?.signals).toHaveLength(3)
+    // Order: validNewer (3), validOlder (1), garbage (2)
+    expect(out?.signals.map((s) => s.commentId)).toEqual([3, 1, 2])
+  })
+
   it("overlapping commentId: NaN-existing-ts loses to valid candidate (code-reviewer M2)", () => {
     // If an existing signal has a malformed ts (Date.parse → NaN),
     // the prior `candidateTs > existingTs` always evaluates false,

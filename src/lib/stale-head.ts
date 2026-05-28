@@ -142,6 +142,18 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
   // still gets a user-visible signal.
   if (depth < MAX_STALE_HEAD_REQUEUES) {
     try {
+      // SIG-247 Phase 1 (CR-3): forward the repo.id ONLY when it's a
+      // positive integer. The caller pre-validates at the webhook
+      // entry point, but the stale-head requeue can fire on a path
+      // that re-reads from a (potentially stale or malformed) state,
+      // and forwarding a poisoned value would degrade the requeued
+      // run's dual-write keyspace.
+      const requeueRepoId =
+        typeof repoId === "number" &&
+        Number.isInteger(repoId) &&
+        repoId > 0
+          ? repoId
+          : undefined
       const result = await enqueuePrReviewJob(env, {
         owner,
         repo,
@@ -151,9 +163,7 @@ export async function handleStaleHead(args: HandleStaleHeadArgs): Promise<StaleH
         installationId,
         deliveryId: null, // not a webhook delivery
         staleHeadRequeueDepth: depth + 1,
-        // SIG-247 Phase 1: thread the repo.id through the auto-requeue
-        // path so the fresh attempt preserves dual-write keyspace.
-        ...(repoId !== undefined ? { repoId } : {}),
+        ...(requeueRepoId !== undefined ? { repoId: requeueRepoId } : {}),
       })
       if (result.ok) {
         console.log(JSON.stringify({

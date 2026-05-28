@@ -176,8 +176,21 @@ export function unionRecords(
       byCommentId.set(s.commentId, s)
     }
   }
+  // NaN-safe descending sort (CR-2): `Date.parse` returns NaN on
+  // malformed input; a naive `y-x` comparator returning NaN makes
+  // Array.prototype.sort behavior engine-defined. Push malformed
+  // timestamps to the end so the FIFO cap evicts them first.
   const merged = Array.from(byCommentId.values())
-    .sort((x, y) => Date.parse(y.ts) - Date.parse(x.ts))
+    .sort((x, y) => {
+      const xTs = Date.parse(x.ts)
+      const yTs = Date.parse(y.ts)
+      const xValid = Number.isFinite(xTs)
+      const yValid = Number.isFinite(yTs)
+      if (xValid && yValid) return yTs - xTs
+      if (xValid) return -1
+      if (yValid) return 1
+      return 0
+    })
     .slice(0, SIGNAL_FIFO_CAP)
   const lastUpdatedTs =
     a.lastUpdatedTs > b.lastUpdatedTs ? a.lastUpdatedTs : b.lastUpdatedTs

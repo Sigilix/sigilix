@@ -151,7 +151,11 @@ describe("buildReviewSubmission applies wrapInlineHtmlTags to verdict prose", ()
       body: "Replace <a href={x}> with <Link href={x}>.",
     }
     const submission = buildReviewSubmission({
-      verdict: { summary: "x", confidence: 3, confidenceReason: "y", findings: [finding] },
+      // SIG-281 PR B: confidence 4 keeps this score-3 finding inline (the
+      // Rec 5 gate would demote a sub-4, confidence<=3, no-fix finding to
+      // body). This test is about wrapInlineHtmlTags on the inline comment
+      // body, not routing.
+      verdict: { summary: "x", confidence: 4, confidenceReason: "y", findings: [finding] },
       prAuthor: "daniel",
       headSha: "a".repeat(40),
     })

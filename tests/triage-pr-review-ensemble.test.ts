@@ -2670,7 +2670,12 @@ describe("buildReviewSubmissionWithMetadata — SIG-216 linkContext threading fr
       // reviewable-map presence (matches the test pattern in
       // tests/triage-pr-review.test.ts:1986).
       scope: "comment",
-      score: 4,
+      // SIG-281 PR B (Rec 6): score 3 keeps this in the "Review Body
+      // Findings" section so the clickable-link assertion isn't confounded
+      // by a Fix Plan table row (score>=4 body-only blockers also render
+      // in the table, which uses the compact `path:line` form).
+      // linkContext threading is severity-independent.
+      score: 3,
       category: "logic",
       headline: "missing null guard",
       body: "Wrap with a guard before deref.",

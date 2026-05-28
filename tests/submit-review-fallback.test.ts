@@ -91,8 +91,13 @@ describe("buildFallbackBody", () => {
       { ...baseFinding, path: "src/m.ts", line: 30, headline: "m-issue" },
     ]
     const body = buildFallbackBody({ ...baseVerdict, findings }, [])
-    expect(body).toContain("### Review Body Findings")
-    expect(body).toContain("GitHub only supports PR review comments on diff lines")
+    // SIG-281 PR B (Rec 6): baseFinding is score 4, so these body-only
+    // findings are blockers — they render in the Fix Plan table + the
+    // collapsed evidence block (which reuses the same compact-anchor /
+    // no-orphan-heading rendering), not the lower "Review Body Findings"
+    // section.
+    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).toContain("| Severity | Location | Issue |")
     expect(body).toContain("`src/a.ts:20`")
     expect(body).toContain("`src/m.ts:30`")
     expect(body).toContain("`src/z.ts:10`")
@@ -129,11 +134,12 @@ describe("buildFallbackBody", () => {
     )
     expect(body).toContain("anchored-finding")
     expect(body).toContain("unanchored-finding")
-    // ARC-281 + SIG-5: the anchorless-fallback path now pours everything
-    // into the body-only findings section (since none of the findings
-    // landed as inline comments). Heading count is in the top-of-body
-    // status heading, not on the section.
-    expect(body).toContain("### Review Body Findings")
+    // SIG-281 PR B (Rec 6): both findings are score 4 (P1) blockers, so
+    // the anchorless-fallback pours them into the Fix Plan table + the
+    // collapsed evidence block, not the lower "Review Body Findings"
+    // section.
+    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).not.toContain("### Review Body Findings")
     // SIG-281 PR A: 1 anchored + 1 unanchored, both score 4 (P1) and all
     // body-only → 2 blockers → REQUEST_CHANGES posture, "high-severity
     // findings" copy with no "non-blocking" prefix.
@@ -193,10 +199,10 @@ describe("buildFallbackBody", () => {
     const populated = buildFallbackBody(baseVerdict, [])
     expect(populated).not.toContain("Clear off-by-one.")
     const blank = buildFallbackBody({ ...baseVerdict, confidenceReason: "" }, [])
-    // Summary still renders; layout flows directly into the
-    // body-only findings section per Kimi's spec.
+    // Summary still renders; the single score-4 (P1) finding flows into
+    // the Fix Plan table + collapsed evidence block (SIG-281 PR B / Rec 6).
     expect(blank).toContain("One real bug.")
-    expect(blank).toContain("### Review Body Findings")
+    expect(blank).toContain("Evidence &amp; suggested changes for body-only blockers")
   })
 })
 
@@ -342,7 +348,11 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
       unanchored,
     })
     expect(submission.body).toContain("unanchored-must-not-be-lost")
-    expect(submission.body).toContain("Review Body Findings")
+    // SIG-281 PR B (Rec 6): the unanchored finding is score 4 (P1), so it
+    // is rolled into the Fix Plan table + the collapsed evidence block
+    // (not lost) — its detail surface moved from "Review Body Findings"
+    // to the body-only blocker details block.
+    expect(submission.body).toContain("Evidence &amp; suggested changes for body-only blockers")
   })
 
   it("still emits inline comments for the anchored findings (UX preserved)", () => {

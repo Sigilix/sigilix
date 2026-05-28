@@ -1148,7 +1148,11 @@ describe("buildReviewSubmission", () => {
   it("includes start_line + start_side when finding has startLine", () => {
     const v: PrReviewVerdict = {
       ...verdict,
-      findings: [{ ...baseFinding, startLine: 38 }],
+      // SIG-281 PR B: score 5 keeps this inline (this describe's verdict
+      // is confidence 2, so a sub-4 finding would now route to body via
+      // the Rec 5 confidence gate — irrelevant to the start_line behavior
+      // under test).
+      findings: [{ ...baseFinding, score: 5, startLine: 38 }],
     }
     const out = buildReviewSubmission({ verdict: v, prAuthor: "alice", headSha: "abc" })
     expect(out.comments?.[0]?.start_line).toBe(38)
@@ -1276,6 +1280,10 @@ describe("buildReviewSubmission", () => {
       findings: [
         {
           ...baseFinding,
+          // SIG-281 PR B: score 5 keeps this inline (verdict confidence 2
+          // would otherwise route a sub-4 finding to body). The test is
+          // about preserving a ```suggestion fence in the inline body.
+          score: 5,
           body: "Use `??`.\n\n```suggestion\nconst x = a ?? b\n```",
         },
       ],
@@ -1304,7 +1312,14 @@ describe("buildReviewSubmission", () => {
       unanchored: [unanchored],
     })
 
-    expect(out.submission.body).toContain("### Review Body Findings")
+    // SIG-281 PR B (Rec 6): a score>=4 body-only finding is now a Fix Plan
+    // table row + a collapsed evidence block (NOT the lower "Review Body
+    // Findings" section, which holds only score<4 findings). Its evidence
+    // (Example / "Why this wasn't caught") still renders, inside the
+    // collapsed details block.
+    expect(out.submission.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.submission.body).toContain("missing integration coverage")
+    expect(out.submission.body).not.toContain("### Review Body Findings")
     expect(out.submission.body).toContain("**Example:**")
     expect(out.submission.body).toContain("opened/synchronize events")
     expect(out.submission.body).toContain("**Why this wasn't caught:** The sibling test only covers push events.")
@@ -1478,7 +1493,11 @@ describe("buildBodyOnlyCheckAnnotations", () => {
 describe("buildReviewSubmission — ARC-189 sigilix marker append (Task 2.5)", () => {
   const verdict: PrReviewVerdict = {
     summary: "Two findings.",
-    confidence: 3,
+    // SIG-281 PR B: confidence 4 so the score-2 finding stays inline (the
+    // Rec 5 gate only demotes sub-4 findings at confidence <= 3). This
+    // describe verifies marker ALIGNMENT across two inline comments, not
+    // routing.
+    confidence: 4,
     confidenceReason: "Mixed.",
     findings: [
       { ...baseFinding, score: 5, headline: "off-by-one in clampIndex" },
@@ -1880,8 +1899,12 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toMatch(/high-severity finding/)
     expect(out.body).not.toMatch(/non-blocking/)
-    expect(out.body).toContain("### Review Body Findings")
-    expect(out.body).toContain("GitHub only supports PR review comments on diff lines")
+    // SIG-281 PR B (Rec 6): a body-only BLOCKER (score >= 4) is now a Fix
+    // Plan table row + a collapsed evidence block — NOT the lower "Review
+    // Body Findings" section (which holds only score < 4 findings).
+    expect(out.body).toContain("| Severity | Location | Issue |")
+    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.body).not.toContain("### Review Body Findings")
     // SIG-216: meta line tightened to `<anchor> · score N` — the
     // "Comment-level (high, score 4)" bracketed prefix is gone (the
     // P1 badge already conveys severity, comment-scope is implicit
@@ -1918,7 +1941,13 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.comments ?? []).toHaveLength(0)
     expect(out.body).toMatch(/high-severity finding/)
     expect(out.body).not.toMatch(/non-blocking/)
-    expect(out.body).toContain("### Review Body Findings")
+    // SIG-281 PR B (Rec 6): file-scoped score-5 blocker → Fix Plan table
+    // row + collapsed evidence block, not the "Review Body Findings"
+    // section. Per Kimi Q3 the table Location cell for a file-level
+    // finding is the bare path (no `:line`).
+    expect(out.body).toContain("| Severity | Location | Issue |")
+    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.body).not.toContain("### Review Body Findings")
     // SIG-216: file-scope anchor is the bare path (no `:line`) and
     // the meta line is just `<anchor> · score N` — no "File-level
     // (critical, ...)" bracketed prefix. Asserting on the legacy
@@ -1993,7 +2022,7 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).not.toContain("### Review Body Findings")
   })
 
-  it("does not duplicate body-only high findings in the Fix Plan", () => {
+  it("SIG-281 PR B (Rec 6): surfaces body-only high findings IN the Fix Plan (inline + body-only blockers both listed)", () => {
     const inlineFinding: PrReviewFinding = {
       path: "src/lib/github-mention.ts",
       line: 436,
@@ -2016,12 +2045,219 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
 
     expect(out.comments).toHaveLength(1)
     expect(out.body).toContain("| Severity |")
+    // Inline blocker → Fix Plan row (unchanged).
     expect(out.body).toContain("| **High (4)** | `src/lib/github-mention.ts:436` | `logic`: ttl is too short |")
-    expect(out.body).not.toContain("`security`: dismiss command trusts")
-    // SIG-216: body-only finding renders with the tightened
-    // `<anchor> · score N` meta — "Comment-level" prefix dropped.
+    // SIG-281 PR B (Rec 6): the body-only blocker now ALSO appears as a
+    // Fix Plan row — surfacing it is the whole point. Previously it was
+    // suppressed from the table, leaving a real blocker buried below.
+    expect(out.body).toContain("`security`: dismiss command trusts")
+    // ...and its full evidence lives in the collapsed body-only blocker
+    // block, with the tightened `<anchor> · score N` meta (no
+    // "Comment-level" prefix).
+    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
     expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
     expect(out.body).not.toContain("Comment-level")
+  })
+})
+
+// ── SIG-281 PR B — routing discipline (Recs 2/3/5) + Rec 6 prominence ──
+//
+// Recs 2/5 (unified per Codex backend sign-off): a sub-4 line finding is
+// demoted to the body when it is weakly grounded — confidence <= 2 with no
+// committable fix, OR confidence === 3 with neither a fix nor a repro. A
+// score >= 4 finding is NEVER demoted (the believability floor), and a
+// confidence >= 4 sub-4 finding stays inline (guards against a blanket
+// "demote all sub-4" rule). Rec 3 caps inline comments at 15, demoting the
+// lowest-priority overflow to the body (never dropped) while preserving the
+// SIG-247 marker invariant. Rec 6 (Kimi K2.6 layout) surfaces body-only
+// blockers in the Fix Plan table + a collapsed evidence block.
+
+describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)", () => {
+  const lf = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
+    ...baseFinding, // score 3, line-scoped, src/lib/foo.ts:42
+    ...overrides,
+  })
+  const mkVerdict = (findings: PrReviewFinding[], confidence = 4): PrReviewVerdict => ({
+    summary: "fixture",
+    confidence,
+    confidenceReason: "fixture",
+    findings,
+  })
+  const submit = (findings: PrReviewFinding[], confidence = 4) =>
+    buildReviewSubmission({ verdict: mkVerdict(findings, confidence), prAuthor: "a", headSha: "abc" })
+
+  it("Rec 5: demotes a sub-4 line finding at confidence <= 2 with no fix to the body", () => {
+    const out = submit([lf({ score: 3, confidence: 2 })])
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain(baseFinding.headline)
+  })
+
+  it("Rec 5: demotes a sub-4 line finding at confidence 3 with neither a fix nor a repro", () => {
+    const out = submit([lf({ score: 3, confidence: 3 })])
+    expect(out.comments ?? []).toHaveLength(0)
+  })
+
+  it("Rec 5: KEEPS a sub-4 confidence-3 finding inline when it carries a repro (failureExample)", () => {
+    const out = submit([lf({ score: 3, confidence: 3, failureExample: "throws when user is null" })])
+    expect(out.comments).toHaveLength(1)
+  })
+
+  it("Rec 5: KEEPS a low-confidence finding inline when it carries a committable fix", () => {
+    const out = submit([lf({ score: 3, confidence: 1, suggestedReplacement: "const x = a ?? b" })])
+    expect(out.comments).toHaveLength(1)
+  })
+
+  it("Rec 5: KEEPS a sub-4 finding inline at confidence >= 4 (guards against a blanket Rec 2)", () => {
+    const out = submit([lf({ score: 3, confidence: 4 })])
+    expect(out.comments).toHaveLength(1)
+  })
+
+  it("believability floor: NEVER demotes a score >= 4 finding, even at confidence 1 with no fix", () => {
+    const out = submit([lf({ score: 4, confidence: 1 })])
+    expect(out.comments).toHaveLength(1)
+  })
+
+  it("Rec 5: demotion runs on the post-line-move anchor (uses effective.line)", () => {
+    // The model says line 5; the only added line is 9. SIG-127 moves the
+    // anchor forward to 9, and the confidence gate (conf 2, no fix) then
+    // demotes on `effective` — so the finding lands in the body carrying
+    // the moved line, not the model's raw line.
+    const added = new Map<string, Map<number, string>>([
+      ["src/lib/foo.ts", new Map<number, string>([[9, "const y = compute()"]])],
+    ])
+    const out = buildReviewSubmission({
+      verdict: mkVerdict([lf({ score: 3, confidence: 2, line: 5 })]),
+      prAuthor: "a",
+      headSha: "abc",
+      addedLineTextByLine: added,
+    })
+    expect(out.comments ?? []).toHaveLength(0)
+    expect(out.body).toContain("src/lib/foo.ts:9")
+  })
+
+  it("Rec 3: caps inline comments at 15 and demotes the overflow to the body (never dropped)", () => {
+    const findings = Array.from({ length: 18 }, (_, i) =>
+      lf({ score: 5, line: 100 + i, headline: `cap-${i}` }),
+    )
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: mkVerdict(findings),
+      prAuthor: "a",
+      headSha: "abc",
+    })
+    expect(out.submission.comments).toHaveLength(15)
+    expect(out.bodyOnlyFindings).toHaveLength(3) // 18 - 15, never dropped
+    expect(out.submission.body).toContain("inline comment cap exceeded; shown here")
+  })
+
+  it("Rec 3: prioritizes higher-severity findings to keep inline; the lowest-severity blocker overflows", () => {
+    const high = Array.from({ length: 15 }, (_, i) =>
+      lf({ score: 5, line: 100 + i, headline: `high-${i}` }),
+    )
+    const low = lf({ score: 4, line: 999, headline: "low-priority blocker" })
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: mkVerdict([low, ...high]),
+      prAuthor: "a",
+      headSha: "abc",
+    })
+    expect(out.submission.comments).toHaveLength(15)
+    expect(out.bodyOnlyFindings.map((f) => f.headline)).toContain("low-priority blocker")
+  })
+
+  it("Rec 3: the cap keeps inlineOriginalIndex aligned so each kept comment carries ITS SIG-247 marker", () => {
+    const findings = Array.from({ length: 16 }, (_, i) =>
+      lf({ score: 5, line: 100 + i, headline: `cap-${i}` }),
+    )
+    const markers = findings.map(
+      (_, i) =>
+        `<!-- sigilix:fid:${String(i).padStart(16, "0")}:cat:logic:sev:error:path:${String(i).padStart(12, "0")} -->`,
+    )
+    const out = buildReviewSubmission({
+      verdict: mkVerdict(findings),
+      prAuthor: "a",
+      headSha: "abc",
+      findingMarkers: markers,
+    })
+    expect(out.comments).toHaveLength(15)
+    for (const c of out.comments ?? []) {
+      const idx = Number(/cap-(\d+)/.exec(c.body)?.[1])
+      expect(c.body).toContain(markers[idx])
+    }
+  })
+
+  it("believability floor: a score >= 4 finding demoted to the body by the cap still REQUEST_CHANGES", () => {
+    // 16 blockers — one overflows to the body, but inlineFindings is still
+    // non-empty so the gate blocks; even an all-overflow case would block
+    // via the body-only score>=4 floor (covered in PR A).
+    const findings = Array.from({ length: 16 }, (_, i) =>
+      lf({ score: 5, line: 100 + i, headline: `cap-${i}` }),
+    )
+    const out = submit(findings)
+    expect(out.event).toBe("REQUEST_CHANGES")
+  })
+})
+
+describe("renderFindingsReviewBody — SIG-281 PR B Rec 6 Fix-Plan prominence (Kimi K2.6)", () => {
+  const lf = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
+    ...baseFinding,
+    ...overrides,
+  })
+  const mkVerdict = (findings: PrReviewFinding[]): PrReviewVerdict => ({
+    summary: "fixture",
+    confidence: 4,
+    confidenceReason: "fixture",
+    findings,
+  })
+  const submit = (findings: PrReviewFinding[]) =>
+    buildReviewSubmission({ verdict: mkVerdict(findings), prAuthor: "a", headSha: "abc" })
+
+  it("a body-only blocker renders in the Fix Plan table + collapsed evidence, NOT Review Body Findings", () => {
+    const out = submit([lf({ scope: "file", score: 5, headline: "file blocker" })])
+    expect(out.body).toContain("| Severity | Location | Issue |")
+    expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(out.body).toContain("file blocker")
+    expect(out.body).not.toContain("### Review Body Findings")
+  })
+
+  it("a body-only NON-blocker (score < 4) stays in the Review Body Findings section", () => {
+    const out = submit([lf({ scope: "file", score: 3, headline: "file nit" })])
+    expect(out.body).toContain("### Review Body Findings")
+    expect(out.body).toContain("file nit")
+    expect(out.body).not.toContain("Evidence &amp; suggested changes for body-only blockers")
+  })
+
+  it("Kimi Q3: a file-level blocker's Fix Plan Location cell is the bare path (no `:line`)", () => {
+    const out = submit([lf({ scope: "file", score: 5, path: "src/lib/foo.ts", line: 42, headline: "x" })])
+    expect(out.body).toMatch(/\|\s*\*\*Critical \(5\)\*\*\s*\|\s*`src\/lib\/foo\.ts`\s*\|/)
+    expect(out.body).not.toContain("`src/lib/foo.ts:42`")
+  })
+
+  it("the Fix Plan caption appears only when the table contains body-only (non-inline) blockers", () => {
+    const withBodyOnlyBlocker = submit([lf({ scope: "file", score: 5 })])
+    expect(withBodyOnlyBlocker.body).toContain(
+      "Rows without a line number are file-level or PR-level",
+    )
+    const inlineOnly = submit([lf({ score: 5, line: 42 })])
+    expect(inlineOnly.body).toContain("| Severity | Location | Issue |")
+    expect(inlineOnly.body).not.toContain("Rows without a line number are file-level or PR-level")
+  })
+
+  it("mixed: inline blocker + body-only blocker + body-only nit land in their three distinct surfaces", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: mkVerdict([
+        lf({ score: 5, line: 42, headline: "inline blocker" }),
+        lf({ scope: "pr", score: 4, headline: "body-only blocker" }),
+        lf({ scope: "file", score: 2, headline: "body-only nit" }),
+      ]),
+      prAuthor: "a",
+      headSha: "abc",
+    })
+    const body = out.submission.body
+    expect(out.submission.comments).toHaveLength(1) // inline blocker
+    expect(body).toContain("inline blocker") // Fix Plan row
+    expect(body).toContain("body-only blocker") // Fix Plan row + details
+    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).toContain("### Review Body Findings") // the nit
+    expect(body).toContain("body-only nit")
   })
 })
 
@@ -2038,7 +2274,13 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
     path: "src/lib/foo.ts",
     line: 42,
     scope: "comment", // routes to body-only without needing an addedLineTextByLine miss
-    score: 4,
+    // SIG-281 PR B (Rec 6): score 3 keeps this in the "Review Body
+    // Findings" section so these body-only link/meta assertions aren't
+    // confounded by a Fix Plan table row (score>=4 body-only blockers now
+    // also render in the table, which uses the compact `path:line` form).
+    // The body-only renderer is severity-independent, so coverage is
+    // unchanged.
+    score: 3,
     category: "logic",
     headline: "missing null guard",
     body: "Wrap with a guard before deref.",
@@ -2121,8 +2363,8 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
 
   it("tightens the meta line to `<anchor> · score N` with no bracketed severity (line scope)", () => {
     const body = buildBody(lineFinding)
-    expect(body).toContain("`src/lib/foo.ts:42` · score 4")
-    expect(body).not.toContain("(high, score 4)")
+    expect(body).toContain("`src/lib/foo.ts:42` · score 3")
+    expect(body).not.toContain("(medium, score 3)")
     expect(body).not.toContain("Line 42")
     expect(body).not.toContain("Comment-level")
   })
@@ -2130,13 +2372,17 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
   it("tightens the meta line for pr-scope to `<path> · score N`", () => {
     const body = buildBody(prFinding)
     expect(body).toContain("`src/lib/foo.ts` · score 3")
-    expect(body).not.toContain("PR-level")
+    // SIG-281 PR B: the body-only explanation copy now legitimately
+    // contains the phrase "PR-level scope", so guard against the OLD
+    // per-finding "PR-level (severity, score N)" location LABEL format
+    // specifically, not the bare substring.
+    expect(body).not.toContain("PR-level (")
   })
 
   it("uses the U+00B7 middle-dot separator (not a bullet or asterisk)", () => {
     const body = buildBody(lineFinding)
     const expectedSeparator = " · "
-    expect(body).toContain(`\`src/lib/foo.ts:42\`${expectedSeparator}score 4`)
+    expect(body).toContain(`\`src/lib/foo.ts:42\`${expectedSeparator}score 3`)
     // Guard against accidental swap to alternative dots/bullets.
     expect(body).not.toContain(" • score") // • bullet
     expect(body).not.toContain(" * score")

@@ -195,6 +195,8 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     expect(catRecord.signals.length).toBe(1)
     expect(catRecord.signals[0].fid).toBe("1111111111111111")
     expect(catRecord.signals[0].commentId).toBe(100)
+    // SIG-114 PR 3: the finding's severity tier is copied from the marker.
+    expect(catRecord.signals[0].sev).toBe("warning")
     // Path-scope record exists (path-sha key derived from marker pathSha12 — but
     // capture pipeline uses the FULL sha256 derived independently so the test
     // can't predict the exact key without knowing the path. Check via prefix.)

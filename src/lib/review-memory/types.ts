@@ -123,6 +123,17 @@ export interface ReviewMemorySignal {
    */
   dismissReason?: import("../dismiss-reasons").DismissReason
   /**
+   * SIG-114 PR 3: the dismissed finding's severity tier, copied from the
+   * parent comment's marker (`sev:` segment) at capture time. Lets the
+   * dismissal signal self-report severity for the offline FP-rate metric
+   * over the FULL signal-retention window — the per-review telemetry that
+   * carries the exact numeric score ages out at 30d, but signals persist
+   * 90/180d. Banded (`info` / `warning` / `error`), NOT the exact score:
+   * the marker carries only the tier. Optional + absent on signals written
+   * before this shipped.
+   */
+  sev?: ReviewMemorySeverityLabel
+  /**
    * SIG-276 Phase 2: the write-time claims the dismissed finding
    * asserted, copied off the parent comment's marker at capture time
    * (PR B) with each `id` recomputed via `hydrateClaimIds`. These

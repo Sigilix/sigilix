@@ -25,13 +25,22 @@ const GLOBAL_TOKEN_CAP = 200
 const PER_RECORD_TOKEN_CAP = 25
 const ELLIPSIS = "…"
 
+// SIG-280 PR B / SIG-284: the synth must NOT soften here — it emits the
+// finding at its TRUE severity + full body and only FLAGS it in
+// `provenance.softened[]`. The orchestrator is the single soften point
+// (deterministic, gated, P0/P1-floored). The old "downgrade severity by
+// one tier, shorten the body" wording caused a double-soften (synth
+// decrement + renderer decrement) and would also bypass the Phase-4
+// calibration gate. (The prereq #216 fixed the system prompt; this is the
+// runtime-injected block it missed.)
 const HEADER = [
   "[REVIEW MEMORY — historical dismissals on this repo]",
   "",
-  "Reviewers have repeatedly dismissed these finding classes. The synth",
-  "SHOULD soften matching findings (downgrade severity by one tier,",
-  "shorten the body) and include them in `provenance.softened[]` with",
-  "`reason: \"review-memory/<category>[/<pathSha12>]\"`.",
+  "Reviewers have repeatedly dismissed these finding classes. For each",
+  "matching finding, emit it at its TRUE severity and full body, and FLAG",
+  "it by adding an entry to `provenance.softened[]` with",
+  "`reason: \"review-memory/<category>[/<pathSha12>]\"`. Do NOT lower the",
+  "score or shorten the body yourself — the orchestrator applies any soften.",
 ].join("\n")
 
 /** Coarse tokenizer estimator matching the rest of the codebase. */

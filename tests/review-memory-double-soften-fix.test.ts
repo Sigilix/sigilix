@@ -28,18 +28,22 @@ describe("SIG-280 prereq: double-soften fix (renderer-only soften)", () => {
     expect(SYNTHESIZER_PROMPT).not.toContain("downgrade the finding's `score` by one tier")
   })
 
-  it("the synth prompt explicitly tells the model to emit TRUE severity and defer soften to the orchestrator", () => {
-    expect(SYNTHESIZER_PROMPT).toContain("do NOT lower the finding's `score` yourself")
-    expect(SYNTHESIZER_PROMPT).toContain("the orchestrator applies the one-tier soften")
+  it("the synth prompt tells the model to emit TRUE severity + full body and defer soften to the orchestrator", () => {
+    expect(SYNTHESIZER_PROMPT).toContain("do NOT lower the finding's `score` or shorten its `body` yourself")
+    expect(SYNTHESIZER_PROMPT).toContain("The orchestrator applies any soften")
+  })
+
+  it("SIG-280 PR B: the synth prompt no longer instructs body-shortening (soften is the orchestrator's job)", () => {
+    expect(SYNTHESIZER_PROMPT).not.toContain("shorten the `body` to at most 2 sentences")
   })
 
   it("still directs the synth to flag softened findings in provenance.softened[]", () => {
-    // The renderer keys its single decrement off `provenance.softened[]`,
+    // The orchestrator keys its single decrement off `provenance.softened[]`,
     // so the synth must still populate it.
     expect(SYNTHESIZER_PROMPT).toContain("provenance.softened[]")
   })
 
-  it("bumps PROMPT_VERSION so v11 reviews go stale on deploy", () => {
-    expect(PROMPT_VERSION).toBe("12")
+  it("bumps PROMPT_VERSION so prior-version reviews go stale on deploy", () => {
+    expect(PROMPT_VERSION).toBe("13")
   })
 })

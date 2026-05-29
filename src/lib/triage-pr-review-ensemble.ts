@@ -4269,7 +4269,14 @@ export async function handlePrReviewEnsemble(
     const approvalReadiness = assessApprovalReadiness({
       intendedEvent,
       sourceFindings: sourceFindingsForApproval,
-      provenance: validated.provenance,
+      // SIG-280 PR B (Codex P1): in PR B no soften actually survives (the
+      // cold-regime veto clears `softenedSet` and the loop is gated off), so
+      // a `provenance.softened[]` entry does NOT mean the finding was
+      // de-emphasized. Pass an empty softened set so approval-readiness
+      // doesn't count a never-softened source finding as "accounted" and
+      // silently approve over it. (PR C: pass the SURVIVING softens once the
+      // calibrated path keeps some.)
+      provenance: { ...validated.provenance, softened: [] },
     })
     const renderableUnanchoredForSubmission = [
       ...renderableUnanchored,

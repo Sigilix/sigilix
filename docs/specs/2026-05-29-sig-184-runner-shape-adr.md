@@ -3,6 +3,7 @@
 Status: **Proposed** (awaiting founder review — SIG-184 is "done when Sigilix has a *reviewed* runner architecture").
 Date: 2026-05-29.
 Deciders: founder.
+Reviewed-by: internal design pass (requirements lens + 3-shape judge panel + adversarial stress-test) + **Codex (architecture second voice)**. Codex agreed on Action-v1 + the phasing and drove three changes folded in here: (1) the receipt mechanism is a **reusable workflow**, not a composite Action (`job_workflow_ref` semantics); (2) **forked-PR / untrusted-code + `id-token` safety** must be explicit in the install template; (3) runner presence + provenance must be a **first-class review state** (the false-believability gap), not just telemetry. (Kimi, the usual second design voice, was unreachable off-LAN this session.)
 Related: SIG-107 (subprocess tools), SIG-171/SIG-144 (annotation posting), SIG-285 (verification-by-execution), ARC-188 (SARIF-evidence ingest, shipped).
 
 ## Context
@@ -27,7 +28,7 @@ This mirrors the proven Qodo Merge / PR-Agent two-tier pattern (Action as the co
 
 1. **It unblocks SIG-285 soonest, because verification is inherently async + latency-tolerant.** A verification *receipt* ("I ran the repro/test, here's the exit code") lands fine as a follow-up comment minutes later; the SIG-285 requirement itself mandates async/best-effort receipts that never fail the review. CI queue latency only hurts the *sub-second inline-lint hot path* — which we keep server-side/async anyway (the webhook already acks in ~50ms and the review runs in the 15-min queue consumer). So the latency objection is misdirected when applied to verification.
 2. **It is the only shape that serves the July audience.** The design partners are an enterprise referral. Cloudflare Containers clones the customer's private source into *Sigilix's* Cloudflare tenant — a security-questionnaire fail for that exact segment, regardless of microVM hardening. Building the managed runner first is building for a customer we don't have yet.
-3. **It has the strongest receipt for the least new trust surface — with one load-bearing requirement.** The runner executes on the customer's per-job-reimaged CI VM with their secrets; **Sigilix never receives source code**, only normalized SARIF + the receipt. OIDC binds that evidence to `repo + head_sha + workflow + run_id`, keyless and auditable. The hole: OIDC proves *who produced it against what SHA*, not *that the tools ran unmodified*. **We close it by publishing a Sigilix *composite* Action and pinning the accepted OIDC subject to it (`job_workflow_ref`)** — then the receipt means "code at SHA X was run by *Sigilix's* pinned action in the customer's CI." This pinning is **load-bearing and must be in v1**, not deferred (it's cheap up front, expensive to retrofit, and the whole believability chain — SIG-114 FP-attribution → SIG-285 → SIG-286 — depends on a trustworthy receipt).
+3. **It has the strongest receipt for the least new trust surface — with one load-bearing requirement.** The runner executes on the customer's per-job-reimaged CI VM with their secrets; **Sigilix never receives source code**, only normalized SARIF + the receipt. OIDC binds that evidence to `repo + head_sha + workflow + run_id`, keyless and auditable. The hole: OIDC proves *who produced it against what SHA*, not *that the tools ran unmodified*. **We close it by shipping the Sigilix runner as a *pinned reusable workflow* (the customer's workflow `uses: sigilix/runner/.github/workflows/scan.yml@<SHA>`) and validating the OIDC `job_workflow_ref` claim against it.** This mechanism is precise: GitHub's `job_workflow_ref` claim identifies the **called reusable workflow** at a `path@ref` — **not** a composite Action step (an earlier draft said "composite Action"; that is NOT what `job_workflow_ref` binds, per GitHub's OIDC docs, so it would not be a defensible proof). With the reusable-workflow pin, the receipt means "code at SHA X was run by *Sigilix's* pinned reusable workflow in the customer's CI." This pinning is **load-bearing and must be in v1**, not deferred (cheap up front, expensive to retrofit; the whole believability chain — SIG-114 FP-attribution → SIG-285 → SIG-286 — depends on a trustworthy receipt). It still does NOT prove semantic tool correctness — acceptable for v1 *if* tool versions + the receipt schema are pinned.
 4. **It reuses what already exists.** SARIF ingest (ARC-188), the evidence-manifest + citation-gate (SIG-108), the prompt evidence-block rendering (`render.ts`/`renderHitsForPrompt`), and the check-run pattern (SIG-216) already consume + post deterministic findings. The Action is mostly a new *evidence feeder* into the best-effort ARC-188 channel, not a new posting mechanism.
 
 The cross-tenant blast radius is **structurally zero** (each run is in the customer's own VM), versus the managed container where "Sigilix leaked Tenant A's code to Tenant B" is a fatal new failure mode in our own account.
@@ -37,7 +38,7 @@ The cross-tenant blast radius is **structurally zero** (each run is in the custo
 | Actor | Sees | Must NOT |
 |---|---|---|
 | Customer CI runner (GitHub-hosted, per-job VM) | the checkout + the customer's CI secrets, in **their** trust boundary | — |
-| Sigilix-published composite Action | the checkout (read-only); runs the pinned tool suite + one verification command | persist secrets; phone home |
+| Sigilix-published reusable workflow (the customer's workflow `uses:` it, SHA-pinned) | the checkout (read-only); runs the pinned tool suite + one verification command | persist secrets; phone home |
 | OIDC token | mints a short-lived, keyless identity bound to `repo+sha+workflow+run_id` | — |
 | Sigilix worker (SARIF-ingest endpoint) | **only** the normalized SARIF + receipt + OIDC claims | ever receive source code, build artifacts, or customer secrets |
 | Sigilix GitHub App | posts the review/check-run via installation token | hold or see the runner's credentials |
@@ -53,22 +54,23 @@ The cross-tenant blast radius is **structurally zero** (each run is in the custo
 - **Version pinning:** native + idiomatic — `uses: sigilix/scan-action@<SHA>`; satisfies the AC without Sigilix shipping a server-side scanner-binary matrix.
 - **Timeout/resource limits:** the Action's step timeouts + runner ceiling (customer's YAML, Sigilix-recommended defaults) + the **worker-side wait-for-SARIF timeout** (Sigilix-enforced). Two places; document both.
 - **Artifact retention + audit logging:** raw artifacts live in the customer's account (their retention); Sigilix **persists the OIDC claims + run IDs server-side** to build the audit trail ("these findings came from this Action run at this SHA"). This is new but small work.
-- **Install flow:** customer commits the workflow YAML (pinned to the composite Action) + grants `id-token: write` (OIDC). The flow **must verify the workflow exists** (see Biggest Risk).
+- **Install flow:** customer commits a workflow YAML that `uses:` Sigilix's reusable workflow SHA-pinned + grants `id-token: write` (OIDC). The flow **must verify the workflow exists** (see Biggest Risk). **Forked-PR safety (load-bearing, Codex):** the install template must be explicit about safe triggers + permissions — `id-token: write` + a repo checkout on *untrusted fork code* (`pull_request_target` semantics) is a known privilege-escalation/secret-exfil footgun. The template defaults to safe handling (run untrusted fork code without privileged tokens/secrets; gate OIDC + verification to trusted contexts) and documents it loudly.
 
-## Biggest risk to de-risk first: the "Action-absent dark layer"
+## Biggest risk to de-risk first: the false-believability gap
 
-The highest-probability, highest-cost risk is **customers installing the GitHub App but never adding the workflow** — silently getting LLM-only reviews with the entire deterministic + verification layer dark in prod, with no loud failure. This is the **same failure class** as Sigilix's indexer incident ("flag on but never bootstrapped — the app was installed BEFORE the flag, so nothing ever indexed"). It directly poisons the believability roadmap: FP-attribution can't distinguish "verification said this was fine" from "verification never ran."
+The highest-probability, highest-cost risk is **Sigilix presenting a review as "verified" when the runner was actually absent, spoofable, or not pinned to the real Sigilix workflow** (Codex). Three faces of the same gap: (a) the customer installs the GitHub App but never adds the workflow → silent LLM-only reviews with the deterministic + verification layer dark in prod — the **same failure class** as Sigilix's indexer incident ("flag on but never bootstrapped — the app was installed BEFORE the flag, so nothing ever indexed"); (b) inbound SARIF/receipt that isn't bound to Sigilix's pinned reusable workflow → spoofable evidence; (c) an async receipt that's still pending rendered as if verification passed. Any of these poisons the believability roadmap: FP-attribution can't distinguish "verification said this was fine" from "verification never ran / was faked."
 
-**Mitigation (build this first, before verification depth):**
+**Mitigation — make runner presence + provenance a FIRST-CLASS review/check-run state (build this first, before verification depth):**
+- The check-run / review explicitly carries one of `verified` / `evidence-pending` / `runner-absent` — an LLM-only review must NEVER look "verified."
+- Reject any inbound SARIF/receipt whose OIDC `job_workflow_ref` doesn't match Sigilix's pinned reusable workflow (provenance gate).
 - Per-repo, per-PR telemetry: `runner-evidence-present` / `runner-evidence-absent` (mirrors the `/metrics/validation` gate pattern).
-- Surface "Action not detected — running LLM-only" in the check-run body.
 - Install flow checks for / offers to commit the workflow.
 
-This is cheap, is the exact instrumentation needed for the eventual managed-tier-vs-Action-tier split, and prevents the deterministic layer from going dark the way the indexer did.
+This is cheap, is the exact instrumentation needed for the managed-tier-vs-Action-tier split, and stops the deterministic layer from going dark — or looking grounded when it isn't — the way the indexer did.
 
 ## Cheapest July SIG-285 demo (does not require the full install flow)
 
-1. A Sigilix-published **composite Action** that checks out PR head, runs the deterministic tool suite, runs **one** configured verification command (`npm test` / `./repro.sh`), and emits a multi-`runs[]` SARIF + a **receipt block** (exit code, stdout excerpt, timestamp, runner identity = the OIDC subject).
+1. A Sigilix-published **reusable workflow** (the demo repo `uses:` it, SHA-pinned) that checks out PR head, runs the deterministic tool suite, runs **one** configured verification command (`npm test` / `./repro.sh`), and emits a multi-`runs[]` SARIF + a **receipt block** (exit code, stdout excerpt, timestamp, runner identity = the OIDC `job_workflow_ref`).
 2. SARIF/receipt back via an **OIDC-authenticated POST** to a Sigilix ingest endpoint (reuses ARC-188).
 3. Thread the receipt into specialist/synth prompts as an **AUTHORITATIVE evidence block** — `render.ts` + the evidence-manifest already do this for SARIF; the receipt is just another deterministic block tagged with `runner identity + exit code`.
 
@@ -76,12 +78,12 @@ That's the whole demo: a *real receipt proving a real test ran at a real SHA* fe
 
 ## Consequences
 
-- **Accept:** a two-headed posture (GitHub App + Action publisher), CI-queue latency for the lint leg (mitigated by keeping it async/best-effort), per-customer setup friction (mitigated by the install flow + presence telemetry), and treating inbound SARIF as **evidence-with-provenance, not ground truth** (mitigated by the composite-Action OIDC pin + severity sanity-checks).
+- **Accept:** a two-headed posture (GitHub App + reusable-workflow publisher), CI-queue latency for the lint leg (mitigated by keeping it async/best-effort), per-customer setup friction (mitigated by the install flow + presence state), the forked-PR/untrusted-code handling burden in the install template, and treating inbound SARIF as **evidence-with-provenance, not ground truth** (mitigated by the reusable-workflow `job_workflow_ref` pin + severity sanity-checks).
 - **Gain:** zero code-egress, near-zero Sigilix compute cost, the cleanest enterprise data story, native version pinning, the soonest SIG-285 receipt, and a v1 that doubles as the self-host story.
-- **Deferred (separate issues):** the composite Action implementation + tool wiring (SIG-107), the OIDC SARIF-ingest endpoint, the receipt evidence-block plumbing (SIG-285), the presence telemetry, Phase 2 (CF Containers) and Phase 3 (self-hosted sidecar, outbound long-poll + version-handshake).
+- **Deferred (separate issues):** the reusable-workflow + tool wiring (SIG-107), the OIDC SARIF-ingest endpoint (with the `job_workflow_ref` provenance gate), the receipt evidence-block plumbing + the first-class `verified/pending/absent` state (SIG-285), the presence telemetry, Phase 2 (CF Containers) and Phase 3 (self-hosted sidecar, outbound long-poll + version-handshake).
 
 ## Open questions for the founder
 
 1. Are the July design partners actually code-egress-averse (confirms Action-over-Containers for v1), or would a zero-setup managed container demo land better with them specifically?
-2. Composite Action vs reusable workflow for the OIDC `job_workflow_ref` pin — confirm the pinning mechanism.
+2. ~~Composite Action vs reusable workflow for the OIDC `job_workflow_ref` pin~~ — **RESOLVED (Codex + GitHub OIDC docs): reusable workflow.** `job_workflow_ref` binds the called reusable workflow, not a composite Action.
 3. Worker-side wait-for-SARIF timeout budget (how long the review waits for async evidence before going LLM-only).

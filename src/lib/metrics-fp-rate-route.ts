@@ -1,0 +1,166 @@
+// SIG-114 PR 5: GET /metrics/fp-rate — authenticated live read of the
+// per-specialist dismissal-based false-positive rate (the "floor" metric
+// from PR 1), computed on-request over the worker's KV binding.
+//
+// Reuses the pure, unit-tested core (src/lib/fp-rate/*): the only new code is
+// reading KV via `env.OPENCLAW_STATE` (instead of the offline CF API) +
+// auth + JSON. Per-repo (Simpson's paradox — `?repo=owner/repo` mandatory).
+//
+// Cost: an authed, low-QPS ops endpoint. It lists the telemetry keyspace
+// (bounded) + the repo's review-memory, then fetches matching records with a
+// concurrency cap. If the corpus outgrows the bound, move the compute to the
+// scheduled() cron + cache the result (this endpoint then reads the cache).
+
+import type { Env } from "../index"
+import { requireBearerToken } from "./auth-bearer"
+import { attributeDismissals, dedupeDismissals } from "./fp-rate/attribute"
+import { computeFpRates } from "./fp-rate/compute"
+import { filterReviewsToWindow } from "./fp-rate/window"
+import { createdMsFromKey, mapSignalRecord, mapTelemetryToReview } from "./fp-rate/ingest"
+import type { FpRateDismissal, FpRateReview } from "./fp-rate/types"
+
+const TELEMETRY_PREFIX = "ensemble-review-telemetry:"
+const MEMORY_PREFIX = "review-memory:"
+// Per-request scan caps. Each matched key costs one KV `get` subrequest, so
+// the caps are sized so telemetry + memory gets JOINTLY stay well under the
+// Workers 1000-subrequest/request limit (700 + 200 + a few `list` calls). The
+// 30d telemetry TTL keeps the live corpus small (≈hundreds), so a single repo
+// hitting the cap is the signal to move this compute to the cron + cache it
+// (the endpoint would then read the cache). When the cap IS hit, the response
+// flags `scanCapped: true` so a sampled (most-recent-N) result is visible.
+const MAX_TELEMETRY_KEYS = 700
+const MAX_MEMORY_KEYS = 200
+const KV_LIST_PAGE = 1000
+/** Concurrency cap for the per-key KV gets (wall-clock; doesn't change the total). */
+const FETCH_CONCURRENCY = 25
+
+const DEFAULT_WINDOW_DAYS = 30
+const MAX_WINDOW_DAYS = 90
+const DEFAULT_MATURITY_DAYS = 14
+const DEFAULT_MIN_N = 30
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+}
+
+function parseIntParam(raw: string | null, fallback: number): number | null {
+  if (raw === null) return fallback
+  const m = /^(\d+)d?$/.exec(raw.trim())
+  if (!m) return null
+  const n = Number(m[1])
+  return Number.isInteger(n) ? n : null
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = []
+  for (let i = 0; i < items.length; i += limit) {
+    out.push(...(await Promise.all(items.slice(i, i + limit).map(fn))))
+  }
+  return out
+}
+
+/** List keys for a prefix via the KV binding, paginated up to `cap` keys. */
+async function listKeys(env: Env, prefix: string, cap: number): Promise<string[]> {
+  const names: string[] = []
+  let cursor: string | undefined
+  while (names.length < cap) {
+    const opts: KVNamespaceListOptions = cursor
+      ? { prefix, limit: KV_LIST_PAGE, cursor }
+      : { prefix, limit: KV_LIST_PAGE }
+    const page = await env.OPENCLAW_STATE.list(opts)
+    for (const k of page.keys) names.push(k.name)
+    if (page.list_complete || !page.cursor) break
+    cursor = page.cursor
+  }
+  return names.slice(0, cap)
+}
+
+export async function handleFpRateMetricsRoute(request: Request, env: Env): Promise<Response> {
+  // Shares the validator-metrics bearer token (same ops surface as /metrics/validation).
+  const token = env.OPENCLAW_VALIDATION_METRICS_TOKEN
+  if (!token) return json({ error: "metrics_endpoint_not_configured" }, 503)
+  if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
+
+  const params = new URL(request.url).searchParams
+  const repo = (params.get("repo") ?? "").trim().toLowerCase()
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) {
+    return json({ error: "invalid_repo", detail: "?repo=owner/repo is required (rate is per-repo)" }, 400)
+  }
+  const windowDays = parseIntParam(params.get("window"), DEFAULT_WINDOW_DAYS)
+  const maturityDays = parseIntParam(params.get("maturity"), DEFAULT_MATURITY_DAYS)
+  const minN = parseIntParam(params.get("min-n"), DEFAULT_MIN_N)
+  if (windowDays === null || windowDays < 1 || windowDays > MAX_WINDOW_DAYS) {
+    return json({ error: "invalid_window", detail: `window must be 1-${MAX_WINDOW_DAYS} days` }, 400)
+  }
+  if (maturityDays === null || maturityDays < 0 || maturityDays >= windowDays) {
+    return json({ error: "invalid_maturity", detail: "maturity must be >= 0 and < window" }, 400)
+  }
+  if (minN === null || minN < 0) return json({ error: "invalid_min_n" }, 400)
+
+  // A non-404 KV get failure is swallowed to null (the record is skipped); we
+  // count it so a lossy/under-counted run is visible rather than masquerading
+  // as a genuinely small corpus.
+  let failedFetches = 0
+  const getJson = (key: string): Promise<unknown> =>
+    env.OPENCLAW_STATE.get(key, "json").catch(() => {
+      failedFetches += 1
+      return null
+    })
+
+  // Telemetry: list (bounded), keep this repo's keys, fetch + map. If the list
+  // hit the cap there may be older records beyond it (sampled most-recent N).
+  const telemetryListed = await listKeys(env, TELEMETRY_PREFIX, MAX_TELEMETRY_KEYS)
+  const memoryListed = await listKeys(env, MEMORY_PREFIX, MAX_MEMORY_KEYS)
+  const scanCapped = telemetryListed.length >= MAX_TELEMETRY_KEYS || memoryListed.length >= MAX_MEMORY_KEYS
+
+  const telemetryKeys = telemetryListed.filter((k) => k.toLowerCase().includes(`:${repo}#`))
+  const reviews = (
+    await mapWithConcurrency(telemetryKeys, FETCH_CONCURRENCY, async (key): Promise<FpRateReview | null> => {
+      const createdMs = createdMsFromKey(key, TELEMETRY_PREFIX)
+      if (createdMs === null) return null
+      return mapTelemetryToReview(await getJson(key), createdMs)
+    })
+  ).filter((r): r is FpRateReview => r !== null)
+
+  // Dismissals: the legacy owner/repo keyspace is repo-scoped + dual-written.
+  const memoryKeys = memoryListed.filter((k) => k.toLowerCase().startsWith(`${MEMORY_PREFIX}${repo}:`))
+  const rawSignals = (
+    await mapWithConcurrency(memoryKeys, FETCH_CONCURRENCY, async (key): Promise<FpRateDismissal[]> =>
+      mapSignalRecord(await getJson(key)),
+    )
+  ).flat()
+  const dismissals = dedupeDismissals(rawSignals)
+  if (failedFetches > 0) {
+    console.error(JSON.stringify({ event: "fp-rate-metrics-lossy-read", repo, failedFetches }))
+  }
+
+  const nowMs = Date.now()
+  const scoped = filterReviewsToWindow(reviews, nowMs, windowDays, maturityDays)
+  const attr = await attributeDismissals(scoped, dismissals, nowMs)
+  const report = computeFpRates(attr, { minN })
+
+  return json(
+    {
+      repo,
+      windowDays,
+      maturityDays,
+      minN,
+      generatedAt: new Date(nowMs).toISOString(),
+      reviewsScanned: report.reviewsScanned,
+      reviewsRealFanout: report.reviewsRealFanout,
+      reviewsZeroPostedFindings: report.reviewsZeroPostedFindings,
+      totalDismissals: dismissals.length,
+      unattributed: report.unattributed,
+      // True if the KV scan hit its cap (result is the most-recent N, may not
+      // cover the full window) or if a KV get failed (under-counted).
+      scanCapped,
+      failedFetches,
+      // Honest contract: a dismissal-based rate is a LOWER BOUND on true FP
+      // (not every FP is dismissed); the curated eval set (npm run fp-eval) is
+      // the ceiling. `meetsTarget` is worst-case (unlabeled counted as hard).
+      note: "dismissal-based FP rate — a lower bound on true FP; floor + trend, not a ceiling",
+      rows: report.rows,
+    },
+    200,
+  )
+}

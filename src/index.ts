@@ -70,6 +70,7 @@ import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
+import { handleFpRateMetricsRoute } from "./lib/metrics-fp-rate-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
 import {
@@ -1058,6 +1059,12 @@ export default {
     // SIG-152: authenticated read of rolling SIG-138 graph shadow telemetry.
     if (request.method === "GET" && url.pathname === "/metrics/graph") {
       return handleGraphMetricsRoute(request, env)
+    }
+
+    // SIG-114 PR 5: authenticated live read of the per-specialist dismissal-
+    // based false-positive rate (the "floor" metric), computed per repo.
+    if (request.method === "GET" && url.pathname === "/metrics/fp-rate") {
+      return handleFpRateMetricsRoute(request, env)
     }
 
     // SIG-156: authenticated manual (re)index trigger.

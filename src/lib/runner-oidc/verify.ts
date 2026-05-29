@@ -25,6 +25,9 @@ function base64urlToString(s: string): string {
   return new TextDecoder().decode(base64urlToBytes(s))
 }
 
+/** Default JWKS-fetch deadline — a stalled endpoint must not hang verification. */
+const DEFAULT_JWKS_TIMEOUT_MS = 3000
+
 export interface VerifyOpts {
   /** The token's `aud` must include this (the Sigilix-configured ingest audience). */
   expectedAudience: string
@@ -34,13 +37,21 @@ export interface VerifyOpts {
   nowMs?: number
   /** Clock-skew tolerance in seconds (default 60). */
   clockSkewSec?: number
+  /** Deadline (ms) for the DEFAULT JWKS fetch (default 3000). Ignored when `fetchJwks` is injected. */
+  jwksTimeoutMs?: number
 }
 
-async function defaultFetchJwks(): Promise<Jwk[]> {
-  const res = await fetch(GITHUB_OIDC_JWKS_URL)
-  if (!res.ok) throw new Error(`jwks ${res.status}`)
-  const body = (await res.json()) as { keys?: Jwk[] }
-  return Array.isArray(body.keys) ? body.keys : []
+async function defaultFetchJwks(timeoutMs: number): Promise<Jwk[]> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const res = await fetch(GITHUB_OIDC_JWKS_URL, { signal: ctrl.signal })
+    if (!res.ok) throw new Error(`jwks ${res.status}`)
+    const body = (await res.json()) as { keys?: Jwk[] }
+    return Array.isArray(body.keys) ? body.keys : []
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /**
@@ -76,7 +87,7 @@ export async function verifyGitHubOidcToken(token: string, opts: VerifyOpts): Pr
 
   let keys: Jwk[]
   try {
-    keys = await (opts.fetchJwks ?? defaultFetchJwks)()
+    keys = await (opts.fetchJwks ?? (() => defaultFetchJwks(opts.jwksTimeoutMs ?? DEFAULT_JWKS_TIMEOUT_MS)))()
   } catch {
     return { ok: false, reason: "jwks-fetch-failed" }
   }

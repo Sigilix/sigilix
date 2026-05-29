@@ -109,6 +109,24 @@ describe("verifyGitHubOidcToken", () => {
     expect(await verifyGitHubOidcToken(token, { expectedAudience: AUD, nowMs: NOW_MS, fetchJwks: async () => { throw new Error("network") } })).toEqual({ ok: false, reason: "jwks-fetch-failed" })
   })
 
+  it("aborts the DEFAULT JWKS fetch past jwksTimeoutMs -> jwks-fetch-failed (no hang)", async () => {
+    const { privateKey } = await genKey()
+    const token = await signToken(baseClaims, privateKey)
+    const orig = globalThis.fetch
+    // A fetch that never resolves on its own — only the AbortController can end it.
+    globalThis.fetch = ((_url: string, init?: { signal?: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")))
+      })) as typeof fetch
+    try {
+      // No injected fetchJwks -> exercises defaultFetchJwks's AbortController.
+      const r = await verifyGitHubOidcToken(token, { expectedAudience: AUD, nowMs: NOW_MS, jwksTimeoutMs: 10 })
+      expect(r).toEqual({ ok: false, reason: "jwks-fetch-failed" })
+    } finally {
+      globalThis.fetch = orig
+    }
+  })
+
   it("fails CLOSED on a missing or non-numeric exp (no silent skip)", async () => {
     const { privateKey, jwk } = await genKey()
     const noExp = await signToken({ ...baseClaims, exp: undefined }, privateKey)

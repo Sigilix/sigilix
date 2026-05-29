@@ -63,7 +63,7 @@ The highest-probability, highest-cost risk is **Sigilix presenting a review as "
 **Mitigation — make runner presence + provenance a FIRST-CLASS review/check-run state (build this first, before verification depth):**
 - The check-run / review explicitly carries one of `verified` / `evidence-pending` / `runner-absent` — an LLM-only review must NEVER look "verified."
 - Reject any inbound SARIF/receipt whose OIDC `job_workflow_ref` doesn't match Sigilix's pinned reusable workflow (provenance gate), and whose `runner_environment` isn't `github-hosted` (unless ephemeral self-host attested).
-- **Harden the OIDC SARIF-ingest endpoint (CodeRabbit):** validate token expiry (~10-min OIDC tokens), prevent replay (single-use per `run_id`/token), rate-limit per repo/workflow, and verify the OIDC claims **match the SARIF metadata** (repo + head SHA) — not just that `job_workflow_ref` is ours.
+- **Harden the OIDC SARIF-ingest endpoint (CodeRabbit):** validate token expiry against the JWT `exp` claim with a small clock-skew tolerance — never a hardcoded window (GitHub Actions OIDC tokens are short-lived and the lifetime is non-configurable: ~5 min today, see actions/toolkit#2048), prevent replay (single-use per `run_id`/token), rate-limit per repo/workflow, and verify the OIDC claims **match the SARIF metadata** (repo + head SHA) — not just that `job_workflow_ref` is ours.
 - Per-repo, per-PR telemetry: `runner-evidence-present` / `runner-evidence-absent` (mirrors the `/metrics/validation` gate pattern).
 - Install flow checks for / offers to commit the workflow.
 

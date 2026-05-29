@@ -346,7 +346,9 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       prov: { headSha: HEAD, nowMs: NOW },
     })
     expect(body).toContain("### Review Body Findings")
-    expect(body).toContain("GitHub only supports PR review comments on diff lines")
+    // SIG-281 PR B (Rec 6 / Kimi): explanation copy reworded to cover
+    // both reasons a finding lands here (un-anchorable scope + inline cap).
+    expect(body).toContain("could not be anchored to specific diff lines")
     expect(body).toContain("`src/bar.ts:99`")
     expect(body).not.toContain("**src/bar.ts**")
     expect(body).toContain("could not anchor")
@@ -360,7 +362,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).not.toMatch(/\+ \d+ body/)
   })
 
-  it("SIG-5 — body-only high findings are prominent but omitted from Fix Plan", () => {
+  it("SIG-281 PR B (Rec 6) — body-only blockers surface in the Fix Plan table + a collapsed evidence block", () => {
     const body = renderRequestChangesBody({
       verdict: verdict({ findings: [finding({ score: 2, headline: "minor inline note" })] }),
       unanchored: [
@@ -374,10 +376,16 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       coverage: FULL,
       prov: { headSha: HEAD, nowMs: NOW },
     })
+    // No legacy "### Fix Plan" H3 heading (it's a table now).
     expect(body).not.toContain("### Fix Plan")
-    expect(body).toContain("### Review Body Findings")
-    // SIG-216: meta tightened from `Line 99 (critical, score 5) ·
-    // \`src/bar.ts:99\`` to just `\`src/bar.ts:99\` · score 5`.
+    // SIG-281 PR B (Rec 6): the score-5 body-only blocker now lives in the
+    // Fix Plan table + the collapsed evidence block — NOT the lower
+    // "Review Body Findings" section (which would hold only score < 4).
+    expect(body).toContain("| Severity | Location | Issue |")
+    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).not.toContain("### Review Body Findings")
+    // SIG-216: meta tightened to `\`src/bar.ts:99\` · score 5` (rendered
+    // inside the collapsed evidence block).
     expect(body).toContain("`src/bar.ts:99` · score 5")
     expect(body).not.toContain("(critical, score 5)")
     expect(body).toContain("body-only blocker")
@@ -400,10 +408,11 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     // High-severity tier copy must fire even though there are zero
     // inline findings — the unanchored critical IS the signal.
     expect(body).toMatch(/^\*\*1 high-severity finding\*\*/m)
-    // The body-only section is where the actual finding lives —
-    // no separate "+ 1 body" clause in the lead (would double-count
-    // the same finding the high-severity tier already represents).
-    expect(body).toContain("### Review Body Findings")
+    // SIG-281 PR B (Rec 6): the body-only critical now surfaces in the
+    // Fix Plan table + collapsed evidence block (no separate "+ 1 body"
+    // clause in the lead — it's already counted in the high-severity tier).
+    expect(body).toContain("| Severity | Location | Issue |")
+    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
     expect(body).toContain("unanchored critical")
   })
 
@@ -429,11 +438,18 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     // "**1 high-severity finding**" — the critical IS the signal.
     expect(body).toMatch(/^\*\*1 high-severity finding\*\*/m)
     expect(body).not.toContain("### Fix Plan")
-    expect(body).toContain("### Review Body Findings")
+    // SIG-281 PR B (Rec 6): pr-scope critical surfaces in the Fix Plan
+    // table + collapsed evidence block, not the "Review Body Findings"
+    // section.
+    expect(body).toContain("| Severity | Location | Issue |")
+    expect(body).toContain("Evidence &amp; suggested changes for body-only blockers")
+    expect(body).not.toContain("### Review Body Findings")
     // SIG-216: pr-scope renders the bare path (no `:line`) + tightened
     // `<anchor> · score N` meta — no "PR-level (critical, ...)" prefix.
+    // (The Fix Plan caption legitimately says "PR-level scope", so guard
+    // the old per-finding "PR-level (" label format specifically.)
     expect(body).toContain("`src/bar.ts` · score 5")
-    expect(body).not.toContain("PR-level")
+    expect(body).not.toContain("PR-level (")
     expect(body).not.toContain("(critical, score 5)")
     expect(body).toContain("pr-level blocker")
   })

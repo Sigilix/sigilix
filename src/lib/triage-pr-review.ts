@@ -518,8 +518,21 @@ export function renderStackParenthetical(stack: StackContext | undefined): strin
 
 const SIGILIX_REVIEW_MARKER = "<!-- sigilix:pr-review -->"
 const BODY_ONLY_FINDINGS_HEADING = "### Review Body Findings"
+// SIG-281 PR B (Rec 6 / Kimi K2.6): this section now holds only
+// sub-blocker (score < 4) body-only findings — score >= 4 blockers are
+// surfaced in the Fix Plan table + a collapsed evidence block above. The
+// copy now covers both reasons a finding lands here: un-anchorable scope
+// AND inline-comment-cap overflow (Rec 3).
 const BODY_ONLY_FINDINGS_EXPLANATION =
-  "<sub>These findings are shown in the review body because GitHub only supports PR review comments on diff lines, or because the finding is broader than one exact changed line.</sub>"
+  "<sub>These findings are shown in the review body because they could not be anchored to specific diff lines (file-level or PR-level scope) or because the inline comment cap was exceeded.</sub>"
+// SIG-281 PR B (Rec 6 / Kimi K2.6): caption shown under the Fix Plan
+// table only when it contains body-only blockers (rows with no inline
+// thread), so a reviewer isn't confused by table rows that have no
+// corresponding inline comment.
+const FIX_PLAN_BODY_ONLY_CAPTION =
+  "_Severity ≥ 4 only. Rows without a line number are file-level or PR-level findings that cannot be posted as inline review comments._"
+const BODY_ONLY_BLOCKER_DETAILS_SUMMARY =
+  "<summary><b>Evidence &amp; suggested changes for body-only blockers</b> (score ≥ 4)</summary>"
 
 
 
@@ -874,6 +887,47 @@ interface PreparedReviewSubmissionFindings {
   unanchored: PrReviewFinding[]
 }
 
+// SIG-281 PR B (Rec 3): cap the number of inline review comments a
+// single review posts, so a large PR doesn't bury the diff under dozens
+// of threads. Overflow is demoted to the review body (never dropped),
+// prioritized so the highest-severity / highest-confidence findings keep
+// their inline thread. 15 = the upper end of the proposed 10-15 range,
+// chosen to minimize SIG-247 marker loss (markers are inline-only) while
+// still bounding inline noise. No sigilix.json config in PR B.
+const MAX_INLINE_COMMENTS = 15
+
+// SIG-281 PR B (Rec 5): a finding is "grounded enough to keep inline"
+// when it carries a committable fix (suggestedReplacement / deletion) OR
+// a customer-visible repro (failureExample). Validator/citation metadata
+// (evidenceRefs / evidenceId) is deliberately NOT counted — it is not an
+// inline patch or a reproduction the reviewer can act on at the line.
+function hasPatchOrRepro(finding: PrReviewFinding): boolean {
+  return (
+    hasStructuredFix(finding) ||
+    (typeof finding.failureExample === "string" && finding.failureExample.trim().length > 0)
+  )
+}
+
+// SIG-281 PR B (Rec 6 / Kimi K2.6): tag a finding demoted from inline to
+// body by the Rec 3 cap so the body renderer can tell the reader WHY it
+// is not an inline thread. Reuses the `anchorNote` suffix slot, which
+// `renderBodyOnlyFindings` renders after `· score N`. Only cap-overflow
+// findings get this note — naturally body-only and confidence-demoted
+// findings do not (they were never inline candidates).
+function markInlineCapOverflow(finding: PrReviewFinding): PrReviewFinding {
+  return { ...finding, anchorNote: "*inline comment cap exceeded; shown here*" }
+}
+
+// SIG-281 PR B: carries an inline candidate with its ORIGINAL
+// verdict.findings index so the Rec 3 priority sort + cap can reorder /
+// truncate WITHOUT decoupling a finding from the index its SIG-247
+// marker is keyed by (consumed at the marker lookup ~line 1019).
+interface InlineFindingCandidate {
+  finding: PrReviewFinding
+  originalIndex: number
+  confidence: number
+}
+
 function prepareReviewSubmissionFindings(args: {
   rawVerdict: PrReviewVerdict
   rawUnanchored: readonly PrReviewFinding[]
@@ -884,12 +938,15 @@ function prepareReviewSubmissionFindings(args: {
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
 
-  const inlineFindings: PrReviewFinding[] = []
-  const inlineOriginalIndex: number[] = []
+  const inlineCandidates: InlineFindingCandidate[] = []
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
     const hasSuggestion = hasStructuredFix(f)
     const scope = findingScope(f)
+    // SIG-281 PR B (Rec 5): resolve per-finding confidence once, up front,
+    // for the severity/confidence routing gate below. `verdict.confidence`
+    // is parse-guaranteed 1-5.
+    const confidence = resolveFindingConfidence(f, verdict.confidence)
     const findingForInline =
       hasSuggestion && scope !== "line"
         ? { ...f, scope: "line" as const }
@@ -922,6 +979,28 @@ function prepareReviewSubmissionFindings(args: {
       }
     }
 
+    // SIG-281 PR B (Recs 2/5): confidence-tiered severity routing. A
+    // low/medium-severity line finding (score < 4) with weak grounding is
+    // demoted to the review body so the inline surface stays high-signal.
+    // Runs on `effective` (post-line-move) and short-circuits the
+    // substantiveness gate below — severity/confidence is orthogonal to
+    // anchor quality. NEVER demotes score >= 4 (P0/P1 — the believability
+    // floor). The tiers (per Codex backend sign-off, the conservative
+    // unification of the ticket's Recs 2 + 5):
+    //   - confidence <= 2: demote unless it carries a committable fix.
+    //   - confidence === 3: demote unless it carries a fix OR a repro.
+    //   - confidence >= 4: never demoted here (high-confidence signal
+    //     keeps its inline thread even without a patch).
+    if (
+      findingScope(effective) === "line" &&
+      effective.score < 4 &&
+      ((confidence <= 2 && !hasStructuredFix(effective)) ||
+        (confidence === 3 && !hasPatchOrRepro(effective)))
+    ) {
+      bodyFindings.push(effective)
+      return
+    }
+
     const lineText = addedLineTextByLine?.get(effective.path)?.get(effective.line)
     const isNonSubstantive =
       !hasSuggestion &&
@@ -931,11 +1010,42 @@ function prepareReviewSubmissionFindings(args: {
     if (isNonSubstantive) {
       bodyFindings.push(effective)
     } else {
-      inlineFindings.push(effective)
-      inlineOriginalIndex.push(i)
+      inlineCandidates.push({ finding: effective, originalIndex: i, confidence })
     }
   })
 
+  // SIG-281 PR B (Rec 3): cap inline comments at MAX_INLINE_COMMENTS.
+  // SELECT which findings keep their inline thread by priority (don't
+  // plain-truncate — keep the highest-severity / highest-confidence /
+  // best-grounded), but then restore ORIGINAL order for the kept set so
+  // we never reorder inline comments when under the cap (the common
+  // case stays byte-identical to pre-PR-B). Overflow is demoted to the
+  // body, NEVER dropped. The {finding, originalIndex} pairing keeps the
+  // SIG-247 marker invariant intact (inlineFindings[j] <->
+  // verdict.findings[inlineOriginalIndex[j]]). The originalIndex
+  // tiebreak makes the priority selection fully deterministic.
+  let kept: InlineFindingCandidate[] = inlineCandidates
+  if (inlineCandidates.length > MAX_INLINE_COMMENTS) {
+    const prioritized = [...inlineCandidates].sort(
+      (a, b) =>
+        b.finding.score - a.finding.score ||
+        b.confidence - a.confidence ||
+        Number(hasPatchOrRepro(b.finding)) - Number(hasPatchOrRepro(a.finding)) ||
+        a.originalIndex - b.originalIndex,
+    )
+    const keptIndices = new Set(
+      prioritized.slice(0, MAX_INLINE_COMMENTS).map((c) => c.originalIndex),
+    )
+    kept = inlineCandidates.filter((c) => keptIndices.has(c.originalIndex))
+    for (const candidate of inlineCandidates) {
+      if (!keptIndices.has(candidate.originalIndex)) {
+        bodyFindings.push(markInlineCapOverflow(candidate.finding))
+      }
+    }
+  }
+
+  const inlineFindings: PrReviewFinding[] = kept.map((c) => c.finding)
+  const inlineOriginalIndex: number[] = kept.map((c) => c.originalIndex)
   const renderVerdict: PrReviewVerdict = { ...verdict, findings: inlineFindings }
   const unanchored: PrReviewFinding[] = [...sanitizedUnanchored, ...bodyFindings]
 
@@ -1943,25 +2053,54 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   }
   lines.push(summary)
 
-  // Fix Plan as a compact table. Only inline findings (body-only have
-  // their own section below). Returns null when no findings at
-  // score>=4, in which case the table is omitted entirely.
-  const fixPlanTable = renderFixPlanTable(inlineFindings)
+  // SIG-281 PR B (Rec 6 / Kimi K2.6): body-only blockers (score >= 4)
+  // that can't anchor inline still belong in the scannable Fix Plan
+  // table — otherwise a body-only-only P0 advertises "1 high-severity
+  // finding" in the lead but has NO Fix Plan row, leaving the blocker
+  // buried in the detail section. Split the body-only set by the blocker
+  // floor:
+  //   - blockers (score >= 4): feed the Fix Plan table (alongside inline
+  //     findings) AND render their full evidence in a collapsed details
+  //     block right after the table, so failureExample/fixExample survive
+  //     without scroll-taxing the surface. They are NOT repeated in the
+  //     lower "Review Body Findings" section.
+  //   - non-blockers (score < 4): unchanged — the "Review Body Findings"
+  //     section, with the load-bearing explanation copy.
+  // The blocker stays VISIBLE (table row, never collapsed); only the
+  // supplementary evidence is collapse-on-demand.
+  const bodyOnlyBlockers = bodyOnlyFindings.filter((f) => f.score >= 4)
+  const bodyOnlyNonBlockers = bodyOnlyFindings.filter((f) => f.score < 4)
+
+  const fixPlanTable = renderFixPlanTable([...inlineFindings, ...bodyOnlyBlockers])
   if (fixPlanTable) {
     lines.push("")
     lines.push(fixPlanTable)
+    if (bodyOnlyBlockers.length > 0) {
+      // Clarify the table can contain non-inline-anchored rows.
+      lines.push("")
+      lines.push(FIX_PLAN_BODY_ONLY_CAPTION)
+      // Full evidence for body-only blockers, collapsed by default.
+      lines.push("")
+      lines.push("<details>")
+      lines.push(BODY_ONLY_BLOCKER_DETAILS_SUMMARY)
+      lines.push("")
+      lines.push(...renderBodyOnlyFindings(bodyOnlyBlockers, args.linkContext))
+      lines.push("")
+      lines.push("</details>")
+    }
   }
 
-  // Body-only findings — unanchored or non-line-scoped set. Same
-  // section as before (explanation copy is load-bearing — these are
-  // findings GitHub can't anchor to a diff line, so the reader needs
-  // to know why they're not inline review threads).
-  if (bodyOnlyFindings.length > 0) {
+  // Body-only findings BELOW the blocker floor (score < 4) — unanchored
+  // or non-line-scoped or inline-cap overflow. The explanation copy is
+  // load-bearing (these can't anchor to a diff line, or overflowed the
+  // inline cap). Blockers were rendered above (table + collapsed
+  // evidence) and are intentionally excluded here to avoid duplication.
+  if (bodyOnlyNonBlockers.length > 0) {
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_HEADING)
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
-    lines.push(...renderBodyOnlyFindings(bodyOnlyFindings, args.linkContext))
+    lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext))
   }
 
   // Single-line footer (replaces the four separate metadata lines).
@@ -2120,9 +2259,21 @@ export function renderFixPlanTable(findings: PrReviewFinding[]): string | null {
     "|:---|:---|:---|",
   ]
   for (const f of eligible) {
-    const range = f.startLine != null && f.startLine !== f.line
-      ? `${f.path}:${f.startLine}-${f.line}`
-      : `${f.path}:${f.line}`
+    // SIG-281 PR B (Rec 6 / Kimi Q3): the table can now contain body-only
+    // blockers (file-level / PR-level scope) that have no specific diff
+    // line. For those, show the path with NO `:line` suffix (the absence
+    // of a line is the visual signal that the row isn't diff-anchored);
+    // an empty path (pure PR-level) renders as "PR-level". Line- and
+    // comment-scoped findings keep the `path:line` (or range) form.
+    const scope = findingScope(f)
+    const range =
+      scope === "pr" || scope === "file"
+        ? f.path.trim().length > 0
+          ? f.path
+          : "PR-level"
+        : f.startLine != null && f.startLine !== f.line
+          ? `${f.path}:${f.startLine}-${f.line}`
+          : `${f.path}:${f.line}`
     const cleanHeadline = stripAstMarkers(f.headline)
     // Escape the pipe in headlines so a finding that says "use a | b"
     // doesn't collapse the table. Hand the reader a safer message and

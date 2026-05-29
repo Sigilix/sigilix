@@ -300,11 +300,19 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
+import {
+  readCalibrationParams,
+  shouldKeepSoften,
+  decideWarmSoftenSurvival,
+  type WarmSoftenCandidate,
+  type WarmSoftenDecision,
+} from "./review-memory/calibration"
 import { runReviewMemoryLookup } from "./review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 import type {
   ReviewMemoryClaimMarkerData,
+  ReviewMemoryClaimType,
   ReviewMemoryFinding,
   ReviewMemorySkipReason,
 } from "./review-memory/types"
@@ -4089,28 +4097,221 @@ export async function handlePrReviewEnsemble(
       claimShadowMode,
       resolveReviewMemoryConfig(sigilixConfig).claimSoftening,
     )
+    const claimsEnabled = env.OPENCLAW_REVIEW_MEMORY_CLAIMS === "on"
+
+    // Reusable claim-extractor model closure. Shared by the SIG-280 PR C
+    // warm veto below and the Phase-2/3 extraction site further down, so
+    // the (paid) classifier runs at most ONCE per review even on the warm
+    // path (the warm pre-pass memoizes its output into
+    // `earlyClaimsPerFinding`).
+    const runClaimClassifier = async (
+      system: string,
+      user: string,
+    ): Promise<string | null> => {
+      if (!env.OLLAMA_API_KEY) return null
+      const res = await runWithRetryAndFallback<string>({
+        config: CLAIM_EXTRACTOR_CONFIG,
+        apiKey: env.OLLAMA_API_KEY,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        signal: orchCtrl.signal,
+        chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
+        format: CLAIM_EXTRACTION_SCHEMA as unknown as Record<string, unknown>,
+        parseAnswer: (content) => content,
+        parseFailureLabel: "claim_extractor_did_not_parse",
+        startedAt: Date.now(),
+        perAttemptTimeoutMs: CLAIM_EXTRACTOR_TIMEOUT_MS,
+      })
+      return res.verdict
+    }
+
+    // Withdrawals are loaded ONCE here (hoisted from the post-soften
+    // filter site below) so the warm veto and the main render path derive
+    // the SAME withdrawal-survivor index from one read — eliminating any
+    // chance the two diverge between back-to-back KV reads. Defense-in-
+    // depth wrap (CodeRabbit M1, PR #142): the store helper already
+    // returns [] on KV/parse failure, but a future sync throw would
+    // otherwise unwind the whole review path; withdrawal suppression is a
+    // nice-to-have and must never fail a review.
+    let withdrawals: Awaited<ReturnType<typeof loadWithdrawals>> = []
+    try {
+      withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "review-withdrawal-load-unexpected-throw",
+        owner, repo, prNumber,
+        error: err instanceof Error ? err.message : String(err),
+      }))
+    }
+
+    // SIG-280 PR C — the soften VETO. PR B shipped only the COLD regime
+    // (no calibration params → veto EVERY soften). PR C adds the WARM
+    // regime: when a calibration blob exists in KV with >=1 trustworthy
+    // claim type, each soften survives ONLY if the finding matched — at
+    // claim level, conditioned on the active memory's shadowClaims, i.e.
+    // exactly what the calibration corpus measured — a claim type whose
+    // 95% lower bound clears the threshold. The ENTIRE warm branch is
+    // gated on params existing; in prod they do not yet, so the cold
+    // veto-all runs byte-identically to PR B until calibration is fitted
+    // and the founder enables it. Believability-dominant: any ambiguity
+    // (no match, cold/thin type, low bound, missing params) → veto, and
+    // the P0/P1 floor in the soften clone below is the final guard.
+    let earlyClaimsPerFinding:
+      | ReadonlyArray<readonly ReviewMemoryClaimMarkerData[]>
+      | null = null
+    // Survival is keyed by CONSENSUS-FINDING INDEX, never by sourceFindingId
+    // (Codex + CodeRabbit P1: one source id can map to multiple synthesized
+    // findings, so a source-id set would leak a survival onto a sibling).
+    // null on the soften-inactive path; an (empty in cold regime) Set when
+    // the veto pre-pass runs. The soften clone loop + approval-readiness key
+    // off this index set.
+    let survivingSoftenIndexSet: Set<number> | null = null
     if (softenActive && softenedSet.size > 0) {
+      const calibrationBlob = claimsEnabled
+        ? await readCalibrationParams(env.OPENCLAW_STATE)
+        : null
+      const warmUsable =
+        calibrationBlob !== null &&
+        shadowMemoriesForPhase3.length > 0 &&
+        Object.values(calibrationBlob).some((p) => shouldKeepSoften(p))
+
+      // Per softened finding, the claim types it matched a memory on.
+      // WARM only — needs the model-backed claim extraction + the shadow
+      // match. Cold/off paths never compute this (→ empty → veto-all).
+      const matchedTypesByFid = new Map<string, Set<ReviewMemoryClaimType>>()
+      if (warmUsable) {
+        // Re-derive today's withdrawal-survivor index the SAME way the
+        // main render path does. `filterWithdrawnFindings` matches on
+        // path+line+body (score-independent), so an UNSOFTENED probe
+        // over the same `withdrawals` yields the identical keepIndex —
+        // and extracting claims over exactly that filtered batch keeps
+        // the veto's claim types on the same batch shape the corpus saw
+        // (Codex Option E: avoids batch-drift over-soften).
+        const probe = consensusVerdict.findings.map((f, i) =>
+          annotateWithConsensus(f, consensusByIndex[i] ?? 1),
+        )
+        const { kept: probeKept } = filterWithdrawnFindings(probe, withdrawals)
+        const probeKeptSet = new Set(probeKept)
+        const warmKeepIndex: number[] = []
+        for (let i = 0; i < probe.length; i++) {
+          if (probeKeptSet.has(probe[i]!)) warmKeepIndex.push(i)
+        }
+        const warmFiltered = warmKeepIndex.map((i) => consensusVerdict.findings[i]!)
+        const warmFilteredProvenance = warmKeepIndex.map((i) => consensusProvenance[i])
+
+        const warmClaims = await extractClaims({
+          findings: warmFiltered.map(
+            (f): ClaimExtractionFinding => ({
+              headline: f.headline,
+              body: f.body,
+              category: f.category,
+            }),
+          ),
+          runClassifier: runClaimClassifier,
+        })
+        earlyClaimsPerFinding = warmClaims
+
+        const warmShadowFids = await Promise.all(
+          warmFiltered.map((f) =>
+            computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline }),
+          ),
+        )
+        const warmShadowPathHashes = await Promise.all(
+          warmFiltered.map((f) => computePathSha256(f.path)),
+        )
+        const warmShadowFindings: ShadowMatchFinding[] = warmFiltered.map((f, j) => {
+          const sourceSpec = warmFilteredProvenance[j]?.sourceSpecialists?.[0]
+          return {
+            category: sourceSpec ? categoryFromRoleHint(sourceSpec) : null,
+            pathSha12: warmShadowPathHashes[j]?.slice(0, 12) ?? null,
+            fid: warmShadowFids[j] ?? "",
+            severityTier: severityTier(f.score),
+            claims: (warmClaims[j] ?? []).map((c) => ({
+              type: c.type,
+              extractorVersion: c.extractorVersion,
+            })),
+          }
+        })
+        const warmRows = shadowMatchReviewMemoryClaims({
+          memories: shadowMemoriesForPhase3,
+          findings: warmShadowFindings,
+        })
+        // Codex P1: the soften veto joins a candidate to its matched claim
+        // types BY fid. `computeFid` ignores body/category, so two distinct
+        // findings sharing (path, line, headline) collide on fid — one
+        // could then inherit the other's match and be softened though it
+        // matched nothing. Believability-dominant resolution: if a fid is
+        // ambiguous (more than one finding in this review carries it), we
+        // CANNOT safely attribute a match, so we drop it from the map →
+        // every candidate with that fid vetoes. Near-impossible after
+        // consensus dedup, but the cost of being wrong here is hiding a
+        // real finding, so we refuse to guess.
+        const fidCounts = new Map<string, number>()
+        for (const fid of warmShadowFids) {
+          fidCounts.set(fid, (fidCounts.get(fid) ?? 0) + 1)
+        }
+        for (const row of warmRows) {
+          if (!row.claimType) continue
+          if ((fidCounts.get(row.fid) ?? 0) > 1) continue // ambiguous fid → veto
+          let set = matchedTypesByFid.get(row.fid)
+          if (!set) {
+            set = new Set<ReviewMemoryClaimType>()
+            matchedTypesByFid.set(row.fid, set)
+          }
+          set.add(row.claimType)
+        }
+      }
+
+      // Build candidates — the softened findings, keyed by consensus index.
+      const candidates: WarmSoftenCandidate[] = []
       for (let i = 0; i < consensusVerdict.findings.length; i++) {
         const f = consensusVerdict.findings[i]!
         const sourceIds = consensusProvenance[i]?.sourceFindingIds ?? []
+        // Candidacy: the finding had at least one synth-softened source id.
         if (!sourceIds.some((id) => softenedSet.has(id))) continue
         const fid = await computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline })
+        candidates.push({
+          index: i,
+          fid,
+          matchedTypes: [...(matchedTypesByFid.get(fid) ?? [])],
+        })
+      }
+      const decisions: WarmSoftenDecision[] = warmUsable
+        ? decideWarmSoftenSurvival({ candidates, blob: calibrationBlob! })
+        : candidates.map((c) => ({
+            index: c.index,
+            fid: c.fid,
+            kept: false,
+            keepingTypes: [] as ReviewMemoryClaimType[],
+          }))
+
+      // Survival is carried forward BY INDEX (empty in the cold regime →
+      // veto-all, exactly as PR B). Keying by index — never by source id —
+      // prevents a kept finding from softening a sibling that shares a
+      // specialist source id (Codex + CodeRabbit P1).
+      survivingSoftenIndexSet = new Set<number>()
+      for (const d of decisions) {
+        if (d.kept) survivingSoftenIndexSet.add(d.index)
         console.log(JSON.stringify({
           event: "review-memory-claim-soften",
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          fid,
-          severityTier: severityTier(f.score),
-          calibratedConf: null,
-          vetoed: true,
-          paramsMissing: true,
+          fid: d.fid,
+          severityTier: severityTier(consensusVerdict.findings[d.index]!.score),
+          keepingTypes: d.keepingTypes,
+          vetoed: !d.kept,
+          paramsMissing: !warmUsable,
         }))
       }
-      // Cold-regime veto-all. PR C replaces this with the per-claimType
-      // calibrated veto (KEEP only the softens a trustworthy-N claim vouches
-      // for via the 95% lower-bound rule; delete the rest).
-      softenedSet.clear()
     }
     let softenedCount = 0
+    // SIG-280 PR C: the SINGLE source of truth for "this finding's score was
+    // actually lowered in the rendered output" — populated below exactly where
+    // the soften clone is built. Approval-readiness reads this (intersected
+    // with the withdrawal-survivor `keepIndex`) instead of re-encoding the
+    // soften contract, so the two paths can never drift (CodeRabbit).
+    const actuallySoftenedIndexSet = new Set<number>()
     // ARC-270: soften walks the CONSENSUS-RANKED arrays (verdict +
     // provenance + consensusByIndex stay in lockstep). Body
     // annotation happens here too, so renderable findings carry both
@@ -4124,21 +4325,27 @@ export async function handlePrReviewEnsemble(
     // signal — the badge stays, just the row position differs in
     // those two surfaces.
     const renderableFindings = consensusVerdict.findings.map((f, i) => {
-      const sourceIds = consensusProvenance[i]?.sourceFindingIds ?? []
-      // SIG-280 PR B: only soften when `softenActive`. In PR B's cold
-      // regime `softenedSet` was already cleared above (veto-all), so this
-      // never fires today; the gate + the P0/P1 floor are in place ready
-      // for PR C's calibrated path. `softenScoreWithFloor` keeps a source
-      // P0/P1 (score >= 4) UNCHANGED — a blocker is never softened below
-      // its tier — and decrements P2/P3 by one (floored at 1). The source
-      // score is reliable post-SIG-284 (renderer is the single soften
-      // point).
-      const matched = softenActive && sourceIds.some((id) => softenedSet.has(id))
+      // SIG-280 PR C: soften iff this finding's INDEX survived the veto
+      // pre-pass (cold regime → empty set, so this never fires in prod yet).
+      // Index-keyed — see `survivingSoftenIndexSet`. `softenScoreWithFloor`
+      // keeps a P0/P1 (score >= 4) UNCHANGED — a blocker is never softened
+      // below its tier — and decrements P2/P3 by one (floored at 1).
+      //
+      // Codex P1 note: the floor reads the CONSENSUS finding's `f.score`,
+      // not the underlying specialist source score. That equals the true
+      // severity only because the synthesizer is required to emit findings
+      // at TRUE severity and never pre-downgrade (the SIG-284 renderer-only-
+      // soften contract, pinned by PROMPT_VERSION + the double-soften test).
+      // If a synth ever under-scored a true P0/P1 to <4 this floor wouldn't
+      // catch it — but that is a synth-correctness bug, out of scope here,
+      // and guarded by the prompt contract rather than this line.
+      const matched = softenActive && (survivingSoftenIndexSet?.has(i) ?? false)
       let working = f
       if (matched) {
         const effectiveScore = softenScoreWithFloor(f.score)
         if (effectiveScore !== f.score) {
           softenedCount++
+          actuallySoftenedIndexSet.add(i)
           working = { ...f, score: effectiveScore }
         }
       }
@@ -4162,22 +4369,10 @@ export async function handlePrReviewEnsemble(
     // original arrays, and downstream consumers (snapshot + marker
     // computation) read through that index list so the filtered view
     // stays aligned end-to-end.
-    // CodeRabbit M1 (review on PR #142): defense-in-depth wrap. The
-    // store helper already swallows + returns [] on KV/parse failure,
-    // but a future regression (sync throw in helper init, etc.) would
-    // otherwise unwind the whole review path through the outer catch
-    // and surface as `errored` on the PR. Withdrawal suppression is a
-    // nice-to-have; never let it fail a review.
-    let withdrawals: Awaited<ReturnType<typeof loadWithdrawals>> = []
-    try {
-      withdrawals = await loadWithdrawals(env, owner, repo, prNumber)
-    } catch (err) {
-      console.warn(JSON.stringify({
-        event: "review-withdrawal-load-unexpected-throw",
-        owner, repo, prNumber,
-        error: err instanceof Error ? err.message : String(err),
-      }))
-    }
+    //
+    // `withdrawals` is loaded once near the soften pre-pass above (SIG-280
+    // PR C hoisted it so the warm veto and this render path share one
+    // read); the defensive wrap + rationale live there.
     const { kept: postWithdrawalFindings, suppressed: withdrawnFindings } =
       filterWithdrawnFindings(renderableFindings, withdrawals)
     // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
@@ -4266,17 +4461,54 @@ export async function handlePrReviewEnsemble(
       synthInputVerdicts,
       withdrawals,
     )
+    // SIG-280 PR C: which synth-softened source ids were ACTUALLY softened in
+    // the rendered output. Derived from finding INDICES, never a source-id set,
+    // because a source id can feed multiple synthesized findings.
+    //
+    // We reuse `actuallySoftenedIndexSet` — the SINGLE source of truth built in
+    // the renderableFindings map above where the score is actually changed —
+    // and intersect it with the withdrawal survivors (`keepIndex`). That makes
+    // "actually de-emphasized in the output" mean: the renderer lowered the
+    // score AND the finding survived withdrawal filtering. No re-encoding of the
+    // soften contract here, so approval can't drift from rendered output
+    // (CodeRabbit). A P0/P1 the floor left unchanged was never added to the set,
+    // so it correctly does NOT count.
+    // FAIL CLOSED: a source id de-emphasized in one finding but left at full
+    // severity in another (vetoed, withdrawn, or floor-no-op) is NOT counted as
+    // accounted — else approval-readiness could approve over a sibling finding
+    // still at full severity (undercount blockers).
+    const keptIndexSet = new Set(keepIndex)
+    const softenMembership = new Map<string, { survived: boolean; vetoed: boolean }>()
+    if (softenActive) {
+      for (let idx = 0; idx < consensusProvenance.length; idx++) {
+        const survived = actuallySoftenedIndexSet.has(idx) && keptIndexSet.has(idx)
+        for (const sourceFindingId of consensusProvenance[idx]?.sourceFindingIds ?? []) {
+          if (!softenedSet.has(sourceFindingId)) continue
+          const state = softenMembership.get(sourceFindingId) ?? { survived: false, vetoed: false }
+          if (survived) state.survived = true
+          else state.vetoed = true
+          softenMembership.set(sourceFindingId, state)
+        }
+      }
+    }
     const approvalReadiness = assessApprovalReadiness({
       intendedEvent,
       sourceFindings: sourceFindingsForApproval,
-      // SIG-280 PR B (Codex P1): in PR B no soften actually survives (the
-      // cold-regime veto clears `softenedSet` and the loop is gated off), so
-      // a `provenance.softened[]` entry does NOT mean the finding was
-      // de-emphasized. Pass an empty softened set so approval-readiness
-      // doesn't count a never-softened source finding as "accounted" and
-      // silently approve over it. (PR C: pass the SURVIVING softens once the
-      // calibrated path keeps some.)
-      provenance: { ...validated.provenance, softened: [] },
+      // Pass only source ids that survived softening EVERYWHERE they appear —
+      // a source finding counts as "accounted" only when it was actually
+      // de-emphasized in the output, so approval-readiness never silently
+      // approves over a finding the calibrated veto kept at full severity.
+      // Empty in the cold regime; [] when soften is inactive entirely.
+      provenance: {
+        ...validated.provenance,
+        softened: softenActive
+          ? (validated.provenance.softened ?? []).filter((s) => {
+              if (typeof s.sourceFindingId !== "string") return false
+              const state = softenMembership.get(s.sourceFindingId)
+              return state !== undefined && state.survived && !state.vetoed
+            })
+          : [],
+      },
     })
     const renderableUnanchoredForSubmission = [
       ...renderableUnanchored,
@@ -4427,38 +4659,30 @@ export async function handlePrReviewEnsemble(
     // classifier blip yields no claims rather than blocking the merge path
     // or rotating a marker. The id-less claim data rides the marker;
     // capture (PR B) recomputes each id before storing it on a signal.
-    const claimsEnabled = env.OPENCLAW_REVIEW_MEMORY_CLAIMS === "on"
     const claimT0 = Date.now()
-    const claimsPerFinding: ReadonlyArray<readonly ReviewMemoryClaimMarkerData[]> = claimsEnabled
-      ? await extractClaims({
-          findings: filteredConsensusFindings.map(
-            (f): ClaimExtractionFinding => ({
-              headline: f.headline,
-              body: f.body,
-              category: f.category,
-            }),
-          ),
-          runClassifier: async (system, user) => {
-            if (!env.OLLAMA_API_KEY) return null
-            const res = await runWithRetryAndFallback<string>({
-              config: CLAIM_EXTRACTOR_CONFIG,
-              apiKey: env.OLLAMA_API_KEY,
-              messages: [
-                { role: "system", content: system },
-                { role: "user", content: user },
-              ],
-              signal: orchCtrl.signal,
-              chatEnabled: env.OLLAMA_CHAT_ENABLE === "on" ? "on" : "off",
-              format: CLAIM_EXTRACTION_SCHEMA as unknown as Record<string, unknown>,
-              parseAnswer: (content) => content,
-              parseFailureLabel: "claim_extractor_did_not_parse",
-              startedAt: Date.now(),
-              perAttemptTimeoutMs: CLAIM_EXTRACTOR_TIMEOUT_MS,
+    // SIG-280 PR C: reuse the warm pre-pass's claim extraction when it
+    // ran — the (paid) classifier is invoked at most once per review. It
+    // was extracted over the SAME withdrawal-filtered batch (one shared
+    // `withdrawals` read + a score-independent filter), so it aligns with
+    // `filteredConsensusFindings`. The length guard is belt-and-suspenders:
+    // if that invariant is ever broken, fall back to a fresh extraction
+    // rather than misalign markers / the shadow corpus.
+    const claimsPerFinding: ReadonlyArray<readonly ReviewMemoryClaimMarkerData[]> =
+      earlyClaimsPerFinding &&
+      earlyClaimsPerFinding.length === filteredConsensusFindings.length
+        ? earlyClaimsPerFinding
+        : claimsEnabled
+          ? await extractClaims({
+              findings: filteredConsensusFindings.map(
+                (f): ClaimExtractionFinding => ({
+                  headline: f.headline,
+                  body: f.body,
+                  category: f.category,
+                }),
+              ),
+              runClassifier: runClaimClassifier,
             })
-            return res.verdict
-          },
-        })
-      : filteredConsensusFindings.map(() => [])
+          : filteredConsensusFindings.map(() => [])
     if (claimsEnabled) {
       const claimsEmitted = claimsPerFinding.reduce((s, cs) => s + cs.length, 0)
       console.log(

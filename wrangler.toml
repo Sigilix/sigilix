@@ -293,7 +293,10 @@ OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT = "shadow"
 # 60s timeout on two different model families on PR #188 — and trimming
 # graph context + symbol retrieval + Vectorize retrieval should let
 # models actually return a verdict.
-OPENCLAW_LOGIC_PROMPT_BUDGET = "shadow"
+# SIG-287: ENFORCE (was "shadow") — the logic specialist was timing out on
+# ~every review (prompt-bound 60s), so reviews ran degraded and the bot
+# fake-approved. Enforcing the ≤6K budget lets logic actually return a verdict.
+OPENCLAW_LOGIC_PROMPT_BUDGET = "enforce"
 
 # SIG-161 confidence-threshold verdict gate. Three-state rollout:
 #   "off"     — gate bypassed; verdict is the legacy `findings.length > 0`.

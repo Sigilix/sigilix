@@ -15,6 +15,7 @@
     "check:advisory-db-size": "./scripts/check-advisory-db-size.sh",
     "bakeoff-report": "tsx scripts/bakeoff-report.ts",
     "fp-rate-report": "tsx scripts/fp-rate-report.ts",
+    "fp-eval": "tsx scripts/fp-eval.ts",
     "phase4-calibrate": "tsx scripts/phase4-calibrate.ts",
     "collect-sig-161-findings": "tsx scripts/collect-sig-161-findings.ts",
     "regenerate-badge-paths": "tsx scripts/generate-badge-glyph-paths.ts"

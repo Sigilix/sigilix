@@ -66,9 +66,13 @@ function escapeRegex(s: string): string {
  * RESIDUAL can be parsed as a canonical reason. E.g. "@sigilix dismiss
  * not-a-bug" → "not-a-bug"; "dismiss: too minor" → "too minor".
  */
-// Longest keyword first so an alternation like `noise|noisy` doesn't let the
-// shorter `noise` shadow `noisy` (CodeRabbit) — that would leave a broken
-// residual ("y — …") and miss the reason on a valid "noisy — <reason>" reply.
+// Longest keyword first as cheap future-proofing for a TRUE prefix pair — a
+// keyword that is a literal prefix of another (e.g. a hypothetical
+// "dismiss"/"dismissal"), where the unbounded alternation would let the
+// shorter one match first and strip too little. The CURRENT set has no such
+// pair (the closest, "noise"/"noisy", are equal-length and the alternation
+// already disambiguates them by fall-through), so this is a NO-OP today —
+// kept only so adding a prefix-pair keyword later can't silently regress.
 const DISMISS_REASON_PREFIX_REGEX = new RegExp(
   `^(?:@[a-z0-9-]+\\s+)?(?:${[...PREFIX_KEYWORDS]
     .sort((a, b) => b.length - a.length)

@@ -299,6 +299,7 @@ import {
   resolveClaimShadowMode,
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
+import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
 import { runReviewMemoryLookup } from "./review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
@@ -4070,6 +4071,45 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+    // SIG-280 PR B: soften is now CALIBRATED + opt-in. It only changes a
+    // score when `softenActive` (global flag === "soften" AND per-repo
+    // `claimSoftening` true). PR B ships the COLD regime: no calibration
+    // params exist yet (PR C produces them), so the veto cancels EVERY
+    // soften — we record what WOULD have softened (telemetry) then clear
+    // the set, so nothing is softened until the calibrated path lands and
+    // the founder enables it (believability-dominant: worst case is "no
+    // soften", never over-soften). When NOT active, the soften loop below
+    // simply doesn't decrement, turning off the pre-Phase-4 uncalibrated
+    // always-on soften.
+    const claimShadowMode = resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW)
+    // `reviewMemoryConfig` is scoped to the review-memory injection block
+    // above; re-resolve the per-repo bool here (pure + cheap) from the
+    // function-scoped sigilixConfig.
+    const softenActive = isSoftenActive(
+      claimShadowMode,
+      resolveReviewMemoryConfig(sigilixConfig).claimSoftening,
+    )
+    if (softenActive && softenedSet.size > 0) {
+      for (let i = 0; i < consensusVerdict.findings.length; i++) {
+        const f = consensusVerdict.findings[i]!
+        const sourceIds = consensusProvenance[i]?.sourceFindingIds ?? []
+        if (!sourceIds.some((id) => softenedSet.has(id))) continue
+        const fid = await computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline })
+        console.log(JSON.stringify({
+          event: "review-memory-claim-soften",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          fid,
+          severityTier: severityTier(f.score),
+          calibratedConf: null,
+          vetoed: true,
+          paramsMissing: true,
+        }))
+      }
+      // Cold-regime veto-all. PR C replaces this with the per-claimType
+      // calibrated veto (KEEP only the softens a trustworthy-N claim vouches
+      // for via the 95% lower-bound rule; delete the rest).
+      softenedSet.clear()
+    }
     let softenedCount = 0
     // ARC-270: soften walks the CONSENSUS-RANKED arrays (verdict +
     // provenance + consensusByIndex stay in lockstep). Body
@@ -4085,10 +4125,18 @@ export async function handlePrReviewEnsemble(
     // those two surfaces.
     const renderableFindings = consensusVerdict.findings.map((f, i) => {
       const sourceIds = consensusProvenance[i]?.sourceFindingIds ?? []
-      const matched = sourceIds.some((id) => softenedSet.has(id))
+      // SIG-280 PR B: only soften when `softenActive`. In PR B's cold
+      // regime `softenedSet` was already cleared above (veto-all), so this
+      // never fires today; the gate + the P0/P1 floor are in place ready
+      // for PR C's calibrated path. `softenScoreWithFloor` keeps a source
+      // P0/P1 (score >= 4) UNCHANGED — a blocker is never softened below
+      // its tier — and decrements P2/P3 by one (floored at 1). The source
+      // score is reliable post-SIG-284 (renderer is the single soften
+      // point).
+      const matched = softenActive && sourceIds.some((id) => softenedSet.has(id))
       let working = f
       if (matched) {
-        const effectiveScore = Math.max(1, f.score - 1)
+        const effectiveScore = softenScoreWithFloor(f.score)
         if (effectiveScore !== f.score) {
           softenedCount++
           working = { ...f, score: effectiveScore }
@@ -4430,7 +4478,7 @@ export async function handlePrReviewEnsemble(
     // calibrates on. Gated: requires the shadow flag AND real claims
     // (claimsEnabled) AND a non-skipped lookup — otherwise a no-op.
     if (
-      resolveClaimShadowMode(env.OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW) !== "off" &&
+      claimShadowMode !== "off" &&
       claimsEnabled &&
       shadowMemoriesForPhase3.length > 0
     ) {

@@ -25,9 +25,15 @@
 // `code` is left intact — prose around it is still scannable.
 
 import type { ReviewMemorySignal } from "./types"
+import { type DismissReason, parseDismissReason } from "../dismiss-reasons"
 
-/** The result kind v1 emits. v2 may add more. */
-type ParsedDismissal = Pick<ReviewMemorySignal, "kind">
+/**
+ * The parsed result. `dismissReason` (SIG-114 PR 4) is attached ONLY when the
+ * reply carries a recognized canonical reason (via the strict `parseDismissReason`
+ * alias table) — opt-in, no fuzzy classification of freeform prose. Absent
+ * otherwise (the signal stays `unlabeled`, prior behavior).
+ */
+type ParsedDismissal = Pick<ReviewMemorySignal, "kind" | "dismissReason">
 
 const PREFIX_KEYWORDS = [
   "not relevant",
@@ -56,8 +62,46 @@ function escapeRegex(s: string): string {
 }
 
 /**
+ * Leading "@mention" + a dismiss keyword + separators, stripped so the
+ * RESIDUAL can be parsed as a canonical reason. E.g. "@sigilix dismiss
+ * not-a-bug" → "not-a-bug"; "dismiss: too minor" → "too minor".
+ */
+const DISMISS_REASON_PREFIX_REGEX = new RegExp(
+  `^(?:@[a-z0-9-]+\\s+)?(?:${PREFIX_KEYWORDS.map(escapeRegex).join("|")})[\\s:;,.\\-—]*`,
+  "i",
+)
+
+/**
+ * Best-effort extraction of a CANONICAL reason from a dismissal reply.
+ * Returns a `DismissReason` only when the reply text maps to one via the
+ * strict alias table — either the whole reply is a reason ("not a bug") or
+ * the residual after a dismiss prefix is ("@sigilix dismiss not-a-bug").
+ * Freeform prose → undefined (no fuzzy guessing). Pure.
+ */
+function extractDismissReason(trimmed: string): DismissReason | undefined {
+  const whole = parseDismissReason(trimmed)
+  if (whole) return whole
+  const residual = trimmed.replace(DISMISS_REASON_PREFIX_REGEX, "").trim()
+  // Only parse the residual when a prefix was actually consumed (residual !==
+  // trimmed); otherwise it's the same lookup we already did above.
+  if (residual && residual !== trimmed) {
+    const fromResidual = parseDismissReason(residual)
+    if (fromResidual) return fromResidual
+  }
+  return undefined
+}
+
+function attachReason(trimmed: string): ParsedDismissal {
+  const dismissReason = extractDismissReason(trimmed)
+  return dismissReason
+    ? { kind: "dismissed-textual", dismissReason }
+    : { kind: "dismissed-textual" }
+}
+
+/**
  * Parse a reply comment body for a dismissal signal. Returns the
- * parsed shape on hit, `null` on miss / non-string / empty.
+ * parsed shape on hit (with an optional canonical `dismissReason` when the
+ * reply carries one), `null` on miss / non-string / empty.
  */
 export function parseDismissalSignal(body: unknown): ParsedDismissal | null {
   if (typeof body !== "string") return null
@@ -67,7 +111,7 @@ export function parseDismissalSignal(body: unknown): ParsedDismissal | null {
   // Bare-nit short-circuit: applies to the WHOLE trimmed body, before
   // code-fence stripping (a bare "nit" reply has no fences).
   if (BARE_NIT_REGEX.test(trimmed)) {
-    return { kind: "dismissed-textual" }
+    return attachReason(trimmed)
   }
 
   // Strip fenced code blocks before keyword scan.
@@ -75,7 +119,7 @@ export function parseDismissalSignal(body: unknown): ParsedDismissal | null {
   if (proseOnly.length === 0) return null
 
   if (PREFIX_KEYWORD_REGEX.test(proseOnly)) {
-    return { kind: "dismissed-textual" }
+    return attachReason(proseOnly.trim())
   }
   return null
 }

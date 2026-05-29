@@ -70,6 +70,37 @@ describe("parseDismissalSignal — neutral text", () => {
   })
 })
 
+describe("parseDismissalSignal — SIG-114 PR 4 canonical reason capture", () => {
+  it("captures the reason from an explicit '@sigilix dismiss <reason>' reply", () => {
+    expect(parseDismissalSignal("@sigilix dismiss not-a-bug")).toEqual({
+      kind: "dismissed-textual",
+      dismissReason: "not-a-bug",
+    })
+  })
+  it("captures a reason after a 'dismiss:' prefix (space-alias)", () => {
+    expect(parseDismissalSignal("dismiss: too minor")).toEqual({
+      kind: "dismissed-textual",
+      dismissReason: "too-minor",
+    })
+  })
+  it("captures a reason trailing another dismissal keyword", () => {
+    expect(parseDismissalSignal("false positive — wrong context")).toEqual({
+      kind: "dismissed-textual",
+      dismissReason: "wrong-context",
+    })
+  })
+  it("leaves a freeform dismissal unlabeled (no fuzzy guessing)", () => {
+    expect(parseDismissalSignal("false positive")).toEqual({ kind: "dismissed-textual" })
+    expect(parseDismissalSignal("Hmm, I think this is a false positive — see PR #42.")).toEqual({
+      kind: "dismissed-textual",
+    })
+    expect(parseDismissalSignal("ignore, out of scope for this PR")).toEqual({ kind: "dismissed-textual" })
+  })
+  it("leaves bare nit unlabeled", () => {
+    expect(parseDismissalSignal("nit")).toEqual({ kind: "dismissed-textual" })
+  })
+})
+
 describe("parseDismissalSignal — degenerate / empty inputs", () => {
   it("returns null for empty string", () => {
     expect(parseDismissalSignal("")).toBeNull()

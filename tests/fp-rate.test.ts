@@ -245,6 +245,13 @@ describe("filterReviewsToWindow", () => {
     const kept = filterReviewsToWindow(reviews, now, 30, 14)
     expect(kept.map((r) => r.prNumber)).toEqual([2])
   })
+
+  it("throws on invalid window parameters", () => {
+    const r = [review(1, [])]
+    expect(() => filterReviewsToWindow(r, 100 * DAY, 0, 0)).toThrow() // windowDays <= 0
+    expect(() => filterReviewsToWindow(r, 100 * DAY, 7, 14)).toThrow() // maturity >= window
+    expect(() => filterReviewsToWindow(r, Number.NaN, 30, 14)).toThrow() // nowMs not finite
+  })
 })
 
 describe("computeFpRates", () => {
@@ -405,9 +412,11 @@ describe("ingest — mapTelemetryToReview (real prod shapes)", () => {
     expect(review.fellBackReason).toBe("merged_before_fanout")
   })
 
-  it("rejects structurally unusable records", () => {
+  it("rejects structurally unusable records (incl. NaN/non-positive prNumber)", () => {
     expect(mapTelemetryToReview(null, 1)).toBeNull()
     expect(mapTelemetryToReview({ owner: "o", repo: "r" }, 1)).toBeNull() // no prNumber
+    expect(mapTelemetryToReview({ owner: "o", repo: "r", prNumber: "abc" }, 1)).toBeNull() // NaN
+    expect(mapTelemetryToReview({ owner: "o", repo: "r", prNumber: 0 }, 1)).toBeNull() // non-positive
   })
 
   it("coerces non-finite score/line to 0 so a NaN-scored finding fails the score gate", () => {
@@ -455,6 +464,7 @@ describe("ingest — createdMsFromKey + mapSignalRecord", () => {
         { ts: "2026-05-29T06:57:29.330Z", prNumber: 218, commentId: 3322657991, fid: "7fabc47db9c373d5", kind: "dismissed-textual" },
         { ts: "2026-05-20T00:00:00.000Z", prNumber: 200, commentId: 999, kind: "dismissed-textual" }, // no fid -> skip
         { ts: "x", prNumber: 1, commentId: 1, fid: "deadbeef", kind: "other" }, // wrong kind -> skip
+        { ts: "2026-05-20T00:00:00.000Z", prNumber: 218, fid: "abcd1234", kind: "dismissed-textual" }, // no commentId -> skip
       ],
     }
     const out = mapSignalRecord(rec)

@@ -17,6 +17,18 @@ export function filterReviewsToWindow(
   windowDays: number,
   maturityDays: number,
 ): FpRateReview[] {
+  // Fail fast on invalid parameters — otherwise an inverted/empty cohort is
+  // produced silently and reads as "no data" (CodeRabbit).
+  if (!Number.isFinite(nowMs)) throw new Error("filterReviewsToWindow: nowMs must be finite")
+  if (!Number.isFinite(windowDays) || windowDays <= 0) {
+    throw new Error("filterReviewsToWindow: windowDays must be a positive number")
+  }
+  if (!Number.isFinite(maturityDays) || maturityDays < 0) {
+    throw new Error("filterReviewsToWindow: maturityDays must be >= 0")
+  }
+  if (maturityDays >= windowDays) {
+    throw new Error("filterReviewsToWindow: maturityDays must be < windowDays (else the window is empty)")
+  }
   const oldest = nowMs - windowDays * DAY_MS
   const newest = nowMs - maturityDays * DAY_MS
   return reviews.filter((r) => r.createdMs >= oldest && r.createdMs <= newest)

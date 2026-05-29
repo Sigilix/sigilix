@@ -126,18 +126,28 @@ async function getKvJson<T>(key: string): Promise<T | null> {
   }
 }
 
+/** KV value gets are independent — fetch them concurrency-capped to cut
+ * wall-clock (~200 reviews: 20-40s sequential -> a few seconds) while staying
+ * well under the CF API rate limit (Sigilix dogfood finding). */
+const KV_FETCH_CONCURRENCY = 10
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = []
+  for (let i = 0; i < items.length; i += limit) {
+    out.push(...(await Promise.all(items.slice(i, i + limit).map(fn))))
+  }
+  return out
+}
+
 async function loadReviews(): Promise<FpRateReview[]> {
   const keys = await listKvKeys(TELEMETRY_PREFIX)
   // Filter to this repo by the key suffix `:owner/repo#pr` before fetching.
   const repoKeys = keys.filter((k) => k.toLowerCase().includes(`:${repoArg}#`))
-  const reviews: FpRateReview[] = []
-  for (const key of repoKeys) {
+  const reviews = await mapWithConcurrency(repoKeys, KV_FETCH_CONCURRENCY, async (key) => {
     const createdMs = createdMsFromKey(key, TELEMETRY_PREFIX)
-    if (createdMs === null) continue
-    const review = mapTelemetryToReview(await getKvJson<unknown>(key), createdMs)
-    if (review) reviews.push(review)
-  }
-  return reviews
+    if (createdMs === null) return null
+    return mapTelemetryToReview(await getKvJson<unknown>(key), createdMs)
+  })
+  return reviews.filter((r): r is FpRateReview => r !== null)
 }
 
 async function loadDismissals(): Promise<{ deduped: FpRateDismissal[]; raw: number }> {
@@ -146,10 +156,10 @@ async function loadDismissals(): Promise<{ deduped: FpRateDismissal[]; raw: numb
   // the canonical repo:<id> keyspace; reading it + dedupe-by-commentId is
   // complete. (repo:<id> needs the numeric id, unavailable offline by name.)
   const repoKeys = keys.filter((k) => k.toLowerCase().startsWith(`${MEMORY_PREFIX}${repoArg}:`))
-  const all: FpRateDismissal[] = []
-  for (const key of repoKeys) {
-    all.push(...mapSignalRecord(await getKvJson<unknown>(key)))
-  }
+  const perKey = await mapWithConcurrency(repoKeys, KV_FETCH_CONCURRENCY, async (key) =>
+    mapSignalRecord(await getKvJson<unknown>(key)),
+  )
+  const all = perKey.flat()
   return { deduped: dedupeDismissals(all), raw: all.length }
 }
 
@@ -168,10 +178,6 @@ async function main() {
   })
   const csv = formatCsv(report)
 
-  if (failedFetches > 0) {
-    console.error(`WARNING: ${failedFetches} KV fetch(es) failed (non-404) — the report may be INCOMPLETE (counts under-reported).`)
-  }
-
   if (args.out) {
     writeFileSync(`${args.out}.md`, md + "\n")
     writeFileSync(`${args.out}.csv`, csv + "\n")
@@ -180,6 +186,14 @@ async function main() {
   if (format === "csv") console.log(csv)
   else if (format === "md") console.log(md)
   else console.log(md + "\n\n```csv\n" + csv + "\n```")
+
+  // Print the (partial) report first, THEN fail non-zero so an automated
+  // pipeline doesn't consume an incomplete report as if it were complete
+  // (CodeRabbit).
+  if (failedFetches > 0) {
+    console.error(`WARNING: ${failedFetches} KV fetch(es) failed (non-404) — the report above may be INCOMPLETE (counts under-reported).`)
+    process.exit(1)
+  }
 }
 
 main().catch((e) => die(e instanceof Error ? e.message : String(e)))

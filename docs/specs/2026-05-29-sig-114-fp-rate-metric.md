@@ -69,7 +69,7 @@ recompute is deterministic).
   unit-tested core.
 - `scripts/fp-rate-report.ts` — thin IO over the Cloudflare KV API
   (`npm run fp-rate-report -- --repo=owner/repo`).
-- `tests/fp-rate.test.ts` — 28 tests incl. ingest fixtures from live prod shapes.
+- `tests/fp-rate.test.ts` — 29 tests incl. ingest fixtures from live prod shapes.
 
 ## First live baseline — Sigilix/sigilix, 2026-05-29 (200 most-recent reviews)
 

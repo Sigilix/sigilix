@@ -42,6 +42,10 @@ export function mapTelemetryToReview(raw: unknown, createdMs: number): FpRateRev
   if (!raw || typeof raw !== "object") return null
   const r = raw as Record<string, any>
   if (r.owner == null || r.repo == null || r.prNumber == null) return null
+  // A NaN/invalid prNumber would flow into the (prNumber:fid) attribution key
+  // and join wrongly — drop the row instead (CodeRabbit).
+  const prNumber = Number(r.prNumber)
+  if (!Number.isInteger(prNumber) || prNumber <= 0) return null
 
   const synth = r.synthesizer
   let synthFindings: RawSynthFinding[] | null = null
@@ -74,7 +78,7 @@ export function mapTelemetryToReview(raw: unknown, createdMs: number): FpRateRev
   return {
     owner: String(r.owner),
     repo: String(r.repo),
-    prNumber: Number(r.prNumber),
+    prNumber,
     createdMs,
     fellBackReason: r.fellBackReason ?? null,
     synthFindings,
@@ -88,11 +92,18 @@ export function mapSignalRecord(rec: unknown): FpRateDismissal[] {
   const out: FpRateDismissal[] = []
   for (const s of signals) {
     if (s?.kind !== "dismissed-textual" || typeof s?.fid !== "string") continue
+    // Skip malformed signals rather than defaulting ids to 0 (CodeRabbit):
+    // a 0 commentId would collapse unrelated signals in dedupeDismissals, and
+    // a 0 prNumber can't join to any review.
+    const prNumber = Number(s.prNumber)
+    const commentId = Number(s.commentId)
+    if (!Number.isInteger(prNumber) || prNumber <= 0) continue
+    if (!Number.isInteger(commentId) || commentId <= 0) continue
     const tsMs = Date.parse(String(s.ts))
     out.push({
       fid: s.fid,
-      prNumber: Number(s.prNumber ?? 0),
-      commentId: Number(s.commentId ?? 0),
+      prNumber,
+      commentId,
       dismissReason: s.dismissReason,
       tsMs: Number.isFinite(tsMs) ? tsMs : 0,
     })

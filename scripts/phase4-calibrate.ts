@@ -70,6 +70,14 @@ if (!args.repo) {
   )
   process.exit(1)
 }
+// Validate the repo format strictly (Sigilix dogfood finding): the value is
+// lower-cased + compared against the shadow event's `owner/repo`, so a
+// malformed string just silently matches nothing. Reject it up front with a
+// clear error rather than producing a confusing empty fit.
+if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(args.repo)) {
+  console.error(`error: --repo must be "owner/repo" (got: ${args.repo})`)
+  process.exit(1)
+}
 
 const nowMs = Date.now()
 const runId = new Date(nowMs).toISOString().replace(/[:.]/g, "-")

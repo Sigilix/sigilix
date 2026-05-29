@@ -4455,16 +4455,33 @@ export async function handlePrReviewEnsemble(
       withdrawals,
     )
     // SIG-280 PR C: which synth-softened source ids were ACTUALLY softened in
-    // the rendered output. Derived from the surviving finding INDICES, never a
-    // source-id set, because a source id can feed multiple synthesized
-    // findings. FAIL CLOSED (CodeRabbit): if a source id spans BOTH a surviving
-    // and a vetoed finding, it is NOT counted as softened — otherwise approval-
-    // readiness would treat it as "accounted" and could approve over the
-    // sibling finding the veto kept at full severity (undercount blockers).
+    // the rendered output. Derived from finding INDICES, never a source-id set,
+    // because a source id can feed multiple synthesized findings.
+    //
+    // "Actually softened in the output" (CodeRabbit, 2nd pass) is STRICTER than
+    // "survived the veto": the finding must also have (a) survived the
+    // withdrawal filter (be in `keepIndex` → actually rendered) AND (b) had its
+    // score genuinely lowered — a P0/P1 finding that the floor left UNCHANGED
+    // "survives" the veto but was NOT de-emphasized, so it must not count.
+    // FAIL CLOSED: a source id that is de-emphasized in one finding but left at
+    // full severity in another (vetoed, withdrawn, or floor-no-op) is NOT
+    // counted as accounted — otherwise approval-readiness could approve over a
+    // sibling finding still at full severity (undercount blockers).
+    const keptIndexSet = new Set(keepIndex)
+    const actuallySoftenedIndexSet = new Set<number>()
+    if (softenActive) {
+      for (let idx = 0; idx < consensusVerdict.findings.length; idx++) {
+        if (!(survivingSoftenIndexSet?.has(idx) ?? false)) continue
+        if (!keptIndexSet.has(idx)) continue
+        const score = consensusVerdict.findings[idx]!.score
+        if (softenScoreWithFloor(score) === score) continue // floor no-op (P0/P1) → not de-emphasized
+        actuallySoftenedIndexSet.add(idx)
+      }
+    }
     const softenMembership = new Map<string, { survived: boolean; vetoed: boolean }>()
     if (softenActive) {
       for (let idx = 0; idx < consensusProvenance.length; idx++) {
-        const survived = survivingSoftenIndexSet?.has(idx) ?? false
+        const survived = actuallySoftenedIndexSet.has(idx)
         for (const sourceFindingId of consensusProvenance[idx]?.sourceFindingIds ?? []) {
           if (!softenedSet.has(sourceFindingId)) continue
           const state = softenMembership.get(sourceFindingId) ?? { survived: false, vetoed: false }

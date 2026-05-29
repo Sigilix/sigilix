@@ -125,8 +125,20 @@
  * legacy single-review path with the existing `suggestedReplacement`
  * field instead of asking the model to put suggestion fences inside
  * `body`.
+ *
+ * v11 → v12 (SIG-280 prereq): the [REVIEW MEMORY] handling no longer
+ * instructs the synth to downgrade a softened finding's `score` itself —
+ * it emits the finding at TRUE severity and the orchestrator applies the
+ * one-tier soften deterministically. This removes a latent DOUBLE-soften:
+ * the synth obeying the old "downgrade by one tier" instruction AND the
+ * renderer's own `Math.max(1, score - 1)` lowered findings by two tiers.
+ * Renderer is now the single soften point, so the pre-soften (source)
+ * severity is recoverable from the emitted score (prerequisite for the
+ * SIG-280 PR B P0/P1 floor). Reviews with v11 go stale on first deploy of
+ * v12 (same mechanism). Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
+ * during rollout.
  */
-export const PROMPT_VERSION = "11"
+export const PROMPT_VERSION = "12"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

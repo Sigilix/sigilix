@@ -61,13 +61,16 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 11", () => {
+  it("PROMPT_VERSION bumped to 12", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
     // SIG-176 8→9 (remove dead synth retrieve/provenance budget contract).
     // SIG-202 9→10 (finding scope decides inline vs body review surface).
     // Structured details 10→11 (structured proof/fix/test-gap finding fields).
-    expect(PROMPT_VERSION).toBe("11")
+    // SIG-280 prereq 11→12 (review-memory soften no longer pre-decrements
+    // score in the synth — renderer is the single soften point; fixes the
+    // double-soften).
+    expect(PROMPT_VERSION).toBe("12")
   })
 })

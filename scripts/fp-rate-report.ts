@@ -188,11 +188,13 @@ async function main() {
   else console.log(md + "\n\n```csv\n" + csv + "\n```")
 
   // Print the (partial) report first, THEN fail non-zero so an automated
-  // pipeline doesn't consume an incomplete report as if it were complete
-  // (CodeRabbit).
+  // pipeline doesn't consume an incomplete report as if it were complete.
+  // Set process.exitCode (not process.exit) so the just-printed report fully
+  // flushes to stdout before the process exits — process.exit() can truncate
+  // buffered output in CI (CodeRabbit; Node docs).
   if (failedFetches > 0) {
     console.error(`WARNING: ${failedFetches} KV fetch(es) failed (non-404) — the report above may be INCOMPLETE (counts under-reported).`)
-    process.exit(1)
+    process.exitCode = 1
   }
 }
 

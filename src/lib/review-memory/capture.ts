@@ -255,6 +255,10 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     commentId: replyCommentId,
     fid: marker.fid,
     kind: dismissal.kind,
+    // SIG-114 PR 3: carry the finding's severity tier (always present on a
+    // valid marker) so the signal self-reports severity for the offline
+    // FP-rate metric beyond the 30d telemetry window.
+    sev: marker.sev,
   }
   // SIG-276 Phase 2: copy the finding's write-time claims (carried on the
   // parent marker) onto the dismissal signal, recomputing each id. The

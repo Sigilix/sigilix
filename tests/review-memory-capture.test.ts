@@ -197,6 +197,9 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     expect(catRecord.signals[0].commentId).toBe(100)
     // SIG-114 PR 3: the finding's severity tier is copied from the marker.
     expect(catRecord.signals[0].sev).toBe("warning")
+    // SIG-114 PR 4: a freeform "false positive" reply carries no canonical
+    // reason → stays unlabeled.
+    expect(catRecord.signals[0].dismissReason).toBeUndefined()
     // Path-scope record exists (path-sha key derived from marker pathSha12 — but
     // capture pipeline uses the FULL sha256 derived independently so the test
     // can't predict the exact key without knowing the path. Check via prefix.)
@@ -209,6 +212,21 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
       .map((args) => String(args[0]))
       .filter((s) => s.includes("review-memory-capture-written"))
     expect(events.length).toBeGreaterThan(0)
+  })
+
+  it("SIG-114 PR 4: captures the canonical dismissReason when the reply states one", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`Some review text\n\n${VALID_MARKER}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "@sigilix dismiss not-a-bug", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    expect(catRecord.signals.length).toBe(1)
+    expect(catRecord.signals[0].dismissReason).toBe("not-a-bug")
+    expect(catRecord.signals[0].sev).toBe("warning")
   })
 
   it("SIG-247 Phase 1: skips when parent comment is NOT authored by Sigilix App, even with valid marker", async () => {

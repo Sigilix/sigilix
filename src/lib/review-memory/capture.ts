@@ -260,6 +260,12 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     // FP-rate metric beyond the 30d telemetry window.
     sev: marker.sev,
   }
+  // SIG-114 PR 4: stamp the canonical dismiss reason when the reply stated one
+  // (e.g. a reply of "@sigilix dismiss not-a-bug" on the finding's thread).
+  // Opt-in via the strict alias table — absent on freeform replies, which stay
+  // `unlabeled`. Per-finding (the marker gives the fid), unlike the review-level
+  // explicit `@sigilix dismiss` command.
+  if (dismissal.dismissReason) signal.dismissReason = dismissal.dismissReason
   // SIG-276 Phase 2: copy the finding's write-time claims (carried on the
   // parent marker) onto the dismissal signal, recomputing each id. The
   // SAME signal object is appended to both the category and path-scope

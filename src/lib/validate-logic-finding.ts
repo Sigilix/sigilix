@@ -165,7 +165,7 @@ export interface LogicEvidence {
  * containment so a backticked expression still matches the added-line
  * text it was lifted from.
  */
-function backtickedTokens(finding: PrReviewFinding): string[] {
+export function backtickedTokens(finding: PrReviewFinding): string[] {
   const text = `${finding.headline ?? ""} ${finding.body ?? ""}`
   const out: string[] = []
   // Match the shortest run between a pair of backticks (non-greedy),

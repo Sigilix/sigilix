@@ -154,6 +154,12 @@ import {
   type PerfDropReason,
   type PerfEvidence,
 } from "./validate-perf-finding"
+import {
+  evaluateInlineGrounding,
+  parseInlineGroundingValidatorMode,
+  type InlineGroundingValidatorMode,
+  type InlineGroundingDropReason,
+} from "./validate-inline-grounding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -1341,7 +1347,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -3926,6 +3932,26 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "perf", reason: info.reason, dropped: info.dropped })
       },
+      // SIG-281 PR C (Rec 4): inline-grounding gate. Default `shadow` —
+      // counts/telemeters the would-demote until the operator flips
+      // OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE to "enforce". Reuses the
+      // `pr-review-finding-rejected-validation` event (`gate:
+      // "inline-grounding"`). `dropped` here = "demoted to body".
+      inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
+      onInlineGroundingFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "inline-grounding",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "inline-grounding", reason: info.reason, dropped: info.dropped })
+      },
     })
     if (telemetry.synthesizer) {
       telemetry.synthesizer.provenance = validated.provenance
@@ -3941,6 +3967,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
       droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
+      droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -4070,7 +4097,7 @@ export async function handlePrReviewEnsemble(
       // Body annotation — only when consensus >= 2.
       return annotateWithConsensus(working, consensusByIndex[i] ?? 1)
     })
-    const renderableUnanchored = validated.unanchoredFindings  // unanchored never matches by index
+    const renderableUnanchoredRaw = validated.unanchoredFindings  // unanchored never matches by INDEX (no parallel arrays)
     // SIG-160 PR3: drop any finding the bot already conceded via mention-reply
     // (`<!-- sigilix:gh-mention-reply -->` with verdict:"concede"). Filter
     // applies to inline-anchored findings only — unanchored findings have
@@ -4105,18 +4132,31 @@ export async function handlePrReviewEnsemble(
     }
     const { kept: postWithdrawalFindings, suppressed: withdrawnFindings } =
       filterWithdrawnFindings(renderableFindings, withdrawals)
+    // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
+    // body-only set. PR C's enforce mode can demote a LINE-scoped finding
+    // (which carries a real path+line) to the body; without this it would
+    // bypass withdrawal suppression and a previously-dismissed nit could
+    // reappear in the Review Body. Safe for pr/file-scope body findings
+    // too — findingMatchesWithdrawal requires path + line-proximity + body
+    // similarity, so an unrelated body finding cannot false-match. This
+    // also closes the pre-existing gap where SIG-141 line-1 / unanchorable
+    // demotions skipped withdrawal entirely.
+    const { kept: renderableUnanchored, suppressed: withdrawnUnanchored } =
+      filterWithdrawnFindings(renderableUnanchoredRaw, withdrawals)
     const keptRefSet = new Set(postWithdrawalFindings)
     const keepIndex: number[] = []
     for (let i = 0; i < renderableFindings.length; i++) {
       if (keptRefSet.has(renderableFindings[i]!)) keepIndex.push(i)
     }
-    if (withdrawnFindings.length > 0) {
+    if (withdrawnFindings.length > 0 || withdrawnUnanchored.length > 0) {
       console.log(JSON.stringify({
         event: "review-findings-suppressed-by-withdrawal",
         owner, repo, prNumber,
         suppressed: withdrawnFindings.length,
+        // SIG-281 PR C: body-only findings now also withdrawal-filtered.
+        suppressed_unanchored: withdrawnUnanchored.length,
         withdrawals_active: withdrawals.length,
-        paths: withdrawnFindings.map((f) => f.path),
+        paths: [...withdrawnFindings, ...withdrawnUnanchored].map((f) => f.path),
       }))
     }
     // Filtered parallel views for downstream consumers — snapshot and
@@ -4145,7 +4185,11 @@ export async function handlePrReviewEnsemble(
     // for the verdict decision, so the summary must agree.
     const hasRemainingFindings =
       postWithdrawalFindings.length + renderableUnanchored.length > 0
-    const summaryAfterSuppression = withdrawnFindings.length > 0
+    // SIG-281 PR C (Codex P2 follow-on): regenerate the summary when
+    // EITHER an inline OR a body finding was withdrawal-suppressed —
+    // otherwise a body-only withdrawal would remove the finding from the
+    // submission but leave the consensus summary still describing it.
+    const summaryAfterSuppression = (withdrawnFindings.length > 0 || withdrawnUnanchored.length > 0)
       ? (!hasRemainingFindings
           ? "All flagged findings were previously addressed via review-thread acknowledgments; nothing remaining to block."
           : "Summary regenerated after suppressing findings previously acknowledged via review-thread replies.")
@@ -7167,6 +7211,13 @@ export interface ValidatedOutput {
    */
   droppedForFailedPerfValidation: number
   /**
+   * SIG-281 PR C: count of score 2-3 findings the inline-grounding gate
+   * flagged as ungrounded (would-demote-to-body in shadow, actual-demote
+   * in enforce). Surfaced to telemetry so the gate's would-demote rate is
+   * observable before enforce.
+   */
+  droppedForFailedInlineGroundingValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -7821,6 +7872,23 @@ export function validateForSubmission(args: {
     info: { reason: PerfDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-281 PR C (Rec 4): inline-grounding gate mode. `shadow` (default)
+   * counts + telemeters but keeps every finding inline; `enforce` DEMOTES
+   * ungrounded score 2-3 findings to the review body (never hard-drops).
+   * Read from `OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE` at the call site.
+   */
+  inlineGroundingValidatorMode?: InlineGroundingValidatorMode
+  /**
+   * SIG-281 PR C: telemetry callback fired once per finding the inline-
+   * grounding gate flagged (reuses the `pr-review-finding-rejected-
+   * validation` event with a `gate: "inline-grounding"` discriminator).
+   * `dropped` here means "demoted to body" (enforce), not hard-dropped.
+   */
+  onInlineGroundingFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: InlineGroundingDropReason; dropped: boolean },
+  ) => void
+  /**
    * ARC-176/SIG-175: review-tone preset. `assertive` preserves the
    * old score-1 advisory summary aggregation; `chill`/default drops
    * score-1 nits from customer-visible output entirely.
@@ -7847,6 +7915,8 @@ export function validateForSubmission(args: {
     perfValidatorMode = "shadow",
     addedLineTextByLine,
     onPerfFindingDropped,
+    inlineGroundingValidatorMode = "shadow",
+    onInlineGroundingFindingDropped,
     profile = "chill",
   } = args
   const validIds = new Set<string>()
@@ -7872,6 +7942,7 @@ export function validateForSubmission(args: {
   let droppedForFailedTestValidation = 0
   let droppedForFailedLogicValidation = 0
   let droppedForFailedPerfValidation = 0
+  let droppedForFailedInlineGroundingValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // Walk by INDEX (v3.1 catch — not by headline).
@@ -8076,6 +8147,38 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-281 PR C (Rec 4): inline-grounding gate. A score 2-3 finding
+    // (ALL categories — no role/source guard) earns an inline review
+    // comment only when it is GROUNDED: a committable fix, a repro, an
+    // evidence ref/id, or a backticked token that resolves to a changed
+    // line. An ungrounded sub-blocker is DEMOTED to the review body
+    // (content preserved — NOT hard-dropped), so the inline surface stays
+    // high-signal. score>=4 (believability floor) and score<=1 (handled
+    // by the score-1 advisory demotion just below) are never touched by
+    // the pure helper.
+    //
+    // PLACEMENT (Codex P1): runs AFTER all the hard-drop gates
+    // (SIG-113/111/141/108/109/110) so a finding those gates would DROP is
+    // never demoted-to-body first — in enforce we demote "only if still
+    // alive". Runs BEFORE the score-1 demotion (the helper keeps score<=1
+    // so that path still owns it) and before line-validity (a kept finding
+    // still flows through; a demoted one is already body-routed).
+    // Withdrawal suppression of the resulting body findings is handled
+    // downstream (Codex P2). Shadow-first: only `enforce` demotes.
+    {
+      const groundingDecision = evaluateInlineGrounding(f, { addedLineTextByLine })
+      if (!groundingDecision.keep) {
+        const demoted = inlineGroundingValidatorMode === "enforce"
+        droppedForFailedInlineGroundingValidation++
+        onInlineGroundingFindingDropped?.(f, { reason: groundingDecision.reason, dropped: demoted })
+        if (demoted) {
+          unanchoredFindings.push(f)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
+    }
+
     // Score-1 advisory demotion
     if (f.score <= 1) {
       advisoryNits.push(f)
@@ -8195,6 +8298,7 @@ export function validateForSubmission(args: {
     droppedForFailedTestValidation,
     droppedForFailedLogicValidation,
     droppedForFailedPerfValidation,
+    droppedForFailedInlineGroundingValidation,
     cleanFindingProvenance,
     provenance: {
       ...synthOutput.provenance,
@@ -8372,6 +8476,10 @@ interface EnsembleTelemetry {
     /** SIG-110: count of sev>=4 perf findings the evidence gate flagged
      * (would-drop in shadow mode, actual-drop in enforce mode). */
     droppedForFailedPerfValidation: number
+    /** SIG-281 PR C: count of score 2-3 findings the inline-grounding gate
+     * flagged as ungrounded (would-demote-to-body in shadow, actual-demote
+     * in enforce mode). */
+    droppedForFailedInlineGroundingValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

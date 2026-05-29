@@ -9,6 +9,7 @@ import {
   buildReviewSubmissionWithMetadata,
   CHECK_ANNOTATION_TEXT_LIMIT,
   CHECK_ANNOTATION_TITLE_LIMIT,
+  chooseRenderedEventWithOverride,
   chooseReviewEvent,
   chooseReviewEventForRenderedFindings,
   chooseReviewEventWithGate,
@@ -407,6 +408,46 @@ describe("chooseReviewEventForRenderedFindings", () => {
       bodyOnlyFindings: [],
       openItems: [sigilixThread],
     })).toBe("REQUEST_CHANGES")
+  })
+})
+
+describe("chooseRenderedEventWithOverride — SIG-287 degraded/low-confidence downgrade", () => {
+  const f = (score = 3): PrReviewFinding => ({ ...baseFinding, score })
+
+  it("REQUEST_CHANGES override always escalates (a real blocker must block)", () => {
+    expect(
+      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }, "REQUEST_CHANGES"),
+    ).toBe("REQUEST_CHANGES")
+  })
+
+  it("COMMENT override DOWNGRADES an otherwise-clean APPROVE to COMMENT (degraded coverage / low confidence)", () => {
+    // The SIG-287 fake-approve bug: 0 findings would APPROVE; when the review is
+    // degraded (logic specialist absent) or low-confidence, we must post a
+    // neutral COMMENT instead of a confident clean sign-off.
+    expect(
+      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }, "COMMENT"),
+    ).toBe("COMMENT")
+  })
+
+  it("COMMENT override NEVER weakens a REQUEST_CHANGES (a blocker still blocks)", () => {
+    expect(
+      chooseRenderedEventWithOverride({ inlineFindings: [f(4)], bodyOnlyFindings: [] }, "COMMENT"),
+    ).toBe("REQUEST_CHANGES")
+    expect(
+      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [f(5)] }, "COMMENT"),
+    ).toBe("REQUEST_CHANGES")
+  })
+
+  it("COMMENT override is a no-op when rendered findings already make it COMMENT", () => {
+    expect(
+      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [f(2)] }, "COMMENT"),
+    ).toBe("COMMENT")
+  })
+
+  it("no override → unchanged base behavior (clean → APPROVE)", () => {
+    expect(
+      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [] }),
+    ).toBe("APPROVE")
   })
 })
 

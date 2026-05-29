@@ -443,6 +443,11 @@ export const RESERVED_HEADROOM_MS = 195_000
 // tracked in ARC-283. For now, 895s comfortably absorbs the diffs
 // that pre-ARC-283 was burning out on.
 export const ORCHESTRATOR_TIMEOUT_MS = 895_000
+// SIG-287: synth confidence (1-5) at or below this downgrades an otherwise-
+// clean APPROVE to a neutral COMMENT — a low-confidence review must not read as
+// a confident sign-off. Degraded coverage (a missing specialist) ALSO triggers
+// the downgrade independently of this. Tunable knob; 2 = "low".
+export const LOW_CONFIDENCE_COMMENT_THRESHOLD = 2
 // Cap the pre-flight Vectorize round-trip so a slow retrieval can't
 // silently consume the synth budget. Failed pre-flight is non-fatal
 // per v3.1 §8 — specialists fall back to empty snapshot.
@@ -4515,11 +4520,49 @@ export async function handlePrReviewEnsemble(
       ...approvalReadiness.bodyOnlyFindings,
     ]
     const effectiveEvent = approvalReadiness.event
+    // SIG-287: a degraded-coverage or low-confidence review must NOT post a
+    // confident clean APPROVE — that is the fake-approve believability bug (the
+    // bot says "all clear" when its primary bug-finder, logic, didn't run).
+    // Downgrade an otherwise-APPROVE to a neutral COMMENT ("Sigilix looked, but
+    // this is not a full sign-off"). A real blocker still escalates to
+    // REQUEST_CHANGES (escalation wins); the COMMENT override can only weaken
+    // APPROVE→COMMENT, never hide a rendered blocker — see
+    // `chooseRenderedEventWithOverride`. Honors the founder's SIG-14 posture
+    // ("speak, don't be silent"): the bot still comments, it just stops
+    // rubber-stamping a review it couldn't actually complete.
+    const synthConfidence =
+      typeof renderableVerdict.confidence === "number" ? renderableVerdict.confidence : 5
+    const reviewIncomplete =
+      degradedCoverage !== null || synthConfidence <= LOW_CONFIDENCE_COMMENT_THRESHOLD
     const reviewEventOverride: ReviewEventOverride | undefined =
-      approvalReadiness.blockers.length > 0 ? "REQUEST_CHANGES" : undefined
+      approvalReadiness.blockers.length > 0
+        ? "REQUEST_CHANGES"
+        : reviewIncomplete
+          ? "COMMENT"
+          : undefined
+    if (reviewIncomplete) {
+      console.log(JSON.stringify({
+        event: "review-incomplete-downgrade",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        reason: degradedCoverage !== null ? "degraded_coverage" : "low_confidence",
+        rolesMissing: degradedCoverage?.rolesMissing ?? [],
+        synthConfidence,
+      }))
+    }
+    // Visible caveat so a downgraded review reads as honestly partial, never as
+    // a quiet clean approve (SIG-94 hid coverage on APPROVE; this re-surfaces it
+    // only when the review is actually incomplete).
+    const incompleteSummaryPrefix = reviewIncomplete
+      ? degradedCoverage !== null
+        ? `> ⚠️ **Partial review** — ${degradedCoverage.rolesMissing.join(", ")} specialist` +
+          `${degradedCoverage.rolesMissing.length === 1 ? "" : "s"} unavailable; this is **not** a full Sigilix sign-off.\n\n`
+        : `> ⚠️ **Low-confidence review** — posted as a comment, not a full approval.\n\n`
+      : ""
     const submissionVerdict: PrReviewVerdict = {
       ...renderableVerdict,
-      summary: buildApprovalReadinessSummary(approvalReadiness, renderableVerdict.summary),
+      summary:
+        incompleteSummaryPrefix +
+        buildApprovalReadinessSummary(approvalReadiness, renderableVerdict.summary),
     }
 
     // ARC-271 — finding delta vs the prior review.

@@ -137,8 +137,18 @@
  * SIG-280 PR B P0/P1 floor). Reviews with v11 go stale on first deploy of
  * v12 (same mechanism). Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
  * during rollout.
+ *
+ * v12 → v13 (SIG-280 PR B): the [REVIEW MEMORY] handling — BOTH the synth
+ * system prompt AND the runtime-injected memory block (render.ts) — now
+ * tells the model to emit matching findings at TRUE severity + full body
+ * and only FLAG them in `provenance.softened[]`; no score downgrade, no
+ * body shortening. The orchestrator is the sole, gated soften point (P0/P1
+ * floored). Completes the SIG-284 double-soften fix (v12 missed render.ts)
+ * and makes Phase-4 soften-gating actually hold (the synth no longer
+ * pre-softens regardless of the flag). Reviews with v12 go stale on first
+ * deploy of v13. Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
  */
-export const PROMPT_VERSION = "12"
+export const PROMPT_VERSION = "13"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

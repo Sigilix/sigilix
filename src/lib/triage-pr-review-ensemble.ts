@@ -8147,38 +8147,6 @@ export function validateForSubmission(args: {
       }
     }
 
-    // SIG-281 PR C (Rec 4): inline-grounding gate. A score 2-3 finding
-    // (ALL categories — no role/source guard) earns an inline review
-    // comment only when it is GROUNDED: a committable fix, a repro, an
-    // evidence ref/id, or a backticked token that resolves to a changed
-    // line. An ungrounded sub-blocker is DEMOTED to the review body
-    // (content preserved — NOT hard-dropped), so the inline surface stays
-    // high-signal. score>=4 (believability floor) and score<=1 (handled
-    // by the score-1 advisory demotion just below) are never touched by
-    // the pure helper.
-    //
-    // PLACEMENT (Codex P1): runs AFTER all the hard-drop gates
-    // (SIG-113/111/141/108/109/110) so a finding those gates would DROP is
-    // never demoted-to-body first — in enforce we demote "only if still
-    // alive". Runs BEFORE the score-1 demotion (the helper keeps score<=1
-    // so that path still owns it) and before line-validity (a kept finding
-    // still flows through; a demoted one is already body-routed).
-    // Withdrawal suppression of the resulting body findings is handled
-    // downstream (Codex P2). Shadow-first: only `enforce` demotes.
-    {
-      const groundingDecision = evaluateInlineGrounding(f, { addedLineTextByLine })
-      if (!groundingDecision.keep) {
-        const demoted = inlineGroundingValidatorMode === "enforce"
-        droppedForFailedInlineGroundingValidation++
-        onInlineGroundingFindingDropped?.(f, { reason: groundingDecision.reason, dropped: demoted })
-        if (demoted) {
-          unanchoredFindings.push(f)
-          continue
-        }
-        // shadow mode: fall through and keep the finding inline.
-      }
-    }
-
     // Score-1 advisory demotion
     if (f.score <= 1) {
       advisoryNits.push(f)
@@ -8242,6 +8210,35 @@ export function validateForSubmission(args: {
       rewroteRange =
         workingFinding.line !== f.line ||
         workingFinding.startLine !== f.startLine
+    }
+
+    // SIG-281 PR C (Rec 4): inline-grounding gate. A finding that reaches
+    // here is a real inline candidate — it survived every hard-drop gate
+    // (SIG-113/111/141/108/109/110), the score-1 advisory demotion, and
+    // the range-aware anchor repair above. If it's a weakly-grounded
+    // score 2-3 finding it is DEMOTED to the review body (content
+    // preserved — NOT hard-dropped) so the inline surface stays
+    // high-signal; score>=4 (believability floor) and score<=1 (already
+    // routed to advisory above) are kept by the pure helper.
+    //
+    // PLACEMENT: AFTER the hard-drop gates (Codex P1 — never demote a
+    // finding those gates would drop) AND AFTER anchor repair (CodeRabbit
+    // Major — demote `workingFinding` so the body record + downstream
+    // withdrawal matching use the REPAIRED anchor, not the raw line).
+    // Shadow-first: only `enforce` demotes; `shadow` counts + telemeters
+    // and keeps the finding inline.
+    {
+      const groundingDecision = evaluateInlineGrounding(workingFinding, { addedLineTextByLine })
+      if (!groundingDecision.keep) {
+        const demoted = inlineGroundingValidatorMode === "enforce"
+        droppedForFailedInlineGroundingValidation++
+        onInlineGroundingFindingDropped?.(workingFinding, { reason: groundingDecision.reason, dropped: demoted })
+        if (demoted) {
+          unanchoredFindings.push(workingFinding)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
     }
 
     const side = deriveSide(reviewable, workingFinding.path, workingFinding.line)

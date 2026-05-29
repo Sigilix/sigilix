@@ -221,9 +221,18 @@ function makeReviewable(path = PATH): ReviewableMap {
 function makeSpecialistVerdicts(): SpecialistVerdictsArg {
   return [{ role: "logic", verdict: { findings: [{ id: "logic-0" }] } }] as unknown as SpecialistVerdictsArg
 }
-function prov(sourceId = "logic-0"): SynthesizerProvenance {
+function prov(count = 1, sourceId = "logic-0"): SynthesizerProvenance {
   return {
-    findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: [sourceId], action: "kept", verifiedViaRetrieval: false }],
+    // One provenance entry per finding (the hallucination guard maps
+    // synthOutput.verdict.findings to provenance.findings BY INDEX). All
+    // point at the single valid source id so every finding survives the
+    // guard and reaches the grounding gate.
+    findings: Array.from({ length: count }, () => ({
+      sourceSpecialists: ["logic"],
+      sourceFindingIds: [sourceId],
+      action: "kept" as const,
+      verifiedViaRetrieval: false,
+    })),
     dropped: [],
     softened: [],
   }
@@ -248,7 +257,7 @@ function run(findings: PrReviewFinding[], opts: { mode?: "shadow" | "enforce"; o
   return validateForSubmission({
     synthOutput: {
       verdict: { summary: "T", confidence: 3, confidenceReason: "R.", findings },
-      provenance: prov(),
+      provenance: prov(findings.length),
     },
     reviewable: makeReviewable(),
     specialistVerdicts: makeSpecialistVerdicts(),
@@ -310,6 +319,21 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
     // (advisory), so it appears in neither inline nor body.
     expect(result.verdict.findings).toHaveLength(0)
     expect(result.unanchoredFindings.some((f) => f.headline === "naming is inconsistent here")).toBe(false)
+  })
+
+  it("ENFORCE: processes a mixed grounded/ungrounded batch correctly (counter + callback reflect only the ungrounded)", () => {
+    const onDrop = vi.fn()
+    const findings = [
+      ungrounded({ headline: "ungrounded nit one" }),
+      ungrounded({ headline: "rename `compute` for clarity" }), // grounded — token on changed line
+      ungrounded({ headline: "ungrounded nit two" }),
+    ]
+    const result = run(findings, { mode: "enforce", onDrop })
+    expect(result.droppedForFailedInlineGroundingValidation).toBe(2)
+    expect(result.verdict.findings).toHaveLength(1) // only the grounded one stays inline
+    expect(result.verdict.findings[0]?.headline).toBe("rename `compute` for clarity")
+    expect(result.unanchoredFindings).toHaveLength(2)
+    expect(onDrop).toHaveBeenCalledTimes(2)
   })
 
   it("ordering: a vague-prefix finding is dropped BEFORE the grounding gate (gate counter 0)", () => {

@@ -4306,6 +4306,12 @@ export async function handlePrReviewEnsemble(
       }
     }
     let softenedCount = 0
+    // SIG-280 PR C: the SINGLE source of truth for "this finding's score was
+    // actually lowered in the rendered output" — populated below exactly where
+    // the soften clone is built. Approval-readiness reads this (intersected
+    // with the withdrawal-survivor `keepIndex`) instead of re-encoding the
+    // soften contract, so the two paths can never drift (CodeRabbit).
+    const actuallySoftenedIndexSet = new Set<number>()
     // ARC-270: soften walks the CONSENSUS-RANKED arrays (verdict +
     // provenance + consensusByIndex stay in lockstep). Body
     // annotation happens here too, so renderable findings carry both
@@ -4339,6 +4345,7 @@ export async function handlePrReviewEnsemble(
         const effectiveScore = softenScoreWithFloor(f.score)
         if (effectiveScore !== f.score) {
           softenedCount++
+          actuallySoftenedIndexSet.add(i)
           working = { ...f, score: effectiveScore }
         }
       }
@@ -4458,30 +4465,23 @@ export async function handlePrReviewEnsemble(
     // the rendered output. Derived from finding INDICES, never a source-id set,
     // because a source id can feed multiple synthesized findings.
     //
-    // "Actually softened in the output" (CodeRabbit, 2nd pass) is STRICTER than
-    // "survived the veto": the finding must also have (a) survived the
-    // withdrawal filter (be in `keepIndex` → actually rendered) AND (b) had its
-    // score genuinely lowered — a P0/P1 finding that the floor left UNCHANGED
-    // "survives" the veto but was NOT de-emphasized, so it must not count.
-    // FAIL CLOSED: a source id that is de-emphasized in one finding but left at
-    // full severity in another (vetoed, withdrawn, or floor-no-op) is NOT
-    // counted as accounted — otherwise approval-readiness could approve over a
-    // sibling finding still at full severity (undercount blockers).
+    // We reuse `actuallySoftenedIndexSet` — the SINGLE source of truth built in
+    // the renderableFindings map above where the score is actually changed —
+    // and intersect it with the withdrawal survivors (`keepIndex`). That makes
+    // "actually de-emphasized in the output" mean: the renderer lowered the
+    // score AND the finding survived withdrawal filtering. No re-encoding of the
+    // soften contract here, so approval can't drift from rendered output
+    // (CodeRabbit). A P0/P1 the floor left unchanged was never added to the set,
+    // so it correctly does NOT count.
+    // FAIL CLOSED: a source id de-emphasized in one finding but left at full
+    // severity in another (vetoed, withdrawn, or floor-no-op) is NOT counted as
+    // accounted — else approval-readiness could approve over a sibling finding
+    // still at full severity (undercount blockers).
     const keptIndexSet = new Set(keepIndex)
-    const actuallySoftenedIndexSet = new Set<number>()
-    if (softenActive) {
-      for (let idx = 0; idx < consensusVerdict.findings.length; idx++) {
-        if (!(survivingSoftenIndexSet?.has(idx) ?? false)) continue
-        if (!keptIndexSet.has(idx)) continue
-        const score = consensusVerdict.findings[idx]!.score
-        if (softenScoreWithFloor(score) === score) continue // floor no-op (P0/P1) → not de-emphasized
-        actuallySoftenedIndexSet.add(idx)
-      }
-    }
     const softenMembership = new Map<string, { survived: boolean; vetoed: boolean }>()
     if (softenActive) {
       for (let idx = 0; idx < consensusProvenance.length; idx++) {
-        const survived = actuallySoftenedIndexSet.has(idx)
+        const survived = actuallySoftenedIndexSet.has(idx) && keptIndexSet.has(idx)
         for (const sourceFindingId of consensusProvenance[idx]?.sourceFindingIds ?? []) {
           if (!softenedSet.has(sourceFindingId)) continue
           const state = softenMembership.get(sourceFindingId) ?? { survived: false, vetoed: false }

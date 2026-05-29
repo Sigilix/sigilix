@@ -300,6 +300,7 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
+import { applyDegradedCoverageFindingFloor } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -3814,6 +3815,46 @@ export async function handlePrReviewEnsemble(
       emitSynthSummary(perfCtx, summary)
     }
 
+    // ─── SIG-287: degraded-coverage finding floor ──────────────
+    // On a degraded run (a dispatched specialist — in practice `logic` —
+    // timed out), the synth can shrug: emit a low-confidence verdict that
+    // DROPS what the surviving specialists found (PR #218: synth emitted 0
+    // findings while `performance` had a real score-2 finding). The event
+    // downgrade (#219) already stops a degraded review from posting a
+    // confident APPROVE; this re-injects the score>=2 findings the synth
+    // dropped so the partial COMMENT shows what was actually found, rather
+    // than an empty "partial review". Re-injected findings flow through the
+    // SAME post-synth pipeline below (validators, anchor repair, withdrawal
+    // suppression, inline-grounding, score-1 demotion) — nothing is force-
+    // posted. Only runs when degraded; full-coverage reviews are untouched.
+    // `synthOutput.verdict`/`.provenance` are non-null here (the bail above
+    // returns otherwise). Capture into locals so the floor can replace them
+    // for validation WITHOUT reassigning `synthOutput` (which would widen its
+    // type back to nullable + perturb the downstream soften path that reads
+    // `synthOutput.provenance.softened`).
+    let effectiveSynthVerdict = synthOutput.verdict
+    let effectiveSynthProvenance = synthOutput.provenance
+    if (degradedCoverage) {
+      const floored = applyDegradedCoverageFindingFloor({
+        findings: effectiveSynthVerdict.findings,
+        provenanceFindings: effectiveSynthProvenance.findings,
+        specialists: synthInputVerdicts
+          .filter((v) => v.verdict !== null)
+          .map((v) => ({ role: v.role, findings: v.verdict!.findings })),
+      })
+      if (floored.restored.length > 0) {
+        effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
+        effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: floored.provenanceFindings }
+        console.log(JSON.stringify({
+          event: "pr-review-degraded-source-findings-restored",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          rolesMissing: degradedCoverage.rolesMissing,
+          restoredCount: floored.restored.length,
+          restored: floored.restored.map((r) => ({ role: r.role, id: r.id, score: r.score })),
+        }))
+      }
+    }
+
     // ─── Post-synthesis validation ─────────────────────────────
     // SIG-141: line spans of DurableObject class declarations in the changed
     // files, parsed from the AST (not raw text). Authz findings inside a DO
@@ -3823,7 +3864,7 @@ export async function handlePrReviewEnsemble(
     // (no suppression → findings kept, never hidden).
     const doClassSpans = durableObjectClassSpans(astFilesByPath)
     const validated = validateForSubmission({
-      synthOutput: { verdict: synthOutput.verdict, provenance: synthOutput.provenance },
+      synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
       reviewable,
       specialistVerdicts: synthInputVerdicts,
       // SIG-113: thread the testing-evidence pack through so the

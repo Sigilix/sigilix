@@ -85,7 +85,17 @@ import { remediationForFinding } from "./validate-security-finding"
  * + the renderer body builders need to switch on the widened union.
  */
 export type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
-export type ReviewEventOverride = Extract<ReviewEvent, "REQUEST_CHANGES">
+/**
+ * A caller-supplied event override. Two safe directions only:
+ *   - `"REQUEST_CHANGES"` — escalate (always wins; a real blocker must block).
+ *   - `"COMMENT"` — DOWNGRADE an otherwise-`APPROVE` to a neutral comment
+ *     (SIG-287: a degraded / low-confidence review must never post a confident
+ *     clean APPROVE). It can only weaken APPROVE→COMMENT — it can NEVER weaken a
+ *     `REQUEST_CHANGES` or hide a blocking finding (see `chooseRenderedEventWithOverride`).
+ * `"APPROVE"` is intentionally NOT overridable — nothing may force a clean
+ * approval over the rendered-findings gate.
+ */
+export type ReviewEventOverride = Exclude<ReviewEvent, "APPROVE">
 
 /**
  * ARC-156 follow-up (rubberfit PR #232 catch): the model occasionally
@@ -1418,14 +1428,20 @@ export function chooseReviewEventForRenderedFindings(
   return "COMMENT"
 }
 
-function chooseRenderedEventWithOverride(
+export function chooseRenderedEventWithOverride(
   args: ChooseReviewEventForRenderedFindingsArgs,
   eventOverride?: ReviewEventOverride,
 ): ReviewEvent {
-  // Only escalation is safe here. COMMENT/APPROVE overrides can hide
-  // rendered findings, so even an unsafe cast at runtime is ignored.
+  // Escalation always wins — a real blocker must block.
   if (eventOverride === "REQUEST_CHANGES") return "REQUEST_CHANGES"
-  return chooseReviewEventForRenderedFindings(args)
+  const base = chooseReviewEventForRenderedFindings(args)
+  // SIG-287: a `"COMMENT"` override DOWNGRADES an otherwise-clean APPROVE to a
+  // neutral comment (degraded coverage / low confidence — "Sigilix looked but
+  // this is not a full sign-off"). It can ONLY weaken APPROVE→COMMENT — never
+  // weaken a REQUEST_CHANGES and never hide a rendered blocker: if `base` is
+  // already REQUEST_CHANGES or COMMENT (findings present), it stands.
+  if (eventOverride === "COMMENT" && base === "APPROVE") return "COMMENT"
+  return base
 }
 
 // ─── SIG-161 PR 4a: thresholded gate ─────────────────────────────────

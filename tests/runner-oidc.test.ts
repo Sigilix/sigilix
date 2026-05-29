@@ -142,30 +142,65 @@ describe("verifyGitHubOidcToken", () => {
     const r = await verifyGitHubOidcToken(badSig, { expectedAudience: AUD, nowMs: NOW_MS, fetchJwks: async () => [jwk] })
     expect(r).toEqual({ ok: false, reason: "malformed-token" })
   })
+
+  it("does NOT throw on a non-object (null/array) header or payload — total never-throws", async () => {
+    const { jwk } = await genKey()
+    const opts = { expectedAudience: AUD, nowMs: NOW_MS, fetchJwks: async () => [jwk] }
+    const nul = b64url(new TextEncoder().encode("null"))
+    // header === JSON `null` (valid base64url, attacker-controlled): without the
+    // object guard, `header.alg` throws TypeError pre-crypto and escapes uncaught.
+    expect(await verifyGitHubOidcToken(`${nul}.${b64urlJson(baseClaims)}.AAAA`, opts)).toEqual({ ok: false, reason: "malformed-token" })
+    // array header
+    expect(await verifyGitHubOidcToken(`${b64urlJson([1, 2, 3])}.${b64urlJson(baseClaims)}.AAAA`, opts)).toEqual({ ok: false, reason: "malformed-token" })
+    // payload === JSON `null` (latent behind the signature in practice, but the
+    // guard makes the "claims is an object" invariant explicit + typed).
+    expect(await verifyGitHubOidcToken(`${b64urlJson({ alg: "RS256", kid: KID })}.${nul}.AAAA`, opts)).toEqual({ ok: false, reason: "malformed-token" })
+  })
 })
 
 describe("validateRunnerProvenance", () => {
   const WORKFLOW = "sigilix/runner/.github/workflows/scan.yml"
+  // repository + sha are REQUIRED by type — a base expectation every case extends.
+  const EXP = { workflowRef: WORKFLOW, repository: "Sigilix/sigilix", sha: "deadbeef" }
+
   it("accepts a token from the pinned reusable workflow on a github-hosted runner", () => {
-    expect(validateRunnerProvenance(baseClaims, { workflowRef: WORKFLOW, repository: "Sigilix/sigilix", sha: "deadbeef" })).toEqual({ ok: true })
+    expect(validateRunnerProvenance(baseClaims, EXP)).toEqual({ ok: true })
   })
   it("rejects a workflow-ref outside Sigilix's pinned workflow", () => {
-    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: "attacker/repo/.github/workflows/x.yml@y" }, { workflowRef: WORKFLOW })).toEqual({ ok: false, reason: "workflow-ref-mismatch" })
+    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: "attacker/repo/.github/workflows/x.yml@y" }, EXP)).toEqual({ ok: false, reason: "workflow-ref-mismatch" })
   })
   it("rejects a SIBLING-repo prefix spoof (exact match, not startsWith)", () => {
     // `sigilix/runner-evil/...` would pass a naive startsWith on `sigilix/runner`.
-    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: "sigilix/runner-evil/.github/workflows/scan.yml@x" }, { workflowRef: WORKFLOW })).toEqual({ ok: false, reason: "workflow-ref-mismatch" })
+    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: "sigilix/runner-evil/.github/workflows/scan.yml@x" }, EXP)).toEqual({ ok: false, reason: "workflow-ref-mismatch" })
   })
-  it("accepts any @ref of OUR workflow path", () => {
-    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: `${WORKFLOW}@refs/heads/main` }, { workflowRef: WORKFLOW })).toEqual({ ok: true })
+  it("rejects a `..` path-traversal ref (exact compare — `..` is inert, never resolved)", () => {
+    // The Sigilix-bot "path traversal" FP: there is no fs sink + exact string
+    // compare, so `..` segments simply fail the match. Proven, not bypassed.
+    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: "sigilix/runner/../../../evil/scan.yml@x" }, EXP)).toEqual({ ok: false, reason: "workflow-ref-mismatch" })
+  })
+  it("matches owner/repo case-INSENSITIVELY but the file path case-SENSITIVELY", () => {
+    // a legit customer who wrote `uses: Sigilix/Runner/...` must still verify.
+    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: "Sigilix/Runner/.github/workflows/scan.yml@v1" }, EXP)).toEqual({ ok: true })
+    // a wrong-CASE file path is a real mismatch (GitHub paths are case-sensitive).
+    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: "sigilix/runner/.github/workflows/SCAN.yml@v1" }, EXP)).toEqual({ ok: false, reason: "workflow-ref-mismatch" })
+  })
+  it("accepts any @ref of OUR workflow path (ref intentionally unconstrained — see workflowRef doc)", () => {
+    expect(validateRunnerProvenance({ ...baseClaims, job_workflow_ref: `${WORKFLOW}@refs/heads/main` }, EXP)).toEqual({ ok: true })
   })
   it("rejects a non-github-hosted runner unless self-host is allowed", () => {
     const selfHosted = { ...baseClaims, runner_environment: "self-hosted" }
-    expect(validateRunnerProvenance(selfHosted, { workflowRef: WORKFLOW })).toEqual({ ok: false, reason: "non-github-hosted-runner" })
-    expect(validateRunnerProvenance(selfHosted, { workflowRef: WORKFLOW, allowSelfHosted: true })).toEqual({ ok: true })
+    expect(validateRunnerProvenance(selfHosted, EXP)).toEqual({ ok: false, reason: "non-github-hosted-runner" })
+    expect(validateRunnerProvenance(selfHosted, { ...EXP, allowSelfHosted: true })).toEqual({ ok: true })
   })
-  it("binds to the SARIF repo + sha", () => {
-    expect(validateRunnerProvenance(baseClaims, { workflowRef: WORKFLOW, repository: "other/repo" })).toEqual({ ok: false, reason: "repository-mismatch" })
-    expect(validateRunnerProvenance(baseClaims, { workflowRef: WORKFLOW, sha: "feedface" })).toEqual({ ok: false, reason: "sha-mismatch" })
+  it("binds to the SARIF repo + sha (case-insensitive), both REQUIRED", () => {
+    expect(validateRunnerProvenance(baseClaims, { ...EXP, repository: "other/repo" })).toEqual({ ok: false, reason: "repository-mismatch" })
+    expect(validateRunnerProvenance(baseClaims, { ...EXP, sha: "feedface" })).toEqual({ ok: false, reason: "sha-mismatch" })
+    // a missing repository claim must not silently pass the binding.
+    expect(validateRunnerProvenance({ ...baseClaims, repository: undefined }, EXP)).toEqual({ ok: false, reason: "repository-mismatch" })
+  })
+  it("binds the IMMUTABLE repository_id when the route supplies it (defeats a repo rename)", () => {
+    const claims = { ...baseClaims, repository_id: "424242" }
+    expect(validateRunnerProvenance(claims, { ...EXP, repositoryId: "424242" })).toEqual({ ok: true })
+    expect(validateRunnerProvenance(claims, { ...EXP, repositoryId: "999999" })).toEqual({ ok: false, reason: "repository-id-mismatch" })
   })
 })

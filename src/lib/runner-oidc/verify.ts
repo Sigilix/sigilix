@@ -25,6 +25,18 @@ function base64urlToString(s: string): string {
   return new TextDecoder().decode(base64urlToBytes(s))
 }
 
+/**
+ * A decoded JWT header/payload MUST be a plain JSON object. `JSON.parse` happily
+ * returns `null`, arrays, and primitives (all valid JSON + valid base64url, fully
+ * attacker-controlled). `null` is the one shape where the later property reads
+ * (`header.alg`, `claims.iss`) THROW instead of yielding `undefined` — which would
+ * escape the function uncaught and break the "never throws" contract. Reject every
+ * non-object shape so the contract is total, not just signature-segment-scoped.
+ */
+function isJsonObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v)
+}
+
 /** Default JWKS-fetch deadline — a stalled endpoint must not hang verification. */
 const DEFAULT_JWKS_TIMEOUT_MS = 3000
 
@@ -68,12 +80,12 @@ export async function verifyGitHubOidcToken(token: string, opts: VerifyOpts): Pr
   }
   const [headerB64, payloadB64, sigB64] = parts as [string, string, string]
 
-  let header: { alg?: string; kid?: string }
-  let claims: GitHubOidcClaims
+  let rawHeader: unknown
+  let rawClaims: unknown
   let sigBytes: Uint8Array
   try {
-    header = JSON.parse(base64urlToString(headerB64)) as { alg?: string; kid?: string }
-    claims = JSON.parse(base64urlToString(payloadB64)) as GitHubOidcClaims
+    rawHeader = JSON.parse(base64urlToString(headerB64))
+    rawClaims = JSON.parse(base64urlToString(payloadB64))
     // Decode the signature HERE (inside the try) so a malformed signature
     // segment (atob throws on illegal chars) is a typed failure, not an
     // uncaught throw — preserving the "never throws" contract (an attacker
@@ -82,6 +94,15 @@ export async function verifyGitHubOidcToken(token: string, opts: VerifyOpts): Pr
   } catch {
     return { ok: false, reason: "malformed-token" }
   }
+  // Parsed JWT segments MUST be plain objects. `null` (and arrays/primitives) are
+  // valid JSON the attacker can supply; a `null` header would throw on the
+  // `header.alg` read below, escaping the function uncaught. Reject here so the
+  // never-throws contract holds for the whole function, not just the signature.
+  if (!isJsonObject(rawHeader) || !isJsonObject(rawClaims)) {
+    return { ok: false, reason: "malformed-token" }
+  }
+  const header = rawHeader as { alg?: string; kid?: string }
+  const claims = rawClaims as GitHubOidcClaims
   if (header.alg !== "RS256") return { ok: false, reason: "unsupported-alg" }
   if (!header.kid) return { ok: false, reason: "no-kid" }
 

@@ -386,6 +386,13 @@ export interface Env {
   // `wrangler secret put OPENCLAW_PERF_VALIDATOR_MODE enforce`.
   OPENCLAW_PERF_VALIDATOR_MODE?: string
 
+  // SIG-281 PR C (Rec 4): inline-grounding gate mode. "shadow" (default)
+  // counts + telemeters the would-demote; "enforce" demotes ungrounded
+  // score 2-3 findings to the review body (never hard-drops). Operator
+  // flips via
+  // `wrangler secret put OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE enforce`.
+  OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE?: string
+
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
   // that AUGMENTS the logic role's shared snapshot; any other value

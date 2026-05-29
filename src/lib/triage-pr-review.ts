@@ -520,11 +520,13 @@ const SIGILIX_REVIEW_MARKER = "<!-- sigilix:pr-review -->"
 const BODY_ONLY_FINDINGS_HEADING = "### Review Body Findings"
 // SIG-281 PR B (Rec 6 / Kimi K2.6): this section now holds only
 // sub-blocker (score < 4) body-only findings — score >= 4 blockers are
-// surfaced in the Fix Plan table + a collapsed evidence block above. The
-// copy now covers both reasons a finding lands here: un-anchorable scope
-// AND inline-comment-cap overflow (Rec 3).
+// surfaced in the Fix Plan table + a collapsed evidence block above.
+// SIG-281 PR C: copy now covers ALL three reasons a finding lands here —
+// un-anchorable scope, inline-comment-cap overflow (Rec 3), AND
+// confidence-tier (Rec 5) / grounding (Rec 4) demotion — closing the
+// CodeRabbit accuracy gap from PR B.
 const BODY_ONLY_FINDINGS_EXPLANATION =
-  "<sub>These findings are shown in the review body because they could not be anchored to specific diff lines (file-level or PR-level scope) or because the inline comment cap was exceeded.</sub>"
+  "<sub>These findings are shown in the review body because they could not be anchored to specific diff lines (file-level or PR-level scope), because the inline comment cap was exceeded, or because their confidence tier or grounding made them better suited for body-only review.</sub>"
 // SIG-281 PR B (Rec 6 / Kimi K2.6): caption shown under the Fix Plan
 // table only when it contains body-only blockers (rows with no inline
 // thread), so a reviewer isn't confused by table rows that have no
@@ -2644,7 +2646,11 @@ function isReplacementSuggestion(finding: PrReviewFinding): boolean {
   )
 }
 
-function hasStructuredFix(finding: PrReviewFinding): boolean {
+// SIG-281 PR C: exported so the inline-grounding gate
+// (validate-inline-grounding.ts) can reuse the canonical "has a
+// committable fix" predicate instead of re-deriving the
+// suggestedReplacement / kind logic (avoids drift).
+export function hasStructuredFix(finding: PrReviewFinding): boolean {
   return isDeletionSuggestion(finding) || isReplacementSuggestion(finding)
 }
 

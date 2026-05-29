@@ -22,6 +22,12 @@
 //   actual work (Ollama + GitHub/Linear API calls) with full budget.
 
 import { triageIssue } from "./lib/triage"
+import {
+  detectRecallAlarm,
+  recallOutcomeFromTelemetry,
+  type RecallReviewOutcome,
+  type RawReviewTelemetry,
+} from "./lib/recall-alarm"
 import { handleMention } from "./lib/mention-reply"
 import {
   bodyMentionsBot,
@@ -1247,6 +1253,20 @@ export default {
    * the cron; the next tick retries.
    */
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // SIG-287/SIG-114 recall alarm — runs EVERY tick, independent of the
+    // indexer gate. Read-only + log-only: scans recent review telemetry for a
+    // silently-degraded reviewer (logic missing / synth shutout) and emits a
+    // loud `review-recall-alarm`. This is the smoke detector whose absence let
+    // the bare-approve regression run 12 PRs unnoticed; it can never affect a
+    // review (no writes, no posting).
+    ctx.waitUntil(
+      runRecallAlarmCheck(env).catch((err) => {
+        console.error(JSON.stringify({
+          event: "review-recall-check-error",
+          error: err instanceof Error ? err.message : String(err),
+        }))
+      }),
+    )
     // CodeRabbit C1: gate the auto-fire on OPENCLAW_INDEXER_ENABLED. The
     // manual routes (index-repo / index-backfill / index-reconcile) stay
     // ungated — those are operator-triggered and the operator already
@@ -1269,6 +1289,54 @@ export default {
       })(),
     )
   },
+}
+
+/**
+ * SIG-287/SIG-114 recall alarm. Scans recent `ensemble-review-telemetry`
+ * (newest-first, deduped to one entry per PR) and emits a loud
+ * `review-recall-alarm` when the reviewer looks silently degraded — `logic`
+ * missing or a synth-finding shutout across consecutive PRs. Read-only +
+ * log-only; never touches a review. Best-effort: a single unreadable record
+ * is skipped, and the whole check is wrapped in `.catch` at the call site.
+ */
+async function runRecallAlarmCheck(env: Env): Promise<void> {
+  const SCAN_LIMIT = 80
+  const WINDOW = 15
+  const listed = await env.OPENCLAW_STATE.list({
+    prefix: "ensemble-review-telemetry:",
+    limit: SCAN_LIMIT,
+  })
+  // Reverse-timestamped keys sort newest-first lexicographically.
+  const outcomes: RecallReviewOutcome[] = []
+  const seenPrs = new Set<number>()
+  for (const key of listed.keys) {
+    if (outcomes.length >= WINDOW) break
+    const rec = await env.OPENCLAW_STATE.get<RawReviewTelemetry>(key.name, "json").catch(() => null)
+    if (!rec) continue
+    const outcome = recallOutcomeFromTelemetry(rec)
+    if (!outcome) continue
+    if (seenPrs.has(outcome.prNumber)) continue // dedup re-reviews → one entry per PR
+    seenPrs.add(outcome.prNumber)
+    outcomes.push(outcome)
+  }
+  const result = detectRecallAlarm(outcomes)
+  for (const alarm of result.alarms) {
+    console.error(JSON.stringify({
+      event: "review-recall-alarm",
+      kind: alarm.kind,
+      streak: alarm.streak,
+      threshold: alarm.threshold,
+      prNumbers: alarm.prNumbers,
+      sampleSize: outcomes.length,
+    }))
+  }
+  console.log(JSON.stringify({
+    event: "review-recall-check",
+    logicDegradedStreak: result.logicDegradedStreak,
+    synthZeroFindingStreak: result.synthZeroFindingStreak,
+    sampleSize: outcomes.length,
+    alarmCount: result.alarms.length,
+  }))
 }
 
 /**

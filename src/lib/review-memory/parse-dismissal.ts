@@ -66,8 +66,14 @@ function escapeRegex(s: string): string {
  * RESIDUAL can be parsed as a canonical reason. E.g. "@sigilix dismiss
  * not-a-bug" → "not-a-bug"; "dismiss: too minor" → "too minor".
  */
+// Longest keyword first so an alternation like `noise|noisy` doesn't let the
+// shorter `noise` shadow `noisy` (CodeRabbit) — that would leave a broken
+// residual ("y — …") and miss the reason on a valid "noisy — <reason>" reply.
 const DISMISS_REASON_PREFIX_REGEX = new RegExp(
-  `^(?:@[a-z0-9-]+\\s+)?(?:${PREFIX_KEYWORDS.map(escapeRegex).join("|")})[\\s:;,.\\-—]*`,
+  `^(?:@[a-z0-9-]+\\s+)?(?:${[...PREFIX_KEYWORDS]
+    .sort((a, b) => b.length - a.length)
+    .map(escapeRegex)
+    .join("|")})[\\s:;,.\\-—]*`,
   "i",
 )
 

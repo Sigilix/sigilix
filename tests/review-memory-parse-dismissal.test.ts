@@ -99,6 +99,12 @@ describe("parseDismissalSignal — SIG-114 PR 4 canonical reason capture", () =>
   it("leaves bare nit unlabeled", () => {
     expect(parseDismissalSignal("nit")).toEqual({ kind: "dismissed-textual" })
   })
+  it("strips the longer 'noisy' prefix without 'noise' shadowing it", () => {
+    expect(parseDismissalSignal("noisy — too minor")).toEqual({
+      kind: "dismissed-textual",
+      dismissReason: "too-minor",
+    })
+  })
 })
 
 describe("parseDismissalSignal — degenerate / empty inputs", () => {

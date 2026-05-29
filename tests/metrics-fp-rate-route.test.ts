@@ -13,6 +13,10 @@ const DAY = 86_400_000
 
 function makeKv(records: Record<string, unknown>) {
   return {
+    // Single-page stub: returns ALL matching keys at once and ignores
+    // `limit`/`cursor` (fixtures here are tiny, so the route's pagination loop
+    // is exercised by the real binding, not this stub). `list_complete: true`
+    // makes the route's loop exit after one page.
     async list({ prefix }: { prefix: string; limit?: number; cursor?: string }) {
       const keys = Object.keys(records)
         .filter((k) => k.startsWith(prefix))
@@ -89,17 +93,33 @@ describe("handleFpRateMetricsRoute", () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       repo: string
+      windowDays: number
+      maturityDays: number
+      minN: number
       totalDismissals: number
-      rows: Array<{ role: string; postedN: number; hard: number; hardFpRate: number | null }>
+      reviewsRealFanout: number
+      scanCapped: boolean
+      failedFetches: number
+      note: string
+      rows: Array<{ role: string; postedN: number; hard: number; soft: number; unlabeled: number; hardFpRate: number | null }>
     }
+    // Echoed params + run metadata.
     expect(body.repo).toBe("sigilix/sigilix")
+    expect(body).toMatchObject({ windowDays: 60, maturityDays: 0, minN: 1 })
+    expect(body.reviewsRealFanout).toBe(1)
     expect(body.totalDismissals).toBe(1)
+    expect(body.scanCapped).toBe(false)
+    expect(body.failedFetches).toBe(0)
+    expect(typeof body.note).toBe("string")
+    // All 5 rows present (4 specialists + synth).
+    expect(body.rows.map((r) => r.role).sort()).toEqual(["logic", "performance", "security", "synth", "tests"])
     const logic = body.rows.find((r) => r.role === "logic")!
-    expect(logic.postedN).toBe(1)
-    expect(logic.hard).toBe(1) // dismissReason "not-a-bug" → hard FP
-    expect(logic.hardFpRate).toBe(1)
+    expect(logic).toMatchObject({ postedN: 1, hard: 1, soft: 0, unlabeled: 0, hardFpRate: 1 })
+    // Synth = the final-gate aggregate over all posted findings.
     const synth = body.rows.find((r) => r.role === "synth")!
-    expect(synth.postedN).toBe(1)
-    expect(synth.hard).toBe(1)
+    expect(synth).toMatchObject({ postedN: 1, hard: 1, hardFpRate: 1 })
+    // A specialist with no findings reports an empty denominator.
+    const security = body.rows.find((r) => r.role === "security")!
+    expect(security).toMatchObject({ postedN: 0, hard: 0, hardFpRate: null })
   })
 })

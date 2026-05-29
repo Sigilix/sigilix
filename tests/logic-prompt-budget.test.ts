@@ -330,12 +330,14 @@ function buildPrompt(sizes: {
 }
 
 describe("trimLogicPrompt — SIG-287 enforce trimming", () => {
-  it("documents the drop order (lowest-value first) + never includes the diff", () => {
+  it("documents the drop order (lowest-value first) + never drops diff/graph/AST", () => {
     expect(LOGIC_PROMPT_DROP_ORDER).toEqual([
-      "dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval", "graphContext",
+      "dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval",
     ])
+    // Mandatory / precision-relevant sections are NOT droppable:
     expect(LOGIC_PROMPT_DROP_ORDER).not.toContain("diff")
     expect(LOGIC_PROMPT_DROP_ORDER).not.toContain("deterministicChecks")
+    expect(LOGIC_PROMPT_DROP_ORDER).not.toContain("graphContext")
   })
 
   it("is a no-op when already within cap", () => {
@@ -362,15 +364,36 @@ describe("trimLogicPrompt — SIG-287 enforce trimming", () => {
     expect(r.prompt).not.toContain("[RETRIEVAL SNAPSHOT]")
   })
 
-  it("NEVER drops the diff or deterministic-checks, even if still over cap after all droppables", () => {
-    // diff alone (200) blows a tiny cap; everything droppable is removed but diff+det stay.
+  it("NEVER drops the diff, graph, or deterministic-checks, even if still over cap after all droppables", () => {
+    // diff alone (200) blows a tiny cap; every DROPPABLE section is removed but
+    // diff + graph + det stay (graph is precision-relevant, not droppable).
     const prompt = buildPrompt({ diff: 200, graph: 50, symbol: 50, vectorize: 50, dynamic: 50, det: 20 })
     const r = trimLogicPrompt(prompt, 100)
-    expect(r.trimmed).toEqual(["dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval", "graphContext"])
+    expect(r.trimmed).toEqual(["dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval"])
     expect(r.prompt).toContain("[DIFF]")
+    expect(r.prompt).toContain("[GRAPH CONTEXT") // precision signal preserved
     expect(r.prompt).toContain("[DETERMINISTIC CHECKS")
-    // Still over cap (diff is mandatory + huge) — but the diff is never sacrificed.
+    // Still over cap (diff is mandatory + huge) — but the diff/graph are never sacrificed.
     expect(r.afterTokens).toBeGreaterThan(100)
+  })
+
+  it("dropping a section NEVER absorbs the trailing unrecognized blocks (Codex HIGH: [REPO RULES] etc.)", () => {
+    // vectorizeRetrieval is the LAST recognized section here, followed by an
+    // UNRECOGNIZED block ([REPO RULES — LOGIC], appended by appendRoleRule).
+    // Before the span-bounding fix, dropping vectorize would have absorbed +
+    // deleted the repo rules. Now the span ends at the next [HEADER, so the
+    // repo rules survive.
+    const prompt = [
+      section("[DIFF]", 30),
+      section("[RETRIEVAL SNAPSHOT]", 200), // big → forces a drop; last recognized section
+      "[REPO RULES — LOGIC (from sigilix.json)]\n- prefer X over Y", // unrecognized trailing block
+    ].join("\n")
+    const r = trimLogicPrompt(prompt, 100)
+    expect(r.trimmed).toContain("vectorizeRetrieval")
+    expect(r.prompt).not.toContain("[RETRIEVAL SNAPSHOT]") // dropped
+    expect(r.prompt).toContain("[REPO RULES — LOGIC") // PRESERVED — not absorbed
+    expect(r.prompt).toContain("prefer X over Y")
+    expect(r.prompt).toContain("[DIFF]")
   })
 })
 

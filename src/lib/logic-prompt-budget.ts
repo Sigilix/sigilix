@@ -193,38 +193,66 @@ export function measureLogicPrompt(prompt: string): LogicPromptMeasurement {
 
 /**
  * Section drop priority for enforce-mode trimming — LOWEST-value first.
- * Per the SIG-236 design: keep the changed-code diff (mandatory) and the
- * deterministic AST checks (tiny + high-signal) ALWAYS; shed the heavy
- * codebase-context blocks (dynamic evidence → shared Vectorize retrieval →
- * symbol retrieval → graph context) in that order until the prompt fits.
- * A context-reduced logic verdict that RETURNS beats a full-context one that
- * times out (the SIG-287 failure mode).
+ * Shed the heavy, least-precision-relevant context blocks in this order until
+ * the prompt fits: dynamic evidence → shared Vectorize retrieval (broad
+ * codebase chunks) → symbol retrieval (last resort). The diff, the deterministic
+ * AST checks, AND the graph context (`LOGIC_PROMPT_MANDATORY_SECTIONS`) are
+ * NEVER dropped — graph is the small, FP-preventing cross-file signal. A
+ * context-reduced logic verdict that RETURNS beats a full-context one that
+ * times out (the SIG-287 failure mode), but we shed broad retrieval — not the
+ * targeted graph/diff context — to keep that tradeoff precision-safe.
  */
 export const LOGIC_PROMPT_DROP_ORDER: readonly PromptSectionLabel[] = [
   "dynamicEvidence",
   "vectorizeRetrieval",
   "symbolRetrieval",
+]
+
+/**
+ * Sections never dropped. Beyond the diff (review target) + deterministic AST
+ * checks, `graphContext` is mandatory too: it's the cross-file dependency
+ * signal that PREVENTS false positives ("is this called / does this exist") and
+ * is empirically small (~200 tok), so keeping it costs almost nothing and
+ * shedding it would risk logic flagging issues the graph would refute (Codex
+ * MEDIUM + founder's hallucination concern).
+ */
+export const LOGIC_PROMPT_MANDATORY_SECTIONS: readonly PromptSectionLabel[] = [
+  "diff",
+  "deterministicChecks",
   "graphContext",
 ]
 
-/** Sections never dropped — the diff is the review target; AST checks are tiny + deterministic. */
-export const LOGIC_PROMPT_MANDATORY_SECTIONS: readonly PromptSectionLabel[] = ["diff", "deterministicChecks"]
+/** Any top-level block header line — `[DIFF]`, `[REPO RULES — …]`, `[OUTPUT SCHEMA]`, etc. */
+const BLOCK_HEADER = /^\[[A-Z]/gm
 
-/** [start, end) char span of each detected section, sorted by start (end = next marker / EOF). */
+/**
+ * [start, end) char span of each DETECTED droppable section, sorted by start.
+ * A section's `end` is the NEXT top-level block header (recognized OR not), so
+ * dropping it removes ONLY its own block — never the trailing `[CODEBASE
+ * NAMESPACE …]` / `[REPO RULES — LOGIC]` / `[OUTPUT SCHEMA]` blocks that follow
+ * the last recognized section (Codex HIGH: those were being absorbed into the
+ * last section's span and silently dropped). Falls back to EOF only when no
+ * later header exists.
+ */
 function computeSectionSpans(
   prompt: string,
 ): Array<{ label: PromptSectionLabel; start: number; end: number }> {
+  // All block-header line positions, ascending (regex scans left→right).
+  const headerPositions: number[] = []
+  BLOCK_HEADER.lastIndex = 0
+  let hm: RegExpExecArray | null
+  while ((hm = BLOCK_HEADER.exec(prompt)) !== null) headerPositions.push(hm.index)
+
   const hits: Array<{ label: PromptSectionLabel; start: number }> = []
   for (const [label, regex] of Object.entries(PROMPT_SECTION_MARKERS) as Array<[PromptSectionLabel, RegExp]>) {
     const match = regex.exec(prompt)
     if (match !== null) hits.push({ label, start: match.index })
   }
   hits.sort((a, b) => a.start - b.start)
-  return hits.map((h, i) => ({
-    label: h.label,
-    start: h.start,
-    end: i + 1 < hits.length ? hits[i + 1]!.start : prompt.length,
-  }))
+  return hits.map((h) => {
+    const next = headerPositions.find((p) => p > h.start)
+    return { label: h.label, start: h.start, end: next ?? prompt.length }
+  })
 }
 
 export interface LogicPromptTrimResult {

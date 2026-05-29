@@ -24,19 +24,32 @@ const LABEL_DIR = ".claude/research/sig-161-labeling"
 const DEFAULT_FINDINGS = `${LABEL_DIR}/findings-source.jsonl`
 const DEFAULT_LABELS = `${LABEL_DIR}/labels-claude.csv`
 const VALID_FORMATS: ReadonlySet<string> = new Set(["csv", "md", "both"])
-
-function parseArgs(argv: string[]): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const a of argv) {
-    const m = a.match(/^--([^=]+)=(.*)$/)
-    if (m) out[m[1]!] = m[2]!
-  }
-  return out
-}
+const ALLOWED_ARGS: ReadonlySet<string> = new Set(["findings", "labels", "format", "out"])
 
 function die(msg: string): never {
   console.error(`error: ${msg}`)
   process.exit(1)
+}
+
+/**
+ * Parse `--key=value` args. Fails fast on a malformed shape, an unknown flag,
+ * or an empty value (CodeRabbit) — silently dropping a typo'd `--findings`
+ * would quietly fall back to the default corpus and produce wrong results.
+ */
+function parseArgs(argv: string[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const a of argv) {
+    const m = a.match(/^--([^=]+)=(.*)$/)
+    if (!m) die(`unrecognized argument "${a}" (expected --key=value)`)
+    const key = m[1]!
+    const value = m[2]!
+    if (!ALLOWED_ARGS.has(key)) {
+      die(`unknown flag --${key} (allowed: ${[...ALLOWED_ARGS].map((k) => "--" + k).join(", ")})`)
+    }
+    if (value === "") die(`--${key} requires a non-empty value`)
+    out[key] = value
+  }
+  return out
 }
 
 const args = parseArgs(process.argv.slice(2))

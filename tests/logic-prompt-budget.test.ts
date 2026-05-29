@@ -9,11 +9,14 @@
 
 import { describe, expect, it, vi } from "vitest"
 import {
+  applyLogicPromptBudget,
   estimateTokens,
+  LOGIC_PROMPT_DROP_ORDER,
   LOGIC_PROMPT_INPUT_TOKEN_CAP,
   maybeEmitLogicPromptBudget,
   measureLogicPrompt,
   parseLogicPromptBudgetMode,
+  trimLogicPrompt,
 } from "../src/lib/logic-prompt-budget"
 
 describe("parseLogicPromptBudgetMode — env flag parser", () => {
@@ -299,6 +302,105 @@ describe("maybeEmitLogicPromptBudget — telemetry side-effect", () => {
       })
       const payload = JSON.parse(spy.mock.calls[0]![0] as string)
       expect(payload.headSha).toBe("0123456")
+    } finally {
+      spy.mockRestore()
+    }
+  })
+})
+
+// ─── SIG-287: enforce-mode trim ──────────────────────────────────────
+// Build a section as `MARKER\n<filler>` sized to ~`tokens` (chars = tokens*4).
+function section(marker: string, tokens: number): string {
+  const fill = "x".repeat(Math.max(0, tokens * 4 - marker.length - 1))
+  return `${marker}\n${fill}`
+}
+// A prompt where dropping the lowest-priority sections brings it under `cap`,
+// but the diff + graph + symbol + deterministic checks should survive.
+function buildPrompt(sizes: {
+  diff: number; graph: number; symbol: number; vectorize: number; dynamic: number; det: number
+}): string {
+  return [
+    section("[DIFF]", sizes.diff),
+    section("[GRAPH CONTEXT — neighbors]", sizes.graph),
+    section("[LOGIC SYMBOL CONTEXT — symbols]", sizes.symbol),
+    section("[RETRIEVAL SNAPSHOT]", sizes.vectorize),
+    section("[DYNAMIC REVIEW EVIDENCE — cards]", sizes.dynamic),
+    section("[DETERMINISTIC CHECKS — ast]", sizes.det),
+  ].join("\n")
+}
+
+describe("trimLogicPrompt — SIG-287 enforce trimming", () => {
+  it("documents the drop order (lowest-value first) + never includes the diff", () => {
+    expect(LOGIC_PROMPT_DROP_ORDER).toEqual([
+      "dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval", "graphContext",
+    ])
+    expect(LOGIC_PROMPT_DROP_ORDER).not.toContain("diff")
+    expect(LOGIC_PROMPT_DROP_ORDER).not.toContain("deterministicChecks")
+  })
+
+  it("is a no-op when already within cap", () => {
+    const prompt = buildPrompt({ diff: 10, graph: 5, symbol: 5, vectorize: 5, dynamic: 5, det: 2 })
+    const r = trimLogicPrompt(prompt, 100)
+    expect(r.trimmed).toEqual([])
+    expect(r.prompt).toBe(prompt)
+    expect(r.afterTokens).toBe(r.beforeTokens)
+  })
+
+  it("drops only enough low-priority sections to fit, keeping higher-priority ones", () => {
+    // total 160 tokens, cap 100. Drop dynamic(40)→120, vectorize(40)→80 ≤100 → stop.
+    const prompt = buildPrompt({ diff: 30, graph: 20, symbol: 20, vectorize: 40, dynamic: 40, det: 10 })
+    const r = trimLogicPrompt(prompt, 100)
+    expect(r.trimmed).toEqual(["dynamicEvidence", "vectorizeRetrieval"])
+    expect(r.afterTokens).toBeLessThanOrEqual(100)
+    expect(r.afterTokens).toBeLessThan(r.beforeTokens)
+    // Survivors present, dropped sections gone:
+    expect(r.prompt).toContain("[DIFF]")
+    expect(r.prompt).toContain("[GRAPH CONTEXT")
+    expect(r.prompt).toContain("[LOGIC SYMBOL CONTEXT")
+    expect(r.prompt).toContain("[DETERMINISTIC CHECKS")
+    expect(r.prompt).not.toContain("[DYNAMIC REVIEW EVIDENCE")
+    expect(r.prompt).not.toContain("[RETRIEVAL SNAPSHOT]")
+  })
+
+  it("NEVER drops the diff or deterministic-checks, even if still over cap after all droppables", () => {
+    // diff alone (200) blows a tiny cap; everything droppable is removed but diff+det stay.
+    const prompt = buildPrompt({ diff: 200, graph: 50, symbol: 50, vectorize: 50, dynamic: 50, det: 20 })
+    const r = trimLogicPrompt(prompt, 100)
+    expect(r.trimmed).toEqual(["dynamicEvidence", "vectorizeRetrieval", "symbolRetrieval", "graphContext"])
+    expect(r.prompt).toContain("[DIFF]")
+    expect(r.prompt).toContain("[DETERMINISTIC CHECKS")
+    // Still over cap (diff is mandatory + huge) — but the diff is never sacrificed.
+    expect(r.afterTokens).toBeGreaterThan(100)
+  })
+})
+
+describe("applyLogicPromptBudget — mode routing", () => {
+  const big = buildPrompt({ diff: 30, graph: 20, symbol: 20, vectorize: 8000, dynamic: 4000, det: 10 })
+  const args = (mode: "off" | "shadow" | "enforce") => ({
+    mode, prompt: big, owner: "o", repo: "r", prNumber: 1, headSha: "abcdef0",
+  })
+
+  it("off → passthrough (prompt unchanged)", () => {
+    expect(applyLogicPromptBudget(args("off"))).toBe(big)
+  })
+
+  it("shadow → passthrough (measures but does not trim)", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {})
+    try {
+      expect(applyLogicPromptBudget(args("shadow"))).toBe(big)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it("enforce → returns a trimmed prompt under the cap", () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {})
+    try {
+      const out = applyLogicPromptBudget(args("enforce"))
+      expect(out).not.toBe(big)
+      expect(estimateTokens(out)).toBeLessThanOrEqual(LOGIC_PROMPT_INPUT_TOKEN_CAP)
+      expect(estimateTokens(out)).toBeLessThan(estimateTokens(big))
+      expect(out).toContain("[DIFF]") // mandatory survives
     } finally {
       spy.mockRestore()
     }

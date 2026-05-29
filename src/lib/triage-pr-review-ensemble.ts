@@ -194,7 +194,7 @@ import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
 import type { ListOpenPullsItem } from "./github"
 import { withComposedTimeout } from "./agent-loop"
 import {
-  maybeEmitLogicPromptBudget,
+  applyLogicPromptBudget,
   parseLogicPromptBudgetMode,
 } from "./logic-prompt-budget"
 import {
@@ -2929,15 +2929,17 @@ export async function handlePrReviewEnsemble(
       // logic-prompt-budget measurement sees exactly what runSpecialist
       // sees, and we don't waste a second messageForRole + appendRoleRule
       // pass.
-      const initialMessage = appendRoleRule(messageForRole(role), role, sigilixConfig)
+      let initialMessage = appendRoleRule(messageForRole(role), role, sigilixConfig)
       if (role === "logic") {
-        // Belt-and-suspenders try/catch (CR catch on PR #191): the helper
-        // already wraps its own body in try/catch (see
-        // `maybeEmitLogicPromptBudget` in `logic-prompt-budget.ts`), but
-        // instrumentation MUST NOT be able to break the fan-out path
-        // even if a future refactor removes the inner guard.
+        // SIG-287/SIG-236: off→passthrough, shadow→measure-only, enforce→TRIM
+        // the logic prompt to the cap (returns the prompt the model receives)
+        // so logic stops timing out on its uniquely-large prompt. Belt-and-
+        // suspenders try/catch (CR catch on PR #191): `applyLogicPromptBudget`
+        // already fails open internally, but instrumentation MUST NOT break the
+        // fan-out even if a future refactor removes the inner guard — on any
+        // throw, fall back to the un-trimmed prompt (logic still runs).
         try {
-          maybeEmitLogicPromptBudget({
+          initialMessage = applyLogicPromptBudget({
             mode: logicPromptBudgetMode,
             prompt: initialMessage,
             owner, repo, prNumber, headSha,

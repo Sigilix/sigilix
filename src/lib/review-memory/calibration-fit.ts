@@ -3,7 +3,7 @@
 // Pure functions that turn the two production corpora into the
 // per-claim-type params blob `calibration.ts` consumes. OFFLINE-ONLY:
 // nothing on the worker review path imports this (the ensemble imports
-// only `calibration.ts`); it's driven by `scripts/phase4-calibrate.mjs`.
+// only `calibration.ts`); it's driven by `scripts/phase4-calibrate.ts`.
 //
 // Estimator + join spec — DeepSeek-v4-pro (2026-05-29), believability-
 // dominant (false-soften >> missed-soften):

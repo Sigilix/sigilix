@@ -90,9 +90,14 @@ for (const key of shadowKeys) {
   if (`${value.owner}/${value.repo}`.toLowerCase() !== repoLc) continue
   const prNumber = Number(value.prNumber)
   if (!Number.isInteger(prNumber)) continue
+  const createdMs = createdMsFromKey(key, SHADOW_PREFIX)
+  if (createdMs === null) {
+    console.warn(`[calibrate] skipping malformed shadow key: ${key}`)
+    continue
+  }
   shadowRecords.push({
     prNumber,
-    createdMs: createdMsFromKey(key, SHADOW_PREFIX),
+    createdMs,
     rows: value.matches
       .filter((m: unknown): m is { fid: string; claimType?: unknown } =>
         !!m && typeof (m as { fid?: unknown }).fid === "string",
@@ -188,12 +193,21 @@ function parseArgs(argv: string[]): ParsedArgs {
   return out
 }
 
-/** Recover the event creation time (ms) from a reverse-ts key segment. */
-function createdMsFromKey(key: string, prefix: string): number {
+/**
+ * Recover the event creation time (ms) from a reverse-ts key segment.
+ * Returns null on a malformed key (CodeRabbit: a parse failure must NOT
+ * default to 0, which would look ancient and bypass the maturity gate —
+ * letting a garbage record into the calibration denominator). The caller
+ * skips records with a null createdMs.
+ */
+function createdMsFromKey(key: string, prefix: string): number | null {
   const rest = key.slice(prefix.length)
-  const reverseTs = Number(rest.slice(0, rest.indexOf(":")))
-  if (!Number.isFinite(reverseTs)) return 0 // unparseable → treated as ancient (always mature)
-  return REVERSE_TS_BASE - reverseTs
+  const sep = rest.indexOf(":")
+  if (sep <= 0) return null
+  const reverseTs = Number(rest.slice(0, sep))
+  if (!Number.isFinite(reverseTs)) return null
+  const createdMs = REVERSE_TS_BASE - reverseTs
+  return Number.isFinite(createdMs) ? createdMs : null
 }
 
 async function listKvKeys(prefix: string): Promise<string[]> {
@@ -223,10 +237,15 @@ async function getKvJson(key: string): Promise<any | null> {
     if (!res.ok) throw new Error(`KV get HTTP ${res.status} on ${key}`)
     return JSON.parse(await res.text())
   } catch (err) {
-    // best-effort per-key read; a single unreadable record is skipped. Surface
-    // parse failures distinctly so silent corruption is observable (CodeRabbit).
-    if (err instanceof SyntaxError) console.warn(`[calibrate] JSON parse failed for key ${key}`)
-    return null
+    // Skip a single record with malformed JSON (best-effort, observable), but
+    // RETHROW transport/HTTP failures (CodeRabbit): silently dropping them
+    // would bias the calibration denominator/labels — a fit must run on
+    // complete data or fail loudly, never quietly produce skewed params.
+    if (err instanceof SyntaxError) {
+      console.warn(`[calibrate] JSON parse failed for key ${key}`)
+      return null
+    }
+    throw err
   } finally {
     clearTimeout(timer)
   }

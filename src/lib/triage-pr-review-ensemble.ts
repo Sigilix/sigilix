@@ -4454,35 +4454,41 @@ export async function handlePrReviewEnsemble(
       synthInputVerdicts,
       withdrawals,
     )
+    // SIG-280 PR C: which synth-softened source ids were ACTUALLY softened in
+    // the rendered output. Derived from the surviving finding INDICES, never a
+    // source-id set, because a source id can feed multiple synthesized
+    // findings. FAIL CLOSED (CodeRabbit): if a source id spans BOTH a surviving
+    // and a vetoed finding, it is NOT counted as softened — otherwise approval-
+    // readiness would treat it as "accounted" and could approve over the
+    // sibling finding the veto kept at full severity (undercount blockers).
+    const softenMembership = new Map<string, { survived: boolean; vetoed: boolean }>()
+    if (softenActive) {
+      for (let idx = 0; idx < consensusProvenance.length; idx++) {
+        const survived = survivingSoftenIndexSet?.has(idx) ?? false
+        for (const sourceFindingId of consensusProvenance[idx]?.sourceFindingIds ?? []) {
+          if (!softenedSet.has(sourceFindingId)) continue
+          const state = softenMembership.get(sourceFindingId) ?? { survived: false, vetoed: false }
+          if (survived) state.survived = true
+          else state.vetoed = true
+          softenMembership.set(sourceFindingId, state)
+        }
+      }
+    }
     const approvalReadiness = assessApprovalReadiness({
       intendedEvent,
       sourceFindings: sourceFindingsForApproval,
-      // SIG-280 PR C: pass the SURVIVING softens — DERIVED from the
-      // surviving finding INDICES, not from a source-id set (Codex +
-      // CodeRabbit P1: a source id can span findings, so deriving the
-      // source-id view from the kept indices is the only leak-free way).
-      // A source finding counts as "accounted" only when its consensus
-      // finding survived softening AND it was actually synth-softened —
-      // so approval-readiness never silently approves over a finding the
-      // calibrated veto kept at full severity. Empty in the cold regime;
-      // [] when soften is inactive entirely.
+      // Pass only source ids that survived softening EVERYWHERE they appear —
+      // a source finding counts as "accounted" only when it was actually
+      // de-emphasized in the output, so approval-readiness never silently
+      // approves over a finding the calibrated veto kept at full severity.
+      // Empty in the cold regime; [] when soften is inactive entirely.
       provenance: {
         ...validated.provenance,
         softened: softenActive
           ? (validated.provenance.softened ?? []).filter((s) => {
               if (typeof s.sourceFindingId !== "string") return false
-              if (!softenedSet.has(s.sourceFindingId)) return false
-              // The source id must belong to a finding whose index survived.
-              for (const idx of survivingSoftenIndexSet ?? []) {
-                if (
-                  (consensusProvenance[idx]?.sourceFindingIds ?? []).includes(
-                    s.sourceFindingId,
-                  )
-                ) {
-                  return true
-                }
-              }
-              return false
+              const state = softenMembership.get(s.sourceFindingId)
+              return state !== undefined && state.survived && !state.vetoed
             })
           : [],
       },

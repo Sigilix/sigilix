@@ -5,7 +5,7 @@
 // the `shouldKeepSoften` veto rule the warm veto consults. It is pure
 // and dependency-free (no model calls, no KV, no stats library) so it
 // can sit on the hot review path. The OFFLINE FIT that produces the
-// blob (`computeClaimCalibration`) lives in `bakeoff-report.ts` — it
+// blob (`computeClaimCalibration`) lives in `calibration-fit.ts` — it
 // imports the types + thresholds from here so the producer and the
 // consumer agree on the contract by construction.
 //

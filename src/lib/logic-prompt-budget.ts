@@ -16,20 +16,24 @@
 // js-tiktoken dependency — Codex's recommendation in the design doc
 // at `.claude/handoff/codex-sig-236-logic-prompt-budget-design.md`.
 //
-// Three-state env flag `OPENCLAW_LOGIC_PROMPT_BUDGET`:
+// Three-state env flag `OPENCLAW_LOGIC_PROMPT_BUDGET` (consumed via
+// `applyLogicPromptBudget`, which returns the prompt the model receives):
 //   off     — no telemetry, no truncation (default)
 //   shadow  — measure + emit `logic-prompt-budget` event, but pass
 //             the prompt through untouched. Used to size the win.
-//   enforce — NOT YET IMPLEMENTED in this PR. The enforce-mode
-//             follow-up will land after shadow data is in. For now,
-//             enforce behaves the same as shadow + sets
-//             `mode: "enforce-pending"` in the event so the dashboard
-//             can flag any premature flips.
+//   enforce — SIG-287: TRIM the prompt to `LOGIC_PROMPT_INPUT_TOKEN_CAP`
+//             by dropping low-priority sections (`LOGIC_PROMPT_DROP_ORDER`)
+//             until it fits, then emit an enforce event with before/after
+//             tokens + the dropped sections. This is the actual fix for
+//             logic timing out on its uniquely-large prompt — SIG-236
+//             shipped only the shadow measurement; the trim landed here.
+//
+// `maybeEmitLogicPromptBudget` (below) is the shadow-only emitter, kept for
+// its unit tests + the shadow path; the fan-out calls `applyLogicPromptBudget`.
 //
 // Output cap (Codex's recommendation: `findings.maxItems: 3-4` on the
-// per-role schema) is NOT in this PR either — also deferred to the
-// enforce follow-up because it requires schema variant + JSON-format
-// validation.
+// per-role schema) is a separate lever, still deferred — it requires a
+// schema variant + JSON-format validation. Input trimming is the bottleneck.
 
 export type LogicPromptBudgetMode = "off" | "shadow" | "enforce"
 
@@ -187,6 +191,106 @@ export function measureLogicPrompt(prompt: string): LogicPromptMeasurement {
   }
 }
 
+/**
+ * Section drop priority for enforce-mode trimming — LOWEST-value first.
+ * Shed the heavy, least-precision-relevant context blocks in this order until
+ * the prompt fits: dynamic evidence → shared Vectorize retrieval (broad
+ * codebase chunks) → symbol retrieval (last resort). The diff, the deterministic
+ * AST checks, AND the graph context (`LOGIC_PROMPT_MANDATORY_SECTIONS`) are
+ * NEVER dropped — graph is the small, FP-preventing cross-file signal. A
+ * context-reduced logic verdict that RETURNS beats a full-context one that
+ * times out (the SIG-287 failure mode), but we shed broad retrieval — not the
+ * targeted graph/diff context — to keep that tradeoff precision-safe.
+ */
+export const LOGIC_PROMPT_DROP_ORDER: readonly PromptSectionLabel[] = [
+  "dynamicEvidence",
+  "vectorizeRetrieval",
+  "symbolRetrieval",
+]
+
+/**
+ * Sections never dropped. Beyond the diff (review target) + deterministic AST
+ * checks, `graphContext` is mandatory too: it's the cross-file dependency
+ * signal that PREVENTS false positives ("is this called / does this exist") and
+ * is empirically small (~200 tok), so keeping it costs almost nothing and
+ * shedding it would risk logic flagging issues the graph would refute (Codex
+ * MEDIUM + founder's hallucination concern).
+ */
+export const LOGIC_PROMPT_MANDATORY_SECTIONS: readonly PromptSectionLabel[] = [
+  "diff",
+  "deterministicChecks",
+  "graphContext",
+]
+
+/** Any top-level block header line — `[DIFF]`, `[REPO RULES — …]`, `[OUTPUT SCHEMA]`, etc. */
+const BLOCK_HEADER = /^\[[A-Z]/gm
+
+/**
+ * [start, end) char span of each DETECTED droppable section, sorted by start.
+ * A section's `end` is the NEXT top-level block header (recognized OR not), so
+ * dropping it removes ONLY its own block — never the trailing `[CODEBASE
+ * NAMESPACE …]` / `[REPO RULES — LOGIC]` / `[OUTPUT SCHEMA]` blocks that follow
+ * the last recognized section (Codex HIGH: those were being absorbed into the
+ * last section's span and silently dropped). Falls back to EOF only when no
+ * later header exists.
+ */
+function computeSectionSpans(
+  prompt: string,
+): Array<{ label: PromptSectionLabel; start: number; end: number }> {
+  // All block-header line positions, ascending (regex scans left→right).
+  const headerPositions: number[] = []
+  BLOCK_HEADER.lastIndex = 0
+  let hm: RegExpExecArray | null
+  while ((hm = BLOCK_HEADER.exec(prompt)) !== null) headerPositions.push(hm.index)
+
+  const hits: Array<{ label: PromptSectionLabel; start: number }> = []
+  for (const [label, regex] of Object.entries(PROMPT_SECTION_MARKERS) as Array<[PromptSectionLabel, RegExp]>) {
+    const match = regex.exec(prompt)
+    if (match !== null) hits.push({ label, start: match.index })
+  }
+  hits.sort((a, b) => a.start - b.start)
+  return hits.map((h) => {
+    const next = headerPositions.find((p) => p > h.start)
+    return { label: h.label, start: h.start, end: next ?? prompt.length }
+  })
+}
+
+export interface LogicPromptTrimResult {
+  /** The (possibly trimmed) prompt. Unchanged when already within cap. */
+  prompt: string
+  /** Sections dropped, in the order dropped. */
+  trimmed: PromptSectionLabel[]
+  beforeTokens: number
+  afterTokens: number
+}
+
+/**
+ * ENFORCE-mode trim. Drops whole low-priority sections (LOGIC_PROMPT_DROP_ORDER)
+ * until the prompt fits `cap` tokens or only mandatory sections remain. Pure;
+ * never mutates input; whole-section removal (not mid-section truncation) so the
+ * prompt never ends up structurally malformed. A no-op when already within cap.
+ */
+export function trimLogicPrompt(
+  prompt: string,
+  cap: number = LOGIC_PROMPT_INPUT_TOKEN_CAP,
+): LogicPromptTrimResult {
+  const beforeTokens = estimateTokens(prompt)
+  if (beforeTokens <= cap) return { prompt, trimmed: [], beforeTokens, afterTokens: beforeTokens }
+
+  let working = prompt
+  const trimmed: PromptSectionLabel[] = []
+  for (const label of LOGIC_PROMPT_DROP_ORDER) {
+    if (estimateTokens(working) <= cap) break
+    // Recompute spans on the CURRENT working string so prior removals don't
+    // invalidate indices.
+    const span = computeSectionSpans(working).find((s) => s.label === label)
+    if (!span) continue
+    working = working.slice(0, span.start) + working.slice(span.end)
+    trimmed.push(label)
+  }
+  return { prompt: working, trimmed, beforeTokens, afterTokens: estimateTokens(working) }
+}
+
 export interface MaybeEmitLogicPromptBudgetArgs {
   mode: LogicPromptBudgetMode
   prompt: string
@@ -238,5 +342,51 @@ export function maybeEmitLogicPromptBudget(args: MaybeEmitLogicPromptBudgetArgs)
       prNumber: args.prNumber,
       reason: err instanceof Error ? err.message : String(err),
     }))
+  }
+}
+
+/**
+ * SIG-287/SIG-236 enforce: the single entry point the fan-out uses for the
+ * logic prompt. Returns the prompt the model should actually receive:
+ *   off     — passthrough, no telemetry.
+ *   shadow  — passthrough, emit the measurement (sizing) event.
+ *   enforce — TRIM to the cap (drop low-priority sections), emit an enforce
+ *             event with before/after + trimmed sections, return the trimmed
+ *             prompt.
+ * Instrumentation MUST NOT break the fan-out: any throw falls back to the
+ * ORIGINAL prompt (logic still runs, just un-trimmed).
+ */
+export function applyLogicPromptBudget(args: MaybeEmitLogicPromptBudgetArgs): string {
+  if (args.mode === "off") return args.prompt
+  if (args.mode === "shadow") {
+    maybeEmitLogicPromptBudget(args)
+    return args.prompt
+  }
+  // enforce
+  try {
+    const trim = trimLogicPrompt(args.prompt)
+    console.log(JSON.stringify({
+      event: "logic-prompt-budget",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      headSha: args.headSha.slice(0, 7),
+      mode: "enforce",
+      capTokens: LOGIC_PROMPT_INPUT_TOKEN_CAP,
+      beforeTokens: trim.beforeTokens,
+      afterTokens: trim.afterTokens,
+      overCap: trim.afterTokens > LOGIC_PROMPT_INPUT_TOKEN_CAP,
+      trimmed: trim.trimmed,
+    }))
+    return trim.prompt
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "logic-prompt-budget-enforce-failed",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      reason: err instanceof Error ? err.message : String(err),
+    }))
+    return args.prompt // fail-open: logic runs with the un-trimmed prompt
   }
 }

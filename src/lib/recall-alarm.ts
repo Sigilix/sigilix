@@ -122,3 +122,6 @@ export function detectRecallAlarm(
 
   return { logicDegradedStreak: logic.streak, synthZeroFindingStreak: synth.streak, alarms }
 }
+
+// SIG-287 validation: temporary marker to trigger an open-PR review with the
+// enforce logic-prompt trim live. This PR is throwaway — do not merge.

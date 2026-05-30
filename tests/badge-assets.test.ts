@@ -7,6 +7,7 @@ import {
   lookupGlyph,
   PUBLIC_BADGE_BASE_URL,
   BADGE_ASSET_VERSION,
+  runnerEvidenceBadgeImg,
 } from "../src/lib/badge-assets"
 import { BADGE_GLYPH_PATHS } from "../src/lib/badge-glyph-paths"
 import worker, { type Env } from "../src/index"
@@ -130,6 +131,46 @@ describe("badge assets (SIG-201)", () => {
     expect(badgeAssetUrl("p2")).not.toContain("Sigilix/sigilix/main")
   })
 
+  // SIG-184: runner-evidence trust pills (Kimi K2.6 spec, 2026-05-30). Text
+  // pills in the PRIORITY treatment (solid bright fill + near-black glyph) at
+  // category width.
+  describe("SIG-184 runner-evidence trust pills", () => {
+    it("renders the VERIFIED pill: cyan #06B6D4 fill, near-black glyph, rx=1, descriptive aria-label", () => {
+      const svg = getBadgeSvg("runner-verified")
+      expect(svg).toContain('fill="#06B6D4"')
+      expect(svg).toContain('fill="#0A0A0A"') // priority treatment: dark glyph on bright fill
+      expect(svg).toContain('rx="1"')
+      expect(svg).toContain('aria-label="Runner verified: GitHub-signed receipt attests provenance"')
+      // 8-char "VERIFIED" → categoryBadgeWidth = ceil(8*6.5+16) = 68; 20 tall.
+      expect(svg).toContain('viewBox="0 0 68 20"')
+    })
+
+    it("renders the PENDING pill: amber-600 #D97706 fill — intentionally NOT P1's #F59E0B", () => {
+      const svg = getBadgeSvg("runner-pending")
+      expect(svg).toContain('fill="#D97706"')
+      expect(svg).not.toContain("#F59E0B") // must not collide with the P1 severity badge
+      expect(svg).toContain('aria-label="Runner evidence pending: receipt expected"')
+    })
+
+    it("builds raw.githubusercontent glyph URLs for the runner pills at the current version", () => {
+      expect(badgeAssetUrl("runner-verified")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/runner-verified.svg`)
+      expect(badgeAssetUrl("runner-pending")).toBe(`${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/runner-pending.svg`)
+    })
+
+    it("runnerEvidenceBadgeImg maps the discriminant to a bare <img> with the descriptive alt", () => {
+      const verified = runnerEvidenceBadgeImg("verified")
+      expect(verified).toBe(
+        `<img src="${badgeAssetUrl("runner-verified")}" alt="Runner verified: GitHub-signed receipt attests provenance">`,
+      )
+      const pending = runnerEvidenceBadgeImg("evidence-pending")
+      expect(pending).toBe(
+        `<img src="${badgeAssetUrl("runner-pending")}" alt="Runner evidence pending: receipt expected">`,
+      )
+      // Bare <img> per Kimi's spec for the check-run surface — no <a> wrap.
+      expect(verified).not.toContain("<a ")
+    })
+  })
+
   // Sigilix bot P1 (PR #176): structural sanity for the path-baked
   // glyph table. Guards against (a) shipping a regeneration that
   // dropped a label, (b) corrupted `d` strings, and (c) adding a new
@@ -149,6 +190,8 @@ describe("badge assets (SIG-201)", () => {
       "STYLE",
       "SYNTAX",
       "DOCS",
+      "VERIFIED", // SIG-184 runner-evidence pills
+      "PENDING",
     ] as const
 
     it("has an entry for every expected label", () => {

@@ -1306,6 +1306,13 @@ export async function handlePrReviewEnsemble(
   // stats into telemetry on every exit path (success, failure, throw).
   let cache: ReturnType<typeof createRetrievalCache> | null = null
 
+  // SIG-184: runner-evidence trust state for the check-run badge, set once the
+  // receipt is consulted (the SARIF-evidence section, below) and read by every
+  // POSTED finalize() so the summary can render the VERIFIED/PENDING pill.
+  // Function-scoped (like `cache`) so it crosses the inner try-block boundaries.
+  // `undefined` = `runner-absent` = no badge (the default, flag-off path).
+  let runnerEvidenceBadge: "verified" | "evidence-pending" | undefined = undefined
+
   // ARC-258: the in-progress check run is owned by `dispatchJob`,
   // not by this orchestrator. Reason: when ensemble-post fails
   // non-stale-head and the dispatcher falls back to Phase 3, the
@@ -2403,6 +2410,17 @@ export async function handlePrReviewEnsemble(
         state: runnerEvidence.state,
         ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
       }))
+    }
+    // SIG-184: record the trust state for the check-run badge. Only in `post`
+    // mode — that's when the receipt actually backs the review (verified →
+    // receipt SARIF via rawOverride below; pending → runner configured but not
+    // verified for this commit). In `shadow` the review uses the repo-pull SARIF
+    // regardless, so a "verified" pill would overclaim; render no badge there.
+    if (runnerMode === "post") {
+      runnerEvidenceBadge =
+        runnerEvidence.state === "verified" ? "verified"
+        : runnerEvidence.state === "evidence-pending" ? "evidence-pending"
+        : undefined
     }
     const sarifResult = await runSarifEvidence({
       env, client, owner, repo, prNumber, headSha,
@@ -4940,6 +4958,7 @@ export async function handlePrReviewEnsemble(
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
           findingsCount: 0,
+          ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
         })
       }
       return finalize(telemetry, env, "errored", cache)
@@ -5389,6 +5408,10 @@ export async function handlePrReviewEnsemble(
             event: fallbackCommentSubmission.event,
             findingsCount,
             surface: "comment",
+            // No runner pill on `surface: "comment"`: the dispatcher maps these
+            // to a `failure` conclusion whose summary is error prose, and the
+            // pill is a success-summary-only signal (Kimi spec). Threading it
+            // here would be dead data the renderer never shows.
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -5466,6 +5489,7 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "posted", cache, {
         event: submission.event,
         findingsCount: inlineFindings,
+        ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
         ...checkAnnotationMeta(bodyOnlyAnnotations),
       })
     } catch (submitErr) {
@@ -5527,6 +5551,9 @@ export async function handlePrReviewEnsemble(
             event: fallbackBodyOnly.event,
             findingsCount,
             surface: "comment",
+            // No runner pill on `surface: "comment"` — see the note at the
+            // fallbackCommentSubmission site above (failure conclusion, pill is
+            // success-summary-only).
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -5606,6 +5633,8 @@ export async function handlePrReviewEnsemble(
             event: fallback.event,
             findingsCount,
             surface: "comment",
+            // No runner pill on `surface: "comment"` — failure conclusion; the
+            // pill is success-summary-only (see fallbackCommentSubmission note).
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -5652,6 +5681,8 @@ export async function handlePrReviewEnsemble(
             event: fallback.event,
             findingsCount,
             surface: "comment",
+            // No runner pill on `surface: "comment"` — failure conclusion; the
+            // pill is success-summary-only (see fallbackCommentSubmission note).
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -5707,6 +5738,7 @@ export async function handlePrReviewEnsemble(
       return finalize(telemetry, env, "posted", cache, {
         event: fallback.event,
         findingsCount: fallbackFindings,
+        ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
         ...checkAnnotationMeta(allFindingAnnotations),
       })
     } finally {
@@ -9026,6 +9058,11 @@ export interface ReviewMeta {
   surface?: "review" | "comment" | "skip-notice"
   /** Body-only findings rendered as GitHub Checks annotations. */
   checkAnnotations?: CheckRunAnnotation[]
+  /** SIG-184: the runner-evidence trust state when a receipt was
+   *  consulted (flag-gated; omitted = `runner-absent` = no badge).
+   *  Flows verbatim into `ReviewCheckMeta.runnerEvidence` (index.ts
+   *  spreads this object) so the check-run summary renders the pill. */
+  runnerEvidence?: "verified" | "evidence-pending"
 }
 
 export interface EnsembleResult {

@@ -60,6 +60,11 @@ const CATEGORY_LABELS = [
   "SYNTAX",
   "DOCS",
 ] as const
+// SIG-184: runner-evidence trust pills (Kimi K2.6 spec). Variable-width text
+// pills like the category labels (same `categoryBadgeWidth` geometry, 20-tall),
+// but rendered with the PRIORITY treatment (bright fill + near-black glyph) in
+// badge-assets.ts. Baked here so the glyph geometry matches the category pills.
+const RUNNER_LABELS = ["VERIFIED", "PENDING"] as const
 
 interface BakedGlyph {
   readonly d: string
@@ -153,6 +158,13 @@ async function main(): Promise<void> {
   }
 
   for (const label of CATEGORY_LABELS) {
+    const width = categoryBadgeWidth(label)
+    entries.push([label, bakeGlyph(font, label, width, CATEGORY_BADGE_HEIGHT)])
+  }
+
+  // SIG-184 runner-evidence pills share the category pill geometry (variable
+  // width via categoryBadgeWidth, 20-tall), so they bake with the same centering.
+  for (const label of RUNNER_LABELS) {
     const width = categoryBadgeWidth(label)
     entries.push([label, bakeGlyph(font, label, width, CATEGORY_BADGE_HEIGHT)])
   }

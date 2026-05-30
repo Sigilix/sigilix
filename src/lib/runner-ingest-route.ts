@@ -238,7 +238,11 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   // that `sha` == the PR's GitHub `merge_commit_sha`. A non-pull_request run has
   // no PR ref → pullNumber 0 (stored as an audit record, but never PR-joinable).
   const refMatch = typeof claims.ref === "string" ? /^refs\/pull\/(\d+)\/merge$/.exec(claims.ref) : null
-  const pullNumber = refMatch ? Number(refMatch[1]) : 0
+  // `\d+` is unbounded, so a pathological ref could exceed Number.MAX_SAFE_INTEGER
+  // (not exploitable — the repository_id scope + merge-sha bind still apply — but a
+  // non-safe-integer pull_number is meaningless; treat it as a non-PR run).
+  const parsedPull = refMatch ? Number(refMatch[1]) : 0
+  const pullNumber = Number.isSafeInteger(parsedPull) ? parsedPull : 0
 
   // (9) Atomic single-use claim. The DO row IS the defensible receipt; it's
   // keyed off VERIFIED claims (post-provenance these equal the envelope's).

@@ -1,17 +1,19 @@
 // SIG-184 PR 3 — review-time consumption of a verified runner receipt.
 //
-// At review time, look up the receipt for (repositoryId, headSha) — the REVIEW
-// join key, NOT the OIDC/replay sha — via the authoritative DO, integrity-check
-// the stored SARIF body against the DO's hash, validate the SARIF is internally
-// consistent with the BOUND repo/sha (the believability boundary), and return
-// one of three first-class states.
+// At review time, look up the receipt for (repositoryId, pull_number) — the
+// REVIEW join key, both SIGNED — via the authoritative DO, then BIND it by
+// requiring the receipt's OIDC-signed merge sha to equal the PR's current
+// merge_commit_sha (CR-4); integrity-check the stored SARIF body against the
+// DO's hash, validate the SARIF is internally consistent with the BOUND
+// repo/sha (the believability boundary), and return one of three first-class
+// states.
 //
 // THE BELIEVABILITY BOUNDARY (load-bearing): the receipt attests "a GitHub-signed
-// run of OUR pinned workflow on (repository, headSha) produced this exact SARIF
+// run of OUR pinned workflow on (repository, merge sha) produced this exact SARIF
 // (by hash)" — NOT "the SARIF's self-described provenance is trustworthy". So the
 // rendered repo/sha MUST come from the receipt row (the bound values), never the
 // SARIF body; and if the SARIF's own `versionControlProvenance` is present-and-
-// inconsistent with the bound head sha / repo, we DEMOTE to evidence-pending
+// inconsistent with the bound merge sha / repo, we DEMOTE to evidence-pending
 // rather than show inconsistent findings under a "verified" stamp.
 
 import type { Env } from "../../index"
@@ -50,7 +52,7 @@ export type RunnerEvidenceState =
     }
   // A receipt (or a transient hole) exists but isn't yet renderable-as-verified.
   | { state: "evidence-pending"; reason: string }
-  // No receipt for this (repo, head) — the runner isn't producing evidence here.
+  // No receipt for this (repo, pull) — the runner isn't producing evidence here.
   | { state: "runner-absent" }
 
 async function sha256Hex(raw: string): Promise<string> {

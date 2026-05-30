@@ -256,6 +256,17 @@ describe("handleRunnerIngestRoute", () => {
     expect(stored.pullNumber).toBe(555)
   })
 
+  it("clamps a non-safe-integer ref PR number to 0 (a pathological 20-digit ref is not a real PR)", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const kvWrap = makeKv()
+    const tok = await signToken({ ...baseClaims, ref: `refs/pull/${"9".repeat(20)}/merge` })
+    const res = await handleRunnerIngestRoute(post(envelope(), tok), makeEnv({}, ns, kvWrap.kv))
+    expect(res.status).toBe(200)
+    const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { pullNumber?: number }
+    expect(stored.pullNumber).toBe(0)
+  })
+
   it("a non-pull_request run (branch push ref) stores pull_number 0 — an audit receipt that is never PR-joinable", async () => {
     stubJwksFetch()
     const { ns } = makeReceiptDo()

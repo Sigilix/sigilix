@@ -2904,15 +2904,45 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
   })
 
   it("SIG-282: appends a deterministic remediation for a confirmed security finding", () => {
+    // Pattern A: the alarmist secrets-exposure remediation fires only when the
+    // CITED line actually holds a credential. Thread an AWS key on line 12.
+    const credLines = new Map([
+      ["src/config.ts", new Map<number, string>([
+        [12, '  const apiKey = "AKIAIOSFODNN7EXAMPLE"'],
+      ])],
+    ])
     const f: PrReviewFinding = {
       path: "src/config.ts", line: 12, score: 5,
       category: "security", headline: "hardcoded API token committed",
       body: "A live provider token is committed in source.",
       cweId: "CWE-798",
     }
-    const out = formatFindingComment(f, 5, reviewable, addedLines)
+    const out = formatFindingComment(f, 5, reviewable, credLines)
     expect(out).toContain("**Remediation:**")
     expect(out).toContain("revoke and rotate it now") // secrets-exposure template
+  })
+
+  it("Pattern A: de-alarms the secrets-exposure remediation when the cited line has no credential", () => {
+    // The live bug: the specialist misread `console.log(x.length)` as a leak
+    // and the system appended "treat the value as compromised … rewrite
+    // history". With the gate, a credential-free cited line gets the
+    // CONDITIONAL remediation, never the confident compromise assertion.
+    const noCredLines = new Map([
+      ["src/log.ts", new Map<number, string>([
+        [12, "  console.log(`payload size: ${payload.length}`)"],
+      ])],
+    ])
+    const f: PrReviewFinding = {
+      path: "src/log.ts", line: 12, score: 5,
+      category: "security", headline: "secret length logged",
+      body: "The byte length of a sensitive payload is written to the log.",
+      cweId: "CWE-798",
+    }
+    const out = formatFindingComment(f, 5, reviewable, noCredLines)
+    expect(out).toContain("**Remediation:**")
+    expect(out).toContain("If this value is an actual credential")
+    expect(out).not.toContain("Treat the value as compromised")
+    expect(out).not.toContain("rewrite history")
   })
 
   it("SIG-282: does not append a remediation to non-security findings", () => {

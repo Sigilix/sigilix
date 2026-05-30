@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import { runSecretScan, renderSecretHitsForPrompt } from "../src/lib/secret-scan"
+import { runSecretScan, renderSecretHitsForPrompt, containsCredentialToken } from "../src/lib/secret-scan"
 
 const mkDiff = (path: string, addedLines: string[]) => {
   const lines = [
@@ -489,5 +489,38 @@ describe("renderSecretHitsForPrompt", () => {
       },
     ])
     expect(block).not.toContain("AKIAIOSFODNN7EXAMPLE")
+  })
+})
+
+describe("containsCredentialToken — secret-remediation gate (Pattern A)", () => {
+  it("matches vetted provider-specific credential shapes", () => {
+    expect(containsCredentialToken('const apiKey = "AKIAIOSFODNN7EXAMPLE"')).toBe(true)
+    expect(containsCredentialToken('token: "ghp_0123456789abcdefghijklmnopqrstuvwxyz"')).toBe(true)
+    expect(containsCredentialToken('const k = "sk-ant-0123456789abcdefghijklmnopqrstuvwxyz"')).toBe(true)
+    expect(containsCredentialToken('STRIPE="sk_live_0123456789abcdefghijklmno"')).toBe(true)
+    expect(containsCredentialToken("-----BEGIN RSA PRIVATE KEY-----")).toBe(true)
+  })
+
+  it("matches a credential-named identifier assigned a high-entropy value", () => {
+    expect(containsCredentialToken('const apiKey = "aB3xY9kQ1mZ7pL5wR2tN8vC4hG6jD0sF"')).toBe(true)
+    expect(containsCredentialToken('password = "p4ssW0rdWithDigits1234567890abcd"')).toBe(true)
+  })
+
+  it("does NOT match the hallucinated .length leak (the bug)", () => {
+    expect(containsCredentialToken("console.log(payload.length)")).toBe(false)
+    expect(containsCredentialToken("logger.info(`token length=${apiKey.length}`)")).toBe(false)
+  })
+
+  it("biases toward false for hashes, identifiers, placeholders, and short/empty values", () => {
+    // 40-char hex hash assigned to a key-named field → not a credential.
+    expect(containsCredentialToken('const apiKey = "0123456789abcdef0123456789abcdef01234567"')).toBe(false)
+    // Long pure-alpha camelCase identifier in a token-named field → not a credential.
+    expect(containsCredentialToken('const tokenName = "veryLongLowerCamelIdentifierNameHere"')).toBe(false)
+    // Placeholder.
+    expect(containsCredentialToken('const apiKey = "your-api-key-here"')).toBe(false)
+    // High-entropy value but no credential-named identifier on the line.
+    expect(containsCredentialToken('const data = "aB3xY9kQ1mZ7pL5wR2tN8vC4hG6jD0sF"')).toBe(false)
+    expect(containsCredentialToken("")).toBe(false)
+    expect(containsCredentialToken("const x = 5")).toBe(false)
   })
 })

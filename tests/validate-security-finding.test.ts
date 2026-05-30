@@ -14,6 +14,7 @@ import {
   isDismissibleFact,
   remediationForFinding,
   REMEDIATION_BY_BUCKET,
+  SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED,
   deriveSecurityBucket,
   parseSecurityValidatorMode,
 } from "../src/lib/validate-security-finding"
@@ -147,8 +148,7 @@ describe("evaluateScanFactDismissal (SIG-282)", () => {
 })
 
 describe("remediationForFinding / REMEDIATION_BY_BUCKET (SIG-282)", () => {
-  it("returns the bucket's vetted remediation for a classified security finding", () => {
-    expect(remediationForFinding(finding({ cweId: "CWE-798" }))).toBe(REMEDIATION_BY_BUCKET["secrets-exposure"])
+  it("returns the bucket's vetted remediation for a non-secrets security finding", () => {
     expect(remediationForFinding(finding({ cweId: "CWE-89" }))).toBe(REMEDIATION_BY_BUCKET["injection"])
   })
 
@@ -162,6 +162,46 @@ describe("remediationForFinding / REMEDIATION_BY_BUCKET (SIG-282)", () => {
     const entries = Object.entries(REMEDIATION_BY_BUCKET)
     expect(entries).toHaveLength(11)
     for (const [, text] of entries) expect(text.length).toBeGreaterThan(20)
+  })
+})
+
+describe("remediationForFinding — secrets-exposure credential gate (Pattern A)", () => {
+  it("keeps the full alarmist remediation when the cited line holds a real credential", () => {
+    const f = finding({ cweId: "CWE-798", headline: "Hard-coded AWS key" })
+    expect(remediationForFinding(f, 'const apiKey = "AKIAIOSFODNN7EXAMPLE"')).toBe(
+      REMEDIATION_BY_BUCKET["secrets-exposure"],
+    )
+  })
+
+  it("de-alarms when the cited line has NO credential (the hallucinated .length leak)", () => {
+    const f = finding({ cweId: "CWE-798", headline: "Secret leaked to logs" })
+    expect(remediationForFinding(f, "console.log(payload.length)")).toBe(
+      SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED,
+    )
+    // The de-alarmed text must NEVER confidently assert compromise.
+    expect(SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED).not.toContain("Treat the value as compromised")
+    expect(SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED.toLowerCase()).toContain("if this value is an actual credential")
+  })
+
+  it("de-alarms a secrets-exposure finding when no cited line text is threaded (back-compat)", () => {
+    expect(remediationForFinding(finding({ cweId: "CWE-798" }))).toBe(SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED)
+  })
+
+  it("leaves every other bucket's remediation unchanged regardless of cited text", () => {
+    // injection / xss / authz etc. ignore the cited-line argument entirely.
+    expect(remediationForFinding(finding({ cweId: "CWE-89" }), "console.log(x.length)")).toBe(
+      REMEDIATION_BY_BUCKET["injection"],
+    )
+    expect(remediationForFinding(finding({ cweId: "CWE-79" }), 'const apiKey = "AKIAIOSFODNN7EXAMPLE"')).toBe(
+      REMEDIATION_BY_BUCKET["xss"],
+    )
+    expect(remediationForFinding(finding({ cweId: "CWE-639" }), "anything")).toBe(
+      REMEDIATION_BY_BUCKET["authn-access-control"],
+    )
+  })
+
+  it("returns null for a non-security finding even with credential-looking cited text", () => {
+    expect(remediationForFinding(finding({ category: "logic", cweId: "CWE-798" }), 'const apiKey = "AKIAIOSFODNN7EXAMPLE"')).toBeNull()
   })
 })
 

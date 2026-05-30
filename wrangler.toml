@@ -222,6 +222,24 @@ SHADOW_BAKEOFF_ROLES = ""
 OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
 
+# SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
+# authorized). The first two un-503 the POST /runner/ingest route so the runner
+# can deposit receipts; the third turns on consumption.
+#   OPENCLAW_RUNNER_OIDC_AUDIENCE  — the `aud` the runner mints its OIDC token
+#     with; the ingest route requires the token's `aud` to equal this. Stable
+#     opaque id (domain-independent) so a future custom domain doesn't break
+#     every caller workflow. The caller's `oidc-audience:` input MUST match.
+#   OPENCLAW_RUNNER_WORKFLOW_REF   — Sigilix's pinned reusable workflow as
+#     `owner/repo/path` (NO @ref). The token's `job_workflow_ref` path part must
+#     equal this (owner/repo compared case-insensitively, path case-sensitively).
+#   OPENCLAW_RUNNER_EVIDENCE_MODE  — "off" | "shadow" | "post". `post`: a verified
+#     receipt's SARIF backs the review (rawOverride) + the check-run renders the
+#     VERIFIED/PENDING trust pill. runner-absent (no receipt) is inert — every
+#     repo without the Action reviews exactly as before. Rollback: set "off".
+OPENCLAW_RUNNER_OIDC_AUDIENCE = "sigilix-runner-ingest"
+OPENCLAW_RUNNER_WORKFLOW_REF = "Sigilix/runner/.github/workflows/scan.yml"
+OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
+
 # SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
 # shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
 # been dormant since Phase 4a "baseline data collection" for months.

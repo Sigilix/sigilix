@@ -6,7 +6,12 @@
 // try/catch (a DO failure must surface a clean 5xx, never crash the route).
 
 import type { Env } from "../index"
-import type { RunnerReceiptDO, ClaimReceiptArgs, ClaimReceiptResult } from "../do/runner-receipt"
+import type {
+  RunnerReceiptDO,
+  ClaimReceiptArgs,
+  ClaimReceiptResult,
+  RunnerReceiptRow,
+} from "../do/runner-receipt"
 
 function receiptStub(env: Env, repositoryId: string): DurableObjectStub<RunnerReceiptDO> {
   const ns = env.RUNNER_RECEIPT_DO as unknown as DurableObjectNamespace<RunnerReceiptDO>
@@ -17,4 +22,13 @@ export function claimRunnerReceipt(env: Env, args: ClaimReceiptArgs): Promise<Cl
   // Direct return — the DO RPC already yields a Promise; the caller awaits it
   // inside its own try/catch (a sync throw from `receiptStub` surfaces there).
   return receiptStub(env, args.repositoryId).claimReceipt(args)
+}
+
+/** Review-join: the latest verified receipt for (repositoryId, headSha), or null. */
+export function queryRunnerReceiptByHead(
+  env: Env,
+  repositoryId: string,
+  headSha: string,
+): Promise<RunnerReceiptRow | null> {
+  return receiptStub(env, repositoryId).queryReceiptByHead(repositoryId, headSha)
 }

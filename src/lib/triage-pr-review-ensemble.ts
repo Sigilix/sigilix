@@ -160,6 +160,12 @@ import {
   type InlineGroundingValidatorMode,
   type InlineGroundingDropReason,
 } from "./validate-inline-grounding"
+import {
+  evaluateAbsenceGrounding,
+  parseAbsenceClaimValidatorMode,
+  type AbsenceClaimValidatorMode,
+  type AbsenceGroundingDropReason,
+} from "./validate-absence-grounding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -1445,7 +1451,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -4260,6 +4266,31 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "inline-grounding", reason: info.reason, dropped: info.dropped })
       },
+      // SIG-290 v1: absence-claim grounding gate. Default `off` — the gate
+      // doesn't run at all until the operator flips
+      // OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE to "shadow" (count/telemeter,
+      // keep inline) or "enforce" (demote ungrounded absence-claims to the
+      // body). `wasTruncated` + `droppedTooLarge` are the in-scope diff-
+      // packing signals from `handlePrReviewEnsemble`. Reuses the
+      // `pr-review-finding-rejected-validation` event (`gate:
+      // "absence-grounding"`). `dropped` here = "demoted to body".
+      absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
+      wasTruncated,
+      droppedPaths: droppedTooLarge,
+      onAbsenceFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "absence-grounding",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "absence-grounding", reason: info.reason, dropped: info.dropped })
+      },
     })
     if (telemetry.synthesizer) {
       telemetry.synthesizer.provenance = validated.provenance
@@ -4276,6 +4307,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
+      droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -7904,6 +7936,15 @@ export interface ValidatedOutput {
    */
   droppedForFailedInlineGroundingValidation: number
   /**
+   * SIG-290 v1: count of absence-claim findings the absence-grounding
+   * gate flagged as ungrounded — the evidence that would confirm-or-
+   * refute the absence was PROVABLY not in the specialist's window
+   * (would-demote-to-body in shadow, actual-demote in enforce). 0 when
+   * the gate is `off`. Surfaced to telemetry so the gate's would-demote
+   * rate is observable before enforce.
+   */
+  droppedForFailedAbsenceGroundingValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -8575,6 +8616,38 @@ export function validateForSubmission(args: {
     info: { reason: InlineGroundingDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-290 v1: absence-claim grounding gate mode. `off` (default) skips
+   * the gate entirely; `shadow` counts + telemeters but keeps every
+   * finding inline; `enforce` DEMOTES an absence-claim ("lacks tests",
+   * "no null check", "missing validation") to the review body when the
+   * evidence that would confirm-or-refute the absence was PROVABLY not in
+   * the specialist's window (never hard-drops). Read from
+   * `OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE` at the call site.
+   */
+  absenceClaimValidatorMode?: AbsenceClaimValidatorMode
+  /**
+   * SIG-290 v1: did the packed diff get char-truncated before specialist
+   * dispatch? Part of the absence-grounding context (computed at the call
+   * site). Default false. Not used alone to suppress in v1.
+   */
+  wasTruncated?: boolean
+  /**
+   * SIG-290 v1: paths the batcher dropped from the diff entirely. A
+   * non-testing absence-claim on a dropped path is ungrounded (the
+   * specialist never saw the file's content). Default [].
+   */
+  droppedPaths?: readonly string[]
+  /**
+   * SIG-290 v1: telemetry callback fired once per finding the absence-
+   * grounding gate flagged (reuses the `pr-review-finding-rejected-
+   * validation` event with a `gate: "absence-grounding"` discriminator).
+   * `dropped` here means "demoted to body" (enforce), not hard-dropped.
+   */
+  onAbsenceFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: AbsenceGroundingDropReason; dropped: boolean },
+  ) => void
+  /**
    * ARC-176/SIG-175: review-tone preset. `assertive` preserves the
    * old score-1 advisory summary aggregation; `chill`/default drops
    * score-1 nits from customer-visible output entirely.
@@ -8603,6 +8676,10 @@ export function validateForSubmission(args: {
     onPerfFindingDropped,
     inlineGroundingValidatorMode = "shadow",
     onInlineGroundingFindingDropped,
+    absenceClaimValidatorMode = "off",
+    wasTruncated = false,
+    droppedPaths = [],
+    onAbsenceFindingDropped,
     profile = "chill",
   } = args
   const validIds = new Set<string>()
@@ -8629,7 +8706,14 @@ export function validateForSubmission(args: {
   let droppedForFailedLogicValidation = 0
   let droppedForFailedPerfValidation = 0
   let droppedForFailedInlineGroundingValidation = 0
+  let droppedForFailedAbsenceGroundingValidation = 0
   const advisoryNits: PrReviewFinding[] = []
+
+  // SIG-290 v1: the reviewable diff's path set for the absence-grounding
+  // gate's context. Built once, but only when the gate runs — in `off`
+  // mode we skip the key iteration entirely (zero cost).
+  const reviewablePaths: ReadonlySet<string> =
+    absenceClaimValidatorMode === "off" ? new Set<string>() : new Set(reviewable.keys())
 
   // Walk by INDEX (v3.1 catch — not by headline).
   for (let i = 0; i < synthOutput.verdict.findings.length; i++) {
@@ -8927,6 +9011,40 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-290 v1: absence-grounding gate. An "absence-claim" finding
+    // ("lacks tests", "no null check", "missing validation") is only
+    // believable when the evidence that would confirm-or-refute the
+    // absence was in the specialist's window. When it was PROVABLY not
+    // (the sibling test was never inspected, or the cited path was
+    // dropped from the diff) the bot was GUESSING — DEMOTE to the body
+    // (content preserved, NOT hard-dropped). FP-safe: non-absence-claims,
+    // excluded phrases, performance findings, and every UNKNOWN keep.
+    //
+    // PLACEMENT mirrors the inline-grounding block above (after the
+    // hard-drop gates + anchor repair, so the demote routes `workingFinding`
+    // with the repaired anchor). `off` skips the gate entirely; `shadow`
+    // counts + telemeters and keeps the finding inline; only `enforce`
+    // demotes. No score floor — a P0/P1 ungrounded absence-claim is the
+    // worst case and is demoted too.
+    if (absenceClaimValidatorMode !== "off") {
+      const absenceDecision = evaluateAbsenceGrounding(workingFinding, {
+        testingEvidence,
+        reviewablePaths,
+        wasTruncated,
+        droppedPaths,
+      })
+      if (!absenceDecision.keep) {
+        const demoted = absenceClaimValidatorMode === "enforce"
+        droppedForFailedAbsenceGroundingValidation++
+        onAbsenceFindingDropped?.(workingFinding, { reason: absenceDecision.reason, dropped: demoted })
+        if (demoted) {
+          unanchoredFindings.push(workingFinding)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
+    }
+
     const side = deriveSide(reviewable, workingFinding.path, workingFinding.line)
     if (!side) {
       const repairedLine =
@@ -8982,6 +9100,7 @@ export function validateForSubmission(args: {
     droppedForFailedLogicValidation,
     droppedForFailedPerfValidation,
     droppedForFailedInlineGroundingValidation,
+    droppedForFailedAbsenceGroundingValidation,
     cleanFindingProvenance,
     provenance: {
       ...synthOutput.provenance,
@@ -9163,6 +9282,11 @@ interface EnsembleTelemetry {
      * flagged as ungrounded (would-demote-to-body in shadow, actual-demote
      * in enforce mode). */
     droppedForFailedInlineGroundingValidation: number
+    /** SIG-290 v1: count of absence-claim findings the absence-grounding
+     * gate flagged as ungrounded — evidence provably outside the window
+     * (would-demote-to-body in shadow, actual-demote in enforce; 0 when
+     * the gate is off). */
+    droppedForFailedAbsenceGroundingValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

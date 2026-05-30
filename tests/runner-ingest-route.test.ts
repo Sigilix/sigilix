@@ -179,7 +179,7 @@ describe("handleRunnerIngestRoute", () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
     const tok = await signToken(baseClaims)
-    const big = { sarif: "x".repeat(2 * 1024 * 1024 + 16), repository: "Sigilix/sigilix", sha: "deadbeef" }
+    const big = { sarif: "x".repeat(8 * 1024 * 1024 + 16), repository: "Sigilix/sigilix", sha: "deadbeef" }
     expect((await handleRunnerIngestRoute(post(big, tok), makeEnv({}, ns, kv))).status).toBe(413)
   })
 
@@ -394,8 +394,8 @@ describe("handleRunnerIngestRoute", () => {
     const { ns } = makeReceiptDo()
     const { kv } = makeKv()
     const badTok = await signToken({ ...baseClaims, aud: "someone-else" }) // verify fails
-    const big = { sarif: "x".repeat(2 * 1024 * 1024 + 16), repository: "Sigilix/sigilix", sha: "deadbeef" }
-    // 401 (not 413): an unauthenticated caller never gets to force a 2 MiB read.
+    const big = { sarif: "x".repeat(8 * 1024 * 1024 + 16), repository: "Sigilix/sigilix", sha: "deadbeef" }
+    // 401 (not 413): an unauthenticated caller never gets to force an 8 MiB read.
     expect((await handleRunnerIngestRoute(post(big, badTok), makeEnv({}, ns, kv))).status).toBe(401)
   })
 

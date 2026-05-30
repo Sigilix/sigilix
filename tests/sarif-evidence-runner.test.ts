@@ -56,8 +56,8 @@ describe("runSarifEvidence — skip paths", () => {
     if (r.skipped) expect(r.reason).toBe("no-report")
   })
 
-  it("report-too-large at 2 MB + 1 byte", async () => {
-    const big = "x".repeat(2 * 1024 * 1024 + 1)
+  it("report-too-large at 8 MB + 1 byte", async () => {
+    const big = "x".repeat(8 * 1024 * 1024 + 1)
     const r = await runSarifEvidence({
       env: fakeEnv, client: fakeClient(big), ...CTX, diff: "",
       config: DEFAULT_CONFIG,
@@ -281,15 +281,15 @@ describe("runSarifEvidence — caps", () => {
     expect(r.telemetry.truncatedCount).toBe(0)
   })
 
-  it("report just under 2 MB does NOT trigger size cap (over-cap test in skip-paths describe)", async () => {
-    // Build a valid SARIF report padded just under the 2 MB cap.
-    const padding = " ".repeat(2 * 1024 * 1024 - 200)
+  it("report just under 8 MB does NOT trigger size cap (over-cap test in skip-paths describe)", async () => {
+    // Build a valid SARIF report padded just under the 8 MB cap.
+    const padding = " ".repeat(8 * 1024 * 1024 - 200)
     const report = JSON.stringify({
       version: "2.1.0",
       $schema: padding,
       runs: [{ tool: { driver: { name: "Trivy" } } }],
     })
-    expect(new TextEncoder().encode(report).length).toBeLessThanOrEqual(2 * 1024 * 1024)
+    expect(new TextEncoder().encode(report).length).toBeLessThanOrEqual(8 * 1024 * 1024)
     const r = await runSarifEvidence({
       env: fakeEnv, client: fakeClient(report), ...CTX, diff: "",
       config: DEFAULT_CONFIG,

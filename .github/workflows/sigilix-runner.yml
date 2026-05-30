@@ -30,3 +30,8 @@ jobs:
     with:
       ingest-url: https://sigilix.dan-martinezjulio.workers.dev/runner/ingest
       oidc-audience: sigilix-runner-ingest
+      # The runner is Sigilix's DETERMINISTIC lane (the LLM specialists handle
+      # logic/perf/etc.). A focused security ruleset is higher-signal than
+      # `--config auto` AND much smaller — `auto` on this repo overran the 8 MiB
+      # ingest cap (SIG-184 413). Deterministic tools are strongest at security.
+      semgrep-config: p/security-audit

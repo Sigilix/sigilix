@@ -285,6 +285,18 @@ OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
 # Rollback: set "off" (or remove the line).
 OPENCLAW_VERIFICATION_MODE = "shadow"
 
+# SIG-290 v1: anti-hallucination absence-grounding gate. Suppress/downgrade
+# "absence-claim" findings (e.g. "lacks tests", "no null check", "missing
+# validation") when the evidence that would confirm-or-refute the absence
+# was PROVABLY not in the specialist's window (the sibling test was never
+# inspected, or the cited path was dropped from the diff) — because then
+# the bot was GUESSING. "off" (default) skips the gate; "shadow" counts +
+# telemeters the would-demote but keeps every finding inline (zero behavior
+# change); "enforce" demotes the ungrounded absence-claim to the review
+# body (never hard-drops). Start "off" until the shadow data is read.
+# Rollback: set "off" (or remove the line).
+OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "off"
+
 # SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
 # shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
 # been dormant since Phase 4a "baseline data collection" for months.

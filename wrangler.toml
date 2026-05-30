@@ -128,6 +128,14 @@ class_name = "GraphMetricsDO"
 name = "RUNNER_RECEIPT_DO"
 class_name = "RunnerReceiptDO"
 
+# SIG-184 PR 5b: single global DO holding rolling runner-evidence presence
+# counters (state × evidence-pending-reason daily buckets + per-repo latest
+# state, 35-day retention). Read via GET /metrics/runner-evidence (same
+# OPENCLAW_VALIDATION_METRICS_TOKEN bearer as the other /metrics/* endpoints).
+[[durable_objects.bindings]]
+name = "RUNNER_EVIDENCE_METRICS_DO"
+class_name = "RunnerEvidenceMetricsDO"
+
 # Migration block — adds the DO class. Forward-only; use
 # `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
 # point-lookup; SQLite buys nothing.
@@ -158,6 +166,12 @@ new_sqlite_classes = ["GraphMetricsDO"]
 [[migrations]]
 tag = "sig-184-v1"
 new_sqlite_classes = ["RunnerReceiptDO"]
+
+# SIG-184 PR 5b: RunnerEvidenceMetricsDO uses SQLite storage. Forward-only;
+# reverting is safe (telemetry-only — no review behavior depends on it).
+[[migrations]]
+tag = "sig-184-metrics-v1"
+new_sqlite_classes = ["RunnerEvidenceMetricsDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

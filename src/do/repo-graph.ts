@@ -159,6 +159,13 @@ const CANDIDATE_EXTS = [
  */
 export const MAX_BLAST_IDS = 200
 
+/**
+ * SIG-286: default per-list row cap for contextExpansionForChangedSymbols.
+ * Bounds the definition / caller / import row lists independently so a
+ * widely-called changed symbol can't return an unbounded edge set.
+ */
+export const DEFAULT_EXPANSION_ROWS = 40
+
 // ─── Public result types ──────────────────────────────────────────
 
 /**
@@ -178,6 +185,63 @@ export interface GraphContextNode {
   hop: number
   /** The `edge_kind` value from the file_edge that connected this node. */
   edgeKind: string
+}
+
+// ─── SIG-286: context-expansion row types ─────────────────────────
+//
+// contextExpansionForChangedSymbols returns LOCATIONS only (no body text).
+// The DO never stores source; the ensemble slices bodies from filesByPath /
+// fetched content. PR1 consumes these rows in shadow-only telemetry.
+
+/** A changed symbol's declaration span in the active graph version. */
+export interface GraphDefinitionRow {
+  symbolId: string
+  path: string
+  name: string
+  kind: string
+  startLine: number
+  endLine: number
+}
+
+/**
+ * A call site of a changed symbol. `callerSymbolId` (and its span, when the
+ * caller resolves to a known symbol) lets the consumer render the WHOLE caller
+ * body instead of a bare window around the call line.
+ *
+ * Matched on `callee_symbol_id` — which `commitGraphVersion` only sets for
+ * `same_file` calls. Cross-file/imported call sites have a null
+ * `callee_symbol_id` and are NOT returned here: a deliberate high-precision,
+ * lower-recall signal (prefer-missing-over-false), distinct from blastRadius's
+ * name-based caller paths.
+ */
+export interface GraphCallerRow {
+  sourcePath: string
+  calleeName: string
+  callKind: string
+  startLine: number
+  startCol: number
+  callerSymbolId: string | null
+  callerStartLine: number | null
+  callerEndLine: number | null
+}
+
+/** An import edge that references a changed symbol (or a changed file). */
+export interface GraphImportRow {
+  sourcePath: string
+  importedName: string | null
+  startLine: number
+}
+
+/**
+ * Result of contextExpansionForChangedSymbols. `graphAvailable=false` (with
+ * empty rows) when there is no active graph version — mirrors the graceful
+ * degrade in blastRadius / contextForVectorHits.
+ */
+export interface GraphContextExpansion {
+  graphAvailable: boolean
+  definitionRows: GraphDefinitionRow[]
+  callerRows: GraphCallerRow[]
+  importRows: GraphImportRow[]
 }
 
 // ─── Public arg types ─────────────────────────────────────────────
@@ -800,6 +864,135 @@ export class RepoGraphDO extends DurableObject<Env> {
     }
 
     return { nodes }
+  }
+
+  /**
+   * SIG-286: row-level context expansion for a PR's changed symbols, scoped to
+   * the ACTIVE graph version. Unlike blastRadiusByNames (which returns only
+   * caller/import-dependent PATHS), this returns the LOCATIONS needed to render
+   * bounded body snippets: definition spans, same-file call sites, and import
+   * reference lines.
+   *
+   * Resolution mirrors blastRadiusByNames: changed NAMES are resolved to
+   * symbol_ids SCOPED to `changedPaths` (the name-collision guard — a bare name
+   * like `handle` resolves only where the PR declared it), capped at
+   * MAX_BLAST_IDS. Each row list is additionally capped at `maxRows`.
+   *
+   * Rows:
+   *   - definitionRows: symbols matching the resolved changed ids → spans.
+   *   - callerRows: call_edges whose callee_symbol_id ∈ changed ids (same-file
+   *     calls only — see GraphCallerRow), joined to the caller symbol's span
+   *     when caller_symbol_id resolves.
+   *   - importRows: file_edges whose target_symbol_id ∈ changed ids OR whose
+   *     target_path ∈ changedPaths → import reference lines.
+   *
+   * Returns `{ graphAvailable: false, …empty }` when there is no active version
+   * or `changedNames`/`changedPaths` is empty — graceful degrade.
+   */
+  async contextExpansionForChangedSymbols(args: {
+    changedNames: string[]
+    changedPaths: string[]
+    maxRows?: number
+  }): Promise<GraphContextExpansion> {
+    const empty: GraphContextExpansion = {
+      graphAvailable: false,
+      definitionRows: [],
+      callerRows: [],
+      importRows: [],
+    }
+    if (args.changedNames.length === 0 || args.changedPaths.length === 0) return empty
+
+    const active = await this.debugActiveVersion()
+    if (!active) return empty
+
+    const maxRows = args.maxRows && args.maxRows > 0 ? Math.floor(args.maxRows) : DEFAULT_EXPANSION_ROWS
+    const sql = this.sql()
+    const names = args.changedNames
+    const paths = args.changedPaths
+    const namePlaceholders = names.map(() => "?").join(",")
+    const pathPlaceholders = paths.map(() => "?").join(",")
+
+    // Resolve changed NAMES → symbol_ids, scoped to changed files. Same query
+    // as blastRadiusByNames (ORDER BY before LIMIT → deterministic cap).
+    const ids = [
+      ...sql.exec<{ symbol_id: string }>(
+        `SELECT DISTINCT symbol_id FROM symbols WHERE graph_version = ? AND name IN (${namePlaceholders}) AND path IN (${pathPlaceholders}) ORDER BY symbol_id LIMIT ?`,
+        active, ...names, ...paths, MAX_BLAST_IDS,
+      ),
+    ].map((r) => r.symbol_id)
+
+    if (ids.length === 0) {
+      // Active version exists but nothing resolved — still "available".
+      return { graphAvailable: true, definitionRows: [], callerRows: [], importRows: [] }
+    }
+
+    const idPlaceholders = ids.map(() => "?").join(",")
+
+    // definitionRows: the changed symbols' own declaration spans.
+    const definitionRows: GraphDefinitionRow[] = [
+      ...sql.exec<{
+        symbol_id: string; path: string; name: string; kind: string
+        start_line: number; end_line: number
+      }>(
+        `SELECT symbol_id, path, name, kind, start_line, end_line FROM symbols WHERE graph_version = ? AND symbol_id IN (${idPlaceholders}) ORDER BY path, start_line LIMIT ?`,
+        active, ...ids, maxRows,
+      ),
+    ].map((r) => ({
+      symbolId: r.symbol_id,
+      path: r.path,
+      name: r.name,
+      kind: r.kind,
+      startLine: r.start_line,
+      endLine: r.end_line,
+    }))
+
+    // callerRows: same-file call sites of a changed symbol, LEFT JOINed to the
+    // caller symbol's span so the consumer can render the whole caller body.
+    const callerRows: GraphCallerRow[] = [
+      ...sql.exec<{
+        source_path: string; callee_name: string; call_kind: string
+        start_line: number; start_col: number
+        caller_symbol_id: string | null
+        caller_start_line: number | null
+        caller_end_line: number | null
+      }>(
+        `SELECT ce.source_path, ce.callee_name, ce.call_kind, ce.start_line, ce.start_col,
+                ce.caller_symbol_id,
+                cs.start_line AS caller_start_line, cs.end_line AS caller_end_line
+           FROM call_edges ce
+           LEFT JOIN symbols cs
+             ON cs.graph_version = ce.graph_version AND cs.symbol_id = ce.caller_symbol_id
+          WHERE ce.graph_version = ? AND ce.callee_symbol_id IN (${idPlaceholders})
+          ORDER BY ce.source_path, ce.start_line
+          LIMIT ?`,
+        active, ...ids, maxRows,
+      ),
+    ].map((r) => ({
+      sourcePath: r.source_path,
+      calleeName: r.callee_name,
+      callKind: r.call_kind,
+      startLine: r.start_line,
+      startCol: r.start_col,
+      callerSymbolId: r.caller_symbol_id,
+      callerStartLine: r.caller_start_line,
+      callerEndLine: r.caller_end_line,
+    }))
+
+    // importRows: import edges referencing a changed symbol (resolved
+    // target_symbol_id) OR a changed file (target_path). Matching either side
+    // captures both symbol-resolved and ambiguous-but-path-resolved importers.
+    const importRows: GraphImportRow[] = [
+      ...sql.exec<{ source_path: string; imported_name: string | null; start_line: number }>(
+        `SELECT DISTINCT source_path, imported_name, start_line FROM file_edges WHERE graph_version = ? AND (target_symbol_id IN (${idPlaceholders}) OR target_path IN (${pathPlaceholders})) ORDER BY source_path, start_line LIMIT ?`,
+        active, ...ids, ...paths, maxRows,
+      ),
+    ].map((r) => ({
+      sourcePath: r.source_path,
+      importedName: r.imported_name,
+      startLine: r.start_line,
+    }))
+
+    return { graphAvailable: true, definitionRows, callerRows, importRows }
   }
 
   /**

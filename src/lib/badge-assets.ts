@@ -27,6 +27,27 @@ const BADGE_STYLES = {
   },
 } as const
 
+// SIG-184: runner-evidence trust pills (Kimi K2.6 spec, 2026-05-30). Rendered
+// with the PRIORITY treatment — a SOLID bright fill + near-black glyph (a
+// provenance signal, visually a sibling of the P0..P3 chips) — but at the
+// variable CATEGORY width (the labels are words, not "P0"). `ariaLabel` carries
+// the full descriptive text Kimi specified (the chip text alone reads as just
+// "VERIFIED"). The `runner-absent` state renders NO badge, so it has no style.
+const RUNNER_BADGE_STYLES = {
+  "runner-verified": {
+    label: "VERIFIED",
+    accent: "#06B6D4", // cyan — "trust/provenance", distinct from every priority/category hue
+    ariaLabel: "Runner verified: GitHub-signed receipt attests provenance",
+  },
+  "runner-pending": {
+    label: "PENDING",
+    // amber-600, intentionally NOT P1's #F59E0B — a pending-provenance signal
+    // must not be confused with a P1 severity badge (Kimi, 2026-05-30).
+    accent: "#D97706",
+    ariaLabel: "Runner evidence pending: receipt expected",
+  },
+} as const
+
 const CATEGORY_BADGE_STYLES = {
   logic: {
     label: "LOGIC",
@@ -68,7 +89,8 @@ const CATEGORY_BADGE_STYLES = {
 
 export type BadgeAssetName = keyof typeof BADGE_STYLES
 export type CategoryBadgeAssetName = keyof typeof CATEGORY_BADGE_STYLES
-export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName
+export type RunnerBadgeAssetName = keyof typeof RUNNER_BADGE_STYLES
+export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName | RunnerBadgeAssetName
 
 // SIG-238 (2026-05-26 round-6 — THE ACTUAL FIX):
 // host = `raw.githubusercontent.com/Sigilix/sigilix-glyphs`, a
@@ -131,7 +153,11 @@ export const LEGACY_WORKER_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.w
 // emits `<a href="#"><img></a>` with NO explicit width/height. See
 // `badge-geometry.ts:BADGE_PADDING_PX` docstring for the full
 // r4-to-r9 history.
-export const BADGE_ASSET_VERSION = "v20260528-2"
+// SIG-184 (2026-05-30): v20260528-2 → v20260530-1 adds the runner-evidence
+// trust pills (runner-verified / runner-pending). Every bump must mirror
+// assets/badges/<version>/*.svg to the public Sigilix/sigilix-glyphs repo AND
+// tag that commit with this exact string (see the PUBLIC_BADGE_BASE_URL note).
+export const BADGE_ASSET_VERSION = "v20260530-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,
@@ -256,6 +282,21 @@ function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBa
 </svg>`
 }
 
+// SIG-184: the PRIORITY treatment (solid bright `accent` fill + near-black
+// PRIORITY_TEXT_COLOR glyph) at the CATEGORY variable width — Kimi's runner
+// pill. The SVG carries the descriptive `ariaLabel` (not the bare label) so a
+// directly-consumed SVG is self-describing; the inline `<img alt>` mirrors it.
+function renderRunnerBadgeSvg(style: (typeof RUNNER_BADGE_STYLES)[RunnerBadgeAssetName]): string {
+  const width = categoryBadgeWidth(style.label)
+  const glyph = lookupGlyph(style.label)
+  const innerW = width - BADGE_GUTTER_PX
+  const innerH = CATEGORY_BADGE_HEIGHT - BADGE_GUTTER_PX
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${CATEGORY_BADGE_HEIGHT}" width="${width}" height="${CATEGORY_BADGE_HEIGHT}" fill="none" role="img" aria-label="${style.ariaLabel}">
+  <rect width="${innerW}" height="${innerH}" rx="${BADGE_RECT_RX}" fill="${style.accent}"/>
+  <path d="${glyph.d}" fill="${PRIORITY_TEXT_COLOR}"/>
+</svg>`
+}
+
 const BADGE_SVGS: Record<ReviewBadgeAssetName, string> = {
   p0: renderBadgeSvg(BADGE_STYLES.p0),
   p1: renderBadgeSvg(BADGE_STYLES.p1),
@@ -270,10 +311,33 @@ const BADGE_SVGS: Record<ReviewBadgeAssetName, string> = {
   style: renderCategoryBadgeSvg(CATEGORY_BADGE_STYLES.style),
   syntax: renderCategoryBadgeSvg(CATEGORY_BADGE_STYLES.syntax),
   docs: renderCategoryBadgeSvg(CATEGORY_BADGE_STYLES.docs),
+  "runner-verified": renderRunnerBadgeSvg(RUNNER_BADGE_STYLES["runner-verified"]),
+  "runner-pending": renderRunnerBadgeSvg(RUNNER_BADGE_STYLES["runner-pending"]),
 }
 
 export function badgeAssetUrl(name: ReviewBadgeAssetName): string {
   return `${PUBLIC_BADGE_BASE_URL}/${BADGE_ASSET_VERSION}/${name}.svg`
+}
+
+// SIG-184: maps the consumer-facing runner-evidence discriminant
+// (`verified` | `evidence-pending`) to its badge name. The third state,
+// `runner-absent`, deliberately has NO badge — the caller renders nothing.
+const RUNNER_EVIDENCE_BADGE_NAME: Record<"verified" | "evidence-pending", RunnerBadgeAssetName> = {
+  verified: "runner-verified",
+  "evidence-pending": "runner-pending",
+}
+
+/**
+ * SIG-184: the inline `<img>` for a runner-evidence trust pill, used in the
+ * check-run summary. Bare `<img>` (no `<a>` wrap) per Kimi's spec for this
+ * surface: the raw.githubusercontent host dodges Camo and the SVG owns its
+ * rx=1 corners. `alt` carries the full descriptive text (screen-reader + the
+ * GitHub markdown→HTML pipeline preserves it). `runner-absent` has no badge,
+ * so it is intentionally NOT a valid input — the caller omits the badge.
+ */
+export function runnerEvidenceBadgeImg(state: "verified" | "evidence-pending"): string {
+  const name = RUNNER_EVIDENCE_BADGE_NAME[state]
+  return `<img src="${badgeAssetUrl(name)}" alt="${RUNNER_BADGE_STYLES[name].ariaLabel}">`
 }
 
 export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; height: number } {
@@ -286,14 +350,20 @@ export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; hei
   if (name in BADGE_STYLES) {
     return { width: PRIORITY_BADGE_WIDTH, height: PRIORITY_BADGE_HEIGHT }
   }
+  // Runner pills share the category geometry (variable width, 20-tall) but live
+  // in their own style table, so resolve their label there.
+  const label = name in RUNNER_BADGE_STYLES
+    ? RUNNER_BADGE_STYLES[name as RunnerBadgeAssetName].label
+    : CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label
   return {
-    width: categoryBadgeWidth(CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label),
+    width: categoryBadgeWidth(label),
     height: CATEGORY_BADGE_HEIGHT,
   }
 }
 
 export function badgeAssetLabel(name: ReviewBadgeAssetName): string {
   if (name in BADGE_STYLES) return BADGE_STYLES[name as BadgeAssetName].label
+  if (name in RUNNER_BADGE_STYLES) return RUNNER_BADGE_STYLES[name as RunnerBadgeAssetName].label
   return CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label
 }
 

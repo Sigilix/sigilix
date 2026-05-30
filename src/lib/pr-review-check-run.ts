@@ -14,6 +14,7 @@
 
 import { GitHubClient, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
+import { runnerEvidenceBadgeImg } from "./badge-assets"
 import type { Env } from "../index"
 
 // SIG-216 (founder sign-off 2026-05-25): Sigilix follows Greptile's
@@ -226,6 +227,15 @@ export interface ReviewCheckMeta {
    * PR number in scope still get a sensible (link-less) summary.
    */
   prNumber?: number
+  /**
+   * SIG-184: the runner-evidence trust state for this review, when a
+   * receipt was consulted (flag-gated; absent by default). When
+   * present, the Check run summary appends a "VERIFIED"/"PENDING"
+   * provenance pill. The third runtime state, `runner-absent`, is
+   * represented by OMITTING this field — no badge renders, so the
+   * default (no runner installed) experience is unchanged.
+   */
+  runnerEvidence?: "verified" | "evidence-pending"
 }
 
 interface CompleteArgs {
@@ -373,17 +383,24 @@ export function renderOutputForConclusion(
   repoCoords?: { owner: string; repo: string },
 ): { title: string; summary: string } {
   const prReviewUrl = buildPrReviewUrl(repoCoords, reviewMeta?.prNumber)
+  // SIG-184: trust-pill suffix appended to the success summary when a runner
+  // receipt backed this review (Kimi spec). `runner-absent` is the omitted
+  // case → empty suffix → byte-identical to the pre-badge summary.
+  const runnerBadge = reviewMeta?.runnerEvidence
+    ? ` · ${runnerEvidenceBadgeImg(reviewMeta.runnerEvidence)}`
+    : ""
   switch (conclusion) {
     case "success":
       // ARC-276 + SIG-216: when the dispatcher threads `reviewMeta`,
       // the Check Run title reflects the verdict directly. The
       // summary collapses to a single line pointing at the PR
-      // conversation tab.
+      // conversation tab. SIG-184: the runner trust pill (when any)
+      // is appended to the summary, never the title.
       if (reviewMeta) {
         if (reviewMeta.event === "APPROVE") {
           return {
             title: "Approved — no issues found",
-            summary: buildApprovedSummary(prReviewUrl),
+            summary: buildApprovedSummary(prReviewUrl) + runnerBadge,
           }
         }
         const n = reviewMeta.findingsCount
@@ -393,12 +410,12 @@ export function renderOutputForConclusion(
           : `${n} ${noun} — changes requested`
         return {
           title,
-          summary: buildFindingsSummary(n, prReviewUrl),
+          summary: buildFindingsSummary(n, prReviewUrl) + runnerBadge,
         }
       }
       return {
         title: "Review posted",
-        summary: buildLegacyPostedSummary(prReviewUrl),
+        summary: buildLegacyPostedSummary(prReviewUrl) + runnerBadge,
       }
     case "skipped":
       return {

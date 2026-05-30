@@ -460,6 +460,70 @@ describe("completeCheckRun", () => {
     expect(p.output.summary).toBe("2 suggestions")
   })
 
+  // SIG-184: runner-evidence trust pill. When the ensemble threads
+  // `runnerEvidence`, the summary appends the VERIFIED/PENDING badge `<img>`;
+  // the title is never touched (Kimi spec). Absent → byte-identical summary.
+  it("appends the VERIFIED runner pill to the APPROVE summary, leaving the title untouched", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "APPROVE", findingsCount: 0, prNumber: 42, runnerEvidence: "verified" },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { title: string; summary: string } }
+    expect(p.output.title).toBe("Approved — no issues found") // title NOT decorated
+    expect(p.output.summary).toBe(
+      "Sigilix approved · [View PR](https://github.com/Arc-and-Anchor/sigilix/pull/42)" +
+        ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260530-1/runner-verified.svg" alt="Runner verified: GitHub-signed receipt attests provenance">',
+    )
+  })
+
+  it("appends the PENDING runner pill to a findings summary", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3, prNumber: 42, runnerEvidence: "evidence-pending" },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { summary: string } }
+    expect(p.output.summary).toBe(
+      "3 suggestions · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)" +
+        ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260530-1/runner-pending.svg" alt="Runner evidence pending: receipt expected">',
+    )
+  })
+
+  it("renders NO runner pill when runnerEvidence is omitted (runner-absent — the default)", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      reviewMeta: { event: "APPROVE", findingsCount: 0, prNumber: 42 },
+    })
+
+    const [, , , payload] = mockUpdateCheckRun.mock.calls[0]!
+    const p = payload as { output: { summary: string } }
+    expect(p.output.summary).toBe(
+      "Sigilix approved · [View PR](https://github.com/Arc-and-Anchor/sigilix/pull/42)",
+    )
+    expect(p.output.summary).not.toContain("<img")
+  })
+
   it("falls back to the generic 'Review posted' title when reviewMeta is omitted on success", async () => {
     // Legacy callers + dedupe-hit skip paths don't carry reviewMeta.
     // The generic copy is the right surface for "we don't know what

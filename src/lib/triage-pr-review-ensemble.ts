@@ -756,6 +756,33 @@ export function parseMinSpecialistsEarlyExitMode(
   return "off"
 }
 
+/** What the fan-out loop should do at a given settle point (SIG-235 + SIG-236). */
+export type EarlyExitAction = "none" | "suppress-protected" | "cancel" | "shadow-mark"
+
+/**
+ * Pure decision for the min-specialists early-exit gate. Extracted so the
+ * SIG-236 protected-role guard is unit-testable without the orchestrator.
+ *   none               — quorum not met (or nothing pending) → keep awaiting
+ *   cancel             — "on" + no protected role pending → cancel the laggards
+ *   suppress-protected — "on" + logic still pending → do NOT cancel (SIG-236):
+ *                        logic is the intentional long-pole; its 110s per-attempt
+ *                        cap bounds it, not early-exit. Without this, flipping
+ *                        early-exit to "on" would silently re-drop logic.
+ *   shadow-mark        — "shadow" → record the would-fire, keep awaiting
+ */
+export function decideEarlyExitAction(args: {
+  mode: MinSpecialistsEarlyExitMode
+  succeededCount: number
+  quorumThreshold: number
+  pendingCount: number
+  logicProtectedPending: boolean
+}): EarlyExitAction {
+  if (args.succeededCount < args.quorumThreshold || args.pendingCount === 0) return "none"
+  if (args.mode === "on") return args.logicProtectedPending ? "suppress-protected" : "cancel"
+  if (args.mode === "shadow") return "shadow-mark"
+  return "none" // "off"
+}
+
 /**
  * SIG-228 Phase 3c: pure eligibility predicate, extracted so unit tests
  * can pin the gate without spinning up the full ensemble. Returns true
@@ -3140,16 +3167,24 @@ export async function handlePrReviewEnsemble(
           (r) => r.status === "fulfilled" && r.value.verdict !== null,
         ).length
 
-        if (succeededCount >= quorumThreshold && pending.size > 0) {
+        // SIG-236: logic is the intentional long-pole (rich graph+symbol context,
+        // ~110s per-attempt). It is a PROTECTED role — early-exit must NOT cancel
+        // it, or flipping early-exit to "on" would silently re-break logic
+        // availability (the regression this fix closes). Early-exit can still fire
+        // to drop a genuinely stuck non-logic role. decideEarlyExitAction is the
+        // pure, unit-tested decision.
+        const logicProtectedPending =
+          router.specialists.includes("logic") && pending.has("logic")
+        const earlyExitAction = decideEarlyExitAction({
+          mode: earlyExitMode,
+          succeededCount,
+          quorumThreshold,
+          pendingCount: pending.size,
+          logicProtectedPending,
+        })
+        if (earlyExitAction !== "none") {
           const nowMs = Date.now()
-          // SIG-236: logic is the intentional long-pole (rich graph+symbol
-          // context, ~110s per-attempt). It is a PROTECTED role — early-exit
-          // must NOT cancel it, or flipping early-exit to "on" would silently
-          // re-break logic availability (the regression this fix closes).
-          // Early-exit can still fire to drop a genuinely stuck non-logic role.
-          const logicProtectedPending =
-            router.specialists.includes("logic") && pending.has("logic")
-          if (earlyExitMode === "on" && logicProtectedPending) {
+          if (earlyExitAction === "suppress-protected") {
             // Keep awaiting logic — its 110s per-attempt cap bounds it, not
             // early-exit. Fall through (no break) to the next Promise.race.
             if (!earlyExitProtectedLogged) {
@@ -3166,7 +3201,7 @@ export async function handlePrReviewEnsemble(
                 elapsedMsSinceFanoutStart: nowMs - fanoutStartMs,
               }))
             }
-          } else if (earlyExitMode === "on") {
+          } else if (earlyExitAction === "cancel") {
             earlyExitFiredAtMs = nowMs
             cancelledRolesAtExit = Array.from(pending.keys())
             // Abort the laggards' AbortControllers — composedSignal
@@ -3192,7 +3227,7 @@ export async function handlePrReviewEnsemble(
               }
             }
             break
-          } else if (earlyExitMode === "shadow" && earlyExitWouldFireAtMs === null) {
+          } else if (earlyExitAction === "shadow-mark" && earlyExitWouldFireAtMs === null) {
             // Shadow: log the would-fire and keep awaiting. Only the
             // FIRST time the threshold is crossed (subsequent settles
             // would also satisfy `>= quorumThreshold` and we don't

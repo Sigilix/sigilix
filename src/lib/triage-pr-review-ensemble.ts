@@ -280,6 +280,8 @@ import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState 
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import { readVerificationMode } from "./verification/mode"
 import { verifyFinding, findingKey } from "./verification/verify-finding"
+import { recordVerificationMetrics } from "./verification-metrics-client"
+import type { RecordVerificationArgs } from "../do/verification-metrics"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
@@ -5105,6 +5107,7 @@ export async function handlePrReviewEnsemble(
         ...submissionVerdict.findings,
         ...renderableUnanchoredForSubmission,
       ]
+      const verificationItems: RecordVerificationArgs[] = []
       for (const finding of submittedFindings) {
         if (finding.score < 4) continue
         if (finding.category !== "logic" && finding.category !== "security") continue
@@ -5123,6 +5126,26 @@ export async function handlePrReviewEnsemble(
           tokenCount: result.tokens.length,
           ...(result.check ? { checkKind: result.check.kind, checkStatus: result.check.status } : {}),
         }))
+        verificationItems.push({ verdict: result.verdict, category: finding.category })
+      }
+      // SIG-285 PR 2: persist the review's verdict distribution to
+      // VerificationMetricsDO (one batched RPC). Best-effort + bounded so a
+      // stalled DO can't eat orchestrator time, and a failure NEVER breaks the
+      // review (telemetry only). Read via GET /metrics/verification.
+      if (verificationItems.length > 0) {
+        let vmTimer: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([
+            recordVerificationMetrics(env, verificationItems),
+            new Promise<never>((_, reject) => {
+              vmTimer = setTimeout(() => reject(new Error("verification-metric-timeout")), 1_500)
+            }),
+          ])
+        } catch (err) {
+          console.warn(JSON.stringify({ event: "verification-metric-record-failed", owner, repo, prNumber, error: String(err) }))
+        } finally {
+          if (vmTimer !== undefined) clearTimeout(vmTimer)
+        }
       }
     }
 

@@ -343,4 +343,34 @@ describe("handleRunnerIngestRoute", () => {
     const rerun = await signToken({ ...baseClaims, run_attempt: "2" })
     expect(await outcome(post(envelope(), rerun))).toBe("accepted")
   })
+
+  // — ordering / config-gate contract locks (CodeRabbit) —
+
+  it("503 when the workflow-ref config is unset (the OTHER required gate)", async () => {
+    const { ns } = makeReceiptDo()
+    const { kv } = makeKv()
+    const res = await handleRunnerIngestRoute(post(envelope(), "tok"), makeEnv({ OPENCLAW_RUNNER_WORKFLOW_REF: undefined }, ns, kv))
+    expect(res.status).toBe(503)
+  })
+
+  it("invalid auth wins over an oversized body — verify happens BEFORE the body read", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const { kv } = makeKv()
+    const badTok = await signToken({ ...baseClaims, aud: "someone-else" }) // verify fails
+    const big = { sarif: "x".repeat(2 * 1024 * 1024 + 16), repository: "Sigilix/sigilix", sha: "deadbeef" }
+    // 401 (not 413): an unauthenticated caller never gets to force a 2 MiB read.
+    expect((await handleRunnerIngestRoute(post(big, badTok), makeEnv({}, ns, kv))).status).toBe(401)
+  })
+
+  it("provenance failure wins over malformed SARIF — provenance happens BEFORE the parse", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const { kv } = makeKv()
+    const tok = await signToken(baseClaims)
+    // repo mismatch (403) AND malformed SARIF (400) — assert 403, so provenance
+    // can't regress behind the SARIF parse.
+    const res = await handleRunnerIngestRoute(post(envelope({ repository: "evil/repo", sarif: "{not sarif" }), tok), makeEnv({}, ns, kv))
+    expect(res.status).toBe(403)
+  })
 })

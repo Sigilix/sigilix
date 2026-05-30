@@ -156,12 +156,16 @@ function findingText(finding: PrReviewFinding): string {
 }
 
 /**
- * Is `text` testing/coverage-flavored — a claim about absent tests,
- * coverage, or specs? Used to route grounding to the sibling-mapping
- * predicate vs the dropped-path predicate.
+ * Should this finding's absence-claim be graded against the sibling-TEST
+ * predicate (vs the dropped-path predicate)? Route on the SPECIALIST
+ * CATEGORY only — NOT on prose. A non-testing absence-claim (e.g. a
+ * security "no null check") whose body merely MENTIONS "test" must not be
+ * graded against an uninspected sibling test: its evidence is the SOURCE
+ * file, which was in-window. (code-reviewer P1: prose-substring routing
+ * suppressed grounded non-testing findings.)
  */
-function isTestingFlavored(finding: PrReviewFinding, text: string): boolean {
-  return finding.category === "testing" || /test|coverage|spec/i.test(text)
+function isTestingFlavored(finding: PrReviewFinding): boolean {
+  return finding.category === "testing"
 }
 
 /**
@@ -208,10 +212,14 @@ export function isAbsenceClaim(finding: PrReviewFinding): boolean {
 /**
  * Was a TESTING-flavored absence-claim grounded? Resolves the finding's
  * `path` against the sibling mappings:
- *   - mapping exists AND its `test` was inspected → GROUNDED → keep.
- *   - mapping exists but `test` is null OR not inspected → UNGROUNDED →
- *     the bot claimed "no/insufficient tests" without reading the test it
- *     pointed at (or there's a sibling it never opened) → suppress.
+ *   - mapping `test === null` → GROUNDED → keep. `->NONE` means the source
+ *     genuinely has NO sibling test, which the bot SAW (the source→NONE
+ *     mapping is in the pack it received, and SIG-113 accepts `->NONE` as
+ *     legitimate evidence) — so "lacks tests" is correct, not a guess.
+ *   - mapping `test` exists AND was inspected → GROUNDED → keep (bot read it).
+ *   - mapping `test` exists but was NOT inspected → UNGROUNDED → the bot
+ *     claimed "no/insufficient tests" without ever opening the sibling test
+ *     it points at → suppress (this is the ONLY suppress case).
  *   - NO mapping for this path → UNKNOWN → keep (FP-safe).
  *   - no testing evidence wired → UNKNOWN → keep.
  */
@@ -222,13 +230,13 @@ function evaluateTestingGrounding(
   if (!pack) return { keep: true }
   const mapping = pack.siblingMappings.find((m) => m.source === finding.path)
   if (!mapping) return { keep: true } // UNKNOWN → keep
+  // `->NONE`: the source has no sibling test — a GROUNDED, true absence
+  // (both reviewers + the SIG-113 `->NONE` evidence contract). Never suppress.
+  if (mapping.test === null) return { keep: true }
   const inspected = new Set(pack.inspectedTestFiles)
-  if (mapping.test !== null && inspected.has(mapping.test)) {
-    return { keep: true } // GROUNDED: the sibling test was actually read
-  }
-  // The mapping exists but the test was NOT inspected (or there is no
-  // sibling test) — the bot couldn't have seen what it would need to
-  // claim the absence.
+  if (inspected.has(mapping.test)) return { keep: true } // bot read the test
+  // A sibling test EXISTS but was NOT inspected — the bot couldn't have seen
+  // what it would need to claim the absence. The one provable out-of-window case.
   return { keep: false, reason: "absence-claim-ungrounded-by-truncation" }
 }
 
@@ -265,8 +273,7 @@ export function evaluateAbsenceGrounding(
 ): AbsenceGroundingDecision {
   if (!isAbsenceClaim(finding)) return { keep: true }
 
-  const text = findingText(finding)
-  if (isTestingFlavored(finding, text)) {
+  if (isTestingFlavored(finding)) {
     return evaluateTestingGrounding(finding, context.testingEvidence)
   }
   return evaluateNonTestingGrounding(finding, context.droppedPaths)

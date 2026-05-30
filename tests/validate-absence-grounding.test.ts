@@ -170,13 +170,23 @@ describe("evaluateAbsenceGrounding — grounding predicate per category", () => 
     })
   })
 
-  it("testing: mapping exists but test is null (no sibling) yet the bot claims 'lacks tests' → suppress", () => {
+  it("testing: mapping test is null (->NONE, source has no sibling test) → keep (GROUNDED — the bot saw ->NONE; SIG-113 accepts it as evidence)", () => {
     const f = finding({ headline: "this module lacks tests" })
     const p = pack({ siblingMappings: [{ source: PATH, test: null }], inspectedTestFiles: [] })
-    expect(evaluateAbsenceGrounding(f, ctx({ testingEvidence: p }))).toEqual({
-      keep: false,
-      reason: "absence-claim-ungrounded-by-truncation",
+    expect(evaluateAbsenceGrounding(f, ctx({ testingEvidence: p }))).toEqual({ keep: true })
+  })
+
+  it("non-testing claim whose BODY merely mentions 'test' is NOT misrouted to the sibling-test predicate → keep (P1: route on category, not prose)", () => {
+    // Security null-check claim; its body incidentally says "add a test", and
+    // its sibling test is mapped-but-not-inspected — but that's irrelevant: the
+    // claim's evidence is the SOURCE (in-window, not dropped). Must KEEP.
+    const f = finding({
+      category: "security",
+      headline: "no null check before deref",
+      body: "consider adding a test for this branch too",
     })
+    const p = pack({ siblingMappings: [{ source: PATH, test: "tests/orders.test.ts" }], inspectedTestFiles: [] })
+    expect(evaluateAbsenceGrounding(f, ctx({ testingEvidence: p, droppedPaths: [] }))).toEqual({ keep: true })
   })
 
   it("testing: NO mapping for the cited path → UNKNOWN → keep", () => {

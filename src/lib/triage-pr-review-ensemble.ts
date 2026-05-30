@@ -8709,10 +8709,11 @@ export function validateForSubmission(args: {
   let droppedForFailedAbsenceGroundingValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
-  // SIG-290 v1: the reviewable diff's path set, built once for the
-  // absence-grounding gate's context (the `ReviewableMap` is keyed by
-  // path). Cheap, immutable, shared across the finding walk.
-  const reviewablePaths: ReadonlySet<string> = new Set(reviewable.keys())
+  // SIG-290 v1: the reviewable diff's path set for the absence-grounding
+  // gate's context. Built once, but only when the gate runs — in `off`
+  // mode we skip the key iteration entirely (zero cost).
+  const reviewablePaths: ReadonlySet<string> =
+    absenceClaimValidatorMode === "off" ? new Set<string>() : new Set(reviewable.keys())
 
   // Walk by INDEX (v3.1 catch — not by headline).
   for (let i = 0; i < synthOutput.verdict.findings.length; i++) {

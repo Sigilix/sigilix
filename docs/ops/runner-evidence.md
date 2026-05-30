@@ -75,8 +75,11 @@ curl -s -H "authorization: Bearer $TOKEN" \
 }
 ```
 
-- **Adoption** = `verified + evidence-pending` over the total (the `runner-absent`
-  majority is every review on a repo without the Action installed).
+- **Adoption** = `verified + evidence-pending` over the total. NB the denominator
+  is reviews where a runner lookup was *attempted* — i.e. repos with a GitHub
+  `repository.id` in scope and the rollout flag on; the `runner-absent` majority
+  is those repos without a stored receipt, not literally every review (a legacy
+  repo with no `repository.id` records nothing).
 - **Why-pending** = the `evidence-pending` reason breakdown (e.g.
   `merge-sha-unavailable` = GitHub hadn't computed the PR's merge commit yet when
   the review ran; `merge-sha-mismatch` = a stale/retargeted receipt — the CR-4

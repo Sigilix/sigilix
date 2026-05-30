@@ -30,8 +30,9 @@ export type VerificationVerdict = "confirmed" | "refuted" | "inconclusive" | "no
 export interface VerificationCheck {
   /** v1 is always a worker-native token-at-line check. */
   kind: "worker-token"
-  /** A deterministic descriptor (NOT a shell command) — for the receipt. */
-  command: string
+  /** A deterministic descriptor of what was checked — NEVER a shell command,
+   *  never executed (named `descriptor`, not `command`, to keep it that way). */
+  descriptor: string
   status: "pass" | "fail" | "error" | "skipped"
   /** Compact evidence: the cited line's content (truncated). */
   outputSnippet: string
@@ -63,63 +64,6 @@ export function findingKey(finding: Pick<PrReviewFinding, "path" | "line" | "hea
   return (h >>> 0).toString(16).padStart(8, "0")
 }
 
-/**
- * Index a unified diff to `path -> (newLineNumber -> addedLineContent)`. Only
- * ADDED (`+`) lines are indexed — that's what the PR introduced and what a
- * line-anchored finding should point at. Mirrors the diff walk in
- * `deterministic-checks.ts` (header-zone guard so a `--- `/`+++ ` inside a hunk
- * isn't mistaken for a file header).
- */
-export function buildAddedLineIndex(diff: string): Map<string, Map<number, string>> {
-  const index = new Map<string, Map<number, string>>()
-  if (!diff) return index
-  let currentPath: string | null = null
-  let newLine = 0
-  let inHunk = false
-  let inFileHeader = false
-
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("diff --git ")) {
-      currentPath = null
-      inHunk = false
-      inFileHeader = true
-      continue
-    }
-    if (inFileHeader && line.startsWith("+++ ")) {
-      const p = line.slice(4).trim()
-      currentPath = p === "/dev/null" ? null : p.startsWith("b/") ? p.slice(2) : p
-      continue
-    }
-    if (inFileHeader && line.startsWith("--- ")) continue
-    if (line.startsWith("@@")) {
-      inFileHeader = false
-      const m = /^@@\s+-(?:\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/.exec(line)
-      if (m && m[1]) {
-        newLine = Number(m[1])
-        inHunk = currentPath !== null
-      } else {
-        inHunk = false
-      }
-      continue
-    }
-    if (!inHunk || currentPath === null) continue
-
-    if (line.startsWith("+")) {
-      let byLine = index.get(currentPath)
-      if (!byLine) {
-        byLine = new Map<number, string>()
-        index.set(currentPath, byLine)
-      }
-      byLine.set(newLine, line.slice(1))
-      newLine++
-    } else if (line.startsWith(" ")) {
-      newLine++
-    }
-    // "-" (deleted) doesn't advance the new-file counter.
-  }
-  return index
-}
-
 // A token is a backticked span that looks like code (has an identifier, and is
 // short). Prose-in-backticks (spaces, sentence-like) is excluded so we don't
 // "confirm" on an English phrase. Stop-words guard against trivially-common
@@ -146,6 +90,11 @@ export function deriveTokens(finding: Pick<PrReviewFinding, "headline" | "body">
       // isn't a bare common keyword that would match almost any line.
       if (/\s/.test(tok)) continue
       if (!IDENTIFIER.test(tok)) continue
+      // Reject ~1-char tokens: `includes("x")` is a near-tautology that would
+      // manufacture spurious CONFIRMEDs and depress the refutable-FP fraction
+      // this experiment exists to measure (count identifier chars so `a.` etc.
+      // can't sneak a 1-letter check past the punctuation).
+      if (tok.replace(/[^A-Za-z0-9_$]/g, "").length < 2) continue
       if (STOP_TOKENS.has(tok.toLowerCase())) continue
       seen.add(tok)
       out.push(tok)
@@ -177,7 +126,7 @@ export function verifyFinding(
       tokens,
       check: {
         kind: "worker-token",
-        command: `token-at-line --path ${finding.path} --line ${finding.line} --tokens ${tokens.join(",")}`,
+        descriptor: `token-at-line --path ${finding.path} --line ${finding.line} --tokens ${tokens.join(",")}`,
         status: "skipped",
         outputSnippet: "",
       },
@@ -192,7 +141,7 @@ export function verifyFinding(
     tokens,
     check: {
       kind: "worker-token",
-      command: `token-at-line --path ${finding.path} --line ${finding.line} --tokens ${tokens.join(",")}`,
+      descriptor: `token-at-line --path ${finding.path} --line ${finding.line} --tokens ${tokens.join(",")}`,
       status: present ? "pass" : "fail",
       outputSnippet: lineContent.slice(0, SNIPPET_MAX),
     },

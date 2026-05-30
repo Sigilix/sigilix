@@ -4,11 +4,13 @@
 
 import { describe, expect, it } from "vitest"
 import {
-  buildAddedLineIndex,
   deriveTokens,
   verifyFinding,
   findingKey,
 } from "../src/lib/verification/verify-finding"
+// Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
+// line-anchoring tests exercise the real index, not a duplicate.
+import { buildAddedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
 import { readVerificationMode } from "../src/lib/verification/mode"
 import type { Env } from "../src/index"
 
@@ -22,12 +24,12 @@ const DIFF = `diff --git a/src/db.ts b/src/db.ts
 +const safe = escape(input)
 `
 
-const index = buildAddedLineIndex(DIFF)
+const index = buildAddedLineTextByLine(DIFF)
 const f = (over: Partial<{ path: string; line: number; headline: string; body: string }>) => ({
   path: "src/db.ts", line: 10, headline: "", body: "", ...over,
 })
 
-describe("buildAddedLineIndex", () => {
+describe("buildAddedLineTextByLine (the parser prod feeds verifyFinding)", () => {
   it("indexes only added lines with correct new-side line numbers", () => {
     const byLine = index.get("src/db.ts")!
     expect(byLine.get(9)).toBeUndefined() // context line, not added
@@ -42,6 +44,10 @@ describe("deriveTokens", () => {
   })
   it("drops prose-in-backticks and bare keywords (no phantom confirm token)", () => {
     expect(deriveTokens({ headline: "this is `really bad` and `if`", body: "" })).toEqual([])
+  })
+  it("drops ~1-char tokens (a 1-char includes() would confirm almost any line)", () => {
+    expect(deriveTokens({ headline: "off-by-one at `i` and `x`", body: "" })).toEqual([])
+    expect(deriveTokens({ headline: "loop var `id` is fine", body: "" })).toEqual(["id"])
   })
   it("returns [] when nothing is backticked", () => {
     expect(deriveTokens({ headline: "this looks risky", body: "no tokens here" })).toEqual([])

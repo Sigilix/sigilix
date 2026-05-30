@@ -11,7 +11,10 @@
 // — these unit tests just pin the parser invariants.
 
 import { describe, expect, it } from "vitest"
-import { parseMinSpecialistsEarlyExitMode } from "../src/lib/triage-pr-review-ensemble"
+import {
+  parseMinSpecialistsEarlyExitMode,
+  decideEarlyExitAction,
+} from "../src/lib/triage-pr-review-ensemble"
 
 describe("parseMinSpecialistsEarlyExitMode — env flag parser", () => {
   describe("happy path — recognized values", () => {
@@ -87,6 +90,45 @@ describe("parseMinSpecialistsEarlyExitMode — env flag parser", () => {
       const mode = parseMinSpecialistsEarlyExitMode("shadow")
       const narrow: "off" | "shadow" | "on" = mode
       expect(narrow === "off" || narrow === "shadow" || narrow === "on").toBe(true)
+    })
+  })
+})
+
+describe("decideEarlyExitAction — SIG-236 protected-role early-exit gate", () => {
+  const base = { succeededCount: 3, quorumThreshold: 3, pendingCount: 1, logicProtectedPending: false }
+
+  describe("quorum gate", () => {
+    it("returns \"none\" below the quorum threshold (keep awaiting)", () => {
+      expect(decideEarlyExitAction({ ...base, mode: "on", succeededCount: 2 })).toBe("none")
+      expect(decideEarlyExitAction({ ...base, mode: "shadow", succeededCount: 2 })).toBe("none")
+    })
+
+    it("returns \"none\" when nothing is pending (quorum met but all settled)", () => {
+      expect(decideEarlyExitAction({ ...base, mode: "on", pendingCount: 0 })).toBe("none")
+    })
+  })
+
+  describe("mode \"on\"", () => {
+    it("CANCELS the laggards when no protected (logic) role is pending", () => {
+      expect(decideEarlyExitAction({ ...base, mode: "on", logicProtectedPending: false })).toBe("cancel")
+    })
+
+    it("SUPPRESSES (never cancels) when logic is the pending straggler — the SIG-236 guard", () => {
+      expect(decideEarlyExitAction({ ...base, mode: "on", logicProtectedPending: true })).toBe("suppress-protected")
+    })
+  })
+
+  describe("mode \"shadow\" — records the would-fire, never cancels", () => {
+    it("returns \"shadow-mark\" regardless of whether logic is pending", () => {
+      expect(decideEarlyExitAction({ ...base, mode: "shadow", logicProtectedPending: false })).toBe("shadow-mark")
+      expect(decideEarlyExitAction({ ...base, mode: "shadow", logicProtectedPending: true })).toBe("shadow-mark")
+    })
+  })
+
+  describe("mode \"off\" — gate is inert", () => {
+    it("returns \"none\" even at quorum with a pending role", () => {
+      expect(decideEarlyExitAction({ ...base, mode: "off", logicProtectedPending: true })).toBe("none")
+      expect(decideEarlyExitAction({ ...base, mode: "off", logicProtectedPending: false })).toBe("none")
     })
   })
 })

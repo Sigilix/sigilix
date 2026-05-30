@@ -21,12 +21,16 @@
 //   off     — no telemetry, no truncation (default)
 //   shadow  — measure + emit `logic-prompt-budget` event, but pass
 //             the prompt through untouched. Used to size the win.
-//   enforce — SIG-287: TRIM the prompt to `LOGIC_PROMPT_INPUT_TOKEN_CAP`
+//   enforce — SIG-287: TRIM the prompt toward `LOGIC_PROMPT_INPUT_TOKEN_CAP`
 //             by dropping low-priority sections (`LOGIC_PROMPT_DROP_ORDER`)
 //             until it fits, then emit an enforce event with before/after
-//             tokens + the dropped sections. This is the actual fix for
-//             logic timing out on its uniquely-large prompt — SIG-236
-//             shipped only the shadow measurement; the trim landed here.
+//             tokens + the dropped sections. This REDUCES the prompt (live
+//             #241: 12009 → 8389 tok) but CANNOT reach the 6000 cap: the
+//             mandatory floor (diff+graph+deterministic+scaffolding) exceeds
+//             it. So the trim alone does NOT make logic available — the actual
+//             availability fix is logic's per-attempt timeout bump to 110s
+//             (SIG-236, see `SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs`).
+//             The trim still helps (less to process → faster), so it stays.
 //
 // `maybeEmitLogicPromptBudget` (below) is the shadow-only emitter, kept for
 // its unit tests + the shadow path; the fan-out calls `applyLogicPromptBudget`.

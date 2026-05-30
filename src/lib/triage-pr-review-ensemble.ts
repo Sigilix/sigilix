@@ -756,6 +756,33 @@ export function parseMinSpecialistsEarlyExitMode(
   return "off"
 }
 
+/** What the fan-out loop should do at a given settle point (SIG-235 + SIG-236). */
+export type EarlyExitAction = "none" | "suppress-protected" | "cancel" | "shadow-mark"
+
+/**
+ * Pure decision for the min-specialists early-exit gate. Extracted so the
+ * SIG-236 protected-role guard is unit-testable without the orchestrator.
+ *   none               — quorum not met (or nothing pending) → keep awaiting
+ *   cancel             — "on" + no protected role pending → cancel the laggards
+ *   suppress-protected — "on" + logic still pending → do NOT cancel (SIG-236):
+ *                        logic is the intentional long-pole; its 110s per-attempt
+ *                        cap bounds it, not early-exit. Without this, flipping
+ *                        early-exit to "on" would silently re-drop logic.
+ *   shadow-mark        — "shadow" → record the would-fire, keep awaiting
+ */
+export function decideEarlyExitAction(args: {
+  mode: MinSpecialistsEarlyExitMode
+  succeededCount: number
+  quorumThreshold: number
+  pendingCount: number
+  logicProtectedPending: boolean
+}): EarlyExitAction {
+  if (args.succeededCount < args.quorumThreshold || args.pendingCount === 0) return "none"
+  if (args.mode === "on") return args.logicProtectedPending ? "suppress-protected" : "cancel"
+  if (args.mode === "shadow") return "shadow-mark"
+  return "none" // "off"
+}
+
 /**
  * SIG-228 Phase 3c: pure eligibility predicate, extracted so unit tests
  * can pin the gate without spinning up the full ensemble. Returns true
@@ -1056,6 +1083,14 @@ export interface ModelConfig {
   retries: number
   /** Cross-provider fallback model. null = fail without fallback. */
   fallback: string | null
+  /**
+   * SIG-236: per-role override for the per-attempt timeout. Omitted → the
+   * runner defaults to the global PER_ATTEMPT_TIMEOUT_MS (no behavior change).
+   * Logic sets this higher: its prompt is uniquely large (graph+symbol+full
+   * retrieval, ~8.4k tok even after the SIG-287 trim) and needs >60s, so the
+   * global 60s cap aborted it mid-generation on every review.
+   */
+  perAttemptTimeoutMs?: number
 }
 
 export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
@@ -1083,12 +1118,25 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // prompt-driven, not model-driven, so swapping fallbacks alone
     // wouldn't help.
     //
-    // Tactical fix: `retries: 0` + `fallback: null` → logic gets 1
-    // attempt only, caps at 60s instead of 180s. Saves 120s/review.
-    // Real fix is min-specialists early exit (structural) + surgical
-    // prompt-budget on logic (see SIG-220 latency budget doc).
+    // #188 tactical fix `retries:0`+`fallback:null` capped logic at 60s
+    // (vs 180s), but the ROOT CAUSE was never the ladder — it's that the
+    // 60s PER-ATTEMPT cap is too small for logic's prompt. SIG-287 added a
+    // trim, but it CANNOT reach the 6000-tok cap: the mandatory floor
+    // (diff+graph+deterministic+system+meta+rules+schema) is ~8.4k tok even
+    // on a small PR. Live #241 telemetry: model-attempt-completed
+    // elapsedMs=60000 outcome=aborted — logic was STILL generating at the
+    // cap on EVERY review → "logic specialist unavailable" banner for weeks.
+    //
+    // SIG-236 REAL FIX: a per-role per-attempt cap of 110s. Sized from
+    // ~8.4k tok / ~104 tok/s ≈ 81s + generation/variance margin (Codex +
+    // DeepSeek-v4-pro concur). Keeps logic's FULL context — graphContext is
+    // mandatory precisely BECAUSE it prevents FPs, so trimming it to go fast
+    // would trade "unavailable" for "higher-FP," counter to the mission.
+    // Safe within SPECIALIST_TIMEOUT_MS=185s because retries:0/fallback:null
+    // (a 2nd 110s attempt would blow the 185s specialist wall — keep them 0).
     retries: 0,
     fallback: null,
+    perAttemptTimeoutMs: 110_000,
   },
   security: {
     // Coder-model territory: vulnerability patterns are mostly
@@ -3079,6 +3127,8 @@ export async function handlePrReviewEnsemble(
     let earlyExitFiredAtMs: number | null = null
     let cancelledRolesAtExit: SpecialistRole[] = []
     let earlyExitWouldFireAtMs: number | null = null
+    // SIG-236: log the protected-role early-exit suppression at most once.
+    let earlyExitProtectedLogged = false
     if (earlyExitMode === "off") {
       // Legacy: wait for everyone.
       specialistResults = await Promise.all(rolePromises.map((rp) => rp.promise))
@@ -3117,9 +3167,41 @@ export async function handlePrReviewEnsemble(
           (r) => r.status === "fulfilled" && r.value.verdict !== null,
         ).length
 
-        if (succeededCount >= quorumThreshold && pending.size > 0) {
+        // SIG-236: logic is the intentional long-pole (rich graph+symbol context,
+        // ~110s per-attempt). It is a PROTECTED role — early-exit must NOT cancel
+        // it, or flipping early-exit to "on" would silently re-break logic
+        // availability (the regression this fix closes). Early-exit can still fire
+        // to drop a genuinely stuck non-logic role. decideEarlyExitAction is the
+        // pure, unit-tested decision.
+        const logicProtectedPending =
+          router.specialists.includes("logic") && pending.has("logic")
+        const earlyExitAction = decideEarlyExitAction({
+          mode: earlyExitMode,
+          succeededCount,
+          quorumThreshold,
+          pendingCount: pending.size,
+          logicProtectedPending,
+        })
+        if (earlyExitAction !== "none") {
           const nowMs = Date.now()
-          if (earlyExitMode === "on") {
+          if (earlyExitAction === "suppress-protected") {
+            // Keep awaiting logic — its 110s per-attempt cap bounds it, not
+            // early-exit. Fall through (no break) to the next Promise.race.
+            if (!earlyExitProtectedLogged) {
+              earlyExitProtectedLogged = true
+              console.log(JSON.stringify({
+                event: "ensemble-early-exit-suppressed-protected-role",
+                owner, repo, prNumber,
+                mode: "on",
+                protectedRole: "logic",
+                succeededRoles: Array.from(settledResults.entries())
+                  .filter(([, r]) => r.status === "fulfilled" && r.value.verdict !== null)
+                  .map(([role]) => role),
+                pendingRoles: Array.from(pending.keys()),
+                elapsedMsSinceFanoutStart: nowMs - fanoutStartMs,
+              }))
+            }
+          } else if (earlyExitAction === "cancel") {
             earlyExitFiredAtMs = nowMs
             cancelledRolesAtExit = Array.from(pending.keys())
             // Abort the laggards' AbortControllers — composedSignal
@@ -3145,7 +3227,7 @@ export async function handlePrReviewEnsemble(
               }
             }
             break
-          } else if (earlyExitMode === "shadow" && earlyExitWouldFireAtMs === null) {
+          } else if (earlyExitAction === "shadow-mark" && earlyExitWouldFireAtMs === null) {
             // Shadow: log the would-fire and keep awaiting. Only the
             // FIRST time the threshold is crossed (subsequent settles
             // would also satisfy `>= quorumThreshold` and we don't
@@ -6423,6 +6505,13 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "specialist_did_not_parse",
     startedAt: t0,
+    // SIG-236: honor a per-role per-attempt cap (logic = 110s; its prompt is
+    // ~8.4k tok and needs >60s). Omitted for the other roles → the runner
+    // falls back to PER_ATTEMPT_TIMEOUT_MS, so their behavior is unchanged.
+    // (Conditional spread, not `: undefined`, under exactOptionalPropertyTypes.)
+    ...(config.perAttemptTimeoutMs !== undefined
+      ? { perAttemptTimeoutMs: config.perAttemptTimeoutMs }
+      : {}),
     // ARC-283 Phase B1b: emit `model-attempt-completed` per attempt.
     // Bucket attempts into primary/retry/fallback by attemptIndex:
     //   1                  → primary

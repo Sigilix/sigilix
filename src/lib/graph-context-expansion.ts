@@ -112,7 +112,10 @@ export async function buildGraphContextExpansion(
   try {
     if (args.signal?.aborted) return zeroResult(graphAvailable, Date.now() - startMs)
 
-    const maxBytes = args.maxBytes && args.maxBytes > 0 ? Math.floor(args.maxBytes) : DEFAULT_MAX_BYTES
+    // Floor + clamp to ≥1: a positive fractional arg (e.g. 0.5) must not floor
+    // to 0 and silently drop every snippet (CodeRabbit). Non-finite/<1 → default.
+    const maxBytesReq = Math.floor(args.maxBytes ?? DEFAULT_MAX_BYTES)
+    const maxBytes = Number.isFinite(maxBytesReq) && maxBytesReq >= 1 ? maxBytesReq : DEFAULT_MAX_BYTES
     const bodiesSource = { filesByPath: 0, github: 0, retrievalChunk: 0, missing: 0 }
     const dropped = { cap: 0, sourceMissing: 0, graphRowsCapped: 0 }
 

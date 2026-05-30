@@ -905,7 +905,10 @@ export class RepoGraphDO extends DurableObject<Env> {
     const active = await this.debugActiveVersion()
     if (!active) return empty
 
-    const maxRows = args.maxRows && args.maxRows > 0 ? Math.floor(args.maxRows) : DEFAULT_EXPANSION_ROWS
+    // Floor + clamp to ≥1: a positive fractional arg (e.g. 0.5) must not floor
+    // to 0 and turn every row query into LIMIT 0 (CodeRabbit). Non-finite/<1 → default.
+    const maxRowsReq = Math.floor(args.maxRows ?? DEFAULT_EXPANSION_ROWS)
+    const maxRows = Number.isFinite(maxRowsReq) && maxRowsReq >= 1 ? maxRowsReq : DEFAULT_EXPANSION_ROWS
     const sql = this.sql()
     const names = args.changedNames
     const paths = args.changedPaths

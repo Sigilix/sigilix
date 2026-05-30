@@ -2450,9 +2450,14 @@ export async function handlePrReviewEnsemble(
     // Soft-fail: bounded by withComposedTimeout(orchCtrl.signal) + a catch that
     // emits `graph-expansion-shadow-error` and continues. It must NEVER block,
     // slow, or break the review.
-    if (graphExpansionMode(env) !== "off") {
+    const graphExpMode = graphExpansionMode(env)
+    if (graphExpMode !== "off") {
       try {
-        const changedExpNames = extractChangedSymbols(astFilesByPath, buildChangedLines(diff))
+        // CodeRabbit: measure the WHOLE PR, not the prompt batch. astFilesByPath
+        // is the full changed JS/TS set, but `diff` is truncated to maxPatchLength
+        // — detect changed lines from `fullDiff` so we don't skip symbols past the
+        // truncation (which would bias the shadow data low on large PRs).
+        const changedExpNames = extractChangedSymbols(astFilesByPath, buildChangedLines(fullDiff))
         const changedExpPaths = [...astFilesByPath.keys()]
         const enriched = await withComposedTimeout(
           async (signal) => {
@@ -2476,7 +2481,10 @@ export async function handlePrReviewEnsemble(
           repo,
           prNumber,
           headSha: headSha.slice(0, 7),
-          mode: graphExpansionMode(env),
+          mode: graphExpMode,
+          // Surface diff truncation so analysis can exclude PRs where the changed
+          // set may still be partial (large PRs) for a clean opportunity measurement.
+          diffTruncated: wasTruncated,
           graphAvailable: enriched.graphAvailable,
           callerBodies: enriched.callerBodies.length,
           dependentBodies: enriched.dependentBodies.length,
@@ -2494,7 +2502,7 @@ export async function handlePrReviewEnsemble(
         console.log(JSON.stringify({
           event: "graph-expansion-shadow-error",
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          mode: graphExpansionMode(env),
+          mode: graphExpMode,
           error: err instanceof Error ? err.message : String(err),
         }))
       }

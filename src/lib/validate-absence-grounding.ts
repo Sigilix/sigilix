@@ -278,3 +278,5 @@ export function evaluateAbsenceGrounding(
   }
   return evaluateNonTestingGrounding(finding, context.droppedPaths)
 }
+
+// SIG-290 shadow-first; see PR #244.

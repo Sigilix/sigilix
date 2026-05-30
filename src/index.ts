@@ -71,6 +71,7 @@ import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
 import { handleFpRateMetricsRoute } from "./lib/metrics-fp-rate-route"
+import { handleRunnerIngestRoute } from "./lib/runner-ingest-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
 import {
@@ -344,6 +345,18 @@ export interface Env {
   // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
   // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
   GRAPH_METRICS_DO: DurableObjectNamespace
+
+  // SIG-184: runner-evidence ingest (POST /runner/ingest). The GitHub OIDC token
+  // IS the auth; these pin what a valid token must attest. Both come from the
+  // Sigilix runner repo — until set, the ingest route returns 503.
+  //   OPENCLAW_RUNNER_OIDC_AUDIENCE — the `aud` the runner mints its token with.
+  //   OPENCLAW_RUNNER_WORKFLOW_REF  — Sigilix's pinned reusable-workflow
+  //                                   `owner/repo/path` (no `@ref`).
+  OPENCLAW_RUNNER_OIDC_AUDIENCE?: string
+  OPENCLAW_RUNNER_WORKFLOW_REF?: string
+  // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
+  // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
+  RUNNER_RECEIPT_DO: DurableObjectNamespace
 
   // SIG-156: shared-secret bearer token for the privileged admin endpoints
   // (POST /admin/index-repo manual (re)index trigger / backfill). Unset → those
@@ -1065,6 +1078,13 @@ export default {
     // based false-positive rate (the "floor" metric), computed per repo.
     if (request.method === "GET" && url.pathname === "/metrics/fp-rate") {
       return handleFpRateMetricsRoute(request, env)
+    }
+
+    // SIG-184: runner-evidence ingest. A Sigilix reusable workflow in the
+    // customer's CI POSTs its SARIF + a GitHub OIDC token here; the token IS the
+    // auth (verified + provenance-gated inside the handler), not a static bearer.
+    if (request.method === "POST" && url.pathname === "/runner/ingest") {
+      return handleRunnerIngestRoute(request, env)
     }
 
     // SIG-156: authenticated manual (re)index trigger.
@@ -3428,3 +3448,8 @@ export { ValidationMetricsDO } from "./do/validation-metrics"
 // (SQLite). Registered via the [[durable_objects.bindings]] GRAPH_METRICS_DO
 // entry + the sig-152-v1 new_sqlite_classes migration in wrangler.toml.
 export { GraphMetricsDO } from "./do/graph-metrics"
+
+// SIG-184: RunnerReceiptDO — atomic single-use guard + defensible runner-evidence
+// receipt (SQLite). Registered via the [[durable_objects.bindings]]
+// RUNNER_RECEIPT_DO entry + the sig-184-v1 new_sqlite_classes migration.
+export { RunnerReceiptDO } from "./do/runner-receipt"

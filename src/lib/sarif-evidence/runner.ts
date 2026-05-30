@@ -87,6 +87,15 @@ export interface RunSarifEvidenceArgs {
   diff: string
   /** Resolved SARIF config (defaults already filled in). */
   config: ResolvedSarifConfig
+  /**
+   * SIG-184 PR 3: an already-in-hand raw SARIF string (from a verified runner
+   * RECEIPT) to scan INSTEAD of pulling `config.path` from the repo. When set,
+   * the GitHub fetch is skipped and this exact string flows through the SAME
+   * parse → normalize → diff-filter → cap pipeline, so push-path (receipt) and
+   * pull-path findings are byte-identical in shape (the security-manifest
+   * evidenceId hash stays stable). The diff/config still apply.
+   */
+  rawOverride?: string
   /** For stale-report telemetry. Defaults to `Date.now()`; injectable for tests. */
   now?: () => number
 }
@@ -195,7 +204,9 @@ export async function runSarifEvidence(args: RunSarifEvidenceArgs): Promise<Scan
     }
   }
 
-  const raw = await fetchReportRaw(client, owner, repo, config.path, headSha)
+  // Push path (a verified receipt) supplies the SARIF directly — skip the repo
+  // pull. Pull path (legacy/dogfood) fetches `config.path` from the head.
+  const raw = args.rawOverride !== undefined ? args.rawOverride : await fetchReportRaw(client, owner, repo, config.path, headSha)
   if (raw === null) {
     emit("sarif-evidence-scan-skipped", { ...ctx, reason: "no-report", path: config.path })
     return {

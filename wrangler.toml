@@ -120,6 +120,14 @@ class_name = "ValidationMetricsDO"
 name = "GRAPH_METRICS_DO"
 class_name = "GraphMetricsDO"
 
+# SIG-184: per-repo-sharded DO enforcing single-use of a runner-evidence receipt
+# (repository_id, sha, run_id, run_attempt) + holding the defensible record
+# (SQLite). Sharded by repository_id (idFromName). Not exercised until the
+# OPENCLAW_RUNNER_* config is set.
+[[durable_objects.bindings]]
+name = "RUNNER_RECEIPT_DO"
+class_name = "RunnerReceiptDO"
+
 # Migration block — adds the DO class. Forward-only; use
 # `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
 # point-lookup; SQLite buys nothing.
@@ -144,12 +152,24 @@ new_sqlite_classes = ["ValidationMetricsDO"]
 tag = "sig-152-v1"
 new_sqlite_classes = ["GraphMetricsDO"]
 
+# SIG-184: RunnerReceiptDO uses SQLite storage. Forward-only; reverting is safe
+# (no data is written until the runner-ingest route is exercised, which needs the
+# OPENCLAW_RUNNER_* config set first).
+[[migrations]]
+tag = "sig-184-v1"
+new_sqlite_classes = ["RunnerReceiptDO"]
+
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):
 #   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES    # numeric; clamped [1, 10], default 3
 #   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS    # numeric; clamped [60000, 1800000] ms, default 1200000 (20 min)
 #   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT  # numeric; clamped [1, 100], default 10
 #
+# SIG-184 runner-evidence ingest (POST /runner/ingest) — both UNSET for now; the
+# route returns 503 until they're provided (values come from the Sigilix runner
+# repo, PR 4). Non-secret → set in [vars] below or via the dashboard when ready:
+#   OPENCLAW_RUNNER_OIDC_AUDIENCE        # the `aud` the runner mints its OIDC token with
+#   OPENCLAW_RUNNER_WORKFLOW_REF         # pinned reusable-workflow `owner/repo/path` (no @ref)
 # ARC-283 Phase B1b — shadow-mode model bake-off:
 #   SHADOW_BAKEOFF_ROLES                 # CSV of "logic"|"security"|"performance"|"tests"|"synth"
 #                                        # (default "" — shadow off everywhere). When set, the

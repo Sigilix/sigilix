@@ -9,11 +9,11 @@ name: Sigilix runner evidence
 on:
   pull_request:
 
-# id-token:write is the ONLY elevated grant — it lets the job mint the short-
-# lived OIDC token the receipt is built from. contents:read is for the checkout.
+# Restrictive workflow-level default (read-only). The id-token:write grant the
+# receipt needs is scoped to the `evidence` job ONLY (jobs.evidence.permissions
+# below), so no other / future job in this workflow inherits token-mint power.
 permissions:
   contents: read
-  id-token: write
 
 # Cancel a superseded run when a newer commit is pushed to the same PR — the
 # receipt only needs to reflect the latest head.

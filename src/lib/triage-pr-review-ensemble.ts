@@ -278,6 +278,8 @@ import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
+import { readVerificationMode } from "./verification/mode"
+import { verifyFinding, findingKey } from "./verification/verify-finding"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
@@ -5085,6 +5087,38 @@ export async function handlePrReviewEnsemble(
     }
 
     const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
+
+    // SIG-285 PR 1 (shadow): verification-by-execution, observe-only. For the
+    // findings we're about to submit, re-check that the code token each score>=4
+    // logic/security finding CITES actually appears at the line it points to
+    // (worker-native, line-anchored — no subprocess, no new perms). Emit the
+    // verdict (confirmed/refuted/inconclusive/no-check) keyed for a SIG-114
+    // outcome join, so we can measure the refutable-FP fraction BEFORE wiring
+    // any demotion (PR 4). NO behavior change here — telemetry only; `enforce`
+    // is treated as `shadow` until PR 4. Off (default) = no work.
+    const verificationMode = readVerificationMode(env)
+    if (verificationMode !== "off") {
+      for (const finding of submissionVerdict.findings) {
+        if (finding.score < 4) continue
+        if (finding.category !== "logic" && finding.category !== "security") continue
+        const result = verifyFinding(finding, addedLineTextByLine)
+        console.log(JSON.stringify({
+          event: "verification-shadow",
+          gate: "verification",
+          mode: verificationMode,
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          findingKey: findingKey(finding),
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+          verdict: result.verdict,
+          tokenCount: result.tokens.length,
+          ...(result.check ? { checkKind: result.check.kind, checkStatus: result.check.status } : {}),
+        }))
+      }
+    }
+
     for (const finding of submissionVerdict.findings) {
       const mismatch = getProposedChangeScopeMismatch(finding)
       if (mismatch === null) continue

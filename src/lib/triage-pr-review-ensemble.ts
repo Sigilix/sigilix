@@ -358,6 +358,9 @@ import {
 import type { Env } from "../index"
 // SIG-138 Phase 2 — graph expansion.
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
+// SIG-286 — graph-context body expansion (shadow-only in PR1).
+import { contextExpansionForChangedSymbolsFor } from "./repo-graph-client"
+import { buildGraphContextExpansion } from "./graph-context-expansion"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
 import type { GraphContextNode } from "../do/repo-graph"
@@ -492,6 +495,10 @@ export const PER_ATTEMPT_TIMEOUT_MS = 60_000
 // Default 2500 ms is generous for a local DO RPC but tight enough that a
 // hung worker doesn't delay the review.
 export const GRAPH_RPC_TIMEOUT_MS = 2_500
+// SIG-286: wall-clock budget for the shadow graph-context expansion (one DO RPC
+// + in-process body slicing, no GitHub reads in PR1). Composed with
+// orchCtrl.signal so a stuck DO can never delay the review.
+export const GRAPH_EXPANSION_TIMEOUT_MS = 3_000
 // SIG-143: max blast-radius paths folded into the prompt graph-context block.
 // Mirrors the ≤4 cap on BFS graph-node additions — keeps the additive context
 // from crowding out the primary vector-hit retrieval.
@@ -832,6 +839,21 @@ export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
     return "shadow"
   }
   return raw
+}
+
+/**
+ * SIG-286: graph-context body-expansion mode parser — "off" | "shadow" | "post".
+ *
+ * Case-insensitive, whitespace-tolerant; unknown/unset → "off". In PR1 BOTH
+ * "shadow" and "post" only COMPUTE + emit `graph-expansion-shadow` telemetry;
+ * neither injects the enriched context into any prompt. `post` is parsed so the
+ * config surface exists, but injection is RESERVED for a later PR.
+ */
+export function graphExpansionMode(env: Env): "off" | "shadow" | "post" {
+  const v = (env.OPENCLAW_GRAPH_EXPANSION ?? "").trim().toLowerCase()
+  if (v === "post") return "post"
+  if (v === "shadow") return "shadow"
+  return "off"
 }
 
 /**
@@ -2411,6 +2433,80 @@ export async function handlePrReviewEnsemble(
     const graphCtxForPrompt = graphRetrievalMode(env) === "post"
       ? [graphContextString, graphBlastContextString].filter((s) => s.length > 0).join("\n")
       : ""
+    // ──────────────────────────────────────────────────────────────────
+
+    // ─── SIG-286: graph-context body expansion (shadow-only in PR1) ─────
+    //
+    // Gated by OPENCLAW_GRAPH_EXPANSION=shadow|post. Off ⇒ no DO call, no
+    // telemetry, zero behavior change. shadow AND post are identical in PR1:
+    // COMPUTE the enriched changed-symbol context (definition / caller /
+    // import-dependent bodies sliced from astFilesByPath) and emit the
+    // `graph-expansion-shadow` event. The result is NEVER injected into any
+    // prompt here (graphCtxForPrompt above stays the only graph block reaching
+    // specialists/synth). PR1 passes NO fetcher: cross-file rows not in
+    // astFilesByPath are counted under bodiesSource.missing / dropped.
+    // sourceMissing, quantifying the PR2 cross-file fetch opportunity.
+    //
+    // Soft-fail: bounded by withComposedTimeout(orchCtrl.signal) + a catch that
+    // emits `graph-expansion-shadow-error` and continues. It must NEVER block,
+    // slow, or break the review.
+    const graphExpMode = graphExpansionMode(env)
+    if (graphExpMode !== "off") {
+      try {
+        // CodeRabbit: measure the WHOLE PR, not the prompt batch. astFilesByPath
+        // is the full changed JS/TS set, but `diff` is truncated to maxPatchLength
+        // — detect changed lines from `fullDiff` so we don't skip symbols past the
+        // truncation (which would bias the shadow data low on large PRs).
+        const changedExpNames = extractChangedSymbols(astFilesByPath, buildChangedLines(fullDiff))
+        const changedExpPaths = [...astFilesByPath.keys()]
+        const enriched = await withComposedTimeout(
+          async (signal) => {
+            const expansion = await contextExpansionForChangedSymbolsFor(env, owner, repo, {
+              changedNames: changedExpNames,
+              changedPaths: changedExpPaths,
+            })
+            return buildGraphContextExpansion({
+              expansion,
+              filesByPath: astFilesByPath,
+              // PR1: no fetcher — measure only bodies already in astFilesByPath.
+              signal,
+            })
+          },
+          GRAPH_EXPANSION_TIMEOUT_MS,
+          orchCtrl.signal,
+        )
+        console.log(JSON.stringify({
+          event: "graph-expansion-shadow",
+          owner,
+          repo,
+          prNumber,
+          headSha: headSha.slice(0, 7),
+          mode: graphExpMode,
+          // Surface diff truncation so analysis can exclude PRs where the changed
+          // set may still be partial (large PRs) for a clean opportunity measurement.
+          diffTruncated: wasTruncated,
+          graphAvailable: enriched.graphAvailable,
+          callerBodies: enriched.callerBodies.length,
+          dependentBodies: enriched.dependentBodies.length,
+          defBodies: enriched.definitionBodies.length,
+          totalTokens: enriched.totalTokens,
+          cappedAt: enriched.cappedAt,
+          elapsedMs: enriched.elapsedMs,
+          bodiesSource: enriched.bodiesSource,
+          dropped: enriched.dropped,
+        }))
+      } catch (err) {
+        // Genuine orchestrator cancellation propagates; any other failure is
+        // soft — log and continue, never block the review.
+        if (orchCtrl.signal.aborted) throw err
+        console.log(JSON.stringify({
+          event: "graph-expansion-shadow-error",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: graphExpMode,
+          error: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
     // ──────────────────────────────────────────────────────────────────
 
     const astResult = await runAstRules({

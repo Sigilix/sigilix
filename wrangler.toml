@@ -250,6 +250,14 @@ SHADOW_BAKEOFF_ROLES = ""
 OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
 
+# SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
+# shadow/post both COMPUTE the enriched changed-symbol context (definition /
+# caller / import-dependent bodies) and emit the `graph-expansion-shadow`
+# telemetry event; neither injects into any prompt in PR1 (post is RESERVED).
+# Flip to "shadow" to start measuring the cross-file fetch opportunity
+# (bodiesSource.missing / dropped.sourceMissing) before wiring fetches in PR2.
+OPENCLAW_GRAPH_EXPANSION = "off"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.

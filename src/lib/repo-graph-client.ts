@@ -7,7 +7,12 @@
 
 import type { Env } from "../index"
 import { indexNamespace } from "./repo-index-manifest"
-import type { RepoGraphDO, UpsertFileGraphArgs, GraphContextNode } from "../do/repo-graph"
+import type {
+  RepoGraphDO,
+  UpsertFileGraphArgs,
+  GraphContextNode,
+  GraphContextExpansion,
+} from "../do/repo-graph"
 
 // Env declares REPO_GRAPH_DO as the unparameterised DurableObjectNamespace.
 // Unlike PR_REVIEW_RUN (which is fetch-based and never calls RPC methods,
@@ -108,4 +113,21 @@ export async function blastRadiusByNamesFor(
   args: { changedNames: string[]; changedPaths: string[] },
 ): Promise<{ callerPaths: string[]; importDependents: string[] }> {
   return graphStub(env, owner, repo).blastRadiusByNames(args)
+}
+
+/**
+ * SIG-286: row-level context expansion for a PR's changed symbols — definition
+ * spans, same-file call sites, and import reference lines, all scoped to the
+ * repo's active graph version. Resolution mirrors blastRadiusByNamesFor (names
+ * scoped to `changedPaths`). Returns `{ graphAvailable: false, …empty }` when
+ * there is no active version or either input list is empty (fast-path inside
+ * the DO).
+ */
+export async function contextExpansionForChangedSymbolsFor(
+  env: Env,
+  owner: string,
+  repo: string,
+  args: { changedNames: string[]; changedPaths: string[]; maxRows?: number },
+): Promise<GraphContextExpansion> {
+  return graphStub(env, owner, repo).contextExpansionForChangedSymbols(args)
 }

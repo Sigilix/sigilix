@@ -38,6 +38,7 @@ import {
   MAX_CALLS_PER_ENSEMBLE_RUN,
   graphRetrievalEnabled,
   graphRetrievalMode,
+  graphExpansionMode,
   formatGraphContext,
   formatGraphBlastContext,
   graphOverlapStats,
@@ -1662,6 +1663,60 @@ describe("resolveDynamicEvidencePromptBlock", () => {
     expect(synthMessage.indexOf("[DYNAMIC REVIEW EVIDENCE")).toBeLessThan(
       synthMessage.indexOf("[SPECIALIST VERDICTS]"),
     )
+  })
+})
+
+describe("graphExpansionMode parser (SIG-286)", () => {
+  const mode = (v: string | undefined): "off" | "shadow" | "post" =>
+    graphExpansionMode({ OPENCLAW_GRAPH_EXPANSION: v } as unknown as Env)
+
+  it("returns off when unset/empty/unknown", () => {
+    expect(mode(undefined)).toBe("off")
+    expect(mode("")).toBe("off")
+    expect(mode("on")).toBe("off")
+    expect(mode("garbage")).toBe("off")
+  })
+
+  it("parses shadow and post, case-insensitive and whitespace-tolerant", () => {
+    expect(mode("shadow")).toBe("shadow")
+    expect(mode("post")).toBe("post")
+    expect(mode("  SHADOW ")).toBe("shadow")
+    expect(mode("Post")).toBe("post")
+  })
+})
+
+describe("graph-context expansion never injects into prompts (SIG-286 PR1 shadow-only)", () => {
+  // The enriched graph-context bodies are measured for telemetry only. There
+  // is NO prompt-builder parameter that carries them, so neither a specialist
+  // nor the synth message can ever contain the expansion's rendered text —
+  // regardless of whether OPENCLAW_GRAPH_EXPANSION is shadow or post in PR1.
+  const expansionText = "src/b.ts:1-3 — function bar\n 1 | export function bar() {}"
+
+  it("specialist message has no graph-expansion parameter and never contains expansion bodies", () => {
+    const specialistMessage = buildSpecialistInitialMessage({
+      prNumber: 1,
+      title: "t",
+      body: "",
+      diff: "diff --git a/src/b.ts b/src/b.ts",
+      retrievalSnapshot: "",
+      namespace: "owner/repo@sha",
+      // The ONLY graph block builders accept is graphContext (SIG-138 BFS
+      // neighbors). There is intentionally no expansion-bodies param.
+      graphContext: "",
+    })
+    expect(specialistMessage).not.toContain(expansionText)
+    expect(specialistMessage).not.toContain("[GRAPH EXPANSION")
+  })
+
+  it("synth message never contains expansion bodies", () => {
+    const synthMessage = buildSynthesizerInitialMessage({
+      prNumber: 1,
+      diff: "diff --git a/src/b.ts b/src/b.ts",
+      specialistVerdictsBlock: "=== LOGIC ===\n{\"findings\":[]}",
+      graphContext: "",
+    })
+    expect(synthMessage).not.toContain(expansionText)
+    expect(synthMessage).not.toContain("[GRAPH EXPANSION")
   })
 })
 

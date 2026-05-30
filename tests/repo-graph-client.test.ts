@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest"
 import {
   graphContextFor,
   blastRadiusFor,
+  contextExpansionForChangedSymbolsFor,
   writeFileGraph,
   commitGraph,
   debugActiveGraphVersion,
@@ -107,6 +108,27 @@ describe("blastRadiusFor delegation", () => {
     expect(idFromNameCall!.args[0]).toBe(indexNamespace(owner, repo))
 
     const rpcCall = calls.find((c) => c.method === "blastRadius")
+    expect(rpcCall).toBeDefined()
+    expect(rpcCall!.args[0]).toEqual(args)
+  })
+})
+
+describe("contextExpansionForChangedSymbolsFor delegation", () => {
+  it("calls idFromName(indexNamespace(owner, repo)) then stub.contextExpansionForChangedSymbols(args)", async () => {
+    const owner = "acme"
+    const repo = "widget"
+    const { env, calls } = makeEnv(owner, repo)
+
+    const args = { changedNames: ["bar"], changedPaths: ["src/b.ts"], maxRows: 25 }
+    await contextExpansionForChangedSymbolsFor(env, owner, repo, args)
+
+    const idFromNameCall = calls.find((c) => c.method === "idFromName")
+    expect(idFromNameCall).toBeDefined()
+    expect(idFromNameCall!.args[0]).toBe(indexNamespace(owner, repo))
+
+    expect(calls.find((c) => c.method === "get")).toBeDefined()
+
+    const rpcCall = calls.find((c) => c.method === "contextExpansionForChangedSymbols")
     expect(rpcCall).toBeDefined()
     expect(rpcCall!.args[0]).toEqual(args)
   })

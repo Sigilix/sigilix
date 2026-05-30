@@ -10,7 +10,7 @@
 // directly (no HTTP fetch).
 
 import { describe, expect, it } from "vitest"
-import { RepoGraphDO, resolveRelative, MAX_BLAST_IDS } from "../src/do/repo-graph"
+import { RepoGraphDO, resolveRelative, MAX_BLAST_IDS, DEFAULT_EXPANSION_ROWS } from "../src/do/repo-graph"
 import type { Env } from "../src/index"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
@@ -2149,5 +2149,163 @@ describe("RepoGraphDO.deleteRepoGraph", () => {
     expect(counts.fileEdges).toBe(0)
     expect(counts.callEdges).toBe(0)
     expect(counts.status).toBeNull()
+  })
+})
+
+// ─── contextExpansionForChangedSymbols tests (SIG-286) ────────────
+//
+// Row-level context expansion: definition spans, same-file call sites
+// (callee_symbol_id-matched, with the caller span joined), and import
+// reference lines — all scoped to the active version and the changed files.
+
+describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
+  it("returns definition spans, import lines, and same-file caller lines", async () => {
+    const do_ = makeDoInstance("o/exp")
+
+    // b.ts defines exported `bar` (the changed symbol) AND a same-file
+    // function `useBar` that calls bar() — that same-file call resolves a
+    // callee_symbol_id at commit, so it surfaces as a caller row at line 7.
+    // (caller_symbol_id is not populated by the v1 write/commit path, so the
+    // joined caller span is null — the LEFT JOIN is forward-compat for when
+    // the indexer starts writing caller_symbol_id.)
+    await do_.upsertFileGraph({
+      runId: "r", headSha: "h", path: "src/b.ts",
+      symbols: [
+        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+        { symbolId: "src/b.ts function useBar 5 0", path: "src/b.ts", name: "useBar", kind: "function", exported: false, startLine: 5, startCol: 0, endLine: 9, endCol: 1 },
+      ],
+      fileEdgesRaw: [],
+      callEdges: [
+        // same-file call to bar → gets callee_symbol_id at commit
+        { sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file", startLine: 7, startCol: 2 },
+      ],
+    })
+
+    // a.ts imports bar from './b' (an import edge → import row) AND calls bar
+    // via an imported binding (NO callee_symbol_id → NOT a caller row).
+    await do_.upsertFileGraph({
+      runId: "r", headSha: "h", path: "src/a.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./b", importedName: "bar", localName: "bar", exportedName: null, startLine: 1, startCol: 0 },
+      ],
+      callEdges: [
+        { sourcePath: "src/a.ts", calleeName: "bar", callKind: "imported_binding", startLine: 4, startCol: 0 },
+      ],
+    })
+
+    await do_.commitGraphVersion("r")
+
+    const exp = await do_.contextExpansionForChangedSymbols({
+      changedNames: ["bar"],
+      changedPaths: ["src/b.ts"],
+    })
+
+    expect(exp.graphAvailable).toBe(true)
+
+    // definition: bar's span 1-3 in src/b.ts
+    expect(exp.definitionRows).toHaveLength(1)
+    expect(exp.definitionRows[0]).toMatchObject({
+      symbolId: "src/b.ts function bar 1 0",
+      path: "src/b.ts", name: "bar", kind: "function",
+      startLine: 1, endLine: 3,
+    })
+
+    // caller: same-file call to bar at line 7 (callee_symbol_id resolved at
+    // commit). The imported_binding call from a.ts has no callee_symbol_id →
+    // excluded. caller_symbol_id is null in v1 → the joined span is null.
+    expect(exp.callerRows).toHaveLength(1)
+    expect(exp.callerRows[0]).toMatchObject({
+      sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file",
+      startLine: 7,
+      callerSymbolId: null,
+      callerStartLine: null, callerEndLine: null,
+    })
+
+    // import: a.ts imports bar (resolved target_symbol_id) at line 1.
+    const importPaths = exp.importRows.map((r) => r.sourcePath)
+    expect(importPaths).toContain("src/a.ts")
+    const aImport = exp.importRows.find((r) => r.sourcePath === "src/a.ts")
+    expect(aImport).toMatchObject({ importedName: "bar", startLine: 1 })
+  })
+
+  it("returns graphAvailable=false with empty rows when there is no active version", async () => {
+    const do_ = makeDoInstance("o/exp-no-active")
+    // No commitGraphVersion call — no active version exists.
+    const exp = await do_.contextExpansionForChangedSymbols({
+      changedNames: ["bar"],
+      changedPaths: ["src/b.ts"],
+    })
+    expect(exp.graphAvailable).toBe(false)
+    expect(exp.definitionRows).toEqual([])
+    expect(exp.callerRows).toEqual([])
+    expect(exp.importRows).toEqual([])
+  })
+
+  it("returns graphAvailable=false when changedNames or changedPaths is empty", async () => {
+    const do_ = makeDoInstance("o/exp-empty-input")
+    await do_.upsertFileGraph({
+      runId: "r", headSha: "h", path: "src/b.ts",
+      symbols: [
+        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+      ],
+      fileEdgesRaw: [], callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    const noNames = await do_.contextExpansionForChangedSymbols({ changedNames: [], changedPaths: ["src/b.ts"] })
+    expect(noNames.graphAvailable).toBe(false)
+    const noPaths = await do_.contextExpansionForChangedSymbols({ changedNames: ["bar"], changedPaths: [] })
+    expect(noPaths.graphAvailable).toBe(false)
+  })
+
+  it("graphAvailable=true with empty rows when a changed name resolves to no symbol in changed files", async () => {
+    const do_ = makeDoInstance("o/exp-no-resolve")
+    await do_.upsertFileGraph({
+      runId: "r", headSha: "h", path: "src/b.ts",
+      symbols: [
+        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+      ],
+      fileEdgesRaw: [], callEdges: [],
+    })
+    await do_.commitGraphVersion("r")
+
+    // `ghost` is not declared in src/b.ts → resolves to no id, but the active
+    // version exists, so graphAvailable stays true with empty rows.
+    const exp = await do_.contextExpansionForChangedSymbols({
+      changedNames: ["ghost"],
+      changedPaths: ["src/b.ts"],
+    })
+    expect(exp.graphAvailable).toBe(true)
+    expect(exp.definitionRows).toEqual([])
+    expect(exp.callerRows).toEqual([])
+    expect(exp.importRows).toEqual([])
+  })
+
+  it("caps each row list at maxRows", async () => {
+    const do_ = makeDoInstance("o/exp-cap")
+    // One changed symbol `bar` with many same-file callers.
+    const callEdges = Array.from({ length: 10 }, (_, i) => ({
+      sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file",
+      startLine: 20 + i, startCol: 0,
+    }))
+    await do_.upsertFileGraph({
+      runId: "r", headSha: "h", path: "src/b.ts",
+      symbols: [
+        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+      ],
+      fileEdgesRaw: [], callEdges,
+    })
+    await do_.commitGraphVersion("r")
+
+    const exp = await do_.contextExpansionForChangedSymbols({
+      changedNames: ["bar"], changedPaths: ["src/b.ts"], maxRows: 3,
+    })
+    expect(exp.callerRows.length).toBeLessThanOrEqual(3)
+    expect(exp.callerRows).toHaveLength(3)
+  })
+
+  it("DEFAULT_EXPANSION_ROWS is the per-list default cap", () => {
+    expect(DEFAULT_EXPANSION_ROWS).toBe(40)
   })
 })

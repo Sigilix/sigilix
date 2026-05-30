@@ -325,6 +325,13 @@ export interface Env {
   OPENCLAW_GRAPH_INDEX?: string
   OPENCLAW_GRAPH_RETRIEVAL?: string
 
+  // SIG-286: graph-context body EXPANSION ("off" | "shadow" | "post").
+  // shadow/post both COMPUTE the enriched changed-symbol context (definition /
+  // caller / import-dependent bodies) and emit `graph-expansion-shadow`
+  // telemetry. In PR1 `post` is RESERVED (treated like shadow — measured,
+  // never injected into any prompt). Default off → fully inert.
+  OPENCLAW_GRAPH_EXPANSION?: string
+
   // SIG-161: confidence-threshold verdict gate. Three-state rollout
   //   "off"     — bypassed; legacy `chooseReviewEvent` decides (default).
   //   "shadow"  — `chooseReviewEventWithGate` runs but legacy verdict ships;

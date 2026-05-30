@@ -136,6 +136,14 @@ class_name = "RunnerReceiptDO"
 name = "RUNNER_EVIDENCE_METRICS_DO"
 class_name = "RunnerEvidenceMetricsDO"
 
+# SIG-285 PR 2: single global DO holding rolling verification-by-execution
+# verdict counters (confirmed/refuted/inconclusive/no-check × category daily
+# buckets, 35-day retention). Read via GET /metrics/verification (same
+# OPENCLAW_VALIDATION_METRICS_TOKEN bearer).
+[[durable_objects.bindings]]
+name = "VERIFICATION_METRICS_DO"
+class_name = "VerificationMetricsDO"
+
 # Migration block — adds the DO class. Forward-only; use
 # `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
 # point-lookup; SQLite buys nothing.
@@ -172,6 +180,12 @@ new_sqlite_classes = ["RunnerReceiptDO"]
 [[migrations]]
 tag = "sig-184-metrics-v1"
 new_sqlite_classes = ["RunnerEvidenceMetricsDO"]
+
+# SIG-285 PR 2: VerificationMetricsDO uses SQLite storage. Forward-only;
+# reverting is safe (telemetry-only — no review behavior depends on it).
+[[migrations]]
+tag = "sig-285-metrics-v1"
+new_sqlite_classes = ["VerificationMetricsDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

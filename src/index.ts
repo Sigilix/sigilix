@@ -67,6 +67,7 @@ import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
 import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
 import { handleRunnerEvidenceMetricsRoute } from "./lib/metrics-runner-evidence-route"
+import { handleVerificationMetricsRoute } from "./lib/metrics-verification-route"
 import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
@@ -352,6 +353,11 @@ export interface Env {
   // latest state). Read via the authenticated GET /metrics/runner-evidence
   // endpoint (shares OPENCLAW_VALIDATION_METRICS_TOKEN).
   RUNNER_EVIDENCE_METRICS_DO: DurableObjectNamespace
+
+  // SIG-285 PR 2: single global DO holding rolling verification-by-execution
+  // verdict counters (confirmed / refuted / inconclusive / no-check × category).
+  // Read via GET /metrics/verification (shares OPENCLAW_VALIDATION_METRICS_TOKEN).
+  VERIFICATION_METRICS_DO: DurableObjectNamespace
 
   // SIG-184: runner-evidence ingest (POST /runner/ingest). The GitHub OIDC token
   // IS the auth; these pin what a valid token must attest. Both come from the
@@ -1100,6 +1106,12 @@ export default {
     // telemetry (adoption + the verified/pending/absent breakdown).
     if (request.method === "GET" && url.pathname === "/metrics/runner-evidence") {
       return handleRunnerEvidenceMetricsRoute(request, env)
+    }
+
+    // SIG-285 PR 2: authenticated read of the rolling verification-by-execution
+    // verdict distribution (the refutable-FP fraction).
+    if (request.method === "GET" && url.pathname === "/metrics/verification") {
+      return handleVerificationMetricsRoute(request, env)
     }
 
     // SIG-184: runner-evidence ingest. A Sigilix reusable workflow in the
@@ -3471,6 +3483,12 @@ export { ValidationMetricsDO } from "./do/validation-metrics"
 // RUNNER_EVIDENCE_METRICS_DO entry + the sig-184-metrics-v1 new_sqlite_classes
 // migration in wrangler.toml.
 export { RunnerEvidenceMetricsDO } from "./do/runner-evidence-metrics"
+
+// SIG-285 PR 2: VerificationMetricsDO — rolling verification verdict telemetry
+// (SQLite). Registered via the [[durable_objects.bindings]]
+// VERIFICATION_METRICS_DO entry + the sig-285-metrics-v1 new_sqlite_classes
+// migration in wrangler.toml.
+export { VerificationMetricsDO } from "./do/verification-metrics"
 
 // SIG-152: GraphMetricsDO — rolling SIG-138 graph-retrieval shadow telemetry
 // (SQLite). Registered via the [[durable_objects.bindings]] GRAPH_METRICS_DO

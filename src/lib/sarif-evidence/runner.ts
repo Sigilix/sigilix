@@ -32,7 +32,11 @@ import type {
   Severity,
 } from "./types"
 
-const REPORT_SIZE_CAP_BYTES = 2 * 1024 * 1024
+// 8 MiB (was 2 MiB). MUST stay >= the runner-ingest MAX_BODY_BYTES so a verified
+// receipt's SARIF that the ingest accepted is never rejected here as too-large
+// (which would render a "verified" pill over a silently-dropped SARIF). Raised
+// after a real `semgrep --config auto` run exceeded 2 MiB (SIG-184 dogfood 413).
+const REPORT_SIZE_CAP_BYTES = 8 * 1024 * 1024
 const MAX_FINDINGS_PER_SCAN = 200
 const STALE_REPORT_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000
 const EVIDENCE_MAX_CHARS = 200

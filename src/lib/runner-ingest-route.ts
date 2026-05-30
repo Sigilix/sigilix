@@ -22,8 +22,12 @@ import { makeCachedFetchJwks, forcedRefetchAvailable } from "./runner-oidc/jwks-
 import { parseSarif } from "./sarif-evidence/sarif-parser"
 import { claimRunnerReceipt } from "./runner-receipt-client"
 
-/** SARIF body cap — mirrors the sarif-evidence runner's REPORT_SIZE_CAP_BYTES. */
-const MAX_BODY_BYTES = 2 * 1024 * 1024
+// SARIF body cap. MUST mirror the sarif-evidence runner's REPORT_SIZE_CAP_BYTES
+// (8 MiB): a receipt the ingest accepts but consumption later rejects as
+// too-large would render a "verified" pill over a silently-dropped SARIF. 8 MiB
+// (was 2 MiB) — a real semgrep run on a large repo exceeds 2 MiB (SIG-184
+// dogfood 413); the scrubbed body still sits well under KV's 25 MiB.
+const MAX_BODY_BYTES = 8 * 1024 * 1024
 /** A JWT is ~1–2 KB; reject an absurd Authorization header before verifying. */
 const MAX_TOKEN_BYTES = 8 * 1024
 /** Audit-receipt retention (the replay guard lives in the DO at 7 d). */
@@ -47,7 +51,7 @@ function json(body: unknown, status: number): Response {
 // Scrub secrets ONLY — do NOT truncate. A byte-truncated SARIF is invalid JSON,
 // so the consumption path could never parse it (CR): the receipt would be
 // `accepted` yet permanently unverifiable. The body is already bounded to
-// MAX_BODY_BYTES (2 MiB) by readBodyCapped, and scrubbing only shrinks (every
+// MAX_BODY_BYTES (8 MiB) by readBodyCapped, and scrubbing only shrinks (every
 // secret pattern is longer than `[REDACTED]`), so the stored blob stays
 // parseable + well under KV's 25 MiB value limit.
 function scrubSecrets(input: string): string {

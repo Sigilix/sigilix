@@ -26,8 +26,6 @@ import { claimRunnerReceipt } from "./runner-receipt-client"
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 /** A JWT is ~1–2 KB; reject an absurd Authorization header before verifying. */
 const MAX_TOKEN_BYTES = 8 * 1024
-/** Per-field cap for the scrubbed SARIF persisted to KV. */
-const MAX_SARIF_FIELD_BYTES = 1.5 * 1024 * 1024
 /** Audit-receipt retention (the replay guard lives in the DO at 7 d). */
 const RECEIPT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -46,14 +44,16 @@ function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
-function scrubAndCap(input: string): string {
+// Scrub secrets ONLY — do NOT truncate. A byte-truncated SARIF is invalid JSON,
+// so the consumption path could never parse it (CR): the receipt would be
+// `accepted` yet permanently unverifiable. The body is already bounded to
+// MAX_BODY_BYTES (2 MiB) by readBodyCapped, and scrubbing only shrinks (every
+// secret pattern is longer than `[REDACTED]`), so the stored blob stays
+// parseable + well under KV's 25 MiB value limit.
+function scrubSecrets(input: string): string {
   let s = input
   for (const p of SECRET_PATTERNS) s = s.replace(p, "[REDACTED]")
-  // Cap on encoded BYTES (the budget is in bytes, not UTF-16 code units). A
-  // partial trailing char left by the byte-slice decodes to U+FFFD — harmless.
-  const enc = new TextEncoder().encode(s)
-  if (enc.byteLength <= MAX_SARIF_FIELD_BYTES) return s
-  return new TextDecoder().decode(enc.slice(0, MAX_SARIF_FIELD_BYTES)) + "\n[…truncated…]"
+  return s
 }
 
 async function sha256Hex(raw: string): Promise<string> {
@@ -233,7 +233,7 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   // The persisted body is SCRUBBED (secrets redacted); hash the scrubbed bytes so
   // consumption can integrity-check the stored body. The raw `sarifSha256` stays
   // the GitHub-attested receipt identity.
-  const scrubbedSarif = scrubAndCap(envelope.sarif)
+  const scrubbedSarif = scrubSecrets(envelope.sarif)
   const scrubbedSha256 = await sha256Hex(scrubbedSarif)
   // The REVIEW joins on the PR HEAD sha — for a pull_request, GitHub's OIDC `sha`
   // is the MERGE commit, not the head, so the review (which keys on head) would

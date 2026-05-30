@@ -99,6 +99,9 @@ describe("validateRunnerSarifConsistency", () => {
   it("rejects a revisionId mismatch", () => {
     expect(validateRunnerSarifConsistency(JSON.stringify({ runs: [{ versionControlProvenance: [{ revisionId: "other" }] }] }), bound)).toEqual({ ok: false, reason: "revision-mismatch" })
   })
+  it("rejects a FOREIGN-host repositoryUri (e.g. gitlab) — cannot match a bound GitHub repo (CR)", () => {
+    expect(validateRunnerSarifConsistency(JSON.stringify({ runs: [{ versionControlProvenance: [{ repositoryUri: "https://gitlab.com/Sigilix/sigilix" }] }] }), bound)).toEqual({ ok: false, reason: "repository-mismatch" })
+  })
   it("rejects a repositoryUri mismatch (cross-repo SARIF)", () => {
     expect(validateRunnerSarifConsistency(JSON.stringify({ runs: [{ versionControlProvenance: [{ repositoryUri: "https://github.com/attacker/repo" }] }] }), bound)).toEqual({ ok: false, reason: "repository-mismatch" })
   })

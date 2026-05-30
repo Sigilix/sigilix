@@ -45,8 +45,11 @@ CREATE TABLE IF NOT EXISTS receipts (
   PRIMARY KEY (repository_id, sha, run_id, run_attempt)
 );
 CREATE INDEX IF NOT EXISTS receipts_by_ingested ON receipts(ingested_at);
-CREATE INDEX IF NOT EXISTS receipts_by_head ON receipts(repository_id, head_sha);
 `
+// The head_sha index is created in sql() AFTER the column migration — a table
+// provisioned before head_sha existed wouldn't have the column when this static
+// schema runs, so indexing it here would throw.
+const HEAD_INDEX = "CREATE INDEX IF NOT EXISTS receipts_by_head ON receipts(repository_id, head_sha)"
 
 export interface ClaimReceiptArgs {
   repositoryId: string
@@ -97,7 +100,18 @@ export class RunnerReceiptDO extends DurableObject<Env> {
 
   private sql(): DurableObjectStorage["sql"] {
     if (!this.ready) {
-      this.ctx.storage.sql.exec(SCHEMA)
+      const sql = this.ctx.storage.sql
+      sql.exec(SCHEMA)
+      // Defensive migration (CR): `CREATE TABLE IF NOT EXISTS` does NOT add new
+      // columns to a table provisioned by an earlier schema. No prod DO instance
+      // exists today (the route is 503-gated, zero ingests), so this is
+      // belt-and-suspenders — but it makes a re-provisioned/old shard safe rather
+      // than failing every INSERT/SELECT with a missing-column error. NOT NULL +
+      // DEFAULT '' satisfies any pre-existing rows (there are none).
+      const cols = new Set([...sql.exec<{ name: string }>("PRAGMA table_info(receipts)")].map((r) => r.name))
+      if (!cols.has("scrubbed_sha256")) sql.exec("ALTER TABLE receipts ADD COLUMN scrubbed_sha256 TEXT NOT NULL DEFAULT ''")
+      if (!cols.has("head_sha")) sql.exec("ALTER TABLE receipts ADD COLUMN head_sha TEXT NOT NULL DEFAULT ''")
+      sql.exec(HEAD_INDEX) // safe now — head_sha is guaranteed to exist
       this.ready = true
     }
     return this.ctx.storage.sql

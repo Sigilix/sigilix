@@ -442,6 +442,16 @@ export interface Env {
   // `wrangler secret put OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE enforce`.
   OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE?: string
 
+  // SIG-290 v1: absence-claim grounding gate mode. "off" (default) skips
+  // the gate; "shadow" counts + telemeters the would-demote but keeps
+  // every finding inline; "enforce" demotes an absence-claim ("lacks
+  // tests", "no null check", "missing validation") to the review body
+  // when the evidence that would confirm-or-refute the absence was
+  // provably outside the specialist's window (never hard-drops). Operator
+  // flips via
+  // `wrangler secret put OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE shadow`.
+  OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE?: string
+
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
   // that AUGMENTS the logic role's shared snapshot; any other value

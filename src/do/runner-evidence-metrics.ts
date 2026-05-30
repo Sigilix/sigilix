@@ -176,9 +176,12 @@ export class RunnerEvidenceMetricsDO extends DurableObject<Env> {
   /** Daily retention GC: drop buckets + repo rows older than RETENTION_DAYS. */
   override async alarm(): Promise<void> {
     const sql = this.sql()
+    // Single clock read so the day-bucket cutoff and the timestamp cutoff can't
+    // straddle a UTC midnight (CR).
     const now = new Date().toISOString()
+    const nowMs = new Date(now).getTime()
     const cutoffDay = utcDayMinus(now, RETENTION_DAYS - 1)
-    const cutoffAt = new Date(Date.now() - RETENTION_DAYS * DAY_MS).toISOString()
+    const cutoffAt = new Date(nowMs - RETENTION_DAYS * DAY_MS).toISOString()
 
     this.ctx.storage.transactionSync(() => {
       sql.exec("DELETE FROM daily_counts WHERE day < ?", cutoffDay)

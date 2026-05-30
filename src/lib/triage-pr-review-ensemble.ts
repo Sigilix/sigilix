@@ -2411,19 +2411,6 @@ export async function handlePrReviewEnsemble(
         state: runnerEvidence.state,
         ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
       }))
-      // SIG-184 PR 5b: presence telemetry (best-effort; awaited because queue-
-      // consumer ctx.waitUntil doesn't extend lifetime, but a failure must NEVER
-      // break the review). One increment per review → RunnerEvidenceMetricsDO,
-      // read via GET /metrics/runner-evidence.
-      try {
-        await recordRunnerEvidenceMetric(env, {
-          owner, repo, prNumber,
-          state: runnerEvidence.state,
-          ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
-        })
-      } catch (err) {
-        console.warn(JSON.stringify({ event: "runner-evidence-metric-record-failed", owner, repo, prNumber, error: String(err) }))
-      }
     }
     // SIG-184: record the trust state for the check-run badge. Only in `post`
     // mode — that's when the receipt actually backs the review (verified →
@@ -2435,6 +2422,32 @@ export async function handlePrReviewEnsemble(
         runnerEvidence.state === "verified" ? "verified"
         : runnerEvidence.state === "evidence-pending" ? "evidence-pending"
         : undefined
+    }
+    // SIG-184 PR 5b: presence telemetry — one increment per review in shadow/
+    // post (a repoId-less review records `runner-absent`, so it still lands in
+    // the adoption denominator). Best-effort: a failure must NEVER break the
+    // review, and the DO RPC is bounded by a race-timeout (queue-consumer
+    // ctx.waitUntil doesn't extend lifetime, and a signal-less RPC won't honor
+    // an AbortSignal, so race is the correct bound). Read via GET
+    // /metrics/runner-evidence.
+    if (runnerMode !== "off") {
+      let metricTimer: ReturnType<typeof setTimeout> | undefined
+      try {
+        await Promise.race([
+          recordRunnerEvidenceMetric(env, {
+            owner, repo, prNumber,
+            state: runnerEvidence.state,
+            ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
+          }),
+          new Promise<never>((_, reject) => {
+            metricTimer = setTimeout(() => reject(new Error("metric-record-timeout")), 1_500)
+          }),
+        ])
+      } catch (err) {
+        console.warn(JSON.stringify({ event: "runner-evidence-metric-record-failed", owner, repo, prNumber, error: String(err) }))
+      } finally {
+        if (metricTimer !== undefined) clearTimeout(metricTimer)
+      }
     }
     const sarifResult = await runSarifEvidence({
       env, client, owner, repo, prNumber, headSha,

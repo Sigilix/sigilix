@@ -95,11 +95,16 @@ describe("RunnerEvidenceMetricsDO.record + query", () => {
 
   it("alarm GC drops buckets + repo rows older than the retention window", async () => {
     const { do_ } = makeDoInstance()
-    const old = new Date(Date.now() - 40 * 86_400_000).toISOString()
+    // Capture "now" once for the test-controlled timestamps so day-slicing can't
+    // straddle a UTC midnight across multiple clock reads (CR). The fresh record
+    // sits ~40 days inside the 35-day window's recent edge; `old` is 40 days back.
+    const nowIso = new Date().toISOString()
+    const nowDay = nowIso.slice(0, 10)
+    const old = new Date(new Date(nowIso).getTime() - 40 * 86_400_000).toISOString()
     await do_.record({ ...base, state: "verified", occurredAt: old })
-    await do_.record({ ...base, prNumber: 8, state: "verified", occurredAt: new Date().toISOString() })
+    await do_.record({ ...base, prNumber: 8, state: "verified", occurredAt: nowIso })
     await do_.alarm()
     expect(await do_.debugDayCount(old.slice(0, 10), "verified", "")).toBeNull()
-    expect(await do_.debugDayCount(new Date().toISOString().slice(0, 10), "verified", "")).not.toBeNull()
+    expect(await do_.debugDayCount(nowDay, "verified", "")).not.toBeNull()
   })
 })

@@ -29,10 +29,17 @@ jobs:
       oidc-audience: sigilix-runner-ingest
 ```
 
-The `oidc-audience` MUST equal the worker's `OPENCLAW_RUNNER_OIDC_AUDIENCE`, and
-the `uses:` path MUST equal `OPENCLAW_RUNNER_WORKFLOW_REF` (the provenance gate
-checks both). `tests/runner-evidence-contract-drift.test.ts` guards our own
-dogfood against drifting from the worker config.
+Matching semantics (the provenance gate checks both):
+- `oidc-audience` MUST equal `OPENCLAW_RUNNER_OIDC_AUDIENCE` **exactly** (the
+  token's `aud` is compared byte-for-byte).
+- The `uses:` **path** MUST equal `OPENCLAW_RUNNER_WORKFLOW_REF` — i.e. the
+  `owner/repo/path` portion, with the `@<sha>` pin **stripped** (the worker
+  matches the token's `job_workflow_ref` path, not the ref). `owner/repo` is
+  compared case-**insensitively**, the path case-**sensitively** (GitHub paths
+  are case-sensitive).
+
+`tests/runner-evidence-contract-drift.test.ts` guards our own dogfood against
+drifting from the worker config under exactly these rules.
 
 ## Worker config (`wrangler.toml [vars]`)
 
@@ -75,11 +82,10 @@ curl -s -H "authorization: Bearer $TOKEN" \
 }
 ```
 
-- **Adoption** = `verified + evidence-pending` over the total. NB the denominator
-  is reviews where a runner lookup was *attempted* — i.e. repos with a GitHub
-  `repository.id` in scope and the rollout flag on; the `runner-absent` majority
-  is those repos without a stored receipt, not literally every review (a legacy
-  repo with no `repository.id` records nothing).
+- **Adoption** = `verified + evidence-pending` over the total. The denominator is
+  every review while the flag is on (shadow/post): a repo without the Action — or
+  without a GitHub `repository.id` in scope — records `runner-absent`, so it's the
+  majority bucket until adoption grows.
 - **Why-pending** = the `evidence-pending` reason breakdown (e.g.
   `merge-sha-unavailable` = GitHub hadn't computed the PR's merge commit yet when
   the review ran; `merge-sha-mismatch` = a stale/retargeted receipt — the CR-4

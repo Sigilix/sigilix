@@ -1388,6 +1388,12 @@ export interface PullRequestMeta {
   /** GitHub REST returns "open" or "closed" only — `merged` is inferred from `merged_at`. */
   state?: "open" | "closed"
   merged_at?: string | null
+  /**
+   * SIG-184: the PR's test-merge commit (`refs/pull/N/merge`). `null` until
+   * GitHub computes it (or unmergeable). The runner-evidence review-join binds a
+   * receipt by requiring the OIDC-signed merge sha to equal this.
+   */
+  merge_commit_sha?: string | null
   changed_files?: number
   /**
    * ARC-265: labels currently applied to the PR. GitHub returns each

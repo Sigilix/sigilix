@@ -22,13 +22,15 @@ import type { Env } from "../index"
 const RETENTION_DAYS = 7
 const DAY_MS = 86_400_000
 
-// `sha` is the OIDC-bound commit (== claims.sha — the MERGE commit for a
-// pull_request) and is the single-use/replay key. `head_sha` is the PR HEAD
-// commit — the key Sigilix's review joins on (see queryReceiptByHead); for
-// non-PR events the two are equal. `scrubbed_sha256` is the hash of the SCRUBBED
-// SARIF actually persisted to KV (the raw `sarif_sha256` is the GitHub-attested
-// identity, but the stored body is scrubbed, so consumption integrity-checks
-// against this one — PR 3 / the believability boundary).
+// `sha` is the OIDC-signed commit (== claims.sha — the MERGE commit for a
+// pull_request) and is the single-use/replay key AND the value the review binds
+// against the PR's merge_commit_sha. `pull_number` is parsed from the SIGNED
+// claims.ref (`refs/pull/{N}/merge`) — it's the REVIEW-JOIN key. Both come from
+// the OIDC token, so neither can be forged via the request body (CR-4: an
+// untrusted body head_sha let a same-repo run retarget another PR's review).
+// `scrubbed_sha256` is the hash of the SCRUBBED SARIF persisted to KV (the raw
+// `sarif_sha256` is the GitHub-attested identity, but the stored body is
+// scrubbed, so consumption integrity-checks against this one).
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS receipts (
   repository_id TEXT NOT NULL,
@@ -37,7 +39,7 @@ CREATE TABLE IF NOT EXISTS receipts (
   run_attempt TEXT NOT NULL,
   sarif_sha256 TEXT NOT NULL,
   scrubbed_sha256 TEXT NOT NULL,
-  head_sha TEXT NOT NULL,
+  pull_number INTEGER NOT NULL,
   repository TEXT NOT NULL,
   job_workflow_ref TEXT NOT NULL,
   runner_environment TEXT NOT NULL,
@@ -46,18 +48,19 @@ CREATE TABLE IF NOT EXISTS receipts (
 );
 CREATE INDEX IF NOT EXISTS receipts_by_ingested ON receipts(ingested_at);
 `
-// The head_sha index is created in sql() AFTER the column migration — a table
-// provisioned before head_sha existed wouldn't have the column when this static
-// schema runs, so indexing it here would throw.
-const HEAD_INDEX = "CREATE INDEX IF NOT EXISTS receipts_by_head ON receipts(repository_id, head_sha)"
+// The pull_number index is created in sql() AFTER the column migration — a table
+// provisioned before pull_number existed wouldn't have the column when this
+// static schema runs, so indexing it here would throw.
+const PULL_INDEX = "CREATE INDEX IF NOT EXISTS receipts_by_pull ON receipts(repository_id, pull_number)"
 
 export interface ClaimReceiptArgs {
   repositoryId: string
-  /** The OIDC-bound sha (== claims.sha; the MERGE commit for pull_request). The
-   *  single-use/replay key. */
+  /** The OIDC-signed sha (== claims.sha; the MERGE commit for pull_request). The
+   *  single-use/replay key + the value the review binds to merge_commit_sha. */
   sha: string
-  /** The PR HEAD sha — the review's join key. For non-PR events == `sha`. */
-  headSha: string
+  /** PR number parsed from the SIGNED claims.ref (`refs/pull/{N}/merge`) — the
+   *  review-join key. 0 for a non-pull_request run (not PR-joinable). */
+  pullNumber: number
   runId: string
   runAttempt: string
   /** SHA-256 (hex) of the EXACT SARIF bytes received, before scrubbing — the
@@ -76,7 +79,7 @@ export interface ClaimReceiptArgs {
 /** A verified receipt row, returned by the review-join lookup. */
 export interface RunnerReceiptRow {
   sha: string
-  headSha: string
+  pullNumber: number
   runId: string
   runAttempt: string
   sarifSha256: string
@@ -110,8 +113,8 @@ export class RunnerReceiptDO extends DurableObject<Env> {
       // DEFAULT '' satisfies any pre-existing rows (there are none).
       const cols = new Set([...sql.exec<{ name: string }>("PRAGMA table_info(receipts)")].map((r) => r.name))
       if (!cols.has("scrubbed_sha256")) sql.exec("ALTER TABLE receipts ADD COLUMN scrubbed_sha256 TEXT NOT NULL DEFAULT ''")
-      if (!cols.has("head_sha")) sql.exec("ALTER TABLE receipts ADD COLUMN head_sha TEXT NOT NULL DEFAULT ''")
-      sql.exec(HEAD_INDEX) // safe now — head_sha is guaranteed to exist
+      if (!cols.has("pull_number")) sql.exec("ALTER TABLE receipts ADD COLUMN pull_number INTEGER NOT NULL DEFAULT 0")
+      sql.exec(PULL_INDEX) // safe now — pull_number is guaranteed to exist
       this.ready = true
     }
     return this.ctx.storage.sql
@@ -143,10 +146,10 @@ export class RunnerReceiptDO extends DurableObject<Env> {
         sql.exec(
           `INSERT INTO receipts
              (repository_id, sha, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
-              head_sha, repository, job_workflow_ref, runner_environment, ingested_at)
+              pull_number, repository, job_workflow_ref, runner_environment, ingested_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args.repositoryId, args.sha, args.runId, args.runAttempt,
-          args.sarifSha256, args.scrubbedSha256, args.headSha, args.repository,
+          args.sarifSha256, args.scrubbedSha256, args.pullNumber, args.repository,
           args.jobWorkflowRef, args.runnerEnvironment, at,
         )
         result = { outcome: "accepted" }
@@ -183,30 +186,33 @@ export class RunnerReceiptDO extends DurableObject<Env> {
   }
 
   /**
-   * Review-join lookup: the most-recent verified receipt for a review of
-   * `(repository_id, head_sha)`. This is the REVIEW path, NOT the replay key — a
-   * re-run with a higher run_attempt (newer `ingested_at`) supersedes. Returns
-   * the row incl. `scrubbedSha256` so the caller can integrity-check the KV body
-   * before trusting it as "verified" evidence. Null if no receipt.
+   * Review-join lookup: the most-recent receipt for a review of `(repository_id,
+   * pull_number)` — both SIGNED values (the caller MUST further bind by comparing
+   * the returned `sha` to the PR's GitHub `merge_commit_sha`, so a stale receipt
+   * for an older merge doesn't match). NOT the replay key — a re-run with a higher
+   * run_attempt (newer `ingested_at`) supersedes. Returns the row incl.
+   * `scrubbedSha256` for the KV-body integrity check. Null if no receipt. A
+   * `pullNumber <= 0` (non-PR run) never joins.
    */
-  async queryReceiptByHead(repositoryId: string, headSha: string): Promise<RunnerReceiptRow | null> {
+  async queryReceiptByPull(repositoryId: string, pullNumber: number): Promise<RunnerReceiptRow | null> {
+    if (pullNumber <= 0) return null
     const sql = this.sql()
     const r = [
       ...sql.exec<{
-        sha: string; head_sha: string; run_id: string; run_attempt: string
+        sha: string; pull_number: number; run_id: string; run_attempt: string
         sarif_sha256: string; scrubbed_sha256: string; repository: string
         job_workflow_ref: string; runner_environment: string; ingested_at: number
       }>(
-        `SELECT sha, head_sha, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
+        `SELECT sha, pull_number, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
                 repository, job_workflow_ref, runner_environment, ingested_at
-         FROM receipts WHERE repository_id = ? AND head_sha = ?
+         FROM receipts WHERE repository_id = ? AND pull_number = ?
          ORDER BY ingested_at DESC LIMIT 1`,
-        repositoryId, headSha,
+        repositoryId, pullNumber,
       ),
     ][0]
     return r
       ? {
-          sha: r.sha, headSha: r.head_sha, runId: r.run_id, runAttempt: r.run_attempt,
+          sha: r.sha, pullNumber: r.pull_number, runId: r.run_id, runAttempt: r.run_attempt,
           sarifSha256: r.sarif_sha256, scrubbedSha256: r.scrubbed_sha256,
           repository: r.repository, jobWorkflowRef: r.job_workflow_ref,
           runnerEnvironment: r.runner_environment, ingestedAt: r.ingested_at,

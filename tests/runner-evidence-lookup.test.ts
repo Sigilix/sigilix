@@ -1,6 +1,8 @@
 // SIG-184 PR 3 — review-time receipt lookup + the believability-boundary
 // validation. Mocks the DO query + the KV body; asserts the three states +
-// fail-closed/demote paths.
+// fail-closed/demote paths. CR-4: the join is on the SIGNED pull_number, then
+// BOUND by requiring the receipt's OIDC-signed merge sha to equal the PR's
+// current merge_commit_sha.
 
 import { describe, expect, it } from "vitest"
 import { lookupRunnerEvidence, validateRunnerSarifConsistency, readRunnerEvidenceMode } from "../src/lib/runner-evidence/lookup"
@@ -11,16 +13,18 @@ async function sha256(s: string): Promise<string> {
   return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("")
 }
 
+// The runner scans the MERGE checkout, so the SARIF's revisionId is the merge
+// commit == claims.sha == the bound row.sha ("mergedead").
 const SARIF = JSON.stringify({
   version: "2.1.0",
-  runs: [{ versionControlProvenance: [{ revisionId: "headcafe", repositoryUri: "https://github.com/Sigilix/sigilix" }] }],
+  runs: [{ versionControlProvenance: [{ revisionId: "mergedead", repositoryUri: "https://github.com/Sigilix/sigilix" }] }],
 })
 
 function makeEnv(opts: { row?: unknown; rowThrows?: boolean; body?: unknown; bodyThrows?: boolean }): Env {
   const ns = {
     idFromName: (id: string) => ({ id }),
     get: () => ({
-      async queryReceiptByHead() {
+      async queryReceiptByPull() {
         if (opts.rowThrows) throw new Error("do down")
         return opts.row ?? null
       },
@@ -37,7 +41,7 @@ function makeEnv(opts: { row?: unknown; rowThrows?: boolean; body?: unknown; bod
 
 const baseRow = (scrubbedSha256: string) => ({
   sha: "mergedead",
-  headSha: "headcafe",
+  pullNumber: 7,
   runId: "1",
   runAttempt: "1",
   sarifSha256: "rawhash",
@@ -49,46 +53,53 @@ const baseRow = (scrubbedSha256: string) => ({
 })
 
 describe("lookupRunnerEvidence", () => {
-  it("verified: DO row + matching body hash + consistent SARIF → renders BOUND values", async () => {
+  it("verified: DO row + matching merge sha + body hash + consistent SARIF → renders BOUND values", async () => {
     const env = makeEnv({ row: baseRow(await sha256(SARIF)), body: { sarif: SARIF } })
-    const r = await lookupRunnerEvidence(env, "424242", "headcafe")
-    expect(r).toMatchObject({ state: "verified", repository: "Sigilix/sigilix", sha: "mergedead", headSha: "headcafe", runId: "1" })
+    const r = await lookupRunnerEvidence(env, "424242", 7, "mergedead")
+    expect(r).toMatchObject({ state: "verified", repository: "Sigilix/sigilix", sha: "mergedead", pullNumber: 7, runId: "1" })
     if (r.state === "verified") expect(r.sarif).toBe(SARIF)
   })
 
-  it("runner-absent: no row, and (fail-closed) empty repositoryId", async () => {
-    expect((await lookupRunnerEvidence(makeEnv({ row: null }), "424242", "headcafe")).state).toBe("runner-absent")
-    expect((await lookupRunnerEvidence(makeEnv({ row: null }), "", "headcafe")).state).toBe("runner-absent")
+  it("runner-absent: no row, and (fail-closed) empty repositoryId / non-PR / missing merge sha", async () => {
+    expect((await lookupRunnerEvidence(makeEnv({ row: null }), "424242", 7, "mergedead")).state).toBe("runner-absent")
+    expect((await lookupRunnerEvidence(makeEnv({ row: null }), "", 7, "mergedead")).state).toBe("runner-absent")
+    expect((await lookupRunnerEvidence(makeEnv({ row: null }), "424242", 0, "mergedead")).state).toBe("runner-absent")
+    expect((await lookupRunnerEvidence(makeEnv({ row: null }), "424242", 7, "")).state).toBe("runner-absent")
+  })
+
+  it("evidence-pending (DEMOTED) when the receipt's merge sha != the PR's current merge_commit_sha (CR-4 retarget defense)", async () => {
+    const r = await lookupRunnerEvidence(makeEnv({ row: baseRow(await sha256(SARIF)), body: { sarif: SARIF } }), "424242", 7, "a-different-merge")
+    expect(r).toMatchObject({ state: "evidence-pending", reason: "merge-sha-mismatch" })
   })
 
   it("evidence-pending (not absent) on a transient DO error", async () => {
-    expect((await lookupRunnerEvidence(makeEnv({ rowThrows: true }), "424242", "headcafe")).state).toBe("evidence-pending")
+    expect((await lookupRunnerEvidence(makeEnv({ rowThrows: true }), "424242", 7, "mergedead")).state).toBe("evidence-pending")
   })
 
   it("evidence-pending when the DO row exists but the KV body is missing", async () => {
-    const r = await lookupRunnerEvidence(makeEnv({ row: baseRow("anyhash"), body: null }), "424242", "headcafe")
+    const r = await lookupRunnerEvidence(makeEnv({ row: baseRow("anyhash"), body: null }), "424242", 7, "mergedead")
     expect(r).toMatchObject({ state: "evidence-pending", reason: "body-missing" })
   })
 
   it("evidence-pending on an integrity mismatch (KV body tampered/corrupt)", async () => {
-    const r = await lookupRunnerEvidence(makeEnv({ row: baseRow("wronghash"), body: { sarif: SARIF } }), "424242", "headcafe")
+    const r = await lookupRunnerEvidence(makeEnv({ row: baseRow("wronghash"), body: { sarif: SARIF } }), "424242", 7, "mergedead")
     expect(r).toMatchObject({ state: "evidence-pending", reason: "integrity-mismatch" })
   })
 
-  it("evidence-pending (DEMOTED) when the SARIF's revisionId != the bound head sha", async () => {
+  it("evidence-pending (DEMOTED) when the SARIF's revisionId != the bound merge sha", async () => {
     const badSarif = JSON.stringify({ version: "2.1.0", runs: [{ versionControlProvenance: [{ revisionId: "victimsha" }] }] })
-    const r = await lookupRunnerEvidence(makeEnv({ row: baseRow(await sha256(badSarif)), body: { sarif: badSarif } }), "424242", "headcafe")
+    const r = await lookupRunnerEvidence(makeEnv({ row: baseRow(await sha256(badSarif)), body: { sarif: badSarif } }), "424242", 7, "mergedead")
     expect(r.state).toBe("evidence-pending")
     if (r.state === "evidence-pending") expect(r.reason).toContain("sarif-inconsistent")
   })
 })
 
 describe("validateRunnerSarifConsistency", () => {
-  const bound = { headSha: "headcafe", repository: "Sigilix/sigilix" }
-  it("ok when VCS provenance matches (case-insensitive owner/repo + sha)", () => {
+  const bound = { sha: "mergedead", repository: "Sigilix/sigilix" }
+  it("ok when VCS provenance matches (case-insensitive owner/repo + merge sha)", () => {
     expect(
       validateRunnerSarifConsistency(
-        JSON.stringify({ runs: [{ versionControlProvenance: [{ revisionId: "HEADCAFE", repositoryUri: "https://github.com/sigilix/SIGILIX.git" }] }] }),
+        JSON.stringify({ runs: [{ versionControlProvenance: [{ revisionId: "MERGEDEAD", repositoryUri: "https://github.com/sigilix/SIGILIX.git" }] }] }),
         bound,
       ),
     ).toEqual({ ok: true })

@@ -104,14 +104,12 @@ async function readBodyCapped(request: Request, maxBytes: number): Promise<strin
 
 interface IngestEnvelope {
   sarif: string
-  /** The SARIF's `owner/repo` — bound to the token's claim (the anti-spoof gate). */
+  /** The run's `owner/repo` — bound to the token's `repository` claim (anti-spoof). */
   repository: string
-  /** The SARIF's run sha — bound to the token's `sha` claim. */
+  /** The run's commit sha (== github.sha; the MERGE commit for a PR) — bound to
+   *  the token's `sha` claim. The PR number + repo id are taken from the SIGNED
+   *  claims (`claims.ref` / `claims.repository_id`), never from the body. */
   sha: string
-  /** Untrusted hint: the PR head sha (OIDC `sha` may be the merge/event sha). */
-  headSha?: string | undefined
-  /** Untrusted hint for PR 3's review join. */
-  prNumber?: number | undefined
   /** Optional immutable repo id, bound to the token's `repository_id` if present. */
   repositoryId?: string | undefined
 }
@@ -189,8 +187,6 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
       sarif: o.sarif,
       repository: o.repository,
       sha: o.sha,
-      headSha: typeof o.headSha === "string" ? o.headSha : undefined,
-      prNumber: typeof o.prNumber === "number" ? o.prNumber : undefined,
       repositoryId: typeof o.repositoryId === "string" ? o.repositoryId : undefined,
     }
   } catch {
@@ -235,13 +231,14 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   // the GitHub-attested receipt identity.
   const scrubbedSarif = scrubSecrets(envelope.sarif)
   const scrubbedSha256 = await sha256Hex(scrubbedSarif)
-  // The REVIEW joins on the PR HEAD sha — for a pull_request, GitHub's OIDC `sha`
-  // is the MERGE commit, not the head, so the review (which keys on head) would
-  // miss if we joined on `claims.sha`. The runner reports the head; it's an
-  // untrusted hint, but scoped by the VERIFIED `repository_id` (a fork's receipt
-  // carries the fork's id → can't bind a victim repo). Non-PR events: OIDC sha IS
-  // the head, so fall back to it.
-  const headSha = (typeof envelope.headSha === "string" && envelope.headSha.length > 0 ? envelope.headSha : tokenSha).toLowerCase()
+  // The REVIEW-JOIN key is the PR number, parsed from the SIGNED `claims.ref`
+  // (`refs/pull/{N}/merge`) — NEVER the untrusted body (CR-4: a body head_sha let
+  // a same-repo run retarget another PR's review). The replay key stays
+  // `claims.sha` (the merge commit), and the review binds the receipt by checking
+  // that `sha` == the PR's GitHub `merge_commit_sha`. A non-pull_request run has
+  // no PR ref → pullNumber 0 (stored as an audit record, but never PR-joinable).
+  const refMatch = typeof claims.ref === "string" ? /^refs\/pull\/(\d+)\/merge$/.exec(claims.ref) : null
+  const pullNumber = refMatch ? Number(refMatch[1]) : 0
 
   // (9) Atomic single-use claim. The DO row IS the defensible receipt; it's
   // keyed off VERIFIED claims (post-provenance these equal the envelope's).
@@ -250,7 +247,7 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
     claim = await claimRunnerReceipt(env, {
       repositoryId,
       sha: tokenSha,
-      headSha,
+      pullNumber,
       runId,
       runAttempt,
       sarifSha256,
@@ -288,8 +285,7 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
             repository: tokenRepository,
             repositoryId,
             sha: tokenSha,
-            headSha,
-            prNumberHint: envelope.prNumber,
+            pullNumber,
             runId,
             runAttempt,
             jobWorkflowRef: claims.job_workflow_ref,

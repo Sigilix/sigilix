@@ -2385,17 +2385,20 @@ export async function handlePrReviewEnsemble(
     const sarifConfig = resolveSarifEvidenceConfig(sigilixConfig)
 
     // SIG-184 PR 3: runner-evidence consumption (flag-gated; off by default →
-    // fully inert). In shadow/post we look up the VERIFIED receipt for
-    // (repoId, headSha) — the review-join key; in `post` we feed its SARIF to the
-    // SAME pipeline via `rawOverride` so the review's findings come from the
-    // GitHub-signed receipt instead of the unauthenticated repo pull.
+    // fully inert). In shadow/post we look up the VERIFIED receipt by the SIGNED
+    // join `(repoId, prNumber)` and BIND it to the PR's current merge commit
+    // (`meta.merge_commit_sha` == the OIDC-signed sha) — the forge-proof key. In
+    // `post` we feed the receipt's SARIF to the SAME pipeline via `rawOverride`.
     const runnerMode = readRunnerEvidenceMode(env)
     let runnerEvidence: RunnerEvidenceState = { state: "runner-absent" }
     if (runnerMode !== "off" && args.repoId !== undefined) {
-      runnerEvidence = await lookupRunnerEvidence(env, String(args.repoId), headSha)
+      const mergeSha = meta.merge_commit_sha
+      runnerEvidence = mergeSha
+        ? await lookupRunnerEvidence(env, String(args.repoId), prNumber, mergeSha)
+        : { state: "evidence-pending", reason: "merge-sha-unavailable" } // GitHub still computing the merge
       console.log(JSON.stringify({
         event: "runner-evidence-consume",
-        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        owner, repo, prNumber,
         mode: runnerMode,
         state: runnerEvidence.state,
         ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),

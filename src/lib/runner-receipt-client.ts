@@ -24,11 +24,12 @@ export function claimRunnerReceipt(env: Env, args: ClaimReceiptArgs): Promise<Cl
   return receiptStub(env, args.repositoryId).claimReceipt(args)
 }
 
-/** Review-join: the latest verified receipt for (repositoryId, headSha), or null. */
-export function queryRunnerReceiptByHead(
+/** Review-join: the latest receipt for (repositoryId, pullNumber), or null. The
+ *  caller binds it further by comparing the row's `sha` to the PR's merge sha. */
+export function queryRunnerReceiptByPull(
   env: Env,
   repositoryId: string,
-  headSha: string,
+  pullNumber: number,
 ): Promise<RunnerReceiptRow | null> {
-  return receiptStub(env, repositoryId).queryReceiptByHead(repositoryId, headSha)
+  return receiptStub(env, repositoryId).queryReceiptByPull(repositoryId, pullNumber)
 }

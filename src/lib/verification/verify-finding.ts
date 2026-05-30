@@ -105,6 +105,21 @@ export function deriveTokens(finding: Pick<PrReviewFinding, "headline" | "body">
 }
 
 /**
+ * Is `token` present at `line` as a WHOLE token, not a substring? A bare
+ * `includes` would falsely CONFIRM `id` inside `userId` / `valid` (CR). For an
+ * identifier-like token, enforce lexical boundaries; for a symbolic/code-shape
+ * token (e.g. `db.query`), the punctuation already makes a substring specific
+ * (and `\b` is ill-defined around dots/parens), so an exact substring is right.
+ */
+function tokenPresentAtLine(line: string, token: string): boolean {
+  if (/^[A-Za-z_$][\w$]*$/.test(token)) {
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    return new RegExp(`(^|[^A-Za-z0-9_$])${escaped}($|[^A-Za-z0-9_$])`).test(line)
+  }
+  return line.includes(token)
+}
+
+/**
  * Verify one finding against the diff it was made about. Pure. The caller
  * decides what to do with the verdict (PR 1: telemetry only).
  */
@@ -135,7 +150,7 @@ export function verifyFinding(
 
   // Line-anchored: a token must appear ON the cited line — a match elsewhere in
   // the file must NOT confirm (that's the false-refutation trap DeepSeek flagged).
-  const present = tokens.some((t) => lineContent.includes(t))
+  const present = tokens.some((t) => tokenPresentAtLine(lineContent, t))
   return {
     verdict: present ? "confirmed" : "refuted",
     tokens,

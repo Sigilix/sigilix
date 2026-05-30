@@ -5098,7 +5098,14 @@ export async function handlePrReviewEnsemble(
     // is treated as `shadow` until PR 4. Off (default) = no work.
     const verificationMode = readVerificationMode(env)
     if (verificationMode !== "off") {
-      for (const finding of submissionVerdict.findings) {
+      // Cover EVERY submitted score>=4 logic/security finding — inline AND the
+      // body-only (unanchored) ones — so the refutable-FP measurement isn't
+      // biased by which surface a finding landed on (CR).
+      const submittedFindings = [
+        ...submissionVerdict.findings,
+        ...renderableUnanchoredForSubmission,
+      ]
+      for (const finding of submittedFindings) {
         if (finding.score < 4) continue
         if (finding.category !== "logic" && finding.category !== "security") continue
         const result = verifyFinding(finding, addedLineTextByLine)

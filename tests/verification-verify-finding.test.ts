@@ -85,6 +85,24 @@ describe("verifyFinding", () => {
   it("INCONCLUSIVE on a path not in the diff", () => {
     expect(verifyFinding(f({ path: "other.ts", line: 10, headline: "x `userId`" }), index).verdict).toBe("inconclusive")
   })
+
+  it("token-boundary: cited token `id` must NOT substring-confirm inside `isValid` (CR)", () => {
+    const d = buildAddedLineTextByLine(
+      "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1,2 @@\n+const isValid = check()\n+const id = 5\n",
+    )
+    // line 1 contains "id" only as a substring of `isValid` → REFUTED (a bare
+    // includes() would have falsely CONFIRMED).
+    expect(verifyFinding({ path: "x.ts", line: 1, headline: "bug in `id`", body: "" }, d).verdict).toBe("refuted")
+    // line 2 has `id` as a whole token → CONFIRMED.
+    expect(verifyFinding({ path: "x.ts", line: 2, headline: "bug in `id`", body: "" }, d).verdict).toBe("confirmed")
+  })
+
+  it("token-boundary: a symbolic/dotted token (`db.query`) still matches via substring", () => {
+    const d = buildAddedLineTextByLine(
+      "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n+const r = db.query(userId)\n",
+    )
+    expect(verifyFinding({ path: "x.ts", line: 1, headline: "injection via `db.query`" }, d).verdict).toBe("confirmed")
+  })
 })
 
 describe("findingKey", () => {

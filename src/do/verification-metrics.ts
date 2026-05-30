@@ -19,7 +19,7 @@ import type { Env } from "../index"
 import type { VerificationVerdict } from "../lib/verification/verify-finding"
 export type { VerificationVerdict }
 
-const RETENTION_DAYS = 35
+const RETENTION_DAYS = 35 // rolling window kept on disk; GC'd daily by the alarm
 const DAY_MS = 86_400_000
 
 const SCHEMA = `
@@ -137,8 +137,8 @@ export class VerificationMetricsDO extends DurableObject<Env> {
       total += row.total
     }
 
-    const confirmed = byVerdict["confirmed"] ?? 0
-    const refuted = byVerdict["refuted"] ?? 0
+    const confirmed = byVerdict["confirmed" satisfies VerificationVerdict] ?? 0
+    const refuted = byVerdict["refuted" satisfies VerificationVerdict] ?? 0
     const round = (n: number): number => (total === 0 ? 0 : Math.round((n / total) * 1000) / 1000)
     return {
       counts,

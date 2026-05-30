@@ -280,7 +280,7 @@ import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState 
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import { readVerificationMode } from "./verification/mode"
 import { verifyFinding, findingKey } from "./verification/verify-finding"
-import { recordVerificationMetrics } from "./verification-metrics-client"
+import { recordVerificationMetricsBounded } from "./verification-metrics-client"
 import type { RecordVerificationArgs } from "../do/verification-metrics"
 import {
   renderSarifFindingsForPrompt,
@@ -5132,21 +5132,10 @@ export async function handlePrReviewEnsemble(
       // VerificationMetricsDO (one batched RPC). Best-effort + bounded so a
       // stalled DO can't eat orchestrator time, and a failure NEVER breaks the
       // review (telemetry only). Read via GET /metrics/verification.
-      if (verificationItems.length > 0) {
-        let vmTimer: ReturnType<typeof setTimeout> | undefined
-        try {
-          await Promise.race([
-            recordVerificationMetrics(env, verificationItems),
-            new Promise<never>((_, reject) => {
-              vmTimer = setTimeout(() => reject(new Error("verification-metric-timeout")), 1_500)
-            }),
-          ])
-        } catch (err) {
-          console.warn(JSON.stringify({ event: "verification-metric-record-failed", owner, repo, prNumber, error: String(err) }))
-        } finally {
-          if (vmTimer !== undefined) clearTimeout(vmTimer)
-        }
-      }
+      await recordVerificationMetricsBounded(
+        env, verificationItems, 1_500,
+        (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
+      )
     }
 
     for (const finding of submissionVerdict.findings) {

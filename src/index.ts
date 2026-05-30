@@ -365,6 +365,11 @@ export interface Env {
   // (look up + telemetry, review unchanged) | "post" (use the verified receipt's
   // SARIF + render the verified/pending/absent state).
   OPENCLAW_RUNNER_EVIDENCE_MODE?: string
+  // SIG-285 PR 1: verification-by-execution rollout posture — "off" (default) |
+  // "shadow" (worker-native line-anchored re-check of score>=4 logic/security
+  // findings + verdict telemetry, review UNCHANGED) | "enforce" (reserved; PR 1
+  // treats it as shadow — the REFUTED-only demotion lands in PR 4).
+  OPENCLAW_VERIFICATION_MODE?: string
   // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
   RUNNER_RECEIPT_DO: DurableObjectNamespace

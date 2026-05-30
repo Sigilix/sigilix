@@ -66,6 +66,7 @@ import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
 import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
+import { handleRunnerEvidenceMetricsRoute } from "./lib/metrics-runner-evidence-route"
 import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
@@ -345,6 +346,12 @@ export interface Env {
   // SIG-152: single global DO holding rolling daily aggregates of the SIG-138
   // `pr-review-graph-retrieval` shadow sample. Read via GET /metrics/graph.
   GRAPH_METRICS_DO: DurableObjectNamespace
+
+  // SIG-184 PR 5b: single global DO holding rolling runner-evidence presence
+  // counters (verified / evidence-pending / runner-absent × reason, + per-repo
+  // latest state). Read via the authenticated GET /metrics/runner-evidence
+  // endpoint (shares OPENCLAW_VALIDATION_METRICS_TOKEN).
+  RUNNER_EVIDENCE_METRICS_DO: DurableObjectNamespace
 
   // SIG-184: runner-evidence ingest (POST /runner/ingest). The GitHub OIDC token
   // IS the auth; these pin what a valid token must attest. Both come from the
@@ -1082,6 +1089,12 @@ export default {
     // based false-positive rate (the "floor" metric), computed per repo.
     if (request.method === "GET" && url.pathname === "/metrics/fp-rate") {
       return handleFpRateMetricsRoute(request, env)
+    }
+
+    // SIG-184 PR 5b: authenticated read of rolling runner-evidence presence
+    // telemetry (adoption + the verified/pending/absent breakdown).
+    if (request.method === "GET" && url.pathname === "/metrics/runner-evidence") {
+      return handleRunnerEvidenceMetricsRoute(request, env)
     }
 
     // SIG-184: runner-evidence ingest. A Sigilix reusable workflow in the
@@ -3447,6 +3460,12 @@ export { RepoGraphDO } from "./do/repo-graph"
 // Registered via the [[durable_objects.bindings]] VALIDATION_METRICS_DO entry
 // + the sig-119-v1 new_sqlite_classes migration in wrangler.toml.
 export { ValidationMetricsDO } from "./do/validation-metrics"
+
+// SIG-184 PR 5b: RunnerEvidenceMetricsDO — rolling runner-evidence presence
+// telemetry (SQLite). Registered via the [[durable_objects.bindings]]
+// RUNNER_EVIDENCE_METRICS_DO entry + the sig-184-metrics-v1 new_sqlite_classes
+// migration in wrangler.toml.
+export { RunnerEvidenceMetricsDO } from "./do/runner-evidence-metrics"
 
 // SIG-152: GraphMetricsDO — rolling SIG-138 graph-retrieval shadow telemetry
 // (SQLite). Registered via the [[durable_objects.bindings]] GRAPH_METRICS_DO

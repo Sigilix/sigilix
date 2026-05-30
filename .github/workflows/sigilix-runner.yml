@@ -1,0 +1,32 @@
+name: Sigilix runner evidence
+
+# SIG-184 dogfood: run Sigilix's deterministic-scan reusable workflow on this
+# repo's own PRs so the worker receives a GitHub-signed receipt and the review
+# renders the "verified" trust pill. Best-effort + non-blocking — the reusable
+# workflow never fails the caller's CI, and an absent receipt simply yields no
+# pill. Pinned to a commit SHA (supply-chain safety): bump on each runner change.
+
+on:
+  pull_request:
+
+# id-token:write is the ONLY elevated grant — it lets the job mint the short-
+# lived OIDC token the receipt is built from. contents:read is for the checkout.
+permissions:
+  contents: read
+  id-token: write
+
+# Cancel a superseded run when a newer commit is pushed to the same PR — the
+# receipt only needs to reflect the latest head.
+concurrency:
+  group: sigilix-runner-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  evidence:
+    permissions:
+      contents: read
+      id-token: write
+    uses: Sigilix/runner/.github/workflows/scan.yml@b297a3052d2fd6897f3342552274ba23239f4762
+    with:
+      ingest-url: https://sigilix.dan-martinezjulio.workers.dev/runner/ingest
+      oidc-audience: sigilix-runner-ingest

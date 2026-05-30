@@ -892,11 +892,12 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // non-starter. Sigilix's own PR #94 self-review caught a 5s
     // overshoot (pre-flight not budgeted into headroom); these
     // values are the post-catch corrected set.
-    // SIG-234 (2026-05-26): SPECIALIST_TIMEOUT_MS tightened 270 → 180
-    // after the lineup swap retired `deepseek-v4-pro:cloud` from the
-    // logic primary (it was the 100-270s wall-time floor). New
-    // primaries fit 3 × 60s = 180s realistic max.
-    expect(SPECIALIST_TIMEOUT_MS).toBe(185_000)
+    // SIG-234 (2026-05-26): tightened 270 → 185 after the lineup swap.
+    // SIG-287 (2026-05-30): bumped 185 → 250 — live telemetry showed logic
+    // still aborting at its 110s per-attempt cap on a 13.5k-tok prompt, so
+    // logic's per-attempt cap went to 240s and the wall must fit it. Budget
+    // invariant still holds: 250 + 420 + 195 = 865 ≤ 895.
+    expect(SPECIALIST_TIMEOUT_MS).toBe(250_000)
     expect(SYNTHESIZER_TIMEOUT_MS).toBe(420_000)
     expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBe(160_000)
     expect(RESERVED_HEADROOM_MS).toBe(195_000)

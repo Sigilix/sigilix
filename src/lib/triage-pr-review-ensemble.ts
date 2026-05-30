@@ -403,7 +403,16 @@ const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 // Pre-SIG-234 history: sized to fit `2 primary attempts (2×90s) +
 // retry backoff (~1s) + 1 cross-provider fallback attempt (~80s,
 // kimi-k2.5:cloud)` = 261s, rounded up to 270s for slack.
-export const SPECIALIST_TIMEOUT_MS = 185_000
+//
+// SIG-287 (2026-05-30): bumped 185s → 250s. Live #244 telemetry showed logic
+// STILL aborting at its 110s per-attempt cap mid-generation on a 13457-tok
+// prompt, while security/perf/tests finished in 4-25s — logic is the unique
+// long-pole (graph+symbol+retrieval context). A thorough logic pass
+// legitimately takes minutes (CodeRabbit/Greptile too); availability +
+// believability outrank the 30-90s aspiration. 250s fits logic's new 240s
+// per-attempt within the budget invariant (250+420+195 = 865 ≤ 895). Other
+// roles finish fast, so a higher wall is pure headroom for them.
+export const SPECIALIST_TIMEOUT_MS = 250_000
 // ARC-283: synth budget bumped from 180s → 420s after PR #93's own
 // review timed out at 180s on a 900-line diff + 27 new tests.
 // Sigilix's product positioning is "yes cost more time for BETTER,
@@ -1155,16 +1164,23 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // elapsedMs=60000 outcome=aborted — logic was STILL generating at the
     // cap on EVERY review → "logic specialist unavailable" banner for weeks.
     //
-    // SIG-236 REAL FIX: a per-role per-attempt cap of 110s. Sized from
-    // ~8.4k tok / ~104 tok/s ≈ 81s + generation/variance margin (Codex +
-    // DeepSeek-v4-pro concur). Keeps logic's FULL context — graphContext is
-    // mandatory precisely BECAUSE it prevents FPs, so trimming it to go fast
-    // would trade "unavailable" for "higher-FP," counter to the mission.
-    // Safe within SPECIALIST_TIMEOUT_MS=185s because retries:0/fallback:null
-    // (a 2nd 110s attempt would blow the 185s specialist wall — keep them 0).
+    // SIG-236/SIG-287 REAL FIX: a per-role per-attempt cap, now 240s. The 110s
+    // first cut (sized to the 30-90s aspiration) STILL aborted mid-generation —
+    // live #244 telemetry: elapsedMs=110000 outcome=aborted on a 13457-tok
+    // prompt, while security/perf/tests finished in 4-25s. Logic is the unique
+    // long-pole (graph+symbol+retrieval context). A thorough logic pass
+    // legitimately takes minutes (CodeRabbit/Greptile too); an AVAILABLE,
+    // correct verdict at ~3min beats a "logic unavailable" banner at 110s.
+    // 240s gives ~13.5k tok / ~88 tok/s ≈ 150s input + generation comfortable
+    // headroom. Keeps logic's FULL context — graphContext is mandatory BECAUSE
+    // it prevents FPs, so trimming it to go fast trades "unavailable" for
+    // "higher-FP." Fits within the bumped SPECIALIST_TIMEOUT_MS=250s with
+    // retries:0/fallback:null (a 2nd 240s attempt would blow the wall — keep
+    // them 0). Generous-first: once logic completes, its real elapsedMs tells
+    // us the true number to tune toward.
     retries: 0,
     fallback: null,
-    perAttemptTimeoutMs: 110_000,
+    perAttemptTimeoutMs: 240_000,
   },
   security: {
     // Coder-model territory: vulnerability patterns are mostly

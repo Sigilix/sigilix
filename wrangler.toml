@@ -295,7 +295,11 @@ OPENCLAW_VERIFICATION_MODE = "shadow"
 # change); "enforce" demotes the ungrounded absence-claim to the review
 # body (never hard-drops). Start "off" until the shadow data is read.
 # Rollback: set "off" (or remove the line).
-OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "off"
+# SIG-290 (2026-05-30): flipped off → shadow to START the measurement. The gate
+# now runs + emits the `pr-review-finding-rejected-validation` (gate:"absence-
+# grounding") telemetry on every review, but KEEPS every finding inline — zero
+# behavior change. Read the firing rate + suppression-fp-rate before "enforce".
+OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 
 # SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
 # shortcuts. The router lives at `src/lib/ensemble-router.ts` and has

@@ -277,6 +277,7 @@ import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
+import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
@@ -2410,6 +2411,19 @@ export async function handlePrReviewEnsemble(
         state: runnerEvidence.state,
         ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
       }))
+      // SIG-184 PR 5b: presence telemetry (best-effort; awaited because queue-
+      // consumer ctx.waitUntil doesn't extend lifetime, but a failure must NEVER
+      // break the review). One increment per review → RunnerEvidenceMetricsDO,
+      // read via GET /metrics/runner-evidence.
+      try {
+        await recordRunnerEvidenceMetric(env, {
+          owner, repo, prNumber,
+          state: runnerEvidence.state,
+          ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
+        })
+      } catch (err) {
+        console.warn(JSON.stringify({ event: "runner-evidence-metric-record-failed", owner, repo, prNumber, error: String(err) }))
+      }
     }
     // SIG-184: record the trust state for the check-run badge. Only in `post`
     // mode — that's when the receipt actually backs the review (verified →

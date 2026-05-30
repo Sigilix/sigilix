@@ -3,7 +3,7 @@
 // fail-closed/demote paths.
 
 import { describe, expect, it } from "vitest"
-import { lookupRunnerEvidence, validateRunnerSarifConsistency } from "../src/lib/runner-evidence/lookup"
+import { lookupRunnerEvidence, validateRunnerSarifConsistency, readRunnerEvidenceMode } from "../src/lib/runner-evidence/lookup"
 import type { Env } from "../src/index"
 
 async function sha256(s: string): Promise<string> {
@@ -104,5 +104,18 @@ describe("validateRunnerSarifConsistency", () => {
   })
   it("demotes a malformed SARIF body", () => {
     expect(validateRunnerSarifConsistency("{not json", bound)).toEqual({ ok: false, reason: "sarif-parse" })
+  })
+})
+
+describe("readRunnerEvidenceMode", () => {
+  const mk = (v?: string) => ({ OPENCLAW_RUNNER_EVIDENCE_MODE: v } as unknown as Env)
+  it("defaults to off (unset / unknown / blank)", () => {
+    expect(readRunnerEvidenceMode(mk(undefined))).toBe("off")
+    expect(readRunnerEvidenceMode(mk("nonsense"))).toBe("off")
+    expect(readRunnerEvidenceMode(mk("  "))).toBe("off")
+  })
+  it("parses shadow / post (case-insensitive, trimmed)", () => {
+    expect(readRunnerEvidenceMode(mk(" SHADOW "))).toBe("shadow")
+    expect(readRunnerEvidenceMode(mk("post"))).toBe("post")
   })
 })

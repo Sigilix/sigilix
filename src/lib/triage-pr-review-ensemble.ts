@@ -276,6 +276,7 @@ import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
 import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
+import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
@@ -2382,9 +2383,29 @@ export async function handlePrReviewEnsemble(
     // as authoritative facts alongside the other deterministic
     // blocks. SBOM (when present) goes to the synth prompt only.
     const sarifConfig = resolveSarifEvidenceConfig(sigilixConfig)
+
+    // SIG-184 PR 3: runner-evidence consumption (flag-gated; off by default →
+    // fully inert). In shadow/post we look up the VERIFIED receipt for
+    // (repoId, headSha) — the review-join key; in `post` we feed its SARIF to the
+    // SAME pipeline via `rawOverride` so the review's findings come from the
+    // GitHub-signed receipt instead of the unauthenticated repo pull.
+    const runnerMode = readRunnerEvidenceMode(env)
+    let runnerEvidence: RunnerEvidenceState = { state: "runner-absent" }
+    if (runnerMode !== "off" && args.repoId !== undefined) {
+      runnerEvidence = await lookupRunnerEvidence(env, String(args.repoId), headSha)
+      console.log(JSON.stringify({
+        event: "runner-evidence-consume",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        mode: runnerMode,
+        state: runnerEvidence.state,
+        ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
+      }))
+    }
     const sarifResult = await runSarifEvidence({
       env, client, owner, repo, prNumber, headSha,
       diff, config: sarifConfig,
+      // `post` + verified → scan the receipt's SARIF; else the repo-pull path.
+      ...(runnerMode === "post" && runnerEvidence.state === "verified" ? { rawOverride: runnerEvidence.sarif } : {}),
     })
     const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
     const sarifBlock = renderSarifFindingsForPrompt(sarifFindings)

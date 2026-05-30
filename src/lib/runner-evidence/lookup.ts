@@ -17,6 +17,24 @@
 import type { Env } from "../../index"
 import { queryRunnerReceiptByHead } from "../runner-receipt-client"
 
+/**
+ * Rollout posture for runner-evidence consumption (mirrors the graph/gate
+ * shadow→post pattern):
+ *   - `off`    (default): no lookup, no behavior change.
+ *   - `shadow`: look up + emit telemetry + compute the state, but the review
+ *               still uses the repo-pull SARIF (observe only).
+ *   - `post`:   use the verified receipt's SARIF for the review + render the state.
+ * Anything else is treated as `off` defensively.
+ */
+export type RunnerEvidenceMode = "off" | "shadow" | "post"
+
+export function readRunnerEvidenceMode(env: Env): RunnerEvidenceMode {
+  const raw = (env.OPENCLAW_RUNNER_EVIDENCE_MODE ?? "").trim().toLowerCase()
+  if (raw === "shadow") return "shadow"
+  if (raw === "post") return "post"
+  return "off"
+}
+
 export type RunnerEvidenceState =
   | {
       state: "verified"

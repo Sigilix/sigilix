@@ -401,8 +401,22 @@ const HIGH_ENTROPY_VALUE_RE = /['"`]?([A-Za-z0-9+/=_-]{32,})['"`]?/
  * Reuses the scanner's provider `RULES` rather than re-deriving them so the
  * vetted regexes stay the single source of truth.
  */
-export function containsCredentialToken(line: string): boolean {
-  if (typeof line !== "string" || line.length === 0) return false
+export function containsCredentialToken(text: string): boolean {
+  if (typeof text !== "string" || text.length === 0) return false
+  // `collectCitedLineText` joins the cited range with "\n", so the input may
+  // be multi-line. Check each line INDEPENDENTLY: the credential-named
+  // identifier and the high-entropy value (path 2) must co-occur on ONE line
+  // (a real assignment), never across unrelated lines — otherwise an
+  // identifier on one line + an unrelated hash on another would false-match
+  // and wrongly KEEP the alarmist remediation (Sigilix bot catch, #248).
+  for (const line of text.split("\n")) {
+    if (lineHasCredentialToken(line)) return true
+  }
+  return false
+}
+
+function lineHasCredentialToken(line: string): boolean {
+  if (line.length === 0) return false
 
   // 1. Vetted provider-specific shapes — unambiguous credentials.
   for (const rule of PROVIDER_RULES) {

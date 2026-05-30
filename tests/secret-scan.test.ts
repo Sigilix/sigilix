@@ -523,4 +523,20 @@ describe("containsCredentialToken — secret-remediation gate (Pattern A)", () =
     expect(containsCredentialToken("")).toBe(false)
     expect(containsCredentialToken("const x = 5")).toBe(false)
   })
+
+  it("checks each line independently on multi-line input (Sigilix #248 catch)", () => {
+    // Identifier on one line, an UNRELATED high-entropy value (hash) on
+    // another — must NOT false-match across lines.
+    expect(
+      containsCredentialToken("function processApiKey(input) {\n  const h = sha(x) // aB3xY9kQ1mZ7pL5wR2tN8vC4hG6jD0sF1\n}"),
+    ).toBe(false)
+    // A real credential on a LATER line of a multi-line range → still detected.
+    expect(
+      containsCredentialToken("const config = {\n  apiKey: \"AKIAIOSFODNN7EXAMPLE\",\n}"),
+    ).toBe(true)
+    // A genuine same-line assignment inside a multi-line range → detected.
+    expect(
+      containsCredentialToken("export const creds = {\n  password: \"p4ssW0rdWithDigits1234567890abcd\",\n}"),
+    ).toBe(true)
+  })
 })

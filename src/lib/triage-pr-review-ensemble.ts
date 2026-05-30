@@ -1204,8 +1204,8 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // minimax-m2.1's 80% (12/15 with 3 timeouts). Findings depth holds
     // up — glm-5.1 averages 1.08 findings/verdict (vs 0.92), with 18%
     // longer body text per finding. The latency tradeoff is real
-    // (glm-5.1 p95 = 144s) but well under the new tightened 185s
-    // specialist budget. Full analysis in
+    // (glm-5.1 p95 = 144s) but well under the 250s specialist budget
+    // (SIG-287). Full analysis in
     // `.claude/research/arc-167/_report.md`.
     primary: "glm-5.1:cloud",
     retries: 1,
@@ -6769,8 +6769,9 @@ export async function runWithRetryAndFallback<T>(args: {
    * Phase 4a.4 (ARC-175): per-attempt timeout cap. Each individual
    * `attemptChat` call aborts after this many ms so a single slow
    * primary can't eat the entire `SPECIALIST_TIMEOUT_MS` budget.
-   * Defaults to `PER_ATTEMPT_TIMEOUT_MS` (85s) — tests pass a smaller
-   * value to exercise the abort path without real-time waits.
+   * Defaults to `PER_ATTEMPT_TIMEOUT_MS` (60s) — tests pass a smaller
+   * value to exercise the abort path without real-time waits. The logic
+   * role overrides this to 240s (SIG-287) via its `ModelConfig`.
    */
   perAttemptTimeoutMs?: number
   /**

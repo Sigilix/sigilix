@@ -29,9 +29,11 @@ function makeDo(): RunnerReceiptDO {
 const base = {
   repositoryId: "424242",
   sha: "deadbeef",
+  headSha: "headcafe",
   runId: "100",
   runAttempt: "1",
   sarifSha256: "hash-A",
+  scrubbedSha256: "scrub-A",
   repository: "Sigilix/sigilix",
   jobWorkflowRef: "sigilix/runner/.github/workflows/scan.yml@v1",
   runnerEnvironment: "github-hosted",
@@ -102,5 +104,31 @@ describe("RunnerReceiptDO.claimReceipt", () => {
     await d.alarm()
     expect(await d.debugGet("424242", "deadbeef", "100", "1")).toBeNull()
     expect(await d.debugGet("424242", "deadbeef", "fresh", "1")).not.toBeNull()
+  })
+})
+
+describe("RunnerReceiptDO.queryReceiptByHead (review join)", () => {
+  it("returns the receipt for a (repository_id, head_sha) review join", async () => {
+    const d = makeDo()
+    await d.claimReceipt(base)
+    expect(await d.queryReceiptByHead("424242", "headcafe")).toMatchObject({
+      sha: "deadbeef", headSha: "headcafe", runId: "100", runAttempt: "1",
+      sarifSha256: "hash-A", scrubbedSha256: "scrub-A", repository: "Sigilix/sigilix",
+    })
+  })
+
+  it("returns null for a non-matching head sha, and is scoped by repository_id", async () => {
+    const d = makeDo()
+    await d.claimReceipt(base)
+    expect(await d.queryReceiptByHead("424242", "otherhead")).toBeNull()
+    // a fork's receipt (different repository_id) must NOT bind to another repo's review.
+    expect(await d.queryReceiptByHead("999999", "headcafe")).toBeNull()
+  })
+
+  it("returns the MOST RECENT receipt by ingested_at (a re-run supersedes)", async () => {
+    const d = makeDo()
+    await d.claimReceipt({ ...base, runAttempt: "1", sarifSha256: "hash-A", scrubbedSha256: "scrub-A", ingestedAtMs: 1000 })
+    await d.claimReceipt({ ...base, runAttempt: "2", sarifSha256: "hash-B", scrubbedSha256: "scrub-B", ingestedAtMs: 2000 })
+    expect(await d.queryReceiptByHead("424242", "headcafe")).toMatchObject({ runAttempt: "2", sarifSha256: "hash-B" })
   })
 })

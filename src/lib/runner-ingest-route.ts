@@ -230,6 +230,18 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   // (8) Hash the EXACT received SARIF (before scrubbing) — the receipt is
   // content-addressed so a replay is told apart from a conflicting resubmit.
   const sarifSha256 = await sha256Hex(envelope.sarif)
+  // The persisted body is SCRUBBED (secrets redacted); hash the scrubbed bytes so
+  // consumption can integrity-check the stored body. The raw `sarifSha256` stays
+  // the GitHub-attested receipt identity.
+  const scrubbedSarif = scrubAndCap(envelope.sarif)
+  const scrubbedSha256 = await sha256Hex(scrubbedSarif)
+  // The REVIEW joins on the PR HEAD sha — for a pull_request, GitHub's OIDC `sha`
+  // is the MERGE commit, not the head, so the review (which keys on head) would
+  // miss if we joined on `claims.sha`. The runner reports the head; it's an
+  // untrusted hint, but scoped by the VERIFIED `repository_id` (a fork's receipt
+  // carries the fork's id → can't bind a victim repo). Non-PR events: OIDC sha IS
+  // the head, so fall back to it.
+  const headSha = (typeof envelope.headSha === "string" && envelope.headSha.length > 0 ? envelope.headSha : tokenSha).toLowerCase()
 
   // (9) Atomic single-use claim. The DO row IS the defensible receipt; it's
   // keyed off VERIFIED claims (post-provenance these equal the envelope's).
@@ -238,9 +250,11 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
     claim = await claimRunnerReceipt(env, {
       repositoryId,
       sha: tokenSha,
+      headSha,
       runId,
       runAttempt,
       sarifSha256,
+      scrubbedSha256,
       repository: tokenRepository,
       jobWorkflowRef: typeof claims.job_workflow_ref === "string" ? claims.job_workflow_ref : "",
       runnerEnvironment: typeof claims.runner_environment === "string" ? claims.runner_environment : "",
@@ -274,14 +288,15 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
             repository: tokenRepository,
             repositoryId,
             sha: tokenSha,
-            headShaHint: envelope.headSha,
+            headSha,
             prNumberHint: envelope.prNumber,
             runId,
             runAttempt,
             jobWorkflowRef: claims.job_workflow_ref,
             runnerEnvironment: claims.runner_environment,
             sarifSha256,
-            sarif: scrubAndCap(envelope.sarif),
+            scrubbedSha256,
+            sarif: scrubbedSarif,
             ingestedAt: new Date().toISOString(),
           }),
           { expirationTtl: RECEIPT_TTL_SECONDS },

@@ -14,12 +14,13 @@
 
 import { DurableObject } from "cloudflare:workers"
 import type { Env } from "../index"
+// Single source of truth for the verdict enum (the check produces it); imported
+// for local use + re-exported as part of this DO's public API.
+import type { VerificationVerdict } from "../lib/verification/verify-finding"
+export type { VerificationVerdict }
 
 const RETENTION_DAYS = 35
 const DAY_MS = 86_400_000
-
-/** The four first-class verdicts (mirrors VerificationVerdict). */
-export type VerificationVerdict = "confirmed" | "refuted" | "inconclusive" | "no-check"
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS daily_counts (

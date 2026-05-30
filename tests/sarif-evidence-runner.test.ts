@@ -436,3 +436,38 @@ describe("runSarifEvidence — SBOM run produces metadata, no findings", () => {
     expect(r.sbom.present).toBe(true)
   })
 })
+
+describe("runSarifEvidence — push path (rawOverride) parity with pull path (SIG-184 PR 3)", () => {
+  it("rawOverride produces byte-identical findings + SBOM to the repo-pull, with NO GitHub fetch", async () => {
+    const report = makeReport([
+      {
+        ruleId: "rule-x",
+        level: "error",
+        message: { text: "boom" },
+        locations: [{ physicalLocation: { artifactLocation: { uri: "src/a.ts" }, region: { startLine: 5 } } }],
+      },
+    ])
+    const diff = diffWithChange("src/a.ts", 5)
+
+    // Pull path: the client fetches the SARIF from the repo.
+    const pull = await runSarifEvidence({ env: fakeEnv, client: fakeClient(report), ...CTX, diff, config: DEFAULT_CONFIG })
+
+    // Push path: rawOverride supplies it; the client would 404 — proving NO fetch.
+    let fetched = false
+    const noFetchClient = { getFileContent: async () => { fetched = true; return null } } as unknown as GitHubClient
+    const push = await runSarifEvidence({ env: fakeEnv, client: noFetchClient, ...CTX, diff, config: DEFAULT_CONFIG, rawOverride: report })
+
+    expect(fetched).toBe(false) // rawOverride skipped the GitHub fetch
+    expect(pull.skipped).toBe(false)
+    expect(push.skipped).toBe(false)
+    if (!pull.skipped && !push.skipped) {
+      // Identical findings shape → stable security-manifest evidenceIds across paths.
+      expect(push.findings).toEqual(pull.findings)
+      expect(push.sbom).toEqual(pull.sbom)
+      // Telemetry identical except the (timing-dependent) durationMs.
+      const { durationMs: _pd, ...pushT } = push.telemetry
+      const { durationMs: _qd, ...pullT } = pull.telemetry
+      expect(pushT).toEqual(pullT)
+    }
+  })
+})

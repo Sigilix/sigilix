@@ -22,6 +22,15 @@ import type { Env } from "../index"
 const RETENTION_DAYS = 7
 const DAY_MS = 86_400_000
 
+// `sha` is the OIDC-signed commit (== claims.sha — the MERGE commit for a
+// pull_request) and is the single-use/replay key AND the value the review binds
+// against the PR's merge_commit_sha. `pull_number` is parsed from the SIGNED
+// claims.ref (`refs/pull/{N}/merge`) — it's the REVIEW-JOIN key. Both come from
+// the OIDC token, so neither can be forged via the request body (CR-4: an
+// untrusted body head_sha let a same-repo run retarget another PR's review).
+// `scrubbed_sha256` is the hash of the SCRUBBED SARIF persisted to KV (the raw
+// `sarif_sha256` is the GitHub-attested identity, but the stored body is
+// scrubbed, so consumption integrity-checks against this one).
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS receipts (
   repository_id TEXT NOT NULL,
@@ -29,6 +38,8 @@ CREATE TABLE IF NOT EXISTS receipts (
   run_id TEXT NOT NULL,
   run_attempt TEXT NOT NULL,
   sarif_sha256 TEXT NOT NULL,
+  scrubbed_sha256 TEXT NOT NULL,
+  pull_number INTEGER NOT NULL,
   repository TEXT NOT NULL,
   job_workflow_ref TEXT NOT NULL,
   runner_environment TEXT NOT NULL,
@@ -37,19 +48,46 @@ CREATE TABLE IF NOT EXISTS receipts (
 );
 CREATE INDEX IF NOT EXISTS receipts_by_ingested ON receipts(ingested_at);
 `
+// The pull_number index is created in sql() AFTER the column migration — a table
+// provisioned before pull_number existed wouldn't have the column when this
+// static schema runs, so indexing it here would throw.
+const PULL_INDEX = "CREATE INDEX IF NOT EXISTS receipts_by_pull ON receipts(repository_id, pull_number)"
 
 export interface ClaimReceiptArgs {
   repositoryId: string
+  /** The OIDC-signed sha (== claims.sha; the MERGE commit for pull_request). The
+   *  single-use/replay key + the value the review binds to merge_commit_sha. */
   sha: string
+  /** PR number parsed from the SIGNED claims.ref (`refs/pull/{N}/merge`) — the
+   *  review-join key. 0 for a non-pull_request run (not PR-joinable). */
+  pullNumber: number
   runId: string
   runAttempt: string
-  /** SHA-256 (hex) of the EXACT SARIF bytes received, computed before scrubbing. */
+  /** SHA-256 (hex) of the EXACT SARIF bytes received, before scrubbing — the
+   *  GitHub-attested receipt identity. */
   sarifSha256: string
+  /** SHA-256 (hex) of the SCRUBBED SARIF persisted to KV — integrity of the
+   *  stored body, so consumption can verify it before trusting it as evidence. */
+  scrubbedSha256: string
   repository: string
   jobWorkflowRef: string
   runnerEnvironment: string
   /** epoch ms; defaults to now. */
   ingestedAtMs?: number
+}
+
+/** A verified receipt row, returned by the review-join lookup. */
+export interface RunnerReceiptRow {
+  sha: string
+  pullNumber: number
+  runId: string
+  runAttempt: string
+  sarifSha256: string
+  scrubbedSha256: string
+  repository: string
+  jobWorkflowRef: string
+  runnerEnvironment: string
+  ingestedAt: number
 }
 
 export type ClaimReceiptResult =
@@ -65,7 +103,18 @@ export class RunnerReceiptDO extends DurableObject<Env> {
 
   private sql(): DurableObjectStorage["sql"] {
     if (!this.ready) {
-      this.ctx.storage.sql.exec(SCHEMA)
+      const sql = this.ctx.storage.sql
+      sql.exec(SCHEMA)
+      // Defensive migration (CR): `CREATE TABLE IF NOT EXISTS` does NOT add new
+      // columns to a table provisioned by an earlier schema. No prod DO instance
+      // exists today (the route is 503-gated, zero ingests), so this is
+      // belt-and-suspenders — but it makes a re-provisioned/old shard safe rather
+      // than failing every INSERT/SELECT with a missing-column error. NOT NULL +
+      // DEFAULT '' satisfies any pre-existing rows (there are none).
+      const cols = new Set([...sql.exec<{ name: string }>("PRAGMA table_info(receipts)")].map((r) => r.name))
+      if (!cols.has("scrubbed_sha256")) sql.exec("ALTER TABLE receipts ADD COLUMN scrubbed_sha256 TEXT NOT NULL DEFAULT ''")
+      if (!cols.has("pull_number")) sql.exec("ALTER TABLE receipts ADD COLUMN pull_number INTEGER NOT NULL DEFAULT 0")
+      sql.exec(PULL_INDEX) // safe now — pull_number is guaranteed to exist
       this.ready = true
     }
     return this.ctx.storage.sql
@@ -96,12 +145,12 @@ export class RunnerReceiptDO extends DurableObject<Env> {
       if (!existing) {
         sql.exec(
           `INSERT INTO receipts
-             (repository_id, sha, run_id, run_attempt, sarif_sha256, repository,
-              job_workflow_ref, runner_environment, ingested_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (repository_id, sha, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
+              pull_number, repository, job_workflow_ref, runner_environment, ingested_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           args.repositoryId, args.sha, args.runId, args.runAttempt,
-          args.sarifSha256, args.repository, args.jobWorkflowRef,
-          args.runnerEnvironment, at,
+          args.sarifSha256, args.scrubbedSha256, args.pullNumber, args.repository,
+          args.jobWorkflowRef, args.runnerEnvironment, at,
         )
         result = { outcome: "accepted" }
       } else if (existing.sarif_sha256 === args.sarifSha256) {
@@ -134,6 +183,41 @@ export class RunnerReceiptDO extends DurableObject<Env> {
     // Only reschedule while rows remain, so an idle DO doesn't hold an alarm.
     const remaining = [...sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM receipts")][0]?.n ?? 0
     if (remaining > 0) await this.ctx.storage.setAlarm(Date.now() + DAY_MS)
+  }
+
+  /**
+   * Review-join lookup: the most-recent receipt for a review of `(repository_id,
+   * pull_number)` — both SIGNED values (the caller MUST further bind by comparing
+   * the returned `sha` to the PR's GitHub `merge_commit_sha`, so a stale receipt
+   * for an older merge doesn't match). NOT the replay key — a re-run with a higher
+   * run_attempt (newer `ingested_at`) supersedes. Returns the row incl.
+   * `scrubbedSha256` for the KV-body integrity check. Null if no receipt. A
+   * `pullNumber <= 0` (non-PR run) never joins.
+   */
+  async queryReceiptByPull(repositoryId: string, pullNumber: number): Promise<RunnerReceiptRow | null> {
+    if (pullNumber <= 0) return null
+    const sql = this.sql()
+    const r = [
+      ...sql.exec<{
+        sha: string; pull_number: number; run_id: string; run_attempt: string
+        sarif_sha256: string; scrubbed_sha256: string; repository: string
+        job_workflow_ref: string; runner_environment: string; ingested_at: number
+      }>(
+        `SELECT sha, pull_number, run_id, run_attempt, sarif_sha256, scrubbed_sha256,
+                repository, job_workflow_ref, runner_environment, ingested_at
+         FROM receipts WHERE repository_id = ? AND pull_number = ?
+         ORDER BY ingested_at DESC LIMIT 1`,
+        repositoryId, pullNumber,
+      ),
+    ][0]
+    return r
+      ? {
+          sha: r.sha, pullNumber: r.pull_number, runId: r.run_id, runAttempt: r.run_attempt,
+          sarifSha256: r.sarif_sha256, scrubbedSha256: r.scrubbed_sha256,
+          repository: r.repository, jobWorkflowRef: r.job_workflow_ref,
+          runnerEnvironment: r.runner_environment, ingestedAt: r.ingested_at,
+        }
+      : null
   }
 
   /** Test-only: fetch a stored receipt row (or null). */

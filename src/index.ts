@@ -354,6 +354,10 @@ export interface Env {
   //                                   `owner/repo/path` (no `@ref`).
   OPENCLAW_RUNNER_OIDC_AUDIENCE?: string
   OPENCLAW_RUNNER_WORKFLOW_REF?: string
+  // SIG-184 PR 3: consumption rollout posture — "off" (default) | "shadow"
+  // (look up + telemetry, review unchanged) | "post" (use the verified receipt's
+  // SARIF + render the verified/pending/absent state).
+  OPENCLAW_RUNNER_EVIDENCE_MODE?: string
   // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
   RUNNER_RECEIPT_DO: DurableObjectNamespace

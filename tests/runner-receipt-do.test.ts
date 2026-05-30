@@ -29,9 +29,11 @@ function makeDo(): RunnerReceiptDO {
 const base = {
   repositoryId: "424242",
   sha: "deadbeef",
+  pullNumber: 7,
   runId: "100",
   runAttempt: "1",
   sarifSha256: "hash-A",
+  scrubbedSha256: "scrub-A",
   repository: "Sigilix/sigilix",
   jobWorkflowRef: "sigilix/runner/.github/workflows/scan.yml@v1",
   runnerEnvironment: "github-hosted",
@@ -102,5 +104,32 @@ describe("RunnerReceiptDO.claimReceipt", () => {
     await d.alarm()
     expect(await d.debugGet("424242", "deadbeef", "100", "1")).toBeNull()
     expect(await d.debugGet("424242", "deadbeef", "fresh", "1")).not.toBeNull()
+  })
+})
+
+describe("RunnerReceiptDO.queryReceiptByPull (review join)", () => {
+  it("returns the receipt for a (repository_id, pull_number) review join", async () => {
+    const d = makeDo()
+    await d.claimReceipt(base)
+    expect(await d.queryReceiptByPull("424242", 7)).toMatchObject({
+      sha: "deadbeef", pullNumber: 7, runId: "100", runAttempt: "1",
+      sarifSha256: "hash-A", scrubbedSha256: "scrub-A", repository: "Sigilix/sigilix",
+    })
+  })
+
+  it("returns null for a non-matching PR number, a non-PR (pull 0), and a different repo", async () => {
+    const d = makeDo()
+    await d.claimReceipt(base)
+    expect(await d.queryReceiptByPull("424242", 999)).toBeNull()
+    expect(await d.queryReceiptByPull("424242", 0)).toBeNull() // non-PR run never joins
+    // a fork's receipt (different repository_id) must NOT bind to another repo's review.
+    expect(await d.queryReceiptByPull("999999", 7)).toBeNull()
+  })
+
+  it("returns the MOST RECENT receipt by ingested_at (a re-run supersedes)", async () => {
+    const d = makeDo()
+    await d.claimReceipt({ ...base, runAttempt: "1", sha: "merge-old", sarifSha256: "hash-A", scrubbedSha256: "scrub-A", ingestedAtMs: 1000 })
+    await d.claimReceipt({ ...base, runAttempt: "2", sha: "merge-new", sarifSha256: "hash-B", scrubbedSha256: "scrub-B", ingestedAtMs: 2000 })
+    expect(await d.queryReceiptByPull("424242", 7)).toMatchObject({ runAttempt: "2", sha: "merge-new", sarifSha256: "hash-B" })
   })
 })

@@ -26,8 +26,6 @@ import { claimRunnerReceipt } from "./runner-receipt-client"
 const MAX_BODY_BYTES = 2 * 1024 * 1024
 /** A JWT is ~1–2 KB; reject an absurd Authorization header before verifying. */
 const MAX_TOKEN_BYTES = 8 * 1024
-/** Per-field cap for the scrubbed SARIF persisted to KV. */
-const MAX_SARIF_FIELD_BYTES = 1.5 * 1024 * 1024
 /** Audit-receipt retention (the replay guard lives in the DO at 7 d). */
 const RECEIPT_TTL_SECONDS = 30 * 24 * 60 * 60
 
@@ -46,14 +44,16 @@ function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 }
 
-function scrubAndCap(input: string): string {
+// Scrub secrets ONLY — do NOT truncate. A byte-truncated SARIF is invalid JSON,
+// so the consumption path could never parse it (CR): the receipt would be
+// `accepted` yet permanently unverifiable. The body is already bounded to
+// MAX_BODY_BYTES (2 MiB) by readBodyCapped, and scrubbing only shrinks (every
+// secret pattern is longer than `[REDACTED]`), so the stored blob stays
+// parseable + well under KV's 25 MiB value limit.
+function scrubSecrets(input: string): string {
   let s = input
   for (const p of SECRET_PATTERNS) s = s.replace(p, "[REDACTED]")
-  // Cap on encoded BYTES (the budget is in bytes, not UTF-16 code units). A
-  // partial trailing char left by the byte-slice decodes to U+FFFD — harmless.
-  const enc = new TextEncoder().encode(s)
-  if (enc.byteLength <= MAX_SARIF_FIELD_BYTES) return s
-  return new TextDecoder().decode(enc.slice(0, MAX_SARIF_FIELD_BYTES)) + "\n[…truncated…]"
+  return s
 }
 
 async function sha256Hex(raw: string): Promise<string> {
@@ -104,14 +104,12 @@ async function readBodyCapped(request: Request, maxBytes: number): Promise<strin
 
 interface IngestEnvelope {
   sarif: string
-  /** The SARIF's `owner/repo` — bound to the token's claim (the anti-spoof gate). */
+  /** The run's `owner/repo` — bound to the token's `repository` claim (anti-spoof). */
   repository: string
-  /** The SARIF's run sha — bound to the token's `sha` claim. */
+  /** The run's commit sha (== github.sha; the MERGE commit for a PR) — bound to
+   *  the token's `sha` claim. The PR number + repo id are taken from the SIGNED
+   *  claims (`claims.ref` / `claims.repository_id`), never from the body. */
   sha: string
-  /** Untrusted hint: the PR head sha (OIDC `sha` may be the merge/event sha). */
-  headSha?: string | undefined
-  /** Untrusted hint for PR 3's review join. */
-  prNumber?: number | undefined
   /** Optional immutable repo id, bound to the token's `repository_id` if present. */
   repositoryId?: string | undefined
 }
@@ -189,8 +187,6 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
       sarif: o.sarif,
       repository: o.repository,
       sha: o.sha,
-      headSha: typeof o.headSha === "string" ? o.headSha : undefined,
-      prNumber: typeof o.prNumber === "number" ? o.prNumber : undefined,
       repositoryId: typeof o.repositoryId === "string" ? o.repositoryId : undefined,
     }
   } catch {
@@ -230,6 +226,23 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
   // (8) Hash the EXACT received SARIF (before scrubbing) — the receipt is
   // content-addressed so a replay is told apart from a conflicting resubmit.
   const sarifSha256 = await sha256Hex(envelope.sarif)
+  // The persisted body is SCRUBBED (secrets redacted); hash the scrubbed bytes so
+  // consumption can integrity-check the stored body. The raw `sarifSha256` stays
+  // the GitHub-attested receipt identity.
+  const scrubbedSarif = scrubSecrets(envelope.sarif)
+  const scrubbedSha256 = await sha256Hex(scrubbedSarif)
+  // The REVIEW-JOIN key is the PR number, parsed from the SIGNED `claims.ref`
+  // (`refs/pull/{N}/merge`) — NEVER the untrusted body (CR-4: a body head_sha let
+  // a same-repo run retarget another PR's review). The replay key stays
+  // `claims.sha` (the merge commit), and the review binds the receipt by checking
+  // that `sha` == the PR's GitHub `merge_commit_sha`. A non-pull_request run has
+  // no PR ref → pullNumber 0 (stored as an audit record, but never PR-joinable).
+  const refMatch = typeof claims.ref === "string" ? /^refs\/pull\/(\d+)\/merge$/.exec(claims.ref) : null
+  // `\d+` is unbounded, so a pathological ref could exceed Number.MAX_SAFE_INTEGER
+  // (not exploitable — the repository_id scope + merge-sha bind still apply — but a
+  // non-safe-integer pull_number is meaningless; treat it as a non-PR run).
+  const parsedPull = refMatch ? Number(refMatch[1]) : 0
+  const pullNumber = Number.isSafeInteger(parsedPull) ? parsedPull : 0
 
   // (9) Atomic single-use claim. The DO row IS the defensible receipt; it's
   // keyed off VERIFIED claims (post-provenance these equal the envelope's).
@@ -238,9 +251,11 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
     claim = await claimRunnerReceipt(env, {
       repositoryId,
       sha: tokenSha,
+      pullNumber,
       runId,
       runAttempt,
       sarifSha256,
+      scrubbedSha256,
       repository: tokenRepository,
       jobWorkflowRef: typeof claims.job_workflow_ref === "string" ? claims.job_workflow_ref : "",
       runnerEnvironment: typeof claims.runner_environment === "string" ? claims.runner_environment : "",
@@ -274,14 +289,14 @@ export async function handleRunnerIngestRoute(request: Request, env: Env): Promi
             repository: tokenRepository,
             repositoryId,
             sha: tokenSha,
-            headShaHint: envelope.headSha,
-            prNumberHint: envelope.prNumber,
+            pullNumber,
             runId,
             runAttempt,
             jobWorkflowRef: claims.job_workflow_ref,
             runnerEnvironment: claims.runner_environment,
             sarifSha256,
-            sarif: scrubAndCap(envelope.sarif),
+            scrubbedSha256,
+            sarif: scrubbedSarif,
             ingestedAt: new Date().toISOString(),
           }),
           { expirationTtl: RECEIPT_TTL_SECONDS },

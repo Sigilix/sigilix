@@ -242,6 +242,42 @@ describe("handleRunnerIngestRoute", () => {
     expect([...kvWrap.store.keys()][0]).toBe("runner-receipt:repo:424242:deadbeef:555:1")
   })
 
+  it("derives the review-join pull_number from the SIGNED claims.ref (refs/pull/N/merge), NOT the body (CR-4)", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const kvWrap = makeKv()
+    // A pull_request run's OIDC ref is `refs/pull/{N}/merge`; the body cannot
+    // influence the join (it carries no PR number). An attacker-supplied body
+    // field is irrelevant — the worker reads the PR number from the signed ref.
+    const tok = await signToken({ ...baseClaims, ref: "refs/pull/555/merge" })
+    const res = await handleRunnerIngestRoute(post(envelope({ pull_number: 999, headSha: "evilhead" }), tok), makeEnv({}, ns, kvWrap.kv))
+    expect(res.status).toBe(200)
+    const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { pullNumber?: number }
+    expect(stored.pullNumber).toBe(555)
+  })
+
+  it("clamps a non-safe-integer ref PR number to 0 (a pathological 20-digit ref is not a real PR)", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const kvWrap = makeKv()
+    const tok = await signToken({ ...baseClaims, ref: `refs/pull/${"9".repeat(20)}/merge` })
+    const res = await handleRunnerIngestRoute(post(envelope(), tok), makeEnv({}, ns, kvWrap.kv))
+    expect(res.status).toBe(200)
+    const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { pullNumber?: number }
+    expect(stored.pullNumber).toBe(0)
+  })
+
+  it("a non-pull_request run (branch push ref) stores pull_number 0 — an audit receipt that is never PR-joinable", async () => {
+    stubJwksFetch()
+    const { ns } = makeReceiptDo()
+    const kvWrap = makeKv()
+    const tok = await signToken({ ...baseClaims, ref: "refs/heads/main" })
+    const res = await handleRunnerIngestRoute(post(envelope(), tok), makeEnv({}, ns, kvWrap.kv))
+    expect(res.status).toBe(200)
+    const stored = JSON.parse([...kvWrap.store.values()][0] ?? "{}") as { pullNumber?: number }
+    expect(stored.pullNumber).toBe(0)
+  })
+
   it("200 duplicate on an identical re-POST (idempotent CI retry)", async () => {
     stubJwksFetch()
     const { ns } = makeReceiptDo()

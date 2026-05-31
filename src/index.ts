@@ -452,6 +452,16 @@ export interface Env {
   // `wrangler secret put OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE shadow`.
   OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE?: string
 
+  // SIG-293 v1: security-grounding gate mode. "off" (default) skips the
+  // gate; "shadow" counts + telemeters the would-demote but keeps every
+  // finding inline; "enforce" demotes a "secrets-exposure" (CWE-798)
+  // finding to the review body when its cited line holds no credential
+  // token and no scanner fact corroborates it (never hard-drops). The one
+  // line-level-detectable security category — the deeper root of Pattern A
+  // (#248). Operator flips via
+  // `wrangler secret put OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE shadow`.
+  OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string
+
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
   // that AUGMENTS the logic role's shared snapshot; any other value

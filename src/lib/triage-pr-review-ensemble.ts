@@ -2519,7 +2519,18 @@ export async function handlePrReviewEnsemble(
             return buildGraphContextExpansion({
               expansion,
               filesByPath: astFilesByPath,
-              // PR1: no fetcher — measure only bodies already in astFilesByPath.
+              // SIG-286 PR2: bounded cross-file fetcher (≤6 distinct files,
+              // concurrency 4, ALL inside the 3s soft-fail GRAPH_EXPANSION cap).
+              // Reuses the in-scope GitHub client; getFileContent returns null on
+              // 404/dir/>1MB and the pre-fetch wraps each call soft-fail so a
+              // fetch error never blocks or breaks the (shadow, non-injected)
+              // measurement. Turns the PR1 `missing` rows into real `github`
+              // bodies → the CONTROL-vs-TREATMENT numbers that decide PR3.
+              // Threads the composed-timeout `signal` so an in-flight cross-file
+              // fetch CANCELS the moment the 3s expansion cap (or the
+              // orchestrator) aborts — the batch is abort-aware mid-wave, not
+              // just between waves (Sigilix + CodeRabbit).
+              fetchFileContent: (path) => client.getFileContent(owner, repo, path, headSha, { signal }),
               signal,
             })
           },
@@ -2545,6 +2556,14 @@ export async function handlePrReviewEnsemble(
           elapsedMs: enriched.elapsedMs,
           bodiesSource: enriched.bodiesSource,
           dropped: enriched.dropped,
+          // SIG-286 PR2: CONTROL (no-fetch) vs TREATMENT (with cross-file fetch).
+          // controlTokens = filesByPath-only; totalTokens above = treatment;
+          // netNewTokens = the cross-file context gain the PR3 inject decision
+          // keys off (GO ≈ median ≥ 800 + cross-file callers on >40% of reviews;
+          // KILL < 500 or no cross-file caller context). `fetch` is the cost.
+          controlTokens: enriched.control.tokens,
+          netNewTokens: enriched.netNewTokens,
+          fetch: enriched.fetch,
         }))
       } catch (err) {
         // Genuine orchestrator cancellation propagates; any other failure is

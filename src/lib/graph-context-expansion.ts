@@ -31,6 +31,15 @@ const DEFAULT_MAX_BYTES = 50_000
 /** ± lines around a call site / import line when no symbol span is known. */
 const WINDOW_LINES = 8
 
+// SIG-286 PR2 — cross-file fetch bounds. The whole expansion runs inside
+// GRAPH_EXPANSION_TIMEOUT_MS=3000 (soft-fail, non-blocking), and a GitHub
+// getFileContent is ~150-350ms, so the budget is deliberately small: at most
+// MAX_CROSS_FILE_FETCHES distinct cross-file paths, FETCH_CONCURRENCY at a time
+// (~2 waves), leaving headroom for the DO query + body build inside the 3s cap.
+// Fetched-but-over-budget paths are counted under `dropped.budgetExhausted`.
+export const MAX_CROSS_FILE_FETCHES = 6
+const FETCH_CONCURRENCY = 4
+
 /** A single rendered body snippet (definition / caller / import-dependent). */
 export interface GraphBodySnippet {
   path: string
@@ -44,12 +53,13 @@ export interface GraphBodySnippet {
   text: string
 }
 
-/** The enriched graph context — measured in shadow, never injected in PR1. */
+/** The enriched graph context — measured in shadow, never injected (PR1/PR2). */
 export interface EnrichedGraphContext {
   graphAvailable: boolean
   definitionBodies: GraphBodySnippet[]
   callerBodies: GraphBodySnippet[]
   dependentBodies: GraphBodySnippet[]
+  /** TREATMENT token total: ALL surviving snippets (filesByPath + fetched). */
   totalTokens: number
   cappedAt: number
   elapsedMs: number
@@ -63,7 +73,30 @@ export interface EnrichedGraphContext {
     cap: number
     sourceMissing: number
     graphRowsCapped: number
+    /** SIG-286 PR2: cross-file paths wanted but past MAX_CROSS_FILE_FETCHES. */
+    budgetExhausted: number
   }
+  /**
+   * SIG-286 PR2 — the CONTROL-vs-TREATMENT measurement that decides PR3 (inject).
+   * `control` = bodies available WITHOUT the cross-file fetch (filesByPath-only,
+   * i.e. what PR1 saw). `treatment` total is `totalTokens` above; `netNewTokens`
+   * is the cross-file context gain (treatment − control). `fetch` is the cost.
+   */
+  control: { tokens: number }
+  fetch: {
+    /** Was a bounded cross-file fetcher wired (PR2 on; PR1/tests off). */
+    enabled: boolean
+    /** Distinct cross-file files actually fetched (non-null) within budget. */
+    files: number
+    /** Total bytes of fetched cross-file source. */
+    bytes: number
+    /** Wall time spent in the bounded pre-fetch. */
+    elapsedMs: number
+    /** True when more distinct cross-file paths were wanted than the cap allows. */
+    budgetExhausted: boolean
+  }
+  /** Cross-file context gain in tokens: `totalTokens − control.tokens`. */
+  netNewTokens: number
 }
 
 export interface BuildGraphContextExpansionArgs {
@@ -91,7 +124,10 @@ function zeroResult(graphAvailable: boolean, elapsedMs: number): EnrichedGraphCo
     cappedAt: 0,
     elapsedMs,
     bodiesSource: { filesByPath: 0, github: 0, retrievalChunk: 0, missing: 0 },
-    dropped: { cap: 0, sourceMissing: 0, graphRowsCapped: 0 },
+    dropped: { cap: 0, sourceMissing: 0, graphRowsCapped: 0, budgetExhausted: 0 },
+    control: { tokens: 0 },
+    fetch: { enabled: false, files: 0, bytes: 0, elapsedMs: 0, budgetExhausted: false },
+    netNewTokens: 0,
   }
 }
 
@@ -117,18 +153,25 @@ export async function buildGraphContextExpansion(
     const maxBytesReq = Math.floor(args.maxBytes ?? DEFAULT_MAX_BYTES)
     const maxBytes = Number.isFinite(maxBytesReq) && maxBytesReq >= 1 ? maxBytesReq : DEFAULT_MAX_BYTES
     const bodiesSource = { filesByPath: 0, github: 0, retrievalChunk: 0, missing: 0 }
-    const dropped = { cap: 0, sourceMissing: 0, graphRowsCapped: 0 }
+    const dropped = { cap: 0, sourceMissing: 0, graphRowsCapped: 0, budgetExhausted: 0 }
 
-    // Cache fetched cross-file sources so multiple rows on one path read once.
+    // SIG-286 PR2: bounded, concurrent, FN-value-ordered cross-file pre-fetch.
+    // Spends the whole fetch budget UP FRONT (so the cap is honored + the
+    // fetches run concurrently within the 3s ceiling), populating `fetchedCache`.
+    // After this, `resolveSource` only READS the cache — never lazily fetches —
+    // so a cross-file path past the budget resolves to null (counted missing /
+    // budgetExhausted), not an unbounded extra fetch.
     const fetchedCache = new Map<string, string | null>()
-    const resolveSource = async (path: string): Promise<string | null> => {
+    const fetchStats = await prefetchCrossFileSources(args, fetchedCache)
+    if (fetchStats.budgetExhausted) {
+      // Distinct cross-file paths we wanted but couldn't fetch under the cap.
+      dropped.budgetExhausted = fetchStats.wantedOverBudget
+    }
+    const resolveSource = (path: string): string | null => {
       const inMap = args.filesByPath.get(path)
       if (typeof inMap === "string") return inMap
-      if (!args.fetchFileContent) return null
-      if (fetchedCache.has(path)) return fetchedCache.get(path) ?? null
-      const fetched = await args.fetchFileContent(path)
-      fetchedCache.set(path, fetched)
-      return fetched
+      const cached = fetchedCache.get(path)
+      return typeof cached === "string" ? cached : null
     }
     const sourceKind = (path: string): "filesByPath" | "github" =>
       args.filesByPath.has(path) ? "filesByPath" : "github"
@@ -137,7 +180,7 @@ export async function buildGraphContextExpansion(
     const definitionBodies: GraphBodySnippet[] = []
     for (const row of args.expansion.definitionRows) {
       if (args.signal?.aborted) break
-      const source = await resolveSource(row.path)
+      const source = resolveSource(row.path)
       if (source === null) {
         bodiesSource.missing++
         dropped.sourceMissing++
@@ -152,7 +195,7 @@ export async function buildGraphContextExpansion(
     const callerBodies: GraphBodySnippet[] = []
     for (const row of args.expansion.callerRows) {
       if (args.signal?.aborted) break
-      const source = await resolveSource(row.sourcePath)
+      const source = resolveSource(row.sourcePath)
       if (source === null) {
         bodiesSource.missing++
         dropped.sourceMissing++
@@ -167,7 +210,7 @@ export async function buildGraphContextExpansion(
     const dependentBodies: GraphBodySnippet[] = []
     for (const row of args.expansion.importRows) {
       if (args.signal?.aborted) break
-      const source = await resolveSource(row.sourcePath)
+      const source = resolveSource(row.sourcePath)
       if (source === null) {
         bodiesSource.missing++
         dropped.sourceMissing++
@@ -188,20 +231,128 @@ export async function buildGraphContextExpansion(
     )
     dropped.cap = capResult.droppedCount
 
+    // CONTROL vs TREATMENT token split (over the SURVIVING, post-cap snippets):
+    // control = filesByPath-sourced bodies only (what PR1 / no-fetch would see);
+    // treatment = all surviving bodies. netNew = the cross-file context gain.
+    const totalTokens = estimateTokens(capResult.rendered)
+    const controlRendered = [
+      ...capResult.definitionBodies,
+      ...capResult.callerBodies,
+      ...capResult.dependentBodies,
+    ]
+      .filter((s) => s.source === "filesByPath")
+      .map(renderSnippet)
+      .join("\n")
+    const controlTokens = estimateTokens(controlRendered)
+
     return {
       graphAvailable,
       definitionBodies: capResult.definitionBodies,
       callerBodies: capResult.callerBodies,
       dependentBodies: capResult.dependentBodies,
-      totalTokens: estimateTokens(capResult.rendered),
+      totalTokens,
       cappedAt: maxBytes,
       elapsedMs: Date.now() - startMs,
       bodiesSource,
       dropped,
+      control: { tokens: controlTokens },
+      fetch: {
+        enabled: args.fetchFileContent !== undefined,
+        files: fetchStats.files,
+        bytes: fetchStats.bytes,
+        elapsedMs: fetchStats.elapsedMs,
+        budgetExhausted: fetchStats.budgetExhausted,
+      },
+      netNewTokens: Math.max(0, totalTokens - controlTokens),
     }
   } catch {
     // Never throw into the review. Zeroed result, graphAvailable preserved.
     return zeroResult(graphAvailable, Date.now() - startMs)
+  }
+}
+
+// ─── SIG-286 PR2: bounded cross-file pre-fetch ──────────────────────
+
+interface PrefetchStats {
+  files: number
+  bytes: number
+  elapsedMs: number
+  budgetExhausted: boolean
+  /** Distinct cross-file paths wanted beyond MAX_CROSS_FILE_FETCHES. */
+  wantedOverBudget: number
+}
+
+/**
+ * Fetch the cross-file source bodies the expansion needs, bounded + concurrent,
+ * UP FRONT, into `fetchedCache`. Cross-file = a row path NOT already in
+ * `filesByPath` (the changed files). Ordered by FN value (deepseek-v4-pro §2):
+ * CALLERS first (who invokes the changed code → "what contract might I break")
+ * > import-dependents > definitions (definitions are ~always in the changed
+ * files already, so they rarely contribute a fetch). Distinct paths only; at
+ * most MAX_CROSS_FILE_FETCHES, FETCH_CONCURRENCY at a time. Soft-fail: a fetch
+ * error resolves to a cached `null` (counted missing, never thrown). No fetcher
+ * (PR1 / tests) ⇒ zero stats and an empty cache.
+ */
+async function prefetchCrossFileSources(
+  args: BuildGraphContextExpansionArgs,
+  fetchedCache: Map<string, string | null>,
+): Promise<PrefetchStats> {
+  const startMs = Date.now()
+  const empty: PrefetchStats = { files: 0, bytes: 0, elapsedMs: 0, budgetExhausted: false, wantedOverBudget: 0 }
+  if (!args.fetchFileContent) return empty
+
+  // Distinct cross-file paths in FN-value order.
+  const wanted: string[] = []
+  const seen = new Set<string>()
+  const consider = (path: string | undefined): void => {
+    if (typeof path !== "string" || path.length === 0) return
+    if (args.filesByPath.has(path) || seen.has(path)) return
+    seen.add(path)
+    wanted.push(path)
+  }
+  for (const row of args.expansion.callerRows) consider(row.sourcePath)
+  for (const row of args.expansion.importRows) consider(row.sourcePath)
+  for (const row of args.expansion.definitionRows) consider(row.path)
+
+  const wantedOverBudget = Math.max(0, wanted.length - MAX_CROSS_FILE_FETCHES)
+  const toFetch = wanted.slice(0, MAX_CROSS_FILE_FETCHES)
+
+  let files = 0
+  let bytes = 0
+  const fetchFile = args.fetchFileContent
+  for (let i = 0; i < toFetch.length; i += FETCH_CONCURRENCY) {
+    if (args.signal?.aborted) break
+    const batch = toFetch.slice(i, i + FETCH_CONCURRENCY)
+    // Each callback returns its OWN contribution; the shared counters are then
+    // summed AFTER Promise.all (not mutated inside the callbacks). Functionally
+    // identical under JS's single thread, but it keeps the accumulation immune
+    // to a future refactor adding a yield before the increment (Sigilix nit).
+    const results = await Promise.all(
+      batch.map(async (path): Promise<{ fetched: boolean; bytes: number }> => {
+        if (fetchedCache.has(path)) return { fetched: false, bytes: 0 }
+        // Soft-fail every individual fetch: a 404 / rate-limit / network error
+        // must NOT throw into the review (the outer catch is the last resort).
+        const src = await fetchFile(path).catch(() => null)
+        fetchedCache.set(path, src)
+        return typeof src === "string"
+          ? { fetched: true, bytes: byteLength(src) }
+          : { fetched: false, bytes: 0 }
+      }),
+    )
+    for (const r of results) {
+      if (r.fetched) {
+        files += 1
+        bytes += r.bytes
+      }
+    }
+  }
+
+  return {
+    files,
+    bytes,
+    elapsedMs: Date.now() - startMs,
+    budgetExhausted: wantedOverBudget > 0,
+    wantedOverBudget,
   }
 }
 

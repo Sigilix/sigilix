@@ -324,13 +324,15 @@ export class GitHubClient {
     owner: string,
     repo: string,
     path: string,
-    ref: string
+    ref: string,
+    opts?: { signal?: AbortSignal }
   ): Promise<string | null> {
     const escaped = encodeURIComponent(path).replace(/%2F/g, "/")
     let res: ContentsResponse
     try {
       res = await this.restGet<ContentsResponse>(
-        `/repos/${owner}/${repo}/contents/${escaped}?ref=${encodeURIComponent(ref)}`
+        `/repos/${owner}/${repo}/contents/${escaped}?ref=${encodeURIComponent(ref)}`,
+        opts
       )
     } catch (error) {
       if (error instanceof GitHubHttpError && error.status === 404) return null

@@ -6,7 +6,7 @@
 // passes no fetcher; cross-file rows then count under bodiesSource.missing.
 
 import { describe, expect, it } from "vitest"
-import { buildGraphContextExpansion } from "../src/lib/graph-context-expansion"
+import { buildGraphContextExpansion, MAX_CROSS_FILE_FETCHES } from "../src/lib/graph-context-expansion"
 import type {
   GraphContextExpansion,
   GraphDefinitionRow,
@@ -249,15 +249,157 @@ describe("buildGraphContextExpansion — telemetry shape + invariants", () => {
     expect(result.totalTokens).toBe(0)
   })
 
-  it("never throws — a fetcher that throws yields a zeroed result", async () => {
+  it("never throws — a fetcher that throws is soft-failed per-path (that row missing), not zeroed", async () => {
     const result = await buildGraphContextExpansion({
       expansion: expansion({ importRows: [importRow()] }),
       filesByPath: new Map(),
       fetchFileContent: async () => { throw new Error("boom") },
     })
-    // Internal error → zeroed result, graphAvailable preserved, no throw.
+    // SIG-286 PR2: a per-fetch throw is caught soft → null → the row counts
+    // missing; the expansion is NOT zeroed (graphAvailable preserved, no throw).
     expect(result.graphAvailable).toBe(true)
     expect(result.dependentBodies).toEqual([])
+    expect(result.bodiesSource.missing).toBe(1)
     expect(result.totalTokens).toBe(0)
+  })
+})
+
+// ─── SIG-286 PR2: bounded cross-file fetch + CONTROL-vs-TREATMENT ─────
+describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
+  it("fetch.enabled reflects whether a fetcher was wired", async () => {
+    const off = await buildGraphContextExpansion({
+      expansion: expansion({ definitionRows: [defRow()] }),
+      filesByPath: new Map([["src/b.ts", SRC_B]]),
+    })
+    expect(off.fetch.enabled).toBe(false)
+    const on = await buildGraphContextExpansion({
+      expansion: expansion({ importRows: [importRow()] }),
+      filesByPath: new Map(),
+      fetchFileContent: async () => SRC_A,
+    })
+    expect(on.fetch.enabled).toBe(true)
+    expect(on.fetch.files).toBe(1)
+    expect(on.fetch.bytes).toBeGreaterThan(0)
+  })
+
+  it("CONTROL vs TREATMENT: control.tokens = filesByPath-only; netNewTokens is the cross-file gain", async () => {
+    const result = await buildGraphContextExpansion({
+      expansion: expansion({
+        definitionRows: [defRow({ startLine: 1, endLine: 6 })],  // in filesByPath (control)
+        importRows: [importRow({ sourcePath: "src/a.ts", startLine: 10 })], // cross-file (treatment)
+      }),
+      filesByPath: new Map([["src/b.ts", SRC_B]]),
+      fetchFileContent: async () => SRC_A,
+    })
+    expect(result.bodiesSource.filesByPath).toBe(1)
+    expect(result.bodiesSource.github).toBe(1)
+    expect(result.control.tokens).toBeGreaterThan(0)
+    expect(result.totalTokens).toBeGreaterThan(result.control.tokens)
+    expect(result.netNewTokens).toBe(result.totalTokens - result.control.tokens)
+    expect(result.netNewTokens).toBeGreaterThan(0)
+  })
+
+  it("control.tokens equals totalTokens when there is NO cross-file body (netNew 0)", async () => {
+    const result = await buildGraphContextExpansion({
+      expansion: expansion({ definitionRows: [defRow({ startLine: 1, endLine: 6 })] }),
+      filesByPath: new Map([["src/b.ts", SRC_B]]),
+      fetchFileContent: async () => SRC_A, // never used (def is in filesByPath)
+    })
+    expect(result.fetch.files).toBe(0)
+    expect(result.control.tokens).toBe(result.totalTokens)
+    expect(result.netNewTokens).toBe(0)
+  })
+
+  it("bounds the fetch to MAX_CROSS_FILE_FETCHES: extra distinct paths → budgetExhausted + dropped", async () => {
+    const fetched: string[] = []
+    const over = MAX_CROSS_FILE_FETCHES + 3
+    const importRows = Array.from({ length: over }, (_, i) =>
+      importRow({ sourcePath: `src/dep${i}.ts`, startLine: 5 }),
+    )
+    const result = await buildGraphContextExpansion({
+      expansion: expansion({ importRows }),
+      filesByPath: new Map(),
+      fetchFileContent: async (p) => { fetched.push(p); return SRC_A },
+    })
+    const overBudget = over - MAX_CROSS_FILE_FETCHES
+    expect(fetched).toHaveLength(MAX_CROSS_FILE_FETCHES)            // capped
+    expect(result.fetch.files).toBe(MAX_CROSS_FILE_FETCHES)
+    expect(result.fetch.budgetExhausted).toBe(true)
+    expect(result.dropped.budgetExhausted).toBe(overBudget)        // wanted − cap
+    expect(result.dependentBodies).toHaveLength(MAX_CROSS_FILE_FETCHES) // only fetched resolve
+    expect(result.bodiesSource.github).toBe(MAX_CROSS_FILE_FETCHES)
+    expect(result.bodiesSource.missing).toBe(overBudget)           // the over-budget paths
+  })
+
+  it("prioritizes CALLERS over import-dependents when the fetch budget is tight", async () => {
+    // numCallers (< cap) cross-file callers + enough imports to overflow the cap.
+    // Callers fetch first → all caller bodies resolve; imports fill the remainder.
+    const numCallers = MAX_CROSS_FILE_FETCHES - 2
+    const numImports = 4
+    const callerRows = Array.from({ length: numCallers }, (_, i) =>
+      callerRow({ sourcePath: `src/caller${i}.ts`, callKind: "cross_file", startLine: 10 }),
+    )
+    const importRows = Array.from({ length: numImports }, (_, i) =>
+      importRow({ sourcePath: `src/imp${i}.ts`, startLine: 10 }),
+    )
+    const result = await buildGraphContextExpansion({
+      expansion: expansion({ callerRows, importRows }),
+      filesByPath: new Map(),
+      fetchFileContent: async () => SRC_A,
+    })
+    expect(result.callerBodies).toHaveLength(numCallers)                       // callers prioritized
+    expect(result.dependentBodies).toHaveLength(MAX_CROSS_FILE_FETCHES - numCallers) // imports fill the rest
+    expect(result.fetch.files).toBe(MAX_CROSS_FILE_FETCHES)
+    expect(result.dropped.budgetExhausted).toBe(numCallers + numImports - MAX_CROSS_FILE_FETCHES)
+  })
+
+  it("one fetch failing soft does not lose the others (per-path soft-fail)", async () => {
+    const result = await buildGraphContextExpansion({
+      expansion: expansion({
+        importRows: [
+          importRow({ sourcePath: "src/good.ts", startLine: 5 }),
+          importRow({ sourcePath: "src/bad.ts", startLine: 5 }),
+        ],
+      }),
+      filesByPath: new Map(),
+      fetchFileContent: async (p) => (p === "src/bad.ts" ? null : SRC_A),
+    })
+    expect(result.dependentBodies).toHaveLength(1)  // good resolves
+    expect(result.bodiesSource.github).toBe(1)
+    expect(result.bodiesSource.missing).toBe(1)     // bad → null → missing
+  })
+
+  it("a THROWING fetch in a multi-path batch is soft-failed; the others survive (no throw)", async () => {
+    const result = await buildGraphContextExpansion({
+      expansion: expansion({
+        importRows: [
+          importRow({ sourcePath: "src/good.ts", startLine: 5 }),
+          importRow({ sourcePath: "src/throws.ts", startLine: 5 }),
+        ],
+      }),
+      filesByPath: new Map(),
+      fetchFileContent: async (p) => {
+        if (p === "src/throws.ts") throw new Error("rate limited")  // getFileContent re-throws non-404s
+        return SRC_A
+      },
+    })
+    expect(result.graphAvailable).toBe(true)        // not zeroed
+    expect(result.dependentBodies).toHaveLength(1)  // good survives
+    expect(result.bodiesSource.github).toBe(1)
+    expect(result.bodiesSource.missing).toBe(1)     // throw → soft-failed → missing
+    expect(result.fetch.files).toBe(1)
+  })
+
+  it("does NOT cross-file fetch when the signal is already aborted (abort-aware)", async () => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    let called = 0
+    await buildGraphContextExpansion({
+      expansion: expansion({ importRows: [importRow()] }),
+      filesByPath: new Map(),
+      fetchFileContent: async () => { called += 1; return SRC_A },
+      signal: ctrl.signal,
+    })
+    expect(called).toBe(0)
   })
 })

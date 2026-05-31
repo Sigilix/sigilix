@@ -144,6 +144,15 @@ class_name = "RunnerEvidenceMetricsDO"
 name = "VERIFICATION_METRICS_DO"
 class_name = "VerificationMetricsDO"
 
+# SIG-286 PR2.5: single global DO holding rolling graph-context-expansion shadow
+# aggregates (netNewTokens histogram → median, cross-file rates, fetch cost,
+# 35-day retention). Read via GET /metrics/graph-expansion (same
+# OPENCLAW_VALIDATION_METRICS_TOKEN bearer). Telemetry-only — nothing here
+# changes a posted review.
+[[durable_objects.bindings]]
+name = "GRAPH_EXPANSION_METRICS_DO"
+class_name = "GraphExpansionMetricsDO"
+
 # Migration block — adds the DO class. Forward-only; use
 # `new_classes` (KV-backed DO storage) per spec §4.8 — v1 access is
 # point-lookup; SQLite buys nothing.
@@ -186,6 +195,12 @@ new_sqlite_classes = ["RunnerEvidenceMetricsDO"]
 [[migrations]]
 tag = "sig-285-metrics-v1"
 new_sqlite_classes = ["VerificationMetricsDO"]
+
+# SIG-286 PR2.5: GraphExpansionMetricsDO uses SQLite storage. Forward-only;
+# reverting is safe (telemetry-only — no review behavior depends on it).
+[[migrations]]
+tag = "sig-286-metrics-v1"
+new_sqlite_classes = ["GraphExpansionMetricsDO"]
 
 # ARC-190 env-var documentation (set via `wrangler secret put` or
 # wrangler.toml [vars]):

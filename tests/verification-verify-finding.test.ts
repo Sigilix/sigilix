@@ -9,6 +9,7 @@ import {
   findingKey,
   selectRefutedInlineDemotions,
   applyRefutedDemotion,
+  planReanchor,
 } from "../src/lib/verification/verify-finding"
 // Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
 // line-anchoring tests exercise the real index, not a duplicate.
@@ -190,6 +191,36 @@ describe("applyRefutedDemotion (SIG-285 PR 4 — marker<->finding alignment)", (
   it("tolerates a sparse (null) marker without misaligning the rest", () => {
     const A = { id: "A" }, B = { id: "B" }, C = { id: "C" }
     expect(applyRefutedDemotion([A, B, C], ["mA", null, "mC"], new Set([A])).keptMarkers).toEqual([null, "mC"])
+  })
+})
+
+describe("planReanchor (SIG-285 inline-first — the re-anchor decision)", () => {
+  // index: line 10 holds `userId`; line 11 holds `escape` + `input`.
+  it("REANCHOR: exactly one same-file added line holds the cited token → move there", () => {
+    // A finding citing `userId` anchored at line 11 (refuted — userId isn't there)
+    // re-anchors to line 10 (the inline-first fix instead of a body-demote).
+    const r = planReanchor(f({ line: 11, headline: "leak via `userId`" }), index)
+    expect(r.kind).toBe("reanchor")
+    if (r.kind === "reanchor") expect(r.toLine).toBe(10)
+  })
+
+  it("NO-MATCH: no added line holds the cited token → caller keeps the body-demote", () => {
+    expect(planReanchor(f({ line: 11, headline: "bug in `nonexistentSymbol`" }), index).kind).toBe("no-match")
+  })
+
+  it("requires ALL cited tokens on ONE line (stricter than verifyFinding's any-token rule)", () => {
+    // `userId` is on line 10, `escape` on line 11 — no single line has BOTH → no-match.
+    expect(planReanchor(f({ line: 99, headline: "uses `userId` and `escape`" }), index).kind).toBe("no-match")
+  })
+
+  it("AMBIGUOUS: >1 added line holds all tokens → don't guess, body-demote", () => {
+    const d = buildAddedLineTextByLine(
+      "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1 +1,3 @@\n+const a = doThing()\n+const b = doThing()\n+const c = other()\n",
+    )
+    // `doThing` is a whole token on lines 1 AND 2; a finding citing it at line 3 → ambiguous.
+    const r = planReanchor({ path: "x.ts", line: 3, headline: "bug in `doThing`", body: "" }, d)
+    expect(r.kind).toBe("ambiguous")
+    if (r.kind === "ambiguous") expect(r.candidateLines).toEqual([1, 2])
   })
 })
 

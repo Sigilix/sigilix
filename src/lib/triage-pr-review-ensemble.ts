@@ -291,7 +291,7 @@ import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sari
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import { readVerificationMode } from "./verification/mode"
-import { verifyFinding, findingKey, selectRefutedInlineDemotions, applyRefutedDemotion } from "./verification/verify-finding"
+import { verifyFinding, findingKey, selectRefutedInlineDemotions, applyRefutedDemotion, planReanchor } from "./verification/verify-finding"
 import {
   verifyFindingAgainstReceipt,
   buildReceiptIndex,
@@ -5531,6 +5531,25 @@ export async function handlePrReviewEnsemble(
           category: finding.category,
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "verification-refuted", reason: "refuted-citation", dropped: demoting })
+        // SIG-285 (inline-first, SHADOW measurement only — NO mutation in this
+        // PR): for each refuted finding, would it RE-ANCHOR to the correct added
+        // line (the inline-first fix) or only body-demote? Measures the
+        // would-reanchor rate (reanchor | ambiguous | no-match) at
+        // /metrics/validation (gate `verification-reanchor`) BEFORE the PR that
+        // actually mutates the line (which must run before marker generation).
+        const reanchor = planReanchor(finding, addedLineTextByLine)
+        console.log(JSON.stringify({
+          event: "verification-reanchor-shadow",
+          mode: verificationMode,
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          findingKey: findingKey(finding), // parity with verification-shadow for the SIG-114 join
+          path: finding.path,
+          fromLine: finding.line,
+          decision: reanchor.kind,
+          ...(reanchor.kind === "reanchor" ? { toLine: reanchor.toLine } : {}),
+          ...(reanchor.kind === "ambiguous" ? { candidateLines: reanchor.candidateLines } : {}),
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: reanchor.kind, dropped: false })
       }
       // Enforce only: move the refuted findings from the inline set to the
       // body-only set BEFORE buildReviewSubmissionWithMetadata. The builder

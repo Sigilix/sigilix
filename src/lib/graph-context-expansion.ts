@@ -323,19 +323,28 @@ async function prefetchCrossFileSources(
   for (let i = 0; i < toFetch.length; i += FETCH_CONCURRENCY) {
     if (args.signal?.aborted) break
     const batch = toFetch.slice(i, i + FETCH_CONCURRENCY)
-    await Promise.all(
-      batch.map(async (path) => {
-        if (fetchedCache.has(path)) return
+    // Each callback returns its OWN contribution; the shared counters are then
+    // summed AFTER Promise.all (not mutated inside the callbacks). Functionally
+    // identical under JS's single thread, but it keeps the accumulation immune
+    // to a future refactor adding a yield before the increment (Sigilix nit).
+    const results = await Promise.all(
+      batch.map(async (path): Promise<{ fetched: boolean; bytes: number }> => {
+        if (fetchedCache.has(path)) return { fetched: false, bytes: 0 }
         // Soft-fail every individual fetch: a 404 / rate-limit / network error
         // must NOT throw into the review (the outer catch is the last resort).
         const src = await fetchFile(path).catch(() => null)
         fetchedCache.set(path, src)
-        if (typeof src === "string") {
-          files += 1
-          bytes += byteLength(src)
-        }
+        return typeof src === "string"
+          ? { fetched: true, bytes: byteLength(src) }
+          : { fetched: false, bytes: 0 }
       }),
     )
+    for (const r of results) {
+      if (r.fetched) {
+        files += 1
+        bytes += r.bytes
+      }
+    }
   }
 
   return {

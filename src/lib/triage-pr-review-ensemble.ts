@@ -5255,7 +5255,10 @@ export async function handlePrReviewEnsemble(
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
           path: r.path, fromLine: r.fromLine, toLine: r.toLine,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: "applied", dropped: true })
+        // dropped:false — a re-anchored finding is KEPT inline (MOVED to the
+        // correct line), NOT dropped/demoted. The `applied` reason distinguishes
+        // it from the shadow would-reanchor decisions (CodeRabbit #260).
+        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: "applied", dropped: false })
       }
     }
 

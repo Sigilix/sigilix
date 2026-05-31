@@ -230,8 +230,9 @@ export function applyRefutedDemotion<T>(
 export type ReanchorDecision =
   /** Exactly one added line (≠ the cited line) holds ALL cited tokens — the
    *  unambiguous re-anchor target. The inline-first fix: move the comment here
-   *  instead of body-demoting it. */
-  | { kind: "reanchor"; fromLine: number; toLine: number; tokens: string[] }
+   *  instead of body-demoting it. (The "from" is the finding's current `line`,
+   *  known at the call site — not duplicated here.) */
+  | { kind: "reanchor"; toLine: number; tokens: string[] }
   /** >1 added line holds all tokens — don't guess; fall back to body-demote. */
   | { kind: "ambiguous"; candidateLines: number[]; tokens: string[] }
   /** No same-file added line holds all tokens — outside-the-diff or a
@@ -269,7 +270,7 @@ export function planReanchor(
     if (line === finding.line) continue // the cited line is where it's ABSENT (that's the refutation)
     if (tokens.every((t) => tokenPresentAtLine(text, t))) candidates.push(line)
   }
-  if (candidates.length === 1) return { kind: "reanchor", fromLine: finding.line, toLine: candidates[0] as number, tokens }
+  if (candidates.length === 1) return { kind: "reanchor", toLine: candidates[0] as number, tokens }
   if (candidates.length > 1) return { kind: "ambiguous", candidateLines: candidates.sort((a, b) => a - b), tokens }
   return { kind: "no-match", tokens }
 }

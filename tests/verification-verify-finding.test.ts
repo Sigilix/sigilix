@@ -201,10 +201,7 @@ describe("planReanchor (SIG-285 inline-first — the re-anchor decision)", () =>
     // re-anchors to line 10 (the inline-first fix instead of a body-demote).
     const r = planReanchor(f({ line: 11, headline: "leak via `userId`" }), index)
     expect(r.kind).toBe("reanchor")
-    if (r.kind === "reanchor") {
-      expect(r.fromLine).toBe(11)
-      expect(r.toLine).toBe(10)
-    }
+    if (r.kind === "reanchor") expect(r.toLine).toBe(10)
   })
 
   it("NO-MATCH: no added line holds the cited token → caller keeps the body-demote", () => {

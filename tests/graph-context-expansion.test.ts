@@ -6,7 +6,7 @@
 // passes no fetcher; cross-file rows then count under bodiesSource.missing.
 
 import { describe, expect, it } from "vitest"
-import { buildGraphContextExpansion } from "../src/lib/graph-context-expansion"
+import { buildGraphContextExpansion, MAX_CROSS_FILE_FETCHES } from "../src/lib/graph-context-expansion"
 import type {
   GraphContextExpansion,
   GraphDefinitionRow,
@@ -310,9 +310,10 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
     expect(result.netNewTokens).toBe(0)
   })
 
-  it("bounds the fetch to MAX_CROSS_FILE_FETCHES (6): extra distinct paths → budgetExhausted + dropped", async () => {
+  it("bounds the fetch to MAX_CROSS_FILE_FETCHES: extra distinct paths → budgetExhausted + dropped", async () => {
     const fetched: string[] = []
-    const importRows = Array.from({ length: 9 }, (_, i) =>
+    const over = MAX_CROSS_FILE_FETCHES + 3
+    const importRows = Array.from({ length: over }, (_, i) =>
       importRow({ sourcePath: `src/dep${i}.ts`, startLine: 5 }),
     )
     const result = await buildGraphContextExpansion({
@@ -320,22 +321,25 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
       filesByPath: new Map(),
       fetchFileContent: async (p) => { fetched.push(p); return SRC_A },
     })
-    expect(fetched).toHaveLength(6)                 // capped
-    expect(result.fetch.files).toBe(6)
+    const overBudget = over - MAX_CROSS_FILE_FETCHES
+    expect(fetched).toHaveLength(MAX_CROSS_FILE_FETCHES)            // capped
+    expect(result.fetch.files).toBe(MAX_CROSS_FILE_FETCHES)
     expect(result.fetch.budgetExhausted).toBe(true)
-    expect(result.dropped.budgetExhausted).toBe(3) // 9 wanted − 6 fetched
-    expect(result.dependentBodies).toHaveLength(6) // only the fetched 6 resolve
-    expect(result.bodiesSource.github).toBe(6)
-    expect(result.bodiesSource.missing).toBe(3)    // the 3 over-budget paths
+    expect(result.dropped.budgetExhausted).toBe(overBudget)        // wanted − cap
+    expect(result.dependentBodies).toHaveLength(MAX_CROSS_FILE_FETCHES) // only fetched resolve
+    expect(result.bodiesSource.github).toBe(MAX_CROSS_FILE_FETCHES)
+    expect(result.bodiesSource.missing).toBe(overBudget)           // the over-budget paths
   })
 
   it("prioritizes CALLERS over import-dependents when the fetch budget is tight", async () => {
-    // 4 cross-file callers + 4 cross-file imports = 8 distinct > 6 cap.
-    // Callers fetch first → all 4 caller bodies resolve, only 2 import bodies.
-    const callerRows = Array.from({ length: 4 }, (_, i) =>
+    // numCallers (< cap) cross-file callers + enough imports to overflow the cap.
+    // Callers fetch first → all caller bodies resolve; imports fill the remainder.
+    const numCallers = MAX_CROSS_FILE_FETCHES - 2
+    const numImports = 4
+    const callerRows = Array.from({ length: numCallers }, (_, i) =>
       callerRow({ sourcePath: `src/caller${i}.ts`, callKind: "cross_file", startLine: 10 }),
     )
-    const importRows = Array.from({ length: 4 }, (_, i) =>
+    const importRows = Array.from({ length: numImports }, (_, i) =>
       importRow({ sourcePath: `src/imp${i}.ts`, startLine: 10 }),
     )
     const result = await buildGraphContextExpansion({
@@ -343,10 +347,10 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
       filesByPath: new Map(),
       fetchFileContent: async () => SRC_A,
     })
-    expect(result.callerBodies).toHaveLength(4)     // callers prioritized
-    expect(result.dependentBodies).toHaveLength(2)  // only 2 imports fit the budget
-    expect(result.fetch.files).toBe(6)
-    expect(result.dropped.budgetExhausted).toBe(2)
+    expect(result.callerBodies).toHaveLength(numCallers)                       // callers prioritized
+    expect(result.dependentBodies).toHaveLength(MAX_CROSS_FILE_FETCHES - numCallers) // imports fill the rest
+    expect(result.fetch.files).toBe(MAX_CROSS_FILE_FETCHES)
+    expect(result.dropped.budgetExhausted).toBe(numCallers + numImports - MAX_CROSS_FILE_FETCHES)
   })
 
   it("one fetch failing soft does not lose the others (per-path soft-fail)", async () => {

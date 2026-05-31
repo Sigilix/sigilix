@@ -37,7 +37,7 @@ const WINDOW_LINES = 8
 // MAX_CROSS_FILE_FETCHES distinct cross-file paths, FETCH_CONCURRENCY at a time
 // (~2 waves), leaving headroom for the DO query + body build inside the 3s cap.
 // Fetched-but-over-budget paths are counted under `dropped.budgetExhausted`.
-const MAX_CROSS_FILE_FETCHES = 6
+export const MAX_CROSS_FILE_FETCHES = 6
 const FETCH_CONCURRENCY = 4
 
 /** A single rendered body snippet (definition / caller / import-dependent). */

@@ -308,6 +308,16 @@ OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
 # Rollback: set "shadow" (telemetry, no demote) or "off".
 OPENCLAW_VERIFICATION_MODE = "enforce"
 
+# SIG-285 re-anchor (inline-first): when verification is `enforce`, set
+# OPENCLAW_VERIFICATION_REANCHOR = "on" to APPLY the re-anchor MUTATION — a
+# refuted (mis-anchored) inline finding with exactly one same-file added line
+# holding ALL its cited tokens is MOVED to that line (a correct inline) instead
+# of body-demoted (the body-demote handles the ambiguous/no-match remainder).
+# Default (unset / not "on") = OFF — the re-anchor stays shadow-measured (PR1,
+# /metrics/validation gate `verification-reanchor`). Flip to "on" once that rate
+# confirms it's worth it. Rollback: remove the line / set anything but "on".
+# OPENCLAW_VERIFICATION_REANCHOR = "on"
+
 # SIG-285 v2 PR1: receipt-join verification — the NO-PERM sandbox foundation.
 # "off" (default) | "shadow" | "enforce" (reserved). When ON + a VERIFIED SIG-184
 # runner receipt exists, join each score>=4 security finding (with a resolvable

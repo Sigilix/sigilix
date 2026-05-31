@@ -290,8 +290,8 @@ import { postAstInlineFindings } from "./ast-rules/inline-poster"
 import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sarif-evidence/runner"
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
-import { readVerificationMode } from "./verification/mode"
-import { verifyFinding, findingKey, selectRefutedInlineDemotions, applyRefutedDemotion, planReanchor } from "./verification/verify-finding"
+import { readVerificationMode, readReanchorEnabled } from "./verification/mode"
+import { verifyFinding, findingKey, selectRefutedInlineDemotions, applyRefutedDemotion, planReanchor, applyReanchors } from "./verification/verify-finding"
 import {
   verifyFindingAgainstReceipt,
   buildReceiptIndex,
@@ -5300,6 +5300,40 @@ export async function handlePrReviewEnsemble(
       }
     }
 
+    // SIG-285: build the added-line index once here — HOISTED above marker
+    // generation so the re-anchor pass below can move a finding to its correct
+    // line BEFORE the marker fid (which includes `line`) is built. `verificationMode`
+    // is hoisted for the same reason. Both are reused by the verification block
+    // further down (no recompute).
+    const verificationMode = readVerificationMode(env)
+    const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
+
+    // SIG-285 re-anchor ENFORCE (inline-first): when verification is `enforce`
+    // AND OPENCLAW_VERIFICATION_REANCHOR=on (default OFF — inert), MOVE each
+    // refuted inline finding that has an UNAMBIGUOUS same-file target to the
+    // correct line, in place, keeping the marker source (filteredConsensusFindings)
+    // aligned — BEFORE the markers are built (the fid includes `line`). A
+    // mis-anchored inline comment becomes a CORRECTLY-anchored one (the founder's
+    // inline-first direction) instead of a body row. Re-anchored findings are then
+    // no longer refuted at the verification block below, so PR4 only body-demotes
+    // the ambiguous/no-match remainder. Default OFF → byte-identical to PR1+PR4.
+    if (verificationMode === "enforce" && readReanchorEnabled(env)) {
+      const reanchored = applyReanchors(
+        submissionVerdict.findings,
+        filteredConsensusFindings,
+        addedLineTextByLine,
+        isSubstantiveAnchorLine,
+      )
+      for (const r of reanchored) {
+        console.log(JSON.stringify({
+          event: "verification-reanchor-applied",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          path: r.path, fromLine: r.fromLine, toLine: r.toLine,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: "applied", dropped: true })
+      }
+    }
+
     // `let` (was const): SIG-285 PR 4 filters this in lockstep with
     // submissionVerdict.findings when a refuted finding is demoted, to keep the
     // marker<->finding index alignment the builder relies on (SIG-127).
@@ -5456,8 +5490,6 @@ export async function handlePrReviewEnsemble(
       })()
     }
 
-    const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
-
     // SIG-285 PR 1 (shadow): verification-by-execution, observe-only. For the
     // findings we're about to submit, re-check that the code token each score>=4
     // logic/security finding CITES actually appears at the line it points to
@@ -5472,7 +5504,6 @@ export async function handlePrReviewEnsemble(
     // not the gate. `shadow` observes-only (counts the would-demote). Off = no
     // work. The move runs BEFORE buildReviewSubmissionWithMetadata so the event +
     // marker alignment recompute over the post-demote split.
-    const verificationMode = readVerificationMode(env)
     if (verificationMode !== "off") {
       // Cover EVERY submitted score>=4 logic/security finding — inline AND the
       // body-only (unanchored) ones — so the refutable-FP measurement isn't

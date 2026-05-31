@@ -20,3 +20,15 @@ export function readVerificationMode(env: Env): VerificationMode {
   if (raw === "enforce") return "enforce"
   return "off"
 }
+
+/**
+ * SIG-285 re-anchor (inline-first): whether to APPLY the re-anchor mutation
+ * (move a refuted inline finding to the correct line) when verification is in
+ * `enforce`. Default OFF — the mutation ships INERT; flip `OPENCLAW_VERIFICATION
+ * _REANCHOR` to "on" after the `/metrics/validation` `verification-reanchor` rate
+ * (measured in shadow by PR1) confirms it's worth it. Only meaningful in
+ * `enforce` mode; in `shadow` the re-anchor stays measurement-only regardless.
+ */
+export function readReanchorEnabled(env: Env): boolean {
+  return (env.OPENCLAW_VERIFICATION_REANCHOR ?? "").trim().toLowerCase() === "on"
+}

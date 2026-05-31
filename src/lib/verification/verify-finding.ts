@@ -281,3 +281,56 @@ export function planReanchor(
   if (candidates.length > 1) return { kind: "ambiguous", candidateLines: candidates.sort((a, b) => a - b), tokens }
   return { kind: "no-match", tokens }
 }
+
+/** One applied re-anchor (for telemetry). */
+export interface ReanchorApplied {
+  index: number
+  path: string
+  fromLine: number
+  toLine: number
+}
+
+/**
+ * SIG-285 re-anchor ENFORCE (inline-first mutation): for each refuted inline
+ * finding that has an UNAMBIGUOUS re-anchor target, MOVE it to the correct line
+ * — IN PLACE — keeping the marker source aligned. Mutates BOTH `inlineFindings[i]`
+ * (the inline render source) AND `markerSourceFindings[i]` (the marker fid is
+ * built from this, and the fid includes `line`; they're index-aligned, so both
+ * must move or the cross-PR dismissal corpus would key the finding on a stale
+ * line). Returns the applied moves for telemetry. Callers MUST invoke this BEFORE
+ * marker generation so the markers are built from the post-move line.
+ *
+ * Same eligibility + safety as `selectRefutedInlineDemotions` + `planReanchor`
+ * (refuted, single-line, score>=4 logic/security, exactly one same-file line with
+ * ALL cited tokens), PLUS a SIG-127 structural-substantive guard on the target
+ * line (`isSubstantive`, injected) — never move a comment onto a bare `}`/blank
+ * line. Anything that doesn't qualify is left untouched (the caller's PR4
+ * body-demote then handles the still-refuted findings).
+ */
+export function applyReanchors<T extends DemotableFinding>(
+  inlineFindings: T[],
+  markerSourceFindings: ReadonlyArray<{ line: number } | undefined>,
+  addedLineIndex: ReadonlyMap<string, ReadonlyMap<number, string>>,
+  isSubstantive: (text: string | undefined) => boolean,
+): ReanchorApplied[] {
+  const applied: ReanchorApplied[] = []
+  for (let i = 0; i < inlineFindings.length; i++) {
+    const f = inlineFindings[i]
+    if (f === undefined) continue
+    // Eligibility = the selectRefutedInlineDemotions contract (refuted subset).
+    if (f.score < 4) continue
+    if (f.category !== "logic" && f.category !== "security") continue
+    if (f.startLine !== undefined && f.startLine !== f.line) continue
+    if (verifyFinding(f, addedLineIndex).verdict !== "refuted") continue
+    const plan = planReanchor(f, addedLineIndex)
+    if (plan.kind !== "reanchor") continue
+    // SIG-127: don't move the inline comment onto a non-substantive target line.
+    if (!isSubstantive(addedLineIndex.get(f.path)?.get(plan.toLine))) continue
+    const fromLine = f.line
+    f.line = plan.toLine // move the render source
+    const ms = markerSourceFindings[i]
+    if (ms !== undefined) ms.line = plan.toLine // move the marker source, in lockstep
+    applied.push({ index: i, path: f.path, fromLine, toLine: plan.toLine })
+  }
+  return applied
+}

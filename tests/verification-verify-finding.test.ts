@@ -10,6 +10,7 @@ import {
   selectRefutedInlineDemotions,
   applyRefutedDemotion,
   planReanchor,
+  applyReanchors,
 } from "../src/lib/verification/verify-finding"
 // Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
 // line-anchoring tests exercise the real index, not a duplicate.
@@ -221,6 +222,49 @@ describe("planReanchor (SIG-285 inline-first — the re-anchor decision)", () =>
     const r = planReanchor({ path: "x.ts", line: 3, headline: "bug in `doThing`", body: "" }, d)
     expect(r.kind).toBe("ambiguous")
     if (r.kind === "ambiguous") expect(r.candidateLines).toEqual([1, 2])
+  })
+})
+
+describe("applyReanchors (SIG-285 enforce — the in-place mutation)", () => {
+  const always = () => true // substantive
+  const fd = (over: Partial<{ path: string; line: number; startLine: number; headline: string; body: string; score: number; category: string }>) => ({
+    path: "src/db.ts", line: 11, headline: "", body: "", score: 5, category: "security", ...over,
+  })
+
+  it("moves a refuted finding to the correct line in BOTH the finding AND the marker source (lockstep)", () => {
+    // `userId` is on line 10, not line 11 — a finding citing it at line 11 is refuted + re-anchors to 10.
+    const inline = [fd({ line: 11, headline: "leak via `userId`" })]
+    const markerSrc = [{ line: 11 }] // index-aligned marker source (filteredConsensusFindings stand-in)
+    const applied = applyReanchors(inline, markerSrc, index, always)
+    expect(applied).toEqual([{ index: 0, path: "src/db.ts", fromLine: 11, toLine: 10 }])
+    expect(inline[0]!.line).toBe(10) // render source moved
+    expect(markerSrc[0]!.line).toBe(10) // marker source moved IN LOCKSTEP — the fid stays consistent
+  })
+
+  it("does NOT move onto a non-substantive target line (SIG-127 guard)", () => {
+    const inline = [fd({ line: 11, headline: "leak via `userId`" })]
+    const markerSrc = [{ line: 11 }]
+    expect(applyReanchors(inline, markerSrc, index, () => false)).toEqual([])
+    expect(inline[0]!.line).toBe(11) // unchanged
+    expect(markerSrc[0]!.line).toBe(11)
+  })
+
+  it("leaves confirmed / score<4 / non-logic-security findings untouched", () => {
+    const inline = [
+      fd({ line: 10, headline: "`userId`", category: "security", score: 5 }), // confirmed (userId IS on 10)
+      fd({ line: 11, headline: "`userId`", category: "logic", score: 3 }), // score < 4
+      fd({ line: 11, headline: "`userId`", category: "performance", score: 5 }), // wrong category
+    ]
+    const markerSrc = [{ line: 10 }, { line: 11 }, { line: 11 }]
+    expect(applyReanchors(inline, markerSrc, index, always)).toEqual([])
+    expect(inline.map((x) => x.line)).toEqual([10, 11, 11]) // all unchanged
+  })
+
+  it("tolerates an undefined marker-source entry (moves the finding, skips the absent marker)", () => {
+    const inline = [fd({ line: 11, headline: "leak via `userId`" })]
+    const markerSrc: Array<{ line: number } | undefined> = [undefined]
+    expect(applyReanchors(inline, markerSrc, index, always).length).toBe(1)
+    expect(inline[0]!.line).toBe(10) // render source still moved; no throw on the absent marker
   })
 })
 

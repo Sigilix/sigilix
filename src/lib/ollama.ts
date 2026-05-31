@@ -109,7 +109,22 @@ export async function generate({
     stream: true,
     options: { temperature: effectiveTemperature },
   }
-  if (format) requestBody.format = format
+  if (format) {
+    requestBody.format = format
+    // SIG-287: disable the reasoning/"thinking" phase for schema-constrained
+    // calls. A reasoning model (deepseek-v4-flash, the logic specialist's
+    // primary) otherwise streams an unbounded chain-of-thought in a SEPARATE
+    // `thinking` field — which `accumulateStream` does not read — emitting
+    // ZERO `response` tokens until the per-attempt AbortController fires at
+    // the cap. That stalled logic on EVERY review (full-cap abort, no output)
+    // and no timeout bump (60→110→240→360s) could fix it, because you can't
+    // out-wait an unbounded CoT. Ollama defaults `think:true` when omitted;
+    // non-reasoning models silently ignore `think`, so this is safe to set
+    // for any structured call — we want the JSON answer, not the CoT. Mirrors
+    // the `temperature→0 when format` rule above (deterministic structured
+    // output). Free-form (format-less) calls keep the default thinking.
+    requestBody.think = false
+  }
 
   try {
     const res = await fetch(OLLAMA_TURBO_URL, {

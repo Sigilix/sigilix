@@ -955,22 +955,21 @@ describe("Phase 4a.3 — timeout schedule", () => {
 })
 
 describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
-  it("logic specialist runs deepseek-v4-flash:cloud primary with no retries and no fallback (2026-05-26 telemetry-driven trim)", () => {
-    // SIG-234 (2026-05-26 round 2): production telemetry on PR #188
-    // showed both deepseek-v4-flash AND the prior kimi-k2.5 fallback
-    // hit exactly 60_000ms (PER_ATTEMPT_TIMEOUT_MS) on every review.
-    // Codex diagnostic: logic's prompt shape (full retrieval + graph
-    // + symbol context) is uniquely expensive; the issue is prompt-
-    // driven, not model-driven. Retry + fallback ladder was 100%
-    // waste, burning 180s while the customer got the same `[DEGRADED
-    // COVERAGE]` result either way.
-    //
-    // Trimmed to 1-attempt-only so logic caps at 60s; saves 120s per
-    // review until structural fixes land (min-specialists early exit
-    // + surgical prompt-budget on logic).
+  it("logic specialist runs deepseek-v4-flash:cloud primary, retries:0, with a qwen3-coder-next cross-provider fallback (SIG-287 think:false + fast-fallback)", () => {
+    // SIG-287 (2026-05-30): the prior "trim to 1-attempt-only, fallback:null"
+    // (PR #188) was built on the wrong diagnosis ("prompt-driven, not model-
+    // driven"). The TRUE root cause was a missing `think:false` — the reasoning
+    // primary burned the whole budget thinking, emitting zero `response`
+    // tokens. With think:false (ollama-chat.ts / ollama.ts) logic finishes
+    // fast, so it now carries a CROSS-PROVIDER fallback: a future stall fails
+    // fast (120s) and qwen3-coder-next rescues it. retries:0 (a same-model
+    // retry of a stalled deepseek would just stall again — the fallback is the
+    // resilience). Cross-provider so the fallback fails independently.
     expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-flash:cloud")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(0)
-    expect(SPECIALIST_CONFIGS.logic.fallback).toBe(null)
+    expect(SPECIALIST_CONFIGS.logic.fallback).toBe("qwen3-coder-next:cloud")
+    const primaryFamily = SPECIALIST_CONFIGS.logic.primary.split("-")[0]
+    expect(SPECIALIST_CONFIGS.logic.fallback?.split("-")[0]).not.toBe(primaryFamily)
   })
 
   it("performance specialist runs glm-5.1:cloud (ARC-167 retained) with kimi-k2.5 fallback", () => {
@@ -1037,7 +1036,7 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(fallbackFamily).not.toBe(primaryFamily)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (16 after 2026-05-26 logic-ladder trim)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (17 after SIG-287 logic fast-fallback)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves
     // before admitting a PR, so the regression must assert against it
     // directly — not against a hand-calc that would silently drift if
@@ -1047,15 +1046,16 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     // is intentionally NOT counted here.
     //
     // Worst-case model calls per ensemble run:
-    //   logic:       primary only (no retry, no fallback)     = 1
+    //   logic:       primary + fallback (retries:0)           = 2 (SIG-287)
     //   security:    primary + 1 retry + fallback             = 3
     //   performance: primary + 1 retry + fallback             = 3
     //   tests:       primary + 1 retry + fallback             = 3
     //   synth:       primary + 1 retry + fallback             = 3 (attempt 1)
     //   synth retry: primary + 1 retry + fallback             = 3 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 16.  Down from 18 (pre-2026-05-26 logic-ladder trim).
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(16)
+    //   total: 17.  Up from 16 — SIG-287 restored logic's cross-provider
+    //   fallback (the prior fallback:null capped logic at 1 call).
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(17)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

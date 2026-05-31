@@ -1177,24 +1177,39 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // elapsedMs=60000 outcome=aborted — logic was STILL generating at the
     // cap on EVERY review → "logic specialist unavailable" banner for weeks.
     //
-    // SIG-236/SIG-287 REAL FIX: a per-role per-attempt cap, now 360s. 110s then
-    // 240s each STILL left logic INTERMITTENT — available on some reviews,
-    // aborted on others (#248: available on the first review, "unavailable" on
-    // the re-review) — because logic's prompt is uniquely large (graph+symbol+
-    // retrieval context, 13k+ tok) and cloud-route latency varies, so a tight
-    // cap clips the slow runs. Logic is the unique long-pole; security/perf/
-    // tests finish in 4-25s. Founder ruling: availability+believability outrank
-    // speed — reviews up to ~8 min are fine, the only hard ceiling is CF's 900s
-    // queue limit. 360s covers ~30k tok / ~88 tok/s + generation, with margin
-    // for route variance. Keeps logic's FULL context (graphContext prevents FPs,
-    // so trimming to go fast trades "unavailable" for "higher-FP"). Fits within
-    // SPECIALIST_TIMEOUT_MS=370s with retries:0/fallback:null (a 2nd 360s attempt
-    // would blow the wall — keep them 0). VERIFY reliability across MULTIPLE
-    // post-deploy reviews (outcome:ok) before declaring it fixed; capture the
-    // real elapsedMs to confirm 360s is enough vs. needing a prompt trim.
+    // SIG-287 TRUE ROOT CAUSE (2026-05-30, telemetry + Ollama API docs +
+    // DeepSeek-v4-pro, all concurring): the timeout was NEVER the lever. The
+    // 60→110→240→360s bumps ALL failed for the same reason — `generate`/
+    // `ollamaChat` omitted `think:false`, so deepseek-v4-flash (a REASONING
+    // model) ran an unbounded chain-of-thought in a separate `thinking` field
+    // (which the stream reader ignores), emitting ZERO `response` tokens until
+    // the per-attempt cap aborted it. Live #251 telemetry: timeoutMs:360000
+    // elapsedMs:360000 outcome:aborted with NO outputTokens — a flash model
+    // producing nothing in 6 min = a stuck reasoning phase, not slow
+    // generation. THE FIX (ollama.ts/ollama-chat.ts): set `think:false` on
+    // schema-constrained calls so the model emits the structured answer
+    // directly — logic now finishes in seconds like every other role.
+    //
+    // RESILIENCE (founder-chosen fast-fallback, 2026-05-30): with think:false
+    // logic is fast, so drop the per-attempt cap 360→120s (still 2× the
+    // expected <60s, covers route variance) and ADD a cross-provider fallback
+    // (was null) so ANY future stall — route outage, capacity dip — fails fast
+    // and the fallback rescues, exactly like the tests role (primary abort →
+    // retry/fallback ok). qwen3-coder-next:cloud (Codex pick): cross-provider
+    // from DeepSeek (fails independently — the point of a fallback), proven
+    // fast in the same #251 telemetry that exposed the stall (it's security's
+    // primary, returned in 7.4s), code-analysis-capable, and think:false
+    // applies to it too. NOT deepseek-v4-pro (same family as the failing
+    // primary + the slow reasoner — the wrong rescue for a stall). Chain:
+    // primary 120s + fallback 120s = ~240s ≤ SPECIALIST_TIMEOUT_MS(370s, 130s
+    // slack); the budget invariant (370+325+195 ≤ 895) is unchanged. NOTE:
+    // logic can now make 2 model calls (primary + fallback), so
+    // MAX_CALLS_PER_ENSEMBLE_RUN rose 16→17. VERIFY reliability across MULTIPLE
+    // post-deploy reviews (outcome:ok + real outputTokens + elapsedMs well
+    // under cap) before declaring SIG-287 fixed.
     retries: 0,
-    fallback: null,
-    perAttemptTimeoutMs: 360_000,
+    fallback: "qwen3-coder-next:cloud",
+    perAttemptTimeoutMs: 120_000,
   },
   security: {
     // Coder-model territory: vulnerability patterns are mostly

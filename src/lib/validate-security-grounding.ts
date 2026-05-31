@@ -168,7 +168,12 @@ function hasCorroboratingSecretFact(
 ): boolean {
   for (const fact of manifest.values()) {
     if (fact.path !== finding.path) continue
-    if (fact.tool !== "secret" && fact.cwe !== SECRETS_CWE) continue
+    // Normalize the CWE before matching (same trim+upper as
+    // deriveSecurityBucket) so a non-secret-tool fact tagged a differently-
+    // cased/padded "cwe-798" still corroborates — a missed match here would
+    // let enforce demote a grounded finding (CodeRabbit, KEEP-direction).
+    const normalizedCwe = typeof fact.cwe === "string" ? fact.cwe.trim().toUpperCase() : undefined
+    if (fact.tool !== "secret" && normalizedCwe !== SECRETS_CWE) continue
     if (fact.line === null) return true // path-only secret fact
     if (Math.abs(fact.line - finding.line) <= EVIDENCE_LINE_TOLERANCE) return true
   }

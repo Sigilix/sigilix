@@ -155,6 +155,15 @@ describe("evaluateSecurityGrounding — manifest corroboration = ground truth", 
     ).toEqual({ keep: true })
   })
 
+  it("KEEPS via a non-secret-tool fact tagged a differently-cased CWE ('cwe-798') — normalized match", () => {
+    const manifest = new Map([
+      ["k", secretFact({ tool: "sarif", cwe: "  cwe-798 ", line: 17, evidenceId: "sarif:rule:..:17" })],
+    ])
+    expect(
+      evaluateSecurityGrounding(finding(), { addedLineTextByLine: added(CLEAN_LINE), manifest }),
+    ).toEqual({ keep: true })
+  })
+
   it("KEEPS on a path-only secret fact (line === null)", () => {
     const manifest = new Map([["k", secretFact({ line: null })]])
     expect(

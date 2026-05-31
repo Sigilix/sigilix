@@ -224,3 +224,46 @@ export function applyRefutedDemotion<T>(
   }
   return { keptFindings, keptMarkers, demoted }
 }
+
+/** SIG-285 re-anchor (inline-first): where a refuted finding's cited tokens
+ *  actually live in the same file's added lines. */
+export type ReanchorDecision =
+  /** Exactly one added line (≠ the cited line) holds ALL cited tokens — the
+   *  unambiguous re-anchor target. The inline-first fix: move the comment here
+   *  instead of body-demoting it. */
+  | { kind: "reanchor"; fromLine: number; toLine: number; tokens: string[] }
+  /** >1 added line holds all tokens — don't guess; fall back to body-demote. */
+  | { kind: "ambiguous"; candidateLines: number[]; tokens: string[] }
+  /** No same-file added line holds all tokens — outside-the-diff or a
+   *  hallucination; fall back to body-demote. */
+  | { kind: "no-match"; tokens: string[] }
+
+/**
+ * SIG-285 (Trust Ledger / inline-first): for a finding ALREADY KNOWN to be
+ * REFUTED + eligible (the caller filters via `selectRefutedInlineDemotions`),
+ * decide whether it can be RE-ANCHORED to the correct added line rather than
+ * body-demoted. Pure + side-effect-free.
+ *
+ * Safety boundary (Codex #257): a candidate added line qualifies only if it
+ * holds ALL of the finding's cited tokens (stricter than `verifyFinding`'s
+ * any-token rule), and ONLY the unambiguous "exactly one same-file line" case
+ * re-anchors. Ambiguous (>1) / no-match → the caller keeps PR4's body-demote.
+ * Same-file only in v0 (no cross-file re-anchor).
+ */
+export function planReanchor(
+  finding: Pick<PrReviewFinding, "path" | "line" | "headline" | "body">,
+  addedLineIndex: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): ReanchorDecision {
+  const tokens = deriveTokens(finding)
+  if (tokens.length === 0) return { kind: "no-match", tokens } // no checkable token (shouldn't happen for refuted)
+  const fileLines = addedLineIndex.get(finding.path)
+  if (fileLines === undefined) return { kind: "no-match", tokens }
+  const candidates: number[] = []
+  for (const [line, text] of fileLines) {
+    if (line === finding.line) continue // the cited line is where it's ABSENT (that's the refutation)
+    if (tokens.every((t) => tokenPresentAtLine(text, t))) candidates.push(line)
+  }
+  if (candidates.length === 1) return { kind: "reanchor", fromLine: finding.line, toLine: candidates[0] as number, tokens }
+  if (candidates.length > 1) return { kind: "ambiguous", candidateLines: candidates.sort((a, b) => a - b), tokens }
+  return { kind: "no-match", tokens }
+}

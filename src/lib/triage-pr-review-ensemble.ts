@@ -292,6 +292,14 @@ import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState 
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import { readVerificationMode } from "./verification/mode"
 import { verifyFinding, findingKey } from "./verification/verify-finding"
+import {
+  verifyFindingAgainstReceipt,
+  buildReceiptIndex,
+  parseReceiptJoinMode,
+  type ReceiptScanResult,
+} from "./verification/verify-finding-receipt"
+import { parseSarif } from "./sarif-evidence/sarif-parser"
+import { normalizeSarifPath } from "./sarif-evidence/path-normalize"
 import { recordVerificationMetricsBounded } from "./verification-metrics-client"
 import type { RecordVerificationArgs } from "../do/verification-metrics"
 import {
@@ -2617,6 +2625,10 @@ export async function handlePrReviewEnsemble(
     // `post` we feed the receipt's SARIF to the SAME pipeline via `rawOverride`.
     const runnerMode = readRunnerEvidenceMode(env)
     let runnerEvidence: RunnerEvidenceState = { state: "runner-absent" }
+    // SIG-285 v2 PR1: the verified receipt's UN-FILTERED HEAD-scan index, built
+    // below + joined to findings after submission (receipt-join verification).
+    // null = no receipt-join (mode off, or no verified receipt for this commit).
+    let receiptScanIndex: Map<string, ReceiptScanResult[]> | null = null
     if (runnerMode !== "off" && args.repoId !== undefined) {
       const mergeSha = meta.merge_commit_sha
       runnerEvidence = mergeSha
@@ -2674,6 +2686,42 @@ export async function handlePrReviewEnsemble(
       ...(runnerMode === "post" && runnerEvidence.state === "verified" ? { rawOverride: runnerEvidence.sarif } : {}),
     })
     const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
+    // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED receipt
+    // exists, build the HEAD-scan index from the receipt's UN-FILTERED parseSarif
+    // results — deliberately NOT `sarifResult.findings`, which runSarifEvidence
+    // already diff/severity-filtered (a filtered-out result would read as a false
+    // absence). Best-effort + bounded: any parse error leaves the index null
+    // (→ the join no-ops) and never breaks the review.
+    if (
+      parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE) !== "off" &&
+      runnerEvidence.state === "verified"
+    ) {
+      try {
+        const parsed = parseSarif(runnerEvidence.sarif)
+        if (parsed.ok) {
+          const scanResults: ReceiptScanResult[] = []
+          for (const run of parsed.report.runs) {
+            for (const res of run.results ?? []) {
+              const ruleId = typeof res.ruleId === "string" ? res.ruleId.trim() : ""
+              if (ruleId.length === 0) continue
+              for (const loc of res.locations ?? []) {
+                const norm = normalizeSarifPath(loc.physicalLocation?.artifactLocation?.uri)
+                if (!norm.ok) continue
+                const startLine = loc.physicalLocation?.region?.startLine
+                scanResults.push(
+                  typeof startLine === "number"
+                    ? { path: norm.path, ruleId, line: startLine }
+                    : { path: norm.path, ruleId },
+                )
+              }
+            }
+          }
+          receiptScanIndex = buildReceiptIndex(scanResults)
+        }
+      } catch (err) {
+        console.warn(JSON.stringify({ event: "receiptjoin-index-build-failed", owner, repo, prNumber, error: String(err) }))
+      }
+    }
     const sarifBlock = renderSarifFindingsForPrompt(sarifFindings)
     telemetry.sarifEvidence = sarifResult.skipped
       ? { skipped: true, reason: sarifResult.reason, findingsCount: 0 }
@@ -5435,6 +5483,35 @@ export async function handlePrReviewEnsemble(
         env, verificationItems, 1_500,
         (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
       )
+    }
+
+    // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED runner
+    // receipt is present (receiptScanIndex built above), re-check each submitted
+    // score>=4 SECURITY finding with a resolvable evidenceId against HEAD's OWN
+    // scan — CONFIRMED if the same rule still fires at the cited path/line,
+    // INCONCLUSIVE otherwise (NEVER refuted; absence is over-determined). PR1 is
+    // TELEMETRY ONLY (event:verification-receiptjoin keyed findingKey for the
+    // SIG-114 join); it measures the refutable-eligible fraction that decides
+    // whether the demote path (PR4/5) is worth building vs receipts-as-trust.
+    // Independent of OPENCLAW_VERIFICATION_MODE; gated by the index being built.
+    if (receiptScanIndex !== null) {
+      const rjMode = parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE)
+      for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
+        if (finding.score < 4 || finding.category !== "security") continue
+        const result = verifyFindingAgainstReceipt(finding, receiptScanIndex)
+        if (result.verdict === "no-check") continue
+        console.log(JSON.stringify({
+          event: "verification-receiptjoin",
+          mode: rjMode,
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          findingKey: findingKey(finding),
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          verdict: result.verdict,
+          ...(result.check ? { checkStatus: result.check.status } : {}),
+        }))
+      }
     }
 
     for (const finding of submissionVerdict.findings) {

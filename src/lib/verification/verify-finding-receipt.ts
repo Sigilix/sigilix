@@ -40,6 +40,22 @@ import { findingKey, type VerificationCheck, type VerificationResult } from "./v
 export { findingKey }
 
 /**
+ * Receipt-join gate mode. `off` (default): the gate doesn't run. `shadow`:
+ * compute + telemeter the verdict, no behavior change. `enforce`: reserved —
+ * PR1 treats it as shadow (demotion is PR4/5, gated on the data). Read from
+ * `OPENCLAW_RECEIPTJOIN_MODE`. Three-state with `off` default, matching the
+ * other gates' idiom.
+ */
+export type ReceiptJoinMode = "off" | "shadow" | "enforce"
+
+export function parseReceiptJoinMode(raw: string | undefined): ReceiptJoinMode {
+  const v = (raw ?? "").trim().toLowerCase()
+  if (v === "shadow") return "shadow"
+  if (v === "enforce") return "enforce"
+  return "off"
+}
+
+/**
  * The minimal slice of a receipt SARIF result this join needs. The ensemble
  * builds these from the verified receipt's UN-FILTERED, UN-CAPPED parseSarif
  * output (NOT runSarifEvidence's diff/severity-filtered findings — a filtered-

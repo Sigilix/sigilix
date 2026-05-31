@@ -404,15 +404,18 @@ const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 // retry backoff (~1s) + 1 cross-provider fallback attempt (~80s,
 // kimi-k2.5:cloud)` = 261s, rounded up to 270s for slack.
 //
-// SIG-287 (2026-05-30): bumped 185s → 250s. Live #244 telemetry showed logic
-// STILL aborting at its 110s per-attempt cap mid-generation on a 13457-tok
-// prompt, while security/perf/tests finished in 4-25s — logic is the unique
-// long-pole (graph+symbol+retrieval context). A thorough logic pass
-// legitimately takes minutes (CodeRabbit/Greptile too); availability +
-// believability outrank the 30-90s aspiration. 250s fits logic's new 240s
-// per-attempt within the budget invariant (250+420+195 = 865 ≤ 895). Other
-// roles finish fast, so a higher wall is pure headroom for them.
-export const SPECIALIST_TIMEOUT_MS = 250_000
+// SIG-287 (2026-05-30): bumped 185s → 250s → 370s over successive passes.
+// Live telemetry showed logic aborting mid-generation at its per-attempt cap on
+// 13k+-tok prompts (graph+symbol+retrieval context) while security/perf/tests
+// finish in 4-25s — logic is the unique long-pole. 110s, then 240s, each STILL
+// left it INTERMITTENT (available on some reviews, aborted on others). A
+// thorough logic pass legitimately takes minutes (CodeRabbit/Greptile too);
+// founder ruling: availability+believability outrank speed, reviews up to ~8 min
+// are fine, the only HARD ceiling is Cloudflare's 900s queue-consumer limit.
+// 370s fits logic's 360s per-attempt within the invariant (370+325+195 = 890 ≤
+// 895; synth trimmed 420→325 to make room — it was wildly over-provisioned).
+// Other roles finish fast, so the higher wall is pure headroom for them.
+export const SPECIALIST_TIMEOUT_MS = 370_000
 // ARC-283: synth budget bumped from 180s → 420s after PR #93's own
 // review timed out at 180s on a 900-line diff + 27 new tests.
 // Sigilix's product positioning is "yes cost more time for BETTER,
@@ -422,7 +425,11 @@ export const SPECIALIST_TIMEOUT_MS = 250_000
 // that timed out at 180s. Pre-ARC-283 telemetry showed synth at
 // 22-100s on small/medium PRs; the 420s ceiling matches the
 // product brand without leaving runaway resource budgets open.
-export const SYNTHESIZER_TIMEOUT_MS = 420_000
+//
+// SIG-287 (2026-05-30): trimmed 420s → 325s to free budget for logic's 360s
+// per-attempt. Synth was over-provisioned — telemetry shows it at 22-100s, so
+// the 325s primary + the 160s in-headroom retry is still 3-5× the observed p95.
+export const SYNTHESIZER_TIMEOUT_MS = 325_000
 // ARC-278 + ARC-283: cap for the one-shot synth RETRY budget. Lives
 // INSIDE the reserved headroom — the retry is "use what's left in
 // the headroom envelope, don't extend the orchestrator wall."
@@ -1164,23 +1171,24 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // elapsedMs=60000 outcome=aborted — logic was STILL generating at the
     // cap on EVERY review → "logic specialist unavailable" banner for weeks.
     //
-    // SIG-236/SIG-287 REAL FIX: a per-role per-attempt cap, now 240s. The 110s
-    // first cut (sized to the 30-90s aspiration) STILL aborted mid-generation —
-    // live #244 telemetry: elapsedMs=110000 outcome=aborted on a 13457-tok
-    // prompt, while security/perf/tests finished in 4-25s. Logic is the unique
-    // long-pole (graph+symbol+retrieval context). A thorough logic pass
-    // legitimately takes minutes (CodeRabbit/Greptile too); an AVAILABLE,
-    // correct verdict at ~3min beats a "logic unavailable" banner at 110s.
-    // 240s gives ~13.5k tok / ~88 tok/s ≈ 150s input + generation comfortable
-    // headroom. Keeps logic's FULL context — graphContext is mandatory BECAUSE
-    // it prevents FPs, so trimming it to go fast trades "unavailable" for
-    // "higher-FP." Fits within the bumped SPECIALIST_TIMEOUT_MS=250s with
-    // retries:0/fallback:null (a 2nd 240s attempt would blow the wall — keep
-    // them 0). Generous-first: once logic completes, its real elapsedMs tells
-    // us the true number to tune toward.
+    // SIG-236/SIG-287 REAL FIX: a per-role per-attempt cap, now 360s. 110s then
+    // 240s each STILL left logic INTERMITTENT — available on some reviews,
+    // aborted on others (#248: available on the first review, "unavailable" on
+    // the re-review) — because logic's prompt is uniquely large (graph+symbol+
+    // retrieval context, 13k+ tok) and cloud-route latency varies, so a tight
+    // cap clips the slow runs. Logic is the unique long-pole; security/perf/
+    // tests finish in 4-25s. Founder ruling: availability+believability outrank
+    // speed — reviews up to ~8 min are fine, the only hard ceiling is CF's 900s
+    // queue limit. 360s covers ~30k tok / ~88 tok/s + generation, with margin
+    // for route variance. Keeps logic's FULL context (graphContext prevents FPs,
+    // so trimming to go fast trades "unavailable" for "higher-FP"). Fits within
+    // SPECIALIST_TIMEOUT_MS=370s with retries:0/fallback:null (a 2nd 360s attempt
+    // would blow the wall — keep them 0). VERIFY reliability across MULTIPLE
+    // post-deploy reviews (outcome:ok) before declaring it fixed; capture the
+    // real elapsedMs to confirm 360s is enough vs. needing a prompt trim.
     retries: 0,
     fallback: null,
-    perAttemptTimeoutMs: 240_000,
+    perAttemptTimeoutMs: 360_000,
   },
   security: {
     // Coder-model territory: vulnerability patterns are mostly

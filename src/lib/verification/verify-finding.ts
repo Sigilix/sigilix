@@ -166,8 +166,8 @@ export function verifyFinding(
 }
 
 /** The finding shape `selectRefutedInlineDemotions` needs (a verifiable finding
- *  plus the eligibility fields). */
-type DemotableFinding = Pick<PrReviewFinding, "path" | "line" | "headline" | "body" | "score" | "category">
+ *  plus the eligibility fields). `startLine` gates the range fail-open below. */
+type DemotableFinding = Pick<PrReviewFinding, "path" | "line" | "headline" | "body" | "score" | "category" | "startLine">
 
 /**
  * SIG-285 PR 4: of the currently-INLINE findings, which are demotable — i.e. a
@@ -177,6 +177,11 @@ type DemotableFinding = Pick<PrReviewFinding, "path" | "line" | "headline" | "bo
  * findings are never passed here (they're already in the body). The eligibility
  * (score>=4, logic/security) matches the verdict-telemetry filter, so the demote
  * set is exactly the REFUTED subset of what the metrics already count.
+ *
+ * FAIL-OPEN on RANGE findings (Codex #257): `verifyFinding` only checks the cited
+ * END line (`finding.line`), so a multi-line finding (`startLine < line`) whose
+ * token sits on an earlier line of the range would FALSE-refute. Never demote a
+ * range finding — FN-cost >> FP-cost, so an unverifiable range stays inline.
  */
 export function selectRefutedInlineDemotions<T extends DemotableFinding>(
   inlineFindings: ReadonlyArray<T>,
@@ -186,6 +191,36 @@ export function selectRefutedInlineDemotions<T extends DemotableFinding>(
     (f) =>
       f.score >= 4 &&
       (f.category === "logic" || f.category === "security") &&
+      (f.startLine === undefined || f.startLine === f.line) && // single-line only
       verifyFinding(f, addedLineIndex).verdict === "refuted",
   )
+}
+
+/**
+ * SIG-285 PR 4: apply the inline->body demotion, keeping the per-finding
+ * `markers` array index-aligned to the kept inline findings. The review builder
+ * indexes findingMarkers by the inline finding's ORIGINAL verdict.findings
+ * position (SIG-127), so removing a finding from the inline array WITHOUT
+ * removing its marker in lockstep would attach the wrong finding's dismissal
+ * marker to every later inline comment — silently corrupting the cross-PR
+ * review-memory corpus. Pure: returns the new arrays; the caller assigns them.
+ */
+export function applyRefutedDemotion<T>(
+  inlineFindings: ReadonlyArray<T>,
+  markers: ReadonlyArray<string | null>,
+  toDemote: ReadonlySet<T>,
+): { keptFindings: T[]; keptMarkers: Array<string | null>; demoted: T[] } {
+  const keptFindings: T[] = []
+  const keptMarkers: Array<string | null> = []
+  const demoted: T[] = []
+  for (let i = 0; i < inlineFindings.length; i++) {
+    const f = inlineFindings[i] as T
+    if (toDemote.has(f)) {
+      demoted.push(f)
+      continue
+    }
+    keptFindings.push(f)
+    keptMarkers.push(markers[i] ?? null)
+  }
+  return { keptFindings, keptMarkers, demoted }
 }

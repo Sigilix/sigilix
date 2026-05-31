@@ -8,6 +8,7 @@ import {
   verifyFinding,
   findingKey,
   selectRefutedInlineDemotions,
+  applyRefutedDemotion,
 } from "../src/lib/verification/verify-finding"
 // Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
 // line-anchoring tests exercise the real index, not a duplicate.
@@ -117,7 +118,7 @@ describe("findingKey", () => {
 
 describe("selectRefutedInlineDemotions (SIG-285 PR 4 — the demote subset)", () => {
   // Reuse the DIFF index: line 10 holds `userId`, line 11 does not.
-  const fd = (over: Partial<{ path: string; line: number; headline: string; body: string; score: number; category: string }>) => ({
+  const fd = (over: Partial<{ path: string; line: number; startLine: number; headline: string; body: string; score: number; category: string }>) => ({
     path: "src/db.ts", line: 11, headline: "", body: "", score: 4, category: "logic", ...over,
   })
 
@@ -144,6 +145,51 @@ describe("selectRefutedInlineDemotions (SIG-285 PR 4 — the demote subset)", ()
     expect(selectRefutedInlineDemotions([], index)).toEqual([])
     expect(selectRefutedInlineDemotions([fd({ line: 10, headline: "`userId`", category: "security", score: 4 })], index)).toEqual([]) // confirmed
     expect(selectRefutedInlineDemotions([fd({ line: 11, headline: "`userId`", category: "tests", score: 5 })], index)).toEqual([]) // wrong category
+  })
+
+  it("FAILS OPEN on a RANGE finding — never demotes a multi-line finding (Codex #257)", () => {
+    // line 11 doesn't contain `userId` → verifyFinding(line 11) is REFUTED, but
+    // verifyFinding only checks the END line; the token may be on an earlier line
+    // of [startLine, line]. A range finding must NOT be demoted.
+    const range = fd({ startLine: 10, line: 11, headline: "leak via `userId`", category: "security", score: 5 })
+    expect(selectRefutedInlineDemotions([range], index)).toEqual([])
+    // A single-line finding (startLine === line, or undefined) IS still eligible.
+    const single = fd({ startLine: 11, line: 11, headline: "leak via `userId`", category: "security", score: 5 })
+    expect(selectRefutedInlineDemotions([single], index)).toEqual([single])
+  })
+})
+
+describe("applyRefutedDemotion (SIG-285 PR 4 — marker<->finding alignment)", () => {
+  // The builder indexes findingMarkers by the inline finding's verdict.findings
+  // position (SIG-127). Removing a finding without removing its marker in
+  // lockstep attaches the WRONG finding's dismissal marker to later inline
+  // comments, corrupting the cross-PR review-memory corpus (the P1 this fixes).
+  it("keeps markers aligned to the kept findings after a MID-list demote", () => {
+    const A = { id: "A" }, B = { id: "B" }, C = { id: "C" }
+    const out = applyRefutedDemotion([A, B, C], ["mA", "mB", "mC"], new Set([B]))
+    expect(out.keptFindings).toEqual([A, C])
+    expect(out.keptMarkers).toEqual(["mA", "mC"]) // NOT ["mA","mB"] — the bug
+    expect(out.demoted).toEqual([B])
+    expect(out.keptFindings[0]).toBe(A) // identity preserved
+    expect(out.keptFindings[1]).toBe(C)
+  })
+
+  it("demoting the FIRST finding shifts the kept markers correctly", () => {
+    const A = { id: "A" }, B = { id: "B" }, C = { id: "C" }
+    const out = applyRefutedDemotion([A, B, C], ["mA", "mB", "mC"], new Set([A]))
+    expect(out.keptFindings).toEqual([B, C])
+    expect(out.keptMarkers).toEqual(["mB", "mC"])
+  })
+
+  it("no demotions leaves both arrays unchanged; all-demoted empties them", () => {
+    const A = { id: "A" }, B = { id: "B" }
+    expect(applyRefutedDemotion([A, B], ["mA", "mB"], new Set())).toEqual({ keptFindings: [A, B], keptMarkers: ["mA", "mB"], demoted: [] })
+    expect(applyRefutedDemotion([A, B], ["mA", "mB"], new Set([A, B]))).toEqual({ keptFindings: [], keptMarkers: [], demoted: [A, B] })
+  })
+
+  it("tolerates a sparse (null) marker without misaligning the rest", () => {
+    const A = { id: "A" }, B = { id: "B" }, C = { id: "C" }
+    expect(applyRefutedDemotion([A, B, C], ["mA", null, "mC"], new Set([A])).keptMarkers).toEqual([null, "mC"])
   })
 })
 

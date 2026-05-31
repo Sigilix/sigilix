@@ -291,7 +291,7 @@ import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sari
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import { readVerificationMode } from "./verification/mode"
-import { verifyFinding, findingKey, selectRefutedInlineDemotions } from "./verification/verify-finding"
+import { verifyFinding, findingKey, selectRefutedInlineDemotions, applyRefutedDemotion } from "./verification/verify-finding"
 import {
   verifyFindingAgainstReceipt,
   buildReceiptIndex,
@@ -5300,7 +5300,10 @@ export async function handlePrReviewEnsemble(
       }
     }
 
-    const findingMarkers: Array<string | null> = await Promise.all(
+    // `let` (was const): SIG-285 PR 4 filters this in lockstep with
+    // submissionVerdict.findings when a refuted finding is demoted, to keep the
+    // marker<->finding index alignment the builder relies on (SIG-127).
+    let findingMarkers: Array<string | null> = await Promise.all(
       filteredConsensusFindings.map(async (f, j) => {
         const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
         if (!sourceSpec) return null
@@ -5463,11 +5466,12 @@ export async function handlePrReviewEnsemble(
     // outcome join (the refutable-FP fraction). SIG-285 PR 4: in `enforce`, a
     // REFUTED score>=4 logic/security finding that is currently INLINE is a
     // mis-anchored citation — DEMOTE it to the PR body (never drop; FN-cost >>
-    // FP-cost, so a possibly-real finding stays visible, just non-blocking).
-    // `shadow` still observes-only (counts the would-demote). The demote runs
-    // BEFORE buildReviewSubmissionWithMetadata below, which derives the review
-    // event from the post-demote inline/body split — so demoting the last inline
-    // blocker flips the posture for free (no separate recompute). Off = no work.
+    // FP-cost). The demote moves a mis-anchored INLINE comment to a body row; it
+    // does NOT unblock the merge (a score>=4 body finding still forces
+    // REQUEST_CHANGES via the SIG-281 body-only floor) — it changes the surface,
+    // not the gate. `shadow` observes-only (counts the would-demote). Off = no
+    // work. The move runs BEFORE buildReviewSubmissionWithMetadata so the event +
+    // marker alignment recompute over the post-demote split.
     const verificationMode = readVerificationMode(env)
     if (verificationMode !== "off") {
       // Cover EVERY submitted score>=4 logic/security finding — inline AND the
@@ -5528,17 +5532,26 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "verification-refuted", reason: "refuted-citation", dropped: demoting })
       }
-      // Enforce only: move them to the body-only set BEFORE
-      // buildReviewSubmissionWithMetadata, which demotes them in the POSTED review
-      // AND recomputes the event (chooseRenderedEventWithOverride reads the
-      // post-demote split — demoting the last inline blocker flips the posture for
-      // free). Never hard-drops; the finding stays visible in the body. The inline
-      // findings were already withdrawal-filtered, so moving them can't
-      // re-introduce a previously-dismissed finding.
+      // Enforce only: move the refuted findings from the inline set to the
+      // body-only set BEFORE buildReviewSubmissionWithMetadata. The builder
+      // re-derives the review event from the post-demote inline/body split, so a
+      // demoted finding stops being an inline comment — but it is NOT unblocked:
+      // it is still score>=4, and the SIG-281 body-only floor keeps a score>=4
+      // body finding at REQUEST_CHANGES. The demote changes the SURFACE (a
+      // mis-anchored inline thread becomes a body row), not the gate. Never
+      // hard-drops; stays fully visible. `applyRefutedDemotion` filters
+      // findingMarkers in lockstep so the marker<->finding alignment the builder
+      // indexes by (SIG-127) survives. Inline findings were already
+      // withdrawal-filtered, so the move can't re-introduce a dismissed finding.
       if (demoting && refutedInline.length > 0) {
-        const demoteSet = new Set<PrReviewFinding>(refutedInline)
-        submissionVerdict.findings = submissionVerdict.findings.filter((f) => !demoteSet.has(f))
-        renderableUnanchoredForSubmission.push(...refutedInline)
+        const { keptFindings, keptMarkers, demoted } = applyRefutedDemotion(
+          submissionVerdict.findings,
+          findingMarkers,
+          new Set<PrReviewFinding>(refutedInline),
+        )
+        submissionVerdict.findings = keptFindings
+        findingMarkers = keptMarkers
+        renderableUnanchoredForSubmission.push(...demoted)
       }
     }
 

@@ -21,7 +21,7 @@ describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () =
   })
 
   it("`shadowRows` is block-scoped to Site 2 — never referenced at/after findingMarkers", () => {
-    const findingMarkersIdx = ENSEMBLE.indexOf("const findingMarkers")
+    const findingMarkersIdx = ENSEMBLE.indexOf("findingMarkers: Array<string | null>")
     expect(findingMarkersIdx).toBeGreaterThan(0)
     const lastShadowRows = ENSEMBLE.lastIndexOf("shadowRows")
     expect(lastShadowRows).toBeGreaterThan(0)
@@ -30,7 +30,7 @@ describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () =
   })
 
   it("`shadowMemoriesForPhase3` is read only before the posting path (never by markers/soften/submission)", () => {
-    const findingMarkersIdx = ENSEMBLE.indexOf("const findingMarkers")
+    const findingMarkersIdx = ENSEMBLE.indexOf("findingMarkers: Array<string | null>")
     const lastHolderUse = ENSEMBLE.lastIndexOf("shadowMemoriesForPhase3")
     expect(lastHolderUse).toBeGreaterThan(0)
     expect(lastHolderUse).toBeLessThan(findingMarkersIdx)
@@ -45,7 +45,7 @@ describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () =
   })
 
   it("SIG-280: the durable shadow KV write lives in the Site-2 block (before the posting path)", () => {
-    const findingMarkersIdx = ENSEMBLE.indexOf("const findingMarkers")
+    const findingMarkersIdx = ENSEMBLE.indexOf("findingMarkers: Array<string | null>")
     expect(findingMarkersIdx).toBeGreaterThanOrEqual(0) // guard: -1 breaks the ordering checks
     // Anchor on the exact KV key expression for the durable corpus record.
     const kvKeyIdx = ENSEMBLE.indexOf("review-memory-claim-shadow:${reverseTs}")

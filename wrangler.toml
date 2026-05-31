@@ -294,13 +294,18 @@ OPENCLAW_RUNNER_OIDC_AUDIENCE = "sigilix-runner-ingest"
 OPENCLAW_RUNNER_WORKFLOW_REF = "Sigilix/runner/.github/workflows/scan.yml"
 OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
 
-# SIG-285 PR 1: start the verification-by-execution SHADOW experiment. For each
-# score>=4 logic/security finding, re-check (worker-native, line-anchored) that
-# its cited code token appears at the cited line and log the verdict
-# (confirmed/refuted/inconclusive/no-check). OBSERVE-ONLY — NO score, rendering,
-# or behavior change; this just emits `verification-shadow` telemetry so we can
-# measure the refutable-FP fraction vs SIG-114 before deciding on PRs 2-4.
-# Rollback: set "off" (or remove the line).
+# SIG-285 verification-by-execution rollout posture (off | shadow | enforce):
+#   - shadow: re-check (worker-native, line-anchored) that each score>=4
+#     logic/security finding's cited token appears at the cited line; emit the
+#     verdict (confirmed/refuted/inconclusive/no-check) telemetry. OBSERVE-ONLY.
+#   - enforce (SIG-285 PR 4): same, PLUS demote a REFUTED inline finding (a
+#     mis-anchored citation) from an inline comment to a PR-body row — never
+#     drop; FN-cost >> FP-cost. The demote changes the SURFACE, not the gate: a
+#     score>=4 body finding still forces REQUEST_CHANGES (SIG-281 body floor), so
+#     a possibly-real refuted finding stays both visible AND blocking — it just
+#     stops being a mis-anchored inline thread. Demote decisions are readable at
+#     /metrics/validation (gate `verification-refuted`).
+# Rollback: set "shadow" (telemetry, no demote) or "off".
 OPENCLAW_VERIFICATION_MODE = "shadow"
 
 # SIG-285 v2 PR1: receipt-join verification — the NO-PERM sandbox foundation.

@@ -14,6 +14,14 @@ const ENSEMBLE = readFileSync(
   "utf8",
 )
 
+// The marker-building declaration is the "start of the posting path" landmark
+// the ordering guards anchor on. One lookup, validated once (CodeRabbit #257).
+function findingMarkersIdx(): number {
+  const idx = ENSEMBLE.indexOf("findingMarkers: Array<string | null>")
+  expect(idx).toBeGreaterThan(0)
+  return idx
+}
+
 describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () => {
   it("the Site-2 block exists and emits review-memory-claim-shadow", () => {
     expect(ENSEMBLE).toContain('event: "review-memory-claim-shadow"')
@@ -21,19 +29,16 @@ describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () =
   })
 
   it("`shadowRows` is block-scoped to Site 2 — never referenced at/after findingMarkers", () => {
-    const findingMarkersIdx = ENSEMBLE.indexOf("const findingMarkers")
-    expect(findingMarkersIdx).toBeGreaterThan(0)
     const lastShadowRows = ENSEMBLE.lastIndexOf("shadowRows")
     expect(lastShadowRows).toBeGreaterThan(0)
     // Its last mention must precede the marker-building / posting path.
-    expect(lastShadowRows).toBeLessThan(findingMarkersIdx)
+    expect(lastShadowRows).toBeLessThan(findingMarkersIdx())
   })
 
   it("`shadowMemoriesForPhase3` is read only before the posting path (never by markers/soften/submission)", () => {
-    const findingMarkersIdx = ENSEMBLE.indexOf("const findingMarkers")
     const lastHolderUse = ENSEMBLE.lastIndexOf("shadowMemoriesForPhase3")
     expect(lastHolderUse).toBeGreaterThan(0)
-    expect(lastHolderUse).toBeLessThan(findingMarkersIdx)
+    expect(lastHolderUse).toBeLessThan(findingMarkersIdx())
   })
 
   it("the shadow event truncates headSha to 7 chars (house style)", () => {
@@ -45,16 +50,15 @@ describe("SIG-276 Phase 3 — shadow output is consumer-less (structural)", () =
   })
 
   it("SIG-280: the durable shadow KV write lives in the Site-2 block (before the posting path)", () => {
-    const findingMarkersIdx = ENSEMBLE.indexOf("const findingMarkers")
-    expect(findingMarkersIdx).toBeGreaterThanOrEqual(0) // guard: -1 breaks the ordering checks
+    const markersIdx = findingMarkersIdx()
     // Anchor on the exact KV key expression for the durable corpus record.
     const kvKeyIdx = ENSEMBLE.indexOf("review-memory-claim-shadow:${reverseTs}")
     expect(kvKeyIdx).toBeGreaterThanOrEqual(0) // durable corpus record exists
-    expect(kvKeyIdx).toBeLessThan(findingMarkersIdx) // gated block, not posting path
+    expect(kvKeyIdx).toBeLessThan(markersIdx) // gated block, not posting path
     // shadowEvent (the durable payload) must be fully contained in the Site-2
     // block: it appears (build + log + KV put) and NEVER at/after findingMarkers.
     const lastShadowEvent = ENSEMBLE.lastIndexOf("shadowEvent")
     expect(lastShadowEvent).toBeGreaterThanOrEqual(0)
-    expect(lastShadowEvent).toBeLessThan(findingMarkersIdx)
+    expect(lastShadowEvent).toBeLessThan(markersIdx)
   })
 })

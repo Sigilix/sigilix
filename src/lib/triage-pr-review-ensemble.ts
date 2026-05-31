@@ -291,7 +291,7 @@ import { runSarifEvidence, type ScanSkipReason as SarifSkipReason } from "./sari
 import { lookupRunnerEvidence, readRunnerEvidenceMode, type RunnerEvidenceState } from "./runner-evidence/lookup"
 import { recordRunnerEvidenceMetric } from "./runner-evidence-metrics-client"
 import { readVerificationMode } from "./verification/mode"
-import { verifyFinding, findingKey } from "./verification/verify-finding"
+import { verifyFinding, findingKey, selectRefutedInlineDemotions, applyRefutedDemotion } from "./verification/verify-finding"
 import {
   verifyFindingAgainstReceipt,
   buildReceiptIndex,
@@ -5300,7 +5300,10 @@ export async function handlePrReviewEnsemble(
       }
     }
 
-    const findingMarkers: Array<string | null> = await Promise.all(
+    // `let` (was const): SIG-285 PR 4 filters this in lockstep with
+    // submissionVerdict.findings when a refuted finding is demoted, to keep the
+    // marker<->finding index alignment the builder relies on (SIG-127).
+    let findingMarkers: Array<string | null> = await Promise.all(
       filteredConsensusFindings.map(async (f, j) => {
         const sourceSpec = filteredConsensusProvenance[j]?.sourceSpecialists?.[0]
         if (!sourceSpec) return null
@@ -5460,9 +5463,15 @@ export async function handlePrReviewEnsemble(
     // logic/security finding CITES actually appears at the line it points to
     // (worker-native, line-anchored — no subprocess, no new perms). Emit the
     // verdict (confirmed/refuted/inconclusive/no-check) keyed for a SIG-114
-    // outcome join, so we can measure the refutable-FP fraction BEFORE wiring
-    // any demotion (PR 4). NO behavior change here — telemetry only; `enforce`
-    // is treated as `shadow` until PR 4. Off (default) = no work.
+    // outcome join (the refutable-FP fraction). SIG-285 PR 4: in `enforce`, a
+    // REFUTED score>=4 logic/security finding that is currently INLINE is a
+    // mis-anchored citation — DEMOTE it to the PR body (never drop; FN-cost >>
+    // FP-cost). The demote moves a mis-anchored INLINE comment to a body row; it
+    // does NOT unblock the merge (a score>=4 body finding still forces
+    // REQUEST_CHANGES via the SIG-281 body-only floor) — it changes the surface,
+    // not the gate. `shadow` observes-only (counts the would-demote). Off = no
+    // work. The move runs BEFORE buildReviewSubmissionWithMetadata so the event +
+    // marker alignment recompute over the post-demote split.
     const verificationMode = readVerificationMode(env)
     if (verificationMode !== "off") {
       // Cover EVERY submitted score>=4 logic/security finding — inline AND the
@@ -5501,6 +5510,49 @@ export async function handlePrReviewEnsemble(
         env, verificationItems, 1_500,
         (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
       )
+      // SIG-285 PR 4: the demote subset = the REFUTED inline findings (pure,
+      // unit-tested helper). Record the demote decision per finding on the shared
+      // validation corpus (gate `verification-refuted`, readable at
+      // /metrics/validation alongside the grounding gates) — `dropped` = actually
+      // demoted (enforce) vs would-demote (shadow), matching the gates' semantics.
+      const refutedInline = selectRefutedInlineDemotions(submissionVerdict.findings, addedLineTextByLine)
+      const demoting = verificationMode === "enforce"
+      for (const finding of refutedInline) {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "verification-refuted",
+          mode: verificationMode,
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: "refuted-citation",
+          dropped: demoting,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-refuted", reason: "refuted-citation", dropped: demoting })
+      }
+      // Enforce only: move the refuted findings from the inline set to the
+      // body-only set BEFORE buildReviewSubmissionWithMetadata. The builder
+      // re-derives the review event from the post-demote inline/body split, so a
+      // demoted finding stops being an inline comment — but it is NOT unblocked:
+      // it is still score>=4, and the SIG-281 body-only floor keeps a score>=4
+      // body finding at REQUEST_CHANGES. The demote changes the SURFACE (a
+      // mis-anchored inline thread becomes a body row), not the gate. Never
+      // hard-drops; stays fully visible. `applyRefutedDemotion` filters
+      // findingMarkers in lockstep so the marker<->finding alignment the builder
+      // indexes by (SIG-127) survives. Inline findings were already
+      // withdrawal-filtered, so the move can't re-introduce a dismissed finding.
+      if (demoting && refutedInline.length > 0) {
+        const { keptFindings, keptMarkers, demoted } = applyRefutedDemotion(
+          submissionVerdict.findings,
+          findingMarkers,
+          new Set<PrReviewFinding>(refutedInline),
+        )
+        submissionVerdict.findings = keptFindings
+        findingMarkers = keptMarkers
+        renderableUnanchoredForSubmission.push(...demoted)
+      }
     }
 
     // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED runner

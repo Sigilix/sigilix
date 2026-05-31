@@ -121,10 +121,17 @@ export interface SecurityGroundingContext {
  * Gather the cited code for a finding from the per-line added-text map:
  * the [startLine, line] range (single line when `startLine` is absent),
  * joined with "\n" — the same shape `containsCredentialToken` expects (it
- * splits on "\n" and checks each line independently). Returns null when
- * the path isn't in the map or NONE of the cited lines resolve to added
- * text (e.g. the finding cites a context/unchanged line outside the diff)
- * — the caller treats null as "cited code not in hand" → keep (FP-safe).
+ * splits on "\n" and checks each line independently).
+ *
+ * Returns null (→ caller keeps, FP-safe) UNLESS we hold the FULL cited
+ * range: every line in [startLine, line] must resolve to an added line. The
+ * map carries only `+` (added) lines, so a multi-line range that spans a
+ * CONTEXT (unchanged) line — which could carry the real credential the bot
+ * cited — would resolve only the added lines and falsely read as
+ * credential-free. Requiring EVERY cited line to resolve preserves the
+ * zero-false-negative guarantee: a partial range is "cited code not fully
+ * in hand" → keep (Codex review catch). Single-line findings (the common
+ * case, incl. the #243 FP) resolve trivially and are unaffected.
  */
 function collectCitedCode(
   finding: PrReviewFinding,
@@ -139,7 +146,10 @@ function collectCitedCode(
   const lines: string[] = []
   for (let ln = lo; ln <= hi; ln++) {
     const text = lineMap.get(ln)
-    if (text !== undefined) lines.push(text)
+    // A cited line that isn't a visible added line (e.g. a context line that
+    // may hold the credential) → we can't see the whole range → keep.
+    if (text === undefined) return null
+    lines.push(text)
   }
   return lines.length > 0 ? lines.join("\n") : null
 }

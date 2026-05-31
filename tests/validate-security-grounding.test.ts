@@ -114,6 +114,15 @@ describe("evaluateSecurityGrounding — credential-token predicate (secrets-expo
     const map = new Map([[PATH, new Map([[16, CLEAN_LINE], [17, CREDENTIAL_LINE]])]])
     expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
   })
+
+  it("multi-line finding with an UNRESOLVED line in range (a context line) → keep (zero-FN: the missing line may hold the credential)", () => {
+    // Range [16,17] but only line 17 is an added line; line 16 is a context
+    // line absent from the map — the credential the bot cited could be there,
+    // so we must NOT suppress on the partial (clean) evidence. (Codex catch.)
+    const f = finding({ startLine: 16, line: 17 })
+    const map = new Map([[PATH, new Map([[17, CLEAN_LINE]])]])
+    expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
+  })
 })
 
 describe("evaluateSecurityGrounding — UNKNOWN always keeps (zero false-negatives)", () => {

@@ -251,6 +251,13 @@ export type ReanchorDecision =
  * re-anchors. Ambiguous (>1) / no-match → the caller keeps PR4's body-demote.
  * Same-file only in v0 (no cross-file re-anchor).
  *
+ * The "refuted + single-line + score>=4 logic/security" precondition is a CALLER
+ * contract (`selectRefutedInlineDemotions`), an optimization — not a safety
+ * requirement: this function is SAFE on any input (a range / off-line / multi-line
+ * finding simply yields `ambiguous` or `no-match`, never a wrong re-anchor), so
+ * there's no throwing assert — a throw in the review path would be an FN risk
+ * (CodeRabbit #259).
+ *
  * TODO (mutation PR): before actually moving an inline comment to `toLine`,
  * re-run the SIG-127 structural-substantive check on it — `toLine` could be a
  * non-substantive added line (e.g. a bare `}`) that GitHub renders awkwardly;

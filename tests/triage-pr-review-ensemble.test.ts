@@ -893,12 +893,13 @@ describe("Phase 4a.3 — timeout schedule", () => {
     // overshoot (pre-flight not budgeted into headroom); these
     // values are the post-catch corrected set.
     // SIG-234 (2026-05-26): tightened 270 → 185 after the lineup swap.
-    // SIG-287 (2026-05-30): bumped 185 → 250 — live telemetry showed logic
-    // still aborting at its 110s per-attempt cap on a 13.5k-tok prompt, so
-    // logic's per-attempt cap went to 240s and the wall must fit it. Budget
-    // invariant still holds: 250 + 420 + 195 = 865 ≤ 895.
-    expect(SPECIALIST_TIMEOUT_MS).toBe(250_000)
-    expect(SYNTHESIZER_TIMEOUT_MS).toBe(420_000)
+    // SIG-287 (2026-05-30): 185 → 250 → 370. Logic stayed INTERMITTENT at 110s
+    // then 240s (aborted mid-generation on big graph-context prompts), so its
+    // per-attempt cap went to 360s and the wall must fit it; synth trimmed
+    // 420 → 325 (over-provisioned) to free budget. Invariant: 370 + 325 + 195 =
+    // 890 ≤ 895.
+    expect(SPECIALIST_TIMEOUT_MS).toBe(370_000)
+    expect(SYNTHESIZER_TIMEOUT_MS).toBe(325_000)
     expect(SYNTHESIZER_RETRY_TIMEOUT_MS).toBe(160_000)
     expect(RESERVED_HEADROOM_MS).toBe(195_000)
     expect(ORCHESTRATOR_TIMEOUT_MS).toBe(895_000)

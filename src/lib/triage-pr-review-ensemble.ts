@@ -384,6 +384,8 @@ import { contextExpansionForChangedSymbolsFor } from "./repo-graph-client"
 import { buildGraphContextExpansion } from "./graph-context-expansion"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
+import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
+import { graphExpansionMode } from "./graph-expansion-mode"
 import type { GraphContextNode } from "../do/repo-graph"
 import { edgeWeight, hopDecay } from "./graph-scoring"
 import { withTimeout } from "./with-timeout"
@@ -878,20 +880,10 @@ export function graphRetrievalMode(env: Env): "off" | "shadow" | "post" {
   return raw
 }
 
-/**
- * SIG-286: graph-context body-expansion mode parser — "off" | "shadow" | "post".
- *
- * Case-insensitive, whitespace-tolerant; unknown/unset → "off". In PR1 BOTH
- * "shadow" and "post" only COMPUTE + emit `graph-expansion-shadow` telemetry;
- * neither injects the enriched context into any prompt. `post` is parsed so the
- * config surface exists, but injection is RESERVED for a later PR.
- */
-export function graphExpansionMode(env: Env): "off" | "shadow" | "post" {
-  const v = (env.OPENCLAW_GRAPH_EXPANSION ?? "").trim().toLowerCase()
-  if (v === "post") return "post"
-  if (v === "shadow") return "shadow"
-  return "off"
-}
+// SIG-286: graphExpansionMode moved to ./graph-expansion-mode (a light module
+// the metrics route can import without pulling this ensemble). Re-exported here
+// so existing importers keep working.
+export { graphExpansionMode }
 
 /**
  * Render graph-expansion nodes as the `[GRAPH CONTEXT]` content string.
@@ -1363,6 +1355,14 @@ export interface EnsembleHandlerArgs {
    * callers (tests).
    */
   graphMetricsSink?: GraphRetrievalSample[]
+  /**
+   * SIG-286 PR2.5: the graph-context-expansion block pushes one
+   * `graph-expansion-shadow` sample here (0 elements if expansion is off /
+   * errored); flushed to GraphExpansionMetricsDO in the dispatcher's finally so
+   * the CONTROL-vs-TREATMENT netNewTokens median is readable at
+   * GET /metrics/graph-expansion. Optional for non-dispatcher callers (tests).
+   */
+  graphExpansionMetricsSink?: GraphExpansionSample[]
   /**
    * SIG-247 Phase 1: GitHub's immutable `repo.id`, threaded from
    * the webhook payload via JobMessage → baseArgs → here. Passed
@@ -2574,6 +2574,22 @@ export async function handlePrReviewEnsemble(
           netNewTokens: enriched.netNewTokens,
           fetch: enriched.fetch,
         }))
+        // SIG-286 PR2.5: push the same sample to the dispatcher's sink so it
+        // lands in GraphExpansionMetricsDO (curl-able via /metrics/graph-expansion,
+        // the readable netNewTokens median the PR3 GO/KILL decision keys off).
+        // Telemetry-only — fires in shadow and post, matching the log event.
+        args.graphExpansionMetricsSink?.push({
+          mode: graphExpMode,
+          graphAvailable: enriched.graphAvailable,
+          netNewTokens: enriched.netNewTokens,
+          controlTokens: enriched.control.tokens,
+          totalTokens: enriched.totalTokens,
+          fetchEnabled: enriched.fetch.enabled,
+          fetchFiles: enriched.fetch.files,
+          fetchBytes: enriched.fetch.bytes,
+          fetchElapsedMs: enriched.fetch.elapsedMs,
+          budgetExhausted: enriched.fetch.budgetExhausted,
+        })
       } catch (err) {
         // Genuine orchestrator cancellation propagates; any other failure is
         // soft — log and continue, never block the review.

@@ -72,10 +72,13 @@ import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
+import { handleGraphExpansionMetricsRoute } from "./lib/metrics-graph-expansion-route"
 import { handleFpRateMetricsRoute } from "./lib/metrics-fp-rate-route"
 import { handleRunnerIngestRoute } from "./lib/runner-ingest-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
 import type { GraphRetrievalSample } from "./do/graph-metrics"
+import { recordGraphExpansionMetrics } from "./lib/graph-expansion-metrics-client"
+import type { GraphExpansionSample } from "./do/graph-expansion-metrics"
 import {
   handleAdminIndexRoute,
   handleAdminBackfillRoute,
@@ -365,6 +368,12 @@ export interface Env {
   // verdict counters (confirmed / refuted / inconclusive / no-check × category).
   // Read via GET /metrics/verification (shares OPENCLAW_VALIDATION_METRICS_TOKEN).
   VERIFICATION_METRICS_DO: DurableObjectNamespace
+
+  // SIG-286 PR2.5: single global DO holding rolling graph-context-expansion
+  // shadow aggregates (netNewTokens histogram → median, cross-file rates, fetch
+  // cost). Read via GET /metrics/graph-expansion (shares the metrics token) —
+  // the readable CONTROL-vs-TREATMENT number the PR3 inject GO/KILL keys off.
+  GRAPH_EXPANSION_METRICS_DO: DurableObjectNamespace
 
   // SIG-184: runner-evidence ingest (POST /runner/ingest). The GitHub OIDC token
   // IS the auth; these pin what a valid token must attest. Both come from the
@@ -1131,6 +1140,12 @@ export default {
       return handleGraphMetricsRoute(request, env)
     }
 
+    // SIG-286 PR2.5: authenticated read of the rolling graph-context-expansion
+    // shadow measurement (netNewTokens median + cross-file rates + GO/KILL hint).
+    if (request.method === "GET" && url.pathname === "/metrics/graph-expansion") {
+      return handleGraphExpansionMetricsRoute(request, env)
+    }
+
     // SIG-114 PR 5: authenticated live read of the per-specialist dismissal-
     // based false-positive rate (the "floor" metric), computed per repo.
     if (request.method === "GET" && url.pathname === "/metrics/fp-rate") {
@@ -1534,6 +1549,10 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // graph-retrieval sample here (0 or 1 element); flushed alongside the
       // validation sink in the finally below.
       const graphMetricsSink: GraphRetrievalSample[] = []
+      // SIG-286 PR2.5: the ensemble's graph-context-expansion block pushes its
+      // one per-review shadow sample here (0 or 1 element); flushed to
+      // GraphExpansionMetricsDO in the finally below.
+      const graphExpansionMetricsSink: GraphExpansionSample[] = []
       const baseArgs = {
         owner: job.owner,
         repo: job.repo,
@@ -1543,6 +1562,7 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env,
         validationSink,
         graphMetricsSink,
+        graphExpansionMetricsSink,
         // ARC-251: thread the requeue depth from the job message into
         // both review pipelines. Webhook-driven messages omit the
         // field (treated as 0); stale-head-driven requeues carry the
@@ -1721,6 +1741,22 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             } catch (err) {
               console.log(JSON.stringify({
                 event: "graph-metrics-record-error",
+                owner: job.owner,
+                repo: job.repo,
+                prNumber: job.prNumber,
+                error: err instanceof Error ? err.message : String(err),
+              }))
+            }
+          }
+          // SIG-286 PR2.5: flush the per-review graph-expansion sample once.
+          // Non-fatal — same guarantees as the graph-retrieval flush above.
+          const expansionSample = graphExpansionMetricsSink[0]
+          if (expansionSample) {
+            try {
+              await recordGraphExpansionMetrics(env, { sample: expansionSample })
+            } catch (err) {
+              console.log(JSON.stringify({
+                event: "graph-expansion-metrics-record-error",
                 owner: job.owner,
                 repo: job.repo,
                 prNumber: job.prNumber,
@@ -3529,6 +3565,12 @@ export { VerificationMetricsDO } from "./do/verification-metrics"
 // (SQLite). Registered via the [[durable_objects.bindings]] GRAPH_METRICS_DO
 // entry + the sig-152-v1 new_sqlite_classes migration in wrangler.toml.
 export { GraphMetricsDO } from "./do/graph-metrics"
+
+// SIG-286 PR2.5: GraphExpansionMetricsDO — rolling graph-context-expansion
+// shadow telemetry (SQLite). Registered via the [[durable_objects.bindings]]
+// GRAPH_EXPANSION_METRICS_DO entry + the sig-286-metrics-v1 new_sqlite_classes
+// migration in wrangler.toml.
+export { GraphExpansionMetricsDO } from "./do/graph-expansion-metrics"
 
 // SIG-184: RunnerReceiptDO — atomic single-use guard + defensible runner-evidence
 // receipt (SQLite). Registered via the [[durable_objects.bindings]]

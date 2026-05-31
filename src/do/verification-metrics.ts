@@ -35,22 +35,40 @@ CREATE INDEX IF NOT EXISTS vrf_daily_counts_by_day ON daily_counts(day);
 
 export interface RecordVerificationArgs {
   verdict: VerificationVerdict
-  /** "logic" | "security" (the only verified categories), kept as a free string. */
+  /** "logic" | "security" (the only verified categories), kept as a free string.
+   *  SIG-285 v2: the receipt-join check records under RECEIPTJOIN_CATEGORY so its
+   *  verdicts are surfaced separately from the worker-token ones. */
   category: string
   /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
   occurredAt?: string
 }
 
+/** Sentinel `category` the receipt-join check (SIG-285 v2) records under, so it
+ *  shares the DO without a schema migration but is reported separately from the
+ *  worker-token verification. */
+export const RECEIPTJOIN_CATEGORY = "receiptjoin"
+
 export interface VerificationMetricsQuery {
-  /** verdict → category → count. */
+  /** verdict → category → count. WORKER-TOKEN only (excludes receipt-join). */
   counts: Record<string, Record<string, number>>
-  /** Roll-up across all categories: verdict → total. */
+  /** Roll-up across all categories: verdict → total. Worker-token only. */
   byVerdict: Record<string, number>
+  /** Worker-token total (excludes receipt-join). */
   total: number
-  /** (confirmed + refuted) / total — the share with a usable check. */
+  /** (confirmed + refuted) / total — the worker-token share with a usable check. */
   refutableFraction: number
-  /** refuted / total — the share that would demote in enforce (PR 4). */
+  /** refuted / total — the worker-token share that would demote in enforce (PR 4). */
   refutedFraction: number
+  /** SIG-285 v2 PR2: the receipt-join verdict distribution (separate corpus).
+   *  `refutableEligibleFraction` = inconclusive / (confirmed + inconclusive) —
+   *  the load-bearing unknown that decides PR4/5 (demote) vs receipts-as-trust. */
+  receiptJoin: {
+    confirmed: number
+    inconclusive: number
+    /** confirmed + inconclusive (the receipt-join-ELIGIBLE findings). */
+    total: number
+    refutableEligibleFraction: number
+  }
   window: { days: number; startDay: string; endDay: string }
 }
 
@@ -125,6 +143,7 @@ export class VerificationMetricsDO extends DurableObject<Env> {
 
     const counts: Record<string, Record<string, number>> = {}
     const byVerdict: Record<string, number> = {}
+    const rjByVerdict: Record<string, number> = {}
     let total = 0
     for (const row of sql.exec<{ verdict: string; category: string; total: number }>(
       `SELECT verdict, category, SUM(count) AS total
@@ -132,6 +151,13 @@ export class VerificationMetricsDO extends DurableObject<Env> {
        GROUP BY verdict, category`,
       startDay, endDay,
     )) {
+      // SIG-285 v2: receipt-join verdicts share the DO under RECEIPTJOIN_CATEGORY
+      // but are a SEPARATE corpus — keep them out of the worker-token counts /
+      // byVerdict / fractions so neither measurement contaminates the other.
+      if (row.category === RECEIPTJOIN_CATEGORY) {
+        rjByVerdict[row.verdict] = (rjByVerdict[row.verdict] ?? 0) + row.total
+        continue
+      }
       ;(counts[row.verdict] ??= {})[row.category] = row.total
       byVerdict[row.verdict] = (byVerdict[row.verdict] ?? 0) + row.total
       total += row.total
@@ -139,13 +165,24 @@ export class VerificationMetricsDO extends DurableObject<Env> {
 
     const confirmed = byVerdict["confirmed" satisfies VerificationVerdict] ?? 0
     const refuted = byVerdict["refuted" satisfies VerificationVerdict] ?? 0
-    const round = (n: number): number => (total === 0 ? 0 : Math.round((n / total) * 1000) / 1000)
+    const ratio = (n: number, d: number): number => (d === 0 ? 0 : Math.round((n / d) * 1000) / 1000)
+
+    const rjConfirmed = rjByVerdict["confirmed" satisfies VerificationVerdict] ?? 0
+    const rjInconclusive = rjByVerdict["inconclusive" satisfies VerificationVerdict] ?? 0
+    const rjTotal = rjConfirmed + rjInconclusive
+
     return {
       counts,
       byVerdict,
       total,
-      refutableFraction: round(confirmed + refuted),
-      refutedFraction: round(refuted),
+      refutableFraction: ratio(confirmed + refuted, total),
+      refutedFraction: ratio(refuted, total),
+      receiptJoin: {
+        confirmed: rjConfirmed,
+        inconclusive: rjInconclusive,
+        total: rjTotal,
+        refutableEligibleFraction: ratio(rjInconclusive, rjTotal),
+      },
       window: { days: args.windowDays, startDay, endDay },
     }
   }

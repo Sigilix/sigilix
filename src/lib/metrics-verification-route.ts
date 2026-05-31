@@ -9,6 +9,7 @@ import type { Env } from "../index"
 import { requireBearerToken } from "./auth-bearer"
 import { queryVerificationMetrics } from "./verification-metrics-client"
 import { readVerificationMode } from "./verification/mode"
+import { parseReceiptJoinMode } from "./verification/verify-finding-receipt"
 
 const DEFAULT_WINDOW_DAYS = 7
 const MAX_WINDOW_DAYS = 30
@@ -52,6 +53,11 @@ export async function handleVerificationMetricsRoute(request: Request, env: Env)
       refutedFraction: metrics.refutedFraction,
       byVerdict: metrics.byVerdict,
       counts: metrics.counts,
+      // SIG-285 v2 PR2: the receipt-join measurement (separate corpus). Its
+      // `refutableEligibleFraction` is THE load-bearing number deciding whether
+      // PR4/5 (demote) is worth building vs receipts-as-trust.
+      receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
+      receiptJoin: metrics.receiptJoin,
     },
     200,
   )

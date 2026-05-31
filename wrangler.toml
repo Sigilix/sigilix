@@ -297,7 +297,13 @@ OPENCLAW_VERIFICATION_MODE = "shadow"
 # (event:verification-receiptjoin); NO score/render/behavior change, NO new GitHub
 # permission. PR1 lands INERT (off); PR2 flips to "shadow" to measure the
 # refutable-eligible fraction. Rollback: set "off".
-OPENCLAW_RECEIPTJOIN_MODE = "off"
+# SIG-285 v2 PR2 (2026-05-31): flipped off → shadow to START the measurement.
+# Shadow runs the join + persists verdicts to VerificationMetricsDO under the
+# `receiptjoin` category + emits telemetry — but NEVER changes the review (no
+# demote/render). Read GET /metrics/verification → `receiptJoin
+# .refutableEligibleFraction`: the load-bearing number deciding PR4/5 (demote)
+# vs receipts-as-trust. Needs a VERIFIED runner receipt (dogfood has one).
+OPENCLAW_RECEIPTJOIN_MODE = "shadow"
 
 # SIG-290 v1: anti-hallucination absence-grounding gate. Suppress/downgrade
 # "absence-claim" findings (e.g. "lacks tests", "no null check", "missing

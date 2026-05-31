@@ -302,7 +302,7 @@ import {
 import { parseSarif } from "./sarif-evidence/sarif-parser"
 import { normalizeSarifPath } from "./sarif-evidence/path-normalize"
 import { recordVerificationMetricsBounded } from "./verification-metrics-client"
-import type { RecordVerificationArgs } from "../do/verification-metrics"
+import { RECEIPTJOIN_CATEGORY, type RecordVerificationArgs } from "../do/verification-metrics"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
@@ -5498,6 +5498,11 @@ export async function handlePrReviewEnsemble(
     // Independent of OPENCLAW_VERIFICATION_MODE; gated by the index being built.
     if (receiptScanIndex !== null) {
       const rjMode = receiptJoinMode
+      // SIG-285 v2 PR2: persist the verdict distribution to VerificationMetricsDO
+      // under RECEIPTJOIN_CATEGORY (a separate corpus from worker-token) so the
+      // refutable-eligible fraction is readable at GET /metrics/verification —
+      // the load-bearing measurement, not just live `wrangler tail`.
+      const receiptJoinItems: RecordVerificationArgs[] = []
       for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
         if (finding.score < 4 || finding.category !== "security") continue
         const result = verifyFindingAgainstReceipt(finding, receiptScanIndex)
@@ -5513,7 +5518,14 @@ export async function handlePrReviewEnsemble(
           verdict: result.verdict,
           ...(result.check ? { checkStatus: result.check.status } : {}),
         }))
+        receiptJoinItems.push({ verdict: result.verdict, category: RECEIPTJOIN_CATEGORY })
       }
+      // Best-effort + bounded (same as the worker-token block) — a stalled DO or
+      // a record failure NEVER breaks the review (measurement only).
+      await recordVerificationMetricsBounded(
+        env, receiptJoinItems, 1_500,
+        (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
+      )
     }
 
     for (const finding of submissionVerdict.findings) {

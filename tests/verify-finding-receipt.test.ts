@@ -18,12 +18,16 @@ import {
 import type { PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { SarifRun } from "../src/lib/sarif-evidence/types"
 
-// A stub normalizer: an inline uri → lowercased path; else an `index` → `idx<n>`;
-// else fail. Lets the extractor's uri / index / fail paths be exercised purely.
+// A stub normalizer: an inline uri → lowercased path; else resolve `index`
+// AGAINST the forwarded `artifacts` table (so the test genuinely fails if the
+// extractor stops forwarding run.artifacts — CodeRabbit); else fail.
 const stubNormalize: SarifPathNormalizer = (uri, opts) => {
   if (typeof uri === "string" && uri.length > 0) return { ok: true, path: uri.toLowerCase() }
-  if (typeof opts.index === "number") return { ok: true, path: `idx${opts.index}` }
-  return { ok: false, reason: "no uri or index" }
+  if (typeof opts.index === "number") {
+    const resolved = opts.artifacts?.[opts.index]?.location?.uri
+    if (typeof resolved === "string" && resolved.length > 0) return { ok: true, path: resolved.toLowerCase() }
+  }
+  return { ok: false, reason: "no uri or resolvable index" }
 }
 
 function run(results: SarifRun["results"], artifacts?: SarifRun["artifacts"]): SarifRun {
@@ -190,10 +194,10 @@ describe("extractReceiptScanResults", () => {
     const out = extractReceiptScanResults([
       run(
         [{ ruleId: "r", locations: [{ physicalLocation: { artifactLocation: { index: 0 }, region: { startLine: 5 } } }] }],
-        [{ location: { uri: "from-index.ts" } }],
+        [{ location: { uri: "From-Index.ts" } }],
       ),
     ], stubNormalize)
-    expect(out).toEqual([{ path: "idx0", ruleId: "r", line: 5 }])
+    expect(out).toEqual([{ path: "from-index.ts", ruleId: "r", line: 5 }]) // resolved THROUGH run.artifacts
   })
 
   it("skips a location the normalizer rejects (ok:false)", () => {

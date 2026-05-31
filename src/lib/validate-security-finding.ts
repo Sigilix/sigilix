@@ -32,6 +32,7 @@
 
 import type { PrReviewFinding, ScanFactDismissal } from "./triage-pr-review"
 import type { SecurityFact } from "./security-evidence-manifest"
+import { containsCredentialToken } from "./secret-scan"
 
 /**
  * Validator mode. `shadow` (default): emit telemetry counting what
@@ -174,14 +175,56 @@ export const REMEDIATION_BY_BUCKET: Record<SecurityBucket, string> = {
 }
 
 /**
+ * Believability gate (secret-remediation): the DE-ALARMED, conditional
+ * remediation used for a `secrets-exposure` finding whose cited code does
+ * NOT actually contain a credential-like token. The alarmist
+ * `REMEDIATION_BY_BUCKET["secrets-exposure"]` text asserts compromise
+ * outright ("treat the value as compromised … rewrite history"); firing
+ * that off the CWE-798 label alone — with no real credential present —
+ * mortified a partner demo when the specialist hallucinated a secret (it
+ * misread a `.length` COUNT as a leak).
+ *
+ * This fallback NEVER asserts compromise. It still tells a genuine secret
+ * to rotate, but conditioned on the reader first confirming it IS one — so
+ * even a detector miss can't fully drop the guidance.
+ */
+export const SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED =
+  "If this value is an actual credential, treat it as compromised — revoke/rotate it, move it to a secret store or environment variable, and purge it from history. First confirm it is a real secret (not a hash, a length/identifier, a placeholder, or another non-sensitive value)."
+
+/**
  * SIG-282 Phase 3: the deterministic remediation for a finding, or null
  * when it isn't a security finding with a resolvable CWE bucket (then the
  * renderer falls back to whatever the finding body already says).
+ *
+ * Believability gate (secret-remediation): for the `secrets-exposure`
+ * bucket ONLY, the alarmist "treat as compromised / rewrite history" text
+ * is gated on a real credential signal. `citedLineText` is the cited
+ * added-line(s) text at the finding's location (threaded from the render
+ * site, where `addedLineTextByLine` is already in scope). When that text
+ * contains a credential-like token (reusing `secret-scan`'s vetted
+ * detector), the full alarmist remediation is kept; otherwise the
+ * de-alarmed conditional remediation is returned instead.
+ *
+ * Back-compat: `citedLineText` is OPTIONAL. When omitted (existing
+ * callers / tests that don't thread cited text), a `secrets-exposure`
+ * finding gets the de-alarmed conditional text — never a confident
+ * assertion of compromise we cannot back with the cited code. Every OTHER
+ * bucket is UNCHANGED regardless of `citedLineText`. Non-security findings
+ * still return null.
  */
-export function remediationForFinding(finding: PrReviewFinding): string | null {
+export function remediationForFinding(
+  finding: PrReviewFinding,
+  citedLineText?: string,
+): string | null {
   if (finding.category !== "security") return null
   const bucket = deriveSecurityBucket(finding)
-  return bucket ? REMEDIATION_BY_BUCKET[bucket] : null
+  if (!bucket) return null
+  if (bucket === "secrets-exposure") {
+    return containsCredentialToken(citedLineText ?? "")
+      ? REMEDIATION_BY_BUCKET["secrets-exposure"]
+      : SECRETS_EXPOSURE_REMEDIATION_UNVERIFIED
+  }
+  return REMEDIATION_BY_BUCKET[bucket]
 }
 
 /**

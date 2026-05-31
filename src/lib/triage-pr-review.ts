@@ -2968,6 +2968,36 @@ export function formatProposedChangeBlock(
 }
 
 /**
+ * Believability gate (secret-remediation): gather the cited added-line
+ * text for a finding's range (startLine..line) from `addedLineTextByPath`,
+ * joined with `\n`. This is the same range the "Current" block renders
+ * (see `formatProposedChangeBlock`), so the credential check runs against
+ * exactly the code the comment cites. Returns "" when no added-line text
+ * is available for any line in the range — the gate then treats the
+ * `secrets-exposure` finding as unverified (de-alarmed remediation).
+ *
+ * Pure — exported for tests.
+ */
+export function collectCitedLineText(
+  finding: PrReviewFinding,
+  addedLineTextByPath?: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): string {
+  const startL =
+    finding.startLine != null && finding.startLine < finding.line
+      ? finding.startLine
+      : finding.line
+  const endL = finding.line
+  const addedLines = addedLineTextByPath?.get(finding.path)
+  if (!addedLines) return ""
+  const citedLines: string[] = []
+  for (let n = startL; n <= endL; n++) {
+    const text = addedLines.get(n)
+    if (text !== undefined) citedLines.push(text)
+  }
+  return citedLines.join("\n")
+}
+
+/**
  * SIG-164 (PR 5): "Prompt To Fix With AI" block — mirrors Greptile's
  * exact summary + body shape (no leading emoji; the words are the
  * affordance). Folds the finding into a structured Markdown prompt
@@ -3089,7 +3119,14 @@ export function formatFindingComment(
   // confirmed security finding, keyed by its CWE bucket — rather than
   // relying on LLM-authored remediation prose. The model describes the
   // problem (the body); the system supplies the standard fix guidance.
-  const remediation = remediationForFinding(finding)
+  //
+  // Believability gate (secret-remediation): the alarmist secrets-exposure
+  // remediation ("treat as compromised / rewrite history") only fires when
+  // the cited code actually contains a credential-like token. Thread the
+  // cited added-line text (startLine..line) so the bucket can be gated on a
+  // real credential signal. Other buckets ignore this argument.
+  const citedLineText = collectCitedLineText(finding, addedLineTextByPath)
+  const remediation = remediationForFinding(finding, citedLineText)
   if (remediation) {
     lines.push("")
     lines.push(`**Remediation:** ${remediation}`)

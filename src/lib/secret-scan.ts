@@ -345,6 +345,103 @@ export function runSecretScan(diff: string): SecretHit[] {
 }
 
 /**
+ * The provider-specific (high-confidence, non-generic) rules. These are
+ * the unambiguous credential shapes — AWS/GitHub/Slack/Stripe/OpenAI/
+ * Anthropic/Ollama keys + PEM private-key headers. The generic
+ * high-entropy catch-all (`generic-token`, `warn` severity) is excluded:
+ * on its own it's noisy, so the credential predicate below requires it to
+ * sit in a credential-named assignment before it counts.
+ */
+const PROVIDER_RULES: readonly SecretRule[] = RULES.filter(
+  (r) => r.category !== "generic-token",
+)
+
+/**
+ * Identifiers that, when ASSIGNED a long high-entropy value, make that
+ * value credential-like even without a recognizable provider prefix
+ * (e.g. `const apiKey = "<40 base64 chars>"`). Conservative on purpose —
+ * only fires when the value is genuinely high-entropy (see below).
+ */
+const CREDENTIAL_IDENTIFIER_RE =
+  /\b(?:api[_-]?key|secret|token|password|passwd|pwd|credential|client[_-]?secret|access[_-]?key|private[_-]?key|auth[_-]?token|bearer)\b/i
+
+/**
+ * A quoted (or `=`-assigned) high-entropy value: 32+ chars of base64/hex
+ * alphabet that ISN'T a pure hash and ISN'T a pure single-case
+ * identifier. Reuses the same false-positive philosophy as the generic
+ * scan rule (`genericFalsePositive`) so a length/identifier/hash assigned
+ * to a `key`-named field doesn't count as a credential.
+ */
+const HIGH_ENTROPY_VALUE_RE = /['"`]?([A-Za-z0-9+/=_-]{32,})['"`]?/
+
+/**
+ * SIG (secret-remediation gate): does a single line of cited code contain
+ * a credential-like token?
+ *
+ * Used ONLY to gate the alarmist `secrets-exposure` remediation — the
+ * deterministic fix text that says "treat the value as compromised,
+ * revoke/rotate, rewrite history". That guidance must not fire on a
+ * hallucinated secret finding (e.g. one that misread `console.log(x.length)`
+ * as a leak), so the renderer first confirms the cited line actually holds
+ * a credential.
+ *
+ * Detection is deliberately BIASED TOWARD FALSE (returning `false` keeps the
+ * de-alarmed conditional remediation; a wrong `true` keeps the scary text):
+ *   - A provider-specific rule matches (AKIA…, gh*_…, sk-…, sk_live_…,
+ *     xox…-style Slack webhook, ollama_…, PEM header) → credential. These
+ *     are the vetted, unambiguous shapes from the secret scanner.
+ *   - OR a credential-named identifier (`apiKey`, `secret`, `token`,
+ *     `password`, …) is assigned a 32+-char high-entropy value that is NOT
+ *     a pure hex hash and NOT a pure single-case identifier (so a
+ *     `const tokenName = "verylongLowerCamelIdentifier"` style false hit
+ *     does not count).
+ * Anything else (a `.length` count, a numeric literal, a placeholder, a
+ * short value, a bare identifier) → `false`.
+ *
+ * Reuses the scanner's provider `RULES` rather than re-deriving them so the
+ * vetted regexes stay the single source of truth.
+ */
+export function containsCredentialToken(text: string): boolean {
+  if (typeof text !== "string" || text.length === 0) return false
+  // `collectCitedLineText` joins the cited range with "\n", so the input may
+  // be multi-line. Check each line INDEPENDENTLY: the credential-named
+  // identifier and the high-entropy value (path 2) must co-occur on ONE line
+  // (a real assignment), never across unrelated lines — otherwise an
+  // identifier on one line + an unrelated hash on another would false-match
+  // and wrongly KEEP the alarmist remediation (Sigilix bot catch, #248).
+  for (const line of text.split("\n")) {
+    if (lineHasCredentialToken(line)) return true
+  }
+  return false
+}
+
+function lineHasCredentialToken(line: string): boolean {
+  if (line.length === 0) return false
+
+  // 1. Vetted provider-specific shapes — unambiguous credentials.
+  for (const rule of PROVIDER_RULES) {
+    if (rule.pattern.test(line)) return true
+  }
+
+  // 2. Credential-named assignment of a high-entropy value. Require BOTH a
+  //    credential-named identifier AND a high-entropy literal on the line,
+  //    then re-apply the generic-scan false-positive filter to the value so
+  //    hashes / single-case identifiers assigned to a `key`-named field do
+  //    not trip the gate.
+  if (!CREDENTIAL_IDENTIFIER_RE.test(line)) return false
+  const valueMatch = line.match(HIGH_ENTROPY_VALUE_RE)
+  const value = valueMatch?.[1]
+  if (!value) return false
+  const offset = line.indexOf(value)
+  if (genericFalsePositive(value, line, offset < 0 ? 0 : offset)) return false
+  // A genuinely high-entropy credential body contains at least one digit
+  // (mirrors the secret-scan single-case-identifier guard): pure-alpha
+  // long values are far more likely identifiers/prose than secrets.
+  if (!/[0-9]/.test(value)) return false
+  return true
+}
+
+/**
  * Render hits as a labeled prompt block. Empty hits → empty string
  * so the orchestrator can skip the block entirely.
  *

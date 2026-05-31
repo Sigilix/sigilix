@@ -5542,6 +5542,7 @@ export async function handlePrReviewEnsemble(
           event: "verification-reanchor-shadow",
           mode: verificationMode,
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          findingKey: findingKey(finding), // parity with verification-shadow for the SIG-114 join
           path: finding.path,
           fromLine: finding.line,
           decision: reanchor.kind,

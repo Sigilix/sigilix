@@ -249,6 +249,12 @@ export type ReanchorDecision =
  * any-token rule), and ONLY the unambiguous "exactly one same-file line" case
  * re-anchors. Ambiguous (>1) / no-match → the caller keeps PR4's body-demote.
  * Same-file only in v0 (no cross-file re-anchor).
+ *
+ * TODO (mutation PR): before actually moving an inline comment to `toLine`,
+ * re-run the SIG-127 structural-substantive check on it — `toLine` could be a
+ * non-substantive added line (e.g. a bare `}`) that GitHub renders awkwardly;
+ * fall back to body-demote in that case. This shadow measurement does not move
+ * anything, so the guard isn't needed yet.
  */
 export function planReanchor(
   finding: Pick<PrReviewFinding, "path" | "line" | "headline" | "body">,

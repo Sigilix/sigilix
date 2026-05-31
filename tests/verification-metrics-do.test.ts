@@ -2,7 +2,7 @@
 // as the other metrics DOs (real in-memory node:sqlite).
 
 import { describe, expect, it } from "vitest"
-import { VerificationMetricsDO } from "../src/do/verification-metrics"
+import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY } from "../src/do/verification-metrics"
 import type { Env } from "../src/index"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
@@ -76,6 +76,36 @@ describe("VerificationMetricsDO.record/recordBatch + query", () => {
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.byVerdict.refuted).toBe(1)
     expect(out.window).toEqual({ days: 7, startDay: "2026-05-24", endDay: "2026-05-30" })
+  })
+
+  it("SIG-285 v2: receipt-join verdicts are a SEPARATE corpus from worker-token", async () => {
+    const { do_ } = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security", occurredAt: T }, // worker-token
+      { verdict: "refuted", category: "logic", occurredAt: T },      // worker-token
+      { verdict: "confirmed", category: RECEIPTJOIN_CATEGORY, occurredAt: T },
+      { verdict: "confirmed", category: RECEIPTJOIN_CATEGORY, occurredAt: T },
+      { verdict: "inconclusive", category: RECEIPTJOIN_CATEGORY, occurredAt: T },
+    ])
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    // Worker-token aggregates EXCLUDE receipt-join — no contamination either way.
+    expect(out.total).toBe(2)
+    expect(out.byVerdict).toEqual({ confirmed: 1, refuted: 1 })
+    expect(out.counts.confirmed).toEqual({ security: 1 })
+    expect(out.counts.confirmed?.[RECEIPTJOIN_CATEGORY]).toBeUndefined()
+    // Receipt-join is its own corpus with the load-bearing fraction.
+    expect(out.receiptJoin).toEqual({
+      confirmed: 2,
+      inconclusive: 1,
+      total: 3,
+      refutableEligibleFraction: 0.333, // inconclusive / (confirmed+inconclusive) = 1/3
+    })
+  })
+
+  it("receiptJoin is zeroed (no divide-by-zero) on an empty corpus", async () => {
+    const { do_ } = makeDo()
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    expect(out.receiptJoin).toEqual({ confirmed: 0, inconclusive: 0, total: 0, refutableEligibleFraction: 0 })
   })
 
   it("arms a GC alarm after the first record, and the alarm drops out-of-window buckets", async () => {

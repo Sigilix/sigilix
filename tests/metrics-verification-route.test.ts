@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest"
 import { handleVerificationMetricsRoute } from "../src/lib/metrics-verification-route"
-import { VerificationMetricsDO } from "../src/do/verification-metrics"
+import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY } from "../src/do/verification-metrics"
 import type { Env } from "../src/index"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
@@ -76,6 +76,32 @@ describe("handleVerificationMetricsRoute", () => {
     expect(body.refutedFraction).toBe(0.25)
     expect(body.byVerdict).toMatchObject({ refuted: 1, confirmed: 1, "no-check": 1, inconclusive: 1 })
     expect(body.counts.refuted).toEqual({ security: 1 })
+  })
+
+  it("surfaces receiptJoinMode + the receiptJoin corpus, kept out of the worker-token totals", async () => {
+    const do_ = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security" }, // worker-token
+      { verdict: "confirmed", category: RECEIPTJOIN_CATEGORY },
+      { verdict: "inconclusive", category: RECEIPTJOIN_CATEGORY },
+    ])
+    const res = await handleVerificationMetricsRoute(
+      get(URL_, `Bearer ${TOKEN}`),
+      makeEnv({ OPENCLAW_RECEIPTJOIN_MODE: "shadow" }, do_),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      total: number; receiptJoinMode: string
+      receiptJoin: { confirmed: number; inconclusive: number; total: number; refutableEligibleFraction: number }
+    }
+    expect(body.total).toBe(1) // worker-token only — receipt-join excluded
+    expect(body.receiptJoinMode).toBe("shadow")
+    expect(body.receiptJoin).toEqual({ confirmed: 1, inconclusive: 1, total: 2, refutableEligibleFraction: 0.5 })
+  })
+
+  it("defaults receiptJoinMode to off when OPENCLAW_RECEIPTJOIN_MODE is unset", async () => {
+    const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
+    expect(((await res.json()) as { receiptJoinMode: string }).receiptJoinMode).toBe("off")
   })
 
   it("defaults mode to off when OPENCLAW_VERIFICATION_MODE is unset", async () => {

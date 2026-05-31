@@ -67,6 +67,10 @@ describe("bucketIndex", () => {
     expect(bucketIndex(3200)).toBe(6)
     expect(bucketIndex(50_000)).toBe(6)
     expect(bucketIndex(-5)).toBe(0) // defensive: negatives fall in b0
+    // Non-finite should be impossible (netNewTokens is a computed count); it
+    // falls to b0 but also warns (Sigilix #256) so an upstream bug stays visible.
+    expect(bucketIndex(NaN)).toBe(0)
+    expect(bucketIndex(Infinity)).toBe(0)
   })
 })
 
@@ -151,6 +155,11 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.reviews).toBe(2)
     expect(out.fetch.reviews).toBe(1) // only the fetch-enabled one
+    // Means divide by the FETCH-ENABLED count (1), not total reviews (2), so the
+    // non-fetch review doesn't dilute the cross-file fetch cost.
+    expect(out.fetch.meanFiles).toBe(6)
+    expect(out.fetch.meanBytes).toBe(1000)
+    expect(out.fetch.meanElapsedMs).toBe(50)
     expect(out.fetch.budgetExhaustedReviews).toBe(1)
     expect(out.modeReviews).toEqual({ shadow: 1, post: 1 })
   })

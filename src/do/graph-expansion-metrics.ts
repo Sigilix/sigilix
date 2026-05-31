@@ -28,10 +28,16 @@ const BUCKET_COUNT = BUCKET_LOWERS.length
 
 /** Map a netNewTokens value to its histogram bucket index (0..BUCKET_COUNT-1). */
 export function bucketIndex(netNewTokens: number): number {
-  const v = Number.isFinite(netNewTokens) ? netNewTokens : 0
+  if (!Number.isFinite(netNewTokens)) {
+    // netNewTokens is a computed token count, so a non-finite value should be
+    // impossible. Surface it instead of silently bucketing as zero, so an
+    // upstream measurement bug is visible rather than masked (Sigilix #256).
+    console.warn(JSON.stringify({ event: "graph-expansion-metrics-nonfinite-netnew", value: String(netNewTokens) }))
+    return 0
+  }
   for (let i = BUCKET_COUNT - 1; i >= 0; i--) {
     const lower = BUCKET_LOWERS[i] ?? 0
-    if (v >= lower) return i
+    if (netNewTokens >= lower) return i
   }
   return 0
 }
@@ -116,6 +122,8 @@ export interface GraphExpansionMetricsQuery {
   treatment: { meanTokens: number }
   fetch: {
     reviews: number
+    /** Means are PER FETCH-ENABLED review (÷ reviews), so non-fetch reviews
+     *  don't dilute the cross-file fetch cost. 0 when no fetch-enabled reviews. */
     meanFiles: number
     meanBytes: number
     meanElapsedMs: number
@@ -263,6 +271,10 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
 
     const reviews = agg.reviews
     const mean = (sum: number): number => (reviews > 0 ? round(sum / reviews) : 0)
+    // Fetch cost means divide by the FETCH-ENABLED review count so non-fetch
+    // reviews (which contribute 0 to the fetch sums) don't dilute the average
+    // (CodeRabbit #256).
+    const fetchMean = (sum: number): number => (agg.fetch_reviews > 0 ? round(sum / agg.fetch_reviews) : 0)
 
     const hist: number[] = new Array<number>(BUCKET_COUNT).fill(0)
     for (const row of sql.exec<{ bucket: number; count: number }>(
@@ -321,9 +333,9 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
       treatment: { meanTokens: mean(agg.sum_total) },
       fetch: {
         reviews: agg.fetch_reviews,
-        meanFiles: mean(agg.sum_fetch_files),
-        meanBytes: mean(agg.sum_fetch_bytes),
-        meanElapsedMs: mean(agg.sum_fetch_elapsed),
+        meanFiles: fetchMean(agg.sum_fetch_files),
+        meanBytes: fetchMean(agg.sum_fetch_bytes),
+        meanElapsedMs: fetchMean(agg.sum_fetch_elapsed),
         budgetExhaustedReviews: agg.budget_exhausted,
       },
       modeReviews,

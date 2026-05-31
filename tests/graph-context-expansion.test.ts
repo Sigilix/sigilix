@@ -368,4 +368,38 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
     expect(result.bodiesSource.github).toBe(1)
     expect(result.bodiesSource.missing).toBe(1)     // bad → null → missing
   })
+
+  it("a THROWING fetch in a multi-path batch is soft-failed; the others survive (no throw)", async () => {
+    const result = await buildGraphContextExpansion({
+      expansion: expansion({
+        importRows: [
+          importRow({ sourcePath: "src/good.ts", startLine: 5 }),
+          importRow({ sourcePath: "src/throws.ts", startLine: 5 }),
+        ],
+      }),
+      filesByPath: new Map(),
+      fetchFileContent: async (p) => {
+        if (p === "src/throws.ts") throw new Error("rate limited")  // getFileContent re-throws non-404s
+        return SRC_A
+      },
+    })
+    expect(result.graphAvailable).toBe(true)        // not zeroed
+    expect(result.dependentBodies).toHaveLength(1)  // good survives
+    expect(result.bodiesSource.github).toBe(1)
+    expect(result.bodiesSource.missing).toBe(1)     // throw → soft-failed → missing
+    expect(result.fetch.files).toBe(1)
+  })
+
+  it("does NOT cross-file fetch when the signal is already aborted (abort-aware)", async () => {
+    const ctrl = new AbortController()
+    ctrl.abort()
+    let called = 0
+    await buildGraphContextExpansion({
+      expansion: expansion({ importRows: [importRow()] }),
+      filesByPath: new Map(),
+      fetchFileContent: async () => { called += 1; return SRC_A },
+      signal: ctrl.signal,
+    })
+    expect(called).toBe(0)
+  })
 })

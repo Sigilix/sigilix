@@ -2526,7 +2526,11 @@ export async function handlePrReviewEnsemble(
               // fetch error never blocks or breaks the (shadow, non-injected)
               // measurement. Turns the PR1 `missing` rows into real `github`
               // bodies → the CONTROL-vs-TREATMENT numbers that decide PR3.
-              fetchFileContent: (path) => client.getFileContent(owner, repo, path, headSha),
+              // Threads the composed-timeout `signal` so an in-flight cross-file
+              // fetch CANCELS the moment the 3s expansion cap (or the
+              // orchestrator) aborts — the batch is abort-aware mid-wave, not
+              // just between waves (Sigilix + CodeRabbit).
+              fetchFileContent: (path) => client.getFileContent(owner, repo, path, headSha, { signal }),
               signal,
             })
           },

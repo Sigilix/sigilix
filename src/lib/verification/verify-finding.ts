@@ -28,8 +28,10 @@ import type { PrReviewFinding } from "../triage-pr-review"
 export type VerificationVerdict = "confirmed" | "refuted" | "inconclusive" | "no-check"
 
 export interface VerificationCheck {
-  /** v1 is always a worker-native token-at-line check. */
-  kind: "worker-token"
+  /** v1 = worker-native token-at-line (verify-finding.ts). `receipt-join` =
+   *  SIG-285 v2 PR1, joining the finding to the SIG-184 runner receipt's HEAD
+   *  SARIF (verify-finding-receipt.ts). Both deterministic, never executed. */
+  kind: "worker-token" | "receipt-join"
   /** A deterministic descriptor of what was checked — NEVER a shell command,
    *  never executed (named `descriptor`, not `command`, to keep it that way). */
   descriptor: string

@@ -196,6 +196,21 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     expect(out.window).toEqual({ days: 7, startDay: "2026-05-25", endDay: "2026-05-31" })
   })
 
+  it("retention keeps EXACTLY 35 days — the boundary day (now-34) is kept, the day before (now-35) is dropped", async () => {
+    // RETENTION_DAYS=35 → cutoff = now-(35-1) = now-34, DELETE WHERE day < cutoff.
+    // So [now-34 … now] = 35 distinct days are retained (matches GraphMetricsDO /
+    // VerificationMetricsDO). Proves the GC is NOT off-by-one.
+    const { do_ } = makeDo()
+    const dayAt = (offset: number) => new Date(Date.now() - offset * 86_400_000).toISOString()
+    const day34 = dayAt(34) // the 35th day inclusive → KEEP
+    const day35 = dayAt(35) // one day past the window → DROP
+    await record(do_, sample(800), day34)
+    await record(do_, sample(800), day35)
+    await do_.alarm()
+    expect(await do_.debugDayReviews(day34.slice(0, 10))).toBe(1) // kept (35-day window is inclusive)
+    expect(await do_.debugDayReviews(day35.slice(0, 10))).toBeNull() // dropped
+  })
+
   it("alarm GCs buckets older than the retention window", async () => {
     const { do_ } = makeDo()
     const old = new Date(Date.now() - 40 * 86_400_000).toISOString()

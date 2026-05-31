@@ -380,4 +380,11 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
     })
     await this.ctx.storage.setAlarm(Date.now() + DAY_MS)
   }
+
+  /** Test-only: the `reviews` count recorded for a given UTC day, or null. */
+  async debugDayReviews(day: string): Promise<number | null> {
+    const sql = this.sql()
+    const rows = [...sql.exec<{ reviews: number }>("SELECT reviews FROM daily_expansion WHERE day = ?", day)]
+    return rows[0] ? rows[0].reviews : null
+  }
 }

@@ -178,9 +178,15 @@ function round(n: number, places = 3): number {
   return Math.round(n * f) / f
 }
 
-/** Every numeric field written to the aggregates is finite (computed counts). */
+/** Every numeric field actually written to the aggregates is finite (computed
+ *  counts). The fetch fields are gated to 0 when fetchEnabled=false, so they're
+ *  only validated when enabled — otherwise a disabled sample with a stale
+ *  non-finite fetch field would be needlessly dropped, undercounting the window
+ *  and skewing GO/KILL (CodeRabbit #256). */
 function hasFiniteMetrics(s: GraphExpansionSample): boolean {
-  return [s.netNewTokens, s.controlTokens, s.totalTokens, s.fetchFiles, s.fetchBytes, s.fetchElapsedMs].every(Number.isFinite)
+  const metrics = [s.netNewTokens, s.controlTokens, s.totalTokens]
+  if (s.fetchEnabled) metrics.push(s.fetchFiles, s.fetchBytes, s.fetchElapsedMs)
+  return metrics.every(Number.isFinite)
 }
 
 export class GraphExpansionMetricsDO extends DurableObject<Env> {

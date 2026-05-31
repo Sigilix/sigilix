@@ -170,16 +170,21 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     expect(out.modeReviews).toEqual({ shadow: 1, post: 1 })
   })
 
-  it("drops a malformed (non-finite) sample before it can poison the aggregates", async () => {
+  it("drops a malformed sample, but keeps a fetch-disabled one with stale non-finite fetch fields", async () => {
     const { do_ } = makeDo()
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     await record(do_, sample(800)) // a good sample
-    await record(do_, sample(Number.NaN)) // malformed → dropped
-    await record(do_, sample(900, { controlTokens: Number.POSITIVE_INFINITY })) // malformed → dropped
+    await record(do_, sample(Number.NaN)) // malformed netNew → dropped
+    await record(do_, sample(900, { controlTokens: Number.POSITIVE_INFINITY })) // malformed control → dropped
+    // fetchEnabled=false with stale non-finite fetch fields: those are gated to 0
+    // before the write, so they must NOT invalidate the sample — it's KEPT, else
+    // we'd undercount the window and skew GO/KILL (CodeRabbit #256).
+    await record(do_, sample(700, { fetchEnabled: false, fetchFiles: Number.NaN, fetchBytes: Number.NaN, fetchElapsedMs: Number.NaN }))
     warn.mockRestore()
     const out = await do_.query({ windowDays: 7, nowIso: T })
-    expect(out.reviews).toBe(1) // only the good sample landed
-    expect(out.netNewTokens.mean).toBe(800)
+    expect(out.reviews).toBe(2) // the good 800 + the kept disabled 700
+    expect(out.fetch.reviews).toBe(1) // only the fetch-enabled good one
+    expect(out.netNewTokens.mean).toBe(750) // (800 + 700) / 2
   })
 
   it("excludes counts outside the trailing window", async () => {

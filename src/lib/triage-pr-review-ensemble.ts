@@ -5223,6 +5223,42 @@ export async function handlePrReviewEnsemble(
       )
     }
 
+    // SIG-285: build the added-line index + verification mode once here —
+    // HOISTED above BOTH the SIG-280 shadow-claim fid computation below AND the
+    // marker generation, so a re-anchored finding's line is updated BEFORE either
+    // reads it (the fid includes `line`). Both consts are reused by the
+    // verification block further down (no recompute).
+    const verificationMode = readVerificationMode(env)
+    const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
+
+    // SIG-285 re-anchor ENFORCE (inline-first): when verification is `enforce`
+    // AND OPENCLAW_VERIFICATION_REANCHOR=on (default OFF — inert), MOVE each
+    // refuted inline finding that has an UNAMBIGUOUS same-file target to the
+    // correct line, in place, keeping the marker source (filteredConsensusFindings)
+    // aligned. Runs BEFORE the shadow-claim fid + the markers (Codex #260: so the
+    // SIG-280 shadow fid and the posted marker both use the post-move line — no
+    // corpus-join divergence). A mis-anchored inline comment becomes a CORRECTLY-
+    // anchored one (the founder's inline-first direction) instead of a body row.
+    // Re-anchored findings are then no longer refuted at the verification block
+    // below, so PR4 only body-demotes the ambiguous/no-match remainder. Default
+    // OFF → byte-identical to PR1+PR4.
+    if (verificationMode === "enforce" && readReanchorEnabled(env)) {
+      const reanchored = applyReanchors(
+        submissionVerdict.findings,
+        filteredConsensusFindings,
+        addedLineTextByLine,
+        isSubstantiveAnchorLine,
+      )
+      for (const r of reanchored) {
+        console.log(JSON.stringify({
+          event: "verification-reanchor-applied",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          path: r.path, fromLine: r.fromLine, toLine: r.toLine,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: "applied", dropped: true })
+      }
+    }
+
     // SIG-276 Phase 3 (Site 2): SHADOW-ONLY claim-match telemetry. Match
     // each incoming finding's write-time claim TYPES against the active
     // memories' `shadowClaims` (populated by lookup Site 1) and emit ONE
@@ -5242,15 +5278,10 @@ export async function handlePrReviewEnsemble(
       )
       // SIG-280: per-finding sha16 fid (same canonical form as the marker)
       // becomes the OFFLINE join key linking this claim-matched finding to a
-      // later `review-memory-outcome` dismissal event.
-      // ⚠️ SIG-285 re-anchor caveat (code-reviewer #260, P2): this fid is computed
-      // from the PRE-move `f.line`, but the re-anchor mutation runs LATER (below,
-      // before marker gen), so when OPENCLAW_VERIFICATION_REANCHOR=on a re-anchored
-      // finding's POSTED marker uses the post-move line and this shadow fid
-      // diverges → that one negative-class row can't join its dismissal (a small
-      // SIG-280 calibration recall bias). Bounded to the re-anchored subset on a
-      // cold corpus; deferred. FIX when flipping the flag: recompute `shadowFids`
-      // AFTER the re-anchor block (or move the re-anchor above this block).
+      // later `review-memory-outcome` dismissal event. NOTE (SIG-285, Codex #260):
+      // the re-anchor mutation runs ABOVE this block, so `f.line` here is already
+      // the post-move line — this fid matches the posted marker fid even for a
+      // re-anchored finding (no SIG-280 corpus-join divergence).
       const shadowFids = await Promise.all(
         filteredConsensusFindings.map((f) =>
           computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline }),
@@ -5305,40 +5336,6 @@ export async function handlePrReviewEnsemble(
       } catch {
         // best-effort durable corpus write — losing one is acceptable; the
         // console event still lands for live/Logpush observation.
-      }
-    }
-
-    // SIG-285: build the added-line index once here — HOISTED above marker
-    // generation so the re-anchor pass below can move a finding to its correct
-    // line BEFORE the marker fid (which includes `line`) is built. `verificationMode`
-    // is hoisted for the same reason. Both are reused by the verification block
-    // further down (no recompute).
-    const verificationMode = readVerificationMode(env)
-    const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
-
-    // SIG-285 re-anchor ENFORCE (inline-first): when verification is `enforce`
-    // AND OPENCLAW_VERIFICATION_REANCHOR=on (default OFF — inert), MOVE each
-    // refuted inline finding that has an UNAMBIGUOUS same-file target to the
-    // correct line, in place, keeping the marker source (filteredConsensusFindings)
-    // aligned — BEFORE the markers are built (the fid includes `line`). A
-    // mis-anchored inline comment becomes a CORRECTLY-anchored one (the founder's
-    // inline-first direction) instead of a body row. Re-anchored findings are then
-    // no longer refuted at the verification block below, so PR4 only body-demotes
-    // the ambiguous/no-match remainder. Default OFF → byte-identical to PR1+PR4.
-    if (verificationMode === "enforce" && readReanchorEnabled(env)) {
-      const reanchored = applyReanchors(
-        submissionVerdict.findings,
-        filteredConsensusFindings,
-        addedLineTextByLine,
-        isSubstantiveAnchorLine,
-      )
-      for (const r of reanchored) {
-        console.log(JSON.stringify({
-          event: "verification-reanchor-applied",
-          owner, repo, prNumber, headSha: headSha.slice(0, 7),
-          path: r.path, fromLine: r.fromLine, toLine: r.toLine,
-        }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "verification-reanchor", reason: "applied", dropped: true })
       }
     }
 

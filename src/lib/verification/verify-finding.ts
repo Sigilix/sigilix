@@ -328,6 +328,12 @@ export function applyReanchors<T extends DemotableFinding>(
     if (!isSubstantive(addedLineIndex.get(f.path)?.get(plan.toLine))) continue
     const fromLine = f.line
     f.line = plan.toLine // move the render source
+    // Keep a single-line finding single-line at the new position. Eligibility
+    // already requires startLine===undefined || startLine===line, so an explicit
+    // startLine equals the OLD line; leaving it stale would turn the finding into
+    // a bogus range (old startLine → new line) that GitHub renders as a multi-line
+    // comment (Codex #260).
+    if (f.startLine !== undefined) f.startLine = plan.toLine
     const ms = markerSourceFindings[i]
     if (ms !== undefined) ms.line = plan.toLine // move the marker source, in lockstep
     applied.push({ index: i, path: f.path, fromLine, toLine: plan.toLine })

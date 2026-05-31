@@ -241,6 +241,14 @@ describe("applyReanchors (SIG-285 enforce — the in-place mutation)", () => {
     expect(markerSrc[0]!.line).toBe(10) // marker source moved IN LOCKSTEP — the fid stays consistent
   })
 
+  it("moves startLine in lockstep with line (no bogus range) when startLine was explicit", () => {
+    const inline = [fd({ line: 11, startLine: 11, headline: "leak via `userId`" })]
+    const markerSrc = [{ line: 11 }]
+    applyReanchors(inline, markerSrc, index, always)
+    expect(inline[0]!.line).toBe(10)
+    expect((inline[0] as { startLine?: number }).startLine).toBe(10) // moved too — NOT left at 11 (Codex #260: would render a spurious range)
+  })
+
   it("does NOT move onto a non-substantive target line (SIG-127 guard)", () => {
     const inline = [fd({ line: 11, headline: "leak via `userId`" })]
     const markerSrc = [{ line: 11 }]

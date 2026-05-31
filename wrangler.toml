@@ -306,7 +306,7 @@ OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
 #     stops being a mis-anchored inline thread. Demote decisions are readable at
 #     /metrics/validation (gate `verification-refuted`).
 # Rollback: set "shadow" (telemetry, no demote) or "off".
-OPENCLAW_VERIFICATION_MODE = "shadow"
+OPENCLAW_VERIFICATION_MODE = "enforce"
 
 # SIG-285 v2 PR1: receipt-join verification — the NO-PERM sandbox foundation.
 # "off" (default) | "shadow" | "enforce" (reserved). When ON + a VERIFIED SIG-184

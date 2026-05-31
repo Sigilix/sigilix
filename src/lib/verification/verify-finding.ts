@@ -164,3 +164,28 @@ export function verifyFinding(
     },
   }
 }
+
+/** The finding shape `selectRefutedInlineDemotions` needs (a verifiable finding
+ *  plus the eligibility fields). */
+type DemotableFinding = Pick<PrReviewFinding, "path" | "line" | "headline" | "body" | "score" | "category">
+
+/**
+ * SIG-285 PR 4: of the currently-INLINE findings, which are demotable — i.e. a
+ * score>=4 logic/security finding whose cited token is REFUTED (mis-anchored)?
+ * Pure + side-effect-free so the demote decision is unit-testable in isolation;
+ * the ensemble applies the move (inline -> body) only in `enforce`. Body-only
+ * findings are never passed here (they're already in the body). The eligibility
+ * (score>=4, logic/security) matches the verdict-telemetry filter, so the demote
+ * set is exactly the REFUTED subset of what the metrics already count.
+ */
+export function selectRefutedInlineDemotions<T extends DemotableFinding>(
+  inlineFindings: ReadonlyArray<T>,
+  addedLineIndex: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): T[] {
+  return inlineFindings.filter(
+    (f) =>
+      f.score >= 4 &&
+      (f.category === "logic" || f.category === "security") &&
+      verifyFinding(f, addedLineIndex).verdict === "refuted",
+  )
+}

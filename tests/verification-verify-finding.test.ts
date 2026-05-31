@@ -7,6 +7,7 @@ import {
   deriveTokens,
   verifyFinding,
   findingKey,
+  selectRefutedInlineDemotions,
 } from "../src/lib/verification/verify-finding"
 // Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
 // line-anchoring tests exercise the real index, not a duplicate.
@@ -111,6 +112,38 @@ describe("findingKey", () => {
     expect(a).toBe(findingKey({ path: "src/db.ts", line: 10, headline: "SQL injection" }))
     expect(a).not.toBe(findingKey({ path: "src/db.ts", line: 11, headline: "SQL injection" }))
     expect(a).toMatch(/^[0-9a-f]{8}$/)
+  })
+})
+
+describe("selectRefutedInlineDemotions (SIG-285 PR 4 — the demote subset)", () => {
+  // Reuse the DIFF index: line 10 holds `userId`, line 11 does not.
+  const fd = (over: Partial<{ path: string; line: number; headline: string; body: string; score: number; category: string }>) => ({
+    path: "src/db.ts", line: 11, headline: "", body: "", score: 4, category: "logic", ...over,
+  })
+
+  it("selects ONLY score>=4 logic/security findings whose cited token is REFUTED", () => {
+    const refutedLogic = fd({ line: 11, headline: "stale guard `userId`", category: "logic", score: 4 }) // userId not on line 11 → refuted
+    const refutedSec = fd({ line: 11, headline: "leak via `userId`", category: "security", score: 5 }) // refuted, security
+    const confirmed = fd({ line: 10, headline: "SQLi via `userId`", category: "security", score: 5 }) // userId IS on line 10 → confirmed
+    const lowScore = fd({ line: 11, headline: "nit `userId`", category: "logic", score: 3 }) // refuted but score<4
+    const wrongCat = fd({ line: 11, headline: "slow `userId`", category: "performance", score: 4 }) // refuted but not logic/security
+    const inconclusive = fd({ line: 99, headline: "off-diff `userId`", category: "logic", score: 4 }) // line not added → inconclusive
+    const noCheck = fd({ line: 11, headline: "no backticked token here", category: "security", score: 4 }) // no token → no-check
+
+    const out = selectRefutedInlineDemotions(
+      [refutedLogic, refutedSec, confirmed, lowScore, wrongCat, inconclusive, noCheck],
+      index,
+    )
+    // Only the two refuted score>=4 logic/security findings, identity preserved.
+    expect(out).toEqual([refutedLogic, refutedSec])
+    expect(out[0]).toBe(refutedLogic) // same object ref → the ensemble's Set move works
+    expect(out[1]).toBe(refutedSec)
+  })
+
+  it("returns [] when nothing is refuted-eligible (empty, all-confirmed, all-ineligible)", () => {
+    expect(selectRefutedInlineDemotions([], index)).toEqual([])
+    expect(selectRefutedInlineDemotions([fd({ line: 10, headline: "`userId`", category: "security", score: 4 })], index)).toEqual([]) // confirmed
+    expect(selectRefutedInlineDemotions([fd({ line: 11, headline: "`userId`", category: "tests", score: 5 })], index)).toEqual([]) // wrong category
   })
 })
 

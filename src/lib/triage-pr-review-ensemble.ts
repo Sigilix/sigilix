@@ -166,6 +166,12 @@ import {
   type AbsenceClaimValidatorMode,
   type AbsenceGroundingDropReason,
 } from "./validate-absence-grounding"
+import {
+  evaluateSecurityGrounding,
+  parseSecurityGroundingValidatorMode,
+  type SecurityGroundingValidatorMode,
+  type SecurityGroundingDropReason,
+} from "./validate-security-grounding"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -1475,7 +1481,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -4315,6 +4321,30 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "absence-grounding", reason: info.reason, dropped: info.dropped })
       },
+      // SIG-293 v1: security-grounding gate (secrets-exposure). Default
+      // `off` — the gate doesn't run until the operator flips
+      // OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE to "shadow" (count/
+      // telemeter, keep inline) or "enforce" (demote a secrets-exposure
+      // finding whose cited line holds no credential token). Reuses the
+      // `securityManifest` + `addedLineTextByLine` already threaded above,
+      // and the `pr-review-finding-rejected-validation` event (`gate:
+      // "security-grounding"`). `dropped` here = "demoted to body".
+      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE),
+      onSecurityGroundingFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "security-grounding",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          cweId: finding.cweId ?? null,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "security-grounding", reason: info.reason, dropped: info.dropped })
+      },
     })
     if (telemetry.synthesizer) {
       telemetry.synthesizer.provenance = validated.provenance
@@ -4332,6 +4362,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
+      droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -7970,6 +8001,14 @@ export interface ValidatedOutput {
    */
   droppedForFailedAbsenceGroundingValidation: number
   /**
+   * SIG-293 v1: count of secrets-exposure findings the security-grounding
+   * gate flagged as ungrounded — the cited line held no credential token
+   * and no scanner fact corroborated it (would-demote-to-body in shadow,
+   * actual-demote in enforce). 0 when the gate is `off`. Surfaced to
+   * telemetry so the gate's would-demote rate is observable before enforce.
+   */
+  droppedForFailedSecurityGroundingValidation: number
+  /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
    * findings so the ensemble caller can derive the source specialist
@@ -8673,6 +8712,26 @@ export function validateForSubmission(args: {
     info: { reason: AbsenceGroundingDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-293 v1: security-grounding gate mode. `off` (default) skips the
+   * gate entirely; `shadow` counts + telemeters but keeps every finding
+   * inline; `enforce` DEMOTES a `secrets-exposure` finding to the review
+   * body when its cited line holds no credential token and no scanner fact
+   * corroborates it (never hard-drops). Read from
+   * `OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE` at the call site. Reuses
+   * the `securityManifest` + `addedLineTextByLine` already threaded above.
+   */
+  securityGroundingValidatorMode?: SecurityGroundingValidatorMode
+  /**
+   * SIG-293 v1: telemetry callback fired once per finding the security-
+   * grounding gate flagged (reuses the `pr-review-finding-rejected-
+   * validation` event with a `gate: "security-grounding"` discriminator).
+   * `dropped` here means "demoted to body" (enforce), not hard-dropped.
+   */
+  onSecurityGroundingFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: SecurityGroundingDropReason; dropped: boolean },
+  ) => void
+  /**
    * ARC-176/SIG-175: review-tone preset. `assertive` preserves the
    * old score-1 advisory summary aggregation; `chill`/default drops
    * score-1 nits from customer-visible output entirely.
@@ -8705,6 +8764,8 @@ export function validateForSubmission(args: {
     wasTruncated = false,
     droppedPaths = [],
     onAbsenceFindingDropped,
+    securityGroundingValidatorMode = "off",
+    onSecurityGroundingFindingDropped,
     profile = "chill",
   } = args
   const validIds = new Set<string>()
@@ -8732,6 +8793,7 @@ export function validateForSubmission(args: {
   let droppedForFailedPerfValidation = 0
   let droppedForFailedInlineGroundingValidation = 0
   let droppedForFailedAbsenceGroundingValidation = 0
+  let droppedForFailedSecurityGroundingValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // SIG-290 v1: the reviewable diff's path set for the absence-grounding
@@ -9070,6 +9132,39 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-293 v1: security-grounding gate (secrets-exposure). A
+    // `secrets-exposure` (CWE-798) finding is only believable when the
+    // cited code actually CONTAINS a credential token. One whose cited
+    // line holds no credential (the #243 FP: a sev-3 finding that misread
+    // `console.log(payload.length)` as a leak) is a hallucination — DEMOTE
+    // to the body (content preserved, NOT hard-dropped). v1 gates ONLY
+    // secrets-exposure (the single line-level-detectable category); a
+    // corroborating scanner fact ALWAYS keeps. Scoped to SECURITY-sourced
+    // findings (provenance, like the SIG-108 evidence gate) so a non-
+    // security finding that merely carries CWE-798 is untouched.
+    //
+    // PLACEMENT mirrors the inline/absence blocks above (after the hard-
+    // drop gates + anchor repair, so the demote routes `workingFinding`
+    // with the repaired anchor). `off` skips the gate; `shadow` counts +
+    // telemeters and keeps inline; only `enforce` demotes. No score floor —
+    // a P0/P1 ungrounded secrets claim is the worst case and is demoted too.
+    if (securityGroundingValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
+      const sgDecision = evaluateSecurityGrounding(workingFinding, {
+        addedLineTextByLine,
+        manifest: securityManifest,
+      })
+      if (!sgDecision.keep) {
+        const demoted = securityGroundingValidatorMode === "enforce"
+        droppedForFailedSecurityGroundingValidation++
+        onSecurityGroundingFindingDropped?.(workingFinding, { reason: sgDecision.reason, dropped: demoted })
+        if (demoted) {
+          unanchoredFindings.push(workingFinding)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
+    }
+
     const side = deriveSide(reviewable, workingFinding.path, workingFinding.line)
     if (!side) {
       const repairedLine =
@@ -9126,6 +9221,7 @@ export function validateForSubmission(args: {
     droppedForFailedPerfValidation,
     droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation,
+    droppedForFailedSecurityGroundingValidation,
     cleanFindingProvenance,
     provenance: {
       ...synthOutput.provenance,
@@ -9312,6 +9408,11 @@ interface EnsembleTelemetry {
      * (would-demote-to-body in shadow, actual-demote in enforce; 0 when
      * the gate is off). */
     droppedForFailedAbsenceGroundingValidation: number
+    /** SIG-293 v1: count of secrets-exposure findings the security-
+     * grounding gate flagged as ungrounded — cited line held no credential
+     * token, uncorroborated by any scanner fact (would-demote-to-body in
+     * shadow, actual-demote in enforce; 0 when the gate is off). */
+    droppedForFailedSecurityGroundingValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

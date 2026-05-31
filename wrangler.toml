@@ -304,6 +304,26 @@ OPENCLAW_VERIFICATION_MODE = "shadow"
 # behavior change. Read the firing rate + suppression-fp-rate before "enforce".
 OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 
+# SIG-293 v1: security-grounding gate (secrets-exposure). The deeper root of
+# Pattern A (#248): where Pattern A only de-alarmed the "revoke and rotate"
+# remediation text, this gate demotes the whole finding. A "secrets-exposure"
+# (CWE-798) finding is only believable when the cited code actually CONTAINS a
+# credential token (containsCredentialToken). One whose cited line holds no
+# credential (the #243 FP: a sev-3 finding that misread `console.log(x.length)`
+# as a leak) is a hallucination. v1 gates ONLY secrets-exposure — the single
+# HIGH-detectability category (a line either has a credential-shaped token or it
+# doesn't); injection/xss/path-traversal look identical parameterised-vs-
+# concatenated at the line level (gating them risks false-negatives), and authn/
+# ssrf/etc. are absences with no line signature. A corroborating scanner fact
+# ALWAYS keeps. "off" (default) skips the gate; "shadow" counts + telemeters the
+# would-demote but keeps every finding inline (zero behavior change); "enforce"
+# demotes to the body (never hard-drops). Read the firing rate + suppression-fp-
+# rate (kill > 2%) before "enforce". Rollback: set "off" (or remove the line).
+# SIG-293 (2026-05-30): landed at shadow to START the measurement immediately —
+# the gate runs + emits `pr-review-finding-rejected-validation` (gate:"security-
+# grounding") on every review but KEEPS every finding inline.
+OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "shadow"
+
 # SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
 # shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
 # been dormant since Phase 4a "baseline data collection" for months.

@@ -33,12 +33,17 @@ CREATE TABLE IF NOT EXISTS daily_counts (
 CREATE INDEX IF NOT EXISTS vrf_daily_counts_by_day ON daily_counts(day);
 `
 
+/** The categories a verification record can carry. Worker-token verification only
+ *  checks `logic`/`security` findings; the receipt-join check records under
+ *  RECEIPTJOIN_CATEGORY. A closed union (not a free `string`) so a typo can't
+ *  silently misclassify a record and leak across the corpus split. */
+export type VerificationCategory = "logic" | "security" | "receiptjoin"
+
 export interface RecordVerificationArgs {
   verdict: VerificationVerdict
-  /** "logic" | "security" (the only verified categories), kept as a free string.
-   *  SIG-285 v2: the receipt-join check records under RECEIPTJOIN_CATEGORY so its
+  /** SIG-285 v2: the receipt-join check records under RECEIPTJOIN_CATEGORY so its
    *  verdicts are surfaced separately from the worker-token ones. */
-  category: string
+  category: VerificationCategory
   /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
   occurredAt?: string
 }

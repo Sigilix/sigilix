@@ -288,6 +288,17 @@ OPENCLAW_RUNNER_EVIDENCE_MODE = "post"
 # Rollback: set "off" (or remove the line).
 OPENCLAW_VERIFICATION_MODE = "shadow"
 
+# SIG-285 v2 PR1: receipt-join verification — the NO-PERM sandbox foundation.
+# "off" (default) | "shadow" | "enforce" (reserved). When ON + a VERIFIED SIG-184
+# runner receipt exists, join each score>=4 security finding (with a resolvable
+# evidenceId) to the receipt's UN-FILTERED HEAD SARIF: CONFIRMED if the same rule
+# still fires at the cited path/line, INCONCLUSIVE otherwise — NEVER refuted
+# (absence is over-determined; sound REFUTED is PR4). TELEMETRY ONLY
+# (event:verification-receiptjoin); NO score/render/behavior change, NO new GitHub
+# permission. PR1 lands INERT (off); PR2 flips to "shadow" to measure the
+# refutable-eligible fraction. Rollback: set "off".
+OPENCLAW_RECEIPTJOIN_MODE = "off"
+
 # SIG-290 v1: anti-hallucination absence-grounding gate. Suppress/downgrade
 # "absence-claim" findings (e.g. "lacks tests", "no null check", "missing
 # validation") when the evidence that would confirm-or-refute the absence

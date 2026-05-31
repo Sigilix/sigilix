@@ -383,6 +383,14 @@ export interface Env {
   // findings + verdict telemetry, review UNCHANGED) | "enforce" (reserved; PR 1
   // treats it as shadow — the REFUTED-only demotion lands in PR 4).
   OPENCLAW_VERIFICATION_MODE?: string
+  // SIG-285 v2 PR1: receipt-join verification mode. "off" (default) skips it;
+  // "shadow" joins each score>=4 security finding (with a resolvable evidenceId)
+  // to the verified SIG-184 runner receipt's HEAD SARIF — CONFIRMED if the same
+  // rule still fires there, INCONCLUSIVE otherwise (NEVER refuted) — and
+  // telemeters the verdict (event:verification-receiptjoin) so the refutable-
+  // eligible fraction is measurable before any demote path. NO new GitHub perm.
+  // "enforce" reserved (demotion is PR4/5). Review UNCHANGED in all modes.
+  OPENCLAW_RECEIPTJOIN_MODE?: string
   // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
   RUNNER_RECEIPT_DO: DurableObjectNamespace

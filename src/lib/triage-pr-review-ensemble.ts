@@ -2705,7 +2705,16 @@ export async function handlePrReviewEnsemble(
               const ruleId = typeof res.ruleId === "string" ? res.ruleId.trim() : ""
               if (ruleId.length === 0) continue
               for (const loc of res.locations ?? []) {
-                const norm = normalizeSarifPath(loc.physicalLocation?.artifactLocation?.uri)
+                const artLoc = loc.physicalLocation?.artifactLocation
+                // Mirror runner.ts:305 path resolution exactly (uriBaseId /
+                // index / run-level artifacts) so a receipt result that uses an
+                // `index` or a `%SRCROOT%` base — not an inline uri — still
+                // resolves, and the index path form matches the bot findings'.
+                const norm = normalizeSarifPath(artLoc?.uri, {
+                  ...(artLoc?.uriBaseId !== undefined ? { uriBaseId: artLoc.uriBaseId } : {}),
+                  ...(artLoc?.index !== undefined ? { index: artLoc.index } : {}),
+                  ...(run.artifacts ? { artifacts: run.artifacts } : {}),
+                })
                 if (!norm.ok) continue
                 const startLine = loc.physicalLocation?.region?.startLine
                 scanResults.push(

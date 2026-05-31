@@ -15,7 +15,7 @@ import {
 // Use the SAME parser the ensemble feeds into verifyFinding in prod, so the
 // line-anchoring tests exercise the real index, not a duplicate.
 import { buildAddedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
-import { readVerificationMode } from "../src/lib/verification/mode"
+import { readVerificationMode, readReanchorEnabled } from "../src/lib/verification/mode"
 import type { Env } from "../src/index"
 
 // New side: line 9 = context, line 10 = the injection, line 11 = a safe line.
@@ -278,5 +278,20 @@ describe("readVerificationMode", () => {
   it("parses shadow / enforce (case-insensitive, trimmed)", () => {
     expect(readVerificationMode(mk(" SHADOW "))).toBe("shadow")
     expect(readVerificationMode(mk("enforce"))).toBe("enforce")
+  })
+})
+
+describe("readReanchorEnabled (SIG-285 re-anchor flip)", () => {
+  const mk = (v?: string) => ({ OPENCLAW_VERIFICATION_REANCHOR: v } as unknown as Env)
+  it("defaults to OFF (unset / blank / garbage / not 'on')", () => {
+    expect(readReanchorEnabled(mk(undefined))).toBe(false)
+    expect(readReanchorEnabled(mk(""))).toBe(false)
+    expect(readReanchorEnabled(mk("  "))).toBe(false)
+    expect(readReanchorEnabled(mk("enforce"))).toBe(false)
+    expect(readReanchorEnabled(mk("true"))).toBe(false)
+  })
+  it("is ON only for the literal 'on' (case-insensitive, trimmed)", () => {
+    expect(readReanchorEnabled(mk("on"))).toBe(true)
+    expect(readReanchorEnabled(mk(" ON "))).toBe(true)
   })
 })

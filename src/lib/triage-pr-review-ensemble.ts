@@ -5243,6 +5243,14 @@ export async function handlePrReviewEnsemble(
       // SIG-280: per-finding sha16 fid (same canonical form as the marker)
       // becomes the OFFLINE join key linking this claim-matched finding to a
       // later `review-memory-outcome` dismissal event.
+      // ⚠️ SIG-285 re-anchor caveat (code-reviewer #260, P2): this fid is computed
+      // from the PRE-move `f.line`, but the re-anchor mutation runs LATER (below,
+      // before marker gen), so when OPENCLAW_VERIFICATION_REANCHOR=on a re-anchored
+      // finding's POSTED marker uses the post-move line and this shadow fid
+      // diverges → that one negative-class row can't join its dismissal (a small
+      // SIG-280 calibration recall bias). Bounded to the re-anchored subset on a
+      // cold corpus; deferred. FIX when flipping the flag: recompute `shadowFids`
+      // AFTER the re-anchor block (or move the re-anchor above this block).
       const shadowFids = await Promise.all(
         filteredConsensusFindings.map((f) =>
           computeFid({ ruleId: null, path: f.path, line: f.line, headline: f.headline }),

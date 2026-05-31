@@ -8,12 +8,27 @@
 import { describe, expect, it } from "vitest"
 import {
   buildReceiptIndex,
+  extractReceiptScanResults,
   isReceiptJoinEligible,
   ruleIdFromEvidenceId,
   verifyFindingAgainstReceipt,
   type ReceiptScanResult,
+  type SarifPathNormalizer,
 } from "../src/lib/verification/verify-finding-receipt"
 import type { PrReviewFinding } from "../src/lib/triage-pr-review"
+import type { SarifRun } from "../src/lib/sarif-evidence/types"
+
+// A stub normalizer: an inline uri → lowercased path; else an `index` → `idx<n>`;
+// else fail. Lets the extractor's uri / index / fail paths be exercised purely.
+const stubNormalize: SarifPathNormalizer = (uri, opts) => {
+  if (typeof uri === "string" && uri.length > 0) return { ok: true, path: uri.toLowerCase() }
+  if (typeof opts.index === "number") return { ok: true, path: `idx${opts.index}` }
+  return { ok: false, reason: "no uri or index" }
+}
+
+function run(results: SarifRun["results"], artifacts?: SarifRun["artifacts"]): SarifRun {
+  return { tool: { driver: { name: "semgrep" } }, results, ...(artifacts ? { artifacts } : {}) } as SarifRun
+}
 
 function finding(over: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {
@@ -135,6 +150,62 @@ describe("verifyFindingAgainstReceipt", () => {
 
   it("never throws on degenerate input", () => {
     expect(() => verifyFindingAgainstReceipt(finding({ evidenceId: "weird", line: undefined }), index([]))).not.toThrow()
+  })
+})
+
+describe("extractReceiptScanResults", () => {
+  it("maps result path/line/ruleId from an inline uri", () => {
+    const out = extractReceiptScanResults([
+      run([{ ruleId: "aws-key", locations: [{ physicalLocation: { artifactLocation: { uri: "Src/Auth.ts" }, region: { startLine: 42 } } }] }]),
+    ], stubNormalize)
+    expect(out).toEqual([{ path: "src/auth.ts", ruleId: "aws-key", line: 42 }])
+  })
+
+  it("drops rule-less results", () => {
+    const out = extractReceiptScanResults([
+      run([{ locations: [{ physicalLocation: { artifactLocation: { uri: "a.ts" }, region: { startLine: 1 } } }] }]),
+    ], stubNormalize)
+    expect(out).toEqual([])
+  })
+
+  it("emits one entry per location (multi-location result)", () => {
+    const out = extractReceiptScanResults([
+      run([{ ruleId: "r", locations: [
+        { physicalLocation: { artifactLocation: { uri: "a.ts" }, region: { startLine: 1 } } },
+        { physicalLocation: { artifactLocation: { uri: "b.ts" }, region: { startLine: 2 } } },
+      ] }]),
+    ], stubNormalize)
+    expect(out).toHaveLength(2)
+    expect(out.map((r) => r.path)).toEqual(["a.ts", "b.ts"])
+  })
+
+  it("path-only (no startLine) yields an entry without a line", () => {
+    const out = extractReceiptScanResults([
+      run([{ ruleId: "dep", locations: [{ physicalLocation: { artifactLocation: { uri: "pkg.lock" } } }] }]),
+    ], stubNormalize)
+    expect(out).toEqual([{ path: "pkg.lock", ruleId: "dep" }])
+  })
+
+  it("resolves an index-based path via the run artifacts (no inline uri)", () => {
+    const out = extractReceiptScanResults([
+      run(
+        [{ ruleId: "r", locations: [{ physicalLocation: { artifactLocation: { index: 0 }, region: { startLine: 5 } } }] }],
+        [{ location: { uri: "from-index.ts" } }],
+      ),
+    ], stubNormalize)
+    expect(out).toEqual([{ path: "idx0", ruleId: "r", line: 5 }])
+  })
+
+  it("skips a location the normalizer rejects (ok:false)", () => {
+    const out = extractReceiptScanResults([
+      run([{ ruleId: "r", locations: [{ physicalLocation: { region: { startLine: 1 } } }] }]), // no uri, no index → fail
+    ], stubNormalize)
+    expect(out).toEqual([])
+  })
+
+  it("handles empty / missing results + runs without throwing", () => {
+    expect(extractReceiptScanResults([], stubNormalize)).toEqual([])
+    expect(extractReceiptScanResults([run(undefined)], stubNormalize)).toEqual([])
   })
 })
 

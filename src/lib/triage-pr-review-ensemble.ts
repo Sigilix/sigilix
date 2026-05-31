@@ -295,6 +295,7 @@ import { verifyFinding, findingKey } from "./verification/verify-finding"
 import {
   verifyFindingAgainstReceipt,
   buildReceiptIndex,
+  extractReceiptScanResults,
   parseReceiptJoinMode,
   type ReceiptScanResult,
 } from "./verification/verify-finding-receipt"
@@ -2649,6 +2650,11 @@ export async function handlePrReviewEnsemble(
         state: runnerEvidence.state,
         ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
       }))
+    } else if (receiptJoinMode !== "off" && args.repoId === undefined) {
+      // Receipt-join is on but this entry path has no repoId, so the receipt
+      // lookup was skipped → telemeter so these reviews are distinguishable from
+      // "feature off" / "no verified receipt" in the rollout denominator (CodeRabbit).
+      console.warn(JSON.stringify({ event: "receiptjoin-skipped-no-repoid", owner, repo, prNumber }))
     }
     // SIG-184: record the trust state for the check-run badge. Only in `post`
     // mode — that's when the receipt actually backs the review (verified →
@@ -2709,33 +2715,10 @@ export async function handlePrReviewEnsemble(
           // from "no verified receipt" / "empty index" during rollout (CodeRabbit).
           console.warn(JSON.stringify({ event: "receiptjoin-index-build-skipped", owner, repo, prNumber, reason: parsed.reason }))
         } else {
-          const scanResults: ReceiptScanResult[] = []
-          for (const run of parsed.report.runs) {
-            for (const res of run.results ?? []) {
-              const ruleId = typeof res.ruleId === "string" ? res.ruleId.trim() : ""
-              if (ruleId.length === 0) continue
-              for (const loc of res.locations ?? []) {
-                const artLoc = loc.physicalLocation?.artifactLocation
-                // Mirror runner.ts:305 path resolution exactly (uriBaseId /
-                // index / run-level artifacts) so a receipt result that uses an
-                // `index` or a `%SRCROOT%` base — not an inline uri — still
-                // resolves, and the index path form matches the bot findings'.
-                const norm = normalizeSarifPath(artLoc?.uri, {
-                  ...(artLoc?.uriBaseId !== undefined ? { uriBaseId: artLoc.uriBaseId } : {}),
-                  ...(artLoc?.index !== undefined ? { index: artLoc.index } : {}),
-                  ...(run.artifacts ? { artifacts: run.artifacts } : {}),
-                })
-                if (!norm.ok) continue
-                const startLine = loc.physicalLocation?.region?.startLine
-                scanResults.push(
-                  typeof startLine === "number"
-                    ? { path: norm.path, ruleId, line: startLine }
-                    : { path: norm.path, ruleId },
-                )
-              }
-            }
-          }
-          receiptScanIndex = buildReceiptIndex(scanResults)
+          // Pure, unit-tested extraction (mirrors runner.ts path resolution).
+          receiptScanIndex = buildReceiptIndex(
+            extractReceiptScanResults(parsed.report.runs, normalizeSarifPath),
+          )
         }
       } catch (err) {
         console.warn(JSON.stringify({ event: "receiptjoin-index-build-failed", owner, repo, prNumber, error: String(err) }))

@@ -35,6 +35,7 @@
 // Pure + side-effect-free (like verify-finding.ts) so it is trivially testable.
 
 import type { PrReviewFinding } from "../triage-pr-review"
+import type { SarifRun } from "../sarif-evidence/types"
 import { findingKey, type VerificationCheck, type VerificationResult } from "./verify-finding"
 
 export { findingKey }
@@ -79,6 +80,60 @@ export interface ReceiptScanResult {
  *  (no demotion happens here); a false CONFIRMED is just a slightly-too-eager
  *  trust pill, which the rule-class match below still bounds. */
 const LINE_WINDOW = 10
+
+/**
+ * The subset of `normalizeSarifPath` the extractor needs — injected so this
+ * module stays runtime-decoupled from sarif-evidence (the ensemble passes the
+ * real one; tests pass a stub). Mirrors NormalizeArgs (uriBaseId / index /
+ * artifacts) so a receipt result that resolves its path via an artifacts index
+ * or a `%SRCROOT%` base — not an inline uri — still resolves.
+ */
+export type SarifPathNormalizer = (
+  uri: string | undefined,
+  opts: {
+    uriBaseId?: string
+    index?: number
+    // Mutable to match normalizeSarifPath's NormalizeArgs (param contravariance).
+    artifacts?: Array<{ location?: { uri?: string } }>
+  },
+) => { ok: true; path: string } | { ok: false; reason: string }
+
+/**
+ * Map parsed SARIF runs → the receipt scan-result list (path / ruleId / line),
+ * the input to `buildReceiptIndex`. Pure (the path normalizer is injected), so
+ * the SARIF→index extraction is unit-testable without the sarif-evidence
+ * runtime or the whole ensemble. Drops rule-less results; mirrors runner.ts path
+ * resolution (uriBaseId / index / run.artifacts) so the index path form matches
+ * the bot findings'.
+ */
+export function extractReceiptScanResults(
+  runs: ReadonlyArray<SarifRun>,
+  normalizePath: SarifPathNormalizer,
+): ReceiptScanResult[] {
+  const out: ReceiptScanResult[] = []
+  for (const run of runs) {
+    for (const res of run.results ?? []) {
+      const ruleId = typeof res.ruleId === "string" ? res.ruleId.trim() : ""
+      if (ruleId.length === 0) continue
+      for (const loc of res.locations ?? []) {
+        const artLoc = loc.physicalLocation?.artifactLocation
+        const norm = normalizePath(artLoc?.uri, {
+          ...(artLoc?.uriBaseId !== undefined ? { uriBaseId: artLoc.uriBaseId } : {}),
+          ...(artLoc?.index !== undefined ? { index: artLoc.index } : {}),
+          ...(run.artifacts ? { artifacts: run.artifacts } : {}),
+        })
+        if (!norm.ok) continue
+        const startLine = loc.physicalLocation?.region?.startLine
+        out.push(
+          typeof startLine === "number"
+            ? { path: norm.path, ruleId, line: startLine }
+            : { path: norm.path, ruleId },
+        )
+      }
+    }
+  }
+  return out
+}
 
 /** Index the receipt results by normalized path for O(1)-per-finding lookup. */
 export function buildReceiptIndex(

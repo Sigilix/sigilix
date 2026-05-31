@@ -150,8 +150,12 @@ function groupedMedian(hist: number[]): { estimate: number; bucket: string } {
     if (next >= half) {
       const lo = BUCKET_LOWERS[i] ?? 0
       const hi = i + 1 < BUCKET_COUNT ? BUCKET_LOWERS[i + 1] : undefined
-      // Open-topped or empty bucket → report the lower bound (can't interpolate).
-      if (hi === undefined || count === 0) return { estimate: lo, bucket: bucketLabel(i) }
+      // Report the lower bound (no interpolation) when:
+      //  - open-topped bucket (no width), or
+      //  - empty median bucket, or
+      //  - a width-≤1 bucket — notably b0 = [0,1), whose only value is exactly 0;
+      //    interpolating there would round an all-zero-gain corpus to median 1.
+      if (hi === undefined || count === 0 || hi - lo <= 1) return { estimate: lo, bucket: bucketLabel(i) }
       const est = lo + ((half - cum) / count) * (hi - lo)
       return { estimate: Math.round(est), bucket: bucketLabel(i) }
     }

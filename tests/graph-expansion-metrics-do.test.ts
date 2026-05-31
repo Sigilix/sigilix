@@ -119,6 +119,19 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     expect(out.goKill.verdict).toBe("BORDERLINE")
   })
 
+  it("KILL with an honest median of 0 when every review has zero cross-file gain", async () => {
+    const { do_ } = makeDo()
+    for (const v of [0, 0, 0, 0]) await record(do_, sample(v))
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    expect(out.reviews).toBe(4)
+    // The median falls in the degenerate b0 = [0,1) bucket — report 0, not an
+    // interpolated 1 (the headline number must read honestly for an all-zero corpus).
+    expect(out.netNewTokens.medianBucket).toBe("[0,1)")
+    expect(out.netNewTokens.medianEstimate).toBe(0)
+    expect(out.netNewTokens.crossFileRate).toBe(0)
+    expect(out.goKill.verdict).toBe("KILL")
+  })
+
   it("NO_DATA + zeroed fields on an empty window (no divide-by-zero)", async () => {
     const { do_, getAlarm } = makeDo()
     const out = await do_.query({ windowDays: 7, nowIso: T })

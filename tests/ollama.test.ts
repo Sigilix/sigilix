@@ -60,6 +60,43 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe("generate() — SIG-287 think:false on schema-constrained calls", () => {
+  // Capture the request init directly inside the one-shot mock.
+  function mockCaptureOnce(captured: { body?: Record<string, unknown> }): void {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (_url, init) => {
+      captured.body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>
+      return {
+        ok: true,
+        status: 200,
+        body: makeStream([
+          JSON.stringify({ response: "{}", done: false }),
+          JSON.stringify({ response: "", done: true }),
+        ]),
+        text: async () => "",
+      } as unknown as Response
+    })
+  }
+
+  it("sets think:false when a format is passed (disables the reasoning phase)", async () => {
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await generate({
+      model: "deepseek-v4-flash:cloud",
+      prompt: "review",
+      apiKey: FAKE_API_KEY,
+      format: { type: "object" },
+    })
+    expect(captured.body?.think).toBe(false)
+  })
+
+  it("omits think on free-form (no format) calls", async () => {
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await generate({ model: FAKE_MODEL, prompt: "say hi", apiKey: FAKE_API_KEY })
+    expect("think" in (captured.body ?? {})).toBe(false)
+  })
+})
+
 describe("generate() — external abort signal (SIG-216)", () => {
   it("rejects immediately when the signal is already aborted before the call", async () => {
     // The fetch mock is wired to honor whatever signal it receives so

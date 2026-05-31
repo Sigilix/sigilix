@@ -161,7 +161,17 @@ export async function chat(args: ChatArgs): Promise<ChatResult> {
     options: { temperature: effectiveTemperature },
   }
   if (args.tools && args.tools.length > 0) requestBody.tools = args.tools
-  if (args.format) requestBody.format = args.format
+  if (args.format) {
+    requestBody.format = args.format
+    // SIG-287: disable the reasoning/"thinking" phase for schema-constrained
+    // calls — see the matching note in ollama.ts. A reasoning model otherwise
+    // streams an unbounded chain-of-thought (separate `thinking` field, never
+    // read here) and emits zero structured output until the per-attempt cap
+    // aborts it. `format` is omitted on tool-call turns (so those keep their
+    // thinking); set only alongside `format` here. Non-reasoning models ignore
+    // `think`, so this is safe.
+    requestBody.think = false
+  }
 
   try {
     const res = await fetch(OLLAMA_TURBO_URL, {

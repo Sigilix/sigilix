@@ -97,6 +97,47 @@ describe("chat() — kill switch", () => {
   })
 })
 
+describe("chat() — SIG-287 think:false on schema-constrained calls", () => {
+  // Capture the request init directly inside the one-shot mock — re-spying
+  // `fetch` via a helper would detach a separately-created spy from the call.
+  function mockCaptureOnce(captured: { body?: Record<string, unknown> }): void {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (_url, init) => {
+      captured.body = JSON.parse((init as RequestInit).body as string) as Record<string, unknown>
+      return {
+        ok: true,
+        status: 200,
+        body: makeStream([JSON.stringify({ message: { role: "assistant", content: "{}" }, done: true })]),
+        text: async () => "",
+      } as unknown as Response
+    })
+  }
+
+  it("sets think:false (disables the reasoning phase) when a format is passed", async () => {
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await chat({
+      model: "deepseek-v4-flash:cloud",
+      apiKey: FAKE_API_KEY,
+      messages: [{ role: "user", content: "review" }],
+      chatEnabled: "on",
+      format: { type: "object" },
+    })
+    expect(captured.body?.think).toBe(false)
+  })
+
+  it("omits think on free-form (no format) calls — those keep the model's default thinking", async () => {
+    const captured: { body?: Record<string, unknown> } = {}
+    mockCaptureOnce(captured)
+    await chat({
+      model: "deepseek-v4-flash:cloud",
+      apiKey: FAKE_API_KEY,
+      messages: [{ role: "user", content: "chat" }],
+      chatEnabled: "on",
+    })
+    expect("think" in (captured.body ?? {})).toBe(false)
+  })
+})
+
 describe("chat() — content accumulation (delta)", () => {
   it("concatenates content across multiple chunks", async () => {
     mockFetchOnce(

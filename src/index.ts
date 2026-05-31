@@ -392,6 +392,10 @@ export interface Env {
   // findings + verdict telemetry, review UNCHANGED) | "enforce" (reserved; PR 1
   // treats it as shadow — the REFUTED-only demotion lands in PR 4).
   OPENCLAW_VERIFICATION_MODE?: string
+  // SIG-285 re-anchor (inline-first): "on" applies the re-anchor MUTATION (move a
+  // refuted inline finding to its correct diff line) when verification is enforce.
+  // Default off → inert (re-anchor stays shadow-measured by PR1).
+  OPENCLAW_VERIFICATION_REANCHOR?: string
   // SIG-285 v2 PR1: receipt-join verification mode. "off" (default) skips it;
   // "shadow" joins each score>=4 security finding (with a resolvable evidenceId)
   // to the verified SIG-184 runner receipt's HEAD SARIF — CONFIRMED if the same

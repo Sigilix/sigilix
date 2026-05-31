@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
+  badgeAssetLabel,
+  badgeAssetSize,
   badgeAssetUrl,
   getBadgeSvg,
   handleBadgeAssetRoute,
@@ -192,6 +194,8 @@ describe("badge assets (SIG-201)", () => {
       "DOCS",
       "VERIFIED", // SIG-184 runner-evidence pills
       "PENDING",
+      "GROUNDED", // Trust Ledger v0 trust pills
+      "MODEL",
     ] as const
 
     it("has an entry for every expected label", () => {
@@ -222,6 +226,41 @@ describe("badge assets (SIG-201)", () => {
 
     it("lookupGlyph throws on an unknown label so a forgotten regeneration surfaces in tests", () => {
       expect(() => lookupGlyph("NONEXISTENT_LABEL")).toThrow(/no baked glyph/)
+    })
+  })
+
+  // Trust Ledger v0: the trust pills live in their own style table
+  // (TRUST_BADGE_STYLES), so every name-resolving accessor must branch on it
+  // BEFORE the category fallback — else `badgeAssetLabel("trust-grounded")`
+  // dereferences `CATEGORY_BADGE_STYLES["trust-grounded"]` (undefined) and
+  // throws the moment `badgeImg`/`trustPill` is wired. Guard the whole accessor
+  // surface so a new style group can never silently fall through again.
+  describe("trust pill accessors are total (no category fall-through)", () => {
+    const TRUST = [
+      { name: "trust-grounded", label: "GROUNDED", accent: "#64748B" },
+      { name: "trust-model", label: "MODEL", accent: "#9CA3AF" },
+    ] as const
+
+    it("badgeAssetLabel resolves the trust label (not undefined)", () => {
+      for (const { name, label } of TRUST) {
+        expect(badgeAssetLabel(name)).toBe(label)
+      }
+    })
+
+    it("badgeAssetSize returns the category geometry without throwing", () => {
+      for (const { name } of TRUST) {
+        const size = badgeAssetSize(name)
+        expect(size.width).toBeGreaterThan(0)
+        expect(size.height).toBe(20)
+      }
+    })
+
+    it("getBadgeSvg serves a real SVG carrying the pill's accent", () => {
+      for (const { name, accent } of TRUST) {
+        const svg = getBadgeSvg(name)
+        expect(svg).toContain("<svg")
+        expect(svg).toContain(accent)
+      }
     })
   })
 

@@ -65,6 +65,9 @@ const CATEGORY_LABELS = [
 // but rendered with the PRIORITY treatment (bright fill + near-black glyph) in
 // badge-assets.ts. Baked here so the glyph geometry matches the category pills.
 const RUNNER_LABELS = ["VERIFIED", "PENDING"] as const
+// Trust Ledger v0: per-finding trust pills (Kimi spec). Same category-pill
+// geometry as the runner pills (variable width, 20-tall), muted slate/gray fill.
+const TRUST_LABELS = ["GROUNDED", "MODEL"] as const
 
 interface BakedGlyph {
   readonly d: string
@@ -165,6 +168,12 @@ async function main(): Promise<void> {
   // SIG-184 runner-evidence pills share the category pill geometry (variable
   // width via categoryBadgeWidth, 20-tall), so they bake with the same centering.
   for (const label of RUNNER_LABELS) {
+    const width = categoryBadgeWidth(label)
+    entries.push([label, bakeGlyph(font, label, width, CATEGORY_BADGE_HEIGHT)])
+  }
+
+  // Trust Ledger pills share the same variable-width category geometry.
+  for (const label of TRUST_LABELS) {
     const width = categoryBadgeWidth(label)
     entries.push([label, bakeGlyph(font, label, width, CATEGORY_BADGE_HEIGHT)])
   }

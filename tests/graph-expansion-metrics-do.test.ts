@@ -2,7 +2,7 @@
 // aggregates (netNewTokens histogram → grouped median, cross-file rates, fetch
 // cost, GO/KILL verdict). Same real-sqlite harness as the other metrics DOs.
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   GraphExpansionMetricsDO,
   bucketIndex,
@@ -67,10 +67,14 @@ describe("bucketIndex", () => {
     expect(bucketIndex(3200)).toBe(6)
     expect(bucketIndex(50_000)).toBe(6)
     expect(bucketIndex(-5)).toBe(0) // defensive: negatives fall in b0
-    // Non-finite should be impossible (netNewTokens is a computed count); it
-    // falls to b0 but also warns (Sigilix #256) so an upstream bug stays visible.
+  })
+
+  it("warns + falls to b0 on a non-finite value (so an upstream bug stays visible)", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     expect(bucketIndex(NaN)).toBe(0)
     expect(bucketIndex(Infinity)).toBe(0)
+    expect(warn).toHaveBeenCalledTimes(2)
+    warn.mockRestore()
   })
 })
 
@@ -148,20 +152,34 @@ describe("GraphExpansionMetricsDO.recordSample + query", () => {
     expect(out.goKill.verdict).toBe("NO_DATA")
   })
 
-  it("tracks fetch cost + budget exhaustion + mode separately", async () => {
+  it("tracks fetch cost + budget exhaustion + mode separately, gating disabled samples", async () => {
     const { do_ } = makeDo()
     await record(do_, sample(300, { fetchBytes: 1000, fetchFiles: 6, budgetExhausted: true }))
-    await record(do_, sample(0, { mode: "post", fetchEnabled: false, fetchFiles: 0, fetchBytes: 0, fetchElapsedMs: 0 }))
+    // A fetchEnabled=false sample carrying STALE non-zero fetch fields must NOT
+    // contribute to the per-fetch means or the exhaustion count (CodeRabbit #256).
+    await record(do_, sample(0, { mode: "post", fetchEnabled: false, fetchFiles: 99, fetchBytes: 99, fetchElapsedMs: 99, budgetExhausted: true }))
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.reviews).toBe(2)
     expect(out.fetch.reviews).toBe(1) // only the fetch-enabled one
-    // Means divide by the FETCH-ENABLED count (1), not total reviews (2), so the
-    // non-fetch review doesn't dilute the cross-file fetch cost.
+    // Means divide by the FETCH-ENABLED count (1) and the disabled sample's stale
+    // 99s are gated to 0 — so the cross-file cost is not inflated.
     expect(out.fetch.meanFiles).toBe(6)
     expect(out.fetch.meanBytes).toBe(1000)
     expect(out.fetch.meanElapsedMs).toBe(50)
-    expect(out.fetch.budgetExhaustedReviews).toBe(1)
+    expect(out.fetch.budgetExhaustedReviews).toBe(1) // disabled sample's budgetExhausted is gated out
     expect(out.modeReviews).toEqual({ shadow: 1, post: 1 })
+  })
+
+  it("drops a malformed (non-finite) sample before it can poison the aggregates", async () => {
+    const { do_ } = makeDo()
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    await record(do_, sample(800)) // a good sample
+    await record(do_, sample(Number.NaN)) // malformed → dropped
+    await record(do_, sample(900, { controlTokens: Number.POSITIVE_INFINITY })) // malformed → dropped
+    warn.mockRestore()
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    expect(out.reviews).toBe(1) // only the good sample landed
+    expect(out.netNewTokens.mean).toBe(800)
   })
 
   it("excludes counts outside the trailing window", async () => {

@@ -178,6 +178,11 @@ function round(n: number, places = 3): number {
   return Math.round(n * f) / f
 }
 
+/** Every numeric field written to the aggregates is finite (computed counts). */
+function hasFiniteMetrics(s: GraphExpansionSample): boolean {
+  return [s.netNewTokens, s.controlTokens, s.totalTokens, s.fetchFiles, s.fetchBytes, s.fetchElapsedMs].every(Number.isFinite)
+}
+
 export class GraphExpansionMetricsDO extends DurableObject<Env> {
   private ready = false
 
@@ -198,9 +203,24 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
     const sql = this.sql()
     const day = utcDay(args.occurredAt)
     const s = args.sample
+    // Drop a malformed sample before it can poison the daily aggregates with a
+    // non-finite numeric. Every field here is a computed count → should always
+    // be finite; warn rather than mask so an upstream bug stays visible
+    // (CodeRabbit #256). Telemetry-only, so dropping one bad sample is safe.
+    if (!hasFiniteMetrics(s)) {
+      console.warn(JSON.stringify({ event: "graph-expansion-metrics-invalid-sample", mode: s.mode }))
+      return
+    }
     const ga = s.graphAvailable ? 1 : 0
     const fe = s.fetchEnabled ? 1 : 0
-    const be = s.budgetExhausted ? 1 : 0
+    // Fetch cost only counts when the fetcher was actually wired, so a
+    // fetchEnabled=false sample (whose fetch fields should be 0 anyway) can never
+    // overstate the per-fetch means (÷ fetch_reviews) or the exhaustion count
+    // (CodeRabbit #256).
+    const be = s.fetchEnabled && s.budgetExhausted ? 1 : 0
+    const fetchFiles = s.fetchEnabled ? s.fetchFiles : 0
+    const fetchBytes = s.fetchEnabled ? s.fetchBytes : 0
+    const fetchElapsedMs = s.fetchEnabled ? s.fetchElapsedMs : 0
 
     this.ctx.storage.transactionSync(() => {
       sql.exec(
@@ -217,8 +237,8 @@ export class GraphExpansionMetricsDO extends DurableObject<Env> {
            sum_fetch_files = sum_fetch_files + ?,
            sum_fetch_bytes = sum_fetch_bytes + ?,
            sum_fetch_elapsed = sum_fetch_elapsed + ?`,
-        day, ga, fe, be, s.netNewTokens, s.controlTokens, s.totalTokens, s.fetchFiles, s.fetchBytes, s.fetchElapsedMs,
-        ga, fe, be, s.netNewTokens, s.controlTokens, s.totalTokens, s.fetchFiles, s.fetchBytes, s.fetchElapsedMs,
+        day, ga, fe, be, s.netNewTokens, s.controlTokens, s.totalTokens, fetchFiles, fetchBytes, fetchElapsedMs,
+        ga, fe, be, s.netNewTokens, s.controlTokens, s.totalTokens, fetchFiles, fetchBytes, fetchElapsedMs,
       )
       sql.exec(
         `INSERT INTO daily_expansion_hist (day, bucket, count) VALUES (?, ?, 1)

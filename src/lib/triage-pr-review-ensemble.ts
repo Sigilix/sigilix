@@ -2624,12 +2624,19 @@ export async function handlePrReviewEnsemble(
     // (`meta.merge_commit_sha` == the OIDC-signed sha) — the forge-proof key. In
     // `post` we feed the receipt's SARIF to the SAME pipeline via `rawOverride`.
     const runnerMode = readRunnerEvidenceMode(env)
+    // SIG-285 v2 PR1: receipt-join shares the SAME verified-receipt lookup as
+    // runner-evidence, so the lookup must fire when EITHER feature is on —
+    // otherwise enabling OPENCLAW_RECEIPTJOIN_MODE alone (with runner-evidence
+    // off) would silently no-op (CodeRabbit). The runner-evidence-specific
+    // outputs (the trust-pill badge + the adoption metric) stay gated on
+    // `runnerMode` below; only the shared lookup is decoupled.
+    const receiptJoinMode = parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE)
     let runnerEvidence: RunnerEvidenceState = { state: "runner-absent" }
     // SIG-285 v2 PR1: the verified receipt's UN-FILTERED HEAD-scan index, built
     // below + joined to findings after submission (receipt-join verification).
     // null = no receipt-join (mode off, or no verified receipt for this commit).
     let receiptScanIndex: Map<string, ReceiptScanResult[]> | null = null
-    if (runnerMode !== "off" && args.repoId !== undefined) {
+    if ((runnerMode !== "off" || receiptJoinMode !== "off") && args.repoId !== undefined) {
       const mergeSha = meta.merge_commit_sha
       runnerEvidence = mergeSha
         ? await lookupRunnerEvidence(env, String(args.repoId), prNumber, mergeSha)
@@ -2638,6 +2645,7 @@ export async function handlePrReviewEnsemble(
         event: "runner-evidence-consume",
         owner, repo, prNumber,
         mode: runnerMode,
+        receiptJoinMode,
         state: runnerEvidence.state,
         ...(runnerEvidence.state === "evidence-pending" ? { reason: runnerEvidence.reason } : {}),
       }))
@@ -2692,13 +2700,15 @@ export async function handlePrReviewEnsemble(
     // already diff/severity-filtered (a filtered-out result would read as a false
     // absence). Best-effort + bounded: any parse error leaves the index null
     // (→ the join no-ops) and never breaks the review.
-    if (
-      parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE) !== "off" &&
-      runnerEvidence.state === "verified"
-    ) {
+    if (receiptJoinMode !== "off" && runnerEvidence.state === "verified") {
       try {
         const parsed = parseSarif(runnerEvidence.sarif)
-        if (parsed.ok) {
+        if (!parsed.ok) {
+          // parseSarif reports malformed/unsupported receipts via {ok:false}
+          // (it does NOT throw); telemeter so a bad receipt is distinguishable
+          // from "no verified receipt" / "empty index" during rollout (CodeRabbit).
+          console.warn(JSON.stringify({ event: "receiptjoin-index-build-skipped", owner, repo, prNumber, reason: parsed.reason }))
+        } else {
           const scanResults: ReceiptScanResult[] = []
           for (const run of parsed.report.runs) {
             for (const res of run.results ?? []) {
@@ -5504,7 +5514,7 @@ export async function handlePrReviewEnsemble(
     // whether the demote path (PR4/5) is worth building vs receipts-as-trust.
     // Independent of OPENCLAW_VERIFICATION_MODE; gated by the index being built.
     if (receiptScanIndex !== null) {
-      const rjMode = parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE)
+      const rjMode = receiptJoinMode
       for (const finding of [...submissionVerdict.findings, ...renderableUnanchoredForSubmission]) {
         if (finding.score < 4 || finding.category !== "security") continue
         const result = verifyFindingAgainstReceipt(finding, receiptScanIndex)

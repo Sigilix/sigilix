@@ -423,3 +423,84 @@ describe("validateForSubmission — SIG-109 logic evidence gate", () => {
     expect(result.verdict.findings).toHaveLength(1)
   })
 })
+
+describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
+  // The default `finding()` is a sev-4 logic finding with no
+  // `independentAssessment` — the shape the backstop flags. logicEvidence is
+  // omitted so the SIG-109 gate no-ops and this gate is exercised in isolation.
+  it("ENFORCE: drops a sev>=4 logic finding lacking a survival rationale + counts + fires callback", () => {
+    const onFlag = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      logicRefutationMode: "enforce",
+      onLogicRefutationFindingDropped: onFlag,
+    })
+    expect(result.droppedForFailedLogicRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), {
+      reason: "logic-finding-missing-refutation-survival",
+      dropped: true,
+    })
+  })
+
+  it("SHADOW: counts the would-flag + fires callback dropped:false but KEEPS the finding", () => {
+    const onFlag = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      logicRefutationMode: "shadow",
+      onLogicRefutationFindingDropped: onFlag,
+    })
+    expect(result.droppedForFailedLogicRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(1) // NOT dropped in shadow
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), {
+      reason: "logic-finding-missing-refutation-survival",
+      dropped: false,
+    })
+  })
+
+  it("KEEPS a sev>=4 logic finding that carries a survival rationale, even in enforce", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [
+            finding({
+              independentAssessment: "No bound on `i`; the loop runs to arr.length inclusive with no guard.",
+            }),
+          ],
+        },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      logicRefutationMode: "enforce",
+    })
+    expect(result.droppedForFailedLogicRefutation).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+  })
+
+  it("defaults to OFF when logicRefutationMode is omitted (gate does not run)", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+    })
+    expect(result.droppedForFailedLogicRefutation).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+  })
+})

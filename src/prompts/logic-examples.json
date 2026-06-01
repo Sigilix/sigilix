@@ -182,6 +182,18 @@
         "body": "`port == cfg.port` relies on coercion; if `cfg.port` becomes `\"08\"` or empty the comparison silently flips. Parse `cfg.port` and use `===`."
       },
       "why": "Concrete, anchored (`port`, `cfg.port`, the `==` token on a changed line) but lower severity (score 3, below the validator's sev>=4 bar so it always keeps). A good, specific finding — included to show the lens can fire below the gate threshold too."
+    },
+    {
+      "id": "skip-overflow-refuted-by-clamp",
+      "situation": "An added line computes `sinceMs = Date.now() - hours * 60 * 60 * 1000`, and you suspect `hours * 60 * 60 * 1000` could overflow or go negative for a large `hours`. But three lines up, `hours` is set via `Math.min(parsed, MAX_RUNS_WINDOW_HOURS)` where `MAX_RUNS_WINDOW_HOURS = 24 * 90` (2160), and `parsed` is already guarded by `Number.isFinite(parsed) && parsed > 0`.",
+      "emit": false,
+      "cleared": {
+        "path": "src/ui/app.tsx",
+        "line": 50,
+        "hypothesis": "hours * 60 * 60 * 1000 could overflow or produce a negative epoch for large hours",
+        "mitigation": "Math.min(parsed, MAX_RUNS_WINDOW_HOURS) clamps hours to 2160 before the multiply (product ~7.8e9, far under Number.MAX_SAFE_INTEGER); Number.isFinite(parsed) && parsed > 0 rules out NaN/Infinity"
+      },
+      "why": "SKIP — refuted by an in-code mitigation. The `Math.min(parsed, 2160)` clamp caps the product far under `Number.MAX_SAFE_INTEGER` and the `Number.isFinite` guard rules out NaN/Infinity. A concern your own reasoning concludes is 'theoretical' or 'already clamped' is a CLEAR: record it in `clearedLogicCandidates` quoting the `Math.min(...)` mitigation, do NOT emit a finding. This is the exact self-refuting-finding FP (PR #12 `sinceMs`) that SIG-308 targets."
     }
   ]
 }

@@ -122,4 +122,63 @@ describe("handleFpRateMetricsRoute", () => {
     const security = body.rows.find((r) => r.role === "security")!
     expect(security).toMatchObject({ postedN: 0, hard: 0, hardFpRate: null })
   })
+
+  it("joins across a rename: review telemetry under the OLD slug + dismissals under the NEW slug, unioned via multiple ?repo= aliases", async () => {
+    const now = Date.now()
+    const reverseTs = REVERSE_TS_BASE - (now - DAY)
+    const finding = { path: "a.ts", line: 10, headline: "bug", score: 5 }
+    const fid = await computeFid({ ruleId: null, path: finding.path, line: finding.line, headline: finding.headline })
+    const records: Record<string, unknown> = {
+      // Review recorded BEFORE the rename → keyed under arc-and-anchor/sigilix.
+      [`ensemble-review-telemetry:${reverseTs}:Arc-and-Anchor/sigilix#100`]: {
+        owner: "Arc-and-Anchor",
+        repo: "sigilix",
+        prNumber: 100,
+        synthesizer: {
+          verdict: { findings: [finding] },
+          provenance: { findings: [{ sourceSpecialists: ["logic"] }] },
+        },
+      },
+      // Dismissal dual-written AFTER the rename → keyed under sigilix/sigilix.
+      "review-memory:Sigilix/sigilix:cat:logic": {
+        schemaVersion: 1,
+        category: "logic",
+        lastUpdatedTs: new Date(now).toISOString(),
+        signals: [
+          { ts: new Date(now).toISOString(), prNumber: 100, commentId: 555, fid, kind: "dismissed-textual", dismissReason: "not-a-bug" },
+        ],
+      },
+    }
+    // A single slug joins NEITHER side to the other...
+    const oldOnly = (await (
+      await handleFpRateMetricsRoute(
+        get("https://x/metrics/fp-rate?repo=Arc-and-Anchor/sigilix&window=60&maturity=0&min-n=1", `Bearer ${TOKEN}`),
+        makeEnv(records),
+      )
+    ).json()) as { reviewsRealFanout: number; totalDismissals: number }
+    expect(oldOnly).toMatchObject({ reviewsRealFanout: 1, totalDismissals: 0 }) // review found, dismissal missed
+
+    // ...both aliases (comma-separated) reconstruct the joinable corpus.
+    const res = await handleFpRateMetricsRoute(
+      get(
+        "https://x/metrics/fp-rate?repo=sigilix/sigilix,arc-and-anchor/sigilix&window=60&maturity=0&min-n=1",
+        `Bearer ${TOKEN}`,
+      ),
+      makeEnv(records),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      repo: string
+      repos: string[]
+      reviewsRealFanout: number
+      totalDismissals: number
+      rows: Array<{ role: string; postedN: number; hard: number; hardFpRate: number | null }>
+    }
+    expect(body.repos.sort()).toEqual(["arc-and-anchor/sigilix", "sigilix/sigilix"])
+    expect(body.repo).toBe("sigilix/sigilix,arc-and-anchor/sigilix")
+    expect(body.reviewsRealFanout).toBe(1)
+    expect(body.totalDismissals).toBe(1)
+    const logic = body.rows.find((r) => r.role === "logic")!
+    expect(logic).toMatchObject({ postedN: 1, hard: 1, hardFpRate: 1 })
+  })
 })

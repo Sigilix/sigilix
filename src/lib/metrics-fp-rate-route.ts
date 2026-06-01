@@ -82,9 +82,32 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   if (!(await requireBearerToken(request, token))) return json({ error: "unauthorized" }, 401)
 
   const params = new URL(request.url).searchParams
-  const repo = (params.get("repo") ?? "").trim().toLowerCase()
-  if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) {
-    return json({ error: "invalid_repo", detail: "?repo=owner/repo is required (rate is per-repo)" }, 400)
+  // Accept one OR several owner/repo slugs (repeatable `?repo=` and/or a single
+  // comma-separated `?repo=a/b,c/d`). Multiple slugs MUST be aliases of the SAME
+  // GitHub repo: a rename (e.g. arc-and-anchor/sigilix -> sigilix/sigilix, the
+  // SIG-243 tenant rename) splits the corpus — review telemetry is keyed under
+  // the slug-at-review-time while review-memory dismissals are (dual-)written
+  // under the current slug, so a single slug loads one side with zero of the
+  // other. The (prNumber, fid) attribution is repo-independent once both sides
+  // are in memory, and PR numbers are continuous across a rename, so unioning
+  // the alias key-filters reconstructs the full joinable corpus.
+  const repos = [
+    ...new Set(
+      params
+        .getAll("repo")
+        .flatMap((r) => r.split(","))
+        .map((r) => r.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ]
+  if (repos.length === 0 || repos.some((r) => !/^[^/\s]+\/[^/\s]+$/.test(r))) {
+    return json(
+      {
+        error: "invalid_repo",
+        detail: "?repo=owner/repo is required (rate is per-repo; pass repeated or comma-separated ?repo= for rename aliases of the same repo)",
+      },
+      400,
+    )
   }
   const windowDays = parseIntParam(params.get("window"), DEFAULT_WINDOW_DAYS)
   const maturityDays = parseIntParam(params.get("maturity"), DEFAULT_MATURITY_DAYS)
@@ -113,7 +136,10 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   const memoryListed = await listKeys(env, MEMORY_PREFIX, MAX_MEMORY_KEYS)
   const scanCapped = telemetryListed.length >= MAX_TELEMETRY_KEYS || memoryListed.length >= MAX_MEMORY_KEYS
 
-  const telemetryKeys = telemetryListed.filter((k) => k.toLowerCase().includes(`:${repo}#`))
+  const telemetryKeys = telemetryListed.filter((k) => {
+    const lk = k.toLowerCase()
+    return repos.some((r) => lk.includes(`:${r}#`))
+  })
   const reviews = (
     await mapWithConcurrency(telemetryKeys, FETCH_CONCURRENCY, async (key): Promise<FpRateReview | null> => {
       const createdMs = createdMsFromKey(key, TELEMETRY_PREFIX)
@@ -123,7 +149,10 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   ).filter((r): r is FpRateReview => r !== null)
 
   // Dismissals: the legacy owner/repo keyspace is repo-scoped + dual-written.
-  const memoryKeys = memoryListed.filter((k) => k.toLowerCase().startsWith(`${MEMORY_PREFIX}${repo}:`))
+  const memoryKeys = memoryListed.filter((k) => {
+    const lk = k.toLowerCase()
+    return repos.some((r) => lk.startsWith(`${MEMORY_PREFIX}${r}:`))
+  })
   const rawSignals = (
     await mapWithConcurrency(memoryKeys, FETCH_CONCURRENCY, async (key): Promise<FpRateDismissal[]> =>
       mapSignalRecord(await getJson(key)),
@@ -131,7 +160,7 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   ).flat()
   const dismissals = dedupeDismissals(rawSignals)
   if (failedFetches > 0) {
-    console.error(JSON.stringify({ event: "fp-rate-metrics-lossy-read", repo, failedFetches }))
+    console.error(JSON.stringify({ event: "fp-rate-metrics-lossy-read", repos, failedFetches }))
   }
 
   const nowMs = Date.now()
@@ -141,7 +170,10 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
 
   return json(
     {
-      repo,
+      // `repo` stays a single string for back-compat (comma-joined when several
+      // aliases were unioned); `repos` is the parsed alias list.
+      repo: repos.join(","),
+      repos,
       windowDays,
       maturityDays,
       minN,

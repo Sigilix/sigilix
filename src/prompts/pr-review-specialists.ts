@@ -246,7 +246,9 @@ Find correctness bugs the diff introduces or exposes:
 - broken assumptions (caller assumed X about return shape; diff changed return shape)
 - dead branches, unreachable code, control flow that can't reach a documented exit
 - race conditions, ordering bugs, time-of-check-to-time-of-use
+- non-atomic read-modify-write of a shared/persisted counter or accumulator: code reads a value, changes it in app memory, then writes it back (read row.count, compute count+1, then UPDATE ... SET count = that value) — concurrent runs lose each other's updates. Flag only when the field is shared/persistent AND the write isn't atomic (an in-place SET count = count + 1) or transaction-guarded.
 - math errors (sign, overflow, precision, unit mismatch)
+- cross-tier field-name drift: a value read as obj.camelCaseField (or obj.snake_case_field) whose declared type / interface / DB row / wire contract spells the field the other way — at runtime the access is undefined, surfacing as Invalid Date, NaN, a blank render, or a silently-wrong default. Confirm the mismatch against the type or contract visible in context before flagging; a deliberate DTO/mapping layer that renames fields is correct, not a bug.
 - data-flow problems: data moves through the code in a way that doesn't preserve invariants. (NOT taint/security data flow — that's the security specialist's lens.)
 
 When scoring:

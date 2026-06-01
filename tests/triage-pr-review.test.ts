@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildFallbackBody,
   buildBodyOnlyCheckAnnotations,
+  buildFallbackSubmission,
   buildReviewSubmission,
   buildReviewSubmissionWithMetadata,
   CHECK_ANNOTATION_TEXT_LIMIT,
@@ -1488,6 +1489,78 @@ describe("buildReviewSubmission", () => {
     expect(out.submission.body).toContain("unresolved policy-level blocker")
     expect(out.submission.body).toContain("Approval validation still has an unresolved policy blocker.")
     expect(out.submission.body).not.toContain("0 findings")
+  })
+
+  it("SIG-245: renders a visible 'files not reviewed' notice when files were dropped from review", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      notReviewedFiles: ["src/services/exec.ts", "src/big.ts"],
+    })
+    expect(out.submission.body).toContain("2 files not reviewed")
+    expect(out.submission.body).toContain("`src/services/exec.ts`")
+    expect(out.submission.body).toContain("`src/big.ts`")
+    expect(out.submission.body).toContain("not analyzed")
+    // The notice sits up top, under the headline lead line — assert it's in the
+    // first third of the body, not buried (robust to renderer rerouting; no
+    // dependence on a downstream "Fix Plan" anchor that may be absent).
+    expect(out.submission.body.indexOf("not reviewed")).toBeGreaterThanOrEqual(0)
+    expect(out.submission.body.indexOf("not reviewed")).toBeLessThan(out.submission.body.length / 3)
+  })
+
+  it("SIG-245: singular phrasing for one dropped file; no notice when nothing dropped", () => {
+    const one = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      notReviewedFiles: ["src/services/exec.ts"],
+    })
+    expect(one.submission.body).toContain("1 file not reviewed")
+    expect(one.submission.body).toContain("it was")
+    const none = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+    })
+    expect(none.submission.body).not.toContain("not reviewed")
+  })
+
+  it("SIG-245: notice survives on a ZERO-findings review downgraded to COMMENT (the silent-clean-approve hole)", () => {
+    // The ensemble downgrades APPROVE→COMMENT when files were dropped, so a
+    // clean-batch[0] review routes through the findings body (which renders the
+    // notice) instead of the marker-only APPROVE body that would discard it.
+    const empty: PrReviewVerdict = {
+      summary: "No issues found in the reviewed files.",
+      confidence: 4,
+      confidenceReason: "Reviewed batch was clean.",
+      findings: [],
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: empty,
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "COMMENT",
+      notReviewedFiles: ["src/services/exec.ts"],
+    })
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.body).toContain("1 file not reviewed")
+    expect(out.submission.body).toContain("`src/services/exec.ts`")
+  })
+
+  it("SIG-245: the anchorless fallback body also carries the notice (CR #286)", () => {
+    // The 422-retry path re-renders via buildFallbackSubmission; it must not
+    // silently omit dropped files either.
+    const out = buildFallbackSubmission({
+      verdict: { summary: "Re-rendered anchorless.", confidence: 4, confidenceReason: "y", findings: [] },
+      unanchored: [],
+      headSha: "abc",
+      eventOverride: "COMMENT",
+      notReviewedFiles: ["src/services/exec.ts"],
+    })
+    expect(out.event).toBe("COMMENT")
+    expect(out.body).toContain("1 file not reviewed")
+    expect(out.body).toContain("`src/services/exec.ts`")
   })
 })
 

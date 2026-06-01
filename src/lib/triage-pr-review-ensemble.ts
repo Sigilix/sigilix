@@ -1423,6 +1423,26 @@ export async function prepareSubmissionAffordance(args: {
 // handled inside the ensemble itself (an early `skipped` return
 // with `fellBackReason: "daily_budget_exhausted"` once it lands).
 
+/**
+ * Resolve the review-event override (pure, exported for test). A real
+ * approval-readiness blocker escalates to REQUEST_CHANGES. Otherwise an
+ * INCOMPLETE review — SIG-287 degraded coverage / low confidence, OR SIG-245
+ * files dropped from review (diff-budget spill / too-large) — downgrades an
+ * otherwise-clean APPROVE to a neutral COMMENT ("Sigilix looked, but this is
+ * not a full sign-off"), so the body's caveat/notice actually renders instead
+ * of being discarded by the marker-only APPROVE body. A clean, complete review
+ * returns undefined (no override → APPROVE/REQUEST_CHANGES derived from findings).
+ */
+export function resolveReviewEventOverride(args: {
+  hasApprovalBlocker: boolean
+  reviewIncomplete: boolean
+  filesDroppedCount: number
+}): ReviewEventOverride | undefined {
+  if (args.hasApprovalBlocker) return "REQUEST_CHANGES"
+  if (args.reviewIncomplete || args.filesDroppedCount > 0) return "COMMENT"
+  return undefined
+}
+
 // ─── orchestrator ──────────────────────────────────────────────────────
 
 export async function handlePrReviewEnsemble(
@@ -5063,12 +5083,20 @@ export async function handlePrReviewEnsemble(
       typeof renderableVerdict.confidence === "number" ? renderableVerdict.confidence : 5
     const reviewIncomplete =
       degradedCoverage !== null || synthConfidence <= LOW_CONFIDENCE_COMMENT_THRESHOLD
-    const reviewEventOverride: ReviewEventOverride | undefined =
-      approvalReadiness.blockers.length > 0
-        ? "REQUEST_CHANGES"
-        : reviewIncomplete
-          ? "COMMENT"
-          : undefined
+    // SIG-245: files dropped from review (diff-budget spill into a later batch,
+    // or individually too large) make a clean APPROVE dishonest — the bot never
+    // read part of the diff. Downgrade it to COMMENT (same mechanism as
+    // SIG-287) so the "files not reviewed" notice — which renders in the
+    // findings body, NOT the marker-only APPROVE body — actually surfaces.
+    // Kept SEPARATE from `reviewIncomplete` so the degraded/low-confidence
+    // summary-prefix wording is NOT applied to a files-dropped review (the
+    // notice is its own block under the headline).
+    const filesDroppedFromReview = [...new Set([...filesNotReviewed, ...droppedTooLarge])]
+    const reviewEventOverride = resolveReviewEventOverride({
+      hasApprovalBlocker: approvalReadiness.blockers.length > 0,
+      reviewIncomplete,
+      filesDroppedCount: filesDroppedFromReview.length,
+    })
     if (reviewIncomplete) {
       console.log(JSON.stringify({
         event: "review-incomplete-downgrade",
@@ -5826,6 +5854,13 @@ export async function handlePrReviewEnsemble(
       // ARC-281: thread specialist coverage + delta counts through
       // to the new renderer.
       coverage,
+      // SIG-245: files dropped from review (diff-budget spill into a later
+      // batch, or individually too large) → a visible "files not reviewed"
+      // notice in the body so a silently-dropped file is never invisible. The
+      // review is also downgraded APPROVE→COMMENT above so this notice renders
+      // even when batch[0] was clean (it would be discarded by the marker-only
+      // APPROVE body otherwise).
+      notReviewedFiles: filesDroppedFromReview,
       delta: deltaCounts,
       ...(primaryAffordance.reviewCounter !== undefined
         ? { reviewCounter: primaryAffordance.reviewCounter }
@@ -6094,6 +6129,7 @@ export async function handlePrReviewEnsemble(
         const fallbackCommentAffordance = await prepareFallbackAffordance(fallbackCommentEvent)
         const fallbackCommentSubmission = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
@@ -6248,6 +6284,7 @@ export async function handlePrReviewEnsemble(
         const fallbackBodyOnlyAffordance = await prepareFallbackAffordance(fallbackBodyOnlyEvent)
         const fallbackBodyOnly = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
@@ -6303,6 +6340,7 @@ export async function handlePrReviewEnsemble(
       const fallbackAffordance = await prepareFallbackAffordance(fallbackEvent)
       const fallback = buildFallbackSubmission(withSubmissionAffordance({
         trustLedger: trustLedgerMode === "on",
+        notReviewedFiles: filesDroppedFromReview,
         // ARC-189: fallback path also receives the soften-applied
         // verdict. Markers are NOT emitted on the fallback (it's a
         // body-only review with no inline anchors) — see Task 2.5.

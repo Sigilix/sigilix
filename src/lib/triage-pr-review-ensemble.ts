@@ -2614,7 +2614,7 @@ export async function handlePrReviewEnsemble(
           // the snippets. Non-inject reviews (empty render) sit out the experiment.
           if (expansionBlock.length > 0) {
             const arm = injectArm(headSha)
-            telemetry.graphExpansionAb = { arm, injected: arm === "treatment" }
+            telemetry.graphExpansionAb = { arm }
             if (arm === "treatment") {
               graphCtxForPrompt = [graphCtxForPrompt, expansionBlock]
                 .filter((s) => s.length > 0)
@@ -9923,13 +9923,14 @@ interface EnsembleTelemetry {
   /**
    * SIG-286 PR2 — targeted-inject A/B arm. Set ONLY in `post` mode and ONLY on
    * reviews that WOULD inject (non-empty render): `treatment` got the cross-file
-   * inject, `control` did not. Rides into the ensemble-review-telemetry KV
+   * inject, `control` did not (so `injected` ≡ `arm === "treatment"` — stored as
+   * just `arm`, no redundant flag). Rides into the ensemble-review-telemetry KV
    * alongside `synthesizer.verdict` (NOT the dead `shadowVerdict`), so a per-arm
    * finding-rate comparison — group by arm, count `synthesizer.verdict.findings`
    * — can read whether the inject catches more real findings. Absent in shadow /
    * non-inject reviews.
    */
-  graphExpansionAb?: { arm: "treatment" | "control"; injected: boolean }
+  graphExpansionAb?: { arm: "treatment" | "control" }
   startMs: number
   totalMs: number
 }

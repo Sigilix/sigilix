@@ -9971,8 +9971,20 @@ async function finalize(
     callsUsed += telemetry.synthesizer.attemptsUsed ?? 1
   }
   await incrementDailyBudget(env, callsUsed).catch(() => {})
-  // Best-effort telemetry write.
-  await writeTelemetry(env, telemetry).catch(() => {})
+  // Best-effort telemetry write — but no longer SILENT (SIG-306): a swallowed
+  // failure here is exactly how the FP-rate ruler went blind for ~30 days after
+  // the org rename. Log the failure (owner/repo/pr) so a regression is visible.
+  await writeTelemetry(env, telemetry).catch((e) => {
+    console.error(
+      JSON.stringify({
+        event: "telemetry-write-failed",
+        owner: telemetry.owner,
+        repo: telemetry.repo,
+        prNumber: telemetry.prNumber,
+        err: e instanceof Error ? e.message : String(e),
+      }),
+    )
+  })
   return reviewMeta !== undefined ? { status, telemetry, reviewMeta } : { status, telemetry }
 }
 

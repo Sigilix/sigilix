@@ -202,11 +202,36 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
       idxByPr.set(ref.prNumber, arr)
     }
     const range = (ns: number[]): number[] => (ns.length ? [Math.min(...ns), Math.max(...ns)] : [])
+    // Slug distribution across the FULL listed keyspace (BEFORE the repo filter):
+    // which owner/repo slugs is telemetry actually written under, and over what
+    // PR range? This settles whether recent reviews write telemetry under an
+    // unexpected slug, a stale one, or not at all (SIG-306 — rename regression).
+    const telBySlug = new Map<string, number[]>()
+    for (const k of telemetryListed) {
+      const m = /ensemble-review-telemetry:\d+:(.+?)#(\d+)/.exec(k)
+      if (!m) continue
+      const slug = (m[1] ?? "").toLowerCase()
+      const arr = telBySlug.get(slug) ?? []
+      arr.push(Number(m[2]))
+      telBySlug.set(slug, arr)
+    }
+    const memBySlug = new Map<string, number>()
+    for (const k of memoryListed) {
+      const slug = (k.split(":")[1] ?? "").toLowerCase()
+      memBySlug.set(slug, (memBySlug.get(slug) ?? 0) + 1)
+    }
     diagnostics = {
       loadedReviews: scoped.length,
+      loadedReviewsPrRange: range(scoped.map((r) => r.prNumber)),
       indexSize: index.size,
       indexPrRange: range([...idxByPr.keys()]),
       dismissalPrRange: range(dismissals.map((d) => d.prNumber)),
+      telemetrySlugs: Object.fromEntries(
+        [...telBySlug].map(([s, prs]) => [s, { count: prs.length, prRange: range(prs) }]),
+      ),
+      memorySlugs: Object.fromEntries(memBySlug),
+      telemetryListedTotal: telemetryListed.length,
+      scanCapped,
       sampleUnmatched: dismissals
         .filter((d) => !index.has(findingKey(d.prNumber, d.fid)))
         .slice(0, 10)

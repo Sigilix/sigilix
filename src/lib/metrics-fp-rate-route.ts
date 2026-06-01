@@ -203,15 +203,14 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   const nowMs = Date.now()
   const scoped = filterReviewsToWindow(reviews, nowMs, windowDays, maturityDays)
   // SIG-306: how many in-window reviews the maturity gate excluded for being too
-  // recent (< maturityDays old). On a YOUNG corpus the default maturity can hide
-  // nearly everything, which reads as a (misleading) empty result — surface the
-  // count so a thin reading is obviously "not yet mature" vs "no data".
-  const DAY_MS = 86_400_000
-  const windowStartMs = nowMs - windowDays * DAY_MS
-  const maturityCutoffMs = nowMs - maturityDays * DAY_MS
-  const maturityExcludedReviews = reviews.filter(
-    (r) => r.createdMs >= windowStartMs && r.createdMs > maturityCutoffMs,
-  ).length
+  // recent. On a YOUNG corpus the default maturity can hide nearly everything,
+  // which reads as a (misleading) empty result — surface the count so a thin
+  // reading is obviously "not yet mature" vs "no data". Derived from the SAME
+  // filterReviewsToWindow (maturity=0 keeps the whole window) minus the matured
+  // set, so the window-bound math lives in ONE place and can't drift from the
+  // real filter (Sigilix #276).
+  const maturityExcludedReviews =
+    filterReviewsToWindow(reviews, nowMs, windowDays, 0).length - scoped.length
 
   // Opt-in attribution diagnostic (`?diagnose=1`, read-only): when dismissals
   // fail to attribute, surface WHY — PR non-overlap vs fid drift — without raw

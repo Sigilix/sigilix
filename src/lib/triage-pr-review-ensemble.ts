@@ -2606,11 +2606,12 @@ export async function handlePrReviewEnsemble(
           // SIG-286 PR2: A/B among reviews that WOULD inject. TREATMENT gets the
           // cross-file inject; CONTROL computes the identical context but does
           // NOT inject. Both arms record `graphExpansionAb` on the telemetry (it
-          // rides into ensemble-review-telemetry with the verdict), so a per-arm
-          // finding-rate comparison can read whether the inject catches MORE real
-          // findings — the only honest FN measure, since the inject's findings
-          // land on the diff (informed by cross-file context), not on the
-          // snippets. Non-inject reviews (empty render) sit out the experiment.
+          // rides into ensemble-review-telemetry alongside `synthesizer.verdict`),
+          // so a per-arm finding-rate comparison (group by arm, count
+          // `synthesizer.verdict.findings`) can read whether the inject catches
+          // MORE real findings — the only honest FN measure, since the inject's
+          // findings land on the diff (informed by cross-file context), not on
+          // the snippets. Non-inject reviews (empty render) sit out the experiment.
           if (expansionBlock.length > 0) {
             const arm = injectArm(headSha)
             telemetry.graphExpansionAb = { arm, injected: arm === "treatment" }
@@ -9922,9 +9923,11 @@ interface EnsembleTelemetry {
   /**
    * SIG-286 PR2 — targeted-inject A/B arm. Set ONLY in `post` mode and ONLY on
    * reviews that WOULD inject (non-empty render): `treatment` got the cross-file
-   * inject, `control` did not. Rides into the ensemble-review-telemetry KV with
-   * the verdict, so a per-arm finding-rate comparison can read whether the
-   * inject catches more real findings. Absent in shadow / non-inject reviews.
+   * inject, `control` did not. Rides into the ensemble-review-telemetry KV
+   * alongside `synthesizer.verdict` (NOT the dead `shadowVerdict`), so a per-arm
+   * finding-rate comparison — group by arm, count `synthesizer.verdict.findings`
+   * — can read whether the inject catches more real findings. Absent in shadow /
+   * non-inject reviews.
    */
   graphExpansionAb?: { arm: "treatment" | "control"; injected: boolean }
   startMs: number

@@ -9294,11 +9294,23 @@ export function validateForSubmission(args: {
           }
         }
       } else {
-        const dropped = securityValidatorMode === "enforce"
+        // SIG-108 (demote-conversion, 2026-06-01): an unsupported sev>=4 security
+        // finding is DEMOTED to the review body in `enforce` — NOT hard-dropped.
+        // The Trust Ledger now gives it a home (the body) + an honest MODEL/GROUNDED
+        // pill, so the guidance stays VISIBLE instead of vanishing (FN-cost >> FP-cost
+        // for security). `shadow` keeps it inline (count only). The counter +
+        // callback semantics are unchanged: `dropped` = the enforce action fired
+        // (now a demote). Currently shadow in prod, so this is inert until the
+        // enforce flip.
+        const demoted = securityValidatorMode === "enforce"
         droppedForFailedValidation++
-        onSecurityFindingDropped?.(f, { reason: decision.reason, dropped })
-        if (dropped) continue
-        // shadow mode: fall through and keep the finding.
+        onSecurityFindingDropped?.(f, { reason: decision.reason, dropped: demoted })
+        if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "security-evidence" })
+          unanchoredFindings.push(f)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
       }
     }
 

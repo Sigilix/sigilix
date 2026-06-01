@@ -362,7 +362,7 @@ function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
 }
 
 describe("validateForSubmission — SIG-108 security evidence gate", () => {
-  it("ENFORCE: drops a sev>=4 security finding with a fabricated evidenceId + increments counter + fires callback", () => {
+  it("ENFORCE: DEMOTES a sev>=4 security finding with a fabricated evidenceId to the body (not dropped) + increments counter + fires callback", () => {
     const dropped: Array<{ reason: string; dropped: boolean }> = []
     const onDrop = vi.fn((_f: PrReviewFinding, info: { reason: string; dropped: boolean }) => {
       dropped.push(info)
@@ -380,9 +380,18 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
       securityManifest: manifestOf(fact()),
       securityValidatorMode: "enforce",
       onSecurityFindingDropped: onDrop,
+      trustLedgerEnabled: true,
     })
     expect(result.droppedForFailedValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.verdict.findings).toHaveLength(0) // no longer inline
+    // SIG-108 demote-conversion (2026-06-01): the finding is DEMOTED to the body,
+    // NOT hard-dropped — it stays visible with a security-evidence demote reason.
+    expect(result.unanchoredFindings).toHaveLength(1)
+    expect(result.unanchoredFindings[0]?.trust).toEqual({
+      tier: "body-only-ungrounded",
+      surface: "body",
+      demoteReason: "security-evidence",
+    })
     expect(onDrop).toHaveBeenCalledTimes(1)
     expect(dropped[0]).toEqual({ reason: "fabricated-evidence-id", dropped: true })
   })

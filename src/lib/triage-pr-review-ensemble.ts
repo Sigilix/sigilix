@@ -4253,7 +4253,11 @@ export async function handlePrReviewEnsemble(
     // (astFilesByPath) — empty when AST features are off, which is fail-safe
     // (no suppression → findings kept, never hidden).
     const doClassSpans = durableObjectClassSpans(astFilesByPath)
+    // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
+    // demote sites can tag body-routed findings with their reason when enabled.
+    const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
     const validated = validateForSubmission({
+      trustLedgerEnabled: trustLedgerMode !== "off",
       synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
       reviewable,
       specialistVerdicts: synthInputVerdicts,
@@ -5230,7 +5234,6 @@ export async function handlePrReviewEnsemble(
     // reads it (the fid includes `line`). Both consts are reused by the
     // verification block further down (no recompute).
     const verificationMode = readVerificationMode(env)
-    const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
     const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
 
     // SIG-285 re-anchor ENFORCE (inline-first): when verification is `enforce`
@@ -9059,6 +9062,11 @@ export function validateForSubmission(args: {
    * score-1 nits from customer-visible output entirely.
    */
   profile?: SigilixProfile
+  /** SIG Trust Ledger v0: when true (flag != off), tag each body-demoted finding
+   *  with its `demoteReason` (inline/absence/security-grounding, outside-diff) so
+   *  the PR3 render can split outside-diff vs PR-level. Inert metadata nothing reads
+   *  yet; gated so `off` stays a true no-op. */
+  trustLedgerEnabled?: boolean
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -9089,6 +9097,7 @@ export function validateForSubmission(args: {
     securityGroundingValidatorMode = "off",
     onSecurityGroundingFindingDropped,
     profile = "chill",
+    trustLedgerEnabled = false,
   } = args
   const validIds = new Set<string>()
   const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
@@ -9346,6 +9355,7 @@ export function validateForSubmission(args: {
     // non-reviewable line), where its content is still surfaced.
     if (f.line === 1) {
       droppedForInvalidLine++
+      if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "outside-diff" })
       unanchoredFindings.push(f)
       continue
     }
@@ -9413,6 +9423,7 @@ export function validateForSubmission(args: {
         droppedForFailedInlineGroundingValidation++
         onInlineGroundingFindingDropped?.(workingFinding, { reason: groundingDecision.reason, dropped: demoted })
         if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "inline-grounding" })
           unanchoredFindings.push(workingFinding)
           continue
         }
@@ -9447,6 +9458,7 @@ export function validateForSubmission(args: {
         droppedForFailedAbsenceGroundingValidation++
         onAbsenceFindingDropped?.(workingFinding, { reason: absenceDecision.reason, dropped: demoted })
         if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "absence-grounding" })
           unanchoredFindings.push(workingFinding)
           continue
         }
@@ -9480,6 +9492,7 @@ export function validateForSubmission(args: {
         droppedForFailedSecurityGroundingValidation++
         onSecurityGroundingFindingDropped?.(workingFinding, { reason: sgDecision.reason, dropped: demoted })
         if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "security-grounding" })
           unanchoredFindings.push(workingFinding)
           continue
         }
@@ -9503,6 +9516,7 @@ export function validateForSubmission(args: {
       // Preserve for submit-fallback. Inline anchoring would fail here,
       // but the finding's *content* is still actionable when posted as
       // free-form markdown in the body of an anchorless review.
+      if (trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "outside-diff" })
       unanchoredFindings.push(workingFinding)
       continue
     }

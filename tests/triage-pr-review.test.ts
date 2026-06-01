@@ -1293,7 +1293,7 @@ describe("buildReviewSubmission", () => {
     expect(out.body).not.toContain("**Confidence:**")
     expect(out.body).not.toContain("max score")
     // Dismissal hint is now required on REQUEST_CHANGES.
-    expect(out.body).toContain("Dismiss: `@sigilix dismiss`")
+    expect(out.body).toContain("Dismiss: `@sigilix dismiss <reason>`")
     expect(out.body).toContain("@sigilix dismiss")
   })
 
@@ -1452,7 +1452,7 @@ describe("buildReviewSubmission", () => {
 
     expect(out.submission.event).toBe("REQUEST_CHANGES")
     expect(out.submission.comments).toBeUndefined()
-    expect(out.submission.body).toContain("Dismiss: `@sigilix dismiss`")
+    expect(out.submission.body).toContain("Dismiss: `@sigilix dismiss <reason>`")
   })
 
   it("ignores unsafe non-blocking event overrides even if a caller casts around the type", () => {
@@ -3743,7 +3743,7 @@ describe("renderRequestChangesBody — SIG-101 retrigger + counter footer", () =
       prov: { headSha: "abc1234", nowMs: 1747547318000 },
     })
     expect(body).toMatch(
-      /<sub>Dismiss: `@sigilix dismiss` in a review thread · Re-run: `\/sigilix review` · Review #1 · `abc1234`<\/sub>/,
+      /<sub>Dismiss: `@sigilix dismiss <reason>` in thread \(not-a-bug\|bad-anchor\|already-covered\|too-minor\|wrong-context\) · Re-run: `\/sigilix review` · Review #1 · `abc1234`<\/sub>/,
     )
   })
 

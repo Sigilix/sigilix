@@ -35,6 +35,7 @@ import {
   type SubmitReviewComment,
 } from "./github"
 import { SIGILIX_BOT_LOGIN } from "./dismiss-prior-reviews"
+import { ALL_DISMISS_REASONS } from "./dismiss-reasons"
 import {
   isContiguousRightRange,
   deriveSide,
@@ -2281,6 +2282,14 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
  * redundant. The SHA stays because it's the only piece of info NOT
  * available from GitHub's chrome.
  */
+// SIG-306: the canonical dismiss reasons (minus the `unlabeled` default), listed
+// in the dismiss hint so reviewers SUPPLY a label — an unlabeled dismissal can't
+// be classified hard-vs-soft on the FP-rate ruler. Derived from
+// ALL_DISMISS_REASONS so the nudge can never drift from the parser's accepted
+// set. `<reason>` stays inside backticks so GitHub renders it literally (not as
+// an HTML tag). (Wording: Kimi.)
+const DISMISS_REASON_HINT = ALL_DISMISS_REASONS.filter((r) => r !== "unlabeled").join("|")
+
 function renderCompactReviewFooter(args: {
   posture: FindingsReviewPosture
   reviewCounter: number | undefined
@@ -2288,7 +2297,7 @@ function renderCompactReviewFooter(args: {
 }): string {
   const parts: string[] = []
   if (args.posture === "request_changes") {
-    parts.push("Dismiss: `@sigilix dismiss` in a review thread")
+    parts.push(`Dismiss: \`@sigilix dismiss <reason>\` in thread (${DISMISS_REASON_HINT})`)
   }
   parts.push("Re-run: `/sigilix review`")
   if (typeof args.reviewCounter === "number" && args.reviewCounter > 0) {

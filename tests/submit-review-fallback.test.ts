@@ -285,7 +285,7 @@ describe("buildFallbackSubmission", () => {
       eventOverride: "REQUEST_CHANGES",
     })
     expect(submission.event).toBe("REQUEST_CHANGES")
-    expect(submission.body).toContain("Dismiss: `@sigilix dismiss`")
+    expect(submission.body).toContain("Dismiss: `@sigilix dismiss <reason>`")
   })
 
   it("renders approval-pending copy when a zero-finding policy blocker forces REQUEST_CHANGES", () => {

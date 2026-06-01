@@ -387,13 +387,47 @@ describe("validateForSubmission — SIG-108 security evidence gate", () => {
     // SIG-108 demote-conversion (2026-06-01): the finding is DEMOTED to the body,
     // NOT hard-dropped — it stays visible with a security-evidence demote reason.
     expect(result.unanchoredFindings).toHaveLength(1)
-    expect(result.unanchoredFindings[0]?.trust).toEqual({
-      tier: "body-only-ungrounded",
-      surface: "body",
-      demoteReason: "security-evidence",
-    })
+    // Assert the FULL demoted record — path/line/evidenceId survive the move, proving
+    // the finding was DEMOTED in place (not reconstructed or dropped) (CodeRabbit #271).
+    expect(result.unanchoredFindings).toEqual([
+      expect.objectContaining({
+        path: "src/db.ts",
+        line: 17,
+        category: "security",
+        cweId: "CWE-89",
+        evidenceId: "sarif:fake:000000000000:17",
+        trust: {
+          tier: "body-only-ungrounded",
+          surface: "body",
+          demoteReason: "security-evidence",
+        },
+      }),
+    ])
     expect(onDrop).toHaveBeenCalledTimes(1)
     expect(dropped[0]).toEqual({ reason: "fabricated-evidence-id", dropped: true })
+  })
+
+  it("ENFORCE + ledger OFF: still DEMOTES to the body but leaves the finding un-annotated (no trust)", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({ cweId: "CWE-89", evidenceId: "sarif:fake:000000000000:17" })],
+        },
+        provenance: securityProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      securityManifest: manifestOf(fact()),
+      securityValidatorMode: "enforce",
+      // trustLedgerEnabled omitted (off): demotion still happens, but the finding must
+      // NOT be trust-annotated — guards against silently writing trust when the ledger
+      // is disabled (CodeRabbit #271).
+    })
+    expect(result.droppedForFailedValidation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.unanchoredFindings).toHaveLength(1)
+    expect(result.unanchoredFindings[0]?.trust).toBeUndefined()
   })
 
   it("SHADOW: counts the would-drop + fires callback with dropped:false but KEEPS the finding", () => {

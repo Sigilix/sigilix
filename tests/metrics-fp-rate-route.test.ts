@@ -192,6 +192,17 @@ describe("handleFpRateMetricsRoute", () => {
     expect(body.repos.sort()).toEqual(["arc-and-anchor/sigilix", "sigilix/sigilix"])
   })
 
+  it("400s on stray leading/trailing/double commas (empty segments rejected explicitly, not order-dependently)", async () => {
+    for (const repo of ["o/r,", ",o/r", "o/r,,o/r", "o/r, ,o/r"]) {
+      const res = await handleFpRateMetricsRoute(
+        get(`https://x/metrics/fp-rate?repo=${encodeURIComponent(repo)}`, `Bearer ${TOKEN}`),
+        makeEnv(),
+      )
+      expect(res.status, `repo=${repo}`).toBe(400)
+      expect((await res.json() as { error: string }).error, `repo=${repo}`).toBe("invalid_repo")
+    }
+  })
+
   it("400s when aliases are DIFFERENT repos (cross-repo attribution guard)", async () => {
     // arc-and-anchor/sigilix and acme/widgets are different repos: PR-number /
     // fid collisions would cross-attribute, so the union must be rejected.

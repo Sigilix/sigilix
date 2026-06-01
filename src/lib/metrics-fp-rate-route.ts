@@ -91,16 +91,15 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   // other. The (prNumber, fid) attribution is repo-independent once both sides
   // are in memory, and PR numbers are continuous across a rename, so unioning
   // the alias key-filters reconstructs the full joinable corpus.
-  const repos = [
-    ...new Set(
-      params
-        .getAll("repo")
-        .flatMap((r) => r.split(","))
-        .map((r) => r.trim().toLowerCase())
-        .filter(Boolean),
-    ),
-  ]
-  if (repos.length === 0 || repos.some((r) => !/^[^/\s]+\/[^/\s]+$/.test(r))) {
+  // Validate EVERY parsed segment explicitly — including empties from stray
+  // leading/trailing/double commas — instead of silently dropping them with
+  // filter(Boolean): the empty-rejection must not depend on operation ordering
+  // (Sigilix #273). A stray comma is a malformed request, not a tolerated no-op.
+  const segments = params
+    .getAll("repo")
+    .flatMap((r) => r.split(","))
+    .map((r) => r.trim().toLowerCase())
+  if (segments.length === 0 || segments.some((r) => !/^[^/\s]+\/[^/\s]+$/.test(r))) {
     return json(
       {
         error: "invalid_repo",
@@ -109,6 +108,8 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
       400,
     )
   }
+  // Already-validated; `repos` is just the de-duplicated set used for filtering.
+  const repos = [...new Set(segments)]
   // Cross-repo attribution guard (code-reviewer + Codex on #273): PR numbers are
   // repo-local and `fid` is not repo-scoped, so unioning genuinely DIFFERENT
   // repos would cross-attribute findings. Real rename aliases share the repo

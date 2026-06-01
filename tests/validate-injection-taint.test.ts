@@ -60,4 +60,14 @@ describe("sinkValueIsProvablyConstant", () => {
   it("KEEPS (false) when there is no recognized sink on the line", () => {
     expect(sinkValueIsProvablyConstant(`const total = compute(items)`, undefined)).toBe(false)
   })
+
+  it("KEEPS (false) when the only matching const is inside a comment (decoy — CR P2)", () => {
+    const file = fileWith([`// const X = "<p>ok</p>"`, `el.innerHTML = X;`])
+    expect(sinkValueIsProvablyConstant(`el.innerHTML = X;`, file)).toBe(false)
+  })
+
+  it("still resolves a real export const literal (anchoring keeps the valid case)", () => {
+    const file = fileWith([`export const X = "<p>ok</p>";`, `el.innerHTML = X;`])
+    expect(sinkValueIsProvablyConstant(`el.innerHTML = X;`, file)).toBe(true)
+  })
 })

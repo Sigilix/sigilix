@@ -107,6 +107,26 @@ describe("evaluateSecurityGrounding — bucket scope", () => {
     expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
   })
 
+  it("SIG-292 (CR P1): KEEPS when the cited multi-line range mixes a constant sink AND a tainted sink", () => {
+    const f = finding({ cweId: "CWE-79", startLine: 16, line: 17 })
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
+      [16, `      <div dangerouslySetInnerHTML={{ __html: "<b>ok</b>" }} />`],
+      [17, `      <div dangerouslySetInnerHTML={{ __html: props.bio }} />`],
+    ])]])
+    expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
+  })
+
+  it("SIG-292: DEMOTES a CWE-94 finding citing eval of a literal; KEEPS eval of an interpolated body", () => {
+    const constEval = finding({ cweId: "CWE-94", line: 17, headline: "eval of dynamic code" })
+    expect(
+      evaluateSecurityGrounding(constEval, { addedLineTextByLine: new Map([[PATH, new Map([[17, `  const r = eval("1 + 1");`]])]]) }),
+    ).toEqual({ keep: false, reason: "injection-sink-non-attacker-controlled-constant" })
+    const taintedEval = finding({ cweId: "CWE-94", line: 17 })
+    expect(
+      evaluateSecurityGrounding(taintedEval, { addedLineTextByLine: new Map([[PATH, new Map([[17, "  const r = eval(`run(${userExpr})`);"]])]]) }),
+    ).toEqual({ keep: true })
+  })
+
   it("KEEPS an authn bucket (CWE-862) — absence category, never gated", () => {
     const f = finding({ cweId: "CWE-862", headline: "missing access check" })
     expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({ keep: true })

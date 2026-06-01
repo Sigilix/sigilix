@@ -18,6 +18,13 @@
 // the finding. So a real `dangerouslySetInnerHTML={{ __html: props.bio }}` or
 // `eval(`return ${userExpr}`)` is never suppressed. The gate demotes-not-drops
 // and ships shadow-first, so a residual false demote is still visible + measured.
+//
+// Accepted edge (v1): a sink fed a HARDCODED-MALICIOUS literal (e.g.
+// `innerHTML = "<img onerror=...>"`) is treated as constant → demoted. A
+// source-committed payload is not runtime-attacker-controllable, so the demote
+// is defensible, but it does suppress a self-XSS / template-in-source finding.
+// The caller demotes-to-body (still visible) and the secret-scan / static-badge
+// paths cover committed-payload detection separately.
 
 /**
  * JS injection / XSS sinks whose argument is the untrusted-HTML / code value.
@@ -74,7 +81,11 @@ function identifierResolvesToLiteral(
   name: string,
   fileAddedLines: ReadonlyMap<number, string>,
 ): boolean {
-  const declRe = new RegExp(`\\b(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*(.+?)\\s*;?\\s*$`)
+  // Anchor to the START of the (optionally `export`-prefixed) line so the
+  // `const NAME =` cannot match mid-line inside a comment or string — a
+  // commented decoy `// const X = "ok"` must NOT resolve a real
+  // `const X = req.body` to a literal (code-reviewer P2).
+  const declRe = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b\\s*(?::[^=]+)?=\\s*(.+?)\\s*;?\\s*$`)
   for (const text of fileAddedLines.values()) {
     const m = declRe.exec(text)
     if (m) {

@@ -55,7 +55,7 @@ import {
   type SecurityBucket,
 } from "./validate-security-finding"
 import { containsCredentialToken } from "./secret-scan"
-import { sinkValueIsProvablyConstant } from "./validate-injection-taint"
+import { extractSinkValueExpr, sinkValueIsProvablyConstant } from "./validate-injection-taint"
 
 /**
  * Validator mode. `off` (default): the gate doesn't run. `shadow`:
@@ -239,10 +239,16 @@ export function evaluateSecurityGrounding(
     const cited = collectCitedCode(finding, context.addedLineTextByLine)
     if (cited === null || cited.trim().length === 0) return { keep: true }
     const fileLines = context.addedLineTextByLine.get(finding.path)
-    for (const line of cited.split("\n")) {
-      if (sinkValueIsProvablyConstant(line, fileLines)) {
-        return { keep: false, reason: "injection-sink-non-attacker-controlled-constant" }
-      }
+    // Require EVERY sink-bearing line in the cited range to be provably constant
+    // (and at least one to exist) before demoting — mirroring the secrets
+    // branch's "whole range or keep". Demoting because ONE line is constant
+    // would suppress a real tainted sink sharing the same multi-line citation
+    // (code-reviewer P1).
+    const sinkLines = cited.split("\n").filter((l) => extractSinkValueExpr(l) !== null)
+    const allConstant =
+      sinkLines.length > 0 && sinkLines.every((l) => sinkValueIsProvablyConstant(l, fileLines))
+    if (allConstant) {
+      return { keep: false, reason: "injection-sink-non-attacker-controlled-constant" }
     }
     return { keep: true }
   }

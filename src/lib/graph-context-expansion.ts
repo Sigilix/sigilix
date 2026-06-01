@@ -284,10 +284,21 @@ export async function buildGraphContextExpansion(
  * blanket inject would have taxed for ~0 gain inject nothing — the whole point
  * of the targeted pivot. Bodies are already byte-capped by the build. Pure.
  */
-export function renderGraphExpansionForPrompt(enriched: EnrichedGraphContext): string {
-  const netNew = [...enriched.definitionBodies, ...enriched.callerBodies].filter(
+/**
+ * The net-new cross-file high-value bodies the targeted inject renders:
+ * definitions + callers sourced from OTHER files (`source !== "filesByPath"`),
+ * import-dependents excluded. The SINGLE source of truth for "what gets
+ * injected" — both the render and the injected-count telemetry call this, so
+ * they can never drift. Pure.
+ */
+export function netNewCrossFileBodies(enriched: EnrichedGraphContext): GraphBodySnippet[] {
+  return [...enriched.definitionBodies, ...enriched.callerBodies].filter(
     (b) => b.source !== "filesByPath",
   )
+}
+
+export function renderGraphExpansionForPrompt(enriched: EnrichedGraphContext): string {
+  const netNew = netNewCrossFileBodies(enriched)
   if (netNew.length === 0) return ""
   const lines = [
     "[GRAPH CONTEXT — CROSS-FILE]",

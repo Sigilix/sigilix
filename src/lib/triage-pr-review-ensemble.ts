@@ -382,7 +382,11 @@ import type { Env } from "../index"
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
 // SIG-286 — graph-context body expansion (shadow-only in PR1).
 import { contextExpansionForChangedSymbolsFor } from "./repo-graph-client"
-import { buildGraphContextExpansion, renderGraphExpansionForPrompt } from "./graph-context-expansion"
+import {
+  buildGraphContextExpansion,
+  renderGraphExpansionForPrompt,
+  netNewCrossFileBodies,
+} from "./graph-context-expansion"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
 import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
@@ -2604,13 +2608,15 @@ export async function handlePrReviewEnsemble(
               .filter((s) => s.length > 0)
               .join("\n\n")
             // Observable so the post-flip is verifiable (which reviews actually
-            // got a targeted inject vs the ~73% that render empty).
+            // got a targeted inject vs the ~73% that render empty). Counts are
+            // the ACTUALLY-INJECTED net-new bodies (same selector as the render),
+            // not the enriched totals — so post-mode analysis isn't muddied by
+            // same-file rows that were never appended (CodeRabbit #277).
             console.log(JSON.stringify({
               event: "graph-expansion-injected",
               owner, repo, prNumber, headSha: headSha.slice(0, 7),
               bytes: expansionBlock.length,
-              defBodies: enriched.definitionBodies.length,
-              callerBodies: enriched.callerBodies.length,
+              bodiesInjected: netNewCrossFileBodies(enriched).length,
               netNewTokens: enriched.netNewTokens,
             }))
           }

@@ -48,6 +48,24 @@ const RUNNER_BADGE_STYLES = {
   },
 } as const
 
+// SIG Trust Ledger v0: per-finding trust pills (Kimi spec, 2026-05-31). Same
+// SVG-text-pill treatment as the runner pills, with honesty-by-colour: slate
+// "GROUNDED" signals evidence-exists (NOT "bug proven"), muted-gray "MODEL"
+// refuses to invent authority. The cyan "VERIFIED" runner pill is reserved for
+// an actual runner receipt and is NOT duplicated here.
+const TRUST_BADGE_STYLES = {
+  "trust-grounded": {
+    label: "GROUNDED",
+    accent: "#64748B", // slate — evidence exists, not a proof claim
+    ariaLabel: "Grounded: cites real evidence (not a proof of exploitability)",
+  },
+  "trust-model": {
+    label: "MODEL",
+    accent: "#9CA3AF", // muted gray — model-only, no stronger proof; claims no authority
+    ariaLabel: "Model-only: no deterministic or runner evidence backs this",
+  },
+} as const
+
 const CATEGORY_BADGE_STYLES = {
   logic: {
     label: "LOGIC",
@@ -90,7 +108,8 @@ const CATEGORY_BADGE_STYLES = {
 export type BadgeAssetName = keyof typeof BADGE_STYLES
 export type CategoryBadgeAssetName = keyof typeof CATEGORY_BADGE_STYLES
 export type RunnerBadgeAssetName = keyof typeof RUNNER_BADGE_STYLES
-export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName | RunnerBadgeAssetName
+export type TrustBadgeAssetName = keyof typeof TRUST_BADGE_STYLES
+export type ReviewBadgeAssetName = BadgeAssetName | CategoryBadgeAssetName | RunnerBadgeAssetName | TrustBadgeAssetName
 
 // SIG-238 (2026-05-26 round-6 — THE ACTUAL FIX):
 // host = `raw.githubusercontent.com/Sigilix/sigilix-glyphs`, a
@@ -286,7 +305,9 @@ function renderCategoryBadgeSvg(style: (typeof CATEGORY_BADGE_STYLES)[CategoryBa
 // PRIORITY_TEXT_COLOR glyph) at the CATEGORY variable width — Kimi's runner
 // pill. The SVG carries the descriptive `ariaLabel` (not the bare label) so a
 // directly-consumed SVG is self-describing; the inline `<img alt>` mirrors it.
-function renderRunnerBadgeSvg(style: (typeof RUNNER_BADGE_STYLES)[RunnerBadgeAssetName]): string {
+// The runner pill style + the SIG Trust Ledger pills share this shape (a
+// word-label text pill with an accent) and the same r9 renderer.
+function renderRunnerBadgeSvg(style: { readonly label: string; readonly accent: string; readonly ariaLabel: string }): string {
   const width = categoryBadgeWidth(style.label)
   const glyph = lookupGlyph(style.label)
   const innerW = width - BADGE_GUTTER_PX
@@ -313,6 +334,8 @@ const BADGE_SVGS: Record<ReviewBadgeAssetName, string> = {
   docs: renderCategoryBadgeSvg(CATEGORY_BADGE_STYLES.docs),
   "runner-verified": renderRunnerBadgeSvg(RUNNER_BADGE_STYLES["runner-verified"]),
   "runner-pending": renderRunnerBadgeSvg(RUNNER_BADGE_STYLES["runner-pending"]),
+  "trust-grounded": renderRunnerBadgeSvg(TRUST_BADGE_STYLES["trust-grounded"]),
+  "trust-model": renderRunnerBadgeSvg(TRUST_BADGE_STYLES["trust-model"]),
 }
 
 export function badgeAssetUrl(name: ReviewBadgeAssetName): string {
@@ -350,11 +373,13 @@ export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; hei
   if (name in BADGE_STYLES) {
     return { width: PRIORITY_BADGE_WIDTH, height: PRIORITY_BADGE_HEIGHT }
   }
-  // Runner pills share the category geometry (variable width, 20-tall) but live
-  // in their own style table, so resolve their label there.
+  // Runner + trust pills share the category geometry (variable width, 20-tall)
+  // but live in their own style tables, so resolve their label there.
   const label = name in RUNNER_BADGE_STYLES
     ? RUNNER_BADGE_STYLES[name as RunnerBadgeAssetName].label
-    : CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label
+    : name in TRUST_BADGE_STYLES
+      ? TRUST_BADGE_STYLES[name as TrustBadgeAssetName].label
+      : CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label
   return {
     width: categoryBadgeWidth(label),
     height: CATEGORY_BADGE_HEIGHT,
@@ -364,6 +389,7 @@ export function badgeAssetSize(name: ReviewBadgeAssetName): { width: number; hei
 export function badgeAssetLabel(name: ReviewBadgeAssetName): string {
   if (name in BADGE_STYLES) return BADGE_STYLES[name as BadgeAssetName].label
   if (name in RUNNER_BADGE_STYLES) return RUNNER_BADGE_STYLES[name as RunnerBadgeAssetName].label
+  if (name in TRUST_BADGE_STYLES) return TRUST_BADGE_STYLES[name as TrustBadgeAssetName].label
   return CATEGORY_BADGE_STYLES[name as CategoryBadgeAssetName].label
 }
 

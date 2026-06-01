@@ -201,6 +201,36 @@ export const REVIEW_FINDING_SCOPES: ReadonlySet<ReviewFindingScope> = new Set([
   "comment",
 ])
 
+/**
+ * SIG Trust Ledger v0: per-finding "why you can trust this" metadata, attached
+ * at submission time (runtime-only — never parsed from model JSON). The renderer
+ * (trust-ledger-render.ts) maps `tier` to the VERIFIED / GROUNDED / MODEL pill.
+ * Tier precedence (most→least proof): runner-confirmed (a scanner in the
+ * customer's CI corroborated it) > deterministic-grounded (an AST/scanner fact
+ * backs it) > worker-token-confirmed (the cited token checks out at the cited
+ * line) > grounded-model (cites real evidence, passed the gates) >
+ * body-only-ungrounded.
+ */
+export type FindingTrustTier =
+  | "runner-confirmed"
+  | "deterministic-grounded"
+  | "worker-token-confirmed"
+  | "grounded-model"
+  | "body-only-ungrounded"
+
+export interface FindingTrust {
+  tier: FindingTrustTier
+  /** where the finding landed after all gates. */
+  surface?: "inline" | "body"
+  /** if body-routed, WHY (the gate that demoted it / outside-the-diff). */
+  demoteReason?:
+    | "inline-grounding"
+    | "absence-grounding"
+    | "security-grounding"
+    | "verification-refuted"
+    | "outside-diff"
+}
+
 export interface PrReviewFinding {
   path: string
   line: number
@@ -219,6 +249,9 @@ export interface PrReviewFinding {
   category: FindingCategory
   headline: string
   body: string
+  /** SIG Trust Ledger v0: runtime-only trust metadata (the renderer reads this);
+   *  attached at submission time, never parsed from model output. */
+  trust?: FindingTrust
   /**
    * Structured details: optional concrete example proving the finding. Intended
    * for minimal repro input/output, runtime exception text, parser

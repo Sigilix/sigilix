@@ -3444,60 +3444,44 @@ describe("formatFindingComment (SIG-101 badges + confidence + details-wrap)", ()
     expect(out).not.toContain("_severity:")
   })
 
-  it("truncates long bodies with a More Info affordance that only shows the remaining detail", () => {
-    const body = "x".repeat(620)
+  // Body split is now STRUCTURAL (split on the first blank-line break), not
+  // length-based. The complete issue stays inline (never a mid-thought "..."),
+  // only the deeper reasoning collapses into a "Detailed reasoning" dropdown.
+  it("splits the body at the first blank-line break: complete issue inline, reasoning in the dropdown", () => {
+    const body = "This is the complete issue, stated plainly.\n\nDeeper reasoning for how the model concluded this."
     const out = formatFindingComment(fnd({ body }), 5)
-    expect(out).toContain("<summary>More Info</summary>")
-    expect(out).toContain(`${"x".repeat(500)}...`)
-    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
-    expect(detailsMatch?.[1]).toContain("x".repeat(120))
-    expect(detailsMatch?.[1]).not.toContain("x".repeat(500))
+    expect(out).toContain("This is the complete issue, stated plainly.")
+    expect(out).toContain("<summary>Detailed reasoning</summary>")
+    expect(out).not.toContain("More Info")
+    expect(out).not.toContain("...") // NEVER a mid-thought ellipsis
+    const detailsMatch = /<details><summary>Detailed reasoning<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
+    expect(detailsMatch?.[1]).toBe("Deeper reasoning for how the model concluded this.")
   })
 
-  it("does not truncate bodies exactly at the 500-character boundary", () => {
-    const body = "x".repeat(500)
+  it("a single-paragraph body (no blank-line break) renders fully inline — no dropdown, no truncation", () => {
+    // 600+ chars, but a single self-contained thought → shown whole.
+    const body = `${"A complete self-contained issue with no paragraph break. ".repeat(11)}done.`
     const out = formatFindingComment(fnd({ body }), 5)
+    expect(out).not.toContain("<summary>Detailed reasoning</summary>")
     expect(out).not.toContain("<summary>More Info</summary>")
     expect(out).toContain(body)
-    expect(out).not.toContain(`${body}...`)
+    expect(out).not.toContain("...")
   })
 
-  it("SIG-216: More Info preview snaps to the last whitespace boundary (no mid-character split)", () => {
-    // Real-world shape from PR #173: prose that runs slightly past the
-    // 500-char preview limit. The pre-SIG-216 slice landed mid-character
-    // of "chat" → preview "Add a unit test that mocks a c..." and the
-    // disclosure opened to "hat stream with known fixtures.". The fix
-    // walks back to the last whitespace inside the preview window so
-    // words remain intact across the boundary.
-    const prefix = "Add a unit test that mocks a "
-    const filler = "x".repeat(500 - prefix.length - "chat".length)
-    // body shape: <prefix><filler> chat stream with known fixtures.
-    // Whitespace position before the limit lands on the space after
-    // the filler, so the preview should end with the filler and the
-    // disclosure should start with "chat stream...".
-    const body = `${prefix}${filler} chat stream with known fixtures.`
+  it("splits at the FIRST blank-line break — every later paragraph goes to the dropdown", () => {
+    const body = "The issue.\n\nReason one.\n\nReason two."
     const out = formatFindingComment(fnd({ body }), 5)
-    expect(out).toContain("<summary>More Info</summary>")
-    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
-    expect(detailsMatch?.[1]).toBeDefined()
-    // Preview must NOT contain the partial-word splits the old logic produced.
-    expect(out).not.toContain("mocks a c...")
-    // Disclosure must start at the next word boundary, not mid-word.
-    expect(detailsMatch?.[1]).toMatch(/^chat stream with known fixtures\.$/)
+    expect(out).toContain("The issue.")
+    const detailsMatch = /<details><summary>Detailed reasoning<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
+    expect(detailsMatch?.[1]).toBe("Reason one.\n\nReason two.")
   })
 
-  it("SIG-216: falls back to a hard slice when the preview window has no whitespace (long token)", () => {
-    // The pre-existing 620-`x` test already covers the same code path
-    // implicitly; this test pins the contract explicitly so a future
-    // regression that drops the fallback branch fails loudly. A
-    // 620-character single token can't be split on a word boundary,
-    // so the function must still terminate via the hard slice.
-    const body = "y".repeat(620)
+  it("never cuts a long issue mid-sentence — a no-break body is shown complete", () => {
+    const body = "x".repeat(620) // no blank line → full inline, no '...'
     const out = formatFindingComment(fnd({ body }), 5)
-    expect(out).toContain("<summary>More Info</summary>")
-    expect(out).toContain(`${"y".repeat(500)}...`)
-    const detailsMatch = /<details><summary>More Info<\/summary>\n\n([\s\S]*?)\n\n<\/details>/.exec(out)
-    expect(detailsMatch?.[1]).toBe("y".repeat(120))
+    expect(out).toContain("x".repeat(620))
+    expect(out).not.toContain("<summary>Detailed reasoning</summary>")
+    expect(out).not.toContain("...")
   })
 
   it("strips AST markers from visible finding text and AI prompt", () => {

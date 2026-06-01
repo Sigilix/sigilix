@@ -113,7 +113,11 @@ export const PR_REVIEW_SCHEMA = {
             ],
           },
           headline: { type: "string" },
-          body: { type: "string" },
+          body: {
+            type: "string",
+            description:
+              "Write the COMPLETE issue first: a self-contained explanation of the problem that a reader understands on its own — what is wrong, where, and why it matters — WITHOUT expanding anything. Keep it tight (typically 1-4 sentences). Then, ONLY if there is genuinely deeper analysis for HOW you reached this conclusion (evidence walk-through, edge cases, alternatives considered), add a SINGLE BLANK LINE and put that deeper reasoning after it. The text before the blank line must stand alone as the full issue; everything after is an optional deep-dive shown in a collapsed dropdown. Do not split a single thought across the blank line.",
+          },
           // Structured details: proof/fix/test-gap fields for richer
           // review comments. Optional so older prompt paths and clean
           // findings can omit them; the renderer decides where each
@@ -239,7 +243,11 @@ export const PR_IMPROVE_SCHEMA = {
             enum: ["naming", "clarity", "dead-code", "error-handling", "style", "docs"],
           },
           headline: { type: "string", maxLength: 120 },
-          body: { type: "string" },
+          body: {
+            type: "string",
+            description:
+              "Write the complete issue as a self-contained explanation the reader understands on its own (usually 1-2 sentences for a nit). If there is genuinely deeper reasoning, add a SINGLE BLANK LINE and put it after — the part before the blank line must stand alone; the part after is an optional deep-dive shown in a dropdown. Never split a single thought across the blank line.",
+          },
         },
         required: ["path", "line", "category", "headline", "body"],
       },

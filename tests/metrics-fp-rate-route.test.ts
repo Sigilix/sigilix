@@ -181,4 +181,31 @@ describe("handleFpRateMetricsRoute", () => {
     const logic = body.rows.find((r) => r.role === "logic")!
     expect(logic).toMatchObject({ postedN: 1, hard: 1, hardFpRate: 1 })
   })
+
+  it("accepts the repeated ?repo= param form (not just comma-separated)", async () => {
+    const res = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=sigilix/sigilix&repo=arc-and-anchor/sigilix&window=60&maturity=0&min-n=1", `Bearer ${TOKEN}`),
+      makeEnv(),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { repos: string[] }
+    expect(body.repos.sort()).toEqual(["arc-and-anchor/sigilix", "sigilix/sigilix"])
+  })
+
+  it("400s when aliases are DIFFERENT repos (cross-repo attribution guard)", async () => {
+    // arc-and-anchor/sigilix and acme/widgets are different repos: PR-number /
+    // fid collisions would cross-attribute, so the union must be rejected.
+    const res = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=arc-and-anchor/sigilix,acme/widgets", `Bearer ${TOKEN}`),
+      makeEnv(),
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json() as { error: string }).error).toBe("alias_repo_mismatch")
+    // Same repo name across differing owners (a transfer/rename) is allowed.
+    const ok = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=arc-and-anchor/sigilix,sigilix/sigilix&window=60&maturity=0&min-n=1", `Bearer ${TOKEN}`),
+      makeEnv(),
+    )
+    expect(ok.status).toBe(200)
+  })
 })

@@ -109,6 +109,25 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
       400,
     )
   }
+  // Cross-repo attribution guard (code-reviewer + Codex on #273): PR numbers are
+  // repo-local and `fid` is not repo-scoped, so unioning genuinely DIFFERENT
+  // repos would cross-attribute findings. Real rename aliases share the repo
+  // NAME — a transfer/rename changes the owner (arc-and-anchor/sigilix ->
+  // sigilix/sigilix), not the name — so require every alias to share the name
+  // segment. (Known limitation: a by-NAME rename `foo/bar -> foo/baz` must be
+  // queried one slug at a time; this read path has no repo-id resolver to prove
+  // two differently-named slugs are the same repo, and a footgun beats a wrong
+  // number on the believability ruler.)
+  const repoNames = new Set(repos.map((r) => r.slice(r.indexOf("/") + 1)))
+  if (repoNames.size > 1) {
+    return json(
+      {
+        error: "alias_repo_mismatch",
+        detail: `?repo= aliases must be the same GitHub repo (same name, differing only in owner); got distinct names: ${[...repoNames].join(", ")}`,
+      },
+      400,
+    )
+  }
   const windowDays = parseIntParam(params.get("window"), DEFAULT_WINDOW_DAYS)
   const maturityDays = parseIntParam(params.get("maturity"), DEFAULT_MATURITY_DAYS)
   const minN = parseIntParam(params.get("min-n"), DEFAULT_MIN_N)

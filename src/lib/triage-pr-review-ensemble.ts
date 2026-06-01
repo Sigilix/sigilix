@@ -1446,7 +1446,7 @@ export function resolveReviewEventOverride(args: {
 /**
  * Build the `[AST RULE FINDINGS]` synth-prompt block (pure, exported for test).
  * ARC-181 + SIG-245: the SUPERSEDE-and-drop instruction (drop a specialist
- * finding that matches an AST entry on (path,line,role)) is only safe when the
+ * finding that matches an AST entry on (path,line,role_hint)) is only safe when the
  * AST version will actually be POSTED — i.e. when `astRules.autoInline` is ON.
  * With autoInline OFF (the DEFAULT) the AST findings are never posted anywhere,
  * so telling the synth to drop the matching specialist finding silently loses a

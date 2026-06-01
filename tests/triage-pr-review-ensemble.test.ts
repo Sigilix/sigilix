@@ -118,6 +118,12 @@ describe("buildAstFindingsSynthBlock (SIG-245 AST-supersession recall fix)", () 
     expect(buildAstFindingsSynthBlock("", true)).toBe("")
     expect(buildAstFindingsSynthBlock("", false)).toBe("")
   })
+
+  it("autoInline ON: composition is byte-identical to the legacy inline block (prod-unchanged guarantee)", () => {
+    const expected =
+      `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\nMatch these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.\n\n\`\`\`json\n${astJson}\n\`\`\``
+    expect(buildAstFindingsSynthBlock(astJson, true)).toBe(expected)
+  })
 })
 
 describe("resolveReviewEventOverride (SIG-245 + SIG-287 downgrade trigger)", () => {

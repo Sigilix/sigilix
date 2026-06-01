@@ -394,6 +394,18 @@ OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 # the validate-injection-taint + validate-security-grounding suites. Rollback: "shadow".
 OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
 
+# SIG-308: logic-refutation backstop (evaluateLogicRefutation). Flags a sev>=4
+# logic finding that never showed it survives refutation (no
+# `independentAssessment`) — the self-refuting-finding shape (sigilix-monitor
+# PR #12 `sinceMs`). Lands at "shadow" to START measurement: the gate runs +
+# emits `pr-review-finding-rejected-validation` (gate:"logic-refutation") on
+# every review but KEEPS every finding. Because logic candidates are self-
+# generated (no manifest to re-surface a wrongly-flagged bug) this is the only
+# recall guard and initially over-flags legit findings lacking a rationale —
+# read the would-flag rate (while the Phase 1 prompt trains the model to fill
+# `independentAssessment`) before "enforce". Rollback: set "off".
+OPENCLAW_LOGIC_REFUTATION_MODE = "shadow"
+
 # SIG-108: the security EVIDENCE gate (evaluateSecurityFinding). A sev>=4
 # security finding citing a fabricated/absent/out-of-range scanner evidenceId
 # is a hallucination. "shadow" (the prior default-when-unset) counts the

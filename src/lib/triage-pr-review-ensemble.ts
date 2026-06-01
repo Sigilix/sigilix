@@ -89,6 +89,7 @@ import {
   type CoverageRoles,
   type DeltaBadgeCounts,
   parsePrReviewResponse,
+  buildClearedLogicCandidateTelemetry,
   buildBodyOnlyCheckAnnotations,
   buildFallbackSubmission,
   buildReviewSubmissionWithMetadata,
@@ -148,6 +149,12 @@ import {
   type LogicDropReason,
   type LogicEvidence,
 } from "./validate-logic-finding"
+import {
+  evaluateLogicRefutation,
+  parseLogicRefutationMode,
+  type LogicRefutationMode,
+  type LogicRefutationDropReason,
+} from "./validate-logic-refutation"
 import {
   evaluatePerfFinding,
   parsePerfValidatorMode,
@@ -1555,7 +1562,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0 },
     retrievalCacheStats: null,
     startMs,
     totalMs: 0,
@@ -3658,6 +3665,20 @@ export async function handlePrReviewEnsemble(
       }))
     }
 
+    // SIG-308 Phase 2: telemeter the logic specialist's cleared candidates —
+    // correctness concerns it refuted against an in-code mitigation instead of
+    // emitting a finding. There is no manifest to reconcile against (logic
+    // candidates are self-generated), so this is pure observability of the
+    // cleared-rate; the recall safety rail is the Phase 3 backstop. Phase 1's
+    // framing already keeps the refuted finding from being emitted.
+    const clearedLogicCandidates =
+      specialistVerdicts.find((v) => v.role === "logic")?.verdict?.clearedLogicCandidates ?? []
+    for (const ev of buildClearedLogicCandidateTelemetry(clearedLogicCandidates, {
+      owner, repo, prNumber, headSha,
+    })) {
+      console.log(JSON.stringify(ev))
+    }
+
     // ARC-283 Phase B1b — snapshot per-role prod outcomes for the
     // shadow comparison emit in `finally`. Only writes for roles
     // that have a shadow promise queued; for everyone else we'd
@@ -4444,6 +4465,26 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "logic", reason: info.reason, dropped: info.dropped })
       },
+      // SIG-308: logic-refutation backstop. Default `off` in code; wrangler
+      // sets `shadow` so production counts/telemeters the would-flag rate
+      // (a sev>=4 logic finding lacking a survival rationale) until the
+      // operator flips OPENCLAW_LOGIC_REFUTATION_MODE to "enforce". Reuses the
+      // `pr-review-finding-rejected-validation` event (`gate: "logic-refutation"`).
+      logicRefutationMode: parseLogicRefutationMode(env.OPENCLAW_LOGIC_REFUTATION_MODE),
+      onLogicRefutationFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "logic-refutation",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped })
+      },
       // SIG-110: thread perf evidence + mode. Evidence is the same
       // changed-line text + the roleHint:performance AST findings. Default
       // `shadow` — counts/telemeters the would-drop until the operator
@@ -4552,6 +4593,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedValidation: validated.droppedForFailedValidation,
       droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
       droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
+      droppedForFailedLogicRefutation: validated.droppedForFailedLogicRefutation,
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
@@ -8416,6 +8458,12 @@ export interface ValidatedOutput {
    */
   droppedForFailedLogicValidation: number
   /**
+   * SIG-308: count of sev>=4 logic findings the refutation backstop flagged
+   * for missing a survival rationale (would-drop in shadow, actual-drop in
+   * enforce). Surfaced so the would-flag rate is observable before enforce.
+   */
+  droppedForFailedLogicRefutation: number
+  /**
    * SIG-110: count of sev>=4 perf findings the evidence gate flagged
    * (unanchored perf claim, perf finding on an unchanged path, or missing
    * path). Shadow counts the would-drop; enforce drops. Surfaced to
@@ -8495,6 +8543,65 @@ function backfillSecurityEvidenceFromSources(
     ...(!hasNonEmptyString(finding.cweId) && source.cweId ? { cweId: source.cweId } : {}),
     ...(!hasNonEmptyString(finding.evidenceId) && source.evidenceId ? { evidenceId: source.evidenceId } : {}),
   }
+}
+
+/**
+ * SIG-308 (PR #290 review): map each source finding's id → its trimmed,
+ * non-empty `independentAssessment`, for one `role` only. The logic analogue
+ * of `buildSourceFindingSecurityEvidenceById` — single-field because that is
+ * the only structured field the SIG-308 backstop reads off the synthesized
+ * finding. Empty / whitespace-only rationales are skipped (treated as absent,
+ * matching `evaluateLogicRefutation`).
+ *
+ * Role-SCOPED (CodeRabbit, PR #290): `independentAssessment` is shared — a
+ * SIG-282 security confirmation and a SIG-308 logic survival rationale live in
+ * the same field with lens-specific meaning. The logic gate keys on
+ * `sourceRolesInclude(sourceIds, "logic")`, so a cross-lens-merged finding
+ * (e.g. ids `["security-0","logic-0"]`) must NOT have a security note satisfy
+ * the logic gate. Restricting the map to the gate's role guarantees that.
+ */
+function buildSourceFindingRationaleById(
+  specialistVerdicts: CollectedVerdict[],
+  role: SpecialistRole,
+): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const verdict of specialistVerdicts) {
+    if (verdict.role !== role) continue
+    if (!verdict.verdict) continue
+    for (const finding of verdict.verdict.findings) {
+      if (hasNonEmptyString(finding.independentAssessment)) {
+        out.set(finding.id, finding.independentAssessment.trim())
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * SIG-308 (PR #290 review): restore a finding's `independentAssessment` from
+ * its source findings when synthesis dropped it. The backstop keys on the
+ * POST-synthesis finding, but the synthesizer (an LLM) may not echo the
+ * rationale — and unlike security evidence there was no deterministic
+ * backfill, so a logic finding whose specialist DID justify survival could be
+ * wrongly flagged. Pure (no mutation), mirroring
+ * `backfillSecurityEvidenceFromSources`. Never overwrites a present value;
+ * the security selector is NOT reused because it matches on cweId/evidenceId,
+ * which a logic source lacks — here we take the first source id that carries a
+ * rationale in `rationaleById`. That map is role-scoped by the caller (see
+ * `buildSourceFindingRationaleById`), so for the logic gate only logic-source
+ * rationales are eligible — a co-merged security note cannot satisfy it.
+ */
+function backfillIndependentAssessmentFromSources(
+  finding: PrReviewFinding,
+  sourceIds: readonly string[],
+  rationaleById: ReadonlyMap<string, string>,
+): PrReviewFinding {
+  if (hasNonEmptyString(finding.independentAssessment)) return finding
+  for (const sourceId of sourceIds) {
+    const rationale = rationaleById.get(sourceId)
+    if (rationale) return { ...finding, independentAssessment: rationale }
+  }
+  return finding
 }
 
 /**
@@ -9073,6 +9180,26 @@ export function validateForSubmission(args: {
     info: { reason: LogicDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-308: logic-refutation backstop mode. `off` (default): the gate
+   * doesn't run. `shadow`: the verdict is counted + telemetered but the
+   * finding is NOT dropped. `enforce`: flagged findings are dropped. Read
+   * from `OPENCLAW_LOGIC_REFUTATION_MODE` at the call site. Scoped to logic-
+   * sourced findings; catches a sev>=4 logic finding that never showed it
+   * survives refutation (no `independentAssessment`). Ships dark.
+   */
+  logicRefutationMode?: LogicRefutationMode
+  /**
+   * SIG-308: optional telemetry callback fired once per logic finding the
+   * refutation backstop flagged (whether or not it was dropped — `dropped`
+   * distinguishes enforce from shadow). Lets the orchestrator log
+   * `pr-review-finding-rejected-validation` (gate:"logic-refutation")
+   * without coupling the pure validator to a logger.
+   */
+  onLogicRefutationFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: LogicRefutationDropReason; dropped: boolean },
+  ) => void
+  /**
    * SIG-110: perf-finding evidence (added-line text per path + the
    * roleHint:performance AST findings). Threaded so `evaluatePerfFinding`
    * can anchor sev>=4 perf findings to the diff. Absent → the gate no-ops.
@@ -9197,6 +9324,8 @@ export function validateForSubmission(args: {
     logicEvidence,
     logicValidatorMode = "shadow",
     onLogicFindingDropped,
+    logicRefutationMode = "off",
+    onLogicRefutationFindingDropped,
     perfEvidence,
     perfValidatorMode = "shadow",
     addedLineTextByLine,
@@ -9214,6 +9343,7 @@ export function validateForSubmission(args: {
   } = args
   const validIds = new Set<string>()
   const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
+  const sourceRationaleById = buildSourceFindingRationaleById(specialistVerdicts, "logic")
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
     for (const f of v.verdict.findings) validIds.add(f.id)
@@ -9234,6 +9364,7 @@ export function validateForSubmission(args: {
   let droppedForFailedValidation = 0
   let droppedForFailedTestValidation = 0
   let droppedForFailedLogicValidation = 0
+  let droppedForFailedLogicRefutation = 0
   let droppedForFailedPerfValidation = 0
   let droppedForFailedInlineGroundingValidation = 0
   let droppedForFailedAbsenceGroundingValidation = 0
@@ -9276,6 +9407,10 @@ export function validateForSubmission(args: {
     // synth telemetry intact and never overwrites fields the synth
     // already provided.
     f = backfillSecurityEvidenceFromSources(f, sourceIds, sourceEvidenceById)
+    // SIG-308 (PR #290 review): restore independentAssessment dropped by
+    // synthesis BEFORE the logic-refutation backstop reads it, so a logic
+    // finding whose specialist justified survival isn't wrongly flagged.
+    f = backfillIndependentAssessmentFromSources(f, sourceIds, sourceRationaleById)
 
     // SIG-216: normalize scope BEFORE any scope-dependent gates fire.
     // LLM specialists sometimes emit `scope: "file"` for findings that
@@ -9489,6 +9624,23 @@ export function validateForSubmission(args: {
         const dropped = logicValidatorMode === "enforce"
         droppedForFailedLogicValidation++
         onLogicFindingDropped?.(f, { reason: logicDecision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
+    }
+
+    // SIG-308: logic-refutation backstop. A sev>=4 logic-sourced finding that
+    // never showed it survives refutation (no `independentAssessment`) is the
+    // self-refuting-finding shape (PR #12 `sinceMs`). Phase 1's prompt is the
+    // primary control (the model self-clears into `clearedLogicCandidates`);
+    // this is the residual safety net. Same shadow-first semantics as the
+    // SIG-109 gate — drops (continue) only in `enforce`; `off` skips entirely.
+    if (logicRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {
+      const refutationDecision = evaluateLogicRefutation(f)
+      if (!refutationDecision.keep) {
+        const dropped = logicRefutationMode === "enforce"
+        droppedForFailedLogicRefutation++
+        onLogicRefutationFindingDropped?.(f, { reason: refutationDecision.reason, dropped })
         if (dropped) continue
         // shadow mode: fall through and keep the finding.
       }
@@ -9738,6 +9890,7 @@ export function validateForSubmission(args: {
     droppedForFailedValidation,
     droppedForFailedTestValidation,
     droppedForFailedLogicValidation,
+    droppedForFailedLogicRefutation,
     droppedForFailedPerfValidation,
     droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation,
@@ -9916,6 +10069,9 @@ interface EnsembleTelemetry {
     /** SIG-109: count of sev>=4 logic findings the evidence gate flagged
      * (would-drop in shadow mode, actual-drop in enforce mode). */
     droppedForFailedLogicValidation: number
+    /** SIG-308: count of sev>=4 logic findings the refutation backstop flagged
+     * for missing a survival rationale (would-drop shadow / actual-drop enforce). */
+    droppedForFailedLogicRefutation: number
     /** SIG-110: count of sev>=4 perf findings the evidence gate flagged
      * (would-drop in shadow mode, actual-drop in enforce mode). */
     droppedForFailedPerfValidation: number

@@ -461,6 +461,16 @@ export interface Env {
   // `wrangler secret put OPENCLAW_LOGIC_VALIDATOR_MODE enforce`.
   OPENCLAW_LOGIC_VALIDATOR_MODE?: string
 
+  // SIG-308: logic-refutation backstop mode. "off" | "shadow" | "enforce".
+  // Flags a sev>=4 logic finding that never showed it survives refutation
+  // (no `independentAssessment`) — the self-refuting-finding shape. Ships
+  // dark ("shadow" in wrangler) because it is the only recall guard for the
+  // self-generated logic-candidate stream and initially over-flags legit
+  // findings that simply lack a rationale; the would-flag rate is observed
+  // (while the Phase 1 prompt trains the model to fill it) before any flip
+  // via `wrangler secret put OPENCLAW_LOGIC_REFUTATION_MODE enforce`.
+  OPENCLAW_LOGIC_REFUTATION_MODE?: string
+
   // SIG-110: perf-finding evidence gate mode. "shadow" (default) counts +
   // telemeters the would-drop; "enforce" drops unanchored sev>=4 perf
   // findings. Operator flips via

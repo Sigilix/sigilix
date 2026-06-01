@@ -71,9 +71,40 @@ function secretFact(overrides: Partial<SecurityFact> = {}): SecurityFact {
 
 // ─────────────────────────────────────────────────────────────────────
 describe("evaluateSecurityGrounding — bucket scope", () => {
-  it("KEEPS a non-secrets bucket (injection CWE-89) — not in scope", () => {
+  it("KEEPS a SQLi (CWE-89, injection bucket) whose cited line has no provably-constant JS sink", () => {
+    // SIG-292: CWE-89 is now in the injection bucket, but the taint detector
+    // only fires on a provably-constant JS sink — a concatenated SQL string is
+    // not one, so it keeps (the real injection is untouched).
     const f = finding({ cweId: "CWE-89", headline: "SQL injection via `id`" })
     expect(evaluateSecurityGrounding(f, ctx({ addedLineTextByLine: added(CLEAN_LINE) }))).toEqual({ keep: true })
+  })
+
+  it("SIG-292: DEMOTES an XSS finding (CWE-79) citing a sink fed a same-file const literal (the BANNER_HTML trap)", () => {
+    const f = finding({ cweId: "CWE-79", line: 17, headline: "XSS via dangerouslySetInnerHTML" })
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
+      [5, `const BANNER_HTML = "<div class=\\"banner\\">Welcome</div>";`],
+      [17, `      <div dangerouslySetInnerHTML={{ __html: BANNER_HTML }} />`],
+    ])]])
+    expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({
+      keep: false,
+      reason: "injection-sink-non-attacker-controlled-constant",
+    })
+  })
+
+  it("SIG-292: KEEPS an XSS finding citing a sink fed attacker-controlled data (props/member access)", () => {
+    const f = finding({ cweId: "CWE-79", line: 17, headline: "stored XSS in bio" })
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
+      [17, `      <div dangerouslySetInnerHTML={{ __html: props.bio }} />`],
+    ])]])
+    expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
+  })
+
+  it("SIG-292: KEEPS an XSS finding when the cited sink value can't be proven constant (unresolved identifier)", () => {
+    const f = finding({ cweId: "CWE-79", line: 17 })
+    const map: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map([[PATH, new Map([
+      [17, `      el.innerHTML = serverHtml;`],
+    ])]])
+    expect(evaluateSecurityGrounding(f, { addedLineTextByLine: map })).toEqual({ keep: true })
   })
 
   it("KEEPS an authn bucket (CWE-862) — absence category, never gated", () => {

@@ -343,7 +343,12 @@ OPENCLAW_RECEIPTJOIN_MODE = "shadow"
 # until then). Display PR2 (2026-05-31): flipped off → shadow to START the tier
 # measurement. Read GET /metrics/verification → `trustLedger.byTier` to confirm
 # the tiers compute sanely BEFORE the PR3 render. Rollback: set "off".
-OPENCLAW_TRUST_LEDGER = "shadow"
+# Display PR3a #268 + PR3b #269 wired the render (gated to "on"). 2026-06-01:
+# flipped shadow -> ON — the believability surface (Trust Summary + VERIFIED/GROUNDED/
+# MODEL pills + the body restructure: PR-level section + collapsed outside-diff
+# dropdown) is now VISIBLE on every review. Rollback: "shadow" (keep measuring, no
+# render) or "off".
+OPENCLAW_TRUST_LEDGER = "on"
 
 # SIG-290 v1: anti-hallucination absence-grounding gate. Suppress/downgrade
 # "absence-claim" findings (e.g. "lacks tests", "no null check", "missing

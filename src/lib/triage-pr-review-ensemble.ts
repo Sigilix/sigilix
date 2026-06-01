@@ -5767,6 +5767,10 @@ export async function handlePrReviewEnsemble(
       verdict: submissionVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
+      // SIG Trust Ledger v0: render the trust layer (Trust Summary + per-finding
+      // VERIFIED/GROUNDED/MODEL pills) only in `on` mode. off/shadow → byte-identical
+      // body. (The Summary's `suppressed` count is a PR3b follow-up.)
+      trustLedger: trustLedgerMode === "on",
       unanchored: renderableUnanchoredForSubmission,
       findingMarkers,
       ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),

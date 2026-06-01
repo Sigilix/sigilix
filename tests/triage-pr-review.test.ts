@@ -3319,6 +3319,44 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
 })
 
+describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
+  it("appends the per-finding pill to the inline comment header only when on", () => {
+    const grounded = { ...baseFinding, trust: { tier: "grounded-model" as const } }
+    expect(formatFindingComment(grounded, 5, undefined, undefined, true)).toContain("trust-grounded")
+    const runner = { ...baseFinding, trust: { tier: "runner-confirmed" as const } }
+    expect(formatFindingComment(runner, 5, undefined, undefined, true)).toContain("runner-verified")
+    const model = { ...baseFinding, trust: { tier: "body-only-ungrounded" as const } }
+    expect(formatFindingComment(model, 5, undefined, undefined, true)).toContain("trust-model")
+    // backward-compat: a finding with NO trust field (pre-Trust-Ledger) → the muted
+    // MODEL pill, not a crash and not an unearned GROUNDED/VERIFIED.
+    const noTrust = formatFindingComment(baseFinding, 5, undefined, undefined, true)
+    expect(noTrust).toContain("trust-model")
+    expect(noTrust).not.toContain("trust-grounded")
+    expect(noTrust).not.toContain("runner-verified")
+    // off (default) → no pill of any kind; byte-identical header to today.
+    const off = formatFindingComment(grounded, 5, undefined, undefined, false)
+    expect(off).not.toContain("trust-grounded")
+    expect(off).not.toContain("trust-model")
+    expect(off).not.toContain("runner-verified")
+  })
+
+  it("renders the Trust Summary (Proof line) under the lead only when on", () => {
+    const verdict: PrReviewVerdict = {
+      summary: "One grounded finding.",
+      confidence: 4,
+      confidenceReason: "narrow surface",
+      findings: [{ ...baseFinding, score: 4, trust: { tier: "grounded-model" } }],
+    }
+    const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: true })
+    // the segmented summary: total + the proof breakdown (1 grounded-model finding).
+    expect(on.submission.body).toContain("**1 finding**")
+    expect(on.submission.body).toContain("**Proof**: 1 grounded")
+    const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: false })
+    expect(off.submission.body).not.toContain("**Proof**")
+    expect(off.submission.body).not.toContain("**1 finding**")
+  })
+})
+
 describe("resolveFindingConfidence (SIG-101)", () => {
   const fnd = (overrides: Partial<PrReviewFinding>): PrReviewFinding => ({
     ...baseFinding,

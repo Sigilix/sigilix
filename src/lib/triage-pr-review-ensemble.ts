@@ -6110,6 +6110,7 @@ export async function handlePrReviewEnsemble(
         const fallbackCommentAffordance = await prepareFallbackAffordance(fallbackCommentEvent)
         const fallbackCommentSubmission = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
@@ -6264,6 +6265,7 @@ export async function handlePrReviewEnsemble(
         const fallbackBodyOnlyAffordance = await prepareFallbackAffordance(fallbackBodyOnlyEvent)
         const fallbackBodyOnly = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
           prAuthor: meta.user?.login ?? null,
@@ -6319,6 +6321,7 @@ export async function handlePrReviewEnsemble(
       const fallbackAffordance = await prepareFallbackAffordance(fallbackEvent)
       const fallback = buildFallbackSubmission(withSubmissionAffordance({
         trustLedger: trustLedgerMode === "on",
+        notReviewedFiles: filesDroppedFromReview,
         // ARC-189: fallback path also receives the soften-applied
         // verdict. Markers are NOT emitted on the fallback (it's a
         // body-only review with no inline anchors) — see Task 2.5.

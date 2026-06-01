@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildFallbackBody,
   buildBodyOnlyCheckAnnotations,
+  buildFallbackSubmission,
   buildReviewSubmission,
   buildReviewSubmissionWithMetadata,
   CHECK_ANNOTATION_TEXT_LIMIT,
@@ -1544,6 +1545,21 @@ describe("buildReviewSubmission", () => {
     expect(out.submission.event).toBe("COMMENT")
     expect(out.submission.body).toContain("1 file not reviewed")
     expect(out.submission.body).toContain("`src/services/exec.ts`")
+  })
+
+  it("SIG-245: the anchorless fallback body also carries the notice (CR #286)", () => {
+    // The 422-retry path re-renders via buildFallbackSubmission; it must not
+    // silently omit dropped files either.
+    const out = buildFallbackSubmission({
+      verdict: { summary: "Re-rendered anchorless.", confidence: 4, confidenceReason: "y", findings: [] },
+      unanchored: [],
+      headSha: "abc",
+      eventOverride: "COMMENT",
+      notReviewedFiles: ["src/services/exec.ts"],
+    })
+    expect(out.event).toBe("COMMENT")
+    expect(out.body).toContain("1 file not reviewed")
+    expect(out.body).toContain("`src/services/exec.ts`")
   })
 })
 

@@ -1312,6 +1312,9 @@ interface BuildFallbackArgs {
   /** SIG Trust Ledger v0: render the trust layer in the anchorless-fallback body
    *  too (post-`on`-flip consistency). Forwarded to buildFallbackBody. */
   trustLedger?: boolean
+  /** SIG-245: files dropped from review — render the "files not reviewed"
+   *  notice on the anchorless-fallback body too (CR #286). */
+  notReviewedFiles?: string[]
 }
 
 /**
@@ -1345,6 +1348,7 @@ export function buildFallbackSubmission({
   retriggerUrl,
   eventOverride,
   trustLedger,
+  notReviewedFiles,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
@@ -1358,8 +1362,13 @@ export function buildFallbackSubmission({
   }, eventOverride)
   const body = buildFallbackBody(
     verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl,
-    event === "REQUEST_CHANGES" ? event : undefined,
+    // Propagate the full override (not just REQUEST_CHANGES) so a COMMENT
+    // downgrade — SIG-287 degraded/low-confidence OR SIG-245 files-dropped —
+    // survives on the fallback body too; otherwise buildFallbackBody re-derives
+    // APPROVE for an empty-findings review and discards the notice/caveat.
+    eventOverride,
     trustLedger,
+    notReviewedFiles,
   )
   return {
     event,
@@ -1387,6 +1396,7 @@ export function buildFallbackBody(
   retriggerUrl?: string,
   eventOverride?: ReviewEventOverride,
   trustLedger?: boolean,
+  notReviewedFiles?: string[],
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
   // dropped the inline anchors, so the body must carry every
@@ -1418,6 +1428,9 @@ export function buildFallbackBody(
   if (delta !== undefined) args.delta = delta
   if (typeof reviewCounter === "number") args.reviewCounter = reviewCounter
   if (retriggerUrl) args.retriggerUrl = retriggerUrl
+  // SIG-245 (CR #286): carry the "files not reviewed" notice onto the
+  // anchorless-fallback body too, so the 422-retry path never silently drops.
+  if (notReviewedFiles && notReviewedFiles.length > 0) args.notReviewedFiles = notReviewedFiles
   return event === "COMMENT"
     ? renderCommentBody(args)
     : renderRequestChangesBody(args)

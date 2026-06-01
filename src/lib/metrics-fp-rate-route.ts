@@ -21,15 +21,23 @@ import type { FpRateDismissal, FpRateReview } from "./fp-rate/types"
 
 const TELEMETRY_PREFIX = "ensemble-review-telemetry:"
 const MEMORY_PREFIX = "review-memory:"
-// Per-request scan caps. Each matched key costs one KV `get` subrequest, so
-// the caps are sized so telemetry + memory gets JOINTLY stay well under the
-// Workers 1000-subrequest/request limit (700 + 200 + a few `list` calls). The
-// 30d telemetry TTL keeps the live corpus small (≈hundreds), so a single repo
-// hitting the cap is the signal to move this compute to the cron + cache it
-// (the endpoint would then read the cache). When the cap IS hit, the response
-// flags `scanCapped: true` so a sampled (most-recent-N) result is visible.
-const MAX_TELEMETRY_KEYS = 700
-const MAX_MEMORY_KEYS = 200
+// Two SEPARATE bounds (SIG-306): the telemetry keyspace is shared across ALL
+// repos and keyed by reverse-ts, NOT by repo — so a target repo's keys are
+// interleaved with every other repo's. Listing only the newest few hundred
+// samples a multi-repo keyspace and silently drops a repo's data (the original
+// 700-key cap surfaced only the oldest `arc-and-anchor` slice for a 16-repo
+// account). So:
+//   - LIST_SCAN: how many keys we `list` (CHEAP — 1000/page, one subrequest per
+//     page). Listed deep so a single repo's full recent window is reachable.
+//   - MAX_*_FETCH: how many MATCHED (this-repo) keys we `get` (one subrequest
+//     each; the expensive bound). Newest-first. Gets + list pages stay under the
+//     Workers 1000-subrequest/request limit: ≤(10+4 list) + (700+200 get) = 914.
+// `scanCapped: true` flags either the LIST hitting its scan bound (older keys
+// unseen) or the matched set exceeding the FETCH cap.
+const TELEMETRY_LIST_SCAN = 10_000
+const MEMORY_LIST_SCAN = 4_000
+const MAX_TELEMETRY_FETCH = 700
+const MAX_MEMORY_FETCH = 200
 const KV_LIST_PAGE = 1000
 /** Concurrency cap for the per-key KV gets (wall-clock; doesn't change the total). */
 const FETCH_CONCURRENCY = 25
@@ -152,14 +160,26 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
 
   // Telemetry: list (bounded), keep this repo's keys, fetch + map. If the list
   // hit the cap there may be older records beyond it (sampled most-recent N).
-  const telemetryListed = await listKeys(env, TELEMETRY_PREFIX, MAX_TELEMETRY_KEYS)
-  const memoryListed = await listKeys(env, MEMORY_PREFIX, MAX_MEMORY_KEYS)
-  const scanCapped = telemetryListed.length >= MAX_TELEMETRY_KEYS || memoryListed.length >= MAX_MEMORY_KEYS
+  const telemetryListed = await listKeys(env, TELEMETRY_PREFIX, TELEMETRY_LIST_SCAN)
+  const memoryListed = await listKeys(env, MEMORY_PREFIX, MEMORY_LIST_SCAN)
 
-  const telemetryKeys = telemetryListed.filter((k) => {
+  const telemetryMatched = telemetryListed.filter((k) => {
     const lk = k.toLowerCase()
     return repos.some((r) => lk.includes(`:${r}#`))
   })
+  const memoryMatched = memoryListed.filter((k) => {
+    const lk = k.toLowerCase()
+    return repos.some((r) => lk.startsWith(`${MEMORY_PREFIX}${r}:`))
+  })
+  // Capped if the LIST scan was exhausted (older keys unseen) OR a repo's matched
+  // set exceeds the FETCH bound (oldest matched keys dropped).
+  const scanCapped =
+    telemetryListed.length >= TELEMETRY_LIST_SCAN ||
+    memoryListed.length >= MEMORY_LIST_SCAN ||
+    telemetryMatched.length > MAX_TELEMETRY_FETCH ||
+    memoryMatched.length > MAX_MEMORY_FETCH
+
+  const telemetryKeys = telemetryMatched.slice(0, MAX_TELEMETRY_FETCH)
   const reviews = (
     await mapWithConcurrency(telemetryKeys, FETCH_CONCURRENCY, async (key): Promise<FpRateReview | null> => {
       const createdMs = createdMsFromKey(key, TELEMETRY_PREFIX)
@@ -169,10 +189,7 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   ).filter((r): r is FpRateReview => r !== null)
 
   // Dismissals: the legacy owner/repo keyspace is repo-scoped + dual-written.
-  const memoryKeys = memoryListed.filter((k) => {
-    const lk = k.toLowerCase()
-    return repos.some((r) => lk.startsWith(`${MEMORY_PREFIX}${r}:`))
-  })
+  const memoryKeys = memoryMatched.slice(0, MAX_MEMORY_FETCH)
   const rawSignals = (
     await mapWithConcurrency(memoryKeys, FETCH_CONCURRENCY, async (key): Promise<FpRateDismissal[]> =>
       mapSignalRecord(await getJson(key)),
@@ -185,6 +202,15 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
 
   const nowMs = Date.now()
   const scoped = filterReviewsToWindow(reviews, nowMs, windowDays, maturityDays)
+  // SIG-306: how many in-window reviews the maturity gate excluded for being too
+  // recent. On a YOUNG corpus the default maturity can hide nearly everything,
+  // which reads as a (misleading) empty result — surface the count so a thin
+  // reading is obviously "not yet mature" vs "no data". Derived from the SAME
+  // filterReviewsToWindow (maturity=0 keeps the whole window) minus the matured
+  // set, so the window-bound math lives in ONE place and can't drift from the
+  // real filter (Sigilix #276).
+  const maturityExcludedReviews =
+    filterReviewsToWindow(reviews, nowMs, windowDays, 0).length - scoped.length
 
   // Opt-in attribution diagnostic (`?diagnose=1`, read-only): when dismissals
   // fail to attribute, surface WHY — PR non-overlap vs fid drift — without raw
@@ -260,6 +286,10 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
       reviewsScanned: report.reviewsScanned,
       reviewsRealFanout: report.reviewsRealFanout,
       reviewsZeroPostedFindings: report.reviewsZeroPostedFindings,
+      // In-window reviews held back by the maturity gate (too recent to count
+      // yet). A large value next to a small reviewsScanned means "lower maturity
+      // to see early signal", not "no data".
+      maturityExcludedReviews,
       totalDismissals: dismissals.length,
       unattributed: report.unattributed,
       // True if the KV scan hit its cap (result is the most-recent N, may not

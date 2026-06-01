@@ -123,6 +123,33 @@ describe("handleFpRateMetricsRoute", () => {
     expect(security).toMatchObject({ postedN: 0, hard: 0, hardFpRate: null })
   })
 
+  it("surfaces maturityExcludedReviews so a young corpus isn't a misleading empty (SIG-306)", async () => {
+    const now = Date.now()
+    const reverseTs = REVERSE_TS_BASE - (now - DAY) // posted ~1 day ago — inside the 14d maturity gate
+    const records: Record<string, unknown> = {
+      [`ensemble-review-telemetry:${reverseTs}:o/r#100`]: {
+        owner: "o",
+        repo: "r",
+        prNumber: 100,
+        synthesizer: {
+          verdict: { findings: [{ path: "a.ts", line: 10, headline: "bug", score: 5 }] },
+          provenance: { findings: [{ sourceSpecialists: ["logic"] }] },
+        },
+      },
+    }
+    const res = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=o/r&window=30&maturity=14&min-n=1", `Bearer ${TOKEN}`),
+      makeEnv(records),
+    )
+    const body = (await res.json()) as { reviewsScanned: number; maturityExcludedReviews: number }
+    // The review is held back by the 14-day maturity gate (so it doesn't count
+    // yet)...
+    expect(body.reviewsScanned).toBe(0)
+    // ...but the count is surfaced, so "0 scanned" reads as "not yet mature",
+    // not "no data".
+    expect(body.maturityExcludedReviews).toBe(1)
+  })
+
   it("joins across a rename: review telemetry under the OLD slug + dismissals under the NEW slug, unioned via multiple ?repo= aliases", async () => {
     const now = Date.now()
     const reverseTs = REVERSE_TS_BASE - (now - DAY)

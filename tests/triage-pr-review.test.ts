@@ -3319,6 +3319,36 @@ describe("severityBadgeForScore (SIG-164 PR 5: SVG badges)", () => {
   })
 })
 
+describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
+  it("appends the per-finding pill to the inline comment header only when on", () => {
+    const grounded = { ...baseFinding, trust: { tier: "grounded-model" as const } }
+    expect(formatFindingComment(grounded, 5, undefined, undefined, true)).toContain("trust-grounded")
+    const runner = { ...baseFinding, trust: { tier: "runner-confirmed" as const } }
+    expect(formatFindingComment(runner, 5, undefined, undefined, true)).toContain("runner-verified")
+    const model = { ...baseFinding, trust: { tier: "body-only-ungrounded" as const } }
+    expect(formatFindingComment(model, 5, undefined, undefined, true)).toContain("trust-model")
+    // off (default) → no pill of any kind; byte-identical header to today.
+    const off = formatFindingComment(grounded, 5, undefined, undefined, false)
+    expect(off).not.toContain("trust-grounded")
+    expect(off).not.toContain("trust-model")
+    expect(off).not.toContain("runner-verified")
+  })
+
+  it("renders the Trust Summary (Proof line) under the lead only when on", () => {
+    const verdict: PrReviewVerdict = {
+      summary: "One grounded finding.",
+      confidence: 4,
+      confidenceReason: "narrow surface",
+      findings: [{ ...baseFinding, score: 4, trust: { tier: "grounded-model" } }],
+    }
+    const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: true })
+    expect(on.submission.body).toContain("**Proof**")
+    expect(on.submission.body).toContain("grounded")
+    const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: false })
+    expect(off.submission.body).not.toContain("**Proof**")
+  })
+})
+
 describe("resolveFindingConfidence (SIG-101)", () => {
   const fnd = (overrides: Partial<PrReviewFinding>): PrReviewFinding => ({
     ...baseFinding,

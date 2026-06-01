@@ -43,6 +43,7 @@ import {
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
+import { renderTrustSummary, trustPill, trustSubTag } from "./trust-ledger-render"
 import { remediationForFinding } from "./validate-security-finding"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
@@ -897,6 +898,11 @@ interface BuildReviewArgs {
    * owner/repo through yet keep the inline-code rendering.
    */
   linkContext?: BodyFindingLinkContext
+  /** SIG Trust Ledger v0: forwarded to `RenderBodyArgs.trustLedger` (render the
+   *  trust layer when OPENCLAW_TRUST_LEDGER=on) + the inline-comment pills. */
+  trustLedger?: boolean
+  /** Trust Ledger: forwarded to `RenderBodyArgs.trustLedgerSuppressed`. */
+  trustLedgerSuppressed?: number
 }
 
 /**
@@ -1169,6 +1175,8 @@ export function buildReviewSubmissionWithMetadata({
   addedLineTextByLine,
   eventOverride,
   linkContext,
+  trustLedger,
+  trustLedgerSuppressed,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
   const {
     verdict,
@@ -1204,6 +1212,9 @@ export function buildReviewSubmissionWithMetadata({
   // as clickable GitHub blob URLs. Omitted callers fall through to
   // the back-compat inline-code anchor.
   if (linkContext) renderArgs.linkContext = linkContext
+  // SIG Trust Ledger v0: forward the render flag + the suppressed count.
+  if (trustLedger) renderArgs.trustLedger = true
+  if (typeof trustLedgerSuppressed === "number") renderArgs.trustLedgerSuppressed = trustLedgerSuppressed
   const body =
     event === "APPROVE"
       ? renderApproveBody(renderArgs)
@@ -1226,7 +1237,7 @@ export function buildReviewSubmissionWithMetadata({
     // and pass to the formatter so the inline comment carries the
     // P0/P1/P2 badge + `confidence: N/5` suffix.
     const confidence = resolveFindingConfidence(f, verdict.confidence)
-    const baseBody = formatFindingComment(f, confidence, reviewable, addedLineTextByLine)
+    const baseBody = formatFindingComment(f, confidence, reviewable, addedLineTextByLine, trustLedger)
     const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
     const c: SubmitReviewComment = {
       path: f.path,
@@ -1905,6 +1916,16 @@ export interface RenderBodyArgs {
    * inline-code rendering.
    */
   linkContext?: BodyFindingLinkContext
+  /**
+   * SIG Trust Ledger v0: when true (OPENCLAW_TRUST_LEDGER=on), render the trust
+   * layer — the per-review Trust Summary under the lead line + per-finding
+   * VERIFIED/GROUNDED/MODEL pills on body rows. Off → body byte-identical to today.
+   */
+  trustLedger?: boolean
+  /** Trust Ledger: the upstream hard-drop/suppressed count for the Summary's
+   *  "Quiet" line (the renderer derives demoted-to-body itself from the body
+   *  findings' demoteReason). Omitted → treated as 0. */
+  trustLedgerSuppressed?: number
 }
 
 /**
@@ -2089,6 +2110,31 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   if (coverageInline) leadParts.push(coverageInline)
   lines.push(leadParts.join(" · "))
 
+  // SIG Trust Ledger v0: the per-review Trust Summary, immediately under the lead
+  // line (the believability headline). Vanishes (null) on a clean approve / no
+  // trust activity. `demotedToBody` = the gate demotions (NOT outside-diff, which
+  // is a location constraint); `suppressed` = the upstream hard-drops (threaded in).
+  if (args.trustLedger) {
+    const demotedToBody = bodyOnlyFindings.filter((f) => {
+      const r = f.trust?.demoteReason
+      return (
+        r === "inline-grounding" ||
+        r === "absence-grounding" ||
+        r === "security-grounding" ||
+        r === "verification-refuted"
+      )
+    }).length
+    const trustLine = renderTrustSummary({
+      inlineFindings,
+      bodyFindings: bodyOnlyFindings,
+      counts: { suppressed: args.trustLedgerSuppressed ?? 0, demotedToBody },
+    })
+    if (trustLine) {
+      lines.push("")
+      lines.push(trustLine)
+    }
+  }
+
   // Summary paragraph (with optional stack-context parenthetical).
   const stackParen = renderStackParenthetical(args.stack)
   const summary = stackParen
@@ -2135,7 +2181,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
       lines.push("<details>")
       lines.push(BODY_ONLY_BLOCKER_DETAILS_SUMMARY)
       lines.push("")
-      lines.push(...renderBodyOnlyFindings(bodyOnlyBlockers, args.linkContext))
+      lines.push(...renderBodyOnlyFindings(bodyOnlyBlockers, args.linkContext, args.trustLedger))
       lines.push("")
       lines.push("</details>")
     }
@@ -2151,7 +2197,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     lines.push(BODY_ONLY_FINDINGS_HEADING)
     lines.push("")
     lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
-    lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext))
+    lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext, args.trustLedger))
   }
 
   // Single-line footer (replaces the four separate metadata lines).
@@ -2487,6 +2533,7 @@ function formatFindingCategory(f: PrReviewFinding): string {
 function renderBodyOnlyFindings(
   findings: PrReviewFinding[],
   linkContext?: BodyFindingLinkContext,
+  trustLedger?: boolean,
 ): string[] {
   const sorted = [...findings].sort((a, b) =>
     b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
@@ -2497,9 +2544,13 @@ function renderBodyOnlyFindings(
     const anchorNote = f.anchorNote ? ` · ${f.anchorNote}` : ""
     const badge = severityBadgeForScore(f.score)
     const categoryBadge = categoryBadgeForFinding(f)
+    // SIG Trust Ledger v0: the pill after the category glyph + the ` · TIER`
+    // sub-tag after the score (zero-width concat; the helpers carry their spacing).
+    const pill = trustLedger ? trustPill(f.trust, badgeImg) : ""
+    const subTag = trustLedger ? trustSubTag(f.trust) : ""
     lines.push("")
-    lines.push(`- ${badge} ${categoryBadge} **${stripAstMarkers(f.headline)}**`)
-    lines.push(`  <sub>${anchor} · score ${f.score}${anchorNote}</sub>`)
+    lines.push(`- ${badge} ${categoryBadge}${pill} **${stripAstMarkers(f.headline)}**`)
+    lines.push(`  <sub>${anchor} · score ${f.score}${subTag}${anchorNote}</sub>`)
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -3105,6 +3156,7 @@ export function formatFindingComment(
   confidence: number,
   reviewable?: ReviewableMap,
   addedLineTextByPath?: ReadonlyMap<string, ReadonlyMap<number, string>>,
+  trustLedger?: boolean,
 ): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
   // SIG-164 PR 5: badge is always present (P3 covers low severity).
@@ -3113,9 +3165,12 @@ export function formatFindingComment(
   // repeating as visible metadata on every stacked thread.
   const badge = severityBadgeForScore(finding.score)
   const categoryBadge = categoryBadgeForFinding(finding)
+  // SIG Trust Ledger v0: the VERIFIED/GROUNDED/MODEL pill, appended right after
+  // the category glyph (zero-width concat — the glyph carries its own spacing).
+  const pill = trustLedger ? trustPill(finding.trust, badgeImg) : ""
   const headline = stripAstMarkers(finding.headline)
   const body = formatFindingBodyMarkdown(finding.body)
-  lines.push(`${badge} ${categoryBadge} **${headline}**`)
+  lines.push(`${badge} ${categoryBadge}${pill} **${headline}**`)
   lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
   lines.push(`<!-- sigilix:severity:${finding.score} -->`)
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)

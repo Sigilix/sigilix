@@ -2,7 +2,7 @@
 // as the other metrics DOs (real in-memory node:sqlite).
 
 import { describe, expect, it } from "vitest"
-import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY } from "../src/do/verification-metrics"
+import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "../src/do/verification-metrics"
 import type { Env } from "../src/index"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
@@ -106,6 +106,37 @@ describe("VerificationMetricsDO.record/recordBatch + query", () => {
     const { do_ } = makeDo()
     const out = await do_.query({ windowDays: 7, nowIso: T })
     expect(out.receiptJoin).toEqual({ confirmed: 0, inconclusive: 0, total: 0, refutableEligibleFraction: 0 })
+  })
+
+  it("Trust Ledger: tier rows are a SEPARATE corpus from worker-token + receipt-join", async () => {
+    const { do_ } = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security", occurredAt: T },                 // worker-token
+      { verdict: "refuted", category: "logic", occurredAt: T },                       // worker-token
+      { verdict: "confirmed", category: RECEIPTJOIN_CATEGORY, occurredAt: T },        // receipt-join
+      { verdict: "runner-confirmed", category: TRUSTLEDGER_CATEGORY, occurredAt: T }, // trust tiers ↓
+      { verdict: "grounded-model", category: TRUSTLEDGER_CATEGORY, occurredAt: T },
+      { verdict: "grounded-model", category: TRUSTLEDGER_CATEGORY, occurredAt: T },
+      { verdict: "body-only-ungrounded", category: TRUSTLEDGER_CATEGORY, occurredAt: T },
+    ])
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    // Worker-token aggregates EXCLUDE both other corpora.
+    expect(out.total).toBe(2)
+    expect(out.byVerdict).toEqual({ confirmed: 1, refuted: 1 })
+    // Trust-tier rows never leak into the worker-token `counts` map.
+    expect(out.counts.confirmed?.[TRUSTLEDGER_CATEGORY]).toBeUndefined()
+    expect(out.counts["runner-confirmed"]).toBeUndefined()
+    // The trust ledger is its own corpus keyed by tier.
+    expect(out.trustLedger).toEqual({
+      byTier: { "runner-confirmed": 1, "grounded-model": 2, "body-only-ungrounded": 1 },
+      total: 4,
+    })
+  })
+
+  it("trustLedger is zeroed on an empty corpus", async () => {
+    const { do_ } = makeDo()
+    const out = await do_.query({ windowDays: 7, nowIso: T })
+    expect(out.trustLedger).toEqual({ byTier: {}, total: 0 })
   })
 
   it("arms a GC alarm after the first record, and the alarm drops out-of-window buckets", async () => {

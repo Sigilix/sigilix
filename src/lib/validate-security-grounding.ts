@@ -55,6 +55,7 @@ import {
   type SecurityBucket,
 } from "./validate-security-finding"
 import { containsCredentialToken } from "./secret-scan"
+import { extractSinkValueExpr, sinkValueIsProvablyConstant } from "./validate-injection-taint"
 
 /**
  * Validator mode. `off` (default): the gate doesn't run. `shadow`:
@@ -82,19 +83,26 @@ export function parseSecurityGroundingValidatorMode(
 }
 
 /** Single failure shape — a secrets-exposure claim whose cited line holds no credential. */
-export type SecurityGroundingDropReason = "secrets-exposure-ungrounded-no-credential-token"
+export type SecurityGroundingDropReason =
+  | "secrets-exposure-ungrounded-no-credential-token"
+  | "injection-sink-non-attacker-controlled-constant"
 
 export type SecurityGroundingDecision =
   | { keep: true }
   | { keep: false; reason: SecurityGroundingDropReason }
 
 /**
- * The categories this gate evaluates. v1 = `secrets-exposure` ONLY — the
- * single HIGH-detectability category (deepseek §1). Widening this set in
- * v2 requires a per-category detector AND a shadow-measured false-negative
- * rate; do NOT add MEDIUM/LOW buckets here without one.
+ * The categories this gate evaluates, each with its own deterministic,
+ * FP-safe detector: `secrets-exposure` (SIG-293, credential-token presence) and
+ * `xss`/`injection` (SIG-292, provably-constant sink value). Adding a bucket
+ * requires a per-category detector that fails closed to KEEP and a
+ * shadow-measured false-negative rate; do NOT add MEDIUM/LOW buckets without one.
  */
-const GATED_BUCKETS: ReadonlySet<SecurityBucket> = new Set<SecurityBucket>(["secrets-exposure"])
+const GATED_BUCKETS: ReadonlySet<SecurityBucket> = new Set<SecurityBucket>([
+  "secrets-exposure",
+  "xss",
+  "injection",
+])
 
 /** CWE id that a corroborating secret manifest fact carries. */
 const SECRETS_CWE = "CWE-798"
@@ -198,25 +206,52 @@ export function evaluateSecurityGrounding(
   const bucket = deriveSecurityBucket(finding)
   if (bucket === null || !GATED_BUCKETS.has(bucket)) return { keep: true }
 
-  // Manifest = ground truth: a real secret-scanner / CWE-798 hit near the
-  // cited line means the bot is corroborated even if THIS exact line is
-  // clean (the credential may sit a few lines away). Never suppress.
-  if (context.manifest && hasCorroboratingSecretFact(finding, context.manifest)) {
+  // SIG-293: secrets-exposure grounding (credential-token presence).
+  if (bucket === "secrets-exposure") {
+    // Manifest = ground truth: a real secret-scanner / CWE-798 hit near the
+    // cited line means the bot is corroborated even if THIS exact line is
+    // clean (the credential may sit a few lines away). Never suppress.
+    if (context.manifest && hasCorroboratingSecretFact(finding, context.manifest)) {
+      return { keep: true }
+    }
+    // No diff wired → can't evaluate → keep (back-compat / FP-safe).
+    if (context.addedLineTextByLine === undefined) return { keep: true }
+    const cited = collectCitedCode(finding, context.addedLineTextByLine)
+    // Cited code not in hand (path absent / cited line is context, not an
+    // added line) → we can't PROVE the absence of a credential → keep.
+    if (cited === null || cited.trim().length === 0) return { keep: true }
+    // We hold the actual cited code. If it contains a credential token the
+    // claim is grounded → keep. Otherwise the bot pointed at a line with no
+    // credential and called it a leak → demote.
+    if (containsCredentialToken(cited)) return { keep: true }
+    return { keep: false, reason: "secrets-exposure-ungrounded-no-credential-token" }
+  }
+
+  // SIG-292: injection/XSS taint grounding. An xss / code-injection finding
+  // whose cited JS sink is fed a PROVABLY non-attacker-controlled constant
+  // (the `dangerouslySetInnerHTML={{__html: BANNER_HTML}}`-on-a-const over-fire,
+  // the only planted precision trap any bot tripped) is demoted. FP-safe:
+  // anything `sinkValueIsProvablyConstant` can't PROVE constant — a member
+  // access, a call, an interpolated template, an unresolved identifier, an
+  // unrecognized sink, a missing diff — keeps the finding.
+  if (bucket === "xss" || bucket === "injection") {
+    if (context.addedLineTextByLine === undefined) return { keep: true }
+    const cited = collectCitedCode(finding, context.addedLineTextByLine)
+    if (cited === null || cited.trim().length === 0) return { keep: true }
+    const fileLines = context.addedLineTextByLine.get(finding.path)
+    // Require EVERY sink-bearing line in the cited range to be provably constant
+    // (and at least one to exist) before demoting — mirroring the secrets
+    // branch's "whole range or keep". Demoting because ONE line is constant
+    // would suppress a real tainted sink sharing the same multi-line citation
+    // (code-reviewer P1).
+    const sinkLines = cited.split("\n").filter((l) => extractSinkValueExpr(l) !== null)
+    const allConstant =
+      sinkLines.length > 0 && sinkLines.every((l) => sinkValueIsProvablyConstant(l, fileLines))
+    if (allConstant) {
+      return { keep: false, reason: "injection-sink-non-attacker-controlled-constant" }
+    }
     return { keep: true }
   }
 
-  // No diff wired → can't evaluate → keep (back-compat / FP-safe).
-  if (context.addedLineTextByLine === undefined) return { keep: true }
-
-  const cited = collectCitedCode(finding, context.addedLineTextByLine)
-  // Cited code not in hand (path absent / cited line is context, not an
-  // added line) → we can't PROVE the absence of a credential → keep.
-  if (cited === null || cited.trim().length === 0) return { keep: true }
-
-  // We hold the actual cited code. If it contains a credential token the
-  // claim is grounded → keep. Otherwise the bot pointed at a line with no
-  // credential and called it a leak → demote.
-  if (containsCredentialToken(cited)) return { keep: true }
-
-  return { keep: false, reason: "secrets-exposure-ungrounded-no-credential-token" }
+  return { keep: true }
 }

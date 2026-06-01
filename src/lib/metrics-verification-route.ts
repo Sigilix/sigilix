@@ -10,6 +10,7 @@ import { requireBearerToken } from "./auth-bearer"
 import { queryVerificationMetrics } from "./verification-metrics-client"
 import { readVerificationMode } from "./verification/mode"
 import { parseReceiptJoinMode } from "./verification/verify-finding-receipt"
+import { parseTrustLedgerMode } from "./trust-ledger-thread"
 
 const DEFAULT_WINDOW_DAYS = 7
 const MAX_WINDOW_DAYS = 30
@@ -58,6 +59,11 @@ export async function handleVerificationMetricsRoute(request: Request, env: Env)
       // PR4/5 (demote) is worth building vs receipts-as-trust.
       receiptJoinMode: parseReceiptJoinMode(env.OPENCLAW_RECEIPTJOIN_MODE),
       receiptJoin: metrics.receiptJoin,
+      // SIG Trust Ledger v0: the per-finding trust tier distribution (separate
+      // corpus). `trustLedgerMode` tells the reader whether the numbers are
+      // accruing (shadow/on) or the ledger is off.
+      trustLedgerMode: parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER),
+      trustLedger: metrics.trustLedger,
     },
     200,
   )

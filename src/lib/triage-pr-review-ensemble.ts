@@ -302,7 +302,8 @@ import {
 import { parseSarif } from "./sarif-evidence/sarif-parser"
 import { normalizeSarifPath } from "./sarif-evidence/path-normalize"
 import { recordVerificationMetricsBounded } from "./verification-metrics-client"
-import { RECEIPTJOIN_CATEGORY, type RecordVerificationArgs } from "../do/verification-metrics"
+import { RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY, type RecordVerificationArgs } from "../do/verification-metrics"
+import { annotateFindingTrust, parseTrustLedgerMode } from "./trust-ledger-thread"
 import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
@@ -5229,6 +5230,7 @@ export async function handlePrReviewEnsemble(
     // reads it (the fid includes `line`). Both consts are reused by the
     // verification block further down (no recompute).
     const verificationMode = readVerificationMode(env)
+    const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
     const addedLineTextByLine = buildAddedLineTextByLine(fullPrDiff)
 
     // SIG-285 re-anchor ENFORCE (inline-first): when verification is `enforce`
@@ -5540,6 +5542,14 @@ export async function handlePrReviewEnsemble(
           ...(result.check ? { checkKind: result.check.kind, checkStatus: result.check.status } : {}),
         }))
         verificationItems.push({ verdict: result.verdict, category: finding.category })
+        // Trust Ledger: a CONFIRMED worker-token re-check (the cited token is
+        // present at the cited line) is a proof signal. Annotate in place — the
+        // finding object's identity is reused by selectRefutedInlineDemotions +
+        // the marker index below, so we must not swap it for a clone. Gated on the
+        // flag so `off` is a true no-op (no trust mutation at all).
+        if (trustLedgerMode !== "off" && result.verdict === "confirmed") {
+          annotateFindingTrust(finding, { signals: ["worker-token-confirmed"] })
+        }
       }
       // SIG-285 PR 2: persist the review's verdict distribution to
       // VerificationMetricsDO (one batched RPC). Best-effort + bounded so a
@@ -5609,6 +5619,14 @@ export async function handlePrReviewEnsemble(
         )
         submissionVerdict.findings = keptFindings
         findingMarkers = keptMarkers
+        // Trust Ledger: these refuted findings are now body-routed because their
+        // inline citation was mis-anchored. Mark the surface + reason (the tier
+        // stays whatever stronger proof it carries — resolveTier never lowers it).
+        if (trustLedgerMode !== "off") {
+          for (const d of demoted) {
+            annotateFindingTrust(d, { surface: "body", demoteReason: "verification-refuted" })
+          }
+        }
         renderableUnanchoredForSubmission.push(...demoted)
       }
     }
@@ -5645,11 +5663,64 @@ export async function handlePrReviewEnsemble(
           ...(result.check ? { checkStatus: result.check.status } : {}),
         }))
         receiptJoinItems.push({ verdict: result.verdict, category: RECEIPTJOIN_CATEGORY })
+        // Trust Ledger: a CONFIRMED receipt join (the same rule still fires in the
+        // VERIFIED runner receipt's HEAD scan) is the STRONGEST proof tier. In place
+        // (identity already preserved by this point — post-demote). Flag-gated.
+        if (trustLedgerMode !== "off" && result.verdict === "confirmed") {
+          annotateFindingTrust(finding, { signals: ["runner-confirmed"] })
+        }
       }
       // Best-effort + bounded (same as the worker-token block) — a stalled DO or
       // a record failure NEVER breaks the review (measurement only).
       await recordVerificationMetricsBounded(
         env, receiptJoinItems, 1_500,
+        (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
+      )
+    }
+
+    // SIG Trust Ledger v0 (thread + measure, INERT): give every final visible
+    // finding a BASELINE trust tier (the strong proof signals — worker-token-confirmed,
+    // runner-confirmed — were already set in place above), then record the per-tier
+    // distribution. The baseline is surface-aware + honest-conservative:
+    //   - INLINE findings passed validation AND anchored, so they have grounding →
+    //     grounded-model (or deterministic-grounded with a real manifest evidenceId,
+    //     the SIG-108 security-evidence path).
+    //   - BODY findings claim NO grounding by default → body-only-ungrounded (the
+    //     MODEL pill), lifted only by a real evidenceId or a proof signal above. We
+    //     under-claim rather than over-claim believability for body-routed findings.
+    // resolveTier keeps the stronger tier, so a baseline never lowers a proven
+    // finding. Distribution persists to VerificationMetricsDO under TRUSTLEDGER_CATEGORY
+    // (a SEPARATE corpus, read at GET /metrics/verification). Whole block is flag-gated,
+    // so `off` (default) is a true no-op. NO render — production renderers ignore
+    // `finding.trust` until the PR3 render wiring.
+    if (trustLedgerMode !== "off") {
+      const hasManifestEvidence = (finding: PrReviewFinding): boolean => {
+        const ev = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
+        return ev.length > 0 && ev !== "NONE"
+      }
+      for (const finding of submissionVerdict.findings) {
+        annotateFindingTrust(finding, {
+          signals: [hasManifestEvidence(finding) ? "deterministic-grounded" : "grounded-model"],
+          surface: "inline",
+        })
+      }
+      for (const finding of renderableUnanchoredForSubmission) {
+        annotateFindingTrust(finding, {
+          signals: [hasManifestEvidence(finding) ? "deterministic-grounded" : "body-only-ungrounded"],
+          surface: "body",
+        })
+      }
+      const trustItems: RecordVerificationArgs[] = [
+        ...submissionVerdict.findings,
+        ...renderableUnanchoredForSubmission,
+      ].map((finding) => ({
+        verdict: finding.trust?.tier ?? "body-only-ungrounded",
+        category: TRUSTLEDGER_CATEGORY,
+      }))
+      // Best-effort + bounded (same as the verification blocks) — a stalled DO or a
+      // record failure NEVER breaks the review (measurement only).
+      await recordVerificationMetricsBounded(
+        env, trustItems, 1_500,
         (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
       )
     }

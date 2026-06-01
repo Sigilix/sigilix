@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest"
 import { handleVerificationMetricsRoute } from "../src/lib/metrics-verification-route"
-import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY } from "../src/do/verification-metrics"
+import { VerificationMetricsDO, RECEIPTJOIN_CATEGORY, TRUSTLEDGER_CATEGORY } from "../src/do/verification-metrics"
 import type { Env } from "../src/index"
 import { NodeSqliteStorage } from "./_shims/cloudflare-workers-shim"
 
@@ -102,6 +102,33 @@ describe("handleVerificationMetricsRoute", () => {
   it("defaults receiptJoinMode to off when OPENCLAW_RECEIPTJOIN_MODE is unset", async () => {
     const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
     expect(((await res.json()) as { receiptJoinMode: string }).receiptJoinMode).toBe("off")
+  })
+
+  it("surfaces trustLedgerMode + the trustLedger corpus, kept out of the worker-token totals", async () => {
+    const do_ = makeDo()
+    await do_.recordBatch([
+      { verdict: "confirmed", category: "security" }, // worker-token
+      { verdict: "runner-confirmed", category: TRUSTLEDGER_CATEGORY },
+      { verdict: "grounded-model", category: TRUSTLEDGER_CATEGORY },
+      { verdict: "grounded-model", category: TRUSTLEDGER_CATEGORY },
+    ])
+    const res = await handleVerificationMetricsRoute(
+      get(URL_, `Bearer ${TOKEN}`),
+      makeEnv({ OPENCLAW_TRUST_LEDGER: "shadow" }, do_),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      total: number; trustLedgerMode: string
+      trustLedger: { byTier: Record<string, number>; total: number }
+    }
+    expect(body.total).toBe(1) // worker-token only — trust-ledger excluded
+    expect(body.trustLedgerMode).toBe("shadow")
+    expect(body.trustLedger).toEqual({ byTier: { "runner-confirmed": 1, "grounded-model": 2 }, total: 3 })
+  })
+
+  it("defaults trustLedgerMode to off when OPENCLAW_TRUST_LEDGER is unset", async () => {
+    const res = await handleVerificationMetricsRoute(get(URL_, `Bearer ${TOKEN}`), makeEnv())
+    expect(((await res.json()) as { trustLedgerMode: string }).trustLedgerMode).toBe("off")
   })
 
   it("defaults mode to off when OPENCLAW_VERIFICATION_MODE is unset", async () => {

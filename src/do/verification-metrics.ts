@@ -18,6 +18,9 @@ import type { Env } from "../index"
 // for local use + re-exported as part of this DO's public API.
 import type { VerificationVerdict } from "../lib/verification/verify-finding"
 export type { VerificationVerdict }
+// SIG Trust Ledger v0: the per-finding trust tier is recorded as the `verdict`
+// column under TRUSTLEDGER_CATEGORY (a separate corpus, like receipt-join).
+import type { FindingTrustTier } from "../lib/triage-pr-review"
 
 const RETENTION_DAYS = 35 // rolling window kept on disk; GC'd daily by the alarm
 const DAY_MS = 86_400_000
@@ -37,12 +40,15 @@ CREATE INDEX IF NOT EXISTS vrf_daily_counts_by_day ON daily_counts(day);
  *  checks `logic`/`security` findings; the receipt-join check records under
  *  RECEIPTJOIN_CATEGORY. A closed union (not a free `string`) so a typo can't
  *  silently misclassify a record and leak across the corpus split. */
-export type VerificationCategory = "logic" | "security" | "receiptjoin"
+export type VerificationCategory = "logic" | "security" | "receiptjoin" | "trustledger"
 
 export interface RecordVerificationArgs {
-  verdict: VerificationVerdict
-  /** SIG-285 v2: the receipt-join check records under RECEIPTJOIN_CATEGORY so its
-   *  verdicts are surfaced separately from the worker-token ones. */
+  /** A worker-token/receipt-join verdict, OR (under TRUSTLEDGER_CATEGORY) a
+   *  per-finding trust tier — both share the generic `verdict` TEXT column. */
+  verdict: VerificationVerdict | FindingTrustTier
+  /** SIG-285 v2: the receipt-join check records under RECEIPTJOIN_CATEGORY, and
+   *  the Trust Ledger under TRUSTLEDGER_CATEGORY, so each is surfaced separately
+   *  from the worker-token verdicts. */
   category: VerificationCategory
   /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
   occurredAt?: string
@@ -52,6 +58,11 @@ export interface RecordVerificationArgs {
  *  shares the DO without a schema migration but is reported separately from the
  *  worker-token verification. */
 export const RECEIPTJOIN_CATEGORY = "receiptjoin"
+
+/** Sentinel `category` the SIG Trust Ledger records under — the per-finding trust
+ *  tier distribution, a SEPARATE corpus from the worker-token / receipt-join
+ *  verdicts (no schema migration; kept out of the worker-token aggregates). */
+export const TRUSTLEDGER_CATEGORY = "trustledger"
 
 export interface VerificationMetricsQuery {
   /** verdict → category → count. WORKER-TOKEN only (excludes receipt-join). */
@@ -73,6 +84,12 @@ export interface VerificationMetricsQuery {
     /** confirmed + inconclusive (the receipt-join-ELIGIBLE findings). */
     total: number
     refutableEligibleFraction: number
+  }
+  /** SIG Trust Ledger v0: the per-finding trust tier distribution (separate
+   *  corpus). `byTier` maps each FindingTrustTier → count over the window. */
+  trustLedger: {
+    byTier: Record<string, number>
+    total: number
   }
   window: { days: number; startDay: string; endDay: string }
 }
@@ -149,18 +166,26 @@ export class VerificationMetricsDO extends DurableObject<Env> {
     const counts: Record<string, Record<string, number>> = {}
     const byVerdict: Record<string, number> = {}
     const rjByVerdict: Record<string, number> = {}
+    const tlByTier: Record<string, number> = {}
     let total = 0
+    let tlTotal = 0
     for (const row of sql.exec<{ verdict: string; category: string; total: number }>(
       `SELECT verdict, category, SUM(count) AS total
        FROM daily_counts WHERE day >= ? AND day <= ?
        GROUP BY verdict, category`,
       startDay, endDay,
     )) {
-      // SIG-285 v2: receipt-join verdicts share the DO under RECEIPTJOIN_CATEGORY
-      // but are a SEPARATE corpus — keep them out of the worker-token counts /
-      // byVerdict / fractions so neither measurement contaminates the other.
+      // SIG-285 v2 / Trust Ledger: receipt-join + trust-ledger rows share the DO
+      // under their sentinel categories but are SEPARATE corpora — keep them out
+      // of the worker-token counts / byVerdict / fractions so no measurement
+      // contaminates another.
       if (row.category === RECEIPTJOIN_CATEGORY) {
         rjByVerdict[row.verdict] = (rjByVerdict[row.verdict] ?? 0) + row.total
+        continue
+      }
+      if (row.category === TRUSTLEDGER_CATEGORY) {
+        tlByTier[row.verdict] = (tlByTier[row.verdict] ?? 0) + row.total
+        tlTotal += row.total
         continue
       }
       ;(counts[row.verdict] ??= {})[row.category] = row.total
@@ -188,6 +213,7 @@ export class VerificationMetricsDO extends DurableObject<Env> {
         total: rjTotal,
         refutableEligibleFraction: ratio(rjInconclusive, rjTotal),
       },
+      trustLedger: { byTier: tlByTier, total: tlTotal },
       window: { days: args.windowDays, startDay, endDay },
     }
   }

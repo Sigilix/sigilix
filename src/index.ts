@@ -404,6 +404,12 @@ export interface Env {
   // eligible fraction is measurable before any demote path. NO new GitHub perm.
   // "enforce" reserved (demotion is PR4/5). Review UNCHANGED in all modes.
   OPENCLAW_RECEIPTJOIN_MODE?: string
+  // SIG Trust Ledger v0: off | shadow | on. `off` (default) attaches per-finding
+  // trust metadata in-memory but records no telemetry + renders nothing. `shadow`
+  // also records the tier distribution (TRUSTLEDGER_CATEGORY on VerificationMetricsDO,
+  // read at GET /metrics/verification). `on` reserved for the render wiring; in the
+  // thread-only PR it behaves like `shadow` (no render). Review UNCHANGED in all modes.
+  OPENCLAW_TRUST_LEDGER?: string
   // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
   RUNNER_RECEIPT_DO: DurableObjectNamespace

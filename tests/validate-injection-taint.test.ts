@@ -70,4 +70,13 @@ describe("sinkValueIsProvablyConstant", () => {
     const file = fileWith([`export const X = "<p>ok</p>";`, `el.innerHTML = X;`])
     expect(sinkValueIsProvablyConstant(`el.innerHTML = X;`, file)).toBe(true)
   })
+
+  it("KEEPS (false) on a reassignable let/var binding — its literal initializer doesn't prove constness (CR)", () => {
+    // `let x = "ok"; x = req.body` — a literal init does NOT prove the value at
+    // the sink is constant. const-only resolution → not provably constant → keep.
+    const letFile = fileWith([`let X = "<b>ok</b>";`, `X = req.body;`, `el.innerHTML = X;`])
+    expect(sinkValueIsProvablyConstant(`el.innerHTML = X;`, letFile)).toBe(false)
+    const varFile = fileWith([`var X = "<b>ok</b>";`, `el.innerHTML = X;`])
+    expect(sinkValueIsProvablyConstant(`el.innerHTML = X;`, varFile)).toBe(false)
+  })
 })

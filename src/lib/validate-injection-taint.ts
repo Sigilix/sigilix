@@ -72,10 +72,13 @@ function isSimpleIdentifier(expr: string): boolean {
 }
 
 /**
- * Search the file's added lines for `const NAME = <non-interpolated literal>`
- * (also `let`/`var`). Returns true only when the binding is found AND its
- * initializer is a provable literal. A `const NAME = something(...)` or a
- * `const NAME = \`${x}\`` → false (not provably constant). Not found → false.
+ * Search the file's added lines for `const NAME = <non-interpolated literal>`.
+ * `const` ONLY — `let`/`var` can be REASSIGNED (`let x = "ok"; x = req.body`),
+ * so a literal initializer doesn't prove the value flowing into the sink is
+ * constant; accepting them would suppress a real finding (CodeRabbit). Returns
+ * true only when an immutable const binding is found AND its initializer is a
+ * provable literal. `const NAME = something(...)` / `const NAME = \`${x}\`` →
+ * false. Not found → false.
  */
 function identifierResolvesToLiteral(
   name: string,
@@ -85,7 +88,7 @@ function identifierResolvesToLiteral(
   // `const NAME =` cannot match mid-line inside a comment or string — a
   // commented decoy `// const X = "ok"` must NOT resolve a real
   // `const X = req.body` to a literal (code-reviewer P2).
-  const declRe = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b\\s*(?::[^=]+)?=\\s*(.+?)\\s*;?\\s*$`)
+  const declRe = new RegExp(`^\\s*(?:export\\s+)?const\\s+${name}\\b\\s*(?::[^=]+)?=\\s*(.+?)\\s*;?\\s*$`)
   for (const text of fileAddedLines.values()) {
     const m = declRe.exec(text)
     if (m) {

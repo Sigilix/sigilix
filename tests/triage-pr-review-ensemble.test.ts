@@ -14,6 +14,7 @@ import {
   annotateWithConsensus,
   assignStableFindingIds,
   buildSynthRetryMessage,
+  resolveReviewEventOverride,
   buildSynthInputVerdicts,
   checkQuorum,
   classifySynthOutcome,
@@ -92,6 +93,25 @@ function makeCounterEnv(store = new Map<string, string>(), puts: Array<[string, 
     },
   } as unknown as Env
 }
+
+describe("resolveReviewEventOverride (SIG-245 + SIG-287 downgrade trigger)", () => {
+  it("escalates to REQUEST_CHANGES when there is an approval blocker (wins over everything)", () => {
+    expect(resolveReviewEventOverride({ hasApprovalBlocker: true, reviewIncomplete: true, filesDroppedCount: 3 })).toBe("REQUEST_CHANGES")
+    expect(resolveReviewEventOverride({ hasApprovalBlocker: true, reviewIncomplete: false, filesDroppedCount: 0 })).toBe("REQUEST_CHANGES")
+  })
+
+  it("downgrades to COMMENT when files were dropped from review (SIG-245)", () => {
+    expect(resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: false, filesDroppedCount: 1 })).toBe("COMMENT")
+  })
+
+  it("downgrades to COMMENT when the review is incomplete (SIG-287 degraded/low-confidence)", () => {
+    expect(resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: true, filesDroppedCount: 0 })).toBe("COMMENT")
+  })
+
+  it("returns undefined for a clean, complete review (no override → APPROVE/RC derived from findings)", () => {
+    expect(resolveReviewEventOverride({ hasApprovalBlocker: false, reviewIncomplete: false, filesDroppedCount: 0 })).toBeUndefined()
+  })
+})
 
 describe("prepareSubmissionAffordance", () => {
   it("does not prepare or persist a review counter for COMMENT submissions", async () => {

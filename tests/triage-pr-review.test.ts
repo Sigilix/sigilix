@@ -1502,10 +1502,11 @@ describe("buildReviewSubmission", () => {
     expect(out.submission.body).toContain("`src/services/exec.ts`")
     expect(out.submission.body).toContain("`src/big.ts`")
     expect(out.submission.body).toContain("not analyzed")
-    // The notice sits up top, under the headline lead line.
-    const lead = out.submission.body.indexOf("not reviewed")
-    const findings = out.submission.body.indexOf("Fix Plan")
-    if (findings >= 0) expect(lead).toBeLessThan(findings)
+    // The notice sits up top, under the headline lead line — assert it's in the
+    // first third of the body, not buried (robust to renderer rerouting; no
+    // dependence on a downstream "Fix Plan" anchor that may be absent).
+    expect(out.submission.body.indexOf("not reviewed")).toBeGreaterThanOrEqual(0)
+    expect(out.submission.body.indexOf("not reviewed")).toBeLessThan(out.submission.body.length / 3)
   })
 
   it("SIG-245: singular phrasing for one dropped file; no notice when nothing dropped", () => {

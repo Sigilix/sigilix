@@ -1423,6 +1423,26 @@ export async function prepareSubmissionAffordance(args: {
 // handled inside the ensemble itself (an early `skipped` return
 // with `fellBackReason: "daily_budget_exhausted"` once it lands).
 
+/**
+ * Resolve the review-event override (pure, exported for test). A real
+ * approval-readiness blocker escalates to REQUEST_CHANGES. Otherwise an
+ * INCOMPLETE review — SIG-287 degraded coverage / low confidence, OR SIG-245
+ * files dropped from review (diff-budget spill / too-large) — downgrades an
+ * otherwise-clean APPROVE to a neutral COMMENT ("Sigilix looked, but this is
+ * not a full sign-off"), so the body's caveat/notice actually renders instead
+ * of being discarded by the marker-only APPROVE body. A clean, complete review
+ * returns undefined (no override → APPROVE/REQUEST_CHANGES derived from findings).
+ */
+export function resolveReviewEventOverride(args: {
+  hasApprovalBlocker: boolean
+  reviewIncomplete: boolean
+  filesDroppedCount: number
+}): ReviewEventOverride | undefined {
+  if (args.hasApprovalBlocker) return "REQUEST_CHANGES"
+  if (args.reviewIncomplete || args.filesDroppedCount > 0) return "COMMENT"
+  return undefined
+}
+
 // ─── orchestrator ──────────────────────────────────────────────────────
 
 export async function handlePrReviewEnsemble(
@@ -5072,12 +5092,11 @@ export async function handlePrReviewEnsemble(
     // summary-prefix wording is NOT applied to a files-dropped review (the
     // notice is its own block under the headline).
     const filesDroppedFromReview = [...new Set([...filesNotReviewed, ...droppedTooLarge])]
-    const reviewEventOverride: ReviewEventOverride | undefined =
-      approvalReadiness.blockers.length > 0
-        ? "REQUEST_CHANGES"
-        : reviewIncomplete || filesDroppedFromReview.length > 0
-          ? "COMMENT"
-          : undefined
+    const reviewEventOverride = resolveReviewEventOverride({
+      hasApprovalBlocker: approvalReadiness.blockers.length > 0,
+      reviewIncomplete,
+      filesDroppedCount: filesDroppedFromReview.length,
+    })
     if (reviewIncomplete) {
       console.log(JSON.stringify({
         event: "review-incomplete-downgrade",

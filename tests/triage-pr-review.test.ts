@@ -1523,6 +1523,28 @@ describe("buildReviewSubmission", () => {
     })
     expect(none.submission.body).not.toContain("not reviewed")
   })
+
+  it("SIG-245: notice survives on a ZERO-findings review downgraded to COMMENT (the silent-clean-approve hole)", () => {
+    // The ensemble downgrades APPROVE→COMMENT when files were dropped, so a
+    // clean-batch[0] review routes through the findings body (which renders the
+    // notice) instead of the marker-only APPROVE body that would discard it.
+    const empty: PrReviewVerdict = {
+      summary: "No issues found in the reviewed files.",
+      confidence: 4,
+      confidenceReason: "Reviewed batch was clean.",
+      findings: [],
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: empty,
+      prAuthor: "alice",
+      headSha: "abc",
+      eventOverride: "COMMENT",
+      notReviewedFiles: ["src/services/exec.ts"],
+    })
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.body).toContain("1 file not reviewed")
+    expect(out.submission.body).toContain("`src/services/exec.ts`")
+  })
 })
 
 describe("buildBodyOnlyCheckAnnotations", () => {

@@ -5063,10 +5063,19 @@ export async function handlePrReviewEnsemble(
       typeof renderableVerdict.confidence === "number" ? renderableVerdict.confidence : 5
     const reviewIncomplete =
       degradedCoverage !== null || synthConfidence <= LOW_CONFIDENCE_COMMENT_THRESHOLD
+    // SIG-245: files dropped from review (diff-budget spill into a later batch,
+    // or individually too large) make a clean APPROVE dishonest — the bot never
+    // read part of the diff. Downgrade it to COMMENT (same mechanism as
+    // SIG-287) so the "files not reviewed" notice — which renders in the
+    // findings body, NOT the marker-only APPROVE body — actually surfaces.
+    // Kept SEPARATE from `reviewIncomplete` so the degraded/low-confidence
+    // summary-prefix wording is NOT applied to a files-dropped review (the
+    // notice is its own block under the headline).
+    const filesDroppedFromReview = [...new Set([...filesNotReviewed, ...droppedTooLarge])]
     const reviewEventOverride: ReviewEventOverride | undefined =
       approvalReadiness.blockers.length > 0
         ? "REQUEST_CHANGES"
-        : reviewIncomplete
+        : reviewIncomplete || filesDroppedFromReview.length > 0
           ? "COMMENT"
           : undefined
     if (reviewIncomplete) {
@@ -5828,8 +5837,11 @@ export async function handlePrReviewEnsemble(
       coverage,
       // SIG-245: files dropped from review (diff-budget spill into a later
       // batch, or individually too large) → a visible "files not reviewed"
-      // notice in the body so a silently-dropped file is never invisible.
-      notReviewedFiles: [...new Set([...filesNotReviewed, ...droppedTooLarge])],
+      // notice in the body so a silently-dropped file is never invisible. The
+      // review is also downgraded APPROVE→COMMENT above so this notice renders
+      // even when batch[0] was clean (it would be discarded by the marker-only
+      // APPROVE body otherwise).
+      notReviewedFiles: filesDroppedFromReview,
       delta: deltaCounts,
       ...(primaryAffordance.reviewCounter !== undefined
         ? { reviewCounter: primaryAffordance.reviewCounter }

@@ -321,6 +321,27 @@ describe("validateForSubmission — SIG-281 PR C inline-grounding gate", () => {
     expect(result.unanchoredFindings.some((f) => f.headline === "naming is inconsistent here")).toBe(false)
   })
 
+  it("SIG-245 line-1 reversal: a reviewable line-1 over-fire is STILL demoted by the grounding gate (not bypassed)", () => {
+    // After the SIG-245 line-1 fix, an anchorable line-1 finding falls through
+    // the line-1 guard to the inline path — but the inline-grounding gate runs
+    // AFTER that guard, so a CONTENT over-fire on line 1 (ungrounded score-2)
+    // must still be demoted to the body. Proves content truth is the gate's
+    // job, not the line-number heuristic's, post-reversal.
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "T", confidence: 3, confidenceReason: "R.", findings: [ungrounded({ line: 1 })] },
+        provenance: prov(1),
+      },
+      reviewable: new Map([[PATH, [{ line: 1, side: "RIGHT" as const, position: 1 }]]]),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      addedLineTextByLine: new Map([[PATH, new Map([[1, "  const total = compute(items)"]])]]),
+      inlineGroundingValidatorMode: "enforce",
+    })
+    expect(result.verdict.findings).toHaveLength(0) // demoted by inline-grounding, NOT inlined at line 1
+    expect(result.droppedForFailedInlineGroundingValidation).toBe(1)
+    expect(result.unanchoredFindings.some((f) => f.line === 1)).toBe(true)
+  })
+
   it("ENFORCE: processes a mixed grounded/ungrounded batch correctly (counter + callback reflect only the ungrounded)", () => {
     const onDrop = vi.fn()
     const findings = [

@@ -472,6 +472,54 @@ describe("validateForSubmission populates unanchoredFindings", () => {
     expect(out.unanchoredFindings[0]?.line).toBe(999)
   })
 
+  it("INLINES a line-1 finding when line 1 IS a reviewable anchor (SIG-245: new-file line-1 is anchorable)", () => {
+    // A genuine finding on the first line of a newly-added file (e.g. a
+    // hardcoded secret — observed on the e2e repos) must INLINE, not body-dump.
+    // line 1 is RIGHT-reviewable here, so inline-first applies.
+    const reviewableLine1: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [{ line: 1, side: "RIGHT" as const }]],
+    ])
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 1, score: 5 }] },
+        provenance: {
+          findings: [
+            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          ],
+          dropped: [],
+        },
+      },
+      reviewable: reviewableLine1,
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(1) // inlined, not body-dumped
+    expect(out.verdict.findings[0]?.line).toBe(1)
+    expect(out.unanchoredFindings).toHaveLength(0)
+    expect(out.droppedForInvalidLine).toBe(0)
+  })
+
+  it("body-routes a line-1 finding when line 1 is NOT reviewable (header on an unchanged file = outside-diff)", () => {
+    // line 1 is absent from `reviewable` (only line 42) → genuinely outside this
+    // PR's diff → body-route, preserving the SIG-141 header-over-fire suppression.
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 1, score: 4 }] },
+        provenance: {
+          findings: [
+            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          ],
+          dropped: [],
+        },
+      },
+      reviewable, // only line 42 is reviewable
+      specialistVerdicts,
+    })
+    expect(out.verdict.findings).toHaveLength(0)
+    expect(out.unanchoredFindings).toHaveLength(1)
+    expect(out.unanchoredFindings[0]?.line).toBe(1)
+    expect(out.droppedForInvalidLine).toBe(1)
+  })
+
   it("does NOT push hallucinated findings into unanchoredFindings (still fully dropped)", () => {
     const out = validateForSubmission({
       synthOutput: {

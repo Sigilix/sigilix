@@ -9461,12 +9461,20 @@ export function validateForSubmission(args: {
       continue
     }
 
-    // SIG-141: a finding anchored to line 1 almost always points at the file
-    // header (license/imports/opening comment), not a real code site — a
-    // common specialist over-fire on new-file PRs. Withhold it from inline
-    // anchoring and route to the summary body (same treatment as a
-    // non-reviewable line), where its content is still surfaced.
-    if (f.line === 1) {
+    // SIG-141 + SIG-245 inline-first: a finding anchored to line 1 is often a
+    // file-header over-fire (license/imports/opening comment) on a new-file PR.
+    // BUT line 1 of a newly-ADDED file IS a real RIGHT diff anchor, so a genuine
+    // line-1 finding (e.g. a hardcoded secret on the first line — observed on
+    // the e2e repos) must still inline: inline-first means anchorable findings
+    // go inline; the body is reserved for code outside the diff. So only
+    // body-route a line-1 finding whose line 1 is NOT a reviewable anchor (a
+    // header/import on an UNCHANGED file = genuinely outside this PR's diff).
+    // When line 1 IS anchorable, fall through to the normal anchor path below,
+    // which inlines it (a RIGHT line-1 anchor inlines verbatim; the
+    // findRepairableInlineAnchor repair only applies when line 1 resolves
+    // LEFT-only). A content over-fire is the grounding/evidence gates' job, not
+    // a line-number heuristic's.
+    if (f.line === 1 && !deriveSide(reviewable, f.path, 1)) {
       droppedForInvalidLine++
       if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "outside-diff" })
       unanchoredFindings.push(f)

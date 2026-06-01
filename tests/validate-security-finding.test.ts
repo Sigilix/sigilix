@@ -938,7 +938,12 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
     expect(result.verdict.findings).toHaveLength(1)
   })
 
-  it("withholds a line-1 (file-header) finding from inline anchoring even when line 1 is reviewable", () => {
+  it("INLINES a line-1 finding when line 1 IS reviewable (SIG-245: top-of-file findings like secrets are anchorable)", () => {
+    // SIG-245 reversal of the original SIG-141 blanket line-1 withhold: line 1
+    // of a newly-added file is a real RIGHT anchor, so a genuine line-1 finding
+    // (e.g. a hardcoded secret on the first line) must INLINE — inline-first.
+    // (Header content over-fires are the grounding/evidence gates' job, not a
+    // line-number heuristic's.)
     const result = validateForSubmission({
       synthOutput: {
         verdict: {
@@ -947,11 +952,28 @@ describe("validateForSubmission — SIG-141 over-fire suppression", () => {
         },
         provenance: securityProvenance(),
       },
-      // line 1 IS in the reviewable set — proves the withhold is by the line-1
-      // guard, not by side-derivation failing.
       reviewable: new Map([["src/db.ts", [{ line: 1, side: "RIGHT" as const, position: 1 }]]]),
       specialistVerdicts: makeSpecialistVerdicts(),
-      // no securityManifest → security gate no-ops; finding flows to line-1 gate
+    })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0]?.line).toBe(1)
+    expect(result.droppedForInvalidLine).toBe(0)
+  })
+
+  it("still body-routes a line-1 finding when line 1 is NOT reviewable (header on an unchanged file = outside-diff)", () => {
+    // The SIG-141 suppression survives for the case it was really for: line 1
+    // is not in the diff at all (an over-fire on an unchanged file's header).
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({ path: "src/db.ts", line: 1 })],
+        },
+        provenance: securityProvenance(),
+      },
+      // line 1 absent — only line 42 is reviewable.
+      reviewable: new Map([["src/db.ts", [{ line: 42, side: "RIGHT" as const, position: 1 }]]]),
+      specialistVerdicts: makeSpecialistVerdicts(),
     })
     expect(result.verdict.findings).toHaveLength(0)
     expect(result.droppedForInvalidLine).toBe(1)

@@ -2498,17 +2498,15 @@ export async function handlePrReviewEnsemble(
       : ""
     // ──────────────────────────────────────────────────────────────────
 
-    // ─── SIG-286: graph-context body expansion (shadow-only in PR1) ─────
+    // ─── SIG-286: graph-context body expansion ─────────────────────────
     //
     // Gated by OPENCLAW_GRAPH_EXPANSION=shadow|post. Off ⇒ no DO call, no
-    // telemetry, zero behavior change. shadow AND post are identical in PR1:
-    // COMPUTE the enriched changed-symbol context (definition / caller /
-    // import-dependent bodies sliced from astFilesByPath) and emit the
-    // `graph-expansion-shadow` event. The result is NEVER injected into any
-    // prompt here (graphCtxForPrompt above stays the only graph block reaching
-    // specialists/synth). PR1 passes NO fetcher: cross-file rows not in
-    // astFilesByPath are counted under bodiesSource.missing / dropped.
-    // sourceMissing, quantifying the PR2 cross-file fetch opportunity.
+    // telemetry, zero behavior change. Both modes COMPUTE the enriched
+    // changed-symbol context (definition / caller / import-dependent bodies)
+    // and emit the `graph-expansion-shadow` event. In `post` (PR1 targeted
+    // inject) the net-new cross-file bodies are ALSO appended to
+    // graphCtxForPrompt below; in `shadow` the result is measured-not-injected,
+    // so graphCtxForPrompt stays the SIG-138-only graph block.
     //
     // Soft-fail: bounded by withComposedTimeout(orchCtrl.signal) + a catch that
     // emits `graph-expansion-shadow-error` and continues. It must NEVER block,

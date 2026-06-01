@@ -8,10 +8,10 @@ import type { Env } from "../index"
 /**
  * graph-context body-expansion mode — "off" | "shadow" | "post".
  *
- * Case-insensitive, whitespace-tolerant; unknown/unset → "off". Both "shadow"
- * and "post" only COMPUTE + emit `graph-expansion-shadow` telemetry; neither
- * injects the enriched context into any prompt yet. `post` is parsed so the
- * config surface exists, but injection is RESERVED for the SIG-286 inject PR.
+ * Case-insensitive, whitespace-tolerant; unknown/unset → "off". `shadow`
+ * COMPUTES + emits `graph-expansion-shadow` telemetry without touching the
+ * prompt; `post` additionally injects the targeted cross-file expansion
+ * (SIG-286 PR1, `renderGraphExpansionForPrompt`) into logic+tests+synth.
  */
 export function graphExpansionMode(env: Env): "off" | "shadow" | "post" {
   const v = (env.OPENCLAW_GRAPH_EXPANSION ?? "").trim().toLowerCase()

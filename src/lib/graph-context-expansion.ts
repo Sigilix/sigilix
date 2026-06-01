@@ -8,11 +8,10 @@
 // for changed files) and, for cross-file rows not in that map, an OPTIONAL
 // bounded fetcher.
 //
-// PR1 is shadow-only and passes NO fetcher: cross-file rows are counted under
-// `bodiesSource.missing` + `dropped.sourceMissing` so the telemetry quantifies
-// the cross-file fetch opportunity for PR2. The result NEVER reaches a prompt
-// in PR1 (see triage-pr-review-ensemble) — it only feeds the
-// `graph-expansion-shadow` event.
+// In `shadow` the result is measured-only (the `graph-expansion-shadow` event).
+// In `post` the TARGETED inject (`renderGraphExpansionForPrompt` below) renders
+// the net-new cross-file bodies into the review prompt — see
+// triage-pr-review-ensemble.
 //
 // This module is pure/deterministic given its inputs, signal-aware, and never
 // throws — on any internal error it returns a zeroed result.

@@ -215,6 +215,24 @@ export const PR_REVIEW_SCHEMA = {
         required: ["evidenceId", "reason"],
       },
     },
+    // SIG-308: the logic specialist records each correctness concern it
+    // REFUTES against a concrete in-code mitigation here (instead of emitting
+    // a finding) so the clear is auditable: { path, line, hypothesis,
+    // mitigation }. OPTIONAL + logic-only; other specialists leave it empty.
+    clearedLogicCandidates: {
+      type: "array",
+      maxItems: 16,
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          line: { type: "integer", minimum: 1 },
+          hypothesis: { type: "string" },
+          mitigation: { type: "string" },
+        },
+        required: ["path", "line", "hypothesis", "mitigation"],
+      },
+    },
   },
   required: ["summary", "confidence", "confidenceReason", "findings"],
 } as const

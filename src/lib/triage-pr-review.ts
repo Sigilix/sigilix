@@ -434,6 +434,22 @@ export interface ScanFactDismissal {
   reason: string
 }
 
+/**
+ * SIG-308: a correctness concern the LOGIC specialist spotted but REFUTED
+ * against a concrete in-code mitigation (a guard/clamp/bound/early-return)
+ * instead of emitting a finding — the logic analogue of `ScanFactDismissal`.
+ * `mitigation` quotes the in-code token that defeats the concern. Self-
+ * generated (no scanner manifest), so the orchestrator only telemeters these
+ * for cleared-rate observability; the recall safety rail is the Phase 3
+ * `evaluateLogicRefutation` backstop, not a manifest re-check.
+ */
+export interface ClearedLogicCandidate {
+  path: string
+  line: number
+  hypothesis: string
+  mitigation: string
+}
+
 export interface PrReviewVerdict {
   summary: string
   confidence: number
@@ -444,6 +460,38 @@ export interface PrReviewVerdict {
    * positives (security-only; absent/empty for other specialists).
    */
   dismissedScanFacts?: ScanFactDismissal[]
+  /**
+   * SIG-308: correctness concerns the logic specialist refuted against an
+   * in-code mitigation (logic-only; absent/empty for other specialists).
+   */
+  clearedLogicCandidates?: ClearedLogicCandidate[]
+}
+
+/**
+ * SIG-308: build the telemetry events for the logic specialist's cleared
+ * candidates. Pure — the ensemble console.logs each record. Each event
+ * carries `index`/`total` so the cleared-rate (the counter) is auditable
+ * from a single candidate's log line. Mirrors the `pr-review-scan-fact-
+ * dismissed` shape; `headSha` is truncated to 7 chars like that emit.
+ */
+export function buildClearedLogicCandidateTelemetry(
+  candidates: readonly ClearedLogicCandidate[],
+  ctx: { owner: string; repo: string; prNumber: number; headSha: string },
+): Array<Record<string, unknown>> {
+  const head = ctx.headSha.slice(0, 7)
+  return candidates.map((c, i) => ({
+    event: "pr-review-logic-candidate-cleared",
+    owner: ctx.owner,
+    repo: ctx.repo,
+    prNumber: ctx.prNumber,
+    headSha: head,
+    path: c.path,
+    line: c.line,
+    hypothesis: c.hypothesis,
+    mitigation: c.mitigation,
+    index: i + 1,
+    total: candidates.length,
+  }))
 }
 
 function normalizeReviewFindingScope(raw: unknown): ReviewFindingScope | undefined {
@@ -771,12 +819,35 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     }
   }
 
+  // SIG-308: parse the logic specialist's cleared candidates — correctness
+  // concerns it refuted against a concrete in-code mitigation instead of
+  // emitting. Each needs path + line(>0) + hypothesis + mitigation; malformed
+  // entries are dropped. Telemetered downstream by the ensemble for cleared-
+  // rate observability.
+  const clearedLogicCandidates: ClearedLogicCandidate[] = []
+  if (Array.isArray(obj.clearedLogicCandidates)) {
+    for (const c of obj.clearedLogicCandidates as unknown[]) {
+      if (!c || typeof c !== "object") continue
+      const rec = c as Record<string, unknown>
+      const path = typeof rec.path === "string" ? rec.path.trim() : ""
+      const line =
+        typeof rec.line === "number" && Number.isFinite(rec.line) ? Math.trunc(rec.line) : 0
+      const hypothesis = typeof rec.hypothesis === "string" ? rec.hypothesis.trim() : ""
+      const mitigation = typeof rec.mitigation === "string" ? rec.mitigation.trim() : ""
+      if (path && line > 0 && hypothesis && mitigation) {
+        clearedLogicCandidates.push({ path, line, hypothesis, mitigation })
+      }
+      if (clearedLogicCandidates.length >= 16) break
+    }
+  }
+
   return {
     summary,
     confidence,
     confidenceReason,
     findings,
     ...(dismissedScanFacts.length > 0 ? { dismissedScanFacts } : {}),
+    ...(clearedLogicCandidates.length > 0 ? { clearedLogicCandidates } : {}),
   }
 }
 

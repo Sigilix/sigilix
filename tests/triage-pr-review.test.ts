@@ -113,6 +113,42 @@ describe("parsePrReviewResponse", () => {
     expect(parsePrReviewResponse(JSON.stringify(valid))?.dismissedScanFacts).toBeUndefined()
   })
 
+  it("SIG-308: parses clearedLogicCandidates and drops malformed entries", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        clearedLogicCandidates: [
+          { path: "src/ui/app.tsx", line: 50, hypothesis: "x*60*60*1000 could overflow", mitigation: "Math.min(parsed, 2160) clamps it" },
+          { path: "", line: 50, hypothesis: "h", mitigation: "m" }, // dropped (no path)
+          { path: "src/a.ts", line: 0, hypothesis: "h", mitigation: "m" }, // dropped (line <= 0)
+          { path: "src/a.ts", line: 5, hypothesis: "", mitigation: "m" }, // dropped (no hypothesis)
+          { path: "src/a.ts", line: 5, hypothesis: "h" }, // dropped (no mitigation)
+          "not-an-object", // dropped
+        ],
+      })
+    )
+    expect(out?.clearedLogicCandidates).toEqual([
+      { path: "src/ui/app.tsx", line: 50, hypothesis: "x*60*60*1000 could overflow", mitigation: "Math.min(parsed, 2160) clamps it" },
+    ])
+  })
+
+  it("SIG-308: clearedLogicCandidates coexist with findings and dismissedScanFacts", () => {
+    const out = parsePrReviewResponse(
+      JSON.stringify({
+        ...valid,
+        dismissedScanFacts: [{ evidenceId: "secret:x:y:1", reason: "public SRI hash next to a CDN url" }],
+        clearedLogicCandidates: [{ path: "src/a.ts", line: 9, hypothesis: "off-by-one", mitigation: "guarded by i < n" }],
+      })
+    )
+    expect(out?.findings).toHaveLength(1)
+    expect(out?.dismissedScanFacts).toHaveLength(1)
+    expect(out?.clearedLogicCandidates).toHaveLength(1)
+  })
+
+  it("SIG-308: omits clearedLogicCandidates when the model emits none", () => {
+    expect(parsePrReviewResponse(JSON.stringify(valid))?.clearedLogicCandidates).toBeUndefined()
+  })
+
   it("SIG-282: reads per-finding independentAssessment", () => {
     const out = parsePrReviewResponse(
       JSON.stringify({

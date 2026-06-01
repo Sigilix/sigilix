@@ -480,7 +480,7 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toBe("Approved — no issues found") // title NOT decorated
     expect(p.output.summary).toBe(
       "Sigilix approved · [View PR](https://github.com/Arc-and-Anchor/sigilix/pull/42)" +
-        ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260530-1/runner-verified.svg" alt="Runner verified: GitHub-signed receipt attests provenance">',
+        ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/runner-verified.svg" alt="Runner verified: GitHub-signed receipt attests provenance">',
     )
   })
 
@@ -500,7 +500,7 @@ describe("completeCheckRun", () => {
     const p = payload as { output: { summary: string } }
     expect(p.output.summary).toBe(
       "3 suggestions · [View review](https://github.com/Arc-and-Anchor/sigilix/pull/42)" +
-        ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260530-1/runner-pending.svg" alt="Runner evidence pending: receipt expected">',
+        ' · <img src="https://raw.githubusercontent.com/Sigilix/sigilix-glyphs/v20260531-1/runner-pending.svg" alt="Runner evidence pending: receipt expected">',
     )
   })
 

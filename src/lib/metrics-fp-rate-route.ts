@@ -13,7 +13,7 @@
 
 import type { Env } from "../index"
 import { requireBearerToken } from "./auth-bearer"
-import { attributeDismissals, dedupeDismissals } from "./fp-rate/attribute"
+import { attributeDismissals, dedupeDismissals, buildFindingIndex, findingKey } from "./fp-rate/attribute"
 import { computeFpRates } from "./fp-rate/compute"
 import { filterReviewsToWindow } from "./fp-rate/window"
 import { createdMsFromKey, mapSignalRecord, mapTelemetryToReview } from "./fp-rate/ingest"
@@ -185,6 +185,40 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
 
   const nowMs = Date.now()
   const scoped = filterReviewsToWindow(reviews, nowMs, windowDays, maturityDays)
+
+  // Opt-in attribution diagnostic (`?diagnose=1`, read-only): when dismissals
+  // fail to attribute, surface WHY — PR non-overlap vs fid drift — without raw
+  // KV access. For each unmatched dismissal: is its PR even in the score>=4
+  // finding index (prInIndex), and what fids does that PR carry (samePrIndexFids)?
+  // prInIndex=false → PR-miss (no score>=4 review finding loaded for that PR);
+  // prInIndex=true with differing fids → fid drift (line/headline mismatch).
+  let diagnostics: Record<string, unknown> | undefined
+  if (params.get("diagnose") === "1") {
+    const index = await buildFindingIndex(scoped)
+    const idxByPr = new Map<number, string[]>()
+    for (const ref of index.values()) {
+      const arr = idxByPr.get(ref.prNumber) ?? []
+      arr.push(ref.fid.slice(0, 10))
+      idxByPr.set(ref.prNumber, arr)
+    }
+    const range = (ns: number[]): number[] => (ns.length ? [Math.min(...ns), Math.max(...ns)] : [])
+    diagnostics = {
+      loadedReviews: scoped.length,
+      indexSize: index.size,
+      indexPrRange: range([...idxByPr.keys()]),
+      dismissalPrRange: range(dismissals.map((d) => d.prNumber)),
+      sampleUnmatched: dismissals
+        .filter((d) => !index.has(findingKey(d.prNumber, d.fid)))
+        .slice(0, 10)
+        .map((d) => ({
+          prNumber: d.prNumber,
+          fid: d.fid.slice(0, 10),
+          prInIndex: idxByPr.has(d.prNumber),
+          samePrIndexFids: idxByPr.get(d.prNumber) ?? [],
+        })),
+    }
+  }
+
   const attr = await attributeDismissals(scoped, dismissals, nowMs)
   const report = computeFpRates(attr, { minN })
 
@@ -212,6 +246,7 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
       // the ceiling. `meetsTarget` is worst-case (unlabeled counted as hard).
       note: "dismissal-based FP rate — a lower bound on true FP; floor + trend, not a ceiling",
       rows: report.rows,
+      ...(diagnostics ? { diagnostics } : {}),
     },
     200,
   )

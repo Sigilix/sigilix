@@ -386,7 +386,13 @@ OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 # SIG-293 (2026-05-30): landed at shadow to START the measurement immediately —
 # the gate runs + emits `pr-review-finding-rejected-validation` (gate:"security-
 # grounding") on every review but KEEPS every finding inline.
-OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "shadow"
+# SIG-292/293 (2026-06-01): flipped shadow->enforce. Both branches are FP-safe by
+# construction (demote-to-body, conservative-keep): the injection branch demotes
+# only a sink fed a PROVABLY constant literal; the secrets branch demotes only a
+# secrets-exposure finding whose cited line holds NO credential token. FN-safety
+# confirmed live (3 e2e reviews kept every real injection/secrets finding) + by
+# the validate-injection-taint + validate-security-grounding suites. Rollback: "shadow".
+OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
 
 # SIG-108: the security EVIDENCE gate (evaluateSecurityFinding). A sev>=4
 # security finding citing a fabricated/absent/out-of-range scanner evidenceId

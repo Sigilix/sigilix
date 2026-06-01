@@ -66,12 +66,15 @@ describe("renderTrustSummary", () => {
 
 describe("renderOutsideDiffDropdown / renderPrLevelSection", () => {
   const row = (f: { id: string }) => `- ${f.id}`
-  it("collapses outside-diff findings into a count-bearing <details>", () => {
+  it("collapses outside-diff findings into a count-bearing <details>, rows BLANK-LINE separated", () => {
     const out = renderOutsideDiffDropdown([{ id: "A" }, { id: "B" }], row)
-    expect(out).toBe("<details>\n<summary><b>2 findings</b> about code outside this PR's diff</summary>\n\n- A\n- B\n\n</details>")
+    // \n\n between rows — each real row ends with a multi-line body, so a single \n
+    // would make B render as loose continuation of A (GFM), not a sibling bullet.
+    expect(out).toBe("<details>\n<summary><b>2 findings</b> about code outside this PR's diff</summary>\n\n- A\n\n- B\n\n</details>")
   })
-  it("renders the non-collapsed PR-level mini-section", () => {
+  it("renders the non-collapsed PR-level mini-section, rows BLANK-LINE separated", () => {
     expect(renderPrLevelSection([{ id: "X" }], row)).toBe("**PR-level**\n\n- X")
+    expect(renderPrLevelSection([{ id: "X" }, { id: "Y" }], row)).toBe("**PR-level**\n\n- X\n\n- Y")
   })
   it("both return null when empty", () => {
     expect(renderOutsideDiffDropdown([], row)).toBeNull()

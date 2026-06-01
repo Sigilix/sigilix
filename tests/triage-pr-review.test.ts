@@ -3355,6 +3355,26 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
     expect(off.submission.body).not.toContain("**Proof**")
     expect(off.submission.body).not.toContain("**1 finding**")
   })
+
+  it("PR3b: restructures body findings — collapsed outside-diff dropdown + PR-level section (on only)", () => {
+    const bf = (over: Partial<PrReviewFinding>): PrReviewFinding => ({ ...baseFinding, score: 3, ...over })
+    const verdict: PrReviewVerdict = { summary: "Body findings.", confidence: 4, confidenceReason: "x", findings: [] }
+    const unanchored: PrReviewFinding[] = [
+      bf({ headline: "outside the diff", trust: { tier: "grounded-model", surface: "body", demoteReason: "outside-diff" } }),
+      bf({ headline: "no test for this", scope: "pr", trust: { tier: "grounded-model", surface: "body" } }), // genuinely PR-scoped
+      bf({ headline: "ungrounded nit", trust: { tier: "body-only-ungrounded", surface: "body", demoteReason: "inline-grounding" } }), // → flat list (not pr-scoped)
+    ]
+    const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: true }).submission.body
+    expect(on).toContain("about code outside this PR's diff") // the collapsed outside-diff dropdown
+    expect(on).toContain("<details>")
+    expect(on).toContain("**PR-level**")
+    expect(on).not.toContain("could not be anchored") // the old generic disclaimer is dropped
+    // off → the generic flat section + disclaimer, no dropdown / no PR-level heading.
+    const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: false }).submission.body
+    expect(off).not.toContain("about code outside this PR's diff")
+    expect(off).not.toContain("**PR-level**")
+    expect(off).toContain("could not be anchored")
+  })
 })
 
 describe("resolveFindingConfidence (SIG-101)", () => {

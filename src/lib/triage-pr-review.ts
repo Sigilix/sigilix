@@ -43,7 +43,13 @@ import {
 import { parseFirstJsonObject } from "./json-extract"
 import { type StackContext } from "./pr-stack"
 import { badgeAssetLabel, badgeAssetUrl, type ReviewBadgeAssetName } from "./badge-assets"
-import { renderTrustSummary, trustPill, trustSubTag } from "./trust-ledger-render"
+import {
+  renderTrustSummary,
+  trustPill,
+  trustSubTag,
+  renderOutsideDiffDropdown,
+  renderPrLevelSection,
+} from "./trust-ledger-render"
 import { remediationForFinding } from "./validate-security-finding"
 // `renderStackContextSummary` is no longer used here — ARC-281
 // replaced the multi-line stack block with a one-line parenthetical
@@ -1293,6 +1299,9 @@ interface BuildFallbackArgs {
   /** SIG-101: forwarded review counter + retrigger URL. */
   reviewCounter?: number
   retriggerUrl?: string
+  /** SIG Trust Ledger v0: render the trust layer in the anchorless-fallback body
+   *  too (post-`on`-flip consistency). Forwarded to buildFallbackBody. */
+  trustLedger?: boolean
 }
 
 /**
@@ -1325,6 +1334,7 @@ export function buildFallbackSubmission({
   reviewCounter,
   retriggerUrl,
   eventOverride,
+  trustLedger,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
@@ -1339,6 +1349,7 @@ export function buildFallbackSubmission({
   const body = buildFallbackBody(
     verdict, unanchored, undefined, stack, coverage, delta, reviewCounter, retriggerUrl,
     event === "REQUEST_CHANGES" ? event : undefined,
+    trustLedger,
   )
   return {
     event,
@@ -1365,6 +1376,7 @@ export function buildFallbackBody(
   reviewCounter?: number,
   retriggerUrl?: string,
   eventOverride?: ReviewEventOverride,
+  trustLedger?: boolean,
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
   // dropped the inline anchors, so the body must carry every
@@ -1389,6 +1401,7 @@ export function buildFallbackBody(
     verdict: { ...verdict, findings: [] },
     unanchored: all,
   }
+  if (trustLedger) args.trustLedger = true
   if (stack !== undefined) args.stack = stack
   if (prov !== undefined) args.prov = prov
   if (coverage) args.coverage = coverage
@@ -2193,11 +2206,48 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   // inline cap). Blockers were rendered above (table + collapsed
   // evidence) and are intentionally excluded here to avoid duplication.
   if (bodyOnlyNonBlockers.length > 0) {
-    lines.push("")
-    lines.push(BODY_ONLY_FINDINGS_HEADING)
-    lines.push("")
-    lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
-    lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext, args.trustLedger))
+    if (args.trustLedger) {
+      // SIG Trust Ledger v0 (PR3b): restructure the body-only (non-blocker)
+      // findings by WHY they're in the body. A genuinely PR-scoped finding
+      // (no-test / architectural, `findingScope === "pr"`) gets the **PR-level**
+      // mini-section; findings about code OUTSIDE this PR's diff collapse into a
+      // dropdown; EVERYTHING ELSE (gate-demoted-from-inline + file/line-scoped
+      // body-routed findings) renders through the normal body-row helper, keeping
+      // its canonical severity/path sort + the pills. The old generic disclaimer
+      // is dropped — the structure now communicates the semantics. (CR #269:
+      // PR-level must be strictly pr-scoped, not "everything without a gate reason".)
+      const outsideDiff = bodyOnlyNonBlockers.filter((f) => f.trust?.demoteReason === "outside-diff")
+      const prLevel = bodyOnlyNonBlockers.filter(
+        (f) => f.trust?.demoteReason !== "outside-diff" && findingScope(f) === "pr",
+      )
+      const flat = bodyOnlyNonBlockers.filter(
+        (f) => f.trust?.demoteReason !== "outside-diff" && findingScope(f) !== "pr",
+      )
+      // Per-finding row formatter for the PR-level + dropdown sections.
+      const renderRow = (f: PrReviewFinding): string =>
+        renderBodyOnlyFindings([f], args.linkContext, args.trustLedger).join("\n").trimStart()
+      lines.push("")
+      lines.push(BODY_ONLY_FINDINGS_HEADING)
+      if (flat.length > 0) {
+        lines.push(...renderBodyOnlyFindings(flat, args.linkContext, args.trustLedger))
+      }
+      const prSection = renderPrLevelSection(prLevel, renderRow)
+      if (prSection) {
+        lines.push("")
+        lines.push(prSection)
+      }
+      const odDropdown = renderOutsideDiffDropdown(outsideDiff, renderRow)
+      if (odDropdown) {
+        lines.push("")
+        lines.push(odDropdown)
+      }
+    } else {
+      lines.push("")
+      lines.push(BODY_ONLY_FINDINGS_HEADING)
+      lines.push("")
+      lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
+      lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext, args.trustLedger))
+    }
   }
 
   // Single-line footer (replaces the four separate metadata lines).

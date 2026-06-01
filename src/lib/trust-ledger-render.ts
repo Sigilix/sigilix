@@ -114,7 +114,10 @@ export function renderOutsideDiffDropdown<T>(
 ): string | null {
   if (outsideDiffFindings.length === 0) return null
   const n = outsideDiffFindings.length
-  const rows = outsideDiffFindings.map(renderRow).join("\n")
+  // Blank-line-separate rows: each row ends with a multi-line body (which can itself
+  // contain blank lines + a nested <details>), so a single \n would make the next
+  // bullet render as loose continuation of the previous list item (GFM), not a sibling.
+  const rows = outsideDiffFindings.map(renderRow).join("\n\n")
   return `<details>\n<summary><b>${n} finding${n === 1 ? "" : "s"}</b> about code outside this PR's diff</summary>\n\n${rows}\n\n</details>`
 }
 
@@ -124,5 +127,7 @@ export function renderPrLevelSection<T>(
   renderRow: (f: T) => string,
 ): string | null {
   if (prLevelFindings.length === 0) return null
-  return `**PR-level**\n\n${prLevelFindings.map(renderRow).join("\n")}`
+  // Blank-line-separate rows (see renderOutsideDiffDropdown) so multi-line body rows
+  // render as sibling list items, not loose continuations.
+  return `**PR-level**\n\n${prLevelFindings.map(renderRow).join("\n\n")}`
 }

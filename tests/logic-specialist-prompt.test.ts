@@ -10,6 +10,8 @@ describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => 
 
   it("instructs flagging non-atomic read-modify-write of a shared counter", () => {
     expect(logic).toContain("non-atomic read-modify-write")
+    // directs an action, not just mentions the term (CodeRabbit)
+    expect(logic).toContain("Flag only when ALL hold")
     // grounded — require ALL of: shared/persistent, non-atomic, and not transaction/lock-serialized
     expect(logic).toContain("shared/persistent")
     expect(logic).toContain("not an in-place SET count = count + 1")
@@ -18,6 +20,8 @@ describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => 
 
   it("instructs detecting cross-tier field-name drift (camel/snake mismatch)", () => {
     expect(logic).toContain("cross-tier field-name drift")
+    // directs detection + grounded gating, not just mentions the term (CodeRabbit)
+    expect(logic).toContain("before flagging")
     expect(logic).toContain("camelCaseField")
     expect(logic).toContain("snake_case")
   })

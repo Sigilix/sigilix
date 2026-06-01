@@ -271,6 +271,36 @@ export async function buildGraphContextExpansion(
   }
 }
 
+/**
+ * SIG-286 PR1 — render the TARGETED graph-context inject for the review prompt.
+ *
+ * The BLANKET inject (every body) was a pre-registered KILL: median net-new
+ * tokens 0, because most reviews have no cross-file context worth adding. This
+ * renders ONLY the net-new cross-file high-value bodies — definitions + callers
+ * whose source is NOT the changed files (`source !== "filesByPath"`), i.e.
+ * context the model does not already have from the diff. Import-dependent bodies
+ * (the lowest-value tier) are dropped entirely.
+ *
+ * Returns "" when there is nothing net-new to add, so the ~73% of reviews the
+ * blanket inject would have taxed for ~0 gain inject nothing — the whole point
+ * of the targeted pivot. Bodies are already byte-capped by the build. Pure.
+ */
+export function renderGraphExpansionForPrompt(enriched: EnrichedGraphContext): string {
+  const netNew = [...enriched.definitionBodies, ...enriched.callerBodies].filter(
+    (b) => b.source !== "filesByPath",
+  )
+  if (netNew.length === 0) return ""
+  const lines = [
+    "[GRAPH CONTEXT — CROSS-FILE]",
+    "Bodies of definitions/callers pulled from OTHER files in the repo (not in",
+    "this diff), to ground reasoning about cross-file contracts. Read-only",
+    "reference — NOT changed code; do not flag findings inside these snippets.",
+    "",
+  ]
+  for (const b of netNew) lines.push(renderSnippet(b))
+  return lines.join("\n").trimEnd()
+}
+
 // ─── SIG-286 PR2: bounded cross-file pre-fetch ──────────────────────
 
 interface PrefetchStats {

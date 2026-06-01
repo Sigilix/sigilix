@@ -382,7 +382,7 @@ import type { Env } from "../index"
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
 // SIG-286 — graph-context body expansion (shadow-only in PR1).
 import { contextExpansionForChangedSymbolsFor } from "./repo-graph-client"
-import { buildGraphContextExpansion } from "./graph-context-expansion"
+import { buildGraphContextExpansion, renderGraphExpansionForPrompt } from "./graph-context-expansion"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
 import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
@@ -2491,7 +2491,9 @@ export async function handlePrReviewEnsemble(
     // blast-radius paths (graphBlastContextString). In shadow mode, the
     // variables are computed but not attached to prompts (bake-off telemetry
     // fires in both modes).
-    const graphCtxForPrompt = graphRetrievalMode(env) === "post"
+    // `let`: SIG-286 may APPEND a targeted cross-file expansion block below (in
+    // OPENCLAW_GRAPH_EXPANSION=post mode) once `enriched` is computed.
+    let graphCtxForPrompt = graphRetrievalMode(env) === "post"
       ? [graphContextString, graphBlastContextString].filter((s) => s.length > 0).join("\n")
       : ""
     // ──────────────────────────────────────────────────────────────────
@@ -2591,6 +2593,30 @@ export async function handlePrReviewEnsemble(
           fetchElapsedMs: enriched.fetch.elapsedMs,
           budgetExhausted: enriched.fetch.budgetExhausted,
         })
+        // SIG-286 PR1: in `post` mode, APPEND the targeted inject — net-new
+        // cross-file definition/caller bodies — to the graph block reaching
+        // logic+tests+synth. The render is "" for the ~73% of reviews with no
+        // net-new cross-file context (the blanket-inject KILL set), so they
+        // append nothing. `shadow` skips this ⇒ measured-but-not-injected, the
+        // current prod behavior; only `post` injects.
+        if (graphExpMode === "post") {
+          const expansionBlock = renderGraphExpansionForPrompt(enriched)
+          if (expansionBlock.length > 0) {
+            graphCtxForPrompt = [graphCtxForPrompt, expansionBlock]
+              .filter((s) => s.length > 0)
+              .join("\n\n")
+            // Observable so the post-flip is verifiable (which reviews actually
+            // got a targeted inject vs the ~73% that render empty).
+            console.log(JSON.stringify({
+              event: "graph-expansion-injected",
+              owner, repo, prNumber, headSha: headSha.slice(0, 7),
+              bytes: expansionBlock.length,
+              defBodies: enriched.definitionBodies.length,
+              callerBodies: enriched.callerBodies.length,
+              netNewTokens: enriched.netNewTokens,
+            }))
+          }
+        }
       } catch (err) {
         // Genuine orchestrator cancellation propagates; any other failure is
         // soft — log and continue, never block the review.

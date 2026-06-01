@@ -2595,7 +2595,6 @@ function truncateCheckAnnotationText(value: string, max: number): string {
  * low-severity null case, so every finding now carries a visible
  * classification.
  */
-const FINDING_BODY_PREVIEW_LIMIT = 500
 const FINDING_STRUCTURED_DETAIL_LIMIT = 2000
 const WHY_NOT_CAUGHT_LABEL = "Why this wasn't caught"
 
@@ -2645,30 +2644,28 @@ function stripAstMarkers(text: string): string {
 }
 
 function formatFindingBodyMarkdown(body: string): string {
-  const clean = stripAstMarkers(body)
-  if (clean.length <= FINDING_BODY_PREVIEW_LIMIT) return clean
-  // SIG-216: word-boundary-aware truncation. Find the last whitespace
-  // in `[0, FINDING_BODY_PREVIEW_LIMIT)` so a body like
-  // "Add a unit test that mocks a chat stream..." becomes
-  // "Add a unit test that mocks a..." in the preview and
-  // "chat stream..." in the More Info disclosure — not the previous
-  // mid-character "...mocks a c" / "hat stream..." split. When the
-  // preview window contains no whitespace at all (artificial long
-  // single token), fall back to the hard character slice so the
-  // function still terminates.
-  const sliceEnd = (() => {
-    const hardSlice = clean.slice(0, FINDING_BODY_PREVIEW_LIMIT)
-    const lastWs = hardSlice.search(/\s\S*$/)
-    return lastWs > 0 ? lastWs : FINDING_BODY_PREVIEW_LIMIT
-  })()
-  const preview = clean.slice(0, sliceEnd).trimEnd()
-  const rest = clean.slice(sliceEnd).trimStart()
+  // Split the body STRUCTURALLY, not by length (founder 2026-05-31): the COMPLETE
+  // issue stays in the main comment — readable on its own, never a mid-sentence
+  // "..." — and only the deeper "why/how the model concluded this" reasoning goes
+  // in a collapsed dropdown. The synthesizer is nudged to write the body as
+  // "{complete issue}\n\n{deeper reasoning}", so we split on the FIRST blank-line
+  // break: everything before it is the issue (main), everything after is the
+  // reasoning (dropdown). No blank-line break → the body is a single self-contained
+  // thought; show it whole inline. No character cap, no truncation marker — the
+  // prompt is the brevity guardrail, the renderer's job is completeness.
+  const clean = stripAstMarkers(body).replace(/\r\n/g, "\n")
+  const breakIdx = clean.indexOf("\n\n")
+  if (breakIdx === -1) return clean.trimEnd()
+  const main = clean.slice(0, breakIdx).trimEnd()
+  const reasoning = clean.slice(breakIdx + 2).trimStart()
+  // Degenerate split (empty issue or empty reasoning) → just show the whole body.
+  if (main.length === 0 || reasoning.length === 0) return clean.trimEnd()
   return [
-    `${preview}...`,
+    main,
     "",
-    "<details><summary>More Info</summary>",
+    "<details><summary>Detailed reasoning</summary>",
     "",
-    rest,
+    reasoning,
     "",
     "</details>",
   ].join("\n")

@@ -8,11 +8,10 @@
 // for changed files) and, for cross-file rows not in that map, an OPTIONAL
 // bounded fetcher.
 //
-// PR1 is shadow-only and passes NO fetcher: cross-file rows are counted under
-// `bodiesSource.missing` + `dropped.sourceMissing` so the telemetry quantifies
-// the cross-file fetch opportunity for PR2. The result NEVER reaches a prompt
-// in PR1 (see triage-pr-review-ensemble) — it only feeds the
-// `graph-expansion-shadow` event.
+// In `shadow` the result is measured-only (the `graph-expansion-shadow` event).
+// In `post` the TARGETED inject (`renderGraphExpansionForPrompt` below) renders
+// the net-new cross-file bodies into the review prompt — see
+// triage-pr-review-ensemble.
 //
 // This module is pure/deterministic given its inputs, signal-aware, and never
 // throws — on any internal error it returns a zeroed result.
@@ -269,6 +268,47 @@ export async function buildGraphContextExpansion(
     // Never throw into the review. Zeroed result, graphAvailable preserved.
     return zeroResult(graphAvailable, Date.now() - startMs)
   }
+}
+
+/**
+ * SIG-286 PR1 — render the TARGETED graph-context inject for the review prompt.
+ *
+ * The BLANKET inject (every body) was a pre-registered KILL: median net-new
+ * tokens 0, because most reviews have no cross-file context worth adding. This
+ * renders ONLY the net-new cross-file high-value bodies — definitions + callers
+ * whose source is NOT the changed files (`source !== "filesByPath"`), i.e.
+ * context the model does not already have from the diff. Import-dependent bodies
+ * (the lowest-value tier) are dropped entirely.
+ *
+ * Returns "" when there is nothing net-new to add, so the ~73% of reviews the
+ * blanket inject would have taxed for ~0 gain inject nothing — the whole point
+ * of the targeted pivot. Bodies are already byte-capped by the build. Pure.
+ */
+/**
+ * The net-new cross-file high-value bodies the targeted inject renders:
+ * definitions + callers sourced from OTHER files (`source !== "filesByPath"`),
+ * import-dependents excluded. The SINGLE source of truth for "what gets
+ * injected" — both the render and the injected-count telemetry call this, so
+ * they can never drift. Pure.
+ */
+export function netNewCrossFileBodies(enriched: EnrichedGraphContext): GraphBodySnippet[] {
+  return [...enriched.definitionBodies, ...enriched.callerBodies].filter(
+    (b) => b.source !== "filesByPath",
+  )
+}
+
+export function renderGraphExpansionForPrompt(enriched: EnrichedGraphContext): string {
+  const netNew = netNewCrossFileBodies(enriched)
+  if (netNew.length === 0) return ""
+  const lines = [
+    "[GRAPH CONTEXT — CROSS-FILE]",
+    "Bodies of definitions/callers pulled from OTHER files in the repo (not in",
+    "this diff), to ground reasoning about cross-file contracts. Read-only",
+    "reference — NOT changed code; do not flag findings inside these snippets.",
+    "",
+  ]
+  for (const b of netNew) lines.push(renderSnippet(b))
+  return lines.join("\n").trimEnd()
 }
 
 // ─── SIG-286 PR2: bounded cross-file pre-fetch ──────────────────────

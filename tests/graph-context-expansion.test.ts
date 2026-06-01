@@ -6,7 +6,12 @@
 // passes no fetcher; cross-file rows then count under bodiesSource.missing.
 
 import { describe, expect, it } from "vitest"
-import { buildGraphContextExpansion, MAX_CROSS_FILE_FETCHES } from "../src/lib/graph-context-expansion"
+import {
+  buildGraphContextExpansion,
+  MAX_CROSS_FILE_FETCHES,
+  renderGraphExpansionForPrompt,
+} from "../src/lib/graph-context-expansion"
+import type { EnrichedGraphContext, GraphBodySnippet } from "../src/lib/graph-context-expansion"
 import type {
   GraphContextExpansion,
   GraphDefinitionRow,
@@ -401,5 +406,72 @@ describe("buildGraphContextExpansion — SIG-286 PR2 cross-file fetch", () => {
       signal: ctrl.signal,
     })
     expect(called).toBe(0)
+  })
+})
+
+describe("renderGraphExpansionForPrompt — SIG-286 PR1 targeted inject", () => {
+  function snip(over: Partial<GraphBodySnippet> = {}): GraphBodySnippet {
+    return {
+      path: "src/other.ts",
+      startLine: 10,
+      endLine: 14,
+      subject: "function callee",
+      source: "github",
+      text: "10| function callee() { return 1 }",
+      ...over,
+    }
+  }
+  function enrichedWith(
+    bodies: Partial<Pick<EnrichedGraphContext, "definitionBodies" | "callerBodies" | "dependentBodies">>,
+  ): EnrichedGraphContext {
+    return {
+      graphAvailable: true,
+      definitionBodies: bodies.definitionBodies ?? [],
+      callerBodies: bodies.callerBodies ?? [],
+      dependentBodies: bodies.dependentBodies ?? [],
+      totalTokens: 0,
+      cappedAt: 0,
+      elapsedMs: 0,
+      bodiesSource: { filesByPath: 0, github: 0, retrievalChunk: 0, missing: 0 },
+      dropped: { cap: 0, sourceMissing: 0, graphRowsCapped: 0, budgetExhausted: 0 },
+      control: { tokens: 0 },
+      fetch: { enabled: false, files: 0, bytes: 0, elapsedMs: 0, budgetExhausted: false },
+      netNewTokens: 0,
+    }
+  }
+
+  it("renders net-new CROSS-FILE definition + caller bodies into a [GRAPH CONTEXT — CROSS-FILE] block", () => {
+    const out = renderGraphExpansionForPrompt(
+      enrichedWith({
+        definitionBodies: [snip({ subject: "function def", path: "src/def.ts" })],
+        callerBodies: [snip({ subject: "function caller", path: "src/caller.ts", source: "retrievalChunk" })],
+      }),
+    )
+    expect(out).toContain("[GRAPH CONTEXT — CROSS-FILE]")
+    expect(out).toContain("src/def.ts:10-14 — function def")
+    expect(out).toContain("src/caller.ts:10-14 — function caller")
+  })
+
+  it("returns '' when every body is same-file (source filesByPath) — the blanket-KILL set injects nothing", () => {
+    const out = renderGraphExpansionForPrompt(
+      enrichedWith({
+        definitionBodies: [snip({ source: "filesByPath" })],
+        callerBodies: [snip({ source: "filesByPath" })],
+      }),
+    )
+    expect(out).toBe("")
+  })
+
+  it("drops import-dependent bodies entirely (lowest-value tier), even cross-file", () => {
+    const out = renderGraphExpansionForPrompt(
+      enrichedWith({
+        dependentBodies: [snip({ subject: "import dep", path: "src/dep.ts", source: "github" })],
+      }),
+    )
+    expect(out).toBe("")
+  })
+
+  it("returns '' for an empty expansion", () => {
+    expect(renderGraphExpansionForPrompt(enrichedWith({}))).toBe("")
   })
 })

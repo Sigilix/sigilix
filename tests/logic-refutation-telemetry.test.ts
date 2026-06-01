@@ -17,7 +17,7 @@ describe("PR_REVIEW_SCHEMA — clearedLogicCandidates surface", () => {
     expect(props.clearedLogicCandidates.type).toBe("array")
     const itemProps = props.clearedLogicCandidates.items.properties
     expect(itemProps.path).toEqual({ type: "string" })
-    expect(itemProps.line).toEqual({ type: "number" })
+    expect(itemProps.line).toEqual({ type: "integer", minimum: 1 })
     expect(itemProps.hypothesis).toEqual({ type: "string" })
     expect(itemProps.mitigation).toEqual({ type: "string" })
   })

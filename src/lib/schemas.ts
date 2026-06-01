@@ -226,7 +226,7 @@ export const PR_REVIEW_SCHEMA = {
         type: "object",
         properties: {
           path: { type: "string" },
-          line: { type: "number" },
+          line: { type: "integer", minimum: 1 },
           hypothesis: { type: "string" },
           mitigation: { type: "string" },
         },

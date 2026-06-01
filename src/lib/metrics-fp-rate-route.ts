@@ -13,6 +13,7 @@
 
 import type { Env } from "../index"
 import { requireBearerToken } from "./auth-bearer"
+import { listKeys, mapWithConcurrency, FETCH_CONCURRENCY } from "./kv-scan"
 import { attributeDismissals, dedupeDismissals, buildFindingIndex, findingKey } from "./fp-rate/attribute"
 import { computeFpRates } from "./fp-rate/compute"
 import { filterReviewsToWindow } from "./fp-rate/window"
@@ -38,9 +39,6 @@ const TELEMETRY_LIST_SCAN = 10_000
 const MEMORY_LIST_SCAN = 4_000
 const MAX_TELEMETRY_FETCH = 700
 const MAX_MEMORY_FETCH = 200
-const KV_LIST_PAGE = 1000
-/** Concurrency cap for the per-key KV gets (wall-clock; doesn't change the total). */
-const FETCH_CONCURRENCY = 25
 
 const DEFAULT_WINDOW_DAYS = 30
 const MAX_WINDOW_DAYS = 90
@@ -59,29 +57,6 @@ function parseIntParam(raw: string | null, fallback: number): number | null {
   return Number.isInteger(n) ? n : null
 }
 
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const out: R[] = []
-  for (let i = 0; i < items.length; i += limit) {
-    out.push(...(await Promise.all(items.slice(i, i + limit).map(fn))))
-  }
-  return out
-}
-
-/** List keys for a prefix via the KV binding, paginated up to `cap` keys. */
-async function listKeys(env: Env, prefix: string, cap: number): Promise<string[]> {
-  const names: string[] = []
-  let cursor: string | undefined
-  while (names.length < cap) {
-    const opts: KVNamespaceListOptions = cursor
-      ? { prefix, limit: KV_LIST_PAGE, cursor }
-      : { prefix, limit: KV_LIST_PAGE }
-    const page = await env.OPENCLAW_STATE.list(opts)
-    for (const k of page.keys) names.push(k.name)
-    if (page.list_complete || !page.cursor) break
-    cursor = page.cursor
-  }
-  return names.slice(0, cap)
-}
 
 export async function handleFpRateMetricsRoute(request: Request, env: Env): Promise<Response> {
   // Shares the validator-metrics bearer token (same ops surface as /metrics/validation).

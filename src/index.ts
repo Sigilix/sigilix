@@ -73,6 +73,7 @@ import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
 import { handleGraphExpansionMetricsRoute } from "./lib/metrics-graph-expansion-route"
+import { handleGraphExpansionAbMetricsRoute } from "./lib/metrics-graph-expansion-ab-route"
 import { handleFpRateMetricsRoute } from "./lib/metrics-fp-rate-route"
 import { handleRunnerIngestRoute } from "./lib/runner-ingest-route"
 import { recordGraphMetrics } from "./lib/graph-metrics-client"
@@ -1154,6 +1155,12 @@ export default {
     // shadow measurement (netNewTokens median + cross-file rates + GO/KILL hint).
     if (request.method === "GET" && url.pathname === "/metrics/graph-expansion") {
       return handleGraphExpansionMetricsRoute(request, env)
+    }
+
+    // SIG-286 PR3: per-arm read of the targeted-inject A/B (treatment vs control
+    // finding rate). Reads the graphExpansionAb tags on ensemble-review-telemetry.
+    if (request.method === "GET" && url.pathname === "/metrics/graph-expansion-ab") {
+      return handleGraphExpansionAbMetricsRoute(request, env)
     }
 
     // SIG-114 PR 5: authenticated live read of the per-specialist dismissal-

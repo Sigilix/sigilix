@@ -238,6 +238,7 @@ export interface FindingTrust {
     | "security-evidence"
     | "verification-refuted"
     | "outside-diff"
+    | "do-race"
 }
 
 export interface PrReviewFinding {

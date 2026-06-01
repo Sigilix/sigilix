@@ -132,6 +132,7 @@ import {
   type SecurityDropReason,
 } from "./validate-security-finding"
 import { durableObjectClassSpans, lineInDurableObjectClass, type LineSpan } from "./durable-object-spans"
+import { findingClaimsIntraInstanceRace } from "./validate-do-race-finding"
 import {
   evaluateTestFinding,
   parseTestsValidatorMode,
@@ -9303,6 +9304,31 @@ export function validateForSubmission(args: {
     ) {
       droppedForFailedValidation++
       onSecurityFindingDropped?.(f, { reason: "do-method-authz-trust-boundary", dropped: true })
+      continue
+    }
+
+    // SIG-307: DurableObject intra-instance race FP. A DO serializes EVERY
+    // invocation of an instance (requests + alarms run one-at-a-time behind
+    // input gates; `await` does not let another invocation of the same instance
+    // interleave), so an intra-instance race/concurrency finding on a DO method
+    // CANNOT be real — the SIG-141 shape for the concurrency category (observed:
+    // a refuted "DO alarm scheduling race" on byte-identical-to-shipped code).
+    // FN-safe: DEMOTED to the body (still visible) rather than dropped, because
+    // the race-claim regex can't perfectly exclude a cross-await EXTERNAL-state
+    // bug — those phrasings are carved out in the detector, and demote-not-drop
+    // keeps any residual real finding visible. Logged on every fire so a false
+    // demote is observable. Always-on (a correctness rule, like the authz drop).
+    if (
+      lineInDurableObjectClass(doClassSpans.get(f.path.trim()), f.line) &&
+      findingClaimsIntraInstanceRace(f)
+    ) {
+      console.log(JSON.stringify({
+        event: "do-race-finding-demoted",
+        path: f.path, line: f.line, score: f.score,
+        headline: (f.headline ?? "").slice(0, 100),
+      }))
+      if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "do-race" })
+      unanchoredFindings.push(f)
       continue
     }
 

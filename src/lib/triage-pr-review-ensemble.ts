@@ -8546,6 +8546,53 @@ function backfillSecurityEvidenceFromSources(
 }
 
 /**
+ * SIG-308 (PR #290 review): map each source specialist finding's id → its
+ * trimmed, non-empty `independentAssessment`. The logic analogue of
+ * `buildSourceFindingSecurityEvidenceById` — single-field because that is the
+ * only structured field the SIG-308 backstop reads off the synthesized
+ * finding. Empty / whitespace-only rationales are skipped (treated as absent,
+ * matching `evaluateLogicRefutation`).
+ */
+function buildSourceFindingRationaleById(specialistVerdicts: CollectedVerdict[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const verdict of specialistVerdicts) {
+    if (!verdict.verdict) continue
+    for (const finding of verdict.verdict.findings) {
+      if (hasNonEmptyString(finding.independentAssessment)) {
+        out.set(finding.id, finding.independentAssessment.trim())
+      }
+    }
+  }
+  return out
+}
+
+/**
+ * SIG-308 (PR #290 review): restore a finding's `independentAssessment` from
+ * its source findings when synthesis dropped it. The backstop keys on the
+ * POST-synthesis finding, but the synthesizer (an LLM) may not echo the
+ * rationale — and unlike security evidence there was no deterministic
+ * backfill, so a logic finding whose specialist DID justify survival could be
+ * wrongly flagged. Pure (no mutation), mirroring
+ * `backfillSecurityEvidenceFromSources`. Never overwrites a present value;
+ * the security selector is NOT reused because it matches on cweId/evidenceId,
+ * which a logic source lacks — here we take the first source id that carries a
+ * rationale. The field is shared (SIG-282 security + SIG-308 logic), so this
+ * benefits both lenses.
+ */
+function backfillIndependentAssessmentFromSources(
+  finding: PrReviewFinding,
+  sourceIds: readonly string[],
+  rationaleById: ReadonlyMap<string, string>,
+): PrReviewFinding {
+  if (hasNonEmptyString(finding.independentAssessment)) return finding
+  for (const sourceId of sourceIds) {
+    const rationale = rationaleById.get(sourceId)
+    if (rationale) return { ...finding, independentAssessment: rationale }
+  }
+  return finding
+}
+
+/**
  * SIG-216 fix-up: run the inline pr-overview with a single retry on
  * transient errors, bounded by `budgetMs` per attempt.
  *
@@ -9284,6 +9331,7 @@ export function validateForSubmission(args: {
   } = args
   const validIds = new Set<string>()
   const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
+  const sourceRationaleById = buildSourceFindingRationaleById(specialistVerdicts)
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
     for (const f of v.verdict.findings) validIds.add(f.id)
@@ -9347,6 +9395,10 @@ export function validateForSubmission(args: {
     // synth telemetry intact and never overwrites fields the synth
     // already provided.
     f = backfillSecurityEvidenceFromSources(f, sourceIds, sourceEvidenceById)
+    // SIG-308 (PR #290 review): restore independentAssessment dropped by
+    // synthesis BEFORE the logic-refutation backstop reads it, so a logic
+    // finding whose specialist justified survival isn't wrongly flagged.
+    f = backfillIndependentAssessmentFromSources(f, sourceIds, sourceRationaleById)
 
     // SIG-216: normalize scope BEFORE any scope-dependent gates fire.
     // LLM specialists sometimes emit `scope: "file"` for findings that

@@ -503,4 +503,33 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
     expect(result.droppedForFailedLogicRefutation).toBe(0)
     expect(result.verdict.findings).toHaveLength(1)
   })
+
+  // PR #290 review (fix C): the backstop reads the POST-synthesis finding. When
+  // synthesis drops the specialist's `independentAssessment`, the deterministic
+  // backfill restores it from the source finding BEFORE the gate runs, so a
+  // genuinely-justified logic finding is not wrongly flagged.
+  it("ENFORCE: backfills independentAssessment from the source finding when synthesis dropped it", () => {
+    const sourceWithRationale = [
+      {
+        role: "logic",
+        verdict: {
+          findings: [
+            { id: "logic-0", independentAssessment: "No bound on `i`; the loop runs to arr.length inclusive with no guard." },
+          ],
+        },
+      },
+    ] as unknown as SpecialistVerdictsArg
+    const result = validateForSubmission({
+      synthOutput: {
+        // synthesized finding LACKS independentAssessment (synthesis dropped it)
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        provenance: logicProvenance("logic-0"),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: sourceWithRationale,
+      logicRefutationMode: "enforce",
+    })
+    expect(result.droppedForFailedLogicRefutation).toBe(0) // backfilled → survives refutation
+    expect(result.verdict.findings).toHaveLength(1)
+  })
 })

@@ -8546,16 +8546,27 @@ function backfillSecurityEvidenceFromSources(
 }
 
 /**
- * SIG-308 (PR #290 review): map each source specialist finding's id → its
- * trimmed, non-empty `independentAssessment`. The logic analogue of
- * `buildSourceFindingSecurityEvidenceById` — single-field because that is the
- * only structured field the SIG-308 backstop reads off the synthesized
+ * SIG-308 (PR #290 review): map each source finding's id → its trimmed,
+ * non-empty `independentAssessment`, for one `role` only. The logic analogue
+ * of `buildSourceFindingSecurityEvidenceById` — single-field because that is
+ * the only structured field the SIG-308 backstop reads off the synthesized
  * finding. Empty / whitespace-only rationales are skipped (treated as absent,
  * matching `evaluateLogicRefutation`).
+ *
+ * Role-SCOPED (CodeRabbit, PR #290): `independentAssessment` is shared — a
+ * SIG-282 security confirmation and a SIG-308 logic survival rationale live in
+ * the same field with lens-specific meaning. The logic gate keys on
+ * `sourceRolesInclude(sourceIds, "logic")`, so a cross-lens-merged finding
+ * (e.g. ids `["security-0","logic-0"]`) must NOT have a security note satisfy
+ * the logic gate. Restricting the map to the gate's role guarantees that.
  */
-function buildSourceFindingRationaleById(specialistVerdicts: CollectedVerdict[]): Map<string, string> {
+function buildSourceFindingRationaleById(
+  specialistVerdicts: CollectedVerdict[],
+  role: SpecialistRole,
+): Map<string, string> {
   const out = new Map<string, string>()
   for (const verdict of specialistVerdicts) {
+    if (verdict.role !== role) continue
     if (!verdict.verdict) continue
     for (const finding of verdict.verdict.findings) {
       if (hasNonEmptyString(finding.independentAssessment)) {
@@ -8576,8 +8587,9 @@ function buildSourceFindingRationaleById(specialistVerdicts: CollectedVerdict[])
  * `backfillSecurityEvidenceFromSources`. Never overwrites a present value;
  * the security selector is NOT reused because it matches on cweId/evidenceId,
  * which a logic source lacks — here we take the first source id that carries a
- * rationale. The field is shared (SIG-282 security + SIG-308 logic), so this
- * benefits both lenses.
+ * rationale in `rationaleById`. That map is role-scoped by the caller (see
+ * `buildSourceFindingRationaleById`), so for the logic gate only logic-source
+ * rationales are eligible — a co-merged security note cannot satisfy it.
  */
 function backfillIndependentAssessmentFromSources(
   finding: PrReviewFinding,
@@ -9331,7 +9343,7 @@ export function validateForSubmission(args: {
   } = args
   const validIds = new Set<string>()
   const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
-  const sourceRationaleById = buildSourceFindingRationaleById(specialistVerdicts)
+  const sourceRationaleById = buildSourceFindingRationaleById(specialistVerdicts, "logic")
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
     for (const f of v.verdict.findings) validIds.add(f.id)

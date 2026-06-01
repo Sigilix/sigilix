@@ -532,4 +532,34 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
     expect(result.droppedForFailedLogicRefutation).toBe(0) // backfilled → survives refutation
     expect(result.verdict.findings).toHaveLength(1)
   })
+
+  // PR #290 review (CodeRabbit, Major): independentAssessment is a shared field
+  // (SIG-282 security confirmation vs SIG-308 logic survival rationale). For a
+  // cross-lens-merged finding, a SECURITY note must NOT satisfy the logic gate.
+  // The rationale map is role-scoped to "logic", so only a logic source's
+  // rationale can backfill — here the logic source has none, so it stays flagged.
+  it("ENFORCE: a co-merged security independentAssessment does NOT satisfy the logic gate", () => {
+    const crossLensSources = [
+      { role: "security", verdict: { findings: [{ id: "security-0", independentAssessment: "Passed to the Stripe client as the secret key — confirms credential use." }] } },
+      { role: "logic", verdict: { findings: [{ id: "logic-0" }] } }, // no survival rationale
+    ] as unknown as SpecialistVerdictsArg
+    const crossLensProvenance: SynthesizerProvenance = {
+      findings: [
+        { sourceSpecialists: ["security", "logic"], sourceFindingIds: ["security-0", "logic-0"], action: "merged", verifiedViaRetrieval: false },
+      ],
+      dropped: [],
+      softened: [],
+    }
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [finding()] },
+        provenance: crossLensProvenance,
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: crossLensSources,
+      logicRefutationMode: "enforce",
+    })
+    expect(result.droppedForFailedLogicRefutation).toBe(1) // security note must not backfill the logic gate
+    expect(result.verdict.findings).toHaveLength(0)
+  })
 })

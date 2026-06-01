@@ -434,15 +434,19 @@ export interface Env {
   // `wrangler secret put OPENCLAW_SECURITY_VALIDATOR_MODE enforce`.
   OPENCLAW_SECURITY_VALIDATOR_MODE?: string
 
-  // SIG-111: tests-finding specificity gate mode. "shadow" (default;
-  // any value other than "enforce") counts + telemeters what the gate
-  // WOULD drop without dropping; "enforce" actually drops sev>=4
+  // SIG-111 / SIG-245: tests-finding specificity gate mode. "shadow"
+  // (default; any value other than "enforce") counts + telemeters what
+  // the gate WOULD demote without acting; "enforce" DEMOTES sev>=4
   // `category: "testing"` findings whose missing-coverage claim is
   // uncited or whose insufficient-test claim names no concrete
-  // source/API/branch. Default OFF-by-effect (shadow) so the gate ships
-  // dark — this gate is false-negative-sensitive, so the would-drop
-  // rate is observed before enforcement. Operator flips via
-  // `wrangler secret put OPENCLAW_TESTS_VALIDATOR_MODE enforce`.
+  // source/API/branch to a NON-blocking body note (FN-safe, still
+  // visible — NOT dropped; score capped below the score>=4
+  // REQUEST_CHANGES floor so a coverage over-fire never gates a PR).
+  // This gate is
+  // false-negative-sensitive, so the would-demote rate was observed in
+  // shadow before enforcement. Set as a `[vars]` entry in wrangler.toml
+  // (= "enforce"), NOT a `wrangler secret` — a stale same-name secret
+  // would shadow the var; do not `wrangler secret put` this flag.
   OPENCLAW_TESTS_VALIDATOR_MODE?: string
 
   // SIG-109: logic-finding evidence gate mode. "shadow" (default; any

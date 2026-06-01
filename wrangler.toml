@@ -402,6 +402,18 @@ OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "shadow"
 # set "shadow" (or remove the line). Read via `/metrics/validation` modes.security.
 OPENCLAW_SECURITY_VALIDATOR_MODE = "enforce"
 
+# SIG-111 / SIG-245: tests-specialist coverage-FP gate. The dominant labeled-FP
+# class (21/31 in the SIG-161 corpus) is the tests specialist over-firing "X
+# lacks coverage" on glue covered by structural tests or with a vague,
+# non-actionable ask. `evaluateTestFinding` (FN-sensitive — biases keep) gates
+# it; in `enforce` the matched finding is DEMOTED to a NON-blocking body note
+# (FN-safe, still visible; score capped below the score>=4 REQUEST_CHANGES floor
+# so a low-confidence coverage over-fire never gates a PR), not dropped. Was a
+# `wrangler secret put` flag (default shadow) — migrated here as a reviewable
+# var, same as the security flag above. Rollback: set "shadow" (or remove the
+# line). Read via `/metrics/validation` modes.tests.
+OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
+
 # SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
 # shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
 # been dormant since Phase 4a "baseline data collection" for months.

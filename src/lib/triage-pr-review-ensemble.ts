@@ -9278,10 +9278,31 @@ export function validateForSubmission(args: {
     {
       const testDecision = evaluateTestFinding(f, testingEvidence, coverageGaps)
       if (!testDecision.keep) {
-        const dropped = testsValidatorMode === "enforce"
+        // SIG-111 / SIG-245: the tests specialist over-fires "X lacks
+        // coverage" on glue covered by structural tests or with a vague,
+        // non-actionable ask — the dominant labeled-FP class (21/31 in the
+        // SIG-161 corpus). FN-safe: in `enforce` the finding is DEMOTED to the
+        // body (still visible if the coverage gap is real) rather than dropped,
+        // matching the SIG-108 / SIG-307 demote-not-drop discipline. In
+        // `shadow` the would-demote is counted + telemetered but the finding is
+        // kept inline. `dropped` in the telemetry callback means "actioned".
+        const demoted = testsValidatorMode === "enforce"
         droppedForFailedTestValidation++
-        onTestFindingDropped?.(f, { reason: testDecision.reason, dropped })
-        if (dropped) continue
+        onTestFindingDropped?.(f, { reason: testDecision.reason, dropped: demoted })
+        if (demoted) {
+          // SIG-245: cap below the score>=4 REQUEST_CHANGES floor so the
+          // gate-flagged FP becomes a NON-blocking body note — visible if the
+          // coverage gap is real, but the bot does NOT block a merge over a
+          // coverage finding the gate itself judged low-confidence. (Differs
+          // from the SIG-108 security demote, which keeps the score: a
+          // weak-evidence security finding still warrants caution; a low-stakes
+          // coverage over-fire does not. evaluateTestFinding only fires on
+          // score>=4, so this always demotes a P0/P1 to a sub-blocker note.)
+          f.score = Math.min(f.score, 3)
+          if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "tests-coverage" })
+          unanchoredFindings.push(f)
+          continue
+        }
         // shadow mode: fall through and keep the finding.
       }
     }

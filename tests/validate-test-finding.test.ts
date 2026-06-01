@@ -542,7 +542,13 @@ function testsProvenance(sourceId = "tests-0"): SynthesizerProvenance {
 }
 
 describe("validateForSubmission — SIG-111 tests specificity gate", () => {
-  it("ENFORCE: drops a vague insufficient-test finding + increments counter + fires callback", () => {
+  it("ENFORCE: DEMOTES a vague insufficient-test finding to a NON-blocking body note + increments counter + fires callback", () => {
+    // SIG-245 demote-conversion: in enforce the FP-shape finding leaves the
+    // inline set (verdict.findings) but lands in unanchoredFindings (the body),
+    // so a residual real coverage gap stays visible. FN-safe. AND its score is
+    // capped below the score>=4 REQUEST_CHANGES floor so the gate-flagged FP
+    // does NOT block the merge (founder decision: a low-confidence coverage
+    // over-fire should not gate a PR).
     const onDrop = vi.fn()
     const f = finding({
       headline: "Module needs more tests",
@@ -562,8 +568,42 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
       onTestFindingDropped: onDrop,
     })
     expect(result.droppedForFailedTestValidation).toBe(1)
-    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.verdict.findings).toHaveLength(0) // left the inline set
+    expect(result.unanchoredFindings).toHaveLength(1) // demoted to the body, NOT dropped
+    expect(result.unanchoredFindings[0].headline).toBe("Module needs more tests")
+    expect(result.unanchoredFindings[0].score).toBeLessThan(4) // non-blocking (below the REQUEST_CHANGES floor)
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "vague-insufficient-test", dropped: true })
+  })
+
+  it("ENFORCE + ledger ON: tags the demoted finding with demoteReason tests-coverage", () => {
+    // Mirrors the SIG-108 demote-conversion test discipline: with the trust
+    // ledger ON, the body-demoted finding carries surface:"body" +
+    // demoteReason:"tests-coverage" so the Trust Summary counts it. Covers the
+    // annotateFindingTrust wiring + the demotedToBody filter branch.
+    const f = finding({
+      headline: "Module needs more tests",
+      body: "This module could use additional tests to improve coverage overall.",
+      evidenceRefs: undefined,
+      inspectedTestFiles: ["tests/retry.test.ts"],
+    })
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [f] },
+        provenance: testsProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      testingEvidence: pack({ inspectedTestFiles: ["tests/retry.test.ts"] }),
+      testsValidatorMode: "enforce",
+      trustLedgerEnabled: true,
+    })
+    expect(result.verdict.findings).toHaveLength(0) // CR #284: not dual-placed — removed from inline
+    expect(result.unanchoredFindings).toHaveLength(1)
+    expect(result.unanchoredFindings[0].trust).toEqual({
+      tier: "body-only-ungrounded",
+      surface: "body",
+      demoteReason: "tests-coverage",
+    })
   })
 
   it("SHADOW: counts the would-drop + fires callback with dropped:false but KEEPS the finding", () => {

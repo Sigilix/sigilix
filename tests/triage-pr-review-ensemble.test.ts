@@ -719,6 +719,9 @@ describe("validateForSubmission — hallucination guard + line validity + score-
         addedLineTextByLine,
         trustLedgerEnabled: true,
       })
+      expect(out.verdict.findings).toHaveLength(0)
+      expect(out.unanchoredFindings).toHaveLength(1) // demoted, not dropped
+      expect(out.droppedForInvalidLine).toBe(1)
       expect(out.unanchoredFindings[0]?.trust).toEqual({
         tier: "body-only-ungrounded",
         surface: "body",
@@ -733,7 +736,10 @@ describe("validateForSubmission — hallucination guard + line validity + score-
         specialistVerdicts,
         addedLineTextByLine,
       })
-      expect(out.unanchoredFindings[0]?.line).toBe(1) // still demoted
+      expect(out.verdict.findings).toHaveLength(0)
+      expect(out.unanchoredFindings).toHaveLength(1) // still demoted (flag only gates the trust tag)
+      expect(out.droppedForInvalidLine).toBe(1)
+      expect(out.unanchoredFindings[0]?.line).toBe(1)
       expect(out.unanchoredFindings[0]?.trust).toBeUndefined() // but untagged
     })
   })

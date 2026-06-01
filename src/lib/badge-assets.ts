@@ -176,7 +176,10 @@ export const LEGACY_WORKER_BADGE_BASE_URL = "https://sigilix.dan-martinezjulio.w
 // trust pills (runner-verified / runner-pending). Every bump must mirror
 // assets/badges/<version>/*.svg to the public Sigilix/sigilix-glyphs repo AND
 // tag that commit with this exact string (see the PUBLIC_BADGE_BASE_URL note).
-export const BADGE_ASSET_VERSION = "v20260530-1"
+// SIG Trust Ledger v0 (2026-05-31): v20260530-1 → v20260531-1 adds the 2 Trust
+// Ledger pills (trust-grounded / trust-model). 17 glyphs total; pushed + tagged
+// at Sigilix/sigilix-glyphs@v20260531-1.
+export const BADGE_ASSET_VERSION = "v20260531-1"
 const BADGE_PATH_RE = /^\/assets\/badges\/(?:v[0-9-]+\/)?([a-z0-9-]+)\.svg$/
 
 // Priority badge geometry (PRIORITY_BADGE_WIDTH/HEIGHT, CATEGORY_BADGE_HEIGHT,

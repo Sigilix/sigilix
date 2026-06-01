@@ -387,6 +387,7 @@ import {
   renderGraphExpansionForPrompt,
   netNewCrossFileBodies,
 } from "./graph-context-expansion"
+import { TELEMETRY_TTL_DAYS } from "./fp-rate/attribute"
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
 import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
@@ -10043,7 +10044,9 @@ async function finalize(
 async function writeTelemetry(env: Env, telemetry: EnsembleTelemetry): Promise<void> {
   const reverseTs = String(9_999_999_999_999 - Date.now()).padStart(13, "0")
   const key = `ensemble-review-telemetry:${reverseTs}:${telemetry.owner}/${telemetry.repo}#${telemetry.prNumber}`
+  // TTL sourced from TELEMETRY_TTL_DAYS so the write expiry and the fp-rate
+  // unmatched-dismissal classification can't drift (SIG-306).
   await env.OPENCLAW_STATE.put(key, JSON.stringify(telemetry), {
-    expirationTtl: 30 * 24 * 60 * 60,
+    expirationTtl: TELEMETRY_TTL_DAYS * 24 * 60 * 60,
   })
 }

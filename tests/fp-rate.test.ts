@@ -193,12 +193,12 @@ describe("attributeDismissals — numerator dedups by fid", () => {
 
 describe("attributeDismissals — unmatched bucketing", () => {
   it("classifies unmatched dismissals as expired vs not-found by ttl", async () => {
-    const now = 100 * DAY
+    const now = 200 * DAY
     const attr = await attributeDismissals(
       [],
       [
-        dismissal("deadbeefdeadbeef", { commentId: 1, tsMs: now - 5 * DAY }), // within 30d -> not-found
-        dismissal("cafecafecafecafe", { commentId: 2, tsMs: now - 40 * DAY }), // older than ttl -> expired
+        dismissal("deadbeefdeadbeef", { commentId: 1, tsMs: now - 5 * DAY }), // within 90d ttl -> not-found
+        dismissal("cafecafecafecafe", { commentId: 2, tsMs: now - 100 * DAY }), // older than 90d ttl -> expired
       ],
       now,
     )

@@ -257,7 +257,7 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
     kind: dismissal.kind,
     // SIG-114 PR 3: carry the finding's severity tier (always present on a
     // valid marker) so the signal self-reports severity for the offline
-    // FP-rate metric beyond the 30d telemetry window.
+    // FP-rate metric beyond the telemetry window (TELEMETRY_TTL_DAYS).
     sev: marker.sev,
   }
   // SIG-114 PR 4: stamp the canonical dismiss reason when the reply stated one

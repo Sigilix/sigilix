@@ -22,8 +22,17 @@ import {
 /** Severity floor for the denominator — the epic's score-4+ headline population. */
 export const FP_SCORE_GATE = 4
 
-/** Telemetry KV TTL (days). Used to classify unmatched dismissals. */
-export const TELEMETRY_TTL_DAYS = 30
+/**
+ * Telemetry KV TTL (days) — the SINGLE source of truth for both the
+ * `ensemble-review-telemetry` write expiry (`writeTelemetry`) AND the
+ * unmatched-dismissal classification here, so they can't drift.
+ * SIG-306 (2026-06-01): 30 → 90 to match the fp-rate max window. The 30-day TTL
+ * meant dismissals on reviews older than 30 days could never attribute (their
+ * telemetry had aged out while the dismissal persisted) — the bigger half of the
+ * residual `notFound`. 90 days aligns telemetry retention with the queryable
+ * window (cost: ~3× the live telemetry corpus; accepted).
+ */
+export const TELEMETRY_TTL_DAYS = 90
 
 /** fellBackReason values that mean the ensemble never ran (exclude from denom). */
 export const GUARD_SKIP_REASONS: ReadonlySet<string> = new Set([

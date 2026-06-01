@@ -386,6 +386,20 @@ OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 # grounding") on every review but KEEPS every finding inline.
 OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "shadow"
 
+# SIG-108: the security EVIDENCE gate (evaluateSecurityFinding). A sev>=4
+# security finding citing a fabricated/absent/out-of-range scanner evidenceId
+# is a hallucination. "shadow" (the prior default-when-unset) counts the
+# would-demote but keeps it inline; "enforce" routes it OFF the inline surface.
+# Since #271 (the demote-conversion) the finding is DEMOTED to the body — never
+# hard-dropped — so it stays visible as a Fix Plan blocker with a MODEL trust
+# pill (zero false-negatives). 30d shadow read justified the flip: 41 would-
+# demote (fabricated-evidence 14 / unsupported-scanner 24 / out-of-range 3), all
+# FP-safe. Previously a `wrangler secret put` flag (inconsistent with every
+# sibling validator-mode flag, which are plain vars, and the value is not
+# sensitive) — migrated here as a reviewable, version-controlled var. Rollback:
+# set "shadow" (or remove the line). Read via `/metrics/validation` modes.security.
+OPENCLAW_SECURITY_VALIDATOR_MODE = "enforce"
+
 # SIG-224 Phase 1.5: enable the legacy rule-based router's safe-skip
 # shortcuts. The router lives at `src/lib/ensemble-router.ts` and has
 # been dormant since Phase 4a "baseline data collection" for months.

@@ -58,4 +58,14 @@ describe("findingClaimsIntraInstanceRace", () => {
       expect(findingClaimsIntraInstanceRace(finding({ headline: "Race condition", body })), body).toBe(false)
     }
   })
+
+  it("does NOT fire on INIT/constructor concurrency (real before blockConcurrencyWhile gates it)", () => {
+    for (const body of [
+      "The constructor's async fetch can be interrupted by the first incoming request.",
+      "Initialization is not wrapped in blockConcurrencyWhile, so a request can race the init load.",
+      "Race during cold-start: the init read may not finish before the first request.",
+    ]) {
+      expect(findingClaimsIntraInstanceRace(finding({ headline: "Init race", body })), body).toBe(false)
+    }
+  })
 })

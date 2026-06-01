@@ -9319,6 +9319,8 @@ export function validateForSubmission(args: {
     // keeps any residual real finding visible. Logged on every fire so a false
     // demote is observable. Always-on (a correctness rule, like the authz drop).
     if (
+      f.category !== "testing" &&
+      f.category !== "docs" &&
       lineInDurableObjectClass(doClassSpans.get(f.path.trim()), f.line) &&
       findingClaimsIntraInstanceRace(f)
     ) {

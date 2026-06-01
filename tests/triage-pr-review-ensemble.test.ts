@@ -683,6 +683,61 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.unanchoredFindings[0]?.line).toBe(1)
   })
 
+  // SIG Trust Ledger v0: the body-demote sites tag `trust.demoteReason` when
+  // `trustLedgerEnabled` (flag != off). Exercises the shared gating + the in-place
+  // annotation survival through to `unanchoredFindings` on the line-1 path
+  // (outside-diff); the other 4 demote sites use the identical
+  // `if (trustLedgerEnabled) annotateFindingTrust(...)` mechanism with their own
+  // reason string. Guards against a silent regression in the threading.
+  describe("trust-ledger demote-reason threading", () => {
+    const lineOneReviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [{ line: 2, side: "RIGHT" }]],
+    ])
+    // Fresh per call — the line-1 demote site annotates the finding object IN
+    // PLACE, so a shared fixture would leak the mutation between the two tests.
+    const mkSynthOutput = () => ({
+      verdict: { ...baseVerdict, findings: [{ ...baseFinding, line: 1, score: 4 }] },
+      provenance: {
+        findings: [{
+          sourceSpecialists: ["logic"],
+          sourceFindingIds: ["logic-0"],
+          action: "kept" as const,
+          verifiedViaRetrieval: false,
+        }],
+        dropped: [],
+      },
+    })
+    const addedLineTextByLine = new Map([
+      ["src/lib/foo.ts", new Map([[2, "export const value = 1"]])],
+    ])
+
+    it("tags a line-1 body-routed finding with demoteReason outside-diff when enabled", () => {
+      const out = validateForSubmission({
+        synthOutput: mkSynthOutput(),
+        reviewable: lineOneReviewable,
+        specialistVerdicts,
+        addedLineTextByLine,
+        trustLedgerEnabled: true,
+      })
+      expect(out.unanchoredFindings[0]?.trust).toEqual({
+        tier: "body-only-ungrounded",
+        surface: "body",
+        demoteReason: "outside-diff",
+      })
+    })
+
+    it("is a true no-op when disabled (default) — no trust mutation", () => {
+      const out = validateForSubmission({
+        synthOutput: mkSynthOutput(),
+        reviewable: lineOneReviewable,
+        specialistVerdicts,
+        addedLineTextByLine,
+      })
+      expect(out.unanchoredFindings[0]?.line).toBe(1) // still demoted
+      expect(out.unanchoredFindings[0]?.trust).toBeUndefined() // but untagged
+    })
+  })
+
   it("does not repair broad-scope findings into inline comments", () => {
     const out = validateForSubmission({
       synthOutput: {

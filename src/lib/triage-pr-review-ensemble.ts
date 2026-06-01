@@ -5826,6 +5826,10 @@ export async function handlePrReviewEnsemble(
       // ARC-281: thread specialist coverage + delta counts through
       // to the new renderer.
       coverage,
+      // SIG-245: files dropped from review (diff-budget spill into a later
+      // batch, or individually too large) → a visible "files not reviewed"
+      // notice in the body so a silently-dropped file is never invisible.
+      notReviewedFiles: [...new Set([...filesNotReviewed, ...droppedTooLarge])],
       delta: deltaCounts,
       ...(primaryAffordance.reviewCounter !== undefined
         ? { reviewCounter: primaryAffordance.reviewCounter }

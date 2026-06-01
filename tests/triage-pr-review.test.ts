@@ -1489,6 +1489,40 @@ describe("buildReviewSubmission", () => {
     expect(out.submission.body).toContain("Approval validation still has an unresolved policy blocker.")
     expect(out.submission.body).not.toContain("0 findings")
   })
+
+  it("SIG-245: renders a visible 'files not reviewed' notice when files were dropped from review", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      notReviewedFiles: ["src/services/exec.ts", "src/big.ts"],
+    })
+    expect(out.submission.body).toContain("2 files not reviewed")
+    expect(out.submission.body).toContain("`src/services/exec.ts`")
+    expect(out.submission.body).toContain("`src/big.ts`")
+    expect(out.submission.body).toContain("not analyzed")
+    // The notice sits up top, under the headline lead line.
+    const lead = out.submission.body.indexOf("not reviewed")
+    const findings = out.submission.body.indexOf("Fix Plan")
+    if (findings >= 0) expect(lead).toBeLessThan(findings)
+  })
+
+  it("SIG-245: singular phrasing for one dropped file; no notice when nothing dropped", () => {
+    const one = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+      notReviewedFiles: ["src/services/exec.ts"],
+    })
+    expect(one.submission.body).toContain("1 file not reviewed")
+    expect(one.submission.body).toContain("it was")
+    const none = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: "alice",
+      headSha: "abc",
+    })
+    expect(none.submission.body).not.toContain("not reviewed")
+  })
 })
 
 describe("buildBodyOnlyCheckAnnotations", () => {

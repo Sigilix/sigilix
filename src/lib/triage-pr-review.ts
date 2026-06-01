@@ -913,6 +913,10 @@ interface BuildReviewArgs {
   trustLedger?: boolean
   /** Trust Ledger: forwarded to `RenderBodyArgs.trustLedgerSuppressed`. */
   trustLedgerSuppressed?: number
+  /** SIG-245: changed files dropped from review (diff-budget spill or
+   *  individually too large). Forwarded to `RenderBodyArgs.notReviewedFiles`
+   *  to render the visible "files not reviewed" notice. */
+  notReviewedFiles?: string[]
 }
 
 /**
@@ -1187,6 +1191,7 @@ export function buildReviewSubmissionWithMetadata({
   linkContext,
   trustLedger,
   trustLedgerSuppressed,
+  notReviewedFiles,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
   const {
     verdict,
@@ -1225,6 +1230,7 @@ export function buildReviewSubmissionWithMetadata({
   // SIG Trust Ledger v0: forward the render flag + the suppressed count.
   if (trustLedger) renderArgs.trustLedger = true
   if (typeof trustLedgerSuppressed === "number") renderArgs.trustLedgerSuppressed = trustLedgerSuppressed
+  if (notReviewedFiles && notReviewedFiles.length > 0) renderArgs.notReviewedFiles = notReviewedFiles
   const body =
     event === "APPROVE"
       ? renderApproveBody(renderArgs)
@@ -1896,6 +1902,11 @@ export interface RenderBodyArgs {
    *  line is omitted (back-compat shim for call sites that haven't
    *  plumbed coverage through yet — ensemble will always supply). */
   coverage?: CoverageRoles
+  /** SIG-245: changed files that spilled past the per-call diff budget
+   *  (or were individually too large) and so were NOT reviewed. When
+   *  non-empty, the body renders a visible "files not reviewed" notice so
+   *  a silently-dropped file is never invisible to the reader. */
+  notReviewedFiles?: string[]
   /** Per-Kimi delta badge counts (already computed). `null` skips. */
   delta?: DeltaBadgeCounts | null
   /** Stack context. When `stack.isStacked === true && stack.parent`,
@@ -2126,6 +2137,20 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   if (deltaBadge) leadParts.push(deltaBadge.replace(/^\*\*Changes:\*\* /, "since last review: "))
   if (coverageInline) leadParts.push(coverageInline)
   lines.push(leadParts.join(" · "))
+
+  // SIG-245: never silently drop. If changed files spilled past the per-call
+  // diff budget (or were individually too large), they were NOT reviewed —
+  // surface a visible notice right under the headline so a dropped file is
+  // never invisible. Believability: the bot must not post as if it analyzed
+  // code it never saw.
+  if (args.notReviewedFiles && args.notReviewedFiles.length > 0) {
+    const n = args.notReviewedFiles.length
+    const files = args.notReviewedFiles.map((p) => `\`${p}\``).join(", ")
+    lines.push("")
+    lines.push(
+      `> ⚠️ **${n} file${n === 1 ? "" : "s"} not reviewed** — the diff exceeded this review's size budget, so ${n === 1 ? "it was" : "they were"} **not analyzed**: ${files}. Split the PR or re-run to cover ${n === 1 ? "it" : "them"}.`,
+    )
+  }
 
   // SIG Trust Ledger v0: the per-review Trust Summary, immediately under the lead
   // line (the believability headline). Vanishes (null) on a clean approve / no

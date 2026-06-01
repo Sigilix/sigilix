@@ -9298,9 +9298,12 @@ export function validateForSubmission(args: {
           // weak-evidence security finding still warrants caution; a low-stakes
           // coverage over-fire does not. evaluateTestFinding only fires on
           // score>=4, so this always demotes a P0/P1 to a sub-blocker note.)
-          f.score = Math.min(f.score, 3)
-          if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "tests-coverage" })
-          unanchoredFindings.push(f)
+          // Clone before mutating: `f` aliases synthOutput.verdict.findings[i],
+          // which is recorded to telemetry.synthesizer.verdict — capping the
+          // score in place would corrupt the recorded synth score (CR #284).
+          const demotedFinding: PrReviewFinding = { ...f, score: Math.min(f.score, 3) }
+          if (trustLedgerEnabled) annotateFindingTrust(demotedFinding, { surface: "body", demoteReason: "tests-coverage" })
+          unanchoredFindings.push(demotedFinding)
           continue
         }
         // shadow mode: fall through and keep the finding.

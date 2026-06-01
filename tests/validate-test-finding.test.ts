@@ -571,7 +571,11 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
     expect(result.verdict.findings).toHaveLength(0) // left the inline set
     expect(result.unanchoredFindings).toHaveLength(1) // demoted to the body, NOT dropped
     expect(result.unanchoredFindings[0].headline).toBe("Module needs more tests")
-    expect(result.unanchoredFindings[0].score).toBeLessThan(4) // non-blocking (below the REQUEST_CHANGES floor)
+    expect(result.unanchoredFindings[0].score).toBe(3) // capped to exactly 3 — non-blocking (below the score>=4 floor)
+    // CR #284: the demote clones — the original synth finding (which aliases
+    // telemetry.synthesizer.verdict) must NOT be mutated by the score-cap.
+    expect(f.score).toBe(4)
+    expect(f.trust).toBeUndefined()
     expect(onDrop).toHaveBeenCalledWith(expect.anything(), { reason: "vague-insufficient-test", dropped: true })
   })
 

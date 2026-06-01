@@ -51,6 +51,7 @@ describe("findingClaimsIntraInstanceRace", () => {
     for (const body of [
       "After awaiting the fetch to another DO, the remote value may have changed — a cross-instance race.",
       "Another worker may have taken the lock between the check and the set.",
+      "Concurrent writes from other durable objects can interleave.",
       "Race against the value in KV — it could change between the read and the write.",
       "TOCTOU: storage could be mutated by a concurrent request to another instance.",
       "Concurrent writes to D1 from a different worker could interleave.",

@@ -31,12 +31,13 @@ const RACE_CLAIM_REGEX =
  * read external state across an await and act on a stale value). When present,
  * we do NOT treat the finding as a DO-race FP.
  */
-// CLEARLY-external actors/services only. NOT `storage`/`cache` — those are often
-// the DO's OWN serialized state, where a race finding is the FP we want to demote
-// (an in-memory "cache map" race is intra-instance). KV/D1/R2/database/queue are
-// genuinely external (cross-system, eventually-consistent) → keep those findings.
+// CLEARLY-external actors/services only. NOT `storage`/`cache`/`queue` — those
+// are often the DO's OWN serialized state, where a race finding is the FP we want
+// to demote (an in-memory "cache map" / queue array race is intra-instance).
+// KV/D1/R2/database are genuinely external (cross-system, eventually-consistent)
+// → keep those findings. Actor nouns accept the plural ("other durable objects").
 const EXTERNAL_STATE_REGEX =
-  /\b(external|cross-instance|across instances|remote|upstream|third-party|(?:other|another)\s+(?:durable object|do|instance|request|worker)|kv|d1|r2|database|queue)\b/i
+  /\b(external|cross-instance|across instances|remote|upstream|third-party|(?:other|another)\s+(?:durable objects?|dos?|instances?|requests?|workers?)|kv|d1|r2|database)\b/i
 
 /**
  * Real intra-instance concurrency that CAN occur at INIT time: a constructor's

@@ -266,15 +266,17 @@ OPENCLAW_GRAPH_INDEX = "shadow"
 OPENCLAW_GRAPH_RETRIEVAL = "post"
 
 # SIG-286 graph-context body EXPANSION ("off" | "shadow" | "post"). Default OFF.
-# shadow/post both COMPUTE the enriched changed-symbol context (definition /
-# caller / import-dependent bodies) and emit the `graph-expansion-shadow`
-# telemetry event; neither injects into any prompt in PR1 (post is RESERVED).
-# SIG-286 (2026-05-30): flipped off → shadow to start measuring the cross-file
-# fetch opportunity (bodiesSource.missing / dropped.sourceMissing / row counts)
-# before wiring the bounded fetch in PR2. PR1 passes NO fetcher, so this is
-# fast (DO query + slicing from astFilesByPath, no GitHub reads) — zero prompt
-# injection, zero posted-behavior change.
-OPENCLAW_GRAPH_EXPANSION = "shadow"
+# Both modes COMPUTE the enriched changed-symbol context (definition / caller /
+# import-dependent bodies) and emit the `graph-expansion-shadow` telemetry.
+# `shadow` does NOT touch the prompt; `post` (PR1/PR2) runs the TARGETED inject
+# as a CONTROL/TREATMENT A/B — among reviews with net-new cross-file context,
+# TREATMENT appends `renderGraphExpansionForPrompt` to logic+tests+synth while
+# CONTROL does not, both tagged on `telemetry.graphExpansionAb.arm` so a per-arm
+# finding-rate read (PR3) can tell whether the inject catches MORE real findings.
+# SIG-286 (2026-06-01): flipped shadow → post to START the A/B. The blanket
+# inject was a pre-registered KILL (median net-new tokens 0); this measures the
+# targeted version. Rollback: set "shadow" (inject stops; telemetry continues).
+OPENCLAW_GRAPH_EXPANSION = "post"
 
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner

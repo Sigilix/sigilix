@@ -42,17 +42,29 @@ CREATE INDEX IF NOT EXISTS vrf_daily_counts_by_day ON daily_counts(day);
  *  silently misclassify a record and leak across the corpus split. */
 export type VerificationCategory = "logic" | "security" | "receiptjoin" | "trustledger"
 
-export interface RecordVerificationArgs {
-  /** A worker-token/receipt-join verdict, OR (under TRUSTLEDGER_CATEGORY) a
-   *  per-finding trust tier — both share the generic `verdict` TEXT column. */
-  verdict: VerificationVerdict | FindingTrustTier
-  /** SIG-285 v2: the receipt-join check records under RECEIPTJOIN_CATEGORY, and
-   *  the Trust Ledger under TRUSTLEDGER_CATEGORY, so each is surfaced separately
-   *  from the worker-token verdicts. */
-  category: VerificationCategory
-  /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
-  occurredAt?: string
-}
+/**
+ * One verdict record. Discriminated by `category` so the `verdict` value can't be
+ * mismatched to the wrong corpus: `query()` splits worker-token / receipt-join /
+ * trust-ledger purely by `category`, so a stray `FindingTrustTier` under a
+ * worker-token category (or vice-versa) would silently corrupt the fractions that
+ * drive the SIG-285 go/no-go calls. The union makes that pairing a type error.
+ * (Both still share the DO's generic `verdict` TEXT column at the storage layer.)
+ */
+export type RecordVerificationArgs =
+  | {
+      /** Trust Ledger corpus — the per-finding trust tier. */
+      category: "trustledger"
+      verdict: FindingTrustTier
+      /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
+      occurredAt?: string
+    }
+  | {
+      /** Worker-token verdicts (`logic`/`security`) + the receipt-join corpus. */
+      category: Exclude<VerificationCategory, "trustledger">
+      verdict: VerificationVerdict
+      /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
+      occurredAt?: string
+    }
 
 /** Sentinel `category` the receipt-join check (SIG-285 v2) records under, so it
  *  shares the DO without a schema migration but is reported separately from the

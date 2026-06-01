@@ -278,7 +278,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       "|:---|:---|:---|",
       "| **Critical (5)** | `src/foo.ts:42` | `logic`: broken test |",
       "",
-      "<sub>Dismiss: `@sigilix dismiss` in a review thread · Re-run: `/sigilix review` · `abcdef1`</sub>",
+      "<sub>Dismiss: `@sigilix dismiss <reason>` in thread (not-a-bug|bad-anchor|already-covered|too-minor|wrong-context) · Re-run: `/sigilix review` · `abcdef1`</sub>",
     ].join("\n"))
   })
 
@@ -468,7 +468,7 @@ describe("renderRequestChangesBody (ARC-281)", () => {
       verdict: verdict({ findings: [finding()] }),
       coverage: FULL,
     })
-    expect(body).toContain("Dismiss: `@sigilix dismiss` in a review thread")
+    expect(body).toContain("Dismiss: `@sigilix dismiss <reason>` in thread (not-a-bug|bad-anchor|already-covered|too-minor|wrong-context)")
     expect(body).not.toMatch(/✅|🎉|🤖|🪄/)
   })
 

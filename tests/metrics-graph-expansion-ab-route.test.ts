@@ -93,6 +93,31 @@ describe("handleGraphExpansionAbMetricsRoute", () => {
     expect(body.verdict).toBe("accruing")
   })
 
+  it("counts failedFetches when a get throws (swallow-and-count, record dropped)", async () => {
+    const reverseTs = REVERSE_TS_BASE - (Date.now() - DAY)
+    const key = `ensemble-review-telemetry:${reverseTs}:o/r#300`
+    const env = {
+      OPENCLAW_VALIDATION_METRICS_TOKEN: TOKEN,
+      OPENCLAW_GRAPH_EXPANSION: "post",
+      OPENCLAW_STATE: {
+        async list() {
+          return { keys: [{ name: key }], list_complete: true, cursor: undefined }
+        },
+        async get() {
+          throw new Error("kv down")
+        },
+      },
+    } as unknown as Env
+    const res = await handleGraphExpansionAbMetricsRoute(
+      get("https://x/metrics/graph-expansion-ab?repo=o/r", `Bearer ${TOKEN}`),
+      env,
+    )
+    const body = (await res.json()) as { failedFetches: number; treatment: { reviews: number }; control: { reviews: number } }
+    expect(body.failedFetches).toBe(1)
+    // The failed record is dropped — counts toward neither arm.
+    expect(body.treatment.reviews + body.control.reviews).toBe(0)
+  })
+
   it("excludes telemetry older than the window", async () => {
     const oldReverseTs = REVERSE_TS_BASE - (Date.now() - 40 * DAY) // ~40 days old
     const records: Record<string, unknown> = {

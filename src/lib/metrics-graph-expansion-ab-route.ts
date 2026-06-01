@@ -132,6 +132,10 @@ export async function handleGraphExpansionAbMetricsRoute(request: Request, env: 
     arm.highSevFindings += s.highSev
   }
 
+  if (failedFetches > 0) {
+    console.error(JSON.stringify({ event: "graph-expansion-ab-lossy-read", repos, failedFetches }))
+  }
+
   const t = withRates(treatment)
   const c = withRates(control)
   const haveData = treatment.reviews >= MIN_PER_ARM && control.reviews >= MIN_PER_ARM
@@ -150,7 +154,13 @@ export async function handleGraphExpansionAbMetricsRoute(request: Request, env: 
       // findings. Recall proxy only — NOT yet FP-adjusted (see header caveat).
       deltaMeanHighSev,
       minPerArm: MIN_PER_ARM,
-      verdict: !haveData ? "accruing" : deltaMeanHighSev !== null && deltaMeanHighSev > 0 ? "treatment-higher" : "no-lift",
+      // Deliberately NOT a go/ship signal — a positive delta could be extra FPs.
+      // The value names the observation, not a recommendation (code-reviewer #281).
+      verdict: !haveData
+        ? "accruing"
+        : deltaMeanHighSev !== null && deltaMeanHighSev > 0
+          ? "treatment-more-findings-unverified"
+          : "no-lift",
       note: "finding-COUNT comparison (recall proxy); a positive delta needs an FP cross-check before defaulting the inject on",
       scanCapped,
       failedFetches,

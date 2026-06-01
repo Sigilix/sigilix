@@ -14,9 +14,10 @@
 // makes an intra-instance race/concurrency CLAIM, and (b) the caller has
 // confirmed the finding's line is inside a DurableObject class body. The
 // await/external-state nuance (a real cross-await consistency bug against
-// EXTERNAL state is possible) is why the claim regex is scoped to race/
-// concurrent-ACCESS language and excludes external-consistency phrasing, and why
-// it ships shadow-first.
+// EXTERNAL state — another worker/DO, KV, storage, D1 — IS possible) is carved
+// out by EXTERNAL_STATE_REGEX, so those findings are kept. The matched finding
+// is DEMOTED to the body, not dropped (FN-safe: a residual real finding stays
+// visible), which is why this ships always-on rather than shadow-first.
 
 import type { PrReviewFinding } from "./triage-pr-review"
 
@@ -30,8 +31,12 @@ const RACE_CLAIM_REGEX =
  * read external state across an await and act on a stale value). When present,
  * we do NOT treat the finding as a DO-race FP.
  */
+// CLEARLY-external actors/services only. NOT `storage`/`cache` — those are often
+// the DO's OWN serialized state, where a race finding is the FP we want to demote
+// (an in-memory "cache map" race is intra-instance). KV/D1/R2/database/queue are
+// genuinely external (cross-system, eventually-consistent) → keep those findings.
 const EXTERNAL_STATE_REGEX =
-  /\b(external|other (?:do|durable object|instance|worker)|cross-instance|across instances|another (?:do|instance|request)|remote|upstream|third-party)\b/i
+  /\b(external|cross-instance|across instances|remote|upstream|third-party|(?:other|another)\s+(?:durable object|do|instance|request|worker)|kv|d1|r2|database|queue)\b/i
 
 /**
  * True when the finding makes an intra-instance race/concurrency claim (and so,

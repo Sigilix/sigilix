@@ -48,13 +48,14 @@ describe("findingClaimsIntraInstanceRace", () => {
   })
 
   it("does NOT fire when the claim is about EXTERNAL / cross-instance state (a real concern on a DO)", () => {
-    expect(
-      findingClaimsIntraInstanceRace(
-        finding({
-          headline: "Race against external state",
-          body: "After awaiting the fetch to another DO, the remote value may have changed — a cross-instance race.",
-        }),
-      ),
-    ).toBe(false)
+    for (const body of [
+      "After awaiting the fetch to another DO, the remote value may have changed — a cross-instance race.",
+      "Another worker may have taken the lock between the check and the set.",
+      "Race against the value in KV — it could change between the read and the write.",
+      "TOCTOU: storage could be mutated by a concurrent request to another instance.",
+      "Concurrent writes to D1 from a different worker could interleave.",
+    ]) {
+      expect(findingClaimsIntraInstanceRace(finding({ headline: "Race condition", body })), body).toBe(false)
+    }
   })
 })

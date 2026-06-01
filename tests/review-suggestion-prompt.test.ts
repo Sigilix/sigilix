@@ -61,7 +61,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 13", () => {
+  it("PROMPT_VERSION bumped to 14", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -74,6 +74,8 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // full body and only flags provenance.softened[]; no score/body soften
     // — completes the double-soften fix render.ts missed + makes Phase-4
     // soften-gating hold).
-    expect(PROMPT_VERSION).toBe("13")
+    // SIG-245 13→14 (logic lens gains non-atomic RMW + cross-tier field-drift
+    // focus bullets — the subtle-logic recall gap the benchmark surfaced).
+    expect(PROMPT_VERSION).toBe("14")
   })
 })

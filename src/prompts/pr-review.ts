@@ -147,8 +147,17 @@
  * and makes Phase-4 soften-gating actually hold (the synth no longer
  * pre-softens regardless of the flag). Reviews with v12 go stale on first
  * deploy of v13. Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
+ *
+ * v13 → v14 (SIG-245 subtle-logic recall): the LOGIC specialist lens gains
+ * two explicit focus bullets the benchmark showed it was missing — (1)
+ * non-atomic read-modify-write of a shared/persisted counter (lost-update
+ * race) and (2) cross-tier field-name drift (obj.camelCaseField vs a
+ * snake_case type/contract → undefined at runtime → Invalid Date/NaN/blank).
+ * Both are phrased FP-safe (grounded: confirm the mismatch / atomicity in
+ * context before flagging). Reviews with v13 go stale on first deploy of v14.
+ * Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
  */
-export const PROMPT_VERSION = "13"
+export const PROMPT_VERSION = "14"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

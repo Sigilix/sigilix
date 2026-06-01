@@ -3327,6 +3327,12 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
     expect(formatFindingComment(runner, 5, undefined, undefined, true)).toContain("runner-verified")
     const model = { ...baseFinding, trust: { tier: "body-only-ungrounded" as const } }
     expect(formatFindingComment(model, 5, undefined, undefined, true)).toContain("trust-model")
+    // backward-compat: a finding with NO trust field (pre-Trust-Ledger) → the muted
+    // MODEL pill, not a crash and not an unearned GROUNDED/VERIFIED.
+    const noTrust = formatFindingComment(baseFinding, 5, undefined, undefined, true)
+    expect(noTrust).toContain("trust-model")
+    expect(noTrust).not.toContain("trust-grounded")
+    expect(noTrust).not.toContain("runner-verified")
     // off (default) → no pill of any kind; byte-identical header to today.
     const off = formatFindingComment(grounded, 5, undefined, undefined, false)
     expect(off).not.toContain("trust-grounded")
@@ -3342,10 +3348,12 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       findings: [{ ...baseFinding, score: 4, trust: { tier: "grounded-model" } }],
     }
     const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: true })
-    expect(on.submission.body).toContain("**Proof**")
-    expect(on.submission.body).toContain("grounded")
+    // the segmented summary: total + the proof breakdown (1 grounded-model finding).
+    expect(on.submission.body).toContain("**1 finding**")
+    expect(on.submission.body).toContain("**Proof**: 1 grounded")
     const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", trustLedger: false })
     expect(off.submission.body).not.toContain("**Proof**")
+    expect(off.submission.body).not.toContain("**1 finding**")
   })
 })
 

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   annotateWithConsensus,
   assignStableFindingIds,
+  buildAstFindingsSynthBlock,
   buildSynthRetryMessage,
   resolveReviewEventOverride,
   buildSynthInputVerdicts,
@@ -93,6 +94,31 @@ function makeCounterEnv(store = new Map<string, string>(), puts: Array<[string, 
     },
   } as unknown as Env
 }
+
+describe("buildAstFindingsSynthBlock (SIG-245 AST-supersession recall fix)", () => {
+  const astJson = '[{"id":"spawn-shell-true","path":"src/services/exec.ts","line":5}]'
+
+  it("autoInline ON: instructs supersession-and-drop (AST version WILL be posted)", () => {
+    const block = buildAstFindingsSynthBlock(astJson, true)
+    expect(block).toContain("drop it from your output")
+    expect(block).toContain("superseded_by_ast")
+    expect(block).toContain(astJson)
+  })
+
+  it("autoInline OFF: instructs KEEP, never drop (AST version is NOT posted → don't lose the finding)", () => {
+    const block = buildAstFindingsSynthBlock(astJson, false)
+    expect(block).toContain("KEEP the specialist finding")
+    expect(block).toContain("Do NOT drop AST-matched findings")
+    expect(block).not.toContain("drop it from your output")
+    expect(block).not.toContain("superseded_by_ast")
+    expect(block).toContain(astJson)
+  })
+
+  it("returns empty string when there are no AST findings (block omitted)", () => {
+    expect(buildAstFindingsSynthBlock("", true)).toBe("")
+    expect(buildAstFindingsSynthBlock("", false)).toBe("")
+  })
+})
 
 describe("resolveReviewEventOverride (SIG-245 + SIG-287 downgrade trigger)", () => {
   it("escalates to REQUEST_CHANGES when there is an approval blocker (wins over everything)", () => {

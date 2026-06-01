@@ -1443,6 +1443,29 @@ export function resolveReviewEventOverride(args: {
   return undefined
 }
 
+/**
+ * Build the `[AST RULE FINDINGS]` synth-prompt block (pure, exported for test).
+ * ARC-181 + SIG-245: the SUPERSEDE-and-drop instruction (drop a specialist
+ * finding that matches an AST entry on (path,line,role)) is only safe when the
+ * AST version will actually be POSTED — i.e. when `astRules.autoInline` is ON.
+ * With autoInline OFF (the DEFAULT) the AST findings are never posted anywhere,
+ * so telling the synth to drop the matching specialist finding silently loses a
+ * real issue that BOTH engines caught. Verified in prod telemetry (e2e-backend
+ * PR#1): the security specialist EMITTED shell-injection + disabled-TLS findings
+ * on src/services/exec.ts, the synth dropped them as `superseded_by_ast/*`, and
+ * the AST version was never re-injected — 2 real P0/P1 bugs vanished. So when
+ * autoInline is OFF, the synth must KEEP its matching findings and use the AST
+ * entries only for confidence + Fix-Plan ordering. Genuine cross-specialist
+ * duplicates are still merged via the synth's separate `duplicate` drop reason.
+ */
+export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: boolean): string {
+  if (astFindingsJson.length === 0) return ""
+  const instruction = autoInline
+    ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
+    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)`
+  return `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\n${instruction}\n\n\`\`\`json\n${astFindingsJson}\n\`\`\``
+}
+
 // ─── orchestrator ──────────────────────────────────────────────────────
 
 export async function handlePrReviewEnsemble(
@@ -3903,9 +3926,11 @@ export async function handlePrReviewEnsemble(
     // ARC-181 Task 8: thread structured AST findings into the synth
     // prompt for (path, line, role_hint) supersession matching.
     const astFindingsForSynth = renderAstFindingsAsJsonForSynth(astResult.findings)
-    const synthMessageWithAst = astFindingsForSynth.length > 0
-      ? `${synthMessage}\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\nMatch these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.\n\n\`\`\`json\n${astFindingsForSynth}\n\`\`\``
-      : synthMessage
+    // SIG-245: only instruct supersession-and-drop when the AST version will be
+    // posted (autoInline ON). With it OFF (default) the drop silently loses
+    // double-detected real findings — see buildAstFindingsSynthBlock.
+    const synthMessageWithAst =
+      synthMessage + buildAstFindingsSynthBlock(astFindingsForSynth, astRulesConfig.autoInline)
 
     // ARC-188: append SARIF structured findings + SBOM summary on
     // top of the AST-augmented prompt. Synth gets the machine-

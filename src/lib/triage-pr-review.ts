@@ -238,6 +238,7 @@ export interface FindingTrust {
     | "security-evidence"
     | "verification-refuted"
     | "outside-diff"
+    | "do-race"
 }
 
 export interface PrReviewFinding {
@@ -2137,7 +2138,8 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
         r === "absence-grounding" ||
         r === "security-grounding" ||
         r === "security-evidence" ||
-        r === "verification-refuted"
+        r === "verification-refuted" ||
+        r === "do-race"
       )
     }).length
     const trustLine = renderTrustSummary({

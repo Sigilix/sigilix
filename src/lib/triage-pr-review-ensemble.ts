@@ -390,7 +390,7 @@ import {
 import type { ValidationRejectionEvent } from "../do/validation-metrics"
 import type { GraphRetrievalSample } from "../do/graph-metrics"
 import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
-import { graphExpansionMode } from "./graph-expansion-mode"
+import { graphExpansionMode, injectArm } from "./graph-expansion-mode"
 import type { GraphContextNode } from "../do/repo-graph"
 import { edgeWeight, hopDecay } from "./graph-scoring"
 import { withTimeout } from "./with-timeout"
@@ -2603,22 +2603,32 @@ export async function handlePrReviewEnsemble(
         // current prod behavior; only `post` injects.
         if (graphExpMode === "post") {
           const expansionBlock = renderGraphExpansionForPrompt(enriched)
+          // SIG-286 PR2: A/B among reviews that WOULD inject. TREATMENT gets the
+          // cross-file inject; CONTROL computes the identical context but does
+          // NOT inject. Both arms record `graphExpansionAb` on the telemetry (it
+          // rides into ensemble-review-telemetry with the verdict), so a per-arm
+          // finding-rate comparison can read whether the inject catches MORE real
+          // findings — the only honest FN measure, since the inject's findings
+          // land on the diff (informed by cross-file context), not on the
+          // snippets. Non-inject reviews (empty render) sit out the experiment.
           if (expansionBlock.length > 0) {
-            graphCtxForPrompt = [graphCtxForPrompt, expansionBlock]
-              .filter((s) => s.length > 0)
-              .join("\n\n")
-            // Observable so the post-flip is verifiable (which reviews actually
-            // got a targeted inject vs the ~73% that render empty). Counts are
-            // the ACTUALLY-INJECTED net-new bodies (same selector as the render),
-            // not the enriched totals — so post-mode analysis isn't muddied by
-            // same-file rows that were never appended (CodeRabbit #277).
-            console.log(JSON.stringify({
-              event: "graph-expansion-injected",
-              owner, repo, prNumber, headSha: headSha.slice(0, 7),
-              bytes: expansionBlock.length,
-              bodiesInjected: netNewCrossFileBodies(enriched).length,
-              netNewTokens: enriched.netNewTokens,
-            }))
+            const arm = injectArm(headSha)
+            telemetry.graphExpansionAb = { arm, injected: arm === "treatment" }
+            if (arm === "treatment") {
+              graphCtxForPrompt = [graphCtxForPrompt, expansionBlock]
+                .filter((s) => s.length > 0)
+                .join("\n\n")
+              // Observable so the inject is verifiable. Counts are the ACTUALLY-
+              // injected net-new bodies (same selector as the render), not the
+              // enriched totals (CodeRabbit #277).
+              console.log(JSON.stringify({
+                event: "graph-expansion-injected",
+                owner, repo, prNumber, headSha: headSha.slice(0, 7),
+                bytes: expansionBlock.length,
+                bodiesInjected: netNewCrossFileBodies(enriched).length,
+                netNewTokens: enriched.netNewTokens,
+              }))
+            }
           }
         }
       } catch (err) {
@@ -9909,6 +9919,14 @@ interface EnsembleTelemetry {
   submitFallback?: boolean
   /** Error message from the original (failed) inline submission. */
   submitFallbackReason?: string
+  /**
+   * SIG-286 PR2 — targeted-inject A/B arm. Set ONLY in `post` mode and ONLY on
+   * reviews that WOULD inject (non-empty render): `treatment` got the cross-file
+   * inject, `control` did not. Rides into the ensemble-review-telemetry KV with
+   * the verdict, so a per-arm finding-rate comparison can read whether the
+   * inject catches more real findings. Absent in shadow / non-inject reviews.
+   */
+  graphExpansionAb?: { arm: "treatment" | "control"; injected: boolean }
   startMs: number
   totalMs: number
 }

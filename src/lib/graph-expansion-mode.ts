@@ -19,3 +19,20 @@ export function graphExpansionMode(env: Env): "off" | "shadow" | "post" {
   if (v === "shadow") return "shadow"
   return "off"
 }
+
+/**
+ * SIG-286 PR2 — deterministic A/B arm for the targeted-inject experiment.
+ *
+ * Among reviews that WOULD inject (the render is non-empty), TREATMENT gets the
+ * cross-file inject and CONTROL does NOT — split ~50/50 by a stable 32-bit hash
+ * of the head SHA. Stable so a re-review of the same head stays in the same arm
+ * (no flip-flop), and deterministic so the arm can be re-derived for analysis.
+ * The point: the inject improves reasoning about the CHANGED code, so its
+ * findings land on the diff, not on the snippets — only a control arm reveals
+ * whether it actually catches MORE real findings (the FN payoff). Pure.
+ */
+export function injectArm(headSha: string): "treatment" | "control" {
+  let h = 0
+  for (let i = 0; i < headSha.length; i++) h = (Math.imul(h, 31) + headSha.charCodeAt(i)) | 0
+  return (h & 1) === 0 ? "treatment" : "control"
+}

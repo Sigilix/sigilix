@@ -12,10 +12,12 @@ const EMIT_RULES = new Set([
   "no-exec-shell-interpolation",
   "spawn-shell-true",
   "no-disabled-tls-reject-unauthorized",
+  // SIG-310: the contract-drift type-pattern (logic/warning — FP-safe at P2).
+  "no-snake-camel-optional-alias",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {
-  it("is true on exactly the 3 constant/context-guarded security sinks", () => {
+  it("is true on exactly the FP-safe emit rules (3 security sinks + the SIG-310 type smell)", () => {
     for (const r of ALL_RULES) {
       if (EMIT_RULES.has(r.id)) expect(r.emitWhenUnmatched).toBe(true)
       else expect(r.emitWhenUnmatched ?? false).toBe(false)
@@ -50,7 +52,10 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
   it("tells the synth to EMIT unmatched deterministic_emit security sinks", () => {
     const off = buildAstFindingsSynthBlock('{"ast_findings":[]}', false)
     expect(off).toContain("deterministic_emit")
-    expect(off).toMatch(/EMIT a .*security.* finding/)
+    expect(off).toMatch(/EMIT a finding/)
+    // role-aware (SIG-310): emit in the entry's own role, not hardcoded security
+    expect(off).toContain("role_hint")
+    expect(off).toContain('category:"logic"')
     // believability-critical: the anti-double-post + "no specialist covers it"
     // guards must stay in the prompt (a silent deletion would re-open FP risk).
     expect(off).toContain("don't double-post")

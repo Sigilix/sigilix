@@ -61,7 +61,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 15", () => {
+  it("PROMPT_VERSION bumped to 16", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -78,6 +78,8 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // focus bullets — the subtle-logic recall gap the benchmark surfaced).
     // SIG-309 PR2 14→15 (AST block emits unmatched deterministic_emit security
     // sinks — exec/spawn/TLS — through the grounding pipeline).
-    expect(PROMPT_VERSION).toBe("15")
+    // SIG-310 15→16 (deterministic_emit generalized role-aware: the logic-role
+    // snake/camel-optional-alias type smell now emits too).
+    expect(PROMPT_VERSION).toBe("16")
   })
 })

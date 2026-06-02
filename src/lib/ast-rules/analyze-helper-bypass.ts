@@ -121,16 +121,18 @@ function writesColumnInto(body: string, table: string, column: string): boolean 
     if (norm(m[1]!) !== table) continue
     if (m[2]!.split(",").some((c) => norm(c.trim() || "x") === column)) return true
   }
-  for (const m of body.matchAll(/\bupdate\s+([A-Za-z_$][\w$.]*)\s+set\s+([\s\S]*?)(?=\bwhere\b|\breturning\b|;|["'`]|$)/gi)) {
+  for (const m of body.matchAll(/\bupdate\s+([A-Za-z_$][\w$.]*)\s+set\s+([\s\S]*?)(?=\bwhere\b|\breturning\b|;|$)/gi)) {
     if (norm(m[1]!) !== table) continue
     for (const a of m[2]!.matchAll(/([A-Za-z_$][\w$]*)\s*=/g)) if (norm(a[1]!) === column) return true
   }
   return false
 }
 
-/** Does `codeBody` (strings already blanked) call `name`? */
+/** Does `codeBody` (strings already blanked) call `name`? Uses a `(?<![\w$])`
+ *  boundary (not `\b`) so a `$`-prefixed identifier is matched (Sigilix #308:
+ *  `\b` is not a boundary before `$`). */
 function callsFunction(codeBody: string, name: string): boolean {
-  return new RegExp(`\\b${esc(name)}\\s*\\(`).test(codeBody)
+  return new RegExp(`(?<![\\w$])${esc(name)}\\s*\\(`).test(codeBody)
 }
 
 /**
@@ -162,7 +164,7 @@ export function analyzeHelperBypass(filesByPath: ReadonlyMap<string, string>): A
     // Helper must be CALLED somewhere (calls minus its own declaration(s) > 0),
     // counted on the strings-blanked corpus so a name in a doc/SQL string doesn't
     // inflate it (code-review L2).
-    const calls = (callCorpus.match(new RegExp(`\\b${esc(helper)}\\s*\\(`, "g")) ?? []).length
+    const calls = (callCorpus.match(new RegExp(`(?<![\\w$])${esc(helper)}\\s*\\(`, "g")) ?? []).length
     const decls = (callCorpus.match(new RegExp(`function\\s+${esc(helper)}\\s*\\(`, "g")) ?? []).length
     if (calls - decls <= 0) continue
     for (const f of fns) {

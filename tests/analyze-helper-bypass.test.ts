@@ -98,9 +98,28 @@ describe("analyzeHelperBypass", () => {
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 
-  it("handles a `$` in a function name without a regex crash (regex safety)", () => {
-    const m = new Map([["b.ts", "function a$b() { pool.query(\"SELECT SUM(x) FROM t\"); }\nfunction w() { pool.query(\"INSERT INTO t (x) VALUES (1)\"); }"], ["api.ts", "a$b(1)"]])
-    expect(() => analyzeHelperBypass(m)).not.toThrow()
+  it("FLAGS via a COUNT helper (not just SUM)", () => {
+    const countHelper = `function refundCount(id) { return pool.query("SELECT COUNT(amount_cents) AS s FROM refunds WHERE charge_id = $1", [id]); }`
+    const m = new Map([["b.ts", countHelper + MUTATOR_BYPASS], ["api.ts", `refundCount(x)`]])
+    const hints = analyzeHelperBypass(m)
+    expect(hints).toHaveLength(1)
+    expect(hints[0]!.fn).toBe("refundCharge")
+  })
+
+  it("FLAGS an UPDATE that writes the aggregated column", () => {
+    const updateMutator = `function bumpRefund(id, n) { pool.query("UPDATE refunds SET amount_cents = amount_cents + $1 WHERE id = $2", [n, id]); }`
+    const m = new Map([["b.ts", HELPER + updateMutator], ["api.ts", SIBLING_USES]])
+    const hints = analyzeHelperBypass(m)
+    expect(hints).toHaveLength(1)
+    expect(hints[0]!.fn).toBe("bumpRefund")
+  })
+
+  it("matches a call from a `$`-named function (regex boundary, Sigilix #308)", () => {
+    // `$write` DOES call refundsTotal → the `(?<![\\w$])` boundary must detect the
+    // call (a `\\b` boundary would miss it) so $write is NOT flagged.
+    const safe = `function $write(id) { const p = refundsTotal(id); pool.query("INSERT INTO refunds (charge_id, amount_cents) VALUES ($1, $2)", [id, amt - p]); }`
+    const m = new Map([["b.ts", HELPER + safe], ["api.ts", SIBLING_USES]])
+    expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
 })
 

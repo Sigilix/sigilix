@@ -2275,9 +2275,13 @@ export async function handlePrReviewEnsemble(
     const wantBranchAware =
       (env.OPENCLAW_BRANCH_AWARE_RETRIEVAL ?? "").trim().toLowerCase() === "on"
     const wantDynamicReviewEvidence = dynamicReviewEvidenceEnabled(env)
+    // SIG-317 Part 4b: the asymmetry injector needs the changed-files corpus too
+    // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
+    const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
     const astFilesByPath = new Map<string, string>()
     if (
-      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence) &&
+      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
+        asymmetryMode !== "off") &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(
@@ -3058,7 +3062,7 @@ export async function handlePrReviewEnsemble(
     // for the model to judge, NOT a posted finding. Gated `off` (shadow) by
     // default: unlike a pure detector this NUDGES the specialist, so it carries
     // an induced-FP risk and ships shadow-first → measure → flip. `on` injects.
-    const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
+    // `asymmetryMode` is read above (it also gates the changed-files corpus load).
     let asymmetryBlock = ""
     if (asymmetryMode !== "off") {
       const asymmetryHints = analyzeHelperBypass(astFilesByPath)

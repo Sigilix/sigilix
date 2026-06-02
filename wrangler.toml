@@ -278,6 +278,21 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # targeted version. Rollback: set "shadow" (inject stops; telemetry continues).
 OPENCLAW_GRAPH_EXPANSION = "post"
 
+# SIG-314 (2026-06-02): deterministic IDOR/BOLA floor (no-unauthorized-object-
+# lookup AST rule). Run-invariant insurance so the obvious in-diff IDOR the
+# security specialist catches only nondeterministically (pr/08: caught keys.ts,
+# dropped the workspaces BOLA) is never fully missed. The rule always RUNS (the
+# runner logs each hit), but its emits reach the synth/post ONLY in "post";
+# "off" strips silently, "shadow" strips-but-logs an `authz-idor-shadow` rollup.
+# Shipping at "post" (founder call 2026-06-02): structurally P2-capped
+# (clampAstEmitScores) so it can NEVER post a P0/P1 on its own; a specialist that
+# independently escalates the same line still stands; and there are no customers
+# yet, so live traffic is dogfood + e2e benchmark only. The residual risk is a P2
+# advisory on a middleware-only-authz handler (no in-body principal proxy) —
+# internal noise, not a believability incident. Rollback: "shadow" (measure-only)
+# or "off".
+OPENCLAW_AUTHZ_IDOR_SCAN = "post"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.

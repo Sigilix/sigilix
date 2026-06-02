@@ -34,6 +34,8 @@ import { noNPlusOneCallInLoop } from "./rules/no-n-plus-one-call-in-loop"
 import { noSyncIoInRequestPath } from "./rules/no-sync-io-in-request-path"
 // SIG-310: contract-drift type-pattern detector.
 import { noSnakeCamelOptionalAlias } from "./rules/no-snake-camel-optional-alias"
+// SIG-314: deterministic IDOR/BOLA floor (security, warning/P2-capped).
+import { noUnauthorizedObjectLookup } from "./rules/no-unauthorized-object-lookup"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -70,6 +72,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noSyncIoInRequestPath,
   // SIG-310: logic-specialist contract-drift type-pattern (severity: warning).
   noSnakeCamelOptionalAlias,
+  // SIG-314: security-specialist deterministic IDOR/BOLA floor (severity: warning).
+  noUnauthorizedObjectLookup,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

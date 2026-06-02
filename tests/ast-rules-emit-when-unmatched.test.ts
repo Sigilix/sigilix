@@ -5,8 +5,10 @@
 import { describe, it, expect } from "vitest"
 import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
 import { renderAstFindingsAsJsonForSynth } from "../src/lib/ast-rules/render"
-import { buildAstFindingsSynthBlock, clampAstEmitScores } from "../src/lib/triage-pr-review-ensemble"
+import { buildAstFindingsSynthBlock, clampAstEmitScores, validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
 import type { AstFinding } from "../src/lib/ast-rules/types"
+import type { PrReviewVerdict, PrReviewFinding } from "../src/lib/triage-pr-review"
+import type { ReviewableMap } from "../src/lib/diff-positions"
 
 const EMIT_RULES = new Set([
   "no-exec-shell-interpolation",
@@ -14,10 +16,12 @@ const EMIT_RULES = new Set([
   "no-disabled-tls-reject-unauthorized",
   // SIG-310: the contract-drift type-pattern (logic/warning — FP-safe at P2).
   "no-snake-camel-optional-alias",
+  // SIG-314: the IDOR/BOLA floor (security/warning — FP-safe at P2).
+  "no-unauthorized-object-lookup",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {
-  it("is true on exactly the FP-safe emit rules (3 security sinks + the SIG-310 type smell)", () => {
+  it("is true on exactly the FP-safe emit rules (security sinks + IDOR floor + the SIG-310 type smell)", () => {
     for (const r of ALL_RULES) {
       if (EMIT_RULES.has(r.id)) expect(r.emitWhenUnmatched).toBe(true)
       else expect(r.emitWhenUnmatched ?? false).toBe(false)
@@ -118,5 +122,52 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
     const f = [{ path: "a.ts", line: 20, category: "logic", score: 2 }]
     expect(clampAstEmitScores(f, [ast({})])).toBe(0)
     expect(f[0].score).toBe(2)
+  })
+})
+
+// SIG-314 (Codex review on #302): an UNMATCHED deterministic emit (the synth
+// emits a finding citing only `ast/…` provenance because no specialist flagged
+// it — the exact case the emitWhenUnmatched path exists for) must SURVIVE the
+// hallucination guard. Without the `astFindingIds` allow-list it is dropped,
+// silently nullifying every emit rule in the specialist-missed case.
+describe("emitWhenUnmatched — ast-only provenance survives validateForSubmission", () => {
+  const AST_ID = "ast/no-unauthorized-object-lookup/abc1234/42"
+  const finding: PrReviewFinding = {
+    path: "src/routes/keys.ts", line: 42, score: 4, category: "security",
+    headline: "IDOR floor", body: "req.params.id reaches a lookup with no authz check.",
+    cweId: "CWE-639", evidenceId: "NONE",
+  }
+  const verdict: PrReviewVerdict = { summary: "one idor", confidence: 4, confidenceReason: "x", findings: [finding] }
+  const reviewable: ReviewableMap = new Map([["src/routes/keys.ts", [{ line: 42, side: "RIGHT" as const }]]])
+  // A specialist verdict that did NOT flag the IDOR — the floor's reason to exist.
+  const specialistVerdicts = [{
+    role: "logic" as const,
+    verdict: { summary: "", confidence: 3, confidenceReason: "x", findings: [
+      { path: "src/routes/keys.ts", line: 10, score: 3, category: "logic" as const, headline: "unrelated", body: "b", id: "logic-0" },
+    ] },
+  }]
+  const call = (astFindingIds?: readonly string[]) => validateForSubmission({
+    synthOutput: { verdict, provenance: { findings: [
+      { sourceSpecialists: [], sourceFindingIds: [AST_ID], action: "kept", verifiedViaRetrieval: false },
+    ], dropped: [] } },
+    reviewable, specialistVerdicts,
+    ...(astFindingIds ? { astFindingIds } : {}),
+  })
+
+  it("WITHOUT astFindingIds: the unmatched emit is dropped (the latent bug Codex found)", () => {
+    const out = call(undefined)
+    expect(out.droppedForHallucination).toBe(1)
+    expect(out.verdict.findings.length).toBe(0)
+  })
+  it("WITH the real scanned id allow-listed: the unmatched emit SURVIVES", () => {
+    const out = call([AST_ID])
+    expect(out.droppedForHallucination).toBe(0)
+    expect(out.verdict.findings.length).toBe(1)
+    expect(out.verdict.findings[0]!.category).toBe("security")
+  })
+  it("a HALLUCINATED ast id (not actually scanned) is still dropped", () => {
+    const out = call(["ast/some-other-rule/zzz9999/7"]) // real allow-list, but not THIS finding's id
+    expect(out.droppedForHallucination).toBe(1)
+    expect(out.verdict.findings.length).toBe(0)
   })
 })

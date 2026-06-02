@@ -75,6 +75,9 @@ export const noSnakeCamelOptionalAlias: AstRule = {
         message: `This interface declares both \`${snake}\` (required) and an OPTIONAL alias \`${camel}?\` for the same field — a contract-drift trap. If the loader/serializer populates only \`${snake}\`, every read of \`${camel}\` is \`undefined\` at runtime (Invalid Date / NaN / blank), and it type-checks because the alias is optional. Use one casing consistently (or map the field explicitly at the boundary).`,
         evidence: sliceEvidence(_ctx.source, alias),
         line: alias.loc?.start?.line ?? node.loc?.start?.line ?? 1,
+        // AstRuleHit contract: a multi-line property signature must carry endLine
+        // so the diff-line filter sees an edit anywhere in the span (CodeRabbit #294).
+        ...(typeof alias.loc?.end?.line === "number" ? { endLine: alias.loc.end.line } : {}),
         column: alias.loc?.start?.column ?? 0,
       })
     }

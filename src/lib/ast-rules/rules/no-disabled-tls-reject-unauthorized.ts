@@ -22,6 +22,8 @@ export const noDisabledTlsRejectUnauthorized: AstRule = {
   shortDescription: "{ rejectUnauthorized: false } — TLS validation disabled",
   language: "both",
   nodeTypes: ["Property"],
+  // FP-safe (the literal `rejectUnauthorized: false` is unambiguous) → emit unmatched.
+  emitWhenUnmatched: true,
   visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
     if (!node || node.type !== "Property") return null
     const k = node.key

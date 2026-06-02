@@ -58,6 +58,8 @@ export const spawnShellTrue: AstRule = {
   shortDescription: "spawn/execFile with { shell: true }",
   language: "both",
   nodeTypes: ["CallExpression"],
+  // FP-safe (requires an explicit `{ shell: true }` literal) → emit unmatched.
+  emitWhenUnmatched: true,
   visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
     if (!node || node.type !== "CallExpression") return null
     const name = calleeName(node)

@@ -253,6 +253,9 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
         message: hit.message,
         evidence: redactEvidence(hit.evidence),
         astFindingId: id,
+        // SIG-309 PR2: carry the rule's emit-when-unmatched flag onto the
+        // finding so the synth renderer can mark it `deterministic_emit`.
+        ...(rule.emitWhenUnmatched ? { emitWhenUnmatched: true } : {}),
       }
       findings.push(finding)
       perFinding.set(id, reviewPos)

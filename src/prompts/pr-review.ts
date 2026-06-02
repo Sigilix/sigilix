@@ -156,8 +156,18 @@
  * Both are phrased FP-safe (grounded: confirm the mismatch / atomicity in
  * context before flagging). Reviews with v13 go stale on first deploy of v14.
  * Use `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
+ *
+ * v14 → v15 (SIG-309 PR2): the [AST RULE FINDINGS] block (autoInline-off path)
+ * now tells the synth to EMIT an unmatched AST entry flagged
+ * `deterministic_emit: true` — set ONLY on the FP-safe security sinks
+ * (exec/spawn shell-injection + disabled-TLS, NOT eval/Function/document.write
+ * which fire on constants). Closes the "AST detected it but no specialist did,
+ * so it vanished" gap for command injection (the pr/06 exec miss) while
+ * preserving the zero-P0/P1-FP bar (emitted via the normal grounding pipeline).
+ * Reviews with v14 go stale on first deploy of v15. Use
+ * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
  */
-export const PROMPT_VERSION = "14"
+export const PROMPT_VERSION = "15"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

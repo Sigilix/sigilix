@@ -70,6 +70,8 @@ export const noExecShellInterpolation: AstRule = {
   shortDescription: "exec()/execSync() with a dynamic command",
   language: "both",
   nodeTypes: ["CallExpression"],
+  // FP-safe (constant commands skipped) → emit even when no specialist matched.
+  emitWhenUnmatched: true,
   visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
     if (!node || node.type !== "CallExpression") return null
     const name = calleeName(node)

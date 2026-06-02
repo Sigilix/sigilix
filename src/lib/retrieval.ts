@@ -10,6 +10,13 @@
 // query the lowercased team key as the namespace.
 
 import { embedText } from "./embeddings"
+import {
+  hybridRetrievalEnabled,
+  queryLexical,
+  reciprocalRankFusion,
+  type LexicalMatch,
+  type RankedItem,
+} from "./lexical-index"
 
 const DEFAULT_NAMESPACE = "rubberfit"
 const TOP_K = 6
@@ -46,6 +53,10 @@ export interface RetrievalEnv {
   AI: AiBinding
   OPENCLAW_CODE_INDEX: VectorizeIndex
   OPENCLAW_TEAM_REPO_MAP?: string
+  // SIG-45: hybrid lexical retrieval. Both optional — when absent or the
+  // flag isn't "on", retrieval stays pure-vector.
+  OPENCLAW_LEXICAL_INDEX?: D1Database
+  OPENCLAW_RETRIEVAL_HYBRID?: string
 }
 
 interface RetrievalCtx {
@@ -55,11 +66,22 @@ interface RetrievalCtx {
 }
 
 export interface RetrievedChunk {
+  /**
+   * SIG-45: the Vectorize/lexical chunk id (the deterministic `chunkId`).
+   * Optional for back-compat with callers that build chunks by hand;
+   * present for index-sourced chunks so hybrid RRF can dedupe across the
+   * vector and lexical backends.
+   */
+  id?: string
   path: string
   lineStart: number
   lineEnd: number
   content: string
   score: number
+  /** SIG-45: which backend(s) surfaced this chunk. Unset = legacy vector-only. */
+  source?: "vector" | "lexical" | "hybrid"
+  /** SIG-45: summed reciprocal-rank-fusion score (only set on the hybrid path). */
+  rrfScore?: number
 }
 
 /**
@@ -114,12 +136,25 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
   if (!trimmed) return []
 
   const namespace = teamKeyToNamespace(ctx.teamKey, ctx.env.OPENCLAW_TEAM_REPO_MAP)
+  const hybrid = hybridRetrievalEnabled(ctx.env)
+
+  // SIG-45: when hybrid is on, the lexical leg needs no embedding, so kick it
+  // off in parallel with the vector embed+query rather than serializing.
+  const lexicalPromise: Promise<LexicalMatch[]> = hybrid
+    ? queryLexical(ctx.env.OPENCLAW_LEXICAL_INDEX!, namespace, trimmed, TOP_K)
+    : Promise.resolve([])
 
   let queryVector: number[]
   try {
     queryVector = await embedText(ctx.env.AI, trimmed.slice(0, 4_000))
   } catch (error) {
     console.warn("retrieval embed failed", { error: String(error), namespace })
+    // Vector leg failed — fall back to whatever the lexical leg returns so
+    // hybrid degrades to lexical-only rather than to nothing.
+    if (hybrid) {
+      const lexical = await lexicalPromise
+      return lexical.length > 0 ? fuseRetrieval([], lexical, namespace) : []
+    }
     return []
   }
 
@@ -132,11 +167,32 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
     })
   } catch (error) {
     console.warn("retrieval query failed", { error: String(error), namespace })
+    if (hybrid) {
+      const lexical = await lexicalPromise
+      return lexical.length > 0 ? fuseRetrieval([], lexical, namespace) : []
+    }
     return []
   }
 
+  const vectorChunks = parseVectorMatches(result.matches)
+  if (!hybrid) return vectorChunks
+
+  const lexical = await lexicalPromise
+  const fused = fuseRetrieval(vectorChunks, lexical, namespace)
+  console.log(JSON.stringify({
+    event: "pr-review-retrieval-hybrid",
+    namespace,
+    vectorHits: vectorChunks.length,
+    lexicalHits: lexical.length,
+    fused: fused.length,
+  }))
+  return fused.slice(0, TOP_K)
+}
+
+/** Map raw Vectorize matches to RetrievedChunks, carrying the chunk id. */
+function parseVectorMatches(matches: VectorizeMatch[] | undefined): RetrievedChunk[] {
   const out: RetrievedChunk[] = []
-  for (const m of result.matches ?? []) {
+  for (const m of matches ?? []) {
     const md = m.metadata
     if (
       !md ||
@@ -148,14 +204,58 @@ export async function retrieveChunks(ctx: RetrievalCtx): Promise<RetrievedChunk[
       continue
     }
     out.push({
+      id: m.id,
       path: md.path,
       lineStart: md.lineStart,
       lineEnd: md.lineEnd,
       content: md.content,
       score: m.score,
+      source: "vector",
     })
   }
   return out
+}
+
+/**
+ * SIG-45: fuse the vector and lexical result lists via reciprocal-rank
+ * fusion. Dedup key is the chunk id when present (same `chunkId` scheme on
+ * both backends) else `path:lineStart-lineEnd`. The vector list is passed
+ * first so a chunk present in both keeps its vector payload (cosine score)
+ * and a same-RRF tie breaks toward the semantic hit. `source` records which
+ * backend(s) surfaced each chunk so specialists can see the signal.
+ */
+export function fuseRetrieval(
+  vector: RetrievedChunk[],
+  lexical: LexicalMatch[],
+  namespace: string,
+): RetrievedChunk[] {
+  void namespace // reserved for future per-namespace tuning; keeps call sites stable
+  const keyOf = (c: { id?: string; path: string; lineStart: number; lineEnd: number }): string =>
+    c.id && c.id.length > 0 ? c.id : `${c.path}:${c.lineStart}-${c.lineEnd}`
+
+  const vectorRanked: RankedItem<RetrievedChunk>[] = vector.map((c) => ({ key: keyOf(c), item: c }))
+  const lexicalRanked: RankedItem<RetrievedChunk>[] = lexical.map((m) => ({
+    key: keyOf(m),
+    item: {
+      id: m.id,
+      path: m.path,
+      lineStart: m.lineStart,
+      lineEnd: m.lineEnd,
+      content: m.content,
+      score: m.score,
+      source: "lexical",
+    },
+  }))
+
+  const inVector = new Set(vectorRanked.map((r) => r.key))
+  const inLexical = new Set(lexicalRanked.map((r) => r.key))
+
+  return reciprocalRankFusion<RetrievedChunk>([vectorRanked, lexicalRanked]).map((f) => {
+    const key = keyOf(f.item)
+    const source: RetrievedChunk["source"] =
+      inVector.has(key) && inLexical.has(key) ? "hybrid" : inVector.has(key) ? "vector" : "lexical"
+    return { ...f.item, source, rrfScore: f.rrfScore }
+  })
 }
 
 /**
@@ -170,7 +270,14 @@ export function formatChunksForPrompt(chunks: RetrievedChunk[]): string | null {
   let total = 0
   for (const c of chunks) {
     const slice = c.content.length > MAX_CHUNK_CHARS ? c.content.slice(0, MAX_CHUNK_CHARS) : c.content
-    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} (score=${c.score.toFixed(3)}) ---\n${slice}`
+    // SIG-45: on the hybrid path cite the RRF score + which signal surfaced
+    // the chunk; legacy vector-only chunks (no `source`) keep `(score=X)` so
+    // existing prompt expectations/tests are unchanged.
+    const tag =
+      c.source && c.rrfScore !== undefined
+        ? `(${c.source}, rrf=${c.rrfScore.toFixed(4)})`
+        : `(score=${c.score.toFixed(3)})`
+    const block = `--- ${c.path}:${c.lineStart}-${c.lineEnd} ${tag} ---\n${slice}`
     if (total + block.length > MAX_TOTAL_CHARS) break
     parts.push(block)
     total += block.length

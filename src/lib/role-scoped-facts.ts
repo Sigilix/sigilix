@@ -41,6 +41,10 @@ export interface RoleScopedFactInputs {
   perfBudgetBlock: string
   /** ARC-181 AST findings, split here by `roleHint`. */
   astFindings: readonly AstFinding[]
+  /** SIG-317 Part 4b cross-function asymmetry hints (logic) — deterministic
+   *  FACTS for the logic specialist to reason about (helper-bypass / idempotency
+   *  asymmetry), not posted findings. Empty when none. */
+  asymmetryBlock?: string
 }
 
 /**
@@ -61,7 +65,7 @@ export function buildFactsByRole(inputs: RoleScopedFactInputs): Record<Specialis
       inputs.sarifBlock,
       inputs.securityManifestBlock,
     ]),
-    logic: join([astBlock("logic"), inputs.deterministicBlock]),
+    logic: join([astBlock("logic"), inputs.deterministicBlock, inputs.asymmetryBlock ?? ""]),
     performance: join([astBlock("performance"), inputs.perfBudgetBlock]),
     tests: join([inputs.docsCoverageBlock, inputs.coverageGapBlock]),
   }

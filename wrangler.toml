@@ -306,6 +306,17 @@ OPENCLAW_AUTHZ_IDOR_SCAN = "post"
 # Rollback: "shadow" (telemetry only) or "off" (inert).
 OPENCLAW_SYNTH_RECOVERY = "on"
 
+# SIG-317 Part 4b (2026-06-02): cross-function asymmetry hints for the LOGIC
+# specialist — the evidence injector. Surfaces a deterministic FACT (a function
+# that mutates table T but bypasses the aggregation helper over T that other code
+# uses = a likely over-credit/over-refund, e.g. refundCharge skipping
+# refundsTotal) into the logic prompt for the model to judge. NOT a posted
+# finding — but it NUDGES the specialist, so unlike a pure detector it carries an
+# induced-FP risk and ships SHADOW-FIRST. "off" (default) inert, "shadow" logs the
+# `pr-review-asymmetry-hints` count, "on" injects. Flip to "on" to validate on a
+# hard re-benchmark; watch for induced FPs before keeping it on. Rollback: "off".
+OPENCLAW_ASYMMETRY_HINTS = "shadow"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.

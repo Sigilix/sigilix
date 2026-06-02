@@ -116,9 +116,15 @@ describe("scanCentsRenderedAsDollars — SKIPS (precision guards)", () => {
     expect(scan(`while (go) /\\$\{y.priceCents}/g.exec(s);`)).toHaveLength(0)
   })
 
-  it("still treats a `/` after a value-) as division — `(a + b) / 100`", () => {
-    // not a regex; this line has no currency render, just confirms no crash/FP.
-    expect(scan(`const x = (a + b) / 100;`)).toHaveLength(0)
+  it("treats `/` after a value-`)` as division so a later cents render still flags (CodeRabbit #306)", () => {
+    // if `(a + b) / 100` were misread as a regex start, the "regex" would run to
+    // the next `/` and mask the ${order.amountCents} → 0 hits. Correct = 1 hit.
+    const src = `const x = (a + b) / 100; return <span>\${order.amountCents}</span>;`
+    expect(scan(src)).toHaveLength(1)
+  })
+
+  it("does NOT flag a regex after `if /* c */ (ok)` — comment between keyword and paren (CodeRabbit #306)", () => {
+    expect(scan(`if /* c */ (ok) /\\$\{x.amountCents}/.test(s);`)).toHaveLength(0)
   })
 })
 

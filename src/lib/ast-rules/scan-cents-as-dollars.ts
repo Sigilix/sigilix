@@ -60,32 +60,39 @@ const CONTROL_FLOW_HEADS = new Set(["if", "while", "for", "switch", "catch", "wi
  *  a value — i.e. after an operator/punctuation, at start of input, or after a
  *  regex-permitting keyword. Conservative toward "regex" so a regex body gets
  *  masked (FN over FP). */
-function isRegexStart(src: string, slashIdx: number): boolean {
-  let j = slashIdx - 1
-  while (j >= 0 && /\s/.test(src[j]!)) j--
+function isRegexStart(src: string, slashIdx: number, masked: boolean[]): boolean {
+  // Scan back past whitespace AND masked chars (comments/strings/regex) so a
+  // comment between a keyword and its `(` can't fool the heuristic
+  // (`if /* c */ (ok) /re/` — CodeRabbit #306).
+  const skipBack = (from: number): number => {
+    let j = from
+    while (j >= 0 && (/\s/.test(src[j]!) || masked[j])) j--
+    return j
+  }
+  const j = skipBack(slashIdx - 1)
   if (j < 0) return true
   const prev = src[j]!
   if (prev === ")") {
     // Division UNLESS the `)` closes a control-flow head (`if (…) /re/`). Match
-    // the `)` back to its `(` and inspect the preceding word.
+    // the `)` back to its `(` (ignoring masked parens) and inspect the word.
     let depth = 0
     let k = j
     for (; k >= 0; k--) {
+      if (masked[k]) continue
       if (src[k] === ")") depth++
       else if (src[k] === "(") { depth--; if (depth === 0) break }
     }
     if (k <= 0) return false
-    let w = k - 1
-    while (w >= 0 && /\s/.test(src[w]!)) w--
+    const w = skipBack(k - 1)
     let ws = w
-    while (ws >= 0 && /[\w$]/.test(src[ws]!)) ws--
+    while (ws >= 0 && /[\w$]/.test(src[ws]!) && !masked[ws]) ws--
     return CONTROL_FLOW_HEADS.has(src.slice(ws + 1, w + 1))
   }
   if (/[\]}]/.test(prev)) return false // value/object/block end → division
   if (/['"`]/.test(prev)) return false // string end → division
   if (/[\w$]/.test(prev)) {
     let k = j
-    while (k >= 0 && /[\w$]/.test(src[k]!)) k--
+    while (k >= 0 && /[\w$]/.test(src[k]!) && !masked[k]) k--
     return REGEX_KEYWORDS.has(src.slice(k + 1, j + 1)) // keyword → regex; ident/number → division
   }
   return true // operator / punctuation / `(` `[` `,` `=` … → regex
@@ -159,7 +166,7 @@ function lex(src: string): { inTmplText: boolean[]; masked: boolean[] } {
       if (i < n) { masked[i] = true; masked[i + 1] = true; i += 2 }
       continue
     }
-    if (c === "/" && isRegexStart(src, i)) {
+    if (c === "/" && isRegexStart(src, i, masked)) {
       // Regex literal: mask its body so a `${ … }` inside it isn't read as
       // currency (code-review + DeepSeek FP vector). Handle `\` escapes and a
       // `[…]` char class (where `/` is literal). Bail at a newline (a regex

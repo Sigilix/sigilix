@@ -82,6 +82,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // snake/camel-optional-alias type smell now emits too).
     // SIG-310 follow-up 16→17 (role-aware suppression: a different-role same-line
     // finding no longer suppresses a logic emit — CodeRabbit #294).
-    expect(PROMPT_VERSION).toBe("17")
+    // SIG-312 17→18 (deterministic_emit severity keys on the entry's `severity`:
+    // a `warning` entry is a P2/P3 advisory never a P0/P1 blocker — lets the
+    // dynamic-HTML-sink detector surface an XSS at P2 without a false P0/P1).
+    expect(PROMPT_VERSION).toBe("18")
   })
 })

@@ -30,10 +30,39 @@ import {
 import { astFindingId } from "./finding-id"
 import {
   getEnabledRules,
+  ruleEnabledByConfig,
   type ResolvedAstRulesConfig,
 } from "./rule-registry"
 import type { AstFinding, AstRule, AstRuleHit, RuleContext } from "./types"
 import type { ReviewableMap } from "../diff-positions"
+import { scanDynamicHtmlSinks, DYNAMIC_HTML_SINK_RULE_ID } from "./scan-dynamic-html-sink"
+
+// SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
+// reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't
+// traversed). We splice its hits into the same finding pipeline as the AST
+// rules via this synthetic rule descriptor: `warning`/`security`, and
+// `emitWhenUnmatched` so a dynamic HTML sink is deterministically SURFACED.
+//
+// Severity is `warning` (P2), not `error` (P0/P1), by design: a line-scan can't
+// prove whether the value is attacker-influenced vs a trusted constant/i18n
+// table (code-review CRITICAL: `TEMPLATES.welcomeHtml` would otherwise flag
+// P0/P1). So this is an FP-safe ADVISORY that surfaces the sink; the model's
+// security specialist still raises its OWN P0/P1 when it judges the value
+// untrusted (and supersedes this), so no recall is lost on a real XSS. The
+// `warning`→P2 ceiling is enforced by the synth emit instruction; the score
+// clamp deliberately does NOT cap security findings (it would demote a real
+// model-caught XSS). `nodeTypes: []` + the no-op `visit` ensure the walker
+// never invokes it as an AST rule.
+const DYNAMIC_HTML_SINK_PSEUDO_RULE: AstRule = {
+  id: DYNAMIC_HTML_SINK_RULE_ID,
+  severity: "warning",
+  roleHint: "security",
+  shortDescription: "Dynamic value rendered as raw HTML via an HTML-injection sink — verify sanitization",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
 
 const LARGE_FILE_BYTES = 500_000
 const EVIDENCE_MAX_CHARS = 200
@@ -214,6 +243,27 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     }
 
     walkAst(parsed.ast, visitors)
+
+    // SIG-312: line-scan the source for an untrusted dynamic value flowing into
+    // an HTML-injection sink (dangerouslySetInnerHTML / innerHTML / …) — the
+    // walker can't reach JSX attributes, so this complements the AST pass. The
+    // hits join `fileHits` under a synthetic security rule and flow through the
+    // SAME changed-line filter, finding-id, dedupe, and emit path below.
+    //
+    // Scoped to parse-OK files (we're past the `parsed.ok` gate): every real
+    // React/TS file parses, so the recurring miss is covered. A file that fails
+    // to parse is a rare malformed edge — it's skipped here exactly as the AST
+    // rules skip it, and the model specialist still reviews it.
+    //
+    // Honor the full config predicate (CodeRabbit #296): the pseudo rule
+    // bypasses `getEnabledRules`, so gate the scan on the SAME enablement check
+    // (disabledRules AND severityThreshold) to keep it suppressible / threshold-
+    // gated exactly like a registry rule.
+    if (ruleEnabledByConfig(config, DYNAMIC_HTML_SINK_RULE_ID, DYNAMIC_HTML_SINK_PSEUDO_RULE.severity)) {
+      for (const hit of scanDynamicHtmlSinks(source)) {
+        fileHits.push({ rule: DYNAMIC_HTML_SINK_PSEUDO_RULE, hit })
+      }
+    }
 
     // Filter hits by changed-lines + emit findings.
     for (const { rule, hit } of fileHits) {

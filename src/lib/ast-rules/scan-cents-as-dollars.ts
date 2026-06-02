@@ -51,6 +51,9 @@ const REGEX_KEYWORDS = new Set([
   "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
   "do", "else", "yield", "await", "case",
 ])
+/** Heads whose `(…)` is a control-flow condition, so a `/` right after the `)`
+ *  begins a regex (`if (ok) /re/.test(s)`), not a division (CodeRabbit #306). */
+const CONTROL_FLOW_HEADS = new Set(["if", "while", "for", "switch", "catch", "with"])
 
 /** Heuristic: is the `/` at `slashIdx` the start of a regex literal (vs a
  *  division operator)? A `/` is regex when the previous significant token is NOT
@@ -62,7 +65,23 @@ function isRegexStart(src: string, slashIdx: number): boolean {
   while (j >= 0 && /\s/.test(src[j]!)) j--
   if (j < 0) return true
   const prev = src[j]!
-  if (/[)\]}]/.test(prev)) return false // value/group end → division
+  if (prev === ")") {
+    // Division UNLESS the `)` closes a control-flow head (`if (…) /re/`). Match
+    // the `)` back to its `(` and inspect the preceding word.
+    let depth = 0
+    let k = j
+    for (; k >= 0; k--) {
+      if (src[k] === ")") depth++
+      else if (src[k] === "(") { depth--; if (depth === 0) break }
+    }
+    if (k <= 0) return false
+    let w = k - 1
+    while (w >= 0 && /\s/.test(src[w]!)) w--
+    let ws = w
+    while (ws >= 0 && /[\w$]/.test(src[ws]!)) ws--
+    return CONTROL_FLOW_HEADS.has(src.slice(ws + 1, w + 1))
+  }
+  if (/[\]}]/.test(prev)) return false // value/object/block end → division
   if (/['"`]/.test(prev)) return false // string end → division
   if (/[\w$]/.test(prev)) {
     let k = j
@@ -227,10 +246,15 @@ export function scanCentsRenderedAsDollars(source: string): AstRuleHit[] {
     if (seen.has(i)) continue
     seen.add(i)
     const lineStartIdx = source.lastIndexOf("\n", i - 1) + 1
+    const line = source.slice(0, i).split("\n").length
+    // A pretty-printed `${\n  x.fooCents\n}` spans lines; carry endLine so the
+    // runner's changed-line filter sees an edit on the inner line (CodeRabbit #306).
+    const endLine = source.slice(0, extracted.endIdx).split("\n").length
     hits.push({
       message: message(rawExpr),
       evidence: `$\{${clip(rawExpr, 120)}}`,
-      line: source.slice(0, i).split("\n").length,
+      line,
+      ...(endLine > line ? { endLine } : {}),
       column: Math.max(0, i - lineStartIdx),
     })
   }

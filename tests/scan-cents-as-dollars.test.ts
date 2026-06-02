@@ -110,6 +110,26 @@ describe("scanCentsRenderedAsDollars — SKIPS (precision guards)", () => {
   it("flags a double-dollar currency inside a nested template", () => {
     expect(scan("const s = `outer ${`inner $${charge.amountCents}`}`;")).toHaveLength(1)
   })
+
+  it("does NOT flag a regex literal after a control-flow ) — `if (ok) /…/` (CodeRabbit #306)", () => {
+    expect(scan(`if (ok) /\\$\{x.amountCents}/.test(s);`)).toHaveLength(0)
+    expect(scan(`while (go) /\\$\{y.priceCents}/g.exec(s);`)).toHaveLength(0)
+  })
+
+  it("still treats a `/` after a value-) as division — `(a + b) / 100`", () => {
+    // not a regex; this line has no currency render, just confirms no crash/FP.
+    expect(scan(`const x = (a + b) / 100;`)).toHaveLength(0)
+  })
+})
+
+describe("scanCentsRenderedAsDollars — structure (endLine)", () => {
+  it("carries endLine for a multi-line currency render (CodeRabbit #306)", () => {
+    const src = `<h2>\${\n  sub.monthlyCents\n}</h2>`
+    const hits = scan(src)
+    expect(hits).toHaveLength(1)
+    expect(hits[0]!.line).toBe(1)
+    expect(hits[0]!.endLine).toBe(3)
+  })
 })
 
 describe("scanCentsRenderedAsDollars — structure", () => {

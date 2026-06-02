@@ -313,10 +313,12 @@ OPENCLAW_SYNTH_RECOVERY = "on"
 # refundsTotal) into the logic prompt for the model to judge. NOT a posted
 # finding — but it NUDGES the specialist, so unlike a pure detector it carries an
 # induced-FP risk and ships SHADOW-FIRST. "off" (default) inert, "shadow" logs the
-# `pr-review-asymmetry-hints` count, "on" injects. Flipped to "on" 2026-06-02 to
-# validate the over-credit hint on a hard re-benchmark (pr/11 D8 A/B); watching
-# for induced FPs — rollback to "shadow" (telemetry only) or "off" (inert).
-OPENCLAW_ASYMMETRY_HINTS = "on"
+# `pr-review-asymmetry-hints` count, "on" injects. pr/11 D8 A/B (2026-06-02): the
+# fact REACHED the model (its reasoning traced downgradeCredit->amount_cents->the
+# helper SUM) but it deflected to a rounding/units judgment and missed the
+# repeatable over-credit. Reverted to "shadow" + retargeted the hint message at the
+# over-credit SEMANTICS; re-measure on the next over-credit benchmark before "on".
+OPENCLAW_ASYMMETRY_HINTS = "shadow"
 
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner

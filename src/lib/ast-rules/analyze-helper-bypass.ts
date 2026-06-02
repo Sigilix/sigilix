@@ -178,11 +178,15 @@ export function analyzeHelperBypass(filesByPath: ReadonlyMap<string, string>): A
         fn: f.name,
         helper,
         message:
-          `\`${f.name}\` writes the \`${column}\` column of \`${table}\` (the same column \`${helper}()\` ` +
-          `aggregates with SUM/COUNT, and \`${helper}\` is used elsewhere) but never calls \`${helper}()\`. ` +
-          `Verify \`${f.name}\` is not ignoring the prior \`${column}\` total — e.g. refunding/crediting a full ` +
-          `amount without subtracting what was already refunded/credited (a repeatable over-refund / ` +
-          `over-credit). If the omission is intentional, confirm why.`,
+          `\`${f.name}\` writes \`${column}\` into \`${table}\` — the column \`${helper}()\` SUMs — WITHOUT ` +
+          `first calling \`${helper}()\` to read the prior total, even though \`${helper}\` exists and is used ` +
+          `elsewhere. This is the OVER-CREDIT / OVER-REFUND shape. Answer ONE question: does \`${f.name}\` write ` +
+          `a FULL or fixed amount (e.g. the whole plan price / charge / invoice total) rather than a delta net ` +
+          `of \`${helper}()\`? If YES, every call ACCUMULATES — the prior \`${column}\` total is ignored and the ` +
+          `customer is credited/refunded again on each invocation (a repeatable over-credit) — raise it as a ` +
+          `logic bug. If \`${f.name}\` writes a usage-derived delta, or the duplicate is guarded elsewhere, it ` +
+          `is safe — say so. This is NOT a rounding, units, or cents/dollars question: judge only whether the ` +
+          `WRITE AMOUNT double-counts against what \`${helper}()\` already sums.`,
       })
     }
   }

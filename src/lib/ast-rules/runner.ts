@@ -41,6 +41,7 @@ import {
   scanSqlEnumDrift,
   ENUM_LITERAL_DRIFT_RULE_ID,
 } from "./scan-enum-literal-drift"
+import { scanCentsRenderedAsDollars, CENTS_AS_DOLLARS_RULE_ID } from "./scan-cents-as-dollars"
 
 // SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
 // reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't
@@ -82,6 +83,23 @@ const ENUM_LITERAL_DRIFT_PSEUDO_RULE: AstRule = {
   severity: "warning",
   roleHint: "logic",
   shortDescription: "SQL writes a value not in the column's declared type union — verify type-contract",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
+
+// SIG-317 Part 3: a `*Cents` value rendered as dollars in JSX without /100 is
+// also a LINE-SCAN (the value lives in a JSX expression the walker can't reach).
+// `warning`/`logic`/`emitWhenUnmatched`: a P2 advisory surfacing the likely
+// unit bug for the logic specialist to escalate, FP-safe by the same reasoning
+// as the sibling scans (a scan can't prove an upstream divide; `*Cents` is a
+// naming convention). `nodeTypes: []` + a no-op `visit` keep the walker out.
+const CENTS_AS_DOLLARS_PSEUDO_RULE: AstRule = {
+  id: CENTS_AS_DOLLARS_RULE_ID,
+  severity: "warning",
+  roleHint: "logic",
+  shortDescription: "A *Cents value is rendered as dollars without dividing by 100 — verify unit",
   language: "both",
   nodeTypes: [],
   emitWhenUnmatched: true,
@@ -305,6 +323,14 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     if (ruleEnabledByConfig(config, ENUM_LITERAL_DRIFT_RULE_ID, ENUM_LITERAL_DRIFT_PSEUDO_RULE.severity)) {
       for (const hit of scanSqlEnumDrift(source, enumUnionMap)) {
         fileHits.push({ rule: ENUM_LITERAL_DRIFT_PSEUDO_RULE, hit })
+      }
+    }
+
+    // SIG-317 Part 3: a `*Cents` value rendered as dollars in JSX without /100.
+    // Same per-file splice + config-gate as the sibling scans.
+    if (ruleEnabledByConfig(config, CENTS_AS_DOLLARS_RULE_ID, CENTS_AS_DOLLARS_PSEUDO_RULE.severity)) {
+      for (const hit of scanCentsRenderedAsDollars(source)) {
+        fileHits.push({ rule: CENTS_AS_DOLLARS_PSEUDO_RULE, hit })
       }
     }
 

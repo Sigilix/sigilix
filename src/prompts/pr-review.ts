@@ -182,8 +182,26 @@
  * for `role_hint:"security"`, but `(path, line, role_hint)` for other roles so
  * a different-role same-line finding can't silently suppress a logic contract-
  * drift emit. Reviews with v16 go stale on first deploy of v17.
+ *
+ * v17 → v18 (SIG-312): the deterministic_emit SEVERITY clause keys on the
+ * entry's `severity` field, not its role — an `error` entry scores on merits
+ * (P0/P1 for a proven sink), a `warning` entry is an ADVISORY scored P2/P3 and
+ * NEVER a P0/P1 blocker, whatever its role. Lets the new dynamic-HTML-sink
+ * detector (`no-dangerous-html-dynamic`, warning/security) SURFACE an XSS sink
+ * at P2 without a false P0/P1 (a line-scan can't prove a member access is
+ * untrusted vs a trusted constant table); the model still escalates a real XSS
+ * to P0/P1 on its own merits. Reviews with v17 go stale on first deploy of v18.
+ *
+ * v18 → v19 (SIG-313): the security specialist gains a mandatory AUTHORIZATION
+ * AUDIT — a forced enumeration of every changed request handler / mutation
+ * (principal → object key → resource → access check), emitting an access-control
+ * finding ONLY when the full exploit tuple holds and SKIPPING the safe cases
+ * (id-from-principal, owner/tenant-scoped query, public route, admin wrapper, DO
+ * trust-boundary). Closes the pr/08 authz-recall gap (IDOR/BOLA single-file
+ * reasoning the model wasn't consistently asking) without over-firing on safe
+ * endpoints. Reviews with v18 go stale on first deploy of v19.
  */
-export const PROMPT_VERSION = "17"
+export const PROMPT_VERSION = "19"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

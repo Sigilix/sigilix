@@ -34,17 +34,37 @@
  * value is almost always request-derived, so the "constant" case ~never
  * arises and the extraction is far less reliable).
  */
+// dangerouslySetInnerHTML={{ __html: VALUE }}
+const RE_DANGEROUSLY_SET_INNER_HTML = /dangerouslySetInnerHTML\s*=\s*\{\{\s*__html\s*:\s*([^}]+?)\s*\}\s*\}/
+// x.innerHTML = VALUE  /  x.outerHTML = VALUE
+const RE_INNER_OUTER_HTML = /\.(?:inner|outer)HTML\s*=\s*([^;]+?)\s*;?\s*$/
+// document.write(VALUE)  /  document.writeln(VALUE)
+const RE_DOCUMENT_WRITE = /document\.write(?:ln)?\s*\(\s*([^)]+?)\s*\)/
+// el.insertAdjacentHTML(position, VALUE)
+const RE_INSERT_ADJACENT_HTML = /insertAdjacentHTML\s*\([^,]+,\s*([^)]+?)\s*\)/
+// eval(VALUE)
+const RE_EVAL = /\beval\s*\(\s*([^)]+?)\s*\)/
+
 const SINK_EXTRACTORS: ReadonlyArray<RegExp> = [
-  // dangerouslySetInnerHTML={{ __html: VALUE }}
-  /dangerouslySetInnerHTML\s*=\s*\{\{\s*__html\s*:\s*([^}]+?)\s*\}\s*\}/,
-  // x.innerHTML = VALUE  /  x.outerHTML = VALUE
-  /\.(?:inner|outer)HTML\s*=\s*([^;]+?)\s*;?\s*$/,
-  // document.write(VALUE)  /  document.writeln(VALUE)
-  /document\.write(?:ln)?\s*\(\s*([^)]+?)\s*\)/,
-  // el.insertAdjacentHTML(position, VALUE)
-  /insertAdjacentHTML\s*\([^,]+,\s*([^)]+?)\s*\)/,
-  // eval(VALUE)
-  /\beval\s*\(\s*([^)]+?)\s*\)/,
+  RE_DANGEROUSLY_SET_INNER_HTML,
+  RE_INNER_OUTER_HTML,
+  RE_DOCUMENT_WRITE,
+  RE_INSERT_ADJACENT_HTML,
+  RE_EVAL,
+]
+
+/**
+ * SIG-312: the HTML-WRITE sink subset, shared (by object identity) with
+ * `SINK_EXTRACTORS` so the regexes can't drift. The deterministic XSS detector
+ * (`scan-dynamic-html-sink.ts`) reuses exactly these — the DOM/React sinks that
+ * render their argument as raw HTML. It deliberately EXCLUDES `eval` /
+ * `new Function` (code-injection, with their own AST rules) and `document.write`
+ * (covered by `no-document-write-call`).
+ */
+export const HTML_WRITE_SINK_EXTRACTORS: ReadonlyArray<RegExp> = [
+  RE_DANGEROUSLY_SET_INNER_HTML,
+  RE_INNER_OUTER_HTML,
+  RE_INSERT_ADJACENT_HTML,
 ]
 
 /**

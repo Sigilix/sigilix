@@ -312,6 +312,28 @@ CWE-Top-25 buckets (use the CWE id whose bucket fits):
 
 The orchestrator runs an \`evaluateSecurityFinding\` gate after synthesis. A sev>=4 security finding whose \`evidenceId\` is fabricated (not in the manifest) or points more than 10 lines from your finding is DROPPED. The ONE exception: an AuthN / Access-Control bug (CWE-862/863/287/352/276/284/639, incl. IDOR) that no scanner detects — for THAT, set \`evidenceId: "NONE"\` and explain in the body why no deterministic check exists (e.g. "missing object-level authorization check; no static pattern exists"). Do NOT use \`"NONE"\` for injection, XSS, secrets, or any other scanner-covered bucket — those must cite a manifest id.
 
+**SIG-313 — AUTHORIZATION AUDIT (mandatory; run for EVERY changed request handler / mutation).**
+
+Broken object-level authorization (IDOR / BOLA) and missing access checks have NO scanner signature — they are the AuthN / Access-Control bucket above, and you are the only line of defense. Do NOT just skim for the word "auth": ENUMERATE. For every request handler, route action, RPC / GraphQL resolver, server action, webhook handler, or DB mutation that this PR ADDS or CHANGES, walk these four:
+  1. PRINCIPAL — the authenticated identity (\`req.subject\`, \`req.user\`, \`ctx.session\`, the token subject, …). If the route performs a sensitive read/write with NO authentication at all, that itself is the finding.
+  2. OBJECT KEY — the user-controlled selector for the resource (a route param like \`:id\`, a query/body field, a slug, an org/owner id).
+  3. RESOURCE — what the handler reads back or mutates, selected by that key.
+  4. CHECK — the EXPLICIT guard that this principal may touch THAT object: an ownership comparison (\`resource.ownerId === principal\`), an owner/tenant-scoped query (\`WHERE owner_id = $principal\`), a policy/permission call, or an admin-role gate.
+
+Emit an access-control finding (CWE-639/862/863, \`evidenceId: "NONE"\`) ONLY when ALL FOUR of the exploit tuple hold:
+  - the handler reads/mutates a SPECIFIC resource chosen by user-controlled input (step 2 selects step 3), AND
+  - a low-privilege authenticated user could substitute ANOTHER user's / org's / resource's id, AND
+  - NO owner/tenant/policy/admin check is visible in the handler or an obvious wrapper/middleware, AND
+  - your body names all four — principal, object key, resource access, and the missing check.
+
+SKIP — do NOT flag these; flagging them is a FALSE POSITIVE:
+  - the object key is DERIVED from the principal (\`const id = req.subject\`), not from request input;
+  - the query is already owner/tenant-scoped (\`WHERE owner_id = $subject\`);
+  - the route is intentionally public / read-only (health check, published page, login/signup);
+  - an admin-role or policy wrapper is visible (you may rely on a clearly-named one even when its body isn't in the diff);
+  - it's a DurableObject method (the binding IS the trust boundary).
+If ANY of the four is UNKNOWN, do NOT assert a flaw — leave it unflagged. A "this MIGHT lack a check" with an unnamed principal or object is exactly the over-fire this audit exists to prevent.
+
 When scoring:
 - 5: exploitable today by a remote unauthenticated attacker (or trivially by an authenticated low-privilege user)
 - 4: exploitable under specific conditions (privileged attacker, specific config, edge case)

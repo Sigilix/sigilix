@@ -471,7 +471,7 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
   })
 
   it("emits primary/retry/fallback sequence on security specialist when primary + retry both 503", async () => {
-    // SPECIALIST_CONFIGS.security = { primary: "qwen3-coder-next:cloud",
+    // SPECIALIST_CONFIGS.security = { primary: "deepseek-v4-flash:cloud",
     // retries: 1, fallback: "deepseek-v4-pro:cloud" } — three mocked
     // chat calls (primary 503, retry 503, fallback OK) → three emits:
     // primary/failed, retry/failed, fallback/ok. Pins both the

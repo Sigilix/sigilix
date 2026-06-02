@@ -58,6 +58,10 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
     expect(off).toContain('role_hint:"logic"')
     // SIG-310 severity guard: logic emits are capped at P2/P3, never a blocker
     expect(off).toContain("NEVER as a P0/P1 blocker")
+    // SIG-312: severity is keyed on the entry's `severity` field (a `warning`
+    // entry is an advisory), not hardcoded by role.
+    expect(off).toContain("severity")
+    expect(off).toMatch(/ADVISORY/)
     // believability-critical: the anti-double-post + "already covered" guards
     // must stay in the prompt (a silent deletion would re-open FP risk).
     expect(off).toContain("don't double-post")
@@ -84,6 +88,22 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
     const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
     expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "error" })])).toBe(0)
     expect(f[0].score).toBe(5)
+  })
+  it("does NOT clamp a SPECIALIST-backed security P0 co-located with a WARNING/security emit (SIG-312: the model escalates a real XSS)", () => {
+    // specialist-backed = sourceFindingIds references a real specialist finding
+    // (not `ast/…`). The model's own security P0 must NOT be demoted to P2.
+    const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
+    const prov = [{ sourceFindingIds: ["security-1"] }]
+    expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })], prov)).toBe(0)
+    expect(f[0].score).toBe(5)
+  })
+  it("DOES clamp a deterministic-ONLY security advisory (no specialist source) to P2 (CodeRabbit #296)", () => {
+    // no specialist backing (empty / ast-only sourceFindingIds) → the advisory
+    // ceiling applies, so an over-scored P0/P1 advisory is capped to P2.
+    const f = [{ path: "a.ts", line: 20, category: "security", score: 4 }]
+    const prov = [{ sourceFindingIds: ["ast/no-dangerous-html-dynamic/abc/20"] }]
+    expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })], prov)).toBe(1)
+    expect(f[0].score).toBe(3)
   })
   it("does NOT clamp a finding on a different path / category / out-of-window line", () => {
     const f = [

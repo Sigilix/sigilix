@@ -160,6 +160,7 @@ import {
 } from "./validate-logic-refutation"
 import {
   evaluatePerfFinding,
+  clampTrivialSyncIoSeverity,
   parsePerfValidatorMode,
   type PerfValidatorMode,
   type PerfDropReason,
@@ -1230,16 +1231,22 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     perAttemptTimeoutMs: 120_000,
   },
   security: {
-    // Coder-model territory: vulnerability patterns are mostly
-    // syntax / dataflow recognition, not frontier reasoning. Qwen3-
-    // Coder-Next is tuned for agentic coding workflows and the
-    // primary needs to be DIFFERENT from tests (which now uses
-    // MiniMax) so the 4+1 unique constraint holds.
-    primary: "qwen3-coder-next:cloud",
+    // REVERTED from qwen3-coder-next (a coder model) to a REASONING model
+    // after the pr/07 benchmark regression. The SIG-234 premise —
+    // "vulnerability patterns are mostly syntax/dataflow recognition, not
+    // frontier reasoning" — holds for INJECTION but FAILS for AUTHORIZATION:
+    // IDOR / BOLA / broken access control are reasoning ("should this caller
+    // reach this resource?"), not pattern matching. On an IDOR-heavy benchmark
+    // the coder model produced ZERO authz findings (only the two obvious
+    // injections); raw pre-gate KV telemetry confirmed they were NEVER
+    // generated (not gate-dropped). In a controlled re-test on the exact diff,
+    // deepseek-v4-flash (the logic primary, a FAST reasoner) caught all of
+    // them. Deliberately the SAME model as logic — recall beats the
+    // 4+1-unique-primaries nicety, and v4-flash is proven in-budget on the hot
+    // path (deepseek-v4-pro is too slow for a critical-path primary; it stays
+    // on the fallback as the deeper authz backup).
+    primary: "deepseek-v4-flash:cloud",
     retries: 1,
-    // `deepseek-v4-pro:cloud` recycled here — the slow but capable
-    // reasoning model now lives on fallback paths so its latency
-    // doesn't anchor the critical path. Cross-provider from Qwen.
     fallback: "deepseek-v4-pro:cloud",
   },
   performance: {
@@ -1478,7 +1485,7 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
   // a double-post), at a marginal recall cost on the rare cross-role same-line case.
   const instruction = autoInline
     ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
-    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by role: a \`role_hint:"security"\` entry is a real sink — score it on its merits (typically P0/P1). A \`role_hint:"logic"\` entry is a type-design smell — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker. (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
+    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by the entry's \`severity\` field: an \`error\` entry is a PROVEN-dangerous sink — score it on its merits (typically P0/P1 for security). A \`warning\` entry is an ADVISORY the scanner surfaced but can't fully prove (a dynamic HTML sink whose value might be a trusted constant; a \`role_hint:"logic"\` type-design smell) — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker, whatever its \`role_hint\`. (If your own specialist independently judges a \`warning\` security advisory to be a real P0/P1, that specialist finding 'covers' the entry per the rule above and stands on its merits — the P2 ceiling applies only to the deterministic advisory.) (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
   return `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\n${instruction}\n\n\`\`\`json\n${astFindingsJson}\n\`\`\``
 }
 
@@ -1492,13 +1499,22 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
  * Clamps, IN PLACE, the score of any finding co-located (±2 lines, same path,
  * same category) with a NON-`error` `emitWhenUnmatched` AST finding to that
  * rule's tier (warning→3/P2, info→2). `error` security emit rules are never
- * clamped — a P0/P1 injection/TLS sink is the correct outcome there. Returns
- * the count clamped. Pure (apart from the in-place score mutation); exported
- * for test.
+ * clamped — a P0/P1 injection/TLS sink is the correct outcome there.
+ *
+ * SIG-312 (CodeRabbit #296): a `warning`/`security` emit (the dynamic-HTML
+ * advisory) DOES create a ceiling, BUT a SPECIALIST-backed security finding is
+ * exempt — its score is the model's TRUST JUDGMENT legitimately escalating a
+ * surfaced sink to P0/P1, and demoting it would hide a REAL caught XSS at P2.
+ * Only a deterministic-ONLY security advisory (no specialist source — its
+ * `sourceFindingIds` are empty or reference only the `ast/…` emit) is capped.
+ * `provenanceFindings` aligns by index with `findings` (same walk in
+ * validateForSubmission). Returns the count clamped. Pure (apart from the
+ * in-place score mutation); exported for test.
  */
 export function clampAstEmitScores(
   findings: Array<{ path: string; line: number; category: string; score: number }>,
   astFindings: ReadonlyArray<{ path: string; line: number; endLine?: number; roleHint: string; severity: string; emitWhenUnmatched?: boolean }>,
+  provenanceFindings?: ReadonlyArray<{ sourceFindingIds?: readonly string[] } | null | undefined>,
 ): number {
   const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
   const emitCeils = astFindings
@@ -1506,14 +1522,20 @@ export function clampAstEmitScores(
     .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
   if (emitCeils.length === 0) return 0
   let clamped = 0
-  for (const finding of findings) {
+  for (let i = 0; i < findings.length; i++) {
+    const finding = findings[i]!
     const ceil = emitCeils
       .filter((e) => e.path === finding.path && e.role === finding.category && finding.line >= e.lo - 2 && finding.line <= e.hi + 2)
       .reduce((m, e) => Math.min(m, e.ceil), 5)
-    if (ceil < 5 && finding.score > ceil) {
-      finding.score = ceil
-      clamped++
+    if (ceil >= 5 || finding.score <= ceil) continue
+    // SIG-312: never demote a SPECIALIST-backed security finding (the model's
+    // escalation of a real sink). Cap only a deterministic-only one.
+    if (finding.category === "security") {
+      const srcIds = provenanceFindings?.[i]?.sourceFindingIds ?? []
+      if (srcIds.some((id) => !id.startsWith("ast/"))) continue
     }
+    finding.score = ceil
+    clamped++
   }
   return clamped
 }
@@ -4653,9 +4675,24 @@ export async function handlePrReviewEnsemble(
     // path, same category) with a NON-`error` emitWhenUnmatched AST finding to
     // that rule's tier (warning→3/P2, info→2). `error` security emit rules are
     // never clamped — a P0/P1 injection/TLS sink is the correct outcome there.
-    const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings)
+    const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings, validated.cleanFindingProvenance)
     if (astEmitClamped > 0) {
       console.log(JSON.stringify({ event: "ast-emit-score-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: astEmitClamped }))
+    }
+
+    // BT1 (pr/07): cap a sev>=4 perf finding citing a CONSTANT version/help
+    // probe sync-exec (`execSync("… --version")`) to P3 — the only P0/P1 FP on
+    // pr/07. Mode-agnostic deterministic clamp (the perf evidence gate can't
+    // catch it: the call anchors to a real changed line, so it validates).
+    // Clamp BOTH the inline verdict findings AND the body-only (unanchored)
+    // findings (CodeRabbit #298): a demoted-to-body sync-exec would otherwise
+    // keep its sev>=4 score in the body/event output.
+    const perfClampLines = buildAddedLineTextByLine(fullPrDiff)
+    const perfClamped =
+      clampTrivialSyncIoSeverity(validated.verdict.findings, perfClampLines) +
+      clampTrivialSyncIoSeverity(validated.unanchoredFindings, perfClampLines)
+    if (perfClamped > 0) {
+      console.log(JSON.stringify({ event: "perf-trivial-sync-io-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: perfClamped }))
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we

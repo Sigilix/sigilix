@@ -347,6 +347,12 @@ export interface Env {
   // provenance but truncated out of verdict.findings on target-rich PRs.
   OPENCLAW_SYNTH_RECOVERY?: string
 
+  // SIG-317 Part 4b: cross-function asymmetry hints for the logic specialist.
+  // off (default) | shadow (log the hint count) | on (inject into the logic
+  // prompt). A FACT (mutator bypasses an aggregation helper used elsewhere) for
+  // the model to judge — nudges the specialist, so shadow-first.
+  OPENCLAW_ASYMMETRY_HINTS?: string
+
   // SIG-161: confidence-threshold verdict gate. Three-state rollout
   //   "off"     — bypassed; legacy `chooseReviewEvent` decides (default).
   //   "shadow"  — `chooseReviewEventWithGate` runs but legacy verdict ships;

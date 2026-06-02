@@ -296,6 +296,7 @@ import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
+import { analyzeHelperBypass, renderAsymmetryHints } from "./ast-rules/analyze-helper-bypass"
 import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
 import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
@@ -2274,9 +2275,13 @@ export async function handlePrReviewEnsemble(
     const wantBranchAware =
       (env.OPENCLAW_BRANCH_AWARE_RETRIEVAL ?? "").trim().toLowerCase() === "on"
     const wantDynamicReviewEvidence = dynamicReviewEvidenceEnabled(env)
+    // SIG-317 Part 4b: the asymmetry injector needs the changed-files corpus too
+    // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
+    const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
     const astFilesByPath = new Map<string, string>()
     if (
-      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence) &&
+      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
+        asymmetryMode !== "off") &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(
@@ -3051,6 +3056,27 @@ export async function handlePrReviewEnsemble(
     // SIG-108: route deterministic facts to their owning specialist — no
     // cross-domain leak. Pure + unit-tested in role-scoped-facts.test.ts.
     // The SIG-91 diff-classification + ARC-182 stack blocks stay shared.
+    // SIG-317 Part 4b: cross-function asymmetry hints for the LOGIC specialist —
+    // a deterministic FACT (a mutator of table T that bypasses the aggregation
+    // helper over T used elsewhere = a likely over-credit/over-refund) surfaced
+    // for the model to judge, NOT a posted finding. Gated `off` (shadow) by
+    // default: unlike a pure detector this NUDGES the specialist, so it carries
+    // an induced-FP risk and ships shadow-first → measure → flip. `on` injects.
+    // `asymmetryMode` is read above (it also gates the changed-files corpus load).
+    let asymmetryBlock = ""
+    if (asymmetryMode !== "off") {
+      const asymmetryHints = analyzeHelperBypass(astFilesByPath)
+      if (asymmetryHints.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-asymmetry-hints",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: asymmetryMode,
+          count: asymmetryHints.length,
+          hints: asymmetryHints.map((h) => ({ fn: h.fn, helper: h.helper })),
+        }))
+        if (asymmetryMode === "on") asymmetryBlock = renderAsymmetryHints(asymmetryHints)
+      }
+    }
     const factsByRole = buildFactsByRole({
       secretScanBlock,
       depVulnBlock,
@@ -3061,6 +3087,7 @@ export async function handlePrReviewEnsemble(
       securityManifestBlock: securityManifest.render(),
       perfBudgetBlock,
       astFindings: astResult.findings,
+      asymmetryBlock,
     })
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
 

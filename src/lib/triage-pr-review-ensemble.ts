@@ -2784,6 +2784,9 @@ export async function handlePrReviewEnsemble(
       const authzEmits = astResult.findings.filter((f) => f.ruleId === "no-unauthorized-object-lookup")
       if (authzEmits.length > 0) {
         astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-unauthorized-object-lookup")
+        // CodeRabbit #302: keep perFinding aligned — the auto-inline poster reads
+        // it by astFindingId, so a stale entry would mis-anchor another comment.
+        for (const f of authzEmits) astResult.perFinding.delete(f.astFindingId)
         if (authzIdorMode === "shadow") {
           console.log(JSON.stringify({
             event: "authz-idor-shadow",
@@ -4459,6 +4462,9 @@ export async function handlePrReviewEnsemble(
       synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
       reviewable,
       specialistVerdicts: synthInputVerdicts,
+      // SIG-314: admit the (post-shadow-strip) deterministic AST emit ids as
+      // valid provenance so an unmatched emit survives the hallucination guard.
+      astFindingIds: astResult.findings.map((f) => f.astFindingId),
       // SIG-113: thread the testing-evidence pack through so the
       // citation gate fires on uncited `category: "testing"` findings.
       // Empty pack (no source/test files) → gate no-ops via the
@@ -9424,6 +9430,15 @@ export function validateForSubmission(args: {
    *  the PR3 render can split outside-diff vs PR-level. Inert metadata nothing reads
    *  yet; gated so `off` stays a true no-op. */
   trustLedgerEnabled?: boolean
+  /**
+   * SIG-314: the `ast/<ruleId>/<hash>/<line>` ids of the deterministic AST
+   * findings the synth was shown. They are admitted as valid provenance so an
+   * `emitWhenUnmatched` finding the synth emits standalone (no specialist cited
+   * it) survives the hallucination guard. Absent → only specialist ids are
+   * valid (back-compat). Only real scanned ids are passed, so this can't be used
+   * to smuggle a hallucinated finding through.
+   */
+  astFindingIds?: readonly string[]
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -9457,6 +9472,7 @@ export function validateForSubmission(args: {
     onSecurityGroundingFindingDropped,
     profile = "chill",
     trustLedgerEnabled = false,
+    astFindingIds = [],
   } = args
   const validIds = new Set<string>()
   const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
@@ -9465,6 +9481,14 @@ export function validateForSubmission(args: {
     if (!v.verdict) continue
     for (const f of v.verdict.findings) validIds.add(f.id)
   }
+  // SIG-314: a deterministic AST emit (emitWhenUnmatched) is a LEGITIMATE source
+  // the synth may cite as `ast/<ruleId>/<hash>/<line>` provenance — that is the
+  // whole point of the unmatched path (the specialist missed it, the scanner
+  // proved it). Without this, the hallucination guard below drops every
+  // unmatched emit (SIG-309/310/312/314 all relied on this and were silently
+  // dropped in the specialist-missed case — Codex caught it). Only REAL scanned
+  // ids are admitted, so a hallucinated `ast/…` still fails the guard.
+  for (const id of astFindingIds) validIds.add(id)
 
   const cleanFindings: PrReviewFinding[] = []
   const cleanFindingProvenance: SynthesizerProvenance["findings"] = []

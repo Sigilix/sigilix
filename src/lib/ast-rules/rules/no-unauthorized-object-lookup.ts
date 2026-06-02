@@ -55,18 +55,29 @@ const NEXT_HTTP_EXPORTS: ReadonlySet<string> = new Set([
 ])
 const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrations?|scripts?)\/)/
 
-// A request-controlled OBJECT HANDLE: req|request|ctx.(params|query|body)[?.]
-// <handle>, where <handle> reads like an id/tenant key (NOT a pagination/search
-// param). The optional `?.` covers `req.body?.workspace`.
+// Names that read like an OBJECT HANDLE (an id / tenant key), NOT a
+// pagination/search param. Shared by the request-member regex, the taint-local
+// pre-pass, and the Next route-param binding.
+const OBJECT_HANDLE_RE =
+  /^(?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)$/i
+// A request-controlled OBJECT HANDLE: req|request|ctx|context.(params|query|
+// body)[?.]<handle>. `context`/`ctx` cover Next `context.params.id`. The
+// optional `?.` covers `req.body?.workspace`.
 const TAINTED_MEMBER_RE =
-  /\b(?:req|request|ctx)\.(?:params|query|body)\??\.(?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)\b/
+  /\b(?:req|request|ctx|context)\.(?:params|query|body)\??\.(?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)\b/
 // The principal/authorization signals. If a handler body references ANY of
 // these, it is authz-aware and we fail closed (skip). Deliberately principal-
 // focused (`subject`/`req.user`/authorize/…) and NOT keyed on bare `member`/
 // `owner`/`tenant` — those name DATA (`member_id`), and skipping on them would
 // hide real IDORs on member/owner/tenant resources (false negative).
-const AUTHZ_GUARD_RE =
-  /\b(?:subject|currentUser|authoriz[a-z]*|isMember|hasAccess|hasPermission|assert(?:Member|Owner|Access)|require(?:Member|Role|Owner|Admin|Auth)|forbidden|unauthorized)\b|\b(?:req|request)\.(?:user|auth|session)\b|\b403\b/i
+// Principal/authorization token names. Matched against AST IDENTIFIERS, member
+// PROPERTY names, and call CALLEE names — NOT raw source (CodeRabbit #302: a
+// comment `// TODO requireRole` or a string `Error("forbidden")` must not mute
+// the floor). Deliberately principal-focused (`subject`/`req.user`/authorize/…)
+// and NOT bare `member`/`owner`/`tenant` — those name DATA (`member_id`), and
+// skipping on them would hide real IDORs on member/owner/tenant resources.
+const AUTHZ_TOKEN_RE =
+  /^(?:subject|currentuser|session|getserversession|gettoken|authoriz[a-z]*|ismember|hasaccess|haspermission|assert(?:member|owner|access)|require(?:member|role|owner|admin|auth)|forbidden|unauthorized)$/
 // Unambiguous DB read/write verbs. Curated (no bare `find`/`get`/`read`) so an
 // array method (`arr.find`, `rows.map`) is never mistaken for a record lookup.
 const DATA_ACCESS_NAMES: ReadonlySet<string> = new Set([
@@ -126,10 +137,60 @@ function isRouteShaped(call: AstNode): boolean {
     && (first.value as string).startsWith("/")
 }
 
-/** Collect request-handler function nodes: Express route callbacks + Next-style
- *  exported HTTP functions. (mirrors no-sync-io-in-request-path) */
+/** Same-file named functions: `function f(){}` and `const f = () => {}`, so a
+ *  route registered with a named handler (`router.get("/x", showWorkspace)`) can
+ *  be resolved + scanned (CodeRabbit #302). */
+function collectNamedFunctions(program: AstNode): Map<string, AstNode> {
+  const fns = new Map<string, AstNode>()
+  function walk(n: AstNode): void {
+    if (!n || typeof n !== "object") return
+    if (n.type === "FunctionDeclaration") {
+      const nm = idName(n.id as AstNode)
+      if (nm) fns.set(nm, n)
+    } else if (n.type === "VariableDeclarator") {
+      const nm = idName(n.id as AstNode)
+      const init = n.init as AstNode
+      if (nm && init && FUNCTION_TYPES.has(init.type as string)) fns.set(nm, init)
+    }
+    for (const k of Object.keys(n)) {
+      if (k === "type" || k === "loc" || k === "start" || k === "end") continue
+      const v = (n as Record<string, unknown>)[k]
+      if (Array.isArray(v)) { for (const item of v) if (item && typeof item === "object") walk(item as AstNode) }
+      else if (v && typeof v === "object") walk(v as AstNode)
+    }
+  }
+  walk(program)
+  return fns
+}
+
+/** Does the handler body contain a real (code-level, not comment/string) authz
+ *  signal — a principal reference, an authz call, or a `403`? (CodeRabbit #302:
+ *  AST-based so comments/strings can't mute the floor.) */
+function handlerHasAuthzSignal(body: AstNode): boolean {
+  let found = false
+  walkNoNested(body, (n) => {
+    if (found) return
+    if (n.type === "Identifier") {
+      if (AUTHZ_TOKEN_RE.test((n.name as string).toLowerCase())) found = true
+    } else if (n.type === "MemberExpression" && !n.computed) {
+      const obj = idName(n.object as AstNode)
+      const prop = idName(n.property as AstNode)
+      // req.user / req.auth / req.session
+      if (obj && /^(?:req|request)$/.test(obj) && prop && /^(?:user|auth|session)$/.test(prop)) found = true
+      else if (prop && AUTHZ_TOKEN_RE.test(prop.toLowerCase())) found = true
+    } else if (n.type === "Literal" && n.value === 403) {
+      found = true
+    }
+  })
+  return found
+}
+
+/** Collect request-handler function nodes: Express route callbacks (inline OR
+ *  named/middleware identifiers resolved same-file) + Next-style exported HTTP
+ *  functions. (mirrors no-sync-io-in-request-path) */
 function collectHandlers(program: AstNode): AstNode[] {
   const handlers: AstNode[] = []
+  const named = collectNamedFunctions(program)
   function walk(n: AstNode): void {
     if (!n || typeof n !== "object") return
     if (n.type === "CallExpression" && (n.callee as AstNode)?.type === "MemberExpression"
@@ -137,7 +198,13 @@ function collectHandlers(program: AstNode): AstNode[] {
       const prop = idName((n.callee as AstNode).property as AstNode)
       if (prop && ROUTE_METHODS.has(prop) && isRouteShaped(n)) {
         for (const arg of (n.arguments ?? []) as AstNode[]) {
-          if (arg && FUNCTION_TYPES.has(arg.type as string)) handlers.push(arg)
+          if (!arg) continue
+          if (FUNCTION_TYPES.has(arg.type as string)) handlers.push(arg)
+          // Named handler / middleware: `router.get("/x", requireAuth, show)`.
+          else if (arg.type === "Identifier") {
+            const resolved = named.get(arg.name as string)
+            if (resolved) handlers.push(resolved)
+          }
         }
       }
     }
@@ -186,9 +253,7 @@ function collectTaintedLocals(body: AstNode, source: string): Set<string> {
         for (const p of (target.properties ?? []) as AstNode[]) {
           const key = idName(p.key as AstNode)
           const local = idName(p.value as AstNode) ?? key
-          if (key && local && /^(?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)$/i.test(key)) {
-            tainted.add(local)
-          }
+          if (key && local && OBJECT_HANDLE_RE.test(key)) tainted.add(local)
         }
       }
       return
@@ -197,6 +262,30 @@ function collectTaintedLocals(body: AstNode, source: string): Set<string> {
     if (local && TAINTED_MEMBER_RE.test(sliceOf(source, init))) tainted.add(local)
   })
   return tainted
+}
+
+/** Next-style route params arrive via the handler's 2nd argument, NOT `req.*`:
+ *  `GET(request, { params })` → the local `params` (so `params.id` is tainted),
+ *  and `GET(request, { params: { id } })` → the inner handle names. (Express
+ *  handlers have `res` as the 2nd arg → ObjectPattern check returns nothing.) */
+function collectNextRouteParamLocals(handler: AstNode): string[] {
+  const second = ((handler.params ?? []) as AstNode[])[1]
+  if (!second || second.type !== "ObjectPattern") return []
+  const out: string[] = []
+  for (const p of (second.properties ?? []) as AstNode[]) {
+    if (idName(p.key as AstNode) !== "params") continue
+    const val = p.value as AstNode
+    if (val?.type === "Identifier") {
+      out.push(val.name as string)
+    } else if (val?.type === "ObjectPattern") {
+      for (const sp of (val.properties ?? []) as AstNode[]) {
+        const key = idName(sp.key as AstNode)
+        const local = idName(sp.value as AstNode) ?? key
+        if (key && local && OBJECT_HANDLE_RE.test(key)) out.push(local)
+      }
+    }
+  }
+  return out
 }
 
 /** Does this call's argument subtree carry taint — a request handle member or a
@@ -245,12 +334,12 @@ export const noUnauthorizedObjectLookup: AstRule = {
     for (const handler of collectHandlers(node)) {
       const body = handler.body as AstNode
       if (!body) continue
-      const bodySrc = sliceOf(ctx.source, body)
       // Fail closed: any in-body principal/authz signal → this handler is
       // authz-aware (or middleware-protected and principal-scoped); skip it.
-      if (AUTHZ_GUARD_RE.test(bodySrc)) continue
+      if (handlerHasAuthzSignal(body)) continue
 
       const taintedLocals = collectTaintedLocals(body, ctx.source)
+      for (const local of collectNextRouteParamLocals(handler)) taintedLocals.add(local)
       // Emit on the FIRST tainted record-lookup in the handler (one finding per
       // handler — the authz gap is the handler's, not each query's).
       let emitted = false

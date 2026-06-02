@@ -6,16 +6,26 @@
 
 import { describe, it, expect } from "vitest"
 import { parseSource } from "../src/lib/ast-rules/parser"
+import { walkAst, type AstNode } from "../src/lib/ast-rules/walker"
 import { noUnauthorizedObjectLookup } from "../src/lib/ast-rules/rules/no-unauthorized-object-lookup"
 import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
 import type { AstRuleHit, AstRuleVisitResult } from "../src/lib/ast-rules/types"
 
+// CodeRabbit #302: route through the production `walkAst` dispatch (keyed on the
+// rule's own `nodeTypes`) so the suite catches nodeTypes / walker drift, not
+// just a direct `visit()` call.
 function runRule(source: string, path = "src/routes/x.ts"): AstRuleHit[] {
   const r = parseSource(source, ".ts")
   if (!r.ok) throw new Error(`parse failed: ${r.reason}`)
   const out: AstRuleHit[] = []
-  const hit: AstRuleVisitResult = noUnauthorizedObjectLookup.visit(r.ast, { path, source, ast: r.ast })
-  if (hit) Array.isArray(hit) ? out.push(...hit) : out.push(hit)
+  const visitors: Record<string, (n: AstNode) => void> = {}
+  for (const t of noUnauthorizedObjectLookup.nodeTypes) {
+    visitors[t] = (n: AstNode) => {
+      const hit: AstRuleVisitResult = noUnauthorizedObjectLookup.visit(n, { path, source, ast: r.ast })
+      if (hit) Array.isArray(hit) ? out.push(...hit) : out.push(hit)
+    }
+  }
+  walkAst(r.ast, visitors)
   return out
 }
 
@@ -119,6 +129,39 @@ keys.post("/keys/:id/revoke", (req, res) => {
   })
 })
 
+// ── Next.js route handlers (Codex #302 review) ──────────────────────────────
+describe("no-unauthorized-object-lookup — Next.js route param shapes", () => {
+  it("fires on context.params.id reaching a lookup (Next, no authz)", () => {
+    const src = `
+import { db } from "../db";
+export async function GET(request: Request, context: { params: { id: string } }) {
+  return db.findUnique({ where: { id: context.params.id } });
+}`
+    expect(runRule(src, "app/keys/[id]/route.ts").length).toBe(1)
+  })
+
+  it("fires on a destructured { params } → params.id lookup (Next, no authz)", () => {
+    const src = `
+import { db } from "../db";
+export async function GET(request: Request, { params }: { params: { id: string } }) {
+  return db.findUnique({ where: { id: params.id } });
+}`
+    expect(runRule(src, "app/keys/[id]/route.ts").length).toBe(1)
+  })
+
+  it("skips a Next handler that checks the session (authz-aware)", () => {
+    const src = `
+import { db } from "../db";
+import { getServerSession } from "next-auth";
+export async function GET(request: Request, { params }: { params: { id: string } }) {
+  const session = await getServerSession();
+  if (!session) return new Response(null, { status: 403 });
+  return db.findUnique({ where: { id: params.id, ownerId: session.user.id } });
+}`
+    expect(runRule(src, "app/keys/[id]/route.ts").length).toBe(0)
+  })
+})
+
 // ── NEGATIVES: safe siblings + adversarial FPs (must SKIP) ───────────────────
 describe("no-unauthorized-object-lookup — FP-safe (skips authz-aware code)", () => {
   it("skips a principal-scoped handler (GET /workspaces — req.subject)", () => {
@@ -196,7 +239,7 @@ describe("no-unauthorized-object-lookup — registration + emit shape", () => {
   it("is registered in ALL_RULES", () => {
     expect(ALL_RULES.some((r) => r.id === "no-unauthorized-object-lookup")).toBe(true)
   })
-  it("the emitted finding cites IDOR / CWE-639", () => {
+  it("the emitted finding cites IDOR / CWE-639 and carries line + endLine (CodeRabbit #302)", () => {
     const src = `
 const router = require("express").Router();
 router.get("/keys/:id", async (req, res) => {
@@ -206,5 +249,66 @@ router.get("/keys/:id", async (req, res) => {
     const hits = runRule(src)
     expect(hits.length).toBe(1)
     expect(hits[0].message).toMatch(/IDOR|CWE-639|object-level authorization/i)
+    // the query spans line 4; anchor must be a real line with endLine >= line.
+    expect(hits[0].line).toBe(4)
+    expect(hits[0].endLine ?? hits[0].line).toBeGreaterThanOrEqual(hits[0].line)
+  })
+})
+
+// ── CodeRabbit #302 fixes: named handlers + comment/string robustness ────────
+describe("no-unauthorized-object-lookup — named-handler resolution + AST authz", () => {
+  it("CR1: fires on a NAMED route handler (router.get('/x', showKey))", () => {
+    const src = `
+const router = require("express").Router();
+async function showKey(req, res) {
+  const r = await query("SELECT * FROM api_keys WHERE id = $1", [req.params.id]);
+  res.json(r);
+}
+router.get("/keys/:id", showKey);`
+    expect(runRule(src).length).toBe(1)
+  })
+
+  it("CR1: resolves the handler past middleware args (router.get('/x', rateLimit, showKey))", () => {
+    const src = `
+const router = require("express").Router();
+const showKey = async (req, res) => {
+  const r = await query("SELECT * FROM api_keys WHERE id = $1", [req.params.id]);
+  res.json(r);
+};
+router.get("/keys/:id", rateLimit, showKey);`
+    expect(runRule(src).length).toBe(1)
+  })
+
+  it("CR2: a COMMENT mentioning authz does NOT mute the detector", () => {
+    const src = `
+const router = require("express").Router();
+router.get("/keys/:id", async (req, res) => {
+  // TODO: requireRole / authorize this once the session story lands
+  const r = await query("SELECT * FROM api_keys WHERE id = $1", [req.params.id]);
+  res.json(r);
+});`
+    expect(runRule(src).length).toBe(1)
+  })
+
+  it("CR2: a STRING literal mentioning authz does NOT mute the detector", () => {
+    const src = `
+const router = require("express").Router();
+router.get("/keys/:id", async (req, res) => {
+  logger.info("unauthorized access attempts are forbidden");
+  const r = await query("SELECT * FROM api_keys WHERE id = $1", [req.params.id]);
+  res.json(r);
+});`
+    expect(runRule(src).length).toBe(1)
+  })
+
+  it("CR2: a REAL code-level authz check (req.subject + 403) still skips", () => {
+    const src = `
+const router = require("express").Router();
+router.get("/keys/:id", async (req, res) => {
+  if (req.subject !== ownerOf(req.params.id)) return res.status(403).end();
+  const r = await query("SELECT * FROM api_keys WHERE id = $1", [req.params.id]);
+  res.json(r);
+});`
+    expect(runRule(src).length).toBe(0)
   })
 })

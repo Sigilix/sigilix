@@ -121,6 +121,17 @@ describe("analyzeHelperBypass", () => {
     const m = new Map([["b.ts", HELPER + safe], ["api.ts", SIBLING_USES]])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
+
+  it("renders the ORIGINAL identifiers in the hint text, not the match-normalized form", () => {
+    // norm() strips underscores/casing for MATCHING (amount_cents -> amountcents);
+    // the hint TEXT the model reads must keep the real `amount_cents` / `refunds`
+    // names, else the model distrusts a hint that cites a column that doesn't exist.
+    const m = new Map([["billing.ts", HELPER + MUTATOR_BYPASS], ["api.ts", SIBLING_USES]])
+    const [hint] = analyzeHelperBypass(m)
+    expect(hint!.message).toContain("`amount_cents`")
+    expect(hint!.message).toContain("`refunds`")
+    expect(hint!.message).not.toContain("amountcents")
+  })
 })
 
 describe("renderAsymmetryHints", () => {

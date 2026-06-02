@@ -38,6 +38,10 @@ export interface AsymmetryHint {
  *  (a `$` in a name would otherwise be an anchor — code-review H1). */
 const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const norm = (t: string): string => t.replace(/_/g, "").toLowerCase().split(".").pop()!
+/** Display form of a SQL identifier: strip any table/alias qualifier but KEEP the
+ *  original casing and underscores. `norm()` mangles `amount_cents` -> `amountcents`
+ *  (fine for matching, wrong for the hint TEXT — the model should see the real name). */
+const display = (t: string): string => t.split(".").pop()!
 
 /** Blank `//` and `/* *​/` comments to spaces (length-preserving). `alsoStrings`
  *  additionally blanks string/template bodies — used for the call-count corpus
@@ -104,13 +108,15 @@ function extractFunctions(blanked: string): FnInfo[] {
  *  … FROM table`. Requires a plain column arg + a single `FROM` with NO JOIN/UNION
  *  (an ambiguous multi-table aggregate could mis-attribute — code-review M2). Null
  *  when the body isn't such a helper. */
-function aggregateTarget(body: string): { table: string; column: string } | null {
+function aggregateTarget(
+  body: string,
+): { table: string; column: string; tableRaw: string; columnRaw: string } | null {
   const agg = /\b(?:sum|count)\s*\(\s*(?:distinct\s+)?([A-Za-z_$][\w$.]*)\s*\)/i.exec(body)
   if (!agg) return null
   if (/\bjoin\b|\bunion\b/i.test(body)) return null
   const from = /\bfrom\s+([A-Za-z_$][\w$.]*)/i.exec(body)
   if (!from) return null
-  return { table: norm(from[1]!), column: norm(agg[1]!) }
+  return { table: norm(from[1]!), column: norm(agg[1]!), tableRaw: display(from[1]!), columnRaw: display(agg[1]!) }
 }
 
 /** Does `body` WRITE `column` into `table` — `INSERT INTO table (… column …)` or
@@ -150,8 +156,9 @@ export function analyzeHelperBypass(filesByPath: ReadonlyMap<string, string>): A
   }
   if (fns.length === 0) return []
 
-  // Aggregation helpers: name -> { table, column }.
-  const helpers = new Map<string, { table: string; column: string }>()
+  // Aggregation helpers: name -> { table, column (normalized, for matching) +
+  // tableRaw, columnRaw (original identifiers, for the hint text) }.
+  const helpers = new Map<string, { table: string; column: string; tableRaw: string; columnRaw: string }>()
   for (const f of fns) {
     const t = aggregateTarget(f.body)
     if (t) helpers.set(f.name, t)
@@ -160,7 +167,7 @@ export function analyzeHelperBypass(filesByPath: ReadonlyMap<string, string>): A
 
   const hints: AsymmetryHint[] = []
   const seen = new Set<string>()
-  for (const [helper, { table, column }] of helpers) {
+  for (const [helper, { table, column, tableRaw, columnRaw }] of helpers) {
     // Helper must be CALLED somewhere (calls minus its own declaration(s) > 0),
     // counted on the strings-blanked corpus so a name in a doc/SQL string doesn't
     // inflate it (code-review L2).
@@ -178,11 +185,11 @@ export function analyzeHelperBypass(filesByPath: ReadonlyMap<string, string>): A
         fn: f.name,
         helper,
         message:
-          `\`${f.name}\` writes \`${column}\` into \`${table}\` — the column \`${helper}()\` SUMs — WITHOUT ` +
+          `\`${f.name}\` writes \`${columnRaw}\` into \`${tableRaw}\` — the column \`${helper}()\` SUMs — WITHOUT ` +
           `first calling \`${helper}()\` to read the prior total, even though \`${helper}\` exists and is used ` +
           `elsewhere. This is the OVER-CREDIT / OVER-REFUND shape. Answer ONE question: does \`${f.name}\` write ` +
           `a FULL or fixed amount (e.g. the whole plan price / charge / invoice total) rather than a delta net ` +
-          `of \`${helper}()\`? If YES, every call ACCUMULATES — the prior \`${column}\` total is ignored and the ` +
+          `of \`${helper}()\`? If YES, every call ACCUMULATES — the prior \`${columnRaw}\` total is ignored and the ` +
           `customer is credited/refunded again on each invocation (a repeatable over-credit) — raise it as a ` +
           `logic bug. If \`${f.name}\` writes a usage-derived delta, or the duplicate is guarded elsewhere, it ` +
           `is safe — say so. This is NOT a rounding, units, or cents/dollars question: judge only whether the ` +

@@ -85,6 +85,28 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // SIG-312 17→18 (deterministic_emit severity keys on the entry's `severity`:
     // a `warning` entry is a P2/P3 advisory never a P0/P1 blocker — lets the
     // dynamic-HTML-sink detector surface an XSS at P2 without a false P0/P1).
-    expect(PROMPT_VERSION).toBe("18")
+    // SIG-313 18→19 (security specialist gains the mandatory AUTHORIZATION AUDIT
+    // — forced handler enumeration + exploit-tuple gate — to close the authz
+    // recall gap without over-firing on safe endpoints).
+    expect(PROMPT_VERSION).toBe("19")
+  })
+
+  it("security specialist has the SIG-313 authorization audit (forced enumeration + exploit-tuple gate + safe skips)", () => {
+    const sec = SPECIALIST_PROMPTS.security
+    expect(sec).toContain("AUTHORIZATION AUDIT")
+    // the four-step enumeration
+    expect(sec).toContain("PRINCIPAL")
+    expect(sec).toContain("OBJECT KEY")
+    expect(sec).toContain("RESOURCE")
+    expect(sec).toContain("CHECK")
+    // FP-safety: emit only on the full exploit tuple
+    expect(sec).toMatch(/exploit tuple/i)
+    // the safe-skip cases (the believability guard — must not over-fire)
+    expect(sec).toMatch(/DERIVED from the principal/i)
+    expect(sec).toMatch(/owner\/tenant-scoped/i)
+    expect(sec).toMatch(/public/i)
+    expect(sec).toMatch(/DurableObject/i)
+    // ties to the existing access-control evidence hatch
+    expect(sec).toContain('evidenceId: "NONE"')
   })
 })

@@ -42,6 +42,7 @@ import {
   ENUM_LITERAL_DRIFT_RULE_ID,
 } from "./scan-enum-literal-drift"
 import { scanCentsRenderedAsDollars, CENTS_AS_DOLLARS_RULE_ID } from "./scan-cents-as-dollars"
+import { scanFractionalCentsMath, FLOAT_CENTS_RULE_ID } from "./scan-float-cents"
 
 // SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
 // reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't
@@ -100,6 +101,22 @@ const CENTS_AS_DOLLARS_PSEUDO_RULE: AstRule = {
   severity: "warning",
   roleHint: "logic",
   shortDescription: "A *Cents value is rendered as dollars without dividing by 100 — verify unit",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
+
+// SIG-317 Part 4a: an integer-cents value multiplied by a non-integer operand
+// without rounding (fractional-cents money math). Line-scan; `warning`/`logic`/
+// `emitWhenUnmatched` P2 advisory — the logic specialist judges whether the
+// multiplier is really fractional. Same FP-safe-by-construction posture as the
+// sibling scans.
+const FLOAT_CENTS_PSEUDO_RULE: AstRule = {
+  id: FLOAT_CENTS_RULE_ID,
+  severity: "warning",
+  roleHint: "logic",
+  shortDescription: "Integer cents multiplied by a non-integer without rounding — verify fractional cents",
   language: "both",
   nodeTypes: [],
   emitWhenUnmatched: true,
@@ -331,6 +348,14 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     if (ruleEnabledByConfig(config, CENTS_AS_DOLLARS_RULE_ID, CENTS_AS_DOLLARS_PSEUDO_RULE.severity)) {
       for (const hit of scanCentsRenderedAsDollars(source)) {
         fileHits.push({ rule: CENTS_AS_DOLLARS_PSEUDO_RULE, hit })
+      }
+    }
+
+    // SIG-317 Part 4a: fractional-cents money math (integer cents * non-integer,
+    // unrounded). Same per-file splice + config-gate as the sibling scans.
+    if (ruleEnabledByConfig(config, FLOAT_CENTS_RULE_ID, FLOAT_CENTS_PSEUDO_RULE.severity)) {
+      for (const hit of scanFractionalCentsMath(source)) {
+        fileHits.push({ rule: FLOAT_CENTS_PSEUDO_RULE, hit })
       }
     }
 

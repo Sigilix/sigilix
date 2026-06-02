@@ -33,39 +33,47 @@ strings, and log lines that lexical search catches reliably.
 
 ---
 
-## SIG-44 — Multi-corpus retrieval (merged PRs + Linear issues) — 🟡 review-time core built & tested
+## SIG-44 — Multi-corpus retrieval (merged PRs + Linear issues) — ✅ wired end-to-end
 
 **Why:** retrieval only sees code, so the bot can't say "this looks like the same
 regression we fixed in PR #234" or cite a Linear decision.
 
-**Built & tested (`src/lib/multi-corpus.ts`):**
+**Core (`src/lib/multi-corpus.ts`):**
 - `pr:<owner>/<repo>` and `issue:<owner>/<repo>` namespace helpers (prefixes on
   the code namespace, well under Vectorize's 64-byte cap, same 768-dim bge
   embeddings).
 - Embed-text builders + stable doc ids (`pr-234`, `issue-arc-42`) so refresh
   overwrites rather than duplicates.
-- `upsertPrDoc` / `upsertIssueDoc` — embed + upsert write helpers with metadata
-  (`kind`, `ref`, `title`, `verdict`/`status`, `content`).
+- `upsertPrDoc` / `upsertIssueDoc` — embed + upsert write helpers with metadata.
 - `retrieveMultiCorpus` — queries `pr:` + `issue:` in parallel, soft-fails per
   leg, emits `pr-review-retrieval-multicorpus` telemetry with per-namespace hit
   counts + top scores.
 - `formatMultiCorpusForPrompt` — labeled blocks
   (`--- past PR #234 (verdict: changes_required) ---`), bounded per-block/total.
-- Flag `OPENCLAW_MULTICORPUS_RETRIEVAL` reserved for the ensemble injection seam.
+- `deriveVerdictLabel` — maps persisted review findings to the verdict label
+  (the manifest stores only per-finding `score`; we reuse the pipeline's own
+  score≥4 = changes_required floor; empty findings = approved; no manifest =
+  undefined so we never assert a false "approved").
 
-**Remaining integration (follow-up — the plumbing, not the logic):**
-1. **Backfill:** on new-repo onboarding, fetch last 90 days of merged PRs via the
-   GitHub Search API and `upsertPrDoc` them (hook in the indexer queue consumer).
-2. **Refresh webhooks:** `pull_request closed+merged` → `upsertPrDoc`; Linear
-   `Issue` webhook → `upsertIssueDoc` (new handlers in `src/index.ts`).
-3. **Read injection:** call `retrieveMultiCorpus` + append
-   `formatMultiCorpusForPrompt` in the ensemble preflight
-   (`triage-pr-review-ensemble.ts`), gated on `OPENCLAW_MULTICORPUS_RETRIEVAL`.
+**Plumbing (now wired):**
+| Piece | Where |
+|---|---|
+| **Read injection** | `triage-pr-review-ensemble.ts` — `retrieveMultiCorpus` runs concurrently with preflight; the `[PRIOR PRS & ISSUES]` section is appended to the shared + perf snapshots *after* the branch-aware merge so it can't be clobbered. Gated on `OPENCLAW_MULTICORPUS_RETRIEVAL`. |
+| **Merged-PR refresh** | `index.ts` `pull_request` handler — `closed && merged` enqueues `corpus-pr-upsert` (waitUntil, flag-gated). |
+| **Linear-issue refresh** | `index.ts` `handleLinearWebhook` — `Issue` create/update enqueues `corpus-issue-upsert` (waitUntil, flag-gated). |
+| **90-day backfill** | `index.ts` install/repos-added handler enqueues `corpus-pr-backfill` per repo; consumer uses the GitHub Search API (`GitHubClient.searchMergedPullRequests`, `is:pr is:merged merged:>=DATE`) to embed the last 90 days. |
+| **Consumers** | `src/lib/multi-corpus-jobs.ts` — `handleCorpusPrUpsert` / `handleCorpusPrBackfill` / `handleCorpusIssueUpsert`, dispatched from the `queue()` switch via 3 new `JobMessage` variants. |
+| **Linear → repo map** | issue consumer maps `team.key` → owner/repo via the existing `OPENCLAW_TEAM_GITHUB_REPO_MAP` (`listTeamRepoMappings`); unmapped teams no-op (inert for non-Linear repos). |
 
-These were deliberately left out of this PR: they touch the budget-tuned ensemble
-hot path and the 8.4k-line webhook router, and would be runtime no-ops until the
-write path populates the corpora. Splitting keeps this PR reviewable and the core
-logic independently verified.
+All producers gate on `multiCorpusEnabled(env)` and are best-effort (waitUntil +
+per-call catch) so a corpus failure never affects code indexing or PR review.
+
+**Known limitation:** the Linear webhook payload carries no issue identifier/state,
+so the issue consumer does one `LinearClient.getIssue` fetch to resolve
+`identifier`/`title`/`description`. Issue `status` isn't in the `LinearIssue`
+projection, so the issue blocks render without a status label (the PR verdict
+label is present). Adding `state` to the Linear GraphQL projection is a small
+follow-up.
 
 ---
 

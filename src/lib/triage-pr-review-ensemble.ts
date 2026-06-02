@@ -1227,16 +1227,22 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     perAttemptTimeoutMs: 120_000,
   },
   security: {
-    // Coder-model territory: vulnerability patterns are mostly
-    // syntax / dataflow recognition, not frontier reasoning. Qwen3-
-    // Coder-Next is tuned for agentic coding workflows and the
-    // primary needs to be DIFFERENT from tests (which now uses
-    // MiniMax) so the 4+1 unique constraint holds.
-    primary: "qwen3-coder-next:cloud",
+    // REVERTED from qwen3-coder-next (a coder model) to a REASONING model
+    // after the pr/07 benchmark regression. The SIG-234 premise —
+    // "vulnerability patterns are mostly syntax/dataflow recognition, not
+    // frontier reasoning" — holds for INJECTION but FAILS for AUTHORIZATION:
+    // IDOR / BOLA / broken access control are reasoning ("should this caller
+    // reach this resource?"), not pattern matching. On an IDOR-heavy benchmark
+    // the coder model produced ZERO authz findings (only the two obvious
+    // injections); raw pre-gate KV telemetry confirmed they were NEVER
+    // generated (not gate-dropped). In a controlled re-test on the exact diff,
+    // deepseek-v4-flash (the logic primary, a FAST reasoner) caught all of
+    // them. Deliberately the SAME model as logic — recall beats the
+    // 4+1-unique-primaries nicety, and v4-flash is proven in-budget on the hot
+    // path (deepseek-v4-pro is too slow for a critical-path primary; it stays
+    // on the fallback as the deeper authz backup).
+    primary: "deepseek-v4-flash:cloud",
     retries: 1,
-    // `deepseek-v4-pro:cloud` recycled here — the slow but capable
-    // reasoning model now lives on fallback paths so its latency
-    // doesn't anchor the critical path. Cross-provider from Qwen.
     fallback: "deepseek-v4-pro:cloud",
   },
   performance: {

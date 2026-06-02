@@ -36,6 +36,11 @@ import {
 import type { AstFinding, AstRule, AstRuleHit, RuleContext } from "./types"
 import type { ReviewableMap } from "../diff-positions"
 import { scanDynamicHtmlSinks, DYNAMIC_HTML_SINK_RULE_ID } from "./scan-dynamic-html-sink"
+import {
+  buildGlobalUnionMap,
+  scanSqlEnumDrift,
+  ENUM_LITERAL_DRIFT_RULE_ID,
+} from "./scan-enum-literal-drift"
 
 // SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
 // reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't
@@ -58,6 +63,25 @@ const DYNAMIC_HTML_SINK_PSEUDO_RULE: AstRule = {
   severity: "warning",
   roleHint: "security",
   shortDescription: "Dynamic value rendered as raw HTML via an HTML-injection sink — verify sanitization",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
+
+// SIG-317 Part 2: enum/type-contract drift is also a LINE-SCAN with a CROSS-FILE
+// pre-pass — the SQL write (`SET status = 'refunded'`) lives in a string literal
+// the walker can't descend into, and the constraint it violates (the declared
+// union) lives in a DIFFERENT file. `warning`/`logic`/`emitWhenUnmatched`: a P2
+// advisory that surfaces the mismatch for the logic specialist to escalate, by
+// the same FP-safety reasoning as the dynamic-HTML sink (a scan can't prove the
+// DB schema doesn't legitimately allow the extra value). `nodeTypes: []` + a
+// no-op `visit` keep the walker from ever invoking it as an AST rule.
+const ENUM_LITERAL_DRIFT_PSEUDO_RULE: AstRule = {
+  id: ENUM_LITERAL_DRIFT_RULE_ID,
+  severity: "warning",
+  roleHint: "logic",
+  shortDescription: "SQL writes a value not in the column's declared type union — verify type-contract",
   language: "both",
   nodeTypes: [],
   emitWhenUnmatched: true,
@@ -157,6 +181,14 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
 
   const enabledRules = getEnabledRules(config)
   const changedLines: ChangedLines = buildChangedLines(diff)
+
+  // SIG-317 Part 2: collect every TS string-literal union declared across ALL
+  // changed files BEFORE the per-file scan, so the enum-drift scan can correlate
+  // a SQL write in one file to the union declared in another (the type lives in
+  // `shared/types.ts`, the query in `billing.ts`). Cheap regex pre-pass; the
+  // ambiguity resolution (a name declared with two distinct unions → never flag)
+  // is the FP-safety guard. Skipped downstream when empty (no unions → no scan).
+  const enumUnionMap = buildGlobalUnionMap(filesByPath.values())
 
   const findings: AstFinding[] = []
   const perFinding: Map<string, { line: number; side: "RIGHT" } | null> = new Map()
@@ -262,6 +294,17 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     if (ruleEnabledByConfig(config, DYNAMIC_HTML_SINK_RULE_ID, DYNAMIC_HTML_SINK_PSEUDO_RULE.severity)) {
       for (const hit of scanDynamicHtmlSinks(source)) {
         fileHits.push({ rule: DYNAMIC_HTML_SINK_PSEUDO_RULE, hit })
+      }
+    }
+
+    // SIG-317 Part 2: enum/type-contract drift — a SQL write of a literal not in
+    // the column's declared union (`enumUnionMap`, built cross-file above). Same
+    // splice + config-gate as the dynamic-HTML scan; hits flow through the same
+    // changed-line filter, finding-id, dedupe, and emit path. No-op when no
+    // unions were declared in the diff.
+    if (ruleEnabledByConfig(config, ENUM_LITERAL_DRIFT_RULE_ID, ENUM_LITERAL_DRIFT_PSEUDO_RULE.severity)) {
+      for (const hit of scanSqlEnumDrift(source, enumUnionMap)) {
+        fileHits.push({ rule: ENUM_LITERAL_DRIFT_PSEUDO_RULE, hit })
       }
     }
 

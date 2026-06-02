@@ -115,6 +115,12 @@ import {
 } from "./lib/index-producer"
 import { handleIndexRepoJob } from "./lib/indexer"
 import {
+  handleCorpusPrUpsert,
+  handleCorpusPrBackfill,
+  handleCorpusIssueUpsert,
+} from "./lib/multi-corpus-jobs"
+import { multiCorpusEnabled } from "./lib/multi-corpus"
+import {
   attachExistingCheckRun,
   startInProgressCheckRun,
   completeCheckRun,
@@ -949,6 +955,23 @@ export type JobMessage =
       reason: "branch-deleted" | "pr-branch-closed"
       branch?: string
     }
+  // SIG-44 multi-corpus write jobs. All gated by OPENCLAW_MULTICORPUS_RETRIEVAL
+  // at the producer; the consumers (lib/multi-corpus-jobs.ts) are best-effort.
+  | {
+      type: "corpus-pr-upsert"
+      owner: string
+      repo: string
+      prNumber: number
+      title: string
+      body: string
+    }
+  | {
+      type: "corpus-pr-backfill"
+      owner: string
+      repo: string
+      installationId: number
+    }
+  | { type: "corpus-issue-upsert"; linearIssueId: string }
 
 /**
  * Pure decision: given a `pull_request` webhook action + draft flag,
@@ -1078,6 +1101,9 @@ interface GitHubWebhookPayload {
     base?: { sha?: string; ref?: string }
     draft?: boolean
     merged?: boolean
+    // SIG-44: title/body feed the merged-PR multi-corpus refresh.
+    title?: string
+    body?: string | null
   }
   workflow_run?: {
     id?: number
@@ -2216,6 +2242,20 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
         installationId: job.installationId,
       })
+    case "corpus-pr-upsert":
+      // SIG-44: embed a merged PR into the pr: multi-corpus namespace.
+      return handleCorpusPrUpsert(env, {
+        owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        title: job.title, body: job.body,
+      })
+    case "corpus-pr-backfill":
+      // SIG-44: 90-day merged-PR backfill on repo onboarding.
+      return handleCorpusPrBackfill(env, {
+        owner: job.owner, repo: job.repo, installationId: job.installationId,
+      }, Date.now())
+    case "corpus-issue-upsert":
+      // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
+      return handleCorpusIssueUpsert(env, { linearIssueId: job.linearIssueId })
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at
@@ -2247,6 +2287,28 @@ async function handleLinearWebhook(
     payload = JSON.parse(rawBody) as LinearWebhookPayload
   } catch {
     return new Response("invalid json\n", { status: 400 })
+  }
+
+  // SIG-44: any Issue create/update refreshes the issue: multi-corpus
+  // namespace (flag-gated, fire-and-forget). Placed before the create→triage
+  // return below so BOTH actions are covered. The consumer maps the issue's
+  // Linear team → GitHub repo via OPENCLAW_TEAM_GITHUB_REPO_MAP; an unmapped
+  // team no-ops, so this is inert for non-Linear-linked repos.
+  if (
+    multiCorpusEnabled(env) &&
+    payload.type === "Issue" &&
+    (payload.action === "create" || payload.action === "update")
+  ) {
+    _ctx.waitUntil(
+      env.OPENCLAW_JOBS.send({ type: "corpus-issue-upsert", linearIssueId: payload.data.id })
+        .catch((err) => {
+          console.warn(JSON.stringify({
+            event: "corpus-issue-upsert-enqueue-failed",
+            issueId: payload.data.id,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }),
+    )
   }
 
   // Issue.create → enqueue full triage pipeline.
@@ -2619,6 +2681,32 @@ async function handleGitHubWebhook(
           reason,
           ...result,
         }))
+        // SIG-44: alongside code indexing, enqueue a 90-day merged-PR
+        // backfill per repo so the pr: corpus is populated on onboarding.
+        // Best-effort + fully isolated: a failure here never changes the
+        // index-fanout response (GitHub redelivery would re-run the code
+        // index, which is the load-bearing path). Flag-gated.
+        if (multiCorpusEnabled(env)) {
+          for (const r of repositories) {
+            const fullName = typeof r?.full_name === "string" ? r.full_name : ""
+            const [bOwner, bRepo] = fullName.split("/")
+            if (!bOwner || !bRepo) continue
+            try {
+              await env.OPENCLAW_JOBS.send({
+                type: "corpus-pr-backfill",
+                owner: bOwner,
+                repo: bRepo,
+                installationId,
+              })
+            } catch (err) {
+              console.warn(JSON.stringify({
+                event: "corpus-pr-backfill-enqueue-failed",
+                owner: bOwner, repo: bRepo,
+                err: err instanceof Error ? err.message : String(err),
+              }))
+            }
+          }
+        }
         return new Response("indexed\n", { status: 202 })
       } catch (err) {
         // Defensive: enqueueIndexJobsForRepos has per-repo try/catch
@@ -2680,6 +2768,28 @@ async function handleGitHubWebhook(
         owner, repo, prNumber: pr.number,
         head_repo: headRepoFullName,
       }))
+    }
+    // SIG-44: a merged PR refreshes the pr: multi-corpus namespace with its
+    // title/body + derived verdict. Placed BEFORE the draft/skip returns
+    // below (a closed PR otherwise short-circuits at decidePullRequestJobs).
+    // Fire-and-forget via waitUntil; flag-gated; never blocks the ack.
+    if (multiCorpusEnabled(env) && action === "closed" && pr.merged === true) {
+      ctx.waitUntil(
+        env.OPENCLAW_JOBS.send({
+          type: "corpus-pr-upsert",
+          owner,
+          repo,
+          prNumber: pr.number,
+          title: typeof pr.title === "string" ? pr.title : "",
+          body: typeof pr.body === "string" ? pr.body : "",
+        }).catch((err) => {
+          console.warn(JSON.stringify({
+            event: "corpus-pr-upsert-enqueue-failed",
+            owner, repo, prNumber: pr.number,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }),
+      )
     }
     if (pr.draft) {
       const headSha = pr.head?.sha ?? ""

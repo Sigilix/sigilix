@@ -39,6 +39,10 @@ describe("scanFractionalCentsMath — SKIPS (precision guards)", () => {
     expect(scan("const x = ~~(amountCents * rate);")).toHaveLength(0)
     expect(scan("const x = (amountCents * rate) | 0;")).toHaveLength(0)
   })
+  it("does NOT flag a MULTI-LINE Math.round wrapping the multiply (CodeRabbit #307)", () => {
+    expect(scan("return Math.round(\n  amountCents * rate\n);")).toHaveLength(0)
+    expect(scan("const x = Math.floor(\n  priceCents * pct,\n);")).toHaveLength(0)
+  })
   it("does NOT flag a non-cents identifier `quantity * rate`", () => {
     expect(scan("const x = quantity * rate;")).toHaveLength(0)
   })

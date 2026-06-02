@@ -92,13 +92,16 @@ function lineOf(source: string, idx: number): { line: number; column: number } {
   return { line: source.slice(0, idx).split("\n").length, column: Math.max(0, idx - lineStartIdx) }
 }
 
-/** The statement window around `idx` (between the previous and next `;`/`{`/`}`
- *  or newline), to check for a rounding call. */
+/** The statement window around `idx` (between the previous and next `;`/`{`/`}`),
+ *  to check for a rounding call. Deliberately NOT bounded by newline so a
+ *  pretty-printed `Math.round(\n  cents * rate\n)` is still seen as rounded
+ *  (CodeRabbit #307). The `{`/`}`/`;` bounds keep it statement-scoped; in ASI
+ *  code a too-wide window only over-suppresses (FN over FP). */
 function statementHasRound(blanked: string, idx: number): boolean {
   let start = idx
-  while (start > 0 && !/[;{}\n]/.test(blanked[start - 1]!)) start--
+  while (start > 0 && !/[;{}]/.test(blanked[start - 1]!)) start--
   let end = idx
-  while (end < blanked.length && !/[;{}\n]/.test(blanked[end]!)) end++
+  while (end < blanked.length && !/[;{}]/.test(blanked[end]!)) end++
   return ROUND_RE.test(blanked.slice(start, end))
 }
 

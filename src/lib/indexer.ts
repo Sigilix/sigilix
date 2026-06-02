@@ -62,6 +62,7 @@ import {
   appendVectorCoverage,
 } from "./repo-index-vectors"
 import { writeActiveRun, readActiveRunId, shouldFinalize } from "./repo-index-active-run"
+import { upsertLexicalChunks, type LexicalChunk } from "./lexical-index"
 import { enqueueWarmupRerunsForIndex } from "./warmup"
 import { extractFileGraph } from "./graph-extract"
 import { writeFileGraph, commitGraph, debugActiveGraphVersion } from "./repo-graph-client"
@@ -1001,6 +1002,7 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
         // isn't in the id-list (which would escape the GDPR uninstall delete).
         await appendVectorCoverage(env, owner, stateRepo, runId, coverageByPath(upBatch))
         await env.OPENCLAW_CODE_INDEX.upsert(upBatch)
+        await dualWriteLexical(env, upBatch) // SIG-45 — soft lexical mirror
       }
     }
   }
@@ -1023,6 +1025,7 @@ async function processSlice(args: ProcessSliceArgs): Promise<ProcessSliceResult>
     // SIG-137: coverage-before-upsert (see flush loop above).
     await appendVectorCoverage(env, owner, stateRepo, runId, coverageByPath(upBatch))
     await env.OPENCLAW_CODE_INDEX.upsert(upBatch)
+    await dualWriteLexical(env, upBatch) // SIG-45 — soft lexical mirror
   }
 
   console.log(JSON.stringify({
@@ -1042,6 +1045,41 @@ interface VectorizeRecord {
   values: number[]
   namespace: string
   metadata: Record<string, string | number>
+}
+
+/**
+ * SIG-45: dual-write the just-upserted batch to the D1 FTS5 lexical mirror.
+ * Gated only on the binding being present (NOT the read flag) so the lexical
+ * index can be populated ahead of flipping OPENCLAW_RETRIEVAL_HYBRID on for
+ * the A/B — you can't measure hybrid retrieval on an empty lexical corpus.
+ *
+ * Soft by design: `upsertLexicalChunks` swallows + logs its own failures and
+ * we don't await-throw here. The Vectorize upsert and its delete-coverage
+ * ledger (written BEFORE the upsert) remain the load-bearing GDPR path; a
+ * lexical-mirror hiccup must never abort indexing or strand a vector that
+ * escapes the uninstall delete.
+ */
+async function dualWriteLexical(
+  env: Env,
+  records: ReadonlyArray<VectorizeRecord>,
+): Promise<void> {
+  const db = env.OPENCLAW_LEXICAL_INDEX
+  if (db == null || records.length === 0) return
+  const chunks: LexicalChunk[] = []
+  for (const r of records) {
+    const path = typeof r.metadata.path === "string" ? r.metadata.path : ""
+    const content = typeof r.metadata.content === "string" ? r.metadata.content : ""
+    if (path.length === 0 || content.length === 0) continue
+    chunks.push({
+      id: r.id,
+      namespace: r.namespace,
+      path,
+      lineStart: typeof r.metadata.lineStart === "number" ? r.metadata.lineStart : 0,
+      lineEnd: typeof r.metadata.lineEnd === "number" ? r.metadata.lineEnd : 0,
+      content,
+    })
+  }
+  await upsertLexicalChunks(db, chunks)
 }
 
 /**

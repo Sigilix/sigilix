@@ -46,6 +46,7 @@ import {
   repoIndexManifestKey,
   REPO_INDEX_MANIFEST_PREFIX,
   repoTenantKey,
+  indexNamespace,
   type ReadResult as ManifestReadResult,
 } from "./repo-index-manifest"
 import {
@@ -58,6 +59,7 @@ import {
   type ReadResult as VectorsReadResult,
 } from "./repo-index-vectors"
 import { activeRunKey } from "./repo-index-active-run"
+import { deleteLexicalNamespace } from "./lexical-index"
 import { deleteGraph } from "./repo-graph-client"
 import { deleteScopedRulesManifest } from "./scoped-rules-kv"
 
@@ -91,6 +93,13 @@ export interface DeleteResult {
    * probe that protects shared repo-only state.
    */
   reviewMemoryKeys: number
+  /**
+   * SIG-45: count of lexical (D1 FTS5) rows deleted for the repo's
+   * namespace. 0 when the OPENCLAW_LEXICAL_INDEX binding is absent (hybrid
+   * never provisioned) — the lexical purge is GDPR cleanup that runs
+   * unguarded for the requested owner/repo, same as the graph delete.
+   */
+  lexicalRows: number
   /** Non-fatal errors (per-step) that should make the webhook return 5xx. */
   errors: string[]
 }
@@ -283,6 +292,7 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
     manifestDeleted: false,
     vectorsKvDeleted: false,
     reviewMemoryKeys: 0,
+    lexicalRows: 0,
     errors: [],
   }
 
@@ -578,6 +588,33 @@ export async function deleteRepoIndex(args: DeleteRepoIndexArgs): Promise<Delete
       event: "index-delete-graph-failed",
       owner, repo, err: message,
     }))
+  }
+
+  // SIG-45: purge the repo's lexical (D1 FTS5) rows. Keyed by
+  // indexNamespace(owner, repo) — only ever touches the requested tenant's
+  // rows (the namespace embeds the owner), so like the graph delete above it
+  // runs UNGUARDED by safeToTouchRepoOnlyState: this is GDPR/SOC 2 cleanup.
+  // Best-effort + idempotent (a missing binding / already-empty namespace =
+  // 0 rows). deleteLexicalNamespace swallows + logs its own errors, but we
+  // still surface a thrown failure so a partial delete is visible.
+  if (env.OPENCLAW_LEXICAL_INDEX != null) {
+    try {
+      result.lexicalRows += await deleteLexicalNamespace(
+        env.OPENCLAW_LEXICAL_INDEX,
+        indexNamespace(owner, repo),
+      )
+      console.log(JSON.stringify({
+        event: "index-delete-lexical-deleted",
+        owner, repo, rows: result.lexicalRows,
+      }))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      result.errors.push(`lexical.delete(namespace): ${message}`)
+      console.error(JSON.stringify({
+        event: "index-delete-lexical-failed",
+        owner, repo, err: message,
+      }))
+    }
   }
 
   // Steps 5 + 6: owner-qualified KV prefixes. ALWAYS safe to delete

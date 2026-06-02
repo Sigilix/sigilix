@@ -89,12 +89,21 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
     expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "error" })])).toBe(0)
     expect(f[0].score).toBe(5)
   })
-  it("does NOT clamp a security finding co-located with a WARNING/security emit (SIG-312: the model may legitimately escalate a surfaced XSS sink to P0)", () => {
-    // The SIG-312 dynamic-HTML advisory is warning/security; the model's own
-    // security P0 on the same line must NOT be demoted to P2.
+  it("does NOT clamp a SPECIALIST-backed security P0 co-located with a WARNING/security emit (SIG-312: the model escalates a real XSS)", () => {
+    // specialist-backed = sourceFindingIds references a real specialist finding
+    // (not `ast/…`). The model's own security P0 must NOT be demoted to P2.
     const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
-    expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })])).toBe(0)
+    const prov = [{ sourceFindingIds: ["security-1"] }]
+    expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })], prov)).toBe(0)
     expect(f[0].score).toBe(5)
+  })
+  it("DOES clamp a deterministic-ONLY security advisory (no specialist source) to P2 (CodeRabbit #296)", () => {
+    // no specialist backing (empty / ast-only sourceFindingIds) → the advisory
+    // ceiling applies, so an over-scored P0/P1 advisory is capped to P2.
+    const f = [{ path: "a.ts", line: 20, category: "security", score: 4 }]
+    const prov = [{ sourceFindingIds: ["ast/no-dangerous-html-dynamic/abc/20"] }]
+    expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })], prov)).toBe(1)
+    expect(f[0].score).toBe(3)
   })
   it("does NOT clamp a finding on a different path / category / out-of-window line", () => {
     const f = [

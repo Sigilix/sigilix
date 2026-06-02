@@ -66,6 +66,16 @@ describe("buildGlobalUnionMap", () => {
     expect([...(m.get("charge")?.get("status") ?? [])].sort()).toEqual(["pending", "settled"])
   })
 
+  it("handles an unterminated block comment at EOF (no crash; real union kept, comment union blanked)", () => {
+    // Sigilix dogfood flagged a (non-existent) off-by-one here; this pins the
+    // behaviour: the real union before the comment is collected, the one inside
+    // the never-closed `/*` is not, and buildGlobalUnionMap returns normally.
+    const m = buildGlobalUnionMap([
+      `interface Charge { status: "pending" | "settled" }\n/* note status: "a" | "b"`,
+    ])
+    expect([...(m.get("charge")?.get("status") ?? [])].sort()).toEqual(["pending", "settled"])
+  })
+
   it("does NOT collect a function-param / variable union (review H2 — not a schema contract)", () => {
     const m = buildGlobalUnionMap([
       `function setStatus(status: "active" | "inactive") {}`,

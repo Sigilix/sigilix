@@ -47,6 +47,10 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
     const off = buildAstFindingsSynthBlock('{"ast_findings":[]}', false)
     expect(off).toContain("deterministic_emit")
     expect(off).toMatch(/EMIT a .*security.* finding/)
+    // believability-critical: the anti-double-post + "no specialist covers it"
+    // guards must stay in the prompt (a silent deletion would re-open FP risk).
+    expect(off).toContain("don't double-post")
+    expect(off).toMatch(/If NO specialist finding already covers/)
   })
   it("returns an empty block for empty json", () => {
     expect(buildAstFindingsSynthBlock("", false)).toBe("")

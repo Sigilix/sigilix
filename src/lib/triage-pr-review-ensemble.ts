@@ -1467,6 +1467,12 @@ export function resolveReviewEventOverride(args: {
  */
 export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: boolean): string {
   if (astFindingsJson.length === 0) return ""
+  // SIG-309 PR2 note: the emit rule's "already covered" test uses (path, line)
+  // — deliberately BROADER than the confirmation rule's (path, line, role_hint).
+  // A same-line specialist finding of ANY role almost certainly concerns the
+  // same security sink, so the broader key biases toward "already covered" →
+  // suppress the synth emit. That's the FP-safe direction (fewer emits, never
+  // a double-post), at a marginal recall cost on the rare cross-role same-line case.
   const instruction = autoInline
     ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
     : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309: an AST entry with \`"deterministic_emit": true\` is a high-confidence security sink (command/shell injection or disabled TLS) the scanner proved is present. If NO specialist finding already covers that \`(path, line)\`, EMIT a \`category:"security"\` finding for it yourself, using the entry's \`message\` and \`severity\` and a concrete fix — do NOT omit it just because no specialist raised it; that is exactly the case this flag exists for. (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`

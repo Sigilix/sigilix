@@ -166,8 +166,18 @@
  * preserving the zero-P0/P1-FP bar (emitted via the normal grounding pipeline).
  * Reviews with v14 go stale on first deploy of v15. Use
  * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
+ *
+ * v15 → v16 (SIG-310): the `deterministic_emit` synth clause is generalized
+ * from security-only to role-aware — a `deterministic_emit` AST entry now emits
+ * a finding in its OWN `role_hint` category (`security` for a sink, `logic` for
+ * a contract-drift type smell). Pairs with the new `no-snake-camel-optional-
+ * alias` rule (flags an interface declaring both `foo_bar` required + `fooBar?`
+ * optional — the optional-alias drift variant the v14 prompt bullet missed and
+ * both competitors catch at the type declaration). FP-safe: warning-severity,
+ * grounding-gated. Reviews with v15 go stale on first deploy of v16. Use
+ * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
  */
-export const PROMPT_VERSION = "15"
+export const PROMPT_VERSION = "16"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

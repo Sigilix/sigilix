@@ -1475,8 +1475,44 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
   // a double-post), at a marginal recall cost on the rare cross-role same-line case.
   const instruction = autoInline
     ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
-    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309: an AST entry with \`"deterministic_emit": true\` is a high-confidence security sink (command/shell injection or disabled TLS) the scanner proved is present. If NO specialist finding already covers that \`(path, line)\`, EMIT a \`category:"security"\` finding for it yourself, using the entry's \`message\` and \`severity\` and a concrete fix — do NOT omit it just because no specialist raised it; that is exactly the case this flag exists for. (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
+    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. If NO specialist finding already covers that \`(path, line)\`, EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — do NOT omit it just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by role: a \`role_hint:"security"\` entry is a real sink — score it on its merits (typically P0/P1). A \`role_hint:"logic"\` entry is a type-design smell — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker. (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
   return `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\n${instruction}\n\n\`\`\`json\n${astFindingsJson}\n\`\`\``
+}
+
+/**
+ * SIG-310: enforce that a `deterministic_emit` AST rule's SEVERITY is a HARD
+ * score ceiling on any finding it produces. The synth picks `score` freely
+ * (the rendered `severity` is advisory text only), so without this a
+ * warning-severity type smell (the optional-alias drift) could be emitted at
+ * P0/P1, breaking the zero-P0/P1-FP bar (code-review MAJOR on #294).
+ *
+ * Clamps, IN PLACE, the score of any finding co-located (±2 lines, same path,
+ * same category) with a NON-`error` `emitWhenUnmatched` AST finding to that
+ * rule's tier (warning→3/P2, info→2). `error` security emit rules are never
+ * clamped — a P0/P1 injection/TLS sink is the correct outcome there. Returns
+ * the count clamped. Pure (apart from the in-place score mutation); exported
+ * for test.
+ */
+export function clampAstEmitScores(
+  findings: Array<{ path: string; line: number; category: string; score: number }>,
+  astFindings: ReadonlyArray<{ path: string; line: number; endLine?: number; roleHint: string; severity: string; emitWhenUnmatched?: boolean }>,
+): number {
+  const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
+  const emitCeils = astFindings
+    .filter((f) => f.emitWhenUnmatched === true && (CEIL[f.severity] ?? 5) < 5)
+    .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
+  if (emitCeils.length === 0) return 0
+  let clamped = 0
+  for (const finding of findings) {
+    const ceil = emitCeils
+      .filter((e) => e.path === finding.path && e.role === finding.category && finding.line >= e.lo - 2 && finding.line <= e.hi + 2)
+      .reduce((m, e) => Math.min(m, e.ceil), 5)
+    if (ceil < 5 && finding.score > ceil) {
+      finding.score = ceil
+      clamped++
+    }
+  }
+  return clamped
 }
 
 // ─── orchestrator ──────────────────────────────────────────────────────
@@ -4604,6 +4640,19 @@ export async function handlePrReviewEnsemble(
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
       droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
+    }
+
+    // SIG-310: a deterministic_emit AST rule's SEVERITY is a HARD score ceiling
+    // on any finding it produces. The synth picks `score` freely (advisory text
+    // only), so a warning-severity type smell — the optional-alias drift — could
+    // otherwise be emitted at P0/P1, breaking the zero-P0/P1-FP bar (code-review
+    // MAJOR). Deterministically clamp any finding co-located (±2 lines, same
+    // path, same category) with a NON-`error` emitWhenUnmatched AST finding to
+    // that rule's tier (warning→3/P2, info→2). `error` security emit rules are
+    // never clamped — a P0/P1 injection/TLS sink is the correct outcome there.
+    const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings)
+    if (astEmitClamped > 0) {
+      console.log(JSON.stringify({ event: "ast-emit-score-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: astEmitClamped }))
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we

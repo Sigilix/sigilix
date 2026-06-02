@@ -32,6 +32,8 @@ import { noSpreadAccumulatorInLoop } from "./rules/no-spread-accumulator-in-loop
 import { noAllocationInLoop } from "./rules/no-allocation-in-loop"
 import { noNPlusOneCallInLoop } from "./rules/no-n-plus-one-call-in-loop"
 import { noSyncIoInRequestPath } from "./rules/no-sync-io-in-request-path"
+// SIG-310: contract-drift type-pattern detector.
+import { noSnakeCamelOptionalAlias } from "./rules/no-snake-camel-optional-alias"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -66,6 +68,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noAllocationInLoop,
   noNPlusOneCallInLoop,
   noSyncIoInRequestPath,
+  // SIG-310: logic-specialist contract-drift type-pattern (severity: warning).
+  noSnakeCamelOptionalAlias,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

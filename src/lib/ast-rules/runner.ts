@@ -30,6 +30,7 @@ import {
 import { astFindingId } from "./finding-id"
 import {
   getEnabledRules,
+  ruleEnabledByConfig,
   type ResolvedAstRulesConfig,
 } from "./rule-registry"
 import type { AstFinding, AstRule, AstRuleHit, RuleContext } from "./types"
@@ -254,10 +255,11 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     // to parse is a rare malformed edge — it's skipped here exactly as the AST
     // rules skip it, and the model specialist still reviews it.
     //
-    // Honor `disabledRules` (CodeRabbit #296): the pseudo rule bypasses
-    // `getEnabledRules`, so gate the scan explicitly to keep the rule id
-    // suppressible like every other rule.
-    if (!config.disabledRules.includes(DYNAMIC_HTML_SINK_RULE_ID)) {
+    // Honor the full config predicate (CodeRabbit #296): the pseudo rule
+    // bypasses `getEnabledRules`, so gate the scan on the SAME enablement check
+    // (disabledRules AND severityThreshold) to keep it suppressible / threshold-
+    // gated exactly like a registry rule.
+    if (ruleEnabledByConfig(config, DYNAMIC_HTML_SINK_RULE_ID, DYNAMIC_HTML_SINK_PSEUDO_RULE.severity)) {
       for (const hit of scanDynamicHtmlSinks(source)) {
         fileHits.push({ rule: DYNAMIC_HTML_SINK_PSEUDO_RULE, hit })
       }

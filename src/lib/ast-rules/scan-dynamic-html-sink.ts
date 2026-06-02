@@ -142,7 +142,9 @@ function dynamicHtmlSinkMessage(value: string, reason: "member" | "interpolation
  */
 export function scanDynamicHtmlSinks(source: string): AstRuleHit[] {
   const hits: AstRuleHit[] = []
-  const seenStartLine = new Set<number>()
+  // Dedupe by match SPAN (offset), not start line (CodeRabbit #296): two sinks
+  // on one line are distinct.
+  const seenSpan = new Set<number>()
   for (const baseRe of HTML_WRITE_SINK_EXTRACTORS) {
     const re = new RegExp(baseRe.source, "gm")
     for (const m of source.matchAll(re)) {
@@ -150,14 +152,15 @@ export function scanDynamicHtmlSinks(source: string): AstRuleHit[] {
       const verdict = classifyHtmlSinkValue(value)
       if (!verdict.flag) continue
       const idx = m.index ?? 0
-      const startLine = source.slice(0, idx).split("\n").length
-      if (seenStartLine.has(startLine)) continue
-      const newlinesInMatch = (m[0].match(/\n/g) ?? []).length
+      if (seenSpan.has(idx)) continue
       const lineStartIdx = source.lastIndexOf("\n", idx - 1) + 1
-      // Skip a line-commented sink (CodeRabbit #296): if a `//` opens before the
-      // sink on its line, it's commented-out code, not a live sink.
-      if (source.slice(lineStartIdx, idx).includes("//")) continue
-      seenStartLine.add(startLine)
+      // Skip a commented-out sink (CodeRabbit #296): a `//` line comment NOT part
+      // of a `://` URL, or an unclosed `/*` block comment, before the sink.
+      const prefix = source.slice(lineStartIdx, idx)
+      if (/(^|[^:])\/\//.test(prefix) || prefix.includes("/*")) continue
+      seenSpan.add(idx)
+      const startLine = source.slice(0, idx).split("\n").length
+      const newlinesInMatch = (m[0].match(/\n/g) ?? []).length
       hits.push({
         message: dynamicHtmlSinkMessage(value, verdict.reason),
         evidence: m[0].replace(/\s+/g, " ").trim().slice(0, 200),

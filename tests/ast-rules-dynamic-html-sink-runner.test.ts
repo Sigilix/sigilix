@@ -70,6 +70,19 @@ describe("runAstRules — SIG-312 dynamic-HTML-sink emission", () => {
     expect(r.findings.filter(HTML).length).toBe(0)
   })
 
+  it("respects severityThreshold (a warning rule is filtered when threshold=error) (CodeRabbit #296)", async () => {
+    const path = "src/Comment.tsx"
+    const src = `const x = <div dangerouslySetInnerHTML={{ __html: c.bodyHtml }} />`
+    const r = await runAstRules({
+      diff: diffAdd(path, 1, src),
+      filesByPath: new Map([[path, src]]),
+      reviewable: REVIEWABLE_AT(path, 1),
+      config: { ...DEFAULT_CONFIG, severityThreshold: "error" },
+      ctx: CTX,
+    })
+    expect(r.findings.filter(HTML).length).toBe(0)
+  })
+
   it("respects the changed-line filter (a sink OUTSIDE the diff is not emitted)", async () => {
     const path = "src/Comment.tsx"
     const src = `const a = 1\nconst x = <div dangerouslySetInnerHTML={{ __html: c.bodyHtml }} />`

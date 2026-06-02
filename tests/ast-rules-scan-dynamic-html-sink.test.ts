@@ -124,9 +124,18 @@ describe("scanDynamicHtmlSinks — line-scan across the sink syntaxes", () => {
     expect(hits[0].line).toBe(3) // the `dangerouslySetInnerHTML` line
     expect(hits[0].endLine).toBeGreaterThan(hits[0].line) // spans to the `}}`
   })
-  it("does NOT flag a line-commented-out sink (CodeRabbit #296)", () => {
+  it("does NOT flag a line-commented-out sink, but does NOT false-skip a real sink after a URL (CodeRabbit #296)", () => {
     expect(scanDynamicHtmlSinks(`  // el.innerHTML = c.bodyHtml`).length).toBe(0)
     expect(scanDynamicHtmlSinks(`foo(); // el.innerHTML = c.bodyHtml`).length).toBe(0)
+    expect(scanDynamicHtmlSinks(`/* el.innerHTML = c.bodyHtml */`).length).toBe(0)
+    // a `://` URL earlier on the line must NOT be treated as a line comment
+    expect(scanDynamicHtmlSinks(`setSrc("https://x"); el.innerHTML = c.bodyHtml`).length).toBe(1)
+  })
+  it("dedupes by match span — two sinks on one line both count (CodeRabbit #296)", () => {
+    // dangerouslySetInnerHTML has no `$` anchor, so two on one line both match;
+    // the span dedup (vs the old start-line dedup) keeps both.
+    const src = `<div dangerouslySetInnerHTML={{ __html: a.bodyHtml }} /><div dangerouslySetInnerHTML={{ __html: b.rawHtml }} />`
+    expect(scanDynamicHtmlSinks(src).length).toBe(2)
   })
   it("does NOT flag `unsafeHtml` being safe, but the line scan still catches it", () => {
     expect(scanDynamicHtmlSinks(`el.innerHTML = c.unsafeHtml`).length).toBe(1)

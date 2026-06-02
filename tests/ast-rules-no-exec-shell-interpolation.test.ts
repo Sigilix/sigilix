@@ -45,6 +45,11 @@ describe("no-exec-shell-interpolation — positive (dynamic command → flag)", 
   it("flags exec where only PART of a concat is constant", () => {
     expect(runRule("exec(`git checkout ` + branch)").length).toBe(1)
   })
+  it("sets endLine on a multi-line exec call (diff-filter contract, CodeRabbit #292)", () => {
+    const hits = runRule("exec(\n  `convert ${path}`\n  + flags\n)")
+    expect(hits.length).toBe(1)
+    expect(hits[0].endLine).toBeGreaterThan(hits[0].line)
+  })
 })
 
 describe("no-exec-shell-interpolation — negative (constant / not-exec → no flag)", () => {

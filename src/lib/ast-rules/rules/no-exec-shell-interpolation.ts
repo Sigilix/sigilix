@@ -83,6 +83,11 @@ export const noExecShellInterpolation: AstRule = {
       message: `\`${name}\` runs its command through a shell, and the command here is built from a dynamic value — a command-injection sink. Shell metacharacters in the interpolated value would execute. Use \`execFile(cmd, [args])\` / \`spawn\` without a shell (argv array, no interpolation), or strictly validate/allowlist the value before use.`,
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
+      // A multi-line exec call (wrapped template / line-broken concat) must
+      // carry endLine so the runner's diff-line filter sees an interpolation
+      // injected on a non-start line, not just the call's start (AstRuleHit
+      // contract; CodeRabbit on #292).
+      ...(typeof node.loc?.end?.line === "number" ? { endLine: node.loc.end.line } : {}),
       column: node.loc?.start?.column ?? 0,
     }
   },

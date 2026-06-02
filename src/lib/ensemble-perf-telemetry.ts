@@ -41,6 +41,19 @@ export interface EnsembleRunCtx {
    *  field; keeping it full here makes the type unambiguous + lets
    *  future emitters opt out of truncation if needed. */
   headSha: string
+  /** SIG-149: optional per-review token sink. The orchestrator hangs the
+   *  recorder from `makeTokenRecorder` (ensemble-slo-telemetry) here so
+   *  the per-attempt `onAttempt` callbacks — which already receive token
+   *  counts — can accumulate per-review totals without threading a new
+   *  param through `runSpecialist`/`runSynthesizer`. Inline function type
+   *  (not an import) keeps this module free of an slo-telemetry dependency
+   *  — the slo module imports this type, not the other way around.
+   *  Absent in tests / shadow paths that don't care about cost. */
+  recordTokens?: (
+    model: string,
+    inputTokens?: number,
+    outputTokens?: number,
+  ) => void
 }
 
 function correlationFields(ctx: EnsembleRunCtx): Record<string, string | number> {

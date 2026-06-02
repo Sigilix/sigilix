@@ -370,6 +370,11 @@ import {
   emitSynthSummary,
   narrowSynthRetryOutcome,
 } from "./ensemble-perf-telemetry"
+import {
+  type TokenUsageByModel,
+  emitReviewSlo,
+  makeTokenRecorder,
+} from "./ensemble-slo-telemetry"
 // ARC-283 Phase B1b — shadow-mode bake-off harness. Imports are
 // no-ops when `env.SHADOW_BAKEOFF_ROLES` is unset/empty (the only
 // code path that fires is `parseShadowEnabledRoles("")` → empty
@@ -1561,6 +1566,13 @@ export async function handlePrReviewEnsemble(
   // throughout this handler. headSha is truncated at log time inside
   // the helper. Stamped here once so every emit gets the same shape.
   const perfCtx: EnsembleRunCtx = { owner, repo, prNumber, headSha }
+  // SIG-149: per-review token accumulator. Shared by reference with
+  // `telemetry.tokenUsageByModel` below — the recorder mutates this
+  // object in place from every settled model attempt, so by the time
+  // `finalize()` reads `telemetry.tokenUsageByModel` it holds the full
+  // review's spend without any further plumbing.
+  const tokenUsageByModel: TokenUsageByModel = {}
+  perfCtx.recordTokens = makeTokenRecorder(tokenUsageByModel)
 
   // Lifted out of the try block so the finally cleanup can read cache
   // stats into telemetry on every exit path (success, failure, throw).
@@ -1632,6 +1644,7 @@ export async function handlePrReviewEnsemble(
     synthesizer: null,
     postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0 },
     retrievalCacheStats: null,
+    tokenUsageByModel,
     startMs,
     totalMs: 0,
   }
@@ -7486,6 +7499,9 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
           ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
           ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
         })
+        // SIG-149: accumulate per-review token spend (every settled
+        // attempt — incl. retries/fallback/parse-fail — burned tokens).
+        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens)
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
         // must not corrupt the verdict path. `runSpecialist` runs inside
@@ -8037,6 +8053,8 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
           ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
           ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
         })
+        // SIG-149: accumulate synth token spend into the per-review total.
+        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens)
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
         // must not corrupt the verdict path. `runSynthesizer` is invoked
@@ -10384,6 +10402,16 @@ interface EnsembleTelemetry {
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**
+   * SIG-149: per-review token spend, keyed by the model that produced
+   * it (summed across every settled attempt — specialist primary +
+   * retries + cross-provider fallback + synth + synth retry). Populated
+   * live during the run via `perfCtx.recordTokens`; read by `finalize()`
+   * to compute modeled cost for the `review-slo-summary` event. Empty
+   * `{}` when no model attempt surfaced usage (e.g. stale-head bail
+   * before fan-out) — never absent, so the cost path is branch-free.
+   */
+  tokenUsageByModel: TokenUsageByModel
+  /**
    * ARC-192: hunk-level diff packing telemetry. Records how the diff
    * was split for the model call. `batchCount > 1` means the PR was
    * too large to fit in one specialist call; v1 reviews only the
@@ -10595,6 +10623,39 @@ async function finalize(
     callsUsed += telemetry.synthesizer.attemptsUsed ?? 1
   }
   await incrementDailyBudget(env, callsUsed).catch(() => {})
+  // SIG-149: emit the per-review latency + cost SLO roll-up. Fires here
+  // because finalize() is the single choke point every exit path funnels
+  // through (success, stale-head, errored, skip-notice) and `totalMs` +
+  // `tokenUsageByModel` are both final by now. Pure-observability: the
+  // emitter only console.log's + does arithmetic, but we still guard it
+  // so a telemetry bug can never convert a posted review into a throw
+  // (same discipline as the writeTelemetry catch below). Tier omitted →
+  // the `default` SLO target applies until SIG-41 lands plan tiers.
+  try {
+    emitReviewSlo(
+      {
+        owner: telemetry.owner,
+        repo: telemetry.repo,
+        prNumber: telemetry.prNumber,
+        headSha: telemetry.headSha,
+      },
+      {
+        status,
+        totalMs: telemetry.totalMs,
+        usage: telemetry.tokenUsageByModel,
+      },
+    )
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        event: "review-slo-emit-failed",
+        owner: telemetry.owner,
+        repo: telemetry.repo,
+        prNumber: telemetry.prNumber,
+        err: e instanceof Error ? e.message : String(e),
+      }),
+    )
+  }
   // Best-effort telemetry write — but no longer SILENT (SIG-306): a swallowed
   // failure here is exactly how the FP-rate ruler went blind for ~30 days after
   // the org rename. Log the failure (owner/repo/pr) so a regression is visible.

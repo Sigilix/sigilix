@@ -76,8 +76,11 @@ import { mapWithConcurrency } from "./bounded-concurrency"
 import {
   loadWithdrawals,
   filterWithdrawnFindings,
+  filterWithdrawnFindingsDetailed,
+  computeContentFingerprint,
   type WithdrawalRecord,
 } from "./review-withdrawal-store"
+import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
 import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -5068,6 +5071,28 @@ export async function handlePrReviewEnsemble(
     // `_Flagged by N specialists._` body prefix still surfaces the
     // signal — the badge stays, just the row position differs in
     // those two surfaces.
+    // SIG-217: annotate each finding with its content fingerprint BEFORE
+    // render + withdrawal filtering. Computed from the RAW synth body (this
+    // runs before annotateWithConsensus prepends its "_Flagged by N_" line),
+    // so the value is stable across pushes regardless of the per-push blob
+    // hash that drives the model-emitted finding ID. The fingerprint then
+    // (a) flows into the rendered comment as a hidden marker, and (b) lets a
+    // later content-equivalent re-fire be recognized as already-dismissed.
+    // Mutates in place — runtime-only field, like `trust`. Best-effort: a hash
+    // failure leaves the finding without a fingerprint (Jaccard fallback).
+    try {
+      await Promise.all(
+        consensusVerdict.findings.map(async (f) => {
+          f.contentFingerprint = await computeContentFingerprint(f.category, f.path, f.body)
+        }),
+      )
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "finding-fingerprint-annotate-failed",
+        owner, repo, prNumber,
+        error: err instanceof Error ? err.message : String(err),
+      }))
+    }
     const renderableFindings = consensusVerdict.findings.map((f, i) => {
       // SIG-280 PR C: soften iff this finding's INDEX survived the veto
       // pre-pass (cold regime → empty set, so this never fires in prod yet).
@@ -5117,8 +5142,36 @@ export async function handlePrReviewEnsemble(
     // `withdrawals` is loaded once near the soften pre-pass above (SIG-280
     // PR C hoisted it so the warm veto and this render path share one
     // read); the defensive wrap + rationale live there.
-    const { kept: postWithdrawalFindings, suppressed: withdrawnFindings } =
-      filterWithdrawnFindings(renderableFindings, withdrawals)
+    const { kept: postWithdrawalFindings, suppressed: withdrawnDetailed } =
+      filterWithdrawnFindingsDetailed(renderableFindings, withdrawals)
+    const withdrawnFindings = withdrawnDetailed.map((s) => s.finding)
+    // SIG-217: emit repeat-FP telemetry for content-fingerprint re-fires (a
+    // dismissed finding that came back despite a changed finding ID) and for
+    // severity-escalation attempts (re-fired at a higher score than dismissed).
+    // Awaited-but-non-fatal (the recordDismissalMetric pattern) — a telemetry
+    // failure must never affect the review.
+    const fingerprintRefires = withdrawnDetailed.filter((s) => s.viaFingerprint)
+    if (fingerprintRefires.length > 0) {
+      const repeatFpEvents: RepeatFpEvent[] = []
+      for (const s of fingerprintRefires) {
+        // The finding's category is the per-specialist dimension (logic /
+        // security / performance / testing …). Always record the re-fire;
+        // additionally record an escalation attempt when the score climbed.
+        repeatFpEvents.push({ kind: "repeat-fp-detected", specialist: s.finding.category })
+        if (s.severityEscalated) {
+          repeatFpEvents.push({ kind: "severity-escalation-attempt", specialist: s.finding.category })
+        }
+      }
+      try {
+        await recordRepeatFpMetrics(env, { owner, repo, prNumber, headSha, events: repeatFpEvents })
+      } catch (err) {
+        console.log(JSON.stringify({
+          event: "repeat-fp-metrics-record-error",
+          owner, repo, prNumber,
+          error: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
     // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
     // body-only set. PR C's enforce mode can demote a LINE-scoped finding
     // (which carries a real path+line) to the body; without this it would

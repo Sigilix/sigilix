@@ -219,6 +219,73 @@ function looksLikeFilePath(match: string, contextLine: string, matchOffset: numb
   return PATH_TAIL_RE.test(trailing)
 }
 
+/**
+ * SIG-217: explicit allowlist of known-safe substrings that the generic
+ * high-entropy catch-all repeatedly mis-flags as P0 secrets. Distinct from
+ * `genericFalsePositive` (heuristic shape rejection) — this is a curated,
+ * segment-aware list for the three classes that keep re-firing in real PRs.
+ * Returns the suppression reason (for structured telemetry) or `null`.
+ *
+ * Why a separate function: the `genericFalsePositive` shapes each assume ONE
+ * separator. The trigger FP — `opened/synchronize/reopened/ready_for_review`
+ * (a JSDoc list of GitHub webhook actions) — mixes `/` (between events) and
+ * `_` (inside `ready_for_review`), so no single-shape regex there catches it.
+ * Splitting on the list separators and checking each segment against a known
+ * vocabulary handles the mixed-separator case the shape rules can't.
+ *
+ * Pure — exported for tests.
+ */
+export type SecretAllowlistReason =
+  | "github-webhook-event"
+  | "screaming-env-var"
+  | "kebab-json-key"
+
+/**
+ * GitHub webhook ACTION names. They show up as `/`-joined literal lists in
+ * dispatcher code + JSDoc (e.g. `decidePullRequestJobs`) and, concatenated,
+ * exceed the 40-char generic threshold. Includes pull_request, issues, review,
+ * and review-thread actions — the sets that actually appear in handler prose.
+ */
+const GITHUB_WEBHOOK_EVENTS: ReadonlySet<string> = new Set([
+  "opened", "edited", "closed", "reopened", "assigned", "unassigned",
+  "review_requested", "review_request_removed", "ready_for_review",
+  "converted_to_draft", "labeled", "unlabeled", "synchronize", "synchronized",
+  "locked", "unlocked", "auto_merge_enabled", "auto_merge_disabled",
+  "milestoned", "demilestoned", "enqueued", "dequeued", "pinned", "unpinned",
+  "transferred", "submitted", "dismissed", "created", "deleted", "resolved",
+  "unresolved",
+])
+
+// SCREAMING_SNAKE env-var identifiers. Digits allowed mid-token (S3_BUCKET,
+// OAUTH2_SECRET) — but a real secret BODY carries digits in irregular,
+// non-identifier positions, so this narrow shape never eats a credential.
+// (base32/TOTP seeds are all-caps but carry NO underscore → still fire.)
+const SCREAMING_ENV_VAR_RE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/
+// A "word-like" kebab segment: letters with an optional SHORT trailing digit
+// run (oauth2, s3, sha256). Deliberately NOT `[a-z0-9]+` — that would admit
+// high-entropy token segments like `2401440store` / `abcd1234efgh5678ijkl`,
+// letting a real Slack/random token (`xoxb-…-abcd1234…`) be allowlisted. A
+// genuine config key's segments are dictionary words; a token's are not.
+const KEBAB_WORD_SEGMENT_RE = /^[a-z]+[0-9]*$/
+
+export function secretAllowlistReason(match: string): SecretAllowlistReason | null {
+  // 1. `/`- `,`- or `|`-joined lists where EVERY segment is a known webhook
+  //    action. Requires ≥2 segments so a lone token can't sneak through on a
+  //    single coincidental match.
+  const eventSegments = match.split(/[/,|]/).filter((s) => s.length > 0)
+  if (eventSegments.length >= 2 && eventSegments.every((s) => GITHUB_WEBHOOK_EVENTS.has(s))) {
+    return "github-webhook-event"
+  }
+  // 2. SCREAMING_SNAKE env-var names.
+  if (SCREAMING_ENV_VAR_RE.test(match)) return "screaming-env-var"
+  // 3. kebab-case JSON keys: ≥2 hyphen-joined word-like segments.
+  const kebabSegments = match.split("-")
+  if (kebabSegments.length >= 2 && kebabSegments.every((s) => KEBAB_WORD_SEGMENT_RE.test(s))) {
+    return "kebab-json-key"
+  }
+  return null
+}
+
 export interface SecretHit {
   ruleId: string
   category: SecretRule["category"]
@@ -316,6 +383,25 @@ export function runSecretScan(diff: string): SecretHit[] {
         const overlaps = claimedSpans.some((s) => !(end <= s.start || s.end <= start))
         if (overlaps) continue
         if (rule.id === "generic-high-entropy-token" && genericFalsePositive(matched, content, start)) continue
+        // SIG-217: explicit allowlist gate for the generic catch-all. Each
+        // suppression emits structured telemetry (Workers Observability
+        // ingests these JSON lines) so we can track which safe class fired
+        // and confirm the allowlist isn't masking real leaks. Redacted
+        // preview only — never the raw substring.
+        if (rule.id === "generic-high-entropy-token") {
+          const allowReason = secretAllowlistReason(matched)
+          if (allowReason) {
+            console.log(JSON.stringify({
+              event: "secret-scan-allowlist-suppressed",
+              reason: allowReason,
+              path: currentPath,
+              line: newLine,
+              match_length: matched.length,
+              preview: redact(matched),
+            }))
+            continue
+          }
+        }
         const redacted = redact(matched)
         const fingerprint = `${rule.id}:${currentPath}:${newLine}:${redacted}`
         // Defense-in-depth: also dedupe identical fingerprints (same

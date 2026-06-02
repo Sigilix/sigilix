@@ -12,7 +12,10 @@ import type {
   RecordBatchArgs,
   ValidationMetricsQuery,
   DismissalMetricsQuery,
+  RecordRepeatFpArgs,
+  RepeatFpMetricsQuery,
 } from "../do/validation-metrics"
+export type { RepeatFpEvent } from "../do/validation-metrics"
 import type { DismissReason } from "./dismiss-reasons"
 
 // All validator telemetry funnels into ONE DO instance — write volume is one
@@ -66,4 +69,21 @@ export function queryDismissalMetrics(
 ): Promise<DismissalMetricsQuery> {
   // Direct return — see `queryValidationMetrics` for the no-async rationale.
   return metricsStub(env).queryDismissals({ windowDays })
+}
+
+/**
+ * SIG-217: record a batch of repeat-FP events (content-fingerprint re-fires,
+ * severity-escalation attempts, decay-window expiries) for one PR review.
+ * Caller owns the non-fatal try/catch — telemetry must never break a review.
+ */
+export async function recordRepeatFpMetrics(env: Env, args: RecordRepeatFpArgs): Promise<void> {
+  await metricsStub(env).recordRepeatFps(args)
+}
+
+export function queryRepeatFpMetrics(
+  env: Env,
+  windowDays: number,
+): Promise<RepeatFpMetricsQuery> {
+  // Direct return — see `queryValidationMetrics` for the no-async rationale.
+  return metricsStub(env).queryRepeatFps({ windowDays })
 }

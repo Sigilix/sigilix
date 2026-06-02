@@ -157,6 +157,7 @@ import {
 } from "./validate-logic-refutation"
 import {
   evaluatePerfFinding,
+  clampTrivialSyncIoSeverity,
   parsePerfValidatorMode,
   type PerfValidatorMode,
   type PerfDropReason,
@@ -4674,6 +4675,15 @@ export async function handlePrReviewEnsemble(
     const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings, validated.cleanFindingProvenance)
     if (astEmitClamped > 0) {
       console.log(JSON.stringify({ event: "ast-emit-score-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: astEmitClamped }))
+    }
+
+    // BT1 (pr/07): cap a sev>=4 perf finding citing a CONSTANT version/help
+    // probe sync-exec (`execSync("… --version")`) to P2 — the only P0/P1 FP on
+    // pr/07. Mode-agnostic deterministic clamp (the perf evidence gate can't
+    // catch it: the call anchors to a real changed line, so it validates).
+    const perfClamped = clampTrivialSyncIoSeverity(validated.verdict.findings, buildAddedLineTextByLine(fullPrDiff))
+    if (perfClamped > 0) {
+      console.log(JSON.stringify({ event: "perf-trivial-sync-io-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: perfClamped }))
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we

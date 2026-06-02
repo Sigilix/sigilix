@@ -23,7 +23,11 @@ describe("emitWhenUnmatched — FP-safe scoping", () => {
   })
   it("is NOT set on eval / new Function / document.write (they fire on constants)", () => {
     for (const id of ["no-eval-call", "no-new-function-constructor", "no-document-write-call"]) {
-      expect(ALL_RULES.find((r) => r.id === id)?.emitWhenUnmatched ?? false).toBe(false)
+      const rule = ALL_RULES.find((r) => r.id === id)
+      // assert the rule exists first so this can't pass vacuously if an id
+      // ever changes (CodeRabbit #293)
+      expect(rule, `excluded rule ${id} should exist in the registry`).toBeDefined()
+      expect(rule?.emitWhenUnmatched ?? false).toBe(false)
     }
   })
 })

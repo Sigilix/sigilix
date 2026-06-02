@@ -342,6 +342,11 @@ export interface Env {
   // always runs; this gates whether its P2-capped emits reach the synth/post.
   OPENCLAW_AUTHZ_IDOR_SCAN?: string
 
+  // SIG-317: synth verdict-truncation recovery. off (default) | shadow (log the
+  // recoverable count) | on (apply). Recovers findings the synth marked KEPT in
+  // provenance but truncated out of verdict.findings on target-rich PRs.
+  OPENCLAW_SYNTH_RECOVERY?: string
+
   // SIG-161: confidence-threshold verdict gate. Three-state rollout
   //   "off"     — bypassed; legacy `chooseReviewEvent` decides (default).
   //   "shadow"  — `chooseReviewEventWithGate` runs but legacy verdict ships;

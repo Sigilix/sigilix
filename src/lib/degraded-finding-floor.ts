@@ -97,3 +97,97 @@ export function applyDegradedCoverageFindingFloor(args: {
 
   return { findings, provenanceFindings, restored }
 }
+
+// ─── SIG-317 — synth verdict-truncation recovery ──────────────────────────
+//
+// On target-rich PRs the synthesizer emits a COMPLETE `provenance.findings`
+// (one terse entry per source it decided to keep) but a SHORTER
+// `verdict.findings` — it details the top-ranked findings (security-first, per
+// the synth prompt's "rank by severity") and silently truncates the verbose
+// verdict array, losing real subtle findings it MARKED KEPT. The synth's own
+// provenance is the proof of intent: on pr/10 `provenance.findings` had 20
+// entries (action "kept", 0 dropped) while `verdict.findings` had 8 — 12
+// score>=3 findings lost, including a score-5 N+1, a cents/dollars bug, a
+// floating promise, and the SIG-310 deterministic emit.
+//
+// This recovers the truncated tail: for every provenance entry BEYOND the
+// verdict length, reconstruct the verdict finding from its cited source. The
+// recovered findings flow through the SAME post-synth gates (grounding,
+// citation, evidence, clamps, anchor repair) as synth-kept findings — nothing
+// is force-posted; a recovered finding that doesn't hold is dropped by its
+// gate. Precision-safe by construction: we only restore findings the synth
+// itself provenanced as "kept"/"merged", never inventing new ones, and the
+// gates remain the precision authority.
+
+export interface TruncationRecoveryResult {
+  /** Synth findings + recovered tail, index-parallel to `provenanceFindings`. */
+  findings: PrReviewFinding[]
+  /** Provenance entries, realigned 1:1 to `findings`. */
+  provenanceFindings: FloorProvenanceFinding[]
+  /** What was recovered (telemetry). Empty when the synth verdict wasn't truncated. */
+  recovered: Array<{ id: string; score: number; category: string; headline: string }>
+}
+
+/**
+ * Recover findings the synth truncated out of `verdict.findings` but still
+ * accounted for in `provenance.findings` (i.e. `provenance.findings.length >
+ * verdict.findings.length`). Reconstructs each orphaned tail entry from its
+ * cited source finding via `sourceById`. Pure — never mutates input. Returns
+ * the inputs unchanged when there is no truncation tail.
+ */
+export function recoverTruncatedSynthFindings(args: {
+  findings: ReadonlyArray<PrReviewFinding>
+  provenanceFindings: ReadonlyArray<FloorProvenanceFinding>
+  /**
+   * Candidate source findings keyed by source id. The orchestrator passes
+   * specialist findings (`${role}-${index}`) in Part 1; orphans citing only
+   * AST-emit ids are simply skipped (AST/SIG-310 recovery is a fast-follow).
+   */
+  sourceById: ReadonlyMap<string, PrReviewFinding & { id: string }>
+  minScore?: number
+}): TruncationRecoveryResult {
+  const minScore = args.minScore ?? DEGRADED_FLOOR_MIN_SCORE
+  // No truncation tail → nothing to recover; return inputs unchanged.
+  if (args.provenanceFindings.length <= args.findings.length) {
+    return {
+      findings: [...args.findings],
+      provenanceFindings: [...args.provenanceFindings],
+      recovered: [],
+    }
+  }
+  // Keep the aligned prefix (the findings the synth DID fully write) intact.
+  const findings: PrReviewFinding[] = [...args.findings]
+  const provenanceFindings: FloorProvenanceFinding[] = args.provenanceFindings.slice(0, findings.length)
+  const recovered: TruncationRecoveryResult["recovered"] = []
+  // Guard against re-adding a source already present in the kept prefix.
+  const present = new Set<string>(provenanceFindings.flatMap((p) => p.sourceFindingIds))
+
+  for (let i = args.findings.length; i < args.provenanceFindings.length; i++) {
+    const p = args.provenanceFindings[i]
+    if (!p || !Array.isArray(p.sourceFindingIds) || p.sourceFindingIds.length === 0) continue
+    // Reconstruct from the highest-score cited source not already present.
+    let best: (PrReviewFinding & { id: string }) | undefined
+    for (const sid of p.sourceFindingIds) {
+      if (present.has(sid)) continue
+      const f = args.sourceById.get(sid)
+      if (f && (best === undefined || f.score > best.score)) best = f
+    }
+    if (best === undefined || best.score < minScore) continue
+    // Mark ALL cited sources present (not just `best`) — a merged provenance
+    // entry [a, b] is recovered as ONE finding (the best-scored representation),
+    // so a later orphan re-citing `a` or `b` must not re-recover it as a
+    // duplicate. Reached only for a QUALIFYING orphan (the skip above returns
+    // first), so a skipped orphan never poisons `present` for later ones.
+    for (const sid of p.sourceFindingIds) present.add(sid)
+    findings.push(best)
+    provenanceFindings.push({
+      sourceSpecialists: p.sourceSpecialists,
+      sourceFindingIds: p.sourceFindingIds,
+      action: p.action,
+      verifiedViaRetrieval: p.verifiedViaRetrieval ?? false,
+    })
+    recovered.push({ id: best.id, score: best.score, category: best.category ?? "logic", headline: best.headline })
+  }
+
+  return { findings, provenanceFindings, recovered }
+}

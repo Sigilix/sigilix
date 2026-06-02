@@ -68,16 +68,23 @@ index_name = "openclaw-code-index"
 # SIG-45: D1 database holding the FTS5 (BM25) lexical mirror of the code
 # chunks for hybrid retrieval. The indexer dual-writes here alongside the
 # Vectorize upsert; PR-review retrieval queries it in parallel with the
-# vector index and fuses via RRF — all gated behind OPENCLAW_RETRIEVAL_HYBRID
-# (default off), so leaving database_id blank on a preview is inert.
+# vector index and fuses via RRF — all gated behind OPENCLAW_RETRIEVAL_HYBRID.
 #
-# Run once: `wrangler d1 create sigilix-lexical-index`, then paste the
-# returned database_id below. The FTS5 schema is created lazily by the
-# Worker (ensureLexicalSchema) — no separate migration step.
-[[d1_databases]]
-binding = "OPENCLAW_LEXICAL_INDEX"
-database_name = "sigilix-lexical-index"
-database_id = ""  # set after `wrangler d1 create sigilix-lexical-index`
+# COMMENTED OUT until the D1 database is provisioned: the CF Workers Builds CI
+# runs `wrangler deploy` on every push, and a binding with an empty
+# `database_id` can fail that deploy. The code treats OPENCLAW_LEXICAL_INDEX as
+# OPTIONAL — when the binding is absent, the indexer dual-write and the hybrid
+# read both no-op, so hybrid retrieval simply stays dark with zero deploy risk.
+#
+# To enable: run `wrangler d1 create sigilix-lexical-index`, uncomment the
+# block below, paste the returned database_id, deploy (the indexer starts
+# populating the FTS5 mirror — schema is created lazily, no migration step),
+# then flip OPENCLAW_RETRIEVAL_HYBRID=on once there's a corpus to query.
+#
+# [[d1_databases]]
+# binding = "OPENCLAW_LEXICAL_INDEX"
+# database_name = "sigilix-lexical-index"
+# database_id = ""  # set after `wrangler d1 create sigilix-lexical-index`
 
 # Cloudflare Workers AI binding — used for embedding the issue/comment
 # body at query time. Keeps the embedding model identical between

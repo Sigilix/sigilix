@@ -189,11 +189,14 @@ export function analyzeHelperBypass(filesByPath: ReadonlyMap<string, string>): A
           `first calling \`${helper}()\` to read the prior total, even though \`${helper}\` exists and is used ` +
           `elsewhere. This is the OVER-CREDIT / OVER-REFUND shape. Answer ONE question: does \`${f.name}\` write ` +
           `a FULL or fixed amount (e.g. the whole plan price / charge / invoice total) rather than a delta net ` +
-          `of \`${helper}()\`? If YES, every call ACCUMULATES — the prior \`${columnRaw}\` total is ignored and the ` +
-          `customer is credited/refunded again on each invocation (a repeatable over-credit) — raise it as a ` +
-          `logic bug. If \`${f.name}\` writes a usage-derived delta, or the duplicate is guarded elsewhere, it ` +
-          `is safe — say so. This is NOT a rounding, units, or cents/dollars question: judge only whether the ` +
-          `WRITE AMOUNT double-counts against what \`${helper}()\` already sums.`,
+          `of \`${helper}()\`? Concretely: if \`${f.name}\` runs twice for the same entity, is it credited/refunded ` +
+          `twice (a repeatable over-credit), or does the second call net out against what \`${helper}()\` already ` +
+          `sums? If it double-counts, raise it as a logic bug. It is safe — say so — if \`${f.name}\` writes a ` +
+          `usage-derived delta, the duplicate is guarded (e.g. ON CONFLICT, or a prior-total check you can name), ` +
+          `or each invocation is an intended distinct grant (e.g. a recurring monthly credit) where the total is ` +
+          `MEANT to accumulate. This is NOT a rounding, units, or cents/dollars question, and do not defer it as ` +
+          `an idempotency, validation, or out-of-scope concern to avoid answering — judge only whether the WRITE ` +
+          `AMOUNT double-counts against what \`${helper}()\` already sums.`,
       })
     }
   }

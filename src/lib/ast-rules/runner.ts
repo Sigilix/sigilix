@@ -39,15 +39,24 @@ import { scanDynamicHtmlSinks, DYNAMIC_HTML_SINK_RULE_ID } from "./scan-dynamic-
 // SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
 // reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't
 // traversed). We splice its hits into the same finding pipeline as the AST
-// rules via this synthetic rule descriptor: `error`/`security`, and
-// `emitWhenUnmatched` so an unmatched XSS is deterministically surfaced (it's
-// FP-safe by construction — see scan-dynamic-html-sink.ts). `nodeTypes: []` and
-// the no-op `visit` ensure the walker never invokes it as an AST rule.
+// rules via this synthetic rule descriptor: `warning`/`security`, and
+// `emitWhenUnmatched` so a dynamic HTML sink is deterministically SURFACED.
+//
+// Severity is `warning` (P2), not `error` (P0/P1), by design: a line-scan can't
+// prove whether the value is attacker-influenced vs a trusted constant/i18n
+// table (code-review CRITICAL: `TEMPLATES.welcomeHtml` would otherwise flag
+// P0/P1). So this is an FP-safe ADVISORY that surfaces the sink; the model's
+// security specialist still raises its OWN P0/P1 when it judges the value
+// untrusted (and supersedes this), so no recall is lost on a real XSS. The
+// `warning`→P2 ceiling is enforced by the synth emit instruction; the score
+// clamp deliberately does NOT cap security findings (it would demote a real
+// model-caught XSS). `nodeTypes: []` + the no-op `visit` ensure the walker
+// never invokes it as an AST rule.
 const DYNAMIC_HTML_SINK_PSEUDO_RULE: AstRule = {
   id: DYNAMIC_HTML_SINK_RULE_ID,
-  severity: "error",
+  severity: "warning",
   roleHint: "security",
-  shortDescription: "Untrusted dynamic value flows into an HTML-injection sink (XSS)",
+  shortDescription: "Dynamic value rendered as raw HTML via an HTML-injection sink — verify sanitization",
   language: "both",
   nodeTypes: [],
   emitWhenUnmatched: true,
@@ -244,8 +253,14 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     // React/TS file parses, so the recurring miss is covered. A file that fails
     // to parse is a rare malformed edge — it's skipped here exactly as the AST
     // rules skip it, and the model specialist still reviews it.
-    for (const hit of scanDynamicHtmlSinks(source)) {
-      fileHits.push({ rule: DYNAMIC_HTML_SINK_PSEUDO_RULE, hit })
+    //
+    // Honor `disabledRules` (CodeRabbit #296): the pseudo rule bypasses
+    // `getEnabledRules`, so gate the scan explicitly to keep the rule id
+    // suppressible like every other rule.
+    if (!config.disabledRules.includes(DYNAMIC_HTML_SINK_RULE_ID)) {
+      for (const hit of scanDynamicHtmlSinks(source)) {
+        fileHits.push({ rule: DYNAMIC_HTML_SINK_PSEUDO_RULE, hit })
+      }
     }
 
     // Filter hits by changed-lines + emit findings.

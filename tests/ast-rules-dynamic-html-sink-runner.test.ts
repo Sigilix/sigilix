@@ -35,11 +35,26 @@ describe("runAstRules — SIG-312 dynamic-HTML-sink emission", () => {
     })
     const html = r.findings.filter(HTML)
     expect(html.length).toBe(1)
-    expect(html[0].severity).toBe("error")
+    // SIG-312: warning (P2 advisory), not error — a line-scan can't prove the
+    // value is untrusted vs a trusted constant table.
+    expect(html[0].severity).toBe("warning")
     expect(html[0].roleHint).toBe("security")
     expect(html[0].emitWhenUnmatched).toBe(true)
     expect(html[0].line).toBe(1)
     expect(html[0].astFindingId).toMatch(/^ast\/no-dangerous-html-dynamic\//)
+  })
+
+  it("is suppressible via config.disabledRules (CodeRabbit #296)", async () => {
+    const path = "src/Comment.tsx"
+    const src = `const x = <div dangerouslySetInnerHTML={{ __html: c.bodyHtml }} />`
+    const r = await runAstRules({
+      diff: diffAdd(path, 1, src),
+      filesByPath: new Map([[path, src]]),
+      reviewable: REVIEWABLE_AT(path, 1),
+      config: { ...DEFAULT_CONFIG, disabledRules: ["no-dangerous-html-dynamic"] },
+      ctx: CTX,
+    })
+    expect(r.findings.filter(HTML).length).toBe(0)
   })
 
   it("does NOT emit for a sanitized / constant sink", async () => {

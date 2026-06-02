@@ -1475,7 +1475,7 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
   // a double-post), at a marginal recall cost on the rare cross-role same-line case.
   const instruction = autoInline
     ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
-    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by role: a \`role_hint:"security"\` entry is a real sink — score it on its merits (typically P0/P1). A \`role_hint:"logic"\` entry is a type-design smell — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker. (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
+    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by the entry's \`severity\` field: an \`error\` entry is a PROVEN-dangerous sink — score it on its merits (typically P0/P1 for security). A \`warning\` entry is an ADVISORY the scanner surfaced but can't fully prove (a dynamic HTML sink whose value might be a trusted constant; a \`role_hint:"logic"\` type-design smell) — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker, whatever its \`role_hint\`. (If your own specialist independently judges a \`warning\` security advisory to be a real P0/P1, that specialist finding 'covers' the entry per the rule above and stands on its merits — the P2 ceiling applies only to the deterministic advisory.) (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
   return `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\n${instruction}\n\n\`\`\`json\n${astFindingsJson}\n\`\`\``
 }
 
@@ -1489,7 +1489,14 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
  * Clamps, IN PLACE, the score of any finding co-located (±2 lines, same path,
  * same category) with a NON-`error` `emitWhenUnmatched` AST finding to that
  * rule's tier (warning→3/P2, info→2). `error` security emit rules are never
- * clamped — a P0/P1 injection/TLS sink is the correct outcome there. Returns
+ * clamped — a P0/P1 injection/TLS sink is the correct outcome there.
+ *
+ * SIG-312: `security`-role AST findings are ALSO never clamped. A security
+ * finding's score is the model's TRUST JUDGMENT, which can legitimately
+ * escalate a deterministically-surfaced sink (the `warning`/security dynamic-
+ * HTML advisory) to P0/P1 when the value is untrusted; clamping it would demote
+ * a REAL model-caught XSS to P2. The advisory's own P2 ceiling is enforced by
+ * the synth emit instruction (`severity:"warning"` → P2/P3), not here. Returns
  * the count clamped. Pure (apart from the in-place score mutation); exported
  * for test.
  */
@@ -1499,7 +1506,7 @@ export function clampAstEmitScores(
 ): number {
   const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
   const emitCeils = astFindings
-    .filter((f) => f.emitWhenUnmatched === true && (CEIL[f.severity] ?? 5) < 5)
+    .filter((f) => f.emitWhenUnmatched === true && f.roleHint !== "security" && (CEIL[f.severity] ?? 5) < 5)
     .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
   if (emitCeils.length === 0) return 0
   let clamped = 0

@@ -26,6 +26,10 @@ describe("classifyHtmlSinkValue — FLAG (untrusted dynamic)", () => {
     expect(classifyHtmlSinkValue("`<b>${userInput}</b>`")).toEqual({ flag: true, reason: "interpolation" })
     expect(classifyHtmlSinkValue("`<div>${row.bio}</div>`")).toEqual({ flag: true, reason: "interpolation" })
   })
+  it("still flags `unsafeHtml` / `uncleanHtml` — the safe-marker is token-anchored (CodeRabbit #296)", () => {
+    expect(classifyHtmlSinkValue("c.unsafeHtml")).toEqual({ flag: true, reason: "member" })
+    expect(classifyHtmlSinkValue("data.uncleanHtml")).toEqual({ flag: true, reason: "member" })
+  })
 })
 
 describe("classifyHtmlSinkValue — SKIP (FP-safe: provably benign / ambiguous)", () => {
@@ -104,6 +108,28 @@ describe("scanDynamicHtmlSinks — line-scan across the sink syntaxes", () => {
     expect(scanDynamicHtmlSinks(`const x = c.bodyHtml`).length).toBe(0)
     expect(scanDynamicHtmlSinks(`eval(userInput)`).length).toBe(0) // eval is NOT an HTML-write sink
     expect(scanDynamicHtmlSinks(`document.write(c.bodyHtml)`).length).toBe(0) // own rule covers it
+  })
+  it("flags a pretty-printed MULTI-LINE dangerouslySetInnerHTML (CodeRabbit #296)", () => {
+    const src = [
+      "const x = (",
+      "  <div",
+      "    dangerouslySetInnerHTML={{",
+      "      __html: c.bodyHtml",
+      "    }}",
+      "  />",
+      ")",
+    ].join("\n")
+    const hits = scanDynamicHtmlSinks(src)
+    expect(hits.length).toBe(1)
+    expect(hits[0].line).toBe(3) // the `dangerouslySetInnerHTML` line
+    expect(hits[0].endLine).toBeGreaterThan(hits[0].line) // spans to the `}}`
+  })
+  it("does NOT flag a line-commented-out sink (CodeRabbit #296)", () => {
+    expect(scanDynamicHtmlSinks(`  // el.innerHTML = c.bodyHtml`).length).toBe(0)
+    expect(scanDynamicHtmlSinks(`foo(); // el.innerHTML = c.bodyHtml`).length).toBe(0)
+  })
+  it("does NOT flag `unsafeHtml` being safe, but the line scan still catches it", () => {
+    expect(scanDynamicHtmlSinks(`el.innerHTML = c.unsafeHtml`).length).toBe(1)
   })
   it("reports a stable rule id", () => {
     expect(DYNAMIC_HTML_SINK_RULE_ID).toBe("no-dangerous-html-dynamic")

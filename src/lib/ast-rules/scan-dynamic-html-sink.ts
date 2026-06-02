@@ -33,11 +33,18 @@ import type { AstRuleHit } from "./types"
 
 export const DYNAMIC_HTML_SINK_RULE_ID = "no-dangerous-html-dynamic"
 
-/** A safe-marker token anywhere in the value PROVES intentional sanitization
+/** A safe-marker TOKEN in the value PROVES intentional sanitization
  *  (`safeHtml`, `sanitizedHtml`, `trustedHtml`, `DOMPurify.sanitize(x)`,
  *  `escapeHtml(x)`) → never flag. This single guard subsumes both the
- *  safe-named-member and the sanitizer-call cases. */
-const SAFE_MARKER_RE = /safe|saniti|trusted|clean|escap|purif/i
+ *  safe-named-member and the sanitizer-call cases.
+ *
+ *  Anchored to a token boundary (start, or a non-letter before the marker) so
+ *  `unSAFEHtml` / `unCLEANHtml` — the literally-UNSAFE fields — are NOT
+ *  swallowed as "safe" (CodeRabbit #296: a raw substring match dropped exactly
+ *  the dynamic sink we must catch). With the `i` flag, `[^a-z]` is "not a
+ *  letter (any case)", so `c.unsafeHtml` (marker preceded by `n`) does NOT
+ *  match while `c.safeHtml` / `DOMPurify.sanitize` (preceded by `.`) do. */
+const SAFE_MARKER_RE = /(?:^|[^a-z])(?:safe|saniti|trusted|clean|escap|purif)/i
 
 /** Terminal property of a member access (the part after the last `.` / `?.`). */
 function terminalProperty(memberExpr: string): string {
@@ -107,43 +114,58 @@ function clip(expr: string, max = 80): string {
 function dynamicHtmlSinkMessage(value: string, reason: "member" | "interpolation"): string {
   const shape =
     reason === "member"
-      ? `\`${clip(value)}\` is a member access rendered as raw HTML`
-      : `the value is an interpolated template rendered as raw HTML`
+      ? `the \`__html\` value \`${clip(value)}\` is a non-constant member access`
+      : `the \`__html\` value is an interpolated template`
+  // Deliberately HEDGED / advisory (P2): a deterministic line-scan can't prove
+  // whether the value is attacker-influenced vs a trusted constant/i18n table,
+  // so this SURFACES the sink for review rather than asserting an XSS. When the
+  // model's security specialist judges the value untrusted it raises its OWN
+  // P0/P1 (which supersedes this), so no recall is lost on a real XSS.
   return (
-    `Untrusted dynamic value flows into an HTML-injection sink without sanitization — XSS. ` +
-    `${shape}; if it can carry attacker-controlled markup, it executes script in the victim's browser. ` +
-    `Sanitize it before rendering (e.g. \`DOMPurify.sanitize(...)\`), or render it as text.`
+    `Dynamic value rendered as raw HTML via an HTML-injection sink — verify it is sanitized before render. ` +
+    `${shape} passed to \`dangerouslySetInnerHTML\` / \`innerHTML\`; ` +
+    `if it can carry attacker-controlled markup (not a trusted constant or sanitizer output) this is a stored/reflected XSS. ` +
+    `Confirm the source is trusted, or wrap it in a sanitizer (e.g. \`DOMPurify.sanitize(...)\`) / render it as text.`
   )
 }
 
 /**
- * Scan a source file's lines for an HTML-injection sink fed an untrusted
- * dynamic value. Returns raw hits (the runner filters by changed-lines, assigns
- * the finding id, and wraps them as `error`/`security`/`emitWhenUnmatched`
- * findings). Pure.
+ * Scan a source file for an HTML-injection sink fed a non-constant dynamic
+ * value. Scans the FULL source (not line-by-line) with global+multiline clones
+ * of the shared extractors so a pretty-printed multi-line `dangerouslySetInner
+ * HTML={{ … }}` is caught too (CodeRabbit #296) — the match offset is mapped
+ * back to a 1-based line number (+ endLine when the match spans lines). The
+ * shared single-line regexes are untouched; the `m` flag only makes the
+ * `innerHTML` `$` mean end-of-LINE for the full-source scan. Returns raw hits
+ * (the runner filters by changed-lines, assigns the finding id, and wraps them
+ * as `warning`/`security`/`emitWhenUnmatched` advisories). Pure.
  */
 export function scanDynamicHtmlSinks(source: string): AstRuleHit[] {
   const hits: AstRuleHit[] = []
-  const lines = source.split("\n")
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    let value: string | null = null
-    for (const re of HTML_WRITE_SINK_EXTRACTORS) {
-      const m = re.exec(line)
-      if (m && m[1] !== undefined) {
-        value = m[1].trim()
-        break
-      }
+  const seenStartLine = new Set<number>()
+  for (const baseRe of HTML_WRITE_SINK_EXTRACTORS) {
+    const re = new RegExp(baseRe.source, "gm")
+    for (const m of source.matchAll(re)) {
+      const value = (m[1] ?? "").trim()
+      const verdict = classifyHtmlSinkValue(value)
+      if (!verdict.flag) continue
+      const idx = m.index ?? 0
+      const startLine = source.slice(0, idx).split("\n").length
+      if (seenStartLine.has(startLine)) continue
+      const newlinesInMatch = (m[0].match(/\n/g) ?? []).length
+      const lineStartIdx = source.lastIndexOf("\n", idx - 1) + 1
+      // Skip a line-commented sink (CodeRabbit #296): if a `//` opens before the
+      // sink on its line, it's commented-out code, not a live sink.
+      if (source.slice(lineStartIdx, idx).includes("//")) continue
+      seenStartLine.add(startLine)
+      hits.push({
+        message: dynamicHtmlSinkMessage(value, verdict.reason),
+        evidence: m[0].replace(/\s+/g, " ").trim().slice(0, 200),
+        line: startLine,
+        ...(newlinesInMatch > 0 ? { endLine: startLine + newlinesInMatch } : {}),
+        column: Math.max(0, idx - lineStartIdx),
+      })
     }
-    if (value === null) continue
-    const verdict = classifyHtmlSinkValue(value)
-    if (!verdict.flag) continue
-    hits.push({
-      message: dynamicHtmlSinkMessage(value, verdict.reason),
-      evidence: line.trim(),
-      line: i + 1,
-      column: Math.max(0, line.indexOf(value)),
-    })
   }
   return hits
 }

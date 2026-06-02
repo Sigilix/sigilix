@@ -58,6 +58,10 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
     expect(off).toContain('role_hint:"logic"')
     // SIG-310 severity guard: logic emits are capped at P2/P3, never a blocker
     expect(off).toContain("NEVER as a P0/P1 blocker")
+    // SIG-312: severity is keyed on the entry's `severity` field (a `warning`
+    // entry is an advisory), not hardcoded by role.
+    expect(off).toContain("severity")
+    expect(off).toMatch(/ADVISORY/)
     // believability-critical: the anti-double-post + "already covered" guards
     // must stay in the prompt (a silent deletion would re-open FP risk).
     expect(off).toContain("don't double-post")
@@ -83,6 +87,13 @@ describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-revi
   it("does NOT clamp a security error-emit finding (P0 sink stays P0)", () => {
     const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
     expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "error" })])).toBe(0)
+    expect(f[0].score).toBe(5)
+  })
+  it("does NOT clamp a security finding co-located with a WARNING/security emit (SIG-312: the model may legitimately escalate a surfaced XSS sink to P0)", () => {
+    // The SIG-312 dynamic-HTML advisory is warning/security; the model's own
+    // security P0 on the same line must NOT be demoted to P2.
+    const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
+    expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "warning" })])).toBe(0)
     expect(f[0].score).toBe(5)
   })
   it("does NOT clamp a finding on a different path / category / out-of-window line", () => {

@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest"
 import { ALL_RULES } from "../src/lib/ast-rules/rule-registry"
 import { renderAstFindingsAsJsonForSynth } from "../src/lib/ast-rules/render"
-import { buildAstFindingsSynthBlock } from "../src/lib/triage-pr-review-ensemble"
+import { buildAstFindingsSynthBlock, clampAstEmitScores } from "../src/lib/triage-pr-review-ensemble"
 import type { AstFinding } from "../src/lib/ast-rules/types"
 
 const EMIT_RULES = new Set([
@@ -55,7 +55,9 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
     expect(off).toMatch(/EMIT a finding/)
     // role-aware (SIG-310): emit in the entry's own role, not hardcoded security
     expect(off).toContain("role_hint")
-    expect(off).toContain('category:"logic"')
+    expect(off).toContain('role_hint:"logic"')
+    // SIG-310 severity guard: logic emits are capped at P2/P3, never a blocker
+    expect(off).toContain("NEVER as a P0/P1 blocker")
     // believability-critical: the anti-double-post + "no specialist covers it"
     // guards must stay in the prompt (a silent deletion would re-open FP risk).
     expect(off).toContain("don't double-post")
@@ -63,5 +65,35 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
   })
   it("returns an empty block for empty json", () => {
     expect(buildAstFindingsSynthBlock("", false)).toBe("")
+  })
+})
+
+describe("clampAstEmitScores — severity ceiling enforcement (SIG-310 code-review fix)", () => {
+  const ast = (over: Record<string, unknown>) => ({
+    path: "a.ts", line: 20, roleHint: "logic", severity: "warning", emitWhenUnmatched: true, ...over,
+  })
+  it("clamps a logic warning-emit finding from P1 (score 4) to P2 (score 3)", () => {
+    const f = [{ path: "a.ts", line: 21, category: "logic", score: 4 }]
+    expect(clampAstEmitScores(f, [ast({})])).toBe(1)
+    expect(f[0].score).toBe(3)
+  })
+  it("does NOT clamp a security error-emit finding (P0 sink stays P0)", () => {
+    const f = [{ path: "a.ts", line: 20, category: "security", score: 5 }]
+    expect(clampAstEmitScores(f, [ast({ roleHint: "security", severity: "error" })])).toBe(0)
+    expect(f[0].score).toBe(5)
+  })
+  it("does NOT clamp a finding on a different path / category / out-of-window line", () => {
+    const f = [
+      { path: "b.ts", line: 20, category: "logic", score: 4 }, // wrong path
+      { path: "a.ts", line: 20, category: "security", score: 4 }, // wrong category
+      { path: "a.ts", line: 40, category: "logic", score: 4 }, // out of ±2 window
+    ]
+    expect(clampAstEmitScores(f, [ast({})])).toBe(0)
+    expect(f.every((x) => x.score === 4)).toBe(true)
+  })
+  it("does NOT raise a score below the ceiling", () => {
+    const f = [{ path: "a.ts", line: 20, category: "logic", score: 2 }]
+    expect(clampAstEmitScores(f, [ast({})])).toBe(0)
+    expect(f[0].score).toBe(2)
   })
 })

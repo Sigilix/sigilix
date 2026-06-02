@@ -907,7 +907,9 @@ describe("RepoGraphDO.commitGraphVersion", () => {
           callKind: "same_file",
           startLine: 10, startCol: 2,
         },
-        // imported_binding calls must NOT get callee_symbol_id from same file
+        // imported_binding with NO resolvable import binding stays null — a
+        // same-file lookup must never resolve a cross-file callee (SIG-286
+        // resolves these only via a matching resolved import edge, below).
         {
           sourcePath: "src/helper.ts",
           calleeName: "externalFn",
@@ -928,6 +930,71 @@ describe("RepoGraphDO.commitGraphVersion", () => {
     const importedEdge = callEdges.find((e) => e.calleeName === "externalFn")
     expect(importedEdge).toBeDefined()
     expect(importedEdge?.calleeSymbolId).toBeNull()
+  })
+
+  it("SIG-286: imported_binding call resolves callee_symbol_id from the import binding (cross-file)", async () => {
+    const do_ = makeDoInstance("o/cross-file-call")
+
+    // b.ts exports `bar`; c.ts exports `baz`. a.ts imports `bar` (direct) and
+    // `baz as qux` (aliased), and calls both via imported bindings. a.ts also
+    // calls `missing` with no import edge → stays null.
+    await do_.upsertFileGraph({
+      runId: "rx", headSha: "h", path: "src/b.ts",
+      symbols: [
+        { symbolId: "src/b.ts function bar 1 0", path: "src/b.ts", name: "bar", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+      ],
+      fileEdgesRaw: [], callEdges: [],
+    })
+    await do_.upsertFileGraph({
+      runId: "rx", headSha: "h", path: "src/c.ts",
+      symbols: [
+        { symbolId: "src/c.ts function baz 1 0", path: "src/c.ts", name: "baz", kind: "function", exported: true, startLine: 1, startCol: 0, endLine: 3, endCol: 1 },
+      ],
+      fileEdgesRaw: [], callEdges: [],
+    })
+    await do_.upsertFileGraph({
+      runId: "rx", headSha: "h", path: "src/a.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./b", importedName: "bar", localName: "bar", exportedName: null, startLine: 1, startCol: 0 },
+        // aliased: `import { baz as qux } from "./c"` — local name is `qux`.
+        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./c", importedName: "baz", localName: "qux", exportedName: null, startLine: 2, startCol: 0 },
+      ],
+      callEdges: [
+        { sourcePath: "src/a.ts", calleeName: "bar", callKind: "imported_binding", startLine: 5, startCol: 0 },
+        { sourcePath: "src/a.ts", calleeName: "qux", callKind: "imported_binding", startLine: 6, startCol: 0 },
+        // no import edge for `missing` → unresolved → stays null.
+        { sourcePath: "src/a.ts", calleeName: "missing", callKind: "imported_binding", startLine: 7, startCol: 0 },
+      ],
+    })
+
+    await do_.commitGraphVersion("rx")
+
+    const callEdges = await do_.debugCallEdges("src/a.ts")
+    expect(callEdges.find((e) => e.calleeName === "bar")?.calleeSymbolId).toBe("src/b.ts function bar 1 0")
+    // alias resolves by LOCAL name (qux) to the imported symbol (baz).
+    expect(callEdges.find((e) => e.calleeName === "qux")?.calleeSymbolId).toBe("src/c.ts function baz 1 0")
+    // no resolvable import → stays null (prefer-missing-over-false).
+    expect(callEdges.find((e) => e.calleeName === "missing")?.calleeSymbolId).toBeNull()
+  })
+
+  it("SIG-286: imported_binding to an UNRESOLVED import (target file absent) stays null", async () => {
+    const do_ = makeDoInstance("o/cross-file-unresolved")
+    // a.ts imports from './ghost' which has no symbols in the graph → the import
+    // edge is unresolved (target_symbol_id null) → the call stays null.
+    await do_.upsertFileGraph({
+      runId: "rg", headSha: "h", path: "src/a.ts",
+      symbols: [],
+      fileEdgesRaw: [
+        { sourcePath: "src/a.ts", edgeKind: "import", specifier: "./ghost", importedName: "gone", localName: "gone", exportedName: null, startLine: 1, startCol: 0 },
+      ],
+      callEdges: [
+        { sourcePath: "src/a.ts", calleeName: "gone", callKind: "imported_binding", startLine: 4, startCol: 0 },
+      ],
+    })
+    await do_.commitGraphVersion("rg")
+    const callEdges = await do_.debugCallEdges("src/a.ts")
+    expect(callEdges.find((e) => e.calleeName === "gone")?.calleeSymbolId).toBeNull()
   })
 })
 
@@ -2182,7 +2249,9 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
     })
 
     // a.ts imports bar from './b' (an import edge → import row) AND calls bar
-    // via an imported binding (NO callee_symbol_id → NOT a caller row).
+    // via an imported binding. SIG-286: commit now resolves the imported_binding
+    // callee_symbol_id from the import binding, so this CROSS-FILE call surfaces
+    // as a caller row too (it was excluded before).
     await do_.upsertFileGraph({
       runId: "r", headSha: "h", path: "src/a.ts",
       symbols: [],
@@ -2211,15 +2280,20 @@ describe("RepoGraphDO.contextExpansionForChangedSymbols", () => {
       startLine: 1, endLine: 3,
     })
 
-    // caller: same-file call to bar at line 7 (callee_symbol_id resolved at
-    // commit). The imported_binding call from a.ts has no callee_symbol_id →
-    // excluded. caller_symbol_id is null in v1 → the joined span is null.
-    expect(exp.callerRows).toHaveLength(1)
-    expect(exp.callerRows[0]).toMatchObject({
+    // callers: the same-file call in b.ts (line 7) AND — NEW with SIG-286 — the
+    // CROSS-FILE imported_binding call in a.ts (line 4), now that its
+    // callee_symbol_id resolves from the import binding at commit. (caller_symbol_id
+    // is null in v1 → the joined caller span is null.)
+    expect(exp.callerRows).toHaveLength(2)
+    const bCaller = exp.callerRows.find((r) => r.sourcePath === "src/b.ts")
+    expect(bCaller).toMatchObject({
       sourcePath: "src/b.ts", calleeName: "bar", callKind: "same_file",
-      startLine: 7,
-      callerSymbolId: null,
-      callerStartLine: null, callerEndLine: null,
+      startLine: 7, callerSymbolId: null, callerStartLine: null, callerEndLine: null,
+    })
+    const aCaller = exp.callerRows.find((r) => r.sourcePath === "src/a.ts")
+    expect(aCaller).toMatchObject({
+      sourcePath: "src/a.ts", calleeName: "bar", callKind: "imported_binding",
+      startLine: 4, callerSymbolId: null,
     })
 
     // import: a.ts imports bar (resolved target_symbol_id) at line 1.

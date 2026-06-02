@@ -34,6 +34,25 @@ import {
 } from "./rule-registry"
 import type { AstFinding, AstRule, AstRuleHit, RuleContext } from "./types"
 import type { ReviewableMap } from "../diff-positions"
+import { scanDynamicHtmlSinks, DYNAMIC_HTML_SINK_RULE_ID } from "./scan-dynamic-html-sink"
+
+// SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
+// reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't
+// traversed). We splice its hits into the same finding pipeline as the AST
+// rules via this synthetic rule descriptor: `error`/`security`, and
+// `emitWhenUnmatched` so an unmatched XSS is deterministically surfaced (it's
+// FP-safe by construction — see scan-dynamic-html-sink.ts). `nodeTypes: []` and
+// the no-op `visit` ensure the walker never invokes it as an AST rule.
+const DYNAMIC_HTML_SINK_PSEUDO_RULE: AstRule = {
+  id: DYNAMIC_HTML_SINK_RULE_ID,
+  severity: "error",
+  roleHint: "security",
+  shortDescription: "Untrusted dynamic value flows into an HTML-injection sink (XSS)",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
 
 const LARGE_FILE_BYTES = 500_000
 const EVIDENCE_MAX_CHARS = 200
@@ -214,6 +233,20 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     }
 
     walkAst(parsed.ast, visitors)
+
+    // SIG-312: line-scan the source for an untrusted dynamic value flowing into
+    // an HTML-injection sink (dangerouslySetInnerHTML / innerHTML / …) — the
+    // walker can't reach JSX attributes, so this complements the AST pass. The
+    // hits join `fileHits` under a synthetic security rule and flow through the
+    // SAME changed-line filter, finding-id, dedupe, and emit path below.
+    //
+    // Scoped to parse-OK files (we're past the `parsed.ok` gate): every real
+    // React/TS file parses, so the recurring miss is covered. A file that fails
+    // to parse is a rare malformed edge — it's skipped here exactly as the AST
+    // rules skip it, and the model specialist still reviews it.
+    for (const hit of scanDynamicHtmlSinks(source)) {
+      fileHits.push({ rule: DYNAMIC_HTML_SINK_PSEUDO_RULE, hit })
+    }
 
     // Filter hits by changed-lines + emit findings.
     for (const { rule, hit } of fileHits) {

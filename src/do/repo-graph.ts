@@ -208,9 +208,11 @@ export interface GraphDefinitionRow {
  * caller resolves to a known symbol) lets the consumer render the WHOLE caller
  * body instead of a bare window around the call line.
  *
- * Matched on `callee_symbol_id` — which `commitGraphVersion` only sets for
- * `same_file` calls. Cross-file/imported call sites have a null
- * `callee_symbol_id` and are NOT returned here: a deliberate high-precision,
+ * Matched on `callee_symbol_id`, which `commitGraphVersion` sets for `same_file`
+ * calls AND (SIG-286) for `imported_binding` cross-file calls whose import
+ * resolves to an exported symbol — so a resolved cross-file caller IS returned
+ * here. Unresolved imports (barrels / `export *`, default, namespace) keep a
+ * null `callee_symbol_id` and are omitted: a deliberate high-precision,
  * lower-recall signal (prefer-missing-over-false), distinct from blastRadius's
  * name-based caller paths.
  */
@@ -913,7 +915,8 @@ export class RepoGraphDO extends DurableObject<Env> {
    * SIG-286: row-level context expansion for a PR's changed symbols, scoped to
    * the ACTIVE graph version. Unlike blastRadiusByNames (which returns only
    * caller/import-dependent PATHS), this returns the LOCATIONS needed to render
-   * bounded body snippets: definition spans, same-file call sites, and import
+   * bounded body snippets: definition spans, call sites (same-file + resolved
+   * cross-file imported_binding callers, SIG-286), and import
    * reference lines.
    *
    * Resolution mirrors blastRadiusByNames: changed NAMES are resolved to
@@ -992,8 +995,10 @@ export class RepoGraphDO extends DurableObject<Env> {
       endLine: r.end_line,
     }))
 
-    // callerRows: same-file call sites of a changed symbol, LEFT JOINed to the
-    // caller symbol's span so the consumer can render the whole caller body.
+    // callerRows: call sites of a changed symbol (same-file + SIG-286 resolved
+    // cross-file imported_binding callers, both matched on callee_symbol_id),
+    // LEFT JOINed to the caller symbol's span so the consumer can render the
+    // whole caller body.
     const callerRows: GraphCallerRow[] = [
       ...sql.exec<{
         source_path: string; callee_name: string; call_kind: string

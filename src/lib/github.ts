@@ -296,6 +296,50 @@ export class GitHubClient {
   }
 
   /**
+   * SIG-44: search merged PRs for the multi-corpus backfill. Uses the GitHub
+   * Search API (`/search/issues`, which covers PRs) to page through PRs merged
+   * on/after `sinceDate` (a `YYYY-MM-DD` string), most-recent first. Returns
+   * number/title/body so the caller can embed each into the `pr:` namespace
+   * without a per-PR follow-up fetch.
+   *
+   * Caveats baked in: the Search API caps results at 1000 (10 pages of 100)
+   * and is rate-limited separately (30 req/min) — we bound to `maxItems` and
+   * `page < 11`. `is:merged` already excludes still-open/closed-unmerged PRs.
+   */
+  async searchMergedPullRequests(
+    owner: string,
+    repo: string,
+    sinceDate: string,
+    opts?: { perPage?: number; maxItems?: number; signal?: AbortSignal },
+  ): Promise<Array<{ number: number; title: string; body: string }>> {
+    const perPage = opts?.perPage ?? 100
+    const maxItems = opts?.maxItems ?? 300
+    const q = encodeURIComponent(`repo:${owner}/${repo} is:pr is:merged merged:>=${sinceDate}`)
+    const out: Array<{ number: number; title: string; body: string }> = []
+    let page = 1
+    while (out.length < maxItems && page < 11) {
+      const res = await this.restGet<{ items?: Array<{ number?: number; title?: string; body?: string | null }> }>(
+        `/search/issues?q=${q}&sort=updated&order=desc&per_page=${perPage}&page=${page}`,
+        opts?.signal !== undefined ? { signal: opts.signal } : undefined,
+      )
+      const items = res.items ?? []
+      if (items.length === 0) break
+      for (const it of items) {
+        if (out.length >= maxItems) break
+        if (typeof it.number !== "number") continue
+        out.push({
+          number: it.number,
+          title: typeof it.title === "string" ? it.title : "",
+          body: typeof it.body === "string" ? it.body : "",
+        })
+      }
+      if (items.length < perPage) break
+      page += 1
+    }
+    return out
+  }
+
+  /**
    * Fetch the most recent commits on a PR (up to GitHub's 250-commit cap).
    * Returns the list newest-last so callers can `.slice(-N)` the latest.
    */

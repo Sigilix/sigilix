@@ -38,6 +38,12 @@ import { chat, type ChatMessage } from "./ollama-chat"
 // this module into ./ollama-chat.
 export type { ChatMessage }
 import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
+import {
+  multiCorpusEnabled,
+  retrieveMultiCorpus,
+  formatMultiCorpusForPrompt,
+  type MultiCorpusResult,
+} from "./multi-corpus"
 import { indexNamespace } from "./repo-index-manifest"
 import {
   buildPerfRetrievalQuery,
@@ -2185,6 +2191,17 @@ export async function handlePrReviewEnsemble(
         orchCtrl.signal,
       ).then((r) => r.chunks).catch(() => null)
     }
+    // SIG-44: multi-corpus retrieval (prior merged PRs + Linear issues).
+    // Kicked off HERE so its embed+query runs CONCURRENTLY with the
+    // preflight/perf retrieval above. Best-effort: never rejects (the
+    // function soft-fails per leg, and we add a defensive .catch). Flag-gated
+    // (default off); the result is appended to the shared snapshot AFTER the
+    // branch-aware merge block below so the merge can't clobber it.
+    const wantMultiCorpus = multiCorpusEnabled(env)
+    const multiCorpusPromise: Promise<MultiCorpusResult> | null = wantMultiCorpus
+      ? retrieveMultiCorpus(env, owner, repo, preflightQuery, { prNumber, headSha })
+          .catch(() => ({ pr: [], issue: [] }))
+      : null
     // ARC-284: phase-completed event always emits (even on the catch
     // path) so a 15s pre-flight cap-hit shows up in the trace.
     const preflightStartMs = Date.now()
@@ -2388,6 +2405,25 @@ export async function handlePrReviewEnsemble(
         perfRetrievalSnapshot = resolvePerfSnapshot(formattedPerf, retrievalSnapshot)
       } else {
         perfRetrievalSnapshot = retrievalSnapshot
+      }
+    }
+
+    // SIG-44: append the multi-corpus (prior PRs + Linear issues) section to
+    // the shared + perf snapshots. Done HERE — after the branch-aware merge's
+    // reassignments — so it can't be overwritten. Awaited now; it ran
+    // concurrently with preflight so this adds no critical-path wall-clock.
+    // The logic role inherits this via its shared snapshot; the SIG-236 logic
+    // prompt budget still trims if needed (formatMultiCorpusForPrompt is
+    // already bounded to ~6K chars).
+    if (multiCorpusPromise) {
+      const mc = await multiCorpusPromise
+      const block = formatMultiCorpusForPrompt(mc) ?? ""
+      if (block.length > 0) {
+        const section = `[PRIOR PRS & ISSUES]\n${block}`
+        retrievalSnapshot = retrievalSnapshot ? `${retrievalSnapshot}\n\n${section}` : section
+        perfRetrievalSnapshot = perfRetrievalSnapshot
+          ? `${perfRetrievalSnapshot}\n\n${section}`
+          : section
       }
     }
 

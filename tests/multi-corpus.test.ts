@@ -12,9 +12,31 @@ import {
   upsertIssueDoc,
   retrieveMultiCorpus,
   formatMultiCorpusForPrompt,
+  multiCorpusEnabled,
+  deriveVerdictLabel,
   type MultiCorpusEnv,
   type MultiCorpusResult,
 } from "../src/lib/multi-corpus"
+
+describe("multiCorpusEnabled", () => {
+  it("is on only for flag === 'on'", () => {
+    expect(multiCorpusEnabled({ OPENCLAW_MULTICORPUS_RETRIEVAL: "on" })).toBe(true)
+    expect(multiCorpusEnabled({ OPENCLAW_MULTICORPUS_RETRIEVAL: " ON" })).toBe(true)
+    expect(multiCorpusEnabled({ OPENCLAW_MULTICORPUS_RETRIEVAL: "shadow" })).toBe(false)
+    expect(multiCorpusEnabled({})).toBe(false)
+  })
+})
+
+describe("deriveVerdictLabel", () => {
+  it("maps findings to the review pipeline's score>=4 buckets", () => {
+    expect(deriveVerdictLabel([{ score: 4 }, { score: 1 }])).toBe("changes_required")
+    expect(deriveVerdictLabel([{ score: 2 }, { score: 3 }])).toBe("commented")
+    expect(deriveVerdictLabel([])).toBe("approved")
+  })
+  it("returns undefined when there was no review (no manifest)", () => {
+    expect(deriveVerdictLabel(undefined)).toBeUndefined()
+  })
+})
 
 const EMBED_DIMS = 768
 const fakeVec = () => Array(EMBED_DIMS).fill(0.1)

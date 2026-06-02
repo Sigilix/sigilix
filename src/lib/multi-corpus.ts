@@ -26,6 +26,35 @@ import { embedText } from "./embeddings"
 export const PR_NAMESPACE_PREFIX = "pr:"
 export const ISSUE_NAMESPACE_PREFIX = "issue:"
 
+/**
+ * Multi-corpus retrieval is on only when the flag is exactly "on" (matches
+ * the sibling OPENCLAW_*_RETRIEVAL boolean flags). Drives both the review-time
+ * read injection and the webhook/backfill write paths — when off, the corpora
+ * are neither populated nor queried.
+ */
+export function multiCorpusEnabled(env: { OPENCLAW_MULTICORPUS_RETRIEVAL?: string }): boolean {
+  return (env.OPENCLAW_MULTICORPUS_RETRIEVAL ?? "").trim().toLowerCase() === "on"
+}
+
+/**
+ * Derive a coarse verdict label for a merged PR from its persisted review
+ * findings. Sigilix doesn't store the synthesizer verdict explicitly — the
+ * review manifest keeps only the per-finding `score`. We map that to the same
+ * three buckets the review pipeline itself gates on: any finding at score >= 4
+ * (the REQUEST_CHANGES floor, per the OPENCLAW_*_VALIDATOR_MODE flags) →
+ * "changes_required"; findings below that floor → "commented"; an empty
+ * findings set → "approved". Returns undefined when no manifest existed (the
+ * PR was merged without a Sigilix review), so the corpus doc simply omits the
+ * verdict rather than asserting a false "approved".
+ */
+export function deriveVerdictLabel(
+  findings: ReadonlyArray<{ score: number }> | undefined,
+): string | undefined {
+  if (findings === undefined) return undefined
+  if (findings.length === 0) return "approved"
+  return findings.some((f) => f.score >= 4) ? "changes_required" : "commented"
+}
+
 /** Vectorize namespace for a repo's merged-PR corpus. */
 export function prNamespace(owner: string, repo: string): string {
   return `${PR_NAMESPACE_PREFIX}${indexNamespace(owner, repo)}`
@@ -52,7 +81,7 @@ interface VectorizeIndex {
     vector: number[],
     options: { topK?: number; namespace?: string; returnMetadata?: "all" | "indexed" },
   ): Promise<{ matches: VectorizeMatch[] }>
-  upsert(records: ReadonlyArray<{
+  upsert(records: Array<{
     id: string
     values: number[]
     namespace: string

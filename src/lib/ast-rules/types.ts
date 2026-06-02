@@ -33,6 +33,19 @@ export interface AstRule {
    * specific node).
    */
   nodeTypes: string[]
+  /**
+   * SIG-309 PR2: when true, the synth EMITS this rule's finding even when NO
+   * specialist raised the same issue (a deterministic high-confidence
+   * detection). Set ONLY on rules that are FP-safe by construction — they do
+   * NOT fire on benign constant code: the shell/command-injection sinks
+   * (`spawn-shell-true` requires `{shell:true}`, `no-exec-shell-interpolation`
+   * skips constant commands) and disabled-TLS (`rejectUnauthorized:false` is
+   * unambiguous). Deliberately NOT on `no-eval-call` / `no-new-function-
+   * constructor` / `no-document-write-call` — those fire on constant args too,
+   * so an unmatched one could be benign (the constant-eval FP that keeps
+   * autoInline off by default). Default false.
+   */
+  emitWhenUnmatched?: boolean
   visit(node: AstNode, ctx: RuleContext): AstRuleVisitResult
 }
 
@@ -75,4 +88,8 @@ export interface AstFinding extends AstRuleHit {
   /** Stable ID of shape `ast/<ruleId>/<pathHash7>/<line>`. Carried
    *  through synth supersession + audit-marker rendering. */
   astFindingId: string
+  /** SIG-309 PR2: copied from the rule's `emitWhenUnmatched`; surfaced to the
+   *  synth as `deterministic_emit` so an unmatched high-confidence security
+   *  sink is emitted (through the normal grounding pipeline), not dropped. */
+  emitWhenUnmatched?: boolean
 }

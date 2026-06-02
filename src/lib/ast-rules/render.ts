@@ -56,6 +56,9 @@ export function renderAstFindingsAsJsonForSynth(findings: readonly AstFinding[])
       role_hint: f.roleHint,
       message: f.message,
       evidence: f.evidence,
+      // SIG-309 PR2: high-confidence FP-safe security sink the synth should
+      // emit even with no matching specialist finding (see the synth block).
+      ...(f.emitWhenUnmatched ? { deterministic_emit: true } : {}),
     })),
   }
   return JSON.stringify(payload, null, 2)

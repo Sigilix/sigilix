@@ -447,6 +447,8 @@ export class RepoGraphDO extends DurableObject<Env> {
    *     - 'star_reexport' (export * from '…') edges are left 'raw' in v1;
    *       transitive re-export FIXPOINT is deferred to a future task.
    *  4. Resolve same_file call edges: set callee_symbol_id from lookup.
+   *  4b. Resolve imported_binding (cross-file) call edges: set callee_symbol_id
+   *     from the import binding Step 3 resolved (SIG-286).
    *  5. Flip: DELETE all rows for the old active version, then set this
    *     version status='active', committed_at=now.
    *  6. Emit 'graph-version-committed'.
@@ -568,6 +570,47 @@ export class RepoGraphDO extends DurableObject<Env> {
         runId,
       )) {
         const calleeSymbolId = symbolsByKey.get(`${c.source_path} ${c.callee_name}`) ?? null
+        if (calleeSymbolId !== null) {
+          sql.exec(
+            "UPDATE call_edges SET callee_symbol_id = ? WHERE graph_version = ? AND edge_id = ?",
+            calleeSymbolId, runId, c.edge_id,
+          )
+        }
+      }
+
+      // Step 4b (SIG-286): resolve imported_binding call edges — a CROSS-FILE
+      // call to an imported name (`import { foo } from "./a"; foo()`). The
+      // extractor already emits these edges but their callee_symbol_id stayed
+      // NULL, so cross-file callers were invisible to
+      // contextExpansionForChangedSymbols (which filters on callee_symbol_id).
+      // Reuse the import resolution Step 3 just computed: map each RESOLVED
+      // import binding `(source_path, local_name) → target_symbol_id` (local_name
+      // so an alias `import { foo as bar }` matches the call site `bar()`), then
+      // set callee_symbol_id on the matching imported_binding call edge. Only
+      // edges whose import resolved to a real EXPORTED symbol are set; barrels /
+      // default / namespace imports stay NULL (prefer-missing-over-false).
+      const importBindingSymbol = new Map<string, string>() // "${source_path} ${local_name}" → symbol_id
+      for (const e of sql.exec<{
+        source_path: string
+        local_name: string | null
+        target_symbol_id: string | null
+      }>(
+        "SELECT source_path, local_name, target_symbol_id FROM file_edges WHERE graph_version = ? AND edge_kind = 'import' AND target_symbol_id IS NOT NULL AND local_name IS NOT NULL",
+        runId,
+      )) {
+        if (e.local_name && e.target_symbol_id) {
+          importBindingSymbol.set(`${e.source_path} ${e.local_name}`, e.target_symbol_id)
+        }
+      }
+      for (const c of sql.exec<{
+        edge_id: string
+        source_path: string
+        callee_name: string
+      }>(
+        "SELECT edge_id, source_path, callee_name FROM call_edges WHERE graph_version = ? AND call_kind = 'imported_binding'",
+        runId,
+      )) {
+        const calleeSymbolId = importBindingSymbol.get(`${c.source_path} ${c.callee_name}`) ?? null
         if (calleeSymbolId !== null) {
           sql.exec(
             "UPDATE call_edges SET callee_symbol_id = ? WHERE graph_version = ? AND edge_id = ?",

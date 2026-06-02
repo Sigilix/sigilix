@@ -340,7 +340,7 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor } from "./degraded-finding-floor"
+import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -4428,6 +4428,63 @@ export async function handlePrReviewEnsemble(
     // `synthOutput.provenance.softened`).
     let effectiveSynthVerdict = synthOutput.verdict
     let effectiveSynthProvenance = synthOutput.provenance
+
+    // SIG-317: synth verdict-truncation recovery (runs BEFORE the degraded floor
+    // so recovery re-aligns verdict↔provenance first). On target-rich PRs the
+    // synth writes a COMPLETE provenance but a SHORTER verdict.findings — it
+    // details the top-ranked findings (security-first) and silently truncates
+    // the verbose tail, losing real subtle findings it MARKED KEPT (pr/10:
+    // provenance 20, verdict 8 — a score-5 N+1, the cents bug, a floating
+    // promise all lost). Recover the tail from the cited specialist sources; the
+    // recovered findings flow through the SAME post-synth gates below, so this
+    // CANNOT lower precision — the gates remain the authority. Modes:
+    // `off` (default) inert, `shadow` logs the recoverable count, `on` applies.
+    //
+    // The helper ALWAYS returns a 1:1-aligned (verdict, provenance) pair — it
+    // trims the truncated orphan tail to verdict length, then re-appends only the
+    // recovered entries. So in `on` we install the result UNCONDITIONALLY whenever
+    // the truncation branch runs, even when nothing qualified for recovery: the
+    // trim alone re-aligns the arrays so the degraded floor downstream appends
+    // onto an aligned base (otherwise the stale longer provenance survives and
+    // validateForSubmission mispairs the floor's restored findings — Codex SIG-317
+    // review). The non-recovered case is behavior-identical for posting (the
+    // ignored tail was never paired), so trimming it costs no recall. Orphans
+    // citing only AST-emit ids are NOT recovered here (sourceById is specialist-
+    // only) — AST/SIG-310 deterministic recovery is a deliberate Part-1 gap,
+    // fast-follow; it is precision-safe (those emits were already truncated).
+    const synthRecoveryMode = (env.OPENCLAW_SYNTH_RECOVERY ?? "off").trim().toLowerCase()
+    if (synthRecoveryMode !== "off"
+      && effectiveSynthProvenance.findings.length > effectiveSynthVerdict.findings.length) {
+      const sourceById = new Map<string, PrReviewFinding & { id: string }>()
+      for (const v of synthInputVerdicts) {
+        for (const f of v.verdict?.findings ?? []) {
+          const id = (f as { id?: unknown }).id
+          if (typeof id === "string") sourceById.set(id, f as PrReviewFinding & { id: string })
+        }
+      }
+      const rec = recoverTruncatedSynthFindings({
+        findings: effectiveSynthVerdict.findings,
+        provenanceFindings: effectiveSynthProvenance.findings,
+        sourceById,
+      })
+      if (rec.recovered.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-synth-truncation-recovered",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: synthRecoveryMode,
+          verdictLen: effectiveSynthVerdict.findings.length,
+          provenanceLen: effectiveSynthProvenance.findings.length,
+          recoveredCount: rec.recovered.length,
+          recovered: rec.recovered.map((r) => ({ id: r.id, score: r.score, category: r.category })),
+        }))
+      }
+      if (synthRecoveryMode === "on") {
+        // Install unconditionally — `rec` is always aligned (trim ± recovery).
+        effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: rec.findings }
+        effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: rec.provenanceFindings }
+      }
+    }
+
     if (degradedCoverage) {
       const floored = applyDegradedCoverageFindingFloor({
         findings: effectiveSynthVerdict.findings,
@@ -4460,6 +4517,20 @@ export async function handlePrReviewEnsemble(
     // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
     // demote sites can tag body-routed findings with their reason when enabled.
     const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
+    // Re-point the synth telemetry at the SAME (verdict, provenance) pair fed to
+    // validateForSubmission. telemetry.synthesizer.verdict was captured from the
+    // raw synthOutput (above), but the post-synth augmentations (SIG-317 recovery
+    // and the SIG-287 degraded floor) replace effectiveSynth* with the pair that
+    // is actually validated and posted. Without this, the `validated.provenance`
+    // assignment below leaves synthesizer.verdict (raw, shorter) index-MISALIGNED
+    // with synthesizer.provenance, breaking fp-rate dismissal attribution and
+    // recall-alarm counts (both pair verdict.findings[i] <-> provenance[i] by
+    // index). No-op when nothing augmented (effectiveSynth* === synthOutput.*);
+    // restores the pre-recovery invariant when they did (CodeRabbit #304).
+    if (telemetry.synthesizer) {
+      telemetry.synthesizer.verdict = effectiveSynthVerdict
+      telemetry.synthesizer.provenance = effectiveSynthProvenance
+    }
     const validated = validateForSubmission({
       trustLedgerEnabled: trustLedgerMode !== "off",
       synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },

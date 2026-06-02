@@ -293,6 +293,19 @@ OPENCLAW_GRAPH_EXPANSION = "post"
 # or "off".
 OPENCLAW_AUTHZ_IDOR_SCAN = "post"
 
+# SIG-317 (2026-06-02): synth verdict-truncation recovery. On target-rich PRs the
+# synthesizer writes a COMPLETE provenance.findings but a SHORTER verdict.findings
+# (it details the top-ranked findings and truncates the verbose tail), silently
+# losing real subtle findings it marked KEPT — pr/10: provenance 20 / verdict 8,
+# a score-5 N+1 + the cents bug + a floating promise lost. Recovery reconstructs
+# the tail from the cited specialist sources; recovered findings flow through the
+# SAME post-synth gates, so it cannot lower precision. "off" inert, "shadow" logs
+# the `pr-review-synth-truncation-recovered` count, "on" applies. Precision-safe
+# by construction (recovers only synth-provenanced-kept findings, never invents;
+# the gates remain the authority) — running at "on" to surface on real reviews.
+# Rollback: "shadow" (telemetry only) or "off" (inert).
+OPENCLAW_SYNTH_RECOVERY = "on"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.

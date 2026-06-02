@@ -196,12 +196,15 @@ const SYNC_EXEC_CALL_RE = /\b(?:execSync|execFileSync|spawnSync)\s*\(/
 const TRIVIAL_PROBE_RE = /["'`][^"'`$]*(?:--version\b|--help\b|(?:^|\s)-v\b|(?:^|\s)-V\b)/
 
 /**
- * Clamp, IN PLACE, the score of any sev>=4 PERFORMANCE finding whose cited line
- * (± 2 lines) is a synchronous child-process call to a CONSTANT version/help
- * probe — capping it to 2 (P2). FP-safe + tightly scoped: a real per-request
- * blocking call (interpolated/heavy command, or a `readFileSync` template read)
- * has no probe flag in a constant literal, so it is untouched. Returns the
- * count clamped. Pure apart from the in-place mutation; exported for test.
+ * Clamp, IN PLACE, the score of any sev>=4 (P0/P1) PERFORMANCE finding whose
+ * cited line (± 2 lines) is a synchronous child-process call to a CONSTANT
+ * version/help probe — capping it to score 2 (P3/Low, well below the P0/P1 bar
+ * this fix targets). ONLY sev>=4 is clamped: a score-3 (P2) note is already
+ * below the believability bar and is left untouched (CodeRabbit #298). FP-safe
+ * + tightly scoped: a real per-request blocking call (interpolated/heavy
+ * command, or a `readFileSync` template read) has no probe flag in a constant
+ * literal, so it is untouched. Returns the count clamped. Pure apart from the
+ * in-place mutation; exported for test.
  */
 export function clampTrivialSyncIoSeverity(
   findings: Array<{ path: string; line: number; category: string; score: number }>,
@@ -210,7 +213,7 @@ export function clampTrivialSyncIoSeverity(
   if (!addedLineTextByLine) return 0
   let clamped = 0
   for (const f of findings) {
-    if (f.category !== "performance" || f.score <= 2) continue
+    if (f.category !== "performance" || f.score < 4) continue
     const lines = addedLineTextByLine.get(f.path)
     if (!lines) continue
     let isTrivialProbe = false

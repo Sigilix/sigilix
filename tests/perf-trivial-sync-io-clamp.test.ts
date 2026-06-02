@@ -38,15 +38,18 @@ describe("clampTrivialSyncIoSeverity", () => {
     expect(f[0].score).toBe(5)
   })
 
-  it("only touches performance findings above P2", () => {
+  it("only clamps sev>=4 (P0/P1); leaves score-3 (P2) and lower untouched (CodeRabbit #298)", () => {
+    const probe = (score: number, category = "performance") => ({ path: "a.ts", line: 1, category, score })
     const f = [
-      { path: "a.ts", line: 1, category: "security", score: 5 }, // wrong category
-      { path: "a.ts", line: 1, category: "performance", score: 2 }, // already P2
+      probe(5), // P0 → clamp
+      probe(4), // P1 → clamp
+      probe(3), // P2 → NOT clamped (already below the P0/P1 bar)
+      probe(2), // P3 → NOT clamped
+      probe(5, "security"), // wrong category → NOT clamped
     ]
     const alt = lines("a.ts", [[1, `execSync("tool --version")`]])
-    expect(clampTrivialSyncIoSeverity(f, alt)).toBe(0)
-    expect(f[0].score).toBe(5)
-    expect(f[1].score).toBe(2)
+    expect(clampTrivialSyncIoSeverity(f, alt)).toBe(2) // only the two sev>=4
+    expect(f.map((x) => x.score)).toEqual([2, 2, 3, 2, 5])
   })
 
   it("no-ops without the line map", () => {

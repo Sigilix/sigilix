@@ -10,6 +10,7 @@ import type { AstRule, Severity } from "./types"
 import { noEvalCall } from "./rules/no-eval-call"
 import { noNewFunctionConstructor } from "./rules/no-new-function-constructor"
 import { spawnShellTrue } from "./rules/spawn-shell-true"
+import { noExecShellInterpolation } from "./rules/no-exec-shell-interpolation"
 import { noDisabledTlsRejectUnauthorized } from "./rules/no-disabled-tls-reject-unauthorized"
 import { noDocumentWriteCall } from "./rules/no-document-write-call"
 import { noAsyncWithoutAwait } from "./rules/no-async-without-await"
@@ -42,6 +43,7 @@ export const ALL_RULES: readonly AstRule[] = [
   noEvalCall,
   noNewFunctionConstructor,
   spawnShellTrue,
+  noExecShellInterpolation,
   noDisabledTlsRejectUnauthorized,
   noDocumentWriteCall,
   // Correctness / perf (severity: warning)

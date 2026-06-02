@@ -38,11 +38,12 @@ function ruleById(id: string): AstRule {
 // ─── ALL_RULES registry contract (Codex MAJOR #3) ───────────────
 
 describe("ALL_RULES registry — v1 contract", () => {
-  it("exports exactly 22 rules in the canonical order", () => {
+  it("exports exactly 23 rules in the canonical order", () => {
     expect(ALL_RULES.map((r) => r.id)).toEqual([
       "no-eval-call",
       "no-new-function-constructor",
       "spawn-shell-true",
+      "no-exec-shell-interpolation",
       "no-disabled-tls-reject-unauthorized",
       "no-document-write-call",
       "no-async-without-await",
@@ -72,6 +73,7 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-eval-call":                          { severity: "error",   roleHint: "security" },
       "no-new-function-constructor":           { severity: "error",   roleHint: "security" },
       "spawn-shell-true":                      { severity: "error",   roleHint: "security" },
+      "no-exec-shell-interpolation":           { severity: "error",   roleHint: "security" },
       "no-disabled-tls-reject-unauthorized":   { severity: "error",   roleHint: "security" },
       "no-document-write-call":                { severity: "error",   roleHint: "security" },
       "no-async-without-await":                { severity: "warning", roleHint: "logic" },

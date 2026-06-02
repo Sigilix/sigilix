@@ -121,6 +121,30 @@ describe("analyzeHelperBypass", () => {
     const m = new Map([["b.ts", HELPER + safe], ["api.ts", SIBLING_USES]])
     expect(analyzeHelperBypass(m)).toHaveLength(0)
   })
+
+  it("renders the ORIGINAL identifiers in the hint text, not the match-normalized form", () => {
+    // norm() strips underscores/casing for MATCHING (amount_cents -> amountcents);
+    // the hint TEXT the model reads must keep the real `amount_cents` / `refunds`
+    // names, else the model distrusts a hint that cites a column that doesn't exist.
+    const m = new Map([["billing.ts", HELPER + MUTATOR_BYPASS], ["api.ts", SIBLING_USES]])
+    const [hint] = analyzeHelperBypass(m)
+    expect(hint!.message).toContain("`amount_cents`")
+    expect(hint!.message).toContain("`refunds`")
+    expect(hint!.message).not.toContain("amountcents")
+  })
+
+  it("carries the FP-safety escape clauses the dual sign-off required (zero-P1-FP bar)", () => {
+    // The hint can only INFLUENCE the model (never auto-posts), but a sound escape
+    // is what keeps it from nudging a false raise on a legitimate accumulating write.
+    // Two consensus clauses (re-validation Workflow): the append-only / recurring-
+    // grant safe-branch (an event-ledger is MEANT to accumulate) and the positive
+    // anti-reclassification clause (can't deflect onto idempotency/validation/scope).
+    const m = new Map([["billing.ts", HELPER + MUTATOR_BYPASS], ["api.ts", SIBLING_USES]])
+    const [hint] = analyzeHelperBypass(m)
+    expect(hint!.message).toContain("MEANT to accumulate")
+    expect(hint!.message).toContain("do not defer it as")
+    expect(hint!.message).toContain("usage-derived delta")
+  })
 })
 
 describe("renderAsymmetryHints", () => {

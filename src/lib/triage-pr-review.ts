@@ -264,6 +264,15 @@ export interface PrReviewFinding {
    *  attached at submission time, never parsed from model output. */
   trust?: FindingTrust
   /**
+   * SIG-217: runtime-only content fingerprint —
+   * `sha256(category + path + bodySnippet(0,80))`, attached by the ensemble
+   * before render. Emitted as a hidden `sigilix:fingerprint:` marker so a
+   * later dismissal can record it and content-equivalent re-fires are
+   * suppressed even when the model-emitted finding ID changes per push.
+   * Never parsed from model output.
+   */
+  contentFingerprint?: string
+  /**
    * Structured details: optional concrete example proving the finding. Intended
    * for minimal repro input/output, runtime exception text, parser
    * examples, or other compact evidence that is clearer in a fenced
@@ -3348,6 +3357,11 @@ export function formatFindingComment(
   lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
   lines.push(`<!-- sigilix:severity:${finding.score} -->`)
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)
+  // SIG-217: hidden content fingerprint, so a later `@sigilix` dismissal can
+  // record it and content-equivalent re-fires are suppressed across pushes.
+  if (finding.contentFingerprint) {
+    lines.push(`<!-- sigilix:fingerprint:${finding.contentFingerprint} -->`)
+  }
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
   if (confidence <= 2 && finding.score < 4) {

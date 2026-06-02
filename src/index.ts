@@ -69,6 +69,7 @@ import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
 import { handleRunnerEvidenceMetricsRoute } from "./lib/metrics-runner-evidence-route"
 import { handleVerificationMetricsRoute } from "./lib/metrics-verification-route"
 import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
+import { handleRepeatFpsMetricsRoute } from "./lib/metrics-repeat-fps-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
@@ -1158,6 +1159,12 @@ export default {
     // SIG-173: authenticated read of rolling per-reason dismissal rollup.
     if (request.method === "GET" && url.pathname === "/metrics/dismissals") {
       return handleDismissalMetricsRoute(request, env)
+    }
+
+    // SIG-217: authenticated read of rolling repeat-FP rollup (per-reason +
+    // per-specialist) — surfaces dismissal-re-fire + severity-escalation rates.
+    if (request.method === "GET" && url.pathname === "/metrics/repeat-fps") {
+      return handleRepeatFpsMetricsRoute(request, env)
     }
 
     // SIG-152: authenticated read of rolling SIG-138 graph shadow telemetry.

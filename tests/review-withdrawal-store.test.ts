@@ -8,6 +8,8 @@ import {
   stripBodyForMatching,
   findingMatchesWithdrawal,
   filterWithdrawnFindings,
+  filterWithdrawnFindingsDetailed,
+  computeContentFingerprint,
   writeWithdrawal,
   loadWithdrawals,
   type WithdrawalRecord,
@@ -375,6 +377,147 @@ describe("WithdrawalRecord dismissReason field (SIG-173)", () => {
     expect(out).toHaveLength(1)
     // Unknown label is dropped so it can't poison softening weight calcs.
     expect(out[0]?.dismissReason).toBeUndefined()
+  })
+})
+
+// ── SIG-217: content-fingerprint dismissal-aware re-fire suppression ──
+
+describe("computeContentFingerprint", () => {
+  it("is stable for identical (category, path, body-prefix)", async () => {
+    const a = await computeContentFingerprint("security", "src/index.ts", "Possible secret leaked in this handler.")
+    const b = await computeContentFingerprint("security", "src/index.ts", "Possible secret leaked in this handler.")
+    expect(a).toBe(b)
+    expect(a).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it("differs when category, path, or the first 80 body chars change", async () => {
+    const base = await computeContentFingerprint("security", "src/index.ts", "Possible secret leaked here.")
+    expect(await computeContentFingerprint("logic", "src/index.ts", "Possible secret leaked here.")).not.toBe(base)
+    expect(await computeContentFingerprint("security", "src/other.ts", "Possible secret leaked here.")).not.toBe(base)
+    expect(await computeContentFingerprint("security", "src/index.ts", "A totally different concern entirely.")).not.toBe(base)
+  })
+
+  it("ignores body drift beyond the first 80 chars (stable prefix)", async () => {
+    const prefix = "x".repeat(80)
+    const a = await computeContentFingerprint("logic", "a.ts", prefix + " tail-A")
+    const b = await computeContentFingerprint("logic", "a.ts", prefix + " tail-B-different")
+    expect(a).toBe(b)
+  })
+})
+
+describe("findingMatchesWithdrawal — SIG-217 fingerprint short-circuit", () => {
+  const withdrawal: WithdrawalRecord = {
+    path: "src/index.ts",
+    line: 667,
+    bodySnapshot: "the original conceded body",
+    withdrawnAt: 1,
+    withdrawnByCommentId: 1,
+    prHeadSha: "abc",
+    reason: "mention-reply-accepted",
+    contentFingerprint: "f".repeat(64),
+  }
+
+  it("matches on fingerprint even when line drifts past tolerance AND body is disjoint", () => {
+    // Different line (well past ±5) and a body that shares no tokens — the
+    // Jaccard path would REJECT this. Fingerprint match must still suppress.
+    expect(findingMatchesWithdrawal(
+      { path: "src/index.ts", line: 712, body: "completely unrelated wording", contentFingerprint: "f".repeat(64) },
+      withdrawal,
+    )).toBe(true)
+  })
+
+  it("falls back to Jaccard when fingerprints are absent on either side", () => {
+    const noFp: WithdrawalRecord = { ...withdrawal, contentFingerprint: undefined }
+    expect(findingMatchesWithdrawal(
+      { path: "src/index.ts", line: 667, body: "the original conceded body" },
+      noFp,
+    )).toBe(true)
+    // Disjoint body + no fingerprint → no match.
+    expect(findingMatchesWithdrawal(
+      { path: "src/index.ts", line: 667, body: "zzz qqq vvv unrelated" },
+      noFp,
+    )).toBe(false)
+  })
+
+  it("does NOT match when fingerprints differ and Jaccard/line fail", () => {
+    expect(findingMatchesWithdrawal(
+      { path: "src/index.ts", line: 712, body: "unrelated", contentFingerprint: "a".repeat(64) },
+      withdrawal,
+    )).toBe(false)
+  })
+})
+
+describe("filterWithdrawnFindingsDetailed — re-fire + escalation telemetry flags", () => {
+  // The SIG-217 trigger fixture: a finding dismissed on push N, re-fired on
+  // push N+1 with a NEW model-emitted id, drifted line, and ESCALATED score —
+  // but identical content fingerprint.
+  const fp = "c".repeat(64)
+  const withdrawal: WithdrawalRecord = {
+    path: "src/index.ts",
+    line: 667,
+    bodySnapshot: "stripped original",
+    withdrawnAt: 1,
+    withdrawnByCommentId: 1,
+    prHeadSha: "sha-n",
+    reason: "mention-reply-accepted",
+    contentFingerprint: fp,
+    dismissedScore: 2,
+  }
+
+  it("suppresses the re-fire via fingerprint and flags it (no escalation when score unchanged)", () => {
+    const { kept, suppressed } = filterWithdrawnFindingsDetailed(
+      [{ path: "src/index.ts", line: 670, body: "re-worded", contentFingerprint: fp, score: 2 }],
+      [withdrawal],
+    )
+    expect(kept).toHaveLength(0)
+    expect(suppressed).toHaveLength(1)
+    expect(suppressed[0]!.viaFingerprint).toBe(true)
+    expect(suppressed[0]!.severityEscalated).toBe(false)
+  })
+
+  it("flags severityEscalated when the re-fire returns at a higher score", () => {
+    const { suppressed } = filterWithdrawnFindingsDetailed(
+      [{ path: "src/index.ts", line: 670, body: "re-worded", contentFingerprint: fp, score: 5 }],
+      [withdrawal],
+    )
+    expect(suppressed[0]!.viaFingerprint).toBe(true)
+    expect(suppressed[0]!.severityEscalated).toBe(true) // 5 > dismissed 2
+  })
+
+  it("does NOT flag escalation for a Jaccard-only (non-fingerprint) match", () => {
+    const noFp: WithdrawalRecord = { ...withdrawal, contentFingerprint: undefined }
+    const { suppressed } = filterWithdrawnFindingsDetailed(
+      [{ path: "src/index.ts", line: 667, body: "stripped original", score: 5 }],
+      [noFp],
+    )
+    expect(suppressed[0]!.viaFingerprint).toBe(false)
+    expect(suppressed[0]!.severityEscalated).toBe(false)
+  })
+})
+
+describe("writeWithdrawal + loadWithdrawal — SIG-217 fingerprint round-trip", () => {
+  it("persists and reloads contentFingerprint + dismissedScore, then matches a re-fire", async () => {
+    const { kv } = makeKvStub()
+    const env = makeEnv(kv)
+    const fp = await computeContentFingerprint("security", "src/index.ts", "JSDoc list flagged as a secret token.")
+    await writeWithdrawal({
+      env, owner: "o", repo: "r", prNumber: 1,
+      path: "src/index.ts", line: 667,
+      bodySnapshot: "JSDoc list flagged as a secret token.",
+      withdrawnByCommentId: 42, prHeadSha: "sha-1",
+      contentFingerprint: fp, score: 0,
+    })
+    const loaded = await loadWithdrawals(env, "o", "r", 1)
+    expect(loaded).toHaveLength(1)
+    expect(loaded[0]!.contentFingerprint).toBe(fp)
+    expect(loaded[0]!.dismissedScore).toBe(0)
+    // Re-fire on the next push: new id, drifted line, escalated to P0 — same fp.
+    const { kept, suppressed } = filterWithdrawnFindingsDetailed(
+      [{ path: "src/index.ts", line: 669, body: "now reported as a P0 secret!!", contentFingerprint: fp, score: 5 }],
+      loaded,
+    )
+    expect(kept).toHaveLength(0)
+    expect(suppressed[0]!.severityEscalated).toBe(true)
   })
 })
 

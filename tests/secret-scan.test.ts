@@ -3,7 +3,7 @@
 
 import { describe, it, expect } from "vitest"
 
-import { runSecretScan, renderSecretHitsForPrompt, containsCredentialToken } from "../src/lib/secret-scan"
+import { runSecretScan, renderSecretHitsForPrompt, containsCredentialToken, secretAllowlistReason } from "../src/lib/secret-scan"
 
 const mkDiff = (path: string, addedLines: string[]) => {
   const lines = [
@@ -329,6 +329,53 @@ describe("runSecretScan — SIG-251 camelCase + env-assignment false-positive ga
       'const TOKEN = "JuIqkUItYHsmxF/LCLfuzfTdvHOTHysg/tQs/yiK"',
     ]))
     expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeDefined()
+  })
+})
+
+describe("runSecretScan — SIG-217 explicit allowlist (mixed-separator safe substrings)", () => {
+  // The trigger FP: a JSDoc list of GitHub webhook actions. Mixes `/` (between
+  // events) and `_` (inside ready_for_review), so the single-separator SIG-126
+  // shape rules miss it. Was dismissed as not-a-bug, then re-fired at P0.
+  it("does NOT flag the `opened/synchronize/reopened/ready_for_review` webhook list", () => {
+    const hits = runSecretScan(mkDiff("src/index.ts", [
+      ' * Decide jobs for opened/synchronize/reopened/ready_for_review actions.',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a digit-bearing SCREAMING_SNAKE env var (S3-style)", () => {
+    const hits = runSecretScan(mkDiff("src/lib/config.ts", [
+      'const NAME = "OPENCLAW_S3_BUCKET_REGION_US_EAST_1_PRIMARY_KEY"',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  it("does NOT flag a kebab-case JSON key with digits (oauth2-...)", () => {
+    const hits = runSecretScan(mkDiff("config.json", [
+      '  "oauth2-client-credentials-redirect-uri-allowlist": true',
+    ]))
+    expect(hits.find((h) => h.ruleId === "generic-high-entropy-token")).toBeUndefined()
+  })
+
+  describe("secretAllowlistReason — pure classifier", () => {
+    it("classifies the trigger webhook-event list", () => {
+      expect(secretAllowlistReason("opened/synchronize/reopened/ready_for_review")).toBe("github-webhook-event")
+    })
+    it("classifies SCREAMING_SNAKE env vars", () => {
+      expect(secretAllowlistReason("OPENCLAW_ENSEMBLE_MAX_MODEL_CALLS_PER_PR")).toBe("screaming-env-var")
+    })
+    it("classifies kebab-case JSON keys", () => {
+      expect(secretAllowlistReason("content-security-policy-report-only-directive")).toBe("kebab-json-key")
+    })
+    // FN-safety: a real secret must NOT be allowlisted. Mixed casing + digits,
+    // not a clean identifier/event vocabulary → null → still fires.
+    it("returns null for a genuine mixed-case secret", () => {
+      expect(secretAllowlistReason("Ab3xZ9Qw7Lp2Rk8Mn4Vc6Bd1Hg5Tf0Js7Yu3Wq9Ea2")).toBeNull()
+    })
+    it("returns null for a slash-joined list with an unknown segment", () => {
+      // `deploy` is not a webhook action → the whole list must NOT be trusted.
+      expect(secretAllowlistReason("opened/deploy/reopened/ready_for_review")).toBeNull()
+    })
   })
 })
 

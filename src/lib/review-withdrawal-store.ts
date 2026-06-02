@@ -51,6 +51,40 @@ export interface WithdrawalRecord {
    * older records loaded from KV simply lack the field.
    */
   dismissReason?: DismissReason
+  /**
+   * SIG-217: deterministic content fingerprint —
+   * `sha256(category + "\0" + path + "\0" + bodySnippet(0,80))`. Stable across
+   * pushes even when the model-emitted finding ID changes with each blob hash,
+   * so a content-equivalent finding is recognized as already-dismissed even if
+   * its body wording drifts below the Jaccard threshold. Optional: legacy
+   * records written before SIG-217 lack it and fall back to Jaccard matching.
+   */
+  contentFingerprint?: string
+  /**
+   * SIG-217: severity score (1–5) of the finding at the moment it was
+   * dismissed. Lets a later content-equivalent re-fire at a HIGHER score be
+   * recognized as a severity-escalation attempt (still suppressed, but
+   * telemetered separately). Optional for back-compat.
+   */
+  dismissedScore?: number
+}
+
+/**
+ * SIG-217: the content-fingerprint primitive. `sha256` per the spec, over the
+ * normalized triple (category, path, first 80 body chars after markdown
+ * stripping). Async because Workers only expose Web Crypto's async digest.
+ *
+ * Pure (no I/O beyond the platform hash) — exported for tests + the write path.
+ */
+export async function computeContentFingerprint(
+  category: string,
+  path: string,
+  body: string,
+): Promise<string> {
+  const snippet = stripBodyForMatching(body).slice(0, 80)
+  const input = `${category}\0${path}\0${snippet}`
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("")
 }
 
 function withdrawalPrefix(owner: string, repo: string, prNumber: number): string {
@@ -129,9 +163,22 @@ export function stripBodyForMatching(body: string): string {
  * Pure — exported for tests.
  */
 export function findingMatchesWithdrawal(
-  finding: { path: string; line: number; body: string },
+  finding: { path: string; line: number; body: string; contentFingerprint?: string },
   withdrawal: WithdrawalRecord,
 ): boolean {
+  // SIG-217: deterministic content-fingerprint match takes precedence. It is
+  // independent of line drift AND body-Jaccard, so a content-equivalent
+  // re-fire is recognized even when (a) the model-emitted finding ID changed
+  // with the push's blob hash, or (b) the body wording drifted below the 0.75
+  // Jaccard threshold. Both fingerprints must be present (legacy records and
+  // un-annotated findings fall through to the Jaccard path below).
+  if (
+    finding.contentFingerprint &&
+    withdrawal.contentFingerprint &&
+    finding.contentFingerprint === withdrawal.contentFingerprint
+  ) {
+    return true
+  }
   if (finding.path !== withdrawal.path) return false
   if (Math.abs(finding.line - withdrawal.line) > LINE_TOLERANCE) return false
   const sim = jaccardSimilarity(
@@ -141,23 +188,74 @@ export function findingMatchesWithdrawal(
   return sim >= MATCH_THRESHOLD
 }
 
+/** A finding shape that can be matched against withdrawals. */
+export type MatchableFinding = {
+  path: string
+  line: number
+  body: string
+  /** SIG-217: precomputed via `computeContentFingerprint`. */
+  contentFingerprint?: string
+  /** SIG-217: current severity score (1–5), for escalation detection. */
+  score?: number
+}
+
+/** SIG-217: one suppressed finding plus why it was suppressed (for telemetry). */
+export interface WithdrawnSuppression<F> {
+  finding: F
+  withdrawal: WithdrawalRecord
+  /** Matched via deterministic content fingerprint (vs. Jaccard body similarity). */
+  viaFingerprint: boolean
+  /** Fingerprint-matched AND re-fired at a higher score than when dismissed. */
+  severityEscalated: boolean
+}
+
 /**
  * Filter findings against a set of active withdrawals for the same PR.
  * Returns the kept findings + the list of suppressed ones (for telemetry).
  *
- * Pure — exported for tests.
+ * Pure — exported for tests. Thin wrapper over `filterWithdrawnFindingsDetailed`
+ * for the legacy callers that only need the kept/suppressed split.
  */
-export function filterWithdrawnFindings<F extends { path: string; line: number; body: string }>(
+export function filterWithdrawnFindings<F extends MatchableFinding>(
   findings: ReadonlyArray<F>,
   withdrawals: ReadonlyArray<WithdrawalRecord>,
 ): { kept: F[]; suppressed: F[] } {
+  const { kept, suppressed } = filterWithdrawnFindingsDetailed(findings, withdrawals)
+  return { kept, suppressed: suppressed.map((s) => s.finding) }
+}
+
+/**
+ * SIG-217: like `filterWithdrawnFindings` but reports, per suppression, whether
+ * it matched via content fingerprint and whether the re-fire was a severity
+ * escalation. The ensemble uses this to emit `repeat-fp-detected` /
+ * `severity-escalation-attempt` telemetry while still suppressing the finding.
+ *
+ * Pure — exported for tests.
+ */
+export function filterWithdrawnFindingsDetailed<F extends MatchableFinding>(
+  findings: ReadonlyArray<F>,
+  withdrawals: ReadonlyArray<WithdrawalRecord>,
+): { kept: F[]; suppressed: WithdrawnSuppression<F>[] } {
   if (withdrawals.length === 0) return { kept: [...findings], suppressed: [] }
   const kept: F[] = []
-  const suppressed: F[] = []
+  const suppressed: WithdrawnSuppression<F>[] = []
   for (const f of findings) {
-    const hit = withdrawals.some((w) => findingMatchesWithdrawal(f, w))
-    if (hit) suppressed.push(f)
-    else kept.push(f)
+    const w = withdrawals.find((w) => findingMatchesWithdrawal(f, w))
+    if (!w) {
+      kept.push(f)
+      continue
+    }
+    const viaFingerprint = Boolean(
+      f.contentFingerprint &&
+        w.contentFingerprint &&
+        f.contentFingerprint === w.contentFingerprint,
+    )
+    const severityEscalated =
+      viaFingerprint &&
+      typeof f.score === "number" &&
+      typeof w.dismissedScore === "number" &&
+      f.score > w.dismissedScore
+    suppressed.push({ finding: f, withdrawal: w, viaFingerprint, severityEscalated })
   }
   return { kept, suppressed }
 }
@@ -178,6 +276,16 @@ interface WriteArgs {
    * this unset; the record then omits the field on the wire.
    */
   dismissReason?: DismissReason
+  /**
+   * SIG-217: the dismissed finding's content fingerprint + score. The
+   * fingerprint is computed ONCE from the raw finding at render time (embedded
+   * as a `sigilix:fingerprint:` marker) and parsed back here, so it derives
+   * from the identical source text the re-fire filter side hashes — recomputing
+   * from the rendered comment body would yield a different (non-matching) hash.
+   * Both optional: when absent the record falls back to Jaccard matching.
+   */
+  contentFingerprint?: string
+  score?: number
 }
 
 /**
@@ -196,6 +304,9 @@ export async function writeWithdrawal(args: WriteArgs): Promise<boolean> {
     prHeadSha: args.prHeadSha,
     reason: "mention-reply-accepted",
     ...(args.dismissReason ? { dismissReason: args.dismissReason } : {}),
+    // SIG-217: store the render-time fingerprint as-is (do NOT recompute).
+    ...(args.contentFingerprint ? { contentFingerprint: args.contentFingerprint } : {}),
+    ...(typeof args.score === "number" ? { dismissedScore: args.score } : {}),
   }
   const key = withdrawalKey(args.owner, args.repo, args.prNumber, args.withdrawnByCommentId)
   try {
@@ -275,6 +386,11 @@ export async function loadWithdrawals(
           const dismissReason = isDismissReason(parsed.dismissReason)
             ? parsed.dismissReason
             : undefined
+          // SIG-217: forward the optional fingerprint/score when well-typed.
+          const contentFingerprint =
+            typeof parsed.contentFingerprint === "string" ? parsed.contentFingerprint : undefined
+          const dismissedScore =
+            typeof parsed.dismissedScore === "number" ? parsed.dismissedScore : undefined
           records.push({
             path: parsed.path,
             line: parsed.line,
@@ -284,6 +400,8 @@ export async function loadWithdrawals(
             prHeadSha: parsed.prHeadSha,
             reason: "mention-reply-accepted",
             ...(dismissReason ? { dismissReason } : {}),
+            ...(contentFingerprint ? { contentFingerprint } : {}),
+            ...(dismissedScore !== undefined ? { dismissedScore } : {}),
           })
         }
       } catch {

@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS last_seen_pr (
   PRIMARY KEY (owner, repo, pr_number)
 );
 CREATE INDEX IF NOT EXISTS last_seen_by_at ON last_seen_pr(last_seen_at);
+CREATE TABLE IF NOT EXISTS repeat_fp_counts (
+  day TEXT NOT NULL,
+  specialist TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, specialist, reason)
+);
+CREATE INDEX IF NOT EXISTS repeat_fp_by_day ON repeat_fp_counts(day);
 `
 
 /**
@@ -75,6 +83,48 @@ export type ValidationRejectionEvent =
 
 /** Synthetic gate name used to file dismissal-reason rows in `daily_counts`. */
 export const DISMISSAL_METRICS_GATE = "dismissal"
+
+/**
+ * SIG-217: repeat-false-positive telemetry. Emitted when a previously
+ * dismissed finding re-fires (content-fingerprint match) or escalates in
+ * severity, plus when a dismissal's decay window lapses. Stored in a dedicated
+ * 2-D `repeat_fp_counts(specialist, reason)` table so `/metrics/repeat-fps` can
+ * roll up BOTH per-reason and per-specialist without a second write.
+ */
+export type RepeatFpEventKind =
+  | "repeat-fp-detected"
+  | "severity-escalation-attempt"
+  | "dismiss-decay-window-expired"
+
+export const ALL_REPEAT_FP_KINDS: readonly RepeatFpEventKind[] = [
+  "repeat-fp-detected",
+  "severity-escalation-attempt",
+  "dismiss-decay-window-expired",
+]
+
+export interface RepeatFpEvent {
+  kind: RepeatFpEventKind
+  /** Per-specialist dimension: the finding category (logic/security/perf/…). */
+  specialist: string
+}
+
+export interface RecordRepeatFpArgs {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  /** ISO timestamp; the UTC date prefix is the bucket. Defaults to now. */
+  occurredAt?: string
+  events: RepeatFpEvent[]
+}
+
+export interface RepeatFpMetricsQuery {
+  window: { days: number; startDay: string; endDay: string }
+  /** Per-reason rollup; every `RepeatFpEventKind` present (defaults to 0). */
+  byReason: Record<RepeatFpEventKind, number>
+  /** Per-specialist rollup; only specialists seen in-window appear. */
+  bySpecialist: Record<string, number>
+}
 
 export interface RecordBatchArgs {
   owner: string
@@ -274,6 +324,66 @@ export class ValidationMetricsDO extends DurableObject<Env> {
     return { reasonCounts, window: { days: args.windowDays, startDay, endDay } }
   }
 
+  /**
+   * SIG-217: record a batch of repeat-FP events for one PR review. Each event
+   * bumps the `(day, specialist, reason)` counter by 1. Atomic via
+   * transactionSync; schedules the daily GC alarm if none is pending. Does not
+   * touch `last_seen_pr` (these aren't validator rejections).
+   */
+  async recordRepeatFps(args: RecordRepeatFpArgs): Promise<void> {
+    if (args.events.length === 0) return
+    const sql = this.sql()
+    const day = utcDay(args.occurredAt)
+
+    this.ctx.storage.transactionSync(() => {
+      for (const e of args.events) {
+        sql.exec(
+          `INSERT INTO repeat_fp_counts (day, specialist, reason, count)
+           VALUES (?, ?, ?, 1)
+           ON CONFLICT(day, specialist, reason) DO UPDATE SET count = count + 1`,
+          day, e.specialist, e.kind,
+        )
+      }
+    })
+
+    if ((await this.ctx.storage.getAlarm()) === null) {
+      await this.ctx.storage.setAlarm(Date.now() + DAY_MS)
+    }
+  }
+
+  /**
+   * SIG-217: aggregate repeat-FP counts over the trailing `windowDays`, rolled
+   * up both per-reason (every `RepeatFpEventKind`, defaulting to 0) and
+   * per-specialist (only specialists seen in-window). Unknown reasons in the
+   * table are dropped from the per-reason rollup but still counted per
+   * specialist, so a future event kind never silently vanishes from totals.
+   */
+  async queryRepeatFps(args: { windowDays: number; nowIso?: string }): Promise<RepeatFpMetricsQuery> {
+    const sql = this.sql()
+    const now = args.nowIso ?? new Date().toISOString()
+    const endDay = utcDay(now)
+    const startDay = utcDayMinus(now, args.windowDays - 1)
+
+    const byReason: Record<RepeatFpEventKind, number> = Object.fromEntries(
+      ALL_REPEAT_FP_KINDS.map((k) => [k, 0]),
+    ) as Record<RepeatFpEventKind, number>
+    const bySpecialist: Record<string, number> = {}
+
+    for (const row of sql.exec<{ specialist: string; reason: string; total: number }>(
+      `SELECT specialist, reason, SUM(count) AS total
+       FROM repeat_fp_counts WHERE day >= ? AND day <= ?
+       GROUP BY specialist, reason`,
+      startDay, endDay,
+    )) {
+      if ((ALL_REPEAT_FP_KINDS as readonly string[]).includes(row.reason)) {
+        byReason[row.reason as RepeatFpEventKind] += row.total
+      }
+      bySpecialist[row.specialist] = (bySpecialist[row.specialist] ?? 0) + row.total
+    }
+
+    return { byReason, bySpecialist, window: { days: args.windowDays, startDay, endDay } }
+  }
+
   /** Daily retention GC: drop buckets + PR heads older than RETENTION_DAYS. */
   override async alarm(): Promise<void> {
     const sql = this.sql()
@@ -286,6 +396,7 @@ export class ValidationMetricsDO extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       sql.exec("DELETE FROM daily_counts WHERE day < ?", cutoffDay)
       sql.exec("DELETE FROM last_seen_pr WHERE last_seen_at < ?", cutoffAt)
+      sql.exec("DELETE FROM repeat_fp_counts WHERE day < ?", cutoffDay)
     })
 
     // Reschedule for the next day so GC keeps running.

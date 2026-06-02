@@ -2769,6 +2769,31 @@ export async function handlePrReviewEnsemble(
       config: astRulesConfig,
       ctx: { owner, repo, prNumber },
     })
+
+    // SIG-314: shadow-first gating for the deterministic IDOR/BOLA floor
+    // (no-unauthorized-object-lookup). The rule lives in ALL_RULES so it always
+    // RUNS (the runner logs `ast-rules-finding` per hit for FP measurement), but
+    // its emits reach the synth — and post — ONLY in `post` mode. `off` (the
+    // default) strips them silently; `shadow` strips-but-logs a rollup so we can
+    // read the firing + false-positive rate on dogfood + the e2e fixtures before
+    // promoting. The rule is structurally P2-capped (clampAstEmitScores), so the
+    // residual risk we're measuring is middleware-only-authz false positives,
+    // never a P0/P1.
+    const authzIdorMode = (env.OPENCLAW_AUTHZ_IDOR_SCAN ?? "off").trim().toLowerCase()
+    if (authzIdorMode !== "post") {
+      const authzEmits = astResult.findings.filter((f) => f.ruleId === "no-unauthorized-object-lookup")
+      if (authzEmits.length > 0) {
+        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-unauthorized-object-lookup")
+        if (authzIdorMode === "shadow") {
+          console.log(JSON.stringify({
+            event: "authz-idor-shadow",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            count: authzEmits.length,
+            anchors: authzEmits.map((f) => `${f.path}:${f.line}`),
+          }))
+        }
+      }
+    }
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.
     telemetry.astRules = astResult.telemetry.scanned

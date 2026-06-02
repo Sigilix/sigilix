@@ -336,6 +336,11 @@ export interface Env {
   // never injected into any prompt). Default off → fully inert.
   OPENCLAW_GRAPH_EXPANSION?: string
 
+  // SIG-314: deterministic IDOR/BOLA floor (no-unauthorized-object-lookup).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory). The rule
+  // always runs; this gates whether its P2-capped emits reach the synth/post.
+  OPENCLAW_AUTHZ_IDOR_SCAN?: string
+
   // SIG-161: confidence-threshold verdict gate. Three-state rollout
   //   "off"     — bypassed; legacy `chooseReviewEvent` decides (default).
   //   "shadow"  — `chooseReviewEventWithGate` runs but legacy verdict ships;

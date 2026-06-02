@@ -14,10 +14,12 @@ const EMIT_RULES = new Set([
   "no-disabled-tls-reject-unauthorized",
   // SIG-310: the contract-drift type-pattern (logic/warning — FP-safe at P2).
   "no-snake-camel-optional-alias",
+  // SIG-314: the IDOR/BOLA floor (security/warning — FP-safe at P2).
+  "no-unauthorized-object-lookup",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {
-  it("is true on exactly the FP-safe emit rules (3 security sinks + the SIG-310 type smell)", () => {
+  it("is true on exactly the FP-safe emit rules (security sinks + IDOR floor + the SIG-310 type smell)", () => {
     for (const r of ALL_RULES) {
       if (EMIT_RULES.has(r.id)) expect(r.emitWhenUnmatched).toBe(true)
       else expect(r.emitWhenUnmatched ?? false).toBe(false)

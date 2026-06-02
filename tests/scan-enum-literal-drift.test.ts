@@ -66,13 +66,16 @@ describe("buildGlobalUnionMap", () => {
     expect([...(m.get("charge")?.get("status") ?? [])].sort()).toEqual(["pending", "settled"])
   })
 
-  it("handles an unterminated block comment at EOF (no crash; real union kept, comment union blanked)", () => {
-    // Sigilix dogfood flagged a (non-existent) off-by-one here; this pins the
-    // behaviour: the real union before the comment is collected, the one inside
-    // the never-closed `/*` is not, and buildGlobalUnionMap returns normally.
+  it("blanks a commented-out interface inside an unterminated /* at EOF (no crash; real union kept)", () => {
+    // Sigilix dogfood flagged a (non-existent) off-by-one here; CodeRabbit then
+    // flagged the first version of this test as unobservable. This version is
+    // observable: the would-be-parsed `interface Ghost` sits inside a NEVER-closed
+    // `/*` — WITHOUT comment-blanking, TYPE_BLOCK_RE would collect `ghost`. So the
+    // `ghost` assertion fails if EOF-blanking regresses.
     const m = buildGlobalUnionMap([
-      `interface Charge { status: "pending" | "settled" }\n/* note status: "a" | "b"`,
+      `interface Charge { status: "pending" | "settled" }\n/* interface Ghost { status: "a" | "b" }`,
     ])
+    expect(m.has("ghost")).toBe(false) // the commented interface must NOT be collected
     expect([...(m.get("charge")?.get("status") ?? [])].sort()).toEqual(["pending", "settled"])
   })
 

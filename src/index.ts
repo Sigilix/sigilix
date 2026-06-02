@@ -140,6 +140,11 @@ export interface Env {
   OPENCLAW_STATE: KVNamespace
   // Vectorize index storing 768-dim embeddings of code chunks per repo.
   OPENCLAW_CODE_INDEX: VectorizeIndex
+  // SIG-45: D1 database holding the FTS5 (BM25) lexical mirror of the same
+  // code chunks. Optional — when unbound (or the OPENCLAW_RETRIEVAL_HYBRID
+  // flag is off) retrieval stays pure-vector and the indexer skips the
+  // dual-write. Provisioned via `wrangler d1 create sigilix-lexical-index`.
+  OPENCLAW_LEXICAL_INDEX?: D1Database
   // Workers AI binding for embedding queries at retrieval time.
   AI: Ai
   // Cloudflare Queue producer binding. Webhook handlers enqueue
@@ -517,6 +522,25 @@ export interface Env {
   // retrievable. Default off; flip via
   // `wrangler secret put OPENCLAW_BRANCH_AWARE_RETRIEVAL on`.
   OPENCLAW_BRANCH_AWARE_RETRIEVAL?: string
+
+  // SIG-45: hybrid lexical (BM25 via D1 FTS5) + vector (Vectorize)
+  // retrieval, merged via reciprocal-rank fusion. When "on" AND the
+  // OPENCLAW_LEXICAL_INDEX D1 binding is present, the PR-review retrieval
+  // path queries both backends in parallel and fuses the results; the
+  // indexer also dual-writes every chunk to the lexical mirror. Any other
+  // value (including unset) keeps it dark — pure-vector, no dual-write.
+  // Flip via `wrangler secret put OPENCLAW_RETRIEVAL_HYBRID on`.
+  OPENCLAW_RETRIEVAL_HYBRID?: string
+
+  // SIG-44: multi-corpus retrieval. When "on", the PR-review ensemble also
+  // queries the `pr:<owner>/<repo>` (merged-PR title/body/verdict) and
+  // `issue:<owner>/<repo>` (Linear issue) Vectorize namespaces and injects
+  // labeled snippet blocks (`--- past PR #234 (verdict: ...) ---`) so
+  // specialists can cite "same regression as PR #234". Any other value
+  // keeps it dark. The corpora are populated by the merged-PR / Linear-issue
+  // refresh paths + the 90-day backfill (see src/lib/multi-corpus.ts).
+  // Flip via `wrangler secret put OPENCLAW_MULTICORPUS_RETRIEVAL on`.
+  OPENCLAW_MULTICORPUS_RETRIEVAL?: string
 
   // Dynamic review evidence cards. "shadow" computes/logs card coverage only;
   // "post" injects the precomputed changed-symbol/context cards into

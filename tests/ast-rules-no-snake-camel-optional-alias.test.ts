@@ -38,6 +38,11 @@ describe("no-snake-camel-optional-alias — positive (snake-required + camel-opt
   it("flags each drifting pair separately in one interface", () => {
     expect(runRule(`interface C { a_b: number; aB?: number; c_d: string; cD?: string }`).length).toBe(2)
   })
+  it("sets endLine on a multi-line alias property signature (CodeRabbit #294)", () => {
+    const hits = runRule("interface C {\n  reply_count: number;\n  replyCount?:\n    number;\n}")
+    expect(hits.length).toBe(1)
+    expect(hits[0].endLine).toBeGreaterThan(hits[0].line)
+  })
 })
 
 describe("no-snake-camel-optional-alias — negative (no flag)", () => {

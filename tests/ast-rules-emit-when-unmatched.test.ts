@@ -58,10 +58,13 @@ describe("buildAstFindingsSynthBlock — emit instruction (autoInline OFF)", () 
     expect(off).toContain('role_hint:"logic"')
     // SIG-310 severity guard: logic emits are capped at P2/P3, never a blocker
     expect(off).toContain("NEVER as a P0/P1 blocker")
-    // believability-critical: the anti-double-post + "no specialist covers it"
-    // guards must stay in the prompt (a silent deletion would re-open FP risk).
+    // believability-critical: the anti-double-post + "already covered" guards
+    // must stay in the prompt (a silent deletion would re-open FP risk).
     expect(off).toContain("don't double-post")
-    expect(off).toMatch(/If NO specialist finding already covers/)
+    expect(off).toContain("already covers it")
+    // SIG-310 follow-up (CodeRabbit #294): suppression is role-aware — broad
+    // (path,line) for security, (path,line,role_hint) for other roles.
+    expect(off).toContain("a different-role finding on the same line must NOT suppress it")
   })
   it("returns an empty block for empty json", () => {
     expect(buildAstFindingsSynthBlock("", false)).toBe("")

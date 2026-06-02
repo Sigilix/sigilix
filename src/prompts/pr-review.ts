@@ -176,8 +176,14 @@
  * both competitors catch at the type declaration). FP-safe: warning-severity,
  * grounding-gated. Reviews with v15 go stale on first deploy of v16. Use
  * `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE` during rollout.
+ *
+ * v16 → v17 (SIG-310 follow-up, CodeRabbit #294): the deterministic_emit
+ * "already covered" suppression is now role-aware — broad `(path, line)` only
+ * for `role_hint:"security"`, but `(path, line, role_hint)` for other roles so
+ * a different-role same-line finding can't silently suppress a logic contract-
+ * drift emit. Reviews with v16 go stale on first deploy of v17.
  */
-export const PROMPT_VERSION = "16"
+export const PROMPT_VERSION = "17"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

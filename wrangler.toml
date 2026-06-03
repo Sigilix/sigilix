@@ -65,6 +65,27 @@ id = "df689379ea6240f7808997a75ceaed7e"
 binding = "OPENCLAW_CODE_INDEX"
 index_name = "openclaw-code-index"
 
+# SIG-45: D1 database holding the FTS5 (BM25) lexical mirror of the code
+# chunks for hybrid retrieval. The indexer dual-writes here alongside the
+# Vectorize upsert; PR-review retrieval queries it in parallel with the
+# vector index and fuses via RRF — all gated behind OPENCLAW_RETRIEVAL_HYBRID.
+#
+# COMMENTED OUT until the D1 database is provisioned: the CF Workers Builds CI
+# runs `wrangler deploy` on every push, and a binding with an empty
+# `database_id` can fail that deploy. The code treats OPENCLAW_LEXICAL_INDEX as
+# OPTIONAL — when the binding is absent, the indexer dual-write and the hybrid
+# read both no-op, so hybrid retrieval simply stays dark with zero deploy risk.
+#
+# To enable: run `wrangler d1 create sigilix-lexical-index`, uncomment the
+# block below, paste the returned database_id, deploy (the indexer starts
+# populating the FTS5 mirror — schema is created lazily, no migration step),
+# then flip OPENCLAW_RETRIEVAL_HYBRID=on once there's a corpus to query.
+#
+# [[d1_databases]]
+# binding = "OPENCLAW_LEXICAL_INDEX"
+# database_name = "sigilix-lexical-index"
+# database_id = ""  # set after `wrangler d1 create sigilix-lexical-index`
+
 # Cloudflare Workers AI binding — used for embedding the issue/comment
 # body at query time. Keeps the embedding model identical between
 # index time (CLI/CI script also calls @cf/baai/bge-base-en-v1.5 via
@@ -330,7 +351,9 @@ OPENCLAW_ASYMMETRY_HINTS = "on"
 # SERIALIZABLE / advisory-lock / DurableObject variants. "shadow" logs the
 # `pr-review-toctou-hints` count (no inject); flip to "on" gated on a clean
 # race-benchmark + the SIG-245 zero-P1-FP window.
-OPENCLAW_TOCTOU_HINTS = "shadow"
+# 2026-06-03: flipped "on" for the live pr/13 race A/B (reserveStock + claimCoupon
+# racy, bumpViewCount fires-but-safe). Rollback path = "shadow".
+OPENCLAW_TOCTOU_HINTS = "on"
 
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
@@ -447,6 +470,15 @@ OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 # confirmed live (3 e2e reviews kept every real injection/secrets finding) + by
 # the validate-injection-taint + validate-security-grounding suites. Rollback: "shadow".
 OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
+
+# SIG-311 Layers A+B: security USAGE-vs-MENTION validator. Shadow-first — logs the
+# would-demote (`pr-review-finding-rejected-validation`, gate "security-usage") +
+# counts on GET /metrics/validation, KEEPS every finding inline (zero behavior
+# change). Demotes a sev>=4 injection/xss finding only when path-is-detector/
+# test/doc AND token-is-non-executable AND file-adds-no-real-sink (the PR #296
+# self-FP family). Flip to "enforce" after the pr/14 benchmark + a clean shadow
+# window (zero real-finding demotes). Rollback: "off".
+OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "shadow"
 
 # SIG-308: logic-refutation backstop (evaluateLogicRefutation). Flags a sev>=4
 # logic finding that never showed it survives refutation (no

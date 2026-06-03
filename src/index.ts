@@ -115,6 +115,12 @@ import {
 } from "./lib/index-producer"
 import { handleIndexRepoJob } from "./lib/indexer"
 import {
+  handleCorpusPrUpsert,
+  handleCorpusPrBackfill,
+  handleCorpusIssueUpsert,
+} from "./lib/multi-corpus-jobs"
+import { multiCorpusEnabled } from "./lib/multi-corpus"
+import {
   attachExistingCheckRun,
   startInProgressCheckRun,
   completeCheckRun,
@@ -141,6 +147,11 @@ export interface Env {
   OPENCLAW_STATE: KVNamespace
   // Vectorize index storing 768-dim embeddings of code chunks per repo.
   OPENCLAW_CODE_INDEX: VectorizeIndex
+  // SIG-45: D1 database holding the FTS5 (BM25) lexical mirror of the same
+  // code chunks. Optional — when unbound (or the OPENCLAW_RETRIEVAL_HYBRID
+  // flag is off) retrieval stays pure-vector and the indexer skips the
+  // dual-write. Provisioned via `wrangler d1 create sigilix-lexical-index`.
+  OPENCLAW_LEXICAL_INDEX?: D1Database
   // Workers AI binding for embedding queries at retrieval time.
   AI: Ai
   // Cloudflare Queue producer binding. Webhook handlers enqueue
@@ -527,6 +538,13 @@ export interface Env {
   // `wrangler secret put OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE shadow`.
   OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string
 
+  // SIG-311 Layers A+B: security USAGE-vs-MENTION validator. off (default) |
+  // shadow (count/telemeter the would-demote, keep inline) | enforce (demote a
+  // sev>=4 injection/xss finding on a detector/validator/test/doc path whose
+  // cited token is a mention, not a live sink — the PR #296 self-FP family).
+  // Demote-not-drop, keep on any uncertainty.
+  OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string
+
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
   // that AUGMENTS the logic role's shared snapshot; any other value
@@ -540,6 +558,25 @@ export interface Env {
   // retrievable. Default off; flip via
   // `wrangler secret put OPENCLAW_BRANCH_AWARE_RETRIEVAL on`.
   OPENCLAW_BRANCH_AWARE_RETRIEVAL?: string
+
+  // SIG-45: hybrid lexical (BM25 via D1 FTS5) + vector (Vectorize)
+  // retrieval, merged via reciprocal-rank fusion. When "on" AND the
+  // OPENCLAW_LEXICAL_INDEX D1 binding is present, the PR-review retrieval
+  // path queries both backends in parallel and fuses the results; the
+  // indexer also dual-writes every chunk to the lexical mirror. Any other
+  // value (including unset) keeps it dark — pure-vector, no dual-write.
+  // Flip via `wrangler secret put OPENCLAW_RETRIEVAL_HYBRID on`.
+  OPENCLAW_RETRIEVAL_HYBRID?: string
+
+  // SIG-44: multi-corpus retrieval. When "on", the PR-review ensemble also
+  // queries the `pr:<owner>/<repo>` (merged-PR title/body/verdict) and
+  // `issue:<owner>/<repo>` (Linear issue) Vectorize namespaces and injects
+  // labeled snippet blocks (`--- past PR #234 (verdict: ...) ---`) so
+  // specialists can cite "same regression as PR #234". Any other value
+  // keeps it dark. The corpora are populated by the merged-PR / Linear-issue
+  // refresh paths + the 90-day backfill (see src/lib/multi-corpus.ts).
+  // Flip via `wrangler secret put OPENCLAW_MULTICORPUS_RETRIEVAL on`.
+  OPENCLAW_MULTICORPUS_RETRIEVAL?: string
 
   // Dynamic review evidence cards. "shadow" computes/logs card coverage only;
   // "post" injects the precomputed changed-symbol/context cards into
@@ -713,6 +750,14 @@ export type JobMessage =
        * exactly like the pre-SIG-220 behavior.
        */
       checkRunId?: number
+      /**
+       * When `true`, this pr-review job is an EXPLICIT user-requested review
+       * (a slash-command rerun re-enqueues a plain `pr-review` message). It
+       * bypasses the merged/closed-PR skip guard in `dispatchJob` so an
+       * explicit rerun on a merged PR still runs. Unset on webhook-originated
+       * automatic reviews — those ARE skipped once the PR is no longer open.
+       */
+      bypassClosedSkip?: boolean
       /**
        * SIG-247 Phase 1: GitHub's immutable `repo.id`. Threaded from
        * webhook payload → enqueuePrReviewJob → DO RunState → queue
@@ -925,6 +970,23 @@ export type JobMessage =
       reason: "branch-deleted" | "pr-branch-closed"
       branch?: string
     }
+  // SIG-44 multi-corpus write jobs. All gated by OPENCLAW_MULTICORPUS_RETRIEVAL
+  // at the producer; the consumers (lib/multi-corpus-jobs.ts) are best-effort.
+  | {
+      type: "corpus-pr-upsert"
+      owner: string
+      repo: string
+      prNumber: number
+      title: string
+      body: string
+    }
+  | {
+      type: "corpus-pr-backfill"
+      owner: string
+      repo: string
+      installationId: number
+    }
+  | { type: "corpus-issue-upsert"; linearIssueId: string }
 
 /**
  * Pure decision: given a `pull_request` webhook action + draft flag,
@@ -1054,6 +1116,9 @@ interface GitHubWebhookPayload {
     base?: { sha?: string; ref?: string }
     draft?: boolean
     merged?: boolean
+    // SIG-44: title/body feed the merged-PR multi-corpus refresh.
+    title?: string
+    body?: string | null
   }
   workflow_run?: {
     id?: number
@@ -1538,6 +1603,45 @@ async function postSlashCommandAck(
   )
 }
 
+/**
+ * Pure decision: is this PR "no longer open" — merged, or closed-unmerged? The
+ * GitHub REST `state` is only "open" | "closed"; `merged` is inferred from a
+ * non-null `merged_at` (a merged PR reports `state: "closed"` too, but we check
+ * both so the predicate is robust to partial mocks). Exported for tests.
+ */
+export function prMetaIsClosedOrMerged(
+  pr: { merged_at?: string | null; state?: "open" | "closed" },
+): boolean {
+  return pr.merged_at != null || pr.state === "closed"
+}
+
+/**
+ * Whether the PR is already merged or closed at job-run time. Used to skip an
+ * automatic re-review of a PR that's no longer open: under model-backend
+ * contention a `pr-review` job can be redelivered and re-run minutes AFTER the
+ * PR merged, posting a useless after-the-fact review and burning the model
+ * budget once per redelivery. FAILS OPEN — missing creds or any fetch error
+ * returns `false` so we never wrongly skip a live review (recall over thrift).
+ */
+async function prClosedOrMerged(
+  env: Env,
+  args: { owner: string; repo: string; prNumber: number; installationId: number },
+): Promise<boolean> {
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return false
+  try {
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId: args.installationId,
+    })
+    const pr = await new GitHubClient({ token }).getPullRequest(args.owner, args.repo, args.prNumber)
+    return prMetaIsClosedOrMerged(pr)
+  } catch {
+    return false
+  }
+}
+
 export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
@@ -1572,6 +1676,46 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env,
       })
     case "pr-review": {
+      // Skip an automatic (re-)review of a PR that's no longer open. Under
+      // model-backend contention a pr-review job can be redelivered and re-run
+      // minutes AFTER the PR merged, posting a useless after-the-fact review
+      // and re-burning the model budget per redelivery. Fails open (see
+      // `prClosedOrMerged`). `bypassClosedSkip` (set when a slash-command rerun
+      // re-enqueues a pr-review message) overrides this — an explicit
+      // user-requested rerun on a merged PR still runs.
+      if (
+        job.bypassClosedSkip !== true &&
+        (await prClosedOrMerged(env, {
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          installationId: job.installationId,
+        }))
+      ) {
+        console.log(
+          JSON.stringify({
+            event: "pr-review-skipped-pr-not-open",
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            headSha: job.headSha.slice(0, 7),
+          }),
+        )
+        // Complete any pre-created check run (the SIG-220 fast-path row) so it
+        // doesn't hang `in_progress` forever on a skipped job — mirrors the
+        // label-gate skip path below.
+        if (job.checkRunId !== undefined) {
+          const handle = await attachExistingCheckRun({
+            env,
+            owner: job.owner,
+            repo: job.repo,
+            installationId: job.installationId,
+            checkRunId: job.checkRunId,
+          })
+          await completeCheckRun({ handle, conclusion: "skipped" })
+        }
+        return
+      }
       // ARC-289 diagnostic logging — emit on EVERY queue-handler entry
       // into the pr-review case so we can correlate duplicate
       // dispatches (PR #96 saw 2× ensemble runs against the same
@@ -1994,6 +2138,9 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             prNumber: job.prNumber,
             headSha,
             installationId: job.installationId,
+            // A slash-command rerun is an EXPLICIT user request: bypass the
+            // merged/closed-PR skip guard so it runs even after merge.
+            bypassClosedSkip: true,
             // SIG-247 Phase 1: slash-command raw-sends bypass the DO
             // path, so they thread repoId directly into the JobMessage
             // here. Consumer reads it into `baseArgs` and on into the
@@ -2192,6 +2339,20 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
         installationId: job.installationId,
       })
+    case "corpus-pr-upsert":
+      // SIG-44: embed a merged PR into the pr: multi-corpus namespace.
+      return handleCorpusPrUpsert(env, {
+        owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        title: job.title, body: job.body,
+      })
+    case "corpus-pr-backfill":
+      // SIG-44: 90-day merged-PR backfill on repo onboarding.
+      return handleCorpusPrBackfill(env, {
+        owner: job.owner, repo: job.repo, installationId: job.installationId,
+      }, Date.now())
+    case "corpus-issue-upsert":
+      // SIG-44: embed a Linear issue into the issue: multi-corpus namespace.
+      return handleCorpusIssueUpsert(env, { linearIssueId: job.linearIssueId })
     default: {
       // Exhaustiveness check — if a new JobMessage variant is added but
       // not handled here, TypeScript flags it via the `never` type at
@@ -2223,6 +2384,28 @@ async function handleLinearWebhook(
     payload = JSON.parse(rawBody) as LinearWebhookPayload
   } catch {
     return new Response("invalid json\n", { status: 400 })
+  }
+
+  // SIG-44: any Issue create/update refreshes the issue: multi-corpus
+  // namespace (flag-gated, fire-and-forget). Placed before the create→triage
+  // return below so BOTH actions are covered. The consumer maps the issue's
+  // Linear team → GitHub repo via OPENCLAW_TEAM_GITHUB_REPO_MAP; an unmapped
+  // team no-ops, so this is inert for non-Linear-linked repos.
+  if (
+    multiCorpusEnabled(env) &&
+    payload.type === "Issue" &&
+    (payload.action === "create" || payload.action === "update")
+  ) {
+    _ctx.waitUntil(
+      env.OPENCLAW_JOBS.send({ type: "corpus-issue-upsert", linearIssueId: payload.data.id })
+        .catch((err) => {
+          console.warn(JSON.stringify({
+            event: "corpus-issue-upsert-enqueue-failed",
+            issueId: payload.data.id,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }),
+    )
   }
 
   // Issue.create → enqueue full triage pipeline.
@@ -2595,6 +2778,32 @@ async function handleGitHubWebhook(
           reason,
           ...result,
         }))
+        // SIG-44: alongside code indexing, enqueue a 90-day merged-PR
+        // backfill per repo so the pr: corpus is populated on onboarding.
+        // Best-effort + fully isolated: a failure here never changes the
+        // index-fanout response (GitHub redelivery would re-run the code
+        // index, which is the load-bearing path). Flag-gated.
+        if (multiCorpusEnabled(env)) {
+          for (const r of repositories) {
+            const fullName = typeof r?.full_name === "string" ? r.full_name : ""
+            const [bOwner, bRepo] = fullName.split("/")
+            if (!bOwner || !bRepo) continue
+            try {
+              await env.OPENCLAW_JOBS.send({
+                type: "corpus-pr-backfill",
+                owner: bOwner,
+                repo: bRepo,
+                installationId,
+              })
+            } catch (err) {
+              console.warn(JSON.stringify({
+                event: "corpus-pr-backfill-enqueue-failed",
+                owner: bOwner, repo: bRepo,
+                err: err instanceof Error ? err.message : String(err),
+              }))
+            }
+          }
+        }
         return new Response("indexed\n", { status: 202 })
       } catch (err) {
         // Defensive: enqueueIndexJobsForRepos has per-repo try/catch
@@ -2656,6 +2865,28 @@ async function handleGitHubWebhook(
         owner, repo, prNumber: pr.number,
         head_repo: headRepoFullName,
       }))
+    }
+    // SIG-44: a merged PR refreshes the pr: multi-corpus namespace with its
+    // title/body + derived verdict. Placed BEFORE the draft/skip returns
+    // below (a closed PR otherwise short-circuits at decidePullRequestJobs).
+    // Fire-and-forget via waitUntil; flag-gated; never blocks the ack.
+    if (multiCorpusEnabled(env) && action === "closed" && pr.merged === true) {
+      ctx.waitUntil(
+        env.OPENCLAW_JOBS.send({
+          type: "corpus-pr-upsert",
+          owner,
+          repo,
+          prNumber: pr.number,
+          title: typeof pr.title === "string" ? pr.title : "",
+          body: typeof pr.body === "string" ? pr.body : "",
+        }).catch((err) => {
+          console.warn(JSON.stringify({
+            event: "corpus-pr-upsert-enqueue-failed",
+            owner, repo, prNumber: pr.number,
+            err: err instanceof Error ? err.message : String(err),
+          }))
+        }),
+      )
     }
     if (pr.draft) {
       const headSha = pr.head?.sha ?? ""

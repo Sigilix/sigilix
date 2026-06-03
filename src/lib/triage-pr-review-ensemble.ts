@@ -38,6 +38,12 @@ import { chat, type ChatMessage } from "./ollama-chat"
 // this module into ./ollama-chat.
 export type { ChatMessage }
 import { retrieveChunks, formatChunksForPrompt, type RetrievedChunk } from "./retrieval"
+import {
+  multiCorpusEnabled,
+  retrieveMultiCorpus,
+  formatMultiCorpusForPrompt,
+  type MultiCorpusResult,
+} from "./multi-corpus"
 import { indexNamespace } from "./repo-index-manifest"
 import {
   buildPerfRetrievalQuery,
@@ -184,6 +190,12 @@ import {
   type SecurityGroundingValidatorMode,
   type SecurityGroundingDropReason,
 } from "./validate-security-grounding"
+import {
+  evaluateSecurityUsage,
+  parseSecurityUsageValidatorMode,
+  type SecurityUsageValidatorMode,
+  type SecurityUsageDropReason,
+} from "./validate-security-usage"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -1643,7 +1655,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
     retrievalCacheStats: null,
     tokenUsageByModel,
     startMs,
@@ -2185,6 +2197,17 @@ export async function handlePrReviewEnsemble(
         orchCtrl.signal,
       ).then((r) => r.chunks).catch(() => null)
     }
+    // SIG-44: multi-corpus retrieval (prior merged PRs + Linear issues).
+    // Kicked off HERE so its embed+query runs CONCURRENTLY with the
+    // preflight/perf retrieval above. Best-effort: never rejects (the
+    // function soft-fails per leg, and we add a defensive .catch). Flag-gated
+    // (default off); the result is appended to the shared snapshot AFTER the
+    // branch-aware merge block below so the merge can't clobber it.
+    const wantMultiCorpus = multiCorpusEnabled(env)
+    const multiCorpusPromise: Promise<MultiCorpusResult> | null = wantMultiCorpus
+      ? retrieveMultiCorpus(env, owner, repo, preflightQuery, { prNumber, headSha })
+          .catch(() => ({ pr: [], issue: [] }))
+      : null
     // ARC-284: phase-completed event always emits (even on the catch
     // path) so a 15s pre-flight cap-hit shows up in the trace.
     const preflightStartMs = Date.now()
@@ -2388,6 +2411,25 @@ export async function handlePrReviewEnsemble(
         perfRetrievalSnapshot = resolvePerfSnapshot(formattedPerf, retrievalSnapshot)
       } else {
         perfRetrievalSnapshot = retrievalSnapshot
+      }
+    }
+
+    // SIG-44: append the multi-corpus (prior PRs + Linear issues) section to
+    // the shared + perf snapshots. Done HERE — after the branch-aware merge's
+    // reassignments — so it can't be overwritten. Awaited now; it ran
+    // concurrently with preflight so this adds no critical-path wall-clock.
+    // The logic role inherits this via its shared snapshot; the SIG-236 logic
+    // prompt budget still trims if needed (formatMultiCorpusForPrompt is
+    // already bounded to ~6K chars).
+    if (multiCorpusPromise) {
+      const mc = await multiCorpusPromise
+      const block = formatMultiCorpusForPrompt(mc) ?? ""
+      if (block.length > 0) {
+        const section = `[PRIOR PRS & ISSUES]\n${block}`
+        retrievalSnapshot = retrievalSnapshot ? `${retrievalSnapshot}\n\n${section}` : section
+        perfRetrievalSnapshot = perfRetrievalSnapshot
+          ? `${perfRetrievalSnapshot}\n\n${section}`
+          : section
       }
     }
 
@@ -4810,6 +4852,24 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "security-grounding", reason: info.reason, dropped: info.dropped })
       },
+      // SIG-311 Layers A+B: security usage-vs-mention gate. Default off until
+      // OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE is flipped to shadow/enforce.
+      securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
+      onSecurityUsageFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "security-usage",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          cweId: finding.cweId ?? null,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "security-usage", reason: info.reason, dropped: info.dropped })
+      },
     })
     if (telemetry.synthesizer) {
       telemetry.synthesizer.provenance = validated.provenance
@@ -4829,6 +4889,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
       droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
+      droppedForFailedSecurityUsageValidation: validated.droppedForFailedSecurityUsageValidation,
     }
 
     // SIG-310: a deterministic_emit AST rule's SEVERITY is a HARD score ceiling
@@ -8813,6 +8874,7 @@ export interface ValidatedOutput {
    * telemetry so the gate's would-demote rate is observable before enforce.
    */
   droppedForFailedSecurityGroundingValidation: number
+  droppedForFailedSecurityUsageValidation: number
   /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
@@ -9616,6 +9678,20 @@ export function validateForSubmission(args: {
     info: { reason: SecurityGroundingDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-311 Layers A+B: security USAGE-vs-MENTION gate mode. Demotes a sev>=4
+   * injection/xss finding on a detector/validator/test/doc path whose cited
+   * token is a mention, not a live sink (the PR #296 self-FP family). Read from
+   * `OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE` at the call site.
+   */
+  securityUsageValidatorMode?: SecurityUsageValidatorMode
+  /** SIG-311: telemetry callback per usage-gate-flagged finding (reuses the
+   *  `pr-review-finding-rejected-validation` event, `gate: "security-usage"`).
+   *  `dropped` = demoted to body (enforce). */
+  onSecurityUsageFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: SecurityUsageDropReason; dropped: boolean },
+  ) => void
+  /**
    * ARC-176/SIG-175: review-tone preset. `assertive` preserves the
    * old score-1 advisory summary aggregation; `chill`/default drops
    * score-1 nits from customer-visible output entirely.
@@ -9666,6 +9742,8 @@ export function validateForSubmission(args: {
     onAbsenceFindingDropped,
     securityGroundingValidatorMode = "off",
     onSecurityGroundingFindingDropped,
+    securityUsageValidatorMode = "off",
+    onSecurityUsageFindingDropped,
     profile = "chill",
     trustLedgerEnabled = false,
     astFindingIds = [],
@@ -9706,6 +9784,7 @@ export function validateForSubmission(args: {
   let droppedForFailedInlineGroundingValidation = 0
   let droppedForFailedAbsenceGroundingValidation = 0
   let droppedForFailedSecurityGroundingValidation = 0
+  let droppedForFailedSecurityUsageValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // SIG-290 v1: the reviewable diff's path set for the absence-grounding
@@ -10173,6 +10252,26 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-311 Layers A+B: security USAGE-vs-MENTION gate. Demote a sev>=4
+    // injection/xss finding on a detector/validator/test/doc path whose cited
+    // token is a mention, not a live sink (the PR #296 self-FP family). Same
+    // off/shadow/enforce placement as the grounding gate above; DEMOTE-not-drop,
+    // keep on any uncertainty (the gate fails closed inside evaluateSecurityUsage).
+    if (securityUsageValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
+      const suDecision = evaluateSecurityUsage(workingFinding, { addedLineTextByLine })
+      if (!suDecision.keep) {
+        const demoted = securityUsageValidatorMode === "enforce"
+        droppedForFailedSecurityUsageValidation++
+        onSecurityUsageFindingDropped?.(workingFinding, { reason: suDecision.reason, dropped: demoted })
+        if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "security-usage" })
+          unanchoredFindings.push(workingFinding)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
+    }
+
     const side = deriveSide(reviewable, workingFinding.path, workingFinding.line)
     if (!side) {
       const repairedLine =
@@ -10232,6 +10331,7 @@ export function validateForSubmission(args: {
     droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation,
     droppedForFailedSecurityGroundingValidation,
+    droppedForFailedSecurityUsageValidation,
     cleanFindingProvenance,
     provenance: {
       ...synthOutput.provenance,
@@ -10426,6 +10526,7 @@ interface EnsembleTelemetry {
      * token, uncorroborated by any scanner fact (would-demote-to-body in
      * shadow, actual-demote in enforce; 0 when the gate is off). */
     droppedForFailedSecurityGroundingValidation: number
+  droppedForFailedSecurityUsageValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
   /**

@@ -543,19 +543,19 @@ OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
 # no inline findings (which is correct for a docs PR).
 OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 
-# SIG-224/227b: dynamic dispatcher mode. The "enforce" branch is WIRED (a code PR
-# with no test/perf surface skips those specialists; reconcile() PROTECTS
-# security+logic — they always run; any LLM error/abort/chat-off FAILS CLOSED to
-# run-all). Per the SIG-227b dual sign-off (DeepSeek + Kimi: don't activate an
-# unvalidated LLM filter blind), now in "shadow" to BAKE: the dispatcher runs its
-# deepseek-v4-flash classifier + logs `dispatcher-shadow-decision`
-# (routerSpecialists vs dispatcherSpecialists) WITHOUT changing fan-out. WATCH
-# those deltas — once the LLM-proposed tests/perf skips never drop a role that
-# would have fired, flip "enforce" (then watch `dispatcher-enforce-applied`).
-# Shadow also confirms OLLAMA_CHAT_ENABLE is on (if the LLM never fires, chat is
-# off). Modes: off | shadow | enforce_rules | enforce. Rollback: "enforce_rules"
-# (the SIG-227a deterministic skips) or "off".
-OPENCLAW_DYNAMIC_DISPATCHER_MODE = "shadow"
+# SIG-224/227b: dynamic dispatcher mode. Flipped shadow -> "enforce_rules" 2026-06-03
+# for CONCURRENT-REVIEW LATENCY RELIEF (#66): under Ollama-Turbo contention reviews
+# blow the 895s orch budget and die (cooked, not late). "enforce_rules" is the
+# SIG-227a DETERMINISTIC layer — it skips a tests/perf specialist ONLY when the rule
+# layer proves that role has no surface (no test files changed / no perf-sensitive
+# code), runs NO LLM classifier (zero added Ollama call, unlike full "enforce"), and
+# reconcile() PROTECTS security+logic (always run) — so no believability-critical
+# lens is ever skipped. Net effect: fewer concurrent specialist calls per review =
+# less contention, recall-safe. Full "enforce" (the deepseek-v4-flash LLM filter)
+# stays deferred until the shadow-bake trail is validated AND it would not ADD an
+# Ollama call to the hot path. Modes: off | shadow | enforce_rules | enforce.
+# Rollback: "shadow" (telemetry-only) or "off".
+OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce_rules"
 
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when

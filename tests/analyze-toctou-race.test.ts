@@ -146,6 +146,28 @@ describe("analyzeToctouRace — SILENT on every atomic / safe variant", () => {
     expect(fired(src)).toEqual([])
   })
 
+  it("SILENT on a nullish sanity-check (=== undefined, not a value-limit guard) [DeepSeek FP-1]", () => {
+    // A `=== undefined` is an existence/sanity check on C, not a limit guard, so
+    // it must not satisfy the range-operator value-guard — no race.
+    const src = `function bumpIfPresent(id) {
+      const { rows } = await pool.query("SELECT cnt FROM t WHERE id = $1", [id]);
+      if (rows[0].cnt === undefined) return;
+      await pool.query("UPDATE t SET cnt = cnt + 1 WHERE id = $1", [id]);
+    }`
+    expect(fired(src)).toEqual([])
+  })
+
+  it("SILENT when an atomic guard FOLLOWS a string literal in the WHERE [DeepSeek bug-2]", () => {
+    // The atomic `qty >= $2` sits after `status = 'active'`; the per-literal SQL
+    // extraction must not truncate the WHERE at the embedded quote and miss it.
+    const src = `function reserveActive(id, n) {
+      const { rows } = await pool.query("SELECT qty FROM inventory WHERE id = $1", [id]);
+      if (rows[0].qty < n) return false;
+      await pool.query("UPDATE inventory SET qty = qty - $2 WHERE id = $1 AND status = 'active' AND qty >= $2", [id, n]);
+    }`
+    expect(fired(src)).toEqual([])
+  })
+
   it("SILENT inside a DurableObject class (serialized by construction)", () => {
     const src = `class Counter extends DurableObject {
       async reserve(id, n) {

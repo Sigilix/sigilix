@@ -77,13 +77,32 @@ const lineOf = (src: string, index: number): number => {
  *  equality, NOT a guard). */
 const REL_OP = /(>=|<=|===|==|!==|>|<)/
 
-/** A relative-delta UPDATE: `UPDATE T SET ... C = C +/- N ... WHERE ...`. Bounded
- *  to within the SQL string literal (`[^"'\`]`) so it never crosses the closing
- *  quote. Groups: 1=table, 2=set-side, 3=where-side. */
-const UPDATE_RE = /\bupdate\s+([A-Za-z_$][\w$.]*)\s+set\s+([^"'`]*?)\bwhere\b([^"'`]*)/gi
+/** Each JS string-literal's content + its start offset in the comment-blanked
+ *  source. SQL extraction runs PER literal so an inner SQL quote (`WHERE status =
+ *  'active'`) can't truncate the match at the wrong delimiter (DeepSeek bug-2). */
+function sqlLiterals(kept: string): Array<{ sql: string; start: number }> {
+  const out: Array<{ sql: string; start: number }> = []
+  const n = kept.length
+  let i = 0
+  while (i < n) {
+    const c = kept[i]!
+    if (c === '"' || c === "'" || c === "`") {
+      const delim = c
+      const start = i + 1
+      i++
+      while (i < n && kept[i] !== delim) i += kept[i] === "\\" ? 2 : 1
+      out.push({ sql: kept.slice(start, Math.min(i, n)), start })
+      i++
+    } else i++
+  }
+  return out
+}
 
-/** A SELECT reading columns from one table: `SELECT <cols> FROM T <rest(WHERE...)>`. */
-const SELECT_RE = /\bselect\b([^"'`]*?)\bfrom\s+([A-Za-z_$][\w$.]*)([^"'`]*)/gi
+/** A relative-delta UPDATE within ONE SQL literal. Groups: 1=table, 2=set, 3=where. */
+const UPDATE_RE = /\bupdate\s+([A-Za-z_$][\w$.]*)\s+set\s+([\s\S]*?)\bwhere\b([\s\S]*)/i
+
+/** A SELECT reading columns from one table within ONE SQL literal. */
+const SELECT_RE = /\bselect\b([\s\S]*?)\bfrom\s+([A-Za-z_$][\w$.]*)([\s\S]*)/i
 
 /** The column being relatively incremented/decremented in an UPDATE SET-side:
  *  `C = C + N` / `C = C - N` (same column both sides). Returns C or null. */
@@ -146,7 +165,9 @@ export function analyzeToctouRace(filesByPath: ReadonlyMap<string, string>): Toc
   for (const source of filesByPath.values()) {
     const kept = blank(source)
     for (const fn of functionsWithOffset(kept)) {
-      for (const u of fn.body.matchAll(UPDATE_RE)) {
+      for (const lit of sqlLiterals(fn.body)) {
+        const u = UPDATE_RE.exec(lit.sql)
+        if (!u) continue
         const delta = relativeDeltaColumn(u[2]!)
         if (delta && whereIsAtomicGuard(u[3]!)) {
           atomicSiblings.set(`${norm(u[1]!)}:${norm(delta.column)}`, fn.name)
@@ -165,7 +186,10 @@ export function analyzeToctouRace(filesByPath: ReadonlyMap<string, string>): Toc
       if (bodyHasSerializationGuard(fn.body)) continue // ON CONFLICT / SERIALIZABLE / advisory lock
       const bodyBlanked = blanked.slice(fn.start, fn.start + fn.body.length)
 
-      for (const u of fn.body.matchAll(UPDATE_RE)) {
+      const lits = sqlLiterals(fn.body) // {sql, start} per JS string literal, in order
+      for (const updLit of lits) {
+        const u = UPDATE_RE.exec(updLit.sql)
+        if (!u) continue
         const updTable = u[1]!
         const setSide = u[2]!
         const whereSide = u[3]!
@@ -176,15 +200,16 @@ export function analyzeToctouRace(filesByPath: ReadonlyMap<string, string>): Toc
         if (new RegExp(`\\b${esc(display(C))}\\b`).test(whereSide)) continue // C re-asserted in WHERE -> safe
         const updKey = whereKeyColumn(whereSide)
         if (!updKey) continue
-        const updIdx = u.index ?? 0
+        const updIdx = updLit.start
 
         // Find a SELECT of C from the SAME table + SAME key column, BEFORE this UPDATE.
         let matched = false
-        for (const s of fn.body.matchAll(SELECT_RE)) {
-          const selIdx = s.index ?? 0
-          if (selIdx >= updIdx) continue
+        for (const selLit of lits) {
+          if (selLit.start >= updIdx) continue
+          const s = SELECT_RE.exec(selLit.sql)
+          if (!s) continue
           if (norm(s[2]!) !== norm(updTable)) continue
-          if (/\bfor\s+(no\s+key\s+)?update\b/i.test(s[0]!)) continue // row lock -> safe
+          if (/\bfor\s+(no\s+key\s+)?update\b/i.test(selLit.sql)) continue // row lock -> safe
           const selList = s[1]!
           if (!selectsBareColumn(selList, C)) continue
           const selKey = whereKeyColumn(s[3]!)
@@ -193,10 +218,14 @@ export function analyzeToctouRace(filesByPath: ReadonlyMap<string, string>): Toc
           // Value-guard between the SELECT and the UPDATE: a relational comparison
           // whose operand is the READ value of C (not a `rows.length === 0`
           // existence check — its operand is `length`, not C).
-          const window = bodyBlanked.slice(selIdx, updIdx)
+          const window = bodyBlanked.slice(selLit.start, updIdx)
+          // RANGE operators only (`>=|<=|>|<`) — a real limit-guard compares the
+          // read value against a bound. Equality ops are excluded so a nullish
+          // sanity-check (`if (C === undefined) return`) is NOT mistaken for a
+          // limit guard (DeepSeek FP-1); it would have a `return` but no race.
           const guard = new RegExp(
-            `\\b${esc(display(C))}\\b[^;{}\\n]{0,40}(?:>=|<=|===|==|!==|>|<)` +
-              `|(?:>=|<=|===|==|!==|>|<)[^;{}\\n]{0,40}\\b${esc(display(C))}\\b`,
+            `\\b${esc(display(C))}\\b[^;{}\\n]{0,40}(?:>=|<=|>|<)` +
+              `|(?:>=|<=|>|<)[^;{}\\n]{0,40}\\b${esc(display(C))}\\b`,
           )
           if (!guard.test(window)) continue
           // The compare must GATE the write — a guard-clause short-circuit

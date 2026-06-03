@@ -543,6 +543,20 @@ OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
 # no inline findings (which is correct for a docs PR).
 OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 
+# SIG-224: dynamic dispatcher mode. "enforce" runs the deterministic rule layer
+# (the safe-skips above) PLUS a deepseek-v4-flash LLM pass for the ambiguous
+# middle; its picks REPLACE router.specialists for fan-out, so a code PR with no
+# test/perf surface skips those specialists — fewer concurrent Ollama-Turbo calls
+# => less contention => faster reviews, AND fewer tests over-fires (SIG-166).
+# RECALL-SAFE BY DESIGN: the PROTECTED roles `security` + `logic` ALWAYS run (the
+# LLM can never skip them); only `tests` + `performance` are LLM-skippable. Fails
+# CLOSED (runs all ambiguous) when OLLAMA_CHAT_ENABLE != "on", so this is a no-op
+# until the chat brain is on. Modes: off | shadow | enforce_rules | enforce.
+# Rollback: set "off" (or remove the line) — no data/schema change. WATCH after
+# deploy: the `dispatcher` decision logs (which roles skipped + why); roll back
+# immediately if it ever skips a role that would have produced a real finding.
+OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce"
+
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when
 # the dispatcher returns exactly 1 specialist AND none of that

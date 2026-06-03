@@ -751,6 +751,14 @@ export type JobMessage =
        */
       checkRunId?: number
       /**
+       * When `true`, this pr-review job is an EXPLICIT user-requested review
+       * (a slash-command rerun re-enqueues a plain `pr-review` message). It
+       * bypasses the merged/closed-PR skip guard in `dispatchJob` so an
+       * explicit rerun on a merged PR still runs. Unset on webhook-originated
+       * automatic reviews — those ARE skipped once the PR is no longer open.
+       */
+      bypassClosedSkip?: boolean
+      /**
        * SIG-247 Phase 1: GitHub's immutable `repo.id`. Threaded from
        * webhook payload → enqueuePrReviewJob → DO RunState → queue
        * sends so the consumer can pass it to the review-memory lookup
@@ -1595,6 +1603,45 @@ async function postSlashCommandAck(
   )
 }
 
+/**
+ * Pure decision: is this PR "no longer open" — merged, or closed-unmerged? The
+ * GitHub REST `state` is only "open" | "closed"; `merged` is inferred from a
+ * non-null `merged_at` (a merged PR reports `state: "closed"` too, but we check
+ * both so the predicate is robust to partial mocks). Exported for tests.
+ */
+export function prMetaIsClosedOrMerged(
+  pr: { merged_at?: string | null; state?: "open" | "closed" },
+): boolean {
+  return pr.merged_at != null || pr.state === "closed"
+}
+
+/**
+ * Whether the PR is already merged or closed at job-run time. Used to skip an
+ * automatic re-review of a PR that's no longer open: under model-backend
+ * contention a `pr-review` job can be redelivered and re-run minutes AFTER the
+ * PR merged, posting a useless after-the-fact review and burning the model
+ * budget once per redelivery. FAILS OPEN — missing creds or any fetch error
+ * returns `false` so we never wrongly skip a live review (recall over thrift).
+ */
+async function prClosedOrMerged(
+  env: Env,
+  args: { owner: string; repo: string; prNumber: number; installationId: number },
+): Promise<boolean> {
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return false
+  try {
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId: args.installationId,
+    })
+    const pr = await new GitHubClient({ token }).getPullRequest(args.owner, args.repo, args.prNumber)
+    return prMetaIsClosedOrMerged(pr)
+  } catch {
+    return false
+  }
+}
+
 export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
@@ -1629,6 +1676,46 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env,
       })
     case "pr-review": {
+      // Skip an automatic (re-)review of a PR that's no longer open. Under
+      // model-backend contention a pr-review job can be redelivered and re-run
+      // minutes AFTER the PR merged, posting a useless after-the-fact review
+      // and re-burning the model budget per redelivery. Fails open (see
+      // `prClosedOrMerged`). `bypassClosedSkip` (set when a slash-command rerun
+      // re-enqueues a pr-review message) overrides this — an explicit
+      // user-requested rerun on a merged PR still runs.
+      if (
+        job.bypassClosedSkip !== true &&
+        (await prClosedOrMerged(env, {
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          installationId: job.installationId,
+        }))
+      ) {
+        console.log(
+          JSON.stringify({
+            event: "pr-review-skipped-pr-not-open",
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            headSha: job.headSha.slice(0, 7),
+          }),
+        )
+        // Complete any pre-created check run (the SIG-220 fast-path row) so it
+        // doesn't hang `in_progress` forever on a skipped job — mirrors the
+        // label-gate skip path below.
+        if (job.checkRunId !== undefined) {
+          const handle = await attachExistingCheckRun({
+            env,
+            owner: job.owner,
+            repo: job.repo,
+            installationId: job.installationId,
+            checkRunId: job.checkRunId,
+          })
+          await completeCheckRun({ handle, conclusion: "skipped" })
+        }
+        return
+      }
       // ARC-289 diagnostic logging — emit on EVERY queue-handler entry
       // into the pr-review case so we can correlate duplicate
       // dispatches (PR #96 saw 2× ensemble runs against the same
@@ -2051,6 +2138,9 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
             prNumber: job.prNumber,
             headSha,
             installationId: job.installationId,
+            // A slash-command rerun is an EXPLICIT user request: bypass the
+            // merged/closed-PR skip guard so it runs even after merge.
+            bypassClosedSkip: true,
             // SIG-247 Phase 1: slash-command raw-sends bypass the DO
             // path, so they thread repoId directly into the JobMessage
             // here. Consumer reads it into `baseArgs` and on into the

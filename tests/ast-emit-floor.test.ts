@@ -135,10 +135,22 @@ describe("injectUnmatchedAstEmits", () => {
     expect(r.injected).toHaveLength(0)
   })
 
-  it("derives a capped headline from the message's first sentence", () => {
+  it("derives a capped headline from the message's first sentence (no label)", () => {
     const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast()] })
     expect(r.findings[0].headline).toBe("Cents value `total` rendered as dollars in JSX.")
     expect(r.findings[0].body).toContain("Divide by 100")
+  })
+
+  it("uses the leading `Label:` as the headline so the preview stays crisp (Part C)", () => {
+    // the real detector messages open with a crisp label before a colon.
+    const labeled = ast({
+      message:
+        "Type-contract drift: this SQL writes `status = 'archived'` to `documents`, but the declared type is the union \"draft\" | \"published\" — 'archived' is not a member.",
+    })
+    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [labeled] })
+    expect(r.findings[0].headline).toBe("Type-contract drift")
+    // the full hedged prose stays in the body (the preview reads as a finding, not noise).
+    expect(r.findings[0].body).toContain("not a member")
   })
 
   it("attaches the AST evidence slice as `astEvidence` on the injected finding (Part B)", () => {

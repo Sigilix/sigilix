@@ -169,6 +169,23 @@ function isDispatcherCall(arg: unknown): boolean {
   return false
 }
 
+/** Which specialist a mocked chat() call is for (by its system-prompt marker),
+ *  or null for the dispatcher classifier / unknown. Used to assert the REAL
+ *  fan-out, not just telemetry (CodeRabbit #325). */
+function callRole(arg: unknown): string | null {
+  if (!arg || typeof arg !== "object") return null
+  const messages = (arg as { messages?: unknown }).messages
+  if (!Array.isArray(messages)) return null
+  const text = messages
+    .map((m) => (m && typeof m === "object" ? String((m as { content?: unknown }).content ?? "") : ""))
+    .join("\n")
+  if (/\*\*SECURITY specialist\*\*/.test(text)) return "security"
+  if (/\*\*LOGIC specialist\*\*/.test(text)) return "logic"
+  if (/\*\*TESTS specialist\*\*/.test(text)) return "tests"
+  if (/\*\*PERFORMANCE specialist\*\*/.test(text)) return "performance"
+  return null
+}
+
 function findLoggedEvent(eventName: string): Record<string, unknown> | undefined {
   for (const call of logSpy.mock.calls) {
     const arg = call[0]
@@ -419,5 +436,18 @@ index abc1234..def5678 100644
       }
     })
     expect(notHonored).toBeUndefined()
+
+    // CodeRabbit #325: assert the REAL fan-out, not just telemetry — the
+    // specialist chat() calls (excluding the dispatcher classifier) RAN
+    // security + logic (protected) and did NOT run tests/performance (the LLM
+    // omitted them). This proves router.specialists actually drove the fan-out.
+    const ranRoles = mockChat.mock.calls
+      .filter((c) => !isDispatcherCall(c[0]))
+      .map((c) => callRole(c[0]))
+      .filter((r): r is string => r !== null)
+    expect(ranRoles).toContain("security")
+    expect(ranRoles).toContain("logic")
+    expect(ranRoles).not.toContain("tests")
+    expect(ranRoles).not.toContain("performance")
   })
 })

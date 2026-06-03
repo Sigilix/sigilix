@@ -291,6 +291,17 @@ export function injectUnmatchedAstEmits(args: {
   // inject in this pass — so we never double-inject the same emit.
   const seen = new Set<string>(provenanceFindings.flatMap((p) => p.sourceFindingIds))
 
+  // Pre-group the emitted findings by path so the per-candidate coverage check
+  // scans only the same-file findings, not the whole array (Sigilix #330 P3:
+  // avoid the O(candidates × all-findings) quadratic on target-rich PRs).
+  const findingsByPath = new Map<string, Array<{ lo: number; hi: number; category: string }>>()
+  for (const f of findings) {
+    let arr = findingsByPath.get(f.path)
+    if (!arr) findingsByPath.set(f.path, (arr = []))
+    // store each finding's OWN span (startLine..line) for range-overlap.
+    arr.push({ lo: f.startLine ?? f.line, hi: f.line, category: f.category })
+  }
+
   for (const ast of candidates) {
     if (seen.has(ast.astFindingId)) continue
     // The AST emit's span (line..endLine) widened by the tolerance. Coverage is
@@ -299,15 +310,14 @@ export function injectUnmatchedAstEmits(args: {
     // finding shouldn't be missed just because its anchor `line` sits outside).
     const lo = ast.line - tol
     const hi = (ast.endLine ?? ast.line) + tol
-    const covered = findings.some((f) => {
-      if (f.path !== ast.path) return false
-      // security entries are covered by ANY finding on the line; other roles
-      // require a same-category finding (the synth prompt's coverage rule).
-      if (ast.roleHint !== "security" && f.category !== ast.roleHint) return false
-      const fLo = f.startLine ?? f.line
-      const fHi = f.line
-      return fLo <= hi && fHi >= lo
-    })
+    const covered = (findingsByPath.get(ast.path) ?? []).some(
+      (f) =>
+        // security entries are covered by ANY finding on the line; other roles
+        // require a same-category finding (the synth prompt's coverage rule).
+        (ast.roleHint === "security" || f.category === ast.roleHint) &&
+        f.lo <= hi &&
+        f.hi >= lo,
+    )
     if (covered) continue
 
     const score = AST_EMIT_FLOOR_CEIL[ast.severity]!

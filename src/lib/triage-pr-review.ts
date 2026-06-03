@@ -2337,6 +2337,13 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     }
   }
 
+  // Phase-3 (founder ask): everything pushed up to HERE is the MUST-KEEP head
+  // (lead + summary + Fix Plan table with every blocker row + body-only blocker
+  // details). The low-severity non-blocker section below is the DROPPABLE tail
+  // that the severity-aware 65k cap sheds first, so a body-scoped security P0/P1
+  // is never the thing that gets sliced out of an oversized review body.
+  const headLineCount = lines.length
+
   // Body-only findings BELOW the blocker floor (score < 4) — unanchored
   // or non-line-scoped or inline-cap overflow. The explanation copy is
   // load-bearing (these can't anchor to a diff line, or overflowed the
@@ -2399,7 +2406,18 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
     headShort,
   })
 
-  return capForGitHub(lines.join("\n"), footer)
+  // Phase-3 (founder ask): severity-aware cap — shed the low-severity
+  // non-blocker tail first so an oversized body never slices out a security
+  // (or any) blocker. `headLineCount` was snapshotted right before the
+  // non-blocker section was appended.
+  const headStr = lines.slice(0, headLineCount).join("\n")
+  const tailStr = lines.slice(headLineCount).join("\n")
+  return capForGitHubPrioritized({
+    head: headStr,
+    droppable: tailStr,
+    droppedCountIfOmitted: bodyOnlyNonBlockers.length,
+    footer,
+  })
 }
 
 /**
@@ -2467,6 +2485,51 @@ function capForGitHub(body: string, footer: string): string {
   const room = GH_BODY_CAP - overhead
   const truncated = body.slice(0, Math.max(0, room))
   return `${truncated}${TRUNC}\n\n${footer}`
+}
+
+// Phase-3 (founder ask): SEVERITY-AWARE 65k cap. A blind tail-cut slices
+// whatever renders LAST — the low-severity body-only findings, but also a
+// body-scoped security P0/P1's evidence if the review is large enough — which
+// is a PRESENTATION false-negative (a real blocker the partner never sees).
+//
+// `head` is the MUST-KEEP prefix: the lead, summary, the Fix Plan table (every
+// score>=4 blocker row, security included), and the body-only BLOCKER details.
+// `droppable` is the low-severity body-only non-blocker section. When the body
+// overflows, we drop the DROPPABLE tail first — cleanly, with a count — so the
+// head (every blocker) always survives intact. Only if the head ALONE still
+// overflows (pathological — a single huge blocker) do we fall back to the blind
+// content cut, which now can only ever truncate a blocker's tail, never silently
+// vanish one whose row was already shown.
+export function capForGitHubPrioritized(args: {
+  head: string
+  droppable: string
+  droppedCountIfOmitted: number
+  footer: string
+}): string {
+  const { head, droppable, footer } = args
+  // `droppable` is `lines.slice(headLineCount)` joined — it already carries its
+  // own leading blank line, so rejoin with a single "\n" to reproduce the exact
+  // original `lines.join("\n")` shape.
+  const full = droppable.length > 0 ? `${head}\n${droppable}` : head
+  const joined = `${full}\n\n${footer}`
+  if (joined.length <= GH_BODY_CAP) return joined
+
+  // Drop the low-severity tail and tell the reader exactly what was omitted.
+  const omitted =
+    args.droppedCountIfOmitted > 0
+      ? `\n\n_${args.droppedCountIfOmitted} lower-severity body ${args.droppedCountIfOmitted === 1 ? "finding" : "findings"} omitted to meet GitHub's 65,535-character limit — every blocker is shown above._`
+      : "\n\n_[lower-severity detail omitted to meet GitHub's 65,535-character limit]_"
+  const headFirst = `${head}${omitted}\n\n${footer}`
+  if (headFirst.length <= GH_BODY_CAP) return headFirst
+
+  // Pathological: the head (blockers) alone overflows. Fall back to the blind
+  // cut on the head — but a blocker's ROW is in the Fix Plan table near the top,
+  // so it survives; only trailing blocker EVIDENCE is trimmed. (DeepSeek: in the
+  // theoretical extreme of HUNDREDS of blocker rows whose table alone exceeds 65k
+  // — a single row is <200 chars, so 65k holds thousands — the table's last rows
+  // could trim; that review is beyond any realistic size, and the outcome is
+  // still strictly better than the old blind cut silently losing a blocker.)
+  return capForGitHub(head, footer)
 }
 
 /**

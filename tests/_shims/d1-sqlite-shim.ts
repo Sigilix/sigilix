@@ -85,3 +85,22 @@ export class D1DatabaseShim {
 export function makeD1(): D1Database {
   return new D1DatabaseShim() as unknown as D1Database
 }
+
+/**
+ * Whether THIS Node build's `node:sqlite` includes the FTS5 extension. The
+ * lexical index is FTS5/BM25; a Node build compiled WITHOUT FTS5 throws
+ * `no such module: fts5` on the virtual-table create, so the FTS5 round-trip
+ * tests cannot run there. They `describe.skipIf(!FTS5_AVAILABLE)` on this flag
+ * so the suite stays green on a no-FTS5 local Node while CI (whose Node ships
+ * FTS5) still exercises them. Probed once at import.
+ */
+export const FTS5_AVAILABLE: boolean = (() => {
+  try {
+    const db = new DatabaseSync(":memory:")
+    db.exec("CREATE VIRTUAL TABLE __fts5_probe USING fts5(x)")
+    db.close()
+    return true
+  } catch {
+    return false
+  }
+})()

@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { retrieveChunks, fuseRetrieval, type RetrievedChunk, type RetrievalEnv } from "../src/lib/retrieval"
 import { upsertLexicalChunks, _resetSchemaMemoForTests, type LexicalMatch } from "../src/lib/lexical-index"
-import { makeD1 } from "./_shims/d1-sqlite-shim"
+import { makeD1, FTS5_AVAILABLE } from "./_shims/d1-sqlite-shim"
 
 const EMBED_DIMS = 768
 
@@ -49,7 +49,8 @@ describe("retrieveChunks — vector-only (flag off)", () => {
   })
 })
 
-describe("retrieveChunks — hybrid (flag on)", () => {
+// Skipped on a node:sqlite build WITHOUT FTS5 (the lexical leg needs it); CI ships FTS5.
+describe.skipIf(!FTS5_AVAILABLE)("retrieveChunks — hybrid (flag on)", () => {
   it("fuses vector + lexical and marks a shared chunk 'hybrid'", async () => {
     const db = makeD1()
     // Lexical index has the SAME id as a vector hit (shared) plus a lexical-only hit.

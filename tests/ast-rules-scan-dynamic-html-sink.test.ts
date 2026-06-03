@@ -140,6 +140,23 @@ describe("scanDynamicHtmlSinks — line-scan across the sink syntaxes", () => {
   it("does NOT flag `unsafeHtml` being safe, but the line scan still catches it", () => {
     expect(scanDynamicHtmlSinks(`el.innerHTML = c.unsafeHtml`).length).toBe(1)
   })
+  it("#64: flags setHTMLUnsafe of an html-ish member or interpolated template", () => {
+    expect(scanDynamicHtmlSinks(`el.setHTMLUnsafe(data.html)`).length).toBe(1)
+    expect(scanDynamicHtmlSinks("root.setHTMLUnsafe(`<b>${u.bio}</b>`)").length).toBe(1)
+  })
+  it("#64: flags an iframe srcdoc bound to an html-ish member", () => {
+    expect(scanDynamicHtmlSinks(`<iframe srcdoc={frame.bodyHtml} />`).length).toBe(1)
+  })
+  it("#64: flags jQuery / DOM `.html()` of an html-ish member or template", () => {
+    expect(scanDynamicHtmlSinks(`$(sel).html(data.markup)`).length).toBe(1)
+    expect(scanDynamicHtmlSinks("el.html(`<p>${row.bio}</p>`)").length).toBe(1)
+  })
+  it("#64: stays FP-safe on the new sinks — constants, bare ids, calls, the getter", () => {
+    expect(scanDynamicHtmlSinks(`el.setHTMLUnsafe(userInput)`).length).toBe(0) // bare identifier
+    expect(scanDynamicHtmlSinks(`<iframe srcdoc={"<b>ok</b>"} />`).length).toBe(0) // constant
+    expect(scanDynamicHtmlSinks(`el.html(escapeHtml(x))`).length).toBe(0) // call → possible sanitizer
+    expect(scanDynamicHtmlSinks(`const s = el.html()`).length).toBe(0) // getter, no value
+  })
   it("reports a stable rule id", () => {
     expect(DYNAMIC_HTML_SINK_RULE_ID).toBe("no-dangerous-html-dynamic")
   })

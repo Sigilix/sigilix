@@ -1595,6 +1595,45 @@ async function postSlashCommandAck(
   )
 }
 
+/**
+ * Pure decision: is this PR "no longer open" — merged, or closed-unmerged? The
+ * GitHub REST `state` is only "open" | "closed"; `merged` is inferred from a
+ * non-null `merged_at` (a merged PR reports `state: "closed"` too, but we check
+ * both so the predicate is robust to partial mocks). Exported for tests.
+ */
+export function prMetaIsClosedOrMerged(
+  pr: { merged_at?: string | null; state?: "open" | "closed" },
+): boolean {
+  return pr.merged_at != null || pr.state === "closed"
+}
+
+/**
+ * Whether the PR is already merged or closed at job-run time. Used to skip an
+ * automatic re-review of a PR that's no longer open: under model-backend
+ * contention a `pr-review` job can be redelivered and re-run minutes AFTER the
+ * PR merged, posting a useless after-the-fact review and burning the model
+ * budget once per redelivery. FAILS OPEN — missing creds or any fetch error
+ * returns `false` so we never wrongly skip a live review (recall over thrift).
+ */
+async function prClosedOrMerged(
+  env: Env,
+  args: { owner: string; repo: string; prNumber: number; installationId: number },
+): Promise<boolean> {
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return false
+  try {
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId: args.installationId,
+    })
+    const pr = await new GitHubClient({ token }).getPullRequest(args.owner, args.repo, args.prNumber)
+    return prMetaIsClosedOrMerged(pr)
+  } catch {
+    return false
+  }
+}
+
 export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
   switch (job.type) {
     case "linear-triage":
@@ -1629,6 +1668,31 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env,
       })
     case "pr-review": {
+      // Skip an automatic (re-)review of a PR that's no longer open. Under
+      // model-backend contention a pr-review job can be redelivered and re-run
+      // minutes AFTER the PR merged, posting a useless after-the-fact review
+      // and re-burning the model budget per redelivery. Fails open (see
+      // `prClosedOrMerged`). Explicit slash-command reruns ("pr-review-rerun")
+      // are intentionally NOT gated — a user who asks on a merged PR gets it.
+      if (
+        await prClosedOrMerged(env, {
+          owner: job.owner,
+          repo: job.repo,
+          prNumber: job.prNumber,
+          installationId: job.installationId,
+        })
+      ) {
+        console.log(
+          JSON.stringify({
+            event: "pr-review-skipped-pr-not-open",
+            owner: job.owner,
+            repo: job.repo,
+            prNumber: job.prNumber,
+            headSha: job.headSha.slice(0, 7),
+          }),
+        )
+        return
+      }
       // ARC-289 diagnostic logging — emit on EVERY queue-handler entry
       // into the pr-review case so we can correlate duplicate
       // dispatches (PR #96 saw 2× ensemble runs against the same

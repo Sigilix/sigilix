@@ -1,5 +1,11 @@
 # Customer Onboarding — Required GitHub Repo Settings
 
+> **Indexing is automatic.** Installing the GitHub App is all that's needed
+> for codebase-aware reviews — there's no script to run and no operator step.
+> See [Automatic Codebase Indexing](./automatic-indexing.md) for what happens
+> on install, the first-PR "warming up" experience, push refresh, and data
+> deletion on uninstall.
+
 After installing the Sigilix GitHub App on your repo, configure one
 required branch-protection setting so stale reviews are auto-dismissed
 with clean GitHub-native UI attribution:

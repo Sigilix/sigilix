@@ -13,6 +13,7 @@ import type { SecretHit } from "../src/lib/secret-scan"
 import type { DepVulnFinding } from "../src/lib/dep-vulns/scanner"
 import type { SarifFinding } from "../src/lib/sarif-evidence/types"
 import type { AstFinding } from "../src/lib/ast-rules/types"
+import { DYNAMIC_HTML_SINK_RULE_ID } from "../src/lib/ast-rules/scan-dynamic-html-sink"
 
 function secretHit(overrides: Partial<SecretHit> = {}): SecretHit {
   return {
@@ -133,6 +134,30 @@ describe("buildSecurityFactManifest", () => {
     const [id] = [...m.manifest.keys()]
     expect(id).toBe("ast:eval-call:ast/eval-call/abc1234/9")
     expect(m.manifest.get(id)!.line).toBe(9)
+  })
+
+  it("#64: stamps CWE-79 on the dynamic-HTML-sink AST fact (routes a confirmed XSS to the xss bucket)", async () => {
+    const m = await buildSecurityFactManifest({
+      ...EMPTY,
+      astSecurityFindings: [
+        astFinding({
+          ruleId: DYNAMIC_HTML_SINK_RULE_ID,
+          astFindingId: "ast/no-dangerous-html-dynamic/deadbeef/12",
+          path: "src/ui/Note.tsx",
+          line: 12,
+          message: "Dynamic value rendered as raw HTML",
+        }),
+      ],
+    })
+    const [id] = [...m.manifest.keys()]
+    expect(m.manifest.get(id)!.cwe).toBe("CWE-79")
+    expect(m.render()).toContain("[proposed CWE-79]")
+  })
+
+  it("#64: does NOT stamp a CWE on a non-XSS AST fact (e.g. eval-call) — scoped to the sink rule", async () => {
+    const m = await buildSecurityFactManifest({ ...EMPTY, astSecurityFindings: [astFinding()] })
+    const [id] = [...m.manifest.keys()]
+    expect(m.manifest.get(id)!.cwe).toBeUndefined()
   })
 
   it("produces a DETERMINISTIC id for the same fact across two builds (hash stability)", async () => {

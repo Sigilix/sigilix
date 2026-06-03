@@ -144,8 +144,9 @@ describe("scanDynamicHtmlSinks — line-scan across the sink syntaxes", () => {
     expect(scanDynamicHtmlSinks(`el.setHTMLUnsafe(data.html)`).length).toBe(1)
     expect(scanDynamicHtmlSinks("root.setHTMLUnsafe(`<b>${u.bio}</b>`)").length).toBe(1)
   })
-  it("#64: flags an iframe srcdoc bound to an html-ish member", () => {
-    expect(scanDynamicHtmlSinks(`<iframe srcdoc={frame.bodyHtml} />`).length).toBe(1)
+  it("#64: flags an iframe srcDoc/srcdoc bound to an html-ish member (React camelCases it, CodeRabbit #321)", () => {
+    expect(scanDynamicHtmlSinks(`<iframe srcDoc={frame.bodyHtml} />`).length).toBe(1) // React canonical
+    expect(scanDynamicHtmlSinks(`<iframe srcdoc={frame.bodyHtml} />`).length).toBe(1) // raw lowercase
   })
   it("#64: flags jQuery / DOM `.html()` of an html-ish member or template", () => {
     expect(scanDynamicHtmlSinks(`$(sel).html(data.markup)`).length).toBe(1)

@@ -44,8 +44,10 @@ const RE_DOCUMENT_WRITE = /document\.write(?:ln)?\s*\(\s*([^)]+?)\s*\)/
 const RE_INSERT_ADJACENT_HTML = /insertAdjacentHTML\s*\([^,]+,\s*([^)]+?)\s*\)/
 // #64: el.setHTMLUnsafe(VALUE) — the HTML-parsing setter (Sanitizer-API sibling)
 const RE_SET_HTML_UNSAFE = /\.setHTMLUnsafe\s*\(\s*([^)]+?)\s*\)/
-// #64: <iframe srcdoc={VALUE} /> (JSX) — renders VALUE as a full document
-const RE_SRCDOC = /\bsrcdoc\s*=\s*\{([^}]+?)\}/
+// #64: <iframe srcDoc={VALUE} /> (JSX) — renders VALUE as a full document.
+// React camelCases the HTML `srcdoc` attribute to `srcDoc`, so match both forms
+// (CodeRabbit #321: `srcDoc` is the canonical React prop name).
+const RE_SRCDOC = /\bsrc[Dd]oc\s*=\s*\{([^}]+?)\}/
 // #64: jQuery / DOM-helper `.html(VALUE)`. The getter `.html()` has no argument,
 // so the required value group keeps it from matching a read.
 const RE_JQUERY_HTML = /\.html\s*\(\s*([^)]+?)\s*\)/

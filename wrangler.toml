@@ -480,6 +480,18 @@ OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
 # window (zero real-finding demotes). Rollback: "off".
 OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "shadow"
 
+# Cross-cutting over-fire Option B: window-blindness validator. Shadow-first —
+# logs the would-demote (`pr-review-finding-rejected-validation`, gate
+# "window-blindness") + counts on GET /metrics/validation, KEEPS every finding
+# inline (zero behavior change). Demotes a sev>=4 LOGIC positive-misread ("X can
+# be undefined / returns NaN / is unbounded") only when the guard on the SAME
+# cited symbol is provably present in the full file (astFilesByPath) but OUTSIDE
+# the diff window the model saw — upstream, at a dominating indent, within 40
+# lines. The deterministic backstop to PR #327's prompt fence. Flip to "enforce"
+# after a clean shadow window (the would-demotes are genuine misreads, not real
+# bugs). Rollback: "off".
+OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
+
 # SIG-308: logic-refutation backstop (evaluateLogicRefutation). Flags a sev>=4
 # logic finding that never showed it survives refutation (no
 # `independentAssessment`) — the self-refuting-finding shape (sigilix-monitor

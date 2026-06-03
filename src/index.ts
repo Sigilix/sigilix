@@ -545,6 +545,14 @@ export interface Env {
   // Demote-not-drop, keep on any uncertainty.
   OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string
 
+  // Cross-cutting over-fire Option B: window-blindness validator. off (default) |
+  // shadow (count/telemeter the would-demote, keep inline) | enforce (demote a
+  // sev>=4 logic positive-misread — "X can be undefined / returns NaN / is
+  // unbounded" — when the guard on the SAME cited symbol is provably present in
+  // the full file but outside the diff window the model saw). Demote-not-drop,
+  // keep on any uncertainty. The deterministic backstop to PR #327's prompt fence.
+  OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE?: string
+
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
   // that AUGMENTS the logic role's shared snapshot; any other value

@@ -241,6 +241,7 @@ export interface FindingTrust {
     | "outside-diff"
     | "do-race"
     | "tests-coverage"
+    | "window-blindness"
 }
 
 export interface PrReviewFinding {

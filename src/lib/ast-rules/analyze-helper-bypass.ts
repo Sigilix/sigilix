@@ -26,82 +26,14 @@
 // pre-existing helper isn't visible — a known v1 recall limit; a future version
 // can feed the SIG-138 graph corpus).
 
+import { esc, norm, display, blank, extractFunctions, type FnInfo } from "./scan-utils"
+
 export interface AsymmetryHint {
   /** The fact, phrased for the logic specialist to judge. */
   message: string
   /** The bypassing function + the helper it skipped (telemetry / dedupe). */
   fn: string
   helper: string
-}
-
-/** Escape a source-derived identifier before interpolating it into a RegExp
- *  (a `$` in a name would otherwise be an anchor — code-review H1). */
-const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-const norm = (t: string): string => t.replace(/_/g, "").toLowerCase().split(".").pop()!
-/** Display form of a SQL identifier: strip any table/alias qualifier but KEEP the
- *  original casing and underscores. `norm()` mangles `amount_cents` -> `amountcents`
- *  (fine for matching, wrong for the hint TEXT — the model should see the real name). */
-const display = (t: string): string => t.split(".").pop()!
-
-/** Blank `//` and `/* *​/` comments to spaces (length-preserving). `alsoStrings`
- *  additionally blanks string/template bodies — used for the call-count corpus
- *  so a name inside a SQL/doc string isn't read as a function call. */
-function blank(src: string, alsoStrings = false): string {
-  const out = src.split("")
-  const n = src.length
-  let i = 0
-  let inStr: string | null = null
-  while (i < n) {
-    const c = src[i]!
-    if (inStr) {
-      if (c === "\\") { if (alsoStrings) { out[i] = " "; if (i + 1 < n) out[i + 1] = " " } i += 2; continue }
-      if (alsoStrings && c !== "\n") out[i] = " "
-      if (c === inStr) inStr = null
-      i++
-      continue
-    }
-    if (c === '"' || c === "'" || c === "`") { inStr = c; if (alsoStrings) out[i] = " "; i++; continue }
-    if (c === "/" && src[i + 1] === "/") { while (i < n && src[i] !== "\n") { out[i] = " "; i++ } continue }
-    if (c === "/" && src[i + 1] === "*") {
-      out[i] = " "; out[i + 1] = " "; i += 2
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) { if (src[i] !== "\n") out[i] = " "; i++ }
-      if (i < n) { out[i] = " "; out[i + 1] = " "; i += 2 }
-      continue
-    }
-    i++
-  }
-  return out.join("")
-}
-
-/** A named `function NAME(...)` declaration (decl form — the helpers + mutators
- *  in practice are named declarations). Group 1 = name. */
-const FN_DECL_RE = /(?:^|[^.\w$])function\s+([A-Za-z_$][\w$]*)\s*\(/g
-
-interface FnInfo { name: string; body: string }
-
-/** Extract named functions + their brace-balanced bodies from one comment-
- *  blanked source. */
-function extractFunctions(blanked: string): FnInfo[] {
-  const fns: FnInfo[] = []
-  for (const m of blanked.matchAll(FN_DECL_RE)) {
-    let i = (m.index ?? 0) + m[0].length
-    let paren = 1
-    while (i < blanked.length && paren > 0) {
-      if (blanked[i] === "(") paren++
-      else if (blanked[i] === ")") paren--
-      i++
-    }
-    while (i < blanked.length && blanked[i] !== "{" && blanked[i] !== ";") i++
-    if (blanked[i] !== "{") continue
-    let depth = 0
-    const start = i
-    for (; i < blanked.length; i++) {
-      if (blanked[i] === "{") depth++
-      else if (blanked[i] === "}") { depth--; if (depth === 0) break }
-    }
-    fns.push({ name: m[1]!, body: blanked.slice(start, i + 1) })
-  }
-  return fns
 }
 
 /** The (table, column) an aggregation helper SUM/COUNTs — `SELECT … SUM|COUNT(col)

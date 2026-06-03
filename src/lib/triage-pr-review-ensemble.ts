@@ -360,7 +360,7 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits } from "./degraded-finding-floor"
+import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits, parseAstEmitFloorMode } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -4652,10 +4652,9 @@ export async function handlePrReviewEnsemble(
     // below, so nothing is force-posted; it just can't be silently dropped.
     // `off` skips; `shadow` logs what WOULD inject (no behavior change); `on`
     // injects. Recall-positive + P2/P3-capped (never mints a P0/P1).
-    // Validate against the allowed set so a misconfig / typo FAILS CLOSED to
-    // "off" rather than silently enabling on any non-"off" string (CodeRabbit #330).
-    const astEmitFloorRaw = (env.OPENCLAW_AST_EMIT_FLOOR ?? "off").trim().toLowerCase()
-    const astEmitFloorMode = astEmitFloorRaw === "shadow" || astEmitFloorRaw === "on" ? astEmitFloorRaw : "off"
+    // Validated parse — a misconfig / typo FAILS CLOSED to "off" rather than
+    // silently enabling on any non-"off" string (CodeRabbit/Sigilix #330).
+    const astEmitFloorMode = parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR)
     if (astEmitFloorMode !== "off") {
       const floored = injectUnmatchedAstEmits({
         findings: effectiveSynthVerdict.findings,

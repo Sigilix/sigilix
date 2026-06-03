@@ -223,6 +223,22 @@ export function recoverTruncatedSynthFindings(args: {
 
 const AST_EMIT_FLOOR_CEIL: Record<string, number> = { warning: 3, info: 2 }
 
+/** Mode for the AST-emit floor. Matches the off|shadow|on idiom of the other gates. */
+export type AstEmitFloorMode = "off" | "shadow" | "on"
+
+/**
+ * Parse `OPENCLAW_AST_EMIT_FLOOR`. Case-insensitive, whitespace-tolerant; any
+ * unknown / missing / garbage value FAILS CLOSED to `off` so a misconfig can't
+ * silently enable the floor (CodeRabbit/Sigilix #330). Mirrors the codebase's
+ * `parseAbsenceClaimValidatorMode` / `parseWindowBlindnessValidatorMode` pattern.
+ */
+export function parseAstEmitFloorMode(raw: string | undefined): AstEmitFloorMode {
+  const v = (raw ?? "").trim().toLowerCase()
+  if (v === "shadow") return "shadow"
+  if (v === "on") return "on"
+  return "off"
+}
+
 /** Minimal structural view of an AST emit the floor needs (subset of `AstFinding`). */
 export interface AstEmitCandidate {
   astFindingId: string

@@ -7,6 +7,7 @@
 import { describe, it, expect } from "vitest"
 import {
   injectUnmatchedAstEmits,
+  parseAstEmitFloorMode,
   type AstEmitCandidate,
   type FloorProvenanceFinding,
 } from "../src/lib/degraded-finding-floor"
@@ -138,5 +139,44 @@ describe("injectUnmatchedAstEmits", () => {
     const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast()] })
     expect(r.findings[0].headline).toBe("Cents value `total` rendered as dollars in JSX.")
     expect(r.findings[0].body).toContain("Divide by 100")
+  })
+
+  it("honors a custom lineTolerance (Sigilix #330)", () => {
+    // emit at line 42, an existing same-category finding at line 44.
+    const near = f({ category: "logic", line: 44, score: 4 })
+    // tol 0 → window [42,42], finding at 44 does NOT overlap → injected.
+    const tight = injectUnmatchedAstEmits({
+      findings: [near],
+      provenanceFindings: [prov(["logic-1"])],
+      astFindings: [ast()],
+      lineTolerance: 0,
+    })
+    expect(tight.injected).toHaveLength(1)
+    // tol 3 (default behavior) → window [39,45], finding at 44 overlaps → covered.
+    const loose = injectUnmatchedAstEmits({
+      findings: [near],
+      provenanceFindings: [prov(["logic-1"])],
+      astFindings: [ast()],
+      lineTolerance: 3,
+    })
+    expect(loose.injected).toHaveLength(0)
+  })
+})
+
+describe("parseAstEmitFloorMode (Sigilix #330 — fail-closed)", () => {
+  it("parses shadow/on (case-insensitive, whitespace-tolerant)", () => {
+    expect(parseAstEmitFloorMode("shadow")).toBe("shadow")
+    expect(parseAstEmitFloorMode("  SHADOW ")).toBe("shadow")
+    expect(parseAstEmitFloorMode("on")).toBe("on")
+    expect(parseAstEmitFloorMode("On")).toBe("on")
+  })
+  it("FAILS CLOSED to off on empty / garbage / unknown values", () => {
+    expect(parseAstEmitFloorMode(undefined)).toBe("off")
+    expect(parseAstEmitFloorMode("")).toBe("off")
+    expect(parseAstEmitFloorMode("   ")).toBe("off")
+    expect(parseAstEmitFloorMode("off")).toBe("off")
+    expect(parseAstEmitFloorMode("enabled")).toBe("off")
+    expect(parseAstEmitFloorMode("ON ")).toBe("on") // trims
+    expect(parseAstEmitFloorMode("shdow")).toBe("off") // typo → off
   })
 })

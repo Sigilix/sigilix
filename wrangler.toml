@@ -330,7 +330,9 @@ OPENCLAW_ASYMMETRY_HINTS = "on"
 # SERIALIZABLE / advisory-lock / DurableObject variants. "shadow" logs the
 # `pr-review-toctou-hints` count (no inject); flip to "on" gated on a clean
 # race-benchmark + the SIG-245 zero-P1-FP window.
-OPENCLAW_TOCTOU_HINTS = "shadow"
+# 2026-06-03: flipped "on" for the live pr/13 race A/B (reserveStock + claimCoupon
+# racy, bumpViewCount fires-but-safe). Rollback path = "shadow".
+OPENCLAW_TOCTOU_HINTS = "on"
 
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner

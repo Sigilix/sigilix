@@ -88,7 +88,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // SIG-313 18→19 (security specialist gains the mandatory AUTHORIZATION AUDIT
     // — forced handler enumeration + exploit-tuple gate — to close the authz
     // recall gap without over-firing on safe endpoints).
-    expect(PROMPT_VERSION).toBe("19")
+    expect(PROMPT_VERSION).toBe("20")
   })
 
   it("security specialist has the SIG-313 authorization audit (forced enumeration + exploit-tuple gate + safe skips)", () => {

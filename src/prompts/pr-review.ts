@@ -200,8 +200,14 @@
  * trust-boundary). Closes the pr/08 authz-recall gap (IDOR/BOLA single-file
  * reasoning the model wasn't consistently asking) without over-firing on safe
  * endpoints. Reviews with v18 go stale on first deploy of v19.
+ *
+ * v20 (SIG-166): tests-specialist lane fence — a security vulnerability (XSS /
+ * injection / auth) is the SECURITY specialist's finding, NOT a "missing test"
+ * coverage gap. Stops the tests specialist re-filing real sinks as testing
+ * findings (the dominant tests over-fire shape). Reviews with v19 go stale on
+ * first deploy of v20.
  */
-export const PROMPT_VERSION = "19"
+export const PROMPT_VERSION = "20"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

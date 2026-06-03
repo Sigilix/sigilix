@@ -2100,10 +2100,31 @@ export async function handlePrReviewEnsemble(
           telemetry.routerDecision = router
         }
         if (dispatcherMode === "enforce") {
-          console.warn(JSON.stringify({
-            event: "dispatcher-enforce-mode-not-honored-in-phase-1",
+          // SIG-227b: NON-PROTECTED enforcement. Apply the dispatcher's full
+          // decision (rule layer + LLM-decided ambiguous middle) for fan-out.
+          // reconcile() PROTECTS security + logic — an ambiguous protected role
+          // ALWAYS runs; only ambiguous `tests`/`performance` are LLM-skippable
+          // — and a disabled/errored/aborted LLM fails CLOSED to "run all
+          // ambiguous" (makeDisabledDecision returns ALL_SPECIALISTS). So this
+          // can only ever SHRINK the fan-out for the two low-stakes roles,
+          // never drop security/logic. (Protected-role LLM-skipping needs a
+          // confidence floor + high-trust = SIG-228, deliberately NOT here.)
+          // Mirrors the enforce_rules swap above; the difference is upstream —
+          // mode=enforce ran the LLM classifier, so the decision is narrower.
+          telemetry.legacyRouterDecision = router
+          router = {
+            specialists: dispatcherDecision.specialists,
+            // Defensive `?? ""` so a malformed decision can never throw the
+            // `.slice` into the outer catch (Kimi sign-off, SIG-227b).
+            reason: `dispatcher_enforce:${(dispatcherDecision.reasoning ?? "").slice(0, 200)}`,
+            routerEnabled: true,
+          }
+          telemetry.routerDecision = router
+          console.log(JSON.stringify({
+            event: "dispatcher-enforce-applied",
             owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            note: "full enforcement (LLM-decided non-protected + protected) ships in SIG-227b + SIG-228; use mode=enforce_rules for rules-only enforcement available today",
+            legacySpecialists: telemetry.legacyRouterDecision.specialists,
+            enforcedSpecialists: router.specialists,
           }))
         }
       } catch (err) {

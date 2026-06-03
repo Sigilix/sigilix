@@ -88,7 +88,19 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // SIG-313 18→19 (security specialist gains the mandatory AUTHORIZATION AUDIT
     // — forced handler enumeration + exploit-tuple gate — to close the authz
     // recall gap without over-firing on safe endpoints).
-    expect(PROMPT_VERSION).toBe("19")
+    expect(PROMPT_VERSION).toBe("20")
+  })
+
+  it("tests specialist has the SIG-166 lane fence + recall-safe uncertainty valve (CodeRabbit #323)", () => {
+    const tests = SPECIALIST_PROMPTS.tests
+    // the lane fence — a clear vulnerability is the security specialist's finding
+    expect(tests).toContain("STAY IN YOUR LANE")
+    expect(tests).toContain("a CLEAR vulnerability is not a coverage gap")
+    // the recall-safe uncertainty valve — must NEVER be silently dropped
+    expect(tests).toContain("FILE THE COVERAGE GAP")
+    expect(tests).toContain("synthesizer dedupes against the security specialist")
+    // the score-5 reframe — a CORRECT boundary with no test, not a vuln
+    expect(tests).toContain("CORRECT security boundary")
   })
 
   it("security specialist has the SIG-313 authorization audit (forced enumeration + exploit-tuple gate + safe skips)", () => {

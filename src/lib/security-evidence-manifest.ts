@@ -29,6 +29,7 @@ import type { SecretHit } from "./secret-scan"
 import type { DepVulnFinding } from "./dep-vulns/scanner"
 import type { SarifFinding } from "./sarif-evidence/types"
 import type { AstFinding } from "./ast-rules/types"
+import { DYNAMIC_HTML_SINK_RULE_ID } from "./ast-rules/scan-dynamic-html-sink"
 
 /**
  * One deterministic security fact, keyed by its `evidenceId`. The
@@ -94,6 +95,11 @@ const CONTENT_HASH_HEX = 12
  * distinguishes WHICH credential, not the weakness class.
  */
 const SECRET_CWE = "CWE-798"
+// #64: the dynamic-HTML-sink AST fact's PROPOSED CWE (XSS). Stamped onto the
+// manifest line so the security specialist classifies a confirmed sink as
+// CWE-79 — which routes it to the `xss` bucket (deriveSecurityBucket keys on
+// cweId) instead of bucket=null, where a real XSS would be dropped.
+const DYNAMIC_HTML_SINK_CWE = "CWE-79"
 
 /**
  * Build the security fact manifest from the role-scoped deterministic
@@ -189,6 +195,10 @@ export async function buildSecurityFactManifest(args: {
       tool: "ast",
       path: f.path,
       line: f.line,
+      // #64: stamp CWE-79 on the dynamic-HTML-sink fact so a model XSS finding
+      // citing it classifies into the `xss` bucket instead of falling to
+      // bucket=null and being dropped as scanner-covered.
+      ...(f.ruleId === DYNAMIC_HTML_SINK_RULE_ID ? { cwe: DYNAMIC_HTML_SINK_CWE } : {}),
       summary: `${f.ruleId} at ${f.path}:${f.line}: ${normalizeSummary(f.message)}`,
     })
   }

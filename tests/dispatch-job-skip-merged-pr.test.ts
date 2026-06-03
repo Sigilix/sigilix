@@ -7,7 +7,13 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
-const { mockGetInstallationToken, mockGetPullRequest, mockEnsemble } = vi.hoisted(() => ({
+const {
+  mockGetInstallationToken,
+  mockGetPullRequest,
+  mockEnsemble,
+  mockAttachCheckRun,
+  mockCompleteCheckRun,
+} = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockGetPullRequest: vi.fn(async () => ({
     head: { sha: "a".repeat(40) },
@@ -16,6 +22,8 @@ const { mockGetInstallationToken, mockGetPullRequest, mockEnsemble } = vi.hoiste
     merged_at: null,
   })),
   mockEnsemble: vi.fn(async () => undefined),
+  mockAttachCheckRun: vi.fn(async () => ({ checkRunId: 1 })),
+  mockCompleteCheckRun: vi.fn(async () => undefined),
 }))
 
 vi.mock("../src/lib/github-app", () => ({
@@ -40,6 +48,18 @@ vi.mock("../src/lib/triage-pr-review-ensemble", async () => {
   return { ...actual, handlePrReviewEnsemble: (...args: unknown[]) => mockEnsemble(...args) }
 })
 
+vi.mock("../src/lib/pr-review-check-run", async () => {
+  const actual =
+    await vi.importActual<typeof import("../src/lib/pr-review-check-run")>(
+      "../src/lib/pr-review-check-run",
+    )
+  return {
+    ...actual,
+    attachExistingCheckRun: (args: unknown) => mockAttachCheckRun(args),
+    completeCheckRun: (args: unknown) => mockCompleteCheckRun(args),
+  }
+})
+
 import { dispatchJob, prMetaIsClosedOrMerged } from "../src/index"
 import type { Env, JobMessage } from "../src/index"
 
@@ -61,7 +81,7 @@ function makeEnv(): Env {
   } as unknown as Env
 }
 
-function prReviewJob(): JobMessage {
+function prReviewJob(extra: Record<string, unknown> = {}): JobMessage {
   return {
     type: "pr-review",
     owner: "Sigilix",
@@ -69,13 +89,25 @@ function prReviewJob(): JobMessage {
     prNumber: 7,
     headSha: "c".repeat(40),
     installationId: 99,
+    ...extra,
   } as unknown as JobMessage
+}
+
+const MERGED_PR = {
+  head: { sha: "a".repeat(40) },
+  base: { sha: "b".repeat(40) },
+  state: "closed",
+  merged_at: "2026-06-03T00:00:00Z",
 }
 
 beforeEach(() => {
   mockGetInstallationToken.mockClear()
-  mockGetPullRequest.mockClear()
+  // mockReset (not mockClear) so any queued mockResolvedValueOnce from a prior
+  // test that short-circuited before the fetch can't bleed into the next test.
+  mockGetPullRequest.mockReset()
   mockEnsemble.mockClear()
+  mockAttachCheckRun.mockClear()
+  mockCompleteCheckRun.mockClear()
   mockGetPullRequest.mockResolvedValue({
     head: { sha: "a".repeat(40) },
     base: { sha: "b".repeat(40) },
@@ -103,16 +135,32 @@ describe("prMetaIsClosedOrMerged (pure decision)", () => {
 })
 
 describe("dispatchJob pr-review — skip when the PR is no longer open", () => {
-  it("SKIPS the ensemble when the PR is merged", async () => {
-    mockGetPullRequest.mockResolvedValueOnce({
-      head: { sha: "a".repeat(40) },
-      base: { sha: "b".repeat(40) },
-      state: "closed",
-      merged_at: "2026-06-03T00:00:00Z",
-    })
+  it("SKIPS the ensemble when the PR is merged (no check run to clean up)", async () => {
+    mockGetPullRequest.mockResolvedValueOnce(MERGED_PR)
     await dispatchJob(prReviewJob(), makeEnv())
     expect(mockGetPullRequest).toHaveBeenCalledTimes(1)
     expect(mockEnsemble).not.toHaveBeenCalled()
+    expect(mockCompleteCheckRun).not.toHaveBeenCalled()
+  })
+
+  it("RUNS an explicit rerun (bypassClosedSkip) even on a merged PR — and never fetches", async () => {
+    // A slash-command rerun re-enqueues a pr-review message with this flag;
+    // the user asked for it, so it must run even post-merge (CodeRabbit #319).
+    // No PR-meta mock needed — the flag short-circuits before any fetch.
+    await dispatchJob(prReviewJob({ bypassClosedSkip: true }), makeEnv()).catch(() => undefined)
+    expect(mockGetPullRequest).not.toHaveBeenCalled() // flag short-circuits before any fetch
+    expect(mockEnsemble).toHaveBeenCalledTimes(1)
+  })
+
+  it("completes a pre-created check run as 'skipped' when skipping a merged PR", async () => {
+    // Don't leave the SIG-220 "Sigilix · In progress" row stuck forever (CodeRabbit #319).
+    mockGetPullRequest.mockResolvedValueOnce(MERGED_PR)
+    await dispatchJob(prReviewJob({ checkRunId: 4242 }), makeEnv())
+    expect(mockEnsemble).not.toHaveBeenCalled()
+    expect(mockAttachCheckRun).toHaveBeenCalledTimes(1)
+    expect(mockCompleteCheckRun).toHaveBeenCalledWith(
+      expect.objectContaining({ conclusion: "skipped" }),
+    )
   })
 
   it("SKIPS the ensemble when the PR is closed-unmerged", async () => {

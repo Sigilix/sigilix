@@ -121,11 +121,24 @@ function childProcessBindings(source: string): { bareNames: Set<string>; namespa
   return { bareNames, namespaces }
 }
 
+/** The quoted `child_process` module specifier. The closing quote anchors it so
+ *  it can't substring-match `child_process_extra` / `child-process-x` (#316). */
+const CP_MODULE_RE = /["'](?:node:)?child_process["']/
+
 /** Does this `exec`/`execSync` call resolve to a `child_process` binding? */
 function resolvesToChildProcess(binding: CallBinding, source: string): boolean {
   if (binding.inlineCp) return true // require("child_process").exec(...)
   const { bareNames, namespaces } = childProcessBindings(source)
-  return binding.object === null ? bareNames.has(binding.fn) : namespaces.has(binding.object)
+  const resolved = binding.object === null ? bareNames.has(binding.fn) : namespaces.has(binding.object)
+  if (resolved) return true
+  // RECALL FALLBACK (Sigilix dogfood #316): `childProcessBindings` only parses
+  // the standard static import forms. If the file references the child_process
+  // module in a shape it can't parse — dynamic `import("child_process")`,
+  // `export { exec } from "child_process"`, a conditional require — fall back to
+  // the old name-match so a REAL shell-out is never dropped. The PR #296 self-FP
+  // still dies: a detector calling `re.exec` references no child_process module
+  // at all, so this fallback never fires there.
+  return CP_MODULE_RE.test(source)
 }
 
 /**

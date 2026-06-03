@@ -73,6 +73,20 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
   it("emits for inline `require('child_process').exec(...)`", () => {
     expect(runRule('require("child_process").exec(`run ${cmd}`)').length).toBe(1)
   })
+  // RECALL FALLBACK (dogfood #316): a child_process reference the static resolver
+  // can't parse (dynamic import / re-export) must still emit — never drop a real
+  // shell-out.
+  it("emits via the recall fallback for a dynamic import('child_process')", () => {
+    expect(
+      runRule(`async function f(){ const cp = await import("child_process"); cp.exec(\`x \${cmd}\`); }`).length,
+    ).toBe(1)
+  })
+  it("emits via the recall fallback for `export { exec } from 'child_process'`", () => {
+    expect(runRule(`export { exec } from "child_process";\nexec(\`run \${x}\`)`).length).toBe(1)
+  })
+  it("the fallback does NOT fire on a substring module name (./child_process_extra)", () => {
+    expect(runRule(`import { exec } from "./child_process_extra"; exec(\`x \${y}\`)`).length).toBe(0)
+  })
   // PRECISION (the PR #296 family): a same-named .exec on a NON-child_process
   // receiver, or a bare exec with no child_process import, is NOT a shell sink.
   it("does NOT flag re.exec(line) (RegExp.exec — the PR #296 self-FP)", () => {

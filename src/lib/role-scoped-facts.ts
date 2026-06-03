@@ -45,6 +45,10 @@ export interface RoleScopedFactInputs {
    *  FACTS for the logic specialist to reason about (helper-bypass / idempotency
    *  asymmetry), not posted findings. Empty when none. */
   asymmetryBlock?: string
+  /** SIG-317 Part 4b-v2 TOCTOU / check-then-act race hints (logic) — deterministic
+   *  FACTS for the logic specialist to judge (SELECT-check then separate relative
+   *  UPDATE with no atomicity), not posted findings. Empty when none. */
+  toctouBlock?: string
 }
 
 /**
@@ -65,7 +69,7 @@ export function buildFactsByRole(inputs: RoleScopedFactInputs): Record<Specialis
       inputs.sarifBlock,
       inputs.securityManifestBlock,
     ]),
-    logic: join([astBlock("logic"), inputs.deterministicBlock, inputs.asymmetryBlock ?? ""]),
+    logic: join([astBlock("logic"), inputs.deterministicBlock, inputs.asymmetryBlock ?? "", inputs.toctouBlock ?? ""]),
     performance: join([astBlock("performance"), inputs.perfBudgetBlock]),
     tests: join([inputs.docsCoverageBlock, inputs.coverageGapBlock]),
   }

@@ -323,6 +323,15 @@ OPENCLAW_SYNTH_RECOVERY = "on"
 # for the live pr/12 over-credit A/B. Rollback path = "shadow".
 OPENCLAW_ASYMMETRY_HINTS = "on"
 
+# SIG-317 Part 4b-v2: the TOCTOU / check-then-act race evidence-injector. Same
+# shadow-first ladder as the over-credit injector above. Detects SELECT-of-C ->
+# JS value-guard -> separate `UPDATE T SET C = C +/- N` with no atomic guard (the
+# addSeat race), silent on the atomic-WHERE / FOR UPDATE / ON CONFLICT / CAS /
+# SERIALIZABLE / advisory-lock / DurableObject variants. "shadow" logs the
+# `pr-review-toctou-hints` count (no inject); flip to "on" gated on a clean
+# race-benchmark + the SIG-245 zero-P1-FP window.
+OPENCLAW_TOCTOU_HINTS = "shadow"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.

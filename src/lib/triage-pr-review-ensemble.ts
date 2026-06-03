@@ -297,6 +297,7 @@ import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
 import { analyzeHelperBypass, renderAsymmetryHints } from "./ast-rules/analyze-helper-bypass"
+import { analyzeToctouRace, renderToctouHints } from "./ast-rules/analyze-toctou-race"
 import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
 import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
@@ -2278,10 +2279,11 @@ export async function handlePrReviewEnsemble(
     // SIG-317 Part 4b: the asymmetry injector needs the changed-files corpus too
     // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
     const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
+    const toctouMode = (env.OPENCLAW_TOCTOU_HINTS ?? "off").trim().toLowerCase()
     const astFilesByPath = new Map<string, string>()
     if (
       (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
-        asymmetryMode !== "off") &&
+        asymmetryMode !== "off" || toctouMode !== "off") &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(
@@ -3077,6 +3079,25 @@ export async function handlePrReviewEnsemble(
         if (asymmetryMode === "on") asymmetryBlock = renderAsymmetryHints(asymmetryHints)
       }
     }
+    // SIG-317 Part 4b-v2: TOCTOU / check-then-act race hints for the LOGIC
+    // specialist — a deterministic FACT (a SELECT-of-C-then-separate-relative-
+    // UPDATE-of-C with no atomic guard = a likely race) surfaced for the model to
+    // judge, NOT a posted finding. Same shadow-first ladder as the asymmetry
+    // injector: `shadow` logs the count, `on` injects.
+    let toctouBlock = ""
+    if (toctouMode !== "off") {
+      const toctouHints = analyzeToctouRace(astFilesByPath)
+      if (toctouHints.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-toctou-hints",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: toctouMode,
+          count: toctouHints.length,
+          hints: toctouHints.map((h) => ({ fn: h.fn, table: h.table, column: h.column })),
+        }))
+        if (toctouMode === "on") toctouBlock = renderToctouHints(toctouHints)
+      }
+    }
     const factsByRole = buildFactsByRole({
       secretScanBlock,
       depVulnBlock,
@@ -3088,6 +3109,7 @@ export async function handlePrReviewEnsemble(
       perfBudgetBlock,
       astFindings: astResult.findings,
       asymmetryBlock,
+      toctouBlock,
     })
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
 

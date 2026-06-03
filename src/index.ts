@@ -353,6 +353,12 @@ export interface Env {
   // the model to judge — nudges the specialist, so shadow-first.
   OPENCLAW_ASYMMETRY_HINTS?: string
 
+  // SIG-317 Part 4b-v2: TOCTOU / check-then-act race hints for the logic
+  // specialist. off (default) | shadow (log the hint count) | on (inject). A
+  // FACT (SELECT-check then separate relative UPDATE with no atomic guard) for
+  // the model to judge — nudges the specialist, so shadow-first.
+  OPENCLAW_TOCTOU_HINTS?: string
+
   // SIG-161: confidence-threshold verdict gate. Three-state rollout
   //   "off"     — bypassed; legacy `chooseReviewEvent` decides (default).
   //   "shadow"  — `chooseReviewEventWithGate` runs but legacy verdict ships;

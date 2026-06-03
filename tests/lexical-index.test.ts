@@ -1,7 +1,7 @@
 // SIG-45 — lexical (BM25 / FTS5) retrieval backend unit tests.
 
 import { describe, it, expect, beforeEach } from "vitest"
-import { makeD1 } from "./_shims/d1-sqlite-shim"
+import { makeD1, FTS5_AVAILABLE } from "./_shims/d1-sqlite-shim"
 import {
   hybridRetrievalEnabled,
   buildFtsQuery,
@@ -86,7 +86,9 @@ describe("reciprocalRankFusion", () => {
   })
 })
 
-describe("lexical D1 round-trip (FTS5/BM25)", () => {
+// Skipped on a node:sqlite build compiled WITHOUT FTS5 ("no such module: fts5");
+// CI's Node ships FTS5 so it runs there. Keeps the suite green on a no-FTS5 local Node.
+describe.skipIf(!FTS5_AVAILABLE)("lexical D1 round-trip (FTS5/BM25)", () => {
   it("writes chunks and retrieves them by BM25 relevance, scoped to namespace", async () => {
     const db = makeD1()
     const ok = await upsertLexicalChunks(db, [

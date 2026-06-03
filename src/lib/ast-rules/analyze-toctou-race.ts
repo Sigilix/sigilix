@@ -138,20 +138,15 @@ function bodyHasSerializationGuard(bodyKept: string): boolean {
   return false
 }
 
-/** Is `col` selected as a BARE column (not inside SUM(/COUNT(/AVG( and not `*`)? */
+/** Is `col` selected as a BARE column — present in the select-list AND with at
+ *  least one occurrence OUTSIDE an aggregate (SUM/COUNT/…), not just `*`? A bare
+ *  read of the column is what a check-then-act guards on; an aggregate is the
+ *  over-credit shape, not this one. */
 function selectsBareColumn(selectList: string, col: string): boolean {
-  if (/\*/.test(selectList) && !new RegExp(`\\b${esc(display(col))}\\b`).test(selectList)) return false
-  // reject if the only occurrence is inside an aggregate call
-  const re = new RegExp(`\\b(?:sum|count|avg|min|max|coalesce)\\s*\\(([^)]*)\\)`, "gi")
-  let aggregatedOnly = false
-  const target = norm(col)
-  if (new RegExp(`\\b${esc(display(col))}\\b`).test(selectList)) {
-    // appears somewhere; ensure at least one occurrence is OUTSIDE an aggregate
-    const withoutAgg = selectList.replace(re, " ")
-    return new RegExp(`\\b${esc(display(col))}\\b`).test(withoutAgg)
-  }
-  void aggregatedOnly; void target
-  return false
+  const name = new RegExp(`\\b${esc(display(col))}\\b`)
+  if (!name.test(selectList)) return false // not selected (covers bare `*`)
+  const withoutAgg = selectList.replace(/\b(?:sum|count|avg|min|max|coalesce)\s*\(([^)]*)\)/gi, " ")
+  return name.test(withoutAgg)
 }
 
 export function analyzeToctouRace(filesByPath: ReadonlyMap<string, string>): ToctouHint[] {

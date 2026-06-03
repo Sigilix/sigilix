@@ -108,6 +108,30 @@ describe("injectUnmatchedAstEmits", () => {
     expect(r.injected).toHaveLength(0)
     expect(r.findings).toHaveLength(1)
     expect(r.findings).not.toBe(findings) // fresh array
+    expect(r.provenanceFindings).toHaveLength(provenanceFindings.length)
+    expect(r.provenanceFindings).not.toBe(provenanceFindings) // fresh array too
+  })
+
+  it("emits the FULL span for a multi-line AST entry (line=endLine, startLine=line)", () => {
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [ast({ line: 42, endLine: 45 })],
+    })
+    expect(r.findings[0].line).toBe(45) // last line of the span
+    expect(r.findings[0].startLine).toBe(42) // first line
+  })
+
+  it("range-overlap coverage: a multi-line existing finding whose span overlaps the emit covers it", () => {
+    // existing logic finding spans 38..40; emit at line 42 with ±3 tol → window [39,45];
+    // the finding's range [38,40] overlaps the window → covered, no inject.
+    const spanning = f({ category: "logic", startLine: 38, line: 40, score: 4 })
+    const r = injectUnmatchedAstEmits({
+      findings: [spanning],
+      provenanceFindings: [prov(["logic-7"])],
+      astFindings: [ast()],
+    })
+    expect(r.injected).toHaveLength(0)
   })
 
   it("derives a capped headline from the message's first sentence", () => {

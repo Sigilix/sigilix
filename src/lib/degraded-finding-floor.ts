@@ -293,25 +293,32 @@ export function injectUnmatchedAstEmits(args: {
 
   for (const ast of candidates) {
     if (seen.has(ast.astFindingId)) continue
+    // The AST emit's span (line..endLine) widened by the tolerance. Coverage is
+    // RANGE-OVERLAP: an existing finding's own span (startLine..line) overlapping
+    // this window counts as covering it (CodeRabbit #330 — a multi-line existing
+    // finding shouldn't be missed just because its anchor `line` sits outside).
     const lo = ast.line - tol
     const hi = (ast.endLine ?? ast.line) + tol
-    const covered = findings.some(
-      (f) =>
-        f.path === ast.path &&
-        f.line >= lo &&
-        f.line <= hi &&
-        // security entries are covered by ANY finding on the line; other roles
-        // require a same-category finding (the synth prompt's coverage rule).
-        (ast.roleHint === "security" || f.category === ast.roleHint),
-    )
+    const covered = findings.some((f) => {
+      if (f.path !== ast.path) return false
+      // security entries are covered by ANY finding on the line; other roles
+      // require a same-category finding (the synth prompt's coverage rule).
+      if (ast.roleHint !== "security" && f.category !== ast.roleHint) return false
+      const fLo = f.startLine ?? f.line
+      const fHi = f.line
+      return fLo <= hi && fHi >= lo
+    })
     if (covered) continue
 
     const score = AST_EMIT_FLOOR_CEIL[ast.severity]!
     const headline = astHeadline(ast.message)
+    const isMultiLine = ast.endLine !== undefined && ast.endLine !== ast.line
     findings.push({
       path: ast.path,
-      line: ast.line,
-      ...(ast.endLine && ast.endLine !== ast.line ? { startLine: ast.line } : {}),
+      // Convention: `line` = last line of the span, `startLine` = first. Emit the
+      // full multi-line span (CodeRabbit #330) so the anchor isn't collapsed.
+      line: ast.endLine ?? ast.line,
+      ...(isMultiLine ? { startLine: ast.line } : {}),
       scope: "line",
       score,
       category: ast.roleHint as PrReviewFinding["category"],

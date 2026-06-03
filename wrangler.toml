@@ -543,22 +543,17 @@ OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
 # no inline findings (which is correct for a docs PR).
 OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 
-# SIG-224: dynamic dispatcher mode. "enforce_rules" (SIG-227a) is the rules-only
-# enforcement available TODAY: it runs the dispatcher's DETERMINISTIC rule layer
-# (NO LLM call, no added Ollama-Turbo round-trip) and its picks REPLACE
-# router.specialists for fan-out. It adds lockfile-only / `.d.ts`-only /
-# test-files-only safe-skips on top of the legacy router's docs-only + CSS-only —
-# fast-tracking trivial PRs so they stop hogging the queue's consumer slots (less
-# of the contention that delays real code reviews). RECALL-SAFE: deterministic
-# skips only, and the PROTECTED roles `security` + `logic` always run.
-# NOTE: "enforce" (the full LLM-decided middle that would skip tests/perf on code
-# PRs) is NOT honored yet — it logs `dispatcher-enforce-mode-not-honored-in-
-# phase-1` and runs everything; it ships in SIG-227b/228.
-# Modes: off | shadow | enforce_rules | enforce. Rollback: set "off" (or remove
-# the line) — no data/schema change. WATCH: prod logs, event
-# `dispatcher-shadow-decision` (compare `routerSpecialists` vs
-# `dispatcherSpecialists` for the legacy-vs-dispatcher fan-out delta); roll back
-# if a skipped role would have produced a real finding.
+# SIG-224/227b: dynamic dispatcher mode. The "enforce" branch is now WIRED in
+# code (a code PR with no test/perf surface skips those specialists; reconcile()
+# PROTECTS security+logic — they always run; any LLM error/timeout/abort/chat-off
+# FAILS CLOSED to run-all). But the SIG-227b dual sign-off (DeepSeek + Kimi, both
+# RISKY) said: don't activate an unvalidated LLM filter blind — BAKE in "shadow"
+# first (the dispatcher runs its deepseek-v4-flash classifier + logs
+# `dispatcher-shadow-decision` = routerSpecialists vs dispatcherSpecialists,
+# WITHOUT changing fan-out), confirm the tests/perf would-skips never drop a role
+# that fired, THEN flip "enforce" (watch `dispatcher-enforce-applied`). Staying
+# "enforce_rules" (the SIG-227a deterministic skips, live since #324) until that
+# bake. Modes: off | shadow | enforce_rules | enforce. Rollback: "off".
 OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce_rules"
 
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",

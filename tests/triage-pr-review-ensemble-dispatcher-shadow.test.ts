@@ -358,7 +358,7 @@ index abc1234..def5678 100644
     expect(dispatcherCalls).toHaveLength(0)
   })
 
-  it("logs enforce-mode-not-honored when mode=enforce (Phase 1 safety)", async () => {
+  it("SIG-227b / enforce mode APPLIES the LLM-decided fan-out — protects security+logic, skips the tests/perf the LLM omits", async () => {
     mockGetPullRequest.mockResolvedValueOnce({
       head: { sha: HEAD_SHA },
       base: { sha: BASE_SHA },
@@ -370,11 +370,15 @@ index abc1234..def5678 100644
     mockGetPullRequestDiff.mockResolvedValueOnce(SIMPLE_SOURCE_DIFF)
     mockListOpenPullRequests.mockResolvedValueOnce([])
     mockGetFileContent.mockResolvedValueOnce(null)
+    // The dispatcher LLM picks NO ambiguous roles — i.e. judges tests +
+    // performance have no surface on this diff. The first chat() is the
+    // dispatcher classifier; the specialist fan-out that follows would hit the
+    // rejecting mock (proving security/logic still run but tests/perf don't).
     mockChat
       .mockImplementationOnce(async () => ({
         message: {
           role: "assistant",
-          content: JSON.stringify({ specialists: [], reasoning: "", confidence: 3 }),
+          content: JSON.stringify({ specialists: [], reasoning: "no test/perf surface", confidence: 4 }),
         },
         hasToolCalls: false,
       }))
@@ -389,19 +393,31 @@ index abc1234..def5678 100644
       env: makeEnv({ OPENCLAW_DYNAMIC_DISPATCHER_MODE: "enforce" } as unknown as Env),
     })
 
-    // Shadow telemetry STILL fires in enforce mode.
-    expect(findLoggedEvent("dispatcher-shadow-decision")).toBeDefined()
-    // Plus the explicit "enforce not honored in Phase 1" warning.
-    const warned = warnSpy.mock.calls.find((c) => {
+    const decision = findLoggedEvent("dispatcher-shadow-decision")
+    expect(decision).toBeDefined()
+    expect(decision?.mode).toBe("enforce")
+    const dispatched = decision?.dispatcherSpecialists as string[]
+    // RECALL-SAFE: the protected roles always run...
+    expect(dispatched).toContain("security")
+    expect(dispatched).toContain("logic")
+    // ...and the LLM-omitted non-protected roles are skipped.
+    expect(dispatched).not.toContain("tests")
+    expect(dispatched).not.toContain("performance")
+
+    // enforce is now HONORED: the applied event fires with the same set, and
+    // the old "not honored in Phase 1" warning is gone.
+    const applied = findLoggedEvent("dispatcher-enforce-applied")
+    expect(applied).toBeDefined()
+    expect(applied?.enforcedSpecialists).toEqual(dispatched)
+    const notHonored = warnSpy.mock.calls.find((c) => {
       const a = c[0]
       if (typeof a !== "string") return false
       try {
-        const obj = JSON.parse(a) as Record<string, unknown>
-        return obj.event === "dispatcher-enforce-mode-not-honored-in-phase-1"
+        return (JSON.parse(a) as Record<string, unknown>).event === "dispatcher-enforce-mode-not-honored-in-phase-1"
       } catch {
         return false
       }
     })
-    expect(warned).toBeDefined()
+    expect(notHonored).toBeUndefined()
   })
 })

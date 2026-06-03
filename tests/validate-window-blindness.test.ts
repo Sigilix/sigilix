@@ -309,8 +309,9 @@ type SpecialistVerdictsArg = Parameters<typeof validateForSubmission>[0]["specia
 
 function makeReviewable(): ReviewableMap {
   // The model's window = line 17 only (RIGHT side). The guard at line 5 is NOT
-  // a reviewable position, so the gate sees it as out-of-window.
-  return new Map([[PATH, [{ line: 17, side: "RIGHT" as const, position: 1 }]]]) as unknown as ReviewableMap
+  // a reviewable position, so the gate sees it as out-of-window. Typed directly
+  // (no `unknown as`) so the ReviewablePosition contract is actually exercised.
+  return new Map([[PATH, [{ line: 17, side: "RIGHT" as const, position: 1 }]]])
 }
 function makeSpecialistVerdicts(): SpecialistVerdictsArg {
   return [{ role: "logic", verdict: { findings: [{ id: "logic-0" }] } }] as unknown as SpecialistVerdictsArg

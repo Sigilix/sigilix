@@ -2343,10 +2343,17 @@ export async function handlePrReviewEnsemble(
     // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
     const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
     const toctouMode = (env.OPENCLAW_TOCTOU_HINTS ?? "off").trim().toLowerCase()
+    // Cross-cutting over-fire Option B: the window-blindness gate reads the full
+    // file from `astFilesByPath` to find a guard the model never saw. It must
+    // trigger the fetch itself (CodeRabbit #329) — else, if every OTHER
+    // AST/symbol feature is off, the map stays empty and the gate silently
+    // fail-opens (keeps) on every finding, i.e. becomes a no-op.
+    const wantWindowBlindness =
+      parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE) !== "off"
     const astFilesByPath = new Map<string, string>()
     if (
       (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
-        asymmetryMode !== "off" || toctouMode !== "off") &&
+        asymmetryMode !== "off" || toctouMode !== "off" || wantWindowBlindness) &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(

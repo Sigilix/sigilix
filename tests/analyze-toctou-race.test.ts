@@ -34,6 +34,15 @@ describe("analyzeToctouRace — FIRES on real check-then-act races", () => {
     expect(fired(src)).toEqual(["claimCoupon"])
   })
 
+  it("fires when SELECT and UPDATE use different identifier casing [CodeRabbit #313]", () => {
+    const src = `function reserveMixed(id, n) {
+      const { rows } = await pool.query("SELECT QTY FROM inventory WHERE id = $1", [id]);
+      if (rows[0].qty < n) return false;
+      await pool.query("UPDATE inventory SET qty = qty - $2 WHERE id = $1", [id, n]);
+    }`
+    expect(fired(src)).toEqual(["reserveMixed"])
+  })
+
   it("names the atomic sibling in the message when one exists in the same change", () => {
     const sibling = `function reserveStockAtomic(id, n) {
       await pool.query("UPDATE inventory SET qty = qty - $2 WHERE id = $1 AND qty >= $2", [id, n]);

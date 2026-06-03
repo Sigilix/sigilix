@@ -56,10 +56,14 @@ export const FN_DECL_RE = /(?:^|[^.\w$])function\s+([A-Za-z_$][\w$]*)\s*\(/g
 export interface FnInfo {
   name: string
   body: string
+  /** Absolute index of the body's opening `{` in the (comment-blanked) source —
+   *  lets a caller map a within-body match back to a file line (e.g. the TOCTOU
+   *  injector's DurableObject-span check). Ignored by callers that don't need it. */
+  start: number
 }
 
-/** Extract named functions + their brace-balanced bodies from one comment-
- *  blanked source. */
+/** Extract named functions + their brace-balanced bodies (with body start offset)
+ *  from one comment-blanked source. */
 export function extractFunctions(blanked: string): FnInfo[] {
   const fns: FnInfo[] = []
   for (const m of blanked.matchAll(FN_DECL_RE)) {
@@ -78,7 +82,7 @@ export function extractFunctions(blanked: string): FnInfo[] {
       if (blanked[i] === "{") depth++
       else if (blanked[i] === "}") { depth--; if (depth === 0) break }
     }
-    fns.push({ name: m[1]!, body: blanked.slice(start, i + 1) })
+    fns.push({ name: m[1]!, body: blanked.slice(start, i + 1), start })
   }
   return fns
 }

@@ -23,7 +23,7 @@
 // NOT the read-aggregate-then-write over-credit shape (that is analyze-helper-
 // bypass's domain; it carries ON CONFLICT, which this detector suppresses on).
 
-import { esc, norm, display, blank, FN_DECL_RE } from "./scan-utils"
+import { esc, norm, display, blank, extractFunctions } from "./scan-utils"
 import { durableObjectClassSpans, lineInDurableObjectClass } from "../durable-object-spans"
 
 export interface ToctouHint {
@@ -33,38 +33,6 @@ export interface ToctouHint {
   fn: string
   table: string
   column: string
-}
-
-interface FnSpan {
-  name: string
-  body: string
-  /** Absolute index of the opening `{` in the (comment-blanked) file source. */
-  start: number
-}
-
-/** Named functions + brace-balanced bodies WITH their absolute start offset (the
- *  offset is needed to map a match back to a file line for the DO-span check). */
-function functionsWithOffset(blanked: string): FnSpan[] {
-  const out: FnSpan[] = []
-  for (const m of blanked.matchAll(FN_DECL_RE)) {
-    let i = (m.index ?? 0) + m[0].length
-    let paren = 1
-    while (i < blanked.length && paren > 0) {
-      if (blanked[i] === "(") paren++
-      else if (blanked[i] === ")") paren--
-      i++
-    }
-    while (i < blanked.length && blanked[i] !== "{" && blanked[i] !== ";") i++
-    if (blanked[i] !== "{") continue
-    let depth = 0
-    const start = i
-    for (; i < blanked.length; i++) {
-      if (blanked[i] === "{") depth++
-      else if (blanked[i] === "}") { depth--; if (depth === 0) break }
-    }
-    out.push({ name: m[1]!, body: blanked.slice(start, i + 1), start })
-  }
-  return out
 }
 
 const lineOf = (src: string, index: number): number => {
@@ -143,7 +111,9 @@ function bodyHasSerializationGuard(bodyKept: string): boolean {
  *  read of the column is what a check-then-act guards on; an aggregate is the
  *  over-credit shape, not this one. */
 function selectsBareColumn(selectList: string, col: string): boolean {
-  const name = new RegExp(`\\b${esc(display(col))}\\b`)
+  // case-insensitive: SQL identifiers are case-insensitive, so `SELECT SEAT_COUNT`
+  // must still match an `UPDATE ... seat_count = seat_count + 1` (CodeRabbit #313).
+  const name = new RegExp(`\\b${esc(display(col))}\\b`, "i")
   if (!name.test(selectList)) return false // not selected (covers bare `*`)
   const withoutAgg = selectList.replace(/\b(?:sum|count|avg|min|max|coalesce)\s*\(([^)]*)\)/gi, " ")
   return name.test(withoutAgg)
@@ -159,7 +129,7 @@ export function analyzeToctouRace(filesByPath: ReadonlyMap<string, string>): Toc
   // First pass: collect atomic-sibling forms (UPDATE T SET C=C±N WHERE ... <rel guard>).
   for (const source of filesByPath.values()) {
     const kept = blank(source)
-    for (const fn of functionsWithOffset(kept)) {
+    for (const fn of extractFunctions(kept)) {
       for (const lit of sqlLiterals(fn.body)) {
         const u = UPDATE_RE.exec(lit.sql)
         if (!u) continue
@@ -177,7 +147,7 @@ export function analyzeToctouRace(filesByPath: ReadonlyMap<string, string>): Toc
     const blanked = blank(source, true) // strings ALSO blanked (JS control-flow)
     const doSpans = doSpansByPath.get(path)
 
-    for (const fn of functionsWithOffset(kept)) {
+    for (const fn of extractFunctions(kept)) {
       if (bodyHasSerializationGuard(fn.body)) continue // ON CONFLICT / SERIALIZABLE / advisory lock
       const bodyBlanked = blanked.slice(fn.start, fn.start + fn.body.length)
 

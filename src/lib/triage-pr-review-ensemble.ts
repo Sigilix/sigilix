@@ -5336,26 +5336,31 @@ export async function handlePrReviewEnsemble(
     // `withdrawals` is loaded once near the soften pre-pass above (SIG-280
     // PR C hoisted it so the warm veto and this render path share one
     // read); the defensive wrap + rationale live there.
-    const { kept: postWithdrawalFindings, suppressed: withdrawnDetailed } =
+    const { kept: postWithdrawalFindings, suppressed: withdrawnDetailed, decayExpired: decayExpiredFindings } =
       filterWithdrawnFindingsDetailed(renderableFindings, withdrawals)
     const withdrawnFindings = withdrawnDetailed.map((s) => s.finding)
-    // SIG-217: emit repeat-FP telemetry for content-fingerprint re-fires (a
-    // dismissed finding that came back despite a changed finding ID) and for
-    // severity-escalation attempts (re-fired at a higher score than dismissed).
-    // Awaited-but-non-fatal (the recordDismissalMetric pattern) — a telemetry
-    // failure must never affect the review.
-    const fingerprintRefires = withdrawnDetailed.filter((s) => s.viaFingerprint)
-    if (fingerprintRefires.length > 0) {
-      const repeatFpEvents: RepeatFpEvent[] = []
-      for (const s of fingerprintRefires) {
-        // The finding's category is the per-specialist dimension (logic /
-        // security / performance / testing …). Always record the re-fire;
-        // additionally record an escalation attempt when the score climbed.
-        repeatFpEvents.push({ kind: "repeat-fp-detected", specialist: s.finding.category })
-        if (s.severityEscalated) {
-          repeatFpEvents.push({ kind: "severity-escalation-attempt", specialist: s.finding.category })
-        }
+    // SIG-217: emit repeat-FP telemetry. Two cases feed one batch:
+    //   - fingerprint re-fires still inside the decay window (suppressed) →
+    //     `repeat-fp-detected`, plus `severity-escalation-attempt` if the score
+    //     climbed above what it was when dismissed.
+    //   - decay-window lapses (SIG-217 Part B) — the finding was LET THROUGH
+    //     because the dismissal aged past the decay window → emit
+    //     `dismiss-decay-window-expired`.
+    // The finding's category is the per-specialist dimension (logic / security /
+    // performance / testing …). Awaited-but-non-fatal (the recordDismissalMetric
+    // pattern) — a telemetry failure must never affect the review.
+    const repeatFpEvents: RepeatFpEvent[] = []
+    for (const s of withdrawnDetailed) {
+      if (!s.viaFingerprint) continue
+      repeatFpEvents.push({ kind: "repeat-fp-detected", specialist: s.finding.category })
+      if (s.severityEscalated) {
+        repeatFpEvents.push({ kind: "severity-escalation-attempt", specialist: s.finding.category })
       }
+    }
+    for (const s of decayExpiredFindings) {
+      repeatFpEvents.push({ kind: "dismiss-decay-window-expired", specialist: s.finding.category })
+    }
+    if (repeatFpEvents.length > 0) {
       try {
         await recordRepeatFpMetrics(env, { owner, repo, prNumber, headSha, events: repeatFpEvents })
       } catch (err) {

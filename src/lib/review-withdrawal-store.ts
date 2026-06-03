@@ -24,6 +24,14 @@ import { type DismissReason, isDismissReason } from "./dismiss-reasons"
 const MATCH_THRESHOLD = 0.75
 const LINE_TOLERANCE = 5
 const TTL_SECONDS = 30 * 24 * 60 * 60 // 30 days
+// SIG-217 Part B: a dismissal only SUPPRESSES re-fires for this long. The KV
+// record still lives the full TTL above, but once a match is older than the
+// decay window we let the finding through (and emit `dismiss-decay-window-
+// expired`) so a stale concession can't mute a genuinely re-surfaced issue
+// forever. MUST stay < TTL — past the TTL the record is gone and there is
+// nothing left to decay.
+const DISMISS_DECAY_WINDOW_DAYS = 14
+const DISMISS_DECAY_WINDOW_MS = DISMISS_DECAY_WINDOW_DAYS * 24 * 60 * 60 * 1000
 
 export interface WithdrawalRecord {
   /** File path of the conceded finding. */
@@ -235,10 +243,15 @@ export function filterWithdrawnFindings<F extends MatchableFinding>(
 export function filterWithdrawnFindingsDetailed<F extends MatchableFinding>(
   findings: ReadonlyArray<F>,
   withdrawals: ReadonlyArray<WithdrawalRecord>,
-): { kept: F[]; suppressed: WithdrawnSuppression<F>[] } {
-  if (withdrawals.length === 0) return { kept: [...findings], suppressed: [] }
+  now: number = Date.now(),
+): { kept: F[]; suppressed: WithdrawnSuppression<F>[]; decayExpired: WithdrawnSuppression<F>[] } {
+  if (withdrawals.length === 0) return { kept: [...findings], suppressed: [], decayExpired: [] }
   const kept: F[] = []
   const suppressed: WithdrawnSuppression<F>[] = []
+  // SIG-217 Part B: matched a withdrawal but the decay window has lapsed — the
+  // finding is KEPT (let through), and the lapse is recorded so the ensemble
+  // can emit `dismiss-decay-window-expired`.
+  const decayExpired: WithdrawnSuppression<F>[] = []
   for (const f of findings) {
     const w = withdrawals.find((w) => findingMatchesWithdrawal(f, w))
     if (!w) {
@@ -255,9 +268,17 @@ export function filterWithdrawnFindingsDetailed<F extends MatchableFinding>(
       typeof f.score === "number" &&
       typeof w.dismissedScore === "number" &&
       f.score > w.dismissedScore
-    suppressed.push({ finding: f, withdrawal: w, viaFingerprint, severityEscalated })
+    const entry: WithdrawnSuppression<F> = { finding: f, withdrawal: w, viaFingerprint, severityEscalated }
+    // Past the decay window → stop suppressing. Keep the finding and record the
+    // lapse instead of muting a concession that may now be stale.
+    if (now - w.withdrawnAt > DISMISS_DECAY_WINDOW_MS) {
+      kept.push(f)
+      decayExpired.push(entry)
+      continue
+    }
+    suppressed.push(entry)
   }
-  return { kept, suppressed }
+  return { kept, suppressed, decayExpired }
 }
 
 interface WriteArgs {

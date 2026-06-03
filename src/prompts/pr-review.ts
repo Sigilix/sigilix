@@ -206,8 +206,16 @@
  * coverage gap. Stops the tests specialist re-filing real sinks as testing
  * findings (the dominant tests over-fire shape). Reviews with v19 go stale on
  * first deploy of v20.
+ *
+ * v20 → v21 (SIG-308): the logic specialist's refutation-survival rationale
+ * (`independentAssessment`) becomes MANDATORY on every score>=4 logic finding,
+ * not "optional but expected". The model was emitting it 0% of the time, which
+ * left the SIG-308 logic-refutation gate (`OPENCLAW_LOGIC_REFUTATION_MODE`)
+ * unflippable — enforce would have dropped 100% of P1 logic. Forcing the model
+ * to name the absent guard both unblocks the gate and improves logic-finding
+ * quality at the source. Reviews with v20 go stale on first deploy of v21.
  */
-export const PROMPT_VERSION = "20"
+export const PROMPT_VERSION = "21"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

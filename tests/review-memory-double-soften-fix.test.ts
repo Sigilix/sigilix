@@ -44,6 +44,6 @@ describe("SIG-280 prereq: double-soften fix (renderer-only soften)", () => {
   })
 
   it("bumps PROMPT_VERSION so prior-version reviews go stale on deploy", () => {
-    expect(PROMPT_VERSION).toBe("20")
+    expect(PROMPT_VERSION).toBe("21")
   })
 })

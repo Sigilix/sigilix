@@ -237,3 +237,44 @@ describe("ValidationMetricsDO dismissal-reason events", () => {
     expect(dismissals.reasonCounts["wrong-context"]).toBe(1)
   })
 })
+
+describe("ValidationMetricsDO.recordRepeatFps + queryRepeatFps (SIG-217)", () => {
+  it("rolls up per-reason and per-specialist; absent reasons default to 0", async () => {
+    const do_ = makeDoInstance()
+    const at = "2026-05-26T12:00:00.000Z"
+    await do_.recordRepeatFps({
+      ...pr,
+      occurredAt: at,
+      events: [
+        { kind: "repeat-fp-detected", specialist: "security" },
+        { kind: "repeat-fp-detected", specialist: "logic" },
+        { kind: "severity-escalation-attempt", specialist: "security" },
+      ],
+    })
+    const out = await do_.queryRepeatFps({ windowDays: 7, nowIso: at })
+    expect(out.byReason["repeat-fp-detected"]).toBe(2)
+    expect(out.byReason["severity-escalation-attempt"]).toBe(1)
+    expect(out.byReason["dismiss-decay-window-expired"]).toBe(0) // never seen → default
+    expect(out.bySpecialist["security"]).toBe(2) // 1 detected + 1 escalation
+    expect(out.bySpecialist["logic"]).toBe(1)
+  })
+
+  it("accumulates the same (day,specialist,reason) across batches", async () => {
+    const do_ = makeDoInstance()
+    const at = "2026-05-26T08:00:00.000Z"
+    for (let i = 0; i < 3; i++) {
+      await do_.recordRepeatFps({ ...pr, occurredAt: at, events: [{ kind: "repeat-fp-detected", specialist: "perf" }] })
+    }
+    const out = await do_.queryRepeatFps({ windowDays: 7, nowIso: at })
+    expect(out.byReason["repeat-fp-detected"]).toBe(3)
+    expect(out.bySpecialist["perf"]).toBe(3)
+  })
+
+  it("excludes events outside the trailing window", async () => {
+    const do_ = makeDoInstance()
+    await do_.recordRepeatFps({ ...pr, occurredAt: "2026-05-01T12:00:00.000Z", events: [{ kind: "repeat-fp-detected", specialist: "logic" }] })
+    await do_.recordRepeatFps({ ...pr, occurredAt: "2026-05-26T12:00:00.000Z", events: [{ kind: "repeat-fp-detected", specialist: "logic" }] })
+    const out = await do_.queryRepeatFps({ windowDays: 7, nowIso: "2026-05-26T12:00:00.000Z" })
+    expect(out.byReason["repeat-fp-detected"]).toBe(1) // only the in-window one
+  })
+})

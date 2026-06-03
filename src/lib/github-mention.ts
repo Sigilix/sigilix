@@ -476,6 +476,11 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
       // `meta.head?.sha` (PR HEAD at the moment the concession was decided)
       // is the audit-trail field; cast-narrow to string with a safe fallback.
       const prHeadSha = typeof meta.head?.sha === "string" ? meta.head.sha : ""
+      // SIG-217: lift the render-time fingerprint + severity off the original
+      // finding comment so the withdrawal can suppress content-equivalent
+      // re-fires (and flag severity-escalation attempts) on later pushes.
+      const contentFingerprint = parseFindingFingerprint(originalFindingBody)
+      const dismissedScore = parseFindingSeverity(originalFindingBody)
       await writeWithdrawal({
         env,
         owner,
@@ -486,6 +491,8 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
         bodySnapshot: originalFindingBody,
         withdrawnByCommentId: newId,
         prHeadSha,
+        ...(contentFingerprint ? { contentFingerprint } : {}),
+        ...(dismissedScore !== undefined ? { score: dismissedScore } : {}),
       })
     } else {
       console.warn(JSON.stringify({
@@ -516,6 +523,28 @@ function findOriginalFindingBody(thread: ThreadEntry[]): string | null {
     if (entry.body.includes(FINDING_MARKER)) return entry.body
   }
   return null
+}
+
+/**
+ * SIG-217: parse the hidden `<!-- sigilix:fingerprint:HASH -->` marker that the
+ * renderer embeds on every finding comment. Returns the 64-hex-char SHA-256, or
+ * undefined when absent (pre-SIG-217 comments / records → Jaccard fallback).
+ */
+function parseFindingFingerprint(body: string): string | undefined {
+  const m = /<!-- sigilix:fingerprint:([0-9a-f]{64}) -->/.exec(body)
+  return m ? m[1] : undefined
+}
+
+/**
+ * SIG-217: parse the hidden `<!-- sigilix:severity:N -->` marker. Returns the
+ * score (1–5) or undefined. Lets a later content-equivalent re-fire at a
+ * HIGHER score be recognized as a severity-escalation attempt.
+ */
+function parseFindingSeverity(body: string): number | undefined {
+  const m = /<!-- sigilix:severity:(\d+) -->/.exec(body)
+  if (!m) return undefined
+  const n = Number(m[1])
+  return Number.isInteger(n) ? n : undefined
 }
 
 interface SourceComment {

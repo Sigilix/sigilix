@@ -69,6 +69,7 @@ import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
 import { handleRunnerEvidenceMetricsRoute } from "./lib/metrics-runner-evidence-route"
 import { handleVerificationMetricsRoute } from "./lib/metrics-verification-route"
 import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
+import { handleRepeatFpsMetricsRoute } from "./lib/metrics-repeat-fps-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
 import { handleGraphMetricsRoute } from "./lib/metrics-graph-route"
@@ -347,6 +348,28 @@ export interface Env {
   // never injected into any prompt). Default off → fully inert.
   OPENCLAW_GRAPH_EXPANSION?: string
 
+  // SIG-314: deterministic IDOR/BOLA floor (no-unauthorized-object-lookup).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory). The rule
+  // always runs; this gates whether its P2-capped emits reach the synth/post.
+  OPENCLAW_AUTHZ_IDOR_SCAN?: string
+
+  // SIG-317: synth verdict-truncation recovery. off (default) | shadow (log the
+  // recoverable count) | on (apply). Recovers findings the synth marked KEPT in
+  // provenance but truncated out of verdict.findings on target-rich PRs.
+  OPENCLAW_SYNTH_RECOVERY?: string
+
+  // SIG-317 Part 4b: cross-function asymmetry hints for the logic specialist.
+  // off (default) | shadow (log the hint count) | on (inject into the logic
+  // prompt). A FACT (mutator bypasses an aggregation helper used elsewhere) for
+  // the model to judge — nudges the specialist, so shadow-first.
+  OPENCLAW_ASYMMETRY_HINTS?: string
+
+  // SIG-317 Part 4b-v2: TOCTOU / check-then-act race hints for the logic
+  // specialist. off (default) | shadow (log the hint count) | on (inject). A
+  // FACT (SELECT-check then separate relative UPDATE with no atomic guard) for
+  // the model to judge — nudges the specialist, so shadow-first.
+  OPENCLAW_TOCTOU_HINTS?: string
+
   // SIG-161: confidence-threshold verdict gate. Three-state rollout
   //   "off"     — bypassed; legacy `chooseReviewEvent` decides (default).
   //   "shadow"  — `chooseReviewEventWithGate` runs but legacy verdict ships;
@@ -514,6 +537,13 @@ export interface Env {
   // (#248). Operator flips via
   // `wrangler secret put OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE shadow`.
   OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string
+
+  // SIG-311 Layers A+B: security USAGE-vs-MENTION validator. off (default) |
+  // shadow (count/telemeter the would-demote, keep inline) | enforce (demote a
+  // sev>=4 injection/xss finding on a detector/validator/test/doc path whose
+  // cited token is a mention, not a live sink — the PR #296 self-FP family).
+  // Demote-not-drop, keep on any uncertainty.
+  OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string
 
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
@@ -1208,6 +1238,12 @@ export default {
     // SIG-173: authenticated read of rolling per-reason dismissal rollup.
     if (request.method === "GET" && url.pathname === "/metrics/dismissals") {
       return handleDismissalMetricsRoute(request, env)
+    }
+
+    // SIG-217: authenticated read of rolling repeat-FP rollup (per-reason +
+    // per-specialist) — surfaces dismissal-re-fire + severity-escalation rates.
+    if (request.method === "GET" && url.pathname === "/metrics/repeat-fps") {
+      return handleRepeatFpsMetricsRoute(request, env)
     }
 
     // SIG-152: authenticated read of rolling SIG-138 graph shadow telemetry.

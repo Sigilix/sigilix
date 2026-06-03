@@ -235,6 +235,7 @@ export interface FindingTrust {
     | "inline-grounding"
     | "absence-grounding"
     | "security-grounding"
+    | "security-usage"
     | "security-evidence"
     | "verification-refuted"
     | "outside-diff"
@@ -263,6 +264,15 @@ export interface PrReviewFinding {
   /** SIG Trust Ledger v0: runtime-only trust metadata (the renderer reads this);
    *  attached at submission time, never parsed from model output. */
   trust?: FindingTrust
+  /**
+   * SIG-217: runtime-only content fingerprint —
+   * `sha256(category + path + bodySnippet(0,80))`, attached by the ensemble
+   * before render. Emitted as a hidden `sigilix:fingerprint:` marker so a
+   * later dismissal can record it and content-equivalent re-fires are
+   * suppressed even when the model-emitted finding ID changes per push.
+   * Never parsed from model output.
+   */
+  contentFingerprint?: string
   /**
    * Structured details: optional concrete example proving the finding. Intended
    * for minimal repro input/output, runtime exception text, parser
@@ -2247,6 +2257,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
         r === "inline-grounding" ||
         r === "absence-grounding" ||
         r === "security-grounding" ||
+        r === "security-usage" ||
         r === "security-evidence" ||
         r === "verification-refuted" ||
         r === "do-race" ||
@@ -3348,6 +3359,11 @@ export function formatFindingComment(
   lines.push(`<!-- sigilix:category:${formatFindingCategory(finding)} -->`)
   lines.push(`<!-- sigilix:severity:${finding.score} -->`)
   lines.push(`<!-- sigilix:confidence:${confidence} -->`)
+  // SIG-217: hidden content fingerprint, so a later `@sigilix` dismissal can
+  // record it and content-equivalent re-fires are suppressed across pushes.
+  if (finding.contentFingerprint) {
+    lines.push(`<!-- sigilix:fingerprint:${finding.contentFingerprint} -->`)
+  }
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
   if (confidence <= 2 && finding.score < 4) {

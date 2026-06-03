@@ -299,6 +299,62 @@ OPENCLAW_GRAPH_RETRIEVAL = "post"
 # targeted version. Rollback: set "shadow" (inject stops; telemetry continues).
 OPENCLAW_GRAPH_EXPANSION = "post"
 
+# SIG-314 (2026-06-02): deterministic IDOR/BOLA floor (no-unauthorized-object-
+# lookup AST rule). Run-invariant insurance so the obvious in-diff IDOR the
+# security specialist catches only nondeterministically (pr/08: caught keys.ts,
+# dropped the workspaces BOLA) is never fully missed. The rule always RUNS (the
+# runner logs each hit), but its emits reach the synth/post ONLY in "post";
+# "off" strips silently, "shadow" strips-but-logs an `authz-idor-shadow` rollup.
+# Shipping at "post" (founder call 2026-06-02): structurally P2-capped
+# (clampAstEmitScores) so it can NEVER post a P0/P1 on its own; a specialist that
+# independently escalates the same line still stands; and there are no customers
+# yet, so live traffic is dogfood + e2e benchmark only. The residual risk is a P2
+# advisory on a middleware-only-authz handler (no in-body principal proxy) —
+# internal noise, not a believability incident. Rollback: "shadow" (measure-only)
+# or "off".
+OPENCLAW_AUTHZ_IDOR_SCAN = "post"
+
+# SIG-317 (2026-06-02): synth verdict-truncation recovery. On target-rich PRs the
+# synthesizer writes a COMPLETE provenance.findings but a SHORTER verdict.findings
+# (it details the top-ranked findings and truncates the verbose tail), silently
+# losing real subtle findings it marked KEPT — pr/10: provenance 20 / verdict 8,
+# a score-5 N+1 + the cents bug + a floating promise lost. Recovery reconstructs
+# the tail from the cited specialist sources; recovered findings flow through the
+# SAME post-synth gates, so it cannot lower precision. "off" inert, "shadow" logs
+# the `pr-review-synth-truncation-recovered` count, "on" applies. Precision-safe
+# by construction (recovers only synth-provenanced-kept findings, never invents;
+# the gates remain the authority) — running at "on" to surface on real reviews.
+# Rollback: "shadow" (telemetry only) or "off" (inert).
+OPENCLAW_SYNTH_RECOVERY = "on"
+
+# SIG-317 Part 4b (2026-06-02): cross-function asymmetry hints for the LOGIC
+# specialist — the evidence injector. Surfaces a deterministic FACT (a function
+# that mutates table T but bypasses the aggregation helper over T that other code
+# uses = a likely over-credit/over-refund, e.g. refundCharge skipping
+# refundsTotal) into the logic prompt for the model to judge. NOT a posted
+# finding — but it NUDGES the specialist, so unlike a pure detector it carries an
+# induced-FP risk and ships SHADOW-FIRST. "off" (default) inert, "shadow" logs the
+# `pr-review-asymmetry-hints` count, "on" injects. pr/11 D8 A/B (2026-06-02): the
+# fact REACHED the model (its reasoning traced downgradeCredit->amount_cents->the
+# helper SUM) but it deflected to a rounding/units judgment and missed the
+# repeatable over-credit. Reverted to "shadow" + retargeted the hint message at the
+# over-credit SEMANTICS; re-measure on the next over-credit benchmark before "on".
+# 2026-06-02: message hardened (#311: append-only + anti-reclassification branches,
+# real identifiers) + dual-signed-off + offline non-regression clean → flipped "on"
+# for the live pr/12 over-credit A/B. Rollback path = "shadow".
+OPENCLAW_ASYMMETRY_HINTS = "on"
+
+# SIG-317 Part 4b-v2: the TOCTOU / check-then-act race evidence-injector. Same
+# shadow-first ladder as the over-credit injector above. Detects SELECT-of-C ->
+# JS value-guard -> separate `UPDATE T SET C = C +/- N` with no atomic guard (the
+# addSeat race), silent on the atomic-WHERE / FOR UPDATE / ON CONFLICT / CAS /
+# SERIALIZABLE / advisory-lock / DurableObject variants. "shadow" logs the
+# `pr-review-toctou-hints` count (no inject); flip to "on" gated on a clean
+# race-benchmark + the SIG-245 zero-P1-FP window.
+# 2026-06-03: flipped "on" for the live pr/13 race A/B (reserveStock + claimCoupon
+# racy, bumpViewCount fires-but-safe). Rollback path = "shadow".
+OPENCLAW_TOCTOU_HINTS = "on"
+
 # SIG-184 runner-evidence ("defensible receipt") go-live (2026-05-30, founder-
 # authorized). The first two un-503 the POST /runner/ingest route so the runner
 # can deposit receipts; the third turns on consumption.
@@ -414,6 +470,15 @@ OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 # confirmed live (3 e2e reviews kept every real injection/secrets finding) + by
 # the validate-injection-taint + validate-security-grounding suites. Rollback: "shadow".
 OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
+
+# SIG-311 Layers A+B: security USAGE-vs-MENTION validator. Shadow-first — logs the
+# would-demote (`pr-review-finding-rejected-validation`, gate "security-usage") +
+# counts on GET /metrics/validation, KEEPS every finding inline (zero behavior
+# change). Demotes a sev>=4 injection/xss finding only when path-is-detector/
+# test/doc AND token-is-non-executable AND file-adds-no-real-sink (the PR #296
+# self-FP family). Flip to "enforce" after the pr/14 benchmark + a clean shadow
+# window (zero real-finding demotes). Rollback: "off".
+OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "shadow"
 
 # SIG-308: logic-refutation backstop (evaluateLogicRefutation). Flags a sev>=4
 # logic finding that never showed it survives refutation (no

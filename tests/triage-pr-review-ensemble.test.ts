@@ -1091,10 +1091,16 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(SPECIALIST_CONFIGS.performance.retries).toBe(1)
   })
 
-  it("security specialist swaps to qwen3-coder-next:cloud (Qwen coder model) + deepseek-v4-pro fallback", () => {
-    // SIG-234: was `deepseek-v4-flash:cloud` (which collided with
-    // tests primary — violated the 4+1 unique constraint).
-    expect(SPECIALIST_CONFIGS.security.primary).toBe("qwen3-coder-next:cloud")
+  it("security specialist runs deepseek-v4-flash:cloud (reasoner, reverted from the qwen coder) + deepseek-v4-pro fallback", () => {
+    // pr/07 regression: SIG-234 had swapped security to qwen3-coder-next (a
+    // CODER model) on the premise "vulns are syntax recognition, not reasoning".
+    // That premise fails for AUTHORIZATION — IDOR/BOLA/access-control are
+    // reasoning, and the coder model generated ZERO authz findings on an
+    // IDOR-heavy benchmark (raw pre-gate telemetry: never generated, not
+    // dropped). Reverted to a REASONING model. Deliberately SHARES
+    // deepseek-v4-flash with logic (recall beats the 4+1-unique nicety);
+    // deepseek-v4-pro stays as the deeper authz fallback.
+    expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek-v4-flash:cloud")
     expect(SPECIALIST_CONFIGS.security.fallback).toBe("deepseek-v4-pro:cloud")
     expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
   })
@@ -1108,7 +1114,7 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
   })
 
-  it("all 5 primaries are unique model identifiers (founder's 4+1 unique constraint)", () => {
+  it("primaries are distinct EXCEPT security deliberately shares logic's reasoner (post-pr/07)", () => {
     const primaries = [
       SPECIALIST_CONFIGS.logic.primary,
       SPECIALIST_CONFIGS.security.primary,
@@ -1116,7 +1122,12 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
       SPECIALIST_CONFIGS.tests.primary,
       SYNTHESIZER_CONFIG.primary,
     ]
-    expect(new Set(primaries).size).toBe(5)
+    // The original SIG-234 "4+1-unique" rule was relaxed after pr/07: security
+    // intentionally reuses logic's reasoning model (deepseek-v4-flash) because
+    // authorization needs reasoning and recall beats model-diversity. The other
+    // three specialist primaries + the synth remain distinct.
+    expect(SPECIALIST_CONFIGS.security.primary).toBe(SPECIALIST_CONFIGS.logic.primary)
+    expect(new Set(primaries).size).toBe(4)
   })
 
   it("synthesizer uses gpt-oss:120b primary + DeepSeek-flash cross-provider fallback (SIG-234)", () => {

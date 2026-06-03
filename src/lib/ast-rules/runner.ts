@@ -30,10 +30,98 @@ import {
 import { astFindingId } from "./finding-id"
 import {
   getEnabledRules,
+  ruleEnabledByConfig,
   type ResolvedAstRulesConfig,
 } from "./rule-registry"
 import type { AstFinding, AstRule, AstRuleHit, RuleContext } from "./types"
 import type { ReviewableMap } from "../diff-positions"
+import { scanDynamicHtmlSinks, DYNAMIC_HTML_SINK_RULE_ID } from "./scan-dynamic-html-sink"
+import {
+  buildGlobalUnionMap,
+  scanSqlEnumDrift,
+  ENUM_LITERAL_DRIFT_RULE_ID,
+} from "./scan-enum-literal-drift"
+import { scanCentsRenderedAsDollars, CENTS_AS_DOLLARS_RULE_ID } from "./scan-cents-as-dollars"
+import { scanFractionalCentsMath, FLOAT_CENTS_RULE_ID } from "./scan-float-cents"
+
+// SIG-312: the dynamic-HTML-sink XSS detector is a LINE-SCAN (the walker can't
+// reach `dangerouslySetInnerHTML` — it's a JSX attribute, and JSX isn't
+// traversed). We splice its hits into the same finding pipeline as the AST
+// rules via this synthetic rule descriptor: `warning`/`security`, and
+// `emitWhenUnmatched` so a dynamic HTML sink is deterministically SURFACED.
+//
+// Severity is `warning` (P2), not `error` (P0/P1), by design: a line-scan can't
+// prove whether the value is attacker-influenced vs a trusted constant/i18n
+// table (code-review CRITICAL: `TEMPLATES.welcomeHtml` would otherwise flag
+// P0/P1). So this is an FP-safe ADVISORY that surfaces the sink; the model's
+// security specialist still raises its OWN P0/P1 when it judges the value
+// untrusted (and supersedes this), so no recall is lost on a real XSS. The
+// `warning`→P2 ceiling is enforced by the synth emit instruction; the score
+// clamp deliberately does NOT cap security findings (it would demote a real
+// model-caught XSS). `nodeTypes: []` + the no-op `visit` ensure the walker
+// never invokes it as an AST rule.
+const DYNAMIC_HTML_SINK_PSEUDO_RULE: AstRule = {
+  id: DYNAMIC_HTML_SINK_RULE_ID,
+  severity: "warning",
+  roleHint: "security",
+  shortDescription: "Dynamic value rendered as raw HTML via an HTML-injection sink — verify sanitization",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
+
+// SIG-317 Part 2: enum/type-contract drift is also a LINE-SCAN with a CROSS-FILE
+// pre-pass — the SQL write (`SET status = 'refunded'`) lives in a string literal
+// the walker can't descend into, and the constraint it violates (the declared
+// union) lives in a DIFFERENT file. `warning`/`logic`/`emitWhenUnmatched`: a P2
+// advisory that surfaces the mismatch for the logic specialist to escalate, by
+// the same FP-safety reasoning as the dynamic-HTML sink (a scan can't prove the
+// DB schema doesn't legitimately allow the extra value). `nodeTypes: []` + a
+// no-op `visit` keep the walker from ever invoking it as an AST rule.
+const ENUM_LITERAL_DRIFT_PSEUDO_RULE: AstRule = {
+  id: ENUM_LITERAL_DRIFT_RULE_ID,
+  severity: "warning",
+  roleHint: "logic",
+  shortDescription: "SQL writes a value not in the column's declared type union — verify type-contract",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
+
+// SIG-317 Part 3: a `*Cents` value rendered as dollars in JSX without /100 is
+// also a LINE-SCAN (the value lives in a JSX expression the walker can't reach).
+// `warning`/`logic`/`emitWhenUnmatched`: a P2 advisory surfacing the likely
+// unit bug for the logic specialist to escalate, FP-safe by the same reasoning
+// as the sibling scans (a scan can't prove an upstream divide; `*Cents` is a
+// naming convention). `nodeTypes: []` + a no-op `visit` keep the walker out.
+const CENTS_AS_DOLLARS_PSEUDO_RULE: AstRule = {
+  id: CENTS_AS_DOLLARS_RULE_ID,
+  severity: "warning",
+  roleHint: "logic",
+  shortDescription: "A *Cents value is rendered as dollars without dividing by 100 — verify unit",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
+
+// SIG-317 Part 4a: an integer-cents value multiplied by a non-integer operand
+// without rounding (fractional-cents money math). Line-scan; `warning`/`logic`/
+// `emitWhenUnmatched` P2 advisory — the logic specialist judges whether the
+// multiplier is really fractional. Same FP-safe-by-construction posture as the
+// sibling scans.
+const FLOAT_CENTS_PSEUDO_RULE: AstRule = {
+  id: FLOAT_CENTS_RULE_ID,
+  severity: "warning",
+  roleHint: "logic",
+  shortDescription: "Integer cents multiplied by a non-integer without rounding — verify fractional cents",
+  language: "both",
+  nodeTypes: [],
+  emitWhenUnmatched: true,
+  visit: () => null,
+}
 
 const LARGE_FILE_BYTES = 500_000
 const EVIDENCE_MAX_CHARS = 200
@@ -129,6 +217,14 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
   const enabledRules = getEnabledRules(config)
   const changedLines: ChangedLines = buildChangedLines(diff)
 
+  // SIG-317 Part 2: collect every TS string-literal union declared across ALL
+  // changed files BEFORE the per-file scan, so the enum-drift scan can correlate
+  // a SQL write in one file to the union declared in another (the type lives in
+  // `shared/types.ts`, the query in `billing.ts`). Cheap regex pre-pass; the
+  // ambiguity resolution (a name declared with two distinct unions → never flag)
+  // is the FP-safety guard. Skipped downstream when empty (no unions → no scan).
+  const enumUnionMap = buildGlobalUnionMap(filesByPath.values())
+
   const findings: AstFinding[] = []
   const perFinding: Map<string, { line: number; side: "RIGHT" } | null> = new Map()
   // CR catch on PR #67: dedupe by `astFindingId`. Two rule hits at
@@ -214,6 +310,54 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
     }
 
     walkAst(parsed.ast, visitors)
+
+    // SIG-312: line-scan the source for an untrusted dynamic value flowing into
+    // an HTML-injection sink (dangerouslySetInnerHTML / innerHTML / …) — the
+    // walker can't reach JSX attributes, so this complements the AST pass. The
+    // hits join `fileHits` under a synthetic security rule and flow through the
+    // SAME changed-line filter, finding-id, dedupe, and emit path below.
+    //
+    // Scoped to parse-OK files (we're past the `parsed.ok` gate): every real
+    // React/TS file parses, so the recurring miss is covered. A file that fails
+    // to parse is a rare malformed edge — it's skipped here exactly as the AST
+    // rules skip it, and the model specialist still reviews it.
+    //
+    // Honor the full config predicate (CodeRabbit #296): the pseudo rule
+    // bypasses `getEnabledRules`, so gate the scan on the SAME enablement check
+    // (disabledRules AND severityThreshold) to keep it suppressible / threshold-
+    // gated exactly like a registry rule.
+    if (ruleEnabledByConfig(config, DYNAMIC_HTML_SINK_RULE_ID, DYNAMIC_HTML_SINK_PSEUDO_RULE.severity)) {
+      for (const hit of scanDynamicHtmlSinks(source)) {
+        fileHits.push({ rule: DYNAMIC_HTML_SINK_PSEUDO_RULE, hit })
+      }
+    }
+
+    // SIG-317 Part 2: enum/type-contract drift — a SQL write of a literal not in
+    // the column's declared union (`enumUnionMap`, built cross-file above). Same
+    // splice + config-gate as the dynamic-HTML scan; hits flow through the same
+    // changed-line filter, finding-id, dedupe, and emit path. No-op when no
+    // unions were declared in the diff.
+    if (ruleEnabledByConfig(config, ENUM_LITERAL_DRIFT_RULE_ID, ENUM_LITERAL_DRIFT_PSEUDO_RULE.severity)) {
+      for (const hit of scanSqlEnumDrift(source, enumUnionMap)) {
+        fileHits.push({ rule: ENUM_LITERAL_DRIFT_PSEUDO_RULE, hit })
+      }
+    }
+
+    // SIG-317 Part 3: a `*Cents` value rendered as dollars in JSX without /100.
+    // Same per-file splice + config-gate as the sibling scans.
+    if (ruleEnabledByConfig(config, CENTS_AS_DOLLARS_RULE_ID, CENTS_AS_DOLLARS_PSEUDO_RULE.severity)) {
+      for (const hit of scanCentsRenderedAsDollars(source)) {
+        fileHits.push({ rule: CENTS_AS_DOLLARS_PSEUDO_RULE, hit })
+      }
+    }
+
+    // SIG-317 Part 4a: fractional-cents money math (integer cents * non-integer,
+    // unrounded). Same per-file splice + config-gate as the sibling scans.
+    if (ruleEnabledByConfig(config, FLOAT_CENTS_RULE_ID, FLOAT_CENTS_PSEUDO_RULE.severity)) {
+      for (const hit of scanFractionalCentsMath(source)) {
+        fileHits.push({ rule: FLOAT_CENTS_PSEUDO_RULE, hit })
+      }
+    }
 
     // Filter hits by changed-lines + emit findings.
     for (const { rule, hit } of fileHits) {

@@ -34,6 +34,8 @@ import { noNPlusOneCallInLoop } from "./rules/no-n-plus-one-call-in-loop"
 import { noSyncIoInRequestPath } from "./rules/no-sync-io-in-request-path"
 // SIG-310: contract-drift type-pattern detector.
 import { noSnakeCamelOptionalAlias } from "./rules/no-snake-camel-optional-alias"
+// SIG-314: deterministic IDOR/BOLA floor (security, warning/P2-capped).
+import { noUnauthorizedObjectLookup } from "./rules/no-unauthorized-object-lookup"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -70,6 +72,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noSyncIoInRequestPath,
   // SIG-310: logic-specialist contract-drift type-pattern (severity: warning).
   noSnakeCamelOptionalAlias,
+  // SIG-314: security-specialist deterministic IDOR/BOLA floor (severity: warning).
+  noUnauthorizedObjectLookup,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {
@@ -86,15 +90,25 @@ export interface ResolvedAstRulesConfig {
 }
 
 /**
+ * The per-repo config predicate a rule must satisfy to run: not in
+ * `disabledRules` AND at/above the `severityThreshold`. Shared with the SIG-312
+ * line-scan pseudo rule (CodeRabbit #296) so it honors `severityThreshold`, not
+ * just the disabled list, exactly like a registry rule.
+ */
+export function ruleEnabledByConfig(
+  config: ResolvedAstRulesConfig,
+  id: string,
+  severity: Severity,
+): boolean {
+  return !config.disabledRules.includes(id) && SEVERITY_RANK[severity] >= SEVERITY_RANK[config.severityThreshold]
+}
+
+/**
  * Filter `ALL_RULES` by the per-repo astRules config. Returns an
  * empty list when the scanner is disabled OR every candidate rule
  * is below threshold or in the disabled list.
  */
 export function getEnabledRules(config: ResolvedAstRulesConfig): readonly AstRule[] {
   if (!config.enabled) return []
-  const minRank = SEVERITY_RANK[config.severityThreshold]
-  const disabled = new Set(config.disabledRules)
-  return ALL_RULES.filter((r) =>
-    !disabled.has(r.id) && SEVERITY_RANK[r.severity] >= minRank,
-  )
+  return ALL_RULES.filter((r) => ruleEnabledByConfig(config, r.id, r.severity))
 }

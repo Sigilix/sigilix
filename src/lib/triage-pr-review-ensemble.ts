@@ -82,8 +82,11 @@ import { mapWithConcurrency } from "./bounded-concurrency"
 import {
   loadWithdrawals,
   filterWithdrawnFindings,
+  filterWithdrawnFindingsDetailed,
+  computeContentFingerprint,
   type WithdrawalRecord,
 } from "./review-withdrawal-store"
+import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
 import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
@@ -163,6 +166,7 @@ import {
 } from "./validate-logic-refutation"
 import {
   evaluatePerfFinding,
+  clampTrivialSyncIoSeverity,
   parsePerfValidatorMode,
   type PerfValidatorMode,
   type PerfDropReason,
@@ -186,6 +190,12 @@ import {
   type SecurityGroundingValidatorMode,
   type SecurityGroundingDropReason,
 } from "./validate-security-grounding"
+import {
+  evaluateSecurityUsage,
+  parseSecurityUsageValidatorMode,
+  type SecurityUsageValidatorMode,
+  type SecurityUsageDropReason,
+} from "./validate-security-usage"
 import { postReviewCommentFallback, postReviewSkipNotice, type SkipNoticeReason } from "./review-comment-fallback"
 import {
   decideSpecialists,
@@ -298,6 +308,8 @@ import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
+import { analyzeHelperBypass, renderAsymmetryHints } from "./ast-rules/analyze-helper-bypass"
+import { analyzeToctouRace, renderToctouHints } from "./ast-rules/analyze-toctou-race"
 import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
 import { buildFactsByRole } from "./role-scoped-facts"
 import { postAstInlineFindings } from "./ast-rules/inline-poster"
@@ -342,7 +354,7 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor } from "./degraded-finding-floor"
+import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -371,6 +383,11 @@ import {
   emitSynthSummary,
   narrowSynthRetryOutcome,
 } from "./ensemble-perf-telemetry"
+import {
+  type TokenUsageByModel,
+  emitReviewSlo,
+  makeTokenRecorder,
+} from "./ensemble-slo-telemetry"
 // ARC-283 Phase B1b — shadow-mode bake-off harness. Imports are
 // no-ops when `env.SHADOW_BAKEOFF_ROLES` is unset/empty (the only
 // code path that fires is `parseShadowEnabledRoles("")` → empty
@@ -1233,16 +1250,22 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     perAttemptTimeoutMs: 120_000,
   },
   security: {
-    // Coder-model territory: vulnerability patterns are mostly
-    // syntax / dataflow recognition, not frontier reasoning. Qwen3-
-    // Coder-Next is tuned for agentic coding workflows and the
-    // primary needs to be DIFFERENT from tests (which now uses
-    // MiniMax) so the 4+1 unique constraint holds.
-    primary: "qwen3-coder-next:cloud",
+    // REVERTED from qwen3-coder-next (a coder model) to a REASONING model
+    // after the pr/07 benchmark regression. The SIG-234 premise —
+    // "vulnerability patterns are mostly syntax/dataflow recognition, not
+    // frontier reasoning" — holds for INJECTION but FAILS for AUTHORIZATION:
+    // IDOR / BOLA / broken access control are reasoning ("should this caller
+    // reach this resource?"), not pattern matching. On an IDOR-heavy benchmark
+    // the coder model produced ZERO authz findings (only the two obvious
+    // injections); raw pre-gate KV telemetry confirmed they were NEVER
+    // generated (not gate-dropped). In a controlled re-test on the exact diff,
+    // deepseek-v4-flash (the logic primary, a FAST reasoner) caught all of
+    // them. Deliberately the SAME model as logic — recall beats the
+    // 4+1-unique-primaries nicety, and v4-flash is proven in-budget on the hot
+    // path (deepseek-v4-pro is too slow for a critical-path primary; it stays
+    // on the fallback as the deeper authz backup).
+    primary: "deepseek-v4-flash:cloud",
     retries: 1,
-    // `deepseek-v4-pro:cloud` recycled here — the slow but capable
-    // reasoning model now lives on fallback paths so its latency
-    // doesn't anchor the critical path. Cross-provider from Qwen.
     fallback: "deepseek-v4-pro:cloud",
   },
   performance: {
@@ -1481,7 +1504,7 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
   // a double-post), at a marginal recall cost on the rare cross-role same-line case.
   const instruction = autoInline
     ? `Match these against specialist findings on \`(path, line, role_hint)\` triple. When a specialist finding shares ALL THREE with an AST entry, drop it from your output and include \`{ specialist, sourceFindingId, headline, reason: "superseded_by_ast/<id>" }\` in \`provenance.dropped[]\`. Cross-role matches (e.g. AST=security vs specialist=performance) do NOT supersede.`
-    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by role: a \`role_hint:"security"\` entry is a real sink — score it on its merits (typically P0/P1). A \`role_hint:"logic"\` entry is a type-design smell — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker. (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
+    : `These are deterministic confirmations. When a specialist finding matches an AST entry on \`(path, line, role_hint)\`, KEEP the specialist finding (the AST version is NOT posted separately) and treat the match as raised confidence. Do NOT drop AST-matched findings as superseded. Use the AST entries to order the Fix Plan — deterministically-confirmed issues outrank speculative ones. (Genuine cross-specialist duplicate findings are still merged via the \`duplicate\` drop reason.)\n\nSIG-309/310: an AST entry with \`"deterministic_emit": true\` is a high-confidence finding the scanner PROVED is present — a security sink (command/shell injection, disabled TLS) or a contract-drift type smell. EMIT a finding for it yourself in the entry's \`role_hint\` category, using the entry's \`message\` and a concrete fix — UNLESS a specialist finding already covers it: for a \`role_hint:"security"\` entry, "covers it" = any finding at the same \`(path, line)\`; for any OTHER role (e.g. \`logic\`), "covers it" = a finding at the same \`(path, line, role_hint)\` (a different-role finding on the same line must NOT suppress it). Do NOT omit an uncovered entry just because no specialist raised it; that is exactly the case this flag exists for. SEVERITY by the entry's \`severity\` field: an \`error\` entry is a PROVEN-dangerous sink — score it on its merits (typically P0/P1 for security). A \`warning\` entry is an ADVISORY the scanner surfaced but can't fully prove (a dynamic HTML sink whose value might be a trusted constant; a \`role_hint:"logic"\` type-design smell) — emit it at score 2-3 (P2/P3), anchored at the entry's path+line, NEVER as a P0/P1 blocker, whatever its \`role_hint\`. (If your own specialist independently judges a \`warning\` security advisory to be a real P0/P1, that specialist finding 'covers' the entry per the rule above and stands on its merits — the P2 ceiling applies only to the deterministic advisory.) (Entries WITHOUT \`deterministic_emit\` stay confirmation/ordering only, per above. A \`deterministic_emit\` entry that a specialist DID match is still just a confirmation — keep the specialist finding, don't double-post.)`
   return `\n\n[AST RULE FINDINGS — pre-LLM, structured]\n\n${instruction}\n\n\`\`\`json\n${astFindingsJson}\n\`\`\``
 }
 
@@ -1495,13 +1518,22 @@ export function buildAstFindingsSynthBlock(astFindingsJson: string, autoInline: 
  * Clamps, IN PLACE, the score of any finding co-located (±2 lines, same path,
  * same category) with a NON-`error` `emitWhenUnmatched` AST finding to that
  * rule's tier (warning→3/P2, info→2). `error` security emit rules are never
- * clamped — a P0/P1 injection/TLS sink is the correct outcome there. Returns
- * the count clamped. Pure (apart from the in-place score mutation); exported
- * for test.
+ * clamped — a P0/P1 injection/TLS sink is the correct outcome there.
+ *
+ * SIG-312 (CodeRabbit #296): a `warning`/`security` emit (the dynamic-HTML
+ * advisory) DOES create a ceiling, BUT a SPECIALIST-backed security finding is
+ * exempt — its score is the model's TRUST JUDGMENT legitimately escalating a
+ * surfaced sink to P0/P1, and demoting it would hide a REAL caught XSS at P2.
+ * Only a deterministic-ONLY security advisory (no specialist source — its
+ * `sourceFindingIds` are empty or reference only the `ast/…` emit) is capped.
+ * `provenanceFindings` aligns by index with `findings` (same walk in
+ * validateForSubmission). Returns the count clamped. Pure (apart from the
+ * in-place score mutation); exported for test.
  */
 export function clampAstEmitScores(
   findings: Array<{ path: string; line: number; category: string; score: number }>,
   astFindings: ReadonlyArray<{ path: string; line: number; endLine?: number; roleHint: string; severity: string; emitWhenUnmatched?: boolean }>,
+  provenanceFindings?: ReadonlyArray<{ sourceFindingIds?: readonly string[] } | null | undefined>,
 ): number {
   const CEIL: Record<string, number> = { error: 5, warning: 3, info: 2 }
   const emitCeils = astFindings
@@ -1509,14 +1541,20 @@ export function clampAstEmitScores(
     .map((f) => ({ path: f.path, role: f.roleHint, lo: f.line, hi: f.endLine ?? f.line, ceil: CEIL[f.severity] ?? 5 }))
   if (emitCeils.length === 0) return 0
   let clamped = 0
-  for (const finding of findings) {
+  for (let i = 0; i < findings.length; i++) {
+    const finding = findings[i]!
     const ceil = emitCeils
       .filter((e) => e.path === finding.path && e.role === finding.category && finding.line >= e.lo - 2 && finding.line <= e.hi + 2)
       .reduce((m, e) => Math.min(m, e.ceil), 5)
-    if (ceil < 5 && finding.score > ceil) {
-      finding.score = ceil
-      clamped++
+    if (ceil >= 5 || finding.score <= ceil) continue
+    // SIG-312: never demote a SPECIALIST-backed security finding (the model's
+    // escalation of a real sink). Cap only a deterministic-only one.
+    if (finding.category === "security") {
+      const srcIds = provenanceFindings?.[i]?.sourceFindingIds ?? []
+      if (srcIds.some((id) => !id.startsWith("ast/"))) continue
     }
+    finding.score = ceil
+    clamped++
   }
   return clamped
 }
@@ -1541,6 +1579,13 @@ export async function handlePrReviewEnsemble(
   // throughout this handler. headSha is truncated at log time inside
   // the helper. Stamped here once so every emit gets the same shape.
   const perfCtx: EnsembleRunCtx = { owner, repo, prNumber, headSha }
+  // SIG-149: per-review token accumulator. Shared by reference with
+  // `telemetry.tokenUsageByModel` below — the recorder mutates this
+  // object in place from every settled model attempt, so by the time
+  // `finalize()` reads `telemetry.tokenUsageByModel` it holds the full
+  // review's spend without any further plumbing.
+  const tokenUsageByModel: TokenUsageByModel = {}
+  perfCtx.recordTokens = makeTokenRecorder(tokenUsageByModel)
 
   // Lifted out of the try block so the finally cleanup can read cache
   // stats into telemetry on every exit path (success, failure, throw).
@@ -1610,8 +1655,9 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
     retrievalCacheStats: null,
+    tokenUsageByModel,
     startMs,
     totalMs: 0,
   }
@@ -2266,9 +2312,14 @@ export async function handlePrReviewEnsemble(
     const wantBranchAware =
       (env.OPENCLAW_BRANCH_AWARE_RETRIEVAL ?? "").trim().toLowerCase() === "on"
     const wantDynamicReviewEvidence = dynamicReviewEvidenceEnabled(env)
+    // SIG-317 Part 4b: the asymmetry injector needs the changed-files corpus too
+    // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
+    const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
+    const toctouMode = (env.OPENCLAW_TOCTOU_HINTS ?? "off").trim().toLowerCase()
     const astFilesByPath = new Map<string, string>()
     if (
-      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence) &&
+      (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
+        asymmetryMode !== "off" || toctouMode !== "off") &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(
@@ -2783,6 +2834,34 @@ export async function handlePrReviewEnsemble(
       config: astRulesConfig,
       ctx: { owner, repo, prNumber },
     })
+
+    // SIG-314: shadow-first gating for the deterministic IDOR/BOLA floor
+    // (no-unauthorized-object-lookup). The rule lives in ALL_RULES so it always
+    // RUNS (the runner logs `ast-rules-finding` per hit for FP measurement), but
+    // its emits reach the synth — and post — ONLY in `post` mode. `off` (the
+    // default) strips them silently; `shadow` strips-but-logs a rollup so we can
+    // read the firing + false-positive rate on dogfood + the e2e fixtures before
+    // promoting. The rule is structurally P2-capped (clampAstEmitScores), so the
+    // residual risk we're measuring is middleware-only-authz false positives,
+    // never a P0/P1.
+    const authzIdorMode = (env.OPENCLAW_AUTHZ_IDOR_SCAN ?? "off").trim().toLowerCase()
+    if (authzIdorMode !== "post") {
+      const authzEmits = astResult.findings.filter((f) => f.ruleId === "no-unauthorized-object-lookup")
+      if (authzEmits.length > 0) {
+        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-unauthorized-object-lookup")
+        // CodeRabbit #302: keep perFinding aligned — the auto-inline poster reads
+        // it by astFindingId, so a stale entry would mis-anchor another comment.
+        for (const f of authzEmits) astResult.perFinding.delete(f.astFindingId)
+        if (authzIdorMode === "shadow") {
+          console.log(JSON.stringify({
+            event: "authz-idor-shadow",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            count: authzEmits.length,
+            anchors: authzEmits.map((f) => `${f.path}:${f.line}`),
+          }))
+        }
+      }
+    }
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.
     telemetry.astRules = astResult.telemetry.scanned
@@ -3034,6 +3113,46 @@ export async function handlePrReviewEnsemble(
     // SIG-108: route deterministic facts to their owning specialist — no
     // cross-domain leak. Pure + unit-tested in role-scoped-facts.test.ts.
     // The SIG-91 diff-classification + ARC-182 stack blocks stay shared.
+    // SIG-317 Part 4b: cross-function asymmetry hints for the LOGIC specialist —
+    // a deterministic FACT (a mutator of table T that bypasses the aggregation
+    // helper over T used elsewhere = a likely over-credit/over-refund) surfaced
+    // for the model to judge, NOT a posted finding. Gated `off` (shadow) by
+    // default: unlike a pure detector this NUDGES the specialist, so it carries
+    // an induced-FP risk and ships shadow-first → measure → flip. `on` injects.
+    // `asymmetryMode` is read above (it also gates the changed-files corpus load).
+    let asymmetryBlock = ""
+    if (asymmetryMode !== "off") {
+      const asymmetryHints = analyzeHelperBypass(astFilesByPath)
+      if (asymmetryHints.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-asymmetry-hints",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: asymmetryMode,
+          count: asymmetryHints.length,
+          hints: asymmetryHints.map((h) => ({ fn: h.fn, helper: h.helper })),
+        }))
+        if (asymmetryMode === "on") asymmetryBlock = renderAsymmetryHints(asymmetryHints)
+      }
+    }
+    // SIG-317 Part 4b-v2: TOCTOU / check-then-act race hints for the LOGIC
+    // specialist — a deterministic FACT (a SELECT-of-C-then-separate-relative-
+    // UPDATE-of-C with no atomic guard = a likely race) surfaced for the model to
+    // judge, NOT a posted finding. Same shadow-first ladder as the asymmetry
+    // injector: `shadow` logs the count, `on` injects.
+    let toctouBlock = ""
+    if (toctouMode !== "off") {
+      const toctouHints = analyzeToctouRace(astFilesByPath)
+      if (toctouHints.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-toctou-hints",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: toctouMode,
+          count: toctouHints.length,
+          hints: toctouHints.map((h) => ({ fn: h.fn, table: h.table, column: h.column })),
+        }))
+        if (toctouMode === "on") toctouBlock = renderToctouHints(toctouHints)
+      }
+    }
     const factsByRole = buildFactsByRole({
       secretScanBlock,
       depVulnBlock,
@@ -3044,6 +3163,8 @@ export async function handlePrReviewEnsemble(
       securityManifestBlock: securityManifest.render(),
       perfBudgetBlock,
       astFindings: astResult.findings,
+      asymmetryBlock,
+      toctouBlock,
     })
     void renderAstFindingsAsJsonForSynth // referenced by Task 8 synth wiring
 
@@ -4411,6 +4532,63 @@ export async function handlePrReviewEnsemble(
     // `synthOutput.provenance.softened`).
     let effectiveSynthVerdict = synthOutput.verdict
     let effectiveSynthProvenance = synthOutput.provenance
+
+    // SIG-317: synth verdict-truncation recovery (runs BEFORE the degraded floor
+    // so recovery re-aligns verdict↔provenance first). On target-rich PRs the
+    // synth writes a COMPLETE provenance but a SHORTER verdict.findings — it
+    // details the top-ranked findings (security-first) and silently truncates
+    // the verbose tail, losing real subtle findings it MARKED KEPT (pr/10:
+    // provenance 20, verdict 8 — a score-5 N+1, the cents bug, a floating
+    // promise all lost). Recover the tail from the cited specialist sources; the
+    // recovered findings flow through the SAME post-synth gates below, so this
+    // CANNOT lower precision — the gates remain the authority. Modes:
+    // `off` (default) inert, `shadow` logs the recoverable count, `on` applies.
+    //
+    // The helper ALWAYS returns a 1:1-aligned (verdict, provenance) pair — it
+    // trims the truncated orphan tail to verdict length, then re-appends only the
+    // recovered entries. So in `on` we install the result UNCONDITIONALLY whenever
+    // the truncation branch runs, even when nothing qualified for recovery: the
+    // trim alone re-aligns the arrays so the degraded floor downstream appends
+    // onto an aligned base (otherwise the stale longer provenance survives and
+    // validateForSubmission mispairs the floor's restored findings — Codex SIG-317
+    // review). The non-recovered case is behavior-identical for posting (the
+    // ignored tail was never paired), so trimming it costs no recall. Orphans
+    // citing only AST-emit ids are NOT recovered here (sourceById is specialist-
+    // only) — AST/SIG-310 deterministic recovery is a deliberate Part-1 gap,
+    // fast-follow; it is precision-safe (those emits were already truncated).
+    const synthRecoveryMode = (env.OPENCLAW_SYNTH_RECOVERY ?? "off").trim().toLowerCase()
+    if (synthRecoveryMode !== "off"
+      && effectiveSynthProvenance.findings.length > effectiveSynthVerdict.findings.length) {
+      const sourceById = new Map<string, PrReviewFinding & { id: string }>()
+      for (const v of synthInputVerdicts) {
+        for (const f of v.verdict?.findings ?? []) {
+          const id = (f as { id?: unknown }).id
+          if (typeof id === "string") sourceById.set(id, f as PrReviewFinding & { id: string })
+        }
+      }
+      const rec = recoverTruncatedSynthFindings({
+        findings: effectiveSynthVerdict.findings,
+        provenanceFindings: effectiveSynthProvenance.findings,
+        sourceById,
+      })
+      if (rec.recovered.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-synth-truncation-recovered",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: synthRecoveryMode,
+          verdictLen: effectiveSynthVerdict.findings.length,
+          provenanceLen: effectiveSynthProvenance.findings.length,
+          recoveredCount: rec.recovered.length,
+          recovered: rec.recovered.map((r) => ({ id: r.id, score: r.score, category: r.category })),
+        }))
+      }
+      if (synthRecoveryMode === "on") {
+        // Install unconditionally — `rec` is always aligned (trim ± recovery).
+        effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: rec.findings }
+        effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: rec.provenanceFindings }
+      }
+    }
+
     if (degradedCoverage) {
       const floored = applyDegradedCoverageFindingFloor({
         findings: effectiveSynthVerdict.findings,
@@ -4443,11 +4621,28 @@ export async function handlePrReviewEnsemble(
     // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
     // demote sites can tag body-routed findings with their reason when enabled.
     const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
+    // Re-point the synth telemetry at the SAME (verdict, provenance) pair fed to
+    // validateForSubmission. telemetry.synthesizer.verdict was captured from the
+    // raw synthOutput (above), but the post-synth augmentations (SIG-317 recovery
+    // and the SIG-287 degraded floor) replace effectiveSynth* with the pair that
+    // is actually validated and posted. Without this, the `validated.provenance`
+    // assignment below leaves synthesizer.verdict (raw, shorter) index-MISALIGNED
+    // with synthesizer.provenance, breaking fp-rate dismissal attribution and
+    // recall-alarm counts (both pair verdict.findings[i] <-> provenance[i] by
+    // index). No-op when nothing augmented (effectiveSynth* === synthOutput.*);
+    // restores the pre-recovery invariant when they did (CodeRabbit #304).
+    if (telemetry.synthesizer) {
+      telemetry.synthesizer.verdict = effectiveSynthVerdict
+      telemetry.synthesizer.provenance = effectiveSynthProvenance
+    }
     const validated = validateForSubmission({
       trustLedgerEnabled: trustLedgerMode !== "off",
       synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
       reviewable,
       specialistVerdicts: synthInputVerdicts,
+      // SIG-314: admit the (post-shadow-strip) deterministic AST emit ids as
+      // valid provenance so an unmatched emit survives the hallucination guard.
+      astFindingIds: astResult.findings.map((f) => f.astFindingId),
       // SIG-113: thread the testing-evidence pack through so the
       // citation gate fires on uncited `category: "testing"` findings.
       // Empty pack (no source/test files) → gate no-ops via the
@@ -4657,6 +4852,24 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "security-grounding", reason: info.reason, dropped: info.dropped })
       },
+      // SIG-311 Layers A+B: security usage-vs-mention gate. Default off until
+      // OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE is flipped to shadow/enforce.
+      securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
+      onSecurityUsageFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "security-usage",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          cweId: finding.cweId ?? null,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "security-usage", reason: info.reason, dropped: info.dropped })
+      },
     })
     if (telemetry.synthesizer) {
       telemetry.synthesizer.provenance = validated.provenance
@@ -4676,6 +4889,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
       droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
+      droppedForFailedSecurityUsageValidation: validated.droppedForFailedSecurityUsageValidation,
     }
 
     // SIG-310: a deterministic_emit AST rule's SEVERITY is a HARD score ceiling
@@ -4686,9 +4900,24 @@ export async function handlePrReviewEnsemble(
     // path, same category) with a NON-`error` emitWhenUnmatched AST finding to
     // that rule's tier (warning→3/P2, info→2). `error` security emit rules are
     // never clamped — a P0/P1 injection/TLS sink is the correct outcome there.
-    const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings)
+    const astEmitClamped = clampAstEmitScores(validated.verdict.findings, astResult.findings, validated.cleanFindingProvenance)
     if (astEmitClamped > 0) {
       console.log(JSON.stringify({ event: "ast-emit-score-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: astEmitClamped }))
+    }
+
+    // BT1 (pr/07): cap a sev>=4 perf finding citing a CONSTANT version/help
+    // probe sync-exec (`execSync("… --version")`) to P3 — the only P0/P1 FP on
+    // pr/07. Mode-agnostic deterministic clamp (the perf evidence gate can't
+    // catch it: the call anchors to a real changed line, so it validates).
+    // Clamp BOTH the inline verdict findings AND the body-only (unanchored)
+    // findings (CodeRabbit #298): a demoted-to-body sync-exec would otherwise
+    // keep its sev>=4 score in the body/event output.
+    const perfClampLines = buildAddedLineTextByLine(fullPrDiff)
+    const perfClamped =
+      clampTrivialSyncIoSeverity(validated.verdict.findings, perfClampLines) +
+      clampTrivialSyncIoSeverity(validated.unanchoredFindings, perfClampLines)
+    if (perfClamped > 0) {
+      console.log(JSON.stringify({ event: "perf-trivial-sync-io-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: perfClamped }))
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we
@@ -5036,6 +5265,28 @@ export async function handlePrReviewEnsemble(
     // `_Flagged by N specialists._` body prefix still surfaces the
     // signal — the badge stays, just the row position differs in
     // those two surfaces.
+    // SIG-217: annotate each finding with its content fingerprint BEFORE
+    // render + withdrawal filtering. Computed from the RAW synth body (this
+    // runs before annotateWithConsensus prepends its "_Flagged by N_" line),
+    // so the value is stable across pushes regardless of the per-push blob
+    // hash that drives the model-emitted finding ID. The fingerprint then
+    // (a) flows into the rendered comment as a hidden marker, and (b) lets a
+    // later content-equivalent re-fire be recognized as already-dismissed.
+    // Mutates in place — runtime-only field, like `trust`. Best-effort: a hash
+    // failure leaves the finding without a fingerprint (Jaccard fallback).
+    try {
+      await Promise.all(
+        consensusVerdict.findings.map(async (f) => {
+          f.contentFingerprint = await computeContentFingerprint(f.category, f.path, f.body)
+        }),
+      )
+    } catch (err) {
+      console.warn(JSON.stringify({
+        event: "finding-fingerprint-annotate-failed",
+        owner, repo, prNumber,
+        error: err instanceof Error ? err.message : String(err),
+      }))
+    }
     const renderableFindings = consensusVerdict.findings.map((f, i) => {
       // SIG-280 PR C: soften iff this finding's INDEX survived the veto
       // pre-pass (cold regime → empty set, so this never fires in prod yet).
@@ -5085,8 +5336,36 @@ export async function handlePrReviewEnsemble(
     // `withdrawals` is loaded once near the soften pre-pass above (SIG-280
     // PR C hoisted it so the warm veto and this render path share one
     // read); the defensive wrap + rationale live there.
-    const { kept: postWithdrawalFindings, suppressed: withdrawnFindings } =
-      filterWithdrawnFindings(renderableFindings, withdrawals)
+    const { kept: postWithdrawalFindings, suppressed: withdrawnDetailed } =
+      filterWithdrawnFindingsDetailed(renderableFindings, withdrawals)
+    const withdrawnFindings = withdrawnDetailed.map((s) => s.finding)
+    // SIG-217: emit repeat-FP telemetry for content-fingerprint re-fires (a
+    // dismissed finding that came back despite a changed finding ID) and for
+    // severity-escalation attempts (re-fired at a higher score than dismissed).
+    // Awaited-but-non-fatal (the recordDismissalMetric pattern) — a telemetry
+    // failure must never affect the review.
+    const fingerprintRefires = withdrawnDetailed.filter((s) => s.viaFingerprint)
+    if (fingerprintRefires.length > 0) {
+      const repeatFpEvents: RepeatFpEvent[] = []
+      for (const s of fingerprintRefires) {
+        // The finding's category is the per-specialist dimension (logic /
+        // security / performance / testing …). Always record the re-fire;
+        // additionally record an escalation attempt when the score climbed.
+        repeatFpEvents.push({ kind: "repeat-fp-detected", specialist: s.finding.category })
+        if (s.severityEscalated) {
+          repeatFpEvents.push({ kind: "severity-escalation-attempt", specialist: s.finding.category })
+        }
+      }
+      try {
+        await recordRepeatFpMetrics(env, { owner, repo, prNumber, headSha, events: repeatFpEvents })
+      } catch (err) {
+        console.log(JSON.stringify({
+          event: "repeat-fp-metrics-record-error",
+          owner, repo, prNumber,
+          error: err instanceof Error ? err.message : String(err),
+        }))
+      }
+    }
     // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
     // body-only set. PR C's enforce mode can demote a LINE-scoped finding
     // (which carries a real path+line) to the body; without this it would
@@ -7303,6 +7582,9 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
           ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
           ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
         })
+        // SIG-149: accumulate per-review token spend (every settled
+        // attempt — incl. retries/fallback/parse-fail — burned tokens).
+        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens)
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
         // must not corrupt the verdict path. `runSpecialist` runs inside
@@ -7854,6 +8136,8 @@ export async function runSynthesizer(args: SynthesizerRunArgs): Promise<Synthesi
           ...(info.inputTokens !== undefined ? { inputTokens: info.inputTokens } : {}),
           ...(info.outputTokens !== undefined ? { outputTokens: info.outputTokens } : {}),
         })
+        // SIG-149: accumulate synth token spend into the per-review total.
+        args.perfCtx.recordTokens?.(info.model, info.inputTokens, info.outputTokens)
       } catch (err) {
         // ARC-283 B1b (code-review BLOCKING): telemetry callback throw
         // must not corrupt the verdict path. `runSynthesizer` is invoked
@@ -8585,6 +8869,7 @@ export interface ValidatedOutput {
    * telemetry so the gate's would-demote rate is observable before enforce.
    */
   droppedForFailedSecurityGroundingValidation: number
+  droppedForFailedSecurityUsageValidation: number
   /**
    * ARC-189: per-clean-finding provenance, aligned by INDEX with
    * `verdict.findings`. Captured during the same walk that filters
@@ -9388,6 +9673,20 @@ export function validateForSubmission(args: {
     info: { reason: SecurityGroundingDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-311 Layers A+B: security USAGE-vs-MENTION gate mode. Demotes a sev>=4
+   * injection/xss finding on a detector/validator/test/doc path whose cited
+   * token is a mention, not a live sink (the PR #296 self-FP family). Read from
+   * `OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE` at the call site.
+   */
+  securityUsageValidatorMode?: SecurityUsageValidatorMode
+  /** SIG-311: telemetry callback per usage-gate-flagged finding (reuses the
+   *  `pr-review-finding-rejected-validation` event, `gate: "security-usage"`).
+   *  `dropped` = demoted to body (enforce). */
+  onSecurityUsageFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: SecurityUsageDropReason; dropped: boolean },
+  ) => void
+  /**
    * ARC-176/SIG-175: review-tone preset. `assertive` preserves the
    * old score-1 advisory summary aggregation; `chill`/default drops
    * score-1 nits from customer-visible output entirely.
@@ -9398,6 +9697,15 @@ export function validateForSubmission(args: {
    *  the PR3 render can split outside-diff vs PR-level. Inert metadata nothing reads
    *  yet; gated so `off` stays a true no-op. */
   trustLedgerEnabled?: boolean
+  /**
+   * SIG-314: the `ast/<ruleId>/<hash>/<line>` ids of the deterministic AST
+   * findings the synth was shown. They are admitted as valid provenance so an
+   * `emitWhenUnmatched` finding the synth emits standalone (no specialist cited
+   * it) survives the hallucination guard. Absent → only specialist ids are
+   * valid (back-compat). Only real scanned ids are passed, so this can't be used
+   * to smuggle a hallucinated finding through.
+   */
+  astFindingIds?: readonly string[]
 }): ValidatedOutput {
   const {
     synthOutput,
@@ -9429,8 +9737,11 @@ export function validateForSubmission(args: {
     onAbsenceFindingDropped,
     securityGroundingValidatorMode = "off",
     onSecurityGroundingFindingDropped,
+    securityUsageValidatorMode = "off",
+    onSecurityUsageFindingDropped,
     profile = "chill",
     trustLedgerEnabled = false,
+    astFindingIds = [],
   } = args
   const validIds = new Set<string>()
   const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
@@ -9439,6 +9750,14 @@ export function validateForSubmission(args: {
     if (!v.verdict) continue
     for (const f of v.verdict.findings) validIds.add(f.id)
   }
+  // SIG-314: a deterministic AST emit (emitWhenUnmatched) is a LEGITIMATE source
+  // the synth may cite as `ast/<ruleId>/<hash>/<line>` provenance — that is the
+  // whole point of the unmatched path (the specialist missed it, the scanner
+  // proved it). Without this, the hallucination guard below drops every
+  // unmatched emit (SIG-309/310/312/314 all relied on this and were silently
+  // dropped in the specialist-missed case — Codex caught it). Only REAL scanned
+  // ids are admitted, so a hallucinated `ast/…` still fails the guard.
+  for (const id of astFindingIds) validIds.add(id)
 
   const cleanFindings: PrReviewFinding[] = []
   const cleanFindingProvenance: SynthesizerProvenance["findings"] = []
@@ -9460,6 +9779,7 @@ export function validateForSubmission(args: {
   let droppedForFailedInlineGroundingValidation = 0
   let droppedForFailedAbsenceGroundingValidation = 0
   let droppedForFailedSecurityGroundingValidation = 0
+  let droppedForFailedSecurityUsageValidation = 0
   const advisoryNits: PrReviewFinding[] = []
 
   // SIG-290 v1: the reviewable diff's path set for the absence-grounding
@@ -9927,6 +10247,26 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-311 Layers A+B: security USAGE-vs-MENTION gate. Demote a sev>=4
+    // injection/xss finding on a detector/validator/test/doc path whose cited
+    // token is a mention, not a live sink (the PR #296 self-FP family). Same
+    // off/shadow/enforce placement as the grounding gate above; DEMOTE-not-drop,
+    // keep on any uncertainty (the gate fails closed inside evaluateSecurityUsage).
+    if (securityUsageValidatorMode !== "off" && sourceRolesInclude(sourceIds, "security")) {
+      const suDecision = evaluateSecurityUsage(workingFinding, { addedLineTextByLine })
+      if (!suDecision.keep) {
+        const demoted = securityUsageValidatorMode === "enforce"
+        droppedForFailedSecurityUsageValidation++
+        onSecurityUsageFindingDropped?.(workingFinding, { reason: suDecision.reason, dropped: demoted })
+        if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "security-usage" })
+          unanchoredFindings.push(workingFinding)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
+    }
+
     const side = deriveSide(reviewable, workingFinding.path, workingFinding.line)
     if (!side) {
       const repairedLine =
@@ -9986,6 +10326,7 @@ export function validateForSubmission(args: {
     droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation,
     droppedForFailedSecurityGroundingValidation,
+    droppedForFailedSecurityUsageValidation,
     cleanFindingProvenance,
     provenance: {
       ...synthOutput.provenance,
@@ -10180,8 +10521,19 @@ interface EnsembleTelemetry {
      * token, uncorroborated by any scanner fact (would-demote-to-body in
      * shadow, actual-demote in enforce; 0 when the gate is off). */
     droppedForFailedSecurityGroundingValidation: number
+  droppedForFailedSecurityUsageValidation: number
   }
   retrievalCacheStats: RetrievalCacheStats | null
+  /**
+   * SIG-149: per-review token spend, keyed by the model that produced
+   * it (summed across every settled attempt — specialist primary +
+   * retries + cross-provider fallback + synth + synth retry). Populated
+   * live during the run via `perfCtx.recordTokens`; read by `finalize()`
+   * to compute modeled cost for the `review-slo-summary` event. Empty
+   * `{}` when no model attempt surfaced usage (e.g. stale-head bail
+   * before fan-out) — never absent, so the cost path is branch-free.
+   */
+  tokenUsageByModel: TokenUsageByModel
   /**
    * ARC-192: hunk-level diff packing telemetry. Records how the diff
    * was split for the model call. `batchCount > 1` means the PR was
@@ -10394,6 +10746,39 @@ async function finalize(
     callsUsed += telemetry.synthesizer.attemptsUsed ?? 1
   }
   await incrementDailyBudget(env, callsUsed).catch(() => {})
+  // SIG-149: emit the per-review latency + cost SLO roll-up. Fires here
+  // because finalize() is the single choke point every exit path funnels
+  // through (success, stale-head, errored, skip-notice) and `totalMs` +
+  // `tokenUsageByModel` are both final by now. Pure-observability: the
+  // emitter only console.log's + does arithmetic, but we still guard it
+  // so a telemetry bug can never convert a posted review into a throw
+  // (same discipline as the writeTelemetry catch below). Tier omitted →
+  // the `default` SLO target applies until SIG-41 lands plan tiers.
+  try {
+    emitReviewSlo(
+      {
+        owner: telemetry.owner,
+        repo: telemetry.repo,
+        prNumber: telemetry.prNumber,
+        headSha: telemetry.headSha,
+      },
+      {
+        status,
+        totalMs: telemetry.totalMs,
+        usage: telemetry.tokenUsageByModel,
+      },
+    )
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        event: "review-slo-emit-failed",
+        owner: telemetry.owner,
+        repo: telemetry.repo,
+        prNumber: telemetry.prNumber,
+        err: e instanceof Error ? e.message : String(e),
+      }),
+    )
+  }
   // Best-effort telemetry write — but no longer SILENT (SIG-306): a swallowed
   // failure here is exactly how the FP-rate ruler went blind for ~30 days after
   // the org rename. Log the failure (owner/repo/pr) so a regression is visible.

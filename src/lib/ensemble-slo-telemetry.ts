@@ -138,6 +138,20 @@ export interface SloTarget {
    *  ~60s headroom under the documented ≤360s end-to-end push→visible
    *  budget (docs/ops/review-latency-budget.md, SIG-220). */
   timeToFullReviewMs: number
+  /** SIG-149: wall-clock budget for time-to-first-overview — `startMs`
+   *  (handler entry) → the moment the inline PR overview/walkthrough is
+   *  posted (the first customer-visible content). Like full-review, the
+   *  ALERT keys on the fleet p95, not a single run.
+   *
+   *  CAVEAT: SIG-216 currently posts the overview late (on the critical
+   *  path, just before submit), so this is ~equal to full-review TODAY —
+   *  it only becomes an early signal once the overview moves off the
+   *  critical path (review-latency-budget.md "Lever 1"). Sized equal to
+   *  the full-review budget for now; emit the measured value and re-tune
+   *  (and tighten) from `review-slo-summary` data. Not all reviews post
+   *  an overview (skipped on budget, never reached on early bails), so
+   *  the measured value is absent on those runs and not evaluated. */
+  timeToFirstOverviewMs: number
   /** USD budget for a single review's modeled cost. Compared per-review
    *  (`costUsd > budget`) because cost is additive, not a percentile.
    *  This is a STARTING threshold — re-tune from the first week of
@@ -149,7 +163,7 @@ export interface SloTarget {
  *  SIG-41). Add rows keyed by plan-tier when tiers land — emitters and
  *  the dashboard query read this table by key, so no other code changes. */
 export const SLO_TARGETS: Readonly<Record<string, SloTarget>> = {
-  default: { timeToFullReviewMs: 300_000, costPerReviewUsd: 0.5 },
+  default: { timeToFullReviewMs: 300_000, timeToFirstOverviewMs: 300_000, costPerReviewUsd: 0.5 },
 }
 
 export type ReviewTier = keyof typeof SLO_TARGETS | (string & {})
@@ -169,27 +183,37 @@ export interface SloEvaluation {
   latencyOverBudget: boolean
   /** Per-review modeled cost vs the tier budget. */
   costOverBudget: boolean
-  /** True when EITHER dimension is over budget. The single field a
-   *  cheap log-alert predicate can fire on for the cost dimension. */
+  /** Time-to-first-overview vs the tier budget. `false` when this run
+   *  posted no overview (no data ≠ breach — same discipline as tokens). */
+  overviewLatencyOverBudget: boolean
+  /** True when ANY dimension is over budget. The single field a cheap
+   *  log-alert predicate can fire on. */
   sloBreached: boolean
 }
 
-/** Pure SLO evaluation. Exported for tests. */
+/** Pure SLO evaluation. Exported for tests. `timeToFirstOverviewMs` is
+ *  optional — when absent (the run posted no overview) the overview
+ *  dimension is treated as "no data" and never counts as a breach. */
 export function evaluateReviewSlo(args: {
   tier?: ReviewTier
   totalMs: number
   costUsd: number
+  timeToFirstOverviewMs?: number
 }): SloEvaluation {
   const tier = args.tier ?? DEFAULT_TIER
   const target = resolveSloTarget(tier)
   const latencyOverBudget = args.totalMs > target.timeToFullReviewMs
   const costOverBudget = args.costUsd > target.costPerReviewUsd
+  const overviewLatencyOverBudget =
+    args.timeToFirstOverviewMs !== undefined &&
+    args.timeToFirstOverviewMs > target.timeToFirstOverviewMs
   return {
     tier,
     target,
     latencyOverBudget,
     costOverBudget,
-    sloBreached: latencyOverBudget || costOverBudget,
+    overviewLatencyOverBudget,
+    sloBreached: latencyOverBudget || costOverBudget || overviewLatencyOverBudget,
   }
 }
 
@@ -206,6 +230,13 @@ export interface ReviewSloSummary {
    *  second lookup to draw the threshold line). */
   latencyBudgetMs: number
   latencyOverBudget: boolean
+  /** Time-to-first-overview for this review, or `null` when no overview
+   *  was posted (skipped on budget / early bail). Null is excluded from
+   *  the dashboard's overview p95, not treated as 0. */
+  timeToFirstOverviewMs: number | null
+  /** Tier overview budget, echoed for the dashboard threshold line. */
+  overviewBudgetMs: number
+  overviewLatencyOverBudget: boolean
   totalInputTokens: number
   totalOutputTokens: number
   costUsd: number
@@ -247,6 +278,8 @@ export function emitReviewSlo(
     status: string
     totalMs: number
     usage: TokenUsageByModel
+    /** Absent when the run posted no overview. */
+    timeToFirstOverviewMs?: number
   },
 ): SloEvaluation {
   const cost = computeReviewCost(args.usage)
@@ -255,6 +288,9 @@ export function emitReviewSlo(
     // exactOptionalPropertyTypes — an explicit `undefined` isn't
     // assignable to the optional `tier?`.
     ...(args.tier !== undefined ? { tier: args.tier } : {}),
+    ...(args.timeToFirstOverviewMs !== undefined
+      ? { timeToFirstOverviewMs: args.timeToFirstOverviewMs }
+      : {}),
     totalMs: args.totalMs,
     costUsd: cost.totalUsd,
   })
@@ -264,6 +300,9 @@ export function emitReviewSlo(
     totalMs: args.totalMs,
     latencyBudgetMs: eval_.target.timeToFullReviewMs,
     latencyOverBudget: eval_.latencyOverBudget,
+    timeToFirstOverviewMs: args.timeToFirstOverviewMs ?? null,
+    overviewBudgetMs: eval_.target.timeToFirstOverviewMs,
+    overviewLatencyOverBudget: eval_.overviewLatencyOverBudget,
     totalInputTokens: cost.totalInputTokens,
     totalOutputTokens: cost.totalOutputTokens,
     costUsd: cost.totalUsd,

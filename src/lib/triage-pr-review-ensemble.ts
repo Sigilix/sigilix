@@ -6422,6 +6422,13 @@ export async function handlePrReviewEnsemble(
             skipDedupe: true,
             reviewContext: overviewReviewContext,
           }, overviewBudgetMs)
+          // SIG-149: time-to-first-overview = handler entry → overview
+          // posted (first customer-visible content). Measured from
+          // `startMs`, NOT `overviewStartMs` (that's the overview's own
+          // generation time, already logged as `elapsed_ms`). Set only on
+          // the success path so `finalize()` reports it as "no data" when
+          // the overview was skipped/failed rather than a misleading 0.
+          telemetry.timeToFirstOverviewMs = Date.now() - startMs
           console.log(JSON.stringify({
             event: "pr-review-inline-overview-posted",
             owner, repo, prNumber, head_sha: headSha.slice(0, 7),
@@ -10540,6 +10547,16 @@ interface EnsembleTelemetry {
    */
   tokenUsageByModel: TokenUsageByModel
   /**
+   * SIG-149: time-to-first-overview — `startMs` → the moment the inline
+   * PR overview/walkthrough is posted (first customer-visible content).
+   * Set only when the overview actually posts; absent on runs that skip
+   * it (budget) or bail before reaching it. `finalize()` forwards it to
+   * the `review-slo-summary` SLO eval, where absent = "no data" (never a
+   * breach). See the `timeToFirstOverviewMs` SloTarget caveat re: the
+   * overview currently being on the critical path (SIG-216).
+   */
+  timeToFirstOverviewMs?: number
+  /**
    * ARC-192: hunk-level diff packing telemetry. Records how the diff
    * was split for the model call. `batchCount > 1` means the PR was
    * too large to fit in one specialist call; v1 reviews only the
@@ -10771,6 +10788,12 @@ async function finalize(
         status,
         totalMs: telemetry.totalMs,
         usage: telemetry.tokenUsageByModel,
+        // Conditional spread under exactOptionalPropertyTypes — absent
+        // when no overview posted, so the overview SLO dimension is
+        // evaluated as "no data" rather than 0.
+        ...(telemetry.timeToFirstOverviewMs !== undefined
+          ? { timeToFirstOverviewMs: telemetry.timeToFirstOverviewMs }
+          : {}),
       },
     )
   } catch (e) {

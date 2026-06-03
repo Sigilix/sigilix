@@ -180,6 +180,34 @@ describe("evaluateReviewSlo", () => {
     })
     expect(e.sloBreached).toBe(false)
   })
+
+  it("treats absent time-to-first-overview as no-data, not a breach", () => {
+    const e = evaluateReviewSlo({ totalMs: 1_000, costUsd: 0.01 })
+    expect(e.overviewLatencyOverBudget).toBe(false)
+    expect(e.sloBreached).toBe(false)
+  })
+
+  it("breaches on time-to-first-overview alone", () => {
+    const e = evaluateReviewSlo({
+      totalMs: 0,
+      costUsd: 0,
+      timeToFirstOverviewMs: target.timeToFirstOverviewMs + 1,
+    })
+    expect(e.latencyOverBudget).toBe(false)
+    expect(e.costOverBudget).toBe(false)
+    expect(e.overviewLatencyOverBudget).toBe(true)
+    expect(e.sloBreached).toBe(true)
+  })
+
+  it("does not breach when overview is exactly at budget (strict >)", () => {
+    const e = evaluateReviewSlo({
+      totalMs: 0,
+      costUsd: 0,
+      timeToFirstOverviewMs: target.timeToFirstOverviewMs,
+    })
+    expect(e.overviewLatencyOverBudget).toBe(false)
+    expect(e.sloBreached).toBe(false)
+  })
 })
 
 // ─── emitReviewSlo (event shape) ────────────────────────────────────
@@ -210,6 +238,26 @@ describe("emitReviewSlo", () => {
     expect(ev["costOverBudget"]).toBe(true) // 2.3 > 0.5
     expect(ev["sloBreached"]).toBe(true)
     expect(ev["byModelUsd"]).toEqual({ "deepseek-v4-pro:cloud": expect.closeTo(2.3, 6) })
+    // Overview fields: no overview passed → null measured value, budget
+    // echoed, no overview breach.
+    expect(ev["timeToFirstOverviewMs"]).toBeNull()
+    expect(ev["overviewBudgetMs"]).toBe(SLO_TARGETS[DEFAULT_TIER]!.timeToFirstOverviewMs)
+    expect(ev["overviewLatencyOverBudget"]).toBe(false)
+  })
+
+  it("surfaces a measured time-to-first-overview and breaches when it exceeds budget", () => {
+    const over = SLO_TARGETS[DEFAULT_TIER]!.timeToFirstOverviewMs + 1
+    const e = emitReviewSlo(CTX, {
+      status: "posted",
+      totalMs: 1_000,
+      usage: {},
+      timeToFirstOverviewMs: over,
+    })
+    const ev = lastLogged()
+    expect(ev["timeToFirstOverviewMs"]).toBe(over)
+    expect(ev["overviewLatencyOverBudget"]).toBe(true)
+    expect(ev["sloBreached"]).toBe(true)
+    expect(e.overviewLatencyOverBudget).toBe(true)
   })
 
   it("emits with zeros + no breach for an empty (pre-fanout bail) review", () => {

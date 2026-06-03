@@ -249,6 +249,10 @@ export interface AstEmitCandidate {
   severity: string
   emitWhenUnmatched?: boolean
   message: string
+  /** SIG-317 step 6 Part B: the runner's redacted code slice that proved the
+   *  emit. Attached to the injected finding as `astEvidence` so the render shows
+   *  "Detected by static analysis". Optional (back-compat). */
+  evidence?: string
 }
 
 export interface AstEmitFloorResult {
@@ -351,6 +355,8 @@ export function injectUnmatchedAstEmits(args: {
       headline,
       body: ast.message,
       confidence: 4,
+      // Part B: the proof slice renders as "Detected by static analysis".
+      ...(ast.evidence ? { astEvidence: ast.evidence } : {}),
     } as PrReviewFinding)
     provenanceFindings.push({
       sourceSpecialists: [ast.roleHint as SpecialistRole],

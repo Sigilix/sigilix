@@ -275,6 +275,15 @@ export interface PrReviewFinding {
    */
   contentFingerprint?: string
   /**
+   * SIG-317 step 6 Part B: runtime-only redacted code slice from the
+   * deterministic AST detector that PROVED this finding (attached by the
+   * AST-emit floor when it injects an unmatched emit). The renderer surfaces it
+   * as a "Detected by static analysis" section so a deterministically-grounded
+   * subtle finding reads as proven, not as an unsupported model guess. Already
+   * redacted by the AST runner; never parsed from model output.
+   */
+  astEvidence?: string
+  /**
    * Structured details: optional concrete example proving the finding. Intended
    * for minimal repro input/output, runtime exception text, parser
    * examples, or other compact evidence that is clearer in a fenced
@@ -2945,6 +2954,17 @@ function formatFindingStructuredDetailsMarkdown(
   const sections: string[] = []
   if (finding.failureExample) {
     const section = formatFenceSection("**Example:**", finding.failureExample, "text")
+    if (section) sections.push(section)
+  }
+  // SIG-317 step 6 Part B: the deterministic AST proof slice — turns a bare
+  // injected emit into a grounded "here's the exact code" finding. The fenced
+  // slice IS the smoking gun, so it leads (right after the example, before the
+  // fix/test sections — Kimi UI sign-off: proof up front, not as fine print).
+  // Capped defensively (the runner already redacts) so the section can't bloat.
+  if (finding.astEvidence) {
+    const lang = extensionToFenceLang(finding.path)
+    const slice = finding.astEvidence.length > 300 ? `${finding.astEvidence.slice(0, 297)}…` : finding.astEvidence
+    const section = formatFenceSection("**Static-analysis evidence:**", slice, lang)
     if (section) sections.push(section)
   }
   if (includeFixExample && finding.fixExample) {

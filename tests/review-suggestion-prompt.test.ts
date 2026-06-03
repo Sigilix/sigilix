@@ -93,7 +93,27 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // SIG-308 20→21 (logic refutation-survival rationale `independentAssessment`
     // becomes MANDATORY on score>=4 logic findings so the SIG-308 gate is
     // flippable and logic findings carry their survival evidence).
-    expect(PROMPT_VERSION).toBe("21")
+    // Cross-cutting over-fire 21→22 (logic CROSS-CUTTING REFUTATION fence:
+    // window-blindness positive misreads + architectural-misunderstanding).
+    expect(PROMPT_VERSION).toBe("22")
+  })
+
+  it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {
+    const logic = SPECIALIST_PROMPTS.logic
+    // the fence block exists
+    expect(logic).toContain("CROSS-CUTTING REFUTATION")
+    // (1) window-blindness: down-rank a misread when the deciding guard is outside the window
+    expect(logic).toContain("WINDOW-BLINDNESS")
+    expect(logic).toMatch(/may live outside the review window/i)
+    // SIG-286 carve-out — injected context blocks count as in-window (Kimi #2)
+    expect(logic).toMatch(/including an injected context block/i)
+    // the recall valve — keep score>=4 when the window itself proves the guard absent
+    expect(logic).toMatch(/EXCEPTION — keep score>=4 ONLY/)
+    expect(logic).toContain("never against a bug you can actually see")
+    // (2) architecture-is-deliberate: single-threaded DO + sentinel/boundary + DTO
+    expect(logic).toContain("ARCHITECTURE IS DELIBERATE")
+    expect(logic).toMatch(/DurableObject instance processes requests to THAT instance serially/)
+    expect(logic).toMatch(/DTO \/ mapping \/ adapter layer/)
   })
 
   it("logic specialist has the SIG-308 mandatory refutation-survival gate (independentAssessment required on score>=4)", () => {

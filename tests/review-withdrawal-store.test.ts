@@ -175,7 +175,9 @@ describe("filterWithdrawnFindings", () => {
       path: "src/index.ts",
       line: 960,
       bodySnapshot: "scheduled handler lacks coverage for gating success and error paths",
-      withdrawnAt: 0, withdrawnByCommentId: 1, prHeadSha: "x", reason: "mention-reply-accepted",
+      // Recent dismissal so it's inside the decay window (the wrapper uses
+      // Date.now() internally — an epoch-0 timestamp would read as decayed).
+      withdrawnAt: Date.now(), withdrawnByCommentId: 1, prHeadSha: "x", reason: "mention-reply-accepted",
     },
   ]
 
@@ -464,10 +466,15 @@ describe("filterWithdrawnFindingsDetailed — re-fire + escalation telemetry fla
     dismissedScore: 2,
   }
 
+  // withdrawnAt is 1; pass now=1 so age=0 keeps every match INSIDE the decay
+  // window (decay behavior is exercised separately below).
+  const NOW = 1
+
   it("suppresses the re-fire via fingerprint and flags it (no escalation when score unchanged)", () => {
     const { kept, suppressed } = filterWithdrawnFindingsDetailed(
       [{ path: "src/index.ts", line: 670, body: "re-worded", contentFingerprint: fp, score: 2 }],
       [withdrawal],
+      NOW,
     )
     expect(kept).toHaveLength(0)
     expect(suppressed).toHaveLength(1)
@@ -479,6 +486,7 @@ describe("filterWithdrawnFindingsDetailed — re-fire + escalation telemetry fla
     const { suppressed } = filterWithdrawnFindingsDetailed(
       [{ path: "src/index.ts", line: 670, body: "re-worded", contentFingerprint: fp, score: 5 }],
       [withdrawal],
+      NOW,
     )
     expect(suppressed[0]!.viaFingerprint).toBe(true)
     expect(suppressed[0]!.severityEscalated).toBe(true) // 5 > dismissed 2
@@ -489,6 +497,7 @@ describe("filterWithdrawnFindingsDetailed — re-fire + escalation telemetry fla
     const { suppressed } = filterWithdrawnFindingsDetailed(
       [{ path: "src/index.ts", line: 667, body: "stripped original", score: 5 }],
       [noFp],
+      NOW,
     )
     expect(suppressed[0]!.viaFingerprint).toBe(false)
     expect(suppressed[0]!.severityEscalated).toBe(false)
@@ -518,6 +527,48 @@ describe("writeWithdrawal + loadWithdrawal — SIG-217 fingerprint round-trip", 
     )
     expect(kept).toHaveLength(0)
     expect(suppressed[0]!.severityEscalated).toBe(true)
+  })
+})
+
+describe("filterWithdrawnFindingsDetailed — SIG-217 Part B decay window", () => {
+  // Mirror of the source constant (private to the module).
+  const DECAY_MS = 14 * 24 * 60 * 60 * 1000
+  const fp = "d".repeat(64)
+  const withdrawal: WithdrawalRecord = {
+    path: "src/a.ts",
+    line: 10,
+    bodySnapshot: "dismissed body",
+    withdrawnAt: 1_000_000_000_000, // fixed epoch ms for deterministic age math
+    withdrawnByCommentId: 1,
+    prHeadSha: "sha",
+    reason: "mention-reply-accepted",
+    contentFingerprint: fp,
+    dismissedScore: 3,
+  }
+  const finding = { path: "src/a.ts", line: 10, body: "re-fired", contentFingerprint: fp, score: 3 }
+
+  it("still SUPPRESSES just inside the window (age == DECAY_MS)", () => {
+    const now = withdrawal.withdrawnAt + DECAY_MS // boundary is inclusive of suppression
+    const { kept, suppressed, decayExpired } = filterWithdrawnFindingsDetailed([finding], [withdrawal], now)
+    expect(kept).toHaveLength(0)
+    expect(suppressed).toHaveLength(1)
+    expect(decayExpired).toHaveLength(0)
+  })
+
+  it("LETS THROUGH and flags decayExpired just past the window", () => {
+    const now = withdrawal.withdrawnAt + DECAY_MS + 1
+    const { kept, suppressed, decayExpired } = filterWithdrawnFindingsDetailed([finding], [withdrawal], now)
+    expect(kept).toHaveLength(1)          // no longer muted
+    expect(suppressed).toHaveLength(0)
+    expect(decayExpired).toHaveLength(1)
+    expect(decayExpired[0]!.viaFingerprint).toBe(true)
+  })
+
+  it("a fresh dismissal is unaffected (suppressed, not decayed)", () => {
+    const now = withdrawal.withdrawnAt + 1000 // 1s later
+    const { kept, decayExpired } = filterWithdrawnFindingsDetailed([finding], [withdrawal], now)
+    expect(kept).toHaveLength(0)
+    expect(decayExpired).toHaveLength(0)
   })
 })
 

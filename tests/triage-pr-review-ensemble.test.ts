@@ -227,7 +227,9 @@ describe("collectApprovalReadinessSourceFindings", () => {
         path: withdrawn.path,
         line: withdrawn.line,
         bodySnapshot: withdrawn.body,
-        withdrawnAt: 0,
+        // Recent so it's inside the SIG-217 Part B decay window (an epoch-0
+        // dismissal would read as decayed and be let through, not suppressed).
+        withdrawnAt: Date.now(),
         withdrawnByCommentId: 123,
         prHeadSha: "a".repeat(40),
         reason: "mention-reply-accepted",

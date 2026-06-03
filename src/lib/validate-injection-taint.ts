@@ -42,6 +42,15 @@ const RE_INNER_OUTER_HTML = /\.(?:inner|outer)HTML\s*=\s*([^;]+?)\s*;?\s*$/
 const RE_DOCUMENT_WRITE = /document\.write(?:ln)?\s*\(\s*([^)]+?)\s*\)/
 // el.insertAdjacentHTML(position, VALUE)
 const RE_INSERT_ADJACENT_HTML = /insertAdjacentHTML\s*\([^,]+,\s*([^)]+?)\s*\)/
+// #64: el.setHTMLUnsafe(VALUE) — the HTML-parsing setter (Sanitizer-API sibling)
+const RE_SET_HTML_UNSAFE = /\.setHTMLUnsafe\s*\(\s*([^)]+?)\s*\)/
+// #64: <iframe srcDoc={VALUE} /> (JSX) — renders VALUE as a full document.
+// React camelCases the HTML `srcdoc` attribute to `srcDoc`, so match both forms
+// (CodeRabbit #321: `srcDoc` is the canonical React prop name).
+const RE_SRCDOC = /\bsrc[Dd]oc\s*=\s*\{([^}]+?)\}/
+// #64: jQuery / DOM-helper `.html(VALUE)`. The getter `.html()` has no argument,
+// so the required value group keeps it from matching a read.
+const RE_JQUERY_HTML = /\.html\s*\(\s*([^)]+?)\s*\)/
 // eval(VALUE)
 const RE_EVAL = /\beval\s*\(\s*([^)]+?)\s*\)/
 
@@ -54,17 +63,23 @@ const SINK_EXTRACTORS: ReadonlyArray<RegExp> = [
 ]
 
 /**
- * SIG-312: the HTML-WRITE sink subset, shared (by object identity) with
- * `SINK_EXTRACTORS` so the regexes can't drift. The deterministic XSS detector
- * (`scan-dynamic-html-sink.ts`) reuses exactly these — the DOM/React sinks that
- * render their argument as raw HTML. It deliberately EXCLUDES `eval` /
- * `new Function` (code-injection, with their own AST rules) and `document.write`
- * (covered by `no-document-write-call`).
+ * SIG-312: the HTML-WRITE sink set used by the deterministic XSS detector
+ * (`scan-dynamic-html-sink.ts`) — the DOM/React sinks that render their argument
+ * as raw HTML. The first three are shared (by object identity) with
+ * `SINK_EXTRACTORS` so they can't drift; #64 adds `setHTMLUnsafe`, iframe
+ * `srcdoc`, and jQuery/DOM `.html()` — HTML-write-specific sinks the LLM
+ * security specialist intermittently misses (they are NOT part of the broader
+ * taint `SINK_EXTRACTORS`). Deliberately EXCLUDES `eval` / `new Function`
+ * (code-injection, own AST rules) and `document.write` (covered by
+ * `no-document-write-call`).
  */
 export const HTML_WRITE_SINK_EXTRACTORS: ReadonlyArray<RegExp> = [
   RE_DANGEROUSLY_SET_INNER_HTML,
   RE_INNER_OUTER_HTML,
   RE_INSERT_ADJACENT_HTML,
+  RE_SET_HTML_UNSAFE,
+  RE_SRCDOC,
+  RE_JQUERY_HTML,
 ]
 
 /**

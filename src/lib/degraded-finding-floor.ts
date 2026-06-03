@@ -271,8 +271,19 @@ export interface AstEmitFloorResult {
   }>
 }
 
-/** One-line headline from an AST message: first sentence, capped at 100 chars. */
+/**
+ * One-line headline from an AST message. The detector messages open with a
+ * crisp label before a colon ("Type-contract drift: …", "Likely cents/dollars
+ * unit bug: …") — that label IS the headline. Using it keeps the GitHub preview
+ * credible instead of truncating the long first sentence mid-word into the
+ * inbox (SIG-317 step 6 Part C — Kimi: the preview must not read as linter
+ * noise). Falls back to the first sentence (capped) when there's no label.
+ */
 function astHeadline(message: string): string {
+  // A leading "Label:" — a short clause (4-60 chars) with no sentence-ending
+  // punctuation, ending at the first colon.
+  const label = message.match(/^([^:.!?\n]{4,60}):\s/)
+  if (label?.[1]) return label[1].trim()
   const first = message.split(/(?<=[.!?])\s/)[0] ?? message
   const trimmed = first.trim()
   return trimmed.length > 100 ? `${trimmed.slice(0, 97)}…` : trimmed

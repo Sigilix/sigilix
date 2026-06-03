@@ -543,6 +543,24 @@ OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
 # no inline findings (which is correct for a docs PR).
 OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
 
+# SIG-224: dynamic dispatcher mode. "enforce_rules" (SIG-227a) is the rules-only
+# enforcement available TODAY: it runs the dispatcher's DETERMINISTIC rule layer
+# (NO LLM call, no added Ollama-Turbo round-trip) and its picks REPLACE
+# router.specialists for fan-out. It adds lockfile-only / `.d.ts`-only /
+# test-files-only safe-skips on top of the legacy router's docs-only + CSS-only —
+# fast-tracking trivial PRs so they stop hogging the queue's consumer slots (less
+# of the contention that delays real code reviews). RECALL-SAFE: deterministic
+# skips only, and the PROTECTED roles `security` + `logic` always run.
+# NOTE: "enforce" (the full LLM-decided middle that would skip tests/perf on code
+# PRs) is NOT honored yet — it logs `dispatcher-enforce-mode-not-honored-in-
+# phase-1` and runs everything; it ships in SIG-227b/228.
+# Modes: off | shadow | enforce_rules | enforce. Rollback: set "off" (or remove
+# the line) — no data/schema change. WATCH: prod logs, event
+# `dispatcher-shadow-decision` (compare `routerSpecialists` vs
+# `dispatcherSpecialists` for the legacy-vs-dispatcher fan-out delta); roll back
+# if a skipped role would have produced a real finding.
+OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce_rules"
+
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when
 # the dispatcher returns exactly 1 specialist AND none of that

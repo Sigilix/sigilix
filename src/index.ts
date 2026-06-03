@@ -538,6 +538,13 @@ export interface Env {
   // `wrangler secret put OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE shadow`.
   OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string
 
+  // SIG-311 Layers A+B: security USAGE-vs-MENTION validator. off (default) |
+  // shadow (count/telemeter the would-demote, keep inline) | enforce (demote a
+  // sev>=4 injection/xss finding on a detector/validator/test/doc path whose
+  // cited token is a mention, not a live sink — the PR #296 self-FP family).
+  // Demote-not-drop, keep on any uncertainty.
+  OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string
+
   // SIG-121 (SIG-109 PR B): symbol-based retrieval for the logic
   // specialist. "on" fires a second, AST-symbol-derived retrieval pass
   // that AUGMENTS the logic role's shared snapshot; any other value

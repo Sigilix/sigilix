@@ -235,6 +235,7 @@ export interface FindingTrust {
     | "inline-grounding"
     | "absence-grounding"
     | "security-grounding"
+    | "security-usage"
     | "security-evidence"
     | "verification-refuted"
     | "outside-diff"
@@ -2256,6 +2257,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
         r === "inline-grounding" ||
         r === "absence-grounding" ||
         r === "security-grounding" ||
+        r === "security-usage" ||
         r === "security-evidence" ||
         r === "verification-refuted" ||
         r === "do-race" ||

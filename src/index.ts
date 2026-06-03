@@ -358,6 +358,14 @@ export interface Env {
   // provenance but truncated out of verdict.findings on target-rich PRs.
   OPENCLAW_SYNTH_RECOVERY?: string
 
+  // SIG-317 step 6 Part A: deterministic AST-emit injection floor. off (default)
+  // | shadow (log what WOULD inject) | on (inject). Force-surfaces an
+  // `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its
+  // verdict — the proven subtle needle (cents-as-dollars, enum drift). Cites the
+  // astFindingId so it flows through the post-synth gates; P2/P3-capped (never a
+  // P0/P1). Recall-positive backstop to the synth's "emit it yourself" prompt.
+  OPENCLAW_AST_EMIT_FLOOR?: string
+
   // SIG-317 Part 4b: cross-function asymmetry hints for the logic specialist.
   // off (default) | shadow (log the hint count) | on (inject into the logic
   // prompt). A FACT (mutator bypasses an aggregation helper used elsewhere) for

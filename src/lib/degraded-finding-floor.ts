@@ -191,3 +191,143 @@ export function recoverTruncatedSynthFindings(args: {
 
   return { findings, provenanceFindings, recovered }
 }
+
+// ─── SIG-317 step 6 Part A — deterministic AST-emit injection floor ─────────
+//
+// The named fast-follow gap above: a `deterministic_emit` AST finding (an
+// `emitWhenUnmatched` pseudo-rule — cents-as-dollars, enum/contract drift,
+// fractional-cents, dynamic-HTML-sink) is surfaced TODAY only if the synth
+// model obeys the prompt instruction to "EMIT a finding for it yourself".
+// When the model ignores it or truncates it into the dropped verdict tail, the
+// PROVEN needle is silently lost — exactly the crowd-out this step exists to
+// stop. `validateForSubmission` (SIG-314) only ADMITS an AST-cited finding the
+// synth chose to emit; it never ADDS one.
+//
+// This floor force-injects any `emitWhenUnmatched` AST finding NOT already
+// covered by an emitted finding, mirroring the synth prompt's coverage rule:
+// for a `roleHint:"security"` entry, "covered" = any finding at the same
+// (path, line±tolerance); for any other role, "covered" = a same-category
+// finding at the same (path, line±tolerance). The injected finding cites the
+// `astFindingId`, so SIG-314's hallucination guard admits it, and it flows
+// through every post-synth gate (grounding, anchor repair, clamps) like any
+// other finding — nothing is force-POSTED, only force-SURFACED to the gates.
+//
+// SCOPE — `warning`/`info` emits ONLY (P2/P3 advisories). The crowd-out is a
+// LOW-severity phenomenon: an `error` security sink (exec / TLS) is P0/P1, sorts
+// FIRST under the synth's severity ranking, is never truncated, and already has
+// the SIG-309 grounding path — so it is never the crowd-out victim and stays out
+// of scope. Capping the floor at the warning tier keeps it RECALL-POSITIVE and
+// SIG-245-safe (it can never mint a deterministic P0/P1 the model didn't judge).
+//
+// Pure — returns fresh arrays, never mutates input.
+
+const AST_EMIT_FLOOR_CEIL: Record<string, number> = { warning: 3, info: 2 }
+
+/** Minimal structural view of an AST emit the floor needs (subset of `AstFinding`). */
+export interface AstEmitCandidate {
+  astFindingId: string
+  path: string
+  line: number
+  endLine?: number
+  roleHint: string
+  severity: string
+  emitWhenUnmatched?: boolean
+  message: string
+}
+
+export interface AstEmitFloorResult {
+  findings: PrReviewFinding[]
+  provenanceFindings: FloorProvenanceFinding[]
+  /** Telemetry — carries the projected headline/body so a human can audit
+   *  believability from the shadow log BEFORE the `on` flip (Kimi sign-off). */
+  injected: Array<{
+    astFindingId: string
+    path: string
+    line: number
+    score: number
+    category: string
+    headline: string
+    body: string
+  }>
+}
+
+/** One-line headline from an AST message: first sentence, capped at 100 chars. */
+function astHeadline(message: string): string {
+  const first = message.split(/(?<=[.!?])\s/)[0] ?? message
+  const trimmed = first.trim()
+  return trimmed.length > 100 ? `${trimmed.slice(0, 97)}…` : trimmed
+}
+
+/**
+ * Inject `emitWhenUnmatched` (warning/info) AST findings the emitted set does
+ * not already cover. `findings` and `provenanceFindings` are INDEX-PARALLEL
+ * (the hallucination guard pairs them), so we append to BOTH in lockstep.
+ * Pure. The caller gates invocation behind the off/shadow/on flag.
+ *
+ * ⚠️ The injected finding's `body` is the RAW AST `message` — no model prose
+ * and no proof slice. At score 2-3 that reads as linter noise, which HURTS
+ * believability. This floor must stay `shadow` until step 6 Part B (AST-evidence
+ * render) makes the surfaced finding customer-ready (Kimi sign-off). Shadow logs
+ * the projected bodies so the robotic-ness can be audited before the `on` flip.
+ */
+export function injectUnmatchedAstEmits(args: {
+  findings: ReadonlyArray<PrReviewFinding>
+  provenanceFindings: ReadonlyArray<FloorProvenanceFinding>
+  astFindings: ReadonlyArray<AstEmitCandidate>
+  /** ± lines of slack when matching an emitted finding to an AST entry. Slightly
+   *  wider than clampAstEmitScores' ±2 so a model finding anchored a few lines
+   *  off the detector's line still counts as covered → no duplicate (DeepSeek). */
+  lineTolerance?: number
+}): AstEmitFloorResult {
+  const tol = args.lineTolerance ?? 3
+  const findings: PrReviewFinding[] = [...args.findings]
+  const provenanceFindings: FloorProvenanceFinding[] = [...args.provenanceFindings]
+  const injected: AstEmitFloorResult["injected"] = []
+
+  const candidates = args.astFindings.filter(
+    (f) => f.emitWhenUnmatched === true && AST_EMIT_FLOOR_CEIL[f.severity] !== undefined,
+  )
+  // Already-cited AST ids (covered by an emitted finding's provenance) + ids we
+  // inject in this pass — so we never double-inject the same emit.
+  const seen = new Set<string>(provenanceFindings.flatMap((p) => p.sourceFindingIds))
+
+  for (const ast of candidates) {
+    if (seen.has(ast.astFindingId)) continue
+    const lo = ast.line - tol
+    const hi = (ast.endLine ?? ast.line) + tol
+    const covered = findings.some(
+      (f) =>
+        f.path === ast.path &&
+        f.line >= lo &&
+        f.line <= hi &&
+        // security entries are covered by ANY finding on the line; other roles
+        // require a same-category finding (the synth prompt's coverage rule).
+        (ast.roleHint === "security" || f.category === ast.roleHint),
+    )
+    if (covered) continue
+
+    const score = AST_EMIT_FLOOR_CEIL[ast.severity]!
+    const headline = astHeadline(ast.message)
+    findings.push({
+      path: ast.path,
+      line: ast.line,
+      ...(ast.endLine && ast.endLine !== ast.line ? { startLine: ast.line } : {}),
+      scope: "line",
+      score,
+      category: ast.roleHint as PrReviewFinding["category"],
+      headline,
+      body: ast.message,
+      confidence: 4,
+    } as PrReviewFinding)
+    provenanceFindings.push({
+      sourceSpecialists: [ast.roleHint as SpecialistRole],
+      sourceFindingIds: [ast.astFindingId],
+      action: "kept",
+      verifiedViaRetrieval: false,
+    })
+    seen.add(ast.astFindingId)
+    injected.push({ astFindingId: ast.astFindingId, path: ast.path, line: ast.line, score, category: ast.roleHint, headline, body: ast.message })
+  }
+
+  return { findings, provenanceFindings, injected }
+}

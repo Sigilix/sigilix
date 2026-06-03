@@ -327,6 +327,22 @@ OPENCLAW_AUTHZ_IDOR_SCAN = "post"
 # Rollback: "shadow" (telemetry only) or "off" (inert).
 OPENCLAW_SYNTH_RECOVERY = "on"
 
+# SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-surfaces an
+# `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its
+# verdict tail — the proven subtle needle (cents-as-dollars, enum/contract drift,
+# fractional-cents, dynamic-HTML-sink) that gets buried under severity-first
+# ranking. Cites the astFindingId (SIG-314 admits it) so it flows through every
+# post-synth gate; P2/P3-capped (an error security sink sorts first + has the
+# SIG-309 path, so it's never the crowd-out victim and stays out of scope).
+# Recall-positive (only ADDS findings, can't hide). Shadow-first: logs the
+# `pr-review-ast-emit-floor-injected` event WITH the projected headline/body so
+# the believability can be audited. ⚠️ DO NOT flip "on" until step 6 Part B
+# (AST-evidence render) ships — a raw AST message at score 2-3 reads as linter
+# noise and would erode believability (dual sign-off). The `on` flip is gated on
+# (a) Part B landed AND (b) the shadow would-inject sample being genuine proven
+# needles, not noise. Rollback: "shadow" or "off".
+OPENCLAW_AST_EMIT_FLOOR = "shadow"
+
 # SIG-317 Part 4b (2026-06-02): cross-function asymmetry hints for the LOGIC
 # specialist — the evidence injector. Surfaces a deterministic FACT (a function
 # that mutates table T but bypasses the aggregation helper over T that other code

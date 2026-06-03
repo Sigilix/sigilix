@@ -360,7 +360,7 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings } from "./degraded-finding-floor"
+import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -4641,6 +4641,36 @@ export async function handlePrReviewEnsemble(
           restoredCount: floored.restored.length,
           restored: floored.restored.map((r) => ({ role: r.role, id: r.id, score: r.score })),
         }))
+      }
+    }
+
+    // SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-
+    // SURFACE any `emitWhenUnmatched` (warning/info) AST finding the synth did
+    // NOT emit — the proven subtle needle (cents-as-dollars, enum drift) the
+    // model crowded out of its verdict tail. The injected finding cites the
+    // `astFindingId` (SIG-314 admits it) and flows through every post-synth gate
+    // below, so nothing is force-posted; it just can't be silently dropped.
+    // `off` skips; `shadow` logs what WOULD inject (no behavior change); `on`
+    // injects. Recall-positive + P2/P3-capped (never mints a P0/P1).
+    const astEmitFloorMode = (env.OPENCLAW_AST_EMIT_FLOOR ?? "off").trim().toLowerCase()
+    if (astEmitFloorMode !== "off") {
+      const floored = injectUnmatchedAstEmits({
+        findings: effectiveSynthVerdict.findings,
+        provenanceFindings: effectiveSynthProvenance.findings,
+        astFindings: astResult.findings,
+      })
+      if (floored.injected.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-ast-emit-floor-injected",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: astEmitFloorMode,
+          injectedCount: floored.injected.length,
+          injected: floored.injected,
+        }))
+        if (astEmitFloorMode === "on") {
+          effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
+          effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: floored.provenanceFindings }
+        }
       }
     }
 

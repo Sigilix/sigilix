@@ -242,6 +242,10 @@ describe("review-slo-summary — full orchestrator, no-fan-out exit (SIG-149)", 
     expect(typeof ev["totalMs"]).toBe("number")
     expect(ev["totalMs"] as number).toBeGreaterThanOrEqual(0)
     expect(ev["latencyBudgetMs"]).toBe(SLO_TARGETS[DEFAULT_TIER]!.timeToFullReviewMs)
+    // SIG-149: no overview is posted on the no-fan-out exit → measured
+    // value is null (not 0) and the overview dimension is not a breach.
+    expect(ev["timeToFirstOverviewMs"]).toBeNull()
+    expect(ev["overviewLatencyOverBudget"]).toBe(false)
   })
 })
 

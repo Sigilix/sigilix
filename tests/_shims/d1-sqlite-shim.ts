@@ -95,12 +95,14 @@ export function makeD1(): D1Database {
  * FTS5) still exercises them. Probed once at import.
  */
 export const FTS5_AVAILABLE: boolean = (() => {
+  let db: DatabaseSync | undefined
   try {
-    const db = new DatabaseSync(":memory:")
+    db = new DatabaseSync(":memory:")
     db.exec("CREATE VIRTUAL TABLE __fts5_probe USING fts5(x)")
-    db.close()
     return true
   } catch {
     return false
+  } finally {
+    db?.close() // close in all paths (CodeRabbit #317) — even when the probe throws
   }
 })()

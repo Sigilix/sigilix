@@ -111,8 +111,13 @@ function isMentionNotUsage(cited: string, bucket: SecurityBucket): boolean {
   if (re === null || !re.test(cited)) return false // token not present → can't prove a mention → keep
   const code = blank(cited, true) // blank comments + string bodies
   if (!re.test(code)) return true // token survived only in a string/comment → mention
-  // Executable but benign: a `.exec(` on a RegExp-conventional receiver.
-  if (bucket === "injection" && REGEX_EXEC_RE.test(code)) return true
+  // Executable but benign: EVERY surviving injection-shaped token is a `.exec(`
+  // on a RegExp-conventional receiver. Strip those and re-test, so a span that
+  // ALSO holds a real `execSync(...)` is NOT read as a mention (CodeRabbit #317).
+  if (bucket === "injection") {
+    const withoutRegexExec = code.replace(new RegExp(REGEX_EXEC_RE.source, "gi"), " ")
+    if (!INJECTION_CALL_RE.test(withoutRegexExec)) return true
+  }
   return false
 }
 
@@ -124,7 +129,11 @@ function fileAddsRealSink(addedFileText: string, bucket: SecurityBucket): boolea
     return /["'](?:node:)?child_process["']/.test(addedFileText)
   }
   // xss: a real executable HTML-write (not a mention) anywhere in the added code.
-  return /\b(?:dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML)\b/.test(blank(addedFileText, true))
+  // Sink set aligned with XSS_TOKEN_RE so a real srcdoc/setHTMLUnsafe also guards
+  // (CodeRabbit #317).
+  return /\b(?:dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|srcdoc|setHTMLUnsafe)\b/.test(
+    blank(addedFileText, true),
+  )
 }
 
 /**

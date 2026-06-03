@@ -66,6 +66,11 @@ describe("evaluateSecurityUsage — KEEP (recall guards — never hide a real P0
     const c = ctx(f.path, { 10: "  exec(`convert ${userPath} out.png`);" })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
   })
+  it("KEEPS a span that holds BOTH re.exec AND a real execSync (CodeRabbit #317)", () => {
+    const f = finding({ path: "src/lib/ast-rules/x.ts", line: 11, startLine: 10 })
+    const c = ctx(f.path, { 10: "  re.exec(line);", 11: "  execSync(`rm ${dir}`);" })
+    expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
+  })
   it("KEEPS a REAL executable exec even on a detector path (B fails — not a mention)", () => {
     const f = finding({ path: "src/lib/ast-rules/x.ts", line: 10 })
     const c = ctx(f.path, { 10: "  child_process.exec(`rm ${dir}`);" })

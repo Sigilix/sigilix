@@ -141,6 +141,20 @@ describe("injectUnmatchedAstEmits", () => {
     expect(r.findings[0].body).toContain("Divide by 100")
   })
 
+  it("attaches the AST evidence slice as `astEvidence` on the injected finding (Part B)", () => {
+    const r = injectUnmatchedAstEmits({
+      findings: [],
+      provenanceFindings: [],
+      astFindings: [ast({ evidence: "<h1>{userTotal}</h1>" })],
+    })
+    expect(r.findings[0].astEvidence).toBe("<h1>{userTotal}</h1>")
+  })
+
+  it("omits astEvidence when the candidate carries none", () => {
+    const r = injectUnmatchedAstEmits({ findings: [], provenanceFindings: [], astFindings: [ast()] })
+    expect(r.findings[0].astEvidence).toBeUndefined()
+  })
+
   it("honors a custom lineTolerance (Sigilix #330)", () => {
     // emit at line 42, an existing same-category finding at line 44.
     const near = f({ category: "logic", line: 44, score: 4 })

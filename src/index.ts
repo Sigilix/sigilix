@@ -359,6 +359,8 @@ export interface Env {
   // off (default) | shadow (measure-only) | post (emit P2 advisory). The rule
   // always runs; this gates whether its P2-capped emits reach the synth/post.
   OPENCLAW_AUTHZ_IDOR_SCAN?: string
+  /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
+  OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 
   // SIG-317: synth verdict-truncation recovery. off (default) | shadow (log the
   // recoverable count) | on (apply). Recovers findings the synth marked KEPT in

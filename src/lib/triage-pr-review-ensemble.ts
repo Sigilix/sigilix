@@ -254,6 +254,7 @@ import {
   type SigilixConfig,
   type SigilixProfile,
 } from "./sigilix-config"
+import { loadAiInstructions, buildAiInstructionGuidance, shouldIngestAiInstructions } from "./ai-instructions"
 import {
   renderScopedRulesForPrompt,
   resolveScopedRulesForChangedPaths,
@@ -1840,7 +1841,25 @@ export async function handlePrReviewEnsemble(
     // missing or malformed config falls back to EMPTY_CONFIG. Loaded
     // BEFORE the diff split so ARC-176 pathFilters can drop files
     // before packing decides what to send to specialists.
-    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+    let sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+
+    // Lane D: when the repo configured NO explicit sigilix.json guidance, fall
+    // back to its own AI-instruction file (CLAUDE.md / AGENTS.md / .cursorrules /
+    // copilot-instructions) as ADVISORY review guidance — parity with CodeRabbit,
+    // without requiring a sigilix.json. sigilix.json always takes precedence
+    // (`shouldIngestAiInstructions`). The injected text rides the existing
+    // `guidance` channel (header generically reads "from sigilix.json"); the
+    // wrapper names the real source + fences it as untrusted/advisory.
+    // Placement: kept here next to the config load for simplicity. On a
+    // label-gated/empty-router skip this does up to 4 (cheap, mostly-404) Contents
+    // calls for a review that won't run — acceptable while engine-only (no
+    // runOnLabels customers); revisit when SIG-318 splits this orchestrator.
+    if (shouldIngestAiInstructions(sigilixConfig.guidance, env.OPENCLAW_INGEST_AI_INSTRUCTIONS)) {
+      const aiInstructions = await loadAiInstructions(client, owner, repo, headSha)
+      if (aiInstructions) {
+        sigilixConfig = { ...sigilixConfig, guidance: buildAiInstructionGuidance(aiInstructions) }
+      }
+    }
 
     // ARC-273: label gate. When the operator configures
     // `costControls.runOnLabels`, pr-review only fires on PRs

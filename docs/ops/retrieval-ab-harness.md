@@ -55,6 +55,8 @@ Exit code `2` when underpowered (`< --min-prs`), so CI/automation can gate on it
   documented justification (closes SIG-45's "A/B completed" + "default decision"
   items).
 
-> Note: this harness is the *decision tool*. Producing real numbers requires a
-> deploy with the D1 lexical index populated and a hand-graded PR set — it can't
-> be run offline. The pure core + CLI are fully tested offline.
+> Note: this harness is the *decision tool*. *Collecting* the arms requires an
+> online deploy (the D1 lexical index populated) plus a hand-graded PR set —
+> that step can't be run offline. Once `findings.jsonl` and `truth.jsonl` exist,
+> *generating the report* (the `retrieval-ab-report` step) runs fully offline.
+> The pure core + CLI are tested offline.

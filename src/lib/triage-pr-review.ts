@@ -2441,7 +2441,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
       // its canonical severity/path sort + the pills. The old generic disclaimer
       // is dropped — the structure now communicates the semantics. (CR #269:
       // PR-level must be strictly pr-scoped, not "everything without a gate reason".)
-      const outsideDiff = bodyOnlyNonBlockers.filter((f) => f.trust?.demoteReason === "outside-diff")
+      const unanchorableFindings = bodyOnlyNonBlockers.filter((f) => f.trust?.demoteReason === "outside-diff")
       const prLevel = bodyOnlyNonBlockers.filter(
         (f) => f.trust?.demoteReason !== "outside-diff" && findingScope(f) === "pr",
       )
@@ -2461,7 +2461,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
         lines.push("")
         lines.push(prSection)
       }
-      const odDropdown = renderOutsideDiffDropdown(outsideDiff, renderRow)
+      const odDropdown = renderOutsideDiffDropdown(unanchorableFindings, renderRow)
       if (odDropdown) {
         lines.push("")
         lines.push(odDropdown)

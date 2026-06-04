@@ -28,10 +28,14 @@ function isValidProfile(v: unknown): v is PrecisionProfile {
   return (
     p.schemaVersion === PRECISION_PROFILE_SCHEMA_VERSION &&
     typeof p.repoId === "string" &&
+    // `typeof [] === "object"` — reject arrays explicitly so an array-shaped
+    // payload can't pass as a `patterns`/`categories` map.
     typeof p.patterns === "object" &&
     p.patterns !== null &&
+    !Array.isArray(p.patterns) &&
     typeof p.categories === "object" &&
-    p.categories !== null
+    p.categories !== null &&
+    !Array.isArray(p.categories)
   )
 }
 
@@ -70,7 +74,22 @@ export async function recordOutcome(
 ): Promise<boolean> {
   const nowIso = new Date(nowMs).toISOString()
   try {
-    const existing = await loadPrecisionProfile(env, event.repoId)
+    // Read raw HERE rather than via loadPrecisionProfile: that swallows a KV
+    // GET failure to `null`, which we'd then treat as "no profile yet" and
+    // OVERWRITE the real (still-present) profile with an empty one. Reading
+    // directly lets a transient GET error throw into our catch, so we skip the
+    // write and leave the existing profile intact. A genuine miss (null) or a
+    // corrupt/invalid stored value still starts fresh (acceptable recovery).
+    const raw = await env.OPENCLAW_STATE.get(profileKey(event.repoId))
+    let existing: PrecisionProfile | null = null
+    if (raw !== null) {
+      try {
+        const parsed = JSON.parse(raw) as unknown
+        existing = isValidProfile(parsed) ? parsed : null
+      } catch {
+        existing = null // corrupt JSON → start fresh
+      }
+    }
     const base = existing ?? emptyProfile(event.repoId, nowIso)
     const updated = foldOutcomeIntoProfile(base, event, nowIso)
     await env.OPENCLAW_STATE.put(profileKey(event.repoId), JSON.stringify(updated), {

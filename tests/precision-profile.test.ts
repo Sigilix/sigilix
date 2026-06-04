@@ -111,11 +111,13 @@ describe("applyPrecisionProfile", () => {
     expect(r.boosted.map((b) => b.finding.category)).toEqual(["security"])
   })
 
-  it("recall-safety: NEVER suppresses a P0/P1 even on a hot pattern", () => {
-    const p0 = { category: "logic" as const, contentFingerprint: "fp1", score: 5 } // same hot pattern, P0
-    const r = applyPrecisionProfile([p0], suppressedProfile(), { enforce: true })
-    expect(r.kept).toHaveLength(1)       // kept despite fp1 being over threshold
-    expect(r.suppressed).toHaveLength(0)
+  it("recall-safety: NEVER suppresses a P0/P1 (score 4 or 5) at the floor boundary; a P2 (3) IS suppressed", () => {
+    const hot = (score: number) => ({ category: "logic" as const, contentFingerprint: "fp1", score })
+    // P1 = floor boundary (score === SUPPRESS_FLOOR_TIER) and P0 must both survive.
+    expect(applyPrecisionProfile([hot(4)], suppressedProfile(), { enforce: true }).suppressed).toHaveLength(0)
+    expect(applyPrecisionProfile([hot(5)], suppressedProfile(), { enforce: true }).suppressed).toHaveLength(0)
+    // P2 (just below the floor) on the same hot pattern IS suppressed.
+    expect(applyPrecisionProfile([hot(3)], suppressedProfile(), { enforce: true }).suppressed).toHaveLength(1)
   })
 
   it("shadow keeps everything but still reports suppressed/boosted", () => {
@@ -161,6 +163,32 @@ describe("recordOutcome / loadPrecisionProfile round-trip", () => {
 
   it("returns null on a cache miss", async () => {
     expect(await loadPrecisionProfile(makeEnv(), "nope")).toBeNull()
+  })
+
+  it("rejects an array-shaped payload (typeof [] === 'object')", async () => {
+    const env = makeEnv()
+    await env.OPENCLAW_STATE.put(
+      "precision-profile:repo:r1",
+      JSON.stringify({ schemaVersion: 1, repoId: "r1", patterns: [], categories: [] }),
+    )
+    expect(await loadPrecisionProfile(env, "r1")).toBeNull()
+  })
+
+  it("recordOutcome does NOT clobber the stored profile when the KV read throws", async () => {
+    const store = new Map<string, string>()
+    let failGet = false
+    const env = {
+      OPENCLAW_STATE: {
+        async get(k: string) { if (failGet) throw new Error("KV transient"); return store.get(k) ?? null },
+        async put(k: string, v: string) { store.set(k, v) },
+      },
+    } as unknown as Env
+    for (let i = 0; i < 5; i++) await recordOutcome(env, ev("dismissed"), Date.parse(TS) + i)
+    const before = store.get("precision-profile:repo:r1")
+    failGet = true
+    const ok = await recordOutcome(env, ev("dismissed"), Date.parse(TS) + 100)
+    expect(ok).toBe(false) // best-effort failure, non-fatal
+    expect(store.get("precision-profile:repo:r1")).toBe(before) // profile preserved, not overwritten
   })
 })
 

@@ -29,7 +29,7 @@ import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
 import { recordOutcome } from "./precision-profile/store"
-import type { FindingCategory } from "./triage-pr-review"
+import { FINDING_CATEGORIES, type FindingCategory } from "./triage-pr-review"
 import { isAuthorAllowedForSlashCommand } from "./slash-commands"
 import {
   LEGACY_REVIEW_BODY_MARKER,
@@ -548,22 +548,19 @@ function parseFindingFingerprint(body: string): string | undefined {
   return m ? m[1] : undefined
 }
 
-/** All FindingCategory values, for validating the parsed category marker. */
-const FINDING_CATEGORIES: ReadonlySet<string> = new Set<FindingCategory>([
-  "logic", "security", "performance", "error-handling",
-  "testing", "complexity", "style", "syntax", "docs",
-])
-
 /**
  * SIG-147: parse the hidden `<!-- sigilix:category:<cat> -->` marker into a
  * FindingCategory for the precision-profile boost dimension. Defaults to
  * `"logic"` (the same fallback `formatFindingCategory` uses) when absent or
  * unrecognized — suppression keys on the fingerprint, so the category default
- * only affects the (not-yet-applied) boost signal.
+ * only affects the (not-yet-applied) boost signal. Validates against the
+ * canonical `FINDING_CATEGORIES` set (shared with the renderer) so a new
+ * category never silently falls through. The marker is on the bot's OWN
+ * rendered comment, so the first match is the authoritative one.
  */
-function parseFindingCategory(body: string): FindingCategory {
+export function parseFindingCategory(body: string): FindingCategory {
   const m = /<!-- sigilix:category:([a-z-]+) -->/.exec(body)
-  return m && FINDING_CATEGORIES.has(m[1]!) ? (m[1] as FindingCategory) : "logic"
+  return m && FINDING_CATEGORIES.has(m[1] as FindingCategory) ? (m[1] as FindingCategory) : "logic"
 }
 
 /**

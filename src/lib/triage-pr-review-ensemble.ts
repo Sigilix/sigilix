@@ -894,10 +894,13 @@ export function decideEarlyExitAction(args: {
  *      specialist itself failed, which makes the bypass impossible).
  *   4. None of that candidate's findings have `score >= 4`.
  *
- * The score-gate semantics match `score >= 4` as the "major/critical"
- * threshold used across the codebase
- * (`triage-pr-review.ts:1961, 2103`). The orchestrator's inline bypass
- * branch reads the predicate verbatim — keep these in sync.
+ * Here `score >= 4` is the major/critical SEVERITY threshold (P0/P1) — this is
+ * a synth-skip optimization, NOT the posted verdict. The verdict rule
+ * (`chooseReviewEventForRenderedFindings` / `isTrivialFinding`) now blocks on
+ * ANY substantive finding regardless of severity; the bypass only avoids the
+ * synthesizer when a lone specialist has no P0/P1, which never changes the
+ * posted event. The orchestrator's inline bypass branch reads the predicate
+ * verbatim — keep these in sync.
  */
 export function isSynthBypassEligible(
   env: Env,

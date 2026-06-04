@@ -402,11 +402,30 @@ describe("chooseReviewEventForRenderedFindings", () => {
     })).toBe("REQUEST_CHANGES")
   })
 
-  it("COMMENT when body-only findings are all below the blocker floor (score < 4)", () => {
+  // Founder verdict rule: ANY substantive finding blocks, even a sub-4 nit —
+  // "no competitor approves on a P2/P3". (`f` has no category → substantive.)
+  it("REQUEST_CHANGES on substantive sub-4 findings (a real finding always blocks)", () => {
     expect(chooseReviewEventForRenderedFindings({
       inlineFindings: [],
       bodyOnlyFindings: [f(3), f(2)],
+    })).toBe("REQUEST_CHANGES")
+  })
+
+  // The only non-blocking tier: a truly trivial style/docs nit below P0/P1.
+  it("COMMENT only for a truly trivial style/docs nit below P0/P1", () => {
+    const triv = (category: "style" | "docs", score = 2): PrReviewFinding => ({ ...baseFinding, category, score })
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [], bodyOnlyFindings: [triv("style"), triv("docs")],
     })).toBe("COMMENT")
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [triv("style")], bodyOnlyFindings: [],
+    })).toBe("COMMENT") // a trivial nit inline is still just a COMMENT (category, not anchor)
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [], bodyOnlyFindings: [triv("style", 4)],
+    })).toBe("REQUEST_CHANGES") // a P0/P1 style finding is NOT trivial → blocks (recall floor)
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [], bodyOnlyFindings: [triv("style"), f(2)],
+    })).toBe("REQUEST_CHANGES") // substantive alongside a trivial → blocks
   })
 
   // SIG-281 PR A — believability floor: a real blocker routed body-only (e.g.
@@ -441,10 +460,15 @@ describe("chooseReviewEventForRenderedFindings", () => {
       inlineFindings: [],
       bodyOnlyFindings: [outside(5), f(5)],
     })).toBe("REQUEST_CHANGES")
-    // out-of-scope + an in-scope sub-4 nit → COMMENT (the nit surfaces, doesn't block)
+    // out-of-scope + an in-scope SUBSTANTIVE finding → blocks (the in-scope one is real)
     expect(chooseReviewEventForRenderedFindings({
       inlineFindings: [],
       bodyOnlyFindings: [outside(5), f(3)],
+    })).toBe("REQUEST_CHANGES")
+    // out-of-scope + an in-scope TRIVIAL style nit → COMMENT (the nit surfaces, doesn't block)
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [outside(5), { ...baseFinding, category: "style", score: 2 }],
     })).toBe("COMMENT")
   })
 
@@ -455,9 +479,11 @@ describe("chooseReviewEventForRenderedFindings", () => {
       openItems: [crThread],
     })).toBe("APPROVE")
 
+    // a competitor (CodeRabbit) open item must NOT escalate; with only a trivial
+    // style nit present, the verdict stays a non-blocking COMMENT.
     expect(chooseReviewEventForRenderedFindings({
       inlineFindings: [],
-      bodyOnlyFindings: [f()],
+      bodyOnlyFindings: [{ ...baseFinding, category: "style", score: 2 }],
       openItems: [crThread],
     })).toBe("COMMENT")
 
@@ -497,8 +523,12 @@ describe("chooseRenderedEventWithOverride — SIG-287 degraded/low-confidence do
   })
 
   it("COMMENT override is a no-op when rendered findings already make it COMMENT", () => {
+    // base is COMMENT only for a trivial style/docs nit (the founder verdict rule)
     expect(
-      chooseRenderedEventWithOverride({ inlineFindings: [], bodyOnlyFindings: [f(2)] }, "COMMENT"),
+      chooseRenderedEventWithOverride(
+        { inlineFindings: [], bodyOnlyFindings: [{ ...baseFinding, category: "style", score: 2 }] },
+        "COMMENT",
+      ),
     ).toBe("COMMENT")
   })
 
@@ -530,8 +560,8 @@ describe("previewReviewSubmissionEvent", () => {
     })).toBe("REQUEST_CHANGES")
   })
 
-  it("COMMENT for a body-only finding below the blocker floor (score < 4)", () => {
-    const fileFinding: PrReviewFinding = { ...baseFinding, scope: "file", score: 3 }
+  it("COMMENT for a trivial style/docs nit below the blocker floor (score < 4)", () => {
+    const fileFinding: PrReviewFinding = { ...baseFinding, scope: "file", category: "style", score: 3 }
     expect(previewReviewSubmissionEvent({
       verdict: { summary: "Body-only nit.", confidence: 4, confidenceReason: "Specific.", findings: [fileFinding] },
       headSha: "abc",
@@ -1899,7 +1929,10 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(body).not.toContain(markerForBlock)
   })
 
-  it("uses COMMENT when all findings route to the body", () => {
+  it("routes a substantive finding to the body but still BLOCKS (founder verdict rule)", () => {
+    // blockFinding ("lacks integration tests", score 3) is substantive — it has
+    // no inline anchor so it renders in the body, but a real finding always
+    // gates the merge (REQUEST_CHANGES), never a green COMMENT.
     const allBlock: PrReviewVerdict = {
       summary: "only block-level findings.",
       confidence: 4,
@@ -1912,10 +1945,10 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
       headSha: "abc",
       addedLineTextByLine,
     })
-    expect(out.event).toBe("COMMENT")
-    expect(out.comments ?? []).toHaveLength(0)
-    expect(out.body).toMatch(/non-blocking( high-severity)? finding/)
+    expect(out.event).toBe("REQUEST_CHANGES")
+    expect(out.comments ?? []).toHaveLength(0) // no inline anchor → routed to body
     expect(out.body).toContain("lacks integration tests")
+    expect(out.body).not.toMatch(/non-blocking/) // blocking review never labels its findings "non-blocking"
   })
 
   it("keeps a suggestion-bearing finding inline even when anchored to a `}` (preserves the fix)", () => {

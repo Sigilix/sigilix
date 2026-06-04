@@ -1601,28 +1601,41 @@ export interface ChooseReviewEventForRenderedFindingsArgs {
 export function chooseReviewEventForRenderedFindings(
   args: ChooseReviewEventForRenderedFindingsArgs,
 ): ReviewEvent {
-  if (args.inlineFindings.length > 0) return "REQUEST_CHANGES"
-
   const sigilixOpenItems = filterToSigilixAuthored(args.openItems ?? [])
   if (sigilixOpenItems.length > 0) return "REQUEST_CHANGES"
 
-  // Inlines-only / outside-diff (founder ask, Codex-hardened): a finding about
-  // code OUTSIDE this PR's changes (`outOfPrScope` — its path is not a changed
-  // file) is INFORMATIONAL. It must never block the merge AND must not withhold
-  // approval; blocking a PR over code the author didn't touch is hostile, and
-  // CodeRabbit handles it the same (post the note, still approve). So exclude
-  // out-of-PR-scope findings from the gate; when they are the ONLY findings the
-  // PR is clean → APPROVE. NOTE: this keys on `outOfPrScope` (path-not-changed),
-  // NOT on anchor-failure — a real blocker on a CHANGED file that merely failed
-  // to anchor inline is in-scope and STILL blocks (closes the recall hole).
-  const inScopeBody = args.bodyOnlyFindings.filter((f) => !f.outOfPrScope)
-  if (inScopeBody.length === 0) return "APPROVE"
-  // SIG-281 PR A — believability floor: an in-scope blocker (score >= 4 = P0/P1)
-  // that landed body-only (unanchorable inline, or demoted by the routing
-  // discipline) must STILL block. Appearing in body TEXT does not gate GitHub's
-  // merge — only the review event does. Sub-4 in-scope body findings stay COMMENT.
-  if (inScopeBody.some((f) => f.score >= 4)) return "REQUEST_CHANGES"
+  // Out-of-PR-scope findings (code OUTSIDE this PR's changes — `outOfPrScope`,
+  // path not a changed file) are INFORMATIONAL: never block, never withhold
+  // approval (CodeRabbit-parity; founder ask #334). When they are the ONLY
+  // findings the PR is clean → APPROVE. Keys on `outOfPrScope` (path-not-changed),
+  // NOT anchor-failure — a real blocker on a CHANGED file that merely failed to
+  // anchor inline is in-scope and STILL blocks (closes the recall hole).
+  const inScope = [...args.inlineFindings, ...args.bodyOnlyFindings].filter(
+    (f) => !f.outOfPrScope,
+  )
+  if (inScope.length === 0) return "APPROVE"
+
+  // Founder verdict rule: Sigilix NEVER approves a PR that carries a real
+  // finding, and ANY substantive finding — inline or body, any severity —
+  // BLOCKS ("no competitor approves on a P2/P3"). The only non-blocking tier is
+  // a truly trivial cosmetic nit (`isTrivialFinding`), which posts as a neutral
+  // COMMENT. The SAME predicate routes the body renderer's blocking-vs-non-
+  // blocking split, so the verdict and the presentation can never contradict.
+  if (inScope.some((f) => !isTrivialFinding(f))) return "REQUEST_CHANGES"
   return "COMMENT"
+}
+
+/**
+ * A "truly trivial" cosmetic nit — a `style`/`docs` finding below P0/P1. The
+ * single source of truth for the founder verdict rule: a trivial finding is
+ * NON-BLOCKING (posts as a neutral COMMENT); EVERYTHING else is substantive and
+ * BLOCKS (REQUEST_CHANGES). A P0/P1 (score >= 4) is NEVER trivial regardless of
+ * category — the `score < 4` gate is the recall floor (SIG-281). This decides
+ * the VERDICT only; where a finding RENDERS (Fix Plan for P0/P1, "Review Body
+ * Findings" for sub-4) stays severity-based and orthogonal. Pure.
+ */
+export function isTrivialFinding(f: PrReviewFinding): boolean {
+  return (f.category === "style" || f.category === "docs") && f.score < 4
 }
 
 export function chooseRenderedEventWithOverride(
@@ -2379,21 +2392,14 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   }
   lines.push(summary)
 
-  // SIG-281 PR B (Rec 6 / Kimi K2.6): body-only blockers (score >= 4)
-  // that can't anchor inline still belong in the scannable Fix Plan
-  // table — otherwise a body-only-only P0 advertises "1 high-severity
-  // finding" in the lead but has NO Fix Plan row, leaving the blocker
-  // buried in the detail section. Split the body-only set by the blocker
-  // floor:
-  //   - blockers (score >= 4): feed the Fix Plan table (alongside inline
-  //     findings) AND render their full evidence in a collapsed details
-  //     block right after the table, so failureExample/fixExample survive
-  //     without scroll-taxing the surface. They are NOT repeated in the
-  //     lower "Review Body Findings" section.
-  //   - non-blockers (score < 4): unchanged — the "Review Body Findings"
-  //     section, with the load-bearing explanation copy.
-  // The blocker stays VISIBLE (table row, never collapsed); only the
-  // supplementary evidence is collapse-on-demand.
+  // SIG-281 PR B (Rec 6 / Kimi K2.6): the Fix Plan table is the HIGH-SEVERITY
+  // (P0/P1, score >= 4) prominence surface — a body-only P0/P1 that can't anchor
+  // inline still belongs there so the blocker isn't buried in the detail section.
+  // Lower-severity (score < 4) body findings render in the "Other findings"
+  // section below. NOTE: the SECTION is a presentation tier (by severity), NOT
+  // the blocking decision — the founder verdict rule (`chooseReviewEventFor-
+  // RenderedFindings`) blocks on ANY substantive finding regardless of which
+  // section renders it; only a truly trivial style/docs nit is non-blocking.
   const bodyOnlyBlockers = bodyOnlyFindings.filter((f) => f.score >= 4)
   const bodyOnlyNonBlockers = bodyOnlyFindings.filter((f) => f.score < 4)
 

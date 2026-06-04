@@ -217,14 +217,24 @@ describe("buildFallbackSubmission", () => {
     expect(submission.comments).toBeUndefined()
   })
 
-  it("uses COMMENT when body-only fallback findings are sub-4 (nits don't block)", () => {
+  it("uses COMMENT when body-only fallback findings are trivial style/docs nits", () => {
     const submission = buildFallbackSubmission({
-      verdict: { ...baseVerdict, findings: [{ ...baseFinding, score: 3 }] },
+      verdict: { ...baseVerdict, findings: [{ ...baseFinding, category: "style", score: 3 }] },
       unanchored: [],
       prAuthor: null,
       headSha: "deadbeef",
     })
     expect(submission.event).toBe("COMMENT")
+  })
+
+  it("ESCALATES to REQUEST_CHANGES when a body-only fallback finding is SUBSTANTIVE sub-4 (founder rule)", () => {
+    const submission = buildFallbackSubmission({
+      verdict: { ...baseVerdict, findings: [{ ...baseFinding, category: "logic", score: 3 }] },
+      unanchored: [],
+      prAuthor: null,
+      headSha: "deadbeef",
+    })
+    expect(submission.event).toBe("REQUEST_CHANGES")
   })
 
   it("SIG-281 PR A: ESCALATES to REQUEST_CHANGES when a body-only fallback finding is a blocker (score >= 4)", () => {
@@ -250,9 +260,9 @@ describe("buildFallbackSubmission", () => {
     expect(submission.event).toBe("APPROVE")
   })
 
-  it("returns COMMENT when only sub-4 unanchored findings exist (anchored empty)", () => {
+  it("returns COMMENT when only trivial style/docs unanchored nits exist (anchored empty)", () => {
     const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, score: 3, line: 999, headline: "drift-flagged-but-line-out-of-diff" },
+      { ...baseFinding, category: "style", score: 3, line: 999, headline: "drift-flagged-but-line-out-of-diff" },
     ]
     const submission = buildFallbackSubmission({
       verdict: { ...baseVerdict, findings: [] },
@@ -371,9 +381,9 @@ describe("buildReviewSubmission with unanchored findings (CR+Sigilix PR #38 catc
     expect(submission.comments?.[0]?.line).toBe(42)
   })
 
-  it("uses COMMENT when sub-4 findings only render in the review body", () => {
+  it("uses COMMENT when trivial style/docs nits only render in the review body", () => {
     const unanchored: PrReviewFinding[] = [
-      { ...baseFinding, score: 3, line: 999, headline: "nit-but-unanchored" },
+      { ...baseFinding, category: "style", score: 3, line: 999, headline: "nit-but-unanchored" },
     ]
     const submission = buildReviewSubmission({
       verdict: { ...baseVerdict, findings: [] },

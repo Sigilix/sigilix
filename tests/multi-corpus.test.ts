@@ -28,7 +28,9 @@ describe("multiCorpusEnabled", () => {
 })
 
 describe("deriveVerdictLabel", () => {
-  it("maps findings to the review pipeline's score>=4 buckets", () => {
+  it("maps manifest findings (score-only) to coarse corpus buckets", () => {
+    // The persisted manifest has no `category`, so this approximates the live
+    // (category-aware) verdict by the score floor: any score>=4 → changes_required.
     expect(deriveVerdictLabel([{ score: 4 }, { score: 1 }])).toBe("changes_required")
     expect(deriveVerdictLabel([{ score: 2 }, { score: 3 }])).toBe("commented")
     expect(deriveVerdictLabel([])).toBe("approved")

@@ -313,6 +313,10 @@ OPENCLAW_GRAPH_EXPANSION = "post"
 # internal noise, not a believability incident. Rollback: "shadow" (measure-only)
 # or "off".
 OPENCLAW_AUTHZ_IDOR_SCAN = "post"
+# Deterministic weak-randomness floor (CWE-338, no-insecure-random-token): flags
+# Math.random() minting a credential-named token/secret. Shipped "shadow" first
+# (measure firing + FP on dogfood) — flip to "post" once clean. P2-capped.
+OPENCLAW_WEAK_RANDOM_SCAN = "shadow"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.

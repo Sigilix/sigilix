@@ -278,3 +278,74 @@ describe("ValidationMetricsDO.recordRepeatFps + queryRepeatFps (SIG-217)", () =>
     expect(out.byReason["repeat-fp-detected"]).toBe(1) // only the in-window one
   })
 })
+
+// SIG-245: per-category over-fire rollup. End-to-end through the real record →
+// query path: gate-rejections that carry the finding's `category` accumulate a
+// separate gate×category counter, surfaced as `byCategory`, WITHOUT disturbing
+// the existing per-reason `counts`.
+describe("ValidationMetricsDO.byCategory (per-category over-fire)", () => {
+  const at = "2026-05-22T12:00:00.000Z"
+
+  it("rolls up gate × category and surfaces the meta-FP split (security gate firing on a testing-category finding)", async () => {
+    const do_ = makeDoInstance()
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: at,
+      events: [
+        // security gate firing on a real security finding (expected)
+        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: false, category: "security" },
+        // security gate firing on a TESTING-category finding (the PR #296 meta-FP)
+        { kind: "gate-rejection", gate: "security", reason: "no-credential-token", dropped: false, category: "testing" },
+        { kind: "gate-rejection", gate: "security", reason: "no-credential-token", dropped: false, category: "testing" },
+      ],
+    })
+    const out = await do_.query({ windowDays: 7, nowIso: at })
+    // gate × category, summed over reasons
+    expect(out.byCategory.security.security).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(out.byCategory.security.testing).toEqual({ wouldDrop: 2, kept: 2 })
+    // the existing per-reason rollup is untouched (coexists)
+    expect(out.counts.security["fabricated-evidence-id"]).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(out.counts.security["no-credential-token"]).toEqual({ wouldDrop: 2, kept: 2 })
+  })
+
+  it("enforce (dropped:true) increments wouldDrop only in byCategory", async () => {
+    const do_ = makeDoInstance()
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: at,
+      events: [{ kind: "gate-rejection", gate: "logic", reason: "no-survival-rationale", dropped: true, category: "logic" }],
+    })
+    const out = await do_.query({ windowDays: 7, nowIso: at })
+    expect(out.byCategory.logic.logic).toEqual({ wouldDrop: 1, kept: 0 })
+  })
+
+  it("does NOT create a category row when the event carries no category", async () => {
+    const do_ = makeDoInstance()
+    await do_.recordBatch({
+      ...pr,
+      occurredAt: at,
+      events: [{ kind: "gate-rejection", gate: "verification-refuted", reason: "refuted-citation", dropped: true }],
+    })
+    const out = await do_.query({ windowDays: 7, nowIso: at })
+    // still recorded in the per-reason counts...
+    expect(out.counts["verification-refuted"]["refuted-citation"]).toEqual({ wouldDrop: 1, kept: 0 })
+    // ...but contributes nothing to byCategory
+    expect(out.byCategory).toEqual({})
+  })
+
+  it("excludes category events outside the trailing window", async () => {
+    const do_ = makeDoInstance()
+    await do_.recordBatch({ ...pr, occurredAt: "2026-05-01T12:00:00.000Z", events: [{ kind: "gate-rejection", gate: "perf", reason: "r", dropped: false, category: "performance" }] })
+    await do_.recordBatch({ ...pr, occurredAt: "2026-05-22T12:00:00.000Z", events: [{ kind: "gate-rejection", gate: "perf", reason: "r", dropped: false, category: "performance" }] })
+    const out = await do_.query({ windowDays: 7, nowIso: "2026-05-22T12:00:00.000Z" })
+    expect(out.byCategory.perf.performance).toEqual({ wouldDrop: 1, kept: 1 }) // only the in-window one
+  })
+
+  it("GC drops category buckets older than retention", async () => {
+    const do_ = makeDoInstance()
+    await do_.recordBatch({ ...pr, occurredAt: "2026-04-01T12:00:00.000Z", events: [{ kind: "gate-rejection", gate: "logic", reason: "r", dropped: false, category: "logic" }] })
+    await do_.alarm()
+    const out = await do_.query({ windowDays: 30, nowIso: "2026-05-22T12:00:00.000Z" })
+    expect(out.byCategory).toEqual({}) // the stale category bucket was GC'd
+  })
+})

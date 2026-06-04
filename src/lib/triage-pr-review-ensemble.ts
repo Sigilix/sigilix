@@ -4754,7 +4754,7 @@ export async function handlePrReviewEnsemble(
           evidenceId: finding.evidenceId ?? null,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "security", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-111: thread the tests-finding specificity gate mode +
       // telemetry through. Default `shadow` — counts/telemeters the
@@ -4781,7 +4781,7 @@ export async function handlePrReviewEnsemble(
           evidenceRefs_count: finding.evidenceRefs?.length ?? 0,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "tests", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "tests", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-109: thread the logic evidence + mode. Evidence is built
       // PR-A-contained — added-line text from the FULL PR diff +
@@ -4807,7 +4807,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "logic", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-308: logic-refutation backstop. Default `off` in code; wrangler
       // sets `shadow` so production counts/telemeters the would-flag rate
@@ -4827,7 +4827,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-110: thread perf evidence + mode. Evidence is the same
       // changed-line text + the roleHint:performance AST findings. Default
@@ -4852,7 +4852,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "perf", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "perf", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-281 PR C (Rec 4): inline-grounding gate. Default `shadow` —
       // counts/telemeters the would-demote until the operator flips
@@ -4872,7 +4872,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "inline-grounding", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "inline-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-290 v1: absence-claim grounding gate. Default `off` — the gate
       // doesn't run at all until the operator flips
@@ -4897,7 +4897,7 @@ export async function handlePrReviewEnsemble(
           score: finding.score,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "absence-grounding", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "absence-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // Cross-cutting over-fire Option B: window-blindness gate. Default off
       // until OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE is flipped to shadow
@@ -4924,7 +4924,7 @@ export async function handlePrReviewEnsemble(
           matchedIdentifier: info.matchedIdentifier,
           guardLine: info.guardLine,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "window-blindness", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "window-blindness", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-293 v1: security-grounding gate (secrets-exposure). Default
       // `off` — the gate doesn't run until the operator flips
@@ -4948,7 +4948,7 @@ export async function handlePrReviewEnsemble(
           cweId: finding.cweId ?? null,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security-grounding", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "security-grounding", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-311 Layers A+B: security usage-vs-mention gate. Default off until
       // OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE is flipped to shadow/enforce.
@@ -4966,7 +4966,7 @@ export async function handlePrReviewEnsemble(
           cweId: finding.cweId ?? null,
           category: finding.category,
         }))
-        args.validationSink?.push({ kind: "gate-rejection", gate: "security-usage", reason: info.reason, dropped: info.dropped })
+        args.validationSink?.push({ kind: "gate-rejection", gate: "security-usage", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
     })
     if (telemetry.synthesizer) {

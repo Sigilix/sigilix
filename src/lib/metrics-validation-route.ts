@@ -59,6 +59,7 @@ export async function handleValidationMetricsRoute(request: Request, env: Env): 
         perf: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
       },
       counts: metrics.counts,
+      byCategory: metrics.byCategory,
       lastSeenPrHeads: metrics.lastSeenPrHeads,
     },
     200,

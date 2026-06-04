@@ -58,6 +58,7 @@ import {
   isAuthorAllowedForReviewDismiss,
   isReviewDismissRequest,
   parseDismissCommand,
+  parseFindingCategory,
   parseGithubMentionResponse,
   parseReviewDismissDedupeRecord,
   preferPersistedReason,
@@ -854,5 +855,19 @@ describe("formatReviewDismissReply", () => {
   it("does not annotate non-success branches with the reason", () => {
     const out = formatReviewDismissReply({ kind: "not-found" }, "too-minor")
     expect(out).not.toContain("reason:")
+  })
+})
+
+describe("parseFindingCategory (SIG-147)", () => {
+  const marker = (cat: string) => `<!-- sigilix:pr-review-finding -->\n<!-- sigilix:category:${cat} -->\nbody`
+  it("parses a valid category marker", () => {
+    expect(parseFindingCategory(marker("security"))).toBe("security")
+    expect(parseFindingCategory(marker("error-handling"))).toBe("error-handling")
+  })
+  it("falls back to 'logic' when the marker is absent", () => {
+    expect(parseFindingCategory("a finding body with no markers")).toBe("logic")
+  })
+  it("falls back to 'logic' on an unrecognized category", () => {
+    expect(parseFindingCategory(marker("bogus"))).toBe("logic")
   })
 })

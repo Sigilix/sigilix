@@ -69,6 +69,7 @@ import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
 import { handleRunnerEvidenceMetricsRoute } from "./lib/metrics-runner-evidence-route"
 import { handleVerificationMetricsRoute } from "./lib/metrics-verification-route"
 import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
+import { handlePrecisionMetricsRoute } from "./lib/metrics-precision-route"
 import { handleRepeatFpsMetricsRoute } from "./lib/metrics-repeat-fps-route"
 import { recordValidationMetrics } from "./lib/validation-metrics-client"
 import type { ValidationRejectionEvent } from "./do/validation-metrics"
@@ -316,6 +317,12 @@ export interface Env {
   // it only attaches telemetry `shadowClaims` in lookup and emits the
   // `review-memory-claim-shadow` corpus the Phase-4 calibration consumes.
   OPENCLAW_REVIEW_MEMORY_CLAIM_SHADOW?: string
+
+  // SIG-147: per-repo precision-profile rollout — `off` (default) | `shadow`
+  // (compute + telemeter would-suppress, no output change) | `enforce` (drop
+  // repeatedly-dismissed patterns; recall-safe, never a P0/P1). Mirrors the
+  // review-memory shadow→enforce three-state flag.
+  OPENCLAW_PRECISION_PROFILE_MODE?: string
 
   // ARC-189 one-shot deploy aid for the PROMPT_VERSION="1" → "2"
   // bump (Task 10b). When `OPENCLAW_SUPPRESS_PROMPT_VERSION_STALE`
@@ -1268,6 +1275,12 @@ export default {
     // per-specialist) — surfaces dismissal-re-fire + severity-escalation rates.
     if (request.method === "GET" && url.pathname === "/metrics/repeat-fps") {
       return handleRepeatFpsMetricsRoute(request, env)
+    }
+
+    // SIG-147: authenticated read of a repo's precision profile (FP-reduction
+    // signal — how many repeatedly-dismissed patterns are now suppressed).
+    if (request.method === "GET" && url.pathname === "/metrics/precision") {
+      return handlePrecisionMetricsRoute(request, env)
     }
 
     // SIG-152: authenticated read of rolling SIG-138 graph shadow telemetry.

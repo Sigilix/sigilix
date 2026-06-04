@@ -65,12 +65,39 @@ function stripComment(line: string): string {
   return line
 }
 
-/** Count unescaped occurrences of a triple-quote delimiter in a line. */
-function countTriple(line: string, delim: string): number {
-  let n = 0
+type Triple = '"""' | "'''" | null
+
+/**
+ * Single-line scan that returns the triple-quoted-string state at end of line,
+ * given the state at its start. Quote-aware (CodeRabbit catch): a triple
+ * delimiter that sits INSIDE an ordinary `'...'`/`"..."` literal — e.g.
+ * `x = '"""'` — does NOT toggle triple state, so it can't falsely swallow the
+ * rest of the file. Ordinary strings honor backslash escapes; inside an open
+ * triple, only its own closing delimiter ends it.
+ */
+function tripleStateAfter(line: string, start: Triple): Triple {
+  let state: Triple = start
+  let inStr: '"' | "'" | null = null
   let i = 0
-  while ((i = line.indexOf(delim, i)) !== -1) { n++; i += 3 }
-  return n
+  while (i < line.length) {
+    if (state) {
+      if (line.startsWith(state, i)) { state = null; i += 3; continue }
+      i++
+      continue
+    }
+    if (inStr) {
+      if (line[i] === "\\") { i += 2; continue }
+      if (line[i] === inStr) inStr = null
+      i++
+      continue
+    }
+    if (line.startsWith('"""', i)) { state = '"""'; i += 3; continue }
+    if (line.startsWith("'''", i)) { state = "'''"; i += 3; continue }
+    const c = line[i]
+    if (c === '"' || c === "'") { inStr = c; i++; continue }
+    i++
+  }
+  return state
 }
 
 /** Split a comma list, respecting nothing fancy (Python import lists are flat
@@ -105,7 +132,7 @@ export function extractPythonFileGraph(path: string, content: string): FileGraph
   const scopes: Scope[] = []
   // Triple-quoted string state: which delimiter we are currently inside, or
   // null. Spans multiple physical lines.
-  let inTriple: '"""' | "'''" | null = null
+  let inTriple: Triple = null
 
   for (let idx = 0; idx < rawLines.length; idx++) {
     const raw = rawLines[idx]!
@@ -113,22 +140,19 @@ export function extractPythonFileGraph(path: string, content: string): FileGraph
 
     // --- triple-quote state machine (skip docstring/string interiors) ---
     if (inTriple) {
-      // Inside a multi-line string; only an odd count of the active delimiter
-      // closes it. Nothing on this line is code we care about.
-      if (countTriple(raw, inTriple) % 2 === 1) inTriple = null
+      // Inside a multi-line string; advance the state over this line (a `#`
+      // here is literal string content, so scan `raw`, not the comment-strip).
+      // v1 skips the whole line even if the triple closes mid-line with trailing
+      // code — a rare shape not worth the added complexity.
+      inTriple = tripleStateAfter(raw, inTriple)
       continue
     }
-    // Not currently inside a triple string. Strip the trailing comment FIRST,
-    // THEN detect a triple that opens (odd count) on this line — otherwise a
-    // lone `"""`/`'''` sitting inside a `#` comment would flip string state
-    // and swallow the rest of the file. `stripComment` is quote-aware, so it
-    // will not cut a `#` that sits inside a string literal on this line.
-    // (The close-detection branch above runs on `raw`, since inside an open
-    // triple a `#` is literal string content, not a comment.)
+    // Not currently inside a triple. Strip the trailing comment FIRST, THEN
+    // scan — otherwise a lone `"""`/`'''` in a `#` comment would open string
+    // state and swallow the rest of the file. The scan is quote-aware, so a
+    // triple delimiter inside an ordinary literal (e.g. `x = '"""'`) is ignored.
     const code = stripComment(raw)
-    for (const delim of ['"""', "'''"] as const) {
-      if (countTriple(code, delim) % 2 === 1) { inTriple = delim; break }
-    }
+    inTriple = tripleStateAfter(code, null)
 
     const trimmed = code.trim()
     if (trimmed.length === 0) continue

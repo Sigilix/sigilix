@@ -34,7 +34,7 @@ Also relevant: the indexer already lists `.py` and `.go` in `INDEXED_EXTENSIONS`
 
 A thin dispatch layer in `graph-extract.ts` keyed by file extension. Each language is an extractor module behind the same `(path, content) => FileGraph` contract; adding a language is adding one module + one routing entry.
 
-```
+```text
 extractFileGraph(path, content)
   → ext = lower(extname(path))
   → .js/.ts/.jsx/.tsx/.mjs/.cjs/.mts/.cts → extractJsTsFileGraph (acorn, existing)

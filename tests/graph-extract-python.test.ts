@@ -67,6 +67,23 @@ describe("extractPythonFileGraph — symbols", () => {
     ].join("\n")
     expect(names(src)).toEqual(["function:real:true"])
   })
+
+  it("a triple delimiter inside an ordinary string literal does not swallow the file", () => {
+    // CodeRabbit catch: `x = '"""'` must not enter triple-string state.
+    const src = ["x = '\"\"\"'", "def real():", "    return 2"].join("\n")
+    expect(names(src)).toEqual(["function:real:true"])
+  })
+
+  it("skips a ''' docstring as well as a \"\"\" one", () => {
+    const src = [
+      "def real():",
+      "    '''",
+      "    def fake_in_doc():",
+      "    '''",
+      "    return 1",
+    ].join("\n")
+    expect(names(src)).toEqual(["function:real:true"])
+  })
 })
 
 describe("extractPythonFileGraph — import edges", () => {
@@ -107,6 +124,14 @@ describe("extractPythonFileGraph — import edges", () => {
 
   it("v1 emits no call edges", () => {
     expect(extractPythonFileGraph("m.py", "def f():\n    g()\n").callEdges).toEqual([])
+  })
+
+  it("multi-line parenthesized import is a documented v1 gap (no edges)", () => {
+    // Known limitation (see docs/design/multi-language-code-graph.md): only the
+    // single-line form is parsed. Pin the current behavior so a future fix is
+    // a deliberate change, not an accident.
+    const src = "from pkg import (\n    a,\n    b,\n)\n"
+    expect(extractPythonFileGraph("m.py", src).fileEdgesRaw).toEqual([])
   })
 })
 

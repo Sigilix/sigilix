@@ -2946,6 +2946,25 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+    // Shadow-first gating for the deterministic open-redirect floor
+    // (no-open-redirect, CWE-601) — same off/shadow/post contract. Default off;
+    // shadow strips-but-logs the firing + FP rate on dogfood before promoting.
+    const openRedirectMode = (env.OPENCLAW_OPEN_REDIRECT_SCAN ?? "off").trim().toLowerCase()
+    if (openRedirectMode !== "post") {
+      const openRedirectEmits = astResult.findings.filter((f) => f.ruleId === "no-open-redirect")
+      if (openRedirectEmits.length > 0) {
+        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-open-redirect")
+        for (const f of openRedirectEmits) astResult.perFinding.delete(f.astFindingId)
+        if (openRedirectMode === "shadow") {
+          console.log(JSON.stringify({
+            event: "open-redirect-shadow",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            count: openRedirectEmits.length,
+            anchors: openRedirectEmits.map((f) => `${f.path}:${f.line}`),
+          }))
+        }
+      }
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

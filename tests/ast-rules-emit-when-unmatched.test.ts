@@ -20,6 +20,8 @@ const EMIT_RULES = new Set([
   "no-unauthorized-object-lookup",
   // the weak-randomness floor (CWE-338, security/warning — FP-safe at P2).
   "no-insecure-random-token",
+  // the open-redirect floor (CWE-601, security/warning — FP-safe at P2).
+  "no-open-redirect",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {

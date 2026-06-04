@@ -317,6 +317,11 @@ OPENCLAW_AUTHZ_IDOR_SCAN = "post"
 # Math.random() minting a credential-named token/secret. Shipped "shadow" first
 # (measure firing + FP on dogfood) — flip to "post" once clean. P2-capped.
 OPENCLAW_WEAK_RANDOM_SCAN = "shadow"
+# Deterministic open-redirect floor (CWE-601, no-open-redirect): flags a
+# request-controlled value flowing into a redirect/Location sink with no
+# destination validation. P2-capped (clampAstEmitScores: never a P0/P1 alone).
+# Shipped at "post" — fail-closed taint + Headers-receiver gating keep FPs out.
+OPENCLAW_OPEN_REDIRECT_SCAN = "post"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.

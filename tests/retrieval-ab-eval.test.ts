@@ -37,6 +37,18 @@ describe("parsing", () => {
     expect(res.rows).toHaveLength(1)
     expect(res.dropped).toBe(1)
   })
+
+  it("drops fractional / non-positive line numbers instead of truncating them", () => {
+    const text = [
+      `{"pr":"1","file":"a.ts","line":10}`, // valid
+      `{"pr":"1","file":"a.ts","line":10.9}`, // fractional → dropped (no silent trunc to 10)
+      `{"pr":"1","file":"a.ts","line":0}`, // non-positive → dropped
+      `{"pr":"1","file":"a.ts","line":-3}`, // negative → dropped
+    ].join("\n")
+    const res = parseGroundTruthJsonl(text)
+    expect(res.rows).toEqual([{ pr: "1", file: "a.ts", line: 10 }])
+    expect(res.dropped).toBe(3)
+  })
 })
 
 describe("tallyArm matching", () => {
@@ -69,6 +81,21 @@ describe("tallyArm matching", () => {
   it("does not cross PR boundaries", () => {
     const findings: ArmFinding[] = [{ pr: "2", arm: "vector", file: "a.ts", line: 10 }]
     expect(tallyArm(findings, truth, 3)).toEqual({ tp: 0, fp: 1, fn: 2 })
+  })
+
+  it("is independent of findings order (no greedy first-claim corruption)", () => {
+    // Regression for the order-dependent greedy: truth T1@10, T2@14 (tol 5).
+    // A@8 reaches only T1 (dist 2). B@11 reaches T1 (dist 1) AND T2 (dist 3).
+    // A greedy nearest-first pass over [B, A] lets B grab its nearer T1, stranding
+    // A → tp 1; over [A, B] → tp 2. Maximum matching pairs A→T1, B→T2 either way.
+    const tw: GroundTruthItem[] = [
+      { pr: "1", file: "a.ts", line: 10 },
+      { pr: "1", file: "a.ts", line: 14 },
+    ]
+    const A: ArmFinding = { pr: "1", arm: "vector", file: "a.ts", line: 8 }
+    const B: ArmFinding = { pr: "1", arm: "vector", file: "a.ts", line: 11 }
+    expect(tallyArm([A, B], tw, 5)).toEqual({ tp: 2, fp: 0, fn: 0 })
+    expect(tallyArm([B, A], tw, 5)).toEqual({ tp: 2, fp: 0, fn: 0 })
   })
 })
 

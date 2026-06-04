@@ -22,7 +22,7 @@
 // as a line in findings.jsonl. Hand-label the genuinely-real findings per PR
 // into truth.jsonl. Then run this report.
 
-import { readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import {
   computeAbReport,
   formatAbCsv,
@@ -92,6 +92,11 @@ const csv = formatAbCsv(report)
 
 if (args.out) {
   const stamp = report.prCount
+  try {
+    mkdirSync(args.out, { recursive: true })
+  } catch (err) {
+    die(`could not create --out directory "${args.out}": ${err instanceof Error ? err.message : String(err)}`)
+  }
   if (format === "md" || format === "both") writeFileSync(`${args.out}/retrieval-ab-${stamp}prs.md`, md)
   if (format === "csv" || format === "both") writeFileSync(`${args.out}/retrieval-ab-${stamp}prs.csv`, csv)
   console.error(`wrote report to ${args.out}/`)

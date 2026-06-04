@@ -16,9 +16,12 @@
 // Matching model (standard IR eval): an arm finding is a true positive when it
 // lands on a ground-truth item for the SAME pr, the SAME file, within
 // `lineTolerance` lines, and (when both carry a category) the same category.
-// Each ground-truth item is claimed by at most one finding (greedy, nearest
-// line first). Unmatched findings are false positives; unmatched ground-truth
-// items are false negatives.
+// Each ground-truth item is claimed by at most one finding and each finding
+// claims at most one truth item — a maximum bipartite matching, so TP is the
+// largest possible set of valid pairings and is INDEPENDENT of the input row
+// order (a greedy first-claim pass would let JSONL ordering change the score).
+// Unmatched findings are false positives; unmatched ground-truth items are
+// false negatives.
 
 import { wilsonInterval } from "../bakeoff-report"
 
@@ -124,8 +127,11 @@ function parseJsonlLines<T>(text: string, pick: (o: Record<string, unknown>) => 
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null)
+// Line numbers are 1-based integers. Reject fractional / non-positive values
+// outright rather than truncating them — `Math.trunc(10.9) === 10` would
+// silently relocate a malformed row onto a real line and forge a match.
 const int = (v: unknown): number | null =>
-  typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null
+  typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null
 
 export function parseGroundTruthJsonl(text: string): ParseResult<GroundTruthItem> {
   return parseJsonlLines<GroundTruthItem>(text, (o) => {
@@ -171,39 +177,59 @@ interface Tally {
 }
 
 /**
- * Greedy match of one arm's findings to ground truth. Each truth item is
- * claimed at most once, by the nearest-line eligible finding. Pure.
+ * Match one arm's findings to ground truth as a MAXIMUM bipartite matching.
+ * Each truth item is claimed by at most one finding and each finding claims at
+ * most one truth item; an edge is eligible when the pair shares pr + file, is
+ * within `lineTolerance`, and has compatible categories. TP is the size of the
+ * maximum matching — which is unique, so the result does NOT depend on the
+ * order of `findings`/`truth` (a greedy first-claim pass did, corrupting the
+ * precision/recall the harness exists to measure). Pure.
+ *
+ * Per-finding edges are sorted nearest-line-first so that when several maximum
+ * matchings exist the augmenting search prefers the closest pairing; this is
+ * cosmetic (TP is order-invariant regardless) but keeps WHICH pairs match
+ * stable and intuitive. Inputs are per-PR-arm small, so the O(V·E) augmenting
+ * algorithm is comfortably fast.
  */
 export function tallyArm(
   findings: ReadonlyArray<ArmFinding>,
   truth: ReadonlyArray<GroundTruthItem>,
   lineTolerance: number,
 ): Tally {
-  const claimed = new Set<number>() // indices into `truth`
-  let tp = 0
-  let fp = 0
-  for (const f of findings) {
-    let bestIdx = -1
-    let bestDist = Number.POSITIVE_INFINITY
+  // Eligible truth indices per finding, nearest-line first (deterministic).
+  const adjacency: number[][] = findings.map((f) => {
+    const edges: Array<{ idx: number; dist: number }> = []
     for (let i = 0; i < truth.length; i++) {
-      if (claimed.has(i)) continue
       const t = truth[i]!
       if (t.pr !== f.pr || t.file !== f.file) continue
       if (!categoriesCompatible(f.category, t.category)) continue
       const dist = Math.abs(t.line - f.line)
-      if (dist <= lineTolerance && dist < bestDist) {
-        bestDist = dist
-        bestIdx = i
+      if (dist <= lineTolerance) edges.push({ idx: i, dist })
+    }
+    edges.sort((a, b) => a.dist - b.dist || a.idx - b.idx)
+    return edges.map((e) => e.idx)
+  })
+
+  // Kuhn's algorithm: augmenting paths → maximum matching. `truthMatch[t]` is
+  // the finding index currently claiming truth item `t`, or -1.
+  const truthMatch = new Array<number>(truth.length).fill(-1)
+  const augment = (findingIdx: number, visited: boolean[]): boolean => {
+    for (const t of adjacency[findingIdx]!) {
+      if (visited[t]) continue
+      visited[t] = true
+      if (truthMatch[t] === -1 || augment(truthMatch[t]!, visited)) {
+        truthMatch[t] = findingIdx
+        return true
       }
     }
-    if (bestIdx >= 0) {
-      claimed.add(bestIdx)
-      tp += 1
-    } else {
-      fp += 1
-    }
+    return false
   }
-  return { tp, fp, fn: truth.length - claimed.size }
+
+  let tp = 0
+  for (let f = 0; f < findings.length; f++) {
+    if (augment(f, new Array<boolean>(truth.length).fill(false))) tp += 1
+  }
+  return { tp, fp: findings.length - tp, fn: truth.length - tp }
 }
 
 function metricsFromTally(arm: Arm, t: Tally): ArmMetrics {

@@ -2918,7 +2918,11 @@ export function buildBodyOnlyCheckAnnotations(findings: PrReviewFinding[]): Chec
     b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
   )
   return sorted
-    .filter((f) => f.path.trim().length > 0 && Number.isFinite(f.line) && f.line > 0)
+    // Out-of-PR-scope findings (code not in this PR) must NOT become check
+    // annotations either — a `failure` annotation on an untouched file recreates
+    // the "looks blocking" problem on the checks surface (CodeRabbit #334).
+    // Filtering here covers every call site at once.
+    .filter((f) => !f.outOfPrScope && f.path.trim().length > 0 && Number.isFinite(f.line) && f.line > 0)
     .map((f) => {
       const start = Math.max(1, Math.min(f.startLine ?? f.line, f.line))
       const end = Math.max(start, Math.max(f.startLine ?? f.line, f.line))

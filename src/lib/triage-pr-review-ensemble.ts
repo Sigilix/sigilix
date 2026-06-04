@@ -10519,9 +10519,14 @@ export function validateForSubmission(args: {
   // anchor stays in-scope and still blocks — only a truly different file is
   // out-of-scope, which closes the recall hole of treating anchor-failure as
   // out-of-PR.
-  const changedFilePaths = new Set(reviewable.keys())
-  for (const f of cleanFindings) if (!changedFilePaths.has(f.path)) f.outOfPrScope = true
-  for (const f of unanchoredFindings) if (!changedFilePaths.has(f.path)) f.outOfPrScope = true
+  // Normalize both sides with `.trim()` — the path-handling convention across
+  // this module (triage-pr-review.ts:702/865, ensemble.ts:9218) — so a model
+  // path with stray whitespace can't mismatch a changed-file key and wrongly
+  // mark a real blocker out-of-scope (CodeRabbit #334 — recall-relevant).
+  const normPath = (p: string): string => p.trim()
+  const changedFilePaths = new Set([...reviewable.keys()].map(normPath))
+  for (const f of cleanFindings) if (!changedFilePaths.has(normPath(f.path))) f.outOfPrScope = true
+  for (const f of unanchoredFindings) if (!changedFilePaths.has(normPath(f.path))) f.outOfPrScope = true
 
   return {
     verdict: { ...synthOutput.verdict, summary, findings: cleanFindings },

@@ -1644,6 +1644,16 @@ describe("buildBodyOnlyCheckAnnotations", () => {
     })
   })
 
+  it("EXCLUDES out-of-PR-scope findings — no check annotation on an untouched file (CodeRabbit #334)", () => {
+    const annotations = buildBodyOnlyCheckAnnotations([
+      { ...baseFinding, path: "in-pr.ts", line: 5, score: 5, headline: "real blocker" },
+      { ...baseFinding, path: "other.ts", line: 9, score: 5, headline: "out of scope", outOfPrScope: true },
+    ])
+    expect(annotations).toHaveLength(1)
+    expect(annotations[0]).toMatchObject({ path: "in-pr.ts" })
+    expect(annotations.some((a) => a.path === "other.ts")).toBe(false)
+  })
+
   it("drops findings that cannot map to a check-run annotation location", () => {
     const annotations = buildBodyOnlyCheckAnnotations([
       { ...baseFinding, path: "", line: 20, headline: "missing path" },

@@ -103,22 +103,26 @@ export function renderTrustSummary(args: {
 }
 
 /**
- * The collapsed "outside your changes" `<details>` — findings about code OUTSIDE
- * this PR's diff, tucked away so they don't clutter a PR they're not about. Uses
- * the caller's `renderRow` to render each finding (so the existing body-row
- * format + the trust sub-tag stay one source of truth). Null if empty.
+ * The collapsed `<details>` for findings that are ABOUT this PR's changed code
+ * but couldn't be anchored to a specific diff line (the model cited a line/range
+ * with no reviewable position). These are IN the PR — only the genuinely-out-of-
+ * PR findings (path not a changed file = `outOfPrScope`) route to the separate
+ * "Outside your changes" section. So the label must NOT say "outside this PR's
+ * diff" (PR #334 follow-up — the literal #333 confusion): it says they just lack
+ * a precise inline anchor. Uses the caller's `renderRow` so the body-row format +
+ * trust sub-tag stay one source of truth. Null if empty.
  */
 export function renderOutsideDiffDropdown<T>(
-  outsideDiffFindings: ReadonlyArray<T>,
+  unanchorableFindings: ReadonlyArray<T>,
   renderRow: (f: T) => string,
 ): string | null {
-  if (outsideDiffFindings.length === 0) return null
-  const n = outsideDiffFindings.length
+  if (unanchorableFindings.length === 0) return null
+  const n = unanchorableFindings.length
   // Blank-line-separate rows: each row ends with a multi-line body (which can itself
   // contain blank lines + a nested <details>), so a single \n would make the next
   // bullet render as loose continuation of the previous list item (GFM), not a sibling.
-  const rows = outsideDiffFindings.map(renderRow).join("\n\n")
-  return `<details>\n<summary><b>${n} finding${n === 1 ? "" : "s"}</b> about code outside this PR's diff</summary>\n\n${rows}\n\n</details>`
+  const rows = unanchorableFindings.map(renderRow).join("\n\n")
+  return `<details>\n<summary><b>${n} finding${n === 1 ? "" : "s"}</b> in your changes that couldn't be anchored to a specific line</summary>\n\n${rows}\n\n</details>`
 }
 
 /** The non-collapsed **PR-level** mini-section (no-test / architectural). Null if empty. */

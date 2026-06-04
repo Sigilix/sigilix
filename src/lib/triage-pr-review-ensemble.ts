@@ -185,6 +185,12 @@ import {
   type AbsenceGroundingDropReason,
 } from "./validate-absence-grounding"
 import {
+  evaluateWindowBlindness,
+  parseWindowBlindnessValidatorMode,
+  type WindowBlindnessValidatorMode,
+  type WindowBlindnessDropReason,
+} from "./validate-window-blindness"
+import {
   evaluateSecurityGrounding,
   parseSecurityGroundingValidatorMode,
   type SecurityGroundingValidatorMode,
@@ -354,7 +360,7 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings } from "./degraded-finding-floor"
+import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits, parseAstEmitFloorMode } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -1655,7 +1661,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
     retrievalCacheStats: null,
     tokenUsageByModel,
     startMs,
@@ -2100,10 +2106,31 @@ export async function handlePrReviewEnsemble(
           telemetry.routerDecision = router
         }
         if (dispatcherMode === "enforce") {
-          console.warn(JSON.stringify({
-            event: "dispatcher-enforce-mode-not-honored-in-phase-1",
+          // SIG-227b: NON-PROTECTED enforcement. Apply the dispatcher's full
+          // decision (rule layer + LLM-decided ambiguous middle) for fan-out.
+          // reconcile() PROTECTS security + logic — an ambiguous protected role
+          // ALWAYS runs; only ambiguous `tests`/`performance` are LLM-skippable
+          // — and a disabled/errored/aborted LLM fails CLOSED to "run all
+          // ambiguous" (makeDisabledDecision returns ALL_SPECIALISTS). So this
+          // can only ever SHRINK the fan-out for the two low-stakes roles,
+          // never drop security/logic. (Protected-role LLM-skipping needs a
+          // confidence floor + high-trust = SIG-228, deliberately NOT here.)
+          // Mirrors the enforce_rules swap above; the difference is upstream —
+          // mode=enforce ran the LLM classifier, so the decision is narrower.
+          telemetry.legacyRouterDecision = router
+          router = {
+            specialists: dispatcherDecision.specialists,
+            // Defensive `?? ""` so a malformed decision can never throw the
+            // `.slice` into the outer catch (Kimi sign-off, SIG-227b).
+            reason: `dispatcher_enforce:${(dispatcherDecision.reasoning ?? "").slice(0, 200)}`,
+            routerEnabled: true,
+          }
+          telemetry.routerDecision = router
+          console.log(JSON.stringify({
+            event: "dispatcher-enforce-applied",
             owner, repo, prNumber, headSha: headSha.slice(0, 7),
-            note: "full enforcement (LLM-decided non-protected + protected) ships in SIG-227b + SIG-228; use mode=enforce_rules for rules-only enforcement available today",
+            legacySpecialists: telemetry.legacyRouterDecision.specialists,
+            enforcedSpecialists: router.specialists,
           }))
         }
       } catch (err) {
@@ -2316,10 +2343,17 @@ export async function handlePrReviewEnsemble(
     // (CodeRabbit #308 — else `on`/`shadow` silently no-ops when astRules is off).
     const asymmetryMode = (env.OPENCLAW_ASYMMETRY_HINTS ?? "off").trim().toLowerCase()
     const toctouMode = (env.OPENCLAW_TOCTOU_HINTS ?? "off").trim().toLowerCase()
+    // Cross-cutting over-fire Option B: the window-blindness gate reads the full
+    // file from `astFilesByPath` to find a guard the model never saw. It must
+    // trigger the fetch itself (CodeRabbit #329) — else, if every OTHER
+    // AST/symbol feature is off, the map stays empty and the gate silently
+    // fail-opens (keeps) on every finding, i.e. becomes a no-op.
+    const wantWindowBlindness =
+      parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE) !== "off"
     const astFilesByPath = new Map<string, string>()
     if (
       (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
-        asymmetryMode !== "off" || toctouMode !== "off") &&
+        asymmetryMode !== "off" || toctouMode !== "off" || wantWindowBlindness) &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(
@@ -4610,6 +4644,38 @@ export async function handlePrReviewEnsemble(
       }
     }
 
+    // SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-
+    // SURFACE any `emitWhenUnmatched` (warning/info) AST finding the synth did
+    // NOT emit — the proven subtle needle (cents-as-dollars, enum drift) the
+    // model crowded out of its verdict tail. The injected finding cites the
+    // `astFindingId` (SIG-314 admits it) and flows through every post-synth gate
+    // below, so nothing is force-posted; it just can't be silently dropped.
+    // `off` skips; `shadow` logs what WOULD inject (no behavior change); `on`
+    // injects. Recall-positive + P2/P3-capped (never mints a P0/P1).
+    // Validated parse — a misconfig / typo FAILS CLOSED to "off" rather than
+    // silently enabling on any non-"off" string (CodeRabbit/Sigilix #330).
+    const astEmitFloorMode = parseAstEmitFloorMode(env.OPENCLAW_AST_EMIT_FLOOR)
+    if (astEmitFloorMode !== "off") {
+      const floored = injectUnmatchedAstEmits({
+        findings: effectiveSynthVerdict.findings,
+        provenanceFindings: effectiveSynthProvenance.findings,
+        astFindings: astResult.findings,
+      })
+      if (floored.injected.length > 0) {
+        console.log(JSON.stringify({
+          event: "pr-review-ast-emit-floor-injected",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          mode: astEmitFloorMode,
+          injectedCount: floored.injected.length,
+          injected: floored.injected,
+        }))
+        if (astEmitFloorMode === "on") {
+          effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
+          effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: floored.provenanceFindings }
+        }
+      }
+    }
+
     // ─── Post-synthesis validation ─────────────────────────────
     // SIG-141: line spans of DurableObject class declarations in the changed
     // files, parsed from the AST (not raw text). Authz findings inside a DO
@@ -4828,6 +4894,33 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "absence-grounding", reason: info.reason, dropped: info.dropped })
       },
+      // Cross-cutting over-fire Option B: window-blindness gate. Default off
+      // until OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE is flipped to shadow
+      // (count/telemeter, keep inline) or enforce (demote a sev>=4 logic
+      // positive-misread whose guard is provably out-of-window). Threads
+      // `astFilesByPath` as the full-file source. Reuses the
+      // `pr-review-finding-rejected-validation` event (`gate: "window-blindness"`).
+      // `dropped` here = "demoted to body".
+      windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
+      fullFileByPath: astFilesByPath,
+      onWindowBlindnessFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "window-blindness",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+          // Shadow-validation payload (Kimi nit): the cited subject + the
+          // out-of-window guard line a human checks before the enforce flip.
+          matchedIdentifier: info.matchedIdentifier,
+          guardLine: info.guardLine,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "window-blindness", reason: info.reason, dropped: info.dropped })
+      },
       // SIG-293 v1: security-grounding gate (secrets-exposure). Default
       // `off` — the gate doesn't run until the operator flips
       // OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE to "shadow" (count/
@@ -4888,6 +4981,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
+      droppedForFailedWindowBlindnessValidation: validated.droppedForFailedWindowBlindnessValidation,
       droppedForFailedSecurityGroundingValidation: validated.droppedForFailedSecurityGroundingValidation,
       droppedForFailedSecurityUsageValidation: validated.droppedForFailedSecurityUsageValidation,
     }
@@ -6422,6 +6516,13 @@ export async function handlePrReviewEnsemble(
             skipDedupe: true,
             reviewContext: overviewReviewContext,
           }, overviewBudgetMs)
+          // SIG-149: time-to-first-overview = handler entry → overview
+          // posted (first customer-visible content). Measured from
+          // `startMs`, NOT `overviewStartMs` (that's the overview's own
+          // generation time, already logged as `elapsed_ms`). Set only on
+          // the success path so `finalize()` reports it as "no data" when
+          // the overview was skipped/failed rather than a misleading 0.
+          telemetry.timeToFirstOverviewMs = Date.now() - startMs
           console.log(JSON.stringify({
             event: "pr-review-inline-overview-posted",
             owner, repo, prNumber, head_sha: headSha.slice(0, 7),
@@ -8867,6 +8968,13 @@ export interface ValidatedOutput {
    */
   droppedForFailedAbsenceGroundingValidation: number
   /**
+   * Cross-cutting over-fire Option B: count of window-blindness gate hits
+   * (would-demote-to-body in shadow, actual-demote in enforce). 0 when the gate
+   * is `off`. Surfaced to telemetry so the would-demote rate is observable
+   * before enforce.
+   */
+  droppedForFailedWindowBlindnessValidation: number
+  /**
    * SIG-293 v1: count of secrets-exposure findings the security-grounding
    * gate flagged as ungrounded — the cited line held no credential token
    * and no scanner fact corroborated it (would-demote-to-body in shadow,
@@ -9658,6 +9766,40 @@ export function validateForSubmission(args: {
     info: { reason: AbsenceGroundingDropReason; dropped: boolean },
   ) => void
   /**
+   * Cross-cutting over-fire Option B: window-blindness gate mode. `off`
+   * (default) skips the gate; `shadow` counts + telemeters but keeps every
+   * finding inline; `enforce` DEMOTES a sev>=4 logic positive-misread ("X can
+   * be undefined / returns NaN / is unbounded") to the review body when the
+   * guard on the SAME cited symbol is provably present in the full file but
+   * OUTSIDE the diff window the model saw (never hard-drops). Read from
+   * `OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE` at the call site.
+   */
+  windowBlindnessValidatorMode?: WindowBlindnessValidatorMode
+  /**
+   * Cross-cutting over-fire Option B: head (post-PR) full file text per path —
+   * the orchestrator's `astFilesByPath`. The window-blindness gate reads the
+   * COMPLETE file to find a guard the model never saw. Default empty (then the
+   * gate keeps every finding, FP-safe).
+   */
+  fullFileByPath?: ReadonlyMap<string, string>
+  /**
+   * Cross-cutting over-fire Option B: telemetry callback fired once per finding
+   * the window-blindness gate flagged (reuses the `pr-review-finding-rejected-
+   * validation` event with a `gate: "window-blindness"` discriminator).
+   * `dropped` here means "demoted to body" (enforce), not hard-dropped.
+   */
+  onWindowBlindnessFindingDropped?: (
+    finding: PrReviewFinding,
+    info: {
+      reason: WindowBlindnessDropReason
+      /** the cited symbol whose guard was found out-of-window (shadow telemetry). */
+      matchedIdentifier: string
+      /** 1-based line of the matching out-of-window guard (shadow telemetry). */
+      guardLine: number
+      dropped: boolean
+    },
+  ) => void
+  /**
    * SIG-293 v1: security-grounding gate mode. `off` (default) skips the
    * gate entirely; `shadow` counts + telemeters but keeps every finding
    * inline; `enforce` DEMOTES a `secrets-exposure` finding to the review
@@ -9740,6 +9882,9 @@ export function validateForSubmission(args: {
     wasTruncated = false,
     droppedPaths = [],
     onAbsenceFindingDropped,
+    windowBlindnessValidatorMode = "off",
+    fullFileByPath = new Map<string, string>(),
+    onWindowBlindnessFindingDropped,
     securityGroundingValidatorMode = "off",
     onSecurityGroundingFindingDropped,
     securityUsageValidatorMode = "off",
@@ -9783,6 +9928,7 @@ export function validateForSubmission(args: {
   let droppedForFailedPerfValidation = 0
   let droppedForFailedInlineGroundingValidation = 0
   let droppedForFailedAbsenceGroundingValidation = 0
+  let droppedForFailedWindowBlindnessValidation = 0
   let droppedForFailedSecurityGroundingValidation = 0
   let droppedForFailedSecurityUsageValidation = 0
   const advisoryNits: PrReviewFinding[] = []
@@ -9792,6 +9938,20 @@ export function validateForSubmission(args: {
   // mode we skip the key iteration entirely (zero cost).
   const reviewablePaths: ReadonlySet<string> =
     absenceClaimValidatorMode === "off" ? new Set<string>() : new Set(reviewable.keys())
+
+  // Cross-cutting over-fire Option B: the NEW-side (RIGHT) line numbers the
+  // specialist actually saw per path — its diff window (changed + context
+  // lines). A guard at a full-file line NOT in this set was outside the model's
+  // window. Built once, but only when the gate runs (`off` skips entirely).
+  const windowLinesByPath: ReadonlyMap<string, ReadonlySet<number>> =
+    windowBlindnessValidatorMode === "off"
+      ? new Map<string, ReadonlySet<number>>()
+      : new Map(
+          [...reviewable.entries()].map(([path, positions]) => [
+            path,
+            new Set(positions.filter((p) => p.side === "RIGHT").map((p) => p.line)),
+          ]),
+        )
 
   // Walk by INDEX (v3.1 catch — not by headline).
   for (let i = 0; i < synthOutput.verdict.findings.length; i++) {
@@ -10218,6 +10378,42 @@ export function validateForSubmission(args: {
       }
     }
 
+    // Cross-cutting over-fire Option B: window-blindness gate. A sev>=4 LOGIC
+    // positive misread ("X can be undefined / returns NaN / is unbounded") is a
+    // window-blindness FP when the guard on the SAME cited symbol is provably
+    // present in the FULL file but OUTSIDE the diff window the model saw —
+    // upstream of the flagged use, at a dominating indent, within the proximity
+    // bound. DEMOTE to the body (content preserved, NOT hard-dropped). FP-safe:
+    // non-logic, sub-4, non-misread, no full file, no out-of-window guard, and
+    // every ambiguity keep. The deterministic backstop to PR #327's prompt fence.
+    //
+    // PLACEMENT mirrors the absence-grounding block above (after the hard-drop
+    // gates + anchor repair, so the demote routes `workingFinding` with the
+    // repaired anchor). `off` skips the gate; `shadow` counts + telemeters and
+    // keeps inline; only `enforce` demotes.
+    if (windowBlindnessValidatorMode !== "off") {
+      const wbDecision = evaluateWindowBlindness(workingFinding, {
+        fullFileByPath,
+        windowLinesByPath,
+      })
+      if (!wbDecision.keep) {
+        const demoted = windowBlindnessValidatorMode === "enforce"
+        droppedForFailedWindowBlindnessValidation++
+        onWindowBlindnessFindingDropped?.(workingFinding, {
+          reason: wbDecision.reason,
+          matchedIdentifier: wbDecision.matchedIdentifier,
+          guardLine: wbDecision.guardLine,
+          dropped: demoted,
+        })
+        if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(workingFinding, { surface: "body", demoteReason: "window-blindness" })
+          unanchoredFindings.push(workingFinding)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
+    }
+
     // SIG-293 v1: security-grounding gate (secrets-exposure). A
     // `secrets-exposure` (CWE-798) finding is only believable when the
     // cited code actually CONTAINS a credential token. One whose cited
@@ -10314,6 +10510,24 @@ export function validateForSubmission(args: {
     summary = `${summary}\n\n**Advisory nits:** ${headlines}${tail}`
   }
 
+  // Inlines-only / outside-diff (founder ask, Codex #333): tag every finding
+  // whose `path` is NOT a changed file as out-of-PR-scope — it's about code the
+  // model raised from graph/retrieval context, not this PR's changes. Computed
+  // from the reviewable changed-file set, INDEPENDENT of the trust-ledger flag.
+  // An inline finding always anchored to a changed line, so its path is in the
+  // set → never tagged. A body finding on a CHANGED file that merely failed to
+  // anchor stays in-scope and still blocks — only a truly different file is
+  // out-of-scope, which closes the recall hole of treating anchor-failure as
+  // out-of-PR.
+  // Normalize both sides with `.trim()` — the path-handling convention across
+  // this module (triage-pr-review.ts:702/865, ensemble.ts:9218) — so a model
+  // path with stray whitespace can't mismatch a changed-file key and wrongly
+  // mark a real blocker out-of-scope (CodeRabbit #334 — recall-relevant).
+  const normPath = (p: string): string => p.trim()
+  const changedFilePaths = new Set([...reviewable.keys()].map(normPath))
+  for (const f of cleanFindings) if (!changedFilePaths.has(normPath(f.path))) f.outOfPrScope = true
+  for (const f of unanchoredFindings) if (!changedFilePaths.has(normPath(f.path))) f.outOfPrScope = true
+
   return {
     verdict: { ...synthOutput.verdict, summary, findings: cleanFindings },
     unanchoredFindings,
@@ -10330,6 +10544,7 @@ export function validateForSubmission(args: {
     droppedForFailedPerfValidation,
     droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation,
+    droppedForFailedWindowBlindnessValidation,
     droppedForFailedSecurityGroundingValidation,
     droppedForFailedSecurityUsageValidation,
     cleanFindingProvenance,
@@ -10521,6 +10736,10 @@ interface EnsembleTelemetry {
      * (would-demote-to-body in shadow, actual-demote in enforce; 0 when
      * the gate is off). */
     droppedForFailedAbsenceGroundingValidation: number
+    /** Cross-cutting over-fire Option B: count of window-blindness gate hits
+     * (would-demote-to-body in shadow, actual-demote in enforce; 0 when the
+     * gate is off). */
+    droppedForFailedWindowBlindnessValidation: number
     /** SIG-293 v1: count of secrets-exposure findings the security-
      * grounding gate flagged as ungrounded — cited line held no credential
      * token, uncorroborated by any scanner fact (would-demote-to-body in
@@ -10539,6 +10758,16 @@ interface EnsembleTelemetry {
    * before fan-out) — never absent, so the cost path is branch-free.
    */
   tokenUsageByModel: TokenUsageByModel
+  /**
+   * SIG-149: time-to-first-overview — `startMs` → the moment the inline
+   * PR overview/walkthrough is posted (first customer-visible content).
+   * Set only when the overview actually posts; absent on runs that skip
+   * it (budget) or bail before reaching it. `finalize()` forwards it to
+   * the `review-slo-summary` SLO eval, where absent = "no data" (never a
+   * breach). See the `timeToFirstOverviewMs` SloTarget caveat re: the
+   * overview currently being on the critical path (SIG-216).
+   */
+  timeToFirstOverviewMs?: number
   /**
    * ARC-192: hunk-level diff packing telemetry. Records how the diff
    * was split for the model call. `batchCount > 1` means the PR was
@@ -10771,6 +11000,12 @@ async function finalize(
         status,
         totalMs: telemetry.totalMs,
         usage: telemetry.tokenUsageByModel,
+        // Conditional spread under exactOptionalPropertyTypes — absent
+        // when no overview posted, so the overview SLO dimension is
+        // evaluated as "no data" rather than 0.
+        ...(telemetry.timeToFirstOverviewMs !== undefined
+          ? { timeToFirstOverviewMs: telemetry.timeToFirstOverviewMs }
+          : {}),
       },
     )
   } catch (e) {

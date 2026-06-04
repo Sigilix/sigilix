@@ -327,6 +327,22 @@ OPENCLAW_AUTHZ_IDOR_SCAN = "post"
 # Rollback: "shadow" (telemetry only) or "off" (inert).
 OPENCLAW_SYNTH_RECOVERY = "on"
 
+# SIG-317 step 6 Part A: deterministic AST-emit injection floor. Force-surfaces an
+# `emitWhenUnmatched` (warning/info) AST finding the synth crowded out of its
+# verdict tail — the proven subtle needle (cents-as-dollars, enum/contract drift,
+# fractional-cents, dynamic-HTML-sink) that gets buried under severity-first
+# ranking. Cites the astFindingId (SIG-314 admits it) so it flows through every
+# post-synth gate; P2/P3-capped (an error security sink sorts first + has the
+# SIG-309 path, so it's never the crowd-out victim and stays out of scope).
+# Recall-positive (only ADDS findings, can't hide). Shadow-first: logs the
+# `pr-review-ast-emit-floor-injected` event WITH the projected headline/body so
+# the believability can be audited. ⚠️ DO NOT flip "on" until step 6 Part B
+# (AST-evidence render) ships — a raw AST message at score 2-3 reads as linter
+# noise and would erode believability (dual sign-off). The `on` flip is gated on
+# (a) Part B landed AND (b) the shadow would-inject sample being genuine proven
+# needles, not noise. Rollback: "shadow" or "off".
+OPENCLAW_AST_EMIT_FLOOR = "shadow"
+
 # SIG-317 Part 4b (2026-06-02): cross-function asymmetry hints for the LOGIC
 # specialist — the evidence injector. Surfaces a deterministic FACT (a function
 # that mutates table T but bypasses the aggregation helper over T that other code
@@ -480,6 +496,18 @@ OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
 # window (zero real-finding demotes). Rollback: "off".
 OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "shadow"
 
+# Cross-cutting over-fire Option B: window-blindness validator. Shadow-first —
+# logs the would-demote (`pr-review-finding-rejected-validation`, gate
+# "window-blindness") + counts on GET /metrics/validation, KEEPS every finding
+# inline (zero behavior change). Demotes a sev>=4 LOGIC positive-misread ("X can
+# be undefined / returns NaN / is unbounded") only when the guard on the SAME
+# cited symbol is provably present in the full file (astFilesByPath) but OUTSIDE
+# the diff window the model saw — upstream, at a dominating indent, within 40
+# lines. The deterministic backstop to PR #327's prompt fence. Flip to "enforce"
+# after a clean shadow window (the would-demotes are genuine misreads, not real
+# bugs). Rollback: "off".
+OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
+
 # SIG-308: logic-refutation backstop (evaluateLogicRefutation). Flags a sev>=4
 # logic finding that never showed it survives refutation (no
 # `independentAssessment`) — the self-refuting-finding shape (sigilix-monitor
@@ -542,6 +570,20 @@ OPENCLAW_TESTS_VALIDATOR_MODE = "enforce"
 # fences PR shows a "Sigilix · Approved — no issues found" check with
 # no inline findings (which is correct for a docs PR).
 OPENCLAW_ENSEMBLE_ROUTER_ENABLED = "on"
+
+# SIG-224/227b: dynamic dispatcher mode. Flipped shadow -> "enforce_rules" 2026-06-03
+# for CONCURRENT-REVIEW LATENCY RELIEF (#66): under Ollama-Turbo contention reviews
+# blow the 895s orch budget and die (cooked, not late). "enforce_rules" is the
+# SIG-227a DETERMINISTIC layer — it skips a tests/perf specialist ONLY when the rule
+# layer proves that role has no surface (no test files changed / no perf-sensitive
+# code), runs NO LLM classifier (zero added Ollama call, unlike full "enforce"), and
+# reconcile() PROTECTS security+logic (always run) — so no believability-critical
+# lens is ever skipped. Net effect: fewer concurrent specialist calls per review =
+# less contention, recall-safe. Full "enforce" (the deepseek-v4-flash LLM filter)
+# stays deferred until the shadow-bake trail is validated AND it would not ADD an
+# Ollama call to the hot path. Modes: off | shadow | enforce_rules | enforce.
+# Rollback: "shadow" (telemetry-only) or "off".
+OPENCLAW_DYNAMIC_DISPATCHER_MODE = "enforce_rules"
 
 # SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
 # the orchestrator skips the synthesizer LLM round-trip entirely when

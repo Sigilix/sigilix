@@ -282,6 +282,81 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     ].join("\n"))
   })
 
+  it("out-of-PR-scope: renders in 'Outside your changes', NOT the Fix Plan; lead counts only in-scope (inlines-only)", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({
+        findings: [
+          finding({ score: 5, headline: "real in-PR blocker" }), // in-scope, inline
+          finding({ score: 5, scope: "file", outOfPrScope: true, headline: "issue in another file", body: "Not in this PR." }),
+        ],
+      }),
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).toContain("real in-PR blocker") // Fix Plan
+    expect(body).toContain("### Outside your changes")
+    expect(body).toContain("issue in another file")
+    expect(body).toContain("not modified in this PR")
+    // the lead counts ONLY the in-scope blocker (1), not the out-of-scope finding
+    expect(body).toContain("**1 high-severity finding**")
+    // the out-of-scope P1 is NOT in the Fix Plan table (no second Critical row)
+    expect(body).not.toMatch(/Critical \(5\)[^|]*issue in another file/)
+  })
+
+  it("renderApproveBody: marker-only on a clean approve; posts 'Outside your changes' + reconciliation when out-of-scope findings exist", () => {
+    const clean = renderApproveBody({ verdict: verdict({ findings: [] }), prov: { headSha: HEAD, nowMs: NOW } })
+    expect(clean).not.toContain("Outside your changes")
+
+    const withNote = renderApproveBody({
+      verdict: verdict({ findings: [finding({ score: 5, outOfPrScope: true, headline: "SQLi in unrelated module" })] }),
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(withNote).toContain("**Approved**")
+    expect(withNote).toContain("1 note about code outside this PR")
+    expect(withNote).toContain("### Outside your changes")
+    expect(withNote).toContain("SQLi in unrelated module")
+  })
+
+  it("Phase 3 (#333): an oversized body sheds the low-severity tail end-to-end, NEVER the security blocker (Sigilix #333)", () => {
+    // A security blocker (score 5) + many huge low-severity body-only findings
+    // that push the body past GitHub's 65,535-char limit. The end-to-end render
+    // (headLineCount snapshot → slice → capForGitHubPrioritized) must keep the
+    // blocker + drop the low-sev tail with a counted marker.
+    const blocker = finding({
+      score: 5,
+      category: "security",
+      headline: "CRITICAL_SQL_INJECTION_BLOCKER",
+      path: "src/auth.ts",
+      line: 7,
+    })
+    const huge = Array.from({ length: 12 }, (_, i) =>
+      finding({
+        score: 2,
+        category: "logic",
+        scope: "file",
+        path: `src/mod${i}.ts`,
+        headline: `low-sev nit ${i}`,
+        body: `UNIQUE_NONBLOCKER_MARKER_${i} ` + "x".repeat(6000),
+      }),
+    )
+    const body = renderRequestChangesBody({
+      verdict: verdict({ findings: [blocker, ...huge] }),
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    // fits GitHub's limit...
+    expect(body.length).toBeLessThanOrEqual(65000)
+    // ...the security blocker's Fix Plan row SURVIVES...
+    expect(body).toContain("CRITICAL_SQL_INJECTION_BLOCKER")
+    // ...the SHA-bearing footer survives...
+    expect(body).toContain("`abcdef1`")
+    // ...the low-sev tail is shed with an honest counted marker...
+    expect(body).toContain("lower-severity body findings omitted to meet GitHub's 65,535-character limit")
+    expect(body).toContain("every blocker is shown above")
+    // ...and the dropped findings' bodies are actually gone.
+    expect(body).not.toContain("UNIQUE_NONBLOCKER_MARKER_11")
+  })
+
   it("Variant E — REQUEST_CHANGES with delta badge appends ` · since last review` to heading", () => {
     const delta: DeltaBadgeCounts = {
       newCount: 2, stillOpenCount: 0, likelyFixedCount: 3, carriedOverCount: 0,

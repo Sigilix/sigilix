@@ -407,6 +407,35 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.demotedScore1).toBe(0)
   })
 
+  it("tags a finding on a NON-changed file as outOfPrScope; a mis-anchored finding on a CHANGED file is NOT (Codex recall-hole fix)", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok", confidence: 4, confidenceReason: "...",
+          findings: [
+            // a finding about code in a file NOT in this PR's diff → out-of-PR-scope
+            { ...baseFinding, path: "src/other-unchanged.ts", line: 5, score: 5, headline: "in another file" },
+            // a real finding on the CHANGED file but a non-reviewable line (mis-anchored) → NOT out-of-scope
+            { ...baseFinding, path: "src/lib/foo.ts", line: 999, score: 5, headline: "mis-anchored blocker" },
+          ],
+        },
+        provenance: {
+          findings: [
+            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+            { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          ],
+          dropped: [],
+        },
+      },
+      reviewable, // only src/lib/foo.ts is a changed file
+      specialistVerdicts,
+    })
+    const other = out.unanchoredFindings.find((f) => f.path === "src/other-unchanged.ts")
+    const misAnchored = out.unanchoredFindings.find((f) => f.path === "src/lib/foo.ts")
+    expect(other?.outOfPrScope).toBe(true) // not a changed file → out-of-PR-scope (won't block / auto-approves)
+    expect(misAnchored?.outOfPrScope).toBeUndefined() // changed file, just unanchorable → STILL blocks (recall hole closed)
+  })
+
   it("DROPS findings whose provenance references a non-existent specialist finding (hallucination guard)", () => {
     const out = validateForSubmission({
       synthOutput: {

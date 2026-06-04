@@ -61,7 +61,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 17", () => {
+  it("PROMPT_VERSION bumped to 21", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -88,7 +88,55 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // SIG-313 18→19 (security specialist gains the mandatory AUTHORIZATION AUDIT
     // — forced handler enumeration + exploit-tuple gate — to close the authz
     // recall gap without over-firing on safe endpoints).
-    expect(PROMPT_VERSION).toBe("19")
+    // SIG-166 19→20 (tests-specialist lane fence — a vuln is the security
+    // specialist's finding, not a coverage gap).
+    // SIG-308 20→21 (logic refutation-survival rationale `independentAssessment`
+    // becomes MANDATORY on score>=4 logic findings so the SIG-308 gate is
+    // flippable and logic findings carry their survival evidence).
+    // Cross-cutting over-fire 21→22 (logic CROSS-CUTTING REFUTATION fence:
+    // window-blindness positive misreads + architectural-misunderstanding).
+    expect(PROMPT_VERSION).toBe("22")
+  })
+
+  it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {
+    const logic = SPECIALIST_PROMPTS.logic
+    // the fence block exists
+    expect(logic).toContain("CROSS-CUTTING REFUTATION")
+    // (1) window-blindness: down-rank a misread when the deciding guard is outside the window
+    expect(logic).toContain("WINDOW-BLINDNESS")
+    expect(logic).toMatch(/may live outside the review window/i)
+    // SIG-286 carve-out — injected context blocks count as in-window (Kimi #2)
+    expect(logic).toMatch(/including an injected context block/i)
+    // the recall valve — keep score>=4 when the window itself proves the guard absent
+    expect(logic).toMatch(/EXCEPTION — keep score>=4 ONLY/)
+    expect(logic).toContain("never against a bug you can actually see")
+    // (2) architecture-is-deliberate: single-threaded DO + sentinel/boundary + DTO
+    expect(logic).toContain("ARCHITECTURE IS DELIBERATE")
+    expect(logic).toMatch(/DurableObject instance processes requests to THAT instance serially/)
+    expect(logic).toMatch(/DTO \/ mapping \/ adapter layer/)
+  })
+
+  it("logic specialist has the SIG-308 mandatory refutation-survival gate (independentAssessment required on score>=4)", () => {
+    const logic = SPECIALIST_PROMPTS.logic
+    // the gate block exists and is mandatory on high-sev logic findings
+    expect(logic).toContain("LOGIC REFUTATION-SURVIVAL GATE")
+    expect(logic).toMatch(/MUST carry a non-empty `independentAssessment`/)
+    // scoped to score>=4 only (recall-safe: low-sev logic + non-logic omit it)
+    expect(logic).toMatch(/applies ONLY to logic findings at `score >= 4`/)
+    // the anti-padding clause — restating the bug is not survival evidence
+    expect(logic).toContain("restating the bug")
+  })
+
+  it("tests specialist has the SIG-166 lane fence + recall-safe uncertainty valve (CodeRabbit #323)", () => {
+    const tests = SPECIALIST_PROMPTS.tests
+    // the lane fence — a clear vulnerability is the security specialist's finding
+    expect(tests).toContain("STAY IN YOUR LANE")
+    expect(tests).toContain("a CLEAR vulnerability is not a coverage gap")
+    // the recall-safe uncertainty valve — must NEVER be silently dropped
+    expect(tests).toContain("FILE THE COVERAGE GAP")
+    expect(tests).toContain("synthesizer dedupes against the security specialist")
+    // the score-5 reframe — a CORRECT boundary with no test, not a vuln
+    expect(tests).toContain("CORRECT security boundary")
   })
 
   it("security specialist has the SIG-313 authorization audit (forced enumeration + exploit-tuple gate + safe skips)", () => {

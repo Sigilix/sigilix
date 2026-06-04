@@ -191,3 +191,193 @@ export function recoverTruncatedSynthFindings(args: {
 
   return { findings, provenanceFindings, recovered }
 }
+
+// ─── SIG-317 step 6 Part A — deterministic AST-emit injection floor ─────────
+//
+// The named fast-follow gap above: a `deterministic_emit` AST finding (an
+// `emitWhenUnmatched` pseudo-rule — cents-as-dollars, enum/contract drift,
+// fractional-cents, dynamic-HTML-sink) is surfaced TODAY only if the synth
+// model obeys the prompt instruction to "EMIT a finding for it yourself".
+// When the model ignores it or truncates it into the dropped verdict tail, the
+// PROVEN needle is silently lost — exactly the crowd-out this step exists to
+// stop. `validateForSubmission` (SIG-314) only ADMITS an AST-cited finding the
+// synth chose to emit; it never ADDS one.
+//
+// This floor force-injects any `emitWhenUnmatched` AST finding NOT already
+// covered by an emitted finding, mirroring the synth prompt's coverage rule:
+// for a `roleHint:"security"` entry, "covered" = any finding at the same
+// (path, line±tolerance); for any other role, "covered" = a same-category
+// finding at the same (path, line±tolerance). The injected finding cites the
+// `astFindingId`, so SIG-314's hallucination guard admits it, and it flows
+// through every post-synth gate (grounding, anchor repair, clamps) like any
+// other finding — nothing is force-POSTED, only force-SURFACED to the gates.
+//
+// SCOPE — `warning`/`info` emits ONLY (P2/P3 advisories). The crowd-out is a
+// LOW-severity phenomenon: an `error` security sink (exec / TLS) is P0/P1, sorts
+// FIRST under the synth's severity ranking, is never truncated, and already has
+// the SIG-309 grounding path — so it is never the crowd-out victim and stays out
+// of scope. Capping the floor at the warning tier keeps it RECALL-POSITIVE and
+// SIG-245-safe (it can never mint a deterministic P0/P1 the model didn't judge).
+//
+// Pure — returns fresh arrays, never mutates input.
+
+const AST_EMIT_FLOOR_CEIL: Record<string, number> = { warning: 3, info: 2 }
+
+/** Mode for the AST-emit floor. Matches the off|shadow|on idiom of the other gates. */
+export type AstEmitFloorMode = "off" | "shadow" | "on"
+
+/**
+ * Parse `OPENCLAW_AST_EMIT_FLOOR`. Case-insensitive, whitespace-tolerant; any
+ * unknown / missing / garbage value FAILS CLOSED to `off` so a misconfig can't
+ * silently enable the floor (CodeRabbit/Sigilix #330). Mirrors the codebase's
+ * `parseAbsenceClaimValidatorMode` / `parseWindowBlindnessValidatorMode` pattern.
+ */
+export function parseAstEmitFloorMode(raw: string | undefined): AstEmitFloorMode {
+  const v = (raw ?? "").trim().toLowerCase()
+  if (v === "shadow") return "shadow"
+  if (v === "on") return "on"
+  return "off"
+}
+
+/** Minimal structural view of an AST emit the floor needs (subset of `AstFinding`). */
+export interface AstEmitCandidate {
+  astFindingId: string
+  path: string
+  line: number
+  endLine?: number
+  roleHint: string
+  severity: string
+  emitWhenUnmatched?: boolean
+  message: string
+  /** SIG-317 step 6 Part B: the runner's redacted code slice that proved the
+   *  emit. Attached to the injected finding as `astEvidence` so the render shows
+   *  "Detected by static analysis". Optional (back-compat). */
+  evidence?: string
+}
+
+export interface AstEmitFloorResult {
+  findings: PrReviewFinding[]
+  provenanceFindings: FloorProvenanceFinding[]
+  /** Telemetry — carries the projected headline/body so a human can audit
+   *  believability from the shadow log BEFORE the `on` flip (Kimi sign-off). */
+  injected: Array<{
+    astFindingId: string
+    path: string
+    line: number
+    score: number
+    category: string
+    headline: string
+    body: string
+  }>
+}
+
+/**
+ * One-line headline from an AST message. The detector messages open with a
+ * crisp label before a colon ("Type-contract drift: …", "Likely cents/dollars
+ * unit bug: …") — that label IS the headline. Using it keeps the GitHub preview
+ * credible instead of truncating the long first sentence mid-word into the
+ * inbox (SIG-317 step 6 Part C — Kimi: the preview must not read as linter
+ * noise). Falls back to the first sentence (capped) when there's no label.
+ */
+function astHeadline(message: string): string {
+  // A leading "Label:" — a short clause (4-60 chars) with no sentence-ending
+  // punctuation, ending at the first colon.
+  const label = message.match(/^([^:.!?\n]{4,60}):\s/)
+  if (label?.[1]) return label[1].trim()
+  const first = message.split(/(?<=[.!?])\s/)[0] ?? message
+  const trimmed = first.trim()
+  return trimmed.length > 100 ? `${trimmed.slice(0, 97)}…` : trimmed
+}
+
+/**
+ * Inject `emitWhenUnmatched` (warning/info) AST findings the emitted set does
+ * not already cover. `findings` and `provenanceFindings` are INDEX-PARALLEL
+ * (the hallucination guard pairs them), so we append to BOTH in lockstep.
+ * Pure. The caller gates invocation behind the off/shadow/on flag.
+ *
+ * ⚠️ The injected finding's `body` is the RAW AST `message` — no model prose
+ * and no proof slice. At score 2-3 that reads as linter noise, which HURTS
+ * believability. This floor must stay `shadow` until step 6 Part B (AST-evidence
+ * render) makes the surfaced finding customer-ready (Kimi sign-off). Shadow logs
+ * the projected bodies so the robotic-ness can be audited before the `on` flip.
+ */
+export function injectUnmatchedAstEmits(args: {
+  findings: ReadonlyArray<PrReviewFinding>
+  provenanceFindings: ReadonlyArray<FloorProvenanceFinding>
+  astFindings: ReadonlyArray<AstEmitCandidate>
+  /** ± lines of slack when matching an emitted finding to an AST entry. Slightly
+   *  wider than clampAstEmitScores' ±2 so a model finding anchored a few lines
+   *  off the detector's line still counts as covered → no duplicate (DeepSeek). */
+  lineTolerance?: number
+}): AstEmitFloorResult {
+  const tol = args.lineTolerance ?? 3
+  const findings: PrReviewFinding[] = [...args.findings]
+  const provenanceFindings: FloorProvenanceFinding[] = [...args.provenanceFindings]
+  const injected: AstEmitFloorResult["injected"] = []
+
+  const candidates = args.astFindings.filter(
+    (f) => f.emitWhenUnmatched === true && AST_EMIT_FLOOR_CEIL[f.severity] !== undefined,
+  )
+  // Already-cited AST ids (covered by an emitted finding's provenance) + ids we
+  // inject in this pass — so we never double-inject the same emit.
+  const seen = new Set<string>(provenanceFindings.flatMap((p) => p.sourceFindingIds))
+
+  // Pre-group the emitted findings by path so the per-candidate coverage check
+  // scans only the same-file findings, not the whole array (Sigilix #330 P3:
+  // avoid the O(candidates × all-findings) quadratic on target-rich PRs).
+  const findingsByPath = new Map<string, Array<{ lo: number; hi: number; category: string }>>()
+  for (const f of findings) {
+    let arr = findingsByPath.get(f.path)
+    if (!arr) findingsByPath.set(f.path, (arr = []))
+    // store each finding's OWN span (startLine..line) for range-overlap.
+    arr.push({ lo: f.startLine ?? f.line, hi: f.line, category: f.category })
+  }
+
+  for (const ast of candidates) {
+    if (seen.has(ast.astFindingId)) continue
+    // The AST emit's span (line..endLine) widened by the tolerance. Coverage is
+    // RANGE-OVERLAP: an existing finding's own span (startLine..line) overlapping
+    // this window counts as covering it (CodeRabbit #330 — a multi-line existing
+    // finding shouldn't be missed just because its anchor `line` sits outside).
+    const lo = ast.line - tol
+    const hi = (ast.endLine ?? ast.line) + tol
+    const covered = (findingsByPath.get(ast.path) ?? []).some(
+      (f) =>
+        // security entries are covered by ANY finding on the line; other roles
+        // require a same-category finding (the synth prompt's coverage rule).
+        (ast.roleHint === "security" || f.category === ast.roleHint) &&
+        f.lo <= hi &&
+        f.hi >= lo,
+    )
+    if (covered) continue
+
+    const score = AST_EMIT_FLOOR_CEIL[ast.severity]!
+    const headline = astHeadline(ast.message)
+    const isMultiLine = ast.endLine !== undefined && ast.endLine !== ast.line
+    findings.push({
+      path: ast.path,
+      // Convention: `line` = last line of the span, `startLine` = first. Emit the
+      // full multi-line span (CodeRabbit #330) so the anchor isn't collapsed.
+      line: ast.endLine ?? ast.line,
+      ...(isMultiLine ? { startLine: ast.line } : {}),
+      scope: "line",
+      score,
+      category: ast.roleHint as PrReviewFinding["category"],
+      headline,
+      body: ast.message,
+      confidence: 4,
+      // Part B: the proof slice renders as "Detected by static analysis".
+      ...(ast.evidence ? { astEvidence: ast.evidence } : {}),
+    } as PrReviewFinding)
+    provenanceFindings.push({
+      sourceSpecialists: [ast.roleHint as SpecialistRole],
+      sourceFindingIds: [ast.astFindingId],
+      action: "kept",
+      verifiedViaRetrieval: false,
+    })
+    seen.add(ast.astFindingId)
+    injected.push({ astFindingId: ast.astFindingId, path: ast.path, line: ast.line, score, category: ast.roleHint, headline, body: ast.message })
+  }
+
+  return { findings, provenanceFindings, injected }
+}

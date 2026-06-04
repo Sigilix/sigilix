@@ -427,6 +427,27 @@ describe("chooseReviewEventForRenderedFindings", () => {
     })).toBe("REQUEST_CHANGES")
   })
 
+  it("APPROVES when the only finding is OUT-OF-PR-SCOPE — never blocks on code not in the PR (founder ask, Codex-hardened)", () => {
+    // out-of-PR-scope = path is not a changed file (NOT mere anchor-failure).
+    const outside = (score: number): PrReviewFinding => ({ ...baseFinding, score, outOfPrScope: true })
+    // out-of-scope-only, even a "P1", APPROVES (informational, not about this PR — like CodeRabbit)
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [outside(5)],
+    })).toBe("APPROVE")
+    // an IN-SCOPE body blocker still blocks — a mis-anchored real finding on a
+    // CHANGED file (no outOfPrScope flag) holds the SIG-281 floor (recall hole closed).
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [outside(5), f(5)],
+    })).toBe("REQUEST_CHANGES")
+    // out-of-scope + an in-scope sub-4 nit → COMMENT (the nit surfaces, doesn't block)
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [outside(5), f(3)],
+    })).toBe("COMMENT")
+  })
+
   it("REQUEST_CHANGES for unresolved Sigilix-authored items, but not competitor items", () => {
     expect(chooseReviewEventForRenderedFindings({
       inlineFindings: [],
@@ -1621,6 +1642,16 @@ describe("buildBodyOnlyCheckAnnotations", () => {
       annotation_level: "notice",
       title: "[P3] logic: low",
     })
+  })
+
+  it("EXCLUDES out-of-PR-scope findings — no check annotation on an untouched file (CodeRabbit #334)", () => {
+    const annotations = buildBodyOnlyCheckAnnotations([
+      { ...baseFinding, path: "in-pr.ts", line: 5, score: 5, headline: "real blocker" },
+      { ...baseFinding, path: "other.ts", line: 9, score: 5, headline: "out of scope", outOfPrScope: true },
+    ])
+    expect(annotations).toHaveLength(1)
+    expect(annotations[0]).toMatchObject({ path: "in-pr.ts" })
+    expect(annotations.some((a) => a.path === "other.ts")).toBe(false)
   })
 
   it("drops findings that cannot map to a check-run annotation location", () => {
@@ -3474,13 +3505,13 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       bf({ headline: "ungrounded nit", trust: { tier: "body-only-ungrounded", surface: "body", demoteReason: "inline-grounding" } }), // → flat list (not pr-scoped)
     ]
     const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: true }).submission.body
-    expect(on).toContain("about code outside this PR's diff") // the collapsed outside-diff dropdown
+    expect(on).toContain("couldn't be anchored to a specific line") // the collapsed unanchorable dropdown
     expect(on).toContain("<details>")
     expect(on).toContain("**PR-level**")
     expect(on).not.toContain("could not be anchored") // the old generic disclaimer is dropped
     // off → the generic flat section + disclaimer, no dropdown / no PR-level heading.
     const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: false }).submission.body
-    expect(off).not.toContain("about code outside this PR's diff")
+    expect(off).not.toContain("couldn't be anchored to a specific line")
     expect(off).not.toContain("**PR-level**")
     expect(off).toContain("could not be anchored")
   })

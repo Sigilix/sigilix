@@ -19,6 +19,7 @@ import {
   type DismissReason,
   isDismissReason,
 } from "../lib/dismiss-reasons"
+import type { FindingCategory } from "../lib/triage-pr-review"
 
 // Retention: keep 35 days of daily buckets so the endpoint can serve up to a
 // 30-day window with margin. GC runs via a daily alarm; queries always filter
@@ -38,6 +39,15 @@ CREATE TABLE IF NOT EXISTS daily_counts (
   PRIMARY KEY (day, gate, reason)
 );
 CREATE INDEX IF NOT EXISTS daily_counts_by_day ON daily_counts(day);
+CREATE TABLE IF NOT EXISTS daily_category_counts (
+  day TEXT NOT NULL,
+  gate TEXT NOT NULL,
+  category TEXT NOT NULL,
+  would_drop INTEGER NOT NULL DEFAULT 0,
+  kept INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, gate, category)
+);
+CREATE INDEX IF NOT EXISTS daily_category_counts_by_day ON daily_category_counts(day);
 CREATE TABLE IF NOT EXISTS last_seen_pr (
   owner TEXT NOT NULL,
   repo TEXT NOT NULL,
@@ -75,6 +85,17 @@ export type ValidationRejectionEvent =
       reason: string
       /** true = actually dropped (enforce mode); false = would-drop (shadow). */
       dropped: boolean
+      /**
+       * SIG-245: the rejected finding's own category (logic/security/
+       * performance/testing/…), distinct from `gate` (the validator that
+       * fired). The gate×category split surfaces the meta-FP class — e.g. the
+       * security gate firing on a `testing`/`docs`-category finding — that a
+       * gate-only rollup can't see. Optional: absent on gates with no finding
+       * in scope (the verification re-anchor/refuted gates). Typed to the
+       * canonical `FindingCategory` so callers can't pass a typo'd bucket; the
+       * record path also trims defensively (the event crosses an RPC boundary).
+       */
+      category?: FindingCategory
     }
   | {
       kind: "dismissal-reason"
@@ -139,6 +160,13 @@ export interface RecordBatchArgs {
 export interface ValidationMetricsQuery {
   /** aggregated counts: gate → reason → {wouldDrop, kept}. */
   counts: Record<string, Record<string, { wouldDrop: number; kept: number }>>
+  /**
+   * SIG-245: per-category over-fire rollup, gate → category → {wouldDrop, kept}
+   * (summed over reasons). Lets the dogwatch see, per validator gate, which
+   * finding categories it demotes — the meta-FP signal a gate-only count hides.
+   * Only gate-rejections that carried a category contribute.
+   */
+  byCategory: Record<string, Record<string, { wouldDrop: number; kept: number }>>
   window: { days: number; startDay: string; endDay: string }
   lastSeenPrHeads: Array<{
     owner: string
@@ -215,6 +243,26 @@ export class ValidationMetricsDO extends DurableObject<Env> {
               e.dropped ? 0 : 1,
               e.dropped ? 0 : 1,
             )
+            // SIG-245: additive per-category rollup. Dual-write only when the
+            // event carried a category (gates with a finding in scope); the
+            // existing per-reason `daily_counts` row is untouched. Trim
+            // defensively — the event crosses an RPC boundary, so guard against
+            // a stray-whitespace value fragmenting the bucket.
+            {
+              const category = typeof e.category === "string" ? e.category.trim() : undefined
+              if (category) {
+                sql.exec(
+                  `INSERT INTO daily_category_counts (day, gate, category, would_drop, kept)
+                   VALUES (?, ?, ?, 1, ?)
+                   ON CONFLICT(day, gate, category) DO UPDATE SET
+                     would_drop = would_drop + 1,
+                     kept = kept + ?`,
+                  day, e.gate, category,
+                  e.dropped ? 0 : 1,
+                  e.dropped ? 0 : 1,
+                )
+              }
+            }
             break
           case "dismissal-reason":
             sql.exec(
@@ -276,6 +324,17 @@ export class ValidationMetricsDO extends DurableObject<Env> {
       ;(counts[row.gate] ??= {})[row.reason] = { wouldDrop: row.would_drop, kept: row.kept }
     }
 
+    // SIG-245: per-category over-fire rollup (gate → category → counts).
+    const byCategory: ValidationMetricsQuery["byCategory"] = {}
+    for (const row of sql.exec<{ gate: string; category: string; would_drop: number; kept: number }>(
+      `SELECT gate, category, SUM(would_drop) AS would_drop, SUM(kept) AS kept
+       FROM daily_category_counts WHERE day >= ? AND day <= ?
+       GROUP BY gate, category`,
+      startDay, endDay,
+    )) {
+      ;(byCategory[row.gate] ??= {})[row.category] = { wouldDrop: row.would_drop, kept: row.kept }
+    }
+
     const lastSeenPrHeads = [
       ...sql.exec<{ owner: string; repo: string; pr_number: number; head_sha: string; last_seen_at: string }>(
         `SELECT owner, repo, pr_number, head_sha, last_seen_at
@@ -290,7 +349,7 @@ export class ValidationMetricsDO extends DurableObject<Env> {
       lastSeenAt: r.last_seen_at,
     }))
 
-    return { counts, window: { days: args.windowDays, startDay, endDay }, lastSeenPrHeads }
+    return { counts, byCategory, window: { days: args.windowDays, startDay, endDay }, lastSeenPrHeads }
   }
 
   /**
@@ -395,6 +454,7 @@ export class ValidationMetricsDO extends DurableObject<Env> {
 
     this.ctx.storage.transactionSync(() => {
       sql.exec("DELETE FROM daily_counts WHERE day < ?", cutoffDay)
+      sql.exec("DELETE FROM daily_category_counts WHERE day < ?", cutoffDay)
       sql.exec("DELETE FROM last_seen_pr WHERE last_seen_at < ?", cutoffAt)
       sql.exec("DELETE FROM repeat_fp_counts WHERE day < ?", cutoffDay)
     })

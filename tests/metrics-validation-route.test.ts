@@ -88,6 +88,25 @@ describe("handleValidationMetricsRoute", () => {
     expect(body.lastSeenPrHeads[0].headSha).toBe("abc")
   })
 
+  it("200 surfaces the per-category over-fire rollup (byCategory)", async () => {
+    const do_ = makeDo()
+    await do_.recordBatch({
+      owner: "o", repo: "r", prNumber: 1, headSha: "abc",
+      events: [
+        { kind: "gate-rejection", gate: "security", reason: "no-credential-token", dropped: false, category: "testing" },
+        { kind: "gate-rejection", gate: "security", reason: "fabricated-evidence-id", dropped: false, category: "security" },
+      ],
+    })
+    const env = makeEnv({}, do_)
+    const res = await handleValidationMetricsRoute(get("https://x/metrics/validation", `Bearer ${TOKEN}`), env)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      byCategory: Record<string, Record<string, { wouldDrop: number; kept: number }>>
+    }
+    expect(body.byCategory.security.testing).toEqual({ wouldDrop: 1, kept: 1 })
+    expect(body.byCategory.security.security).toEqual({ wouldDrop: 1, kept: 1 })
+  })
+
   it("defaults to a 7-day window when unspecified", async () => {
     const env = makeEnv()
     const res = await handleValidationMetricsRoute(get("https://x/metrics/validation", `Bearer ${TOKEN}`), env)

@@ -10510,6 +10510,24 @@ export function validateForSubmission(args: {
     summary = `${summary}\n\n**Advisory nits:** ${headlines}${tail}`
   }
 
+  // Inlines-only / outside-diff (founder ask, Codex #333): tag every finding
+  // whose `path` is NOT a changed file as out-of-PR-scope — it's about code the
+  // model raised from graph/retrieval context, not this PR's changes. Computed
+  // from the reviewable changed-file set, INDEPENDENT of the trust-ledger flag.
+  // An inline finding always anchored to a changed line, so its path is in the
+  // set → never tagged. A body finding on a CHANGED file that merely failed to
+  // anchor stays in-scope and still blocks — only a truly different file is
+  // out-of-scope, which closes the recall hole of treating anchor-failure as
+  // out-of-PR.
+  // Normalize both sides with `.trim()` — the path-handling convention across
+  // this module (triage-pr-review.ts:702/865, ensemble.ts:9218) — so a model
+  // path with stray whitespace can't mismatch a changed-file key and wrongly
+  // mark a real blocker out-of-scope (CodeRabbit #334 — recall-relevant).
+  const normPath = (p: string): string => p.trim()
+  const changedFilePaths = new Set([...reviewable.keys()].map(normPath))
+  for (const f of cleanFindings) if (!changedFilePaths.has(normPath(f.path))) f.outOfPrScope = true
+  for (const f of unanchoredFindings) if (!changedFilePaths.has(normPath(f.path))) f.outOfPrScope = true
+
   return {
     verdict: { ...synthOutput.verdict, summary, findings: cleanFindings },
     unanchoredFindings,

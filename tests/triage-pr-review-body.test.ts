@@ -282,6 +282,41 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     ].join("\n"))
   })
 
+  it("out-of-PR-scope: renders in 'Outside your changes', NOT the Fix Plan; lead counts only in-scope (inlines-only)", () => {
+    const body = renderRequestChangesBody({
+      verdict: verdict({
+        findings: [
+          finding({ score: 5, headline: "real in-PR blocker" }), // in-scope, inline
+          finding({ score: 5, scope: "file", outOfPrScope: true, headline: "issue in another file", body: "Not in this PR." }),
+        ],
+      }),
+      coverage: FULL,
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(body).toContain("real in-PR blocker") // Fix Plan
+    expect(body).toContain("### Outside your changes")
+    expect(body).toContain("issue in another file")
+    expect(body).toContain("not modified in this PR")
+    // the lead counts ONLY the in-scope blocker (1), not the out-of-scope finding
+    expect(body).toContain("**1 high-severity finding**")
+    // the out-of-scope P1 is NOT in the Fix Plan table (no second Critical row)
+    expect(body).not.toMatch(/Critical \(5\)[^|]*issue in another file/)
+  })
+
+  it("renderApproveBody: marker-only on a clean approve; posts 'Outside your changes' + reconciliation when out-of-scope findings exist", () => {
+    const clean = renderApproveBody({ verdict: verdict({ findings: [] }), prov: { headSha: HEAD, nowMs: NOW } })
+    expect(clean).not.toContain("Outside your changes")
+
+    const withNote = renderApproveBody({
+      verdict: verdict({ findings: [finding({ score: 5, outOfPrScope: true, headline: "SQLi in unrelated module" })] }),
+      prov: { headSha: HEAD, nowMs: NOW },
+    })
+    expect(withNote).toContain("**Approved**")
+    expect(withNote).toContain("1 note about code outside this PR")
+    expect(withNote).toContain("### Outside your changes")
+    expect(withNote).toContain("SQLi in unrelated module")
+  })
+
   it("Phase 3 (#333): an oversized body sheds the low-severity tail end-to-end, NEVER the security blocker (Sigilix #333)", () => {
     // A security blocker (score 5) + many huge low-severity body-only findings
     // that push the body past GitHub's 65,535-char limit. The end-to-end render

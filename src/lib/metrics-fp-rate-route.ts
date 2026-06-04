@@ -42,8 +42,16 @@ const MAX_MEMORY_FETCH = 200
 
 const DEFAULT_WINDOW_DAYS = 30
 const MAX_WINDOW_DAYS = 90
-const DEFAULT_MATURITY_DAYS = 14
+// SIG-245: the maturity lag holds back reviews too recent to have been dismissed
+// yet (so the denominator isn't padded with un-aged findings). 14d was tuned for
+// a slow corpus; ours dismisses bot findings within hours-to-days, and the
+// 90d-TTL telemetry corpus is still shallow — at 14d the gate excluded 100% of
+// retained reviews, silently zeroing the ruler. 3d matches the real dismissal
+// cadence and yields signal now; `maturityRelaxed` (below) is the safety net if
+// even that empties the corpus.
+const DEFAULT_MATURITY_DAYS = 3
 const DEFAULT_MIN_N = 30
+const DAY_MS = 24 * 60 * 60 * 1000
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -176,16 +184,36 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
   }
 
   const nowMs = Date.now()
-  const scoped = filterReviewsToWindow(reviews, nowMs, windowDays, maturityDays)
-  // SIG-306: how many in-window reviews the maturity gate excluded for being too
-  // recent. On a YOUNG corpus the default maturity can hide nearly everything,
-  // which reads as a (misleading) empty result — surface the count so a thin
-  // reading is obviously "not yet mature" vs "no data". Derived from the SAME
-  // filterReviewsToWindow (maturity=0 keeps the whole window) minus the matured
-  // set, so the window-bound math lives in ONE place and can't drift from the
-  // real filter (Sigilix #276).
-  const maturityExcludedReviews =
-    filterReviewsToWindow(reviews, nowMs, windowDays, 0).length - scoped.length
+  // The whole in-window cohort (maturity=0) is the relaxation ceiling + the base
+  // for `maturityExcludedReviews`; computed once so the window-bound math lives
+  // in ONE place and can't drift from the real filter (Sigilix #276).
+  const inWindowReviews = filterReviewsToWindow(reviews, nowMs, windowDays, 0)
+  // SIG-245: auto-relax the maturity gate rather than return a silent, misleading
+  // empty result. If the requested maturity excludes EVERY in-window review (a
+  // young/shallow corpus where all retained reviews are newer than the gate),
+  // relax to the LARGEST maturity that still yields ≥1 review — i.e. the age of
+  // the oldest in-window review. We relax UP-toward-oldest (not down to 0) on
+  // purpose: keeping the most-settled reviews avoids padding the denominator with
+  // fresh, not-yet-judged findings, which would understate FP and falsely flatter
+  // the ruler. The relaxation is always flagged (`maturityRelaxed` +
+  // `effectiveMaturityDays`) so a degraded reading is never mistaken for a clean one.
+  let effectiveMaturityDays = maturityDays
+  let scoped = filterReviewsToWindow(reviews, nowMs, windowDays, effectiveMaturityDays)
+  let maturityRelaxed = false
+  if (scoped.length === 0 && inWindowReviews.length > 0) {
+    const maxAgeDays = Math.max(...inWindowReviews.map((r) => (nowMs - r.createdMs) / DAY_MS))
+    // floor(maxAge) → the largest integer-day gate that still admits the OLDEST
+    // review (its age ≥ floor), so scoped is guaranteed ≥1. The empty result
+    // proves every age < maturityDays, so floor(maxAge) < maturityDays already;
+    // the clamp to [0, maturityDays] is purely defensive (never relax UPWARD).
+    effectiveMaturityDays = Math.max(0, Math.min(Math.floor(maxAgeDays), maturityDays))
+    scoped = filterReviewsToWindow(reviews, nowMs, windowDays, effectiveMaturityDays)
+    maturityRelaxed = true
+  }
+  // In-window reviews the EFFECTIVE maturity gate held back for being too recent.
+  // A large value next to a small reviewsScanned means "lower ?maturity to see
+  // early signal", not "no data".
+  const maturityExcludedReviews = inWindowReviews.length - scoped.length
 
   // Opt-in attribution diagnostic (`?diagnose=1`, read-only): when dismissals
   // fail to attribute, surface WHY — PR non-overlap vs fid drift — without raw
@@ -255,7 +283,15 @@ export async function handleFpRateMetricsRoute(request: Request, env: Env): Prom
       repo: repos.join(","),
       repos,
       windowDays,
+      // `maturityDays` = the requested gate; `effectiveMaturityDays` = what was
+      // actually applied (smaller when `maturityRelaxed`, see below).
       maturityDays,
+      effectiveMaturityDays,
+      // SIG-245: the requested maturity excluded EVERY in-window review, so the
+      // gate was relaxed to the oldest review's age to avoid a misleading empty
+      // result. A relaxed reading is degraded (thinner, less-settled) — surface
+      // it so it's never read as a clean number.
+      maturityRelaxed,
       minN,
       generatedAt: new Date(nowMs).toISOString(),
       reviewsScanned: report.reviewsScanned,

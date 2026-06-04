@@ -327,6 +327,30 @@ export default {
     expect(runRule(src, "src/worker.ts").length).toBe(1)
   })
 
+  it("fires: arrow-form export default { fetch: async (request, env) => ... }", () => {
+    const src = `
+export default {
+  fetch: async (request, env) => {
+    const id = new URL(request.url).searchParams.get("id");
+    const row = await env.DB.prepare("SELECT * FROM docs WHERE id = ?").bind(id).first();
+    return Response.json(row);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(1)
+  })
+
+  it("safe: a STATIC URLSearchParams (not request-derived) does NOT fire (anchor lock)", () => {
+    const src = `
+export default {
+  async fetch(request, env) {
+    const id = new URLSearchParams("id=42").get("id");
+    const row = await env.DB.prepare("SELECT * FROM docs WHERE id = ?").bind(id).first();
+    return Response.json(row);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(0)
+  })
+
   it("fires: tainted id flows into env.DB.query()", () => {
     const src = `
 export default {

@@ -70,15 +70,16 @@ const TAINTED_MEMBER_RE =
 // regex) so taint flows through `String(c.req.param("id") ?? "")` wrappers:
 //   - Hono:    c.req.param("id") / c.req.query("workspace")  (ctx in c|ctx|context)
 //   - Workers: new URL(request.url).searchParams.get("id")
-// The `searchParams.get(...)` arm is intentionally unanchored (any
-// URLSearchParams `.get("<handle>")`, not just `new URL(request.url)`) — same
-// deliberate slice-regex looseness as TAINTED_MEMBER_RE's `req.`; a `.get` on a
-// URLSearchParams IS request-controlled, and a stray match is only a P2 warning.
+// The Workers arm is ANCHORED to a request-derived URL (`req|request.url` must
+// precede `.searchParams.get`) so a static `new URLSearchParams("a=1").get(...)`
+// can't false-positive (Sigilix #344 — the rule's zero-FP-on-safe-code goal).
+// The split form `const u = new URL(request.url); u.searchParams.get("id")` is
+// intentionally NOT matched — a safe miss, per the rule's prefer-a-miss design.
 // The string-literal arg must be an OBJECT HANDLE, so `c.req.query("page")`
 // (pagination) and `searchParams.get("q")` (search) never taint.
 const HANDLE_ARG = String.raw`["'\`](?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)["'\`]`
 const TAINTED_CALL_RE = new RegExp(
-  String.raw`(?:\b(?:c|ctx|context)\.req\.(?:param|query)|\.searchParams\.get)\(\s*` + HANDLE_ARG,
+  String.raw`(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[\s\S]{0,40}?\.searchParams\.get\()\s*` + HANDLE_ARG,
 )
 /** A request-controlled OBJECT HANDLE in `slice` — member access OR a call source. */
 function sliceIsTainted(slice: string): boolean {

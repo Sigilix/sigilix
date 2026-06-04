@@ -670,6 +670,35 @@ describe("SIG-144: toPlainTextAnnotation", () => {
     expect(out.annotation_level).toBe("warning")
   })
 
+  it("preserves TypeScript generics in finding text (does NOT treat them as HTML tags)", () => {
+    const out = toPlainTextAnnotation({
+      path: "a.ts", start_line: 1, end_line: 1,
+      annotation_level: "warning",
+      title: "Type `Map<string, number>` is wrong",
+      message: "Use `Promise<void>` not `Promise<any>`; also `Array<Record<string, T>>` and a < b comparison.",
+    })
+    expect(out.title).toBe("Type Map<string, number> is wrong")
+    expect(out.message).toContain("Promise<void>")
+    expect(out.message).toContain("Promise<any>")
+    expect(out.message).toContain("Array<Record<string, T>>")
+    expect(out.message).toContain("a < b")
+  })
+
+  it("normalizes entity-encoded markup before stripping (decode-then-strip)", () => {
+    const out = toPlainTextAnnotation({
+      path: "a.ts", start_line: 1, end_line: 1,
+      annotation_level: "notice",
+      message: "&lt;details&gt;hidden&lt;/details&gt; and **bold**",
+    })
+    // entity-encoded <details> is decoded then stripped; no leftover tags/markdown
+    expect(out.message).not.toContain("details")
+    expect(out.message).not.toContain("&lt;")
+    expect(out.message).not.toContain("<")
+    expect(out.message).not.toContain("**")
+    expect(out.message).toContain("hidden")
+    expect(out.message).toContain("bold")
+  })
+
   it("leaves an undefined title/raw_details undefined", () => {
     const out = toPlainTextAnnotation({
       path: "a.ts", start_line: 1, end_line: 1,

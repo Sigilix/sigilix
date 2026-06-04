@@ -549,18 +549,31 @@ export function toPlainTextAnnotation(a: CheckRunAnnotation): CheckRunAnnotation
 
 /**
  * SIG-144: reduce GitHub-flavored markdown / HTML to plain text. Order
- * matters — drop self-contained HTML (badge `<img>`) first, unwrap
- * `<details>/<summary>`, then markdown emphasis/code/links, then
+ * matters — decode entities first (so entity-encoded markup normalizes
+ * before tag stripping), drop self-contained HTML (badge `<img>`), unwrap
+ * ONLY the tags our renderers emit, then markdown emphasis/code/links, then
  * collapse whitespace.
  */
 function stripMarkupToPlainText(input: string): string {
   let s = input
+  // Decode the handful of HTML entities our renderers emit FIRST, so
+  // entity-encoded markup (`&lt;details&gt;`) is normalized before the tag
+  // strip below instead of surviving into the output. `&amp;` last to avoid
+  // double-decoding. (PR #339 review: P2.)
+  s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&")
   // Drop badge / image tags entirely (they carry no readable text).
   s = s.replace(/<img\b[^>]*>/gi, "")
-  // Unwrap remaining HTML tags (<details>, <summary>, <b>, <br>, …),
-  // turning <br> into a newline so structure isn't lost.
+  // <br> → newline so structure isn't lost.
   s = s.replace(/<br\s*\/?>/gi, "\n")
-  s = s.replace(/<\/?[a-z][^>]*>/gi, "")
+  // Unwrap ONLY the HTML tags our finding renderers actually emit — an
+  // ALLOW-LIST, not a blanket `<[a-z]…>` strip. The blanket strip deleted
+  // TypeScript generics in finding text (`Map<string, number>` → `Map`,
+  // `Promise<void>` → `Promise`) — silently corrupting the very content
+  // this surface exists to show. (PR #339 review: P1.)
+  s = s.replace(
+    /<\/?(?:details|summary|sub|sup|b|i|em|strong|code|pre|a|p|div|span|kbd|ul|ol|li|blockquote|h[1-6]|table|thead|tbody|tr|td|th)\b[^>]*>/gi,
+    "",
+  )
   // Markdown links [text](url) → "text (url)".
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
   // Bold / italic emphasis markers.
@@ -573,8 +586,6 @@ function stripMarkupToPlainText(input: string): string {
   // Heading / blockquote / list leaders at line starts.
   s = s.replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
   s = s.replace(/^[ \t]*>[ \t]?/gm, "")
-  // Decode the handful of HTML entities our renderers emit.
-  s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
   // Collapse 3+ blank lines and trim trailing whitespace per line.
   s = s.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n")
   return s.trim()

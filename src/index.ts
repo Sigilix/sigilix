@@ -365,6 +365,9 @@ export interface Env {
   // Deterministic open-redirect floor (CWE-601, no-open-redirect).
   // off (default) | shadow (measure-only) | post (emit P2 advisory).
   OPENCLAW_OPEN_REDIRECT_SCAN?: string
+  // Deterministic SSRF floor (CWE-918, no-ssrf).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory).
+  OPENCLAW_SSRF_SCAN?: string
   /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
   OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 

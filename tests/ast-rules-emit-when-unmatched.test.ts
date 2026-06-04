@@ -22,6 +22,8 @@ const EMIT_RULES = new Set([
   "no-insecure-random-token",
   // the open-redirect floor (CWE-601, security/warning — FP-safe at P2).
   "no-open-redirect",
+  // the SSRF floor (CWE-918, security/warning — FP-safe at P2).
+  "no-ssrf",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {

@@ -38,6 +38,7 @@ import { noSnakeCamelOptionalAlias } from "./rules/no-snake-camel-optional-alias
 import { noUnauthorizedObjectLookup } from "./rules/no-unauthorized-object-lookup"
 import { noInsecureRandomToken } from "./rules/no-insecure-random-token"
 import { noOpenRedirect } from "./rules/no-open-redirect"
+import { noSsrf } from "./rules/no-ssrf"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -80,6 +81,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noInsecureRandomToken,
   // security-specialist deterministic open-redirect floor (CWE-601, severity: warning).
   noOpenRedirect,
+  // security-specialist deterministic SSRF floor (CWE-918, severity: warning).
+  noSsrf,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

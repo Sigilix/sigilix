@@ -362,6 +362,9 @@ export interface Env {
   // Deterministic weak-randomness floor (CWE-338, no-insecure-random-token).
   // off (default) | shadow (measure-only) | post (emit P2 advisory).
   OPENCLAW_WEAK_RANDOM_SCAN?: string
+  // Deterministic open-redirect floor (CWE-601, no-open-redirect).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory).
+  OPENCLAW_OPEN_REDIRECT_SCAN?: string
   /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
   OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 

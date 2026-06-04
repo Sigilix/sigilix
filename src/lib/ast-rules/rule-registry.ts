@@ -37,6 +37,7 @@ import { noSnakeCamelOptionalAlias } from "./rules/no-snake-camel-optional-alias
 // SIG-314: deterministic IDOR/BOLA floor (security, warning/P2-capped).
 import { noUnauthorizedObjectLookup } from "./rules/no-unauthorized-object-lookup"
 import { noInsecureRandomToken } from "./rules/no-insecure-random-token"
+import { noOpenRedirect } from "./rules/no-open-redirect"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -77,6 +78,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noUnauthorizedObjectLookup,
   // security-specialist deterministic weak-randomness floor (CWE-338, severity: warning).
   noInsecureRandomToken,
+  // security-specialist deterministic open-redirect floor (CWE-601, severity: warning).
+  noOpenRedirect,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

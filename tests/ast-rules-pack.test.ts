@@ -38,7 +38,7 @@ function ruleById(id: string): AstRule {
 // ─── ALL_RULES registry contract (Codex MAJOR #3) ───────────────
 
 describe("ALL_RULES registry — v1 contract", () => {
-  it("exports exactly 26 rules in the canonical order", () => {
+  it("exports exactly 27 rules in the canonical order", () => {
     expect(ALL_RULES.map((r) => r.id)).toEqual([
       "no-eval-call",
       "no-new-function-constructor",
@@ -71,6 +71,8 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-unauthorized-object-lookup",
       // deterministic weak-randomness floor (CWE-338, security/warning).
       "no-insecure-random-token",
+      // deterministic open-redirect floor (CWE-601, security/warning).
+      "no-open-redirect",
     ])
   })
 
@@ -102,6 +104,7 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-snake-camel-optional-alias":         { severity: "warning", roleHint: "logic" },
       "no-unauthorized-object-lookup":         { severity: "warning", roleHint: "security" },
       "no-insecure-random-token":              { severity: "warning", roleHint: "security" },
+      "no-open-redirect":                      { severity: "warning", roleHint: "security" },
     }
     for (const r of ALL_RULES) {
       expect({ severity: r.severity, roleHint: r.roleHint }).toEqual(expected[r.id])

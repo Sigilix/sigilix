@@ -312,3 +312,168 @@ router.get("/keys/:id", async (req, res) => {
     expect(runRule(src).length).toBe(0)
   })
 })
+
+// ── SIG-313: Cloudflare Workers-native + Hono handler & taint support ────────
+describe("no-unauthorized-object-lookup — Cloudflare Workers-native (SIG-313)", () => {
+  it("fires: export default { fetch } reads searchParams id → env.DB.prepare(sql).bind(id)", () => {
+    const src = `
+export default {
+  async fetch(request, env) {
+    const id = new URL(request.url).searchParams.get("id");
+    const row = await env.DB.prepare("SELECT * FROM docs WHERE id = ?").bind(id).first();
+    return Response.json(row);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(1)
+  })
+
+  it("fires: arrow-form export default { fetch: async (request, env) => ... }", () => {
+    const src = `
+export default {
+  fetch: async (request, env) => {
+    const id = new URL(request.url).searchParams.get("id");
+    const row = await env.DB.prepare("SELECT * FROM docs WHERE id = ?").bind(id).first();
+    return Response.json(row);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(1)
+  })
+
+  it("safe: a STATIC URLSearchParams (not request-derived) does NOT fire (anchor lock)", () => {
+    const src = `
+export default {
+  async fetch(request, env) {
+    const id = new URLSearchParams("id=42").get("id");
+    const row = await env.DB.prepare("SELECT * FROM docs WHERE id = ?").bind(id).first();
+    return Response.json(row);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(0)
+  })
+
+  it("fires: tainted id flows into env.DB.query()", () => {
+    const src = `
+export default {
+  async fetch(request, env) {
+    const id = new URL(request.url).searchParams.get("docId");
+    const row = await env.DB.query("SELECT * FROM docs WHERE id = ?", [id]);
+    return Response.json(row);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(1)
+  })
+
+  it("safe: a principal/ownership 403 check skips the Workers handler", () => {
+    const src = `
+export default {
+  async fetch(request, env) {
+    const id = new URL(request.url).searchParams.get("id");
+    const session = await getSession(request);
+    const row = await env.DB.prepare("SELECT * FROM docs WHERE id = ?").bind(id).first();
+    if (!session || row.ownerId !== session.userId) return new Response("forbidden", { status: 403 });
+    return Response.json(row);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(0)
+  })
+
+  it("safe: a pagination/search param (not an object handle) never fires", () => {
+    const src = `
+export default {
+  async fetch(request, env) {
+    const page = new URL(request.url).searchParams.get("page");
+    const rows = await env.DB.query("SELECT * FROM docs LIMIT 50 OFFSET ?", [page]);
+    return Response.json(rows);
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(0)
+  })
+
+  it("safe: a .bind() that is NOT a D1 prepare chain (fn.bind(this)) never fires", () => {
+    const src = `
+export default {
+  async fetch(request, env) {
+    const id = new URL(request.url).searchParams.get("id");
+    const handler = doLookup.bind(id);
+    return Response.json(await handler());
+  }
+};`
+    expect(runRule(src, "src/worker.ts").length).toBe(0)
+  })
+})
+
+describe("no-unauthorized-object-lookup — Hono (SIG-313)", () => {
+  it("fires: app.get with c.req.param('id') flowing into c.env.DB.query()", () => {
+    const src = `
+import { Hono } from "hono";
+const app = new Hono();
+app.get("/docs/:id", async (c) => {
+  const id = c.req.param("id");
+  const row = await c.env.DB.query("SELECT * FROM docs WHERE id = ?", [id]);
+  return c.json(row);
+});`
+    expect(runRule(src, "src/routes.ts").length).toBe(1)
+  })
+
+  it("fires: c.req.query('workspace') directly inside a record lookup", () => {
+    const src = `
+import { Hono } from "hono";
+const app = new Hono();
+app.get("/keys", async (c) => {
+  const rows = await c.env.DB.prepare("SELECT * FROM keys WHERE workspace = ?").bind(c.req.query("workspace")).all();
+  return c.json(rows);
+});`
+    expect(runRule(src, "src/routes.ts").length).toBe(1)
+  })
+
+  it("safe: a Hono handler that reads the principal via c.get('user') skips", () => {
+    const src = `
+import { Hono } from "hono";
+const app = new Hono();
+app.get("/docs/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const row = await c.env.DB.query("SELECT * FROM docs WHERE id = ? AND owner = ?", [id, user.id]);
+  return c.json(row);
+});`
+    expect(runRule(src, "src/routes.ts").length).toBe(0)
+  })
+
+  it("safe: a Hono handler using the c.var principal namespace skips", () => {
+    const src = `
+import { Hono } from "hono";
+const app = new Hono();
+app.get("/docs/:id", async (c) => {
+  const id = c.req.param("id");
+  const row = await c.env.DB.query("SELECT * FROM docs WHERE id = ?", [id]);
+  if (row.tenant !== c.var.user.tenantId) throw new Error("no");
+  return c.json(row);
+});`
+    expect(runRule(src, "src/routes.ts").length).toBe(0)
+  })
+
+  it("adversarial: a NON-principal c.get('settings') does NOT mute (only the principal allow-list does)", () => {
+    const src = `
+import { Hono } from "hono";
+const app = new Hono();
+app.get("/docs/:id", async (c) => {
+  const settings = c.get("settings");
+  const id = c.req.param("id");
+  const row = await c.env.DB.query("SELECT * FROM docs WHERE id = ?", [id]);
+  return c.json(row);
+});`
+    expect(runRule(src, "src/routes.ts").length).toBe(1)
+  })
+
+  it("safe: Hono pagination query param (c.req.query('page')) never fires", () => {
+    const src = `
+import { Hono } from "hono";
+const app = new Hono();
+app.get("/docs", async (c) => {
+  const page = c.req.query("page");
+  const rows = await c.env.DB.query("SELECT * FROM docs LIMIT 50 OFFSET ?", [page]);
+  return c.json(rows);
+});`
+    expect(runRule(src, "src/routes.ts").length).toBe(0)
+  })
+})

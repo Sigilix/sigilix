@@ -65,6 +65,31 @@ const OBJECT_HANDLE_RE =
 // optional `?.` covers `req.body?.workspace`.
 const TAINTED_MEMBER_RE =
   /\b(?:req|request|ctx|context)\.(?:params|query|body)\??\.(?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)\b/
+// SIG-313: CALL-based request handles (Hono + Cloudflare Workers), the
+// complement to TAINTED_MEMBER_RE's member access. Slice-based (like the member
+// regex) so taint flows through `String(c.req.param("id") ?? "")` wrappers:
+//   - Hono:    c.req.param("id") / c.req.query("workspace")  (ctx in c|ctx|context)
+//   - Workers: new URL(request.url).searchParams.get("id")
+// The Workers arm is ANCHORED to a request-derived URL (`req|request.url` must
+// precede `.searchParams.get`) so a static `new URLSearchParams("a=1").get(...)`
+// can't false-positive (Sigilix #344 — the rule's zero-FP-on-safe-code goal).
+// The split form `const u = new URL(request.url); u.searchParams.get("id")` is
+// intentionally NOT matched — a safe miss, per the rule's prefer-a-miss design.
+// The string-literal arg must be an OBJECT HANDLE, so `c.req.query("page")`
+// (pagination) and `searchParams.get("q")` (search) never taint.
+const HANDLE_ARG = String.raw`["'\`](?:id|uuid|guid|pk|[A-Za-z]+[_]?[Ii]d|workspace|org|tenant|account|project|group)["'\`]`
+const TAINTED_CALL_RE = new RegExp(
+  String.raw`(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[\s\S]{0,40}?\.searchParams\.get\()\s*` + HANDLE_ARG,
+)
+/** A request-controlled OBJECT HANDLE in `slice` — member access OR a call source. */
+function sliceIsTainted(slice: string): boolean {
+  return TAINTED_MEMBER_RE.test(slice) || TAINTED_CALL_RE.test(slice)
+}
+// SIG-313: Hono/Workers principal reads that mark a handler authz-aware (fail
+// closed). `c.get("user")` and the `c.var.<principal>` namespace are Hono's
+// idiomatic principal accessors; scoped to those shapes so a data field named
+// `user` can't mute the floor (the `403` literal already covers most safe handlers).
+const CTX_PRINCIPAL_RE = /^(?:user|session|auth|subject|principal|currentuser|jwtpayload|jwt|identity)$/
 // The principal/authorization signals. If a handler body references ANY of
 // these, it is authz-aware and we fail closed (skip). Deliberately principal-
 // focused (`subject`/`req.user`/authorize/…) and NOT keyed on bare `member`/
@@ -87,6 +112,14 @@ const DATA_ACCESS_NAMES: ReadonlySet<string> = new Set([
 
 function idName(n: AstNode | undefined): string | null {
   return n && n.type === "Identifier" ? (n.name as string) : null
+}
+
+/** Is `node` the Hono `<ctx>.var` principal namespace (`c.var`/`ctx.var`)? */
+function isCtxVar(node: AstNode | undefined): boolean {
+  if (!node || node.type !== "MemberExpression" || node.computed) return false
+  if (idName(node.property as AstNode) !== "var") return false
+  const root = idName(node.object as AstNode)
+  return !!root && /^(?:c|ctx|context)$/i.test(root)
 }
 
 function sliceOf(source: string, node: AstNode | undefined): string {
@@ -177,7 +210,18 @@ function handlerHasAuthzSignal(body: AstNode): boolean {
       const prop = idName(n.property as AstNode)
       // req.user / req.auth / req.session
       if (obj && /^(?:req|request)$/.test(obj) && prop && /^(?:user|auth|session)$/.test(prop)) found = true
+      // SIG-313: Hono `c.var.<principal>` (the .var principal namespace).
+      else if (prop && CTX_PRINCIPAL_RE.test(prop.toLowerCase()) && isCtxVar(n.object as AstNode)) found = true
       else if (prop && AUTHZ_TOKEN_RE.test(prop.toLowerCase())) found = true
+    } else if (n.type === "CallExpression" && (n.callee as AstNode)?.type === "MemberExpression"
+      && !(n.callee as AstNode).computed) {
+      // SIG-313: Hono `c.get("user")` principal read.
+      const callee = n.callee as AstNode
+      const root = idName(callee.object as AstNode)
+      const a0 = (n.arguments ?? [])[0] as AstNode | undefined
+      if (idName(callee.property as AstNode) === "get" && root && /^(?:c|ctx|context)$/i.test(root)
+        && a0?.type === "Literal" && typeof a0.value === "string"
+        && CTX_PRINCIPAL_RE.test((a0.value as string).toLowerCase())) found = true
     } else if (n.type === "Literal" && n.value === 403) {
       found = true
     }
@@ -206,6 +250,18 @@ function collectHandlers(program: AstNode): AstNode[] {
             if (resolved) handlers.push(resolved)
           }
         }
+      }
+    }
+    // SIG-313: Cloudflare Workers-native `export default { async fetch(request,
+    // env) {} }` (and `fetch: (request, env) => {}`). The single fetch mega-
+    // handler is the Workers request path.
+    if (n.type === "ExportDefaultDeclaration" && (n.declaration as AstNode)?.type === "ObjectExpression") {
+      for (const p of ((n.declaration as AstNode).properties ?? []) as AstNode[]) {
+        if (!p || p.type !== "Property" || idName(p.key as AstNode) !== "fetch") continue
+        // Both `async fetch(request, env) {}` (method shorthand) and
+        // `fetch: (request, env) => {}` land here as Property.value = a function.
+        const fn = p.value as AstNode
+        if (fn && FUNCTION_TYPES.has(fn.type as string)) handlers.push(fn)
       }
     }
     if (n.type === "ExportNamedDeclaration" && n.declaration) {
@@ -259,7 +315,7 @@ function collectTaintedLocals(body: AstNode, source: string): Set<string> {
       return
     }
     const local = idName(target)
-    if (local && TAINTED_MEMBER_RE.test(sliceOf(source, init))) tainted.add(local)
+    if (local && sliceIsTainted(sliceOf(source, init))) tainted.add(local)
   })
   return tainted
 }
@@ -297,6 +353,9 @@ function argsCarryTaint(call: AstNode, taintedLocals: Set<string>, source: strin
     walkNoNested(arg as AstNode, (n) => {
       if (found) return
       if (n.type === "MemberExpression" && TAINTED_MEMBER_RE.test(sliceOf(source, n))) found = true
+      // SIG-313: a call-based request handle directly in the sink's args
+      // (`query(c.req.param("id"))`, `...bind(url.searchParams.get("id"))`).
+      else if (n.type === "CallExpression" && TAINTED_CALL_RE.test(sliceOf(source, n))) found = true
       else if (n.type === "Identifier" && taintedLocals.has(n.name as string)) found = true
     })
     if (found) return true
@@ -310,10 +369,30 @@ function isDataAccessCall(call: AstNode): boolean {
   // bare `query(…)`
   const bare = idName(callee)
   if (bare && DATA_ACCESS_NAMES.has(bare.toLowerCase())) return true
-  // member `db.findUnique(…)` / `repo.findById(…)`
+  // member `db.findUnique(…)` / `repo.findById(…)` / Workers `env.DB.query(…)`
   if (callee.type === "MemberExpression" && !callee.computed) {
     const prop = idName(callee.property as AstNode)
     if (prop && DATA_ACCESS_NAMES.has(prop.toLowerCase())) return true
+    // SIG-313: Cloudflare D1 prepared statement `<…>.prepare(sql).bind(id)`.
+    // `bind` is a sink ONLY when its callee chain includes a `.prepare(…)` call,
+    // so `fn.bind(this)` (Function.prototype.bind) never fires.
+    if (prop === "bind" && calleeChainHasPrepare(callee.object as AstNode)) return true
+  }
+  return false
+}
+
+/** Walk a member/call callee chain for a `.prepare(…)` call (D1 sink scoping). */
+function calleeChainHasPrepare(node: AstNode | undefined): boolean {
+  let cur: AstNode | undefined = node
+  let guard = 0
+  while (cur && guard++ < 8) {
+    if (cur.type === "CallExpression") {
+      const c = cur.callee as AstNode
+      if (c?.type === "MemberExpression" && !c.computed && idName(c.property as AstNode) === "prepare") return true
+      cur = c?.object as AstNode
+    } else if (cur.type === "MemberExpression") {
+      cur = cur.object as AstNode
+    } else break
   }
   return false
 }

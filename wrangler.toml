@@ -313,6 +313,10 @@ OPENCLAW_GRAPH_EXPANSION = "post"
 # internal noise, not a believability incident. Rollback: "shadow" (measure-only)
 # or "off".
 OPENCLAW_AUTHZ_IDOR_SCAN = "post"
+# Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
+# .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
+# no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.
+OPENCLAW_INGEST_AI_INSTRUCTIONS = "on"
 
 # SIG-317 (2026-06-02): synth verdict-truncation recovery. On target-rich PRs the
 # synthesizer writes a COMPLETE provenance.findings but a SHORTER verdict.findings

@@ -40,9 +40,12 @@ const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrati
 // redirect target (unlike IDOR, the param need not read like an object handle).
 const TAINTED_MEMBER_RE = /\b(?:req|request|ctx|context)\.(?:params|query|body)\b/
 // Call-based request input: Hono `c.req.param/query(...)`, Workers
-// `new URL(request.url).searchParams.get(...)` (anchored to a request URL).
+// `new URL(request.url).searchParams.get(...)` (anchored to a request URL). The
+// span between `request.url` and `.searchParams.get(` is SAME-LINE only
+// (`[^\n]`, Sigilix #348) — the real pattern is one line, so this avoids matching
+// an unrelated `.searchParams.get(` newlines away.
 const TAINTED_CALL_RE =
-  /(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[\s\S]{0,40}?\.searchParams\.get\()/
+  /(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[^\n]{0,40}?\.searchParams\.get\()/
 // Redirect-target validation tokens — an in-body reference means "this handler
 // checks the destination", so we fail closed (skip). Matched against AST
 // identifiers, member property names, and call callee names (not raw source).

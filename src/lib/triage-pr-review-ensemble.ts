@@ -2920,6 +2920,30 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+    // Shadow-first gating for the deterministic weak-randomness floor
+    // (no-insecure-random-token, CWE-338) — same off/shadow/post contract as the
+    // IDOR floor above. The rule always RUNS (logged per hit for FP measurement);
+    // its emits reach synth/post ONLY in `post`. `off` (default) strips silently;
+    // `shadow` strips-but-logs a rollup so we can read the firing + FP rate on
+    // dogfood before promoting. Structurally P2-capped (clampAstEmitScores).
+    const weakRandomMode = (env.OPENCLAW_WEAK_RANDOM_SCAN ?? "off").trim().toLowerCase()
+    if (weakRandomMode !== "post") {
+      const weakRandomEmits = astResult.findings.filter((f) => f.ruleId === "no-insecure-random-token")
+      if (weakRandomEmits.length > 0) {
+        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-insecure-random-token")
+        // Keep perFinding aligned (the auto-inline poster reads it by astFindingId).
+        for (const f of weakRandomEmits) astResult.perFinding.delete(f.astFindingId)
+        if (weakRandomMode === "shadow") {
+          console.log(JSON.stringify({
+            event: "weak-random-token-shadow",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            count: weakRandomEmits.length,
+            anchors: weakRandomEmits.map((f) => `${f.path}:${f.line}`),
+          }))
+        }
+      }
+    }
+
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.
     telemetry.astRules = astResult.telemetry.scanned

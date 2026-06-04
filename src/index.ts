@@ -359,6 +359,9 @@ export interface Env {
   // off (default) | shadow (measure-only) | post (emit P2 advisory). The rule
   // always runs; this gates whether its P2-capped emits reach the synth/post.
   OPENCLAW_AUTHZ_IDOR_SCAN?: string
+  // Deterministic weak-randomness floor (CWE-338, no-insecure-random-token).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory).
+  OPENCLAW_WEAK_RANDOM_SCAN?: string
   /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
   OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 

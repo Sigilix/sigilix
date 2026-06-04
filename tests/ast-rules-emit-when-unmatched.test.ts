@@ -18,6 +18,8 @@ const EMIT_RULES = new Set([
   "no-snake-camel-optional-alias",
   // SIG-314: the IDOR/BOLA floor (security/warning — FP-safe at P2).
   "no-unauthorized-object-lookup",
+  // the weak-randomness floor (CWE-338, security/warning — FP-safe at P2).
+  "no-insecure-random-token",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {

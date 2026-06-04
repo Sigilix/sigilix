@@ -36,6 +36,7 @@ import { noSyncIoInRequestPath } from "./rules/no-sync-io-in-request-path"
 import { noSnakeCamelOptionalAlias } from "./rules/no-snake-camel-optional-alias"
 // SIG-314: deterministic IDOR/BOLA floor (security, warning/P2-capped).
 import { noUnauthorizedObjectLookup } from "./rules/no-unauthorized-object-lookup"
+import { noInsecureRandomToken } from "./rules/no-insecure-random-token"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -74,6 +75,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noSnakeCamelOptionalAlias,
   // SIG-314: security-specialist deterministic IDOR/BOLA floor (severity: warning).
   noUnauthorizedObjectLookup,
+  // security-specialist deterministic weak-randomness floor (CWE-338, severity: warning).
+  noInsecureRandomToken,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

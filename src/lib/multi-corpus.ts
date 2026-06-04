@@ -18,6 +18,7 @@
 
 import { indexNamespace } from "./repo-index-manifest"
 import { embedText } from "./embeddings"
+import { isTrivialFinding } from "./triage-pr-review"
 
 // ---------------------------------------------------------------------
 // Namespaces
@@ -40,19 +41,22 @@ export function multiCorpusEnabled(env: { OPENCLAW_MULTICORPUS_RETRIEVAL?: strin
  * Derive a coarse verdict label for a merged PR from its persisted review
  * findings. Sigilix doesn't store the synthesizer verdict explicitly — the
  * review manifest keeps only the per-finding `score`. We map that to the same
- * three buckets the review pipeline itself gates on: any finding at score >= 4
- * (the REQUEST_CHANGES floor, per the OPENCLAW_*_VALIDATOR_MODE flags) →
- * "changes_required"; findings below that floor → "commented"; an empty
- * findings set → "approved". Returns undefined when no manifest existed (the
+ * three buckets the review pipeline itself gates on (`isTrivialFinding`): any
+ * SUBSTANTIVE finding → "changes_required"; only trivial style/docs nits →
+ * "commented"; an empty findings set → "approved". Returns undefined when no
+ * manifest existed (the
  * PR was merged without a Sigilix review), so the corpus doc simply omits the
  * verdict rather than asserting a false "approved".
  */
 export function deriveVerdictLabel(
-  findings: ReadonlyArray<{ score: number }> | undefined,
+  findings: ReadonlyArray<{ score: number; category?: string | null }> | undefined,
 ): string | undefined {
   if (findings === undefined) return undefined
   if (findings.length === 0) return "approved"
-  return findings.some((f) => f.score >= 4) ? "changes_required" : "commented"
+  // Mirror the live verdict rule (`chooseReviewEventForRenderedFindings`): ANY
+  // substantive finding → "changes_required"; only a trivial style/docs nit is
+  // "commented". Shared `isTrivialFinding` keeps the corpus label from drifting.
+  return findings.some((f) => !isTrivialFinding(f)) ? "changes_required" : "commented"
 }
 
 /** Vectorize namespace for a repo's merged-PR corpus. */

@@ -56,8 +56,12 @@ annotations).
 ## Telemetry (Workers logs)
 
 - `pr-review-check-annotations-posted` — `{ posted, requested }` per review.
-- `pr-review-check-annotation-batch-failed` — a 50-batch PATCH was rejected
-  (triggers the per-annotation retry).
+- `pr-review-check-annotation-batch-rejected` — a 50-batch PATCH was rejected
+  with HTTP 422 (one invalid annotation); triggers the sequential
+  per-annotation retry that isolates and drops the offender.
+- `pr-review-check-annotation-batch-failed-transient` — a batch PATCH failed
+  with a non-422 (5xx / network) error; no per-annotation retry runs (the
+  write may have landed and GitHub appends, so a retry could duplicate).
 - `pr-review-check-annotation-dropped` — a single annotation couldn't post
   (path/line included).
 - `pr-review-check-annotation-prefilter-dropped` — count dropped before

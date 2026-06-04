@@ -490,30 +490,29 @@ async function postCheckAnnotations(args: {
         owner, repo, check_run_id: id, batch_size: batch.length,
         err: err.message,
       }))
-      // Re-post survivors CONCURRENTLY (the writes are independent) so
-      // isolating one bad annotation doesn't cost O(n) sequential
-      // round-trips on the check-completion path. (Sigilix perf finding,
-      // PR #339.)
-      const results = await Promise.allSettled(
-        batch.map((annotation) =>
-          handle.client.updateCheckRun(owner, repo, id, {
+      // Re-post survivors SEQUENTIALLY, isolating + dropping the offender.
+      // Not parallelized on purpose: GitHub's REST guidance is to serialize
+      // mutations (POST/PATCH) — up to 50 concurrent check-run PATCHes risks
+      // a secondary-rate-limit 403/429. This path is rare (only a 422-poisoned
+      // batch, e.g. a force-push staled a line) and best-effort, so the
+      // serial round-trips are an acceptable cost for staying within GitHub's
+      // limits. (CodeRabbit secondary-rate-limit finding vs. Sigilix latency
+      // finding, PR #339 — GitHub's documented guidance wins.)
+      for (const annotation of batch) {
+        try {
+          await handle.client.updateCheckRun(owner, repo, id, {
             output: { title: output.title, summary: output.summary, annotations: [annotation] },
-          }),
-        ),
-      )
-      results.forEach((result, idx) => {
-        const annotation = batch[idx]!
-        if (result.status === "fulfilled") {
+          })
           posted += 1
-        } else {
+        } catch (singleErr) {
           console.warn(JSON.stringify({
             event: "pr-review-check-annotation-dropped",
             owner, repo, check_run_id: id,
             path: annotation.path, start_line: annotation.start_line,
-            err: result.reason instanceof Error ? result.reason.message : String(result.reason),
+            err: singleErr instanceof Error ? singleErr.message : String(singleErr),
           }))
         }
-      })
+      }
     }
   }
 
@@ -548,19 +547,27 @@ export function toPlainTextAnnotation(a: CheckRunAnnotation): CheckRunAnnotation
 }
 
 /**
- * SIG-144: reduce GitHub-flavored markdown / HTML to plain text. Order
- * matters — decode entities first (so entity-encoded markup normalizes
- * before tag stripping), drop self-contained HTML (badge `<img>`), unwrap
- * ONLY the tags our renderers emit, then markdown emphasis/code/links, then
- * collapse whitespace.
+ * SIG-144: reduce GitHub-flavored markdown / HTML to plain text. Order is
+ * deliberate: drop dangerous element bodies, then real `<img>`/`<br>`, then
+ * unwrap ONLY our renderers' allow-listed tags, then markdown, and **decode
+ * HTML entities LAST**. Decoding last is the fix for two PR #339 findings:
+ * a literal code example like `` `&lt;details&gt;` `` stays readable text
+ * instead of being decoded into a real tag and then deleted by the allow-list
+ * (CodeRabbit), and entity-encoded markup can't be normalized into a
+ * surviving non-allow-listed tag (Sigilix). Real tags emitted by our
+ * renderers are already plain `<...>` (not entity-encoded), so they're
+ * stripped before the decode pass runs.
  */
 function stripMarkupToPlainText(input: string): string {
   let s = input
-  // Decode the handful of HTML entities our renderers emit FIRST, so
-  // entity-encoded markup (`&lt;details&gt;`) is normalized before the tag
-  // strip below instead of surviving into the output. `&amp;` last to avoid
-  // double-decoding. (PR #339 review: P2.)
-  s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&")
+  // Best-effort tidy-up: drop dangerous *literal* element bodies so they don't
+  // dump as noise. NOT a security control and NOT load-bearing — the output
+  // sink (GitHub annotation message/title/raw_details) is rendered as PLAIN
+  // TEXT, so nothing here is ever live HTML. Note this runs BEFORE the
+  // entity-decode below, so entity-encoded markup an author wrote as an example
+  // (e.g. a finding that literally discusses `&lt;script&gt;`) is intentionally
+  // preserved as readable text rather than stripped. (PR #339 review.)
+  s = s.replace(/<(script|style|iframe|object|embed|noscript|template)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
   // Drop badge / image tags entirely (they carry no readable text).
   s = s.replace(/<img\b[^>]*>/gi, "")
   // <br> → newline so structure isn't lost.
@@ -586,6 +593,11 @@ function stripMarkupToPlainText(input: string): string {
   // Heading / blockquote / list leaders at line starts.
   s = s.replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
   s = s.replace(/^[ \t]*>[ \t]?/gm, "")
+  // Decode the handful of HTML entities our renderers emit LAST — see the
+  // doc-comment: real tags are already stripped, so this only turns
+  // entity-encoded example text back into readable literal characters.
+  // `&amp;` last to avoid double-decoding.
+  s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&")
   // Collapse 3+ blank lines and trim trailing whitespace per line.
   s = s.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n")
   return s.trim()

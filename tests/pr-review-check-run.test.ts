@@ -684,19 +684,50 @@ describe("SIG-144: toPlainTextAnnotation", () => {
     expect(out.message).toContain("a < b")
   })
 
-  it("normalizes entity-encoded markup before stripping (decode-then-strip)", () => {
+  it("strips REAL renderer tags but PRESERVES entity-encoded markup as readable example text", () => {
+    // Real <details> emitted by our renderer → unwrapped. Entity-encoded
+    // markup is example text the author wrote → decoded LAST to readable
+    // literal characters, NOT mistaken for a tag and deleted. (PR #339:
+    // CodeRabbit code-span corruption + Sigilix decode-order.)
     const out = toPlainTextAnnotation({
       path: "a.ts", start_line: 1, end_line: 1,
       annotation_level: "notice",
-      message: "&lt;details&gt;hidden&lt;/details&gt; and **bold**",
+      message: "<details><summary>x</summary>Use `&lt;details&gt;` not `&lt;div&gt;`</details> **bold**",
     })
-    // entity-encoded <details> is decoded then stripped; no leftover tags/markdown
-    expect(out.message).not.toContain("details")
-    expect(out.message).not.toContain("&lt;")
-    expect(out.message).not.toContain("<")
-    expect(out.message).not.toContain("**")
-    expect(out.message).toContain("hidden")
+    expect(out.message).not.toContain("**")            // markdown stripped
+    expect(out.message).toContain("Use <details> not <div>") // example text survives
     expect(out.message).toContain("bold")
+    // the real <summary>/<details> wrappers are gone (only the decoded
+    // example angle-brackets remain)
+    expect(out.message).not.toContain("<summary>")
+  })
+
+  it("removes dangerous element bodies entirely (script/style) — defense in depth", () => {
+    const out = toPlainTextAnnotation({
+      path: "a.ts", start_line: 1, end_line: 1,
+      annotation_level: "warning",
+      message: "before <script>alert(1)</script> after <style>.x{}</style> end",
+    })
+    expect(out.message).not.toContain("alert(1)")
+    expect(out.message).not.toContain("script")
+    expect(out.message).not.toContain(".x{}")
+    expect(out.message).toContain("before")
+    expect(out.message).toContain("after")
+    expect(out.message).toContain("end")
+  })
+
+  it("preserves entity-encoded dangerous markup as readable text (plain-text sink, not stripped)", () => {
+    // The deny-list runs before the entity decode, so an author's literal
+    // example `&lt;script&gt;…` decodes to readable text rather than being
+    // removed — which is correct here because GitHub renders this field as
+    // PLAIN TEXT (inert). Pins the decode-order/deny-list interaction so a
+    // future reader doesn't mistake the deny-list for a load-bearing sanitizer.
+    const out = toPlainTextAnnotation({
+      path: "a.ts", start_line: 1, end_line: 1,
+      annotation_level: "warning",
+      message: "Reject untrusted `&lt;script&gt;alert(1)&lt;/script&gt;` payloads",
+    })
+    expect(out.message).toBe("Reject untrusted <script>alert(1)</script> payloads")
   })
 
   it("leaves an undefined title/raw_details undefined", () => {
@@ -742,12 +773,15 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
     expect(completion.output.annotations).toBeUndefined()
 
     const b1 = mockUpdateCheckRun.mock.calls[1]![3] as { output: { title: string; summary: string; annotations: CheckRunAnnotation[] } }
-    const b2 = mockUpdateCheckRun.mock.calls[2]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    const b2 = mockUpdateCheckRun.mock.calls[2]![3] as { output: { summary: string; annotations: CheckRunAnnotation[] } }
     expect(b1.output.annotations).toHaveLength(50) // GitHub's per-request cap
     expect(b2.output.annotations).toHaveLength(1)
-    // GitHub requires title + summary on any update carrying annotations
+    // GitHub's Update-a-check-run schema requires `output.summary` whenever an
+    // `output` object is sent with annotations — on EVERY follow-up batch, not
+    // just the first (CodeRabbit, PR #339). `title` is optional but we send it.
     expect(typeof b1.output.title).toBe("string")
     expect(typeof b1.output.summary).toBe("string")
+    expect(typeof b2.output.summary).toBe("string")
     // plain-text sanitization applied to the posted annotation message
     expect(b1.output.annotations[0]!.message).toBe("Body finding")
   })

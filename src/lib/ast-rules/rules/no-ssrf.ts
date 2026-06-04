@@ -85,20 +85,28 @@ function walkNoNested(root: AstNode, fn: (n: AstNode) => void): void {
   walk(root)
 }
 
-/** Does a slice carry a request-controlled value (member OR call source)? */
-function sliceIsTainted(slice: string): boolean {
-  return TAINTED_MEMBER_RE.test(slice) || TAINTED_CALL_RE.test(slice)
-}
-
-/** Locals whose initializer carries request taint (and the init node, so we can
- *  fold a fixed prefix through `const u = "https://api.x/" + req.query.id`). */
+/** Locals whose initializer carries request taint (mapped to the init node, so we
+ *  can fold a fixed prefix through `const u = "https://api.x/" + req.query.id`).
+ *  Iterated to a FIXED POINT so a shallow alias of a tainted local is also tracked
+ *  (`const a = req.query.x; const b = a; fetch(b)` — CodeRabbit #349). */
 function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNode> {
-  const tainted = new Map<string, AstNode>()
+  const decls: Array<{ name: string; init: AstNode }> = []
   walkNoNested(root, (n) => {
     if (n.type !== "VariableDeclarator" || !n.init) return
-    const local = idName(n.id as AstNode)
-    if (local && sliceIsTainted(sliceOf(source, n.init as AstNode))) tainted.set(local, n.init as AstNode)
+    const name = idName(n.id as AstNode)
+    if (name) decls.push({ name, init: n.init as AstNode })
   })
+  const tainted = new Map<string, AstNode>()
+  for (let pass = 0; pass < 8; pass++) {
+    let changed = false
+    for (const { name, init } of decls) {
+      if (tainted.has(name)) continue
+      // tainted if the init reaches a request source directly OR via an
+      // already-tainted local (carriesTaint consults the evolving map).
+      if (carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+    }
+    if (!changed) break
+  }
   return tainted
 }
 
@@ -219,15 +227,21 @@ function authorityFixed(
   target: AstNode, consts: Map<string, AstNode>, taintedLocals: Map<string, AstNode>, source: string,
 ): boolean {
   let node = target
-  // A tainted local resolves to its initializer (`const u = base + req.q.x; fetch(u)`).
-  if (node.type === "Identifier" && taintedLocals.has(node.name as string)) {
+  // Resolve a tainted-local chain to the underlying expression
+  // (`const a = base + req.q.x; const u = a; fetch(u)`).
+  let hops = 0
+  while (node.type === "Identifier" && taintedLocals.has(node.name as string) && hops++ < 6) {
     node = taintedLocals.get(node.name as string) as AstNode
   }
   let acc = ""
   for (const p of urlParts(node, consts, taintedLocals, source)) {
     if (p.kind === "taint") return false // taint reaches the still-open authority → SSRF
-    acc += p.kind === "static" ? p.s : "h" // opaque → a fixed host placeholder char
-    if (authorityClosed(acc)) return true // authority pinned before any taint → safe
+    // An opaque operand (env var / imported or unresolved const base) is fixed,
+    // non-request host material; by convention it is a complete base/host, so it
+    // pins the authority — the tainted tail can only land in the path (CodeRabbit #349).
+    if (p.kind === "opaque") return true
+    acc += p.s
+    if (authorityClosed(acc)) return true // authority pinned by a static prefix before any taint
   }
   return false
 }
@@ -277,7 +291,30 @@ function normalizeUrlArg(arg: AstNode | undefined, consts: Map<string, AstNode>)
   return { target: arg }
 }
 
-/** Does the function body contain a host-validation signal? */
+const GUARD_METHODS = /^(?:includes|startswith|endswith|test|has|match|some|every)$/
+
+/** A non-tainted `<url>.hostname`/`.host` member access — the value a host guard
+ *  compares. A request-tainted member (`req.query.host`) is the INPUT, not a check. */
+function isHostMember(n: AstNode, source: string): boolean {
+  return (
+    n.type === "MemberExpression" && !n.computed &&
+    /^(?:host|hostname)$/.test(idName(n.property as AstNode) ?? "") &&
+    !TAINTED_MEMBER_RE.test(sliceOf(source, n))
+  )
+}
+
+/** Does this subtree contain a host/hostname member access? */
+function subtreeHasHostMember(node: AstNode, source: string): boolean {
+  let f = false
+  walkNoNested(node, (n) => { if (!f && isHostMember(n, source)) f = true })
+  return f
+}
+
+/** Does the function body contain a host-validation signal? A named validator
+ *  (`isAllowedHost`/allow-list/…), or an ACTUAL guard SHAPE on a parsed host — a
+ *  comparison (`u.hostname === "x"`) or an allow-list call (`ALLOWED.includes(
+ *  u.hostname)`). A bare read (logging `url.hostname`) is NOT a guard, so it no
+ *  longer suppresses real sinks (CodeRabbit #349). */
 function hasValidationSignal(body: AstNode, source: string): boolean {
   let found = false
   walkNoNested(body, (n) => {
@@ -286,10 +323,19 @@ function hasValidationSignal(body: AstNode, source: string): boolean {
       if (VALIDATION_TOKEN_RE.test((n.name as string).toLowerCase())) found = true
     } else if (n.type === "MemberExpression" && !n.computed) {
       const prop = idName(n.property as AstNode)
-      // a `<url>.hostname`/`.host` parse-and-check is the canonical SSRF guard;
-      // but a request-tainted member (`req.query.host`) is the INPUT, not a check.
-      if (prop && (VALIDATION_TOKEN_RE.test(prop.toLowerCase()) || /^(?:hostname|host)$/.test(prop))) {
-        if (!TAINTED_MEMBER_RE.test(sliceOf(source, n))) found = true
+      if (prop && VALIDATION_TOKEN_RE.test(prop.toLowerCase())) found = true
+    } else if (n.type === "BinaryExpression" && /^[!=]==?$/.test(n.operator as string)) {
+      // `u.hostname === "api.x"` / `!==` — a host compared to something is a guard.
+      if (subtreeHasHostMember(n.left as AstNode, source) || subtreeHasHostMember(n.right as AstNode, source)) {
+        found = true
+      }
+    } else if (n.type === "CallExpression") {
+      const callee = n.callee as AstNode
+      if (callee?.type === "MemberExpression" && !callee.computed &&
+          GUARD_METHODS.test((idName(callee.property as AstNode) ?? "").toLowerCase())) {
+        // `ALLOWED.includes(u.hostname)`, `u.hostname.endsWith(".x.com")`
+        const inArgs = ((n.arguments ?? []) as AstNode[]).some((a) => subtreeHasHostMember(a, source))
+        if (inArgs || subtreeHasHostMember(callee.object as AstNode, source)) found = true
       }
     }
   })

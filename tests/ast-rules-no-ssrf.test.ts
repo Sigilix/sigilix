@@ -58,6 +58,19 @@ app.get("/p", (c) => { return got(c.req.query("url")); });`
     expect(runRule(`app.get("/p", (req, res) => { got.get(req.query.url); });`).length).toBe(1)
     expect(runRule(`app.get("/p", (req, res) => { ky.get(req.query.url); });`).length).toBe(1)
   })
+  // CodeRabbit #349: shallow alias chain must still be tainted.
+  it("alias chain: const a = req.query.url; const b = a; fetch(b)", () => {
+    expect(runRule(`app.get("/p", (req, res) => { const a = req.query.url; const b = a; fetch(b); });`).length).toBe(1)
+  })
+  // CodeRabbit #349: a bare host READ (not a guard) must NOT suppress a real sink.
+  it("a non-guard hostname read does not suppress: log(u.hostname); fetch(req.query.url)", () => {
+    const src = `app.get("/p", (req, res) => {
+      const u = new URL(req.query.url);
+      console.log(u.hostname);
+      fetch(req.query.url);
+    });`
+    expect(runRule(src).length).toBe(1)
+  })
 })
 
 describe("no-ssrf — FP-safety: does NOT fire on safe fetch code", () => {
@@ -90,6 +103,18 @@ app.get("/p", (req, res) => { fetch(API + "/v1/" + req.query.id); });`
   })
   it("imported / undeclared base const + tainted path: fetch(API_BASE + '/v1/' + req.query.id)", () => {
     expect(runRule(`app.get("/p", (req, res) => { fetch(API_BASE + "/v1/" + req.query.id); });`).length).toBe(0)
+  })
+  // CodeRabbit #349: an opaque absolute base + tainted tail (no explicit separator)
+  // is fixed-host material — the base, by convention, is a complete base URL.
+  it("opaque base, no separator: fetch(apiBase + req.query.id)", () => {
+    expect(runRule(`app.get("/p", (req, res) => { fetch(apiBase + req.query.id); });`).length).toBe(0)
+  })
+  it("an allow-list call guard is skipped: ALLOWED.includes(new URL(t).hostname)", () => {
+    const src = `app.get("/p", (req, res) => {
+      const target = req.query.url;
+      if (ALLOWED_HOSTS.includes(new URL(target).hostname)) fetch(target);
+    });`
+    expect(runRule(src).length).toBe(0)
   })
   it("fixed prefix through a local: const u = 'https://api.x.com/' + req.query.id; fetch(u)", () => {
     const src = `app.get("/p", (req, res) => { const u = "https://api.x.com/" + req.query.id; fetch(u); });`
@@ -127,9 +152,12 @@ app.get("/p", (req, res) => { fetch(API + "/v1/" + req.query.id); });`
   it("a non-fetch call never fires: res.json(req.query.url)", () => {
     expect(runRule(`app.get("/p", (req, res) => { res.json(req.query.url); });`).length).toBe(0)
   })
-  it("skips test / spec / migration files", () => {
+  it("skips test / spec / config / migration / script files", () => {
     const src = `app.get("/p", (req, res) => { fetch(req.query.url); });`
     expect(runRule(src, "tests/proxy.test.ts").length).toBe(0)
+    expect(runRule(src, "src/proxy.spec.ts").length).toBe(0)
+    expect(runRule(src, "src/app.config.ts").length).toBe(0)
     expect(runRule(src, "src/migrations/001.ts").length).toBe(0)
+    expect(runRule(src, "scripts/seed.ts").length).toBe(0)
   })
 })

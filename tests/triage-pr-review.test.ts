@@ -427,6 +427,27 @@ describe("chooseReviewEventForRenderedFindings", () => {
     })).toBe("REQUEST_CHANGES")
   })
 
+  it("APPROVES when the only finding is OUT-OF-PR-SCOPE — never blocks on code not in the PR (founder ask, Codex-hardened)", () => {
+    // out-of-PR-scope = path is not a changed file (NOT mere anchor-failure).
+    const outside = (score: number): PrReviewFinding => ({ ...baseFinding, score, outOfPrScope: true })
+    // out-of-scope-only, even a "P1", APPROVES (informational, not about this PR — like CodeRabbit)
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [outside(5)],
+    })).toBe("APPROVE")
+    // an IN-SCOPE body blocker still blocks — a mis-anchored real finding on a
+    // CHANGED file (no outOfPrScope flag) holds the SIG-281 floor (recall hole closed).
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [outside(5), f(5)],
+    })).toBe("REQUEST_CHANGES")
+    // out-of-scope + an in-scope sub-4 nit → COMMENT (the nit surfaces, doesn't block)
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [outside(5), f(3)],
+    })).toBe("COMMENT")
+  })
+
   it("REQUEST_CHANGES for unresolved Sigilix-authored items, but not competitor items", () => {
     expect(chooseReviewEventForRenderedFindings({
       inlineFindings: [],

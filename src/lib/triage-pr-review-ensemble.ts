@@ -10510,6 +10510,19 @@ export function validateForSubmission(args: {
     summary = `${summary}\n\n**Advisory nits:** ${headlines}${tail}`
   }
 
+  // Inlines-only / outside-diff (founder ask, Codex #333): tag every finding
+  // whose `path` is NOT a changed file as out-of-PR-scope — it's about code the
+  // model raised from graph/retrieval context, not this PR's changes. Computed
+  // from the reviewable changed-file set, INDEPENDENT of the trust-ledger flag.
+  // An inline finding always anchored to a changed line, so its path is in the
+  // set → never tagged. A body finding on a CHANGED file that merely failed to
+  // anchor stays in-scope and still blocks — only a truly different file is
+  // out-of-scope, which closes the recall hole of treating anchor-failure as
+  // out-of-PR.
+  const changedFilePaths = new Set(reviewable.keys())
+  for (const f of cleanFindings) if (!changedFilePaths.has(f.path)) f.outOfPrScope = true
+  for (const f of unanchoredFindings) if (!changedFilePaths.has(f.path)) f.outOfPrScope = true
+
   return {
     verdict: { ...synthOutput.verdict, summary, findings: cleanFindings },
     unanchoredFindings,

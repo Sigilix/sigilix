@@ -39,11 +39,17 @@ const {
 vi.mock("../src/lib/triage-pr-review-ensemble", () => ({
   handlePrReviewEnsemble: handlePrReviewEnsembleMock,
 }))
-vi.mock("../src/lib/pr-review-check-run", () => ({
-  startInProgressCheckRun: startInProgressCheckRunMock,
-  attachExistingCheckRun: attachExistingCheckRunMock,
-  completeCheckRun: completeCheckRunMock,
-}))
+vi.mock("../src/lib/pr-review-check-run", async () => {
+  // SIG-144: keep the real (pure) `parseReviewOutputSurface` the
+  // dispatcher now calls; only the side-effecting helpers are mocked.
+  const actual = await vi.importActual<typeof import("../src/lib/pr-review-check-run")>("../src/lib/pr-review-check-run")
+  return {
+    ...actual,
+    startInProgressCheckRun: startInProgressCheckRunMock,
+    attachExistingCheckRun: attachExistingCheckRunMock,
+    completeCheckRun: completeCheckRunMock,
+  }
+})
 vi.mock("../src/lib/repo-policy", async () => {
   const actual = await vi.importActual<typeof import("../src/lib/repo-policy")>("../src/lib/repo-policy")
   return { ...actual, isRepoSensitive: isRepoSensitiveMock }
@@ -96,6 +102,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "success",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
       // SIG-216: dispatcher now threads prNumber into reviewMeta so the
       // check-run summary can render the `[View review](pr-url)` link.
       reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
@@ -124,6 +131,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "failure",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
       // SIG-216: prNumber threaded into reviewMeta by the dispatcher.
       reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
     })
@@ -137,6 +145,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "skipped",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
     })
   })
 
@@ -151,6 +160,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "failure",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
     })
   })
 
@@ -177,6 +187,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "failure",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
       // SIG-216: prNumber threaded into reviewMeta by the dispatcher.
       reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
     })
@@ -193,6 +204,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "success",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
     })
   })
 
@@ -286,6 +298,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "success",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
       reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
     })
     // CodeRabbit nit on PR #179: pin exact call count so a future
@@ -319,6 +332,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: HANDLE,
       conclusion: "failure",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
     })
   })
 
@@ -335,6 +349,7 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     expect(completeCheckRunMock).toHaveBeenCalledWith({
       handle: null,
       conclusion: "success",
+      surface: "comments", // SIG-144: dispatcher threads the default surface
       // SIG-216: prNumber threaded into reviewMeta by the dispatcher.
       reviewMeta: { event: "APPROVE", findingsCount: 0, prNumber: job.prNumber },
     })

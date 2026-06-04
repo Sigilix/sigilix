@@ -17,12 +17,61 @@ import { getInstallationToken } from "./github-app"
 import { runnerEvidenceBadgeImg } from "./badge-assets"
 import type { Env } from "../index"
 
-// SIG-216 (founder sign-off 2026-05-25): Sigilix follows Greptile's
-// pattern of NOT posting Check annotations. GitHub renders the
-// annotation `message` field as PLAIN TEXT, so our markdown-formatted
-// finding bodies (with <details>, **bold**, badge <img> tags) dump
-// literally with raw HTML visible. Findings live in the PR review
-// thread instead; the Check run is advisory-only and links back.
+// SIG-216 (founder sign-off 2026-05-25): Sigilix originally followed
+// Greptile's pattern of NOT posting Check annotations. GitHub renders
+// the annotation `message` field as PLAIN TEXT, so markdown-formatted
+// finding bodies (with <details>, **bold**, badge <img> tags) dumped
+// literally with raw HTML visible.
+//
+// SIG-144 (competitive parity with CodeRabbit/Copilot): annotations are
+// reinstated as a *configurable, opt-in* second output surface. The
+// SIG-216 lesson is honored — annotation text is sanitized to PLAIN
+// TEXT before posting (markdown/HTML stripped, see `toPlainTextAnnotation`)
+// so it reads cleanly in the Files tab + Checks UI. The rich markdown
+// finding bodies still live in the PR review thread. Which surface(s)
+// are active is controlled by `OPENCLAW_REVIEW_OUTPUT_SURFACE`
+// (`parseReviewOutputSurface`); the default keeps annotations OFF, so a
+// deploy with no flag change is byte-for-byte the SIG-216 behavior.
+
+/** SIG-144: which output surface(s) the review posts to. */
+export type ReviewOutputSurface = "comments" | "annotations" | "both"
+
+/**
+ * SIG-144: parse `OPENCLAW_REVIEW_OUTPUT_SURFACE` into the typed surface.
+ * Unset / unrecognized → `"comments"` (the historical default; annotations
+ * stay dark). Case-insensitive + trimmed. Pure — exported for tests and
+ * shared by the dispatcher (annotation posting) and the ensemble (inline-
+ * comment suppression) so both agree on the active surface.
+ */
+export function parseReviewOutputSurface(raw: string | undefined | null): ReviewOutputSurface {
+  switch ((raw ?? "").trim().toLowerCase()) {
+    case "annotations":
+      return "annotations"
+    case "both":
+      return "both"
+    default:
+      return "comments"
+  }
+}
+
+/** SIG-144: does this surface post Checks annotations? */
+export function surfacePostsAnnotations(surface: ReviewOutputSurface): boolean {
+  return surface === "annotations" || surface === "both"
+}
+
+/** SIG-144: does this surface post inline PR review comments? */
+export function surfacePostsInlineComments(surface: ReviewOutputSurface): boolean {
+  return surface === "comments" || surface === "both"
+}
+
+/**
+ * SIG-144: GitHub caps `output.annotations[]` at 50 entries per
+ * check-run write. To post more, send multiple `PATCH /check-runs/{id}`
+ * requests — GitHub *appends* annotations across updates rather than
+ * replacing them, so batching accumulates the full set.
+ * https://docs.github.com/en/rest/checks/runs#update-a-check-run
+ */
+const GITHUB_MAX_ANNOTATIONS_PER_REQUEST = 50
 
 /** Name used for the Check Run — renders in the PR's Checks tab.
  *  Kept short ("Sigilix") since the row already carries the
@@ -213,12 +262,12 @@ export interface ReviewCheckMeta {
   findingsCount: number
   surface?: "review" | "comment" | "skip-notice"
   /**
-   * @deprecated SIG-216 — `completeCheckRun` no longer posts these.
-   * GitHub renders the annotation `message` field as plain text,
-   * which butchers our markdown finding bodies. The field stays on
-   * the interface for back-compat with the producer in
-   * `triage-pr-review-ensemble.ts`; the consumer drops it. Remove
-   * once the producer stops threading it.
+   * SIG-144: per-finding Check annotations (path/line/severity) built
+   * by the ensemble producer. Posted by `completeCheckRun` ONLY when
+   * the active surface includes annotations (`OPENCLAW_REVIEW_OUTPUT_SURFACE`
+   * = `annotations` | `both`) and the conclusion is `success`. Sanitized
+   * to plain text before posting (SIG-216). Empty/absent → nothing posted.
+   * (Was a no-op from SIG-216 until SIG-144 reinstated the surface.)
    */
   checkAnnotations?: CheckRunAnnotation[]
   /**
@@ -243,6 +292,14 @@ interface CompleteArgs {
   conclusion: SigilixCheckConclusion
   /** ARC-276: optional; populated by the dispatcher on posted runs. */
   reviewMeta?: ReviewCheckMeta
+  /**
+   * SIG-144: active output surface (from `OPENCLAW_REVIEW_OUTPUT_SURFACE`).
+   * When it includes annotations AND the conclusion is `success`, the
+   * findings on `reviewMeta.checkAnnotations` are posted as Check
+   * annotations after the completion PATCH. Defaults to `"comments"`
+   * (annotations OFF) so existing callers are unaffected.
+   */
+  surface?: ReviewOutputSurface
 }
 
 /**
@@ -255,6 +312,7 @@ interface CompleteArgs {
  */
 export async function completeCheckRun(args: CompleteArgs): Promise<void> {
   const { handle, conclusion, reviewMeta } = args
+  const surface = args.surface ?? "comments"
   if (handle === null) return
   const output = renderOutputForConclusion(conclusion, reviewMeta, {
     owner: handle.owner,
@@ -296,12 +354,172 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
     return
   }
 
-  // SIG-216: Check annotations are NOT posted. GitHub renders the
-  // annotation `message` field as plain text, so our markdown
-  // finding bodies (with <details>, **bold**, badge <img> tags)
-  // dump literally with raw HTML visible. Findings live in the PR
-  // review thread; the Check summary links there. The annotation
-  // batching loop that previously ran here was removed for SIG-216.
+  // SIG-144: post per-finding Check annotations as a second output
+  // surface, but ONLY when configured and only on a successful review.
+  // `success` is the gate because annotations describe REAL findings on
+  // a posted review — on skip/failure there's no review to anchor them
+  // to (and `failure + surface=comment` already routed to a fallback
+  // PR comment). Best-effort: a post failure here never disturbs the
+  // already-completed check or the underlying review.
+  if (surfacePostsAnnotations(surface) && conclusion === "success" && reviewMeta?.checkAnnotations?.length) {
+    await postCheckAnnotations({
+      handle,
+      output,
+      annotations: reviewMeta.checkAnnotations,
+    })
+  }
+}
+
+/**
+ * SIG-144: post the finding annotations onto the (already-completed)
+ * check run. Sanitizes each annotation to plain text (SIG-216 lesson:
+ * GitHub renders the `message` field literally), filters out anything
+ * GitHub would reject, and writes in batches of ≤50 (the API cap;
+ * GitHub appends across PATCHes).
+ *
+ * Graceful degradation (AC + Sigilix comment): GitHub rejects the WHOLE
+ * request if a SINGLE annotation is invalid (stale line, file no longer
+ * in the diff, etc.). So if a batch PATCH fails, we retry that batch
+ * one annotation at a time and drop only the offenders — a stale
+ * annotation never sinks the rest of the review's findings.
+ *
+ * Best-effort throughout: every failure logs and continues; nothing
+ * thrown reaches the dispatcher.
+ */
+async function postCheckAnnotations(args: {
+  handle: InProgressCheckRun
+  output: { title: string; summary: string }
+  annotations: CheckRunAnnotation[]
+}): Promise<void> {
+  const { handle, output } = args
+  const { owner, repo, id } = handle
+
+  const valid = args.annotations
+    .map(toPlainTextAnnotation)
+    .filter(isPostableAnnotation)
+  const dropped = args.annotations.length - valid.length
+  if (dropped > 0) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-annotation-prefilter-dropped",
+      owner, repo, check_run_id: id, dropped,
+    }))
+  }
+  if (valid.length === 0) return
+
+  let posted = 0
+  for (let i = 0; i < valid.length; i += GITHUB_MAX_ANNOTATIONS_PER_REQUEST) {
+    const batch = valid.slice(i, i + GITHUB_MAX_ANNOTATIONS_PER_REQUEST)
+    try {
+      // Re-send title+summary: GitHub requires `output.title` +
+      // `output.summary` on any update that carries annotations.
+      await handle.client.updateCheckRun(owner, repo, id, {
+        output: { title: output.title, summary: output.summary, annotations: batch },
+      })
+      posted += batch.length
+    } catch (err) {
+      // The batch was rejected — likely one stale/out-of-range
+      // annotation poisoned it. Re-post the survivors individually so
+      // the bad one is isolated and dropped, not the whole batch.
+      console.warn(JSON.stringify({
+        event: "pr-review-check-annotation-batch-failed",
+        owner, repo, check_run_id: id, batch_size: batch.length,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      for (const annotation of batch) {
+        try {
+          await handle.client.updateCheckRun(owner, repo, id, {
+            output: { title: output.title, summary: output.summary, annotations: [annotation] },
+          })
+          posted += 1
+        } catch (singleErr) {
+          console.warn(JSON.stringify({
+            event: "pr-review-check-annotation-dropped",
+            owner, repo, check_run_id: id,
+            path: annotation.path, start_line: annotation.start_line,
+            err: singleErr instanceof Error ? singleErr.message : String(singleErr),
+          }))
+        }
+      }
+    }
+  }
+
+  console.log(JSON.stringify({
+    event: "pr-review-check-annotations-posted",
+    owner, repo, check_run_id: id,
+    posted, requested: args.annotations.length,
+  }))
+}
+
+/**
+ * SIG-144 / SIG-216: GitHub renders the annotation `title`, `message`,
+ * and `raw_details` fields as PLAIN TEXT. The ensemble producer builds
+ * annotation bodies from the same markdown the PR-comment surface uses
+ * (`**bold**`, `<details>`, badge `<img>` tags, `[link](url)`), which
+ * dumps literally. This strips the markup down to readable prose so the
+ * annotation reads cleanly in the Files tab + Checks UI.
+ *
+ * Pure — exported for tests.
+ */
+export function toPlainTextAnnotation(a: CheckRunAnnotation): CheckRunAnnotation {
+  const out: CheckRunAnnotation = {
+    path: a.path,
+    start_line: a.start_line,
+    end_line: a.end_line,
+    annotation_level: a.annotation_level,
+    message: stripMarkupToPlainText(a.message),
+  }
+  if (a.title !== undefined) out.title = stripMarkupToPlainText(a.title)
+  if (a.raw_details !== undefined) out.raw_details = stripMarkupToPlainText(a.raw_details)
+  return out
+}
+
+/**
+ * SIG-144: reduce GitHub-flavored markdown / HTML to plain text. Order
+ * matters — drop self-contained HTML (badge `<img>`) first, unwrap
+ * `<details>/<summary>`, then markdown emphasis/code/links, then
+ * collapse whitespace.
+ */
+function stripMarkupToPlainText(input: string): string {
+  let s = input
+  // Drop badge / image tags entirely (they carry no readable text).
+  s = s.replace(/<img\b[^>]*>/gi, "")
+  // Unwrap remaining HTML tags (<details>, <summary>, <b>, <br>, …),
+  // turning <br> into a newline so structure isn't lost.
+  s = s.replace(/<br\s*\/?>/gi, "\n")
+  s = s.replace(/<\/?[a-z][^>]*>/gi, "")
+  // Markdown links [text](url) → "text (url)".
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1 ($2)")
+  // Bold / italic emphasis markers.
+  s = s.replace(/\*\*([^*]+)\*\*/g, "$1")
+  s = s.replace(/__([^_]+)__/g, "$1")
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
+  // Code spans / fences → keep inner text, drop backticks.
+  s = s.replace(/```[a-z]*\n?/gi, "")
+  s = s.replace(/`+/g, "")
+  // Heading / blockquote / list leaders at line starts.
+  s = s.replace(/^[ \t]*#{1,6}[ \t]+/gm, "")
+  s = s.replace(/^[ \t]*>[ \t]?/gm, "")
+  // Decode the handful of HTML entities our renderers emit.
+  s = s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  // Collapse 3+ blank lines and trim trailing whitespace per line.
+  s = s.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n")
+  return s.trim()
+}
+
+/**
+ * SIG-144: GitHub rejects an annotation (and the whole request with it)
+ * when required fields are missing or nonsensical. Filter to the ones
+ * that can anchor: a real path, finite positive line range with
+ * end ≥ start, and a non-empty message. Out-of-range / file-deleted
+ * cases that survive this still get caught by the per-annotation retry.
+ */
+function isPostableAnnotation(a: CheckRunAnnotation): boolean {
+  return (
+    typeof a.path === "string" && a.path.trim().length > 0 &&
+    Number.isInteger(a.start_line) && a.start_line >= 1 &&
+    Number.isInteger(a.end_line) && a.end_line >= a.start_line &&
+    typeof a.message === "string" && a.message.trim().length > 0
+  )
 }
 
 /**

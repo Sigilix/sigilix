@@ -88,6 +88,7 @@ import {
 } from "./review-withdrawal-store"
 import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
 import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
+import { parseReviewOutputSurface, surfacePostsInlineComments } from "./pr-review-check-run"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_SCHEMA } from "./schemas"
@@ -6641,6 +6642,26 @@ export async function handlePrReviewEnsemble(
     ])
     const checkAnnotationMeta = (annotations: CheckRunAnnotation[]) =>
       annotations.length > 0 ? { checkAnnotations: annotations } : {}
+
+    // SIG-144: when the configured surface is `annotations` (only), the
+    // findings are delivered as Check annotations (posted by the
+    // dispatcher's `completeCheckRun`), NOT as inline review comments.
+    // Strip the inline comments from the submission so the formal review
+    // still registers its verdict (APPROVE / REQUEST_CHANGES) + summary
+    // body, but doesn't double-post each finding as a review comment. The
+    // `both` and `comments` surfaces keep inline comments untouched.
+    const reviewOutputSurface = parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE)
+    if (!surfacePostsInlineComments(reviewOutputSurface) && submission.comments && submission.comments.length > 0) {
+      console.log(JSON.stringify({
+        event: "pr-review-inline-comments-suppressed-for-annotations",
+        owner, repo, prNumber,
+        suppressed: submission.comments.length,
+      }))
+      submission.comments = []
+      // Point the reader at the annotations surface so the formal review
+      // body isn't silent about where the findings went.
+      submission.body = `${submission.body ?? ""}\n\n_Findings are posted as inline check annotations — see the **Files changed** tab and the **Checks** summary._`.trimStart()
+    }
 
     // ─── SIG-216: post the overview comment IMMEDIATELY before the
     // review submit so the two GitHub timeline entries land in the

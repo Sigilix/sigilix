@@ -47,7 +47,12 @@ import {
   attachExistingCheckRun,
   completeCheckRun,
   startInProgressCheckRun,
+  parseReviewOutputSurface,
+  surfacePostsAnnotations,
+  surfacePostsInlineComments,
+  toPlainTextAnnotation,
 } from "../src/lib/pr-review-check-run"
+import type { CheckRunAnnotation } from "../src/lib/github"
 import type { Env } from "../src/index"
 
 function makeEnv(opts: { credentials?: boolean } = {}): Env {
@@ -271,12 +276,11 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toBe("Review posted")
   })
 
-  // SIG-216: Check annotations are NOT posted (GitHub renders the
-  // `message` field as plain text, butchering markdown finding
-  // bodies). Even when the ensemble threads `checkAnnotations` on
-  // reviewMeta, only the single completion PATCH fires — no
-  // follow-up annotation batches.
-  it("does NOT post annotation batches even when reviewMeta carries checkAnnotations (SIG-216)", async () => {
+  // SIG-144: with the DEFAULT surface (`comments`, i.e. `surface`
+  // unset), annotations stay dark — exactly the SIG-216 behavior.
+  // Even when the ensemble threads `checkAnnotations` on reviewMeta,
+  // only the single completion PATCH fires.
+  it("does NOT post annotations when surface is unset/comments (SIG-216 default preserved)", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     const env = makeEnv()
@@ -293,6 +297,7 @@ describe("completeCheckRun", () => {
     await completeCheckRun({
       handle,
       conclusion: "success",
+      // surface omitted → defaults to "comments"
       reviewMeta: {
         event: "REQUEST_CHANGES",
         findingsCount: 51,
@@ -602,5 +607,223 @@ describe("completeCheckRun", () => {
     expect(p.output.title).toBe("Couldn't review — see PR comment")
     expect(p.output.summary).toContain("couldn't generate a review")
     expect(p.output.summary).toContain("PR comment")
+  })
+})
+
+// ───────────────────────── SIG-144 ─────────────────────────
+// GitHub Checks annotations as a configurable second output surface.
+
+describe("SIG-144: parseReviewOutputSurface + surface predicates", () => {
+  it("defaults to `comments` when unset / empty / unrecognized", () => {
+    expect(parseReviewOutputSurface(undefined)).toBe("comments")
+    expect(parseReviewOutputSurface(null)).toBe("comments")
+    expect(parseReviewOutputSurface("")).toBe("comments")
+    expect(parseReviewOutputSurface("nonsense")).toBe("comments")
+    expect(parseReviewOutputSurface("off")).toBe("comments")
+  })
+
+  it("parses `annotations` / `both` / `comments`, case- + whitespace-insensitive", () => {
+    expect(parseReviewOutputSurface("annotations")).toBe("annotations")
+    expect(parseReviewOutputSurface("  Annotations ")).toBe("annotations")
+    expect(parseReviewOutputSurface("BOTH")).toBe("both")
+    expect(parseReviewOutputSurface("comments")).toBe("comments")
+  })
+
+  it("predicates gate the right surfaces", () => {
+    expect(surfacePostsAnnotations("comments")).toBe(false)
+    expect(surfacePostsAnnotations("annotations")).toBe(true)
+    expect(surfacePostsAnnotations("both")).toBe(true)
+    expect(surfacePostsInlineComments("comments")).toBe(true)
+    expect(surfacePostsInlineComments("annotations")).toBe(false)
+    expect(surfacePostsInlineComments("both")).toBe(true)
+  })
+})
+
+describe("SIG-144: toPlainTextAnnotation", () => {
+  it("strips markdown + HTML so GitHub's plain-text rendering reads cleanly", () => {
+    const a: CheckRunAnnotation = {
+      path: "src/app.ts",
+      start_line: 10,
+      end_line: 12,
+      annotation_level: "warning",
+      title: "[P1] **logic**: `foo` is wrong",
+      message: "**Bold** body with `code` and a [link](https://x.test) <img src=\"b.svg\" />\n\n\n\nmore",
+      raw_details: "```ts\nconst x = 1\n```",
+    }
+    const out = toPlainTextAnnotation(a)
+
+    expect(out.title).toBe("[P1] logic: foo is wrong")
+    expect(out.message).toContain("Bold body with code and a link (https://x.test)")
+    expect(out.message).toContain("more")
+    expect(out.message).not.toContain("**")
+    expect(out.message).not.toContain("<")
+    expect(out.message).not.toContain("`")
+    expect(out.message).not.toMatch(/\n{3,}/)
+    expect(out.raw_details).toBe("const x = 1")
+    // structural fields preserved verbatim
+    expect(out.path).toBe("src/app.ts")
+    expect(out.start_line).toBe(10)
+    expect(out.end_line).toBe(12)
+    expect(out.annotation_level).toBe("warning")
+  })
+
+  it("leaves an undefined title/raw_details undefined", () => {
+    const out = toPlainTextAnnotation({
+      path: "a.ts", start_line: 1, end_line: 1,
+      annotation_level: "notice", message: "plain",
+    })
+    expect(out.title).toBeUndefined()
+    expect(out.raw_details).toBeUndefined()
+    expect(out.message).toBe("plain")
+  })
+})
+
+describe("SIG-144: completeCheckRun annotation posting", () => {
+  function makeAnnotations(n: number): CheckRunAnnotation[] {
+    return Array.from({ length: n }, (_, i) => ({
+      path: "src/app.ts",
+      start_line: i + 1,
+      end_line: i + 1,
+      annotation_level: "warning" as const,
+      title: `[P2] finding ${i + 1}`,
+      message: "**Body** finding",
+    }))
+  }
+
+  it("posts annotations in ≤50 batches when surface=both (51 → completion + 2 batches)", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      surface: "both",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 51, prNumber: 5, checkAnnotations: makeAnnotations(51) },
+    })
+
+    // 1 completion PATCH (no annotations) + 2 annotation batches (50 + 1)
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(3)
+    const completion = mockUpdateCheckRun.mock.calls[0]![3] as { status: string; output: { annotations?: unknown[] } }
+    expect(completion.status).toBe("completed")
+    expect(completion.output.annotations).toBeUndefined()
+
+    const b1 = mockUpdateCheckRun.mock.calls[1]![3] as { output: { title: string; summary: string; annotations: CheckRunAnnotation[] } }
+    const b2 = mockUpdateCheckRun.mock.calls[2]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    expect(b1.output.annotations).toHaveLength(50) // GitHub's per-request cap
+    expect(b2.output.annotations).toHaveLength(1)
+    // GitHub requires title + summary on any update carrying annotations
+    expect(typeof b1.output.title).toBe("string")
+    expect(typeof b1.output.summary).toBe("string")
+    // plain-text sanitization applied to the posted annotation message
+    expect(b1.output.annotations[0]!.message).toBe("Body finding")
+  })
+
+  it("posts annotations when surface=annotations", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      surface: "annotations",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 2, checkAnnotations: makeAnnotations(2) },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2) // completion + 1 batch
+  })
+
+  it("does NOT post annotations on a non-success conclusion even when surface=both", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "skipped",
+      surface: "both",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 2, checkAnnotations: makeAnnotations(2) },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1) // completion only
+  })
+
+  it("pre-filters annotations GitHub would reject (bad path / line range)", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+    const annotations: CheckRunAnnotation[] = [
+      { path: "src/app.ts", start_line: 5, end_line: 5, annotation_level: "warning", message: "ok" },
+      { path: "src/app.ts", start_line: 0, end_line: 0, annotation_level: "warning", message: "bad line" },
+      { path: "", start_line: 3, end_line: 3, annotation_level: "warning", message: "no path" },
+      { path: "src/app.ts", start_line: 9, end_line: 2, annotation_level: "warning", message: "end<start" },
+    ]
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      surface: "both",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 4, checkAnnotations: annotations },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2) // completion + 1 batch (1 survivor)
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    expect(batch.output.annotations).toHaveLength(1)
+    expect(batch.output.annotations[0]!.message).toBe("ok")
+  })
+
+  it("drops only the offending annotation when a batch is rejected (graceful degradation)", async () => {
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    // completion (no annotations) ok; the multi-annotation batch 422s
+    // (one stale line poisoned it); the per-annotation retry re-posts
+    // survivors and drops the stale one.
+    mockUpdateCheckRun.mockImplementation(async (...a: unknown[]) => {
+      const payload = a[3] as { output?: { annotations?: CheckRunAnnotation[] } }
+      const ann = payload.output?.annotations
+      if (!ann) return undefined // completion PATCH
+      if (ann.length > 1) throw new Error("HTTP 422 invalid annotation in batch")
+      if (ann[0]!.start_line === 999) throw new Error("HTTP 422 line out of range")
+      return undefined
+    })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+    const annotations: CheckRunAnnotation[] = [
+      { path: "src/a.ts", start_line: 1, end_line: 1, annotation_level: "warning", message: "good 1" },
+      { path: "src/a.ts", start_line: 999, end_line: 999, annotation_level: "failure", message: "stale" },
+      { path: "src/a.ts", start_line: 3, end_line: 3, annotation_level: "warning", message: "good 2" },
+    ]
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      surface: "both",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3, checkAnnotations: annotations },
+    })
+
+    // completion(1) + failed batch(1) + 3 single-annotation retries = 5
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(5)
+  })
+
+  it("never throws when annotation posting fails entirely (best-effort)", async () => {
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    mockUpdateCheckRun.mockImplementation(async (...a: unknown[]) => {
+      const payload = a[3] as { output?: { annotations?: CheckRunAnnotation[] } }
+      if (payload.output?.annotations) throw new Error("HTTP 500 server error")
+      return undefined // completion succeeds
+    })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await expect(completeCheckRun({
+      handle,
+      conclusion: "success",
+      surface: "both",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 1, checkAnnotations: makeAnnotations(1) },
+    })).resolves.toBeUndefined()
   })
 })

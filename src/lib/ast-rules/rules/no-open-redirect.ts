@@ -67,15 +67,18 @@ const HEADERS_RECEIVER_METHODS: ReadonlySet<string> = new Set(["set", "append"])
 // excluded — those let the tainted tail become protocol-relative (`//evil.com`).
 const SAFE_ORIGIN_PREFIX_RE = /^\/[^/\\]/
 
+/** The identifier name of `n`, or null if it isn't a plain `Identifier`. */
 function idName(n: AstNode | undefined): string | null {
   return n && n.type === "Identifier" ? (n.name as string) : null
 }
 
+/** The raw source text spanned by `node` (empty when its range is unknown). */
 function sliceOf(source: string, node: AstNode | undefined): string {
   if (!node || typeof node.start !== "number" || typeof node.end !== "number") return ""
   return source.slice(node.start, node.end)
 }
 
+/** The node's source text, truncated to `SLICE_MAX` for the finding evidence. */
 function sliceEvidence(source: string, node: AstNode): string {
   const slice = sliceOf(source, node)
   return slice.length > SLICE_MAX ? slice.slice(0, SLICE_MAX) + "…" : slice
@@ -208,7 +211,7 @@ function hasSafeOriginPrefix(target: AstNode): boolean {
 }
 
 /** Does the function body contain a redirect-target validation signal? */
-function hasValidationSignal(body: AstNode): boolean {
+function hasValidationSignal(body: AstNode, source: string): boolean {
   let found = false
   walkNoNested(body, (n) => {
     if (found) return
@@ -217,9 +220,12 @@ function hasValidationSignal(body: AstNode): boolean {
     } else if (n.type === "MemberExpression" && !n.computed) {
       const prop = idName(n.property as AstNode)
       // `.startsWith(...)`, `<url>.origin`/`.host`/`.hostname` (a parsed-URL host
-      // check is the canonical safe-redirect guard).
+      // check is the canonical safe-redirect guard). But a request-tainted member
+      // (`req.query.host`) is the dangerous INPUT, not a check — counting it would
+      // suppress a real finding (CodeRabbit #348), so a tainted member never
+      // qualifies as validation.
       if (prop && (VALIDATION_TOKEN_RE.test(prop.toLowerCase()) || /^(?:origin|host|hostname)$/.test(prop))) {
-        found = true
+        if (!TAINTED_MEMBER_RE.test(sliceOf(source, n))) found = true
       }
     }
   })
@@ -229,6 +235,7 @@ function hasValidationSignal(body: AstNode): boolean {
 /** Collect every function node in the program (for innermost-enclosing lookup). */
 function collectFunctions(program: AstNode): AstNode[] {
   const fns: AstNode[] = []
+  /** Recurse into `n`, pushing any function node onto `fns`. */
   function walk(n: AstNode): void {
     if (!n || typeof n !== "object") return
     if (typeof n.type === "string" && FUNCTION_TYPES.has(n.type)) fns.push(n)
@@ -263,7 +270,7 @@ export const noOpenRedirect: AstRule = {
     const validatedCache = new Map<AstNode, boolean>()
     const isValidated = (f: AstNode): boolean => {
       let v = validatedCache.get(f)
-      if (v === undefined) { v = hasValidationSignal((f.body as AstNode) ?? f); validatedCache.set(f, v) }
+      if (v === undefined) { v = hasValidationSignal((f.body as AstNode) ?? f, ctx.source); validatedCache.set(f, v) }
       return v
     }
 

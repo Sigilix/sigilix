@@ -77,6 +77,11 @@ export default {
   it("absolute-URL prefix STILL fires: res.redirect('https://' + req.query.dest)", () => {
     expect(runRule(`app.get("/r", (req, res) => { res.redirect("https://" + req.query.dest); });`).length).toBe(1)
   })
+  // CodeRabbit #348: a request param NAMED host/origin must not self-suppress —
+  // the tainted member is the dangerous input, not a destination check.
+  it("req.query.host as the target STILL fires (tainted member is not a check)", () => {
+    expect(runRule(`app.get("/r", (req, res) => { res.redirect(req.query.host); });`).length).toBe(1)
+  })
 })
 
 describe("no-open-redirect — FP-safety: does NOT fire on safe redirect code", () => {

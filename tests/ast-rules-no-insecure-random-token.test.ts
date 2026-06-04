@@ -55,6 +55,18 @@ describe("no-insecure-random-token — FIRES on Math.random() minting a secret",
   it("an object-method credential factory { generateToken() { return Math.random() } } fires", () => {
     expect(runRule(`const f = { generateToken() { return Math.random().toString(36); } };`).length).toBe(1)
   })
+  it("quoted object key { \"apiKey\": Math.random() } fires (CodeRabbit #346)", () => {
+    expect(runRule(`const c = { "apiKey": Math.random().toString(36) };`).length).toBe(1)
+  })
+  it("computed member assignment obj[\"resetToken\"] = Math.random() fires (CodeRabbit #346)", () => {
+    expect(runRule(`obj["resetToken"] = Math.random().toString(36);`).length).toBe(1)
+  })
+  it("class method credential factory fires (CodeRabbit #346)", () => {
+    expect(runRule(`class Auth { resetToken() { return Math.random().toString(36); } }`).length).toBe(1)
+  })
+  it("a computed member with a NON-credential key does not fire", () => {
+    expect(runRule(`obj["cacheKey"] = Math.random();`).length).toBe(0)
+  })
 })
 
 describe("no-insecure-random-token — FP-safety: does NOT fire on safe / non-secret randomness", () => {

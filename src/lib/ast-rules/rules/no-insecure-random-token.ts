@@ -51,6 +51,15 @@ function idName(n: AstNode | undefined): string | null {
   return n && n.type === "Identifier" ? (n.name as string) : null
 }
 
+/** A binding key as an `Identifier` name OR a string `Literal` value, so quoted
+ *  keys (`{ "apiKey": … }`, `obj["resetToken"]`) are read like bare ones. */
+function keyName(n: AstNode | undefined): string | null {
+  if (!n) return null
+  if (n.type === "Identifier") return n.name as string
+  if (n.type === "Literal" && typeof n.value === "string") return n.value
+  return null
+}
+
 /** Does a normalized identifier name a credential / secret? (CWE-338 sink.) */
 function isCredentialName(name: string | null | undefined): boolean {
   if (!name) return false
@@ -108,21 +117,25 @@ function findMathRandom(root: AstNode): AstNode | null {
   return found
 }
 
-/** The credential-named binding target of an assignment-like node, or null. */
+/** The credential-named binding target of an assignment-like node, or null.
+ *  Covers identifier + quoted-string keys, computed member assignments, object
+ *  properties, and class methods (CodeRabbit #346). */
 function credentialTarget(node: AstNode): AstNode | null {
   if (node.type === "VariableDeclarator") {
     return isCredentialName(idName(node.id as AstNode)) ? (node.init as AstNode) ?? null : null
   }
   if (node.type === "AssignmentExpression") {
     const left = node.left as AstNode
-    const name =
-      left?.type === "MemberExpression" && !left.computed
-        ? idName(left.property as AstNode)
-        : idName(left)
+    // `tok = …`, `obj.resetToken = …`, AND computed `obj["resetToken"] = …`.
+    const name = left?.type === "MemberExpression" ? keyName(left.property as AstNode) : idName(left)
     return isCredentialName(name) ? (node.right as AstNode) ?? null : null
   }
-  if (node.type === "Property" && !node.computed) {
-    return isCredentialName(idName(node.key as AstNode)) ? (node.value as AstNode) ?? null : null
+  // Object property (incl. quoted `{ "apiKey": … }`) and class methods.
+  if (node.type === "Property") {
+    return isCredentialName(keyName(node.key as AstNode)) ? (node.value as AstNode) ?? null : null
+  }
+  if (node.type === "MethodDefinition") {
+    return isCredentialName(keyName(node.key as AstNode)) ? (node.value as AstNode) ?? null : null
   }
   return null
 }

@@ -276,6 +276,20 @@ export const noOpenRedirect: AstRule = {
       if (v === undefined) { v = hasValidationSignal((f.body as AstNode) ?? f, ctx.source); validatedCache.set(f, v) }
       return v
     }
+    // Memoize the per-scope taint/headers-locals walks so a function with k
+    // redirect sinks walks its body once, not 2k times (Sigilix #348 perf).
+    const taintCache = new Map<AstNode, Set<string>>()
+    const headersCache = new Map<AstNode, Set<string>>()
+    const taintLocalsOf = (scope: AstNode): Set<string> => {
+      let t = taintCache.get(scope)
+      if (!t) { t = collectTaintedLocals(scope, ctx.source); taintCache.set(scope, t) }
+      return t
+    }
+    const headersLocalsOf = (scope: AstNode): Set<string> => {
+      let h = headersCache.get(scope)
+      if (!h) { h = collectHeadersLocals(scope); headersCache.set(scope, h) }
+      return h
+    }
 
     const hits: AstRuleHit[] = []
     const seen = new Set<number>()
@@ -299,8 +313,8 @@ export const noOpenRedirect: AstRule = {
           // `.set`/`.append` are header writes only on a real Headers receiver.
           const headersOk =
             !sink.needsHeadersReceiver ||
-            isHeadersReceiver(sink.receiver ?? undefined, collectHeadersLocals(taintScope))
-          const taintedLocals = collectTaintedLocals(taintScope, ctx.source)
+            isHeadersReceiver(sink.receiver ?? undefined, headersLocalsOf(taintScope))
+          const taintedLocals = taintLocalsOf(taintScope)
           // Skip a same-origin path prefix (`"/dashboard/" + req.query.tab`): the
           // request value can't escape the origin, so it is not an open redirect.
           if (headersOk && carriesTaint(sink.target, taintedLocals, ctx.source) && !hasSafeOriginPrefix(sink.target)) {

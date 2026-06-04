@@ -371,6 +371,11 @@ import {
 import { runReviewMemoryLookup } from "./review-memory/lookup"
 import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
+// SIG-147: per-repo precision-profile feedback loop (suppress repeatedly-dismissed
+// patterns, record outcome signal). Shadow-gated; recall-safe.
+import { loadPrecisionProfile, recordOutcome } from "./precision-profile/store"
+import { applyPrecisionProfile } from "./precision-profile/apply"
+import { resolvePrecisionMode } from "./precision-profile/mode"
 import type {
   ReviewMemoryClaimMarkerData,
   ReviewMemoryClaimType,
@@ -5465,6 +5470,58 @@ export async function handlePrReviewEnsemble(
         }))
       }
     }
+    // SIG-147: per-repo precision profile — suppress repeatedly-dismissed
+    // PATTERNS (recall-safe: never a P0/P1) and record the `stale` outcome from
+    // decay-expired dismissals. Shadow by default (compute + telemeter, no
+    // output change); `enforce` filters. Best-effort — a profile failure must
+    // never affect the review. Boost is computed/surfaced but applied at the
+    // SIG-104 prompt gate (not yet built); see precision-profile/README.md.
+    // NOTE: `shadow` leaves the posted review byte-identical, but DOES still
+    // write `stale` outcomes to KV (building the corpus is the point of shadow);
+    // only `enforce` changes what's posted.
+    const precisionMode = resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE)
+    let precisionKept = postWithdrawalFindings
+    if (precisionMode !== "off") {
+      // Key on the owner/repo slug — the SAME key the dismiss path
+      // (github-mention) records outcomes under, so the signal round-trips.
+      const precisionRepoKey = `${owner}/${repo}`
+      try {
+        const profile = await loadPrecisionProfile(env, precisionRepoKey)
+        const precision = applyPrecisionProfile(postWithdrawalFindings, profile, {
+          enforce: precisionMode === "enforce",
+        })
+        if (precision.suppressed.length > 0 || precision.boosted.length > 0) {
+          console.log(JSON.stringify({
+            event: "precision-profile-decision",
+            owner, repo, prNumber, mode: precisionMode,
+            // FP-reduction signal (ties SIG-114): each suppressed finding is an avoided FP.
+            suppressed: precision.suppressed.length,
+            boosted: precision.boosted.length,
+            suppressed_categories: precision.suppressed.map((s) => s.finding.category),
+            boosted_categories: precision.boosted.map((b) => b.finding.category),
+          }))
+        }
+        if (precisionMode === "enforce") precisionKept = precision.kept
+      } catch (err) {
+        console.warn(JSON.stringify({
+          event: "precision-profile-apply-failed",
+          owner, repo, prNumber,
+          error: err instanceof Error ? err.message : String(err),
+        }))
+      }
+      // A decay-expired dismissal (SIG-217) relaxes its pattern back toward neutral.
+      for (const s of decayExpiredFindings) {
+        if (!s.finding.contentFingerprint) continue
+        try {
+          await recordOutcome(env, {
+            repoId: precisionRepoKey,
+            category: s.finding.category,
+            patternHash: s.finding.contentFingerprint,
+            outcome: "stale",
+          })
+        } catch { /* non-fatal */ }
+      }
+    }
     // SIG-281 PR C (Codex P2): also suppress withdrawn findings from the
     // body-only set. PR C's enforce mode can demote a LINE-scoped finding
     // (which carries a real path+line) to the body; without this it would
@@ -5476,7 +5533,7 @@ export async function handlePrReviewEnsemble(
     // demotions skipped withdrawal entirely.
     const { kept: renderableUnanchored, suppressed: withdrawnUnanchored } =
       filterWithdrawnFindings(renderableUnanchoredRaw, withdrawals)
-    const keptRefSet = new Set(postWithdrawalFindings)
+    const keptRefSet = new Set(precisionKept)
     const keepIndex: number[] = []
     for (let i = 0; i < renderableFindings.length; i++) {
       if (keptRefSet.has(renderableFindings[i]!)) keepIndex.push(i)
@@ -5517,7 +5574,7 @@ export async function handlePrReviewEnsemble(
     // "nothing remaining." `chooseReviewEvent` reads the merged set
     // for the verdict decision, so the summary must agree.
     const hasRemainingFindings =
-      postWithdrawalFindings.length + renderableUnanchored.length > 0
+      precisionKept.length + renderableUnanchored.length > 0
     // SIG-281 PR C (Codex P2 follow-on): regenerate the summary when
     // EITHER an inline OR a body finding was withdrawal-suppressed —
     // otherwise a body-only withdrawal would remove the finding from the
@@ -5530,7 +5587,7 @@ export async function handlePrReviewEnsemble(
     const renderableVerdict: PrReviewVerdict = {
       ...consensusVerdict,
       summary: summaryAfterSuppression,
-      findings: postWithdrawalFindings,
+      findings: precisionKept,
     }
     if (softenedCount > 0) {
       console.log(JSON.stringify({

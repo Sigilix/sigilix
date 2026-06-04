@@ -1,0 +1,96 @@
+// SIG-147: per-repo PrecisionProfile KV store. Best-effort, never throws — a
+// profile read/write failure must never block a review or a dismissal.
+//
+// Storage: one KV value per repo at `precision-profile:repo:<repoId>`, refreshed
+// with a rolling 90-day TTL so active repos persist and dormant ones expire.
+// KV has no CAS, so concurrent `recordOutcome` writes can lose an update (same
+// caveat as review-memory's `appendSignal`); the EMA + MIN_OBSERVATIONS gate
+// absorbs the occasional lost fold.
+
+import type { Env } from "../../index"
+import { emptyProfile, foldOutcomeIntoProfile } from "./ema"
+import {
+  PRECISION_PROFILE_SCHEMA_VERSION,
+  type OutcomeEvent,
+  type PrecisionProfile,
+} from "./types"
+
+const TTL_SECONDS = 90 * 24 * 60 * 60 // 90 days
+
+function profileKey(repoId: string): string {
+  return `precision-profile:repo:${repoId}`
+}
+
+/** Defensive structural check on a parsed KV value. */
+function isValidProfile(v: unknown): v is PrecisionProfile {
+  if (typeof v !== "object" || v === null) return false
+  const p = v as Partial<PrecisionProfile>
+  return (
+    p.schemaVersion === PRECISION_PROFILE_SCHEMA_VERSION &&
+    typeof p.repoId === "string" &&
+    typeof p.patterns === "object" &&
+    p.patterns !== null &&
+    typeof p.categories === "object" &&
+    p.categories !== null
+  )
+}
+
+/**
+ * Load a repo's PrecisionProfile, or `null` on miss / parse failure / KV error.
+ * `null` is the safe default — the apply gate treats it as "no signal yet".
+ */
+export async function loadPrecisionProfile(
+  env: Env,
+  repoId: string,
+): Promise<PrecisionProfile | null> {
+  try {
+    const raw = await env.OPENCLAW_STATE.get(profileKey(repoId))
+    if (raw === null) return null
+    const parsed = JSON.parse(raw) as unknown
+    return isValidProfile(parsed) ? parsed : null
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "precision-profile-load-failed",
+      repo_id: repoId,
+      error: err instanceof Error ? err.message : String(err),
+    }))
+    return null
+  }
+}
+
+/**
+ * Record one finding outcome into the repo's profile (EMA read-modify-write).
+ * Best-effort: returns `false` and logs on any failure, never throws. `nowMs`
+ * is injectable for deterministic tests.
+ */
+export async function recordOutcome(
+  env: Env,
+  event: OutcomeEvent,
+  nowMs: number = Date.now(),
+): Promise<boolean> {
+  const nowIso = new Date(nowMs).toISOString()
+  try {
+    const existing = await loadPrecisionProfile(env, event.repoId)
+    const base = existing ?? emptyProfile(event.repoId, nowIso)
+    const updated = foldOutcomeIntoProfile(base, event, nowIso)
+    await env.OPENCLAW_STATE.put(profileKey(event.repoId), JSON.stringify(updated), {
+      expirationTtl: TTL_SECONDS,
+    })
+    console.log(JSON.stringify({
+      event: "precision-profile-outcome-recorded",
+      repo_id: event.repoId,
+      category: event.category,
+      outcome: event.outcome,
+      pattern_count: Object.keys(updated.patterns).length,
+    }))
+    return true
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "precision-profile-record-failed",
+      repo_id: event.repoId,
+      outcome: event.outcome,
+      error: err instanceof Error ? err.message : String(err),
+    }))
+    return false
+  }
+}

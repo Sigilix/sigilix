@@ -28,6 +28,8 @@ import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
+import { recordOutcome } from "./precision-profile/store"
+import type { FindingCategory } from "./triage-pr-review"
 import { isAuthorAllowedForSlashCommand } from "./slash-commands"
 import {
   LEGACY_REVIEW_BODY_MARKER,
@@ -494,6 +496,17 @@ export async function handleGithubMention(args: GithubMentionArgs): Promise<void
         ...(contentFingerprint ? { contentFingerprint } : {}),
         ...(dismissedScore !== undefined ? { score: dismissedScore } : {}),
       })
+      // SIG-147: record the dismissal as a per-repo outcome so a
+      // repeatedly-dismissed PATTERN gets suppressed in future reviews.
+      // Pattern-keyed on the same fingerprint; best-effort, never blocks.
+      if (contentFingerprint) {
+        await recordOutcome(env, {
+          repoId: `${owner}/${repo}`,
+          category: parseFindingCategory(originalFindingBody),
+          patternHash: contentFingerprint,
+          outcome: "dismissed",
+        }).catch(() => { /* non-fatal — telemetry must never break a dismissal */ })
+      }
     } else {
       console.warn(JSON.stringify({
         event: "review-withdrawal-skip-incomplete-context",
@@ -533,6 +546,24 @@ function findOriginalFindingBody(thread: ThreadEntry[]): string | null {
 function parseFindingFingerprint(body: string): string | undefined {
   const m = /<!-- sigilix:fingerprint:([0-9a-f]{64}) -->/.exec(body)
   return m ? m[1] : undefined
+}
+
+/** All FindingCategory values, for validating the parsed category marker. */
+const FINDING_CATEGORIES: ReadonlySet<string> = new Set<FindingCategory>([
+  "logic", "security", "performance", "error-handling",
+  "testing", "complexity", "style", "syntax", "docs",
+])
+
+/**
+ * SIG-147: parse the hidden `<!-- sigilix:category:<cat> -->` marker into a
+ * FindingCategory for the precision-profile boost dimension. Defaults to
+ * `"logic"` (the same fallback `formatFindingCategory` uses) when absent or
+ * unrecognized — suppression keys on the fingerprint, so the category default
+ * only affects the (not-yet-applied) boost signal.
+ */
+function parseFindingCategory(body: string): FindingCategory {
+  const m = /<!-- sigilix:category:([a-z-]+) -->/.exec(body)
+  return m && FINDING_CATEGORIES.has(m[1]!) ? (m[1] as FindingCategory) : "logic"
 }
 
 /**

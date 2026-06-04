@@ -28,15 +28,11 @@ describe("multiCorpusEnabled", () => {
 })
 
 describe("deriveVerdictLabel", () => {
-  it("maps findings to the review pipeline's substantive-vs-trivial buckets", () => {
-    // any substantive finding → changes_required (a P1 + a low-sev substantive)
+  it("maps manifest findings (score-only) to coarse corpus buckets", () => {
+    // The persisted manifest has no `category`, so this approximates the live
+    // (category-aware) verdict by the score floor: any score>=4 → changes_required.
     expect(deriveVerdictLabel([{ score: 4 }, { score: 1 }])).toBe("changes_required")
-    // a substantive sub-4 finding (no/non-trivial category) STILL blocks now
-    expect(deriveVerdictLabel([{ score: 2 }, { score: 3 }])).toBe("changes_required")
-    // only trivial style/docs nits below P0/P1 → commented
-    expect(deriveVerdictLabel([{ score: 2, category: "style" }, { score: 3, category: "docs" }])).toBe("commented")
-    // a P0/P1 style finding is NOT trivial → changes_required
-    expect(deriveVerdictLabel([{ score: 4, category: "style" }])).toBe("changes_required")
+    expect(deriveVerdictLabel([{ score: 2 }, { score: 3 }])).toBe("commented")
     expect(deriveVerdictLabel([])).toBe("approved")
   })
   it("returns undefined when there was no review (no manifest)", () => {

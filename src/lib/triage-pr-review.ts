@@ -1634,7 +1634,7 @@ export function chooseReviewEventForRenderedFindings(
  * the VERDICT only; where a finding RENDERS (Fix Plan for P0/P1, "Review Body
  * Findings" for sub-4) stays severity-based and orthogonal. Pure.
  */
-export function isTrivialFinding(f: { category?: string | null; score: number }): boolean {
+export function isTrivialFinding(f: PrReviewFinding): boolean {
   return (f.category === "style" || f.category === "docs") && f.score < 4
 }
 

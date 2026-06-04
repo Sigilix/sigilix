@@ -18,7 +18,6 @@
 
 import { indexNamespace } from "./repo-index-manifest"
 import { embedText } from "./embeddings"
-import { isTrivialFinding } from "./triage-pr-review"
 
 // ---------------------------------------------------------------------
 // Namespaces
@@ -40,23 +39,22 @@ export function multiCorpusEnabled(env: { OPENCLAW_MULTICORPUS_RETRIEVAL?: strin
 /**
  * Derive a coarse verdict label for a merged PR from its persisted review
  * findings. Sigilix doesn't store the synthesizer verdict explicitly — the
- * review manifest keeps only the per-finding `score`. We map that to the same
- * three buckets the review pipeline itself gates on (`isTrivialFinding`): any
- * SUBSTANTIVE finding → "changes_required"; only trivial style/docs nits →
- * "commented"; an empty findings set → "approved". Returns undefined when no
- * manifest existed (the
- * PR was merged without a Sigilix review), so the corpus doc simply omits the
- * verdict rather than asserting a false "approved".
+ * review manifest (`ReviewManifestFinding`) keeps only `{key, path, headline,
+ * score, consensus}`, with NO `category`. So this can only APPROXIMATE the live
+ * verdict (`chooseReviewEventForRenderedFindings`, which is category-aware): a
+ * score >= 4 finding → "changes_required"; below that → "commented"; empty →
+ * "approved" (CodeRabbit #347 — the category-aware rule needs a field the
+ * manifest doesn't persist; the score floor is the available approximation).
+ * Returns undefined when no manifest existed (the PR was merged without a
+ * Sigilix review), so the corpus doc omits the verdict rather than asserting a
+ * false "approved". This label is a coarse RETRIEVAL signal, not the live gate.
  */
 export function deriveVerdictLabel(
-  findings: ReadonlyArray<{ score: number; category?: string | null }> | undefined,
+  findings: ReadonlyArray<{ score: number }> | undefined,
 ): string | undefined {
   if (findings === undefined) return undefined
   if (findings.length === 0) return "approved"
-  // Mirror the live verdict rule (`chooseReviewEventForRenderedFindings`): ANY
-  // substantive finding → "changes_required"; only a trivial style/docs nit is
-  // "commented". Shared `isTrivialFinding` keeps the corpus label from drifting.
-  return findings.some((f) => !isTrivialFinding(f)) ? "changes_required" : "commented"
+  return findings.some((f) => f.score >= 4) ? "changes_required" : "commented"
 }
 
 /** Vectorize namespace for a repo's merged-PR corpus. */

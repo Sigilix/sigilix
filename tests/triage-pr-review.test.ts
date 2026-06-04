@@ -3505,13 +3505,13 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
       bf({ headline: "ungrounded nit", trust: { tier: "body-only-ungrounded", surface: "body", demoteReason: "inline-grounding" } }), // → flat list (not pr-scoped)
     ]
     const on = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: true }).submission.body
-    expect(on).toContain("about code outside this PR's diff") // the collapsed outside-diff dropdown
+    expect(on).toContain("couldn't be anchored to a specific line") // the collapsed unanchorable dropdown
     expect(on).toContain("<details>")
     expect(on).toContain("**PR-level**")
     expect(on).not.toContain("could not be anchored") // the old generic disclaimer is dropped
     // off → the generic flat section + disclaimer, no dropdown / no PR-level heading.
     const off = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: false }).submission.body
-    expect(off).not.toContain("about code outside this PR's diff")
+    expect(off).not.toContain("couldn't be anchored to a specific line")
     expect(off).not.toContain("**PR-level**")
     expect(off).toContain("could not be anchored")
   })

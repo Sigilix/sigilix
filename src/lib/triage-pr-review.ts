@@ -2433,13 +2433,15 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
       // SIG Trust Ledger v0 (PR3b): restructure the body-only (non-blocker)
       // findings by WHY they're in the body. A genuinely PR-scoped finding
       // (no-test / architectural, `findingScope === "pr"`) gets the **PR-level**
-      // mini-section; findings about code OUTSIDE this PR's diff collapse into a
-      // dropdown; EVERYTHING ELSE (gate-demoted-from-inline + file/line-scoped
+      // mini-section; findings in this PR that couldn't be anchored to a line
+      // (demoteReason "outside-diff") collapse into a dropdown — note these are
+      // IN the PR; genuinely-out-of-PR findings already split to "Outside your
+      // changes" via outOfPrScope; EVERYTHING ELSE (gate-demoted-from-inline + file/line-scoped
       // body-routed findings) renders through the normal body-row helper, keeping
       // its canonical severity/path sort + the pills. The old generic disclaimer
       // is dropped — the structure now communicates the semantics. (CR #269:
       // PR-level must be strictly pr-scoped, not "everything without a gate reason".)
-      const outsideDiff = bodyOnlyNonBlockers.filter((f) => f.trust?.demoteReason === "outside-diff")
+      const unanchorableFindings = bodyOnlyNonBlockers.filter((f) => f.trust?.demoteReason === "outside-diff")
       const prLevel = bodyOnlyNonBlockers.filter(
         (f) => f.trust?.demoteReason !== "outside-diff" && findingScope(f) === "pr",
       )
@@ -2459,7 +2461,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
         lines.push("")
         lines.push(prSection)
       }
-      const odDropdown = renderOutsideDiffDropdown(outsideDiff, renderRow)
+      const odDropdown = renderOutsideDiffDropdown(unanchorableFindings, renderRow)
       if (odDropdown) {
         lines.push("")
         lines.push(odDropdown)

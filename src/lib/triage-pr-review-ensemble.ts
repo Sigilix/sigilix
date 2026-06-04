@@ -2965,6 +2965,25 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+    // Shadow-first gating for the deterministic SSRF floor (no-ssrf, CWE-918) —
+    // same off/shadow/post contract. Default off; shadow strips-but-logs the
+    // firing + FP rate on dogfood before promoting.
+    const ssrfMode = (env.OPENCLAW_SSRF_SCAN ?? "off").trim().toLowerCase()
+    if (ssrfMode !== "post") {
+      const ssrfEmits = astResult.findings.filter((f) => f.ruleId === "no-ssrf")
+      if (ssrfEmits.length > 0) {
+        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-ssrf")
+        for (const f of ssrfEmits) astResult.perFinding.delete(f.astFindingId)
+        if (ssrfMode === "shadow") {
+          console.log(JSON.stringify({
+            event: "ssrf-shadow",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            count: ssrfEmits.length,
+            anchors: ssrfEmits.map((f) => `${f.path}:${f.line}`),
+          }))
+        }
+      }
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

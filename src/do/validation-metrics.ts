@@ -19,6 +19,7 @@ import {
   type DismissReason,
   isDismissReason,
 } from "../lib/dismiss-reasons"
+import type { FindingCategory } from "../lib/triage-pr-review"
 
 // Retention: keep 35 days of daily buckets so the endpoint can serve up to a
 // 30-day window with margin. GC runs via a daily alarm; queries always filter
@@ -90,9 +91,11 @@ export type ValidationRejectionEvent =
        * fired). The gate×category split surfaces the meta-FP class — e.g. the
        * security gate firing on a `testing`/`docs`-category finding — that a
        * gate-only rollup can't see. Optional: absent on gates with no finding
-       * in scope (the verification re-anchor/refuted gates).
+       * in scope (the verification re-anchor/refuted gates). Typed to the
+       * canonical `FindingCategory` so callers can't pass a typo'd bucket; the
+       * record path also trims defensively (the event crosses an RPC boundary).
        */
-      category?: string
+      category?: FindingCategory
     }
   | {
       kind: "dismissal-reason"
@@ -242,18 +245,23 @@ export class ValidationMetricsDO extends DurableObject<Env> {
             )
             // SIG-245: additive per-category rollup. Dual-write only when the
             // event carried a category (gates with a finding in scope); the
-            // existing per-reason `daily_counts` row is untouched.
-            if (e.category !== undefined && e.category !== "") {
-              sql.exec(
-                `INSERT INTO daily_category_counts (day, gate, category, would_drop, kept)
-                 VALUES (?, ?, ?, 1, ?)
-                 ON CONFLICT(day, gate, category) DO UPDATE SET
-                   would_drop = would_drop + 1,
-                   kept = kept + ?`,
-                day, e.gate, e.category,
-                e.dropped ? 0 : 1,
-                e.dropped ? 0 : 1,
-              )
+            // existing per-reason `daily_counts` row is untouched. Trim
+            // defensively — the event crosses an RPC boundary, so guard against
+            // a stray-whitespace value fragmenting the bucket.
+            {
+              const category = typeof e.category === "string" ? e.category.trim() : undefined
+              if (category) {
+                sql.exec(
+                  `INSERT INTO daily_category_counts (day, gate, category, would_drop, kept)
+                   VALUES (?, ?, ?, 1, ?)
+                   ON CONFLICT(day, gate, category) DO UPDATE SET
+                     would_drop = would_drop + 1,
+                     kept = kept + ?`,
+                  day, e.gate, category,
+                  e.dropped ? 0 : 1,
+                  e.dropped ? 0 : 1,
+                )
+              }
             }
             break
           case "dismissal-reason":

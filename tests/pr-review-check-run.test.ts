@@ -50,9 +50,12 @@ import {
   parseReviewOutputSurface,
   surfacePostsAnnotations,
   surfacePostsInlineComments,
+  selectPrimarySubmitAnnotations,
+  applyOutputSurfaceToSubmission,
+  ANNOTATIONS_ONLY_BODY_NOTE,
   toPlainTextAnnotation,
 } from "../src/lib/pr-review-check-run"
-import type { CheckRunAnnotation } from "../src/lib/github"
+import { GitHubHttpError, type CheckRunAnnotation } from "../src/lib/github"
 import type { Env } from "../src/index"
 
 function makeEnv(opts: { credentials?: boolean } = {}): Env {
@@ -777,7 +780,7 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
     expect(batch.output.annotations[0]!.message).toBe("ok")
   })
 
-  it("drops only the offending annotation when a batch is rejected (graceful degradation)", async () => {
+  it("drops only the offending annotation when a batch is 422-rejected (graceful degradation)", async () => {
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     // completion (no annotations) ok; the multi-annotation batch 422s
     // (one stale line poisoned it); the per-annotation retry re-posts
@@ -786,8 +789,8 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
       const payload = a[3] as { output?: { annotations?: CheckRunAnnotation[] } }
       const ann = payload.output?.annotations
       if (!ann) return undefined // completion PATCH
-      if (ann.length > 1) throw new Error("HTTP 422 invalid annotation in batch")
-      if (ann[0]!.start_line === 999) throw new Error("HTTP 422 line out of range")
+      if (ann.length > 1) throw new GitHubHttpError(422, "invalid annotation in batch")
+      if (ann[0]!.start_line === 999) throw new GitHubHttpError(422, "line out of range")
       return undefined
     })
     const env = makeEnv()
@@ -807,13 +810,46 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
 
     // completion(1) + failed batch(1) + 3 single-annotation retries = 5
     expect(mockUpdateCheckRun).toHaveBeenCalledTimes(5)
+    // CodeRabbit nit (PR #339): pin that the retries are single-annotation
+    // PATCHes carrying exactly the batch's annotations — the drop-the-
+    // offender contract, not just the call count. A regression that
+    // re-posted the stale one or dropped a good one would surface here.
+    const retryPayloads = mockUpdateCheckRun.mock.calls
+      .slice(2)
+      .map((c) => (c[3] as { output: { annotations: CheckRunAnnotation[] } }).output.annotations)
+    expect(retryPayloads.every((a) => a.length === 1)).toBe(true)
+    expect(retryPayloads.map((a) => a[0]!.message)).toEqual(["good 1", "stale", "good 2"])
+  })
+
+  it("does NOT retry per-annotation on a transient (non-422) batch error — duplication guard", async () => {
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    // GitHub APPENDS annotations across PATCHes, so a blind retry after a
+    // 5xx/timeout (where the write may have landed) could duplicate. Only
+    // 422 (atomic reject → nothing stored) is safe to retry.
+    mockUpdateCheckRun.mockImplementation(async (...a: unknown[]) => {
+      const payload = a[3] as { output?: { annotations?: CheckRunAnnotation[] } }
+      if (!payload.output?.annotations) return undefined // completion
+      throw new GitHubHttpError(503, "service unavailable")
+    })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      surface: "both",
+      reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 3, checkAnnotations: makeAnnotations(3) },
+    })
+
+    // completion(1) + the single failed batch(1) — NO per-annotation retries
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
   })
 
   it("never throws when annotation posting fails entirely (best-effort)", async () => {
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })
     mockUpdateCheckRun.mockImplementation(async (...a: unknown[]) => {
       const payload = a[3] as { output?: { annotations?: CheckRunAnnotation[] } }
-      if (payload.output?.annotations) throw new Error("HTTP 500 server error")
+      if (payload.output?.annotations) throw new GitHubHttpError(422, "bad")
       return undefined // completion succeeds
     })
     const env = makeEnv()
@@ -825,5 +861,61 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
       surface: "both",
       reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 1, checkAnnotations: makeAnnotations(1) },
     })).resolves.toBeUndefined()
+  })
+})
+
+describe("SIG-144: selectPrimarySubmitAnnotations", () => {
+  const bodyOnly: CheckRunAnnotation[] = [
+    { path: "a.ts", start_line: 1, end_line: 1, annotation_level: "notice", message: "unanchored" },
+  ]
+  const all: CheckRunAnnotation[] = [
+    ...bodyOnly,
+    { path: "b.ts", start_line: 2, end_line: 2, annotation_level: "warning", message: "anchored" },
+  ]
+
+  it("comments / both → body-only (anchored findings are inline comments; no double-post)", () => {
+    expect(selectPrimarySubmitAnnotations("comments", bodyOnly, all)).toBe(bodyOnly)
+    expect(selectPrimarySubmitAnnotations("both", bodyOnly, all)).toBe(bodyOnly)
+  })
+
+  it("annotations → ALL findings (inline comments suppressed; nothing dropped)", () => {
+    expect(selectPrimarySubmitAnnotations("annotations", bodyOnly, all)).toBe(all)
+  })
+})
+
+describe("SIG-144: applyOutputSurfaceToSubmission (inline-comment suppression)", () => {
+  function makeSubmission() {
+    return {
+      event: "REQUEST_CHANGES" as const,
+      body: "<!-- sigilix:pr-review -->\nVerdict body.",
+      comments: [{ path: "a.ts", line: 1, body: "x" }, { path: "b.ts", line: 2, body: "y" }],
+    }
+  }
+
+  it("annotations mode strips inline comments and appends the Checks pointer to the body", () => {
+    const submission = makeSubmission()
+    const { suppressedComments } = applyOutputSurfaceToSubmission(submission, "annotations")
+
+    expect(suppressedComments).toBe(2)
+    expect(submission.comments).toEqual([])
+    expect(submission.body).toContain("Verdict body.")
+    expect(submission.body).toContain(ANNOTATIONS_ONLY_BODY_NOTE)
+  })
+
+  it("comments / both leave the submission untouched", () => {
+    for (const surface of ["comments", "both"] as const) {
+      const submission = makeSubmission()
+      const before = JSON.parse(JSON.stringify(submission))
+      const { suppressedComments } = applyOutputSurfaceToSubmission(submission, surface)
+      expect(suppressedComments).toBe(0)
+      expect(submission).toEqual(before)
+    }
+  })
+
+  it("annotations mode with no inline comments is a no-op (no spurious body note)", () => {
+    const submission = { event: "APPROVE" as const, body: "All good.", comments: [] as unknown[] }
+    const { suppressedComments } = applyOutputSurfaceToSubmission(submission, "annotations")
+    expect(suppressedComments).toBe(0)
+    expect(submission.body).toBe("All good.")
   })
 })

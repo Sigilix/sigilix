@@ -88,7 +88,7 @@ import {
 } from "./review-withdrawal-store"
 import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
 import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
-import { parseReviewOutputSurface, surfacePostsInlineComments } from "./pr-review-check-run"
+import { parseReviewOutputSurface, applyOutputSurfaceToSubmission, selectPrimarySubmitAnnotations } from "./pr-review-check-run"
 import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "./json-extract"
 import { PR_REVIEW_SCHEMA } from "./schemas"
@@ -6651,16 +6651,13 @@ export async function handlePrReviewEnsemble(
     // body, but doesn't double-post each finding as a review comment. The
     // `both` and `comments` surfaces keep inline comments untouched.
     const reviewOutputSurface = parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE)
-    if (!surfacePostsInlineComments(reviewOutputSurface) && submission.comments && submission.comments.length > 0) {
+    const { suppressedComments } = applyOutputSurfaceToSubmission(submission, reviewOutputSurface)
+    if (suppressedComments > 0) {
       console.log(JSON.stringify({
         event: "pr-review-inline-comments-suppressed-for-annotations",
         owner, repo, prNumber,
-        suppressed: submission.comments.length,
+        suppressed: suppressedComments,
       }))
-      submission.comments = []
-      // Point the reader at the annotations surface so the formal review
-      // body isn't silent about where the findings went.
-      submission.body = `${submission.body ?? ""}\n\n_Findings are posted as inline check annotations — see the **Files changed** tab and the **Checks** summary._`.trimStart()
     }
 
     // ─── SIG-216: post the overview comment IMMEDIATELY before the
@@ -7020,7 +7017,13 @@ export async function handlePrReviewEnsemble(
         event: submission.event,
         findingsCount: inlineFindings,
         ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
-        ...checkAnnotationMeta(bodyOnlyAnnotations),
+        // SIG-144 (PR #339 review fix): in annotations-only mode inline
+        // comments are suppressed, so the annotations payload must carry
+        // ALL findings — not just the body-only leftovers — or anchored
+        // findings get dropped from every surface.
+        ...checkAnnotationMeta(
+          selectPrimarySubmitAnnotations(reviewOutputSurface, bodyOnlyAnnotations, allFindingAnnotations),
+        ),
       })
     } catch (submitErr) {
       // Narrow the anchorless-retry fallback to GitHub HTTP 422 — that's

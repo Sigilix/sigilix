@@ -12,7 +12,7 @@
 // underlying review pipeline. The check is an indicator ON TOP OF
 // the real review — the review must always go through.
 
-import { GitHubClient, type CheckRunAnnotation } from "./github"
+import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
 import { getInstallationToken } from "./github-app"
 import { runnerEvidenceBadgeImg } from "./badge-assets"
 import type { Env } from "../index"
@@ -62,6 +62,56 @@ export function surfacePostsAnnotations(surface: ReviewOutputSurface): boolean {
 /** SIG-144: does this surface post inline PR review comments? */
 export function surfacePostsInlineComments(surface: ReviewOutputSurface): boolean {
   return surface === "comments" || surface === "both"
+}
+
+/**
+ * SIG-144: pick which annotations the review's primary success path should
+ * carry, so a finding is never dropped and never double-posted:
+ *   - `comments` / `both` — anchored findings already post as inline review
+ *     COMMENTS, so annotations carry only the body-only (unanchored)
+ *     leftovers. A finding appears on exactly one surface.
+ *   - `annotations` — inline comments are suppressed, so EVERY finding must
+ *     become an annotation or anchored findings vanish from all surfaces.
+ *
+ * Pure — exported for tests. (CodeRabbit + Sigilix flagged the original
+ * always-`bodyOnly` path as dropping anchored findings in annotations-only
+ * mode — PR #339 review.)
+ */
+export function selectPrimarySubmitAnnotations(
+  surface: ReviewOutputSurface,
+  bodyOnlyAnnotations: CheckRunAnnotation[],
+  allFindingAnnotations: CheckRunAnnotation[],
+): CheckRunAnnotation[] {
+  return surfacePostsInlineComments(surface) ? bodyOnlyAnnotations : allFindingAnnotations
+}
+
+/** SIG-144: short, plain copy appended to the review body in annotations-only
+ *  mode so the formal review isn't silent about where the findings went. */
+export const ANNOTATIONS_ONLY_BODY_NOTE =
+  "_Findings are posted as inline check annotations — see the **Files changed** tab and the **Checks** summary._"
+
+/**
+ * SIG-144: apply the output surface to a built review submission. In
+ * annotations-only mode the findings are delivered as Check annotations, so
+ * strip the inline review comments (mutating in place, matching the ensemble's
+ * in-place submission build) and point the body at the Checks surface. No-op
+ * for `comments` / `both` (inline comments stay). Returns how many comments
+ * were suppressed so the caller can log it.
+ *
+ * Pure-of-IO — exported so the suppression branch is unit-testable without an
+ * ensemble harness (Sigilix finding on PR #339).
+ */
+export function applyOutputSurfaceToSubmission<T extends { comments?: unknown[]; body?: string }>(
+  submission: T,
+  surface: ReviewOutputSurface,
+): { suppressedComments: number } {
+  if (surfacePostsInlineComments(surface) || !submission.comments || submission.comments.length === 0) {
+    return { suppressedComments: 0 }
+  }
+  const suppressedComments = submission.comments.length
+  submission.comments = []
+  submission.body = `${submission.body ?? ""}\n\n${ANNOTATIONS_ONLY_BODY_NOTE}`.trimStart()
+  return { suppressedComments }
 }
 
 /**
@@ -417,29 +467,53 @@ async function postCheckAnnotations(args: {
       })
       posted += batch.length
     } catch (err) {
-      // The batch was rejected — likely one stale/out-of-range
-      // annotation poisoned it. Re-post the survivors individually so
-      // the bad one is isolated and dropped, not the whole batch.
+      // GitHub rejects the ENTIRE batch atomically when a SINGLE annotation
+      // is invalid (HTTP 422 — stale line after a force-push, file no longer
+      // in the diff). Only then is a per-annotation retry both safe and
+      // useful: we KNOW nothing from this batch was stored, so re-posting the
+      // survivors can't duplicate. For transient / 5xx / network errors the
+      // write may have landed server-side (GitHub APPENDS annotations across
+      // PATCHes), so a blind retry risks duplicate annotations — log and move
+      // on. Mirrors the `submitReview` 422 idempotency reasoning below in
+      // triage-pr-review-ensemble.ts. (CodeRabbit + Sigilix, PR #339 review.)
+      const isValidationError = err instanceof GitHubHttpError && err.status === 422
+      if (!isValidationError) {
+        console.warn(JSON.stringify({
+          event: "pr-review-check-annotation-batch-failed-transient",
+          owner, repo, check_run_id: id, batch_size: batch.length,
+          err: err instanceof Error ? err.message : String(err),
+        }))
+        continue
+      }
       console.warn(JSON.stringify({
-        event: "pr-review-check-annotation-batch-failed",
+        event: "pr-review-check-annotation-batch-rejected",
         owner, repo, check_run_id: id, batch_size: batch.length,
-        err: err instanceof Error ? err.message : String(err),
+        err: err.message,
       }))
-      for (const annotation of batch) {
-        try {
-          await handle.client.updateCheckRun(owner, repo, id, {
+      // Re-post survivors CONCURRENTLY (the writes are independent) so
+      // isolating one bad annotation doesn't cost O(n) sequential
+      // round-trips on the check-completion path. (Sigilix perf finding,
+      // PR #339.)
+      const results = await Promise.allSettled(
+        batch.map((annotation) =>
+          handle.client.updateCheckRun(owner, repo, id, {
             output: { title: output.title, summary: output.summary, annotations: [annotation] },
-          })
+          }),
+        ),
+      )
+      results.forEach((result, idx) => {
+        const annotation = batch[idx]!
+        if (result.status === "fulfilled") {
           posted += 1
-        } catch (singleErr) {
+        } else {
           console.warn(JSON.stringify({
             event: "pr-review-check-annotation-dropped",
             owner, repo, check_run_id: id,
             path: annotation.path, start_line: annotation.start_line,
-            err: singleErr instanceof Error ? singleErr.message : String(singleErr),
+            err: result.reason instanceof Error ? result.reason.message : String(result.reason),
           }))
         }
-      }
+      })
     }
   }
 

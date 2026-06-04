@@ -109,6 +109,28 @@ describe("dispatchJob — ARC-258 / ARC-280 check-run lifecycle", () => {
     })
   })
 
+  // SIG-144: a non-default OPENCLAW_REVIEW_OUTPUT_SURFACE must thread
+  // through to completeCheckRun (Sigilix finding on PR #339 — the other
+  // assertions only exercise the default `comments`).
+  it("SIG-144: threads a non-default surface (both) through to completeCheckRun", async () => {
+    const reviewMeta = { event: "REQUEST_CHANGES" as const, findingsCount: 2 }
+    handlePrReviewEnsembleMock.mockResolvedValue({
+      status: "posted",
+      telemetry: {},
+      reviewMeta,
+    })
+
+    const env = { ...makeEnv(), OPENCLAW_REVIEW_OUTPUT_SURFACE: "both" } as Env
+    await dispatchJob(job, env)
+
+    expect(completeCheckRunMock).toHaveBeenCalledWith({
+      handle: HANDLE,
+      conclusion: "success",
+      surface: "both",
+      reviewMeta: { ...reviewMeta, prNumber: job.prNumber },
+    })
+  })
+
   // ARC-279: when the ensemble had to use the comment fallback
   // (formal review submit silently rejected), the Check Run reflects
   // that the normal pipeline didn't run — even though synth's body

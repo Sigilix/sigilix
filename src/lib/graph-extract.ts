@@ -18,64 +18,30 @@
 
 import { parseSource, type SourceExt } from "./ast-rules/parser"
 import { walkAst, type AstNode } from "./ast-rules/walker"
+// SIG-146: shared contract moved to graph-extract-types.ts so language
+// extractor modules can depend on it without a cycle. Re-exported here so
+// existing importers of these names from "./graph-extract" keep working.
+import {
+  computeSymbolId,
+  type SymbolKind,
+  type GraphSymbol,
+  type FileEdgeKind,
+  type FileEdgeRaw,
+  type CallEdge,
+  type FileGraph,
+} from "./graph-extract-types"
+import { extractPythonFileGraph } from "./graph-extract-python"
 
-export type SymbolKind = "function" | "class" | "method" | "variable"
-
-export interface GraphSymbol {
-  symbolId: string
-  path: string
-  name: string
-  kind: SymbolKind
-  exported: boolean
-  startLine: number
-  startCol: number
-  endLine: number
-  endCol: number
-}
-
-// T2: file import/export edges (raw, unresolved specifiers).
-// T3 fills callEdges; stub kept until that task lands.
-export type FileEdgeKind = "import" | "export" | "reexport" | "star_reexport"
-
-export interface FileEdgeRaw {
-  sourcePath: string
-  edgeKind: FileEdgeKind
-  specifier: string
-  importedName: string | null
-  localName: string | null
-  exportedName: string | null
-  startLine: number
-  startCol: number
-}
-
-export type CallKind = "same_file" | "imported_binding"
-
-export interface CallEdge {
-  sourcePath: string
-  callerSymbolId: string | null
-  calleeSymbolId: string | null
-  calleeName: string
-  callKind: CallKind
-  startLine: number
-  startCol: number
-}
-
-export interface FileGraph {
-  symbols: GraphSymbol[]
-  fileEdgesRaw: FileEdgeRaw[]
-  callEdges: CallEdge[]
-}
-
-/** Natural-key composite string used as symbolId. Synchronous, no hashing. */
-export function computeSymbolId(
-  path: string,
-  kind: SymbolKind,
-  name: string,
-  startLine: number,
-  startCol: number,
-): string {
-  return `${path} ${kind} ${name} ${startLine} ${startCol}`
-}
+export {
+  computeSymbolId,
+  type SymbolKind,
+  type GraphSymbol,
+  type FileEdgeKind,
+  type FileEdgeRaw,
+  type CallKind,
+  type CallEdge,
+  type FileGraph,
+} from "./graph-extract-types"
 
 const KNOWN_EXTS: ReadonlySet<string> = new Set([
   ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx",
@@ -89,11 +55,26 @@ function sourceExt(path: string): SourceExt | null {
 }
 
 /**
- * Extract the symbol table (and stub edges) for a single source file.
+ * SIG-146: extension router. Dispatches a file to the language extractor that
+ * owns its extension; each extractor returns the same language-neutral
+ * `FileGraph`. Unknown extensions → empty (no-op). Adding a language is a new
+ * module + one branch here. All extractors are best-effort and never throw.
+ */
+export function extractFileGraph(path: string, content: string): FileGraph {
+  const dot = path.lastIndexOf(".")
+  const ext = dot < 0 ? "" : path.slice(dot).toLowerCase()
+  if (ext === ".py") return extractPythonFileGraph(path, content)
+  // JS/TS (acorn) owns the rest of the source extensions; it returns empty
+  // for anything outside KNOWN_EXTS, preserving the prior no-op behavior.
+  return extractJsTsFileGraph(path, content)
+}
+
+/**
+ * Extract the symbol table (+ edges) for a single JS/TS source file via acorn.
  * Returns an empty FileGraph on unsupported extensions or parse failure —
  * never throws. Prefers missing symbols over false ones.
  */
-export function extractFileGraph(path: string, content: string): FileGraph {
+function extractJsTsFileGraph(path: string, content: string): FileGraph {
   const empty: FileGraph = { symbols: [], fileEdgesRaw: [], callEdges: [] }
 
   const ext = sourceExt(path)

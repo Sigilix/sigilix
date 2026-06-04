@@ -123,31 +123,94 @@ describe("handleFpRateMetricsRoute", () => {
     expect(security).toMatchObject({ postedN: 0, hard: 0, hardFpRate: null })
   })
 
-  it("surfaces maturityExcludedReviews so a young corpus isn't a misleading empty (SIG-306)", async () => {
-    const now = Date.now()
-    const reverseTs = REVERSE_TS_BASE - (now - DAY) // posted ~1 day ago — inside the 14d maturity gate
-    const records: Record<string, unknown> = {
-      [`ensemble-review-telemetry:${reverseTs}:o/r#100`]: {
-        owner: "o",
-        repo: "r",
-        prNumber: 100,
-        synthesizer: {
-          verdict: { findings: [{ path: "a.ts", line: 10, headline: "bug", score: 5 }] },
-          provenance: { findings: [{ sourceSpecialists: ["logic"] }] },
-        },
+  const reviewRecord = (slug: string, pr: number, ageMs: number, now: number) => ({
+    [`ensemble-review-telemetry:${REVERSE_TS_BASE - (now - ageMs)}:${slug}#${pr}`]: {
+      owner: slug.split("/")[0],
+      repo: slug.split("/")[1],
+      prNumber: pr,
+      synthesizer: {
+        verdict: { findings: [{ path: "a.ts", line: 10, headline: "bug", score: 5 }] },
+        provenance: { findings: [{ sourceSpecialists: ["logic"] }] },
       },
+    },
+  })
+
+  it("surfaces maturityExcludedReviews when SOME reviews are too recent (no relax needed)", async () => {
+    const now = Date.now()
+    const records = {
+      ...reviewRecord("o/r", 100, 20 * DAY, now), // mature: 20d old, ≥ 14d gate
+      ...reviewRecord("o/r", 101, 1 * DAY, now), // too recent: 1d old, excluded by 14d gate
     }
     const res = await handleFpRateMetricsRoute(
-      get("https://x/metrics/fp-rate?repo=o/r&window=30&maturity=14&min-n=1", `Bearer ${TOKEN}`),
+      get("https://x/metrics/fp-rate?repo=o/r&window=60&maturity=14&min-n=1", `Bearer ${TOKEN}`),
       makeEnv(records),
     )
-    const body = (await res.json()) as { reviewsScanned: number; maturityExcludedReviews: number }
-    // The review is held back by the 14-day maturity gate (so it doesn't count
-    // yet)...
-    expect(body.reviewsScanned).toBe(0)
-    // ...but the count is surfaced, so "0 scanned" reads as "not yet mature",
-    // not "no data".
-    expect(body.maturityExcludedReviews).toBe(1)
+    const body = (await res.json()) as {
+      reviewsScanned: number; maturityExcludedReviews: number; maturityRelaxed: boolean; effectiveMaturityDays: number
+    }
+    expect(body.reviewsScanned).toBe(1) // only the mature one counts
+    expect(body.maturityExcludedReviews).toBe(1) // the recent one is held back + surfaced
+    expect(body.maturityRelaxed).toBe(false) // a mature review exists → no relax
+    expect(body.effectiveMaturityDays).toBe(14)
+  })
+
+  it("auto-relaxes the maturity gate (flagged) rather than return a silent empty when EVERY review is too recent (SIG-245)", async () => {
+    const now = Date.now()
+    // Only review is 2 days old — fully excluded by the requested 14d gate.
+    const records = reviewRecord("o/r", 100, 2 * DAY, now)
+    const res = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=o/r&window=60&maturity=14&min-n=1", `Bearer ${TOKEN}`),
+      makeEnv(records),
+    )
+    const body = (await res.json()) as {
+      reviewsScanned: number; maturityExcludedReviews: number; maturityRelaxed: boolean
+      maturityDays: number; effectiveMaturityDays: number
+    }
+    // Instead of a misleading reviewsScanned:0, the gate relaxes to admit the
+    // review, and the relaxation is flagged.
+    expect(body.reviewsScanned).toBe(1)
+    expect(body.maturityRelaxed).toBe(true)
+    expect(body.maturityDays).toBe(14) // requested gate echoed unchanged
+    // Relaxed to the oldest review's age (2d), NOT all the way to 0 — keeps the
+    // most-settled gate that still yields data.
+    expect(body.effectiveMaturityDays).toBe(2)
+    expect(body.maturityExcludedReviews).toBe(0)
+  })
+
+  it("relaxes all the way to 0 when the only review is younger than a day (floor(age)→0)", async () => {
+    const now = Date.now()
+    const records = reviewRecord("o/r", 100, Math.round(0.5 * DAY), now) // ~12h old
+    const res = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=o/r&window=60&maturity=3&min-n=1", `Bearer ${TOKEN}`),
+      makeEnv(records),
+    )
+    const body = (await res.json()) as { reviewsScanned: number; maturityRelaxed: boolean; effectiveMaturityDays: number }
+    expect(body.reviewsScanned).toBe(1)
+    expect(body.maturityRelaxed).toBe(true)
+    expect(body.effectiveMaturityDays).toBe(0)
+  })
+
+  it("never relaxes when maturity=0 was requested (the relax guard can't false-fire)", async () => {
+    const now = Date.now()
+    const records = reviewRecord("o/r", 100, Math.round(0.25 * DAY), now) // very recent
+    const res = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=o/r&window=60&maturity=0&min-n=1", `Bearer ${TOKEN}`),
+      makeEnv(records),
+    )
+    const body = (await res.json()) as { reviewsScanned: number; maturityRelaxed: boolean; effectiveMaturityDays: number }
+    expect(body.reviewsScanned).toBe(1)
+    expect(body.maturityRelaxed).toBe(false) // maturity=0 already admits everything → no relax
+    expect(body.effectiveMaturityDays).toBe(0)
+  })
+
+  it("defaults the maturity gate to 3 days (SIG-245 — was 14, too high for the dismissal cadence)", async () => {
+    const res = await handleFpRateMetricsRoute(
+      get("https://x/metrics/fp-rate?repo=o/r&min-n=1", `Bearer ${TOKEN}`),
+      makeEnv(),
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { maturityDays: number }
+    expect(body.maturityDays).toBe(3)
   })
 
   it("joins across a rename: review telemetry under the OLD slug + dismissals under the NEW slug, unioned via multiple ?repo= aliases", async () => {

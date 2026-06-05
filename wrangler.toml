@@ -314,9 +314,9 @@ OPENCLAW_GRAPH_EXPANSION = "post"
 # or "off".
 OPENCLAW_AUTHZ_IDOR_SCAN = "post"
 # Deterministic weak-randomness floor (CWE-338, no-insecure-random-token): flags
-# Math.random() minting a credential-named token/secret. Shipped "shadow" first
-# (measure firing + FP on dogfood) — flip to "post" once clean. P2-capped.
-OPENCLAW_WEAK_RANDOM_SCAN = "shadow"
+# Math.random() minting a credential-named token/secret. P2-capped
+# (clampAstEmitScores: never a P0/P1 alone). Promoted shadow→"post" 2026-06-04.
+OPENCLAW_WEAK_RANDOM_SCAN = "post"
 # Deterministic open-redirect floor (CWE-601, no-open-redirect): flags a
 # request-controlled value flowing into a redirect/Location sink with no
 # destination validation. P2-capped (clampAstEmitScores: never a P0/P1 alone).
@@ -325,15 +325,15 @@ OPENCLAW_OPEN_REDIRECT_SCAN = "post"
 # Deterministic SSRF floor (CWE-918, no-ssrf): flags a request-controlled value
 # reaching a server-side fetch sink (fetch/axios/http(s)/got/ky) whose authority
 # the request can control, with no host validation. P2-capped (clampAstEmitScores:
-# never a P0/P1 alone). Shipped "shadow" first (measure firing + FP on dogfood) —
-# flip to "post" once clean. Higher sink ambiguity than open-redirect, so measure.
-OPENCLAW_SSRF_SCAN = "shadow"
+# never a P0/P1 alone). Promoted shadow→"post" 2026-06-04 (founder-authorized;
+# watch the review stream for FPs — rollback is this flag back to "shadow").
+OPENCLAW_SSRF_SCAN = "post"
 # Deterministic path-traversal floor (CWE-22, no-path-traversal): flags a
 # request-controlled value reaching a filesystem path op (fs.*/sendFile/Deno) with
 # no path sanitization (basename / within-root check). No fixed-prefix exemption —
-# `../` escapes a base. P2-capped (clampAstEmitScores: never a P0/P1 alone). Shipped
-# "shadow" first (measure firing + FP on dogfood) — flip to "post" once clean.
-OPENCLAW_PATH_TRAVERSAL_SCAN = "shadow"
+# `../` escapes a base. P2-capped (clampAstEmitScores: never a P0/P1 alone).
+# Promoted shadow→"post" 2026-06-04 (founder-authorized; rollback = "shadow").
+OPENCLAW_PATH_TRAVERSAL_SCAN = "post"
 # Deterministic SQL-injection floor (CWE-89, no-sql-injection): flags a request-
 # controlled value concatenated into a raw SQL string at a query sink (.query/
 # .execute/.exec/.prepare/.raw + raw-named $queryRawUnsafe/whereRaw). Parameterized

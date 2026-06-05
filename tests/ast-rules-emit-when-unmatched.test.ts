@@ -26,6 +26,8 @@ const EMIT_RULES = new Set([
   "no-ssrf",
   // the path-traversal floor (CWE-22, security/warning — FP-safe at P2).
   "no-path-traversal",
+  // the SQL-injection floor (CWE-89, security/warning — FP-safe at P2).
+  "no-sql-injection",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {

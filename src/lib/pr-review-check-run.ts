@@ -312,8 +312,8 @@ export interface ReviewCheckMeta {
   findingsCount: number
   surface?: "review" | "comment" | "skip-notice"
   /**
-   * SIG-144: per-finding Check annotations (path/line/severity) built
-   * by the ensemble producer. Posted by `completeCheckRun` ONLY when
+   * SIG-144: per-finding Check annotations (path/start_line/end_line/
+   * annotation_level) built by the ensemble producer. Posted by `completeCheckRun` ONLY when
    * the active surface includes annotations (`OPENCLAW_REVIEW_OUTPUT_SURFACE`
    * = `annotations` | `both`) and the conclusion is `success`. Sanitized
    * to plain text before posting (SIG-216). Empty/absent → nothing posted.

@@ -24,6 +24,7 @@ import {
   isCommentAnchorable,
   isSubstantiveAnchorLine,
   pickAnchorLineForward,
+  pickSubstantiveAnchorLineForward,
   previewReviewSubmissionEvent,
   parsePrReviewResponse,
   renderCommentBody,
@@ -1864,6 +1865,34 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     expect(out.body).toContain("lacks integration tests for the queue consumer")
   })
 
+  it("inline-more-in-diff: a finding anchored to a `}` walks forward to the SUBSTANTIVE added line and stays INLINE", () => {
+    // The brace at 1370 has real added code right after it (1372) — instead of
+    // demoting to the body, anchor forward to the substantive line (CodeRabbit
+    // parity). Score-4 isolates this from the SIG-281 confidence demotion.
+    const braceP1: PrReviewFinding = {
+      path: "src/lib/foo.ts", line: 1370, score: 4,
+      headline: "race in the queue consumer", body: "Guard the check-then-act.",
+    }
+    const mapWithCodeAfter = new Map<string, Map<number, string>>([
+      ["src/lib/foo.ts", new Map<number, string>([
+        [1370, "}"],
+        [1372, "  await processQueue(batch)"],
+      ])],
+    ])
+    const out = buildReviewSubmission({
+      verdict: { ...verdict, findings: [braceP1] },
+      prAuthor: "alice",
+      headSha: "abc",
+      addedLineTextByLine: mapWithCodeAfter,
+    })
+    const inline = (out.comments ?? []).find((c) => c.body.includes("race in the queue consumer"))
+    expect(inline).toBeDefined()
+    expect(inline?.line).toBe(1372) // walked forward from the `}` (1370) to real code
+    // (a P1 is ALSO summarized in the Fix Plan table — that's expected; the proof
+    // of "stayed inline" is the inline comment above, not a body absence.)
+    expect(out.body).not.toContain("### Review Body Findings")
+  })
+
   it("keeps a finding anchored to real code as an inline comment", () => {
     const out = buildReviewSubmission({
       verdict,
@@ -2151,11 +2180,12 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     expect(out.body).toContain("| Severity | Location | Issue |")
     expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
     expect(out.body).not.toContain("### Review Body Findings")
-    // SIG-216: meta line tightened to `<anchor> · score N` — the
-    // "Comment-level (high, score 4)" bracketed prefix is gone (the
-    // P1 badge already conveys severity, comment-scope is implicit
-    // from the path:line anchor with no inline thread).
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
+    // Kimi prominence: the location leads the row in BOLD; the score
+    // collapses into a trailing <sub>. (Was the `<anchor> · score N`
+    // meta line; the bracketed "Comment-level (high, score 4)" prefix
+    // stays gone — the P1 badge conveys severity.)
+    expect(out.body).toContain("**`src/lib/github-mention.ts:436`**:")
+    expect(out.body).toContain("score 4")
     expect(out.body).not.toContain("Comment-level")
     expect(out.body).toContain("dismiss command trusts the issue-comment author")
   })
@@ -2200,7 +2230,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     // `(critical, score 5)` parenthetical specifically (the verdict
     // summary still contains the word "File-level" for unrelated
     // reasons).
-    expect(out.body).toContain("`src/lib/github-mention.ts` · score 5")
+    expect(out.body).toContain("**`src/lib/github-mention.ts`**:")
+    expect(out.body).toContain("score 5")
     expect(out.body).not.toContain("(critical, score 5)")
     expect(out.body).toContain("module-level lifecycle ordering is unsafe")
   })
@@ -2301,7 +2332,8 @@ describe("buildReviewSubmission — SIG-202 non-line scope routing", () => {
     // block, with the tightened `<anchor> · score N` meta (no
     // "Comment-level" prefix).
     expect(out.body).toContain("Evidence &amp; suggested changes for body-only blockers")
-    expect(out.body).toContain("`src/lib/github-mention.ts:436` · score 4")
+    expect(out.body).toContain("**`src/lib/github-mention.ts:436`**:")
+    expect(out.body).toContain("score 4")
     expect(out.body).not.toContain("Comment-level")
   })
 })
@@ -2607,17 +2639,19 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
     expect(body).not.toContain("](https://github.com/")
   })
 
-  it("tightens the meta line to `<anchor> · score N` with no bracketed severity (line scope)", () => {
+  it("leads with the bold location + trails score in <sub>, no bracketed severity (line scope)", () => {
     const body = buildBody(lineFinding)
-    expect(body).toContain("`src/lib/foo.ts:42` · score 3")
+    expect(body).toContain("**`src/lib/foo.ts:42`**:")
+    expect(body).toContain("score 3")
     expect(body).not.toContain("(medium, score 3)")
     expect(body).not.toContain("Line 42")
     expect(body).not.toContain("Comment-level")
   })
 
-  it("tightens the meta line for pr-scope to `<path> · score N`", () => {
+  it("leads with the bold path for pr-scope (no `:line`)", () => {
     const body = buildBody(prFinding)
-    expect(body).toContain("`src/lib/foo.ts` · score 3")
+    expect(body).toContain("**`src/lib/foo.ts`**:")
+    expect(body).toContain("score 3")
     // SIG-281 PR B: the body-only explanation copy now legitimately
     // contains the phrase "PR-level scope", so guard against the OLD
     // per-finding "PR-level (severity, score N)" location LABEL format
@@ -2625,11 +2659,13 @@ describe("renderBodyOnlyFindings (SIG-216 link + meta)", () => {
     expect(body).not.toContain("PR-level (")
   })
 
-  it("uses the U+00B7 middle-dot separator (not a bullet or asterisk)", () => {
+  it("renders the row as `**<location>**: **<headline>** … <sub>score N</sub>` (Kimi prominence)", () => {
     const body = buildBody(lineFinding)
-    const expectedSeparator = " · "
-    expect(body).toContain(`\`src/lib/foo.ts:42\`${expectedSeparator}score 3`)
-    // Guard against accidental swap to alternative dots/bullets.
+    // bold location LEADS the row, immediately followed by the bold headline,
+    // and the score collapses into a trailing <sub>.
+    expect(body).toMatch(/\*\*`src\/lib\/foo\.ts:42`\*\*: \*\*/)
+    expect(body).toContain("<sub>score 3")
+    // Guard against accidental bullet/asterisk separators in the score meta.
     expect(body).not.toContain(" • score") // • bullet
     expect(body).not.toContain(" * score")
   })
@@ -3210,6 +3246,47 @@ describe("pickAnchorLineForward (SIG-159 PR1)", () => {
 
   it("returns null on an empty added-lines map", () => {
     expect(pickAnchorLineForward(new Map(), 42)).toBeNull()
+  })
+})
+
+describe("pickSubstantiveAnchorLineForward (inline-more-in-diff)", () => {
+  const lines = new Map<number, string>([
+    [40, "}"], // non-substantive: a closing brace
+    [41, "  "], // non-substantive: blank
+    [42, "  const idx = clampIndex(i)"], // substantive
+    [100, ");"], // non-substantive
+    [101, "  return result"], // substantive
+    [200, "}"], // trailing non-substantive only
+  ])
+
+  it("fast path: returns the requested line when it's a substantive added line", () => {
+    expect(pickSubstantiveAnchorLineForward(lines, 42)).toBe(42)
+    expect(pickSubstantiveAnchorLineForward(lines, 101)).toBe(101)
+  })
+
+  it("skips PAST a non-substantive anchor (brace/blank) to the nearest substantive added line", () => {
+    // the model anchored at the `}` (40) / blank (41) above the real code
+    expect(pickSubstantiveAnchorLineForward(lines, 40)).toBe(42)
+    expect(pickSubstantiveAnchorLineForward(lines, 41)).toBe(42)
+    expect(pickSubstantiveAnchorLineForward(lines, 100)).toBe(101)
+  })
+
+  it("respects the forward-distance cap: WITHIN the window anchors inline, BEYOND it falls back to body (null)", () => {
+    // 101 is the nearest substantive line. From 80 it's 21 lines away (≤25 cap →
+    // anchor inline); from 50 it's 51 lines away (>25 → don't mis-anchor across a
+    // gap, route to the body).
+    expect(pickSubstantiveAnchorLineForward(lines, 80)).toBe(101)
+    expect(pickSubstantiveAnchorLineForward(lines, 50)).toBeNull()
+  })
+
+  it("returns null when only non-substantive added lines remain (→ body)", () => {
+    expect(pickSubstantiveAnchorLineForward(lines, 102)).toBeNull() // only 200:`}` after
+    expect(pickSubstantiveAnchorLineForward(lines, 200)).toBeNull()
+  })
+
+  it("returns null for an undefined / empty map", () => {
+    expect(pickSubstantiveAnchorLineForward(undefined, 42)).toBeNull()
+    expect(pickSubstantiveAnchorLineForward(new Map(), 42)).toBeNull()
   })
 })
 

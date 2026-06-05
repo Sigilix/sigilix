@@ -381,6 +381,9 @@ export interface Env {
   // Deterministic NoSQL-injection floor (CWE-943, no-nosql-injection).
   // off (default) | shadow (measure-only) | post (emit P2 advisory).
   OPENCLAW_NOSQL_INJECTION_SCAN?: string
+  // Deterministic prototype-pollution floor (CWE-1321, no-prototype-pollution).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory).
+  OPENCLAW_PROTO_POLLUTION_SCAN?: string
   /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
   OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 

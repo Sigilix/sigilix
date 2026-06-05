@@ -355,6 +355,12 @@ OPENCLAW_SSTI_SCAN = "post"
 # tainted scalar field, array .find(cb), lodash) is auto-excluded. P2-capped
 # (clampAstEmitScores: never a P0/P1 alone). Shipped "shadow" first.
 OPENCLAW_NOSQL_INJECTION_SCAN = "shadow"
+# Deterministic prototype-pollution floor (CWE-1321, no-prototype-pollution): flags
+# a request-controlled KEY in a dynamic property write (target[req.body.key] = v)
+# or a request object deep-merged into a target (_.merge/defaultsDeep/deepmerge).
+# SAFE: fixed/numeric keys, Object.assign (shallow), and a __proto__ guard in the
+# function are auto-excluded. P2-capped (never a P0/P1 alone). Shipped "shadow".
+OPENCLAW_PROTO_POLLUTION_SCAN = "shadow"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.

@@ -27,6 +27,7 @@ import { noPathTraversal } from "../src/lib/ast-rules/rules/no-path-traversal"
 import { noSqlInjection } from "../src/lib/ast-rules/rules/no-sql-injection"
 import { noSsti } from "../src/lib/ast-rules/rules/no-ssti"
 import { noNosqlInjection } from "../src/lib/ast-rules/rules/no-nosql-injection"
+import { noPrototypePollution } from "../src/lib/ast-rules/rules/no-prototype-pollution"
 
 export interface FloorEval {
   id: string
@@ -201,6 +202,31 @@ export const FLOOR_EVALS: FloorEval[] = [
       // array `.find(cb)` and lodash in-memory predicate.
       `app.get("/arr", (req, res) => { items.find((x) => x.id === req.query.id); });`,
       `app.get("/lod", (req, res) => { _.find(rows, req.query); });`,
+    ],
+  },
+  {
+    id: "no-prototype-pollution",
+    cwe: "CWE-1321 prototype pollution",
+    rule: noPrototypePollution,
+    vuln: [
+      `app.post("/m", (req, res) => { _.merge(target, req.body); });`,
+      `app.post("/d", (req, res) => { deepmerge(opts, req.query); });`,
+      `app.post("/dd", (req, res) => { _.defaultsDeep(settings, req.body.prefs); });`,
+      `app.post("/mw", (req, res) => { _.mergeWith(cfg, req.body, customizer); });`,
+      `app.post("/a", (req, res) => { const src = req.body; _.merge(target, src); });`,
+    ],
+    safe: [
+      // Object.assign is SHALLOW — copies __proto__ as a plain own prop, not a sink.
+      `app.post("/o", (req, res) => { Object.assign(target, req.body); });`,
+      // merge of a NON-tainted object.
+      `app.post("/c", (req, res) => { _.merge(target, defaults); });`,
+      // bare merge on a non-lodash receiver (RxJS) — not a deep-merge sink.
+      `app.post("/rx", (req, res) => { rxjs.merge(a$, req.body); });`,
+      // a user-keyed dynamic-dict write is DELIBERATELY not flagged (idiomatic).
+      `app.post("/cache", (req, res) => { cache[req.query.key] = req.body.value; });`,
+      `app.post("/sess", (req, res) => { sessions[req.params.id] = data; });`,
+      // a __proto__ sanitization guard means the dev is defending → cleared.
+      `app.post("/g", (req, res) => { delete req.body.__proto__; _.merge(target, req.body); });`,
     ],
   },
 ]

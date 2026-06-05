@@ -43,6 +43,7 @@ import { noPathTraversal } from "./rules/no-path-traversal"
 import { noSqlInjection } from "./rules/no-sql-injection"
 import { noSsti } from "./rules/no-ssti"
 import { noNosqlInjection } from "./rules/no-nosql-injection"
+import { noPrototypePollution } from "./rules/no-prototype-pollution"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -95,6 +96,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noSsti,
   // security-specialist deterministic NoSQL-injection floor (CWE-943, severity: warning).
   noNosqlInjection,
+  // security-specialist deterministic prototype-pollution floor (CWE-1321, severity: warning).
+  noPrototypePollution,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

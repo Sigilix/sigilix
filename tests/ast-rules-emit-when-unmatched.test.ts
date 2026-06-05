@@ -32,6 +32,8 @@ const EMIT_RULES = new Set([
   "no-ssti",
   // the NoSQL-injection floor (CWE-943, security/warning — FP-safe at P2).
   "no-nosql-injection",
+  // the prototype-pollution floor (CWE-1321, security/warning — FP-safe at P2).
+  "no-prototype-pollution",
 ])
 
 describe("emitWhenUnmatched — FP-safe scoping", () => {

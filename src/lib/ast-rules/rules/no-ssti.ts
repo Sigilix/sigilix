@@ -35,7 +35,10 @@ const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrati
 const TAINTED_MEMBER_RE = /\b(?:req|request|ctx|context)\.(?:params|query|body)\b/
 const TAINTED_CALL_RE =
   /(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[^\n]{0,40}?\.searchParams\.get\()/
-const REQUEST_ROOT_RE = /^(?:c|req|request|ctx|context)$/
+// Bare request-object aliases (`const r = req`). `c` is deliberately EXCLUDED —
+// it's too generic a name to seed as a tainted root without the structural
+// `c.req.query(` confirmation (which TAINTED_CALL_RE already handles). (CodeRabbit)
+const REQUEST_ROOT_RE = /^(?:req|request|ctx|context)$/
 
 // Template-engine receivers UNAMBIGUOUS enough that `.compile`/`.render` on them
 // is a template-source sink. Deliberately EXCLUDES short collision-prone names
@@ -102,8 +105,18 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
   const decls: Array<{ name: string; init: AstNode }> = []
   walkNoNested(root, (n) => {
     if (n.type !== "VariableDeclarator" || !n.init) return
-    const name = idName(n.id as AstNode)
-    if (name) decls.push({ name, init: n.init as AstNode })
+    const init = n.init as AstNode
+    const id = n.id as AstNode
+    const name = idName(id)
+    if (name) { decls.push({ name, init }); return }
+    // Destructured binding (`const { tpl } = req.query`): each local inherits the
+    // initializer's taint (CodeRabbit). `carriesTaint(init)` decides below.
+    if (id.type === "ObjectPattern") {
+      for (const p of (id.properties ?? []) as AstNode[]) {
+        const local = idName(p.value as AstNode) ?? idName(p.key as AstNode)
+        if (local) decls.push({ name: local, init })
+      }
+    }
   })
   const tainted = new Map<string, AstNode>()
   for (let pass = 0; pass < 8; pass++) {

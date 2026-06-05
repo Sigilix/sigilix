@@ -43,6 +43,9 @@ describe("no-ssti — FIRES on request-controlled template source", () => {
   it("tainted via a local: const t = req.body.tpl; ejs.render(t, data)", () => {
     expect(runRule(`app.post("/r", (req, res) => { const t = req.body.tpl; ejs.render(t, data); });`).length).toBe(1)
   })
+  it("destructured binding: const { tpl } = req.query; handlebars.compile(tpl) (CodeRabbit)", () => {
+    expect(runRule(`app.get("/r", (req, res) => { const { tpl } = req.query; handlebars.compile(tpl); });`).length).toBe(1)
+  })
   it("Hono: hbs.compile(c.req.query('tpl'))", () => {
     const src = `
 import { Hono } from "hono";
@@ -76,6 +79,7 @@ describe("no-ssti — FP-safety: does NOT fire on safe templating", () => {
   // short collision-prone names (eta/art/dot) must NOT fire on generic .render.
   it("lodash `.render`/`.compile` do NOT fire (only `_.template` is a sink)", () => {
     expect(runRule(`app.get("/r", (req, res) => { _.render(req.query.x); });`).length).toBe(0)
+    expect(runRule(`app.get("/r", (req, res) => { _.compile(req.query.x); });`).length).toBe(0)
     expect(runRule(`app.get("/r", (req, res) => { underscore.compile(req.query.x); });`).length).toBe(0)
   })
   it("a collision-prone short name does NOT fire on generic .render: art.render(req.query.config)", () => {

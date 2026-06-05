@@ -152,10 +152,18 @@ function hasTaintedWhereOp(arg: AstNode | undefined, taintedLocals: Map<string, 
 function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNode> {
   const decls: Array<{ name: string; init: AstNode }> = []
   const counts = new Map<string, number>()
+  const bump = (name: string | null): void => { if (name) counts.set(name, (counts.get(name) ?? 0) + 1) }
   walkNoNested(root, (n) => {
-    if (n.type !== "VariableDeclarator" || !n.init) return
-    const name = idName(n.id as AstNode)
-    if (name) { decls.push({ name, init: n.init as AstNode }); counts.set(name, (counts.get(name) ?? 0) + 1) }
+    if (n.type === "VariableDeclarator") {
+      const name = idName(n.id as AstNode)
+      bump(name) // count ALL declarators toward ambiguity, even without an init
+      if (name && n.init) decls.push({ name, init: n.init as AstNode })
+    } else if (n.type === "CatchClause" && n.param) {
+      // a `catch (f)` binding shadows an outer `f` — count it so a tainted outer
+      // `const f` becomes ambiguous and is not falsely tainted inside the catch
+      // (CodeRabbit #356).
+      bump(idName(n.param as AstNode))
+    }
   })
   const tainted = new Map<string, AstNode>()
   for (let pass = 0; pass < 8; pass++) {

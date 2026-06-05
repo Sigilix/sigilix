@@ -94,6 +94,11 @@ describe("no-nosql-injection — FP-safety: does NOT fire on safe / non-Mongo co
     const src = `app.get("/u", (req, res) => { const f = req.body; doStuff(f); { const f = { _id: "fixed" }; db.collection("u").findOne(f); } });`
     expect(runRule(src).length).toBe(0)
   })
+  it("a catch-param shadowing a tainted outer binding does not fire (CodeRabbit #356)", () => {
+    // `f` is the caught error inside the catch, NOT the outer tainted `req.body`.
+    const src = `app.get("/u", (req, res) => { const f = req.body; try { go(f); } catch (f) { db.collection("u").findOne(f); } });`
+    expect(runRule(src).length).toBe(0)
+  })
   it("a sanitized filter is skipped (fail closed)", () => {
     expect(runRule(`app.get("/u", (req, res) => { const f = mongoSanitize(req.query); db.collection("u").find(f); });`).length).toBe(0)
   })

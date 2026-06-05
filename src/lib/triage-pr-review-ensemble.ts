@@ -3020,6 +3020,18 @@ export async function handlePrReviewEnsemble(
         anchors: pathTraversalStripped.map((a) => `${a.path}:${a.line}`),
       }))
     }
+    // Shadow-first gating for the deterministic SQL-injection floor
+    // (no-sql-injection, CWE-89) — same off/shadow/post contract.
+    const sqlInjectionMode = (env.OPENCLAW_SQL_INJECTION_SCAN ?? "off").trim().toLowerCase()
+    const sqlInjectionStripped = applyAstScanGate(astResult, "no-sql-injection", sqlInjectionMode)
+    if (sqlInjectionMode === "shadow" && sqlInjectionStripped.length > 0) {
+      console.log(JSON.stringify({
+        event: "sql-injection-shadow",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        count: sqlInjectionStripped.length,
+        anchors: sqlInjectionStripped.map((a) => `${a.path}:${a.line}`),
+      }))
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

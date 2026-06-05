@@ -43,7 +43,9 @@ const TAINTED_CALL_RE =
   /(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[^\n]{0,40}?\.searchParams\.get\()/
 // The request object itself — `const r = req; query("…" + r.query.id)` aliases the
 // whole request, so a local bound to a bare request root is a tainted root too.
-const REQUEST_ROOT_RE = /^(?:req|request|ctx|context)$/
+// Includes Hono's `c` (the context) for parity with TAINTED_CALL_RE's `c.req.…`
+// (CodeRabbit #352) — shadow-first, so the marginal `const x = c` FP is measured.
+const REQUEST_ROOT_RE = /^(?:c|req|request|ctx|context)$/
 
 // Generic executor methods — fire ONLY when the static text reads like SQL.
 // Deliberately NARROW: `query`/`execute`/`exec`/`prepare` are the real raw-SQL

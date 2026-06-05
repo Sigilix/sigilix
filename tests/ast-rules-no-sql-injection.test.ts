@@ -45,6 +45,10 @@ describe("no-sql-injection — FIRES on tainted SQL strings", () => {
     const src = `app.get("/u", (req, res) => { const r = req; db.query("SELECT * FROM u WHERE id = " + r.query.id); });`
     expect(runRule(src).length).toBe(1)
   })
+  it("Hono context alias fires: const x = c; db.query('SELECT * FROM u WHERE id = ' + x.req.query('id'))", () => {
+    const src = `app.get("/u", (c) => { const x = c; return db.query("SELECT * FROM u WHERE id = " + x.req.query("id")); });`
+    expect(runRule(src).length).toBe(1)
+  })
   it("Hono: c.req.query into a concatenated query", () => {
     const src = `
 import { Hono } from "hono";

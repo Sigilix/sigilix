@@ -461,7 +461,8 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     expect(body).not.toContain("### Review Body Findings")
     // SIG-216: meta tightened to `\`src/bar.ts:99\` · score 5` (rendered
     // inside the collapsed evidence block).
-    expect(body).toContain("`src/bar.ts:99` · score 5")
+    expect(body).toContain("**`src/bar.ts:99`**:")
+    expect(body).toContain("score 5")
     expect(body).not.toContain("(critical, score 5)")
     expect(body).toContain("body-only blocker")
   })
@@ -523,7 +524,8 @@ describe("renderRequestChangesBody (ARC-281)", () => {
     // `<anchor> · score N` meta — no "PR-level (critical, ...)" prefix.
     // (The Fix Plan caption legitimately says "PR-level scope", so guard
     // the old per-finding "PR-level (" label format specifically.)
-    expect(body).toContain("`src/bar.ts` · score 5")
+    expect(body).toContain("**`src/bar.ts`**:")
+    expect(body).toContain("score 5")
     expect(body).not.toContain("PR-level (")
     expect(body).not.toContain("(critical, score 5)")
     expect(body).toContain("pr-level blocker")

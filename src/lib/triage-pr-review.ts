@@ -1137,7 +1137,12 @@ function prepareReviewSubmissionFindings(args: {
     const addedLinesForPath = addedLineTextByLine?.get(findingForInline.path)
     let effective: PrReviewFinding = findingForInline
     if (addedLineTextByLine !== undefined && !hasSuggestion) {
-      const resolved = pickAnchorLineForward(addedLinesForPath, f.line)
+      // Walk forward to the nearest SUBSTANTIVE added line so an in-diff finding
+      // whose anchor landed on a brace/blank stays INLINE on real code instead of
+      // demoting to the body. Only fall back to the body when there's no
+      // substantive added line at/after the anchor (genuinely outside the diff —
+      // CodeRabbit parity: the body is for outside-the-diff findings only).
+      const resolved = pickSubstantiveAnchorLineForward(addedLinesForPath, f.line)
       if (resolved === null) {
         bodyFindings.push(withLineMovedNote(f, headSha))
         return
@@ -1170,17 +1175,10 @@ function prepareReviewSubmissionFindings(args: {
       return
     }
 
-    const lineText = addedLineTextByLine?.get(effective.path)?.get(effective.line)
-    const isNonSubstantive =
-      !hasSuggestion &&
-      addedLineTextByLine !== undefined &&
-      lineText !== undefined &&
-      !isSubstantiveAnchorLine(lineText)
-    if (isNonSubstantive) {
-      bodyFindings.push(effective)
-    } else {
-      inlineCandidates.push({ finding: effective, originalIndex: i, confidence })
-    }
+    // The forward-walk above already guaranteed a SUBSTANTIVE anchor line (or
+    // routed to the body), so a separate non-substantive demotion is no longer
+    // needed — the finding keeps its inline thread.
+    inlineCandidates.push({ finding: effective, originalIndex: i, confidence })
   })
 
   // SIG-281 PR B (Rec 3): cap inline comments at MAX_INLINE_COMMENTS.
@@ -2899,9 +2897,11 @@ function renderBodyOnlyFindings(
     // sub-tag after the score (zero-width concat; the helpers carry their spacing).
     const pill = trustLedger ? trustPill(f.trust, badgeImg) : ""
     const subTag = trustLedger ? trustSubTag(f.trust) : ""
+    // Kimi (UI): lead the row with the BOLD, linked location so a reviewer sees
+    // WHERE a body finding is at a glance (CodeRabbit parity) instead of hunting
+    // grey <sub> metadata; score/trust collapse into a trailing subscript.
     lines.push("")
-    lines.push(`- ${badge} ${categoryBadge}${pill} **${stripAstMarkers(f.headline)}**`)
-    lines.push(`  <sub>${anchor} · score ${f.score}${subTag}${anchorNote}</sub>`)
+    lines.push(`- ${badge} ${categoryBadge} **${anchor}**: **${stripAstMarkers(f.headline)}**${pill} <sub>score ${f.score}${subTag}${anchorNote}</sub>`)
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -3322,6 +3322,45 @@ export function pickAnchorLineForward(
   let best: number | null = null
   for (const line of addedLinesForPath.keys()) {
     if (line > requestedLine && (best === null || line < best)) {
+      best = line
+    }
+  }
+  return best
+}
+
+/**
+ * Like `pickAnchorLineForward`, but SKIPS non-substantive added lines (blank, a
+ * lone `}` / `)` / `;`) to land on the nearest SUBSTANTIVE added line at or after
+ * `requestedLine`. Completes SIG-159's forward-walk: the model often anchors to
+ * the brace ABOVE the code it means, and the nearest added line can itself be
+ * that brace — previously the finding then demoted to the body. Walking to the
+ * nearest substantive added line keeps it INLINE on real code instead (CodeRabbit
+ * parity — the body is for outside-the-diff findings only). Returns null when no
+ * substantive added line exists at/after the anchor WITHIN the forward window
+ * (genuinely outside the meaningful diff → caller routes to the body). Pure —
+ * exported for tests.
+ *
+ * The forward window (`MAX_SUBSTANTIVE_ANCHOR_WALK`) bounds the walk so a finding
+ * can't be inline-anchored to unrelated code an arbitrary distance away (e.g. a
+ * trailing `}` whose next substantive added line is in a different hunk) — a
+ * confidently-wrong inline comment is worse than a body finding. SIG-159's
+ * motivating case (the `}` above the real subject) is only a handful of lines,
+ * so a small cap keeps that case inline while preventing cross-hunk drift.
+ */
+export const MAX_SUBSTANTIVE_ANCHOR_WALK = 25
+export function pickSubstantiveAnchorLineForward(
+  addedLinesForPath: ReadonlyMap<number, string> | undefined,
+  requestedLine: number,
+): number | null {
+  if (addedLinesForPath === undefined) return null
+  let best: number | null = null
+  for (const [line, text] of addedLinesForPath) {
+    if (
+      line >= requestedLine &&
+      line - requestedLine <= MAX_SUBSTANTIVE_ANCHOR_WALK &&
+      isSubstantiveAnchorLine(text) &&
+      (best === null || line < best)
+    ) {
       best = line
     }
   }

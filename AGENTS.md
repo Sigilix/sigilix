@@ -16,3 +16,7 @@ The gate for any change, in one line:
 
 No self-merging. No pushing to `main` or force-pushing. No `Co-Authored-By` trailers.
 Never hide a real high-severity (P0/P1) finding to make a check go green.
+
+**Model-eval tests** (running a real review specialist through a live model, e.g.
+`npm run logic-recall-eval`) need a Turbo-entitled `OLLAMA_API_KEY` in your gitignored
+`.dev.vars`; they SKIP without it so CI stays green. See `CLAUDE.md` → "Model-eval testing".

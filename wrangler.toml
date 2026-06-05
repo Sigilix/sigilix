@@ -353,8 +353,9 @@ OPENCLAW_SSTI_SCAN = "post"
 # (find/findOne/updateMany/deleteMany/aggregate(req.query|req.body|alias)) or a
 # tainted $where/$function operator. The SAFE idiom (fixed-shape literal with a
 # tainted scalar field, array .find(cb), lodash) is auto-excluded. P2-capped
-# (clampAstEmitScores: never a P0/P1 alone). Shipped "shadow" first.
-OPENCLAW_NOSQL_INJECTION_SCAN = "shadow"
+# (clampAstEmitScores: never a P0/P1 alone). Promoted shadow→"post" 2026-06-05 on
+# the floor-eval ruler (no-nosql-injection = 100% recall / 0% FP across the corpus).
+OPENCLAW_NOSQL_INJECTION_SCAN = "post"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.

@@ -41,6 +41,7 @@ import { noOpenRedirect } from "./rules/no-open-redirect"
 import { noSsrf } from "./rules/no-ssrf"
 import { noPathTraversal } from "./rules/no-path-traversal"
 import { noSqlInjection } from "./rules/no-sql-injection"
+import { noSsti } from "./rules/no-ssti"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -89,6 +90,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noPathTraversal,
   // security-specialist deterministic SQL-injection floor (CWE-89, severity: warning).
   noSqlInjection,
+  // security-specialist deterministic SSTI floor (CWE-1336, severity: warning).
+  noSsti,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

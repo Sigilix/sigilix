@@ -348,6 +348,13 @@ OPENCLAW_SQL_INJECTION_SCAN = "post"
 # P2-capped (clampAstEmitScores: never a P0/P1 alone). Promoted shadow→"post"
 # 2026-06-05 on the floor-eval ruler (0% FP / 100% recall across the corpus).
 OPENCLAW_SSTI_SCAN = "post"
+# Deterministic NoSQL-injection floor (CWE-943, no-nosql-injection): flags a
+# request-controlled object handed DIRECTLY to a Mongo query as the filter
+# (find/findOne/updateMany/deleteMany/aggregate(req.query|req.body|alias)) or a
+# tainted $where/$function operator. The SAFE idiom (fixed-shape literal with a
+# tainted scalar field, array .find(cb), lodash) is auto-excluded. P2-capped
+# (clampAstEmitScores: never a P0/P1 alone). Shipped "shadow" first.
+OPENCLAW_NOSQL_INJECTION_SCAN = "shadow"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.

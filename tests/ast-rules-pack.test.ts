@@ -38,7 +38,7 @@ function ruleById(id: string): AstRule {
 // ─── ALL_RULES registry contract (Codex MAJOR #3) ───────────────
 
 describe("ALL_RULES registry — v1 contract", () => {
-  it("exports exactly 31 rules in the canonical order", () => {
+  it("exports exactly 32 rules in the canonical order", () => {
     expect(ALL_RULES.map((r) => r.id)).toEqual([
       "no-eval-call",
       "no-new-function-constructor",
@@ -81,6 +81,8 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-sql-injection",
       // deterministic SSTI floor (CWE-1336, security/warning).
       "no-ssti",
+      // deterministic NoSQL-injection floor (CWE-943, security/warning).
+      "no-nosql-injection",
     ])
   })
 
@@ -117,6 +119,7 @@ describe("ALL_RULES registry — v1 contract", () => {
       "no-path-traversal":                     { severity: "warning", roleHint: "security" },
       "no-sql-injection":                      { severity: "warning", roleHint: "security" },
       "no-ssti":                               { severity: "warning", roleHint: "security" },
+      "no-nosql-injection":                    { severity: "warning", roleHint: "security" },
     }
     for (const r of ALL_RULES) {
       expect({ severity: r.severity, roleHint: r.roleHint }).toEqual(expected[r.id])

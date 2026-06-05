@@ -125,6 +125,7 @@ import {
   attachExistingCheckRun,
   startInProgressCheckRun,
   completeCheckRun,
+  parseReviewOutputSurface,
   type SigilixCheckConclusion,
 } from "./lib/pr-review-check-run"
 import { postPrOverviewStubIfNeeded } from "./lib/pr-overview-stub"
@@ -623,6 +624,20 @@ export interface Env {
   // refresh paths + the 90-day backfill (see src/lib/multi-corpus.ts).
   // Flip via `wrangler secret put OPENCLAW_MULTICORPUS_RETRIEVAL on`.
   OPENCLAW_MULTICORPUS_RETRIEVAL?: string
+
+  // SIG-144: review output surface. Controls WHERE findings are posted —
+  // GitHub Checks annotations (inline in the Files tab + Checks UI, like
+  // CodeRabbit/Copilot), PR review comments (the historical default), or both.
+  //   - unset / "comments" → PR review comments only (default; no annotations)
+  //   - "both"             → review comments AND Checks annotations
+  //   - "annotations"      → Checks annotations only; the formal review still
+  //                          submits the verdict (APPROVE/REQUEST_CHANGES) +
+  //                          summary body, but inline review comments are
+  //                          suppressed and findings live in the annotations.
+  // Annotation messages are rendered as PLAIN TEXT (SIG-216: GitHub does not
+  // render markdown in the annotation `message` field). Flip via
+  // `wrangler secret put OPENCLAW_REVIEW_OUTPUT_SURFACE both`.
+  OPENCLAW_REVIEW_OUTPUT_SURFACE?: string
 
   // Dynamic review evidence cards. "shadow" computes/logs card coverage only;
   // "post" injects the precomputed changed-symbol/context cards into
@@ -1959,6 +1974,11 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
           await completeCheckRun({
             handle: checkRun,
             conclusion: conclusion ?? "failure",
+            // SIG-144: thread the configured output surface so the
+            // check-run completer knows whether to post Checks
+            // annotations (annotations | both) in addition to the
+            // PR review comments the ensemble already posted.
+            surface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
             ...(reviewMetaForComplete !== undefined ? { reviewMeta: reviewMetaForComplete } : {}),
           })
           // SIG-119: flush collected validator-rejection telemetry once.

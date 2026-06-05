@@ -3043,6 +3043,18 @@ export async function handlePrReviewEnsemble(
         anchors: sstiStripped.map((a) => `${a.path}:${a.line}`),
       }))
     }
+    // Shadow-first gating for the deterministic NoSQL-injection floor
+    // (no-nosql-injection, CWE-943) — same off/shadow/post contract.
+    const nosqlInjectionMode = (env.OPENCLAW_NOSQL_INJECTION_SCAN ?? "off").trim().toLowerCase()
+    const nosqlInjectionStripped = applyAstScanGate(astResult, "no-nosql-injection", nosqlInjectionMode)
+    if (nosqlInjectionMode === "shadow" && nosqlInjectionStripped.length > 0) {
+      console.log(JSON.stringify({
+        event: "nosql-injection-shadow",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        count: nosqlInjectionStripped.length,
+        anchors: nosqlInjectionStripped.map((a) => `${a.path}:${a.line}`),
+      }))
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

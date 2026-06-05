@@ -377,6 +377,9 @@ export interface Env {
   // Deterministic SSTI floor (CWE-1336, no-ssti).
   // off (default) | shadow (measure-only) | post (emit P2 advisory).
   OPENCLAW_SSTI_SCAN?: string
+  // Deterministic NoSQL-injection floor (CWE-943, no-nosql-injection).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory).
+  OPENCLAW_NOSQL_INJECTION_SCAN?: string
   /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
   OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 

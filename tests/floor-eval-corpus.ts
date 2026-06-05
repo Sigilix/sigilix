@@ -26,6 +26,7 @@ import { noSsrf } from "../src/lib/ast-rules/rules/no-ssrf"
 import { noPathTraversal } from "../src/lib/ast-rules/rules/no-path-traversal"
 import { noSqlInjection } from "../src/lib/ast-rules/rules/no-sql-injection"
 import { noSsti } from "../src/lib/ast-rules/rules/no-ssti"
+import { noNosqlInjection } from "../src/lib/ast-rules/rules/no-nosql-injection"
 
 export interface FloorEval {
   id: string
@@ -176,6 +177,30 @@ export const FLOOR_EVALS: FloorEval[] = [
       `app.get("/chart", (req, res) => { art.render(req.query.config); });`,
       `app.get("/comp", (req, res) => { component.render(req.query.x); });`,
       `app.get("/m", (req, res) => { _.map(req.query.items, fn); });`,
+    ],
+  },
+  {
+    id: "no-nosql-injection",
+    cwe: "CWE-943 NoSQL injection",
+    rule: noNosqlInjection,
+    vuln: [
+      `app.get("/u", (req, res) => { db.collection("users").find(req.query); });`,
+      `app.post("/s", (req, res) => { db.collection("orders").findOne(req.body); });`,
+      `app.post("/d", (req, res) => { Order.deleteMany(req.body.filter); });`,
+      `app.get("/w", (req, res) => { User.find({ $where: req.query.fn }); });`,
+      `app.post("/a", (req, res) => { const f = req.body; Account.updateMany(f, { $set: { active: false } }); });`,
+    ],
+    safe: [
+      // fixed-shape literal with a tainted scalar is safe even on a real collection.
+      `app.get("/u", (req, res) => { db.collection("users").findOne({ _id: req.params.id }); });`,
+      // knex: `.update(obj)` is the column-map and is parameterized — the safe idiom.
+      `app.post("/k", (req, res) => { knex("users").where({ id: req.params.id }).update(req.body); });`,
+      // Sequelize / TypeORM: ambiguous method names, no Mongo signal → must not fire.
+      `app.get("/seq", (req, res) => { User.count(req.query); });`,
+      `app.get("/orm", (req, res) => { repo.find(req.query); });`,
+      // array `.find(cb)` and lodash in-memory predicate.
+      `app.get("/arr", (req, res) => { items.find((x) => x.id === req.query.id); });`,
+      `app.get("/lod", (req, res) => { _.find(rows, req.query); });`,
     ],
   },
 ]

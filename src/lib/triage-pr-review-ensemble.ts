@@ -3056,6 +3056,18 @@ export async function handlePrReviewEnsemble(
         anchors: nosqlInjectionStripped.map((a) => `${a.path}:${a.line}`),
       }))
     }
+    // Shadow-first gating for the deterministic prototype-pollution floor
+    // (no-prototype-pollution, CWE-1321) — same off/shadow/post contract.
+    const protoPollutionMode = (env.OPENCLAW_PROTO_POLLUTION_SCAN ?? "off").trim().toLowerCase()
+    const protoPollutionStripped = applyAstScanGate(astResult, "no-prototype-pollution", protoPollutionMode)
+    if (protoPollutionMode === "shadow" && protoPollutionStripped.length > 0) {
+      console.log(JSON.stringify({
+        event: "proto-pollution-shadow",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        count: protoPollutionStripped.length,
+        anchors: protoPollutionStripped.map((a) => `${a.path}:${a.line}`),
+      }))
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

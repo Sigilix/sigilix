@@ -3068,6 +3068,18 @@ export async function handlePrReviewEnsemble(
         anchors: protoPollutionStripped.map((a) => `${a.path}:${a.line}`),
       }))
     }
+    // Shadow-first gating for the deterministic XXE floor
+    // (no-xxe, CWE-611) — same off/shadow/post contract.
+    const xxeMode = (env.OPENCLAW_XXE_SCAN ?? "off").trim().toLowerCase()
+    const xxeStripped = applyAstScanGate(astResult, "no-xxe", xxeMode)
+    if (xxeMode === "shadow" && xxeStripped.length > 0) {
+      console.log(JSON.stringify({
+        event: "xxe-shadow",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        count: xxeStripped.length,
+        anchors: xxeStripped.map((a) => `${a.path}:${a.line}`),
+      }))
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

@@ -362,6 +362,12 @@ OPENCLAW_NOSQL_INJECTION_SCAN = "post"
 # bare merge on a non-lodash receiver, non-tainted sources, a __proto__ guard, and
 # user-keyed dynamic-dict writes are all excluded. P2-capped (never a P0/P1). Shipped "shadow".
 OPENCLAW_PROTO_POLLUTION_SCAN = "shadow"
+# Deterministic XXE floor (CWE-611, no-xxe): flags an XML parse with external-entity
+# / DTD resolution EXPLICITLY enabled (noent/replaceEntities/resolveExternalEntities/
+# dtdload/…) on request-controlled input — e.g. libxmljs.parseXml(req.body.xml,
+# { noent: true }). SAFE: no option (default-off), an explicitly-false option, and
+# constant/non-request input are all excluded. P2-capped (never a P0/P1). Shipped "shadow".
+OPENCLAW_XXE_SCAN = "shadow"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.

@@ -13,7 +13,6 @@ import { describe, it } from "vitest"
 import {
   LOGIC_RECALL_CASES,
   scoreCase,
-  aggregate,
   type CaseResult,
   type ScoredFinding,
 } from "./logic-recall-corpus"
@@ -57,6 +56,10 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
     const verdict = parsePrReviewResponse(content)
     findings = (verdict?.findings ?? []).map((f) => ({ path: f.path, line: f.line, score: f.score }))
     tag = `${findings.length}f${verdict ? "" : " · UNPARSEABLE"}`
+    if (!verdict && process.env.LOGIC_RECALL_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.log(`    RAW[${c.id}] len=${content.length}: ${content.slice(0, 900).replace(/\n/g, " ")}`)
+    }
   } catch (e) {
     tag = `ERROR ${e instanceof Error ? e.message : String(e)}`
   }
@@ -67,25 +70,42 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number]): Promise<CaseResu
   return result
 }
 
+// The logic specialist is NON-DETERMINISTIC run-to-run (even at temperature 0), so
+// a single pass over N=16 is too noisy to tune against. Repeat each case K times
+// (LOGIC_RECALL_REPEATS, default 1) and report the CATCH-RATE per case — a stable
+// per-case signal that separates real weak spots from run-to-run variance.
+const REPEATS = (() => { const n = Number(process.env.LOGIC_RECALL_REPEATS ?? 1); return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1 })()
+
 describe.skipIf(!URL)("subtle-logic recall baseline (LIVE via direct Ollama)", () => {
   it(
-    "measures recall + FP-rate over the corpus",
+    "measures recall + FP-rate over the corpus (K-repeated)",
     async () => {
-      const results: CaseResult[] = []
-      for (const c of LOGIC_RECALL_CASES) results.push(await runCase(c))
-      const r = aggregate(results)
-      const lines: string[] = ["", `┌─ SUBTLE-LOGIC RECALL BASELINE · ${MODEL} ─────────────┐`]
-      lines.push(`OVERALL: recall ${pct(r.recall)} (${r.caught}/${r.vulnTotal})  ·  FP-rate ${pct(r.fpRate)} (${r.falsePositives}/${r.safeTotal})`)
-      lines.push("by bug class:")
-      for (const [cls, b] of Object.entries(r.byClass)) lines.push(`  ${cls.padEnd(18)} ${b.caught}/${b.total}  ${pct(b.total ? b.caught / b.total : 0)}`)
-      lines.push("missed (vuln):")
-      for (const res of r.results.filter((x) => x.label === "vuln" && !x.caught)) lines.push(`  · ${res.id} (${res.bugClass})${res.nearestLine !== null ? ` — nearest @${res.nearestLine}` : " — none on path"}`)
-      lines.push("false positives (safe):")
-      for (const res of r.results.filter((x) => x.label === "safe" && x.falsePositive)) lines.push(`  ⚠ ${res.id} (${res.bugClass}) @${res.nearestLine}`)
+      const perCase = new Map<string, { hits: number; runs: number }>()
+      for (const c of LOGIC_RECALL_CASES) perCase.set(c.id, { hits: 0, runs: 0 })
+      for (let k = 0; k < REPEATS; k++) {
+        for (const c of LOGIC_RECALL_CASES) {
+          const r = await runCase(c)
+          const e = perCase.get(c.id) as { hits: number; runs: number }
+          e.runs++
+          // "hit" = a GOOD outcome: vuln caught, or safe stayed clean.
+          if (c.label === "vuln" ? r.caught : !r.falsePositive) e.hits++
+        }
+      }
+      const vuln = LOGIC_RECALL_CASES.filter((c) => c.label === "vuln")
+      const safe = LOGIC_RECALL_CASES.filter((c) => c.label === "safe")
+      const rate = (id: string): number => { const e = perCase.get(id)!; return e.runs ? e.hits / e.runs : 0 }
+      const meanRecall = vuln.reduce((s, c) => s + rate(c.id), 0) / (vuln.length || 1)
+      const meanClean = safe.reduce((s, c) => s + rate(c.id), 0) / (safe.length || 1)
+      const lines: string[] = ["", `┌─ SUBTLE-LOGIC RECALL · ${MODEL} · ${REPEATS}×/case ─────────────┐`]
+      lines.push(`MEAN: recall ${pct(meanRecall)}  ·  clean-on-safe ${pct(meanClean)}  (FP-rate ${pct(1 - meanClean)})`)
+      lines.push("per VULN case (caught / runs):")
+      for (const c of vuln) { const e = perCase.get(c.id)!; lines.push(`  ${e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})`) }
+      lines.push("per SAFE case (clean / runs):")
+      for (const c of safe) { const e = perCase.get(c.id)!; lines.push(`  ${e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~"} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})`) }
       lines.push("└──────────────────────────────────────────────────────────┘")
       // eslint-disable-next-line no-console
       console.log(lines.join("\n"))
     },
-    LOGIC_RECALL_CASES.length * 180_000 + 60_000,
+    LOGIC_RECALL_CASES.length * REPEATS * 180_000 + 60_000,
   )
 })

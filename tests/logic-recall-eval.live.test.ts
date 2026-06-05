@@ -26,6 +26,8 @@ const PER_CASE_TIMEOUT_MS = 180_000
 const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
 
 async function runCase(c: (typeof LOGIC_RECALL_CASES)[number], apiKey: string): Promise<CaseResult> {
+  // Minimal context (diff only) — omits the optional graph/retrieval/guidance
+  // blocks prod also passes, so this is a LOWER BOUND on prod recall (CodeRabbit #358).
   const userMessage = buildSpecialistInitialMessage({
     prNumber: 0, title: c.id, body: "", diff: c.diff, retrievalSnapshot: "", namespace: "eval",
   })

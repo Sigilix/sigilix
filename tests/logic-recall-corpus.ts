@@ -335,6 +335,10 @@ function samePath(found: string, expected: string): boolean {
   const f = norm(found)
   const e = norm(expected)
   if (f === e || f.endsWith("/" + e) || e.endsWith("/" + f)) return true
+  // Basename fallback (CodeRabbit #358): `src/a/wallet.ts` would match
+  // `src/b/wallet.ts`. Safe HERE because each case targets ONE specific file, so
+  // there's no same-basename ambiguity within a case's findings — but it would
+  // mask a path error if a case ever spanned multiple files sharing a basename.
   const base = (p: string): string => p.slice(p.lastIndexOf("/") + 1)
   return base(f) === base(e)
 }

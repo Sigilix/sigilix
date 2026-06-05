@@ -3032,6 +3032,17 @@ export async function handlePrReviewEnsemble(
         anchors: sqlInjectionStripped.map((a) => `${a.path}:${a.line}`),
       }))
     }
+    // Shadow-first gating for the deterministic SSTI floor (no-ssti, CWE-1336).
+    const sstiMode = (env.OPENCLAW_SSTI_SCAN ?? "off").trim().toLowerCase()
+    const sstiStripped = applyAstScanGate(astResult, "no-ssti", sstiMode)
+    if (sstiMode === "shadow" && sstiStripped.length > 0) {
+      console.log(JSON.stringify({
+        event: "ssti-shadow",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        count: sstiStripped.length,
+        anchors: sstiStripped.map((a) => `${a.path}:${a.line}`),
+      }))
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

@@ -155,9 +155,9 @@ describe("buildFallbackBody", () => {
       line: 50,
     }
     const body = buildFallbackBody({ ...baseVerdict, findings: [ranged] }, [])
-    // SIG-216: ranged anchor encodes the span in the path:line label
-    // itself; the meta line is just `<anchor> · score N` (no
-    // "Lines 40-50 (high, ...)" bracketed prefix).
+    // The ranged anchor encodes the span in the path:line label; it leads the
+    // row in BOLD with the score in a trailing <sub> (no "Lines 40-50 (high, ...)"
+    // bracketed prefix).
     expect(body).toContain("**`src/lib/foo.ts:40-50`**:")
     expect(body).toContain("score 4")
     expect(body).not.toContain("(high, score 4)")

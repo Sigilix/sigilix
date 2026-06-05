@@ -1139,9 +1139,9 @@ function prepareReviewSubmissionFindings(args: {
     if (addedLineTextByLine !== undefined && !hasSuggestion) {
       // Walk forward to the nearest SUBSTANTIVE added line so an in-diff finding
       // whose anchor landed on a brace/blank stays INLINE on real code instead of
-      // demoting to the body. Only fall back to the body when there's no
-      // substantive added line at/after the anchor (genuinely outside the diff —
-      // CodeRabbit parity: the body is for outside-the-diff findings only).
+      // demoting to the body. For THIS anchoring step, fall back to the body only
+      // when there's no substantive added line at/after the anchor. (Other gates —
+      // confidence-tier routing below, inline-cap overflow — can still body-route.)
       const resolved = pickSubstantiveAnchorLineForward(addedLinesForPath, f.line)
       if (resolved === null) {
         bodyFindings.push(withLineMovedNote(f, headSha))
@@ -3335,7 +3335,7 @@ export function pickAnchorLineForward(
  * the brace ABOVE the code it means, and the nearest added line can itself be
  * that brace — previously the finding then demoted to the body. Walking to the
  * nearest substantive added line keeps it INLINE on real code instead (CodeRabbit
- * parity — the body is for outside-the-diff findings only). Returns null when no
+ * parity for anchor-quality routing). Returns null when no
  * substantive added line exists at/after the anchor WITHIN the forward window
  * (genuinely outside the meaningful diff → caller routes to the body). Pure —
  * exported for tests.

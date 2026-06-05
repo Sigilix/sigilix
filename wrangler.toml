@@ -328,6 +328,12 @@ OPENCLAW_OPEN_REDIRECT_SCAN = "post"
 # never a P0/P1 alone). Shipped "shadow" first (measure firing + FP on dogfood) —
 # flip to "post" once clean. Higher sink ambiguity than open-redirect, so measure.
 OPENCLAW_SSRF_SCAN = "shadow"
+# Deterministic path-traversal floor (CWE-22, no-path-traversal): flags a
+# request-controlled value reaching a filesystem path op (fs.*/sendFile/Deno) with
+# no path sanitization (basename / within-root check). No fixed-prefix exemption —
+# `../` escapes a base. P2-capped (clampAstEmitScores: never a P0/P1 alone). Shipped
+# "shadow" first (measure firing + FP on dogfood) — flip to "post" once clean.
+OPENCLAW_PATH_TRAVERSAL_SCAN = "shadow"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when
 # no sigilix.json guidance is set (parity with CodeRabbit). "off" disables.

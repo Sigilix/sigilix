@@ -39,6 +39,7 @@ import { noUnauthorizedObjectLookup } from "./rules/no-unauthorized-object-looku
 import { noInsecureRandomToken } from "./rules/no-insecure-random-token"
 import { noOpenRedirect } from "./rules/no-open-redirect"
 import { noSsrf } from "./rules/no-ssrf"
+import { noPathTraversal } from "./rules/no-path-traversal"
 
 /**
  * The full v1 rule set. Add new rules here; the order is the
@@ -83,6 +84,8 @@ export const ALL_RULES: readonly AstRule[] = [
   noOpenRedirect,
   // security-specialist deterministic SSRF floor (CWE-918, severity: warning).
   noSsrf,
+  // security-specialist deterministic path-traversal floor (CWE-22, severity: warning).
+  noPathTraversal,
 ] as const
 
 const SEVERITY_RANK: Record<Severity, number> = {

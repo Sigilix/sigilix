@@ -2984,6 +2984,24 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+    // Shadow-first gating for the deterministic path-traversal floor
+    // (no-path-traversal, CWE-22) — same off/shadow/post contract.
+    const pathTraversalMode = (env.OPENCLAW_PATH_TRAVERSAL_SCAN ?? "off").trim().toLowerCase()
+    if (pathTraversalMode !== "post") {
+      const pathTraversalEmits = astResult.findings.filter((f) => f.ruleId === "no-path-traversal")
+      if (pathTraversalEmits.length > 0) {
+        astResult.findings = astResult.findings.filter((f) => f.ruleId !== "no-path-traversal")
+        for (const f of pathTraversalEmits) astResult.perFinding.delete(f.astFindingId)
+        if (pathTraversalMode === "shadow") {
+          console.log(JSON.stringify({
+            event: "path-traversal-shadow",
+            owner, repo, prNumber, headSha: headSha.slice(0, 7),
+            count: pathTraversalEmits.length,
+            anchors: pathTraversalEmits.map((f) => `${f.path}:${f.line}`),
+          }))
+        }
+      }
+    }
 
     // SIG-108: AST findings are split by roleHint inside buildFactsByRole
     // (below) so each block reaches only its own specialist.

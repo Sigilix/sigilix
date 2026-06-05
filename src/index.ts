@@ -368,6 +368,9 @@ export interface Env {
   // Deterministic SSRF floor (CWE-918, no-ssrf).
   // off (default) | shadow (measure-only) | post (emit P2 advisory).
   OPENCLAW_SSRF_SCAN?: string
+  // Deterministic path-traversal floor (CWE-22, no-path-traversal).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory).
+  OPENCLAW_PATH_TRAVERSAL_SCAN?: string
   /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
   OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 

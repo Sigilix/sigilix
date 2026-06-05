@@ -384,6 +384,9 @@ export interface Env {
   // Deterministic prototype-pollution floor (CWE-1321, no-prototype-pollution).
   // off (default) | shadow (measure-only) | post (emit P2 advisory).
   OPENCLAW_PROTO_POLLUTION_SCAN?: string
+  // Deterministic XXE floor (CWE-611, no-xxe).
+  // off (default) | shadow (measure-only) | post (emit P2 advisory).
+  OPENCLAW_XXE_SCAN?: string
   /** Lane D: ingest repo AI-instruction files (CLAUDE.md/…) as advisory review guidance. Default on; "off" disables. */
   OPENCLAW_INGEST_AI_INSTRUCTIONS?: string
 

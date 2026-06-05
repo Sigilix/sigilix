@@ -83,7 +83,7 @@ describe("floor eval (SIG-114 ruler) — precision/recall over an independent co
     lines.push("└─────────────────────────────────────────────────────────────────────────────┘")
     // eslint-disable-next-line no-console
     console.log(lines.join("\n"))
-    expect(results.length).toBe(9)
+    expect(results.length).toBe(10)
   })
 
   // THE bar (SIG-245): zero false positives on the safe corpus. A floor that

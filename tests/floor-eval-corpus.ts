@@ -28,6 +28,7 @@ import { noSqlInjection } from "../src/lib/ast-rules/rules/no-sql-injection"
 import { noSsti } from "../src/lib/ast-rules/rules/no-ssti"
 import { noNosqlInjection } from "../src/lib/ast-rules/rules/no-nosql-injection"
 import { noPrototypePollution } from "../src/lib/ast-rules/rules/no-prototype-pollution"
+import { noXxe } from "../src/lib/ast-rules/rules/no-xxe"
 
 export interface FloorEval {
   id: string
@@ -227,6 +228,29 @@ export const FLOOR_EVALS: FloorEval[] = [
       `app.post("/sess", (req, res) => { sessions[req.params.id] = data; });`,
       // a __proto__ sanitization guard means the dev is defending → cleared.
       `app.post("/g", (req, res) => { delete req.body.__proto__; _.merge(target, req.body); });`,
+    ],
+  },
+  {
+    id: "no-xxe",
+    cwe: "CWE-611 XML external entity",
+    rule: noXxe,
+    vuln: [
+      `app.post("/x", (req, res) => { libxmljs.parseXml(req.body.xml, { noent: true }); });`,
+      `app.post("/p", (req, res) => { parser.parseXmlString(req.query.data, { replaceEntities: true }); });`,
+      `app.post("/d", (req, res) => { const xml = req.body.doc; parseXml(xml, { dtdload: true, noent: true }); });`,
+      `app.post("/r", (req, res) => { libxml.parseXml(req.body.payload, { resolveExternalEntities: true }); });`,
+    ],
+    safe: [
+      // entities explicitly DISABLED — the safe config.
+      `app.post("/s", (req, res) => { libxmljs.parseXml(req.body.xml, { noent: false }); });`,
+      // no entity option — the safe default.
+      `app.post("/d2", (req, res) => { libxmljs.parseXml(req.body.xml); });`,
+      // constant / non-request input — not untrusted.
+      `app.post("/c", (req, res) => { libxmljs.parseXml("<root/>", { noent: true }); });`,
+      // a safe-by-default parser with no entity option.
+      `app.post("/x2", (req, res) => { xml2js.parseString(req.body.xml, cb); });`,
+      // not XML parsing at all.
+      `app.post("/j", (req, res) => { JSON.parse(req.body.data); });`,
     ],
   },
 ]

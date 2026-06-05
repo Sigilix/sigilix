@@ -6,7 +6,7 @@
 // query and runs their own SQL (dump tables, auth bypass, RCE via stacked stmts).
 //
 // WHY this exists: the security specialist catches these by reasoning, but
-// NONDETERMINISTICALLY. This is the run-INVARIANT floor: an obvious
+// non-deterministically. This is the run-invariant floor: an obvious
 // tainted-string-into-query is never silently missed.
 //
 // FP-SAFETY (a false positive on safe query code is the worst outcome — after the
@@ -41,6 +41,9 @@ const SKIP_PATH = /(\.test\.|\.spec\.|\.config\.|(^|\/)(__tests__|tests?|migrati
 const TAINTED_MEMBER_RE = /\b(?:req|request|ctx|context)\.(?:params|query|body)\b/
 const TAINTED_CALL_RE =
   /(?:\b(?:c|ctx|context)\.req\.(?:param|query)\(|(?:req|request)\.url\b[^\n]{0,40}?\.searchParams\.get\()/
+// The request object itself — `const r = req; query("…" + r.query.id)` aliases the
+// whole request, so a local bound to a bare request root is a tainted root too.
+const REQUEST_ROOT_RE = /^(?:req|request|ctx|context)$/
 
 // Generic executor methods — fire ONLY when the static text reads like SQL.
 // Deliberately NARROW: `query`/`execute`/`exec`/`prepare` are the real raw-SQL
@@ -122,22 +125,33 @@ function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNod
     let changed = false
     for (const { name, init } of decls) {
       if (tainted.has(name)) continue
-      if (carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
+      // tainted if the init reaches a request source / tainted local, OR aliases a
+      // bare request root (`const r = req`) — `r.query.id` then carries taint.
+      const aliasesRoot = init.type === "Identifier" && REQUEST_ROOT_RE.test(init.name as string)
+      if (aliasesRoot || carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
     }
     if (!changed) break
   }
   return tainted
 }
 
-/** Program-wide `const NAME = <init>` map for static text resolution. */
+/** Program-wide `const NAME = <init>` map for static text resolution. A name
+ *  declared in more than one place is AMBIGUOUS (we have no lexical scope here),
+ *  so it is dropped rather than risk resolving the wrong initializer — CodeRabbit
+ *  #352. The SQL-shape check then just gets no static text from it (fail-closed:
+ *  no false SQL match). */
 function collectConstInits(program: AstNode): Map<string, AstNode> {
   const consts = new Map<string, AstNode>()
+  const ambiguous = new Set<string>()
   function walk(n: AstNode): void {
     if (!n || typeof n !== "object") return
     if (n.type === "VariableDeclaration" && n.kind === "const") {
       for (const d of (n.declarations ?? []) as AstNode[]) {
         const name = idName(d.id as AstNode)
-        if (name && d.init && !consts.has(name)) consts.set(name, d.init as AstNode)
+        if (!name || !d.init) continue
+        if (ambiguous.has(name)) continue
+        if (consts.has(name)) { consts.delete(name); ambiguous.add(name) } // re-declared → drop
+        else consts.set(name, d.init as AstNode)
       }
     }
     for (const k of Object.keys(n)) {

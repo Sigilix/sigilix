@@ -41,6 +41,10 @@ describe("no-sql-injection — FIRES on tainted SQL strings", () => {
   it("knex whereRaw (name-sufficient): qb.whereRaw('id = ' + req.query.id)", () => {
     expect(runRule(`app.get("/u", (req, res) => { qb.whereRaw("id = " + req.query.id); });`).length).toBe(1)
   })
+  it("request-object alias fires: const r = req; db.query('SELECT * FROM u WHERE id = ' + r.query.id)", () => {
+    const src = `app.get("/u", (req, res) => { const r = req; db.query("SELECT * FROM u WHERE id = " + r.query.id); });`
+    expect(runRule(src).length).toBe(1)
+  })
   it("Hono: c.req.query into a concatenated query", () => {
     const src = `
 import { Hono } from "hono";
@@ -90,6 +94,14 @@ describe("no-sql-injection — FP-safety: does NOT fire on safe query code", () 
   })
   it("a constant SQL with a non-request concat never fires", () => {
     expect(runRule(`const T = "users"; app.get("/u", (req, res) => { db.query("SELECT * FROM " + T + " LIMIT 10"); });`).length).toBe(0)
+  })
+  it("an ambiguous (re-declared) const is not resolved — no false SQL match (CodeRabbit #352)", () => {
+    // `MSG` is declared twice; the static-text resolver must not borrow the SQL-shaped
+    // one to make a non-SQL `.execute` look like a statement.
+    const src = `const MSG = "SELECT * FROM audit_log";
+function other() { const MSG = "hello "; return queue.push(MSG); }
+app.get("/u", (req, res) => { const MSG = "ping "; bus.execute(MSG + req.query.id); });`
+    expect(runRule(src).length).toBe(0)
   })
   it("skips test / spec / config / migration / script files", () => {
     const src = `app.get("/u", (req, res) => { db.query("SELECT * FROM users WHERE id = " + req.query.id); });`

@@ -16,6 +16,9 @@ import { FLOOR_EVALS } from "./floor-eval-corpus"
 const SAMPLE_PATH = "src/routes/handler.ts" // a real request path (NOT a skipped test path)
 
 function fires(rule: AstRule, source: string): boolean {
+  // Fail LOUD on a misconfigured rule (no nodeTypes) — otherwise it would never
+  // be visited and silently deflate recall as phantom FNs (Sigilix #355).
+  if (rule.nodeTypes.length === 0) throw new Error(`rule ${rule.id} declares no nodeTypes`)
   const r = parseSource(source, ".ts")
   if (!r.ok) throw new Error(`parse failed for sample: ${r.reason}\n${source}`)
   const out: AstRuleHit[] = []
@@ -61,21 +64,22 @@ describe("floor eval (SIG-114 ruler) — precision/recall over an independent co
     const lines: string[] = []
     lines.push("")
     lines.push("┌─ DETERMINISTIC SECURITY FLOOR EVAL ─────────────────────────────────────────┐")
-    lines.push("floor                          CWE                    TP/FN  FP/TN  recall  FP-rate")
+    lines.push("floor                          CWE                    TP/FN  FP/TN  prec  recall  FP-rate")
     let TP = 0, FP = 0, TN = 0, FN = 0
     for (const r of results) {
       TP += r.tp; FP += r.fp; TN += r.tn; FN += r.fn
       lines.push(
         `${r.id.padEnd(30)} ${r.cwe.padEnd(22)} ${`${r.tp}/${r.fn}`.padEnd(6)} ${`${r.fp}/${r.tn}`.padEnd(6)} ` +
-        `${pct(r.recall).padStart(6)}  ${pct(r.fpRate).padStart(6)}`,
+        `${pct(r.precision).padStart(4)}  ${pct(r.recall).padStart(6)}  ${pct(r.fpRate).padStart(6)}`,
       )
       for (const s of r.fpSamples) lines.push(`    ⚠ FALSE POSITIVE: ${s.replace(/\n/g, " ").slice(0, 90)}`)
       for (const s of r.fnSamples) lines.push(`    · missed (FN): ${s.replace(/\n/g, " ").slice(0, 90)}`)
     }
     const recall = TP + FN === 0 ? 1 : TP / (TP + FN)
     const fpRate = FP + TN === 0 ? 0 : FP / (FP + TN)
+    const precision = TP + FP === 0 ? 1 : TP / (TP + FP)
     lines.push("─────────────────────────────────────────────────────────────────────────────")
-    lines.push(`OVERALL: ${TP} TP · ${FN} FN · ${FP} FP · ${TN} TN  →  recall ${pct(recall)} · FP-rate ${pct(fpRate)}`)
+    lines.push(`OVERALL: ${TP} TP · ${FN} FN · ${FP} FP · ${TN} TN  →  precision ${pct(precision)} · recall ${pct(recall)} · FP-rate ${pct(fpRate)}`)
     lines.push("└─────────────────────────────────────────────────────────────────────────────┘")
     // eslint-disable-next-line no-console
     console.log(lines.join("\n"))
@@ -86,9 +90,10 @@ describe("floor eval (SIG-114 ruler) — precision/recall over an independent co
   // fires on idiomatic safe code would post a false REQUEST_CHANGES at `post`.
   it("has ZERO false positives across the entire safe corpus", () => {
     const offenders = results.filter((r) => r.fp > 0)
-    expect(
-      offenders.map((r) => `${r.id}: ${r.fp} FP — ${r.fpSamples.map((s) => s.slice(0, 70)).join(" | ")}`),
-    ).toEqual([])
+    const detail = offenders
+      .map((r) => `${r.id}: ${r.fp} FP — ${r.fpSamples.map((s) => s.slice(0, 70)).join(" | ")}`)
+      .join("\n")
+    expect(offenders.length, `floors with false positives:\n${detail}`).toBe(0)
   })
 
   // Each floor must catch a solid majority of its canonical vulnerable patterns

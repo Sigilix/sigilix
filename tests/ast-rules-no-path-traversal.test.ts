@@ -51,6 +51,9 @@ describe("no-path-traversal — FIRES on request-controlled fs paths", () => {
   it("Express res.sendFile(req.query.path) inside an (req, res) handler", () => {
     expect(runRule(`app.get("/f", (req, res) => { res.sendFile(req.query.path); });`).length).toBe(1)
   })
+  it("a request-controlled { root } is no boundary → still fires (CodeRabbit #350)", () => {
+    expect(runRule(`app.get("/f", (req, res) => { res.sendFile(req.query.name, { root: req.query.dir }); });`).length).toBe(1)
+  })
   it("alias chain: const a = req.query.f; const b = a; fs.readFileSync(b)", () => {
     expect(runRule(FS + `app.get("/f", (req, res) => { const a = req.query.f; const b = a; fs.readFileSync(b); });`).length).toBe(1)
   })

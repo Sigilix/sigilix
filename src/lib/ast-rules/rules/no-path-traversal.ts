@@ -204,23 +204,24 @@ function hasRequestParam(fn: AstNode): boolean {
   return false
 }
 
-/** Does an Express `sendFile`/`download` options object confine to a root dir?
- *  `res.sendFile(p, { root: BASE })` resolves within root and rejects escaping
- *  `..`, so it is safe. */
-function hasRootOption(arg: AstNode | undefined): boolean {
-  if (!arg || arg.type !== "ObjectExpression") return false
+/** The `root` value node of an Express `sendFile`/`download` options object, or
+ *  undefined. `res.sendFile(p, { root: BASE })` confines within `root` — but only
+ *  when `root` itself is NOT attacker-controlled (CodeRabbit #350), so the caller
+ *  must verify the value is untainted. */
+function rootOptionValue(arg: AstNode | undefined): AstNode | undefined {
+  if (!arg || arg.type !== "ObjectExpression") return undefined
   for (const prop of (arg.properties ?? []) as AstNode[]) {
     if (prop.type === "Property" && !prop.computed && (idName(prop.key as AstNode) ?? "").toLowerCase() === "root") {
-      return true
+      return prop.value as AstNode
     }
   }
-  return false
+  return undefined
 }
 
 /** Classify a call as a filesystem path sink and return the path argument, or
  *  null when it's not a sink / is confined to a root. `requiresHandlerShape` =
  *  the caller must additionally confirm an Express handler (for `res.sendFile`). */
-function pathSink(call: AstNode, fsImports: FsImports): { target: AstNode; requiresHandlerShape: boolean } | null {
+function pathSink(call: AstNode, fsImports: FsImports, source: string): { target: AstNode; requiresHandlerShape: boolean } | null {
   const callee = call.callee as AstNode
   if (!callee) return null
   const args = (call.arguments ?? []) as AstNode[]
@@ -238,8 +239,12 @@ function pathSink(call: AstNode, fsImports: FsImports): { target: AstNode; requi
     else if ((objId ?? "").toLowerCase() === "res" && EXPRESS_SEND_METHODS.has(method)) { isSink = true; sendFile = true }
   }
   if (!isSink) return null
-  // `res.sendFile(p, { root })` / `res.download(p, { root })` is confined → safe.
-  if (sendFile && (hasRootOption(args[1]) || hasRootOption(args[2]))) return null
+  // `res.sendFile(p, { root })` confines to root — but ONLY when `root` is not
+  // itself request-controlled (an attacker-chosen root is no boundary).
+  if (sendFile) {
+    const root = rootOptionValue(args[1]) ?? rootOptionValue(args[2])
+    if (root && !(TAINTED_MEMBER_RE.test(sliceOf(source, root)) || TAINTED_CALL_RE.test(sliceOf(source, root)))) return null
+  }
   const target = args[0]
   return target ? { target, requiresHandlerShape: sendFile } : null
 }
@@ -328,7 +333,7 @@ export const noPathTraversal: AstRule = {
     function walk(n: AstNode): void {
       if (!n || typeof n !== "object") return
       if (n.type === "CallExpression") {
-        const sink = pathSink(n, fsImports)
+        const sink = pathSink(n, fsImports, ctx.source)
         if (sink) {
           const callStart = typeof n.start === "number" ? n.start : -1
           let enclosing: AstNode | null = null

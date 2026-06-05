@@ -336,9 +336,9 @@ OPENCLAW_SSRF_SCAN = "shadow"
 OPENCLAW_PATH_TRAVERSAL_SCAN = "shadow"
 # Deterministic SQL-injection floor (CWE-89, no-sql-injection): flags a request-
 # controlled value concatenated into a raw SQL string at a query sink (.query/
-# .execute/.run/raw/$queryRawUnsafe). Parameterized queries (taint in the params,
-# not the SQL string) + tagged-template queries are auto-safe. P2-capped
-# (clampAstEmitScores: never a P0/P1 alone). Shipped "shadow" first.
+# .execute/.exec/.prepare/.raw + raw-named $queryRawUnsafe/whereRaw). Parameterized
+# queries (taint in the params, not the SQL string) + tagged-template queries are
+# auto-safe. P2-capped (clampAstEmitScores: never a P0/P1 alone). Shipped "shadow".
 OPENCLAW_SQL_INJECTION_SCAN = "shadow"
 # Lane D: ingest a repo's own AI-instruction files (CLAUDE.md / AGENTS.md /
 # .cursorrules / .github/copilot-instructions.md) as ADVISORY review guidance when

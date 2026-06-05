@@ -72,3 +72,30 @@ applies to you. This file adds the operating rules specific to working as an age
   `src/lib/` (notably the `triage-pr-review*` files).
 - Tests are **vitest**; `npm run build` runs the whole gate. Internal env vars keep the
   legacy `OPENCLAW_*` prefix on purpose — don't rename them.
+
+---
+
+## Model-eval testing (the live specialists)
+
+Some tests run a **real review specialist through a live model** — e.g. the subtle-logic
+recall ruler that measures the logic specialist (`tests/logic-recall-eval.live.test.ts`,
+`npm run logic-recall-eval`). These need a **Turbo-entitled `OLLAMA_API_KEY`** — the same
+Ollama Turbo (`ollama.com`) endpoint prod uses. Put the shared testing key in your
+**gitignored `.dev.vars`**:
+
+```
+OLLAMA_API_KEY=<your Turbo testing key>
+```
+
+Then, e.g.:
+
+```bash
+OLLAMA_API_KEY="$(grep -E '^OLLAMA_API_KEY' .dev.vars | cut -d= -f2-)" npm run logic-recall-eval
+```
+
+- These live tests are **gated on the key and SKIP without it**, so `npm run build` / CI
+  stay green without it — only run them when you're measuring model behavior.
+- This is the **real prod path** (Ollama Turbo). Prefer it over any local proxy / LAN-Ollama
+  workaround — a Turbo key works from anywhere; a private LAN box doesn't.
+- Re-baseline a model/prompt change with the **K-repeated** ruler (`LOGIC_RECALL_REPEATS=4`):
+  the specialists are non-deterministic run-to-run, so a single pass is noise.

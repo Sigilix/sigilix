@@ -72,6 +72,11 @@ hand or with an AI assistant. It's short on purpose. Read it once; follow it eve
 | `npm test` | tests only (`vitest run`) |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` / `npm run lint:fix` | eslint |
+| `npm run logic-recall-eval` | **live** subtle-logic recall ruler — runs the real logic specialist; needs a Turbo-entitled `OLLAMA_API_KEY` in `.dev.vars` (SKIPS without it, so CI stays green) |
+
+Tests that hit a **live model** (e.g. `npm run logic-recall-eval`) need a Turbo-entitled
+`OLLAMA_API_KEY` in your gitignored `.dev.vars` — the real prod endpoint (Ollama Turbo),
+not a local LAN box. They're gated on the key and skip without it.
 
 ## Commits
 

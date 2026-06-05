@@ -16,6 +16,7 @@
     "bakeoff-report": "tsx scripts/bakeoff-report.ts",
     "fp-rate-report": "tsx scripts/fp-rate-report.ts",
     "fp-eval": "tsx scripts/fp-eval.ts",
+    "logic-recall-eval": "vitest run tests/logic-recall-eval.live.test.ts",
     "retrieval-ab-report": "tsx scripts/retrieval-ab-report.ts",
     "phase4-calibrate": "tsx scripts/phase4-calibrate.ts",
     "collect-sig-161-findings": "tsx scripts/collect-sig-161-findings.ts",

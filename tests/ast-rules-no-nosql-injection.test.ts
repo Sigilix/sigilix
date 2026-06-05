@@ -42,6 +42,12 @@ describe("no-nosql-injection — FIRES on a request object handed directly to a 
   it("$where with a tainted value (server-side JS injection) — $where is itself a Mongo signal", () => {
     expect(runRule(`app.get("/w", (req, res) => { User.find({ $where: req.query.fn }); });`).length).toBe(1)
   })
+  it("$function with a tainted value", () => {
+    expect(runRule(`app.get("/f", (req, res) => { User.find({ $function: { body: req.query.fn, args: [], lang: "js" } }); });`).length).toBe(1)
+  })
+  it("$accumulator with a tainted value", () => {
+    expect(runRule(`app.post("/ac", (req, res) => { Metric.find({ $accumulator: req.body.acc }); });`).length).toBe(1)
+  })
   it("Mongoose query chain: User.find(req.query).lean()", () => {
     expect(runRule(`app.get("/m", (req, res) => { User.find(req.query).sort({ a: 1 }).lean(); });`).length).toBe(1)
   })
@@ -81,6 +87,12 @@ describe("no-nosql-injection — FP-safety: does NOT fire on safe / non-Mongo co
   })
   it("no taint: a constant filter never fires", () => {
     expect(runRule(`app.get("/u", (req, res) => { db.collection("u").find({ role: "admin" }); });`).length).toBe(0)
+  })
+  it("a shadowed/redeclared binding is never tainted (CodeRabbit #356 — fail closed)", () => {
+    // `f` is redeclared; the inner sanitized binding reaches the sink. The
+    // ambiguous-name guard skips `f` entirely rather than merging taint.
+    const src = `app.get("/u", (req, res) => { const f = req.body; doStuff(f); { const f = { _id: "fixed" }; db.collection("u").findOne(f); } });`
+    expect(runRule(src).length).toBe(0)
   })
   it("a sanitized filter is skipped (fail closed)", () => {
     expect(runRule(`app.get("/u", (req, res) => { const f = mongoSanitize(req.query); db.collection("u").find(f); });`).length).toBe(0)

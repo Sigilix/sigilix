@@ -144,19 +144,24 @@ function hasTaintedWhereOp(arg: AstNode | undefined, taintedLocals: Map<string, 
   return found
 }
 
-/** Tainted locals → their init node, iterated to a FIXED POINT (alias chains). */
+/** Tainted locals → their init node, iterated to a FIXED POINT (alias chains).
+ *  A name declared MORE THAN ONCE in the scope is AMBIGUOUS (we have no lexical
+ *  scope here, so we can't tell which binding reaches the sink) — it is never
+ *  tainted, so a shadowed/redeclared binding can't merge taint across bindings
+ *  (CodeRabbit #356; mirrors collectConstInits' ambiguity guard). Fail closed. */
 function collectTaintedLocals(root: AstNode, source: string): Map<string, AstNode> {
   const decls: Array<{ name: string; init: AstNode }> = []
+  const counts = new Map<string, number>()
   walkNoNested(root, (n) => {
     if (n.type !== "VariableDeclarator" || !n.init) return
     const name = idName(n.id as AstNode)
-    if (name) decls.push({ name, init: n.init as AstNode })
+    if (name) { decls.push({ name, init: n.init as AstNode }); counts.set(name, (counts.get(name) ?? 0) + 1) }
   })
   const tainted = new Map<string, AstNode>()
   for (let pass = 0; pass < 8; pass++) {
     let changed = false
     for (const { name, init } of decls) {
-      if (tainted.has(name)) continue
+      if (tainted.has(name) || (counts.get(name) ?? 0) > 1) continue // ambiguous shadow → skip
       const aliasesRoot = init.type === "Identifier" && REQUEST_ROOT_RE.test(init.name as string)
       if (aliasesRoot || carriesTaint(init, tainted, source)) { tainted.set(name, init); changed = true }
     }

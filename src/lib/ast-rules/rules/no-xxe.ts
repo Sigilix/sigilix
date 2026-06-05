@@ -145,6 +145,32 @@ function isEnabled(v: AstNode | undefined): boolean {
   return true
 }
 
+// Known XML-parser library receivers (gate the generic sink names to these).
+const XML_LIB_RE = /^(?:libxml|libxmljs|libxmljs2|xmldom|domparser|saxparser|sax|xml2js|fastxmlparser|expat|nodeexpat)$/
+
+/** Is this call an XML PARSE sink? (CodeRabbit #363: gate the option/taint check
+ *  to a real XML parser so a non-XML API reusing an option name can't fire.) A
+ *  method/function whose name mentions `xml`, the DOM/sax `parseFromString` /
+ *  `parseString`, or any parse on a known XML-library receiver. */
+function isXmlParseSink(call: AstNode): boolean {
+  const callee = call.callee as AstNode
+  if (!callee) return false
+  let name = ""
+  let recv = ""
+  if (callee.type === "Identifier") {
+    name = (callee.name as string).toLowerCase()
+  } else if (callee.type === "MemberExpression" && !callee.computed) {
+    name = (idName(callee.property as AstNode) ?? "").toLowerCase()
+    recv = (idName(callee.object as AstNode) ?? "").toLowerCase()
+  } else {
+    return false
+  }
+  if (name.includes("xml")) return true // parseXml, parseXmlString, readXml, …
+  if (name === "parsefromstring" || name === "parsestring") return true // DOMParser / sax / xml2js
+  if (recv && XML_LIB_RE.test(recv)) return true // <xmlLib>.parse(…)
+  return false
+}
+
 /** Does the call carry an options object with an entity-enabling switch turned on? */
 function hasEnabledEntityOption(call: AstNode): boolean {
   let found = false
@@ -188,7 +214,7 @@ export const noXxe: AstRule = {
 
     function walk(n: AstNode): void {
       if (!n || typeof n !== "object") return
-      if (n.type === "CallExpression" && hasEnabledEntityOption(n)) {
+      if (n.type === "CallExpression" && isXmlParseSink(n) && hasEnabledEntityOption(n)) {
         const start = typeof n.start === "number" ? n.start : -1
         let enclosing: AstNode | null = null
         for (const f of fns) {

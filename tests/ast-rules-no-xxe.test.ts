@@ -72,6 +72,10 @@ describe("no-xxe — FP-safety: does NOT fire", () => {
   it("taint ONLY inside the options object (not the parsed input) does not fire", () => {
     expect(runRule(`app.post("/b", (req, res) => { libxmljs.parseXml(trustedXml, { noent: true, baseUrl: req.body.base }); });`).length).toBe(0)
   })
+  it("a NON-XML call reusing an entity-option name does not fire (sink-gated, CodeRabbit #363)", () => {
+    expect(runRule(`app.post("/api", (req, res) => { client.configure(req.body.x, { noent: true }); });`).length).toBe(0)
+    expect(runRule(`app.post("/c", (req, res) => { chart.render(req.body.data, { dtdload: true }); });`).length).toBe(0)
+  })
   it("skips test / spec / config / migration / script files", () => {
     const src = `app.post("/x", (req, res) => { libxmljs.parseXml(req.body.xml, { noent: true }); });`
     expect(runRule(src, "tests/xml.test.ts").length).toBe(0)

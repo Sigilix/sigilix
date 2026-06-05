@@ -251,6 +251,8 @@ export const FLOOR_EVALS: FloorEval[] = [
       `app.post("/x2", (req, res) => { xml2js.parseString(req.body.xml, cb); });`,
       // not XML parsing at all.
       `app.post("/j", (req, res) => { JSON.parse(req.body.data); });`,
+      // a non-XML API reusing an entity-option name — sink-gated, must not fire.
+      `app.post("/api", (req, res) => { client.configure(req.body.x, { noent: true }); });`,
     ],
   },
 ]

@@ -3696,6 +3696,21 @@ async function dispatchReviewMemoryCapture(args: {
   }
 }
 
+async function resolvePullRequestHeadRefForConfig(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<string> {
+  try {
+    const pr = await client.getPullRequest(owner, repo, prNumber)
+    const headSha = pr.head?.sha
+    return typeof headSha === "string" && headSha.length > 0 ? headSha : "HEAD"
+  } catch {
+    return "HEAD"
+  }
+}
+
 export async function dispatchTopLevelReviewMemoryCapture(args: {
   env: Env
   owner: string
@@ -3716,7 +3731,8 @@ export async function dispatchTopLevelReviewMemoryCapture(args: {
       installationId,
     })
     const client = new GitHubClient({ token })
-    const sigilixConfig = await loadSigilixConfig(client, owner, repo, "HEAD")
+    const configRef = await resolvePullRequestHeadRefForConfig(client, owner, repo, prNumber)
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, configRef)
     const config = resolveReviewMemoryConfig(sigilixConfig)
     await captureTopLevelReviewFeedback({
       env,

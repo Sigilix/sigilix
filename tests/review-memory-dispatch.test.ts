@@ -8,6 +8,7 @@ const {
   mockCaptureDismissedReviewFeedback,
   mockCaptureTopLevelReviewFeedback,
   mockGetInstallationToken,
+  mockGetPullRequest,
   mockGitHubClient,
   mockLoadSigilixConfig,
   mockResolveReviewMemoryConfig,
@@ -20,12 +21,18 @@ const {
     maxInjectedMemories: 5,
     minSignalThreshold: 3,
     maxSignalAgeDays: 90,
+    claimSoftening: false,
   }
   return {
     mockCaptureDismissedReviewFeedback: vi.fn(async () => undefined),
     mockCaptureTopLevelReviewFeedback: vi.fn(async () => undefined),
     mockGetInstallationToken: vi.fn(async () => "test-token"),
-    mockGitHubClient: vi.fn((args: { token: string }) => ({ token: args.token })),
+    mockGetPullRequest: vi.fn(async () => ({ head: { sha: "c".repeat(40) } })),
+    mockGitHubClient: vi.fn((args: { token: string }) => ({
+      token: args.token,
+      getPullRequest: (...getPullRequestArgs: unknown[]) =>
+        mockGetPullRequest(...getPullRequestArgs),
+    })),
     mockLoadSigilixConfig: vi.fn(async () => ({ reviewMemory: { enabled: true } })),
     mockResolveReviewMemoryConfig: vi.fn(() => resolvedReviewMemoryConfig),
     resolvedReviewMemoryConfig,
@@ -120,6 +127,7 @@ beforeEach(() => {
   mockCaptureDismissedReviewFeedback.mockClear()
   mockCaptureTopLevelReviewFeedback.mockClear()
   mockGetInstallationToken.mockReset().mockResolvedValue("test-token")
+  mockGetPullRequest.mockReset().mockResolvedValue({ head: { sha: "c".repeat(40) } })
   mockGitHubClient.mockClear()
   mockLoadSigilixConfig.mockReset().mockResolvedValue({ reviewMemory: { enabled: true } })
   mockResolveReviewMemoryConfig.mockReset().mockReturnValue(resolvedReviewMemoryConfig)
@@ -180,7 +188,8 @@ describe("review-memory dispatch wrappers", () => {
     await dispatchTopLevelReviewMemoryCapture(args)
 
     const client = mockGitHubClient.mock.results[0]?.value
-    expect(mockLoadSigilixConfig).toHaveBeenCalledWith(client, "acme", "site", "HEAD")
+    expect(mockGetPullRequest).toHaveBeenCalledWith("acme", "site", 7)
+    expect(mockLoadSigilixConfig).toHaveBeenCalledWith(client, "acme", "site", "c".repeat(40))
     expect(mockResolveReviewMemoryConfig).toHaveBeenCalledWith({ reviewMemory: { enabled: true } })
     expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalledWith(expect.objectContaining({
       client,
@@ -188,6 +197,17 @@ describe("review-memory dispatch wrappers", () => {
       config: resolvedReviewMemoryConfig,
       repoId: 555,
     }))
+  })
+
+  it("falls back to HEAD when top-level PR head lookup fails", async () => {
+    const args = topLevelArgs(makeEnv())
+    mockGetPullRequest.mockRejectedValueOnce(new Error("pr lookup failed"))
+
+    await dispatchTopLevelReviewMemoryCapture(args)
+
+    const client = mockGitHubClient.mock.results[0]?.value
+    expect(mockLoadSigilixConfig).toHaveBeenCalledWith(client, "acme", "site", "HEAD")
+    expect(mockCaptureTopLevelReviewFeedback).toHaveBeenCalled()
   })
 
   it("delegates dismissed-review capture using the webhook head SHA for config", async () => {

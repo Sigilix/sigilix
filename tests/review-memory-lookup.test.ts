@@ -64,6 +64,7 @@ function defaultConfig(
     maxInjectedMemories: 5,
     minSignalThreshold: 3,
     maxSignalAgeDays: 90,
+    claimSoftening: false,
     ...over,
   }
 }

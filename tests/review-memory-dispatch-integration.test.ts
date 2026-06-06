@@ -137,7 +137,7 @@ describe("review-memory dispatch wrappers — real capture path", () => {
 
     expect(mockGetInstallationToken).toHaveBeenCalledOnce()
     expect(mockGitHubClient).toHaveBeenCalledWith({ token: "test-token" })
-    expect(mockGetFileContent).toHaveBeenCalledWith("acme", "site", "sigilix.json", "HEAD")
+    expect(mockGetFileContent).toHaveBeenCalledWith("acme", "site", "sigilix.json", "head")
     const record = JSON.parse(store.get("review-memory:repo:555:cat:performance")!)
     expect(record.signals[0].commentId).toBe(900)
     expect(record.signals[0].fid).toBe("1111111111111111")

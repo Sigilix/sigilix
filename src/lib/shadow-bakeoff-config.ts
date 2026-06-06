@@ -65,10 +65,10 @@ export const SHADOW_BAKEOFF_LINEUP: Record<ShadowRole, ModelConfig> = {
   },
   // Tests: use a different agentic-code model from security so the
   // ensemble no longer has two roles anchored to the same model ID.
-  // MiniMax M2.5 is fast enough to stay off the critical path and has
-  // strong coding-agent evidence.
+  // MiniMax M3 (upgraded from M2.5, 2026-06-05) is fast enough to stay off
+  // the critical path and has strong coding-agent evidence.
   tests: {
-    primary: "minimax-m2.5:cloud",
+    primary: "minimax-m3:cloud",
     retries: 1,
     fallback: "qwen3-coder:480b-cloud",
   },

@@ -1209,9 +1209,18 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // security + tests fallback — kept reachable for its reasoning
   // capability without anchoring wall-time.
   logic: {
-    // Was `deepseek-v4-pro:cloud` (100-270s). `deepseek-v4-flash:cloud`
-    // keeps the V4 reasoning lineage + 1M context.
-    primary: "deepseek-v4-flash:cloud",
+    // 2026-06-05 — SWAPPED BACK to `deepseek-v4-pro:cloud` from
+    // `deepseek-v4-flash:cloud`. The original demotion reason (100-270s
+    // latency) is VOID: that was the unbounded-CoT stall, which the SIG-287
+    // `think:false` fix already cured — with `think:false`, v4-pro returns
+    // structured output in ~6-12s on Turbo (curl-probed + live eval), same
+    // ballpark as flash, well within the budget invariant below. The subtle-
+    // logic recall ruler (tests/logic-recall-eval.live.test.ts, K=12 real-path)
+    // shows v4-pro + the FP-discipline prompt in this PR at recall 93% / FP 25%
+    // vs flash-tuned 86% / 31% — better on BOTH axes, and the only config that
+    // beats Greptile's recall (82%) while matching CodeRabbit's precision floor
+    // (~75%). v4-pro keeps the V4 reasoning lineage + 1M context.
+    primary: "deepseek-v4-pro:cloud",
     // 2026-05-26 Codex/measurement: production telemetry on PR #188
     // showed deepseek-v4-flash + kimi-k2.5 (the prior fallback) BOTH
     // hit exactly 60_000ms (PER_ATTEMPT_TIMEOUT_MS) on every review.
@@ -1303,12 +1312,12 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     fallback: "kimi-k2.5:cloud",
   },
   tests: {
-    // MiniMax M2.5 — agentic-code / test-workflow model per Codex's
-    // ARC-292 analysis. Format-tested clean (~40-90s). Was
-    // `deepseek-v4-flash:cloud` which collided with security's
-    // primary in the old lineup (violated the 4+1 unique constraint
-    // even pre-this-swap).
-    primary: "minimax-m2.5:cloud",
+    // MiniMax M3 — agentic-code / test-workflow model. 2026-06-05 upgrade
+    // from `minimax-m2.5:cloud` (founder-tested, works well); Turbo-probed
+    // available + format-clean (think:false + schema → bare JSON, no fences).
+    // The M2.5 line was the ARC-292 (Codex) pick; M3 is the same family, newer.
+    // Was `deepseek-v4-flash:cloud` before M2.5 (collided with security's primary).
+    primary: "minimax-m3:cloud",
     retries: 1,
     // `deepseek-v4-pro:cloud` reused as fallback — cross-provider
     // from MiniMax, proven on reasoning tasks.

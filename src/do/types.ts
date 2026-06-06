@@ -239,7 +239,7 @@ export interface ResolvedDoConfig {
   maxRetries: number
   /** Clamped [60000, 1800000] ms; default 600000 (10 min absolute backstop). */
   watchdogMs: number
-  /** SIG-329: clamped [15000, 300000] ms; default 90000 (90s heartbeat-gap detector). */
+  /** SIG-329: clamped [45000, 300000] ms; default 90000 (90s heartbeat-gap detector). */
   livenessMs: number
   /** Clamped [1, 100]; default 10. */
   historyLimit: number

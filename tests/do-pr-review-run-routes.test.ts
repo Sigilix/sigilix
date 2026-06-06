@@ -338,11 +338,18 @@ describe("PrReviewRunDO /pickup", () => {
     expect(res.status).toBe(200)
     const afterAlarm = state.alarms.alarmAt
     expect(afterAlarm).not.toBeNull()
-    // The alarm should be (re)scheduled at >= now (with livenessMs offset),
-    // i.e. at or after the pickup instant.
-    expect(afterAlarm!).toBeGreaterThanOrEqual(beforePickup)
     // SIG-329: the claimed run is on the liveness alarm now.
     expect((state.store.get("state") as RunState).alarmKind).toBe("liveness")
+    // CodeRabbit PR #370: assert the alarm used `livenessMs` (default 90s),
+    // not `watchdogMs` (env=1_200_000 here) or an immediate (now) schedule.
+    // The offset from pickup must be ~90s: at least livenessMs (alarm is
+    // armed at pickupNow + livenessMs, and pickupNow ≥ beforePickup) and
+    // comfortably under the 1_200_000ms watchdog.
+    const LIVENESS_MS = 90_000
+    const WATCHDOG_MS = 1_200_000
+    const offset = afterAlarm! - beforePickup
+    expect(offset).toBeGreaterThanOrEqual(LIVENESS_MS)
+    expect(offset).toBeLessThan(WATCHDOG_MS)
   })
 
   it("does not persist a running claim when the liveness alarm arm fails", async () => {

@@ -18,6 +18,10 @@ const F = (overrides: Partial<SarifFinding> = {}): SarifFinding => ({
 })
 
 describe("buildSarifCheckAnnotations", () => {
+  it("returns no annotations for empty SARIF findings", () => {
+    expect(buildSarifCheckAnnotations([])).toEqual([])
+  })
+
   it("maps SARIF severities to GitHub annotation levels", () => {
     const annotations = buildSarifCheckAnnotations([
       F({ ruleId: "error", severity: "error", line: 1 }),
@@ -101,8 +105,58 @@ describe("buildSarifCheckAnnotations", () => {
     expect(annotations[0]?.message).toContain("Tool: Trivy")
     expect(annotations[0]?.message).toContain("SARIF severity: error")
     expect(annotations[0]?.message).toContain("Category: iac")
-    expect(annotations[0]?.message).toContain("Evidence: privileged: true")
-    expect(annotations[0]?.message).toContain("Containers should not run as privileged.")
+    expect(annotations[0]?.message).toContain("Evidence omitted from public check annotation.")
+    expect(annotations[0]?.message).not.toContain("privileged: true")
+    expect(annotations[0]?.message).toContain("Rule help text omitted from public check annotation.")
+    expect(annotations[0]?.message).not.toContain("Containers should not run as privileged.")
+  })
+
+  it("omits raw evidence and redacts secret-like public text", () => {
+    const token = `sk-${"a".repeat(48)}`
+    const annotations = buildSarifCheckAnnotations([
+      F({
+        message: `Do not expose ${token}`,
+        evidence: `OPENAI_API_KEY=${token}`,
+        ruleHelpText: `Example token ${token}`,
+      }),
+    ])
+
+    expect(annotations[0]?.message).toContain("Evidence omitted from public check annotation.")
+    expect(annotations[0]?.message).toContain("[REDACTED]")
+    expect(annotations[0]?.message).not.toContain(token)
+    expect(annotations[0]?.message).not.toContain("OPENAI_API_KEY=")
+  })
+
+  it("redacts long bearer tokens without redacting short placeholders", () => {
+    const bearer = `Bearer ${"a".repeat(24)}`
+    const annotations = buildSarifCheckAnnotations([
+      F({ ruleId: "long-bearer", message: `Header ${bearer}` }),
+      F({ ruleId: "short-bearer", message: "Use Bearer example in docs", line: 11 }),
+    ])
+
+    expect(annotations[0]?.message).toContain("Header [REDACTED]")
+    expect(annotations[0]?.message).not.toContain(bearer)
+    expect(annotations[1]?.message).toContain("Use Bearer example in docs")
+  })
+
+  it("redacts bearer tokens with base64 padding", () => {
+    const bearer = `Bearer ${"a".repeat(22)}==`
+    const annotations = buildSarifCheckAnnotations([
+      F({ message: `Header ${bearer}` }),
+    ])
+
+    expect(annotations[0]?.message).toContain("Header [REDACTED]")
+    expect(annotations[0]?.message).not.toContain(bearer)
+  })
+
+  it("redacts JWT-like tokens in public messages", () => {
+    const jwt = `eyJ${"a".repeat(16)}.eyJ${"b".repeat(16)}.${"c".repeat(32)}`
+    const annotations = buildSarifCheckAnnotations([
+      F({ message: `OIDC token ${jwt}` }),
+    ])
+
+    expect(annotations[0]?.message).toContain("OIDC token [REDACTED]")
+    expect(annotations[0]?.message).not.toContain(jwt)
   })
 
   it("truncates long titles to GitHub's title budget", () => {
@@ -112,5 +166,14 @@ describe("buildSarifCheckAnnotations", () => {
 
     expect(annotations[0]?.title).toHaveLength(240)
     expect(annotations[0]?.title.endsWith("...")).toBe(true)
+  })
+
+  it("truncates long messages to GitHub's annotation text budget", () => {
+    const annotations = buildSarifCheckAnnotations([
+      F({ message: "x".repeat(70000) }),
+    ])
+
+    expect(annotations[0]?.message).toHaveLength(60000)
+    expect(annotations[0]?.message.endsWith("...")).toBe(true)
   })
 })

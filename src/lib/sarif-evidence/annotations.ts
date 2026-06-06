@@ -9,6 +9,21 @@ import type { SarifFinding } from "./types"
 
 const CHECK_ANNOTATION_TEXT_LIMIT = 60000
 const CHECK_ANNOTATION_TITLE_LIMIT = 240
+const REDACTED_PLACEHOLDER = "[REDACTED]"
+
+const SECRET_PATTERNS: RegExp[] = [
+  /gh[poustr]_[A-Za-z0-9_]{36,}/g,
+  /github_pat_[A-Za-z0-9_]{60,}/g,
+  /glpat-[A-Za-z0-9_-]{20,}/g,
+  /npm_[A-Za-z0-9_]{36,}/g,
+  /sk-[A-Za-z0-9]{40,}/g,
+  /xox[baprs]-[A-Za-z0-9-]{20,}/g,
+  /AKIA[0-9A-Z]{16}/g,
+  /(?:aws_secret_access_key|aws_secret_key)["'\s:=]{1,4}[A-Za-z0-9/+=]{40}/gi,
+  /\bBearer\s+[A-Za-z0-9._~+/-]{20,}=*/gi,
+  /\beyJ[A-Za-z0-9_-]{10,2048}\.eyJ[A-Za-z0-9_-]{10,4096}\.[A-Za-z0-9_-]{10,1024}\b/gi,
+  /\b(?:https?|ftp|postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis):\/\/[^\s/:@]+:[^\s/@]+@[^\s]+/gi,
+]
 
 const SEVERITY_RANK: Record<SarifFinding["severity"], number> = {
   error: 2,
@@ -41,6 +56,14 @@ function nonBlank(value: string | undefined, fallback: string): string {
 
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0
+}
+
+function redactSecretPatterns(value: string): string {
+  let redacted = value
+  for (const pattern of SECRET_PATTERNS) {
+    redacted = redacted.replace(pattern, REDACTED_PLACEHOLDER)
+  }
+  return redacted
 }
 
 function ruleParts(finding: SarifFinding): { ruleId: string; ruleName?: string; label: string } {
@@ -87,12 +110,12 @@ function messageForFinding(finding: SarifFinding): string {
     `Category: ${finding.category}`,
   ]
   if (finding.evidence) {
-    lines.push("", `Evidence: ${finding.evidence}`)
+    lines.push("", "Evidence omitted from public check annotation.")
   }
   if (finding.ruleHelpText) {
-    lines.push("", finding.ruleHelpText)
+    lines.push("", "Rule help text omitted from public check annotation.")
   }
-  return truncate(lines.join("\n"), CHECK_ANNOTATION_TEXT_LIMIT)
+  return truncate(redactSecretPatterns(lines.join("\n")), CHECK_ANNOTATION_TEXT_LIMIT)
 }
 
 export function buildSarifCheckAnnotations(findings: readonly SarifFinding[]): CheckRunAnnotation[] {

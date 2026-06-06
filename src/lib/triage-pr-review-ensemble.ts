@@ -3227,14 +3227,6 @@ export async function handlePrReviewEnsemble(
     })
     const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
     deterministicCheckAnnotations = buildSarifCheckAnnotations(sarifFindings)
-    if (deterministicCheckAnnotations.length > 0) {
-      console.log(JSON.stringify({
-        event: "sarif-lane-a-check-annotations-built",
-        owner, repo, prNumber,
-        annotations: deterministicCheckAnnotations.length,
-        findings: sarifFindings.length,
-      }))
-    }
     // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED receipt
     // exists, build the HEAD-scan index from the receipt's UN-FILTERED parseSarif
     // results — deliberately NOT `sarifResult.findings`, which runSarifEvidence

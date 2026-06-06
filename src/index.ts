@@ -63,6 +63,7 @@ import {
   handlePrCancel,
 } from "./lib/pr-lifecycle-commands"
 import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
+import { SIGILIX_BOT_LOGIN } from "./lib/dismiss-prior-reviews"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
@@ -3454,6 +3455,7 @@ async function handleGitHubWebhook(
       reviewMemoryComment &&
       typeof reviewMemoryComment.id === "number" &&
       typeof reviewMemoryComment.body === "string" &&
+      reviewMemoryComment.user?.login === SIGILIX_BOT_LOGIN &&
       typeof reviewMemoryPrNumber === "number" &&
       hasExplicitTopLevelReviewFeedbackSignal(reviewMemoryComment.body)
     ) {

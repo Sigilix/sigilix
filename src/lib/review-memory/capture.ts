@@ -587,6 +587,13 @@ function sourceMatchesExplicitCorrelation(args: {
     args.explicitFingerprints.has(sourceFingerprint)
 }
 
+export function hasExplicitTopLevelReviewFeedbackSignal(body: unknown): boolean {
+  if (typeof body !== "string") return false
+  if (!parseReviewFeedbackSignal(body)) return false
+  return extractSigilixMarker(body) !== null ||
+    parseFindingOutcomeMarkers(body).length > 0
+}
+
 async function findTrustedSigilixSourceForTopLevel(args: {
   client: GitHubClient
   owner: string

@@ -96,6 +96,7 @@ import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
   captureTopLevelReviewFeedback,
+  hasExplicitTopLevelReviewFeedbackSignal,
 } from "./lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
 import {
@@ -3430,7 +3431,8 @@ async function handleGitHubWebhook(
       reviewMemoryComment &&
       typeof reviewMemoryComment.id === "number" &&
       typeof reviewMemoryComment.body === "string" &&
-      typeof reviewMemoryPrNumber === "number"
+      typeof reviewMemoryPrNumber === "number" &&
+      hasExplicitTopLevelReviewFeedbackSignal(reviewMemoryComment.body)
     ) {
       const reviewMemoryRepoId =
         typeof payload.repository?.id === "number" &&

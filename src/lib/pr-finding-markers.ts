@@ -4,6 +4,8 @@ import {
 } from "./triage-pr-review"
 
 const FINDING_BLOCK_MARKER = "<!-- sigilix:pr-review-finding -->"
+export const MAX_FINDING_OUTCOME_MARKERS = 50
+const MAX_FINDING_OUTCOME_BODY_CHARS = 128_000
 
 /**
  * SIG-217/SIG-185: parse the hidden content-fingerprint marker emitted on
@@ -46,19 +48,35 @@ export interface FindingOutcomeMarker {
  * copied block cannot double-count within the same webhook delivery.
  */
 export function parseFindingOutcomeMarkers(body: string): FindingOutcomeMarker[] {
-  const chunks = body.includes(FINDING_BLOCK_MARKER)
-    ? body.split(FINDING_BLOCK_MARKER).slice(1)
-    : [body]
   const seen = new Set<string>()
   const out: FindingOutcomeMarker[] = []
-  for (const chunk of chunks) {
+
+  function addChunk(chunk: string): void {
+    if (out.length >= MAX_FINDING_OUTCOME_MARKERS) return
     const patternHash = parseFindingFingerprint(chunk)
-    if (!patternHash) continue
+    if (!patternHash) return
     const category = parseFindingCategory(chunk)
     const key = `${patternHash}:${category}`
-    if (seen.has(key)) continue
+    if (seen.has(key)) return
     seen.add(key)
     out.push({ patternHash, category })
+  }
+
+  const cappedBody = body.slice(0, MAX_FINDING_OUTCOME_BODY_CHARS)
+  const firstMarkerIndex = cappedBody.indexOf(FINDING_BLOCK_MARKER)
+  if (firstMarkerIndex === -1) {
+    addChunk(cappedBody)
+    return out
+  }
+
+  let cursor = firstMarkerIndex
+  while (cursor !== -1 && out.length < MAX_FINDING_OUTCOME_MARKERS) {
+    const chunkStart = cursor + FINDING_BLOCK_MARKER.length
+    const nextMarkerIndex = cappedBody.indexOf(FINDING_BLOCK_MARKER, chunkStart)
+    const chunkEnd =
+      nextMarkerIndex === -1 ? cappedBody.length : nextMarkerIndex
+    addChunk(cappedBody.slice(chunkStart, chunkEnd))
+    cursor = nextMarkerIndex
   }
   return out
 }

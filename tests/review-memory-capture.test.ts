@@ -5,6 +5,7 @@ import {
   captureDismissedReviewFeedback,
   captureReviewFeedback,
   captureTopLevelReviewFeedback,
+  hasExplicitTopLevelReviewFeedbackSignal,
 } from "../src/lib/review-memory/capture"
 import { buildKey } from "../src/lib/review-memory/storage"
 import type { Env } from "../src/index"
@@ -566,6 +567,12 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     } as unknown as GitHubClient
   }
 
+  it("prefilters ordinary PR comments before token/config work", () => {
+    expect(hasExplicitTopLevelReviewFeedbackSignal("Looks good to me")).toBe(false)
+    expect(hasExplicitTopLevelReviewFeedbackSignal(`${VALID_MARKER}\n\nfalse positive`)).toBe(true)
+    expect(hasExplicitTopLevelReviewFeedbackSignal(`${PRECISION_FINDING_MARKERS}\n\nGood catch`)).toBe(true)
+  })
+
   it("captures a top-level dismissal only after verifying the copied marker against a Sigilix-authored source", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
@@ -598,6 +605,34 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
     const client = makeTopLevelClient(`${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`, "human")
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      comment: {
+        id: 900,
+        body: `${VALID_MARKER}\n\nfalse positive`,
+      },
+      config: makeConfig(),
+    })
+    expect(Array.from(store.keys()).some((k) => k.startsWith("review-memory:"))).toBe(false)
+    expect(store.get("precision-profile:repo:a/r")).toBeUndefined()
+    const skipped = consoleSpy.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes("not-a-reply-to-sigilix"))
+    expect(skipped).toBeDefined()
+  })
+
+  it("exits cleanly when no source review comments are available to verify the marker", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = {
+      listIssueComments: vi.fn(async () => []),
+      listPullRequestReviewComments: vi.fn(async () => []),
+      getRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
+    } as unknown as GitHubClient
     await captureTopLevelReviewFeedback({
       env,
       client,

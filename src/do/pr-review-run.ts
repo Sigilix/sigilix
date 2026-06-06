@@ -427,7 +427,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       if (pruned.evicted > 0) {
         // Rewrite kept records + remove evicted.
         for (const key of Object.keys(allHistory)) {
-          if (!(key in pruned.kept)) {
+          if (!Object.hasOwn(pruned.kept, key)) {
             await this.ctx.storage.delete(key)
           }
         }
@@ -570,7 +570,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
     const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
     if (pruned.evicted > 0) {
       for (const key of Object.keys(allHistory)) {
-        if (!(key in pruned.kept)) {
+        if (!Object.hasOwn(pruned.kept, key)) {
           await this.ctx.storage.delete(key)
         }
       }
@@ -873,7 +873,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
       if (pruned.evicted > 0) {
         for (const key of Object.keys(allHistory)) {
-          if (!(key in pruned.kept)) {
+          if (!Object.hasOwn(pruned.kept, key)) {
             await this.ctx.storage.delete(key)
           }
         }

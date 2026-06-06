@@ -139,6 +139,9 @@ export async function runPrReviewWithDoCallback(
 // route. Comfortably inside DEFAULT_LIVENESS_MS (90s) so a healthy
 // consumer always re-arms the liveness alarm before it fires, while an
 // evicted isolate stops pinging and is detected within one gap.
+// INVARIANT: must stay below LIVENESS_MS_RANGE's floor (45s, see
+// `config.ts`) so the first beat always lands before the first liveness
+// alarm — even when livenessMs is configured at the floor.
 const HEARTBEAT_INTERVAL_MS = 30_000
 
 /**

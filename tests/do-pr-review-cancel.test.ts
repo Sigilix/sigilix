@@ -162,6 +162,36 @@ describe("PrReviewRunDO /cancel — terminates an active run", () => {
     expect(attachSpy).not.toHaveBeenCalled()
     expect(completeSpy).not.toHaveBeenCalled()
   })
+
+  it("prunes history to historyLimit WITHOUT nuking valid records (refutes Sigilix PR #370 #1)", async () => {
+    // Sigilix flagged that handleCancel might delete ALL history because
+    // `pruneHistoryRecords` could key its result by raw runId while
+    // `collectHistory` keys by `run:<id>`. It does NOT — pruneHistoryRecords
+    // preserves the input (prefixed) keys, so only the genuine overflow is
+    // evicted. This locks that in: 2 pre-seeded records + the cancelled
+    // record, limit 2 → only the OLDEST is evicted.
+    const env = { ...makeEnv(), OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "2" } as unknown as Env
+    const { ctx, store } = makeDoState()
+    seedState(store, { state: "running" })
+    store.set("run:OLD-1", {
+      runId: "OLD-1", headSha: "x".repeat(40), finalState: "done",
+      attempts: 1, startedAt: "2026-05-01T00:00:00.000Z",
+      finishedAt: "2026-05-01T01:00:00.000Z",
+    })
+    store.set("run:OLD-2", {
+      runId: "OLD-2", headSha: "y".repeat(40), finalState: "failed",
+      attempts: 2, startedAt: "2026-05-02T00:00:00.000Z",
+      finishedAt: "2026-05-02T01:00:00.000Z",
+    })
+    const instance = new PrReviewRunDO(ctx, env)
+
+    await cancel(instance)
+
+    // Oldest evicted; newer record AND the freshly-cancelled record survive.
+    expect(store.has("run:OLD-1")).toBe(false)
+    expect(store.has("run:OLD-2")).toBe(true)
+    expect(store.has(`run:${RUN_ID}`)).toBe(true)
+  })
 })
 
 describe("PrReviewRunDO /cancel — no-op cases", () => {

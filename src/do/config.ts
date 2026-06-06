@@ -31,10 +31,14 @@ const DEFAULT_HISTORY_LIMIT = 10
 /** Spec §4.9 — clamp ranges. */
 const MAX_RETRIES_RANGE = [1, 10] as const
 const WATCHDOG_MS_RANGE = [60000, 1800000] as const   // 1 min - 30 min
-// SIG-329: liveness clamp. Floor 15s (room for a slow heartbeat round-
-// trip without false-positives); ceiling 5 min (still far under the
+// SIG-329: liveness clamp. Floor 45s, ceiling 5 min (still far under the
 // watchdog backstop so a misconfig can't silently disable fast detection).
-const LIVENESS_MS_RANGE = [15000, 300000] as const
+// INVARIANT: the floor MUST exceed the consumer's HEARTBEAT_INTERVAL_MS
+// (30s, see `consumer-wrapper.ts`) — otherwise the first liveness alarm
+// (armed at pickup + livenessMs) would fire before the consumer's first
+// heartbeat (at pickup + interval) and false-declare a live consumer dead.
+// 45s leaves 15s of slack over the 30s beat (Sigilix PR #370 finding #3).
+const LIVENESS_MS_RANGE = [45000, 300000] as const
 const HISTORY_LIMIT_RANGE = [1, 100] as const
 
 function clampInt(

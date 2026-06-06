@@ -188,7 +188,7 @@ Config (`src/do/config.ts`, env overrides are clamped, `OPENCLAW_`-prefixed):
 | Constant | Default | Env override | Clamp | Role |
 |---|---|---|---|---|
 | `DEFAULT_WATCHDOG_MS` | 600000 (10 min) | `OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS` | 60s–30min | absolute max-review backstop |
-| `DEFAULT_LIVENESS_MS` | 90000 (90s) | `OPENCLAW_PR_REVIEW_DO_LIVENESS_MS` | 15s–5min | heartbeat-gap dead-consumer detector |
+| `DEFAULT_LIVENESS_MS` | 90000 (90s) | `OPENCLAW_PR_REVIEW_DO_LIVENESS_MS` | 45s–5min | heartbeat-gap dead-consumer detector (floor > 30s heartbeat interval) |
 
 ### Operator control — `/sigilix cancel`
 

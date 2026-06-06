@@ -66,6 +66,16 @@ describe("normalizeFindings", () => {
     expect(out.sigilix).toHaveLength(0)
   })
 
+  it("excludes thread replies (in_reply_to_id set) so CR replies don't inflate counts", () => {
+    const out = normalizeFindings([
+      comment({ id: 1, user: { login: CR }, body: "Potential issue: real finding" }),
+      comment({ id: 2, user: { login: CR }, body: "@someone exactly right — thanks", in_reply_to_id: 1 }),
+      comment({ id: 3, body: "<!-- sigilix:pr-review-finding -->\n**logic:** x", in_reply_to_id: 1 }),
+    ])
+    expect(out.coderabbit.map((f) => f.commentId)).toEqual([1]) // reply id=2 dropped
+    expect(out.sigilix).toHaveLength(0) // reply id=3 dropped even with the marker
+  })
+
   it("assigns stable, sorted refs (s1.. / c1..) by comment id", () => {
     const out = normalizeFindings([
       comment({ id: 30 }),

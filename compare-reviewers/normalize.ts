@@ -18,6 +18,8 @@ export interface RawComment {
   line?: number | null
   body: string
   html_url: string
+  /** Set when this comment is a reply within a thread — not a fresh finding. */
+  in_reply_to_id?: number | null
 }
 
 // Sigilix posts many comment kinds (overview, mention-reply); only the ones
@@ -96,10 +98,15 @@ export function normalizeFindings(comments: RawComment[]): {
   sigilix: NormalizedFinding[]
   coderabbit: NormalizedFinding[]
 } {
-  const sigilixRaw = comments
+  // A reply within a thread (in_reply_to_id set) is conversation, not a fresh
+  // finding — CodeRabbit in particular posts follow-up replies as inline review
+  // comments, which would otherwise inflate its finding count and skew the
+  // head-to-head. Keep only top-level review comments.
+  const topLevel = comments.filter((c) => c.in_reply_to_id == null)
+  const sigilixRaw = topLevel
     .filter((c) => c.user?.login === SIGILIX_BOT && SIGILIX_FINDING_MARKER.test(c.body))
     .sort(byCommentId)
-  const coderabbitRaw = comments
+  const coderabbitRaw = topLevel
     .filter((c) => c.user?.login === CODERABBIT_BOT)
     .sort(byCommentId)
 

@@ -12,6 +12,11 @@ It does three things:
 Nothing here touches the Worker or production — it only reads GitHub through the
 `gh` CLI and writes files under `compare-reviewers/data/`.
 
+A finding is a **top-level inline review comment** from each bot — for Sigilix, only
+comments carrying its finding marker (overviews and `@`-mention replies are skipped);
+for CodeRabbit, every inline comment **except thread replies** (a reply has
+`in_reply_to_id` set), so CodeRabbit's follow-up conversation doesn't inflate its count.
+
 ## Prerequisites
 
 - `gh` authenticated for the repo you're measuring (`gh auth status`).

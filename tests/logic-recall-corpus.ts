@@ -23,6 +23,12 @@ export type BugClass =
   | "falsy-zero"
   | "wrong-operator"
   | "state-machine"
+  | "swallowed-error"
+  | "missing-bound"
+  | "unbounded-input"
+  | "sign-error"
+  | "regex-dos"
+  | "missing-transaction"
 
 export interface LogicRecallCase {
   id: string
@@ -199,6 +205,95 @@ export const LOGIC_RECALL_CASES: LogicRecallCase[] = [
  }
 `,
   },
+  {
+    id: "swallowed-charge-error",
+    label: "vuln",
+    bugClass: "swallowed-error",
+    path: "src/payments/process.ts",
+    buggyLine: 7,
+    note: "the charge failure is swallowed by an empty catch, then the order is marked paid anyway → unpaid orders ship",
+    diff: `diff --git a/src/payments/process.ts b/src/payments/process.ts
+@@ -4,4 +4,9 @@ export async function processOrder(order: Order): Promise<void> {
+   markPending(order)
++  try {
++    await chargeCard(order.amountCents)
++  } catch (e) {}
++  markPaid(order)
+ }
+`,
+  },
+  {
+    id: "missing-bound-index",
+    label: "vuln",
+    bugClass: "missing-bound",
+    path: "src/api/items.ts",
+    buggyLine: 3,
+    note: "a request-controlled array index is used with no bounds check → out-of-range read / undefined.price crash",
+    diff: `diff --git a/src/api/items.ts b/src/api/items.ts
+@@ -2,4 +2,5 @@ export function itemPrice(items: Item[], req: Req): number {
+   const idx = req.body.index
++  return items[idx].price
+ }
+`,
+  },
+  {
+    id: "unbounded-limit",
+    label: "vuln",
+    bugClass: "unbounded-input",
+    path: "src/api/list.ts",
+    buggyLine: 3,
+    note: "the page limit is taken straight from the request with no upper clamp → limit=10000000 exhausts memory/DB (DoS)",
+    diff: `diff --git a/src/api/list.ts b/src/api/list.ts
+@@ -2,3 +2,5 @@ export async function listRows(req: Req): Promise<Row[]> {
+   const limit = Number(req.query.limit)
++  return db.fetch({ limit })
+ }
+`,
+  },
+  {
+    id: "sign-error-withdraw",
+    label: "vuln",
+    bugClass: "sign-error",
+    path: "src/wallet/withdraw.ts",
+    buggyLine: 4,
+    note: "withdraw ADDS the amount to the balance instead of subtracting → users gain money on every withdrawal (overdraft guard present, so the ONLY defect is the sign)",
+    diff: `diff --git a/src/wallet/withdraw.ts b/src/wallet/withdraw.ts
+@@ -2,3 +2,5 @@ export function withdraw(account: Account, amount: number): void {
+   assertPositive(amount)
++  if (account.balance < amount) throw new Error("insufficient funds")
++  account.balance += amount
+ }
+`,
+  },
+  {
+    id: "regex-dos-user-pattern",
+    label: "vuln",
+    bugClass: "regex-dos",
+    path: "src/search/filter.ts",
+    buggyLine: 3,
+    note: "a request-controlled string is compiled into a RegExp → a catastrophic-backtracking pattern hangs the event loop (ReDoS)",
+    diff: `diff --git a/src/search/filter.ts b/src/search/filter.ts
+@@ -2,3 +2,5 @@ export function filterRows(rows: Row[], req: Req): Row[] {
+   const re = new RegExp(req.query.pattern)
++  return rows.filter((r) => re.test(r.name))
+ }
+`,
+  },
+  {
+    id: "missing-transfer-transaction",
+    label: "vuln",
+    bugClass: "missing-transaction",
+    path: "src/payments/transfer.ts",
+    buggyLine: 4,
+    note: "debit and credit run as two separate awaits with no transaction → if credit fails after debit, money disappears",
+    diff: `diff --git a/src/payments/transfer.ts b/src/payments/transfer.ts
+@@ -3,4 +3,6 @@ export async function transfer(from: Id, to: Id, amount: number): Promise<void> {
+   validate(amount)
++  await debit(from, amount)
++  await credit(to, amount)
+ }
+`,
+  },
 
   // ─── SAFE counterparts (must NOT produce a logic finding) ───
   {
@@ -209,13 +304,11 @@ export const LOGIC_RECALL_CASES: LogicRecallCase[] = [
     buggyLine: 0,
     note: "atomic conditional decrement — no read-check-write race",
     diff: `diff --git a/src/wallet.ts b/src/wallet.ts
-@@ -8,6 +8,11 @@ export class Wallet {
+@@ -8,6 +8,10 @@ export class Wallet {
    constructor(private store: KV, private id: string) {}
 
 +  async withdraw(amount: number): Promise<boolean> {
-+    // atomic: the store rejects the decrement if it would go negative
-+    const ok = await this.store.decrementIfAtLeast(this.id, amount)
-+    return ok
++    return this.store.decrementIfAtLeast(this.id, amount)
 +  }
  }
 `,
@@ -300,6 +393,134 @@ export const LOGIC_RECALL_CASES: LogicRecallCase[] = [
 +  }
 +  return totalCents === expectedCents
  }
+`,
+  },
+  {
+    id: "safe-charge-error-rethrown",
+    label: "safe",
+    bugClass: "swallowed-error",
+    path: "src/payments/process.ts",
+    buggyLine: 0,
+    note: "the charge error is logged and rethrown — not swallowed; markPaid only runs on success",
+    diff: `diff --git a/src/payments/process.ts b/src/payments/process.ts
+@@ -4,4 +4,9 @@ export async function processOrder(order: Order): Promise<void> {
+   markPending(order)
++  try {
++    await chargeCard(order.amountCents)
++    markPaid(order)
++  } catch (e) { logger.error(e); throw e }
+ }
+`,
+  },
+  {
+    id: "safe-bounded-index",
+    label: "safe",
+    bugClass: "missing-bound",
+    path: "src/api/items.ts",
+    buggyLine: 0,
+    note: "the request index is coerced and fully bounds-checked (integer, range) before use",
+    diff: `diff --git a/src/api/items.ts b/src/api/items.ts
+@@ -2,3 +2,6 @@ export function itemPrice(items: Item[], req: Req): number {
+   const idx = Number(req.body.index)
++  if (!Number.isInteger(idx) || idx < 0 || idx >= items.length) throw new RangeError("index out of range")
++  return items[idx].price
+ }
+`,
+  },
+  {
+    id: "safe-clamped-limit",
+    label: "safe",
+    bugClass: "unbounded-input",
+    path: "src/api/list.ts",
+    buggyLine: 0,
+    note: "the page limit is clamped to BOTH a safe minimum and maximum (negatives and NaN fall back to 100)",
+    diff: `diff --git a/src/api/list.ts b/src/api/list.ts
+@@ -2,3 +2,6 @@ export async function listRows(req: Req): Promise<Row[]> {
+   const raw = Number(req.query.limit)
++  const limit = Number.isFinite(raw) ? Math.min(Math.max(Math.trunc(raw), 1), 1000) : 100
++  return db.fetch({ limit })
+ }
+`,
+  },
+  {
+    id: "safe-correct-withdraw",
+    label: "safe",
+    bugClass: "sign-error",
+    path: "src/wallet/withdraw.ts",
+    buggyLine: 0,
+    note: "withdraw correctly subtracts, AND guards against overdraft — no flaggable gap (the operator is the only thing that differs from the vuln twin)",
+    diff: `diff --git a/src/wallet/withdraw.ts b/src/wallet/withdraw.ts
+@@ -2,3 +2,5 @@ export function withdraw(account: Account, amount: number): void {
+   assertPositive(amount)
++  if (account.balance < amount) throw new Error("insufficient funds")
++  account.balance -= amount
+ }
+`,
+  },
+  {
+    id: "safe-transactional-transfer",
+    label: "safe",
+    bugClass: "missing-transaction",
+    path: "src/payments/transfer.ts",
+    buggyLine: 0,
+    note: "debit + credit run inside an atomic transaction",
+    diff: `diff --git a/src/payments/transfer.ts b/src/payments/transfer.ts
+@@ -3,3 +3,6 @@ export async function transfer(from: Id, to: Id, amount: number): Promise<void> {
+   validate(amount)
++  await db.transaction(async (tx) => {
++    await debit(tx, from, amount)
++    await credit(tx, to, amount)
++  })
+ }
+`,
+  },
+  {
+    id: "safe-literal-substring-filter",
+    label: "safe",
+    bugClass: "regex-dos",
+    path: "src/search/filter.ts",
+    buggyLine: 0,
+    note: "filters by plain substring — the request value is never compiled into a RegExp, so there is no ReDoS surface",
+    diff: `diff --git a/src/search/filter.ts b/src/search/filter.ts
+@@ -2,3 +2,5 @@ export function filterRows(rows: Row[], req: Req): Row[] {
+   const needle = String(req.query.q ?? "")
++  return rows.filter((r) => r.name.includes(needle))
+ }
+`,
+  },
+  {
+    id: "safe-guarded-transition",
+    label: "safe",
+    bugClass: "state-machine",
+    path: "src/order/transition.ts",
+    buggyLine: 0,
+    note: "the refund transition requires the order to be 'paid' first — the precondition is enforced",
+    diff: `diff --git a/src/order/transition.ts b/src/order/transition.ts
+@@ -5,5 +5,9 @@ export function transition(order: Order, to: Status): Order {
+   if (to === "refunded") {
++    if (order.status !== "paid") throw new Error("only paid orders can be refunded")
++    order.status = "refunded"
++    order.refundedAt = Date.now()
++    return order
+   }
+   return order
+ }
+`,
+  },
+  {
+    id: "safe-correct-range",
+    label: "safe",
+    bugClass: "wrong-operator",
+    path: "src/validate.ts",
+    buggyLine: 0,
+    note: "a fresh month-range guard using && — both bounds are unambiguously required (months are 1–12), so there is no defensible 'contract change' angle; only the operator distinguishes it from a || always-true bug",
+    diff: `diff --git a/src/validate.ts b/src/validate.ts
+@@ -4,2 +4,5 @@ export function isAdult(age: number): boolean {
+   return age >= 18
+ }
++export function isValidMonth(month: number): boolean {
++  return month >= 1 && month <= 12
++}
 `,
   },
 ]

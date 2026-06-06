@@ -45,6 +45,13 @@ export interface ShadowRunResult {
   attemptsUsed: number
   /** Findings extracted for comparison telemetry. Empty on failure. */
   findings: readonly FindingForOverlap[]
+  /**
+   * Full finding text (headline/body) for the SAME findings — diagnostics only
+   * (e.g. the subtle-logic recall ruler triaging why a model over-fired). The
+   * comparison telemetry path ignores this; prod callers never read it. Optional
+   * + additive so this is non-breaking.
+   */
+  rawFindings?: ReadonlyArray<{ path: string; line: number; score: number; category: string; headline: string; body: string }>
   /** Wall-clock elapsed (start → finalize). */
   elapsedMs: number
   /** Failure reason from runWithRetryAndFallback, or undefined on success. */
@@ -159,6 +166,16 @@ export async function runShadowSpecialist(args: SpecialistShadowArgs): Promise<S
           line: f.line,
           category: f.category,
           score: f.score,
+        }))
+      : [],
+    rawFindings: verdictOk
+      ? outcome.verdict!.findings.map((f) => ({
+          path: f.path,
+          line: f.line,
+          score: f.score,
+          category: f.category,
+          headline: f.headline ?? "",
+          body: f.body ?? "",
         }))
       : [],
     elapsedMs: outcome.elapsedMs,

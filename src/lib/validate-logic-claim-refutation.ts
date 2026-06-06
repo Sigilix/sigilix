@@ -81,7 +81,7 @@ const SYNC_RACE_CLAIM_RE =
 // stable idempotency / dedup key can refute. Tight to retry/redelivery wording:
 // a different logical-operation duplicate still needs a domain-state guard.
 const IDEMPOTENCY_RETRY_CLAIM_RE =
-  /\b(?:retry|retried|redeliver(?:y|ed|s)?|replay(?:ed|s)?|webhook\s+replay|duplicate\s+(?:processing|delivery)|double[-\s]?(?:charge|charges|send|sends|enqueue|enqueues)|duplicate\s+(?:charge|charges|send|sends|enqueue|enqueues))\b/i
+  /\b(?:retry|retried|redeliver(?:y|ed|s)?|replay(?:ed|s)?|webhook\s+replay|duplicate\s+(?:processing|delivery))\b/i
 
 const DISTINCT_ID_CLAIM_RE =
   /\b(?:different|distinct|fresh|new)\s+(?:event|message|delivery|attempt)?\s*\.?\s*id\b|\b(?:event|message|delivery|attempt)\.id\b[^.\n]{0,80}\b(?:different|distinct|fresh|new)\b/i
@@ -91,6 +91,9 @@ const UNSTABLE_IDEMPOTENCY_VALUE_RE =
 
 const UNSTABLE_IDEMPOTENCY_CONTEXT_RE =
   /\b(?:(?:fresh|different|distinct|unique|new)\s+(?:event|message|delivery|attempt|webhook)s?\s*\.?\s*id|(?:event|message|delivery|attempt)\.id\b[\s\S]{0,240}\b(?:fresh|different|distinct|unique|new|varies|changes|unstable|not\s+stable)|\bid\s+(?:changes|varies)\s+(?:on|per|across)\s+(?:retry|redelivery|delivery|attempt)|different\s+webhook\s+events?[\s\S]{0,240}\bsame\s+(?:order|operation)|same\s+(?:order|operation)[\s\S]{0,240}\bdifferent\s+webhook\s+events?)\b/i
+
+const STABLE_IDEMPOTENCY_VALUE_PATH_RE = /\b(?:event|msg|message|delivery)\.id\b/i
+const FAIL_OPEN_IDEMPOTENCY_VALUE_PATH_RE = /\b(?:request|order)\.id\b/i
 
 // A finding asserting an identifier is unused/never-referenced. Loose on purpose
 // (just the TRIGGER); the AST refuter is the real guard and fails open. Tolerates
@@ -359,13 +362,78 @@ function stableIdempotencyValue(node: Node, lines: string[]): boolean {
   const src = nodeSourceLines(node, lines)
   if (UNSTABLE_IDEMPOTENCY_VALUE_RE.test(src)) return false
   const path = memberPath(node)
-  if (path && /\b(?:event|msg|message|delivery|request|order)\.id\b/i.test(path)) return true
+  // Only direct delivery-token member paths refute retry claims. Domain keys
+  // (`order.id`) and request-scoped keys (`request.id`) can hide distinct
+  // operations or per-attempt IDs, so they deliberately fail open.
+  if (path && FAIL_OPEN_IDEMPOTENCY_VALUE_PATH_RE.test(path)) return false
+  if (path && STABLE_IDEMPOTENCY_VALUE_PATH_RE.test(path)) return true
   return false
 }
 
 function callNearLine(node: Node, line: number): boolean {
   if (!node?.loc) return false
   return node.loc.start.line <= line + 3 && node.loc.end.line >= line - 3
+}
+
+function eachNodeInCurrentFunction(node: Node, cb: (n: Node) => void): void {
+  if (!node || typeof node.type !== "string") return
+  cb(node)
+  for (const key of Object.keys(node)) {
+    if (key === "loc" || key === "start" || key === "end" || key === "range") continue
+    const child = node[key]
+    if (Array.isArray(child)) {
+      for (const c of child) {
+        if (c && typeof c.type === "string" && !FUNCTION_TYPES.has(c.type)) eachNodeInCurrentFunction(c, cb)
+      }
+    } else if (child && typeof child.type === "string" && !FUNCTION_TYPES.has(child.type)) {
+      eachNodeInCurrentFunction(child, cb)
+    }
+  }
+}
+
+function callDistanceFromLine(node: Node, line: number): number {
+  if (spans(node, line)) return 0
+  if (node.loc.end.line < line) return line - node.loc.end.line
+  return node.loc.start.line - line
+}
+
+function targetCallNearLine(fn: Node, line: number): Node | null {
+  const body = fn.body ?? fn
+  if (!body || typeof body.type !== "string") return null
+  let best: Node | null = null
+  let bestDistance = Infinity
+  let ambiguous = false
+  eachNodeInCurrentFunction(body, (n) => {
+    if (n.type !== "CallExpression" || !callNearLine(n, line)) return
+    const distance = callDistanceFromLine(n, line)
+    if (!best) {
+      best = n
+      bestDistance = distance
+      ambiguous = false
+      return
+    }
+    if (distance < bestDistance) {
+      best = n
+      bestDistance = distance
+      ambiguous = false
+      return
+    }
+    if (distance === bestDistance) ambiguous = true
+  })
+  return ambiguous ? null : best
+}
+
+function callHasStableIdempotencyOption(call: Node, lines: string[]): boolean {
+  for (const arg of call.arguments ?? []) {
+    if (!arg || arg.type !== "ObjectExpression") continue
+    for (const p of arg.properties ?? []) {
+      if (!p || p.type !== "Property") continue
+      const key = propertyName(p.key)
+      if (!key || !/\b(?:idempotency|dedup)/i.test(key)) continue
+      if (stableIdempotencyValue(p.value, lines)) return true
+    }
+  }
+  return false
 }
 
 /**
@@ -383,23 +451,8 @@ function refutesIdempotencyRetryClaim(fn: Node, line: number, finding: PrReviewF
   const fnText = nodeSourceLines(fn, lines)
   if (UNSTABLE_IDEMPOTENCY_CONTEXT_RE.test(fnText)) return false
 
-  let foundStableKey = false
-  eachNode(fn, (n) => {
-    if (foundStableKey || n.type !== "CallExpression" || !callNearLine(n, line)) return
-    for (const arg of n.arguments ?? []) {
-      if (!arg || arg.type !== "ObjectExpression") continue
-      for (const p of arg.properties ?? []) {
-        if (!p || p.type !== "Property") continue
-        const key = propertyName(p.key)
-        if (!key || !/\b(?:idempotency|dedup)/i.test(key)) continue
-        if (stableIdempotencyValue(p.value, lines)) {
-          foundStableKey = true
-          return
-        }
-      }
-    }
-  })
-  return foundStableKey
+  const call = targetCallNearLine(fn, line)
+  return call ? callHasStableIdempotencyOption(call, lines) : false
 }
 
 const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g

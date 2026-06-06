@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 17,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17",
+  "collectedAt": "2026-06-06T07:54:18.951Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "bot": "sigilix",
+        "commentId": 3346360287,
+        "path": "server/webhooks.ts",
+        "line": 1,
+        "excerpt": "**New webhook handler ships without tests**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346360287",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s2",
+        "bot": "sigilix",
+        "commentId": 3346360289,
+        "path": "server/webhooks.ts",
+        "line": null,
+        "excerpt": "**Action string conversion silences null/undefined without logging or differentiating no‑op from invalid payload**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346360289",
+        "botCategory": "logic"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "bot": "coderabbit",
+        "commentId": 3346368576,
+        "path": "server/webhooks.ts",
+        "line": null,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346368576"
+      },
+      {
+        "ref": "c2",
+        "bot": "coderabbit",
+        "commentId": 3346368587,
+        "path": "server/webhooks.ts",
+        "line": 45,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346368587"
+      },
+      {
+        "ref": "c3",
+        "bot": "coderabbit",
+        "commentId": 3352918753,
+        "path": "server/webhooks.ts",
+        "line": 44,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3352918753"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "tests",
+      "note": "webhook handler untested"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s2"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "logic",
+      "note": "action null/undefined silently treated as no-op"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "c1"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "req.body undefined without json middleware"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "c2"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "security",
+      "note": "missing GitHub webhook signature verification"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "c3"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "gate actions by event type, not just action"
+    }
+  ]
+}

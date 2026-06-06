@@ -3288,6 +3288,43 @@ describe("pickSubstantiveAnchorLineForward (inline-more-in-diff)", () => {
     expect(pickSubstantiveAnchorLineForward(undefined, 42)).toBeNull()
     expect(pickSubstantiveAnchorLineForward(new Map(), 42)).toBeNull()
   })
+
+  it("range-bounded backward fallback: anchors WITHIN [startLine..line] when the bottom line has nothing substantive after it", () => {
+    // Sigilix/runner #5 dogfood case: a finding citing a multi-line range whose
+    // primary `line` (the range bottom, 185) lands on a trailing blank with no
+    // substantive added line AFTER it — the forward walk demotes to body. With
+    // the model's range start, anchor INLINE to the nearest substantive line
+    // within the range (closest to the bottom) instead.
+    const ranged = new Map<number, string>([
+      [170, "  base_runs = base.get('runs')"], // substantive, in range
+      [180, "  base['runs'] = base_runs"], // the asserted line, in range
+      [183, "  f.write(out)"], // substantive, closest to the bottom
+      [184, "  "], // blank
+      [185, "  "], // blank — the model's primary `line`
+    ])
+    // forward-only (no range arg): demotes to body — unchanged behavior
+    expect(pickSubstantiveAnchorLineForward(ranged, 185)).toBeNull()
+    // range-aware: anchors to 183 (nearest substantive within [170..185])
+    expect(pickSubstantiveAnchorLineForward(ranged, 185, 170)).toBe(183)
+  })
+
+  it("forward result always wins over the range fallback", () => {
+    // 101 is substantive at/after the requested line → forward walk wins even
+    // with a range start present; the backward fallback never runs.
+    expect(pickSubstantiveAnchorLineForward(lines, 100, 40)).toBe(101)
+    expect(pickSubstantiveAnchorLineForward(lines, 42, 40)).toBe(42)
+  })
+
+  it("range fallback never drifts BELOW startLine (no out-of-range anchor)", () => {
+    const m = new Map<number, string>([
+      [10, "  const real = compute()"], // substantive but BELOW the range
+      [50, "  "], // blank — the requested bottom
+    ])
+    // startLine 45: nothing substantive in [45..50) → stays body (no drift to 10)
+    expect(pickSubstantiveAnchorLineForward(m, 50, 45)).toBeNull()
+    // startLine 5: line 10 is in [5..50) → anchors there
+    expect(pickSubstantiveAnchorLineForward(m, 50, 5)).toBe(10)
+  })
 })
 
 describe("isSubstantiveAnchorLine (SIG-127)", () => {
@@ -3624,6 +3661,31 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
     expect(off).not.toContain("couldn't be anchored to a specific line")
     expect(off).not.toContain("**PR-level**")
     expect(off).toContain("could not be anchored")
+  })
+
+  it("body-row glyph layout: the trust pill LEADS with the badges (before the location), not orphaned after the headline", () => {
+    // The dogfood layout bug: the trust pill (GROUNDED/MODEL) was jammed
+    // immediately after the bold headline, landing in a random mid-line spot
+    // when the title wrapped. It belongs with the leading severity+category
+    // badges (`trustPill` doc: "append after the category glyph"), matching the
+    // inline `formatFindingComment` render.
+    const verdict: PrReviewVerdict = { summary: "Body findings.", confidence: 4, confidenceReason: "x", findings: [] }
+    const unanchored: PrReviewFinding[] = [
+      { ...baseFinding, score: 3, headline: "evidence rendered without redaction",
+        trust: { tier: "grounded-model", surface: "body", demoteReason: "inline-grounding" } },
+    ]
+    const body = buildReviewSubmissionWithMetadata({ verdict, prAuthor: null, headSha: "abc1234", unanchored, trustLedger: true }).submission.body
+    const pillIdx = body.indexOf("trust-grounded")
+    const headlineIdx = body.indexOf("evidence rendered without redaction")
+    expect(pillIdx).toBeGreaterThanOrEqual(0)
+    expect(headlineIdx).toBeGreaterThanOrEqual(0)
+    // pill renders BEFORE the bold location + headline (with the leading badges)…
+    expect(pillIdx).toBeLessThan(headlineIdx)
+    // …and is NOT jammed immediately after the bold headline (the old broken
+    // layout). The pill renders as `<a …><img …></a>`, so match the anchor wrapper
+    // to actually catch the old `**headline**<pill>` order (a bare `<img` check
+    // would pass on both layouts).
+    expect(body).not.toMatch(/redaction\*\*\s*<a[^>]*>\s*<img[^>]*trust-grounded/)
   })
 })
 

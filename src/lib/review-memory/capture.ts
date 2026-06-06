@@ -567,24 +567,6 @@ export async function captureReviewFeedback(args: CaptureArgs): Promise<void> {
   })
 }
 
-function sourceMatchesExplicitCorrelation(args: {
-  sourceBody: string
-  explicitMarker: SigilixCommentMarker | null
-  explicitFingerprints: ReadonlySet<string>
-}): boolean {
-  const sourceMarker = extractSigilixMarker(args.sourceBody)
-  if (
-    args.explicitMarker !== null &&
-    sourceMarker !== null &&
-    sourceMarker.fid === args.explicitMarker.fid
-  ) {
-    return true
-  }
-  if (args.explicitFingerprints.size === 0) return false
-  return parseFindingOutcomeMarkers(args.sourceBody)
-    .some((m) => args.explicitFingerprints.has(m.patternHash))
-}
-
 export function hasExplicitTopLevelReviewFeedbackSignal(body: unknown): boolean {
   if (typeof body !== "string") return false
   if (!parseReviewFeedbackSignal(body)) return false
@@ -637,13 +619,26 @@ async function findTrustedSigilixSourceForTopLevel(args: {
     args.client.listIssueComments(args.owner, args.repo, args.prNumber),
     args.client.listPullRequestReviewComments(args.owner, args.repo, args.prNumber),
   ])
-  const matches = (sourceBody: string): boolean =>
-    sourceMatchesExplicitCorrelation({
-      sourceBody,
-      explicitMarker: args.explicitMarker,
-      explicitFingerprints: args.explicitFingerprints,
-    })
-  const candidates: TrustedSigilixSource[] = []
+  type MatchStrength = 0 | 1 | 2
+  type RankedCandidate = TrustedSigilixSource & { strength: MatchStrength }
+  const matchStrength = (
+    sourceBody: string,
+    sourceMarker: SigilixCommentMarker | null,
+  ): MatchStrength | null => {
+    if (
+      args.explicitMarker !== null &&
+      sourceMarker !== null &&
+      sourceMarker.fid === args.explicitMarker.fid
+    ) {
+      return 2
+    }
+    if (args.explicitFingerprints.size === 0) return null
+    const fingerprintMatch = parseFindingOutcomeMarkers(sourceBody)
+      .some((m) => args.explicitFingerprints.has(m.patternHash))
+    if (!fingerprintMatch) return null
+    return sourceMarker !== null ? 1 : 0
+  }
+  const candidates: RankedCandidate[] = []
   const pushCandidate = (
     body: unknown,
     login: string | null | undefined,
@@ -651,11 +646,13 @@ async function findTrustedSigilixSourceForTopLevel(args: {
   ): void => {
     if (typeof body !== "string") return
     if (!isArcGithubLogin(login ?? null)) return
-    if (!matches(body)) return
     const marker = extractSigilixMarker(body)
+    const strength = matchStrength(body, marker)
+    if (strength === null) return
     candidates.push({
       body,
       marker,
+      strength,
       ...(path !== undefined ? { path } : {}),
     })
   }
@@ -669,9 +666,11 @@ async function findTrustedSigilixSourceForTopLevel(args: {
   for (const review of reviews) {
     pushCandidate(review.body, review.user?.login)
   }
-  return candidates.find((candidate) => candidate.marker !== null) ??
-    candidates[0] ??
-    null
+  candidates.sort((a, b) => b.strength - a.strength)
+  const trusted = candidates[0]
+  if (!trusted) return null
+  const { strength: _strength, ...source } = trusted
+  return source
 }
 
 /**

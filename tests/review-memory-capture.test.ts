@@ -120,6 +120,8 @@ function makeClient(
 
 const VALID_MARKER =
   "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"
+const OTHER_VALID_MARKER =
+  "<!-- sigilix:fid:3333333333333333:cat:security:sev:warning:path:444444444444 -->"
 const VALID_FINGERPRINT = "f".repeat(64)
 const VALID_FINGERPRINT_2 = "a".repeat(64)
 const PRECISION_FINDING_MARKERS = [
@@ -730,6 +732,57 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
       k.startsWith("review-memory:a/r:path:"),
     )
     expect(pathKeys).toHaveLength(1)
+  })
+
+  it("prefers exact copied-marker matches over earlier generic fingerprint matches", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = {
+      listIssueComments: vi.fn(async () => []),
+      listPullRequestReviewComments: vi.fn(async () => [
+        {
+          id: 500,
+          body: `${PRECISION_FINDING_MARKERS}\n\n${OTHER_VALID_MARKER}`,
+          path: "src/lib/other.ts",
+          line: 10,
+          original_line: 10,
+          user: { login: "sigilix[bot]" },
+        },
+        {
+          id: 501,
+          body: `${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`,
+          path: "src/lib/foo.ts",
+          line: 20,
+          original_line: 20,
+          user: { login: "sigilix[bot]" },
+        },
+      ]),
+      listPullRequestReviews: vi.fn(async () => []),
+      getPullRequest: vi.fn(async () => ({
+        number: 7,
+        title: "PR",
+        body: "",
+        user: { login: "human" },
+        head: { sha: "head", ref: "branch" },
+        base: { sha: "base", ref: "main" },
+      })),
+      getRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
+    } as unknown as GitHubClient
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      comment: {
+        id: 900,
+        body: `${VALID_MARKER}\n\n${PRECISION_FINDING_MARKERS}\n\nfalse positive`,
+      },
+      config: makeConfig(),
+    })
+    const performanceRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    expect(performanceRecord.signals[0].fid).toBe("1111111111111111")
+    expect(store.get("review-memory:a/r:cat:security")).toBeUndefined()
   })
 
   it("exits cleanly when no source review comments are available to verify the marker", async () => {

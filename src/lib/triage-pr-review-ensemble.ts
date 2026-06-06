@@ -6659,6 +6659,7 @@ export async function handlePrReviewEnsemble(
       verdict: submissionVerdict,
       headSha,
       unanchored: renderableUnanchoredForSubmission,
+      reviewable,
       addedLineTextByLine,
       ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
     })
@@ -6746,7 +6747,6 @@ export async function handlePrReviewEnsemble(
         suppressed: suppressedComments,
       }))
     }
-
     // ─── SIG-216: post the overview comment IMMEDIATELY before the
     // review submit so the two GitHub timeline entries land in the
     // same time window (CodeRabbit-style Walkthrough-then-Review).
@@ -7035,6 +7035,20 @@ export async function handlePrReviewEnsemble(
       }
       await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
+      if ((submission.comments?.length ?? 0) > 0) {
+        for (const suggestion of submissionBuild.suggestionEmissions) {
+          console.log(JSON.stringify({
+            event: "pr-review-suggestion-emitted",
+            owner,
+            repo,
+            prNumber,
+            headSha: headSha.slice(0, 7),
+            path: suggestion.path,
+            line: suggestion.line,
+            ...(suggestion.startLine !== undefined ? { startLine: suggestion.startLine } : {}),
+          }))
+        }
+      }
       // ARC-258 follow-up: dismiss any stale Sigilix reviews from
       // earlier commits on this PR so the Reviews tab reflects only
       // the current head. Without this, customers see "Sigilix

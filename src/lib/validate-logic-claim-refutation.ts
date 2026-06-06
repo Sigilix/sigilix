@@ -9,6 +9,10 @@
 //   2. "read-check-write race / TOCTOU" — but the code is SYNCHRONOUS: no
 //      `await`/`yield`/callback between the check and the in-memory write, so
 //      nothing can interleave in single-threaded JS.
+//   3. "retry/redelivery double-charges despite a visible idempotency key" —
+//      but the side-effect call carries a stable idempotency/dedup option, so
+//      the same-delivery retry hypothesis is refuted. Distinct-event/domain
+//      duplicates fail open.
 //
 // Consensus filtering (PR2) cannot kill these — they are STABLE, not flickery.
 // This gate fact-checks each high-severity logic finding against the cited
@@ -48,6 +52,7 @@ export const LOGIC_CLAIM_REFUTATION_MIN_SEVERITY = 4
 export type LogicClaimDropReason =
   | "control-flow-claim-refuted-by-guard"
   | "sync-race-claim-refuted-no-async-boundary"
+  | "idempotency-claim-refuted-by-visible-key"
   | "unused-claim-refuted-identifier-is-referenced"
   | "missing-return-type-claim-refuted-annotation-present"
 
@@ -71,6 +76,24 @@ const CONTROL_FLOW_CLAIM_RE =
 // A finding asserting a TOCTOU / read-check-write race.
 const SYNC_RACE_CLAIM_RE =
   /\b(?:race\s+condition|toctou|time[-\s]?of[-\s]?check|read[-\s]?(?:modify|check)[-\s]?(?:write|act)|check[-\s]?then[-\s]?act|non[-\s]?atomic|lost\s+update|concurrent\s+(?:withdrawal|update|write|deduction|access))\b/i
+
+// A finding asserting a retry/redelivery duplicate side effect that a visible
+// stable idempotency / dedup key can refute. Tight to retry/redelivery wording:
+// a different logical-operation duplicate still needs a domain-state guard.
+const IDEMPOTENCY_RETRY_CLAIM_RE =
+  /\b(?:retry|retried|redeliver(?:y|ed|s)?|replay(?:ed|s)?|webhook\s+replay|duplicate\s+(?:processing|delivery))\b/i
+
+const DISTINCT_ID_CLAIM_RE =
+  /\b(?:different|distinct|fresh|new)\s+(?:event|message|delivery|attempt)?\s*\.?\s*id\b|\b(?:event|message|delivery|attempt)\.id\b[^.\n]{0,80}\b(?:different|distinct|fresh|new)\b/i
+
+const UNSTABLE_IDEMPOTENCY_VALUE_RE =
+  /\b(?:crypto\.randomUUID|randomUUID|Math\.random|Date\.now|new\s+Date|timestamp|nonce)\b/i
+
+const UNSTABLE_IDEMPOTENCY_CONTEXT_RE =
+  /\b(?:(?:fresh|different|distinct|unique|new)\s+(?:event|message|delivery|attempt|webhook)s?\s*\.?\s*id|(?:event|message|delivery|attempt)\.id\b[\s\S]{0,240}\b(?:fresh|different|distinct|unique|new|varies|changes|unstable|not\s+stable)|\bid\s+(?:changes|varies)\s+(?:on|per|across)\s+(?:retry|redelivery|delivery|attempt)|different\s+webhook\s+events?[\s\S]{0,240}\bsame\s+(?:order|operation)|same\s+(?:order|operation)[\s\S]{0,240}\bdifferent\s+webhook\s+events?)\b/i
+
+const STABLE_IDEMPOTENCY_VALUE_PATH_RE = /\b(?:event|msg|message|delivery)\.id\b/i
+const FAIL_OPEN_IDEMPOTENCY_VALUE_PATH_RE = /\b(?:request|order)\.id\b/i
 
 // A finding asserting an identifier is unused/never-referenced. Loose on purpose
 // (just the TRIGGER); the AST refuter is the real guard and fails open. Tolerates
@@ -317,6 +340,121 @@ function refutesSyncRace(fn: Node, line: number): boolean {
   return sawCheck
 }
 
+function propertyName(prop: Node): string | null {
+  if (!prop) return null
+  if (prop.type === "Identifier") return prop.name
+  if (prop.type === "Literal" && typeof prop.value === "string") return prop.value
+  return null
+}
+
+function memberPath(node: Node): string | null {
+  if (!node) return null
+  if (node.type === "Identifier") return node.name
+  if (node.type === "MemberExpression") {
+    const left = memberPath(node.object)
+    const right = propertyName(node.property)
+    return left && right ? `${left}.${right}` : null
+  }
+  return null
+}
+
+function stableIdempotencyValue(node: Node, lines: string[]): boolean {
+  const src = nodeSourceLines(node, lines)
+  if (UNSTABLE_IDEMPOTENCY_VALUE_RE.test(src)) return false
+  const path = memberPath(node)
+  // Only direct delivery-token member paths refute retry claims. Domain keys
+  // (`order.id`) and request-scoped keys (`request.id`) can hide distinct
+  // operations or per-attempt IDs, so they deliberately fail open.
+  if (path && FAIL_OPEN_IDEMPOTENCY_VALUE_PATH_RE.test(path)) return false
+  if (path && STABLE_IDEMPOTENCY_VALUE_PATH_RE.test(path)) return true
+  return false
+}
+
+function callNearLine(node: Node, line: number): boolean {
+  if (!node?.loc) return false
+  return node.loc.start.line <= line + 3 && node.loc.end.line >= line - 3
+}
+
+function eachNodeInCurrentFunction(node: Node, cb: (n: Node) => void): void {
+  if (!node || typeof node.type !== "string") return
+  cb(node)
+  for (const key of Object.keys(node)) {
+    if (key === "loc" || key === "start" || key === "end" || key === "range") continue
+    const child = node[key]
+    if (Array.isArray(child)) {
+      for (const c of child) {
+        if (c && typeof c.type === "string" && !FUNCTION_TYPES.has(c.type)) eachNodeInCurrentFunction(c, cb)
+      }
+    } else if (child && typeof child.type === "string" && !FUNCTION_TYPES.has(child.type)) {
+      eachNodeInCurrentFunction(child, cb)
+    }
+  }
+}
+
+function callDistanceFromLine(node: Node, line: number): number {
+  if (spans(node, line)) return 0
+  if (node.loc.end.line < line) return line - node.loc.end.line
+  return node.loc.start.line - line
+}
+
+function targetCallNearLine(fn: Node, line: number): Node | null {
+  const body = fn.body ?? fn
+  if (!body || typeof body.type !== "string") return null
+  let best: Node | null = null
+  let bestDistance = Infinity
+  let ambiguous = false
+  eachNodeInCurrentFunction(body, (n) => {
+    if (n.type !== "CallExpression" || !callNearLine(n, line)) return
+    const distance = callDistanceFromLine(n, line)
+    if (!best) {
+      best = n
+      bestDistance = distance
+      ambiguous = false
+      return
+    }
+    if (distance < bestDistance) {
+      best = n
+      bestDistance = distance
+      ambiguous = false
+      return
+    }
+    if (distance === bestDistance) ambiguous = true
+  })
+  return ambiguous ? null : best
+}
+
+function callHasStableIdempotencyOption(call: Node, lines: string[]): boolean {
+  for (const arg of call.arguments ?? []) {
+    if (!arg || arg.type !== "ObjectExpression") continue
+    for (const p of arg.properties ?? []) {
+      if (!p || p.type !== "Property") continue
+      const key = propertyName(p.key)
+      if (!key || !/\b(?:idempotency|dedup)/i.test(key)) continue
+      if (stableIdempotencyValue(p.value, lines)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Refute a retry/redelivery duplicate-side-effect claim. TRUE only when the
+ * finding itself is a retry/redelivery claim (not a distinct-event/domain-state
+ * claim), and the cited function has a nearby call with a stable idempotency /
+ * dedup option such as `{ idempotencyKey: event.id }`. Fail open for unstable
+ * keys (`randomUUID`, timestamps, nonce) and for visible text saying the id is
+ * fresh/different per attempt.
+ */
+function refutesIdempotencyRetryClaim(fn: Node, line: number, finding: PrReviewFinding, lines: string[]): boolean {
+  const text = findingText(finding)
+  if (!IDEMPOTENCY_RETRY_CLAIM_RE.test(text)) return false
+  if (DISTINCT_ID_CLAIM_RE.test(text)) return false
+  const fnText = nodeSourceLines(fn, lines)
+  if (UNSTABLE_IDEMPOTENCY_CONTEXT_RE.test(fnText)) return false
+
+  const call = targetCallNearLine(fn, line)
+  return call ? callHasStableIdempotencyOption(call, lines) : false
+}
+
 const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g
 
 /**
@@ -401,9 +539,10 @@ export function evaluateLogicClaimRefutation(
   const text = findingText(finding)
   const isControlFlow = CONTROL_FLOW_CLAIM_RE.test(text)
   const isSyncRace = SYNC_RACE_CLAIM_RE.test(text)
+  const isIdempotencyRetry = IDEMPOTENCY_RETRY_CLAIM_RE.test(text)
   const isUnused = UNUSED_CLAIM_RE.test(text)
   const isMissingReturnType = MISSING_RETURN_TYPE_CLAIM_RE.test(text)
-  if (!isControlFlow && !isSyncRace && !isUnused && !isMissingReturnType) return { keep: true }
+  if (!isControlFlow && !isSyncRace && !isIdempotencyRetry && !isUnused && !isMissingReturnType) return { keep: true }
 
   const source = context.fullFileByPath.get(finding.path)
   if (typeof source !== "string" || source.length === 0) return { keep: true }
@@ -423,6 +562,9 @@ export function evaluateLogicClaimRefutation(
   }
   if (isSyncRace && refutesSyncRace(fn, line)) {
     return { keep: false, reason: "sync-race-claim-refuted-no-async-boundary" }
+  }
+  if (isIdempotencyRetry && refutesIdempotencyRetryClaim(fn, line, finding, lines)) {
+    return { keep: false, reason: "idempotency-claim-refuted-by-visible-key" }
   }
   if (isUnused && refutesUnused(fn, finding)) {
     return { keep: false, reason: "unused-claim-refuted-identifier-is-referenced" }

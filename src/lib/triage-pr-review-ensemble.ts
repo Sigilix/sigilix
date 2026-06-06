@@ -10618,11 +10618,11 @@ export function validateForSubmission(args: {
     }
 
     // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
-    // when its control-flow ("unconditional/double-response") or sync-race
-    // ("TOCTOU") claim is PROVABLY false against the AST of the cited file — the
-    // two stable v4-pro priors prompt-tuning could not dislodge. Fails OPEN on
-    // every ambiguity (the pure validator re-checks category+sev), so it cannot
-    // suppress a real bug. Same shadow-first semantics: only `enforce` drops.
+    // when its control-flow ("unconditional/double-response"), sync-race
+    // ("TOCTOU"), or retry/idempotency claim is PROVABLY false against the AST
+    // of the cited file. Fails OPEN on every ambiguity (the pure validator
+    // re-checks category+sev), so it cannot suppress a real bug. Same
+    // shadow-first semantics: only `enforce` drops.
     if (logicClaimRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {
       const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath })
       if (!claimDecision.keep) {

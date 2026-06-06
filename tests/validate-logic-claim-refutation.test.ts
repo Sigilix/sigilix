@@ -159,6 +159,269 @@ describe("sync-race recall-safety (KEEP: any async / closure / IO / external bou
   })
 })
 
+describe("idempotency retry refutation", () => {
+  const STABLE_KEY = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: event.id },
+  )
+  return ack()
+}`
+
+  it("refutes a retry/redelivery double-charge claim when a stable idempotency key is visible", () => {
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 5,
+      headline: "Charge is created without checking whether the order was already paid",
+      body: "If Stripe redelivers the webhook, this double-charges the order because there is no paid flag.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", STABLE_KEY))).toEqual({
+      keep: false,
+      reason: "idempotency-claim-refuted-by-visible-key",
+    })
+  })
+
+  it("KEEPS the real bug when there is no idempotency key", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  await stripe.charges.create({ amount: order.amountCents, customer: order.customerId })
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 3,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook calls stripe.charges.create again with no idempotency key.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a generic double-charge claim without retry/redelivery wording", () => {
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 5,
+      headline: "Charge can double-charge the order",
+      body: "The handler does not check whether the order was already paid.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", STABLE_KEY)).keep).toBe(true)
+  })
+
+  it("KEEPS retry claims when the idempotency key is request.id", () => {
+    const SRC = `export async function handleChargeWebhook(request, db, stripe) {
+  const order = await db.orders.find(request.orderId)
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: request.id },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 5,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook can call stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS retry claims when the idempotency key is order.id", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: order.id },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 5,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook can call stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when only an unrelated nested call has a stable idempotency key", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe, audit) {
+  const order = await db.orders.find(event.orderId)
+  function auditDelivery() {
+    return audit.record({ idempotencyKey: event.id })
+  }
+  await stripe.charges.create({ amount: order.amountCents, customer: order.customerId })
+  auditDelivery()
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 6,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook calls stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when the idempotency key is computed through a helper expression", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: (() => event.id)() },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 5,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook calls stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when multiple calls on the cited line make the target ambiguous", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe, audit) {
+  const order = await db.orders.find(event.orderId)
+  await stripe.charges.create({ amount: order.amountCents, customer: order.customerId }, { idempotencyKey: event.id }); audit.record("charged")
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 3,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook calls stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when visible context says event.id is fresh per retry attempt", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  // Provider retries get a fresh event.id for the same order.
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: event.id },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 6,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook uses a fresh event id, so the idempotency key changes.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a generic retry claim when source context says different webhook events share an order", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  // Different webhook events can map to the same order, each with a unique ID.
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: event.id },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 6,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook can call stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS distinct-event duplicate claims even when a delivery key is present", () => {
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 5,
+      headline: "A different event.id can charge the same order again",
+      body: "The idempotency key is event.id, but a distinct event id for the same order bypasses it.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", STABLE_KEY)).keep).toBe(true)
+  })
+
+  it("KEEPS when the idempotency key is a hardcoded constant", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: "hardcoded-charge-key" },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 5,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook can call stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when source context says event.id is not stable across retries", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  // event.id is not stable across retries; the id changes per attempt.
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: event.id },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 6,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook can call stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when a long source comment eventually says event.id varies", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe) {
+  const order = await db.orders.find(event.orderId)
+  // event.id is assigned by the upstream delivery layer after routing, batching, fanout, provider normalization, and retry scheduling; it varies per delivery attempt.
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: event.id },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 6,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook can call stripe.charges.create again.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC)).keep).toBe(true)
+  })
+
+  it("still refutes when an unrelated timestamp log appears in the function", () => {
+    const SRC = `export async function handleChargeWebhook(event, db, stripe, logger) {
+  logger.info("processing at", Date.now())
+  const order = await db.orders.find(event.orderId)
+  await stripe.charges.create(
+    { amount: order.amountCents, customer: order.customerId },
+    { idempotencyKey: event.id },
+  )
+  return ack()
+}`
+    const f = finding({
+      path: "src/payments/charge.ts",
+      line: 6,
+      headline: "Webhook retry can double-charge the order",
+      body: "A redelivered webhook calls stripe.charges.create again despite no paid flag.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/payments/charge.ts", SRC))).toEqual({
+      keep: false,
+      reason: "idempotency-claim-refuted-by-visible-key",
+    })
+  })
+})
+
 describe("scope + fail-open guards (KEEP)", () => {
   const AUTH = `export function requireAdmin(svc) {
   return async (req, res, next) => {

@@ -124,6 +124,25 @@ export const LOGIC_RECALL_CASES: LogicRecallCase[] = [
    const order = await db.orders.find(event.orderId)
 +  await stripe.charges.create({ amount: order.amountCents, customer: order.customerId })
 +  return ack()
+}
+`,
+  },
+  {
+    id: "idempotency-unstable-event-id",
+    label: "vuln",
+    bugClass: "idempotency",
+    path: "src/payments/charge.ts",
+    buggyLine: 9,
+    note: "idempotency key is derived from a delivery-attempt id that changes across retries, with no order-paid/domain guard",
+    diff: `diff --git a/src/payments/charge.ts b/src/payments/charge.ts
+@@ -6,3 +6,9 @@ export async function handleChargeWebhook(event: StripeEvent) {
+   const order = await db.orders.find(event.orderId)
++  // Provider retries get a fresh event.id for the same order.
++  await stripe.charges.create(
++    { amount: order.amountCents, customer: order.customerId },
++    { idempotencyKey: event.id },
++  )
++  return ack()
  }
 `,
   },

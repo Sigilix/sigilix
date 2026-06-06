@@ -549,6 +549,10 @@ export interface Env {
   // (while the Phase 1 prompt trains the model to fill it) before any flip
   // via `wrangler secret put OPENCLAW_LOGIC_REFUTATION_MODE enforce`.
   OPENCLAW_LOGIC_REFUTATION_MODE?: string
+  // SIG-328: logic-claim refutation gate. off | shadow (would-drop telemetry) |
+  // enforce (drop a logic finding whose control-flow / sync-race claim is
+  // PROVABLY false against the cited AST). Fails open; ships dark ("shadow").
+  OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE?: string
 
   // SIG-110: perf-finding evidence gate mode. "shadow" (default) counts +
   // telemeters the would-drop; "enforce" drops unanchored sev>=4 perf

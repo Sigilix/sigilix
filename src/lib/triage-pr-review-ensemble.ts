@@ -166,6 +166,12 @@ import {
   type LogicRefutationDropReason,
 } from "./validate-logic-refutation"
 import {
+  evaluateLogicClaimRefutation,
+  parseLogicClaimRefutationMode,
+  type LogicClaimRefutationMode,
+  type LogicClaimDropReason,
+} from "./validate-logic-claim-refutation"
+import {
   evaluatePerfFinding,
   clampTrivialSyncIoSeverity,
   parsePerfValidatorMode,
@@ -1704,7 +1710,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedLogicClaimRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
     retrievalCacheStats: null,
     tokenUsageByModel,
     startMs,
@@ -2411,10 +2417,15 @@ export async function handlePrReviewEnsemble(
     // fail-opens (keeps) on every finding, i.e. becomes a no-op.
     const wantWindowBlindness =
       parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE) !== "off"
+    // SIG-328: the logic-claim refutation gate also needs the full-file source
+    // map for its AST proof — trigger the fetch so it can't silently no-op (and
+    // mis-read as "0 would-drops") if the other AST features are ever flipped off.
+    const wantLogicClaimRefutation =
+      parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE) !== "off"
     const astFilesByPath = new Map<string, string>()
     if (
       (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
-        asymmetryMode !== "off" || toctouMode !== "off" || wantWindowBlindness) &&
+        asymmetryMode !== "off" || toctouMode !== "off" || wantWindowBlindness || wantLogicClaimRefutation) &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(
@@ -5018,6 +5029,26 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
+      // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
+      // when its control-flow / sync-race claim is PROVABLY false against the
+      // AST of the cited file (`fullFileByPath` = `astFilesByPath`). Default
+      // `shadow` — counts/telemeters the would-drop until the operator flips
+      // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
+      logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
+      onLogicClaimRefutationFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "logic-claim-refutation",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-claim-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
+      },
       // SIG-110: thread perf evidence + mode. Evidence is the same
       // changed-line text + the roleHint:performance AST findings. Default
       // `shadow` — counts/telemeters the would-drop until the operator
@@ -5172,6 +5203,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
       droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
       droppedForFailedLogicRefutation: validated.droppedForFailedLogicRefutation,
+      droppedForFailedLogicClaimRefutation: validated.droppedForFailedLogicClaimRefutation,
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
@@ -9213,6 +9245,8 @@ export interface ValidatedOutput {
    * enforce). Surfaced so the would-flag rate is observable before enforce.
    */
   droppedForFailedLogicRefutation: number
+  /** SIG-328: logic findings whose AST-provably-false claim the gate flagged. */
+  droppedForFailedLogicClaimRefutation: number
   /**
    * SIG-110: count of sev>=4 perf findings the evidence gate flagged
    * (unanchored perf claim, perf finding on an unchanged path, or missing
@@ -9958,6 +9992,20 @@ export function validateForSubmission(args: {
     info: { reason: LogicRefutationDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-328: logic-claim refutation gate mode. `off` (default): the gate
+   * doesn't run. `shadow`: would-drops are counted + telemetered, finding kept.
+   * `enforce`: a logic finding whose control-flow / sync-race claim is PROVABLY
+   * false against the cited AST is dropped. Read from
+   * `OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE`. Scoped to sev>=4 logic findings;
+   * needs `fullFileByPath` for the AST proof. Fails open. Ships dark.
+   */
+  logicClaimRefutationMode?: LogicClaimRefutationMode
+  /** SIG-328: telemetry callback per logic finding the claim gate flagged. */
+  onLogicClaimRefutationFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: LogicClaimDropReason; dropped: boolean },
+  ) => void
+  /**
    * SIG-110: perf-finding evidence (added-line text per path + the
    * roleHint:performance AST findings). Threaded so `evaluatePerfFinding`
    * can anchor sev>=4 perf findings to the diff. Absent → the gate no-ops.
@@ -10141,6 +10189,8 @@ export function validateForSubmission(args: {
     onLogicFindingDropped,
     logicRefutationMode = "off",
     onLogicRefutationFindingDropped,
+    logicClaimRefutationMode = "off",
+    onLogicClaimRefutationFindingDropped,
     perfEvidence,
     perfValidatorMode = "shadow",
     addedLineTextByLine,
@@ -10194,6 +10244,7 @@ export function validateForSubmission(args: {
   let droppedForFailedTestValidation = 0
   let droppedForFailedLogicValidation = 0
   let droppedForFailedLogicRefutation = 0
+  let droppedForFailedLogicClaimRefutation = 0
   let droppedForFailedPerfValidation = 0
   let droppedForFailedInlineGroundingValidation = 0
   let droppedForFailedAbsenceGroundingValidation = 0
@@ -10486,6 +10537,23 @@ export function validateForSubmission(args: {
         const dropped = logicRefutationMode === "enforce"
         droppedForFailedLogicRefutation++
         onLogicRefutationFindingDropped?.(f, { reason: refutationDecision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
+    }
+
+    // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
+    // when its control-flow ("unconditional/double-response") or sync-race
+    // ("TOCTOU") claim is PROVABLY false against the AST of the cited file — the
+    // two stable v4-pro priors prompt-tuning could not dislodge. Fails OPEN on
+    // every ambiguity (the pure validator re-checks category+sev), so it cannot
+    // suppress a real bug. Same shadow-first semantics: only `enforce` drops.
+    if (logicClaimRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {
+      const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath })
+      if (!claimDecision.keep) {
+        const dropped = logicClaimRefutationMode === "enforce"
+        droppedForFailedLogicClaimRefutation++
+        onLogicClaimRefutationFindingDropped?.(f, { reason: claimDecision.reason, dropped })
         if (dropped) continue
         // shadow mode: fall through and keep the finding.
       }
@@ -10810,6 +10878,7 @@ export function validateForSubmission(args: {
     droppedForFailedTestValidation,
     droppedForFailedLogicValidation,
     droppedForFailedLogicRefutation,
+    droppedForFailedLogicClaimRefutation,
     droppedForFailedPerfValidation,
     droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation,
@@ -10993,6 +11062,7 @@ interface EnsembleTelemetry {
     /** SIG-308: count of sev>=4 logic findings the refutation backstop flagged
      * for missing a survival rationale (would-drop shadow / actual-drop enforce). */
     droppedForFailedLogicRefutation: number
+    droppedForFailedLogicClaimRefutation: number
     /** SIG-110: count of sev>=4 perf findings the evidence gate flagged
      * (would-drop in shadow mode, actual-drop in enforce mode). */
     droppedForFailedPerfValidation: number

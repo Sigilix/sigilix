@@ -1,0 +1,193 @@
+// SIG-328: the logic-claim refutation gate drops a high-sev logic finding ONLY
+// when it can POSITIVELY prove the cited claim false against the AST — the two
+// stable v4-pro priors (control-flow "double-response" + synchronous "race").
+// It fails OPEN on every ambiguity, so it cannot suppress a real bug. These
+// tests pin both the refutations AND the recall-safety counter-cases.
+
+import { describe, expect, it } from "vitest"
+import type { PrReviewFinding } from "../src/lib/triage-pr-review"
+import {
+  evaluateLogicClaimRefutation,
+  parseLogicClaimRefutationMode,
+  LOGIC_CLAIM_REFUTATION_MIN_SEVERITY,
+} from "../src/lib/validate-logic-claim-refutation"
+
+function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
+  return {
+    path: "src/x.ts",
+    line: 1,
+    score: 5,
+    category: "logic",
+    headline: "",
+    body: "",
+    ...overrides,
+  }
+}
+
+function ctx(path: string, source: string) {
+  return { fullFileByPath: new Map([[path, source]]) }
+}
+
+describe("parseLogicClaimRefutationMode", () => {
+  it("defaults to off; parses shadow/enforce case-insensitively", () => {
+    expect(parseLogicClaimRefutationMode(undefined)).toBe("off")
+    expect(parseLogicClaimRefutationMode("nonsense")).toBe("off")
+    expect(parseLogicClaimRefutationMode("  SHADOW ")).toBe("shadow")
+    expect(parseLogicClaimRefutationMode("enforce")).toBe("enforce")
+  })
+})
+
+describe("control-flow refutation (REFUTE: the early-return guard makes the tail conditional)", () => {
+  const AUTH = `export function requireAdmin(svc) {
+  return async (req, res, next) => {
+    if (!(await svc.isAdmin(req.user))) {
+      return res.status(403).end()
+    }
+    next()
+  }
+}`
+  it("refutes 'next() runs unconditionally after the 403 / double-response'", () => {
+    const f = finding({
+      path: "src/middleware/auth.ts",
+      line: 6,
+      headline: "`next()` runs unconditionally after the 403 response, causing a double-response",
+      body: "When isAdmin returns false the middleware returns; next() is not inside an else block.",
+    })
+    const d = evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", AUTH))
+    expect(d).toEqual({ keep: false, reason: "control-flow-claim-refuted-by-guard" })
+  })
+
+  it("refutes a generic 'runs unconditionally' when the immediate guard returns", () => {
+    const SRC = `export function f(rateLimited) {
+  if (rateLimited) return
+  doWork()
+}`
+    const f = finding({ line: 3, headline: "doWork() runs unconditionally", body: "doWork always executes." })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(false)
+  })
+})
+
+describe("control-flow recall-safety (KEEP: a real bug whose claim is true/unprovable)", () => {
+  it("KEEPS a real double-response (two sends, no separating return)", () => {
+    const SRC = `export function handler(req, res) {
+  res.status(200).json({ ok: true })
+  res.status(200).json({ done: true })
+}`
+    const f = finding({
+      line: 3,
+      headline: "Second response sent — double-response",
+      body: "res.json is called twice; the second send throws ERR_HTTP_HEADERS_SENT.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a real double-response where a send PRECEDES the guard (code-reviewer P1)", () => {
+    const SRC = `export function h(res, x, a, b) {
+  res.json(a)
+  if (x) return
+  res.json(b)
+}`
+    const f = finding({
+      line: 4,
+      headline: "Double-response: res.json is called twice",
+      body: "On the !x path the second res.json send throws ERR_HTTP_HEADERS_SENT.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when the claim's subject is unbound (guard unrelated to the finding)", () => {
+    const SRC = `export function f(rateLimited) {
+  if (rateLimited) return
+  next()
+}`
+    const f = finding({
+      line: 3,
+      headline: "Double-response: the handler emits two responses",
+      body: "the second emit fires regardless",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+})
+
+describe("sync-race refutation (REFUTE: synchronous in-memory read-check-write)", () => {
+  const WITHDRAW = `export function withdraw(account, amount) {
+  assertPositive(amount)
+  if (account.balance < amount) throw new Error("insufficient")
+  account.balance -= amount
+}`
+  it("refutes 'read-check-write race on account.balance' in a synchronous fn", () => {
+    const f = finding({
+      path: "src/wallet/withdraw.ts",
+      line: 4,
+      score: 4,
+      headline: "Read-check-write race on `account.balance`",
+      body: "TOCTOU: concurrent withdrawals can overdraw the account.",
+    })
+    const d = evaluateLogicClaimRefutation(f, ctx("src/wallet/withdraw.ts", WITHDRAW))
+    expect(d).toEqual({ keep: false, reason: "sync-race-claim-refuted-no-async-boundary" })
+  })
+})
+
+describe("sync-race recall-safety (KEEP: any async / closure / IO / external boundary)", () => {
+  it("KEEPS a genuine ASYNC race (await between check and write)", () => {
+    const SRC = `export async function withdraw(account, amount) {
+  if (account.balance < amount) throw new Error("x")
+  await audit(account)
+  account.balance -= amount
+}`
+    const f = finding({ line: 4, score: 4, headline: "Read-check-write race", body: "TOCTOU across the await." })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a synchronous FILESYSTEM TOCTOU (write is a call, not a member assignment)", () => {
+    const SRC = `export function save(path, data) {
+  if (existsSync(path)) return
+  writeFileSync(path, data)
+}`
+    const f = finding({ line: 3, score: 4, headline: "TOCTOU race between existsSync and writeFileSync", body: "check-then-act on the filesystem." })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when a nested closure could defer the write", () => {
+    const SRC = `export function process(items, acc) {
+  if (acc.total < 0) throw new Error("x")
+  items.forEach((i) => { acc.total += i })
+  acc.total -= 1
+}`
+    const f = finding({ line: 4, score: 4, headline: "Non-atomic read-check-write on acc.total", body: "race condition / lost update." })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+})
+
+describe("scope + fail-open guards (KEEP)", () => {
+  const AUTH = `export function requireAdmin(svc) {
+  return async (req, res, next) => {
+    if (!(await svc.isAdmin(req.user))) {
+      return res.status(403).end()
+    }
+    next()
+  }
+}`
+  const cfFinding = (o: Partial<PrReviewFinding> = {}) =>
+    finding({ path: "src/middleware/auth.ts", line: 6, headline: "`next()` runs unconditionally after the 403", body: "double-response", ...o })
+
+  it("KEEPS non-logic findings", () => {
+    expect(evaluateLogicClaimRefutation(cfFinding({ category: "security" }), ctx("src/middleware/auth.ts", AUTH)).keep).toBe(true)
+  })
+  it(`KEEPS below the sev>=${LOGIC_CLAIM_REFUTATION_MIN_SEVERITY} floor`, () => {
+    expect(evaluateLogicClaimRefutation(cfFinding({ score: 3 }), ctx("src/middleware/auth.ts", AUTH)).keep).toBe(true)
+  })
+  it("KEEPS a finding with no checkable claim shape", () => {
+    const f = cfFinding({ headline: "off-by-one in the loop bound", body: "the slice drops the last element" })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", AUTH)).keep).toBe(true)
+  })
+  it("KEEPS when the cited source is unavailable (window-blind)", () => {
+    expect(evaluateLogicClaimRefutation(cfFinding(), { fullFileByPath: new Map() }).keep).toBe(true)
+  })
+  it("KEEPS when the source fails to parse", () => {
+    expect(evaluateLogicClaimRefutation(cfFinding(), ctx("src/middleware/auth.ts", "function ( { ][ )")).keep).toBe(true)
+  })
+  it("KEEPS for a non-source file extension", () => {
+    expect(evaluateLogicClaimRefutation(cfFinding({ path: "docs/auth.md" }), ctx("docs/auth.md", AUTH)).keep).toBe(true)
+  })
+})

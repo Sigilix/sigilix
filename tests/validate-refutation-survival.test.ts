@@ -20,6 +20,7 @@ import type { PrReviewFinding } from "../src/lib/triage-pr-review"
 import type { SynthesizerProvenance } from "../src/lib/triage-pr-review-ensemble"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 import type { PerfEvidence } from "../src/lib/validate-perf-finding"
+import type { SecurityFact } from "../src/lib/security-evidence-manifest"
 
 // A self-originated security finding: a CWE claim with no manifest evidenceId.
 // Defaults to the SSRF hallucination shape (sev>=4, no independentAssessment).
@@ -85,9 +86,14 @@ function makeReviewable(path = "src/parse/ndjson.ts"): ReviewableMap {
 
 type SpecialistVerdictsArg = Parameters<typeof validateForSubmission>[0]["specialistVerdicts"]
 
-function makeSpecialistVerdicts(): SpecialistVerdictsArg {
+function makeSpecialistVerdicts(securityRationale?: string): SpecialistVerdictsArg {
   return [
-    { role: "security", verdict: { findings: [{ id: "security-0" }] } },
+    {
+      role: "security",
+      verdict: {
+        findings: [{ id: "security-0", ...(securityRationale ? { independentAssessment: securityRationale } : {}) }],
+      },
+    },
     { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
   ] as unknown as SpecialistVerdictsArg
 }
@@ -102,9 +108,26 @@ function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
   }
 }
 
+// A manifest with one resolving fact at the finding's path/line/CWE — so a
+// non-empty evidenceId that matches it counts as TOOL-BACKED (CR2).
+function secManifest(id: string, overrides: Partial<SecurityFact> = {}): Map<string, SecurityFact> {
+  const fact = {
+    evidenceId: id,
+    tool: "sarif",
+    path: "src/parse/ndjson.ts",
+    line: 17,
+    cwe: "CWE-918",
+    summary: "ssrf candidate",
+    ...overrides,
+  } as unknown as SecurityFact
+  return new Map([[id, fact]])
+}
+
 function run(args: {
   finding: PrReviewFinding
   mode: "off" | "shadow" | "enforce"
+  securityManifest?: Map<string, SecurityFact>
+  sourceRationale?: string
   onDrop?: (f: PrReviewFinding, info: { reason: string; dropped: boolean; lens: string }) => void
 }) {
   return validateForSubmission({
@@ -113,7 +136,8 @@ function run(args: {
       provenance: securityProvenance(),
     },
     reviewable: makeReviewable(),
-    specialistVerdicts: makeSpecialistVerdicts(),
+    specialistVerdicts: makeSpecialistVerdicts(args.sourceRationale),
+    securityManifest: args.securityManifest,
     refutationSurvivalMode: args.mode,
     onRefutationSurvivalFindingDropped: args.onDrop,
     trustLedgerEnabled: true,
@@ -163,11 +187,12 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     expect(onDrop).not.toHaveBeenCalled()
   })
 
-  it("does NOT flag a self-originated finding that DID carry a mechanism rationale", () => {
+  it("does NOT flag a self-originated finding whose SECURITY source carried the mechanism rationale", () => {
     const onDrop = vi.fn()
     const result = run({
-      finding: finding({ independentAssessment: "source=req header → sink=fetch → type=string; no allowlist guard present." }),
+      finding: finding({ independentAssessment: undefined }),
       mode: "enforce",
+      sourceRationale: "source=req header → sink=fetch → type=string; no allowlist guard present.",
       onDrop,
     })
 
@@ -181,6 +206,7 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     const result = run({
       finding: finding({ evidenceId: "sarif:ssrf:abc123abc123:17", independentAssessment: undefined }),
       mode: "enforce",
+      securityManifest: secManifest("sarif:ssrf:abc123abc123:17"),
       onDrop,
     })
 
@@ -189,12 +215,67 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     expect(onDrop).not.toHaveBeenCalled()
   })
 
+  it("CR2: treats a BOGUS non-resolving evidenceId as self-originated — flagged despite a non-empty id", () => {
+    const onDrop = vi.fn()
+    const result = run({
+      finding: finding({ evidenceId: "sarif:bogus:000000000000:17", independentAssessment: undefined }),
+      mode: "enforce",
+      securityManifest: new Map<string, SecurityFact>(), // empty → the id does NOT resolve
+      onDrop,
+    })
+
+    expect(result.droppedForFailedRefutationSurvival).toBe(1)
+    expect(onDrop.mock.calls[0]![1]).toMatchObject({ dropped: true, lens: "security" })
+  })
+
   it("does NOT flag a self-originated finding below the severity floor", () => {
     const onDrop = vi.fn()
     const result = run({ finding: finding({ score: 3, independentAssessment: undefined }), mode: "enforce", onDrop })
 
     expect(result.droppedForFailedRefutationSurvival).toBe(0)
     expect(onDrop).not.toHaveBeenCalled()
+  })
+
+  it("CR7: flags a merged logic+security finding whose ONLY rationale is the logic one (no cross-lens credit)", () => {
+    const onDrop = vi.fn()
+    // logic source carries a rationale; security source does not. The global
+    // (logic-scoped) backfill puts the logic rationale on the finding — the
+    // security gate must NOT accept it.
+    const verdicts = [
+      { role: "security", verdict: { findings: [{ id: "security-0" }] } },
+      { role: "logic", verdict: { findings: [{ id: "logic-0", independentAssessment: "no clamp before the array read" }] } },
+    ] as unknown as SpecialistVerdictsArg
+    const provenance: SynthesizerProvenance = {
+      findings: [
+        {
+          sourceSpecialists: ["security", "logic"],
+          sourceFindingIds: ["security-0", "logic-0"],
+          action: "kept",
+          verifiedViaRetrieval: false,
+        },
+      ],
+      dropped: [],
+      softened: [],
+    }
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test",
+          confidence: 3,
+          confidenceReason: "Reason.",
+          findings: [finding({ independentAssessment: undefined })], // evidenceId "NONE" → self-originated security
+        },
+        provenance,
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: verdicts,
+      refutationSurvivalMode: "enforce",
+      onRefutationSurvivalFindingDropped: onDrop,
+      trustLedgerEnabled: true,
+    })
+
+    expect(result.droppedForFailedRefutationSurvival).toBe(1)
+    expect(onDrop.mock.calls[0]![1]).toMatchObject({ dropped: true, lens: "security" })
   })
 })
 
@@ -212,9 +293,14 @@ function perfFinding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding 
   }
 }
 
-function makePerfSpecialistVerdicts(): SpecialistVerdictsArg {
+function makePerfSpecialistVerdicts(perfRationale?: string): SpecialistVerdictsArg {
   return [
-    { role: "performance", verdict: { findings: [{ id: "performance-0" }] } },
+    {
+      role: "performance",
+      verdict: {
+        findings: [{ id: "performance-0", ...(perfRationale ? { independentAssessment: perfRationale } : {}) }],
+      },
+    },
     { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
   ] as unknown as SpecialistVerdictsArg
 }
@@ -233,6 +319,7 @@ function runPerf(args: {
   finding: PrReviewFinding
   mode: "off" | "shadow" | "enforce"
   astHit?: boolean
+  sourceRationale?: string
   onDrop?: (f: PrReviewFinding, info: { reason: string; dropped: boolean; lens: string }) => void
 }) {
   const astPerfFindings = args.astHit
@@ -248,7 +335,7 @@ function runPerf(args: {
       provenance: perfProvenance(),
     },
     reviewable: makeReviewable(),
-    specialistVerdicts: makePerfSpecialistVerdicts(),
+    specialistVerdicts: makePerfSpecialistVerdicts(args.sourceRationale),
     perfEvidence,
     refutationSurvivalMode: args.mode,
     onRefutationSurvivalFindingDropped: args.onDrop,
@@ -272,11 +359,12 @@ describe("validateForSubmission — SIG-325 refutation-survival gate (performanc
     expect(onDrop.mock.calls[0]![1]).toEqual({ reason: "refutation-survival-missing", dropped: true, lens: "performance" })
   })
 
-  it("does NOT flag a self-originated perf finding that carried a cost rationale", () => {
+  it("does NOT flag a self-originated perf finding whose PERF source carried the cost rationale", () => {
     const onDrop = vi.fn()
     const result = runPerf({
-      finding: perfFinding({ independentAssessment: "Runs on every gate-middleware request; re-derives the WebCrypto key per call under load." }),
+      finding: perfFinding({ independentAssessment: undefined }),
       mode: "enforce",
+      sourceRationale: "Runs on every gate-middleware request; re-derives the WebCrypto key per call under load.",
       onDrop,
     })
 

@@ -556,8 +556,9 @@ export interface Env {
   // resolving manifest evidenceId, or a performance finding with no co-located
   // AST hit: a sev>=4 such finding lacking an `independentAssessment` mechanism
   // rationale is flagged. "shadow" counts + telemeters the would-demote;
-  // "enforce" demotes to the review body. Flip via
-  // `wrangler secret put OPENCLAW_REFUTATION_SURVIVAL_MODE enforce`.
+  // "enforce" demotes to the review body. Set in wrangler.toml [vars]
+  // (reviewable, version-controlled), matching the SECURITY/TESTS validator-mode
+  // flags — do NOT `wrangler secret put` it, or the secret shadows the var.
   OPENCLAW_REFUTATION_SURVIVAL_MODE?: string
 
   // SIG-110: perf-finding evidence gate mode. "shadow" (default) counts +

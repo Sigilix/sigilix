@@ -2362,7 +2362,8 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
         r === "security-evidence" ||
         r === "verification-refuted" ||
         r === "do-race" ||
-        r === "tests-coverage"
+        r === "tests-coverage" ||
+        r === "refutation-survival"
       )
     }).length
     const trustLine = renderTrustSummary({

@@ -9572,15 +9572,42 @@ function hasNonEmptyString(value: unknown): value is string {
 
 /**
  * SIG-325: a security finding is SELF-ORIGINATED when no deterministic scanner
- * fact backs it — its `evidenceId` is empty/missing, or "NONE" (the authz/IDOR
- * exemption, which by definition no scanner detects). A finding carrying a real
- * manifest id (cited, or auto-enriched by `evaluateSecurityFinding`) is tool-
- * backed and covered by the SIG-108 evidence gate, so it is NOT re-gated by the
- * refutation-survival backstop.
+ * fact backs it — its `evidenceId` is empty/missing, "NONE" (the authz/IDOR
+ * exemption no scanner detects), OR a non-empty id that does NOT resolve in the
+ * manifest. CodeRabbit (PR #364): the SIG-108 gate rejects a bogus id as
+ * fabricated, but in `shadow` it falls through — so a bogus non-empty id must
+ * not silently bypass this backstop. A finding carrying a REAL, resolving id
+ * (cited, or auto-enriched by `evaluateSecurityFinding`) is tool-backed and
+ * covered by the SIG-108 gate, so it is NOT re-gated here. No manifest at all →
+ * nothing to corroborate against → self-originated.
  */
-function isSelfOriginatedSecurityFinding(finding: PrReviewFinding): boolean {
+function isSelfOriginatedSecurityFinding(
+  finding: PrReviewFinding,
+  manifest: ReadonlyMap<string, unknown> | undefined,
+): boolean {
   const eid = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
-  return eid.length === 0 || eid === "NONE"
+  if (eid.length === 0 || eid === "NONE") return true
+  return !manifest || !manifest.has(eid)
+}
+
+/**
+ * SIG-325 (CodeRabbit PR #364): resolve the `independentAssessment` rationale for
+ * a SPECIFIC lens from that lens's source findings, rather than trusting the
+ * globally-backfilled `finding.independentAssessment` (which is logic-scoped —
+ * SIG-308/PR#290). This stops a merged logic+security/perf finding from
+ * satisfying the security/perf refutation gate with a LOGIC rationale, and
+ * restores a same-lens rationale the synthesizer may have dropped. Keyed by
+ * source id, mirroring `buildSourceFindingRationaleById`.
+ */
+function resolveLensRationale(
+  sourceIds: readonly string[],
+  rationaleById: ReadonlyMap<string, string>,
+): string {
+  for (const id of sourceIds) {
+    const r = rationaleById.get(id)
+    if (typeof r === "string" && r.trim().length > 0) return r.trim()
+  }
+  return ""
 }
 
 const INLINE_ANCHOR_REPAIR_WINDOW = 12
@@ -10231,6 +10258,11 @@ export function validateForSubmission(args: {
   const validIds = new Set<string>()
   const sourceEvidenceById = buildSourceFindingSecurityEvidenceById(specialistVerdicts)
   const sourceRationaleById = buildSourceFindingRationaleById(specialistVerdicts, "logic")
+  // SIG-325 (CodeRabbit PR #364): per-lens rationale maps so the security/perf
+  // refutation gates judge against a SAME-LENS rationale instead of the
+  // logic-scoped global backfill (no cross-lens contamination / false demotes).
+  const sourceRationaleByIdSecurity = buildSourceFindingRationaleById(specialistVerdicts, "security")
+  const sourceRationaleByIdPerf = buildSourceFindingRationaleById(specialistVerdicts, "performance")
   for (const v of specialistVerdicts) {
     if (!v.verdict) continue
     for (const f of v.verdict.findings) validIds.add(f.id)
@@ -10532,9 +10564,16 @@ export function validateForSubmission(args: {
     if (
       refutationSurvivalMode !== "off" &&
       sourceRolesInclude(sourceIds, "security") &&
-      isSelfOriginatedSecurityFinding(f)
+      isSelfOriginatedSecurityFinding(f, securityManifest)
     ) {
-      const decision = evaluateRefutationSurvival(f)
+      // CodeRabbit: judge against the SECURITY-lens rationale, NOT the
+      // logic-scoped globally-backfilled field — a merged finding must not pass
+      // the security gate on a logic rationale, and a synth-dropped security
+      // rationale is restored from the security sources.
+      const decision = evaluateRefutationSurvival({
+        ...f,
+        independentAssessment: resolveLensRationale(sourceIds, sourceRationaleByIdSecurity),
+      })
       if (!decision.keep) {
         const demoted = refutationSurvivalMode === "enforce"
         droppedForFailedRefutationSurvival++
@@ -10624,7 +10663,12 @@ export function validateForSubmission(args: {
       sourceRolesInclude(sourceIds, "performance") &&
       perfFindingIsSelfOriginated(f, perfEvidence)
     ) {
-      const decision = evaluateRefutationSurvival(f)
+      // CodeRabbit: judge against the PERFORMANCE-lens rationale, NOT the
+      // logic-scoped globally-backfilled field.
+      const decision = evaluateRefutationSurvival({
+        ...f,
+        independentAssessment: resolveLensRationale(sourceIds, sourceRationaleByIdPerf),
+      })
       if (!decision.keep) {
         const demoted = refutationSurvivalMode === "enforce"
         droppedForFailedRefutationSurvival++

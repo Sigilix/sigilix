@@ -46,7 +46,7 @@ const findingMarkers = await Promise.all(
 
 Why provenance and not `f.category`: the rendered `FindingCategory` has 9 values (logic / security / performance / error-handling / testing / complexity / style / syntax / docs); `ReviewMemoryCategory` has 4. The right category source is the SPECIALIST that produced the finding, captured in `provenance.findings[i].sourceSpecialists[0]`. `validateForSubmission` now emits a parallel `cleanFindingProvenance` array aligned by index with `verdict.findings` for this purpose.
 
-Findings with no source specialist (defensive — shouldn't happen post-hallucination guard) emit `null` and skip the marker. The fallback (anchorless body) submission path does NOT emit markers in v1 — `pull_request_review` events aren't subscribed (deferred to v2 alongside `issue_comment.created` capture).
+Findings with no source specialist (defensive — shouldn't happen post-hallucination guard) emit `null` and skip the marker. The fallback (anchorless body) submission path still does NOT emit legacy path/category markers in v1. SIG-185 added capture paths for explicit top-level PR comments and dismissed formal reviews: top-level comments must carry a copied marker/fingerprint and are verified against Sigilix-authored PR/review/issue-comment sources; dismissed reviews are recorded as `stale` precision outcomes only when the dismissed Sigilix review points at an older commit than the current PR head. Inline replies continue to use `in_reply_to_id` parent lookup.
 
 ## Related modules
 

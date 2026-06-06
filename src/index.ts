@@ -3696,7 +3696,7 @@ async function dispatchReviewMemoryCapture(args: {
   }
 }
 
-async function dispatchTopLevelReviewMemoryCapture(args: {
+export async function dispatchTopLevelReviewMemoryCapture(args: {
   env: Env
   owner: string
   repo: string
@@ -3738,7 +3738,7 @@ async function dispatchTopLevelReviewMemoryCapture(args: {
   }
 }
 
-async function dispatchDismissedReviewMemoryCapture(args: {
+export async function dispatchDismissedReviewMemoryCapture(args: {
   env: Env
   owner: string
   repo: string
@@ -3758,7 +3758,7 @@ async function dispatchDismissedReviewMemoryCapture(args: {
       installationId,
     })
     const client = new GitHubClient({ token })
-    const sigilixConfig = await loadSigilixConfig(client, owner, repo, "HEAD")
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
     const config = resolveReviewMemoryConfig(sigilixConfig)
     await captureDismissedReviewFeedback({
       env,

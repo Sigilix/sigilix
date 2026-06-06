@@ -678,6 +678,60 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     expect(profile.categories.security.boost).toBe(0.3)
   })
 
+  it("prefers marker-bearing inline sources over body-only formal review matches", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = {
+      listIssueComments: vi.fn(async () => []),
+      listPullRequestReviewComments: vi.fn(async () => [
+        {
+          id: 500,
+          body: `${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`,
+          path: "src/lib/foo.ts",
+          line: 10,
+          original_line: 10,
+          user: { login: "sigilix[bot]" },
+        },
+      ]),
+      listPullRequestReviews: vi.fn(async () => [
+        {
+          id: 800,
+          state: "CHANGES_REQUESTED",
+          body: PRECISION_FINDING_MARKERS,
+          user: { login: "sigilix[bot]" },
+          commitId: "old-head",
+        },
+      ]),
+      getPullRequest: vi.fn(async () => ({
+        number: 7,
+        title: "PR",
+        body: "",
+        user: { login: "human" },
+        head: { sha: "head", ref: "branch" },
+        base: { sha: "base", ref: "main" },
+      })),
+      getRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
+    } as unknown as GitHubClient
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      comment: {
+        id: 900,
+        body: `${PRECISION_FINDING_MARKERS}\n\nfalse positive`,
+      },
+      config: makeConfig(),
+    })
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    expect(catRecord.signals).toHaveLength(1)
+    const pathKeys = Array.from(store.keys()).filter((k) =>
+      k.startsWith("review-memory:a/r:path:"),
+    )
+    expect(pathKeys).toHaveLength(1)
+  })
+
   it("exits cleanly when no source review comments are available to verify the marker", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")

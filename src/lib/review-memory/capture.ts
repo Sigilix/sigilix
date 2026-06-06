@@ -637,58 +637,41 @@ async function findTrustedSigilixSourceForTopLevel(args: {
     args.client.listIssueComments(args.owner, args.repo, args.prNumber),
     args.client.listPullRequestReviewComments(args.owner, args.repo, args.prNumber),
   ])
-  if (
-    typeof pr.body === "string" &&
-    isArcGithubLogin(pr.user?.login ?? null) &&
+  const matches = (sourceBody: string): boolean =>
     sourceMatchesExplicitCorrelation({
-      sourceBody: pr.body,
+      sourceBody,
       explicitMarker: args.explicitMarker,
       explicitFingerprints: args.explicitFingerprints,
     })
-  ) {
-    return {
-      body: pr.body,
-      marker: extractSigilixMarker(pr.body),
-    }
-  }
-  for (const review of reviews) {
-    if (!isArcGithubLogin(review.user?.login ?? null)) continue
-    if (!sourceMatchesExplicitCorrelation({
-      sourceBody: review.body,
-      explicitMarker: args.explicitMarker,
-      explicitFingerprints: args.explicitFingerprints,
-    })) continue
-    return {
-      body: review.body,
-      marker: extractSigilixMarker(review.body),
-    }
+  const candidates: TrustedSigilixSource[] = []
+  const pushCandidate = (
+    body: unknown,
+    login: string | null | undefined,
+    path?: string,
+  ): void => {
+    if (typeof body !== "string") return
+    if (!isArcGithubLogin(login ?? null)) return
+    if (!matches(body)) return
+    const marker = extractSigilixMarker(body)
+    candidates.push({
+      body,
+      marker,
+      ...(path !== undefined ? { path } : {}),
+    })
   }
   for (const comment of reviewComments) {
-    if (!isArcGithubLogin(comment.user?.login ?? null)) continue
-    if (!sourceMatchesExplicitCorrelation({
-      sourceBody: comment.body,
-      explicitMarker: args.explicitMarker,
-      explicitFingerprints: args.explicitFingerprints,
-    })) continue
-    return {
-      body: comment.body,
-      marker: extractSigilixMarker(comment.body),
-      path: comment.path,
-    }
+    pushCandidate(comment.body, comment.user?.login, comment.path)
   }
   for (const comment of issueComments) {
-    if (!isArcGithubLogin(comment.user?.login ?? null)) continue
-    if (!sourceMatchesExplicitCorrelation({
-      sourceBody: comment.body,
-      explicitMarker: args.explicitMarker,
-      explicitFingerprints: args.explicitFingerprints,
-    })) continue
-    return {
-      body: comment.body,
-      marker: extractSigilixMarker(comment.body),
-    }
+    pushCandidate(comment.body, comment.user?.login)
   }
-  return null
+  pushCandidate(pr.body, pr.user?.login)
+  for (const review of reviews) {
+    pushCandidate(review.body, review.user?.login)
+  }
+  return candidates.find((candidate) => candidate.marker !== null) ??
+    candidates[0] ??
+    null
 }
 
 /**

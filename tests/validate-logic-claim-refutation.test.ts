@@ -191,3 +191,57 @@ describe("scope + fail-open guards (KEEP)", () => {
     expect(evaluateLogicClaimRefutation(cfFinding({ path: "docs/auth.md" }), ctx("docs/auth.md", AUTH)).keep).toBe(true)
   })
 })
+
+describe("unused-identifier refutation (REFUTE when the symbol is referenced)", () => {
+  const SRC = `export function filterRows(rows, req) {
+  const needle = String(req.query.q ?? "")
+  return rows.filter((r) => r.name.includes(needle))
+}`
+  it("refutes 'Unused \`req\` parameter' when req IS referenced", () => {
+    const f = finding({ path: "src/filter.ts", line: 2, headline: "Unused `req` parameter after refactor", body: "the req parameter is no longer used" })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", SRC))).toEqual({ keep: false, reason: "unused-claim-refuted-identifier-is-referenced" })
+  })
+  it("KEEPS 'unused `dead` variable' when dead really is unused (appears once)", () => {
+    const S = `export function f(rows) {
+  const dead = 1
+  return rows.length
+}`
+    const g = finding({ path: "src/f.ts", line: 2, headline: "Unused variable `dead`", body: "the dead binding is never referenced" })
+    expect(evaluateLogicClaimRefutation(g, ctx("src/f.ts", S)).keep).toBe(true)
+  })
+  it("KEEPS a genuinely-unused OUTER var that a NESTED scope reuses the name of (code-reviewer P1)", () => {
+    const S = `export function outer(rows) {
+  const dead = 1
+  return rows.map((x) => {
+    const dead = x * 2
+    return dead
+  })
+}`
+    const g = finding({ path: "src/f.ts", line: 2, headline: "Unused variable `dead`", body: "the outer dead binding is never used" })
+    expect(evaluateLogicClaimRefutation(g, ctx("src/f.ts", S)).keep).toBe(true)
+  })
+})
+
+describe("missing-return-type refutation (REFUTE when the annotation is present)", () => {
+  it("refutes 'return type annotation is missing' when the function HAS one", () => {
+    const S = `export function filterRows(rows: Row[], req: Req): Row[] {
+  return rows.filter((r) => r.name.includes(String(req.query.q ?? "")))
+}`
+    const f = finding({ path: "src/filter.ts", line: 1, headline: "Function return type annotation is missing", body: "filterRows lacks an explicit return type annotation" })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", S))).toEqual({ keep: false, reason: "missing-return-type-claim-refuted-annotation-present" })
+  })
+  it("KEEPS 'return type is missing' when it genuinely is absent", () => {
+    const S = `export function filterRows(rows: Row[], req: Req) {
+  return rows.filter((r) => r.name.includes(String(req.query.q ?? "")))
+}`
+    const f = finding({ path: "src/filter.ts", line: 1, headline: "Function return type annotation is missing", body: "no explicit return type" })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/filter.ts", S)).keep).toBe(true)
+  })
+  it("KEEPS a real bug whose text merely contains 'return type' (the GUARD, not the annotation — code-reviewer P2)", () => {
+    const S = `export async function load(id: string): Promise<Data> {
+  return fetchData(id)
+}`
+    const f = finding({ path: "src/load.ts", line: 2, headline: "Missing the return-type guard before the await", body: "no narrowing before returning" })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/load.ts", S)).keep).toBe(true)
+  })
+})

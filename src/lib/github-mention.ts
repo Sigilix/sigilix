@@ -29,7 +29,12 @@ import { makeKvTelemetrySink } from "./agent-telemetry-kv"
 import { AGENT_SYSTEM_PROMPT } from "../prompts/agent-system"
 import { writeWithdrawal } from "./review-withdrawal-store"
 import { recordOutcome } from "./precision-profile/store"
-import { FINDING_CATEGORIES, type FindingCategory } from "./triage-pr-review"
+import {
+  parseFindingCategory,
+  parseFindingFingerprint,
+  parseFindingSeverity,
+} from "./pr-finding-markers"
+export { parseFindingCategory } from "./pr-finding-markers"
 import { isAuthorAllowedForSlashCommand } from "./slash-commands"
 import {
   LEGACY_REVIEW_BODY_MARKER,
@@ -536,43 +541,6 @@ function findOriginalFindingBody(thread: ThreadEntry[]): string | null {
     if (entry.body.includes(FINDING_MARKER)) return entry.body
   }
   return null
-}
-
-/**
- * SIG-217: parse the hidden `<!-- sigilix:fingerprint:HASH -->` marker that the
- * renderer embeds on every finding comment. Returns the 64-hex-char SHA-256, or
- * undefined when absent (pre-SIG-217 comments / records → Jaccard fallback).
- */
-function parseFindingFingerprint(body: string): string | undefined {
-  const m = /<!-- sigilix:fingerprint:([0-9a-f]{64}) -->/.exec(body)
-  return m ? m[1] : undefined
-}
-
-/**
- * SIG-147: parse the hidden `<!-- sigilix:category:<cat> -->` marker into a
- * FindingCategory for the precision-profile boost dimension. Defaults to
- * `"logic"` (the same fallback `formatFindingCategory` uses) when absent or
- * unrecognized — suppression keys on the fingerprint, so the category default
- * only affects the (not-yet-applied) boost signal. Validates against the
- * canonical `FINDING_CATEGORIES` set (shared with the renderer) so a new
- * category never silently falls through. The marker is on the bot's OWN
- * rendered comment, so the first match is the authoritative one.
- */
-export function parseFindingCategory(body: string): FindingCategory {
-  const m = /<!-- sigilix:category:([a-z-]+) -->/.exec(body)
-  return m && FINDING_CATEGORIES.has(m[1] as FindingCategory) ? (m[1] as FindingCategory) : "logic"
-}
-
-/**
- * SIG-217: parse the hidden `<!-- sigilix:severity:N -->` marker. Returns the
- * score (1–5) or undefined. Lets a later content-equivalent re-fire at a
- * HIGHER score be recognized as a severity-escalation attempt.
- */
-function parseFindingSeverity(body: string): number | undefined {
-  const m = /<!-- sigilix:severity:(\d+) -->/.exec(body)
-  if (!m) return undefined
-  const n = Number(m[1])
-  return Number.isInteger(n) ? n : undefined
 }
 
 interface SourceComment {

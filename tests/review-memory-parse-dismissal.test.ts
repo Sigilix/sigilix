@@ -1,7 +1,10 @@
 // ARC-189 — Reviewer-reply dismissal-signal parser tests (Task 3).
 
 import { describe, expect, it } from "vitest"
-import { parseDismissalSignal } from "../src/lib/review-memory/parse-dismissal"
+import {
+  parseDismissalSignal,
+  parseReviewFeedbackSignal,
+} from "../src/lib/review-memory/parse-dismissal"
 
 describe("parseDismissalSignal — keyword set triggers", () => {
   it.each([
@@ -156,5 +159,53 @@ describe("parseDismissalSignal — code fences excluded from keyword scan", () =
   it("inline single-backtick `code` does NOT shield prose around it", () => {
     const body = "I think `someVar` is a false positive here."
     expect(parseDismissalSignal(body)).not.toBeNull()
+  })
+})
+
+describe("parseReviewFeedbackSignal — SIG-185 accepted/dismissed outcomes", () => {
+  it.each([
+    "good catch",
+    "Great catch, I'll fix it",
+    "thanks for flagging",
+    "thank you for catching this",
+    "fixed in the latest push",
+    "addressed",
+    "makes sense",
+    "you're right",
+  ])("maps accepted prose %p to accepted", (body) => {
+    expect(parseReviewFeedbackSignal(body)).toEqual({ outcome: "accepted" })
+  })
+
+  it("keeps dismissal reason parsing for dismissed feedback", () => {
+    expect(parseReviewFeedbackSignal("@sigilix dismiss wrong-context")).toEqual({
+      outcome: "dismissed",
+      kind: "dismissed-textual",
+      dismissReason: "wrong-context",
+    })
+  })
+
+  it("lets dismissal win mixed prose that also contains acceptance text", () => {
+    expect(parseReviewFeedbackSignal("good catch, but this is a false positive")).toEqual({
+      outcome: "dismissed",
+      kind: "dismissed-textual",
+    })
+  })
+
+  it("ignores accepted keywords inside fenced code blocks", () => {
+    const body = [
+      "I disagree with this pattern.",
+      "",
+      "```md",
+      "good catch",
+      "fixed",
+      "```",
+    ].join("\n")
+    expect(parseReviewFeedbackSignal(body)).toBeNull()
+  })
+
+  it("returns null for neutral prose and non-strings", () => {
+    expect(parseReviewFeedbackSignal("I'll take a look")).toBeNull()
+    expect(parseReviewFeedbackSignal(null)).toBeNull()
+    expect(parseReviewFeedbackSignal(undefined)).toBeNull()
   })
 })

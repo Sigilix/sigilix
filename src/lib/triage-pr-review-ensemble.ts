@@ -348,6 +348,7 @@ import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
 } from "./sarif-evidence/render"
+import { buildSarifCheckAnnotations } from "./sarif-evidence/annotations"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import {
@@ -1652,6 +1653,11 @@ export async function handlePrReviewEnsemble(
   // Function-scoped (like `cache`) so it crosses the inner try-block boundaries.
   // `undefined` = `runner-absent` = no badge (the default, flag-off path).
   let runnerEvidenceBadge: "verified" | "evidence-pending" | undefined = undefined
+  let deterministicCheckAnnotations: CheckRunAnnotation[] | undefined
+  const deterministicCheckAnnotationMeta = () =>
+    deterministicCheckAnnotations !== undefined && deterministicCheckAnnotations.length > 0
+      ? { deterministicCheckAnnotations: [...deterministicCheckAnnotations] }
+      : {}
 
   // ARC-258: the in-progress check run is owned by `dispatchJob`,
   // not by this orchestrator. Reason: when ensemble-post fails
@@ -1752,6 +1758,7 @@ export async function handlePrReviewEnsemble(
           event: "REQUEST_CHANGES",
           findingsCount: 0,
           surface: "skip-notice",
+          ...deterministicCheckAnnotationMeta(),
         })
       }
       return finalize(telemetry, env, "errored", cache)
@@ -1821,6 +1828,7 @@ export async function handlePrReviewEnsemble(
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
           findingsCount: 0,
+          ...deterministicCheckAnnotationMeta(),
         })
       }
       // Submit failed — fall through to `errored` without a surface
@@ -3206,6 +3214,15 @@ export async function handlePrReviewEnsemble(
       ...(runnerMode === "post" && runnerEvidence.state === "verified" ? { rawOverride: runnerEvidence.sarif } : {}),
     })
     const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
+    deterministicCheckAnnotations = buildSarifCheckAnnotations(sarifFindings)
+    if (deterministicCheckAnnotations.length > 0) {
+      console.log(JSON.stringify({
+        event: "sarif-lane-a-check-annotations-built",
+        owner, repo, prNumber,
+        annotations: deterministicCheckAnnotations.length,
+        findings: sarifFindings.length,
+      }))
+    }
     // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED receipt
     // exists, build the HEAD-scan index from the receipt's UN-FILTERED parseSarif
     // results — deliberately NOT `sarifResult.findings`, which runSarifEvidence
@@ -6290,6 +6307,7 @@ export async function handlePrReviewEnsemble(
           event: "APPROVE",
           findingsCount: 0,
           ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
+          ...deterministicCheckAnnotationMeta(),
         })
       }
       return finalize(telemetry, env, "errored", cache)
@@ -7004,6 +7022,7 @@ export async function handlePrReviewEnsemble(
             // to a `failure` conclusion whose summary is error prose, and the
             // pill is a success-summary-only signal (Kimi spec). Threading it
             // here would be dead data the renderer never shows.
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -7082,6 +7101,7 @@ export async function handlePrReviewEnsemble(
         event: submission.event,
         findingsCount: inlineFindings,
         ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
+        ...deterministicCheckAnnotationMeta(),
         // SIG-144 (PR #339 review fix): in annotations-only mode inline
         // comments are suppressed, so the annotations payload must carry
         // ALL findings — not just the body-only leftovers — or anchored
@@ -7154,6 +7174,7 @@ export async function handlePrReviewEnsemble(
             // No runner pill on `surface: "comment"` — see the note at the
             // fallbackCommentSubmission site above (failure conclusion, pill is
             // success-summary-only).
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -7237,6 +7258,7 @@ export async function handlePrReviewEnsemble(
             surface: "comment",
             // No runner pill on `surface: "comment"` — failure conclusion; the
             // pill is success-summary-only (see fallbackCommentSubmission note).
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -7285,6 +7307,7 @@ export async function handlePrReviewEnsemble(
             surface: "comment",
             // No runner pill on `surface: "comment"` — failure conclusion; the
             // pill is success-summary-only (see fallbackCommentSubmission note).
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -7341,6 +7364,7 @@ export async function handlePrReviewEnsemble(
         event: fallback.event,
         findingsCount: fallbackFindings,
         ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
+        ...deterministicCheckAnnotationMeta(),
         ...checkAnnotationMeta(allFindingAnnotations),
       })
     } finally {
@@ -11276,6 +11300,9 @@ export interface ReviewMeta {
   surface?: "review" | "comment" | "skip-notice"
   /** Body-only findings rendered as GitHub Checks annotations. */
   checkAnnotations?: CheckRunAnnotation[]
+  /** SIG-171: scanner-derived Lane A annotations rendered independently
+   *  from model-authored review findings. */
+  deterministicCheckAnnotations?: CheckRunAnnotation[]
   /** SIG-184: the runner-evidence trust state when a receipt was
    *  consulted (flag-gated; omitted = `runner-absent` = no badge).
    *  Flows verbatim into `ReviewCheckMeta.runnerEvidence` (index.ts

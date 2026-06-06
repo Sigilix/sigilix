@@ -601,7 +601,7 @@ describe("completeCheckRun", () => {
     // `neutral`; title + summary carry the diagnostic surface info.
     expect(p.conclusion).toBe("neutral")
     expect(p.output.title).toBe("Couldn't review — see PR comment")
-    expect(p.output.summary).toContain("couldn't generate a review")
+    expect(p.output.summary).toContain("couldn't generate a model review")
     expect(p.output.summary).toContain("PR comment")
   })
 })
@@ -792,5 +792,169 @@ describe("SIG-144: completeCheckRun annotation posting", () => {
       surface: "both",
       reviewMeta: { event: "REQUEST_CHANGES", findingsCount: 1, checkAnnotations: makeAnnotations(1) },
     })).resolves.toBeUndefined()
+  })
+})
+
+// ───────────────────────── SIG-171 ─────────────────────────
+// Deterministic SARIF/RDF/linter Lane A annotations are scanner-derived, not
+// model-authored review comments. They post independently from the LLM annotation
+// output surface and survive LLM degradation paths once the scan has run.
+
+describe("SIG-171: deterministic Check annotations", () => {
+  const deterministic: CheckRunAnnotation[] = [
+    {
+      path: "src/app.ts",
+      start_line: 7,
+      end_line: 7,
+      annotation_level: "failure",
+      title: "[SARIF error] Semgrep: no-eval",
+      message: "Avoid eval.",
+    },
+  ]
+
+  const model: CheckRunAnnotation[] = [
+    {
+      path: "src/model.ts",
+      start_line: 9,
+      end_line: 9,
+      annotation_level: "warning",
+      title: "[P2] logic: model finding",
+      message: "Model-authored finding.",
+    },
+  ]
+
+  it("posts deterministic annotations even when review surface defaults to comments", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      // surface omitted -> comments, so model annotations are still gated off.
+      reviewMeta: {
+        event: "APPROVE",
+        findingsCount: 0,
+        prNumber: 5,
+        checkAnnotations: model,
+        deterministicCheckAnnotations: deterministic,
+      },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    const completion = mockUpdateCheckRun.mock.calls[0]![3] as { output: { summary: string } }
+    expect(completion.output.summary).toContain("1 scanner diagnostic from deterministic analysis")
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    expect(batch.output.annotations).toEqual(deterministic)
+  })
+
+  it("combines deterministic and model annotations on successful annotation surfaces", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "success",
+      surface: "both",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 1,
+        prNumber: 5,
+        checkAnnotations: model,
+        deterministicCheckAnnotations: deterministic,
+      },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    const completion = mockUpdateCheckRun.mock.calls[0]![3] as { output: { summary: string } }
+    expect(completion.output.summary).toContain("1 scanner diagnostic from deterministic analysis")
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    expect(batch.output.annotations).toEqual([...model, ...deterministic])
+  })
+
+  it("posts deterministic annotations when the LLM review degraded to a failure conclusion", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "failure",
+      surface: "both",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 0,
+        surface: "skip-notice",
+        checkAnnotations: model,
+        deterministicCheckAnnotations: deterministic,
+      },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    const completion = mockUpdateCheckRun.mock.calls[0]![3] as {
+      conclusion: string
+      output: { title: string; summary: string }
+    }
+    expect(completion.conclusion).toBe("neutral")
+    expect(completion.output.title).toBe("Couldn't review — see PR comment")
+    expect(completion.output.summary).toContain("couldn't generate a model review")
+    expect(completion.output.summary).toContain("Deterministic analysis still found 1 scanner diagnostic")
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    expect(batch.output.annotations).toEqual(deterministic)
+  })
+
+  it("keeps deterministic scanner context on review-submit comment fallback", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "failure",
+      surface: "comments",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 0,
+        surface: "comment",
+        checkAnnotations: model,
+        deterministicCheckAnnotations: deterministic,
+      },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    const completion = mockUpdateCheckRun.mock.calls[0]![3] as {
+      conclusion: string
+      output: { title: string; summary: string }
+    }
+    expect(completion.conclusion).toBe("neutral")
+    expect(completion.output.title).toBe("Couldn't post review — see PR comment")
+    expect(completion.output.summary).toContain("Deterministic analysis also found 1 scanner diagnostic")
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    expect(batch.output.annotations).toEqual(deterministic)
+  })
+
+  it("does not post deterministic annotations on stale-head skip", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "skipped",
+      surface: "both",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 0,
+        deterministicCheckAnnotations: deterministic,
+      },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(1)
   })
 })

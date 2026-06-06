@@ -52,7 +52,6 @@ import { recordDismissalMetric } from "../validation-metrics-client"
 import type { FindingOutcome } from "../precision-profile/types"
 import {
   parseFindingOutcomeMarkers,
-  parseFindingFingerprint,
 } from "../pr-finding-markers"
 import type { DismissReason } from "../dismiss-reasons"
 
@@ -582,9 +581,8 @@ function sourceMatchesExplicitCorrelation(args: {
     return true
   }
   if (args.explicitFingerprints.size === 0) return false
-  const sourceFingerprint = parseFindingFingerprint(args.sourceBody)
-  return sourceFingerprint !== undefined &&
-    args.explicitFingerprints.has(sourceFingerprint)
+  return parseFindingOutcomeMarkers(args.sourceBody)
+    .some((m) => args.explicitFingerprints.has(m.patternHash))
 }
 
 export function hasExplicitTopLevelReviewFeedbackSignal(body: unknown): boolean {
@@ -592,6 +590,37 @@ export function hasExplicitTopLevelReviewFeedbackSignal(body: unknown): boolean 
   if (!parseReviewFeedbackSignal(body)) return false
   return extractSigilixMarker(body) !== null ||
     parseFindingOutcomeMarkers(body).length > 0
+}
+
+export function hasStaleDismissedReviewFeedbackSignal(
+  review: unknown,
+  headSha: unknown,
+): boolean {
+  if (
+    typeof review !== "object" ||
+    review === null ||
+    typeof headSha !== "string" ||
+    headSha.length === 0
+  ) {
+    return false
+  }
+  const r = review as {
+    body?: unknown
+    commit_id?: unknown
+    user?: { login?: unknown }
+  }
+  if (typeof r.body !== "string") return false
+  if (!isArcGithubLogin(typeof r.user?.login === "string" ? r.user.login : null)) {
+    return false
+  }
+  if (
+    typeof r.commit_id !== "string" ||
+    r.commit_id.length === 0 ||
+    r.commit_id === headSha
+  ) {
+    return false
+  }
+  return parseFindingOutcomeMarkers(r.body).length > 0
 }
 
 async function findTrustedSigilixSourceForTopLevel(args: {
@@ -602,10 +631,38 @@ async function findTrustedSigilixSourceForTopLevel(args: {
   explicitMarker: SigilixCommentMarker | null
   explicitFingerprints: ReadonlySet<string>
 }): Promise<TrustedSigilixSource | null> {
-  const [issueComments, reviewComments] = await Promise.all([
+  const [pr, reviews, issueComments, reviewComments] = await Promise.all([
+    args.client.getPullRequest(args.owner, args.repo, args.prNumber),
+    args.client.listPullRequestReviews(args.owner, args.repo, args.prNumber),
     args.client.listIssueComments(args.owner, args.repo, args.prNumber),
     args.client.listPullRequestReviewComments(args.owner, args.repo, args.prNumber),
   ])
+  if (
+    typeof pr.body === "string" &&
+    isArcGithubLogin(pr.user?.login ?? null) &&
+    sourceMatchesExplicitCorrelation({
+      sourceBody: pr.body,
+      explicitMarker: args.explicitMarker,
+      explicitFingerprints: args.explicitFingerprints,
+    })
+  ) {
+    return {
+      body: pr.body,
+      marker: extractSigilixMarker(pr.body),
+    }
+  }
+  for (const review of reviews) {
+    if (!isArcGithubLogin(review.user?.login ?? null)) continue
+    if (!sourceMatchesExplicitCorrelation({
+      sourceBody: review.body,
+      explicitMarker: args.explicitMarker,
+      explicitFingerprints: args.explicitFingerprints,
+    })) continue
+    return {
+      body: review.body,
+      marker: extractSigilixMarker(review.body),
+    }
+  }
   for (const comment of reviewComments) {
     if (!isArcGithubLogin(comment.user?.login ?? null)) continue
     if (!sourceMatchesExplicitCorrelation({

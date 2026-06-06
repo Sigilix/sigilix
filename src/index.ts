@@ -97,6 +97,7 @@ import {
   captureReviewFeedback,
   captureTopLevelReviewFeedback,
   hasExplicitTopLevelReviewFeedbackSignal,
+  hasStaleDismissedReviewFeedbackSignal,
 } from "./lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
 import {
@@ -3480,34 +3481,39 @@ async function handleGitHubWebhook(
     const reviewMemoryPrNumber = payload.pull_request?.number
     const headSha = payload.pull_request?.head?.sha
     if (
-      reviewMemoryReview &&
-      typeof reviewMemoryReview.id === "number" &&
-      typeof reviewMemoryReview.body === "string" &&
-      typeof reviewMemoryPrNumber === "number" &&
-      typeof headSha === "string" &&
-      headSha.length > 0
+      !reviewMemoryReview ||
+      typeof reviewMemoryReview.id !== "number" ||
+      typeof reviewMemoryReview.body !== "string" ||
+      typeof reviewMemoryPrNumber !== "number" ||
+      !hasStaleDismissedReviewFeedbackSignal(reviewMemoryReview, headSha)
     ) {
-      ctx.waitUntil(
-        dispatchDismissedReviewMemoryCapture({
-          env,
-          owner,
-          repo,
-          prNumber: reviewMemoryPrNumber,
-          installationId,
-          review: {
-            id: reviewMemoryReview.id,
-            body: reviewMemoryReview.body,
-            ...(typeof reviewMemoryReview.commit_id === "string"
-              ? { commit_id: reviewMemoryReview.commit_id }
-              : {}),
-            ...(reviewMemoryReview.user?.login !== undefined
-              ? { user: { login: reviewMemoryReview.user.login } }
-              : {}),
-          },
-          headSha,
-        }),
-      )
+      return new Response("skip review dismissal capture\n", { status: 200 })
     }
+    const staleCommitId = reviewMemoryReview.commit_id
+    const sigilixLogin = reviewMemoryReview.user?.login
+    if (
+      typeof headSha !== "string" ||
+      typeof staleCommitId !== "string" ||
+      typeof sigilixLogin !== "string"
+    ) {
+      return new Response("skip review dismissal capture\n", { status: 200 })
+    }
+    ctx.waitUntil(
+      dispatchDismissedReviewMemoryCapture({
+        env,
+        owner,
+        repo,
+        prNumber: reviewMemoryPrNumber,
+        installationId,
+        review: {
+          id: reviewMemoryReview.id,
+          body: reviewMemoryReview.body,
+          commit_id: staleCommitId,
+          user: { login: sigilixLogin },
+        },
+        headSha,
+      }),
+    )
     return new Response("queued review dismissal capture\n", { status: 202 })
   }
 

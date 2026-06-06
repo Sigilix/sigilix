@@ -6,6 +6,7 @@ import {
   captureReviewFeedback,
   captureTopLevelReviewFeedback,
   hasExplicitTopLevelReviewFeedbackSignal,
+  hasStaleDismissedReviewFeedbackSignal,
 } from "../src/lib/review-memory/capture"
 import { buildKey } from "../src/lib/review-memory/storage"
 import type { Env } from "../src/index"
@@ -563,6 +564,15 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
           user: { login: authorLogin },
         },
       ]),
+      listPullRequestReviews: vi.fn(async () => []),
+      getPullRequest: vi.fn(async () => ({
+        number: 7,
+        title: "PR",
+        body: "",
+        user: { login: "human" },
+        head: { sha: "head", ref: "branch" },
+        base: { sha: "base", ref: "main" },
+      })),
       getRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
     } as unknown as GitHubClient
   }
@@ -625,12 +635,64 @@ describe("captureTopLevelReviewFeedback — explicit verified source", () => {
     expect(skipped).toBeDefined()
   })
 
+  it("verifies top-level feedback against a Sigilix-authored formal review body", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = {
+      listIssueComments: vi.fn(async () => []),
+      listPullRequestReviewComments: vi.fn(async () => []),
+      listPullRequestReviews: vi.fn(async () => [
+        {
+          id: 800,
+          state: "CHANGES_REQUESTED",
+          body: `${PRECISION_FINDING_MARKERS}\n\n${SECOND_PRECISION_FINDING_MARKERS}`,
+          user: { login: "sigilix[bot]" },
+          commitId: "old-head",
+        },
+      ]),
+      getPullRequest: vi.fn(async () => ({
+        number: 7,
+        title: "PR",
+        body: "",
+        user: { login: "human" },
+        head: { sha: "head", ref: "branch" },
+        base: { sha: "base", ref: "main" },
+      })),
+      getRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
+    } as unknown as GitHubClient
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      comment: {
+        id: 900,
+        body: `${SECOND_PRECISION_FINDING_MARKERS}\n\nGood catch`,
+      },
+      config: makeConfig(),
+    })
+    expect(Array.from(store.keys()).some((k) => k.startsWith("review-memory:"))).toBe(false)
+    const profile = JSON.parse(store.get("precision-profile:repo:a/r")!)
+    expect(profile.patterns[VALID_FINGERPRINT_2].suppress).toBe(0)
+    expect(profile.categories.security.boost).toBe(0.3)
+  })
+
   it("exits cleanly when no source review comments are available to verify the marker", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
     const client = {
       listIssueComments: vi.fn(async () => []),
       listPullRequestReviewComments: vi.fn(async () => []),
+      listPullRequestReviews: vi.fn(async () => []),
+      getPullRequest: vi.fn(async () => ({
+        number: 7,
+        title: "PR",
+        body: "",
+        user: { login: "human" },
+        head: { sha: "head", ref: "branch" },
+        base: { sha: "base", ref: "main" },
+      })),
       getRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
     } as unknown as GitHubClient
     await captureTopLevelReviewFeedback({
@@ -663,6 +725,27 @@ describe("captureDismissedReviewFeedback — stale precision outcome", () => {
   })
   afterEach(() => {
     consoleSpy.mockRestore()
+  })
+
+  it("prefilters irrelevant dismissed reviews before token/config work", () => {
+    expect(hasStaleDismissedReviewFeedbackSignal({
+      id: 700,
+      body: PRECISION_FINDING_MARKERS,
+      commit_id: "old-head",
+      user: { login: "sigilix[bot]" },
+    }, "new-head")).toBe(true)
+    expect(hasStaleDismissedReviewFeedbackSignal({
+      id: 701,
+      body: PRECISION_FINDING_MARKERS,
+      commit_id: "new-head",
+      user: { login: "sigilix[bot]" },
+    }, "new-head")).toBe(false)
+    expect(hasStaleDismissedReviewFeedbackSignal({
+      id: 702,
+      body: PRECISION_FINDING_MARKERS,
+      commit_id: "old-head",
+      user: { login: "human" },
+    }, "new-head")).toBe(false)
   })
 
   it("records stale only when a Sigilix review for an older commit has mappable finding fingerprints", async () => {

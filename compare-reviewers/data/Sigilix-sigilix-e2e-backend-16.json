@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-backend",
+  "pr": 16,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-backend/pull/16",
+  "collectedAt": "2026-06-06T07:54:17.497Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "bot": "sigilix",
+        "commentId": 3352891876,
+        "path": "src/routes/profile.ts",
+        "line": 22,
+        "excerpt": "**No length validation on the `bio` field**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/16#discussion_r3352891876",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s2",
+        "bot": "sigilix",
+        "commentId": 3352891881,
+        "path": "src/routes/profile.ts",
+        "line": 1,
+        "excerpt": "**New profile endpoint ships without test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/16#discussion_r3352891881",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "bot": "coderabbit",
+        "commentId": 3352893379,
+        "path": "src/routes/profile.ts",
+        "line": 23,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/16#discussion_r3352893379"
+      },
+      {
+        "ref": "c2",
+        "bot": "coderabbit",
+        "commentId": 3352893387,
+        "path": "src/routes/profile.ts",
+        "line": 37,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/16#discussion_r3352893387"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "security",
+      "note": "no length cap on bio field"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s2"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "tests",
+      "note": "profile endpoint untested"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "c1"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "unguarded req.body causes 500"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "c2"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "DB failures unhandled"
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-backend",
+  "pr": 18,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18",
+  "collectedAt": "2026-06-06T07:54:16.170Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "bot": "sigilix",
+        "commentId": 3352955469,
+        "path": "src/routes/session.ts",
+        "line": 1,
+        "excerpt": "**Authentication endpoint ships without test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352955469",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "bot": "coderabbit",
+        "commentId": 3352961995,
+        "path": "src/routes/session.ts",
+        "line": 6,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352961995"
+      },
+      {
+        "ref": "c2",
+        "bot": "coderabbit",
+        "commentId": 3352962000,
+        "path": "src/routes/session.ts",
+        "line": 16,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352962000"
+      },
+      {
+        "ref": "c3",
+        "bot": "coderabbit",
+        "commentId": 3352962002,
+        "path": "src/routes/session.ts",
+        "line": 14,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352962002"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "tests",
+      "note": "auth endpoint untested"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "c1"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "security",
+      "note": "empty SESSION_SECRET allows auth bypass"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "c2"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "split('.') breaks payload containing dots"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "c3"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "security",
+      "note": "non-constant-time token compare"
+    }
+  ]
+}

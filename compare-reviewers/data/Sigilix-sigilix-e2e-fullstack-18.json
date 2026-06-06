@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-fullstack",
+  "pr": 18,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18",
+  "collectedAt": "2026-06-06T07:54:20.336Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "bot": "sigilix",
+        "commentId": 3352945408,
+        "path": "server/invoice-summary.ts",
+        "line": 14,
+        "excerpt": "**Unhandled promise rejection on database query will crash the process under load**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352945408",
+        "botCategory": "error-handling"
+      },
+      {
+        "ref": "s2",
+        "bot": "sigilix",
+        "commentId": 3352945415,
+        "path": "server/invoice-summary.ts",
+        "line": 12,
+        "excerpt": "**New endpoint has no authentication: any caller can read per-status invoice summary data**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352945415",
+        "botCategory": "security"
+      },
+      {
+        "ref": "s3",
+        "bot": "sigilix",
+        "commentId": 3352945423,
+        "path": "server/invoice-summary.ts",
+        "line": 1,
+        "excerpt": "**New endpoint ships without test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352945423",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "bot": "coderabbit",
+        "commentId": 3352949500,
+        "path": "server/invoice-summary.ts",
+        "line": 5,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949500"
+      },
+      {
+        "ref": "c2",
+        "bot": "coderabbit",
+        "commentId": 3352949505,
+        "path": "server/invoice-summary.ts",
+        "line": 30,
+        "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949505"
+      },
+      {
+        "ref": "c3",
+        "bot": "coderabbit",
+        "commentId": 3352949507,
+        "path": "server/invoice-summary.ts",
+        "line": 19,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949507"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1",
+        "c2"
+      ],
+      "label": "both_real",
+      "category": "logic",
+      "note": "both flagged unhandled async rejection crashing the route"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s2"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "security",
+      "note": "no auth on invoice-summary endpoint"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s3"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "tests",
+      "note": "endpoint untested"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "c1"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "fail fast when DATABASE_URL missing"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "c3"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "::int casts on aggregates can overflow"
+    }
+  ]
+}

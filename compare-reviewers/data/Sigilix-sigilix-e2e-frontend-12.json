@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "owner": "Sigilix",
+  "repo": "sigilix-e2e-frontend",
+  "pr": 12,
+  "prUrl": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12",
+  "collectedAt": "2026-06-06T07:54:14.747Z",
+  "findings": {
+    "sigilix": [
+      {
+        "ref": "s1",
+        "bot": "sigilix",
+        "commentId": 3345892588,
+        "path": "src/hooks/usePagedUsers.ts",
+        "line": 25,
+        "excerpt": "**Stale closure in `loadMore` captures initial `cursor`, `done`, and `loading` values**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892588",
+        "botCategory": "logic"
+      },
+      {
+        "ref": "s2",
+        "bot": "sigilix",
+        "commentId": 3345892600,
+        "path": "src/hooks/usePagedUsers.ts",
+        "line": 17,
+        "excerpt": "**New pagination hook ships without test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892600",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s3",
+        "bot": "sigilix",
+        "commentId": 3345892602,
+        "path": "src/api/client.ts",
+        "line": 28,
+        "excerpt": "**New getUsersPaged API method lacks test coverage**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892602",
+        "botCategory": "testing"
+      },
+      {
+        "ref": "s4",
+        "bot": "sigilix",
+        "commentId": 3345892603,
+        "path": "src/components/UserList.tsx",
+        "line": 12,
+        "excerpt": "**UserList component filter logic untested**",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892603",
+        "botCategory": "testing"
+      }
+    ],
+    "coderabbit": [
+      {
+        "ref": "c1",
+        "bot": "coderabbit",
+        "commentId": 3345897373,
+        "path": "src/components/UserList.tsx",
+        "line": 15,
+        "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345897373"
+      },
+      {
+        "ref": "c2",
+        "bot": "coderabbit",
+        "commentId": 3345897376,
+        "path": "src/hooks/usePagedUsers.ts",
+        "line": 36,
+        "excerpt": "_⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_",
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345897376"
+      }
+    ]
+  },
+  "items": [
+    {
+      "id": 1,
+      "findings": [
+        "s1"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "logic",
+      "note": "stale closure in loadMore"
+    },
+    {
+      "id": 2,
+      "findings": [
+        "s2"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "tests",
+      "note": "pagination hook untested"
+    },
+    {
+      "id": 3,
+      "findings": [
+        "s3"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "tests",
+      "note": "getUsersPaged untested"
+    },
+    {
+      "id": 4,
+      "findings": [
+        "s4"
+      ],
+      "label": "sigilix_only_real_bug",
+      "category": "tests",
+      "note": "UserList filter untested"
+    },
+    {
+      "id": 5,
+      "findings": [
+        "c1"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "error short-circuit discards already-loaded users"
+    },
+    {
+      "id": 6,
+      "findings": [
+        "c2"
+      ],
+      "label": "cr_only_real_bug",
+      "category": "logic",
+      "note": "StrictMode double-invoke concern"
+    }
+  ]
+}

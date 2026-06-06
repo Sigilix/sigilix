@@ -246,6 +246,18 @@
       "why": "SKIP — a retryable side effect that passes a VISIBLE dedup/idempotency key is idempotent by design. The FP fires when a reviewer sees a send in a consumer and cries double-send without reading the key. Record a `clearedLogicCandidate` quoting `dedupKey`; do not emit. (A send/charge/enqueue with NO such key or dedup lookup in sight IS a real bug — only a present, quotable key clears it.)"
     },
     {
+      "id": "skip-stripe-event-id-clears-redelivery",
+      "situation": "A Stripe webhook handler charges `order.amountCents` and passes `{ idempotencyKey: event.id }` to `stripe.charges.create(...)`; the only concern visible in the diff is retry/redelivery of the same webhook event.",
+      "emit": false,
+      "cleared": {
+        "path": "src/payments/charge.ts",
+        "line": 9,
+        "hypothesis": "a retried webhook double-charges the order",
+        "mitigation": "the Stripe call passes `{ idempotencyKey: event.id }`, so redelivery of the same event reuses the same idempotency key"
+      },
+      "why": "SKIP — for the retry/redelivery hypothesis, a visible delivery-stable idempotency key is enough; do not require an additional `order.paid` / status guard for the SAME retry. Keep the recall valve: if the diff visibly shows `event.id` is fresh per attempt or that different event ids can represent the same logical operation, then the key is not stable and the missing domain-state guard remains a real bug."
+    },
+    {
       "id": "skip-early-return-guards-the-tail",
       "situation": "Added middleware: `if (!allowed) { return res.status(429).end() }` and on the NEXT line `handler(req, res)`. A reviewer flags `handler` runs unconditionally after the 429 (double response / guard bypass).",
       "emit": false,
@@ -255,7 +267,7 @@
         "hypothesis": "handler runs unconditionally after the 429 is sent, causing a double response / bypassing the guard",
         "mitigation": "the guard branch ends in `return res.status(429).end()` — the early return means the tail line only runs on the allowed path; it is the else-path, not unconditional"
       },
-      "why": "SKIP — before flagging that a tail call (`next()`, a commit, a success return, a handler) 'runs unconditionally' or 'after the error response', look for an early `return`/`throw` inside the error branch. An early `return`/`throw` IS the guard: the code after the `if` is the else-path. This is a control-flow misread — quote the `return` in a `clearedLogicCandidate`, do not emit. (Only a branch that sends the error and then FALLS THROUGH with no return/throw is the real double-response bug.)"
+      "why": "SKIP — before flagging that a tail call (`next()`, a commit, a success return, a handler) 'runs unconditionally' or 'after the error response', look for an early `return`/`throw` inside the error branch. In JavaScript/TypeScript, a `return` inside an `if` exits the enclosing function/callback, not just the block, so the code after the `if` is the else-path. This is a control-flow misread — quote the `return` in a `clearedLogicCandidate`, do not emit. (Only a branch that sends the error and then FALLS THROUGH with no return/throw is the real double-response bug.)"
     },
     {
       "id": "skip-default-guards-downstream",

@@ -225,8 +225,18 @@
  * Candidate unless the deliberate-design reading is disprovable). Recall-safe:
  * down-rank/clear, never hide a confirmable bug. Reviews with v21 go stale on
  * first deploy of v22.
+ *
+ * v22 → v23 (SIG-317 follow-up): the logic specialist's idempotency fence now
+ * distinguishes same-delivery retry/redelivery from duplicate logical
+ * operations. A visible delivery-stable idempotency/dedup key clears the
+ * retry hypothesis without demanding a second order-status guard, but visibly
+ * unstable keys or multiple delivery ids for one operation still require a
+ * domain-state guard / operation-stable key. The same bump reinforces the
+ * control-flow fence with the JS/TS rule that `return` inside an `if` exits the
+ * enclosing function/callback, preventing a safe auth middleware FP. Reviews
+ * with v22 go stale on first deploy of v23.
  */
-export const PROMPT_VERSION = "22"
+export const PROMPT_VERSION = "23"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

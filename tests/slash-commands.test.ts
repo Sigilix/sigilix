@@ -396,6 +396,12 @@ describe("parseSlashCommand — SIG-98 lifecycle commands", () => {
     expect(parseSlashCommand("/Sigilix RESOLVE")).toEqual({ cmd: "resolve" })
   })
 
+  it("recognizes `/sigilix cancel` (SIG-329)", () => {
+    expect(parseSlashCommand("/sigilix cancel")).toEqual({ cmd: "cancel" })
+    expect(parseSlashCommand("/Sigilix CANCEL")).toEqual({ cmd: "cancel" })
+    expect(parseSlashCommand("/sigilix cancel now")).toEqual({ cmd: "cancel" })
+  })
+
   it("recognizes the two-word `/sigilix full review`", () => {
     expect(parseSlashCommand("/sigilix full review")).toEqual({ cmd: "full-review" })
     expect(parseSlashCommand("/Sigilix FULL Review")).toEqual({ cmd: "full-review" })
@@ -455,6 +461,12 @@ describe("renderSlashCommandAck — SIG-98 lifecycle commands", () => {
     expect(out.toLowerCase()).toContain("resolve")
     expect(out.toLowerCase()).toMatch(/sigilix-authored|sigilix/)
   })
+
+  it("renders a cancel ack mentioning the in-progress review + check close (SIG-329)", () => {
+    const out = renderSlashCommandAck({ cmd: "cancel" })
+    expect(out.toLowerCase()).toContain("cancel")
+    expect(out.toLowerCase()).toMatch(/in-progress|check/)
+  })
 })
 
 describe("renderHelpBody", () => {
@@ -474,6 +486,10 @@ describe("renderHelpBody", () => {
     expect(body).toContain("`/sigilix ignore`")
     expect(body).toContain("`/sigilix full review`")
     expect(body).toContain("`/sigilix resolve`")
+  })
+
+  it("documents the SIG-329 cancel command", () => {
+    expect(body).toContain("`/sigilix cancel`")
   })
 
   it("documents the describe mode tokens", () => {

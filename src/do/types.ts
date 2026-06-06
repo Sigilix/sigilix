@@ -13,7 +13,10 @@ export type RunStateLifecycle =
   | "failed-transient"
   | "failed"
 
-export type AlarmKind = "retry" | "watchdog"
+// SIG-329: `liveness` is the running-attempt heartbeat-gap alarm, set at
+// /pickup and re-armed on every /heartbeat. `watchdog` remains the
+// queued-but-not-picked-up backstop (set at /enqueue + retry-requeue).
+export type AlarmKind = "retry" | "watchdog" | "liveness"
 
 /** Spec §4.2 — single source of truth for a PR's review-run state. */
 export interface RunState {
@@ -53,6 +56,22 @@ export interface RunState {
   consumerId?: string
   /** ISO of last state mutation; used by spec §4.10 v2 GC sweep. */
   lastActivityAt: string
+  /**
+   * SIG-329: ISO of the most recent `/heartbeat` from the running
+   * consumer (seeded to pickup-time at /pickup so the first liveness
+   * window measures from claim). The liveness alarm declares the
+   * attempt dead when `now - lastHeartbeatAt >= livenessMs`. Absent on
+   * queued / never-picked-up runs (those are covered by the watchdog).
+   */
+  lastHeartbeatAt?: string
+  /**
+   * SIG-329: ISO absolute backstop deadline (`pickup + watchdogMs`),
+   * persisted at /pickup so the single liveness alarm can enforce the
+   * max-review-duration cap as well as the heartbeat gap. When the
+   * liveness alarm fires past this instant the run is failed/retried as
+   * an exhausted watchdog even if heartbeats were still arriving.
+   */
+  watchdogDeadlineAt?: string
   /**
    * ARC-251: number of times this run was re-enqueued because a
    * stale-head guard fired on a prior attempt. Persisted on RunState
@@ -150,6 +169,17 @@ export interface PickupRequest {
 }
 
 /**
+ * SIG-329: `/heartbeat` payload. The running consumer posts this
+ * periodically; the DO re-arms the liveness alarm and returns 200, or
+ * 410 when the run was superseded / cancelled / already terminal (the
+ * consumer treats 410 as "stop heartbeating").
+ */
+export interface HeartbeatRequest {
+  runId: string
+  consumerId: string
+}
+
+/**
  * Reasons the DO returns in the JSON body when /pickup blocks.
  * Aligns with the literals emitted by `decidePickupAction` /
  * `handlePickup` in `pr-review-run.ts` — the HTTP status code
@@ -207,8 +237,10 @@ export type StatusResponse = StatusResponseFound | StatusResponseEmpty
 export interface ResolvedDoConfig {
   /** Clamped [1, 10]; default 3. */
   maxRetries: number
-  /** Clamped [60000, 1800000] ms; default 1200000 (20 min). */
+  /** Clamped [60000, 1800000] ms; default 600000 (10 min absolute backstop). */
   watchdogMs: number
+  /** SIG-329: clamped [45000, 300000] ms; default 90000 (90s heartbeat-gap detector). */
+  livenessMs: number
   /** Clamped [1, 100]; default 10. */
   historyLimit: number
 }

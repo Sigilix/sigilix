@@ -60,6 +60,7 @@ import {
   handlePrResume,
   handlePrIgnore,
   handlePrResolveThreads,
+  handlePrCancel,
 } from "./lib/pr-lifecycle-commands"
 import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
@@ -513,6 +514,10 @@ export interface Env {
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
+  // SIG-329: max tolerated gap (ms) between runner heartbeats before the
+  // DO declares an in-flight attempt dead and retries. Decouples
+  // dead-consumer detection from the watchdog backstop.
+  OPENCLAW_PR_REVIEW_DO_LIVENESS_MS?: string
   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT?: string
 
   // SIG-108: security-finding evidence gate mode. "shadow" (default;
@@ -908,6 +913,16 @@ export type JobMessage =
     }
   | {
       type: "pr-resolve-threads"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
+  // SIG-329: `/sigilix cancel` — abort the in-flight review for this PR
+  // by terminating its PrReviewRunDO run + closing the check. No LLM
+  // call; talks to the DO `/cancel` route, then posts an ack.
+  | {
+      type: "pr-cancel"
       owner: string
       repo: string
       prNumber: number
@@ -2433,6 +2448,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
       // SIG-98: `/sigilix resolve` — mark Sigilix-rooted threads
       // resolved via the GraphQL `resolveReviewThread` mutation.
       return handlePrResolveThreads({
+        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        installationId: job.installationId,
+      })
+    case "pr-cancel":
+      // SIG-329: `/sigilix cancel` — abort the in-flight review by
+      // terminating its PrReviewRunDO run + closing the check.
+      return handlePrCancel({
         env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
         installationId: job.installationId,
       })
@@ -4000,6 +4022,9 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
         break
       case "resolve":
         message = { type: "pr-resolve-threads", owner, repo, prNumber, installationId }
+        break
+      case "cancel":
+        message = { type: "pr-cancel", owner, repo, prNumber, installationId }
         break
       default: {
         const _exhaustive: never = slashCmd

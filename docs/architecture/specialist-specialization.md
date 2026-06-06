@@ -63,7 +63,7 @@ orchestrator builds one initial message per role via `buildSpecialistInitialMess
 
 ## Decision flow
 
-```
+```text
   diff + scans (secret-scan, dep-vuln, AST rules, SARIF, coverage, perf-budgets)
                                    │
                                    ▼

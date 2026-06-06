@@ -321,6 +321,13 @@ export interface ReviewCheckMeta {
    */
   checkAnnotations?: CheckRunAnnotation[]
   /**
+   * SIG-171: deterministic SARIF/RDF/linter Lane A annotations. These are not
+   * model-authored review findings, so they are eligible even when the active
+   * review surface is `comments` and when the LLM review degrades after the
+   * deterministic scan has run. Stale-head skips still suppress them.
+   */
+  deterministicCheckAnnotations?: CheckRunAnnotation[]
+  /**
    * SIG-216: PR number used to build the `[View review]` link in
    * the Check run summary. Optional so legacy callers without the
    * PR number in scope still get a sensible (link-less) summary.
@@ -404,18 +411,29 @@ export async function completeCheckRun(args: CompleteArgs): Promise<void> {
     return
   }
 
-  // SIG-144: post per-finding Check annotations as a second output
-  // surface, but ONLY when configured and only on a successful review.
-  // `success` is the gate because annotations describe REAL findings on
-  // a posted review — on skip/failure there's no review to anchor them
-  // to (and `failure + surface=comment` already routed to a fallback
-  // PR comment). Best-effort: a post failure here never disturbs the
+  // SIG-144: model-authored per-finding annotations stay gated on the active
+  // review output surface AND a successful review submit.
+  //
+  // SIG-171: deterministic Lane A annotations are scanner-derived, not
+  // model-authored. Post them whenever the run reached the scan and did not
+  // stale-head skip, even if the later LLM review degraded to a skip-notice or
+  // comment fallback. Best-effort: annotation failures never disturb the
   // already-completed check or the underlying review.
-  if (surfacePostsAnnotations(surface) && conclusion === "success" && reviewMeta?.checkAnnotations?.length) {
+  const modelAnnotations =
+    surfacePostsAnnotations(surface) && conclusion === "success"
+      ? reviewMeta?.checkAnnotations ?? []
+      : []
+  // At this boundary `skipped` means stale-head only. The dispatcher maps
+  // user/config skips to `success` and internal errors to `failure`, so this
+  // gate suppresses stale-head annotations without hiding post-scan diagnostics.
+  const deterministicAnnotations =
+    conclusion !== "skipped" ? reviewMeta?.deterministicCheckAnnotations ?? [] : []
+  const annotations = [...modelAnnotations, ...deterministicAnnotations]
+  if (annotations.length > 0) {
     await postCheckAnnotations({
       handle,
       output,
-      annotations: reviewMeta.checkAnnotations,
+      annotations,
     })
   }
 }
@@ -704,6 +722,13 @@ export function renderOutputForConclusion(
   const runnerBadge = reviewMeta?.runnerEvidence
     ? ` · ${runnerEvidenceBadgeImg(reviewMeta.runnerEvidence)}`
     : ""
+  const deterministicCount = reviewMeta?.deterministicCheckAnnotations?.length ?? 0
+  const deterministicPhrase = deterministicCount > 0
+    ? `${deterministicCount} scanner ${deterministicCount === 1 ? "diagnostic" : "diagnostics"}`
+    : ""
+  const deterministicSuffix = deterministicCount > 0
+    ? ` · ${deterministicPhrase} from deterministic analysis`
+    : ""
   switch (conclusion) {
     case "success":
       // ARC-276 + SIG-216: when the dispatcher threads `reviewMeta`,
@@ -715,7 +740,7 @@ export function renderOutputForConclusion(
         if (reviewMeta.event === "APPROVE") {
           return {
             title: "Approved — no issues found",
-            summary: buildApprovedSummary(prReviewUrl) + runnerBadge,
+            summary: buildApprovedSummary(prReviewUrl) + deterministicSuffix + runnerBadge,
           }
         }
         const n = reviewMeta.findingsCount
@@ -725,12 +750,12 @@ export function renderOutputForConclusion(
           : `${n} ${noun} — changes requested`
         return {
           title,
-          summary: buildFindingsSummary(n, prReviewUrl) + runnerBadge,
+          summary: buildFindingsSummary(n, prReviewUrl) + deterministicSuffix + runnerBadge,
         }
       }
       return {
         title: "Review posted",
-        summary: buildLegacyPostedSummary(prReviewUrl) + runnerBadge,
+        summary: buildLegacyPostedSummary(prReviewUrl) + deterministicSuffix + runnerBadge,
       }
     case "skipped":
       return {
@@ -744,9 +769,12 @@ export function renderOutputForConclusion(
       // synth's body. Title points them at the PR comment so they
       // don't think the bot was entirely silent.
       if (reviewMeta?.surface === "comment") {
+        const scannerSummary = deterministicCount > 0
+          ? ` Deterministic analysis also found ${deterministicPhrase}.`
+          : ""
         return {
           title: "Couldn't post review — see PR comment",
-          summary: "GitHub silently rejected Sigilix's formal review submit. Sigilix posted the review content as a regular PR comment instead so the signal isn't lost. Re-run `/sigilix review` to try the formal review again.",
+          summary: "GitHub silently rejected Sigilix's formal review submit." + scannerSummary + " Sigilix posted the review content as a regular PR comment instead so the signal isn't lost. Re-run `/sigilix review` to try the formal review again.",
         }
       }
       // ARC-280 follow-up: `surface === "skip-notice"` means the
@@ -755,14 +783,17 @@ export function renderOutputForConclusion(
       // minimal "couldn't review" comment instead. Different
       // title so log analysis can distinguish.
       if (reviewMeta?.surface === "skip-notice") {
+        const scannerSummary = deterministicCount > 0
+          ? ` Deterministic analysis still found ${deterministicPhrase}.`
+          : ""
         return {
           title: "Couldn't review — see PR comment",
-          summary: "Sigilix couldn't generate a review for this PR (specialists failed, synth couldn't run, or an internal error fired). A short PR comment explains which path bailed. Re-run `/sigilix review` to try again.",
+          summary: "Sigilix couldn't generate a model review for this PR (specialists failed, synth couldn't run, or an internal error fired)." + scannerSummary + " A short PR comment explains which path bailed. Re-run `/sigilix review` to try again.",
         }
       }
       return {
         title: "Review failed",
-        summary: "Sigilix encountered an error while reviewing this PR. Re-trigger with `/sigilix review` or contact support.",
+        summary: "Sigilix encountered an error while reviewing this PR. Re-trigger with `/sigilix review` or contact support." + deterministicSuffix,
       }
   }
 }

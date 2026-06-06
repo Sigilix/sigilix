@@ -46,6 +46,7 @@ const {
   mockSubmitReview,
   mockListPullRequestReviews,
   mockCreateIssueComment,
+  mockRunSarifEvidence,
 } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockChat: vi.fn(),
@@ -56,6 +57,7 @@ const {
   mockSubmitReview: vi.fn(),
   mockListPullRequestReviews: vi.fn(),
   mockCreateIssueComment: vi.fn(),
+  mockRunSarifEvidence: vi.fn(),
 }))
 
 vi.mock("../src/lib/github-app", () => ({
@@ -96,6 +98,16 @@ vi.mock("../src/lib/github", async () => {
     }
   }
   return { ...actual, GitHubClient: GitHubClientMock }
+})
+
+vi.mock("../src/lib/sarif-evidence/runner", async () => {
+  const actual = await vi.importActual<typeof import("../src/lib/sarif-evidence/runner")>(
+    "../src/lib/sarif-evidence/runner",
+  )
+  return {
+    ...actual,
+    runSarifEvidence: (...args: unknown[]) => mockRunSarifEvidence(...args),
+  }
 })
 
 import { handlePrReviewEnsemble } from "../src/lib/triage-pr-review-ensemble"
@@ -182,6 +194,10 @@ beforeEach(() => {
   mockSubmitReview.mockReset()
   mockListPullRequestReviews.mockReset()
   mockCreateIssueComment.mockReset()
+  mockRunSarifEvidence.mockReset().mockResolvedValue({
+    skipped: true,
+    reason: "disabled-config",
+  })
   logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined)
   errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined)
@@ -347,5 +363,63 @@ describe("handlePrReviewEnsemble — label-gate skip path (SIG-224 Phase 0 follo
     })
 
     expect(result.telemetry.fellBackReason).not.toBe("label_gate_skip")
+  })
+})
+
+describe("handlePrReviewEnsemble — deterministic SARIF annotation threading (SIG-171)", () => {
+  it("threads deterministic annotations through post-SARIF skip-notice failures", async () => {
+    mockGetPullRequest.mockResolvedValueOnce({
+      head: { sha: HEAD_SHA },
+      base: { sha: BASE_SHA },
+      merged_at: null,
+      labels: [],
+      title: "exercise deterministic annotations",
+      body: "",
+    })
+    mockGetPullRequestDiff.mockResolvedValueOnce(SOURCE_DIFF)
+    mockListOpenPullRequests.mockResolvedValueOnce([])
+    mockGetFileContent.mockResolvedValue(null)
+    mockRunSarifEvidence.mockResolvedValueOnce({
+      skipped: false,
+      findings: [{
+        ruleId: "no-token",
+        severity: "error",
+        roleHint: "security",
+        category: "secret",
+        path: "src/lib/foo.ts",
+        line: 2,
+        message: "scanner finding",
+        toolName: "Semgrep",
+      }],
+      telemetry: { truncatedCount: 0, durationMs: 1 },
+      sbom: { present: false, text: "", packageCount: 0, directDepCount: 0, licenseCounts: {} },
+    })
+    mockChat.mockRejectedValue(new Error("model unavailable"))
+    mockCreateIssueComment.mockResolvedValueOnce({ id: 12_345 })
+
+    const result = await handlePrReviewEnsemble({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 9005,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env: makeEnv({
+        OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR: "0",
+      } as unknown as Env),
+    })
+
+    expect(result.status).toBe("errored")
+    expect(result.telemetry.fellBackReason).toBe("specialists_all_failed")
+    expect(result.reviewMeta?.surface).toBe("skip-notice")
+    expect(result.reviewMeta?.event).toBe("REQUEST_CHANGES")
+    expect(result.reviewMeta?.findingsCount).toBe(0)
+    expect(result.reviewMeta?.deterministicCheckAnnotations).toMatchObject([{
+      path: "src/lib/foo.ts",
+      start_line: 2,
+      end_line: 2,
+      annotation_level: "failure",
+      title: "[SARIF error] Semgrep: no-token",
+    }])
+    expect(mockCreateIssueComment).toHaveBeenCalledOnce()
   })
 })

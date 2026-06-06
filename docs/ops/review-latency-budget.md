@@ -147,3 +147,80 @@ Manual verification gate before closing this ticket:
 2. Confirm the "Sigilix" check appears in the PR's Checks tab within 5s.
 3. Confirm the full review still lands within end-to-end budget (~6 min).
 4. Founder sign-off that "the bot feels fast again."
+
+---
+
+## Deploy-vs-review race (SIG-329)
+
+**Linear**: [SIG-329](https://linear.app/sigilix/issue/SIG-329).
+
+### The stall
+
+A review could appear hung for ~20 min (worst case ~1 hr). Root cause is a
+**self-collision**: a push to the bot's *own* repo triggers both a review of that commit
+*and* a production redeploy of the bot Worker. The redeploy hard-kills the isolate running
+the review, so the queue consumer never `POST`s `/run-result`. `PrReviewRunDO` then held
+the run as `running` until the watchdog fired.
+
+Structurally, the DO has a **single alarm slot** multiplexed (`alarmKind`) between a
+`watchdog` (max review duration) and `retry` (backoff). The watchdog was refreshed only at
+`/pickup`, so it could not tell "consumer alive but slow" from "consumer dead" — it had to
+wait the full window (then was 20 min) before assuming death, then retried up to 3×
+(backoff 30/90/270s) → ~1 hr worst case to a terminal `failed`.
+
+### The fix — runner heartbeat + liveness, decoupled from the backstop
+
+1. **Runner heartbeat.** The queue consumer (`src/do/consumer-wrapper.ts`) pings
+   `POST /heartbeat` every `HEARTBEAT_INTERVAL_MS` (30s) while the ensemble runs. When the
+   isolate is evicted, the heartbeat stops with it — so "no heartbeat" *is* "isolate gone."
+2. **Liveness alarm.** `/pickup` now arms a short `liveness` alarm (re-armed on every
+   heartbeat) instead of the long watchdog. A silent consumer is detected within one
+   **`livenessMs`** gap (default 90s) and retried immediately — not after the watchdog.
+   See `handleLivenessAlarm` in `src/do/pr-review-run.ts`.
+3. **Watchdog is now an absolute backstop.** `DEFAULT_WATCHDOG_MS` lowered **20 min →
+   10 min** (real p99 review duration). It rides on `watchdogDeadlineAt` (persisted at
+   pickup) so the single alarm slot enforces both "went silent" (liveness gap) and "ran
+   too long" (backstop). The queued-but-never-picked-up path still uses the `watchdog`
+   alarm armed at `/enqueue`.
+
+Config (`src/do/config.ts`, env overrides are clamped, `OPENCLAW_`-prefixed):
+
+| Constant | Default | Env override | Clamp | Role |
+|---|---|---|---|---|
+| `DEFAULT_WATCHDOG_MS` | 600000 (10 min) | `OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS` | 60s–30min | absolute max-review backstop |
+| `DEFAULT_LIVENESS_MS` | 90000 (90s) | `OPENCLAW_PR_REVIEW_DO_LIVENESS_MS` | 15s–5min | heartbeat-gap dead-consumer detector |
+
+### Operator control — `/sigilix cancel`
+
+`/sigilix cancel` (ACL-gated to OWNER/MEMBER/COLLABORATOR like the other lifecycle
+commands) terminates a stuck in-flight run without waiting on the watchdog or pushing a new
+SHA. It POSTs the PR's `PrReviewRunDO` `/cancel` route, which finalizes the run as `failed`
+(`lastError.stage = "cancelled"`), cancels the pending alarm, and closes the check as
+`skipped`. An evicted/old consumer still running the prior attempt learns it was cancelled
+on its next heartbeat (`410`) and stops.
+
+### Required ops change — deploy only on `main`
+
+The heartbeat shrinks an eviction stall to ~90s automatically, but the *self-collision*
+itself is removed by configuring **Cloudflare Workers Builds to deploy to production only
+on merge to `main`** (Dashboard → Workers & Pages → `sigilix` → Settings → Builds → branch
+control). A push to a PR branch must not trigger a production redeploy. This is a
+dashboard-only setting; there is no repo-side deploy workflow to change.
+
+### Telemetry to watch (`wrangler tail`, all tagged `dedupe_system: "do"`)
+
+- `do-review-heartbeat` — a live consumer pinged (re-arms liveness).
+- `do-review-liveness-dead` — a silent consumer was detected and retried (carries `gapMs`).
+  This is the canonical signal that the fast-detection path fired instead of the watchdog.
+- `do-review-watchdog-terminal` / `do-review-watchdog-transient` — carry a `trigger`
+  field (`watchdog` | `liveness`) so you can tell which path drove the fail/retry.
+- `do-review-cancelled` — an operator cancel landed.
+
+### Verification
+
+1. With deploy-on-`main` set, push to a PR branch on the bot repo → confirm **no**
+   production redeploy fires (the self-collision is gone).
+2. Simulate an evicted consumer (kill the isolate / drop heartbeats) → confirm
+   `do-review-liveness-dead` within ~`livenessMs`, not a 10-min wait.
+3. `/sigilix cancel` on an in-flight review → check flips to neutral within seconds and
+   `do-review-cancelled` is emitted.

@@ -9,6 +9,7 @@ import {
   handlePrResume,
   handlePrIgnore,
   handlePrResolveThreads,
+  handlePrCancel,
   buildPausedKey,
   buildIgnoredKey,
   PR_PAUSE_TTL_SECONDS,
@@ -351,5 +352,80 @@ describe("handlePrResolveThreads", () => {
     expect(ackPost).toBeDefined()
     expect(errSpy).toHaveBeenCalled()
     errSpy.mockRestore()
+  })
+})
+
+// ─── SIG-329 — `/sigilix cancel` ─────────────────────────────
+
+describe("handlePrCancel", () => {
+  let kv: MockKv
+  let envBundle: ReturnType<typeof makeEnv>
+
+  // Records the DO-instance name + the /cancel POSTs the handler makes.
+  function withDoStub(
+    base: Env,
+    opts: { status?: number; body?: unknown } = {},
+  ): { env: Env; names: string[]; cancelCalls: number } {
+    const names: string[] = []
+    let cancelCalls = 0
+    const stub = {
+      fetch: vi.fn(async (input: string | Request, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.url
+        if (url.endsWith("/cancel")) cancelCalls++
+        void (init?.method)
+        return new Response(JSON.stringify(opts.body ?? { cancelled: true, runId: "r" }), {
+          status: opts.status ?? 200,
+          headers: { "content-type": "application/json" },
+        })
+      }),
+    } as unknown as DurableObjectStub
+    const env = {
+      ...base,
+      PR_REVIEW_RUN: {
+        idFromName: vi.fn((name: string) => { names.push(name); return { name } as unknown as DurableObjectId }),
+        get: vi.fn(() => stub),
+      } as unknown as DurableObjectNamespace,
+    } as unknown as Env
+    return { env, get names() { return names }, get cancelCalls() { return cancelCalls } } as {
+      env: Env; names: string[]; cancelCalls: number
+    }
+  }
+
+  beforeEach(() => {
+    kv = makeKv()
+    envBundle = makeEnv(kv)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it("POSTs /cancel to the PR's DO instance and posts the ack comment", async () => {
+    const stubbed = withDoStub(envBundle.env)
+    await handlePrCancel({ env: stubbed.env, ...args })
+
+    expect(stubbed.cancelCalls).toBe(1)
+    expect(stubbed.names).toContain("Arc-and-Anchor/sigilix#7")
+    const ackPost = envBundle.fetches.find(
+      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
+    )
+    expect(ackPost).toBeDefined()
+    const ackBody = ackPost?.body as { body?: string }
+    expect(ackBody.body?.toLowerCase()).toContain("cancel")
+  })
+
+  it("throws on a 5xx from the DO /cancel route (queue redelivers; cancel is idempotent)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    const stubbed = withDoStub(envBundle.env, { status: 503, body: { error: "boom" } })
+    await expect(handlePrCancel({ env: stubbed.env, ...args })).rejects.toThrow(/cancel-failed/)
+    errSpy.mockRestore()
+  })
+
+  it("still acks when the DO reports a no-op (no in-flight run)", async () => {
+    const stubbed = withDoStub(envBundle.env, { body: { cancelled: false, reason: "no-state" } })
+    await handlePrCancel({ env: stubbed.env, ...args })
+    const ackPost = envBundle.fetches.find(
+      (f) => f.method === "POST" && f.url.endsWith("/issues/7/comments"),
+    )
+    expect(ackPost).toBeDefined()
   })
 })

@@ -55,6 +55,11 @@ export type SlashCommand =
   | { cmd: "ignore" }
   | { cmd: "full-review" } // parsed from the literal two-word "full review"
   | { cmd: "resolve" }
+  // SIG-329 — operator abort for a stuck in-flight review. Unlike
+  // pause/ignore (which gate FUTURE pushes), cancel terminates the
+  // CURRENT run in the DO and closes its check without waiting on the
+  // watchdog.
+  | { cmd: "cancel" }
   // Reserved shape (parser doesn't return this yet — adding the
   // type when handlers exist will surface missed dispatch cases via
   // the exhaustive switch in renderSlashCommandAck):
@@ -132,6 +137,10 @@ export function parseSlashCommand(body: string): SlashCommand | null {
     }
     if (head === "resolve") {
       return { cmd: "resolve" }
+    }
+    if (head === "cancel") {
+      // SIG-329 — single-token; extra args ignored like the others.
+      return { cmd: "cancel" }
     }
     if (head === "full") {
       // SIG-98 — second token MUST be "review". Without it, `/sigilix
@@ -240,6 +249,8 @@ export function renderSlashCommandAck(cmd: SlashCommand): string {
       return "Re-running ensemble review with cumulative-diff dedup bypass on the current head. Standard sticky comment will update when complete."
     case "resolve":
       return "Marking every Sigilix-authored review thread on this PR as resolved."
+    case "cancel":
+      return "Cancelling the in-progress Sigilix review on this PR. The check will be closed shortly. Push a new commit or comment `/sigilix review` to start a fresh run."
     default: {
       const _exhaustive: never = cmd
       return _exhaustive
@@ -285,6 +296,7 @@ export function renderHelpBody(): string {
     "| `/sigilix resume` | Re-enable auto-review on this PR (clears both pause and ignore flags). |",
     "| `/sigilix ignore` | Permanently opt this PR out of auto-review. Reversible via `/sigilix resume`. |",
     "| `/sigilix resolve` | Mark every Sigilix-authored review thread on this PR as resolved. |",
+    "| `/sigilix cancel` | Abort the in-progress review on this PR and close its check immediately (without waiting for the watchdog). |",
     "| `/sigilix help` | Show this list. |",
     "",
     "`/sigilix describe` accepts an optional mode arg: `pr` (default), `internal`, or `external`. Example: `/sigilix describe internal`.",

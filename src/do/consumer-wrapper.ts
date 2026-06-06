@@ -94,11 +94,18 @@ export async function runPrReviewWithDoCallback(
     return
   }
 
+  // SIG-329: keep the DO's liveness alarm armed while the ensemble runs.
+  // If this isolate is evicted (e.g. a production redeploy on the bot's
+  // own repo) the heartbeat stops and the DO detects the dead attempt
+  // within one `livenessMs` gap instead of waiting out the watchdog.
+  const stopHeartbeat = startHeartbeat(stub, runId, consumerId, job)
   let caught: unknown = undefined
   try {
     await runEnsemble()
   } catch (err) {
     caught = err
+  } finally {
+    stopHeartbeat()
   }
 
   const payload = buildRunResultPayload(runId, consumerId, caught)
@@ -126,6 +133,64 @@ export async function runPrReviewWithDoCallback(
     consumerWallMs: finishedAtMs - pickedUpAtMs,
     finalState: caught !== undefined ? "errored" : "completed",
   }))
+}
+
+// SIG-329: how often the running consumer pings the DO `/heartbeat`
+// route. Comfortably inside DEFAULT_LIVENESS_MS (90s) so a healthy
+// consumer always re-arms the liveness alarm before it fires, while an
+// evicted isolate stops pinging and is detected within one gap.
+const HEARTBEAT_INTERVAL_MS = 30_000
+
+/**
+ * Start a periodic `/heartbeat` loop for the in-flight attempt. Returns
+ * a stop function the caller MUST invoke (in a `finally`) once the
+ * ensemble settles. A 410 response means the run was superseded /
+ * cancelled / already terminal — the loop stops itself (the DO no
+ * longer wants this consumer's results; `/run-result` routes to
+ * history). Transient errors are swallowed: the DO's liveness + watchdog
+ * alarms are the safety net. Uses chained `setTimeout` (not
+ * `setInterval`) so a slow round-trip never overlaps the next ping.
+ */
+function startHeartbeat(
+  stub: DurableObjectStub,
+  runId: string,
+  consumerId: string,
+  job: PrReviewJob,
+): () => void {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const tick = async (): Promise<void> => {
+    if (stopped) return
+    try {
+      const res = await stub.fetch(`${DO_BASE_URL}/heartbeat`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ runId, consumerId }),
+      })
+      try { await res.json() } catch { /* ignore body */ }
+      if (res.status === 410) {
+        // Superseded / cancelled / terminal — stop pinging.
+        stopped = true
+        console.log(JSON.stringify({
+          event: "do-review-consumer-heartbeat-stopped",
+          dedupe_system: "do",
+          owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+          runId, consumerId, reason: "410",
+        }))
+        return
+      }
+    } catch {
+      // Transient DO blip — keep beating; liveness/watchdog is the net.
+    }
+    if (!stopped) timer = setTimeout(() => { void tick() }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  timer = setTimeout(() => { void tick() }, HEARTBEAT_INTERVAL_MS)
+  return () => {
+    stopped = true
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 async function postPickup(

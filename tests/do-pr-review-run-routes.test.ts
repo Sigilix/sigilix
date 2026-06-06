@@ -321,12 +321,14 @@ describe("PrReviewRunDO /pickup", () => {
     expect(res.status).toBe(410)
   })
 
-  // Codex P2 regression: /pickup must refresh the watchdog so the
-  // timer measures from pickup-time (when the consumer actually
-  // starts) rather than enqueue-time. Otherwise a queue-backlog
-  // delay can cause the watchdog to fire while a legitimately
-  // running consumer is still within its allowed processing window.
-  it("claim refreshes the watchdog alarm to now+watchdogMs", async () => {
+  // Codex P2 regression (re-armed for SIG-329): /pickup must (re)arm the
+  // liveness alarm so the timer measures from pickup-time (when the
+  // consumer actually starts) rather than enqueue-time. Otherwise a
+  // queue-backlog delay can fire the alarm while a legitimately running
+  // consumer is still within its allowed processing window. SIG-329
+  // switched this from a watchdog refresh to a liveness arm; the alarm is
+  // still scheduled strictly later than the enqueue-time value.
+  it("claim (re)arms the liveness alarm from pickup-time", async () => {
     const { instance, state, runId } = await setupQueuedRun()
     const enqueueAlarmAt = state.alarms.alarmAt
     expect(enqueueAlarmAt).not.toBeNull()
@@ -336,12 +338,14 @@ describe("PrReviewRunDO /pickup", () => {
     expect(res.status).toBe(200)
     const afterAlarm = state.alarms.alarmAt
     expect(afterAlarm).not.toBeNull()
-    // The alarm should be (re)scheduled at >= now (with watchdogMs offset),
-    // i.e. strictly later than the enqueue-time alarm value.
+    // The alarm should be (re)scheduled at >= now (with livenessMs offset),
+    // i.e. at or after the pickup instant.
     expect(afterAlarm!).toBeGreaterThanOrEqual(beforePickup)
+    // SIG-329: the claimed run is on the liveness alarm now.
+    expect((state.store.get("state") as RunState).alarmKind).toBe("liveness")
   })
 
-  it("does not persist a running claim when the watchdog refresh fails", async () => {
+  it("does not persist a running claim when the liveness alarm arm fails", async () => {
     const { instance, state, runId } = await setupQueuedRun()
     const queuedState = state.store.get("state") as RunState
     const enqueueAlarmAt = state.alarms.alarmAt

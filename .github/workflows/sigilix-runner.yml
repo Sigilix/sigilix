@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: Sigilix/runner/.github/workflows/scan.yml@b297a3052d2fd6897f3342552274ba23239f4762
+    uses: Sigilix/runner/.github/workflows/scan.yml@2963822c9439e15b2e25b254fd59b52fa4dd1c32
     with:
       ingest-url: https://sigilix.dan-martinezjulio.workers.dev/runner/ingest
       oidc-audience: sigilix-runner-ingest

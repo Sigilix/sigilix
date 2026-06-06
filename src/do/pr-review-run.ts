@@ -13,6 +13,8 @@ import type {
   EnqueueAction,
   EnqueueRequest,
   EnqueueResponse,
+  HeartbeatRequest,
+  ResolvedDoConfig,
   RunRecord,
   RunResultRequest,
   RunState,
@@ -71,6 +73,12 @@ export class PrReviewRunDO extends DurableObject<Env> {
     }
     if (request.method === "POST" && url.pathname === "/run-result") {
       return this.handleRunResult(request)
+    }
+    if (request.method === "POST" && url.pathname === "/heartbeat") {
+      return this.handleHeartbeat(request)
+    }
+    if (request.method === "POST" && url.pathname === "/cancel") {
+      return this.handleCancel()
     }
     if (request.method === "GET" && url.pathname === "/status") {
       return this.handleStatus()
@@ -292,20 +300,31 @@ export class PrReviewRunDO extends DurableObject<Env> {
 
     // claim
     const config = resolveDoConfig(this.env)
+    const nowMs = Date.now()
+    // SIG-329: a claimed run switches from the queued-side `watchdog`
+    // backstop to the running-side `liveness` model. The liveness alarm
+    // re-arms on every /heartbeat; `watchdogDeadlineAt` carries the
+    // absolute max-review-duration cap so the single DO alarm slot can
+    // enforce both "consumer went silent" and "review ran too long".
+    // `lastHeartbeatAt` is seeded to pickup-time so the first liveness
+    // window measures from claim (the consumer's first real heartbeat
+    // lands within `livenessMs`). It is also reset here so a prior
+    // attempt's stale heartbeat can't make this fresh attempt look dead.
     const updated: RunState = {
       ...existing!,
       state: "running",
       consumerId: body.consumerId,
       pickedUpAt: existing!.pickedUpAt ?? nowIso(),
       lastActivityAt: nowIso(),
+      lastHeartbeatAt: nowIso(),
+      watchdogDeadlineAt: new Date(nowMs + config.watchdogMs).toISOString(),
       alarmTargetRunId: existing!.runId,
-      alarmKind: "watchdog",
+      alarmKind: "liveness",
     }
-    // Refresh watchdog: measure from pickup-time, not enqueue-time.
-    // A queue backlog could otherwise burn most of the budget
-    // before the consumer even starts.
-    const pickupWatchdogAt = Date.now() + config.watchdogMs
-    await this.ctx.storage.setAlarm(pickupWatchdogAt)
+    // Arm liveness from pickup-time (not enqueue-time): a queue backlog
+    // could otherwise burn the budget before the consumer even starts.
+    const livenessAt = nowMs + config.livenessMs
+    await this.ctx.storage.setAlarm(livenessAt)
     await this.ctx.storage.put(STATE_KEY, updated)
 
     emit("do-review-picked-up", {
@@ -408,7 +427,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       if (pruned.evicted > 0) {
         // Rewrite kept records + remove evicted.
         for (const key of Object.keys(allHistory)) {
-          if (!(key in pruned.kept)) {
+          if (!Object.hasOwn(pruned.kept, key)) {
             await this.ctx.storage.delete(key)
           }
         }
@@ -427,6 +446,158 @@ export class PrReviewRunDO extends DurableObject<Env> {
     }
 
     return jsonResponse(200, { transition: decision.transition })
+  }
+
+  // ── /heartbeat (SIG-329) ────────────────────────────────────
+  //
+  // The running consumer pings this every ~30s. A valid ping re-arms
+  // the liveness alarm to `now + livenessMs` (capped at the absolute
+  // watchdog deadline) so a dead consumer is detected within one
+  // heartbeat gap instead of waiting out the full watchdog. A ping that
+  // doesn't match the current running attempt (superseded / cancelled /
+  // already terminal / different consumer) returns 410 so the consumer
+  // stops heartbeating.
+
+  private async handleHeartbeat(request: Request): Promise<Response> {
+    const body = (await request.json()) as HeartbeatRequest
+    const existing = await this.ctx.storage.get<RunState>(STATE_KEY)
+    if (
+      !existing ||
+      existing.runId !== body.runId ||
+      existing.state !== "running" ||
+      existing.consumerId !== body.consumerId
+    ) {
+      emit("do-review-heartbeat-stale", {
+        owner: existing?.owner, repo: existing?.repo, prNumber: existing?.prNumber,
+        runId: body.runId, consumerId: body.consumerId,
+        currentRunId: existing?.runId, currentState: existing?.state,
+      })
+      return jsonResponse(410, { reason: "stale-or-terminal" })
+    }
+    const config = resolveDoConfig(this.env)
+    const nowMs = Date.now()
+    // Cap the re-arm at the absolute backstop so a perpetually-
+    // heartbeating-but-stuck consumer still terminates at the deadline.
+    // Guard Date.parse against a corrupted/unparseable persisted ISO so a
+    // NaN can never reach setAlarm via Math.min(x, NaN) === NaN.
+    const parsedDeadline = existing.watchdogDeadlineAt !== undefined
+      ? Date.parse(existing.watchdogDeadlineAt)
+      : NaN
+    const deadlineMs = Number.isFinite(parsedDeadline)
+      ? parsedDeadline
+      : nowMs + config.watchdogMs
+    // If the deadline already elapsed, the cap yields an instant (≤ now)
+    // alarm — that's intended: it fires immediately and the liveness
+    // handler takes the absolute-backstop branch.
+    const nextAlarmAt = Math.min(nowMs + config.livenessMs, deadlineMs)
+    const updated: RunState = {
+      ...existing,
+      lastHeartbeatAt: nowIso(),
+      lastActivityAt: nowIso(),
+      alarmTargetRunId: existing.runId,
+      alarmKind: "liveness",
+    }
+    await this.ctx.storage.setAlarm(nextAlarmAt)
+    await this.ctx.storage.put(STATE_KEY, updated)
+    emit("do-review-heartbeat", {
+      owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
+      runId: existing.runId, consumerId: body.consumerId,
+    })
+    return jsonResponse(200, { ok: true })
+  }
+
+  // ── /cancel (SIG-329) ───────────────────────────────────────
+  //
+  // Operator abort for a stuck in-flight review (driven by
+  // `/sigilix cancel`). Terminates an active run (queued | running |
+  // failed-transient) immediately: cancels the pending alarm, finalizes
+  // state as `failed` with a `cancelled` stage marker, archives a
+  // history record, and closes the upstream check. A consumer still
+  // running the evicted/old attempt learns it was cancelled on its next
+  // /heartbeat (410) and stops; its late /run-result routes to history.
+  // Cancel of an absent or already-terminal run is a clean 200 no-op.
+
+  private async handleCancel(): Promise<Response> {
+    const existing = await this.ctx.storage.get<RunState>(STATE_KEY)
+    if (!existing) {
+      emit("do-review-cancel-noop", { reason: "no-state" })
+      return jsonResponse(200, { cancelled: false, reason: "no-state" })
+    }
+    if (
+      existing.state === "done" ||
+      existing.state === "failed" ||
+      existing.state === "idle"
+    ) {
+      emit("do-review-cancel-noop", {
+        owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
+        runId: existing.runId, currentState: existing.state, reason: "already-terminal",
+      })
+      return jsonResponse(200, { cancelled: false, reason: "already-terminal" })
+    }
+
+    const config = resolveDoConfig(this.env)
+    const finishedAt = nowIso()
+    const lastError = {
+      stage: "cancelled",
+      message: "operator cancelled via /sigilix cancel",
+    }
+    const updated: RunState = {
+      ...existing,
+      state: "failed",
+      lastActivityAt: nowIso(),
+      finishedAt,
+      lastError,
+    }
+    // No further alarm should fire for a cancelled run.
+    delete (updated as { alarmKind?: string }).alarmKind
+    delete (updated as { alarmTargetRunId?: string }).alarmTargetRunId
+    delete (updated as { nextRetryAt?: string }).nextRetryAt
+    await this.ctx.storage.deleteAlarm()
+    await this.ctx.storage.put(STATE_KEY, updated)
+
+    // Archive + prune history (mirrors the watchdog-terminal path).
+    const record: RunRecord = {
+      runId: existing.runId,
+      headSha: existing.headSha,
+      finalState: "failed",
+      attempts: existing.attempts,
+      startedAt: existing.startedAt,
+      finishedAt,
+      lastError,
+    }
+    await this.ctx.storage.put(`run:${existing.runId}`, record)
+    const allHistory = await this.collectHistory()
+    const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
+    if (pruned.evicted > 0) {
+      for (const key of Object.keys(allHistory)) {
+        if (!Object.hasOwn(pruned.kept, key)) {
+          await this.ctx.storage.delete(key)
+        }
+      }
+    }
+
+    // Close the upstream check as `skipped` (wire `neutral`): the bot
+    // did not complete a review. `cancelled` is intentionally not a
+    // SigilixCheckConclusion. Best-effort; null handle / undefined
+    // checkRunId is a no-op.
+    if (existing.checkRunId !== undefined) {
+      const handle = await attachExistingCheckRun({
+        env: this.env,
+        owner: existing.owner,
+        repo: existing.repo,
+        installationId: existing.installationId,
+        checkRunId: existing.checkRunId,
+      })
+      await completeCheckRun({ handle, conclusion: "skipped" })
+    }
+
+    emit("do-review-cancelled", {
+      owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
+      runId: existing.runId, attempts: existing.attempts,
+      priorState: existing.state,
+      ...(existing.checkRunId !== undefined ? { checkRunId: existing.checkRunId } : {}),
+    })
+    return jsonResponse(200, { cancelled: true, runId: existing.runId })
   }
 
   // ── /status ─────────────────────────────────────────────────
@@ -491,6 +662,8 @@ export class PrReviewRunDO extends DurableObject<Env> {
       await this.handleRetryAlarm(state)
     } else if (kind === "watchdog") {
       await this.handleWatchdogAlarm(state)
+    } else if (kind === "liveness") {
+      await this.handleLivenessAlarm(state)
     }
   }
 
@@ -557,6 +730,13 @@ export class PrReviewRunDO extends DurableObject<Env> {
     // Clear stale pickedUpAt so the next attempt's /pickup records
     // its own timestamp rather than reusing the prior attempt's.
     delete (updated as { pickedUpAt?: string }).pickedUpAt
+    // SIG-329: clear per-attempt liveness fields. The requeued run is
+    // `queued` again (covered by the watchdog backstop armed below);
+    // /pickup re-seeds both when the next consumer claims it. Leaving a
+    // stale lastHeartbeatAt would make the fresh attempt look dead on
+    // its first liveness alarm.
+    delete (updated as { lastHeartbeatAt?: string }).lastHeartbeatAt
+    delete (updated as { watchdogDeadlineAt?: string }).watchdogDeadlineAt
     await this.ctx.storage.put(STATE_KEY, updated)
     await this.ctx.storage.setAlarm(watchdogAt)
     emit("do-review-retry-fired", {
@@ -578,6 +758,96 @@ export class PrReviewRunDO extends DurableObject<Env> {
       stage: "watchdog",
       message: `consumer did not report run-result within ${config.watchdogMs}ms`,
     }
+    await this.failOrRetry(state, lastError, config, "watchdog")
+  }
+
+  // ── liveness alarm (SIG-329) ────────────────────────────────
+  //
+  // Fires for a `running` attempt. One DO alarm slot enforces two
+  // independent deadlines, checked in priority order:
+  //   1. Absolute backstop (`watchdogDeadlineAt`): the review ran longer
+  //      than the watchdog budget even though heartbeats kept arriving →
+  //      fail/retry as an exhausted watchdog.
+  //   2. Heartbeat gap (`now - lastHeartbeatAt >= livenessMs`): the
+  //      consumer went silent (isolate evicted by a deploy, crash, etc.)
+  //      → declare the attempt dead and fail/retry IMMEDIATELY. This is
+  //      the SIG-329 win: detection in one heartbeat gap (~90s) instead
+  //      of the full watchdog (~10–20 min).
+  //   3. Otherwise the alarm merely raced a recent heartbeat → re-arm to
+  //      `lastHeartbeatAt + livenessMs` (capped at the backstop) and wait.
+
+  private async handleLivenessAlarm(state: RunState): Promise<void> {
+    if (state.state === "done" || state.state === "failed") {
+      emit("do-review-liveness-noop", {
+        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        runId: state.runId, currentState: state.state,
+      })
+      return
+    }
+    const config = resolveDoConfig(this.env)
+    const nowMs = Date.now()
+    const deadlineMs = state.watchdogDeadlineAt !== undefined
+      ? Date.parse(state.watchdogDeadlineAt)
+      : undefined
+
+    // 1. Absolute backstop.
+    if (deadlineMs !== undefined && nowMs >= deadlineMs) {
+      const lastError = {
+        stage: "watchdog",
+        message: `review exceeded absolute watchdog deadline (${config.watchdogMs}ms)`,
+      }
+      await this.failOrRetry(state, lastError, config, "watchdog")
+      return
+    }
+
+    // 2. Heartbeat gap → dead consumer. Fall back to pickedUpAt if no
+    // heartbeat was ever recorded (defensive; /pickup seeds
+    // lastHeartbeatAt, so this only bites a pre-SIG-329 in-flight run).
+    // A corrupted/unparseable timestamp collapses to `undefined` → treated
+    // as dead (safer than letting NaN reach the re-arm setAlarm below).
+    const baselineIso = state.lastHeartbeatAt ?? state.pickedUpAt
+    const baselineParsed = baselineIso !== undefined ? Date.parse(baselineIso) : NaN
+    const baselineMs = Number.isFinite(baselineParsed) ? baselineParsed : undefined
+    if (baselineMs === undefined || nowMs - baselineMs >= config.livenessMs) {
+      emit("do-review-liveness-dead", {
+        owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+        runId: state.runId, attempts: state.attempts,
+        gapMs: baselineMs !== undefined ? nowMs - baselineMs : undefined,
+        livenessMs: config.livenessMs,
+      })
+      const lastError = {
+        stage: "liveness",
+        message: `no consumer heartbeat within ${config.livenessMs}ms`,
+      }
+      await this.failOrRetry(state, lastError, config, "liveness")
+      return
+    }
+
+    // 3. Heartbeat fresh, alarm raced → re-arm (capped at the backstop).
+    let nextAlarmAt = baselineMs + config.livenessMs
+    if (deadlineMs !== undefined && deadlineMs < nextAlarmAt) nextAlarmAt = deadlineMs
+    await this.ctx.storage.setAlarm(nextAlarmAt)
+    emit("do-review-liveness-rearm", {
+      owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+      runId: state.runId, nextAlarmAt: new Date(nextAlarmAt).toISOString(),
+    })
+  }
+
+  /**
+   * SIG-329: shared terminal-vs-retry decision for a dead/stuck running
+   * attempt, extracted from the original watchdog handler so the
+   * watchdog backstop and the liveness gap-detector apply identical
+   * semantics (single-increment-point preserved: attempts is bumped
+   * only at retry-alarm fire, never here). `trigger` distinguishes the
+   * caller in telemetry without forking the event names dashboards
+   * already query.
+   */
+  private async failOrRetry(
+    state: RunState,
+    lastError: { stage: string; message: string },
+    config: ResolvedDoConfig,
+    trigger: "watchdog" | "liveness",
+  ): Promise<void> {
     if (state.attempts >= config.maxRetries) {
       const finishedAt = nowIso()
       const updated: RunState = {
@@ -603,17 +873,16 @@ export class PrReviewRunDO extends DurableObject<Env> {
       const pruned = pruneHistoryRecords(allHistory, config.historyLimit)
       if (pruned.evicted > 0) {
         for (const key of Object.keys(allHistory)) {
-          if (!(key in pruned.kept)) {
+          if (!Object.hasOwn(pruned.kept, key)) {
             await this.ctx.storage.delete(key)
           }
         }
       }
-      // SIG-220: terminal watchdog failure ⇒ the consumer never
-      // reported result, so the upstream-created check is still
-      // `in_progress`. Close it as `failure` (wire-mapped to
-      // `neutral` per the SIG-216 advisory-bot convention in
-      // `completeCheckRun`). Best-effort; null handle on token
-      // failure is a no-op. If `checkRunId` is undefined (creation
+      // SIG-220: terminal failure ⇒ the consumer never reported result,
+      // so the upstream-created check is still `in_progress`. Close it as
+      // `failure` (wire-mapped to `neutral` per the SIG-216 advisory-bot
+      // convention in `completeCheckRun`). Best-effort; null handle on
+      // token failure is a no-op. If `checkRunId` is undefined (creation
       // failed at enqueue time), nothing to close.
       if (state.checkRunId !== undefined) {
         const handle = await attachExistingCheckRun({
@@ -627,7 +896,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       }
       emit("do-review-watchdog-terminal", {
         owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-        runId: state.runId, attempts: state.attempts,
+        runId: state.runId, attempts: state.attempts, trigger,
         ...(state.checkRunId !== undefined ? { checkRunId: state.checkRunId } : {}),
       })
       return
@@ -646,7 +915,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(nextAlarmAt)
     emit("do-review-watchdog-transient", {
       owner: state.owner, repo: state.repo, prNumber: state.prNumber,
-      runId: state.runId, attempts: state.attempts,
+      runId: state.runId, attempts: state.attempts, trigger,
       nextRetryAt: updated.nextRetryAt,
     })
   }

@@ -172,6 +172,12 @@ import {
   type RefutationSurvivalDropReason,
 } from "./validate-refutation-survival"
 import {
+  evaluateLogicClaimRefutation,
+  parseLogicClaimRefutationMode,
+  type LogicClaimRefutationMode,
+  type LogicClaimDropReason,
+} from "./validate-logic-claim-refutation"
+import {
   evaluatePerfFinding,
   perfFindingIsSelfOriginated,
   clampTrivialSyncIoSeverity,
@@ -349,6 +355,7 @@ import {
   renderSarifFindingsForPrompt,
   renderSarifFindingsAsJsonForSynth,
 } from "./sarif-evidence/render"
+import { buildSarifCheckAnnotations } from "./sarif-evidence/annotations"
 import { resolveSarifEvidenceConfig } from "./sigilix-config"
 import { renderDepVulnFindingsForPrompt } from "./dep-vulns/render"
 import {
@@ -1653,6 +1660,23 @@ export async function handlePrReviewEnsemble(
   // Function-scoped (like `cache`) so it crosses the inner try-block boundaries.
   // `undefined` = `runner-absent` = no badge (the default, flag-off path).
   let runnerEvidenceBadge: "verified" | "evidence-pending" | undefined = undefined
+  let deterministicCheckAnnotations: CheckRunAnnotation[] | undefined
+  const deterministicCheckAnnotationMeta = () =>
+    deterministicCheckAnnotations !== undefined && deterministicCheckAnnotations.length > 0
+      ? { deterministicCheckAnnotations: [...deterministicCheckAnnotations] }
+      : {}
+  const deterministicErroredReviewMeta = (): ReviewMeta | undefined =>
+    deterministicCheckAnnotations !== undefined && deterministicCheckAnnotations.length > 0
+      ? {
+          // Generic `errored` check-run rendering ignores `event` and
+          // `findingsCount`; ReviewMeta requires them only for success titles.
+          // These placeholders carry Lane A annotations through post-SARIF
+          // failure paths without pretending a model review was posted.
+          event: "REQUEST_CHANGES",
+          findingsCount: 0,
+          deterministicCheckAnnotations: [...deterministicCheckAnnotations],
+        }
+      : undefined
 
   // ARC-258: the in-progress check run is owned by `dispatchJob`,
   // not by this orchestrator. Reason: when ensemble-post fails
@@ -1711,7 +1735,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedRefutationSurvival: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedLogicClaimRefutation: 0, droppedForFailedRefutationSurvival: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
     retrievalCacheStats: null,
     tokenUsageByModel,
     startMs,
@@ -1753,9 +1777,10 @@ export async function handlePrReviewEnsemble(
           event: "REQUEST_CHANGES",
           findingsCount: 0,
           surface: "skip-notice",
+          ...deterministicCheckAnnotationMeta(),
         })
       }
-      return finalize(telemetry, env, "errored", cache)
+      return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
     }
 
     // ─── Stale-head guard #1 ───────────────────────────────────
@@ -1822,12 +1847,13 @@ export async function handlePrReviewEnsemble(
         return finalize(telemetry, env, "posted", cache, {
           event: "APPROVE",
           findingsCount: 0,
+          ...deterministicCheckAnnotationMeta(),
         })
       }
       // Submit failed — fall through to `errored` without a surface
       // (we have no comment to point the customer at, and the PR is
       // already merged so a skip-notice is pointless).
-      return finalize(telemetry, env, "errored", cache)
+      return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       // SIG-89 note: this merged-on-approve short-circuit intentionally
       // does NOT write a noop-merge diff hash. `fullPrDiff` isn't
       // fetched on this path (the diff fetch lives below at the start
@@ -2418,10 +2444,15 @@ export async function handlePrReviewEnsemble(
     // fail-opens (keeps) on every finding, i.e. becomes a no-op.
     const wantWindowBlindness =
       parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE) !== "off"
+    // SIG-328: the logic-claim refutation gate also needs the full-file source
+    // map for its AST proof — trigger the fetch so it can't silently no-op (and
+    // mis-read as "0 would-drops") if the other AST features are ever flipped off.
+    const wantLogicClaimRefutation =
+      parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE) !== "off"
     const astFilesByPath = new Map<string, string>()
     if (
       (astRulesConfig.enabled || wantSymbolRetrieval || wantBranchAware || wantDynamicReviewEvidence ||
-        asymmetryMode !== "off" || toctouMode !== "off" || wantWindowBlindness) &&
+        asymmetryMode !== "off" || toctouMode !== "off" || wantWindowBlindness || wantLogicClaimRefutation) &&
       jsTsPaths.length > 0
     ) {
       const fetchResults = await mapWithConcurrency(
@@ -3202,6 +3233,7 @@ export async function handlePrReviewEnsemble(
       ...(runnerMode === "post" && runnerEvidence.state === "verified" ? { rawOverride: runnerEvidence.sarif } : {}),
     })
     const sarifFindings = sarifResult.skipped ? [] : sarifResult.findings
+    deterministicCheckAnnotations = buildSarifCheckAnnotations(sarifFindings)
     // SIG-285 v2 PR1 (receipt-join, no-perm, shadow): when a VERIFIED receipt
     // exists, build the HEAD-scan index from the receipt's UN-FILTERED parseSarif
     // results — deliberately NOT `sarifResult.findings`, which runSarifEvidence
@@ -5049,6 +5081,26 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "refutation-survival", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
+      // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
+      // when its control-flow / sync-race claim is PROVABLY false against the
+      // AST of the cited file (`fullFileByPath` = `astFilesByPath`). Default
+      // `shadow` — counts/telemeters the would-drop until the operator flips
+      // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
+      logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
+      onLogicClaimRefutationFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "logic-claim-refutation",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "logic-claim-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
+      },
       // SIG-110: thread perf evidence + mode. Evidence is the same
       // changed-line text + the roleHint:performance AST findings. Default
       // `shadow` — counts/telemeters the would-drop until the operator
@@ -5203,6 +5255,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
       droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
       droppedForFailedLogicRefutation: validated.droppedForFailedLogicRefutation,
+      droppedForFailedLogicClaimRefutation: validated.droppedForFailedLogicClaimRefutation,
       droppedForFailedRefutationSurvival: validated.droppedForFailedRefutationSurvival,
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
@@ -6290,9 +6343,10 @@ export async function handlePrReviewEnsemble(
           event: "APPROVE",
           findingsCount: 0,
           ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
+          ...deterministicCheckAnnotationMeta(),
         })
       }
-      return finalize(telemetry, env, "errored", cache)
+      return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
     }
 
     // SIG-101/SIG-205: approval-readiness blockers can still force a
@@ -6876,7 +6930,7 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
         telemetry.fellBackReason = "stale_head_recheck_failed"
-        return finalize(telemetry, env, "errored", cache)
+        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       }
     }
 
@@ -7004,11 +7058,12 @@ export async function handlePrReviewEnsemble(
             // to a `failure` conclusion whose summary is error prose, and the
             // pill is a success-summary-only signal (Kimi spec). Threading it
             // here would be dead data the renderer never shows.
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
         // Comment fallback ALSO failed — `errored` is the truth.
-        return finalize(telemetry, env, "errored", cache)
+        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       }
       await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
@@ -7082,6 +7137,7 @@ export async function handlePrReviewEnsemble(
         event: submission.event,
         findingsCount: inlineFindings,
         ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
+        ...deterministicCheckAnnotationMeta(),
         // SIG-144 (PR #339 review fix): in annotations-only mode inline
         // comments are suppressed, so the annotations payload must carry
         // ALL findings — not just the body-only leftovers — or anchored
@@ -7154,6 +7210,7 @@ export async function handlePrReviewEnsemble(
             // No runner pill on `surface: "comment"` — see the note at the
             // fallbackCommentSubmission site above (failure conclusion, pill is
             // success-summary-only).
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -7237,6 +7294,7 @@ export async function handlePrReviewEnsemble(
             surface: "comment",
             // No runner pill on `surface: "comment"` — failure conclusion; the
             // pill is success-summary-only (see fallbackCommentSubmission note).
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
@@ -7285,10 +7343,11 @@ export async function handlePrReviewEnsemble(
             surface: "comment",
             // No runner pill on `surface: "comment"` — failure conclusion; the
             // pill is success-summary-only (see fallbackCommentSubmission note).
+            ...deterministicCheckAnnotationMeta(),
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
-        return finalize(telemetry, env, "errored", cache)
+        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       }
       await fallbackAffordance.persistReviewCounter()
       telemetry.submitted = true
@@ -7341,6 +7400,7 @@ export async function handlePrReviewEnsemble(
         event: fallback.event,
         findingsCount: fallbackFindings,
         ...(runnerEvidenceBadge ? { runnerEvidence: runnerEvidenceBadge } : {}),
+        ...deterministicCheckAnnotationMeta(),
         ...checkAnnotationMeta(allFindingAnnotations),
       })
     } finally {
@@ -7362,7 +7422,7 @@ export async function handlePrReviewEnsemble(
     // `failure` Check Run mapping renders a generic "Review
     // failed" title, which is accurate for this case — the on-
     // call team needs to look at telemetry to know what failed.
-    return finalize(telemetry, env, "errored", cache)
+    return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
   } finally {
     clearTimeout(orchTimer)
     // ARC-283 Phase B1b — shadow comparison emit. Runs on EVERY
@@ -9245,6 +9305,8 @@ export interface ValidatedOutput {
    * enforce). Surfaced so the would-flag rate is observable before enforce.
    */
   droppedForFailedLogicRefutation: number
+  /** SIG-328: logic findings whose AST-provably-false claim the gate flagged. */
+  droppedForFailedLogicClaimRefutation: number
   /**
    * SIG-325: count of sev>=4 self-originated findings (currently security with
    * no resolving manifest evidenceId) the refutation-survival gate flagged for
@@ -10070,6 +10132,20 @@ export function validateForSubmission(args: {
     info: { reason: RefutationSurvivalDropReason; dropped: boolean; lens: string },
   ) => void
   /**
+   * SIG-328: logic-claim refutation gate mode. `off` (default): the gate
+   * doesn't run. `shadow`: would-drops are counted + telemetered, finding kept.
+   * `enforce`: a logic finding whose control-flow / sync-race claim is PROVABLY
+   * false against the cited AST is dropped. Read from
+   * `OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE`. Scoped to sev>=4 logic findings;
+   * needs `fullFileByPath` for the AST proof. Fails open. Ships dark.
+   */
+  logicClaimRefutationMode?: LogicClaimRefutationMode
+  /** SIG-328: telemetry callback per logic finding the claim gate flagged. */
+  onLogicClaimRefutationFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: LogicClaimDropReason; dropped: boolean },
+  ) => void
+  /**
    * SIG-110: perf-finding evidence (added-line text per path + the
    * roleHint:performance AST findings). Threaded so `evaluatePerfFinding`
    * can anchor sev>=4 perf findings to the diff. Absent → the gate no-ops.
@@ -10255,6 +10331,8 @@ export function validateForSubmission(args: {
     refutationSurvivalMode = "off",
     onLogicRefutationFindingDropped,
     onRefutationSurvivalFindingDropped,
+    logicClaimRefutationMode = "off",
+    onLogicClaimRefutationFindingDropped,
     perfEvidence,
     perfValidatorMode = "shadow",
     addedLineTextByLine,
@@ -10313,6 +10391,7 @@ export function validateForSubmission(args: {
   let droppedForFailedTestValidation = 0
   let droppedForFailedLogicValidation = 0
   let droppedForFailedLogicRefutation = 0
+  let droppedForFailedLogicClaimRefutation = 0
   let droppedForFailedRefutationSurvival = 0
   let droppedForFailedPerfValidation = 0
   let droppedForFailedInlineGroundingValidation = 0
@@ -10652,6 +10731,23 @@ export function validateForSubmission(args: {
         const dropped = logicRefutationMode === "enforce"
         droppedForFailedLogicRefutation++
         onLogicRefutationFindingDropped?.(f, { reason: refutationDecision.reason, dropped })
+        if (dropped) continue
+        // shadow mode: fall through and keep the finding.
+      }
+    }
+
+    // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
+    // when its control-flow ("unconditional/double-response") or sync-race
+    // ("TOCTOU") claim is PROVABLY false against the AST of the cited file — the
+    // two stable v4-pro priors prompt-tuning could not dislodge. Fails OPEN on
+    // every ambiguity (the pure validator re-checks category+sev), so it cannot
+    // suppress a real bug. Same shadow-first semantics: only `enforce` drops.
+    if (logicClaimRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {
+      const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath })
+      if (!claimDecision.keep) {
+        const dropped = logicClaimRefutationMode === "enforce"
+        droppedForFailedLogicClaimRefutation++
+        onLogicClaimRefutationFindingDropped?.(f, { reason: claimDecision.reason, dropped })
         if (dropped) continue
         // shadow mode: fall through and keep the finding.
       }
@@ -11019,6 +11115,7 @@ export function validateForSubmission(args: {
     droppedForFailedTestValidation,
     droppedForFailedLogicValidation,
     droppedForFailedLogicRefutation,
+    droppedForFailedLogicClaimRefutation,
     droppedForFailedRefutationSurvival,
     droppedForFailedPerfValidation,
     droppedForFailedInlineGroundingValidation,
@@ -11203,6 +11300,10 @@ interface EnsembleTelemetry {
     /** SIG-308: count of sev>=4 logic findings the refutation backstop flagged
      * for missing a survival rationale (would-drop shadow / actual-drop enforce). */
     droppedForFailedLogicRefutation: number
+    /** SIG-328: count of sev>=4 logic findings the logic-claim refutation gate
+     * flagged for a provably-false control-flow / sync-race claim (would-drop
+     * shadow / actual-drop enforce). */
+    droppedForFailedLogicClaimRefutation: number
     /** SIG-325: count of sev>=4 self-originated findings the refutation-survival
      * gate flagged for a missing mechanism rationale (would-demote shadow /
      * actual-demote enforce). */
@@ -11420,6 +11521,9 @@ export interface ReviewMeta {
   surface?: "review" | "comment" | "skip-notice"
   /** Body-only findings rendered as GitHub Checks annotations. */
   checkAnnotations?: CheckRunAnnotation[]
+  /** SIG-171: scanner-derived Lane A annotations rendered independently
+   *  from model-authored review findings. */
+  deterministicCheckAnnotations?: CheckRunAnnotation[]
   /** SIG-184: the runner-evidence trust state when a receipt was
    *  consulted (flag-gated; omitted = `runner-absent` = no badge).
    *  Flows verbatim into `ReviewCheckMeta.runnerEvidence` (index.ts

@@ -296,23 +296,18 @@ describe("ARC-190 acceptance — watchdog exhaustion (spec §4.6a)", () => {
     expect(eventCount("do-review-watchdog-terminal")).toBe(1)
   })
 
-  it("/run-result never arrives from running state (consumer crashed mid-run) → watchdog catches it (Codex MAJOR T9 v1)", async () => {
-    // Spec §4.6a: the watchdog covers `queued | running`. The other
-    // scenario covers `queued`; this one covers `running` — the
-    // consumer claimed the run via /pickup but crashed before posting
-    // /run-result. Catches watchdog regressions specific to the
-    // running state, the recorded consumerId, and the watchdog
-    // refresh on /pickup.
+  it("/run-result never arrives from running state (consumer crashed mid-run) → liveness catches it (SIG-329; was Codex MAJOR T9 v1)", async () => {
+    // SIG-329: a claimed-then-crashed consumer is now caught by the
+    // `liveness` alarm (heartbeat-gap detector) rather than the long
+    // watchdog. The consumer claimed the run via /pickup but stopped
+    // heartbeating; once the gap exceeds livenessMs the DO declares the
+    // attempt dead and schedules a retry — in seconds, not the full
+    // watchdog window. (The queued-never-picked-up case above still uses
+    // the watchdog backstop.)
     const h = buildHarness({ maxRetries: 3 })
     await enqueuePrReviewJob(h.env, baseEnqueueArgs)
     expect(h.queue.sent).toHaveLength(1)
 
-    // Consumer claims the run, then "crashes" before posting
-    // /run-result (we throw inside the wrapper's runEnsemble, but a
-    // crash in real life would also skip the /run-result post — the
-    // wrapper's try/catch around /run-result simulates that path well
-    // enough for this test).
-    //
     // We bypass the wrapper here and post /pickup directly so we can
     // freeze the run in `running` without triggering the wrapper's
     // /run-result emit.
@@ -327,13 +322,22 @@ describe("ARC-190 acceptance — watchdog exhaustion (spec §4.6a)", () => {
     let state = h.store.get("state") as RunState
     expect(state.state).toBe("running")
     expect(state.consumerId).toBe(consumerId)
-    expect(state.alarmKind).toBe("watchdog")
+    // SIG-329: pickup arms liveness (not watchdog); the absolute backstop
+    // rides on watchdogDeadlineAt.
+    expect(state.alarmKind).toBe("liveness")
 
-    // Fire watchdog from running state → attempts=1 < 3 → schedule retry.
+    // Simulate the consumer going silent: no heartbeat past the gap
+    // (pickup seeded lastHeartbeatAt to ~now; default livenessMs is 90s).
+    const silent = h.store.get("state") as RunState
+    silent.lastHeartbeatAt = new Date(Date.now() - 200_000).toISOString()
+    h.store.set("state", silent)
+
+    // Fire liveness from running state → gap exceeded → attempts=1 < 3 → retry.
     await h.fireAlarm()
     state = h.store.get("state") as RunState
     expect(state.state).toBe("failed-transient")
     expect(state.alarmKind).toBe("retry")
+    expect(state.lastError?.stage).toBe("liveness")
   })
 })
 

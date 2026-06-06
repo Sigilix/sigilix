@@ -60,6 +60,7 @@ import {
   handlePrResume,
   handlePrIgnore,
   handlePrResolveThreads,
+  handlePrCancel,
 } from "./lib/pr-lifecycle-commands"
 import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
@@ -463,6 +464,12 @@ export interface Env {
   //                                   `owner/repo/path` (no `@ref`).
   OPENCLAW_RUNNER_OIDC_AUDIENCE?: string
   OPENCLAW_RUNNER_WORKFLOW_REF?: string
+  // SIG-285 runner-execution (outbound): on-demand workflow_dispatch of a
+  // per-finding deterministic check. off (default) | shadow (would-dispatch
+  // telemetry) | on (actually dispatch). Needs the App's Actions:write + a
+  // caller workflow in the target repo. Dark default — dispatching is a write
+  // action; wired into the review flow in a follow-up.
+  OPENCLAW_RUNNER_DISPATCH_MODE?: string
   // SIG-184 PR 3: consumption rollout posture — "off" (default) | "shadow"
   // (look up + telemetry, review unchanged) | "post" (use the verified receipt's
   // SARIF + render the verified/pending/absent state).
@@ -501,6 +508,10 @@ export interface Env {
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string
   OPENCLAW_PR_REVIEW_DO_MAX_RETRIES?: string
   OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS?: string
+  // SIG-329: max tolerated gap (ms) between runner heartbeats before the
+  // DO declares an in-flight attempt dead and retries. Decouples
+  // dead-consumer detection from the watchdog backstop.
+  OPENCLAW_PR_REVIEW_DO_LIVENESS_MS?: string
   OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT?: string
 
   // SIG-108: security-finding evidence gate mode. "shadow" (default;
@@ -549,6 +560,10 @@ export interface Env {
   // (while the Phase 1 prompt trains the model to fill it) before any flip
   // via `wrangler secret put OPENCLAW_LOGIC_REFUTATION_MODE enforce`.
   OPENCLAW_LOGIC_REFUTATION_MODE?: string
+  // SIG-328: logic-claim refutation gate. off | shadow (would-drop telemetry) |
+  // enforce (drop a logic finding whose control-flow / sync-race claim is
+  // PROVABLY false against the cited AST). Fails open; ships dark ("shadow").
+  OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE?: string
 
   // SIG-325: generalized refutation-survival gate mode. "off" (default in code;
   // "shadow" in wrangler) extends the SIG-308 refute-first discipline to
@@ -903,6 +918,16 @@ export type JobMessage =
     }
   | {
       type: "pr-resolve-threads"
+      owner: string
+      repo: string
+      prNumber: number
+      installationId: number
+    }
+  // SIG-329: `/sigilix cancel` — abort the in-flight review for this PR
+  // by terminating its PrReviewRunDO run + closing the check. No LLM
+  // call; talks to the DO `/cancel` route, then posts an ack.
+  | {
+      type: "pr-cancel"
       owner: string
       repo: string
       prNumber: number
@@ -2428,6 +2453,13 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
         installationId: job.installationId,
       })
+    case "pr-cancel":
+      // SIG-329: `/sigilix cancel` — abort the in-flight review by
+      // terminating its PrReviewRunDO run + closing the check.
+      return handlePrCancel({
+        env, owner: job.owner, repo: job.repo, prNumber: job.prNumber,
+        installationId: job.installationId,
+      })
     case "corpus-pr-upsert":
       // SIG-44: embed a merged PR into the pr: multi-corpus namespace.
       return handleCorpusPrUpsert(env, {
@@ -3814,6 +3846,9 @@ export async function queueGithubMention(args: QueueGithubMentionArgs): Promise<
         break
       case "resolve":
         message = { type: "pr-resolve-threads", owner, repo, prNumber, installationId }
+        break
+      case "cancel":
+        message = { type: "pr-cancel", owner, repo, prNumber, installationId }
         break
       default: {
         const _exhaustive: never = slashCmd

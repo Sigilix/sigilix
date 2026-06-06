@@ -12,7 +12,10 @@ describe("resolveDoConfig — defaults", () => {
   it("all-undefined env → locked numeric defaults", () => {
     const c = resolveDoConfig(envWith())
     expect(c.maxRetries).toBe(3)
-    expect(c.watchdogMs).toBe(1200000)
+    // SIG-329: watchdog lowered 20 min → 10 min (now an absolute backstop);
+    // liveness gap-detector added.
+    expect(c.watchdogMs).toBe(600000)
+    expect(c.livenessMs).toBe(90000)
     expect(c.historyLimit).toBe(10)
   })
 })
@@ -45,8 +48,26 @@ describe("resolveDoConfig — watchdogMs clamp [60000, 1800000]", () => {
   it("600000 → 600000 (in-range)", () => {
     expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "600000" })).watchdogMs).toBe(600000)
   })
-  it("non-numeric → default 1200000", () => {
-    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "soon" })).watchdogMs).toBe(1200000)
+  it("non-numeric → default 600000", () => {
+    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "soon" })).watchdogMs).toBe(600000)
+  })
+})
+
+describe("resolveDoConfig — livenessMs clamp [45000, 300000] (SIG-329)", () => {
+  // SIG-329 PR #370 finding #3: the floor must exceed the consumer's 30s
+  // HEARTBEAT_INTERVAL_MS, else the first liveness alarm fires before the
+  // first heartbeat and false-declares a live consumer dead.
+  it("30000 → 45000 (clamp low — below the 30s heartbeat interval is rejected)", () => {
+    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_DO_LIVENESS_MS: "30000" })).livenessMs).toBe(45000)
+  })
+  it("600000 → 300000 (clamp high)", () => {
+    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_DO_LIVENESS_MS: "600000" })).livenessMs).toBe(300000)
+  })
+  it("60000 → 60000 (in-range)", () => {
+    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_DO_LIVENESS_MS: "60000" })).livenessMs).toBe(60000)
+  })
+  it("non-numeric → default 90000", () => {
+    expect(resolveDoConfig(envWith({ OPENCLAW_PR_REVIEW_DO_LIVENESS_MS: "later" })).livenessMs).toBe(90000)
   })
 })
 
@@ -66,15 +87,17 @@ describe("resolveDoConfig — historyLimit clamp [1, 100]", () => {
 })
 
 describe("resolveDoConfig — combined", () => {
-  it("custom retries + custom watchdog + custom history", () => {
+  it("custom retries + custom watchdog + custom liveness + custom history", () => {
     const c = resolveDoConfig(envWith({
       OPENCLAW_PR_REVIEW_DO_MAX_RETRIES: "5",
       OPENCLAW_PR_REVIEW_DO_WATCHDOG_MS: "900000",
+      OPENCLAW_PR_REVIEW_DO_LIVENESS_MS: "60000",
       OPENCLAW_PR_REVIEW_DO_HISTORY_LIMIT: "20",
     }))
     expect(c).toEqual({
       maxRetries: 5,
       watchdogMs: 900000,
+      livenessMs: 60000,
       historyLimit: 20,
     })
   })

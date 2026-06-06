@@ -1143,7 +1143,7 @@ function prepareReviewSubmissionFindings(args: {
       // demoting to the body. For THIS anchoring step, fall back to the body only
       // when there's no substantive added line at/after the anchor. (Other gates —
       // confidence-tier routing below, inline-cap overflow — can still body-route.)
-      const resolved = pickSubstantiveAnchorLineForward(addedLinesForPath, f.line)
+      const resolved = pickSubstantiveAnchorLineForward(addedLinesForPath, f.line, f.startLine)
       if (resolved === null) {
         bodyFindings.push(withLineMovedNote(f, headSha))
         return
@@ -2903,7 +2903,7 @@ function renderBodyOnlyFindings(
     // WHERE a body finding is at a glance (CodeRabbit parity) instead of hunting
     // grey <sub> metadata; score/trust collapse into a trailing subscript.
     lines.push("")
-    lines.push(`- ${badge} ${categoryBadge} **${anchor}**: **${stripAstMarkers(f.headline)}**${pill} <sub>score ${f.score}${subTag}${anchorNote}</sub>`)
+    lines.push(`- ${badge} ${categoryBadge}${pill} **${anchor}**: **${stripAstMarkers(f.headline)}** <sub>score ${f.score}${subTag}${anchorNote}</sub>`)
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
@@ -3348,11 +3348,19 @@ export function pickAnchorLineForward(
  * confidently-wrong inline comment is worse than a body finding. SIG-159's
  * motivating case (the `}` above the real subject) is only a handful of lines,
  * so a small cap keeps that case inline while preventing cross-hunk drift.
+ *
+ * Optional `rangeStartLine`: when the model emitted an explicit multi-line
+ * range and the forward walk finds nothing (the primary `line` landed on a
+ * trailing blank/brace at the range's bottom), fall back to the nearest
+ * substantive added line WITHIN [rangeStartLine..requestedLine] instead of
+ * demoting the finding to the body — bounded by the model's own asserted
+ * range, so it can't drift to unrelated code. Recall-safe (body → inline only).
  */
 export const MAX_SUBSTANTIVE_ANCHOR_WALK = 25
 export function pickSubstantiveAnchorLineForward(
   addedLinesForPath: ReadonlyMap<number, string> | undefined,
   requestedLine: number,
+  rangeStartLine?: number,
 ): number | null {
   if (addedLinesForPath === undefined) return null
   let best: number | null = null
@@ -3366,7 +3374,33 @@ export function pickSubstantiveAnchorLineForward(
       best = line
     }
   }
-  return best
+  if (best !== null) return best
+  // Range-bounded backward fallback. When the model emitted an explicit
+  // multi-line range [rangeStartLine..requestedLine] and the forward walk
+  // found nothing substantive (the primary `line` landed on a trailing
+  // blank/brace at the range's bottom edge, with no substantive added line
+  // AFTER it), anchor INLINE to the nearest substantive added line WITHIN the
+  // model's own asserted range instead of demoting the whole finding to the
+  // body. Bounded by `rangeStartLine`, so — unlike an open backward walk
+  // (Codex/DeepSeek 2026-05-23: avoid drift to unrelated code) — it can only
+  // land inside the range the model itself claimed, never an arbitrary
+  // distance away. Picks the line CLOSEST to the bottom (the primary anchor
+  // intent). Recall-safe: only converts a body demotion into an inline anchor.
+  if (rangeStartLine !== undefined && rangeStartLine < requestedLine) {
+    let backBest: number | null = null
+    for (const [line, text] of addedLinesForPath) {
+      if (
+        line >= rangeStartLine &&
+        line < requestedLine &&
+        isSubstantiveAnchorLine(text) &&
+        (backBest === null || line > backBest)
+      ) {
+        backBest = line
+      }
+    }
+    if (backBest !== null) return backBest
+  }
+  return null
 }
 
 /**

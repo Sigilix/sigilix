@@ -578,6 +578,12 @@ OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
 # read the would-flag rate (while the Phase 1 prompt trains the model to fill
 # `independentAssessment`) before "enforce". Rollback: set "off".
 OPENCLAW_LOGIC_REFUTATION_MODE = "shadow"
+# SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only when
+# its control-flow ("unconditional"/"double-response") or sync-race ("TOCTOU")
+# claim is PROVABLY false against the cited AST (the two stable v4-pro priors).
+# Fails open; ships "shadow" — read the would-drop rate + audit before "enforce".
+# Rollback: set "off".
+OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE = "shadow"
 
 # SIG-325: the GENERALIZED refutation-survival gate (evaluateRefutationSurvival).
 # Extends the SIG-308 refute-first discipline to SELF-ORIGINATED findings on

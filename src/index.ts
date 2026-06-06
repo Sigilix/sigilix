@@ -464,6 +464,12 @@ export interface Env {
   //                                   `owner/repo/path` (no `@ref`).
   OPENCLAW_RUNNER_OIDC_AUDIENCE?: string
   OPENCLAW_RUNNER_WORKFLOW_REF?: string
+  // SIG-285 runner-execution (outbound): on-demand workflow_dispatch of a
+  // per-finding deterministic check. off (default) | shadow (would-dispatch
+  // telemetry) | on (actually dispatch). Needs the App's Actions:write + a
+  // caller workflow in the target repo. Dark default — dispatching is a write
+  // action; wired into the review flow in a follow-up.
+  OPENCLAW_RUNNER_DISPATCH_MODE?: string
   // SIG-184 PR 3: consumption rollout posture — "off" (default) | "shadow"
   // (look up + telemetry, review unchanged) | "post" (use the verified receipt's
   // SARIF + render the verified/pending/absent state).

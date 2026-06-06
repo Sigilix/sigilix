@@ -48,6 +48,8 @@ export const LOGIC_CLAIM_REFUTATION_MIN_SEVERITY = 4
 export type LogicClaimDropReason =
   | "control-flow-claim-refuted-by-guard"
   | "sync-race-claim-refuted-no-async-boundary"
+  | "unused-claim-refuted-identifier-is-referenced"
+  | "missing-return-type-claim-refuted-annotation-present"
 
 export type LogicClaimRefutationDecision =
   | { keep: true }
@@ -69,6 +71,18 @@ const CONTROL_FLOW_CLAIM_RE =
 // A finding asserting a TOCTOU / read-check-write race.
 const SYNC_RACE_CLAIM_RE =
   /\b(?:race\s+condition|toctou|time[-\s]?of[-\s]?check|read[-\s]?(?:modify|check)[-\s]?(?:write|act)|check[-\s]?then[-\s]?act|non[-\s]?atomic|lost\s+update|concurrent\s+(?:withdrawal|update|write|deduction|access))\b/i
+
+// A finding asserting an identifier is unused/never-referenced. Loose on purpose
+// (just the TRIGGER); the AST refuter is the real guard and fails open. Tolerates
+// a back-ticked symbol between the keyword and the noun ("unused `req` parameter").
+const UNUSED_CLAIM_RE =
+  /\b(?:unused|never\s+(?:used|referenced)|not\s+(?:used|referenced))\b[^.\n]{0,24}?\b(?:variable|parameter|argument|import|binding|field|property)\b|\b(?:variable|parameter|argument|import|binding|field|property)\b[^.\n]{0,24}?\bis\s+(?:never\s+(?:used|referenced)|unused|not\s+(?:used|referenced))\b/i
+
+// A finding asserting a (return) type ANNOTATION is missing. Tightened
+// (code-reviewer P2) to require the word "annotation"/"declaration" so a real
+// bug like "missing the return type GUARD before the await" does NOT trigger.
+const MISSING_RETURN_TYPE_CLAIM_RE =
+  /\breturn[\s-]type\s+(?:annotation|declaration)\b[^.\n]{0,24}?\b(?:is\s+)?(?:missing|absent|not\s+(?:declared|specified|present|annotated))\b|\bmissing\s+(?:a\s+|an\s+|the\s+)?(?:explicit\s+)?return[\s-]type\s+(?:annotation|declaration)\b/i
 
 function findingText(f: PrReviewFinding): string {
   return `${f.headline} ${f.body}`
@@ -303,6 +317,61 @@ function refutesSyncRace(fn: Node, line: number): boolean {
   return sawCheck
 }
 
+const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g
+
+/**
+ * Refute an "unused identifier" claim. The finding names a symbol (back-tick /
+ * quote quoted); if that symbol is REFERENCED inside the enclosing function
+ * (appears more than once — declaration + >=1 use), the "unused" claim is FALSE.
+ * Refute only when we can see the use; if the symbol appears 0-1 times (genuinely
+ * unused, or not found) → keep.
+ */
+function refutesUnused(fn: Node, finding: PrReviewFinding): boolean {
+  const named = new Set<string>()
+  for (const m of findingText(finding).matchAll(BACKTICK_IDENT_RE)) named.add(m[1] as string)
+  if (named.size === 0) return false
+  // Count name-matching Identifiers WITHOUT descending into NESTED functions
+  // (code-reviewer P1): a same-named binding in a nested closure must not inflate
+  // the outer symbol's count and wrongly refute a genuinely-unused outer var. A
+  // legitimate use inside a nested closure simply won't be counted → we keep
+  // (fail open), never a false refute. Skip TS type-space nodes for the same
+  // reason (a `type req = ...` annotation isn't a value use).
+  const counts = new Map<string, number>()
+  const visit = (n: Node, depth: number): void => {
+    if (!n || typeof n.type !== "string") return
+    if (depth > 0 && FUNCTION_TYPES.has(n.type)) return // don't descend into nested fns
+    if (n.type.startsWith("TS")) return // skip the TS type space (annotations, type aliases)
+    if (n.type === "Identifier" && typeof n.name === "string" && named.has(n.name)) {
+      counts.set(n.name, (counts.get(n.name) ?? 0) + 1)
+    }
+    for (const key of Object.keys(n)) {
+      if (key === "loc" || key === "start" || key === "end" || key === "range") continue
+      const child = n[key]
+      if (Array.isArray(child)) {
+        for (const c of child) if (c && typeof c.type === "string") visit(c, depth + 1)
+      } else if (child && typeof child.type === "string") {
+        visit(child, depth + 1)
+      }
+    }
+  }
+  visit(fn, 0)
+  // Any claimed-unused identifier that occurs >=2 times (declaration + >=1 use,
+  // both in the enclosing fn's own scope) is provably referenced.
+  for (const id of named) if ((counts.get(id) ?? 0) >= 2) return true
+  return false
+}
+
+/**
+ * Refute a "missing return type annotation" claim. acorn-typescript sets
+ * `returnType` on a function with an explicit return-type annotation. If the
+ * enclosing function HAS one, the claim is FALSE. (A genuinely missing return
+ * type is a style nit, never a correctness bug — but we only refute on positive
+ * proof the annotation is present.)
+ */
+function refutesMissingReturnType(fn: Node): boolean {
+  return fn?.returnType != null
+}
+
 const SOURCE_EXTS: Record<string, SourceExt> = {
   ts: ".ts", tsx: ".tsx", mts: ".mts", cts: ".cts",
   js: ".js", jsx: ".jsx", mjs: ".mjs", cjs: ".cjs",
@@ -332,7 +401,9 @@ export function evaluateLogicClaimRefutation(
   const text = findingText(finding)
   const isControlFlow = CONTROL_FLOW_CLAIM_RE.test(text)
   const isSyncRace = SYNC_RACE_CLAIM_RE.test(text)
-  if (!isControlFlow && !isSyncRace) return { keep: true }
+  const isUnused = UNUSED_CLAIM_RE.test(text)
+  const isMissingReturnType = MISSING_RETURN_TYPE_CLAIM_RE.test(text)
+  if (!isControlFlow && !isSyncRace && !isUnused && !isMissingReturnType) return { keep: true }
 
   const source = context.fullFileByPath.get(finding.path)
   if (typeof source !== "string" || source.length === 0) return { keep: true }
@@ -352,6 +423,12 @@ export function evaluateLogicClaimRefutation(
   }
   if (isSyncRace && refutesSyncRace(fn, line)) {
     return { keep: false, reason: "sync-race-claim-refuted-no-async-boundary" }
+  }
+  if (isUnused && refutesUnused(fn, finding)) {
+    return { keep: false, reason: "unused-claim-refuted-identifier-is-referenced" }
+  }
+  if (isMissingReturnType && refutesMissingReturnType(fn)) {
+    return { keep: false, reason: "missing-return-type-claim-refuted-annotation-present" }
   }
   return { keep: true }
 }

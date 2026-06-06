@@ -3307,6 +3307,13 @@ describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
     expect(out.suggestionEmissions).toHaveLength(0)
   })
 
+  it("strips replacement when only line endings differ from current code", () => {
+    const out = submit(finding({ suggestedReplacement: "  const x = compute()\r\n" }))
+    expect(out.submission.comments?.[0]?.body).not.toContain("```suggestion")
+    expect(out.submission.comments?.[0]?.body).not.toContain("**Proposed:**")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
   it("does not count literal suggestion fences inside ordinary code blocks as emissions", () => {
     const out = submit(finding({
       kind: "describe",
@@ -3316,6 +3323,18 @@ describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
 
     expect(out.submission.comments?.[0]?.body).toContain("```suggestion")
     expect(out.submission.comments?.[0]?.body).not.toContain("\n```suggestion\n  const x = compute() ?? 0\n```")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
+  it("does not count literal suggestion fences inside tilde code blocks as emissions", () => {
+    const out = submit(finding({
+      body: "Example:\n~~~text\n```suggestion\nconst x = compute() ?? 0\n```\n~~~",
+      kind: "describe",
+      suggestedReplacement: undefined,
+    }))
+
+    expect(out.submission.comments?.[0]?.body).toContain("~~~text")
+    expect(out.submission.comments?.[0]?.body).toContain("```suggestion")
     expect(out.suggestionEmissions).toHaveLength(0)
   })
 
@@ -4255,6 +4274,12 @@ describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
     const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: tooLong }] }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+  it("keeps suggestedReplacement when the replacement is exactly 10 lines", () => {
+    const tenLines = Array.from({ length: 10 }, (_, i) => `  line${i}`).join("\n")
+    const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: tenLines }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.suggestedReplacement).toBe(tenLines)
   })
 })
 

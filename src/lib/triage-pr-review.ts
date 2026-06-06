@@ -1125,6 +1125,13 @@ function currentAnchoredLines(
   return lines
 }
 
+function normalizeAnchoredTextForNoopComparison(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\n$/, "")
+}
+
 function validatedStructuredFixForSubmission(
   finding: PrReviewFinding,
   reviewable: ReviewableMap | undefined,
@@ -1144,7 +1151,10 @@ function validatedStructuredFixForSubmission(
   if (countReplacementLines(replacement) > MAX_SUGGESTED_REPLACEMENT_LINES) {
     return stripStructuredFix(finding)
   }
-  if (replacement.replace(/\n$/, "") === currentLines.join("\n")) {
+  if (
+    normalizeAnchoredTextForNoopComparison(replacement) ===
+    normalizeAnchoredTextForNoopComparison(currentLines.join("\n"))
+  ) {
     return stripStructuredFix(finding)
   }
   return finding
@@ -1324,18 +1334,35 @@ function renderedSuggestionEmissions(
   })
 }
 
+interface MarkdownFence {
+  ch: "`" | "~"
+  len: number
+}
+
 function hasRenderedSuggestionBlock(body: string): boolean {
-  let openFence: string | null = null
+  let openFence: MarkdownFence | null = null
   for (const line of body.split("\n")) {
     if (openFence === null) {
       if (/^```suggestion\s*$/.test(line)) return true
-      const fence = /^(`{3,})[^`]*$/.exec(line)
-      if (fence) openFence = fence[1] ?? null
+      const fence = /^(`{3,}|~{3,})[^`~]*$/.exec(line)
+      if (fence?.[1]) {
+        const seq = fence[1]
+        const ch = seq[0]
+        if (ch === "`" || ch === "~") openFence = { ch, len: seq.length }
+      }
       continue
     }
-    if (line.startsWith(openFence)) openFence = null
+    if (isClosingMarkdownFence(line, openFence)) openFence = null
   }
   return false
+}
+
+function isClosingMarkdownFence(line: string, fence: MarkdownFence): boolean {
+  const closeRe =
+    fence.ch === "`"
+      ? new RegExp("^`{" + fence.len + ",}\\s*$")
+      : new RegExp("^~{" + fence.len + ",}\\s*$")
+  return closeRe.test(line)
 }
 
 export interface PreviewReviewSubmissionEventArgs {

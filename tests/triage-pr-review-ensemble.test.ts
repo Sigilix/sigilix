@@ -48,6 +48,7 @@ import {
   BLAST_RADIUS_RESOLUTION_READY,
   resolveDynamicEvidencePromptBlock,
   prepareSubmissionAffordance,
+  buildSuggestionEmissionLogEvents,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import {
@@ -185,6 +186,50 @@ describe("prepareSubmissionAffordance", () => {
 
     expect(store.get(key)).toBe("8")
     expect(puts).toEqual([[key, "8"]])
+  })
+})
+
+describe("buildSuggestionEmissionLogEvents (SIG-103)", () => {
+  const context = {
+    owner: "Sigilix",
+    repo: "sigilix",
+    prNumber: 377,
+    headSha: "148dacc1050aafd118764a8320a74ae14673100e",
+    commentsSubmitted: true,
+  }
+
+  it("renders the post-submit suggestion telemetry shape", () => {
+    expect(buildSuggestionEmissionLogEvents(context, [
+      { path: "src/a.ts", line: 12 },
+      { path: "src/b.ts", line: 20, startLine: 18 },
+    ])).toEqual([
+      {
+        event: "pr-review-suggestion-emitted",
+        owner: "Sigilix",
+        repo: "sigilix",
+        prNumber: 377,
+        headSha: "148dacc",
+        path: "src/a.ts",
+        line: 12,
+      },
+      {
+        event: "pr-review-suggestion-emitted",
+        owner: "Sigilix",
+        repo: "sigilix",
+        prNumber: 377,
+        headSha: "148dacc",
+        path: "src/b.ts",
+        line: 20,
+        startLine: 18,
+      },
+    ])
+  })
+
+  it("does not emit telemetry when review comments were suppressed", () => {
+    expect(buildSuggestionEmissionLogEvents({
+      ...context,
+      commentsSubmitted: false,
+    }, [{ path: "src/a.ts", line: 12 }])).toEqual([])
   })
 })
 

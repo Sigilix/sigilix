@@ -39,6 +39,21 @@ function nonBlank(value: string | undefined, fallback: string): string {
   return clean && clean.length > 0 ? clean : fallback
 }
 
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function ruleParts(finding: SarifFinding): { ruleId: string; ruleName?: string; label: string } {
+  const ruleId = nonBlank(finding.ruleId, "unknown-rule")
+  const ruleName = finding.ruleName?.trim()
+  const cleanRuleName = ruleName && ruleName.length > 0 ? ruleName : undefined
+  return {
+    ruleId,
+    ...(cleanRuleName !== undefined ? { ruleName: cleanRuleName } : {}),
+    label: cleanRuleName ?? ruleId,
+  }
+}
+
 function hasAnchorableLine(finding: SarifFinding): finding is SarifFinding & { line: number } {
   return (
     finding.path.trim().length > 0 &&
@@ -52,17 +67,16 @@ function sortForChecks(findings: readonly (SarifFinding & { line: number })[]): 
   return [...findings].sort((a, b) => {
     const sevDiff = SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity]
     if (sevDiff !== 0) return sevDiff
-    const pathDiff = a.path.localeCompare(b.path)
+    const pathDiff = compareText(a.path, b.path)
     if (pathDiff !== 0) return pathDiff
     const lineDiff = a.line - b.line
     if (lineDiff !== 0) return lineDiff
-    return a.ruleId.localeCompare(b.ruleId)
+    return compareText(a.ruleId, b.ruleId)
   })
 }
 
 function messageForFinding(finding: SarifFinding): string {
-  const ruleId = nonBlank(finding.ruleId, "unknown-rule")
-  const ruleName = finding.ruleName !== undefined ? nonBlank(finding.ruleName, ruleId) : undefined
+  const { ruleId, ruleName } = ruleParts(finding)
   const toolName = nonBlank(finding.toolName, "unknown-tool")
   const lines = [
     finding.message,
@@ -88,7 +102,7 @@ export function buildSarifCheckAnnotations(findings: readonly SarifFinding[]): C
     end_line: finding.line,
     annotation_level: annotationLevelForSarifSeverity(finding.severity),
     title: truncate(
-      `[SARIF ${finding.severity}] ${nonBlank(finding.toolName, "unknown-tool")}: ${nonBlank(finding.ruleName ?? finding.ruleId, "unknown-rule")}`,
+      `[SARIF ${finding.severity}] ${nonBlank(finding.toolName, "unknown-tool")}: ${ruleParts(finding).label}`,
       CHECK_ANNOTATION_TITLE_LIMIT,
     ),
     message: messageForFinding(finding),

@@ -1658,6 +1658,18 @@ export async function handlePrReviewEnsemble(
     deterministicCheckAnnotations !== undefined && deterministicCheckAnnotations.length > 0
       ? { deterministicCheckAnnotations: [...deterministicCheckAnnotations] }
       : {}
+  const deterministicErroredReviewMeta = (): ReviewMeta | undefined =>
+    deterministicCheckAnnotations !== undefined && deterministicCheckAnnotations.length > 0
+      ? {
+          // Generic `errored` check-run rendering ignores `event` and
+          // `findingsCount`; ReviewMeta requires them only for success titles.
+          // These placeholders carry Lane A annotations through post-SARIF
+          // failure paths without pretending a model review was posted.
+          event: "REQUEST_CHANGES",
+          findingsCount: 0,
+          deterministicCheckAnnotations: [...deterministicCheckAnnotations],
+        }
+      : undefined
 
   // ARC-258: the in-progress check run is owned by `dispatchJob`,
   // not by this orchestrator. Reason: when ensemble-post fails
@@ -1761,7 +1773,7 @@ export async function handlePrReviewEnsemble(
           ...deterministicCheckAnnotationMeta(),
         })
       }
-      return finalize(telemetry, env, "errored", cache)
+      return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
     }
 
     // ─── Stale-head guard #1 ───────────────────────────────────
@@ -1834,7 +1846,7 @@ export async function handlePrReviewEnsemble(
       // Submit failed — fall through to `errored` without a surface
       // (we have no comment to point the customer at, and the PR is
       // already merged so a skip-notice is pointless).
-      return finalize(telemetry, env, "errored", cache)
+      return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       // SIG-89 note: this merged-on-approve short-circuit intentionally
       // does NOT write a noop-merge diff hash. `fullPrDiff` isn't
       // fetched on this path (the diff fetch lives below at the start
@@ -6310,7 +6322,7 @@ export async function handlePrReviewEnsemble(
           ...deterministicCheckAnnotationMeta(),
         })
       }
-      return finalize(telemetry, env, "errored", cache)
+      return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
     }
 
     // SIG-101/SIG-205: approval-readiness blockers can still force a
@@ -6894,7 +6906,7 @@ export async function handlePrReviewEnsemble(
           err: err instanceof Error ? err.message : String(err),
         }))
         telemetry.fellBackReason = "stale_head_recheck_failed"
-        return finalize(telemetry, env, "errored", cache)
+        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       }
     }
 
@@ -7027,7 +7039,7 @@ export async function handlePrReviewEnsemble(
           })
         }
         // Comment fallback ALSO failed — `errored` is the truth.
-        return finalize(telemetry, env, "errored", cache)
+        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       }
       await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
@@ -7311,7 +7323,7 @@ export async function handlePrReviewEnsemble(
             ...checkAnnotationMeta(allFindingAnnotations),
           })
         }
-        return finalize(telemetry, env, "errored", cache)
+        return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
       }
       await fallbackAffordance.persistReviewCounter()
       telemetry.submitted = true
@@ -7386,7 +7398,7 @@ export async function handlePrReviewEnsemble(
     // `failure` Check Run mapping renders a generic "Review
     // failed" title, which is accurate for this case — the on-
     // call team needs to look at telemetry to know what failed.
-    return finalize(telemetry, env, "errored", cache)
+    return finalize(telemetry, env, "errored", cache, deterministicErroredReviewMeta())
   } finally {
     clearTimeout(orchTimer)
     // ARC-283 Phase B1b — shadow comparison emit. Runs on EVERY

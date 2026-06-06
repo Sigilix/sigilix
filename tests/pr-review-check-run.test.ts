@@ -938,6 +938,35 @@ describe("SIG-171: deterministic Check annotations", () => {
     expect(batch.output.annotations).toEqual(deterministic)
   })
 
+  it("posts deterministic annotations on generic post-scan review failure", async () => {
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    mockCreateCheckRun.mockResolvedValue({ id: 7777 })
+    const env = makeEnv()
+    const handle = await startInProgressCheckRun({ env, ...baseArgs })
+
+    await completeCheckRun({
+      handle,
+      conclusion: "failure",
+      surface: "both",
+      reviewMeta: {
+        event: "REQUEST_CHANGES",
+        findingsCount: 0,
+        deterministicCheckAnnotations: deterministic,
+      },
+    })
+
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    const completion = mockUpdateCheckRun.mock.calls[0]![3] as {
+      conclusion: string
+      output: { title: string; summary: string }
+    }
+    expect(completion.conclusion).toBe("neutral")
+    expect(completion.output.title).toBe("Review failed")
+    expect(completion.output.summary).toContain("1 scanner diagnostic from deterministic analysis")
+    const batch = mockUpdateCheckRun.mock.calls[1]![3] as { output: { annotations: CheckRunAnnotation[] } }
+    expect(batch.output.annotations).toEqual(deterministic)
+  })
+
   it("does not post deterministic annotations on stale-head skip", async () => {
     mockUpdateCheckRun.mockResolvedValue(undefined)
     mockCreateCheckRun.mockResolvedValue({ id: 7777 })

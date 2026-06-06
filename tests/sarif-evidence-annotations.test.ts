@@ -48,6 +48,30 @@ describe("buildSarifCheckAnnotations", () => {
     ])
   })
 
+  it("uses host-stable codepoint sorting for paths and rules", () => {
+    const annotations = buildSarifCheckAnnotations([
+      F({ ruleId: "b", path: "src/a.ts", line: 1 }),
+      F({ ruleId: "A", path: "src/a.ts", line: 1 }),
+      F({ ruleId: "a", path: "Src/a.ts", line: 1 }),
+    ])
+
+    expect(annotations.map((a) => `${a.path}:${a.title}`)).toEqual([
+      "Src/a.ts:[SARIF warning] Semgrep: a",
+      "src/a.ts:[SARIF warning] Semgrep: A",
+      "src/a.ts:[SARIF warning] Semgrep: b",
+    ])
+  })
+
+  it("falls back to ruleId when ruleName is blank", () => {
+    const annotations = buildSarifCheckAnnotations([
+      F({ ruleId: "no-eval", ruleName: "   " }),
+    ])
+
+    expect(annotations[0]?.title).toBe("[SARIF warning] Semgrep: no-eval")
+    expect(annotations[0]?.message).toContain("Rule: no-eval")
+    expect(annotations[0]?.message).not.toContain("unknown-rule")
+  })
+
   it("drops path-only findings because GitHub Checks annotations need a line", () => {
     const annotations = buildSarifCheckAnnotations([
       F({ ruleId: "path-only", line: undefined }),

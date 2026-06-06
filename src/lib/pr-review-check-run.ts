@@ -724,10 +724,10 @@ export function renderOutputForConclusion(
     : ""
   const deterministicCount = reviewMeta?.deterministicCheckAnnotations?.length ?? 0
   const deterministicPhrase = deterministicCount > 0
-    ? `${deterministicCount} scanner ${deterministicCount === 1 ? "diagnostic" : "diagnostics"} from deterministic analysis`
+    ? `${deterministicCount} scanner ${deterministicCount === 1 ? "diagnostic" : "diagnostics"}`
     : ""
   const deterministicSuffix = deterministicCount > 0
-    ? ` · ${deterministicPhrase}`
+    ? ` · ${deterministicPhrase} from deterministic analysis`
     : ""
   switch (conclusion) {
     case "success":

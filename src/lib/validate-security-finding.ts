@@ -240,6 +240,7 @@ export type SecurityFindingDecision =
 export type SecurityDropReason =
   | "fabricated-evidence-id" // cited evidenceId doesn't resolve in the manifest
   | "evidence-out-of-range" // cited fact resolves but its line is >+/-10 away
+  | "evidence-class-mismatch" // SIG-325: cited/enriched fact's CWE bucket differs from the finding's claimed class (cross-class laundering)
   | "authz-none-without-justification" // NONE exemption without a body justification
   | "unsupported-scanner-covered" // sev>=4 in a scanner-covered bucket, no cwe + no auto-enrich match
   | "do-method-authz-trust-boundary" // SIG-141: authz finding on a DurableObject method — the binding is the trust boundary
@@ -306,11 +307,13 @@ export function evaluateScanFactDismissal(
  *     supplied").
  *   - evidenceId present (not NONE): must resolve in the manifest AND
  *     the fact's path must equal the finding's path AND the fact's
- *     line must be within +/-10 of the finding's line. Else reject.
+ *     line must be within +/-10 of the finding's line AND (SIG-325) the
+ *     fact's CWE bucket must not PROVABLY differ from the finding's
+ *     claimed class. Else reject (evidence-out-of-range / -class-mismatch).
  *   - evidenceId absent: try auto-enrich (a manifest fact at the same
- *     path within +/-10 lines). On match → keep + enrich. On no match:
- *     authz bucket with justification → keep; otherwise reject as
- *     unsupported-scanner-covered.
+ *     path within +/-10 lines whose class is not provably different —
+ *     SIG-325). On match → keep + enrich. On no match: authz bucket with
+ *     justification → keep; otherwise reject as unsupported-scanner-covered.
  */
 export function evaluateSecurityFinding(
   finding: PrReviewFinding,
@@ -357,7 +360,16 @@ export function evaluateSecurityFinding(
       // claims → non-linking. Hard reject (anti-fabrication + relevance).
       return { keep: false, reason: "evidence-out-of-range" }
     }
-    // Resolved + relevant. Enrich the cwe from the fact when the
+    // SIG-325: the cited fact must corroborate the finding's vulnerability
+    // CLASS, not merely sit at the same line. A CWE-22/CWE-918 claim citing a
+    // nearby CWE-798 secret-scan fact is laundering a fabricated mechanism
+    // through a real id — reject it (the finding then has no backing, so it
+    // falls to unsupported / the SIG-325 refutation-survival gate). Bucket-
+    // level so a same-family CWE relabel (SIG-282) still corroborates.
+    if (!factClassCompatible(fact, finding)) {
+      return { keep: false, reason: "evidence-class-mismatch" }
+    }
+    // Resolved + relevant + same class. Enrich the cwe from the fact when the
     // finding lacks one so downstream consumers see a bucket.
     if (!finding.cweId && fact.cwe) {
       return { keep: true, enrich: { evidenceId: fact.evidenceId, cweId: fact.cwe } }
@@ -398,6 +410,31 @@ function factMatchesFinding(fact: SecurityFact, finding: PrReviewFinding): boole
 }
 
 /**
+ * SIG-325: a fact CORROBORATES a finding's vulnerability CLASS unless we can
+ * PROVE the two belong to different security buckets. Returns false ONLY when
+ * BOTH the finding's bucket AND the fact's CWE bucket are known and differ —
+ * the laundering shape where e.g. a CWE-22 path-traversal claim borrows a
+ * nearby CWE-798 secret-scan fact to satisfy the evidence gate. When either
+ * side's bucket is unknown (the fact has no CWE, or carries a CVE/non-CWE id;
+ * or the finding has no usable cweId — the "model forgot the id" auto-enrich
+ * case) we cannot prove a mismatch, so we allow it. FN-safe: only PROVABLE
+ * cross-class corroboration is blocked.
+ *
+ * Granularity is the bucket, not the exact CWE id, which preserves SIG-282's
+ * allowance for the specialist to adopt a different CWE within the same family
+ * than the scanner proposed (e.g. a CWE-862 finding citing a CWE-863 fact —
+ * both authn-access-control — still corroborates).
+ */
+function factClassCompatible(fact: SecurityFact, finding: PrReviewFinding): boolean {
+  const findingBucket = deriveSecurityBucket(finding)
+  if (!findingBucket) return true
+  const factCwe = typeof fact.cwe === "string" ? fact.cwe.trim().toUpperCase() : ""
+  const factBucket = factCwe ? CWE_TO_BUCKET[factCwe] : undefined
+  if (!factBucket) return true
+  return factBucket === findingBucket
+}
+
+/**
  * Scan the manifest for the fact that best corroborates the finding for
  * the AUTO-ENRICH path (the model omitted the id). M1/Codex-M2 (review):
  * auto-enrich is stricter than an explicit citation because the model
@@ -410,6 +447,12 @@ function factMatchesFinding(fact: SecurityFact, finding: PrReviewFinding): boole
  *   - among line-bearing matches within +/-10, pick the CLOSEST line so
  *     a finding doesn't grab an unrelated nearby fact's id when a better
  *     match exists.
+ *   - SIG-325: skip facts whose CWE bucket is PROVABLY different from the
+ *     finding's claimed class. Otherwise a fabricated CWE-22/CWE-918 finding
+ *     auto-enriches against any nearby secret-scan (CWE-798) fact and looks
+ *     corroborated — the cross-class laundering hole. When the finding has no
+ *     usable cweId (the canonical "model forgot the id" case) its bucket is
+ *     unknown, so `factClassCompatible` allows the enrich as before.
  */
 function findEnrichingFact(
   finding: PrReviewFinding,
@@ -420,6 +463,7 @@ function findEnrichingFact(
   for (const fact of manifest.values()) {
     if (fact.path !== finding.path) continue
     if (fact.line === null) continue // skip path-only facts for auto-enrich
+    if (!factClassCompatible(fact, finding)) continue // SIG-325: no cross-class enrich
     const distance = Math.abs(fact.line - finding.line)
     if (distance <= EVIDENCE_LINE_TOLERANCE && distance < bestDistance) {
       best = fact

@@ -310,6 +310,51 @@ describe("evaluateSecurityFinding (pure FP-safe decision)", () => {
   })
 })
 
+describe("evaluateSecurityFinding — SIG-325 cross-class laundering", () => {
+  it("REJECTS an explicit citation whose fact is a DIFFERENT CWE bucket (CWE-22 finding citing a CWE-798 secret fact)", () => {
+    const r = evaluateSecurityFinding(
+      finding({ cweId: "CWE-22", evidenceId: "secret:generic:abc123abc123:17", line: 17 }),
+      manifestOf(fact({ evidenceId: "secret:generic:abc123abc123:17", cwe: "CWE-798", line: 17 })),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("evidence-class-mismatch")
+  })
+
+  it("does NOT auto-enrich a CWE-918 finding against a nearby CWE-798 fact (laundering closed → unsupported)", () => {
+    const r = evaluateSecurityFinding(
+      finding({ cweId: "CWE-918", evidenceId: undefined, line: 17 }),
+      manifestOf(fact({ evidenceId: "secret:generic:abc123abc123:17", cwe: "CWE-798", line: 17 })),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("unsupported-scanner-covered")
+  })
+
+  it("ALLOWS a same-bucket CWE relabel (CWE-862 finding citing a CWE-863 fact — both authn-access-control)", () => {
+    const r = evaluateSecurityFinding(
+      finding({ cweId: "CWE-862", evidenceId: "sarif:authz:abc123abc123:17", line: 17 }),
+      manifestOf(fact({ evidenceId: "sarif:authz:abc123abc123:17", cwe: "CWE-863", line: 17 })),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("ALLOWS a citation when the fact has no usable CWE bucket (cannot prove a mismatch → FN-safe)", () => {
+    const r = evaluateSecurityFinding(
+      finding({ cweId: "CWE-22", evidenceId: "depvuln:cve:abc123abc123:17", line: 17 }),
+      manifestOf(fact({ evidenceId: "depvuln:cve:abc123abc123:17", cwe: "CVE-2024-0001", line: 17 })),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("still auto-enriches a finding with NO cweId (the 'model forgot the id' case) against a real fact", () => {
+    const r = evaluateSecurityFinding(
+      finding({ cweId: undefined, evidenceId: undefined, line: 17 }),
+      manifestOf(fact({ evidenceId: "sarif:sqli:abc123abc123:17", cwe: "CWE-89", line: 17 })),
+    )
+    expect(r.keep).toBe(true)
+    if (r.keep) expect(r.enrich).toEqual({ evidenceId: "sarif:sqli:abc123abc123:17", cweId: "CWE-89" })
+  })
+})
+
 // ── Integration with validateForSubmission ──────────────────────
 
 function makeReviewable(path = "src/db.ts"): ReviewableMap {

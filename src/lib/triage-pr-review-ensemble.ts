@@ -166,7 +166,14 @@ import {
   type LogicRefutationDropReason,
 } from "./validate-logic-refutation"
 import {
+  evaluateRefutationSurvival,
+  parseRefutationSurvivalMode,
+  type RefutationSurvivalMode,
+  type RefutationSurvivalDropReason,
+} from "./validate-refutation-survival"
+import {
   evaluatePerfFinding,
+  perfFindingIsSelfOriginated,
   clampTrivialSyncIoSeverity,
   parsePerfValidatorMode,
   type PerfValidatorMode,
@@ -1695,7 +1702,7 @@ export async function handlePrReviewEnsemble(
     routerDecision: null,
     specialistVerdicts: [],
     synthesizer: null,
-    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
+    postValidation: { droppedForInvalidLine: 0, remappedInvalidLineToInline: 0, droppedForHallucination: 0, demotedScore1: 0, droppedForVaguePrefix: 0, droppedForUncitedTestingEvidence: 0, droppedForFailedValidation: 0, droppedForFailedTestValidation: 0, droppedForFailedLogicValidation: 0, droppedForFailedLogicRefutation: 0, droppedForFailedRefutationSurvival: 0, droppedForFailedPerfValidation: 0, droppedForFailedInlineGroundingValidation: 0, droppedForFailedAbsenceGroundingValidation: 0, droppedForFailedWindowBlindnessValidation: 0, droppedForFailedSecurityGroundingValidation: 0, droppedForFailedSecurityUsageValidation: 0 },
     retrievalCacheStats: null,
     tokenUsageByModel,
     startMs,
@@ -5009,6 +5016,30 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
+      // SIG-325: generalized refutation-survival gate. Default `off` in code;
+      // wrangler sets `shadow` so production counts/telemeters the would-demote
+      // (a sev>=4 self-originated security finding lacking a mechanism rationale)
+      // until the operator flips OPENCLAW_REFUTATION_SURVIVAL_MODE to "enforce".
+      // Reuses the `pr-review-finding-rejected-validation` event (`gate:
+      // "refutation-survival"`). `dropped` here = "demoted to body".
+      refutationSurvivalMode: parseRefutationSurvivalMode(env.OPENCLAW_REFUTATION_SURVIVAL_MODE),
+      onRefutationSurvivalFindingDropped: (finding, info) => {
+        console.log(JSON.stringify({
+          event: "pr-review-finding-rejected-validation",
+          gate: "refutation-survival",
+          lens: info.lens,
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          reason: info.reason,
+          dropped: info.dropped,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          cweId: finding.cweId ?? null,
+          evidenceId: finding.evidenceId ?? null,
+          category: finding.category,
+        }))
+        args.validationSink?.push({ kind: "gate-rejection", gate: "refutation-survival", reason: info.reason, dropped: info.dropped, category: finding.category })
+      },
       // SIG-110: thread perf evidence + mode. Evidence is the same
       // changed-line text + the roleHint:performance AST findings. Default
       // `shadow` — counts/telemeters the would-drop until the operator
@@ -5163,6 +5194,7 @@ export async function handlePrReviewEnsemble(
       droppedForFailedTestValidation: validated.droppedForFailedTestValidation,
       droppedForFailedLogicValidation: validated.droppedForFailedLogicValidation,
       droppedForFailedLogicRefutation: validated.droppedForFailedLogicRefutation,
+      droppedForFailedRefutationSurvival: validated.droppedForFailedRefutationSurvival,
       droppedForFailedPerfValidation: validated.droppedForFailedPerfValidation,
       droppedForFailedInlineGroundingValidation: validated.droppedForFailedInlineGroundingValidation,
       droppedForFailedAbsenceGroundingValidation: validated.droppedForFailedAbsenceGroundingValidation,
@@ -9205,6 +9237,12 @@ export interface ValidatedOutput {
    */
   droppedForFailedLogicRefutation: number
   /**
+   * SIG-325: count of sev>=4 self-originated findings (currently security with
+   * no resolving manifest evidenceId) the refutation-survival gate flagged for
+   * a missing mechanism rationale (would-demote shadow / actual-demote enforce).
+   */
+  droppedForFailedRefutationSurvival: number
+  /**
    * SIG-110: count of sev>=4 perf findings the evidence gate flagged
    * (unanchored perf claim, perf finding on an unchanged path, or missing
    * path). Shadow counts the would-drop; enforce drops. Surfaced to
@@ -9530,6 +9568,19 @@ function selectSourceEvidenceForBackfill(
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0
+}
+
+/**
+ * SIG-325: a security finding is SELF-ORIGINATED when no deterministic scanner
+ * fact backs it — its `evidenceId` is empty/missing, or "NONE" (the authz/IDOR
+ * exemption, which by definition no scanner detects). A finding carrying a real
+ * manifest id (cited, or auto-enriched by `evaluateSecurityFinding`) is tool-
+ * backed and covered by the SIG-108 evidence gate, so it is NOT re-gated by the
+ * refutation-survival backstop.
+ */
+function isSelfOriginatedSecurityFinding(finding: PrReviewFinding): boolean {
+  const eid = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
+  return eid.length === 0 || eid === "NONE"
 }
 
 const INLINE_ANCHOR_REPAIR_WINDOW = 12
@@ -9949,6 +10000,28 @@ export function validateForSubmission(args: {
     info: { reason: LogicRefutationDropReason; dropped: boolean },
   ) => void
   /**
+   * SIG-325: generalized refutation-survival gate mode. `off` (default): the
+   * gate doesn't run. `shadow`: count + telemeter the would-demote, keep inline.
+   * `enforce`: demote flagged findings to the body. Read from
+   * `OPENCLAW_REFUTATION_SURVIVAL_MODE` at the call site. Scoped to SELF-
+   * originated findings (security findings with no resolving manifest
+   * `evidenceId`, and performance findings with no co-located AST hit); a sev>=4
+   * such finding lacking an `independentAssessment` mechanism rationale is
+   * flagged. Logic is covered by its own SIG-308 gate. Ships dark.
+   */
+  refutationSurvivalMode?: RefutationSurvivalMode
+  /**
+   * SIG-325: telemetry callback fired once per finding the refutation-survival
+   * gate flagged (`dropped` distinguishes enforce from shadow; `lens` names the
+   * lens that triggered it). Lets the orchestrator log
+   * `pr-review-finding-rejected-validation` (gate:"refutation-survival") without
+   * coupling the pure validator to a logger.
+   */
+  onRefutationSurvivalFindingDropped?: (
+    finding: PrReviewFinding,
+    info: { reason: RefutationSurvivalDropReason; dropped: boolean; lens: string },
+  ) => void
+  /**
    * SIG-110: perf-finding evidence (added-line text per path + the
    * roleHint:performance AST findings). Threaded so `evaluatePerfFinding`
    * can anchor sev>=4 perf findings to the diff. Absent → the gate no-ops.
@@ -10131,7 +10204,9 @@ export function validateForSubmission(args: {
     logicValidatorMode = "shadow",
     onLogicFindingDropped,
     logicRefutationMode = "off",
+    refutationSurvivalMode = "off",
     onLogicRefutationFindingDropped,
+    onRefutationSurvivalFindingDropped,
     perfEvidence,
     perfValidatorMode = "shadow",
     addedLineTextByLine,
@@ -10185,6 +10260,7 @@ export function validateForSubmission(args: {
   let droppedForFailedTestValidation = 0
   let droppedForFailedLogicValidation = 0
   let droppedForFailedLogicRefutation = 0
+  let droppedForFailedRefutationSurvival = 0
   let droppedForFailedPerfValidation = 0
   let droppedForFailedInlineGroundingValidation = 0
   let droppedForFailedAbsenceGroundingValidation = 0
@@ -10442,6 +10518,40 @@ export function validateForSubmission(args: {
       }
     }
 
+    // SIG-325: refutation-survival backstop for SELF-ORIGINATED security
+    // findings — the security analog of the SIG-308 logic gate. A sev>=4
+    // security finding with no resolving manifest evidenceId (empty or "NONE")
+    // is self-originated: no scanner proposed it, so the SIG-282 candidate-
+    // verification path never engaged. It must articulate its mechanism
+    // (source→sink→type) in `independentAssessment` or it reads as a CWE label
+    // with a confabulated mechanism (the SSRF / path-traversal / prototype-
+    // pollution hallucination class). Runs AFTER the SIG-108 evidence gate so an
+    // auto-enriched evidenceId already marks a finding tool-backed (and thus
+    // exempt). Same shadow-first + demote-to-body (not hard-drop) FN-safety as
+    // the security evidence gate; `off` skips entirely.
+    if (
+      refutationSurvivalMode !== "off" &&
+      sourceRolesInclude(sourceIds, "security") &&
+      isSelfOriginatedSecurityFinding(f)
+    ) {
+      const decision = evaluateRefutationSurvival(f)
+      if (!decision.keep) {
+        const demoted = refutationSurvivalMode === "enforce"
+        droppedForFailedRefutationSurvival++
+        onRefutationSurvivalFindingDropped?.(f, {
+          reason: decision.reason,
+          dropped: demoted,
+          lens: "security",
+        })
+        if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "refutation-survival" })
+          unanchoredFindings.push(f)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
+      }
+    }
+
     // SIG-109: logic evidence gate. Applies ONLY to findings whose
     // derived role set includes `logic` (from the `logic-` sourceFindingId
     // prefix, NOT `finding.category` alone — mirrors the SIG-108 security
@@ -10496,6 +10606,39 @@ export function validateForSubmission(args: {
         onPerfFindingDropped?.(f, { reason: perfDecision.reason, dropped })
         if (dropped) continue
         // shadow mode: fall through and keep the finding.
+      }
+    }
+
+    // SIG-325: refutation-survival backstop for SELF-ORIGINATED perf findings.
+    // A sev>=4 perf finding with no co-located AST perf hit (kept only via a
+    // changed-token match) is the model's own assertion — no deterministic
+    // analyzer flagged it. It must justify why the cost is real (the changed
+    // hot path under load) in `independentAssessment` or it reads as a verdict
+    // without backing (the PR #18 "recomputes HMAC — no caching" over-claim
+    // class). Runs AFTER the SIG-110 evidence gate so an AST-backed perf finding
+    // is already marked tool-backed (and thus exempt). Same shadow-first +
+    // demote-to-body (not hard-drop) FN-safety; `off` skips entirely.
+    if (
+      refutationSurvivalMode !== "off" &&
+      perfEvidence &&
+      sourceRolesInclude(sourceIds, "performance") &&
+      perfFindingIsSelfOriginated(f, perfEvidence)
+    ) {
+      const decision = evaluateRefutationSurvival(f)
+      if (!decision.keep) {
+        const demoted = refutationSurvivalMode === "enforce"
+        droppedForFailedRefutationSurvival++
+        onRefutationSurvivalFindingDropped?.(f, {
+          reason: decision.reason,
+          dropped: demoted,
+          lens: "performance",
+        })
+        if (demoted) {
+          if (trustLedgerEnabled) annotateFindingTrust(f, { surface: "body", demoteReason: "refutation-survival" })
+          unanchoredFindings.push(f)
+          continue
+        }
+        // shadow mode: fall through and keep the finding inline.
       }
     }
 
@@ -10801,6 +10944,7 @@ export function validateForSubmission(args: {
     droppedForFailedTestValidation,
     droppedForFailedLogicValidation,
     droppedForFailedLogicRefutation,
+    droppedForFailedRefutationSurvival,
     droppedForFailedPerfValidation,
     droppedForFailedInlineGroundingValidation,
     droppedForFailedAbsenceGroundingValidation,
@@ -10984,6 +11128,10 @@ interface EnsembleTelemetry {
     /** SIG-308: count of sev>=4 logic findings the refutation backstop flagged
      * for missing a survival rationale (would-drop shadow / actual-drop enforce). */
     droppedForFailedLogicRefutation: number
+    /** SIG-325: count of sev>=4 self-originated findings the refutation-survival
+     * gate flagged for a missing mechanism rationale (would-demote shadow /
+     * actual-demote enforce). */
+    droppedForFailedRefutationSurvival: number
     /** SIG-110: count of sev>=4 perf findings the evidence gate flagged
      * (would-drop in shadow mode, actual-drop in enforce mode). */
     droppedForFailedPerfValidation: number

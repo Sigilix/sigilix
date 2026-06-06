@@ -242,6 +242,7 @@ export interface FindingTrust {
     | "do-race"
     | "tests-coverage"
     | "window-blindness"
+    | "refutation-survival"
 }
 
 export interface PrReviewFinding {

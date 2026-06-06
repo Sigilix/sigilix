@@ -550,6 +550,16 @@ export interface Env {
   // via `wrangler secret put OPENCLAW_LOGIC_REFUTATION_MODE enforce`.
   OPENCLAW_LOGIC_REFUTATION_MODE?: string
 
+  // SIG-325: generalized refutation-survival gate mode. "off" (default in code;
+  // "shadow" in wrangler) extends the SIG-308 refute-first discipline to
+  // self-originated findings on OTHER lenses — a security CWE claim with no
+  // resolving manifest evidenceId, or a performance finding with no co-located
+  // AST hit: a sev>=4 such finding lacking an `independentAssessment` mechanism
+  // rationale is flagged. "shadow" counts + telemeters the would-demote;
+  // "enforce" demotes to the review body. Flip via
+  // `wrangler secret put OPENCLAW_REFUTATION_SURVIVAL_MODE enforce`.
+  OPENCLAW_REFUTATION_SURVIVAL_MODE?: string
+
   // SIG-110: perf-finding evidence gate mode. "shadow" (default) counts +
   // telemeters the would-drop; "enforce" drops unanchored sev>=4 perf
   // findings. Operator flips via

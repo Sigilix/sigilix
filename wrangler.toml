@@ -579,6 +579,19 @@ OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE = "shadow"
 # `independentAssessment`) before "enforce". Rollback: set "off".
 OPENCLAW_LOGIC_REFUTATION_MODE = "shadow"
 
+# SIG-325: the GENERALIZED refutation-survival gate (evaluateRefutationSurvival).
+# Extends the SIG-308 refute-first discipline to SELF-ORIGINATED findings on
+# other lenses — a security CWE claim with no resolving manifest evidenceId
+# (empty or "NONE"), the SSRF / path-traversal / prototype-pollution
+# hallucination class no scanner proposed; and a performance finding with no
+# co-located AST hit (the "no caching" over-claim class). Lands at "shadow" to START
+# measurement: the gate runs + emits `pr-review-finding-rejected-validation`
+# (gate:"refutation-survival") on every review but KEEPS every finding inline.
+# Read the would-demote rate (while the Phase 1 prompt trains the model to fill
+# `independentAssessment` with the confirmed source→sink→type) before "enforce"
+# (which DEMOTES to the body, never hard-drops). Rollback: set "off".
+OPENCLAW_REFUTATION_SURVIVAL_MODE = "shadow"
+
 # SIG-108: the security EVIDENCE gate (evaluateSecurityFinding). A sev>=4
 # security finding citing a fabricated/absent/out-of-range scanner evidenceId
 # is a hallucination. "shadow" (the prior default-when-unset) counts the

@@ -111,7 +111,7 @@ function securityProvenance(sourceId = "security-0"): SynthesizerProvenance {
 // A manifest with one resolving fact at the finding's path/line/CWE — so a
 // non-empty evidenceId that matches it counts as TOOL-BACKED (CR2).
 function secManifest(id: string, overrides: Partial<SecurityFact> = {}): Map<string, SecurityFact> {
-  const fact = {
+  const fact: SecurityFact = {
     evidenceId: id,
     tool: "sarif",
     path: "src/parse/ndjson.ts",
@@ -119,7 +119,7 @@ function secManifest(id: string, overrides: Partial<SecurityFact> = {}): Map<str
     cwe: "CWE-918",
     summary: "ssrf candidate",
     ...overrides,
-  } as unknown as SecurityFact
+  }
   return new Map([[id, fact]])
 }
 
@@ -276,6 +276,26 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
 
     expect(result.droppedForFailedRefutationSurvival).toBe(1)
     expect(onDrop.mock.calls[0]![1]).toMatchObject({ dropped: true, lens: "security" })
+  })
+
+  it("CR-B: KEEPS a pure-security finding carrying a synth-authored rationale no source had (no clobber-to-empty)", () => {
+    // The security sources omit independentAssessment, but the synthesizer
+    // authored a real security mechanism rationale on the finding. With every
+    // source same-lens (security-0 only), there is no cross-lens ambiguity, so
+    // the gate must trust f.independentAssessment rather than clobbering it to ""
+    // and demoting a valid sev>=4 finding. Before the fix this dropped to 1.
+    const onDrop = vi.fn()
+    const result = run({
+      finding: finding({
+        independentAssessment: "source=req header → sink=fetch(url) → type=string; allowlist absent on the changed path.",
+      }),
+      mode: "enforce",
+      onDrop, // no sourceRationale → no security source carries the rationale
+    })
+
+    expect(result.droppedForFailedRefutationSurvival).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(onDrop).not.toHaveBeenCalled()
   })
 })
 

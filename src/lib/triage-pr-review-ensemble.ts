@@ -9609,14 +9609,26 @@ function isSelfOriginatedSecurityFinding(
  * source id, mirroring `buildSourceFindingRationaleById`.
  */
 function resolveLensRationale(
+  current: string | undefined,
   sourceIds: readonly string[],
   rationaleById: ReadonlyMap<string, string>,
+  lens: SpecialistRole,
 ): string {
   for (const id of sourceIds) {
     const r = rationaleById.get(id)
     if (typeof r === "string" && r.trim().length > 0) return r.trim()
   }
-  return ""
+  // CodeRabbit (PR #364, round 2): when NO same-lens source carried a rationale,
+  // fall back to the synthesized finding's own `independentAssessment` — but ONLY
+  // when there is no cross-lens ambiguity (every source id is this lens). Logic
+  // contamination reaches `f.independentAssessment` solely via the logic-scoped
+  // global backfill (`backfillIndependentAssessmentFromSources`), which requires a
+  // `logic-*` id in sourceIds — i.e. always a mixed-lens merge. So restricting the
+  // fallback to same-lens-only preserves a synth-authored same-lens rationale
+  // (never demote a valid finding) while still rejecting a logic rationale
+  // standing in for the security/perf gate.
+  const mixedLens = sourceIds.some((id) => !id.startsWith(`${lens}-`))
+  return !mixedLens && typeof current === "string" ? current.trim() : ""
 }
 
 const INLINE_ANCHOR_REPAIR_WINDOW = 12
@@ -10581,7 +10593,12 @@ export function validateForSubmission(args: {
       // rationale is restored from the security sources.
       const decision = evaluateRefutationSurvival({
         ...f,
-        independentAssessment: resolveLensRationale(sourceIds, sourceRationaleByIdSecurity),
+        independentAssessment: resolveLensRationale(
+          f.independentAssessment,
+          sourceIds,
+          sourceRationaleByIdSecurity,
+          "security",
+        ),
       })
       if (!decision.keep) {
         const demoted = refutationSurvivalMode === "enforce"
@@ -10676,7 +10693,12 @@ export function validateForSubmission(args: {
       // logic-scoped globally-backfilled field.
       const decision = evaluateRefutationSurvival({
         ...f,
-        independentAssessment: resolveLensRationale(sourceIds, sourceRationaleByIdPerf),
+        independentAssessment: resolveLensRationale(
+          f.independentAssessment,
+          sourceIds,
+          sourceRationaleByIdPerf,
+          "performance",
+        ),
       })
       if (!decision.keep) {
         const demoted = refutationSurvivalMode === "enforce"

@@ -1099,7 +1099,7 @@ describe("Phase 4a.3 — timeout schedule", () => {
 })
 
 describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
-  it("logic specialist runs deepseek-v4-flash:cloud primary, retries:0, with a qwen3-coder-next cross-provider fallback (SIG-287 think:false + fast-fallback)", () => {
+  it("logic specialist runs deepseek-v4-pro:cloud primary, retries:0, with a qwen3-coder-next cross-provider fallback (think:false + fast-fallback)", () => {
     // SIG-287 (2026-05-30): the prior "trim to 1-attempt-only, fallback:null"
     // (PR #188) was built on the wrong diagnosis ("prompt-driven, not model-
     // driven"). The TRUE root cause was a missing `think:false` — the reasoning
@@ -1109,7 +1109,10 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     // fast (120s) and qwen3-coder-next rescues it. retries:0 (a same-model
     // retry of a stalled deepseek would just stall again — the fallback is the
     // resilience). Cross-provider so the fallback fails independently.
-    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-flash:cloud")
+    // 2026-06-05: primary SWAPPED flash→pro. With think:false v4-pro is also
+    // fast (~6-12s), and the subtle-logic recall ruler (K=12 real-path) shows
+    // v4-pro + FP-discipline at recall 93% / FP 25% vs flash-tuned 86% / 31%.
+    expect(SPECIALIST_CONFIGS.logic.primary).toBe("deepseek-v4-pro:cloud")
     expect(SPECIALIST_CONFIGS.logic.retries).toBe(0)
     expect(SPECIALIST_CONFIGS.logic.fallback).toBe("qwen3-coder-next:cloud")
     const primaryFamily = SPECIALIST_CONFIGS.logic.primary.split("-")[0]
@@ -1136,16 +1139,16 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
   })
 
-  it("tests specialist swaps to minimax-m2.5:cloud + deepseek-v4-pro fallback", () => {
-    // SIG-234: was `deepseek-v4-flash:cloud` (collided with security).
-    // MiniMax M2.5 is an agentic-code / test-workflow model per
-    // Codex's ARC-292 analysis.
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m2.5:cloud")
+  it("tests specialist runs minimax-m3:cloud + deepseek-v4-pro fallback", () => {
+    // SIG-234: was `deepseek-v4-flash:cloud` (collided with security), then
+    // MiniMax M2.5 (ARC-292). 2026-06-05: upgraded M2.5→M3 (founder-tested,
+    // Turbo-probed available + format-clean).
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m3:cloud")
     expect(SPECIALIST_CONFIGS.tests.fallback).toBe("deepseek-v4-pro:cloud")
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
   })
 
-  it("primaries are distinct EXCEPT security deliberately shares logic's reasoner (post-pr/07)", () => {
+  it("all five primaries are distinct again after the logic→v4-pro swap (2026-06-05)", () => {
     const primaries = [
       SPECIALIST_CONFIGS.logic.primary,
       SPECIALIST_CONFIGS.security.primary,
@@ -1153,12 +1156,17 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
       SPECIALIST_CONFIGS.tests.primary,
       SYNTHESIZER_CONFIG.primary,
     ]
-    // The original SIG-234 "4+1-unique" rule was relaxed after pr/07: security
-    // intentionally reuses logic's reasoning model (deepseek-v4-flash) because
-    // authorization needs reasoning and recall beats model-diversity. The other
-    // three specialist primaries + the synth remain distinct.
-    expect(SPECIALIST_CONFIGS.security.primary).toBe(SPECIALIST_CONFIGS.logic.primary)
-    expect(new Set(primaries).size).toBe(4)
+    // History: SIG-234 required 4+1-unique primaries; pr/07 relaxed it so
+    // security REUSED logic's reasoner (both deepseek-v4-flash) — "authz needs
+    // reasoning, recall beats model-diversity". The 2026-06-05 logic→v4-pro swap
+    // (a measured logic-only believability change) un-shares them: logic is now
+    // deepseek-v4-pro and security STAYS on deepseek-v4-flash (security-on-pro is
+    // a deliberately-deferred, separately-measured follow-up). Net effect — all
+    // five primaries are distinct again. v4-pro remains security's + tests'
+    // FALLBACK; primary-uniqueness does not constrain fallbacks.
+    expect(SPECIALIST_CONFIGS.security.primary).not.toBe(SPECIALIST_CONFIGS.logic.primary)
+    expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek-v4-flash:cloud")
+    expect(new Set(primaries).size).toBe(5)
   })
 
   it("synthesizer uses gpt-oss:120b primary + DeepSeek-flash cross-provider fallback (SIG-234)", () => {

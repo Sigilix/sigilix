@@ -97,5 +97,9 @@ OLLAMA_API_KEY="$(grep -E '^OLLAMA_API_KEY' .dev.vars | cut -d= -f2-)" npm run l
   stay green without it — only run them when you're measuring model behavior.
 - This is the **real prod path** (Ollama Turbo). Prefer it over any local proxy / LAN-Ollama
   workaround — a Turbo key works from anywhere; a private LAN box doesn't.
-- Re-baseline a model/prompt change with the **K-repeated** ruler (`LOGIC_RECALL_REPEATS=4`):
-  the specialists are non-deterministic run-to-run, so a single pass is noise.
+- Re-baseline a model/prompt change with the **K-repeated** ruler (`LOGIC_RECALL_REPEATS=12`):
+  the specialists are non-deterministic run-to-run, so a single pass is noise. K=4 is **also**
+  too noisy — two back-to-back K=4 runs on the *same* prompt swung ~8pp recall / ~12pp FP, so a
+  tune smaller than that is invisible under it. Use **K≥12** for any number you'll act on, and
+  trust only the per-case rates that agree across runs (a 0/K or K/K is signal; a 5/K-vs-9/K
+  swing is noise). A genuinely-errored case is excluded from the mean (it never had a verdict).

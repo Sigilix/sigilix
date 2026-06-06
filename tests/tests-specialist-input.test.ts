@@ -477,8 +477,8 @@ describe("SPECIALIST_PROMPTS.tests grounding", () => {
   })
 
   it("test-specialist primary model is set (regression guard, SIG-234 lineup)", () => {
-    // SIG-234 (2026-05-26): swapped from deepseek-v4-flash to
-    // minimax-m2.5 as part of the 4+1 unique-primary lineup.
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m2.5:cloud")
+    // SIG-234 (2026-05-26): swapped from deepseek-v4-flash to minimax-m2.5
+    // as part of the 4+1 unique-primary lineup. 2026-06-05: upgraded m2.5→m3.
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m3:cloud")
   })
 })

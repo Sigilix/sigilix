@@ -106,6 +106,32 @@
       "why": "Concurrency bug, LLM-only, anchored to `cache.has(key)` / `cache.set` / the `await` on changed lines. KEEP."
     },
     {
+      "id": "good-empty-catch-swallows-then-commits",
+      "situation": "Added lines do `try { await reserveStock(sku, qty) } catch (e) {}` and then, AFTER the try, `return { reserved: true }` — an empty catch, and the reservation is reported successful even when `reserveStock` threw.",
+      "emit": true,
+      "finding": {
+        "path": "src/inventory/reserve.ts",
+        "category": "logic",
+        "score": 5,
+        "headline": "Empty catch swallows the `reserveStock` failure, then `{ reserved: true }` returns anyway",
+        "body": "`catch (e) {}` discards a failed `reserveStock`, and the function returns `{ reserved: true }` after the try regardless — callers treat unreserved stock as reserved. Rethrow, or return success only inside the try after a successful reserve."
+      },
+      "why": "EMIT — both halves of the swallowed-error shape are present and anchored: the catch is EMPTY (suppresses) AND the success commit (`return { reserved: true }`) runs after the try regardless of failure. KEEP. (Contrast the rethrow SKIP below, where the catch propagates.)"
+    },
+    {
+      "id": "good-floating-promise-unawaited-io",
+      "situation": "An async handler calls `auditLog.record(event)` (an async I/O call) with NO `await` and NO `return`, then immediately `return res.json({ ok: true })`.",
+      "emit": true,
+      "finding": {
+        "path": "src/handlers/submit.ts",
+        "category": "logic",
+        "score": 4,
+        "headline": "`auditLog.record(event)` is not awaited — the write can outlive the response and its rejection is unhandled",
+        "body": "`auditLog.record(event)` returns a promise that is neither awaited nor returned, yet the handler returns `res.json({ ok: true })` immediately. The write may not finish before the worker is recycled, and a rejection has no handler. Await it (or explicitly `void`-handle with a catch) before returning success."
+      },
+      "why": "EMIT — a floating promise from an async I/O call followed by an unconditional success return. No scanner detects it; anchored to the `auditLog.record(event)` call on a changed line. This is the high-value logic core. KEEP."
+    },
+    {
       "id": "bad-vague-might-be-buggy",
       "situation": "A diff touches a parser; the finding says the change 'could introduce subtle bugs' without naming any symbol, line, or behavior.",
       "emit": false,
@@ -194,6 +220,66 @@
         "mitigation": "Math.min(parsed, MAX_RUNS_WINDOW_HOURS) clamps hours to 2160 before the multiply (product ~7.8e9, far under Number.MAX_SAFE_INTEGER); Number.isFinite(parsed) && parsed > 0 rules out NaN/Infinity"
       },
       "why": "SKIP — refuted by an in-code mitigation. The `Math.min(parsed, 2160)` clamp caps the product far under `Number.MAX_SAFE_INTEGER` and the `Number.isFinite` guard rules out NaN/Infinity. A concern your own reasoning concludes is 'theoretical' or 'already clamped' is a CLEAR: record it in `clearedLogicCandidates` quoting the `Math.min(...)` mitigation, do NOT emit a finding. This is the exact self-refuting-finding FP (PR #12 `sinceMs`) that SIG-308 targets."
+    },
+    {
+      "id": "skip-rethrow-is-not-swallow",
+      "situation": "Added lines wrap a send in `try { await notifyShipped(order) } catch (e) { metrics.inc(\"notify.fail\"); throw e }` — the catch records a metric and RE-THROWS; nothing after the try assumes success.",
+      "emit": false,
+      "cleared": {
+        "path": "src/notify/shipped.ts",
+        "line": 12,
+        "hypothesis": "the catch swallows a failed notifyShipped so the failure is hidden",
+        "mitigation": "the catch re-throws (`throw e`) after the metric, so the failure propagates to the caller — it is not suppressed"
+      },
+      "why": "SKIP — a catch that re-throws is NOT swallowing. This FP fires when a reviewer sees `try/catch` around an I/O call and assumes suppression without reading the `throw e`. Both halves are required for a swallow (suppress + commit-anyway); here neither holds. Record a `clearedLogicCandidate` quoting `throw e`; do not emit."
+    },
+    {
+      "id": "skip-idempotency-key-present",
+      "situation": "A retryable queue consumer calls `mailer.send(msg, { dedupKey: msg.id })` — the send passes a dedup key derived from the message id.",
+      "emit": false,
+      "cleared": {
+        "path": "src/queue/consumer.ts",
+        "line": 22,
+        "hypothesis": "a redelivered message double-sends the email",
+        "mitigation": "the send passes `{ dedupKey: msg.id }` — a redelivery with the same id is deduplicated by the mailer, so the effect runs at most once"
+      },
+      "why": "SKIP — a retryable side effect that passes a VISIBLE dedup/idempotency key is idempotent by design. The FP fires when a reviewer sees a send in a consumer and cries double-send without reading the key. Record a `clearedLogicCandidate` quoting `dedupKey`; do not emit. (A send/charge/enqueue with NO such key or dedup lookup in sight IS a real bug — only a present, quotable key clears it.)"
+    },
+    {
+      "id": "skip-early-return-guards-the-tail",
+      "situation": "Added middleware: `if (!allowed) { return res.status(429).end() }` and on the NEXT line `handler(req, res)`. A reviewer flags `handler` runs unconditionally after the 429 (double response / guard bypass).",
+      "emit": false,
+      "cleared": {
+        "path": "src/middleware/rate-limit.ts",
+        "line": 9,
+        "hypothesis": "handler runs unconditionally after the 429 is sent, causing a double response / bypassing the guard",
+        "mitigation": "the guard branch ends in `return res.status(429).end()` — the early return means the tail line only runs on the allowed path; it is the else-path, not unconditional"
+      },
+      "why": "SKIP — before flagging that a tail call (`next()`, a commit, a success return, a handler) 'runs unconditionally' or 'after the error response', look for an early `return`/`throw` inside the error branch. An early `return`/`throw` IS the guard: the code after the `if` is the else-path. This is a control-flow misread — quote the `return` in a `clearedLogicCandidate`, do not emit. (Only a branch that sends the error and then FALLS THROUGH with no return/throw is the real double-response bug.)"
+    },
+    {
+      "id": "skip-default-guards-downstream",
+      "situation": "Added `const name = String(input.name ?? \"anonymous\")` then `greet(name)`. A reviewer flags `String(undefined)` yields the literal \"undefined\" / a NaN / an empty-value bug.",
+      "emit": false,
+      "cleared": {
+        "path": "src/greet.ts",
+        "line": 3,
+        "hypothesis": "String(input.name) is \"undefined\" when input.name is missing, corrupting downstream use",
+        "mitigation": "`?? \"anonymous\"` (a nullish-coalescing default) handles the null/undefined branch BEFORE String() runs, so String(undefined) never occurs"
+      },
+      "why": "SKIP — a nullish-coalescing default (`?? d`) or an explicit null/undefined check applied to a value before it is used covers the null/undefined branch, so do not claim a downstream `String(undefined)` / NaN bug past it; quote the `?? d` in a `clearedLogicCandidate`. CRITICAL DISTINCTION — this clears `??` ONLY, NOT `||`: `x || d` clobbers EVERY falsy value (0, '', false, NaN), so `count || 10` / `config.retries || 3` silently replaces a VALID 0/''/false with the default — that is the real falsy-zero BUG and you MUST still flag it whenever x can legitimately be 0/''/false. (A raw use with NO null-guard at all is also in scope.)"
+    },
+    {
+      "id": "skip-scope-beyond-the-diff",
+      "situation": "A diff adds a `maxLength` check to the `title` field of a form validator. A reviewer flags that the validator 'does not also check the unrelated, untouched `description` and `tags` fields.'",
+      "emit": false,
+      "cleared": {
+        "path": "src/forms/validate.ts",
+        "line": 14,
+        "hypothesis": "the validator fails to check the description and tags fields",
+        "mitigation": "the diff added a check to the one field it touched; description/tags are pre-existing untouched fields, not a defect this change introduced"
+      },
+      "why": "SKIP — demanding handling for inputs or branches the diff did NOT add or change is a scope-expansion wishlist, not a defect in the changed code; assume untouched behavior is intentional. IMPORTANT — this is ONLY about UNTOUCHED paths: a guard or precondition that is MISSING on the path the diff DID add/change IS in scope and you MUST flag it. A newly-added branch that performs a state change / write / refund WITHOUT a required precondition the operation needs (e.g. a new refund path that never checks the order was paid) is a real introduced bug — flag it; do not mistake it for scope-creep."
     }
   ]
 }

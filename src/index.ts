@@ -92,7 +92,11 @@ import {
 import { runIndexReconciliation } from "./lib/index-reconciliation"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
-import { captureReviewFeedback } from "./lib/review-memory/capture"
+import {
+  captureDismissedReviewFeedback,
+  captureReviewFeedback,
+  captureTopLevelReviewFeedback,
+} from "./lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
 import {
   postDraftPrSkipNotice,
@@ -1205,6 +1209,9 @@ interface GitHubWebhookPayload {
     event?: string
   }
   review?: {
+    id?: number
+    body?: string | null
+    commit_id?: string | null
     state?: string
     user?: { login?: string }
   }
@@ -3417,6 +3424,37 @@ async function handleGitHubWebhook(
     if (!payload.issue?.pull_request) {
       return new Response("skip non-PR issue_comment\n", { status: 200 })
     }
+    const reviewMemoryComment = payload.comment
+    const reviewMemoryPrNumber = payload.issue.number
+    if (
+      reviewMemoryComment &&
+      typeof reviewMemoryComment.id === "number" &&
+      typeof reviewMemoryComment.body === "string" &&
+      typeof reviewMemoryPrNumber === "number"
+    ) {
+      const reviewMemoryRepoId =
+        typeof payload.repository?.id === "number" &&
+        Number.isInteger(payload.repository.id) &&
+        payload.repository.id > 0
+          ? payload.repository.id
+          : undefined
+      ctx.waitUntil(
+        dispatchTopLevelReviewMemoryCapture({
+          env,
+          owner,
+          repo,
+          prNumber: reviewMemoryPrNumber,
+          installationId,
+          comment: {
+            id: reviewMemoryComment.id,
+            body: reviewMemoryComment.body,
+          },
+          ...(reviewMemoryRepoId !== undefined
+            ? { repoId: reviewMemoryRepoId }
+            : {}),
+        }),
+      )
+    }
     return queueGithubMention({
       env,
       ctx,
@@ -3427,6 +3465,48 @@ async function handleGitHubWebhook(
       surface: "issue",
       prNumber: payload.issue.number,
     })
+  }
+
+  // SIG-185: formal review dismissal. Treat as a stale precision signal only
+  // when the dismissed Sigilix review is mappable to finding fingerprints and
+  // was posted against an older commit than the current PR head.
+  if (event === "pull_request_review") {
+    if (payload.action !== "dismissed") {
+      return new Response("skip pull_request_review action\n", { status: 200 })
+    }
+    const reviewMemoryReview = payload.review
+    const reviewMemoryPrNumber = payload.pull_request?.number
+    const headSha = payload.pull_request?.head?.sha
+    if (
+      reviewMemoryReview &&
+      typeof reviewMemoryReview.id === "number" &&
+      typeof reviewMemoryReview.body === "string" &&
+      typeof reviewMemoryPrNumber === "number" &&
+      typeof headSha === "string" &&
+      headSha.length > 0
+    ) {
+      ctx.waitUntil(
+        dispatchDismissedReviewMemoryCapture({
+          env,
+          owner,
+          repo,
+          prNumber: reviewMemoryPrNumber,
+          installationId,
+          review: {
+            id: reviewMemoryReview.id,
+            body: reviewMemoryReview.body,
+            ...(typeof reviewMemoryReview.commit_id === "string"
+              ? { commit_id: reviewMemoryReview.commit_id }
+              : {}),
+            ...(reviewMemoryReview.user?.login !== undefined
+              ? { user: { login: reviewMemoryReview.user.login } }
+              : {}),
+          },
+          headSha,
+        }),
+      )
+    }
+    return new Response("queued review dismissal capture\n", { status: 202 })
   }
 
   // GitHub @-mention reply — inline PR review comment thread.
@@ -3603,6 +3683,89 @@ async function dispatchReviewMemoryCapture(args: {
     console.log(JSON.stringify({
       event: "review-memory-capture-dispatch-failed",
       owner, repo, prNumber, commentId: comment.id,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+}
+
+async function dispatchTopLevelReviewMemoryCapture(args: {
+  env: Env
+  owner: string
+  repo: string
+  prNumber: number
+  installationId: number
+  comment: { id: number; body: string }
+  repoId?: number
+}): Promise<void> {
+  const { env, owner, repo, prNumber, installationId, comment, repoId } = args
+  try {
+    if (env.OPENCLAW_REVIEW_MEMORY_CAPTURE !== "on") return
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, "HEAD")
+    const config = resolveReviewMemoryConfig(sigilixConfig)
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      comment,
+      config,
+      ...(repoId !== undefined ? { repoId } : {}),
+    })
+  } catch (err) {
+    console.log(JSON.stringify({
+      event: "review-memory-capture-dispatch-failed",
+      owner, repo, prNumber, commentId: comment.id,
+      signal_source: "top-level-explicit",
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+}
+
+async function dispatchDismissedReviewMemoryCapture(args: {
+  env: Env
+  owner: string
+  repo: string
+  prNumber: number
+  installationId: number
+  review: { id: number; body: string; commit_id?: string; user?: { login?: string } }
+  headSha: string
+}): Promise<void> {
+  const { env, owner, repo, prNumber, installationId, review, headSha } = args
+  try {
+    if (env.OPENCLAW_REVIEW_MEMORY_CAPTURE !== "on") return
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, "HEAD")
+    const config = resolveReviewMemoryConfig(sigilixConfig)
+    await captureDismissedReviewFeedback({
+      env,
+      owner,
+      repo,
+      prNumber,
+      review,
+      headSha,
+      config,
+    })
+  } catch (err) {
+    console.log(JSON.stringify({
+      event: "review-memory-capture-dispatch-failed",
+      owner, repo, prNumber, commentId: review.id,
+      signal_source: "review-dismissed-stale",
       err: err instanceof Error ? err.message : String(err),
     }))
   }

@@ -66,9 +66,9 @@ the review-memory `shadow → enforce` flag so the signal bakes before a flip.
 
 ## Outcome sources today
 
-- **dismissed** — `@sigilix dismiss <reason>` / model concede (`github-mention.ts`), pattern-keyed on the finding fingerprint.
-- **stale** — a dismissal whose SIG-217 decay window lapsed (`decayExpired`), relaxing the pattern.
-- **accepted** — exposed via `recordOutcome(..., "accepted")`; capture is **SIG-185** (reactions / resolved threads / merged-survival).
+- **dismissed** — `@sigilix dismiss <reason>` / model concede (`github-mention.ts`) and SIG-185 verified inline/top-level feedback capture, pattern-keyed on the finding fingerprint.
+- **stale** — a dismissal whose SIG-217 decay window lapsed (`decayExpired`) or a SIG-185 `pull_request_review.dismissed` event with commit-sha proof that the dismissed Sigilix review is stale, relaxing the pattern.
+- **accepted** — SIG-185 verified inline/top-level feedback capture from narrow accepted text (`good catch`, `fixed`, `addressed`, etc.).
 
 ## Integration points
 

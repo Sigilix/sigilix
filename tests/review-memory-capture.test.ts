@@ -1,7 +1,11 @@
 // ARC-189 — Capture pipeline tests (Task 9).
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
-import { captureReviewFeedback } from "../src/lib/review-memory/capture"
+import {
+  captureDismissedReviewFeedback,
+  captureReviewFeedback,
+  captureTopLevelReviewFeedback,
+} from "../src/lib/review-memory/capture"
 import { buildKey } from "../src/lib/review-memory/storage"
 import type { Env } from "../src/index"
 import type { GitHubClient } from "../src/lib/github"
@@ -114,6 +118,20 @@ function makeClient(
 
 const VALID_MARKER =
   "<!-- sigilix:fid:1111111111111111:cat:performance:sev:warning:path:222222222222 -->"
+const VALID_FINGERPRINT = "f".repeat(64)
+const VALID_FINGERPRINT_2 = "a".repeat(64)
+const PRECISION_FINDING_MARKERS = [
+  "<!-- sigilix:pr-review-finding -->",
+  "<!-- sigilix:category:performance -->",
+  "<!-- sigilix:severity:3 -->",
+  `<!-- sigilix:fingerprint:${VALID_FINGERPRINT} -->`,
+].join("\n")
+const SECOND_PRECISION_FINDING_MARKERS = [
+  "<!-- sigilix:pr-review-finding -->",
+  "<!-- sigilix:category:security -->",
+  "<!-- sigilix:severity:4 -->",
+  `<!-- sigilix:fingerprint:${VALID_FINGERPRINT_2} -->`,
+].join("\n")
 
 // ─── Capture: gate skips ─────────────────────────────────────
 
@@ -217,7 +235,7 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
   it("SIG-114 PR 4: captures the canonical dismissReason when the reply states one", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
-    const client = makeClient(`Some review text\n\n${VALID_MARKER}`)
+    const client = makeClient(`${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`)
     await captureReviewFeedback({
       env, client, owner: "a", repo: "r", prNumber: 7,
       replyComment: { id: 100, body: "@sigilix dismiss not-a-bug", in_reply_to_id: 50, path: "src/lib/foo.ts" },
@@ -227,6 +245,8 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     expect(catRecord.signals.length).toBe(1)
     expect(catRecord.signals[0].dismissReason).toBe("not-a-bug")
     expect(catRecord.signals[0].sev).toBe("warning")
+    const profile = JSON.parse(store.get("precision-profile:repo:a/r")!)
+    expect(profile.patterns[VALID_FINGERPRINT].suppress).toBe(0.3)
   })
 
   it("SIG-247 Phase 1: skips when parent comment is NOT authored by Sigilix App, even with valid marker", async () => {
@@ -314,13 +334,13 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
     expect(events.length).toBeGreaterThan(0)
   })
 
-  it("skips when reply has no dismissal keyword (no-dismissal-keyword)", async () => {
+  it("skips when reply has no feedback keyword (no-dismissal-keyword)", async () => {
     const { kv, store } = makeKvStub()
     const env = makeEnv(kv, "on")
     const client = makeClient(`text\n${VALID_MARKER}`)
     await captureReviewFeedback({
       env, client, owner: "a", repo: "r", prNumber: 7,
-      replyComment: { id: 100, body: "Thanks for the catch!", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      replyComment: { id: 100, body: "Can you explain this?", in_reply_to_id: 50, path: "src/lib/foo.ts" },
       config: makeConfig(),
     })
     expect(Array.from(store.keys())
@@ -329,6 +349,23 @@ describe("captureReviewFeedback — parent + reply parsing", () => {
       .map((args) => String(args[0]))
       .filter((s) => s.includes("no-dismissal-keyword"))
     expect(events.length).toBeGreaterThan(0)
+  })
+
+  it("SIG-185: accepted inline reply records a precision-profile accepted outcome without review-memory softening", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeClient(`${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`)
+    await captureReviewFeedback({
+      env, client, owner: "a", repo: "r", prNumber: 7,
+      replyComment: { id: 100, body: "Good catch, fixed.", in_reply_to_id: 50, path: "src/lib/foo.ts" },
+      config: makeConfig(),
+    })
+    expect(store.has("review-memory:a/r:cat:performance")).toBe(false)
+    const rawProfile = store.get("precision-profile:repo:a/r")
+    expect(rawProfile).toBeDefined()
+    const profile = JSON.parse(rawProfile!)
+    expect(profile.patterns[VALID_FINGERPRINT].suppress).toBe(0)
+    expect(profile.categories.performance.boost).toBe(0.3)
   })
 
   it("skips when parent fetch returns null (parent-fetch-failed) — defensive", async () => {
@@ -498,6 +535,151 @@ describe("captureReviewFeedback — SIG-276 claims on signal", () => {
           s.includes("claim-hydrate"),
       )
     expect(failed).toBeDefined()
+  })
+})
+
+// ─── Capture: SIG-185 top-level explicit correlation ─────────────
+
+describe("captureTopLevelReviewFeedback — explicit verified source", () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    consoleSpy.mockRestore()
+  })
+
+  function makeTopLevelClient(sourceBody: string, authorLogin = "sigilix[bot]"): GitHubClient {
+    return {
+      listIssueComments: vi.fn(async () => []),
+      listPullRequestReviewComments: vi.fn(async () => [
+        {
+          id: 500,
+          body: sourceBody,
+          path: "src/lib/foo.ts",
+          line: 10,
+          original_line: 10,
+          user: { login: authorLogin },
+        },
+      ]),
+      getRepository: vi.fn(async () => ({ default_branch: "main", id: 555_000 })),
+    } as unknown as GitHubClient
+  }
+
+  it("captures a top-level dismissal only after verifying the copied marker against a Sigilix-authored source", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const sourceBody = `${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`
+    const client = makeTopLevelClient(sourceBody)
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      comment: {
+        id: 900,
+        body: `> copied finding\n> ${VALID_MARKER}\n\nfalse positive`,
+      },
+      config: makeConfig(),
+    })
+    const catRecord = JSON.parse(store.get("review-memory:a/r:cat:performance")!)
+    expect(catRecord.signals).toHaveLength(1)
+    expect(catRecord.signals[0].commentId).toBe(900)
+    const pathKeys = Array.from(store.keys()).filter((k) =>
+      k.startsWith("review-memory:a/r:path:"),
+    )
+    expect(pathKeys).toHaveLength(1)
+    const profile = JSON.parse(store.get("precision-profile:repo:a/r")!)
+    expect(profile.patterns[VALID_FINGERPRINT].suppress).toBe(0.3)
+  })
+
+  it("does not trust a copied marker when no Sigilix-authored source matches it", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    const client = makeTopLevelClient(`${PRECISION_FINDING_MARKERS}\n\n${VALID_MARKER}`, "human")
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      comment: {
+        id: 900,
+        body: `${VALID_MARKER}\n\nfalse positive`,
+      },
+      config: makeConfig(),
+    })
+    expect(Array.from(store.keys()).some((k) => k.startsWith("review-memory:"))).toBe(false)
+    expect(store.get("precision-profile:repo:a/r")).toBeUndefined()
+    const skipped = consoleSpy.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes("not-a-reply-to-sigilix"))
+    expect(skipped).toBeDefined()
+  })
+})
+
+// ─── Capture: SIG-185 formal review dismissal ────────────────────
+
+describe("captureDismissedReviewFeedback — stale precision outcome", () => {
+  let consoleSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    consoleSpy = vi.spyOn(console, "log").mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    consoleSpy.mockRestore()
+  })
+
+  it("records stale only when a Sigilix review for an older commit has mappable finding fingerprints", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    await captureDismissedReviewFeedback({
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      review: {
+        id: 700,
+        body: `${PRECISION_FINDING_MARKERS}\n\n${SECOND_PRECISION_FINDING_MARKERS}`,
+        commit_id: "old-head",
+        user: { login: "sigilix[bot]" },
+      },
+      headSha: "new-head",
+      config: makeConfig(),
+    })
+    expect(Array.from(store.keys()).some((k) => k.startsWith("review-memory:"))).toBe(false)
+    const profile = JSON.parse(store.get("precision-profile:repo:a/r")!)
+    expect(profile.patterns[VALID_FINGERPRINT].suppress).toBe(0)
+    expect(profile.patterns[VALID_FINGERPRINT_2].suppress).toBe(0)
+    const recorded = consoleSpy.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes("review-feedback-outcome-recorded"))
+    expect(recorded).toContain("\"outcome\":\"stale\"")
+    expect(recorded).toContain("\"pattern_count\":2")
+  })
+
+  it("skips a same-head review dismissal because staleness is not proven", async () => {
+    const { kv, store } = makeKvStub()
+    const env = makeEnv(kv, "on")
+    await captureDismissedReviewFeedback({
+      env,
+      owner: "a",
+      repo: "r",
+      prNumber: 7,
+      review: {
+        id: 700,
+        body: PRECISION_FINDING_MARKERS,
+        commit_id: "same-head",
+        user: { login: "sigilix[bot]" },
+      },
+      headSha: "same-head",
+      config: makeConfig(),
+    })
+    expect(store.get("precision-profile:repo:a/r")).toBeUndefined()
+    const skipped = consoleSpy.mock.calls
+      .map((a) => String(a[0]))
+      .find((s) => s.includes("review-dismissed-without-stale-sha"))
+    expect(skipped).toBeDefined()
   })
 })
 

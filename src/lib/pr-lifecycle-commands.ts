@@ -265,3 +265,47 @@ export async function handlePrResolveThreads(args: LifecycleHandlerArgs): Promis
     }))
   }
 }
+
+/**
+ * SIG-329 — `/sigilix cancel` — abort the in-flight review for this PR.
+ * Unlike pause/ignore (which gate FUTURE pushes via KV flags), cancel
+ * targets the CURRENT run: it POSTs the PR's `PrReviewRunDO` `/cancel`
+ * route, which finalizes the run and closes its check immediately
+ * instead of waiting on the watchdog. Then it posts the ack comment.
+ *
+ * `/cancel` is idempotent (a second cancel on a terminal run is a 200
+ * no-op), so a transport / 5xx failure throws to let the queue
+ * redeliver. The ack-post failure is logged but not re-thrown, matching
+ * the other lifecycle handlers.
+ */
+export async function handlePrCancel(args: LifecycleHandlerArgs): Promise<void> {
+  const tag = { owner: args.owner, repo: args.repo, prNumber: args.prNumber }
+  const id = args.env.PR_REVIEW_RUN.idFromName(
+    `${args.owner}/${args.repo}#${args.prNumber}`,
+  )
+  const stub = args.env.PR_REVIEW_RUN.get(id)
+  const res = await stub.fetch("https://do.internal/cancel", { method: "POST" })
+  if (res.status >= 500) {
+    throw new Error(`pr-review-do-cancel-failed status=${res.status}`)
+  }
+  const body = (await res.json().catch(() => ({}))) as {
+    cancelled?: boolean
+    reason?: string
+  }
+  console.log(JSON.stringify({
+    event: "pr-review-cancelled-command",
+    cancelled: body.cancelled ?? false,
+    ...(body.reason !== undefined ? { reason: body.reason } : {}),
+    ...tag,
+  }))
+  try {
+    await postAck(args, { cmd: "cancel" })
+  } catch (err) {
+    console.error(JSON.stringify({
+      event: "slash-command-ack-failed",
+      cmd: "cancel",
+      err: err instanceof Error ? err.message : String(err),
+      ...tag,
+    }))
+  }
+}

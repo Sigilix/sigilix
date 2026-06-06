@@ -670,6 +670,7 @@ const FIX_PLAN_BODY_ONLY_CAPTION =
   "_Severity ≥ 4 only. Rows without a line number are file-level or PR-level findings that cannot be posted as inline review comments._"
 const BODY_ONLY_BLOCKER_DETAILS_SUMMARY =
   "<summary><b>Evidence &amp; suggested changes for body-only blockers</b> (score ≥ 4)</summary>"
+const MAX_SUGGESTED_REPLACEMENT_LINES = 10
 
 
 
@@ -815,7 +816,10 @@ export function parsePrReviewResponse(text: string): PrReviewVerdict | null {
     const replRaw = finding.suggestedReplacement
     const replIsString = typeof replRaw === "string"
     const replIsEmpty = replIsString && replRaw.trim().length === 0
-    const replIsNonEmpty = replIsString && replRaw.trim().length > 0
+    const replIsNonEmpty =
+      replIsString &&
+      replRaw.trim().length > 0 &&
+      countReplacementLines(replRaw) <= MAX_SUGGESTED_REPLACEMENT_LINES
 
     if (kindRaw === "delete" && replIsEmpty) {
       finalFinding.kind = "delete"
@@ -985,9 +989,12 @@ interface BuildReviewArgs {
    * `suggestedReplacement` can render as a committable ```suggestion
    * (RIGHT side + contiguous reviewable range) or must fall back to a
    * non-committable code snippet. Optional — omitted call sites fall
-   * back to the snippet tier.
+   * back to the snippet tier. SIG-103's structured-fix validator also
+   * needs this map; when omitted, submission keeps the old trust-the-
+   * model behavior for routing/back-compat and the renderer still
+   * refuses committable suggestion blocks.
    */
-  reviewable?: ReviewableMap
+	  reviewable?: ReviewableMap
   /**
    * SIG-127: per-file map of new-side line number → added-line TEXT
    * (from `buildAddedLineTextByLine`). When supplied, a finding whose
@@ -1046,6 +1053,13 @@ export interface ReviewSubmissionBuildResult {
   submission: SubmitReviewBody
   bodyOnlyFindings: PrReviewFinding[]
   bodyOnlyAnnotations: CheckRunAnnotation[]
+  suggestionEmissions: ReviewSuggestionEmission[]
+}
+
+export interface ReviewSuggestionEmission {
+  path: string
+  line: number
+  startLine?: number
 }
 
 interface PreparedReviewSubmissionFindings {
@@ -1087,6 +1101,65 @@ function markInlineCapOverflow(finding: PrReviewFinding): PrReviewFinding {
   return { ...finding, anchorNote: "*inline comment cap exceeded; shown here*" }
 }
 
+function stripStructuredFix(finding: PrReviewFinding): PrReviewFinding {
+  const { kind: _kind, suggestedReplacement: _suggestedReplacement, ...rest } = finding
+  return rest
+}
+
+function currentAnchoredLines(
+  finding: PrReviewFinding,
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>>,
+): string[] | null {
+  const start =
+    finding.startLine != null && finding.startLine < finding.line
+      ? finding.startLine
+      : finding.line
+  const linesForPath = addedLineTextByLine.get(finding.path)
+  if (!linesForPath) return null
+  const lines: string[] = []
+  for (let line = start; line <= finding.line; line++) {
+    const text = linesForPath.get(line)
+    if (text === undefined) return null
+    lines.push(text)
+  }
+  return lines
+}
+
+function normalizeAnchoredTextForNoopComparison(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\n$/, "")
+}
+
+function validatedStructuredFixForSubmission(
+  finding: PrReviewFinding,
+  reviewable: ReviewableMap | undefined,
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>> | undefined,
+): PrReviewFinding {
+  if (!hasStructuredFix(finding)) return finding
+  if (reviewable === undefined || addedLineTextByLine === undefined) return finding
+  if (!isFindingAnchorable(finding, reviewable)) return stripStructuredFix(finding)
+
+  const currentLines = currentAnchoredLines(finding, addedLineTextByLine)
+  if (currentLines === null) return stripStructuredFix(finding)
+  if (isDeletionSuggestion(finding)) return finding
+
+  const replacement = finding.suggestedReplacement
+  if (typeof replacement !== "string") return stripStructuredFix(finding)
+  if (replacement.trim().length === 0) return stripStructuredFix(finding)
+  if (countReplacementLines(replacement) > MAX_SUGGESTED_REPLACEMENT_LINES) {
+    return stripStructuredFix(finding)
+  }
+  if (
+    normalizeAnchoredTextForNoopComparison(replacement) ===
+    normalizeAnchoredTextForNoopComparison(currentLines.join("\n"))
+  ) {
+    return stripStructuredFix(finding)
+  }
+  return finding
+}
+
 // SIG-281 PR B: carries an inline candidate with its ORIGINAL
 // verdict.findings index so the Rec 3 priority sort + cap can reorder /
 // truncate WITHOUT decoupling a finding from the index its SIG-247
@@ -1101,25 +1174,28 @@ function prepareReviewSubmissionFindings(args: {
   rawVerdict: PrReviewVerdict
   rawUnanchored: readonly PrReviewFinding[]
   headSha: string
+  reviewable?: ReviewableMap
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
 }): PreparedReviewSubmissionFindings {
-  const { rawVerdict, rawUnanchored, headSha, addedLineTextByLine } = args
+  const { rawVerdict, rawUnanchored, headSha, reviewable, addedLineTextByLine } = args
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
 
   const inlineCandidates: InlineFindingCandidate[] = []
   const bodyFindings: PrReviewFinding[] = []
   verdict.findings.forEach((f, i) => {
-    const hasSuggestion = hasStructuredFix(f)
-    const scope = findingScope(f)
+    const validatedFinding = validatedStructuredFixForSubmission(f, reviewable, addedLineTextByLine)
+    const structuredFixWasStripped = hasStructuredFix(f) && !hasStructuredFix(validatedFinding)
+    const hasSuggestion = hasStructuredFix(validatedFinding)
+    const scope = findingScope(validatedFinding)
     // SIG-281 PR B (Rec 5): resolve per-finding confidence once, up front,
     // for the severity/confidence routing gate below. `verdict.confidence`
     // is parse-guaranteed 1-5.
-    const confidence = resolveFindingConfidence(f, verdict.confidence)
+    const confidence = resolveFindingConfidence(validatedFinding, verdict.confidence)
     const findingForInline =
       hasSuggestion && scope !== "line"
-        ? { ...f, scope: "line" as const }
-        : f
+        ? { ...validatedFinding, scope: "line" as const }
+        : validatedFinding
 
     // SIG-127 wins over broad scope: a localized suggestedReplacement
     // or empty deletion suggestion needs an inline review thread or the
@@ -1130,25 +1206,43 @@ function prepareReviewSubmissionFindings(args: {
     // anchors. Review-level, file-level, and comment-event findings stay
     // in the body even if they carry a nearby line for context.
     if (scope !== "line" && !hasSuggestion) {
-      bodyFindings.push(f)
+      bodyFindings.push(validatedFinding)
       return
     }
 
     const addedLinesForPath = addedLineTextByLine?.get(findingForInline.path)
     let effective: PrReviewFinding = findingForInline
-    if (addedLineTextByLine !== undefined && !hasSuggestion) {
+    const lineIsReviewable =
+      reviewable !== undefined &&
+      deriveSide(reviewable, findingForInline.path, findingForInline.line) === "RIGHT"
+    const needsSubstantiveAnchorValidation =
+      addedLineTextByLine !== undefined &&
+      !hasSuggestion &&
+      (!structuredFixWasStripped || !lineIsReviewable)
+    if (needsSubstantiveAnchorValidation) {
       // Walk forward to the nearest SUBSTANTIVE added line so an in-diff finding
       // whose anchor landed on a brace/blank stays INLINE on real code instead of
       // demoting to the body. For THIS anchoring step, fall back to the body only
       // when there's no substantive added line at/after the anchor. (Other gates —
       // confidence-tier routing below, inline-cap overflow — can still body-route.)
-      const resolved = pickSubstantiveAnchorLineForward(addedLinesForPath, f.line, f.startLine)
+      const resolved = pickSubstantiveAnchorLineForward(
+        addedLinesForPath,
+        findingForInline.line,
+        findingForInline.startLine,
+      )
       if (resolved === null) {
-        bodyFindings.push(withLineMovedNote(f, headSha))
+        bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
         return
       }
-      if (resolved !== f.line) {
-        const { startLine: _drop, ...rest } = f
+      if (
+        reviewable !== undefined &&
+        deriveSide(reviewable, findingForInline.path, resolved) !== "RIGHT"
+      ) {
+        bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
+        return
+      }
+      if (resolved !== findingForInline.line) {
+        const { startLine: _drop, ...rest } = findingForInline
         effective = { ...rest, line: resolved }
       }
     }
@@ -1225,10 +1319,57 @@ function prepareReviewSubmissionFindings(args: {
   }
 }
 
+function renderedSuggestionEmissions(
+  comments: readonly SubmitReviewComment[],
+): ReviewSuggestionEmission[] {
+  return comments.flatMap((comment) => {
+    if (!hasRenderedSuggestionBlock(comment.body)) return []
+    if (typeof comment.line !== "number") return []
+    const emission: ReviewSuggestionEmission = {
+      path: comment.path,
+      line: comment.line,
+    }
+    if (comment.start_line !== undefined) emission.startLine = comment.start_line
+    return [emission]
+  })
+}
+
+interface MarkdownFence {
+  ch: "`" | "~"
+  len: number
+}
+
+function hasRenderedSuggestionBlock(body: string): boolean {
+  let openFence: MarkdownFence | null = null
+  for (const line of body.split("\n")) {
+    if (openFence === null) {
+      if (/^```suggestion\s*$/.test(line)) return true
+      const fence = /^(`{3,}|~{3,})[^`~]*$/.exec(line)
+      if (fence?.[1]) {
+        const seq = fence[1]
+        const ch = seq[0]
+        if (ch === "`" || ch === "~") openFence = { ch, len: seq.length }
+      }
+      continue
+    }
+    if (isClosingMarkdownFence(line, openFence)) openFence = null
+  }
+  return false
+}
+
+function isClosingMarkdownFence(line: string, fence: MarkdownFence): boolean {
+  const closeRe =
+    fence.ch === "`"
+      ? new RegExp("^`{" + fence.len + ",}\\s*$")
+      : new RegExp("^~{" + fence.len + ",}\\s*$")
+  return closeRe.test(line)
+}
+
 export interface PreviewReviewSubmissionEventArgs {
   verdict: PrReviewVerdict
   headSha: string
   unanchored?: readonly PrReviewFinding[]
+  reviewable?: ReviewableMap
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
   eventOverride?: ReviewEventOverride
 }
@@ -1237,6 +1378,7 @@ export function previewReviewSubmissionEvent({
   verdict: rawVerdict,
   headSha,
   unanchored: rawUnanchored = [],
+  reviewable,
   addedLineTextByLine,
   eventOverride,
 }: PreviewReviewSubmissionEventArgs): ReviewEvent {
@@ -1244,6 +1386,7 @@ export function previewReviewSubmissionEvent({
     rawVerdict,
     rawUnanchored,
     headSha,
+    ...(reviewable !== undefined ? { reviewable } : {}),
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
   })
   return chooseRenderedEventWithOverride({
@@ -1305,6 +1448,7 @@ export function buildReviewSubmissionWithMetadata({
     rawVerdict,
     rawUnanchored,
     headSha,
+    ...(reviewable !== undefined ? { reviewable } : {}),
     ...(addedLineTextByLine !== undefined ? { addedLineTextByLine } : {}),
   })
   const event = chooseRenderedEventWithOverride({
@@ -1392,6 +1536,7 @@ export function buildReviewSubmissionWithMetadata({
     submission,
     bodyOnlyFindings: unanchored,
     bodyOnlyAnnotations: buildBodyOnlyCheckAnnotations(unanchored),
+    suggestionEmissions: renderedSuggestionEmissions(comments),
   }
 }
 

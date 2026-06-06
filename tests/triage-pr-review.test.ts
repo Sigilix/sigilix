@@ -2385,6 +2385,28 @@ describe("buildReviewSubmission — SIG-281 PR B routing discipline (Recs 2/3/5)
     expect(out.comments).toHaveLength(1)
   })
 
+  it("SIG-103: strips identical replacement before routing so bogus fixes do not keep weak findings inline", () => {
+    const reviewable: ReviewableMap = new Map([
+      ["src/lib/foo.ts", [{ line: 42, side: "RIGHT" }]],
+    ])
+    const addedLineTextByLine = new Map([
+      ["src/lib/foo.ts", new Map([[42, "const x = a ?? b"]])],
+    ])
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: mkVerdict([
+        lf({ score: 3, confidence: 1, suggestedReplacement: "const x = a ?? b" }),
+      ]),
+      prAuthor: "a",
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.comments ?? []).toHaveLength(0)
+    expect(out.bodyOnlyFindings[0]?.suggestedReplacement).toBeUndefined()
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
   it("Rec 5: KEEPS a sub-4 finding inline at confidence >= 4 (guards against a blanket Rec 2)", () => {
     const out = submit([lf({ score: 3, confidence: 4 })])
     expect(out.comments).toHaveLength(1)
@@ -3213,6 +3235,139 @@ describe("formatFindingComment integration (SIG-164 PR 5)", () => {
     expect(out).toContain("insert `inserted()` before `return x`")
     expect(out).not.toContain("```suggestion")
     expect(out).not.toContain("**Proposed change:**")
+  })
+})
+
+describe("buildReviewSubmission — SIG-103 suggestion hardening", () => {
+  const reviewable: ReviewableMap = new Map([
+    ["src/a.ts", [
+      { line: 10, side: "RIGHT" },
+      { line: 11, side: "RIGHT" },
+    ]],
+  ])
+  const addedLines = new Map([
+    ["src/a.ts", new Map([
+      [10, "  const x = compute()"],
+      [11, "  return x"],
+    ])],
+  ])
+  const finding = (overrides: Partial<PrReviewFinding> = {}): PrReviewFinding => ({
+    path: "src/a.ts",
+    line: 10,
+    score: 4,
+    category: "logic",
+    headline: "use nullish fallback",
+    body: "`compute()` can return undefined.",
+    kind: "replace",
+    suggestedReplacement: "  const x = compute() ?? 0",
+    ...overrides,
+  })
+  const submit = (f: PrReviewFinding) =>
+    buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "fixture",
+        confidence: 4,
+        confidenceReason: "fixture",
+        findings: [f],
+      },
+      prAuthor: "a",
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine: addedLines,
+    })
+
+  it("records telemetry metadata only for actually rendered suggestion blocks", () => {
+    const out = submit(finding())
+    expect(out.submission.comments?.[0]?.body).toContain("```suggestion")
+    expect(out.suggestionEmissions).toEqual([{ path: "src/a.ts", line: 10 }])
+  })
+
+  it("strips replacement when the anchored range is not fully reviewable", () => {
+    const out = submit(finding({ startLine: 10, line: 12 }))
+    expect(out.submission.comments?.[0]?.body).not.toContain("```suggestion")
+    expect(out.submission.comments?.[0]?.body).not.toContain("**Proposed:**")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
+  it("strips replacement when the current line text is unavailable for validation", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "fixture",
+        confidence: 4,
+        confidenceReason: "fixture",
+        findings: [finding()],
+      },
+      prAuthor: "a",
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine: new Map([["src/a.ts", new Map()]]),
+    })
+    expect(out.submission.comments?.[0]?.body).not.toContain("```suggestion")
+    expect(out.submission.comments?.[0]?.body).not.toContain("**Proposed:**")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
+  it("strips replacement when only line endings differ from current code", () => {
+    const out = submit(finding({ suggestedReplacement: "  const x = compute()\r\n" }))
+    expect(out.submission.comments?.[0]?.body).not.toContain("```suggestion")
+    expect(out.submission.comments?.[0]?.body).not.toContain("**Proposed:**")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
+  it("does not count literal suggestion fences inside ordinary code blocks as emissions", () => {
+    const out = submit(finding({
+      kind: "describe",
+      suggestedReplacement: undefined,
+      fixExample: "```suggestion\nconst x = compute() ?? 0\n```",
+    }))
+
+    expect(out.submission.comments?.[0]?.body).toContain("```suggestion")
+    expect(out.submission.comments?.[0]?.body).not.toContain("\n```suggestion\n  const x = compute() ?? 0\n```")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
+  it("does not count literal suggestion fences inside tilde code blocks as emissions", () => {
+    const out = submit(finding({
+      body: "Example:\n~~~text\n```suggestion\nconst x = compute() ?? 0\n```\n~~~",
+      kind: "describe",
+      suggestedReplacement: undefined,
+    }))
+
+    expect(out.submission.comments?.[0]?.body).toContain("~~~text")
+    expect(out.submission.comments?.[0]?.body).toContain("```suggestion")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
+  it("strips deletion suggestions when the anchored range is not fully reviewable", () => {
+    const out = submit(finding({
+      kind: "delete",
+      suggestedReplacement: "",
+      startLine: 10,
+      line: 12,
+    }))
+
+    expect(out.submission.comments?.[0]?.body).not.toContain("```suggestion")
+    expect(out.submission.comments?.[0]?.body).not.toContain("**Proposed change:** remove")
+    expect(out.suggestionEmissions).toHaveLength(0)
+  })
+
+  it("body-routes a stripped patch when the repaired anchor is not reviewable", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "fixture",
+        confidence: 4,
+        confidenceReason: "fixture",
+        findings: [finding({ startLine: 10, line: 12 })],
+      },
+      prAuthor: "a",
+      headSha: "abc",
+      reviewable: new Map([["src/a.ts", [{ line: 10, side: "RIGHT" }]]]),
+      addedLineTextByLine: addedLines,
+    })
+
+    expect(out.submission.comments ?? []).toHaveLength(0)
+    expect(out.bodyOnlyFindings[0]?.suggestedReplacement).toBeUndefined()
+    expect(out.suggestionEmissions).toHaveLength(0)
   })
 })
 
@@ -4113,6 +4268,18 @@ describe("parsePrReviewResponse — suggestedReplacement (SIG-125)", () => {
     const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: 42 }] }
     const v = parsePrReviewResponse(JSON.stringify(raw))
     expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+  it("drops suggestedReplacement when the replacement exceeds 10 lines", () => {
+    const tooLong = Array.from({ length: 11 }, (_, i) => `  line${i}`).join("\n")
+    const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: tooLong }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.suggestedReplacement).toBeUndefined()
+  })
+  it("keeps suggestedReplacement when the replacement is exactly 10 lines", () => {
+    const tenLines = Array.from({ length: 10 }, (_, i) => `  line${i}`).join("\n")
+    const raw = { ...base, findings: [{ ...base.findings[0], suggestedReplacement: tenLines }] }
+    const v = parsePrReviewResponse(JSON.stringify(raw))
+    expect(v?.findings[0]?.suggestedReplacement).toBe(tenLines)
   })
 })
 

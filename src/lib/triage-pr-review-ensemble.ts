@@ -111,6 +111,7 @@ import {
   previewReviewSubmissionEvent,
   type ReviewEvent,
   type ReviewEventOverride,
+  type ReviewSuggestionEmission,
 } from "./triage-pr-review"
 import {
   assessApprovalReadiness,
@@ -1464,6 +1465,42 @@ function withSubmissionAffordance<T extends object>(
     ...(affordance.reviewCounter !== undefined ? { reviewCounter: affordance.reviewCounter } : {}),
     ...(affordance.retriggerUrl !== undefined ? { retriggerUrl: affordance.retriggerUrl } : {}),
   }
+}
+
+export interface SuggestionEmissionLogContext {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  commentsSubmitted: boolean
+}
+
+export interface SuggestionEmissionLogEvent {
+  event: "pr-review-suggestion-emitted"
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  path: string
+  line: number
+  startLine?: number
+}
+
+export function buildSuggestionEmissionLogEvents(
+  context: SuggestionEmissionLogContext,
+  suggestions: readonly ReviewSuggestionEmission[],
+): SuggestionEmissionLogEvent[] {
+  if (!context.commentsSubmitted) return []
+  return suggestions.map((suggestion) => ({
+    event: "pr-review-suggestion-emitted",
+    owner: context.owner,
+    repo: context.repo,
+    prNumber: context.prNumber,
+    headSha: context.headSha.slice(0, 7),
+    path: suggestion.path,
+    line: suggestion.line,
+    ...(suggestion.startLine !== undefined ? { startLine: suggestion.startLine } : {}),
+  }))
 }
 
 export async function prepareSubmissionAffordance(args: {
@@ -6659,6 +6696,7 @@ export async function handlePrReviewEnsemble(
       verdict: submissionVerdict,
       headSha,
       unanchored: renderableUnanchoredForSubmission,
+      reviewable,
       addedLineTextByLine,
       ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
     })
@@ -6746,7 +6784,6 @@ export async function handlePrReviewEnsemble(
         suppressed: suppressedComments,
       }))
     }
-
     // ─── SIG-216: post the overview comment IMMEDIATELY before the
     // review submit so the two GitHub timeline entries land in the
     // same time window (CodeRabbit-style Walkthrough-then-Review).
@@ -7035,6 +7072,16 @@ export async function handlePrReviewEnsemble(
       }
       await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
+      const suggestionEmissionEvents = buildSuggestionEmissionLogEvents({
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        commentsSubmitted: (submission.comments?.length ?? 0) > 0,
+      }, submissionBuild.suggestionEmissions)
+      for (const event of suggestionEmissionEvents) {
+        console.log(JSON.stringify(event))
+      }
       // ARC-258 follow-up: dismiss any stale Sigilix reviews from
       // earlier commits on this PR so the Reviews tab reflects only
       // the current head. Without this, customers see "Sigilix

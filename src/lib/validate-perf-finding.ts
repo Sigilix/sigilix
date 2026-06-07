@@ -139,6 +139,21 @@ function hasColocatedAstHit(finding: PrReviewFinding, evidence: PerfEvidence, pa
 }
 
 /**
+ * SIG-325: a perf finding is SELF-ORIGINATED when NO deterministic AST perf hit
+ * corroborates it — the model asserted the regression and it is at most anchored
+ * to a changed token, not flagged by the analyzer. The refutation-survival gate
+ * uses this to require a survival rationale on a sev>=4 token-only / no-backing
+ * perf claim. A co-located AST hit makes the finding tool-backed (the SIG-110
+ * evidence gate covers that case), so it is NOT self-originated. A finding with
+ * no usable `path` has nothing to corroborate against → self-originated.
+ */
+export function perfFindingIsSelfOriginated(finding: PrReviewFinding, evidence: PerfEvidence): boolean {
+  const path = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (path.length === 0) return true
+  return !hasColocatedAstHit(finding, evidence, path)
+}
+
+/**
  * Pure decision for ONE perf-applicable finding. The caller has already
  * decided this finding's derived role set includes `performance` (via the
  * `performance-` sourceFindingId prefix) AND that `score >= 4`. Mode-agnostic.

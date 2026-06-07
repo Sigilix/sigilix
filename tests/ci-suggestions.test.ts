@@ -11,8 +11,11 @@ import {
   renderUnanchorableCiPatches,
   hasExistingCiSuggestion,
   planCiSuggestions,
+  submitCiSuggestionReview,
   CI_SUGGESTION_MARKER,
+  type CiSuggestionClient,
 } from "../src/lib/ci-suggestions"
+import type { SubmitReviewBody } from "../src/lib/github"
 
 // A small unified diff: line 2 is added; lines 1 and 3 are context. All
 // three are RIGHT-reviewable in the new file.
@@ -204,5 +207,97 @@ describe("planCiSuggestions", () => {
     expect(plan.stickySuffix).toContain("manual me")
     expect(plan.anchorableCount).toBe(1)
     expect(plan.unanchorableCount).toBe(1)
+  })
+})
+
+describe("fence safety", () => {
+  const reviewable = parseDiffToReviewablePositions(DIFF)
+
+  it("routes a patch whose replacement contains ``` to the un-anchorable fallback", () => {
+    const { anchorable, unanchorable } = partitionCiPatches(
+      [patch("src/a.ts", 2, "before ``` after")],
+      reviewable,
+    )
+    expect(anchorable).toHaveLength(0)
+    expect(unanchorable).toHaveLength(1)
+  })
+
+  it("renders the sticky fallback with a fence longer than any backtick run", () => {
+    const out = renderUnanchorableCiPatches([patch("src/a.ts", 9, "a ``` b")])
+    // 4-backtick fence so the inner ``` can't close the block early.
+    expect(out).toContain("````")
+  })
+})
+
+function fakeClient(opts: {
+  prior?: Array<{ body: string }>
+  listThrows?: boolean
+  bulkThrows?: boolean
+  perCommentThrows?: (i: number) => boolean
+}): { client: CiSuggestionClient; calls: SubmitReviewBody[] } {
+  const calls: SubmitReviewBody[] = []
+  const client: CiSuggestionClient = {
+    async listPullRequestReviewComments() {
+      if (opts.listThrows) throw new Error("list boom")
+      return opts.prior ?? []
+    },
+    async submitReview(_owner, _repo, _pr, review) {
+      const index = calls.length // 0 = bulk, 1.. = per-comment retries
+      calls.push(review)
+      if (index === 0 && opts.bulkThrows) throw new Error("bulk 422")
+      if (index > 0 && opts.perCommentThrows?.(index - 1)) throw new Error("per-comment 422")
+      return { id: index + 1, state: "COMMENTED" }
+    },
+  }
+  return { client, calls }
+}
+
+describe("submitCiSuggestionReview", () => {
+  const review = buildCiSuggestionReview(
+    [patch("src/a.ts", 1), patch("src/a.ts", 2), patch("src/a.ts", 3)],
+    "head",
+  ) as SubmitReviewBody
+
+  it("dedup: skips entirely when a CI suggestion already exists on the PR", async () => {
+    const { client, calls } = fakeClient({ prior: [{ body: `prior ${CI_SUGGESTION_MARKER}` }] })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 0, skip: "already-posted" })
+    expect(calls).toHaveLength(0)
+  })
+
+  it("skips when the dedup listing fails (can't verify → don't risk a duplicate)", async () => {
+    const { client, calls } = fakeClient({ listThrows: true })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 0, skip: "dedup-check-failed" })
+    expect(calls).toHaveLength(0)
+  })
+
+  it("happy path: posts the bulk review in a single call", async () => {
+    const { client, calls } = fakeClient({})
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 3, skip: null })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.comments).toHaveLength(3)
+  })
+
+  it("split-on-422: bulk rejected, every comment recovered individually", async () => {
+    const { client, calls } = fakeClient({ bulkThrows: true })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 3, skip: "split-recovered" })
+    expect(calls).toHaveLength(4) // 1 failed bulk + 3 per-comment
+    expect(calls[1]?.comments).toHaveLength(1)
+  })
+
+  it("split-on-422: one bad anchor only drops itself (partial)", async () => {
+    const { client } = fakeClient({ bulkThrows: true, perCommentThrows: (i) => i === 1 })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r.posted).toBe(2)
+    expect(r.skip).toBe("partial")
+  })
+
+  it("reports submit-failed when nothing posts", async () => {
+    const { client } = fakeClient({ bulkThrows: true, perCommentThrows: () => true })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 0, skip: "submit-failed" })
   })
 })

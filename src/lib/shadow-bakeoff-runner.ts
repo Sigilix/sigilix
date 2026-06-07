@@ -61,6 +61,8 @@ export interface ShadowRunResult {
     cweId?: string
     evidenceId?: string
     independentAssessment?: string
+    complexityEstimate?: string
+    hotPathIdentifier?: string
   }>
   /** Wall-clock elapsed (start → finalize). */
   elapsedMs: number
@@ -189,6 +191,8 @@ export async function runShadowSpecialist(args: SpecialistShadowArgs): Promise<S
           ...(f.cweId !== undefined ? { cweId: f.cweId } : {}),
           ...(f.evidenceId !== undefined ? { evidenceId: f.evidenceId } : {}),
           ...(f.independentAssessment !== undefined ? { independentAssessment: f.independentAssessment } : {}),
+          ...(f.complexityEstimate !== undefined ? { complexityEstimate: f.complexityEstimate } : {}),
+          ...(f.hotPathIdentifier !== undefined ? { hotPathIdentifier: f.hotPathIdentifier } : {}),
         }))
       : [],
     elapsedMs: outcome.elapsedMs,

@@ -5,6 +5,7 @@
 // The FP-vector regressions (comments, function-param unions, interpolation,
 // SQL comments) come straight from the dual review (code-reviewer + DeepSeek).
 
+import { readFileSync } from "node:fs"
 import { describe, it, expect } from "vitest"
 import {
   buildGlobalUnionMap,
@@ -130,6 +131,56 @@ describe("scanSqlEnumDrift", () => {
     expect(scanSqlEnumDrift("pool.query(`UPDATE charges SET status = '${s}' WHERE id=$1`)", unions)).toHaveLength(0)
   })
 
+  it("detects a static drifting SET value inside template SQL with interpolation elsewhere", () => {
+    const unions = buildGlobalUnionMap([PR10_TYPES])
+    const hits = scanSqlEnumDrift(
+      "pool.query(`UPDATE charges SET status = 'refunded' WHERE id = ${chargeId}`)",
+      unions,
+    )
+    expect(hits).toHaveLength(1)
+    expect(hits[0]!.message).toContain("'refunded'")
+  })
+
+  it("does not close a template SQL candidate on a nested template inside interpolation", () => {
+    const unions = buildGlobalUnionMap([PR10_TYPES])
+    const hits = scanSqlEnumDrift(
+      "pool.query(`UPDATE charges SET status = 'refunded' WHERE note = ${String(`id-${chargeId}`)}`)",
+      unions,
+    )
+    expect(hits).toHaveLength(1)
+    expect(hits[0]!.message).toContain("'refunded'")
+  })
+
+  it("does not close a template SQL candidate on braces or backticks inside interpolation comments", () => {
+    const unions = buildGlobalUnionMap([PR10_TYPES])
+    const hits = scanSqlEnumDrift(
+      "pool.query(`${/* } ` */ tableName} UPDATE charges SET status = 'refunded' WHERE id = ${chargeId}`)",
+      unions,
+    )
+    expect(hits).toHaveLength(1)
+    expect(hits[0]!.message).toContain("'refunded'")
+  })
+
+  it("does not let a regex quote swallow a later SQL string", () => {
+    const unions = buildGlobalUnionMap([PR10_TYPES])
+    const hits = scanSqlEnumDrift(
+      "const quote = /\"/;\npool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
+      unions,
+    )
+    expect(hits).toHaveLength(1)
+    expect(hits[0]!.message).toContain("'refunded'")
+  })
+
+  it("does not close a template SQL candidate on braces or backticks inside interpolation regexes", () => {
+    const unions = buildGlobalUnionMap([PR10_TYPES])
+    const hits = scanSqlEnumDrift(
+      "pool.query(`${/}`/.test(kind)} UPDATE charges SET status = 'refunded' WHERE id = ${chargeId}`)",
+      unions,
+    )
+    expect(hits).toHaveLength(1)
+    expect(hits[0]!.message).toContain("'refunded'")
+  })
+
   it("does NOT flag a SQL write hidden in a -- comment inside the query string (DeepSeek)", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
     expect(scanSqlEnumDrift(
@@ -189,5 +240,14 @@ describe("scanSqlEnumDrift", () => {
   it("does NOT flag non-SQL code that happens to assign a union-named field", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
     expect(scanSqlEnumDrift(`const status = 'refunded'; obj.status = 'refunded';`, unions)).toHaveLength(0)
+  })
+
+  it("does not backtrack on non-SQL source when an unrelated changed file seeds unions", () => {
+    const source = readFileSync(
+      new URL("../src/lib/validate-logic-claim-refutation.ts", import.meta.url),
+      "utf8",
+    )
+    const unions = buildGlobalUnionMap([PR10_TYPES])
+    expect(scanSqlEnumDrift(source, unions)).toEqual([])
   })
 })

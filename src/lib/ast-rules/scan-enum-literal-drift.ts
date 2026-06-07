@@ -164,11 +164,183 @@ function resolveUnion(table: string, normCol: string, map: UnionMap): Set<string
   return withCol.length === 1 ? withCol[0] : undefined
 }
 
-/** A quoted SQL string containing an `UPDATE`. Group 2 = the body. Outer
- *  delimiter is `"` or `` ` `` ONLY — never `'`: a SQL string holding a
- *  `'literal'` cannot itself be single-quoted, and allowing `'` would let
- *  apostrophes in comments (`wallet's`) start bogus matches. */
-const SQL_UPDATE_STRING_RE = /(["`])((?:\\.|(?!\1)[\s\S])*?\bupdate\b(?:\\.|(?!\1)[\s\S])*?)\1/gi
+const SQL_UPDATE_KEYWORD_RE = /\bupdate\b/i
+
+/** A quoted SQL string candidate. `bodyStart` is the absolute offset of body[0]. */
+interface SqlStringCandidate {
+  body: string
+  bodyStart: number
+}
+
+/**
+ * Extract double-quoted and template-literal bodies that contain `UPDATE`.
+ * Deliberately linear: the previous whole-source backtracking regexp could pin
+ * a Worker CPU when an unrelated changed file seeded the union map and a large
+ * TS file contained many quote/update-shaped prose fragments.
+ *
+ * We keep the old delimiter policy: no single-quoted JS strings, because SQL
+ * bodies need single quotes for SQL literals (`status = 'refunded'`) and letting
+ * apostrophes start candidates creates noise.
+ */
+function sqlStringCandidates(source: string): SqlStringCandidate[] {
+  const out: SqlStringCandidate[] = []
+  let i = 0
+  while (i < source.length) {
+    if (source[i] === "/" && source[i + 1] === "/") {
+      i += 2
+      while (i < source.length && source[i] !== "\n") i++
+      continue
+    }
+    if (source[i] === "/" && source[i + 1] === "*") {
+      i += 2
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++
+      i = Math.min(source.length, i + 2)
+      continue
+    }
+    const regexEnd = maybeRegexLiteralEnd(source, i)
+    if (regexEnd > i) {
+      i = regexEnd
+      continue
+    }
+
+    const quote = source[i]
+    if (quote !== "\"" && quote !== "`") {
+      i++
+      continue
+    }
+
+    const bodyStart = i + 1
+    const end = findQuotedStringEnd(source, i, quote)
+    if (end < 0) {
+      i = bodyStart
+      continue
+    }
+
+    const body = source.slice(bodyStart, end)
+    if (SQL_UPDATE_KEYWORD_RE.test(body)) out.push({ body, bodyStart })
+    i = end + 1
+  }
+  return out
+}
+
+function findQuotedStringEnd(source: string, openIdx: number, quote: "\"" | "`"): number {
+  let i = openIdx + 1
+  while (i < source.length) {
+    const c = source[i]
+    if (c === "\\") {
+      i += 2
+      continue
+    }
+    if (quote === "`" && c === "$" && i + 1 < source.length && source[i + 1] === "{") {
+      i = skipTemplateExpression(source, i + 1)
+      continue
+    }
+    if (c === quote) return i
+    i++
+  }
+  return -1
+}
+
+function skipTemplateExpression(source: string, openBraceIdx: number): number {
+  let depth = 1
+  let i = openBraceIdx + 1
+  while (i < source.length) {
+    const c = source[i]
+    if (c === "\"" || c === "'" || c === "`") {
+      const end = c === "`"
+        ? findQuotedStringEnd(source, i, "`")
+        : findSimpleQuotedStringEnd(source, i, c)
+      if (end < 0) return source.length
+      i = end + 1
+      continue
+    }
+    if (c === "/" && source[i + 1] === "/") {
+      i += 2
+      while (i < source.length && source[i] !== "\n") i++
+      continue
+    }
+    if (c === "/" && source[i + 1] === "*") {
+      i += 2
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++
+      i = Math.min(source.length, i + 2)
+      continue
+    }
+    const regexEnd = maybeRegexLiteralEnd(source, i)
+    if (regexEnd > i) {
+      i = regexEnd
+      continue
+    }
+    if (c === "{") depth++
+    else if (c === "}") {
+      depth--
+      if (depth === 0) return i + 1
+    }
+    i++
+  }
+  return source.length
+}
+
+function findSimpleQuotedStringEnd(source: string, openIdx: number, quote: "\"" | "'"): number {
+  let i = openIdx + 1
+  while (i < source.length) {
+    const c = source[i]
+    if (c === "\\") {
+      i += 2
+      continue
+    }
+    if (c === quote) return i
+    i++
+  }
+  return -1
+}
+
+function maybeRegexLiteralEnd(source: string, slashIdx: number): number {
+  if (source[slashIdx] !== "/" || source[slashIdx + 1] === "/" || source[slashIdx + 1] === "*") return -1
+  if (!canStartRegexLiteral(source, slashIdx)) return -1
+
+  let i = slashIdx + 1
+  let inClass = false
+  while (i < source.length) {
+    const c = source[i]
+    if (c === "\\") {
+      i += 2
+      continue
+    }
+    if (c === "\n" || c === "\r") return -1
+    if (c === "[") {
+      inClass = true
+      i++
+      continue
+    }
+    if (c === "]" && inClass) {
+      inClass = false
+      i++
+      continue
+    }
+    if (c === "/" && !inClass) {
+      i++
+      while (/[A-Za-z]/.test(source[i] ?? "")) i++
+      return i
+    }
+    i++
+  }
+  return -1
+}
+
+function canStartRegexLiteral(source: string, slashIdx: number): boolean {
+  let i = slashIdx - 1
+  while (i >= 0 && /\s/.test(source[i] ?? "")) i--
+  if (i < 0) return true
+
+  const c = source[i]!
+  if ("([{=,:;!&|?+-*~^<>".includes(c)) return true
+
+  const wordEnd = i + 1
+  while (i >= 0 && /[A-Za-z_$]/.test(source[i] ?? "")) i--
+  const word = source.slice(i + 1, wordEnd)
+  return /^(?:return|throw|case|delete|void|typeof|instanceof|yield|await|else|do)$/.test(word)
+}
+
 /** `UPDATE <table> SET <set-clause>` up to (not including) WHERE/RETURNING/;/end. */
 const UPDATE_SET_RE = /\bupdate\s+([A-Za-z_$][\w$.]*)\s+set\s+([\s\S]*?)(?=\bwhere\b|\breturning\b|;|$)/gi
 /** A `col = 'literal'` assignment. Single-quoted only, so `= $1` / `= ?` skip.
@@ -206,11 +378,10 @@ export function scanSqlEnumDrift(source: string, unionMap: UnionMap): AstRuleHit
   const hits: AstRuleHit[] = []
   if (unionMap.size === 0) return hits
   const seen = new Set<number>()
-  for (const sm of source.matchAll(SQL_UPDATE_STRING_RE)) {
-    const bodyStart = (sm.index ?? 0) + sm[1]!.length // after opening quote
+  for (const { body: rawBody, bodyStart } of sqlStringCandidates(source)) {
     // Blank SQL comments inside the body (length-preserving) so a commented-out
     // `-- UPDATE … SET x='y'` can't trigger a finding (DeepSeek FP vector).
-    const body = blankComments(sm[2] ?? "", true)
+    const body = blankComments(rawBody, true)
     for (const um of body.matchAll(UPDATE_SET_RE)) {
       const table = um[1]!
       const setClause = um[2] ?? ""

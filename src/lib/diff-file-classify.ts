@@ -169,6 +169,87 @@ function leafStem(path: string): string {
     .replace(/\.(?:m|c)?[jt]sx?$/i, "")
 }
 
+function normalizeRepoPathForSiblingMatch(path: string): string {
+  return path.trim().replace(/\\/g, "/").replace(/^(?:\.\/|\/)+/, "")
+}
+
+function appendRepoSiblingSourceCandidates(
+  candidates: string[],
+  prefix: string | undefined,
+  rest: string,
+): void {
+  if (prefix !== undefined) {
+    candidates.push(`${prefix}/${rest}`)
+    for (const sourceRoot of ["src", "src/lib", "app", "lib", "workers"]) {
+      candidates.push(`${prefix}/${sourceRoot}/${rest}`)
+    }
+    return
+  }
+
+  for (const sourceRoot of ["src", "src/lib", "app", "lib", "workers"]) {
+    candidates.push(`${sourceRoot}/${rest}`)
+  }
+  candidates.push(rest)
+}
+
+function repoWideCandidateSources(testPath: string): string[] {
+  const candidates: string[] = []
+  const stripped = stripTestMarker(testPath)
+
+  if (
+    stripped !== testPath &&
+    !/(^|\/)(?:tests|__tests__)\//.test(stripped)
+  ) {
+    candidates.push(stripped)
+  }
+
+  const testsPrefix = stripped.match(/^(?:(.+)\/)?tests\/(.+)$/)
+  if (testsPrefix && testsPrefix[2]) {
+    appendRepoSiblingSourceCandidates(candidates, testsPrefix[1], testsPrefix[2])
+  }
+
+  const dunderTests = stripped.match(/^(?:(.+)\/)?__tests__\/([^/]+)$/)
+  if (dunderTests && dunderTests[2]) {
+    const parent = dunderTests[1]
+    if (parent !== undefined) {
+      candidates.push(`${parent}/${dunderTests[2]}`)
+    } else {
+      appendRepoSiblingSourceCandidates(candidates, undefined, dunderTests[2])
+    }
+  }
+
+  return Array.from(new Set(candidates))
+}
+
+function matchesSourceForTestPath(sourcePath: string, testPath: string): boolean {
+  const normalizedSource = normalizeRepoPathForSiblingMatch(sourcePath)
+  const normalizedTest = normalizeRepoPathForSiblingMatch(testPath)
+  return repoWideCandidateSources(normalizedTest).includes(normalizedSource)
+}
+
+/**
+ * Resolve whether a source file has an already-existing repo-wide test
+ * sibling. Returns a path only for one unambiguous recognized test match;
+ * no match or multiple plausible matches both fail open as `null`.
+ */
+export function findExistingTestSiblingForSource(
+  sourcePath: string,
+  repoPaths: readonly string[],
+): string | null {
+  const normalizedSource = normalizeRepoPathForSiblingMatch(sourcePath)
+  if (normalizedSource.length === 0) return null
+
+  const matches = new Set<string>()
+  for (const rawPath of repoPaths) {
+    const path = normalizeRepoPathForSiblingMatch(rawPath)
+    if (path.length === 0) continue
+    if (!isTestPath(path)) continue
+    if (matchesSourceForTestPath(normalizedSource, path)) matches.add(path)
+  }
+
+  return matches.size === 1 ? [...matches][0]! : null
+}
+
 /**
  * Classify every path in a diff's file list + cross-link source/test
  * siblings present in the SAME diff.

@@ -50,6 +50,14 @@ describe("logic-examples.json — SIG-308 cleared-candidate exemplar", () => {
     expect(cleared!.emit).toBe(false)
   })
 
+  it("includes the substring-search skip exemplar for requirement-dependent UX semantics", () => {
+    const cleared = logicExamples.examples.find((e) => e.id === "skip-substring-search-contract-absent")
+    expect(cleared).toBeTruthy()
+    expect(cleared!.emit).toBe(false)
+    expect(cleared!.why).toContain("product semantics")
+    expect(cleared!.why).toContain("visible contract")
+  })
+
   it("stays balanced — still has >=3 EMIT and >=3 SKIP exemplars", () => {
     const good = logicExamples.examples.filter((e) => e.emit)
     const bad = logicExamples.examples.filter((e) => !e.emit)

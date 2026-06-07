@@ -48,6 +48,7 @@ import {
   BLAST_RADIUS_RESOLUTION_READY,
   resolveDynamicEvidencePromptBlock,
   prepareSubmissionAffordance,
+  buildSuggestionEmissionLogEvents,
   type SynthesizerProvenance,
 } from "../src/lib/triage-pr-review-ensemble"
 import {
@@ -59,6 +60,11 @@ import {
   type PrReviewVerdict,
   type PrReviewFinding,
 } from "../src/lib/triage-pr-review"
+import {
+  buildTestingEvidencePack,
+  filterTestingEvidenceForSuppressedMissingCoverage,
+  renderTestingEvidenceBlock,
+} from "../src/lib/testing-evidence-pack"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 import type { Env } from "../src/index"
 
@@ -94,6 +100,87 @@ function makeCounterEnv(store = new Map<string, string>(), puts: Array<[string, 
     },
   } as unknown as Env
 }
+
+describe("SIG-222 testing evidence policy integration", () => {
+  it("suppresses repo-known/comment-only missing-sibling rows and keeps remaining testing findings P3 inline COMMENT", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: [
+        "src/lib/comment-only.ts",
+        "src/lib/existing-tested.ts",
+        "src/lib/new-source.ts",
+      ],
+      reviewedFilePaths: [
+        "src/lib/comment-only.ts",
+        "src/lib/existing-tested.ts",
+        "src/lib/new-source.ts",
+      ],
+    })
+    const filtered = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([
+        ["src/lib/comment-only.ts", ["// update docs for maintainers"]],
+        ["src/lib/existing-tested.ts", ["export function existingTested() { return run() }"]],
+        ["src/lib/new-source.ts", ["export function newSource() { return run() }"]],
+      ]),
+      repoPaths: [
+        "src/lib/existing-tested.ts",
+        "tests/existing-tested.test.ts",
+      ],
+    })
+
+    expect(filtered.suppressions).toEqual([
+      { source: "src/lib/comment-only.ts", reason: "no-substantive-change" },
+      {
+        source: "src/lib/existing-tested.ts",
+        reason: "repo-sibling-exists",
+        test: "tests/existing-tested.test.ts",
+      },
+    ])
+    expect(filtered.pack.siblingMappings).toEqual([
+      { source: "src/lib/new-source.ts", test: null },
+    ])
+    const evidenceBlock = renderTestingEvidenceBlock(filtered.pack, {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    })
+    expect(evidenceBlock).not.toContain("src/lib/comment-only.ts")
+    expect(evidenceBlock).not.toContain("src/lib/existing-tested.ts")
+    expect(evidenceBlock).toContain("siblingMapping:src/lib/new-source.ts->NONE")
+
+    const reviewable: ReviewableMap = new Map([
+      ["src/lib/new-source.ts", [{ line: 12, side: "RIGHT" }]],
+    ])
+    const addedLineTextByLine = new Map<string, Map<number, string>>([
+      ["src/lib/new-source.ts", new Map([[12, "export function newSource() { return run() }"]])],
+    ])
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "One test gap.",
+        confidence: 5,
+        confidenceReason: "Grounded by evidence pack.",
+        findings: [{
+          path: "src/lib/new-source.ts",
+          line: 12,
+          scope: "line",
+          score: 5,
+          category: "testing",
+          headline: "new source lacks a sibling test",
+          body: "Add a sibling test covering the new exported behavior.",
+          evidenceRefs: ["siblingMapping:src/lib/new-source.ts->NONE"],
+        }],
+      },
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.comments).toHaveLength(1)
+    expect(out.submission.comments?.[0]?.body).toContain("<!-- sigilix:severity:2 -->")
+  })
+})
 
 describe("buildAstFindingsSynthBlock (SIG-245 AST-supersession recall fix)", () => {
   const astJson = '[{"id":"spawn-shell-true","path":"src/services/exec.ts","line":5}]'
@@ -185,6 +272,50 @@ describe("prepareSubmissionAffordance", () => {
 
     expect(store.get(key)).toBe("8")
     expect(puts).toEqual([[key, "8"]])
+  })
+})
+
+describe("buildSuggestionEmissionLogEvents (SIG-103)", () => {
+  const context = {
+    owner: "Sigilix",
+    repo: "sigilix",
+    prNumber: 377,
+    headSha: "148dacc1050aafd118764a8320a74ae14673100e",
+    commentsSubmitted: true,
+  }
+
+  it("renders the post-submit suggestion telemetry shape", () => {
+    expect(buildSuggestionEmissionLogEvents(context, [
+      { path: "src/a.ts", line: 12 },
+      { path: "src/b.ts", line: 20, startLine: 18 },
+    ])).toEqual([
+      {
+        event: "pr-review-suggestion-emitted",
+        owner: "Sigilix",
+        repo: "sigilix",
+        prNumber: 377,
+        headSha: "148dacc",
+        path: "src/a.ts",
+        line: 12,
+      },
+      {
+        event: "pr-review-suggestion-emitted",
+        owner: "Sigilix",
+        repo: "sigilix",
+        prNumber: 377,
+        headSha: "148dacc",
+        path: "src/b.ts",
+        line: 20,
+        startLine: 18,
+      },
+    ])
+  })
+
+  it("does not emit telemetry when review comments were suppressed", () => {
+    expect(buildSuggestionEmissionLogEvents({
+      ...context,
+      commentsSubmitted: false,
+    }, [{ path: "src/a.ts", line: 12 }])).toEqual([])
   })
 })
 
@@ -405,6 +536,175 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.droppedForHallucination).toBe(0)
     expect(out.droppedForInvalidLine).toBe(0)
     expect(out.demotedScore1).toBe(0)
+  })
+
+  it("attaches EvidenceRecord from validated synth provenance without changing score or confidence", () => {
+    const astId = "ast/no-unsafe-call/abc123/42"
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{
+            ...baseFinding,
+            line: 42,
+            score: 4,
+            confidence: 4,
+            evidenceId: "freeform-model-id",
+            evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE", "freeform:<script>"],
+          }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0", "security-0", astId],
+            action: "merged",
+            verifiedViaRetrieval: true,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts: [
+        ...specialistVerdicts,
+        {
+          role: "security" as const,
+          verdict: {
+            ...baseVerdict,
+            findings: [{
+              ...baseFinding,
+              id: "security-0",
+              line: 42,
+              score: 4,
+              evidenceId: "secret:generic-api-key:abc123:42",
+            }],
+          },
+          elapsedMs: 100,
+        },
+        {
+          role: "performance" as const,
+          verdict: { ...baseVerdict, findings: [] },
+          elapsedMs: 100,
+        },
+        {
+          role: "tests" as const,
+          verdict: null,
+          elapsedMs: 100,
+        },
+      ],
+      astFindingIds: [astId],
+    })
+
+    const finding = out.verdict.findings[0]
+    expect(finding?.score).toBe(4)
+    expect(finding?.confidence).toBe(4)
+    expect(finding?.evidence).toEqual({
+      specialistsThatFlagged: ["logic", "security"],
+      specialistsThatDeclined: ["performance"],
+      deterministicFactIds: [
+        "secret:generic-api-key:abc123:42",
+        "siblingMapping:src/lib/foo.ts->NONE",
+        astId,
+      ],
+      retrievalChunkIds: [],
+      relatedPriorPRs: [],
+      synthDecision: "merged",
+      consensusScore: 2,
+    })
+  })
+
+  it("does not attribute fallback sourceSpecialists that returned no findings", () => {
+    const astId = "ast/no-unsafe-call/abc123/42"
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{ ...baseFinding, line: 42, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["security"],
+            sourceFindingIds: [astId],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts: [
+        ...specialistVerdicts,
+        {
+          role: "security" as const,
+          verdict: { ...baseVerdict, findings: [] },
+          elapsedMs: 100,
+        },
+      ],
+      astFindingIds: [astId],
+    })
+
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatFlagged).toEqual([])
+    expect(out.verdict.findings[0]?.evidence?.consensusScore).toBe(0)
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatDeclined).toEqual(["logic", "security"])
+  })
+
+  it("uses sourceSpecialists fallback only for a matching specialist finding", () => {
+    const astId = "ast/no-unsafe-call/abc123/42"
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{ ...baseFinding, line: 42, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: [astId],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+      astFindingIds: [astId],
+    })
+
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatFlagged).toEqual(["logic"])
+    expect(out.verdict.findings[0]?.evidence?.consensusScore).toBe(1)
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatDeclined).toEqual([])
+  })
+
+  it("normalizes malformed synth evidence actions before rendering metadata", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{ ...baseFinding, line: 42, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "split" as unknown as SynthesizerProvenance["findings"][number]["action"],
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+
+    expect(out.verdict.findings[0]?.evidence?.synthDecision).toBe("unknown")
   })
 
   it("tags a finding on a NON-changed file as outOfPrScope; a mis-anchored finding on a CHANGED file is NOT (Codex recall-hole fix)", () => {

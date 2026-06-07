@@ -1,53 +1,54 @@
-// SIG-70 — aggregate labeled comparison files into the decision report.
+// SIG-70/SIG-326 — aggregate labeled comparison files into the decision report.
 //
 // Pure: input is the parsed `ComparisonFile[]` (every `data/*.json`); output
 // is a tally object + a markdown rendering. The numbers answer the issue's
-// question directly — what would dropping CodeRabbit cost (unique real bugs)
-// and save (CodeRabbit-only noise), and how do the two bots' precisions
-// compare. `cli.ts` reads the files and writes the markdown.
+// question directly — per-tool precision/recall, overlap, unique catches, and
+// noise by category. `cli.ts` reads the files and writes the markdown.
 
 import {
   CATEGORIES,
-  CR_LABELS,
-  LABELS,
-  REAL_LABELS,
-  SIGILIX_LABELS,
   type Category,
   type ComparisonFile,
-  type Label,
+  type Outcome,
+  OUTCOMES,
+  type Tool,
+  TOOLS,
+  toolDisplayName,
 } from "./types"
 
 export interface SummaryReport {
   filesCollected: number
   filesLabeled: number
   totalItems: number
-  byLabel: Record<Label, number>
+  byOutcome: Record<Outcome, number>
   byCategory: Record<Category, { total: number; real: number }>
-  /** Per-bot: how many issues it flagged, how many were real, precision. */
-  sigilix: BotStats
-  coderabbit: BotStats
-  /** Issues both bots flagged (`both_real` + `both_noise`). */
-  overlap: number
-  /** Real bugs only CodeRabbit caught — the cost of dropping it. */
-  crUniqueRealBugs: number
-  /** Real bugs only Sigilix caught. */
-  sigilixUniqueRealBugs: number
-  /** CodeRabbit-only noise — the friction dropping it would remove. */
-  crOnlyNoise: number
-  sigilixOnlyNoise: number
+  byTool: Record<Tool, ToolStats>
+  /** Raw inline finding count per tool across collected PRs. */
+  commentVolume: Record<Tool, number>
+  /** Ground-truth real bugs across labeled rows. */
+  totalRealBugs: number
+  /** Real bugs no compared tool flagged. */
+  missedByAllRealBugs: number
+  /** Combination matrix keyed by joined tool ids, or `missed_by_all`. */
+  byCombination: Record<string, { real: number; noise: number }>
+  pairOverlap: Record<`${Tool}+${Tool}`, number>
 }
 
-export interface BotStats {
+export interface ToolStats {
   flagged: number
   real: number
   noise: number
   /** real / flagged, or null when the bot flagged nothing. */
   precision: number | null
+  /** real bugs this tool caught / all ground-truth real bugs. */
+  recall: number | null
+  uniqueRealBugs: number
+  onlyNoise: number
 }
 
-function emptyByLabel(): Record<Label, number> {
-  const out = {} as Record<Label, number>
-  for (const l of LABELS) out[l] = 0
+function emptyByOutcome(): Record<Outcome, number> {
+  const out = {} as Record<Outcome, number>
+  for (const o of OUTCOMES) out[o] = 0
   return out
 }
 
@@ -57,51 +58,123 @@ function emptyByCategory(): Record<Category, { total: number; real: number }> {
   return out
 }
 
-function botStats(byLabel: Record<Label, number>, labels: readonly Label[]): BotStats {
-  let flagged = 0
-  let real = 0
-  for (const l of labels) {
-    flagged += byLabel[l]
-    if ((REAL_LABELS as readonly string[]).includes(l)) real += byLabel[l]
+function emptyToolStats(): Record<Tool, ToolStats> {
+  const out = {} as Record<Tool, ToolStats>
+  for (const tool of TOOLS) {
+    out[tool] = {
+      flagged: 0,
+      real: 0,
+      noise: 0,
+      precision: null,
+      recall: null,
+      uniqueRealBugs: 0,
+      onlyNoise: 0,
+    }
   }
+  return out
+}
+
+function emptyCommentVolume(): Record<Tool, number> {
+  const out = {} as Record<Tool, number>
+  for (const tool of TOOLS) out[tool] = 0
+  return out
+}
+
+function emptyPairOverlap(): Record<`${Tool}+${Tool}`, number> {
   return {
-    flagged,
-    real,
-    noise: flagged - real,
-    precision: flagged === 0 ? null : real / flagged,
-  }
+    "sigilix+coderabbit": 0,
+    "sigilix+greptile": 0,
+    "coderabbit+greptile": 0,
+    // The template-literal type permits every ordering; keep only canonical
+    // rows in the renderer.
+  } as Record<`${Tool}+${Tool}`, number>
+}
+
+function combinationKey(tools: ReadonlySet<Tool>): string {
+  if (tools.size === 0) return "missed_by_all"
+  return TOOLS.filter((tool) => tools.has(tool)).join("+")
 }
 
 export function summarize(files: ComparisonFile[]): SummaryReport {
-  const byLabel = emptyByLabel()
+  const byOutcome = emptyByOutcome()
   const byCategory = emptyByCategory()
+  const byTool = emptyToolStats()
+  const commentVolume = emptyCommentVolume()
+  const byCombination: Record<string, { real: number; noise: number }> = {}
+  const pairOverlap = emptyPairOverlap()
   let totalItems = 0
   let filesLabeled = 0
+  let totalRealBugs = 0
+  let missedByAllRealBugs = 0
 
   for (const file of files) {
     if (file.items.length > 0) filesLabeled += 1
+    const refTool = new Map<string, Tool>()
+    for (const tool of TOOLS) {
+      commentVolume[tool] += file.findings[tool].length
+      for (const f of file.findings[tool]) refTool.set(f.ref, tool)
+    }
+
     for (const item of file.items) {
       totalItems += 1
-      byLabel[item.label] += 1
+      byOutcome[item.outcome] += 1
       const cat = byCategory[item.category]
       cat.total += 1
-      if ((REAL_LABELS as readonly string[]).includes(item.label)) cat.real += 1
+      if (item.outcome === "real_bug") {
+        cat.real += 1
+        totalRealBugs += 1
+      }
+
+      const tools = new Set<Tool>()
+      for (const ref of item.findings) {
+        const tool = refTool.get(ref)
+        if (tool) tools.add(tool)
+      }
+      const key = combinationKey(tools)
+      byCombination[key] ??= { real: 0, noise: 0 }
+      byCombination[key][item.outcome === "real_bug" ? "real" : "noise"] += 1
+      if (item.outcome === "real_bug" && tools.size === 0) missedByAllRealBugs += 1
+
+      for (const tool of TOOLS) {
+        if (!tools.has(tool)) continue
+        const stats = byTool[tool]
+        stats.flagged += 1
+        if (item.outcome === "real_bug") stats.real += 1
+        else stats.noise += 1
+      }
+      for (let i = 0; i < TOOLS.length; i++) {
+        for (let j = i + 1; j < TOOLS.length; j++) {
+          const a = TOOLS[i]!
+          const b = TOOLS[j]!
+          if (tools.has(a) && tools.has(b)) pairOverlap[`${a}+${b}`] += 1
+        }
+      }
+      if (tools.size === 1) {
+        const onlyTool = [...tools][0]!
+        if (item.outcome === "real_bug") byTool[onlyTool].uniqueRealBugs += 1
+        else byTool[onlyTool].onlyNoise += 1
+      }
     }
+  }
+
+  for (const tool of TOOLS) {
+    const stats = byTool[tool]
+    stats.precision = stats.flagged === 0 ? null : stats.real / stats.flagged
+    stats.recall = totalRealBugs === 0 ? null : stats.real / totalRealBugs
   }
 
   return {
     filesCollected: files.length,
     filesLabeled,
     totalItems,
-    byLabel,
+    byOutcome,
     byCategory,
-    sigilix: botStats(byLabel, SIGILIX_LABELS),
-    coderabbit: botStats(byLabel, CR_LABELS),
-    overlap: byLabel.both_real + byLabel.both_noise,
-    crUniqueRealBugs: byLabel.cr_only_real_bug,
-    sigilixUniqueRealBugs: byLabel.sigilix_only_real_bug,
-    crOnlyNoise: byLabel.cr_only_noise,
-    sigilixOnlyNoise: byLabel.sigilix_only_noise,
+    byTool,
+    commentVolume,
+    totalRealBugs,
+    missedByAllRealBugs,
+    byCombination,
+    pairOverlap,
   }
 }
 
@@ -110,7 +183,11 @@ function pct(n: number, d: number): string {
   return `${((n / d) * 100).toFixed(1)}%`
 }
 
-function precisionCell(s: BotStats): string {
+function ratioCell(n: number | null): string {
+  return n === null ? "—" : `${(n * 100).toFixed(1)}%`
+}
+
+function precisionCell(s: ToolStats): string {
   return s.precision === null ? "—" : `${(s.precision * 100).toFixed(1)}%`
 }
 
@@ -120,43 +197,63 @@ export function formatSummaryMarkdown(
   opts: { generatedIso: string },
 ): string {
   const r = report
-  const l = r.byLabel
+  const l = r.byOutcome
   const lines: string[] = []
 
-  lines.push("# Sigilix vs CodeRabbit — head-to-head comparison")
+  lines.push("# Reviewer head-to-head comparison")
   lines.push("")
   lines.push(`_Generated ${opts.generatedIso} · ${r.filesCollected} PR(s) collected, ${r.filesLabeled} labeled · ${r.totalItems} labeled issues._`)
   lines.push("")
 
-  lines.push("## Label matrix")
+  lines.push("## Outcome Matrix")
   lines.push("")
-  lines.push("| label | count | % of issues |")
-  lines.push("|-------|------:|------------:|")
-  for (const label of LABELS) {
-    lines.push(`| ${label} | ${l[label]} | ${pct(l[label], r.totalItems)} |`)
+  lines.push("| outcome | count | % of issues |")
+  lines.push("|---------|------:|------------:|")
+  for (const outcome of OUTCOMES) {
+    lines.push(`| ${outcome} | ${l[outcome]} | ${pct(l[outcome], r.totalItems)} |`)
   }
   lines.push(`| **total** | **${r.totalItems}** | |`)
   lines.push("")
 
-  lines.push("## Per-bot precision")
+  lines.push("## Per-Tool Precision And Recall")
   lines.push("")
-  lines.push("Precision = real bugs ÷ everything the bot flagged.")
+  lines.push("Precision = real bugs flagged ÷ everything the tool flagged. Recall = real bugs flagged ÷ all ground-truth real bugs.")
   lines.push("")
-  lines.push("| bot | flagged | real | noise | precision |")
-  lines.push("|-----|--------:|-----:|------:|----------:|")
-  lines.push(`| Sigilix | ${r.sigilix.flagged} | ${r.sigilix.real} | ${r.sigilix.noise} | ${precisionCell(r.sigilix)} |`)
-  lines.push(`| CodeRabbit | ${r.coderabbit.flagged} | ${r.coderabbit.real} | ${r.coderabbit.noise} | ${precisionCell(r.coderabbit)} |`)
+  lines.push("| tool | comments | flagged issues | real | noise | precision | recall | unique real | only noise |")
+  lines.push("|------|---------:|---------------:|-----:|------:|----------:|-------:|------------:|-----------:|")
+  for (const tool of TOOLS) {
+    const s = r.byTool[tool]
+    lines.push(`| ${toolDisplayName(tool)} | ${r.commentVolume[tool]} | ${s.flagged} | ${s.real} | ${s.noise} | ${precisionCell(s)} | ${ratioCell(s.recall)} | ${s.uniqueRealBugs} | ${s.onlyNoise} |`)
+  }
   lines.push("")
-  lines.push(`Overlap (both bots flagged the same issue): **${r.overlap}** (${pct(r.overlap, r.totalItems)} of issues).`)
+  const zeroCommentTools = TOOLS.filter((tool) => r.commentVolume[tool] === 0)
+  if (zeroCommentTools.length > 0) {
+    lines.push(
+      `Coverage note: ${zeroCommentTools.map(toolDisplayName).join(", ")} had zero collected comments. ` +
+        "Treat recall for those tools as not interpretable until you verify they actually reviewed the sampled PRs.",
+    )
+    lines.push("")
+  }
+  lines.push(`Ground-truth real bugs: **${r.totalRealBugs}**; missed by all compared tools: **${r.missedByAllRealBugs}**.`)
   lines.push("")
 
-  lines.push("## Decision support")
+  lines.push("## Overlap")
   lines.push("")
-  lines.push("What dropping CodeRabbit would cost vs. save:")
+  lines.push("| combination | real | noise | total |")
+  lines.push("|-------------|-----:|------:|------:|")
+  const combinationKeys = Object.keys(r.byCombination).sort((a, b) => a.localeCompare(b))
+  for (const key of combinationKeys) {
+    const row = r.byCombination[key]!
+    lines.push(`| ${key} | ${row.real} | ${row.noise} | ${row.real + row.noise} |`)
+  }
   lines.push("")
-  lines.push(`- **Cost** — real bugs only CodeRabbit caught: **${r.crUniqueRealBugs}**`)
-  lines.push(`- **Save** — CodeRabbit-only noise comments removed: **${r.crOnlyNoise}**`)
-  lines.push(`- For reference, real bugs only Sigilix caught: ${r.sigilixUniqueRealBugs}; Sigilix-only noise: ${r.sigilixOnlyNoise}`)
+  lines.push("Pairwise overlap counts include all-three rows.")
+  lines.push("")
+  lines.push("| pair | shared issues |")
+  lines.push("|------|--------------:|")
+  for (const [pair, count] of Object.entries(r.pairOverlap)) {
+    lines.push(`| ${pair} | ${count} |`)
+  }
   lines.push("")
 
   lines.push("## By category")

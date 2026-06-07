@@ -2,9 +2,9 @@
 
 https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17
 
-Sigilix flagged **2**; CodeRabbit flagged **3**.
+Sigilix flagged **2**; CodeRabbit flagged **3**; Greptile flagged **0**.
 
-Label each *real-world issue* once in the table at the bottom. If both bots flagged the same issue, put both refs in one row and use a `both_*` label. Leave a finding out of the table only if it is a pure duplicate of a row you already wrote.
+Label each *real-world issue* once in the table at the bottom. If multiple tools flagged the same issue, put all refs in one row. Use `none` only for a ground-truth real bug every tool missed. Leave a finding out of the table only if it is a pure duplicate of a row you already wrote.
 
 ### Sigilix findings
 
@@ -17,16 +17,20 @@ Label each *real-world issue* once in the table at the bottom. If both bots flag
 - `c2` server/webhooks.ts:45 — _⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_
 - `c3` server/webhooks.ts:44 — _⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_
 
+### Greptile findings
+
+_(none)_
+
 ## Labels
 
-<!-- label    ∈ sigilix_only_real_bug | sigilix_only_noise | cr_only_real_bug | cr_only_noise | both_real | both_noise -->
+<!-- outcome  ∈ real_bug | noise -->
 <!-- category ∈ security | perf | logic | tests | style -->
-<!-- findings: comma-separated refs, e.g. s1,c3 -->
+<!-- findings: comma-separated refs, e.g. s1,c3,g2; use `none` for a real bug every tool missed -->
 
-| findings | label | category | note |
+| findings | outcome | category | note |
 |----------|-------|----------|------|
-| s1 | sigilix_only_real_bug | tests | webhook handler untested |
-| s2 | sigilix_only_real_bug | logic | action null/undefined silently treated as no-op |
-| c1 | cr_only_real_bug | logic | req.body undefined without json middleware |
-| c2 | cr_only_real_bug | security | missing GitHub webhook signature verification |
-| c3 | cr_only_real_bug | logic | gate actions by event type, not just action |
+| s1 | real_bug | tests | webhook handler untested |
+| s2 | real_bug | logic | action null/undefined silently treated as no-op |
+| c1 | real_bug | logic | req.body undefined without json middleware |
+| c2 | real_bug | security | missing GitHub webhook signature verification |
+| c3 | real_bug | logic | gate actions by event type, not just action |

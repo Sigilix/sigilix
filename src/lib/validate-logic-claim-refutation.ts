@@ -1,14 +1,22 @@
 // SIG-328: logic-claim refutation gate (deterministic FP precision layer).
 //
-// The logic specialist (deepseek-v4-pro) is a strong reasoner but has TWO
-// stable priors that prompt-tuning could not dislodge (they fire ~10/12 even
-// after refutation few-shots), BOTH of which are PROVABLY FALSE against the AST:
+// The logic specialist (deepseek-v4-pro) is a strong reasoner but has a handful
+// of stable priors that prompt-tuning did not fully dislodge. Each case below
+// is dropped only when it is PROVABLY FALSE against the AST:
 //   1. "next() runs unconditionally after the 403 / double-response" — but the
 //      guard branch ends in `return res.status(403).end()`, so the tail is the
 //      else-path, reached only when authorized.
 //   2. "read-check-write race / TOCTOU" — but the code is SYNCHRONOUS: no
 //      `await`/`yield`/callback between the check and the in-memory write, so
 //      nothing can interleave in single-threaded JS.
+//   3. "retry/redelivery double-charges despite a visible idempotency key" —
+//      but the side-effect call carries a stable idempotency/dedup option, so
+//      the same-delivery retry hypothesis is refuted. Distinct-event/domain
+//      duplicates fail open.
+//   4. "user input is compiled into a regex / ReDoS" — but the exact cited
+//      statement only passes the quoted value through a literal string
+//      substring API (`includes`/`startsWith`/`endsWith`/`indexOf`), and the
+//      enclosing function contains no actual regex surface.
 //
 // Consensus filtering (PR2) cannot kill these — they are STABLE, not flickery.
 // This gate fact-checks each high-severity logic finding against the cited
@@ -18,7 +26,7 @@
 // closure/IO boundary it cannot rule out, or an unbound guard. A real bug's
 // claim is TRUE (or unprovable), so the gate cannot suppress it.
 //
-// Codex sign-off (2026-06-05) shaped the two rules: control-flow requires a
+// Codex sign-off (2026-06-05) shaped the first two rules: control-flow requires a
 // same-block, unconditionally-terminating guard PLUS subject binding (the guard
 // must reference an identifier the finding complains about — mirroring the
 // SIG-327 window-blindness gate); sync-race requires a visible in-memory
@@ -30,6 +38,7 @@
 
 import type { PrReviewFinding } from "./triage-pr-review"
 import { parseSource, type SourceExt } from "./ast-rules/parser"
+import type { AstCache } from "./ast-rules/parse-cache"
 import { extractCitedIdentifiers } from "./validate-window-blindness"
 
 export type LogicClaimRefutationMode = "off" | "shadow" | "enforce"
@@ -48,6 +57,8 @@ export const LOGIC_CLAIM_REFUTATION_MIN_SEVERITY = 4
 export type LogicClaimDropReason =
   | "control-flow-claim-refuted-by-guard"
   | "sync-race-claim-refuted-no-async-boundary"
+  | "idempotency-claim-refuted-by-visible-key"
+  | "regex-substring-claim-refuted-by-literal-string-filter"
   | "unused-claim-refuted-identifier-is-referenced"
   | "missing-return-type-claim-refuted-annotation-present"
 
@@ -58,6 +69,14 @@ export type LogicClaimRefutationDecision =
 export interface LogicClaimRefutationContext {
   /** Full source of changed files (same map the AST floors use). */
   fullFileByPath: ReadonlyMap<string, string>
+  /**
+   * SIG-336: optional per-review parse-once cache. When provided, the cited file
+   * is acorn-parsed at most ONCE per review across all findings (and the shared
+   * 500KB large-file guard applies) instead of re-parsing per finding. Absent
+   * (e.g. standalone unit tests) → parse directly. Either way the gate fails open
+   * on a parse failure or large-file skip, so behavior is unchanged.
+   */
+  astCache?: AstCache
 }
 
 // --- claim-shape detection -------------------------------------------------
@@ -72,6 +91,24 @@ const CONTROL_FLOW_CLAIM_RE =
 const SYNC_RACE_CLAIM_RE =
   /\b(?:race\s+condition|toctou|time[-\s]?of[-\s]?check|read[-\s]?(?:modify|check)[-\s]?(?:write|act)|check[-\s]?then[-\s]?act|non[-\s]?atomic|lost\s+update|concurrent\s+(?:withdrawal|update|write|deduction|access))\b/i
 
+// A finding asserting a retry/redelivery duplicate side effect that a visible
+// stable idempotency / dedup key can refute. Tight to retry/redelivery wording:
+// a different logical-operation duplicate still needs a domain-state guard.
+const IDEMPOTENCY_RETRY_CLAIM_RE =
+  /\b(?:retry|retried|redeliver(?:y|ed|s)?|replay(?:ed|s)?|webhook\s+replay|duplicate\s+(?:processing|delivery))\b/i
+
+const DISTINCT_ID_CLAIM_RE =
+  /\b(?:different|distinct|fresh|new)\s+(?:event|message|delivery|attempt)?\s*\.?\s*id\b|\b(?:event|message|delivery|attempt)\.id\b[^.\n]{0,80}\b(?:different|distinct|fresh|new)\b/i
+
+const UNSTABLE_IDEMPOTENCY_VALUE_RE =
+  /\b(?:crypto\.randomUUID|randomUUID|Math\.random|Date\.now|new\s+Date|timestamp|nonce)\b/i
+
+const UNSTABLE_IDEMPOTENCY_CONTEXT_RE =
+  /\b(?:(?:fresh|different|distinct|unique|new)\s+(?:event|message|delivery|attempt|webhook)s?\s*\.?\s*id|(?:event|message|delivery|attempt)\.id\b[\s\S]{0,240}\b(?:fresh|different|distinct|unique|new|varies|changes|unstable|not\s+stable)|\bid\s+(?:changes|varies)\s+(?:on|per|across)\s+(?:retry|redelivery|delivery|attempt)|different\s+webhook\s+events?[\s\S]{0,240}\bsame\s+(?:order|operation)|same\s+(?:order|operation)[\s\S]{0,240}\bdifferent\s+webhook\s+events?)\b/i
+
+const STABLE_IDEMPOTENCY_VALUE_PATH_RE = /\b(?:event|msg|message|delivery)\.id\b/i
+const FAIL_OPEN_IDEMPOTENCY_VALUE_PATH_RE = /\b(?:request|order)\.id\b/i
+
 // A finding asserting an identifier is unused/never-referenced. Loose on purpose
 // (just the TRIGGER); the AST refuter is the real guard and fails open. Tolerates
 // a back-ticked symbol between the keyword and the noun ("unused `req` parameter").
@@ -83,6 +120,16 @@ const UNUSED_CLAIM_RE =
 // bug like "missing the return type GUARD before the await" does NOT trigger.
 const MISSING_RETURN_TYPE_CLAIM_RE =
   /\breturn[\s-]type\s+(?:annotation|declaration)\b[^.\n]{0,24}?\b(?:is\s+)?(?:missing|absent|not\s+(?:declared|specified|present|annotated))\b|\bmissing\s+(?:a\s+|an\s+|the\s+)?(?:explicit\s+)?return[\s-]type\s+(?:annotation|declaration)\b/i
+
+// A finding asserting regex / RegExp / ReDoS risk. The refuter below is much
+// tighter than this trigger: it only fires when the exact cited statement is a
+// string-only substring operation on quoted claim identifiers, with no regex
+// surface in the enclosing function.
+const REGEX_SUBSTRING_CLAIM_RE =
+  /\b(?:re-?dos|regex|regexp|regular\s+expression|dynamic\s+pattern|catastrophic\s+backtracking)\b/i
+
+const REGEX_ELSEWHERE_CLAIM_RE =
+  /\b(?:elsewhere|outside|later|another|separate|different)\b[^.\n]{0,48}\b(?:function|file|path|branch|call|helper|statement|line|block)\b|\b(?:function|file|path|branch|call|helper|statement|line|block)\b[^.\n]{0,48}\b(?:elsewhere|outside|later|another|separate|different)\b/i
 
 function findingText(f: PrReviewFinding): string {
   return `${f.headline} ${f.body}`
@@ -125,19 +172,15 @@ function eachNode(node: Node, cb: (n: Node) => void): void {
 }
 
 /** The SMALLEST function node whose body spans `line`. */
-function enclosingFunction(ast: Node, line: number): Node | null {
-  let best: Node | null = null
-  let bestSize = Infinity
+function enclosingFunctions(ast: Node, line: number): Node[] {
+  const matches: Node[] = []
   eachNode(ast, (n) => {
     if (!FUNCTION_TYPES.has(n.type)) return
     if (!spans(n, line)) return
-    const size = n.loc.end.line - n.loc.start.line
-    if (size < bestSize) {
-      best = n
-      bestSize = size
-    }
+    matches.push(n)
   })
-  return best
+  matches.sort((a, b) => (a.loc.end.line - a.loc.start.line) - (b.loc.end.line - b.loc.start.line))
+  return matches
 }
 
 /** Is this statement an unconditional terminator at the top level of its branch? */
@@ -219,14 +262,40 @@ function refutesControlFlow(fn: Node, line: number, finding: PrReviewFinding, li
     // PRIOR-ACTION CHECK (code-reviewer P1): the early-return guard only proves
     // the cited tail is the else-path — NOT that the flagged action hasn't
     // ALREADY happened. `res.json(a); if (x) return; res.json(b)` double-responds
-    // on the !x path. If any statement BEFORE the guard (or the guard's own
-    // consequent) contains a call whose callee identifiers the finding complains
-    // about, the cited tail may be a genuine SECOND occurrence → fail open.
-    const priorScope: Node[] = [...block.slice(0, citedIdx - 1), prev.consequent]
+    // on the !x path. Statements BEFORE the guard are on the same path as the
+    // tail. The guard consequent is mutually exclusive with the tail, but if it
+    // repeats the same cited tail action, fail open rather than suppress a
+    // possible "called twice in this handler" claim.
+    const priorScope: Node[] = block.slice(0, citedIdx - 1)
     if (priorScope.some((n) => containsConflictingCall(n, findingIds))) continue
+    const citedActionIds = new Set(callCalleeIdentifiers(citedStmt).filter((id) => findingIds.has(id)))
+    if (citedActionIds.size > 0 && containsConflictingCall(prev.consequent, citedActionIds)) continue
     return true
   }
   return false
+}
+
+function callCalleeIdentifiers(node: Node): string[] {
+  const ids = new Set<string>()
+  eachNode(node, (n) => {
+    if (n.type !== "CallExpression") return
+    let callee = n.callee
+    while (callee) {
+      if (callee.type === "Identifier") {
+        ids.add(callee.name)
+        return
+      }
+      if (callee.type === "MemberExpression") {
+        if (callee.property?.type === "Identifier") ids.add(callee.property.name)
+        callee = callee.object
+      } else if (callee.type === "CallExpression") {
+        callee = callee.callee
+      } else {
+        break
+      }
+    }
+  })
+  return [...ids]
 }
 
 /** Does `node` contain a CallExpression whose callee identifiers intersect `findingIds`? */
@@ -317,7 +386,167 @@ function refutesSyncRace(fn: Node, line: number): boolean {
   return sawCheck
 }
 
+function propertyName(prop: Node): string | null {
+  if (!prop) return null
+  if (prop.type === "Identifier") return prop.name
+  if (prop.type === "Literal" && typeof prop.value === "string") return prop.value
+  return null
+}
+
+function memberPath(node: Node): string | null {
+  if (!node) return null
+  if (node.type === "Identifier") return node.name
+  if (node.type === "MemberExpression") {
+    const left = memberPath(node.object)
+    const right = propertyName(node.property)
+    return left && right ? `${left}.${right}` : null
+  }
+  return null
+}
+
+function stableIdempotencyValue(node: Node, lines: string[]): boolean {
+  const src = nodeSourceLines(node, lines)
+  if (UNSTABLE_IDEMPOTENCY_VALUE_RE.test(src)) return false
+  const path = memberPath(node)
+  // Only direct delivery-token member paths refute retry claims. Domain keys
+  // (`order.id`) and request-scoped keys (`request.id`) can hide distinct
+  // operations or per-attempt IDs, so they deliberately fail open.
+  if (path && FAIL_OPEN_IDEMPOTENCY_VALUE_PATH_RE.test(path)) return false
+  if (path && STABLE_IDEMPOTENCY_VALUE_PATH_RE.test(path)) return true
+  return false
+}
+
+function callNearLine(node: Node, line: number): boolean {
+  if (!node?.loc) return false
+  return node.loc.start.line <= line + 3 && node.loc.end.line >= line - 3
+}
+
+function candidateLines(line: number): number[] {
+  return [line, line - 1, line + 1].filter((n) => n >= 1)
+}
+
+function eachNodeInCurrentFunction(node: Node, cb: (n: Node) => void): void {
+  if (!node || typeof node.type !== "string") return
+  cb(node)
+  for (const key of Object.keys(node)) {
+    if (key === "loc" || key === "start" || key === "end" || key === "range") continue
+    const child = node[key]
+    if (Array.isArray(child)) {
+      for (const c of child) {
+        if (c && typeof c.type === "string" && !FUNCTION_TYPES.has(c.type)) eachNodeInCurrentFunction(c, cb)
+      }
+    } else if (child && typeof child.type === "string" && !FUNCTION_TYPES.has(child.type)) {
+      eachNodeInCurrentFunction(child, cb)
+    }
+  }
+}
+
+function callDistanceFromLine(node: Node, line: number): number {
+  if (spans(node, line)) return 0
+  if (node.loc.end.line < line) return line - node.loc.end.line
+  return node.loc.start.line - line
+}
+
+function targetCallNearLine(fn: Node, line: number): Node | null {
+  const body = fn.body ?? fn
+  if (!body || typeof body.type !== "string") return null
+  let best: Node | null = null
+  let bestDistance = Infinity
+  let ambiguous = false
+  eachNodeInCurrentFunction(body, (n) => {
+    if (n.type !== "CallExpression" || !callNearLine(n, line)) return
+    const distance = callDistanceFromLine(n, line)
+    if (!best) {
+      best = n
+      bestDistance = distance
+      ambiguous = false
+      return
+    }
+    if (distance < bestDistance) {
+      best = n
+      bestDistance = distance
+      ambiguous = false
+      return
+    }
+    if (distance === bestDistance) ambiguous = true
+  })
+  return ambiguous ? null : best
+}
+
+function callHasStableIdempotencyOption(call: Node, lines: string[]): boolean {
+  for (const arg of call.arguments ?? []) {
+    if (!arg || arg.type !== "ObjectExpression") continue
+    for (const p of arg.properties ?? []) {
+      if (!p || p.type !== "Property") continue
+      const key = propertyName(p.key)
+      if (!key || !/\b(?:idempotency|dedup)/i.test(key)) continue
+      if (stableIdempotencyValue(p.value, lines)) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Refute a retry/redelivery duplicate-side-effect claim. TRUE only when the
+ * finding itself is a retry/redelivery claim (not a distinct-event/domain-state
+ * claim), and the cited function has a nearby call with a stable idempotency /
+ * dedup option such as `{ idempotencyKey: event.id }`. Fail open for unstable
+ * keys (`randomUUID`, timestamps, nonce) and for visible text saying the id is
+ * fresh/different per attempt.
+ */
+function refutesIdempotencyRetryClaim(fn: Node, line: number, finding: PrReviewFinding, lines: string[]): boolean {
+  const text = findingText(finding)
+  if (!IDEMPOTENCY_RETRY_CLAIM_RE.test(text)) return false
+  if (DISTINCT_ID_CLAIM_RE.test(text)) return false
+  const fnText = nodeSourceLines(fn, lines)
+  if (UNSTABLE_IDEMPOTENCY_CONTEXT_RE.test(fnText)) return false
+
+  const call = targetCallNearLine(fn, line)
+  return call ? callHasStableIdempotencyOption(call, lines) : false
+}
+
+function statementsSpanningLine(fn: Node, line: number): Node[] {
+  const seen = new Set<Node>()
+  const statements: Node[] = []
+  for (const block of statementBlocks(fn.body ?? fn)) {
+    for (const stmt of block) {
+      if (!spans(stmt, line) || seen.has(stmt)) continue
+      seen.add(stmt)
+      statements.push(stmt)
+    }
+  }
+  return statements
+}
+
+function substringProofNodesSpanningLine(fn: Node, line: number): Node[] {
+  const nodes = statementsSpanningLine(fn, line)
+  const body = fn.body
+  if (body && body.type !== "BlockStatement" && spans(body, line) && !nodes.includes(body)) {
+    nodes.push(body)
+  }
+  return nodes
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function lineContainsAnyIdentifier(lines: readonly string[], line: number, ids: ReadonlySet<string>): boolean {
+  const text = lines[line - 1] ?? ""
+  return [...ids].some((id) => new RegExp(`\\b${escapeRegExp(id)}\\b`).test(text))
+}
+
+function candidateLinesWhenUnanchored(fn: Node, line: number, lines: readonly string[], finding: PrReviewFinding): number[] {
+  const ids = new Set(extractCitedIdentifiers(findingText(finding)))
+  const spanning = statementsSpanningLine(fn, line)
+  if (spanning.some((stmt) => lineContainsAnyIdentifier(lines, stmt.loc.end.line, ids))) return [line]
+  return candidateLines(line)
+    .filter((candidate) => candidate === line || lineContainsAnyIdentifier(lines, candidate, ids))
+}
+
 const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g
+const STRING_ONLY_SUBSTRING_METHODS = new Set(["includes", "startsWith", "endsWith", "indexOf"])
+const REGEX_SURFACE_METHODS = new Set(["test", "exec", "match", "matchAll", "search"])
 
 /**
  * Refute an "unused identifier" claim. The finding names a symbol (back-tick /
@@ -361,6 +590,156 @@ function refutesUnused(fn: Node, finding: PrReviewFinding): boolean {
   return false
 }
 
+function quotedIdentifiers(text: string): Set<string> {
+  const ids = new Set<string>()
+  for (const m of text.matchAll(BACKTICK_IDENT_RE)) ids.add(m[1] as string)
+  return ids
+}
+
+function textContainsIdentifier(text: string, id: string): boolean {
+  return new RegExp(`\\b${escapeRegExp(id)}\\b`).test(text)
+}
+
+function nodeContainsStringOnlySubstringCall(node: Node): boolean {
+  let hit = false
+  eachNode(node, (n) => {
+    if (hit || n.type !== "CallExpression") return
+    const callee = n.callee
+    if (callee?.type !== "MemberExpression") return
+    const prop = propertyName(callee.property)
+    if (prop && STRING_ONLY_SUBSTRING_METHODS.has(prop)) hit = true
+  })
+  return hit
+}
+
+function isStringOnlySubstringCall(node: Node): boolean {
+  if (!node || node.type !== "CallExpression") return false
+  const callee = node.callee
+  if (callee?.type !== "MemberExpression") return false
+  const prop = propertyName(callee.property)
+  return prop ? STRING_ONLY_SUBSTRING_METHODS.has(prop) : false
+}
+
+function nodeContainsIdentifierOutsideNestedFunctions(node: Node, id: string): boolean {
+  let hit = false
+  const visit = (n: Node): void => {
+    if (hit || !n || typeof n.type !== "string") return
+    if (FUNCTION_TYPES.has(n.type)) return
+    if (n.type === "Identifier" && n.name === id) {
+      hit = true
+      return
+    }
+    for (const key of Object.keys(n)) {
+      if (key === "loc" || key === "start" || key === "end" || key === "range") continue
+      const child = n[key]
+      if (Array.isArray(child)) {
+        for (const c of child) if (c && typeof c.type === "string") visit(c)
+      } else if (child && typeof child.type === "string") {
+        visit(child)
+      }
+    }
+  }
+  visit(node)
+  return hit
+}
+
+function callPassesQuotedIdentifierToUnknownCallee(call: Node, quoted: ReadonlySet<string>): boolean {
+  if (!call || (call.type !== "CallExpression" && call.type !== "NewExpression")) return false
+  if (isStringOnlySubstringCall(call)) return false
+  for (const arg of call.arguments ?? []) {
+    if (!arg || FUNCTION_TYPES.has(arg.type)) continue
+    for (const id of quoted) {
+      if (nodeContainsIdentifierOutsideNestedFunctions(arg, id)) return true
+    }
+  }
+  return false
+}
+
+function taggedTemplatePassesQuotedIdentifierToUnknownTag(node: Node, quoted: ReadonlySet<string>): boolean {
+  if (!node || node.type !== "TaggedTemplateExpression") return false
+  for (const expr of node.quasi?.expressions ?? []) {
+    if (!expr || FUNCTION_TYPES.has(expr.type)) continue
+    for (const id of quoted) {
+      if (nodeContainsIdentifierOutsideNestedFunctions(expr, id)) return true
+    }
+  }
+  return false
+}
+
+function functionPassesQuotedIdentifierToUnknownCall(fn: Node, quoted: ReadonlySet<string>): boolean {
+  let hit = false
+  // Intentionally descend through callbacks: the target FP shape is
+  // `rows.filter((r) => r.name.includes(needle))`, and any sibling callback
+  // that sends the same quoted value to a non-substring callee must fail open.
+  eachNode(fn.body ?? fn, (n) => {
+    if (!hit && (callPassesQuotedIdentifierToUnknownCallee(n, quoted) || taggedTemplatePassesQuotedIdentifierToUnknownTag(n, quoted))) hit = true
+  })
+  return hit
+}
+
+function functionContainsRegexSurface(fn: Node): boolean {
+  let hit = false
+  eachNodeInCurrentFunction(fn.body ?? fn, (n) => {
+    if (hit) return
+    if (n.type === "Literal" && n.regex) {
+      hit = true
+      return
+    }
+    if (n.type === "NewExpression" || n.type === "CallExpression") {
+      const calleePath = memberPath(n.callee)
+      if (
+        (n.callee?.type === "Identifier" && n.callee.name === "RegExp") ||
+        calleePath === "globalThis.RegExp" ||
+        calleePath === "window.RegExp"
+      ) {
+        hit = true
+        return
+      }
+    }
+    if (n.type === "TaggedTemplateExpression") {
+      const tagPath = memberPath(n.tag)
+      if (tagPath && /\bregex\b/i.test(tagPath)) {
+        hit = true
+        return
+      }
+    }
+    if (n.type === "CallExpression" && n.callee?.type === "MemberExpression") {
+      const prop = propertyName(n.callee.property)
+      if (prop && REGEX_SURFACE_METHODS.has(prop)) hit = true
+    }
+  })
+  return hit
+}
+
+/**
+ * Refute a regex/ReDoS hallucination ONLY when the exact cited statement proves
+ * the model's named value is used as a literal string substring, not as a
+ * regular expression. This intentionally descends into callback expressions
+ * because `rows.filter((r) => r.name.includes(needle))` is the target FP shape;
+ * the unknown-call guard also descends and fails open if that same quoted value
+ * reaches any non-substring call/constructor. This is deliberately narrower
+ * than "the function looks safe": no quoted expression, no exact statement
+ * match, text claiming another location, or any actual regex surface in the
+ * enclosing function all KEEP.
+ */
+function refutesRegexSubstringClaim(fnChain: readonly Node[], line: number, finding: PrReviewFinding, lines: string[]): boolean {
+  const text = findingText(finding)
+  if (!REGEX_SUBSTRING_CLAIM_RE.test(text)) return false
+  if (REGEX_ELSEWHERE_CLAIM_RE.test(text)) return false
+  const quoted = quotedIdentifiers(text)
+  if (quoted.size === 0) return false
+  if (fnChain.some((fn) => functionContainsRegexSurface(fn))) return false
+  if (fnChain.some((fn) => functionPassesQuotedIdentifierToUnknownCall(fn, quoted))) return false
+
+  return fnChain.some((fn) => {
+    return substringProofNodesSpanningLine(fn, line).some((stmt) => {
+      if (!nodeContainsStringOnlySubstringCall(stmt)) return false
+      const stmtText = nodeSourceLines(stmt, lines)
+      return [...quoted].every((id) => textContainsIdentifier(stmtText, id))
+    })
+  })
+}
+
 /**
  * Refute a "missing return type annotation" claim. acorn-typescript sets
  * `returnType` on a function with an explicit return-type annotation. If the
@@ -401,28 +780,50 @@ export function evaluateLogicClaimRefutation(
   const text = findingText(finding)
   const isControlFlow = CONTROL_FLOW_CLAIM_RE.test(text)
   const isSyncRace = SYNC_RACE_CLAIM_RE.test(text)
+  const isIdempotencyRetry = IDEMPOTENCY_RETRY_CLAIM_RE.test(text)
   const isUnused = UNUSED_CLAIM_RE.test(text)
   const isMissingReturnType = MISSING_RETURN_TYPE_CLAIM_RE.test(text)
-  if (!isControlFlow && !isSyncRace && !isUnused && !isMissingReturnType) return { keep: true }
+  const isRegexSubstring = REGEX_SUBSTRING_CLAIM_RE.test(text)
+  if (
+    !isControlFlow &&
+    !isSyncRace &&
+    !isIdempotencyRetry &&
+    !isUnused &&
+    !isMissingReturnType &&
+    !isRegexSubstring
+  ) return { keep: true }
 
   const source = context.fullFileByPath.get(finding.path)
   if (typeof source !== "string" || source.length === 0) return { keep: true }
   const ext = extOf(finding.path)
   if (!ext) return { keep: true }
-  const parsed = parseSource(source, ext)
+  // SIG-336: parse via the per-review cache when present (parse-once + size
+  // guard); fall back to a direct parse when called without a cache.
+  const parsed = context.astCache
+    ? context.astCache.get(finding.path, source, ext)
+    : parseSource(source, ext)
   if (!parsed.ok) return { keep: true }
 
   const line = finding.line
   if (typeof line !== "number" || line < 1) return { keep: true }
-  const fn = enclosingFunction(parsed.ast, line)
+  const fnChain = enclosingFunctions(parsed.ast, line)
+  const fn = fnChain[0] ?? null
   if (!fn) return { keep: true }
   const lines = source.split(/\r?\n/)
 
-  if (isControlFlow && refutesControlFlow(fn, line, finding, lines)) {
+  const controlLinesToTry = candidateLinesWhenUnanchored(fn, line, lines, finding)
+
+  if (isControlFlow && controlLinesToTry.some((l) => refutesControlFlow(fn, l, finding, lines))) {
     return { keep: false, reason: "control-flow-claim-refuted-by-guard" }
   }
   if (isSyncRace && refutesSyncRace(fn, line)) {
     return { keep: false, reason: "sync-race-claim-refuted-no-async-boundary" }
+  }
+  if (isIdempotencyRetry && refutesIdempotencyRetryClaim(fn, line, finding, lines)) {
+    return { keep: false, reason: "idempotency-claim-refuted-by-visible-key" }
+  }
+  if (isRegexSubstring && refutesRegexSubstringClaim(fnChain, line, finding, lines)) {
+    return { keep: false, reason: "regex-substring-claim-refuted-by-literal-string-filter" }
   }
   if (isUnused && refutesUnused(fn, finding)) {
     return { keep: false, reason: "unused-claim-refuted-identifier-is-referenced" }

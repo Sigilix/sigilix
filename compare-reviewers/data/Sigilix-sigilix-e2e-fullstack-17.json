@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "owner": "Sigilix",
   "repo": "sigilix-e2e-fullstack",
   "pr": 17,
@@ -9,54 +9,55 @@
     "sigilix": [
       {
         "ref": "s1",
-        "bot": "sigilix",
         "commentId": 3346360287,
         "path": "server/webhooks.ts",
         "line": 1,
         "excerpt": "**New webhook handler ships without tests**",
         "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346360287",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       },
       {
         "ref": "s2",
-        "bot": "sigilix",
         "commentId": 3346360289,
         "path": "server/webhooks.ts",
         "line": null,
         "excerpt": "**Action string conversion silences null/undefined without logging or differentiating no‑op from invalid payload**",
         "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346360289",
-        "botCategory": "logic"
+        "botCategory": "logic",
+        "tool": "sigilix"
       }
     ],
     "coderabbit": [
       {
         "ref": "c1",
-        "bot": "coderabbit",
         "commentId": 3346368576,
         "path": "server/webhooks.ts",
         "line": null,
         "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346368576"
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346368576",
+        "tool": "coderabbit"
       },
       {
         "ref": "c2",
-        "bot": "coderabbit",
         "commentId": 3346368587,
         "path": "server/webhooks.ts",
         "line": 45,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346368587"
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3346368587",
+        "tool": "coderabbit"
       },
       {
         "ref": "c3",
-        "bot": "coderabbit",
         "commentId": 3352918753,
         "path": "server/webhooks.ts",
         "line": 44,
         "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3352918753"
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/17#discussion_r3352918753",
+        "tool": "coderabbit"
       }
-    ]
+    ],
+    "greptile": []
   },
   "items": [
     {
@@ -64,45 +65,45 @@
       "findings": [
         "s1"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "tests",
-      "note": "webhook handler untested"
+      "note": "webhook handler untested",
+      "outcome": "real_bug"
     },
     {
       "id": 2,
       "findings": [
         "s2"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "logic",
-      "note": "action null/undefined silently treated as no-op"
+      "note": "action null/undefined silently treated as no-op",
+      "outcome": "real_bug"
     },
     {
       "id": 3,
       "findings": [
         "c1"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "req.body undefined without json middleware"
+      "note": "req.body undefined without json middleware",
+      "outcome": "real_bug"
     },
     {
       "id": 4,
       "findings": [
         "c2"
       ],
-      "label": "cr_only_real_bug",
       "category": "security",
-      "note": "missing GitHub webhook signature verification"
+      "note": "missing GitHub webhook signature verification",
+      "outcome": "real_bug"
     },
     {
       "id": 5,
       "findings": [
         "c3"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "gate actions by event type, not just action"
+      "note": "gate actions by event type, not just action",
+      "outcome": "real_bug"
     }
   ]
 }

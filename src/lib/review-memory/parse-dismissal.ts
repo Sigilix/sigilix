@@ -1,9 +1,9 @@
 // ARC-189 — Reviewer-reply dismissal-signal parser (Task 3).
 //
-// Walks a reply comment body looking for textual signals that the
-// reviewer is dismissing the parent Sigilix comment. v1 detects ONLY
-// dismissal — agreement / "good catch" replies are NOT positively
-// recorded, only the absence of a dismiss signal.
+// Walks a reply comment body looking for textual feedback signals on a
+// verified Sigilix finding. Dismissal detection is the original ARC-189
+// path; SIG-185 adds a narrow accepted-signal parser used only after the
+// caller has already verified the comment is responding to Sigilix.
 //
 // Keyword set:
 //   - "not relevant"
@@ -35,6 +35,10 @@ import { type DismissReason, parseDismissReason } from "../dismiss-reasons"
  */
 type ParsedDismissal = Pick<ReviewMemorySignal, "kind" | "dismissReason">
 
+export type ParsedReviewFeedback =
+  | ({ outcome: "dismissed" } & ParsedDismissal)
+  | { outcome: "accepted" }
+
 const PREFIX_KEYWORDS = [
   "not relevant",
   "false positive",
@@ -56,6 +60,9 @@ const BARE_NIT_REGEX = /^nit[.!]?$/i
 
 /** Triple-backtick fenced code block. Multi-line, non-greedy. */
 const CODE_FENCE_REGEX = /```[\s\S]*?```/g
+
+const ACCEPTANCE_REGEX =
+  /\b(?:good|great|nice)\s+catch\b|\b(?:thanks|thank you)\s+for\s+(?:catching|flagging)\b|\b(?:fixed|addressed|done)\b|\bmakes sense\b|\byou'?re right\b|\byou are right\b/i
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -132,4 +139,24 @@ export function parseDismissalSignal(body: unknown): ParsedDismissal | null {
     return attachReason(proseOnly.trim())
   }
   return null
+}
+
+/**
+ * SIG-185: parse direct reviewer feedback on a verified Sigilix finding into
+ * the SIG-147 outcome vocabulary. Dismissal keeps the existing keyword/reason
+ * behavior. Acceptance is deliberately narrow and only used by callers that
+ * already proved the comment is responding to a Sigilix finding. Dismissal
+ * wins mixed prose so "good catch, but false positive" never records acceptance.
+ */
+export function parseReviewFeedbackSignal(
+  body: unknown,
+): ParsedReviewFeedback | null {
+  const dismissal = parseDismissalSignal(body)
+  if (dismissal) return { outcome: "dismissed", ...dismissal }
+  if (typeof body !== "string") return null
+  const trimmed = body.trim()
+  if (trimmed.length === 0) return null
+  const proseOnly = trimmed.replace(CODE_FENCE_REGEX, "")
+  if (proseOnly.length === 0) return null
+  return ACCEPTANCE_REGEX.test(proseOnly) ? { outcome: "accepted" } : null
 }

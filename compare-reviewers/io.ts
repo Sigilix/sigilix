@@ -1,4 +1,4 @@
-// SIG-70 — pure path / merge / argument helpers.
+// SIG-70/SIG-326 — pure path / merge / argument helpers.
 //
 // Kept separate from `cli.ts` (which does the actual fs reads/writes) so the
 // naming + merge rules are unit-testable without touching disk.
@@ -60,11 +60,15 @@ export function mergeComparison(
     pr: number
     prUrl: string
     collectedAt: string
-    findings: { sigilix: NormalizedFinding[]; coderabbit: NormalizedFinding[] }
+    findings: {
+      sigilix: NormalizedFinding[]
+      coderabbit: NormalizedFinding[]
+      greptile: NormalizedFinding[]
+    }
   },
 ): ComparisonFile {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     owner: fresh.owner,
     repo: fresh.repo,
     pr: fresh.pr,

@@ -822,7 +822,8 @@ OPENCLAW_GATE = "shadow"
 #   pull_request                  (opened, synchronize, ready_for_review, reopened)
 #   push                          (default/dev/active-PR branch re-indexing)
 #   workflow_run                  (CI failure triage)
-#   issue_comment                 (top-level PR conversation @-mentions)
+#   issue_comment                 (top-level PR conversation @-mentions + explicit feedback capture)
+#   pull_request_review           (formal review-dismissal feedback capture)
 #   pull_request_review_comment   (inline PR review comment @-mentions)
 #
 # Optional (other):

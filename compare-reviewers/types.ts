@@ -1,4 +1,4 @@
-// SIG-70 — Sigilix vs CodeRabbit head-to-head measurement framework.
+// SIG-70/SIG-326 — head-to-head reviewer measurement framework.
 //
 // Shared shapes + the controlled vocabularies the reviewer labels into.
 // Everything here is pure data; no IO. The CLI (`cli.ts`) and the gh
@@ -7,57 +7,35 @@
 // summary tally are all pure functions over these types, unit-tested in
 // `tests/compare-reviewers.test.ts`.
 
-/** The two bots we compare. `coderabbit` ⇒ the `coderabbitai[bot]` login. */
-export const BOTS = ["sigilix", "coderabbit"] as const
-export type Bot = (typeof BOTS)[number]
+/** Tools we compare. GitHub login mapping lives in normalize.ts. */
+export const TOOLS = ["sigilix", "coderabbit", "greptile"] as const
+export type Tool = (typeof TOOLS)[number]
 
 /**
- * The six mutually-exclusive labels the reviewer assigns to each real-world
- * issue. The `{bot}_only_*` labels mean exactly one bot flagged the issue;
- * `both_*` means the issue appears in both bots' findings (the reviewer pairs
- * them in the worksheet). `*_real_bug` ⇒ a genuine issue worth a comment;
- * `*_noise` ⇒ a false positive / not worth flagging.
+ * A ground-truth outcome for one real-world issue. Tool participation is
+ * inferred from the refs in `LabeledItem.findings`, which scales past two bots
+ * without combinatorial labels.
  */
-export const LABELS = [
-  "sigilix_only_real_bug",
-  "sigilix_only_noise",
-  "cr_only_real_bug",
-  "cr_only_noise",
-  "both_real",
-  "both_noise",
-] as const
-export type Label = (typeof LABELS)[number]
+export const OUTCOMES = ["real_bug", "noise"] as const
+export type Outcome = (typeof OUTCOMES)[number]
 
 /** Topic each labeled issue is tagged with (independent of the six labels). */
 export const CATEGORIES = ["security", "perf", "logic", "tests", "style"] as const
 export type Category = (typeof CATEGORIES)[number]
 
-/** Labels that imply Sigilix flagged the issue. */
-export const SIGILIX_LABELS: readonly Label[] = [
-  "sigilix_only_real_bug",
-  "sigilix_only_noise",
-  "both_real",
-  "both_noise",
-]
-/** Labels that imply CodeRabbit flagged the issue. */
-export const CR_LABELS: readonly Label[] = [
-  "cr_only_real_bug",
-  "cr_only_noise",
-  "both_real",
-  "both_noise",
-]
-/** Labels that mean the flagged issue is a genuine bug. */
-export const REAL_LABELS: readonly Label[] = [
-  "sigilix_only_real_bug",
-  "cr_only_real_bug",
-  "both_real",
-]
-
-export function isLabel(s: string): s is Label {
-  return (LABELS as readonly string[]).includes(s)
+export function isOutcome(s: string): s is Outcome {
+  return (OUTCOMES as readonly string[]).includes(s)
 }
 export function isCategory(s: string): s is Category {
   return (CATEGORIES as readonly string[]).includes(s)
+}
+
+export function toolDisplayName(tool: Tool): string {
+  switch (tool) {
+    case "sigilix": return "Sigilix"
+    case "coderabbit": return "CodeRabbit"
+    case "greptile": return "Greptile"
+  }
 }
 
 /**
@@ -68,7 +46,7 @@ export function isCategory(s: string): s is Category {
  */
 export interface NormalizedFinding {
   ref: string
-  bot: Bot
+  tool: Tool
   /** GitHub review-comment id — stable across re-collection. */
   commentId: number
   /** File path the comment is anchored to (null for file-level / PR-level). */
@@ -79,7 +57,7 @@ export interface NormalizedFinding {
   excerpt: string
   /** Permalink to the comment. */
   url: string
-  /** Sigilix's self-reported category when parseable; CodeRabbit has none. */
+  /** Tool self-reported category when parseable; most tools have none. */
   botCategory?: string
 }
 
@@ -87,16 +65,19 @@ export interface NormalizedFinding {
 export interface LabeledItem {
   /** 1-based row number from the worksheet (display only). */
   id: number
-  /** The finding refs this issue groups (e.g. `["s1","c3"]`). */
+  /**
+   * The finding refs this issue groups (e.g. `["s1","c3","g1"]`).
+   * Empty means a labeled real bug no tool caught.
+   */
   findings: string[]
-  label: Label
+  outcome: Outcome
   category: Category
   note: string
 }
 
 /** The persisted per-PR comparison record (`data/{owner}-{repo}-{pr}.json`). */
 export interface ComparisonFile {
-  schemaVersion: 1
+  schemaVersion: 2
   owner: string
   repo: string
   pr: number
@@ -106,6 +87,7 @@ export interface ComparisonFile {
   findings: {
     sigilix: NormalizedFinding[]
     coderabbit: NormalizedFinding[]
+    greptile: NormalizedFinding[]
   }
   /** Reviewer labels; empty until `label` parses a filled worksheet. */
   items: LabeledItem[]

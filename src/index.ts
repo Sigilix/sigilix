@@ -63,6 +63,7 @@ import {
   handlePrCancel,
 } from "./lib/pr-lifecycle-commands"
 import { handlePrStaleMark } from "./lib/triage-pr-stale-mark"
+import { SIGILIX_BOT_LOGIN } from "./lib/dismiss-prior-reviews"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
@@ -93,7 +94,13 @@ import {
 import { runIndexReconciliation } from "./lib/index-reconciliation"
 import { isRepoSensitive } from "./lib/repo-policy"
 import { handleGithubMention, type GhMentionSurface } from "./lib/github-mention"
-import { captureReviewFeedback } from "./lib/review-memory/capture"
+import {
+  captureDismissedReviewFeedback,
+  captureReviewFeedback,
+  captureTopLevelReviewFeedback,
+  hasExplicitTopLevelReviewFeedbackSignal,
+  hasStaleDismissedReviewFeedbackSignal,
+} from "./lib/review-memory/capture"
 import { isPrOverviewEnabled, loadSigilixConfig, resolveReviewMemoryConfig } from "./lib/sigilix-config"
 import {
   postDraftPrSkipNotice,
@@ -494,8 +501,8 @@ export interface Env {
   // SIG Trust Ledger v0: off | shadow | on. `off` (default) attaches per-finding
   // trust metadata in-memory but records no telemetry + renders nothing. `shadow`
   // also records the tier distribution (TRUSTLEDGER_CATEGORY on VerificationMetricsDO,
-  // read at GET /metrics/verification). `on` reserved for the render wiring; in the
-  // thread-only PR it behaves like `shadow` (no render). Review UNCHANGED in all modes.
+  // read at GET /metrics/verification). `on` also renders the Trust Summary and
+  // per-finding VERIFIED/GROUNDED/MODEL pills.
   OPENCLAW_TRUST_LEDGER?: string
   // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
@@ -560,9 +567,9 @@ export interface Env {
   // (while the Phase 1 prompt trains the model to fill it) before any flip
   // via `wrangler secret put OPENCLAW_LOGIC_REFUTATION_MODE enforce`.
   OPENCLAW_LOGIC_REFUTATION_MODE?: string
-  // SIG-328: logic-claim refutation gate. off | shadow (would-drop telemetry) |
-  // enforce (drop a logic finding whose control-flow / sync-race claim is
-  // PROVABLY false against the cited AST). Fails open; ships dark ("shadow").
+  // SIG-328/SIG-334: logic-claim refutation gate. off | shadow (would-drop
+  // telemetry) | enforce (drop a supported logic claim shape that is PROVABLY
+  // false against the cited AST). Fails open; ships dark ("shadow").
   OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE?: string
 
   // SIG-325: generalized refutation-survival gate mode. "off" (default in code;
@@ -675,6 +682,12 @@ export interface Env {
   // "post" injects the precomputed changed-symbol/context cards into
   // specialist + synth prompts. Any other value keeps it off.
   OPENCLAW_DYNAMIC_REVIEW_EVIDENCE?: string
+
+  // SIG-112: dev/dogfood override for visible finding evidence blocks.
+  // "on" renders the per-finding collapsible provenance block regardless of
+  // sigilix.json; any other value leaves customer visibility to
+  // sigilix.json::evidence.visible.
+  OPENCLAW_SHOW_EVIDENCE?: string
 
   // SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
   // skip the synthesizer LLM call entirely if the dispatcher returned
@@ -1231,6 +1244,9 @@ interface GitHubWebhookPayload {
     event?: string
   }
   review?: {
+    id?: number
+    body?: string | null
+    commit_id?: string | null
     state?: string
     user?: { login?: string }
   }
@@ -3450,6 +3466,39 @@ async function handleGitHubWebhook(
     if (!payload.issue?.pull_request) {
       return new Response("skip non-PR issue_comment\n", { status: 200 })
     }
+    const reviewMemoryComment = payload.comment
+    const reviewMemoryPrNumber = payload.issue.number
+    if (
+      reviewMemoryComment &&
+      typeof reviewMemoryComment.id === "number" &&
+      typeof reviewMemoryComment.body === "string" &&
+      reviewMemoryComment.user?.login === SIGILIX_BOT_LOGIN &&
+      typeof reviewMemoryPrNumber === "number" &&
+      hasExplicitTopLevelReviewFeedbackSignal(reviewMemoryComment.body)
+    ) {
+      const reviewMemoryRepoId =
+        typeof payload.repository?.id === "number" &&
+        Number.isInteger(payload.repository.id) &&
+        payload.repository.id > 0
+          ? payload.repository.id
+          : undefined
+      ctx.waitUntil(
+        dispatchTopLevelReviewMemoryCapture({
+          env,
+          owner,
+          repo,
+          prNumber: reviewMemoryPrNumber,
+          installationId,
+          comment: {
+            id: reviewMemoryComment.id,
+            body: reviewMemoryComment.body,
+          },
+          ...(reviewMemoryRepoId !== undefined
+            ? { repoId: reviewMemoryRepoId }
+            : {}),
+        }),
+      )
+    }
     return queueGithubMention({
       env,
       ctx,
@@ -3460,6 +3509,53 @@ async function handleGitHubWebhook(
       surface: "issue",
       prNumber: payload.issue.number,
     })
+  }
+
+  // SIG-185: formal review dismissal. Treat as a stale precision signal only
+  // when the dismissed Sigilix review is mappable to finding fingerprints and
+  // was posted against an older commit than the current PR head.
+  if (event === "pull_request_review") {
+    if (payload.action !== "dismissed") {
+      return new Response("skip pull_request_review action\n", { status: 200 })
+    }
+    const reviewMemoryReview = payload.review
+    const reviewMemoryPrNumber = payload.pull_request?.number
+    const headSha = payload.pull_request?.head?.sha
+    if (
+      !reviewMemoryReview ||
+      typeof reviewMemoryReview.id !== "number" ||
+      typeof reviewMemoryReview.body !== "string" ||
+      typeof reviewMemoryPrNumber !== "number" ||
+      !hasStaleDismissedReviewFeedbackSignal(reviewMemoryReview, headSha)
+    ) {
+      return new Response("skip review dismissal capture\n", { status: 200 })
+    }
+    const staleCommitId = reviewMemoryReview.commit_id
+    const sigilixLogin = reviewMemoryReview.user?.login
+    if (
+      typeof headSha !== "string" ||
+      typeof staleCommitId !== "string" ||
+      typeof sigilixLogin !== "string"
+    ) {
+      return new Response("skip review dismissal capture\n", { status: 200 })
+    }
+    ctx.waitUntil(
+      dispatchDismissedReviewMemoryCapture({
+        env,
+        owner,
+        repo,
+        prNumber: reviewMemoryPrNumber,
+        installationId,
+        review: {
+          id: reviewMemoryReview.id,
+          body: reviewMemoryReview.body,
+          commit_id: staleCommitId,
+          user: { login: sigilixLogin },
+        },
+        headSha,
+      }),
+    )
+    return new Response("queued review dismissal capture\n", { status: 202 })
   }
 
   // GitHub @-mention reply — inline PR review comment thread.
@@ -3636,6 +3732,105 @@ async function dispatchReviewMemoryCapture(args: {
     console.log(JSON.stringify({
       event: "review-memory-capture-dispatch-failed",
       owner, repo, prNumber, commentId: comment.id,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+}
+
+async function resolvePullRequestHeadRefForConfig(
+  client: GitHubClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<string> {
+  try {
+    const pr = await client.getPullRequest(owner, repo, prNumber)
+    const headSha = pr.head?.sha
+    return typeof headSha === "string" && headSha.length > 0 ? headSha : "HEAD"
+  } catch {
+    return "HEAD"
+  }
+}
+
+export async function dispatchTopLevelReviewMemoryCapture(args: {
+  env: Env
+  owner: string
+  repo: string
+  prNumber: number
+  installationId: number
+  comment: { id: number; body: string }
+  repoId?: number
+}): Promise<void> {
+  const { env, owner, repo, prNumber, installationId, comment, repoId } = args
+  try {
+    if (env.OPENCLAW_REVIEW_MEMORY_CAPTURE !== "on") return
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+    const configRef = await resolvePullRequestHeadRefForConfig(client, owner, repo, prNumber)
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, configRef)
+    const config = resolveReviewMemoryConfig(sigilixConfig)
+    await captureTopLevelReviewFeedback({
+      env,
+      client,
+      owner,
+      repo,
+      prNumber,
+      comment,
+      config,
+      ...(repoId !== undefined ? { repoId } : {}),
+    })
+  } catch (err) {
+    console.log(JSON.stringify({
+      event: "review-memory-capture-dispatch-failed",
+      owner, repo, prNumber, commentId: comment.id,
+      signal_source: "top-level-explicit",
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+}
+
+export async function dispatchDismissedReviewMemoryCapture(args: {
+  env: Env
+  owner: string
+  repo: string
+  prNumber: number
+  installationId: number
+  review: { id: number; body: string; commit_id?: string; user?: { login?: string } }
+  headSha: string
+}): Promise<void> {
+  const { env, owner, repo, prNumber, installationId, review, headSha } = args
+  try {
+    if (env.OPENCLAW_REVIEW_MEMORY_CAPTURE !== "on") return
+    if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) return
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+    const sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
+    const config = resolveReviewMemoryConfig(sigilixConfig)
+    await captureDismissedReviewFeedback({
+      env,
+      owner,
+      repo,
+      prNumber,
+      review,
+      headSha,
+      config,
+    })
+  } catch (err) {
+    console.log(JSON.stringify({
+      event: "review-memory-capture-dispatch-failed",
+      owner, repo, prNumber, commentId: review.id,
+      signal_source: "review-dismissed-stale",
       err: err instanceof Error ? err.message : String(err),
     }))
   }

@@ -61,7 +61,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 21", () => {
+  it("PROMPT_VERSION bumped to 23", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -95,7 +95,10 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // flippable and logic findings carry their survival evidence).
     // Cross-cutting over-fire 21→22 (logic CROSS-CUTTING REFUTATION fence:
     // window-blindness positive misreads + architectural-misunderstanding).
-    expect(PROMPT_VERSION).toBe("22")
+    // SIG-317 follow-up 22→23 (logic idempotency fence distinguishes
+    // same-delivery retry safety from duplicate logical operations; return
+    // semantics fence prevents safe auth middleware tail-call FPs).
+    expect(PROMPT_VERSION).toBe("23")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

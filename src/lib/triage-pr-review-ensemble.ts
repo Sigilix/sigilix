@@ -95,6 +95,7 @@ import { PR_REVIEW_SCHEMA } from "./schemas"
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
+  type EvidenceRecord,
   type ReviewFindingScope,
   type CoverageRoles,
   type DeltaBadgeCounts,
@@ -111,6 +112,7 @@ import {
   previewReviewSubmissionEvent,
   type ReviewEvent,
   type ReviewEventOverride,
+  type ReviewSuggestionEmission,
 } from "./triage-pr-review"
 import {
   assessApprovalReadiness,
@@ -122,6 +124,7 @@ import { buildPrUrl, preparePrReviewCounter } from "./pr-review-counter"
 import {
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
+  filterTestingEvidenceForSuppressedMissingCoverage,
   mergeInspectedTestFileContents,
   mergeHelperCoverage,
   renderTestingEvidenceBlock,
@@ -255,6 +258,7 @@ import {
 } from "./logic-prompt-budget"
 import {
   isPrOverviewEnabled,
+  isFindingEvidenceVisible,
   loadSigilixConfig,
   passesLabelGate,
   renderPathInstructionsForPrompt,
@@ -268,7 +272,12 @@ import {
   type SigilixConfig,
   type SigilixProfile,
 } from "./sigilix-config"
-import { loadAiInstructions, buildAiInstructionGuidance, shouldIngestAiInstructions } from "./ai-instructions"
+import {
+  buildAiInstructionGuidance,
+  filterAiInstructionsForChangedPaths,
+  loadAiInstructions,
+  shouldIngestAiInstructions,
+} from "./ai-instructions"
 import {
   renderScopedRulesForPrompt,
   resolveScopedRulesForChangedPaths,
@@ -329,6 +338,7 @@ import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
+import { createAstCache, type AstCache } from "./ast-rules/parse-cache"
 import { analyzeHelperBypass, renderAsymmetryHints } from "./ast-rules/analyze-helper-bypass"
 import { analyzeToctouRace, renderToctouHints } from "./ast-rules/analyze-toctou-race"
 import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
@@ -619,6 +629,9 @@ export interface ResolveDynamicEvidencePromptBlockArgs {
   blastCallerPaths: readonly string[]
   blastDependentPaths: readonly string[]
   testingEvidence: TestingEvidencePack | undefined
+  /** SIG-336: shared per-review parse-once cache (the evidence pack parses each
+   *  changed file via extractFileGraph — reuse the runner's AST). */
+  astCache?: AstCache
 }
 
 export interface ResolvedDynamicEvidencePromptBlock {
@@ -645,6 +658,7 @@ export function resolveDynamicEvidencePromptBlock(
     blastCallerPaths: args.blastCallerPaths,
     blastDependentPaths: args.blastDependentPaths,
     ...(args.testingEvidence !== undefined ? { testingEvidence: args.testingEvidence } : {}),
+    ...(args.astCache !== undefined ? { astCache: args.astCache } : {}),
   })
   const rendered = renderDynamicReviewEvidenceBlock(pack)
 
@@ -1473,6 +1487,42 @@ function withSubmissionAffordance<T extends object>(
   }
 }
 
+export interface SuggestionEmissionLogContext {
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  commentsSubmitted: boolean
+}
+
+export interface SuggestionEmissionLogEvent {
+  event: "pr-review-suggestion-emitted"
+  owner: string
+  repo: string
+  prNumber: number
+  headSha: string
+  path: string
+  line: number
+  startLine?: number
+}
+
+export function buildSuggestionEmissionLogEvents(
+  context: SuggestionEmissionLogContext,
+  suggestions: readonly ReviewSuggestionEmission[],
+): SuggestionEmissionLogEvent[] {
+  if (!context.commentsSubmitted) return []
+  return suggestions.map((suggestion) => ({
+    event: "pr-review-suggestion-emitted",
+    owner: context.owner,
+    repo: context.repo,
+    prNumber: context.prNumber,
+    headSha: context.headSha.slice(0, 7),
+    path: suggestion.path,
+    line: suggestion.line,
+    ...(suggestion.startLine !== undefined ? { startLine: suggestion.startLine } : {}),
+  }))
+}
+
 export async function prepareSubmissionAffordance(args: {
   env: Env
   owner: string
@@ -1912,24 +1962,10 @@ export async function handlePrReviewEnsemble(
     // BEFORE the diff split so ARC-176 pathFilters can drop files
     // before packing decides what to send to specialists.
     let sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
-
-    // Lane D: when the repo configured NO explicit sigilix.json guidance, fall
-    // back to its own AI-instruction file (CLAUDE.md / AGENTS.md / .cursorrules /
-    // copilot-instructions) as ADVISORY review guidance — parity with CodeRabbit,
-    // without requiring a sigilix.json. sigilix.json always takes precedence
-    // (`shouldIngestAiInstructions`). The injected text rides the existing
-    // `guidance` channel (header generically reads "from sigilix.json"); the
-    // wrapper names the real source + fences it as untrusted/advisory.
-    // Placement: kept here next to the config load for simplicity. On a
-    // label-gated/empty-router skip this does up to 4 (cheap, mostly-404) Contents
-    // calls for a review that won't run — acceptable while engine-only (no
-    // runOnLabels customers); revisit when SIG-318 splits this orchestrator.
-    if (shouldIngestAiInstructions(sigilixConfig.guidance, env.OPENCLAW_INGEST_AI_INSTRUCTIONS)) {
-      const aiInstructions = await loadAiInstructions(client, owner, repo, headSha)
-      if (aiInstructions) {
-        sigilixConfig = { ...sigilixConfig, guidance: buildAiInstructionGuidance(aiInstructions) }
-      }
-    }
+    const shouldLoadAiInstructions = shouldIngestAiInstructions(
+      sigilixConfig.guidance,
+      env.OPENCLAW_INGEST_AI_INSTRUCTIONS,
+    )
 
     // ARC-273: label gate. When the operator configures
     // `costControls.runOnLabels`, pr-review only fires on PRs
@@ -1977,6 +2013,35 @@ export async function handlePrReviewEnsemble(
     // with parallel specialist calls + verdict merge is the v2
     // enhancement; v1 ships the bound + telemetry.
     const splitFiles = splitDiffByFile(fullDiff)
+    // Lane D: when the repo configured NO explicit sigilix.json guidance, fall
+    // back to its own AI-instruction files as ADVISORY review guidance — parity
+    // with CodeRabbit/Greptile-style context ingestion, without requiring a
+    // sigilix.json. sigilix.json always takes precedence
+    // (`shouldLoadAiInstructions`). GitHub `.github/instructions/**` files may
+    // carry `applyTo:` path scopes, so binding happens against the full selected
+    // diff's changed-file set (not the post-packing reviewed batch) for stable
+    // per-PR semantics.
+    if (shouldLoadAiInstructions) {
+      const aiInstructions = await loadAiInstructions(client, owner, repo, headSha)
+      const applicableAiInstructions = aiInstructions
+        ? filterAiInstructionsForChangedPaths(aiInstructions, splitFiles.map((f) => f.path))
+        : null
+      if (applicableAiInstructions) {
+        sigilixConfig = {
+          ...sigilixConfig,
+          guidance: buildAiInstructionGuidance(applicableAiInstructions),
+        }
+        console.log(JSON.stringify({
+          event: "pr-review-ai-instructions-ingested",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          source_count: applicableAiInstructions.chunks.length,
+          sources: applicableAiInstructions.chunks.map((chunk) => chunk.source),
+          scoped_source_count: applicableAiInstructions.chunks.filter((chunk) =>
+            chunk.applyTo !== undefined && chunk.applyTo.length > 0
+          ).length,
+        }))
+      }
+    }
     const filterPatterns = sigilixConfig.pathFilters ?? []
     const filesAfterFilter = filterPatterns.length === 0
       ? splitFiles
@@ -2469,6 +2534,13 @@ export async function handlePrReviewEnsemble(
         }
       }
     }
+
+    // SIG-336: one parse-once AST cache for the whole review. Every acorn
+    // consumer below (runAstRules, durableObjectClassSpans, detectHelperCoverage,
+    // the graph expansion, and the logic-claim refutation gate) shares it, so a
+    // given file is parsed at most once per review instead of once per subsystem
+    // (and once per finding). The shared 500KB guard rides along.
+    const astCache = createAstCache()
 
     // SIG-129: build the branch retrieval set ONCE (best-effort), reused
     // across the preflight / perf / symbol merges. Empty set ⇒ every merge
@@ -2966,6 +3038,7 @@ export async function handlePrReviewEnsemble(
       reviewable,
       config: astRulesConfig,
       ctx: { owner, repo, prNumber },
+      astCache,
     })
 
     // SIG-314: shadow-first gating for the deterministic IDOR/BOLA floor
@@ -3563,6 +3636,110 @@ export async function handlePrReviewEnsemble(
       splitFilePaths: filesAfterFilter.map((f) => f.path),
       reviewedFilePaths: reviewedFiles.map((f) => f.path),
     })
+    const changedLineTextByPath = buildChangedLineTextByPath(fullPrDiff)
+    const missingSiblingSources = testingEvidencePackInitial.siblingMappings
+      .filter((m) => m.test === null)
+      .map((m) => m.source)
+    let repoPathsForTestingEvidence: string[] | undefined
+    if (missingSiblingSources.length > 0) {
+      let repoTreeStatus:
+        | "ok"
+        | "unavailable"
+        | "missing-head-ref"
+        | "branch-missing"
+        | "head-ref-mismatch"
+        | "tree-missing"
+        | "tree-truncated"
+        | "fetch-failed" = "unavailable"
+      let repoTreePathsCount = 0
+      const treeCapableClient = client as GitHubClient & {
+        getBranch?: GitHubClient["getBranch"]
+        getRepoTree?: GitHubClient["getRepoTree"]
+      }
+      const headRef = meta.head?.ref ?? ""
+      if (
+        typeof treeCapableClient.getBranch === "function" &&
+        typeof treeCapableClient.getRepoTree === "function"
+      ) {
+        if (headRef.length === 0) {
+          repoTreeStatus = "missing-head-ref"
+        } else {
+          try {
+            const branch = await treeCapableClient.getBranch(owner, repo, headRef, {
+              signal: orchCtrl.signal,
+            })
+            if (branch === null) {
+              repoTreeStatus = "branch-missing"
+            } else if (branch.headSha !== headSha) {
+              repoTreeStatus = "head-ref-mismatch"
+            } else {
+              const tree = await treeCapableClient.getRepoTree(owner, repo, branch.treeSha, {
+                signal: orchCtrl.signal,
+              })
+              if (tree === null) {
+                repoTreeStatus = "tree-missing"
+              } else if (tree.truncated) {
+                repoTreeStatus = "tree-truncated"
+              } else {
+                repoPathsForTestingEvidence = tree.tree.flatMap((entry) =>
+                  entry.type === "blob" && typeof entry.path === "string" && entry.path.length > 0
+                    ? [entry.path]
+                    : [],
+                )
+                repoTreePathsCount = repoPathsForTestingEvidence.length
+                repoTreeStatus = "ok"
+              }
+            }
+          } catch (err) {
+            if (orchCtrl.signal.aborted) {
+              console.warn(JSON.stringify({
+                event: "tests-evidence-repo-tree-aborted",
+                owner, repo, prNumber, headSha: headSha.slice(0, 7),
+                error: err instanceof Error ? err.message : String(err),
+              }))
+              throw err
+            }
+            repoTreeStatus = "fetch-failed"
+            console.warn(JSON.stringify({
+              event: "tests-evidence-repo-tree-fetch-failed",
+              owner, repo, prNumber, headSha: headSha.slice(0, 7),
+              error: err instanceof Error ? err.message : String(err),
+            }))
+          }
+        }
+      }
+      console.log(JSON.stringify({
+        event: "tests-evidence-repo-tree-status",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        status: repoTreeStatus,
+        missingSiblingSources_count: missingSiblingSources.length,
+        repoTreePaths_count: repoTreePathsCount,
+      }))
+    }
+    const testingEvidenceSuppression = filterTestingEvidenceForSuppressedMissingCoverage(
+      testingEvidencePackInitial,
+      {
+        changedLineTextByPath,
+        ...(repoPathsForTestingEvidence !== undefined ? { repoPaths: repoPathsForTestingEvidence } : {}),
+      },
+    )
+    for (const suppression of testingEvidenceSuppression.suppressions) {
+      if (suppression.reason === "repo-sibling-exists") {
+        console.log(JSON.stringify({
+          event: "tests-finding-suppressed-repo-sibling-exists",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          source: suppression.source,
+          test: suppression.test ?? null,
+        }))
+      } else {
+        console.log(JSON.stringify({
+          event: "tests-finding-suppressed-comment-only-source",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          source: suppression.source,
+        }))
+      }
+    }
+    const testingEvidencePackFiltered = testingEvidenceSuppression.pack
     let testingEvidenceFetchResult: InspectedTestFileFetchResult = {
       contentByPath: {},
       failedPaths: [],
@@ -3572,9 +3749,9 @@ export async function handlePrReviewEnsemble(
     }
     let testingEvidenceFetchedCount = 0
     let testingEvidenceSkippedForBudgetCount = 0
-    if (testingEvidencePackInitial.testFilesChanged.length > 0) {
+    if (testingEvidencePackFiltered.testFilesChanged.length > 0) {
       const fetched = await fetchTestFileContentsWithBudget({
-        paths: testingEvidencePackInitial.testFilesChanged,
+        paths: testingEvidencePackFiltered.testFilesChanged,
         fetchContent: async (p) => {
           const src = await client.getFileContent(owner, repo, p, headSha)
           if (typeof src !== "string") throw new Error("content unavailable")
@@ -3587,7 +3764,7 @@ export async function handlePrReviewEnsemble(
       testingEvidenceSkippedForBudgetCount = fetched.skippedForBudgetCount
     }
     const testingEvidencePack = mergeInspectedTestFileContents(
-      testingEvidencePackInitial,
+      testingEvidencePackFiltered,
       testingEvidenceFetchResult,
     )
     // SIG-128: credit orchestrator glue whose changed logic delegates to
@@ -3602,8 +3779,9 @@ export async function handlePrReviewEnsemble(
     const helperCoverage = detectHelperCoverage({
       filesByPath: astFilesByPath,
       addedLineTextByPath: buildAddedLineTextByLine(fullDiff),
-      siblingMappings: testingEvidencePackInitial.siblingMappings,
+      siblingMappings: testingEvidencePackFiltered.siblingMappings,
       testContentByPath: testingEvidenceFetchResult.contentByPath,
+      astCache,
     })
     const testingEvidencePackWithCoverage = mergeHelperCoverage(
       testingEvidencePack,
@@ -3661,6 +3839,7 @@ export async function handlePrReviewEnsemble(
     const dynamicEvidence = resolveDynamicEvidencePromptBlock({
       env,
       filesByPath: astFilesByPath,
+      astCache,
       changedLines: buildChangedLines(diff),
       reviewablePaths: filePaths,
       retrievalChunks: sharedChunksForOverlap,
@@ -4916,10 +5095,11 @@ export async function handlePrReviewEnsemble(
     // derived from the already-fetched changed JS/TS head content
     // (astFilesByPath) — empty when AST features are off, which is fail-safe
     // (no suppression → findings kept, never hidden).
-    const doClassSpans = durableObjectClassSpans(astFilesByPath)
+    const doClassSpans = durableObjectClassSpans(astFilesByPath, astCache)
     // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
     // demote sites can tag body-routed findings with their reason when enabled.
     const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
+    const showEvidence = isFindingEvidenceVisible(sigilixConfig, env)
     // Re-point the synth telemetry at the SAME (verdict, provenance) pair fed to
     // validateForSubmission. telemetry.synthesizer.verdict was captured from the
     // raw synthOutput (above), but the post-synth augmentations (SIG-317 recovery
@@ -5019,7 +5199,7 @@ export async function handlePrReviewEnsemble(
       // "enforce". Reuses the `pr-review-finding-rejected-validation`
       // event with a `gate: "logic"` discriminator.
       logicEvidence: {
-        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        changedLineTextByPath,
         astLogicFindings: astResult.findings.filter((f) => f.roleHint === "logic"),
       },
       logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
@@ -5081,9 +5261,11 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "refutation-survival", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
-      // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
-      // when its control-flow / sync-race claim is PROVABLY false against the
-      // AST of the cited file (`fullFileByPath` = `astFilesByPath`). Default
+      // SIG-328/SIG-334: logic-claim refutation gate. Drops a sev>=4 logic
+      // finding only when its claim (control-flow / sync-race / retry
+      // idempotency / literal-string regex hallucination) is PROVABLY false
+      // against the AST of the cited file (`fullFileByPath` =
+      // `astFilesByPath`). Default
       // `shadow` — counts/telemeters the would-drop until the operator flips
       // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
       logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
@@ -5107,7 +5289,7 @@ export async function handlePrReviewEnsemble(
       // flips OPENCLAW_PERF_VALIDATOR_MODE to "enforce". Reuses the
       // `pr-review-finding-rejected-validation` event (`gate: "perf"`).
       perfEvidence: {
-        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        changedLineTextByPath,
         astPerfFindings: astResult.findings.filter((f) => f.roleHint === "performance"),
       },
       perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
@@ -5180,6 +5362,7 @@ export async function handlePrReviewEnsemble(
       // `dropped` here = "demoted to body".
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
       fullFileByPath: astFilesByPath,
+      astCache,
       onWindowBlindnessFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -6620,7 +6803,7 @@ export async function handlePrReviewEnsemble(
       )
     }
 
-    // SIG Trust Ledger v0 (thread + measure, INERT): give every final visible
+    // SIG Trust Ledger v0: give every final visible
     // finding a BASELINE trust tier (the strong proof signals — worker-token-confirmed,
     // runner-confirmed — were already set in place above), then record the per-tier
     // distribution. The baseline is surface-aware + honest-conservative:
@@ -6633,8 +6816,8 @@ export async function handlePrReviewEnsemble(
     // resolveTier keeps the stronger tier, so a baseline never lowers a proven
     // finding. Distribution persists to VerificationMetricsDO under TRUSTLEDGER_CATEGORY
     // (a SEPARATE corpus, read at GET /metrics/verification). Whole block is flag-gated,
-    // so `off` (default) is a true no-op. NO render — production renderers ignore
-    // `finding.trust` until the PR3 render wiring.
+    // so `off` (default) is a true no-op; `on` lets the renderer surface these
+    // tiers as the Trust Summary and per-finding pills.
     if (trustLedgerMode !== "off") {
       const hasManifestEvidence = (finding: PrReviewFinding): boolean => {
         const ev = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
@@ -6667,6 +6850,34 @@ export async function handlePrReviewEnsemble(
       )
     }
 
+    if (showEvidence) {
+      for (const [index, finding] of [
+        ...submissionVerdict.findings,
+        ...renderableUnanchoredForSubmission,
+      ].entries()) {
+        const record = finding.evidence
+        const evidencePieces = evidencePieceCountForTelemetry(record)
+        console.log(JSON.stringify({
+          event: "pr-review-evidence-emitted",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          index,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+          visible: true,
+          specialists_flagged: record?.specialistsThatFlagged.length ?? 0,
+          specialists_declined: record?.specialistsThatDeclined.length ?? 0,
+          deterministic_fact_ids: record?.deterministicFactIds.length ?? 0,
+          retrieval_chunk_ids: record?.retrievalChunkIds.length ?? 0,
+          related_prior_prs: record?.relatedPriorPRs.length ?? 0,
+          consensus_score: record?.consensusScore ?? 0,
+          synth_decision: record?.synthDecision ?? null,
+          structured_evidence_empty: evidencePieces === 0,
+        }))
+      }
+    }
+
     for (const finding of submissionVerdict.findings) {
       const mismatch = getProposedChangeScopeMismatch(finding)
       if (mismatch === null) continue
@@ -6691,6 +6902,7 @@ export async function handlePrReviewEnsemble(
       verdict: submissionVerdict,
       headSha,
       unanchored: renderableUnanchoredForSubmission,
+      reviewable,
       addedLineTextByLine,
       ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
     })
@@ -6710,6 +6922,7 @@ export async function handlePrReviewEnsemble(
       // VERIFIED/GROUNDED/MODEL pills) only in `on` mode. off/shadow → byte-identical
       // body. (The Summary's `suppressed` count is a PR3b follow-up.)
       trustLedger: trustLedgerMode === "on",
+      showEvidence,
       unanchored: renderableUnanchoredForSubmission,
       findingMarkers,
       ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
@@ -6778,7 +6991,6 @@ export async function handlePrReviewEnsemble(
         suppressed: suppressedComments,
       }))
     }
-
     // ─── SIG-216: post the overview comment IMMEDIATELY before the
     // review submit so the two GitHub timeline entries land in the
     // same time window (CodeRabbit-style Walkthrough-then-Review).
@@ -7021,6 +7233,7 @@ export async function handlePrReviewEnsemble(
         const fallbackCommentAffordance = await prepareFallbackAffordance(fallbackCommentEvent)
         const fallbackCommentSubmission = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          showEvidence,
           notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
@@ -7067,6 +7280,16 @@ export async function handlePrReviewEnsemble(
       }
       await primaryAffordance.persistReviewCounter()
       telemetry.submitted = true
+      const suggestionEmissionEvents = buildSuggestionEmissionLogEvents({
+        owner,
+        repo,
+        prNumber,
+        headSha,
+        commentsSubmitted: (submission.comments?.length ?? 0) > 0,
+      }, submissionBuild.suggestionEmissions)
+      for (const event of suggestionEmissionEvents) {
+        console.log(JSON.stringify(event))
+      }
       // ARC-258 follow-up: dismiss any stale Sigilix reviews from
       // earlier commits on this PR so the Reviews tab reflects only
       // the current head. Without this, customers see "Sigilix
@@ -7184,6 +7407,7 @@ export async function handlePrReviewEnsemble(
         const fallbackBodyOnlyAffordance = await prepareFallbackAffordance(fallbackBodyOnlyEvent)
         const fallbackBodyOnly = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          showEvidence,
           notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
@@ -7241,6 +7465,7 @@ export async function handlePrReviewEnsemble(
       const fallbackAffordance = await prepareFallbackAffordance(fallbackEvent)
       const fallback = buildFallbackSubmission(withSubmissionAffordance({
         trustLedger: trustLedgerMode === "on",
+        showEvidence,
         notReviewedFiles: filesDroppedFromReview,
         // ARC-189: fallback path also receives the soften-applied
         // verdict. Markers are NOT emitted on the fallback (it's a
@@ -9403,6 +9628,135 @@ function backfillSecurityEvidenceFromSources(
   }
 }
 
+function uniqueNonEmpty(values: Iterable<string | null | undefined>): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of values) {
+    const value = typeof raw === "string" ? raw.trim() : ""
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    out.push(value)
+  }
+  return out
+}
+
+const DETERMINISTIC_EVIDENCE_ID_PREFIXES = ["secret:", "depvuln:", "sarif:", "ast/"] as const
+const DETERMINISTIC_EVIDENCE_REF_PREFIXES = [
+  "coverageGap:",
+  "inspectedTestFile:",
+  "siblingMapping:",
+  "testFileChanged:",
+] as const
+
+function hasDeterministicPrefix(value: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => value.startsWith(prefix))
+}
+
+function normalizeSynthDecision(action: unknown): EvidenceRecord["synthDecision"] {
+  return action === "kept" || action === "merged" || action === "rewritten" ? action : "unknown"
+}
+
+function evidencePieceCountForTelemetry(record: EvidenceRecord | undefined): number {
+  if (!record) return 0
+  return (
+    record.specialistsThatFlagged.length +
+    record.deterministicFactIds.length +
+    record.retrievalChunkIds.length +
+    record.relatedPriorPRs.length
+  )
+}
+
+function specialistReturnedMatchingFinding(
+  role: SpecialistRole,
+  finding: PrReviewFinding,
+  specialistVerdicts: readonly CollectedVerdict[],
+): boolean {
+  const verdict = specialistVerdicts.find((v) => v.role === role)?.verdict
+  if (!verdict) return false
+  const findingPath = finding.path.trim()
+  const findingEvidenceId = hasNonEmptyString(finding.evidenceId) ? finding.evidenceId.trim() : ""
+  return verdict.findings.some((source) => {
+    if (source.path.trim() !== findingPath) return false
+    if (source.line === finding.line) return true
+    const sourceEvidenceId = hasNonEmptyString(source.evidenceId) ? source.evidenceId.trim() : ""
+    return findingEvidenceId !== "" && sourceEvidenceId === findingEvidenceId
+  })
+}
+
+function rolesFromValidatedSources(
+  provenance: SynthesizerProvenance["findings"][number],
+  finding: PrReviewFinding,
+  specialistVerdicts: readonly CollectedVerdict[],
+): SpecialistRole[] {
+  const rolesFromIds = ALL_SPECIALISTS.filter((role) =>
+    provenance.sourceFindingIds.some((id) => id.startsWith(`${role}-`)),
+  )
+  if (rolesFromIds.length > 0) return rolesFromIds
+  return ALL_SPECIALISTS.filter((role) =>
+    provenance.sourceSpecialists.includes(role) &&
+    specialistReturnedMatchingFinding(role, finding, specialistVerdicts),
+  )
+}
+
+function deterministicFactIdsForFinding(
+  finding: PrReviewFinding,
+  sourceIds: readonly string[],
+  sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>,
+  validSourceIds: ReadonlySet<string>,
+): string[] {
+  const evidenceId = hasNonEmptyString(finding.evidenceId) ? finding.evidenceId.trim() : ""
+  const sourceEvidenceIds = sourceIds
+    .map((id) => sourceEvidenceById.get(id)?.evidenceId)
+    .filter((id): id is string =>
+      hasNonEmptyString(id) &&
+      id !== "NONE" &&
+      hasDeterministicPrefix(id, DETERMINISTIC_EVIDENCE_ID_PREFIXES),
+    )
+  return uniqueNonEmpty([
+    ...(evidenceId !== "" &&
+      evidenceId !== "NONE" &&
+      hasDeterministicPrefix(evidenceId, DETERMINISTIC_EVIDENCE_ID_PREFIXES)
+      ? [evidenceId]
+      : []),
+    ...sourceEvidenceIds,
+    ...(finding.evidenceRefs ?? []).filter((ref) =>
+      hasDeterministicPrefix(ref.trim(), DETERMINISTIC_EVIDENCE_REF_PREFIXES),
+    ),
+    ...sourceIds.filter((id) => id.startsWith("ast/") && validSourceIds.has(id)),
+  ])
+}
+
+function buildFindingEvidenceRecord(args: {
+  finding: PrReviewFinding
+  provenance: SynthesizerProvenance["findings"][number]
+  specialistVerdicts: readonly CollectedVerdict[]
+  sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>
+  validSourceIds: ReadonlySet<string>
+}): EvidenceRecord {
+  const flagged = rolesFromValidatedSources(args.provenance, args.finding, args.specialistVerdicts)
+  const flaggedSet = new Set(flagged)
+  const returnedRoles = ALL_SPECIALISTS.filter((role) =>
+    args.specialistVerdicts.some((v) => v.role === role && v.verdict !== null),
+  )
+  return {
+    specialistsThatFlagged: flagged,
+    specialistsThatDeclined: returnedRoles.filter((role) => !flaggedSet.has(role)),
+    deterministicFactIds: deterministicFactIdsForFinding(
+      args.finding,
+      args.provenance.sourceFindingIds,
+      args.sourceEvidenceById,
+      args.validSourceIds,
+    ),
+    // SIG-112 Phase 1: the prompt may have retrieval context, but the
+    // synth provenance does not yet carry stable chunk/pr IDs. Keep
+    // these explicit empty arrays until SIG-44 exposes structured ids.
+    retrievalChunkIds: [],
+    relatedPriorPRs: [],
+    synthDecision: normalizeSynthDecision(args.provenance.action),
+    consensusScore: flagged.length,
+  }
+}
+
 /**
  * SIG-308 (PR #290 review): map each source finding's id → its trimmed,
  * non-empty `independentAssessment`, for one `role` only. The logic analogue
@@ -10134,8 +10488,8 @@ export function validateForSubmission(args: {
   /**
    * SIG-328: logic-claim refutation gate mode. `off` (default): the gate
    * doesn't run. `shadow`: would-drops are counted + telemetered, finding kept.
-   * `enforce`: a logic finding whose control-flow / sync-race claim is PROVABLY
-   * false against the cited AST is dropped. Read from
+   * `enforce`: a logic finding whose supported claim shape is PROVABLY false
+   * against the cited AST is dropped. Read from
    * `OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE`. Scoped to sev>=4 logic findings;
    * needs `fullFileByPath` for the AST proof. Fails open. Ships dark.
    */
@@ -10239,6 +10593,13 @@ export function validateForSubmission(args: {
    * gate keeps every finding, FP-safe).
    */
   fullFileByPath?: ReadonlyMap<string, string>
+  /**
+   * SIG-336: per-review parse-once AST cache. Threaded into the logic-claim
+   * refutation gate so a file cited by N findings is acorn-parsed once (not N
+   * times) and the 500KB guard applies. Defaults to a fresh cache when omitted;
+   * the caller passes a shared instance so earlier parsers reuse it (Phase 3).
+   */
+  astCache?: AstCache
   /**
    * Cross-cutting over-fire Option B: telemetry callback fired once per finding
    * the window-blindness gate flagged (reuses the `pr-review-finding-rejected-
@@ -10345,6 +10706,7 @@ export function validateForSubmission(args: {
     onAbsenceFindingDropped,
     windowBlindnessValidatorMode = "off",
     fullFileByPath = new Map<string, string>(),
+    astCache = createAstCache(),
     onWindowBlindnessFindingDropped,
     securityGroundingValidatorMode = "off",
     onSecurityGroundingFindingDropped,
@@ -10432,7 +10794,11 @@ export function validateForSubmission(args: {
     // Hallucination guard. Defensive against malformed provenance
     // even though isValidProvenance pre-validated (belt + suspenders
     // per CR PR #35 — provenance might be partially valid).
-    const sourceIds = Array.isArray(provenance?.sourceFindingIds)
+    if (!provenance) {
+      droppedForHallucination++
+      continue
+    }
+    const sourceIds = Array.isArray(provenance.sourceFindingIds)
       ? provenance.sourceFindingIds
       : []
     if (sourceIds.length === 0) {
@@ -10455,6 +10821,19 @@ export function validateForSubmission(args: {
     // synthesis BEFORE the logic-refutation backstop reads it, so a logic
     // finding whose specialist justified survival isn't wrongly flagged.
     f = backfillIndependentAssessmentFromSources(f, sourceIds, sourceRationaleById)
+    // Attach once after provenance/security backfills but before the demote-to-body
+    // gates below. Dropped findings discard this clone; demoted findings keep the
+    // same provenance block when rendered in the review body.
+    f = {
+      ...f,
+      evidence: buildFindingEvidenceRecord({
+        finding: f,
+        provenance,
+        specialistVerdicts,
+        sourceEvidenceById,
+        validSourceIds: validIds,
+      }),
+    }
 
     // SIG-216: normalize scope BEFORE any scope-dependent gates fire.
     // LLM specialists sometimes emit `scope: "file"` for findings that
@@ -10736,14 +11115,13 @@ export function validateForSubmission(args: {
       }
     }
 
-    // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
-    // when its control-flow ("unconditional/double-response") or sync-race
-    // ("TOCTOU") claim is PROVABLY false against the AST of the cited file — the
-    // two stable v4-pro priors prompt-tuning could not dislodge. Fails OPEN on
-    // every ambiguity (the pure validator re-checks category+sev), so it cannot
-    // suppress a real bug. Same shadow-first semantics: only `enforce` drops.
+    // SIG-328/SIG-334: logic-claim refutation gate. Drops a sev>=4 logic
+    // finding only when a supported claim shape is PROVABLY false against the
+    // AST of the cited file. Fails OPEN on every ambiguity (the pure validator
+    // re-checks category+sev), so it cannot suppress a real bug. Same
+    // shadow-first semantics: only `enforce` drops.
     if (logicClaimRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {
-      const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath })
+      const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath, astCache })
       if (!claimDecision.keep) {
         const dropped = logicClaimRefutationMode === "enforce"
         droppedForFailedLogicClaimRefutation++

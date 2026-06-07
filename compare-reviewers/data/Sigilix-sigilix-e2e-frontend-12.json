@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "owner": "Sigilix",
   "repo": "sigilix-e2e-frontend",
   "pr": 12,
@@ -9,65 +9,66 @@
     "sigilix": [
       {
         "ref": "s1",
-        "bot": "sigilix",
         "commentId": 3345892588,
         "path": "src/hooks/usePagedUsers.ts",
         "line": 25,
         "excerpt": "**Stale closure in `loadMore` captures initial `cursor`, `done`, and `loading` values**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892588",
-        "botCategory": "logic"
+        "botCategory": "logic",
+        "tool": "sigilix"
       },
       {
         "ref": "s2",
-        "bot": "sigilix",
         "commentId": 3345892600,
         "path": "src/hooks/usePagedUsers.ts",
         "line": 17,
         "excerpt": "**New pagination hook ships without test coverage**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892600",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       },
       {
         "ref": "s3",
-        "bot": "sigilix",
         "commentId": 3345892602,
         "path": "src/api/client.ts",
         "line": 28,
         "excerpt": "**New getUsersPaged API method lacks test coverage**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892602",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       },
       {
         "ref": "s4",
-        "bot": "sigilix",
         "commentId": 3345892603,
         "path": "src/components/UserList.tsx",
         "line": 12,
         "excerpt": "**UserList component filter logic untested**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345892603",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       }
     ],
     "coderabbit": [
       {
         "ref": "c1",
-        "bot": "coderabbit",
         "commentId": 3345897373,
         "path": "src/components/UserList.tsx",
         "line": 15,
         "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345897373"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345897373",
+        "tool": "coderabbit"
       },
       {
         "ref": "c2",
-        "bot": "coderabbit",
         "commentId": 3345897376,
         "path": "src/hooks/usePagedUsers.ts",
         "line": 36,
         "excerpt": "_⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345897376"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/12#discussion_r3345897376",
+        "tool": "coderabbit"
       }
-    ]
+    ],
+    "greptile": []
   },
   "items": [
     {
@@ -75,54 +76,54 @@
       "findings": [
         "s1"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "logic",
-      "note": "stale closure in loadMore"
+      "note": "stale closure in loadMore",
+      "outcome": "real_bug"
     },
     {
       "id": 2,
       "findings": [
         "s2"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "tests",
-      "note": "pagination hook untested"
+      "note": "pagination hook untested",
+      "outcome": "real_bug"
     },
     {
       "id": 3,
       "findings": [
         "s3"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "tests",
-      "note": "getUsersPaged untested"
+      "note": "getUsersPaged untested",
+      "outcome": "real_bug"
     },
     {
       "id": 4,
       "findings": [
         "s4"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "tests",
-      "note": "UserList filter untested"
+      "note": "UserList filter untested",
+      "outcome": "real_bug"
     },
     {
       "id": 5,
       "findings": [
         "c1"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "error short-circuit discards already-loaded users"
+      "note": "error short-circuit discards already-loaded users",
+      "outcome": "real_bug"
     },
     {
       "id": 6,
       "findings": [
         "c2"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "StrictMode double-invoke concern"
+      "note": "StrictMode double-invoke concern",
+      "outcome": "real_bug"
     }
   ]
 }

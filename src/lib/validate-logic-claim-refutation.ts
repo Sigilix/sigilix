@@ -1,8 +1,8 @@
 // SIG-328: logic-claim refutation gate (deterministic FP precision layer).
 //
-// The logic specialist (deepseek-v4-pro) is a strong reasoner but has TWO
-// stable priors that prompt-tuning could not dislodge (they fire ~10/12 even
-// after refutation few-shots), BOTH of which are PROVABLY FALSE against the AST:
+// The logic specialist (deepseek-v4-pro) is a strong reasoner but has a handful
+// of stable priors that prompt-tuning did not fully dislodge. Each case below
+// is dropped only when it is PROVABLY FALSE against the AST:
 //   1. "next() runs unconditionally after the 403 / double-response" — but the
 //      guard branch ends in `return res.status(403).end()`, so the tail is the
 //      else-path, reached only when authorized.
@@ -13,6 +13,10 @@
 //      but the side-effect call carries a stable idempotency/dedup option, so
 //      the same-delivery retry hypothesis is refuted. Distinct-event/domain
 //      duplicates fail open.
+//   4. "user input is compiled into a regex / ReDoS" — but the exact cited
+//      statement only passes the quoted value through a literal string
+//      substring API (`includes`/`startsWith`/`endsWith`/`indexOf`), and the
+//      enclosing function contains no actual regex surface.
 //
 // Consensus filtering (PR2) cannot kill these — they are STABLE, not flickery.
 // This gate fact-checks each high-severity logic finding against the cited
@@ -22,7 +26,7 @@
 // closure/IO boundary it cannot rule out, or an unbound guard. A real bug's
 // claim is TRUE (or unprovable), so the gate cannot suppress it.
 //
-// Codex sign-off (2026-06-05) shaped the two rules: control-flow requires a
+// Codex sign-off (2026-06-05) shaped the first two rules: control-flow requires a
 // same-block, unconditionally-terminating guard PLUS subject binding (the guard
 // must reference an identifier the finding complains about — mirroring the
 // SIG-327 window-blindness gate); sync-race requires a visible in-memory
@@ -53,6 +57,7 @@ export type LogicClaimDropReason =
   | "control-flow-claim-refuted-by-guard"
   | "sync-race-claim-refuted-no-async-boundary"
   | "idempotency-claim-refuted-by-visible-key"
+  | "regex-substring-claim-refuted-by-literal-string-filter"
   | "unused-claim-refuted-identifier-is-referenced"
   | "missing-return-type-claim-refuted-annotation-present"
 
@@ -106,6 +111,16 @@ const UNUSED_CLAIM_RE =
 // bug like "missing the return type GUARD before the await" does NOT trigger.
 const MISSING_RETURN_TYPE_CLAIM_RE =
   /\breturn[\s-]type\s+(?:annotation|declaration)\b[^.\n]{0,24}?\b(?:is\s+)?(?:missing|absent|not\s+(?:declared|specified|present|annotated))\b|\bmissing\s+(?:a\s+|an\s+|the\s+)?(?:explicit\s+)?return[\s-]type\s+(?:annotation|declaration)\b/i
+
+// A finding asserting regex / RegExp / ReDoS risk. The refuter below is much
+// tighter than this trigger: it only fires when the exact cited statement is a
+// string-only substring operation on quoted claim identifiers, with no regex
+// surface in the enclosing function.
+const REGEX_SUBSTRING_CLAIM_RE =
+  /\b(?:re-?dos|regex|regexp|regular\s+expression|dynamic\s+pattern|catastrophic\s+backtracking)\b/i
+
+const REGEX_ELSEWHERE_CLAIM_RE =
+  /\b(?:elsewhere|outside|later|another|separate|different)\b[^.\n]{0,48}\b(?:function|file|path|branch|call|helper|statement|line|block)\b|\b(?:function|file|path|branch|call|helper|statement|line|block)\b[^.\n]{0,48}\b(?:elsewhere|outside|later|another|separate|different)\b/i
 
 function findingText(f: PrReviewFinding): string {
   return `${f.headline} ${f.body}`
@@ -494,6 +509,15 @@ function statementsSpanningLine(fn: Node, line: number): Node[] {
   return statements
 }
 
+function substringProofNodesSpanningLine(fn: Node, line: number): Node[] {
+  const nodes = statementsSpanningLine(fn, line)
+  const body = fn.body
+  if (body && body.type !== "BlockStatement" && spans(body, line) && !nodes.includes(body)) {
+    nodes.push(body)
+  }
+  return nodes
+}
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
@@ -512,6 +536,8 @@ function candidateLinesWhenUnanchored(fn: Node, line: number, lines: readonly st
 }
 
 const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g
+const STRING_ONLY_SUBSTRING_METHODS = new Set(["includes", "startsWith", "endsWith", "indexOf"])
+const REGEX_SURFACE_METHODS = new Set(["test", "exec", "match", "matchAll", "search"])
 
 /**
  * Refute an "unused identifier" claim. The finding names a symbol (back-tick /
@@ -553,6 +579,156 @@ function refutesUnused(fn: Node, finding: PrReviewFinding): boolean {
   // both in the enclosing fn's own scope) is provably referenced.
   for (const id of named) if ((counts.get(id) ?? 0) >= 2) return true
   return false
+}
+
+function quotedIdentifiers(text: string): Set<string> {
+  const ids = new Set<string>()
+  for (const m of text.matchAll(BACKTICK_IDENT_RE)) ids.add(m[1] as string)
+  return ids
+}
+
+function textContainsIdentifier(text: string, id: string): boolean {
+  return new RegExp(`\\b${escapeRegExp(id)}\\b`).test(text)
+}
+
+function nodeContainsStringOnlySubstringCall(node: Node): boolean {
+  let hit = false
+  eachNode(node, (n) => {
+    if (hit || n.type !== "CallExpression") return
+    const callee = n.callee
+    if (callee?.type !== "MemberExpression") return
+    const prop = propertyName(callee.property)
+    if (prop && STRING_ONLY_SUBSTRING_METHODS.has(prop)) hit = true
+  })
+  return hit
+}
+
+function isStringOnlySubstringCall(node: Node): boolean {
+  if (!node || node.type !== "CallExpression") return false
+  const callee = node.callee
+  if (callee?.type !== "MemberExpression") return false
+  const prop = propertyName(callee.property)
+  return prop ? STRING_ONLY_SUBSTRING_METHODS.has(prop) : false
+}
+
+function nodeContainsIdentifierOutsideNestedFunctions(node: Node, id: string): boolean {
+  let hit = false
+  const visit = (n: Node): void => {
+    if (hit || !n || typeof n.type !== "string") return
+    if (FUNCTION_TYPES.has(n.type)) return
+    if (n.type === "Identifier" && n.name === id) {
+      hit = true
+      return
+    }
+    for (const key of Object.keys(n)) {
+      if (key === "loc" || key === "start" || key === "end" || key === "range") continue
+      const child = n[key]
+      if (Array.isArray(child)) {
+        for (const c of child) if (c && typeof c.type === "string") visit(c)
+      } else if (child && typeof child.type === "string") {
+        visit(child)
+      }
+    }
+  }
+  visit(node)
+  return hit
+}
+
+function callPassesQuotedIdentifierToUnknownCallee(call: Node, quoted: ReadonlySet<string>): boolean {
+  if (!call || (call.type !== "CallExpression" && call.type !== "NewExpression")) return false
+  if (isStringOnlySubstringCall(call)) return false
+  for (const arg of call.arguments ?? []) {
+    if (!arg || FUNCTION_TYPES.has(arg.type)) continue
+    for (const id of quoted) {
+      if (nodeContainsIdentifierOutsideNestedFunctions(arg, id)) return true
+    }
+  }
+  return false
+}
+
+function taggedTemplatePassesQuotedIdentifierToUnknownTag(node: Node, quoted: ReadonlySet<string>): boolean {
+  if (!node || node.type !== "TaggedTemplateExpression") return false
+  for (const expr of node.quasi?.expressions ?? []) {
+    if (!expr || FUNCTION_TYPES.has(expr.type)) continue
+    for (const id of quoted) {
+      if (nodeContainsIdentifierOutsideNestedFunctions(expr, id)) return true
+    }
+  }
+  return false
+}
+
+function functionPassesQuotedIdentifierToUnknownCall(fn: Node, quoted: ReadonlySet<string>): boolean {
+  let hit = false
+  // Intentionally descend through callbacks: the target FP shape is
+  // `rows.filter((r) => r.name.includes(needle))`, and any sibling callback
+  // that sends the same quoted value to a non-substring callee must fail open.
+  eachNode(fn.body ?? fn, (n) => {
+    if (!hit && (callPassesQuotedIdentifierToUnknownCallee(n, quoted) || taggedTemplatePassesQuotedIdentifierToUnknownTag(n, quoted))) hit = true
+  })
+  return hit
+}
+
+function functionContainsRegexSurface(fn: Node): boolean {
+  let hit = false
+  eachNodeInCurrentFunction(fn.body ?? fn, (n) => {
+    if (hit) return
+    if (n.type === "Literal" && n.regex) {
+      hit = true
+      return
+    }
+    if (n.type === "NewExpression" || n.type === "CallExpression") {
+      const calleePath = memberPath(n.callee)
+      if (
+        (n.callee?.type === "Identifier" && n.callee.name === "RegExp") ||
+        calleePath === "globalThis.RegExp" ||
+        calleePath === "window.RegExp"
+      ) {
+        hit = true
+        return
+      }
+    }
+    if (n.type === "TaggedTemplateExpression") {
+      const tagPath = memberPath(n.tag)
+      if (tagPath && /\bregex\b/i.test(tagPath)) {
+        hit = true
+        return
+      }
+    }
+    if (n.type === "CallExpression" && n.callee?.type === "MemberExpression") {
+      const prop = propertyName(n.callee.property)
+      if (prop && REGEX_SURFACE_METHODS.has(prop)) hit = true
+    }
+  })
+  return hit
+}
+
+/**
+ * Refute a regex/ReDoS hallucination ONLY when the exact cited statement proves
+ * the model's named value is used as a literal string substring, not as a
+ * regular expression. This intentionally descends into callback expressions
+ * because `rows.filter((r) => r.name.includes(needle))` is the target FP shape;
+ * the unknown-call guard also descends and fails open if that same quoted value
+ * reaches any non-substring call/constructor. This is deliberately narrower
+ * than "the function looks safe": no quoted expression, no exact statement
+ * match, text claiming another location, or any actual regex surface in the
+ * enclosing function all KEEP.
+ */
+function refutesRegexSubstringClaim(fnChain: readonly Node[], line: number, finding: PrReviewFinding, lines: string[]): boolean {
+  const text = findingText(finding)
+  if (!REGEX_SUBSTRING_CLAIM_RE.test(text)) return false
+  if (REGEX_ELSEWHERE_CLAIM_RE.test(text)) return false
+  const quoted = quotedIdentifiers(text)
+  if (quoted.size === 0) return false
+  if (fnChain.some((fn) => functionContainsRegexSurface(fn))) return false
+  if (fnChain.some((fn) => functionPassesQuotedIdentifierToUnknownCall(fn, quoted))) return false
+
+  return fnChain.some((fn) => {
+    return substringProofNodesSpanningLine(fn, line).some((stmt) => {
+      if (!nodeContainsStringOnlySubstringCall(stmt)) return false
+      const stmtText = nodeSourceLines(stmt, lines)
+      return [...quoted].every((id) => textContainsIdentifier(stmtText, id))
+    })
+  })
 }
 
 /**
@@ -598,12 +774,14 @@ export function evaluateLogicClaimRefutation(
   const isIdempotencyRetry = IDEMPOTENCY_RETRY_CLAIM_RE.test(text)
   const isUnused = UNUSED_CLAIM_RE.test(text)
   const isMissingReturnType = MISSING_RETURN_TYPE_CLAIM_RE.test(text)
+  const isRegexSubstring = REGEX_SUBSTRING_CLAIM_RE.test(text)
   if (
     !isControlFlow &&
     !isSyncRace &&
     !isIdempotencyRetry &&
     !isUnused &&
-    !isMissingReturnType
+    !isMissingReturnType &&
+    !isRegexSubstring
   ) return { keep: true }
 
   const source = context.fullFileByPath.get(finding.path)
@@ -630,6 +808,9 @@ export function evaluateLogicClaimRefutation(
   }
   if (isIdempotencyRetry && refutesIdempotencyRetryClaim(fn, line, finding, lines)) {
     return { keep: false, reason: "idempotency-claim-refuted-by-visible-key" }
+  }
+  if (isRegexSubstring && refutesRegexSubstringClaim(fnChain, line, finding, lines)) {
+    return { keep: false, reason: "regex-substring-claim-refuted-by-literal-string-filter" }
   }
   if (isUnused && refutesUnused(fn, finding)) {
     return { keep: false, reason: "unused-claim-refuted-identifier-is-referenced" }

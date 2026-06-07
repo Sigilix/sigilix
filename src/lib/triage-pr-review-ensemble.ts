@@ -5215,10 +5215,11 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
-      // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
-      // when its claim (control-flow / sync-race / retry idempotency) is
-      // PROVABLY false against the
-      // AST of the cited file (`fullFileByPath` = `astFilesByPath`). Default
+      // SIG-328/SIG-334: logic-claim refutation gate. Drops a sev>=4 logic
+      // finding only when its claim (control-flow / sync-race / retry
+      // idempotency / literal-string regex hallucination) is PROVABLY false
+      // against the AST of the cited file (`fullFileByPath` =
+      // `astFilesByPath`). Default
       // `shadow` — counts/telemeters the would-drop until the operator flips
       // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
       logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
@@ -10359,8 +10360,8 @@ export function validateForSubmission(args: {
   /**
    * SIG-328: logic-claim refutation gate mode. `off` (default): the gate
    * doesn't run. `shadow`: would-drops are counted + telemetered, finding kept.
-   * `enforce`: a logic finding whose control-flow / sync-race claim is PROVABLY
-   * false against the cited AST is dropped. Read from
+   * `enforce`: a logic finding whose supported claim shape is PROVABLY false
+   * against the cited AST is dropped. Read from
    * `OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE`. Scoped to sev>=4 logic findings;
    * needs `fullFileByPath` for the AST proof. Fails open. Ships dark.
    */
@@ -10924,10 +10925,9 @@ export function validateForSubmission(args: {
       }
     }
 
-    // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
-    // when its control-flow ("unconditional/double-response"), sync-race
-    // ("TOCTOU"), or retry/idempotency claim is PROVABLY false against the AST
-    // of the cited file. Fails OPEN on every ambiguity (the pure validator
+    // SIG-328/SIG-334: logic-claim refutation gate. Drops a sev>=4 logic
+    // finding only when a supported claim shape is PROVABLY false against the
+    // AST of the cited file. Fails OPEN on every ambiguity (the pure validator
     // re-checks category+sev), so it cannot suppress a real bug. Same
     // shadow-first semantics: only `enforce` drops.
     if (logicClaimRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {

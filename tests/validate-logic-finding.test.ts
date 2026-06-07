@@ -580,6 +580,18 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
     headline: "`next()` runs after 403 response, causing a double-response error",
     body: "When `svc.isAdmin(req.user)` returns false, the middleware sends `res.status(403).end()` and then calls `next()`.",
   })
+  const FILTER_PATH = "src/search/filter.ts"
+  const FILTER_SOURCE = `export function filterRows(rows, req) {
+  const needle = String(req.query.q ?? "")
+  return rows.filter((r) => r.name.includes(needle))
+}`
+  const regexSubstringFinding = finding({
+    path: FILTER_PATH,
+    line: 3,
+    score: 5,
+    headline: "User-controlled regex can cause ReDoS",
+    body: "`needle` is compiled into a regular expression, but the cited filter uses includes.",
+  })
 
   it("ENFORCE: drops a provably-refuted logic claim + counts + fires callback", () => {
     const onFlag = vi.fn()
@@ -598,6 +610,27 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
     expect(result.verdict.findings).toHaveLength(0)
     expect(onFlag).toHaveBeenCalledWith(expect.anything(), {
       reason: "control-flow-claim-refuted-by-guard",
+      dropped: true,
+    })
+  })
+
+  it("ENFORCE: drops a regex/ReDoS claim refuted by an exact literal substring statement", () => {
+    const onFlag = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [regexSubstringFinding] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(FILTER_PATH, 3),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      logicClaimRefutationMode: "enforce",
+      fullFileByPath: new Map([[FILTER_PATH, FILTER_SOURCE]]),
+      onLogicClaimRefutationFindingDropped: onFlag,
+    })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), {
+      reason: "regex-substring-claim-refuted-by-literal-string-filter",
       dropped: true,
     })
   })

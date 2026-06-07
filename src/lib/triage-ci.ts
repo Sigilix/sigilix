@@ -15,6 +15,8 @@ import { getInstallationToken } from "./github-app"
 import { GitHubClient, GitHubHttpError, type WorkflowJob } from "./github"
 import { retrieveChunks } from "./retrieval"
 import { indexNamespace } from "./repo-index-manifest"
+import { parseFirstJsonObject } from "./json-extract"
+import { CI_TRIAGE_SCHEMA } from "./schemas"
 import { CI_TRIAGE_PROMPT } from "../prompts/ci-triage"
 import type { Env } from "../index"
 
@@ -42,6 +44,27 @@ const LIMITS = {
 interface CiVerdict {
   raw: string
   confidence: "high" | "medium" | "low"
+}
+
+export interface CiTriagePatch {
+  path: string
+  line: number
+  replacement: string
+}
+
+export interface CiTriageDiagnosis {
+  rootCause: string
+  suggestedFix?: string
+  affectedFiles: string[]
+  failureExcerpt: string
+  patches: CiTriagePatch[]
+  confidence: "high" | "medium" | "low"
+}
+
+export interface CiTriageCommentDraft {
+  body: string
+  confidence: "high" | "medium" | "low"
+  diagnosis: CiTriageDiagnosis | null
 }
 
 export interface TriageCiArgs {
@@ -198,12 +221,13 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     model,
     prompt,
     apiKey: env.OLLAMA_API_KEY,
-    temperature: 0.2,
+    format: CI_TRIAGE_SCHEMA as unknown as Record<string, unknown>,
   })
   since("ollama-done")
 
-  const verdict = parseConfidence(response)
-  if (verdict == null || verdict === "low") {
+  const draft = buildCiTriageCommentFromModelResponse(response)
+  const verdict = draft?.confidence ?? null
+  if (draft == null || verdict === "low") {
     console.log(
       `Skipping ci-triage post — confidence=${verdict ?? "unparsed"} on ${owner}/${repo}#${prNumber}`
     )
@@ -211,7 +235,7 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
   }
 
   const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Sigilix · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
-  const body = response + footer
+  const body = draft.body + footer
 
   const existing = await findExistingCiComment(client, owner, repo, prNumber)
   if (existing != null) {
@@ -265,6 +289,159 @@ export function parseConfidence(response: string): "high" | "medium" | "low" | n
   const level = match[1].toLowerCase()
   if (level === "high" || level === "medium" || level === "low") return level
   return null
+}
+
+export function parseCiTriageResponse(response: string): CiTriageDiagnosis | null {
+  const obj = parseFirstJsonObject(response)
+  if (!obj) return null
+
+  const rootCause = typeof obj.rootCause === "string" ? obj.rootCause.trim() : ""
+  if (!rootCause) return null
+
+  if (!Array.isArray(obj.affectedFiles)) return null
+
+  // Structured-output enforcement can vary by model/provider; normalize
+  // casing defensively while still rejecting unknown confidence values.
+  const confidenceRaw = typeof obj.confidence === "string" ? obj.confidence.trim().toLowerCase() : ""
+  const confidence =
+    confidenceRaw === "high" || confidenceRaw === "medium" || confidenceRaw === "low"
+      ? confidenceRaw
+      : null
+  if (confidence == null) return null
+
+  const suggestedFix = typeof obj.suggestedFix === "string" ? obj.suggestedFix.trim() : ""
+  const failureExcerpt = typeof obj.failureExcerpt === "string" ? obj.failureExcerpt.trim() : ""
+  if (!failureExcerpt) return null
+
+  // Empty arrays are still valid: some CI failures are repo/global
+  // (for example missing env or runner setup) rather than file-local.
+  const affectedFiles = parseStringArray(obj.affectedFiles, 10)
+  const patches = parseCiTriagePatches(obj.patches)
+
+  return {
+    rootCause,
+    ...(suggestedFix ? { suggestedFix } : {}),
+    affectedFiles,
+    failureExcerpt,
+    patches,
+    confidence,
+  }
+}
+
+export function renderCiTriageComment(diagnosis: CiTriageDiagnosis): string {
+  const fixBullets = renderFixBullets(diagnosis)
+  const failureExcerptBlock = renderMarkdownCodeBlock(diagnosis.failureExcerpt)
+  return [
+    `🔴 **Root cause:** ${diagnosis.rootCause}`,
+    "",
+    "📍 **Likely fix:**",
+    ...fixBullets,
+    "",
+    "📋 **Failure excerpt:**",
+    failureExcerptBlock,
+    "",
+    `🤔 **Confidence:** ${diagnosis.confidence}`,
+  ].join("\n")
+}
+
+export function buildCiTriageCommentFromModelResponse(response: string): CiTriageCommentDraft | null {
+  const diagnosis = parseCiTriageResponse(response)
+  if (diagnosis) {
+    return {
+      body: renderCiTriageComment(diagnosis),
+      confidence: diagnosis.confidence,
+      diagnosis,
+    }
+  }
+
+  const confidence = parseConfidence(response)
+  if (confidence == null) return null
+  return {
+    body: response.trim(),
+    confidence,
+    diagnosis: null,
+  }
+}
+
+function parseStringArray(value: unknown, maxItems: number): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== "string") continue
+    const s = item.trim()
+    if (!s || seen.has(s)) continue
+    seen.add(s)
+    out.push(s)
+    if (out.length >= maxItems) break
+  }
+  return out
+}
+
+function parseCiTriagePatches(value: unknown): CiTriagePatch[] {
+  if (!Array.isArray(value)) return []
+  const out: CiTriagePatch[] = []
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue
+    const obj = item as Record<string, unknown>
+    const path = typeof obj.path === "string" ? normalizeCiTriagePatchPath(obj.path) : null
+    const line = obj.line
+    const replacement = typeof obj.replacement === "string" ? obj.replacement : ""
+    if (
+      !path ||
+      typeof line !== "number" ||
+      !Number.isInteger(line) ||
+      line <= 0 ||
+      replacement.length === 0 ||
+      replacement.length > 5000
+    ) {
+      continue
+    }
+    out.push({ path, line, replacement })
+    if (out.length >= 5) break
+  }
+  return out
+}
+
+function normalizeCiTriagePatchPath(path: string): string | null {
+  const normalized = path.trim().replace(/\\/g, "/").replace(/^\.\//, "")
+  if (!normalized || normalized.length > 512) return null
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return null
+  if (normalized.includes("\0")) return null
+
+  const segments = normalized.split("/")
+  if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) {
+    return null
+  }
+
+  return normalized
+}
+
+function renderMarkdownCodeBlock(content: string): string {
+  const maxBacktickRun = Math.max(
+    0,
+    ...Array.from(content.matchAll(/`+/g), (match) => match[0]?.length ?? 0)
+  )
+  const fence = "`".repeat(Math.max(3, maxBacktickRun + 1))
+  return [fence, content, fence].join("\n")
+}
+
+function renderFixBullets(diagnosis: CiTriageDiagnosis): string[] {
+  const bullets: string[] = []
+  if (diagnosis.suggestedFix) {
+    for (const line of diagnosis.suggestedFix.split(/\r?\n/)) {
+      const trimmed = line.trim().replace(/^[-*]\s+/, "")
+      if (trimmed) bullets.push(`- ${trimmed}`)
+    }
+  }
+  if (bullets.length === 0 && diagnosis.affectedFiles.length > 0) {
+    const files = diagnosis.affectedFiles.map((p) => `\`${p}\``).join(", ")
+    bullets.push(`- Inspect ${files} for the failing callsite.`)
+  }
+  if (bullets.length === 0) {
+    bullets.push("- Inspect the failing step and changed files named in the log.")
+  }
+  return bullets
 }
 
 interface PromptCtx {
@@ -329,7 +506,7 @@ function buildPrompt(ctx: PromptCtx): string {
     }
   }
 
-  sections.push("", "[OUTPUT]", "Produce the comment in the exact format specified above. No preamble.")
+  sections.push("", "[OUTPUT]", "Return only the JSON object specified above. No preamble, no Markdown fence.")
   return sections.join("\n")
 }
 

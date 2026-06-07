@@ -197,6 +197,11 @@ function sqlStringCandidates(source: string): SqlStringCandidate[] {
       i = Math.min(source.length, i + 2)
       continue
     }
+    if (source[i] === "'") {
+      const end = findSimpleQuotedStringEnd(source, i, "'")
+      i = end < 0 ? i + 1 : end + 1
+      continue
+    }
     const regexEnd = maybeRegexLiteralEnd(source, i)
     if (regexEnd > i) {
       i = regexEnd

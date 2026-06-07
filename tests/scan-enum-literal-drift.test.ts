@@ -171,6 +171,18 @@ describe("scanSqlEnumDrift", () => {
     expect(hits[0]!.message).toContain("'refunded'")
   })
 
+  it("does not let comment markers inside single-quoted JS strings skip later SQL", () => {
+    const unions = buildGlobalUnionMap([PR10_TYPES])
+    expect(scanSqlEnumDrift(
+      "const url = 'http://example.test'; pool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
+      unions,
+    )).toHaveLength(1)
+    expect(scanSqlEnumDrift(
+      "const marker = '/*'; pool.query(\"UPDATE charges SET status = 'refunded' WHERE id = $1\")",
+      unions,
+    )).toHaveLength(1)
+  })
+
   it("does not close a template SQL candidate on braces or backticks inside interpolation regexes", () => {
     const unions = buildGlobalUnionMap([PR10_TYPES])
     const hits = scanSqlEnumDrift(

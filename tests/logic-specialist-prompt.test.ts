@@ -49,4 +49,15 @@ describe("logic specialist lens — SIG-245 subtle-logic recall bullets", () => 
     expect(logic).toContain("the following `next()` is NOT reached on the forbidden path")
     expect(logic).toContain("exits the enclosing function/callback, not just the block")
   })
+
+  it("requires a visible contract before flagging substring search UX semantics", () => {
+    expect(logic).toContain("SEARCH SEMANTICS NEED A VISIBLE CONTRACT")
+    expect(logic).toContain("String.prototype.includes")
+    expect(logic).toContain("includes(\"\")")
+    expect(logic).toContain("This carve-out is ONLY for substring search UX preferences")
+    expect(logic).toContain("division by zero, null dereference, out-of-bounds")
+    expect(logic).toContain("case-insensitive search")
+    expect(logic).toContain("empty queries returning no rows")
+    expect(logic).toContain("explicit contract, test, API comment, or requirement")
+  })
 })

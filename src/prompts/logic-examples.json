@@ -282,6 +282,18 @@
       "why": "SKIP — a nullish-coalescing default (`?? d`) or an explicit null/undefined check applied to a value before it is used covers the null/undefined branch, so do not claim a downstream `String(undefined)` / NaN bug past it; quote the `?? d` in a `clearedLogicCandidate`. CRITICAL DISTINCTION — this clears `??` ONLY, NOT `||`: `x || d` clobbers EVERY falsy value (0, '', false, NaN), so `count || 10` / `config.retries || 3` silently replaces a VALID 0/''/false with the default — that is the real falsy-zero BUG and you MUST still flag it whenever x can legitimately be 0/''/false. (A raw use with NO null-guard at all is also in scope.)"
     },
     {
+      "id": "skip-substring-search-contract-absent",
+      "situation": "Added lines do `const needle = String(req.query.q ?? \"\")` and `return rows.filter((r) => r.name.includes(needle))`. A reviewer flags that `includes` is case-sensitive or that `includes(\"\")` returns every row, but the visible diff/context contains no test, API comment, or requirement saying search must be case-insensitive or empty queries must return no rows.",
+      "emit": false,
+      "cleared": {
+        "path": "src/search/filter.ts",
+        "line": 4,
+        "hypothesis": "the substring search should be case-insensitive or return no rows for an empty query",
+        "mitigation": "the visible code only uses `r.name.includes(needle)`; no visible contract requires case folding, a minimum query length, or empty-query suppression"
+      },
+      "why": "SKIP — `String.prototype.includes` is a plain string operation, not a correctness bug by itself. Case-insensitive search and empty-query behavior are product semantics; without a visible contract/test/comment requiring those semantics, emitting a finding is preference speculation. Record a `clearedLogicCandidate` or omit. If visible context DOES require case-insensitive matching or empty queries to return none, then flag it and quote that contract."
+    },
+    {
       "id": "skip-scope-beyond-the-diff",
       "situation": "A diff adds a `maxLength` check to the `title` field of a form validator. A reviewer flags that the validator 'does not also check the unrelated, untouched `description` and `tags` fields.'",
       "emit": false,

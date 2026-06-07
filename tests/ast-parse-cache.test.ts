@@ -6,7 +6,7 @@
 // and large-file skips too; (3) apply the shared LARGE_FILE_BYTES ceiling.
 
 import { describe, it, expect } from "vitest"
-import { createAstCache, LARGE_FILE_SKIP_PREFIX } from "../src/lib/ast-rules/parse-cache"
+import { createAstCache, LARGE_FILE_SKIP_PREFIX, AST_CACHE_CONFLICT_PREFIX } from "../src/lib/ast-rules/parse-cache"
 import { LARGE_FILE_BYTES } from "../src/lib/ast-rules/parser"
 
 const SRC = "export function f(a: number): number { return a + 1 }\n"
@@ -39,10 +39,13 @@ describe("createAstCache", () => {
     // A valid-but-huge source: padded with a long comment so it parses fine if
     // it were ever sent to acorn — proving the skip is by SIZE, not syntax.
     const huge = `${SRC}// ${"x".repeat(LARGE_FILE_BYTES + 1)}\n`
-    const r = cache.get("src/huge.ts", huge, ".ts")
+    const r1 = cache.get("src/huge.ts", huge, ".ts")
+    const r2 = cache.get("src/huge.ts", huge, ".ts")
 
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.reason.startsWith(LARGE_FILE_SKIP_PREFIX)).toBe(true)
+    expect(r1.ok).toBe(false)
+    if (!r1.ok) expect(r1.reason.startsWith(LARGE_FILE_SKIP_PREFIX)).toBe(true)
+    expect(r2).toBe(r1) // the skip result is memoized too (parse-once on the skip path)
+    expect(cache.size).toBe(1)
   })
 
   it("uses BYTE length, not UTF-16 code-unit length, for the size guard", () => {
@@ -52,10 +55,26 @@ describe("createAstCache", () => {
     const padBytes = LARGE_FILE_BYTES + 4
     const emoji = "🔒".repeat(Math.ceil(padBytes / 4))
     const huge = `${SRC}// ${emoji}\n`
+    // Pin the preconditions so a future fixture edit can't make this vacuous:
+    // under the ceiling by UTF-16 code units, over it by UTF-8 bytes.
+    expect(huge.length).toBeLessThan(LARGE_FILE_BYTES)
+    expect(new TextEncoder().encode(huge).byteLength).toBeGreaterThan(LARGE_FILE_BYTES)
     const r = cache.get("src/emoji.ts", huge, ".ts")
 
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason.startsWith(LARGE_FILE_SKIP_PREFIX)).toBe(true)
+  })
+
+  it("CR-1: fails safe (ok:false) when the SAME path is requested with a different source", () => {
+    const cache = createAstCache()
+    const first = cache.get("src/x.ts", SRC, ".ts")
+    expect(first.ok).toBe(true)
+    // Same path, different source ⇒ serving the cached AST would be stale.
+    const conflict = cache.get("src/x.ts", `${SRC}export const y = 2\n`, ".ts")
+    expect(conflict.ok).toBe(false)
+    if (!conflict.ok) expect(conflict.reason.startsWith(AST_CACHE_CONFLICT_PREFIX)).toBe(true)
+    // The original entry is untouched: re-requesting with the original source still hits.
+    expect(cache.get("src/x.ts", SRC, ".ts")).toBe(first)
   })
 
   it("parses distinct paths independently and grows size per unique path", () => {

@@ -12,6 +12,7 @@ import {
   LOGIC_CLAIM_REFUTATION_MIN_SEVERITY,
 } from "../src/lib/validate-logic-claim-refutation"
 import { createAstCache } from "../src/lib/ast-rules/parse-cache"
+import { LARGE_FILE_BYTES } from "../src/lib/ast-rules/parser"
 
 function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {
@@ -992,7 +993,7 @@ describe("SIG-336: parse-once cache integration (behavior-invariant, parses each
     const cache = createAstCache()
     // Valid source padded past the byte ceiling — would refute if parsed, but the
     // cache skips it by size, so the gate fails open and keeps the finding.
-    const huge = `${AUTH}\n// ${"x".repeat(500_001)}\n`
+    const huge = `${AUTH}\n// ${"x".repeat(LARGE_FILE_BYTES + 1)}\n`
     const fullFileByPath = new Map([["src/middleware/auth.ts", huge]])
     const d = evaluateLogicClaimRefutation(refuting, { fullFileByPath, astCache: cache })
     expect(d.keep).toBe(true)

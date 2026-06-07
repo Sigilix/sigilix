@@ -23,6 +23,12 @@ import { parseSource, LARGE_FILE_BYTES, type SourceExt, type ParseResult } from 
  *  branch on it. `parseSource` itself never produces this prefix. */
 export const LARGE_FILE_SKIP_PREFIX = "file-too-large:"
 
+/** CodeRabbit (PR #392): reason prefix returned when the same path is requested
+ *  with a DIFFERENT source/ext than the cached entry — a cache-key invariant
+ *  violation. Serving the stale AST would be wrong, so we fail safe (`ok:false`),
+ *  which every consumer already treats as fail-open/skip. */
+export const AST_CACHE_CONFLICT_PREFIX = "ast-cache-key-conflict:"
+
 export interface AstCache {
   /**
    * Parse `source` (interpreted as `ext`) once per `path`, memoizing the result.
@@ -37,12 +43,25 @@ export interface AstCache {
   readonly size: number
 }
 
+type CacheEntry = { source: string; ext: SourceExt; result: ParseResult }
+
 export function createAstCache(): AstCache {
-  const cache = new Map<string, ParseResult>()
+  const cache = new Map<string, CacheEntry>()
   return {
     get(path: string, source: string, ext: SourceExt): ParseResult {
       const hit = cache.get(path)
-      if (hit !== undefined) return hit
+      if (hit !== undefined) {
+        // CodeRabbit (PR #392): keying by path assumes one review = one source
+        // snapshot per path. If a caller ever requests the same path with a
+        // different source/ext, serving the cached AST would be stale — fail safe
+        // (`ok:false` → consumers fail open / skip) rather than silently wrong.
+        // In practice consumers pass the same astFilesByPath string reference, so
+        // `hit.source !== source` short-circuits on identity (near-free).
+        if (hit.ext !== ext || hit.source !== source) {
+          return { ok: false, reason: `${AST_CACHE_CONFLICT_PREFIX}${path}` }
+        }
+        return hit.result
+      }
       // Byte length (not UTF-16 code-unit length): matches the runner's guard so
       // non-ASCII sources can't sneak past the ceiling.
       const bytes = new TextEncoder().encode(source).length
@@ -50,7 +69,7 @@ export function createAstCache(): AstCache {
         bytes > LARGE_FILE_BYTES
           ? { ok: false, reason: `${LARGE_FILE_SKIP_PREFIX}${bytes}` }
           : parseSource(source, ext)
-      cache.set(path, result)
+      cache.set(path, { source, ext, result })
       return result
     },
     get size(): number {

@@ -25,6 +25,7 @@ import {
   isSubstantiveAnchorLine,
   pickAnchorLineForward,
   pickSubstantiveAnchorLineForward,
+  previewFallbackSubmissionEvent,
   previewReviewSubmissionEvent,
   parsePrReviewResponse,
   renderCommentBody,
@@ -400,6 +401,22 @@ describe("chooseReviewEventForRenderedFindings", () => {
     expect(chooseReviewEventForRenderedFindings({
       inlineFindings: [f()],
       bodyOnlyFindings: [f(2)],
+    })).toBe("REQUEST_CHANGES")
+  })
+
+  it("COMMENT when rendered findings are testing-only, even at high score", () => {
+    const testingFinding: PrReviewFinding = { ...baseFinding, category: "testing", score: 5 }
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [testingFinding],
+      bodyOnlyFindings: [],
+    })).toBe("COMMENT")
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [],
+      bodyOnlyFindings: [testingFinding],
+    })).toBe("COMMENT")
+    expect(chooseReviewEventForRenderedFindings({
+      inlineFindings: [testingFinding],
+      bodyOnlyFindings: [f(3)],
     })).toBe("REQUEST_CHANGES")
   })
 
@@ -1461,9 +1478,9 @@ describe("buildReviewSubmission", () => {
       path: "src/body-only.ts",
       line: 12,
       score: 4,
-      category: "testing" as const,
-      headline: "missing integration coverage",
-      body: "The new branch has no integration coverage.",
+      category: "logic" as const,
+      headline: "missing idempotency guard",
+      body: "The new branch can process the same event twice.",
       failureExample: "opened/synchronize events are never exercised",
       testGap: "The sibling test only covers push events.",
     }
@@ -1480,7 +1497,7 @@ describe("buildReviewSubmission", () => {
     // (Example / "Why this wasn't caught") still renders, inside the
     // collapsed details block.
     expect(out.submission.body).toContain("Evidence &amp; suggested changes for body-only blockers")
-    expect(out.submission.body).toContain("missing integration coverage")
+    expect(out.submission.body).toContain("missing idempotency guard")
     expect(out.submission.body).not.toContain("### Review Body Findings")
     expect(out.submission.body).toContain("**Example:**")
     expect(out.submission.body).toContain("opened/synchronize events")
@@ -1492,7 +1509,7 @@ describe("buildReviewSubmission", () => {
         start_line: 12,
         end_line: 12,
         annotation_level: "warning",
-        title: "[P1] testing: missing integration coverage",
+        title: "[P1] logic: missing idempotency guard",
       }),
     ])
   })
@@ -2131,6 +2148,200 @@ describe("buildReviewSubmission — SIG-127 non-substantive anchor routing", () 
     // Line preserved (no walk) because the suggestion needs the original
     // multi-line range to anchor cleanly.
     expect(out.comments?.[0]?.line).toBe(700)
+  })
+})
+
+describe("buildReviewSubmission — SIG-222 testing findings are non-blocking and inline-only", () => {
+  const testingFinding: PrReviewFinding = {
+    path: "src/lib/new-source.ts",
+    line: 7,
+    scope: "line",
+    score: 5,
+    category: "testing",
+    headline: "new module has no sibling test",
+    body: "Add a sibling test for the new exported behavior.",
+    evidenceRefs: ["siblingMapping:src/lib/new-source.ts->NONE"],
+  }
+  const reviewable: ReviewableMap = new Map([
+    ["src/lib/new-source.ts", [{ line: 7, side: "RIGHT" }]],
+  ])
+  const addedLineTextByLine = new Map<string, Map<number, string>>([
+    ["src/lib/new-source.ts", new Map([[7, "export function newSource() { return run() }"]])],
+  ])
+
+  it("keeps an anchorable missing-test finding inline, clamps it to P3, and posts COMMENT", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "Testing gap.",
+        confidence: 5,
+        confidenceReason: "Concrete.",
+        findings: [testingFinding],
+      },
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.comments).toHaveLength(1)
+    expect(out.submission.comments?.[0]?.line).toBe(7)
+    expect(out.submission.comments?.[0]?.body).toContain("new module has no sibling test")
+    expect(out.submission.comments?.[0]?.body).toContain("<!-- sigilix:severity:2 -->")
+  })
+
+  it("preserves explicit removed-test coverage severity while still posting COMMENT", () => {
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "Removed coverage.",
+        confidence: 5,
+        confidenceReason: "Concrete.",
+        findings: [{
+          ...testingFinding,
+          score: 4,
+          headline: "test coverage was removed",
+          evidenceRefs: ["testFileChanged:tests/new-source.test.ts"],
+        }],
+      },
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.comments).toHaveLength(1)
+    expect(out.submission.comments?.[0]?.body).toContain("<!-- sigilix:severity:4 -->")
+  })
+
+  it("drops a testing finding instead of body-routing it when no substantive anchor exists", () => {
+    const nonSubstantiveLines = new Map<string, Map<number, string>>([
+      ["src/lib/new-source.ts", new Map([[7, "}"]])],
+    ])
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "No anchor.",
+        confidence: 5,
+        confidenceReason: "Concrete.",
+        findings: [testingFinding],
+      },
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine: nonSubstantiveLines,
+    })
+
+    expect(out.submission.event).toBe("APPROVE")
+    expect(out.submission.comments ?? []).toHaveLength(0)
+    expect(out.bodyOnlyFindings).toEqual([])
+    expect(out.submission.body).not.toContain("new module has no sibling test")
+  })
+
+  it("body-routes explicit removed-test coverage even when no substantive source anchor exists", () => {
+    const nonSubstantiveLines = new Map<string, Map<number, string>>([
+      ["src/lib/new-source.ts", new Map([[7, "}"]])],
+    ])
+    const removedCoverage = {
+      ...testingFinding,
+      score: 4,
+      headline: "test coverage was removed",
+      body: "The PR removes coverage for the exported behavior.",
+      evidenceRefs: ["testFileChanged:tests/new-source.test.ts"],
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "Removed coverage.",
+        confidence: 5,
+        confidenceReason: "Concrete.",
+        findings: [removedCoverage],
+      },
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine: nonSubstantiveLines,
+    })
+
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.comments ?? []).toHaveLength(0)
+    expect(out.bodyOnlyFindings).toEqual([expect.objectContaining(removedCoverage)])
+    expect(out.submission.body).toContain("test coverage was removed")
+  })
+
+  it("body-routes non-missing-sibling testing evidence when no substantive anchor exists", () => {
+    const nonSubstantiveLines = new Map<string, Map<number, string>>([
+      ["src/lib/new-source.ts", new Map([[7, "}"]])],
+    ])
+    const coverageGapFinding = {
+      ...testingFinding,
+      headline: "branch coverage regressed",
+      body: "The uncovered branch needs a focused test.",
+      evidenceRefs: ["coverageGap:src/lib/new-source.ts:7"],
+    }
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "Coverage gap.",
+        confidence: 5,
+        confidenceReason: "Concrete.",
+        findings: [coverageGapFinding],
+      },
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine: nonSubstantiveLines,
+    })
+
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.comments ?? []).toHaveLength(0)
+    expect(out.bodyOnlyFindings).toEqual([
+      expect.objectContaining({ ...coverageGapFinding, score: 2 }),
+    ])
+    expect(out.submission.body).toContain("branch coverage regressed")
+  })
+
+  it("drops missing-sibling testing findings from anchorless fallback routing", () => {
+    const verdict: PrReviewVerdict = {
+      summary: "Fallback should not body-route missing tests.",
+      confidence: 5,
+      confidenceReason: "Concrete.",
+      findings: [testingFinding],
+    }
+
+    expect(previewFallbackSubmissionEvent({ verdict, unanchored: [] })).toBe("APPROVE")
+
+    const fallback = buildFallbackSubmission({
+      verdict,
+      unanchored: [],
+      headSha: "abc",
+    })
+    expect(fallback.event).toBe("APPROVE")
+    expect(fallback.body).not.toContain("new module has no sibling test")
+  })
+
+  it("keeps removed-test coverage in anchorless fallback routing", () => {
+    const removedCoverage = {
+      ...testingFinding,
+      score: 4,
+      headline: "test coverage was removed",
+      body: "The PR removes coverage for the exported behavior.",
+      evidenceRefs: ["testFileChanged:tests/new-source.test.ts"],
+    }
+    const verdict: PrReviewVerdict = {
+      summary: "Fallback should keep removed coverage.",
+      confidence: 5,
+      confidenceReason: "Concrete.",
+      findings: [removedCoverage],
+    }
+
+    expect(previewFallbackSubmissionEvent({ verdict, unanchored: [] })).toBe("COMMENT")
+
+    const fallback = buildFallbackSubmission({
+      verdict,
+      unanchored: [],
+      headSha: "abc",
+    })
+    expect(fallback.event).toBe("COMMENT")
+    expect(fallback.body).toContain("test coverage was removed")
+    expect(fallback.body).toContain("score 4")
   })
 })
 

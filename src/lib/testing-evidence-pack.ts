@@ -37,9 +37,11 @@
 
 import {
   classifyDiffFiles,
+  findExistingTestSiblingForSource,
   type ClassifiedDiffFile,
 } from "./diff-file-classify"
 import { normalizeConcurrencyLimit } from "./bounded-concurrency"
+import { isSubstantiveAddedLine } from "./helper-coverage"
 import type { HelperCoverage } from "./helper-coverage"
 
 /**
@@ -99,6 +101,21 @@ export interface TestingEvidencePack {
   helperCoverageBySource: Record<string, HelperCoverage>
 }
 
+export type TestingEvidenceSuppressionReason =
+  | "repo-sibling-exists"
+  | "no-substantive-change"
+
+export interface TestingEvidenceSuppression {
+  source: string
+  reason: TestingEvidenceSuppressionReason
+  test?: string
+}
+
+export interface FilterTestingEvidenceResult {
+  pack: TestingEvidencePack
+  suppressions: TestingEvidenceSuppression[]
+}
+
 /**
  * Build the testing evidence pack from the PR's full diff inventory.
  *
@@ -152,6 +169,78 @@ export function buildTestingEvidencePack(args: {
     siblingMappings,
     inspectedTestFiles: [], // populated by mergeInspectedTestFileContents
     helperCoverageBySource: {}, // populated by mergeHelperCoverage
+  }
+}
+
+function changedLinesAreNonSubstantive(lines: readonly string[] | undefined): boolean {
+  if (lines === undefined || lines.length === 0) return false
+  // Caller passes added + deleted diff text; one substantive deletion keeps the row.
+  return lines.every((line) => !isSubstantiveAddedLine(stripRawDiffLinePrefix(line)))
+}
+
+function stripRawDiffLinePrefix(line: string): string {
+  return /^[+-]/.test(line) ? line.slice(1) : line
+}
+
+/**
+ * Remove missing-sibling evidence rows that deterministic context proves
+ * should not become tests-specialist "no sibling test" findings.
+ *
+ * This only filters `siblingMapping:<source>->NONE` rows. UNKNOWN repo state
+ * fails open by passing no `repoPaths`, and ambiguous repo-wide sibling
+ * matches also fail open inside `findExistingTestSiblingForSource`.
+ */
+export function filterTestingEvidenceForSuppressedMissingCoverage(
+  pack: TestingEvidencePack,
+  args: {
+    changedLineTextByPath: ReadonlyMap<string, readonly string[]>
+    repoPaths?: readonly string[]
+  },
+): FilterTestingEvidenceResult {
+  const suppressions: TestingEvidenceSuppression[] = []
+  const suppressedSources = new Set<string>()
+
+  for (const mapping of pack.siblingMappings) {
+    if (mapping.test !== null) continue
+
+    const existingTest = args.repoPaths !== undefined
+      ? findExistingTestSiblingForSource(mapping.source, args.repoPaths)
+      : null
+    if (existingTest !== null) {
+      suppressions.push({
+        source: mapping.source,
+        reason: "repo-sibling-exists",
+        test: existingTest,
+      })
+      suppressedSources.add(mapping.source)
+      continue
+    }
+
+    if (changedLinesAreNonSubstantive(args.changedLineTextByPath.get(mapping.source))) {
+      suppressions.push({
+        source: mapping.source,
+        reason: "no-substantive-change",
+      })
+      suppressedSources.add(mapping.source)
+    }
+  }
+
+  if (suppressions.length === 0) {
+    return { pack, suppressions }
+  }
+
+  const helperCoverageBySource = Object.fromEntries(
+    Object.entries(pack.helperCoverageBySource).filter(([source]) => !suppressedSources.has(source)),
+  )
+
+  return {
+    pack: {
+      ...pack,
+      sourceFilesChanged: pack.sourceFilesChanged.filter((source) => !suppressedSources.has(source)),
+      siblingMappings: pack.siblingMappings.filter((mapping) => !suppressedSources.has(mapping.source)),
+      helperCoverageBySource,
+    },
+    suppressions,
   }
 }
 

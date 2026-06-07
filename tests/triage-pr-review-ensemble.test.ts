@@ -618,7 +618,7 @@ describe("validateForSubmission — hallucination guard + line validity + score-
       specialistVerdicts,
     })
 
-    expect(out.verdict.findings[0]?.evidence?.synthDecision).toBe("kept")
+    expect(out.verdict.findings[0]?.evidence?.synthDecision).toBe("unknown")
   })
 
   it("tags a finding on a NON-changed file as outOfPrScope; a mis-anchored finding on a CHANGED file is NOT (Codex recall-hole fix)", () => {

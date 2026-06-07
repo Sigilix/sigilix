@@ -3876,8 +3876,8 @@ describe("Evidence provenance render (SIG-112) — gated on `showEvidence`", () 
     const body = formatFindingComment({
       ...baseFinding,
       evidence: {
-        specialistsThatFlagged: ["logic"],
-        specialistsThatDeclined: [],
+        specialistsThatFlagged: ["logic<script>"],
+        specialistsThatDeclined: ["tests&perf"],
         deterministicFactIds: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts</script>&"],
         retrievalChunkIds: ["chunk-`quoted`"],
         relatedPriorPRs: [],
@@ -3886,6 +3886,8 @@ describe("Evidence provenance render (SIG-112) — gated on `showEvidence`", () 
       },
     }, 5, undefined, undefined, false, true)
 
+    expect(body).toContain("Flagged by: logic&lt;script&gt;")
+    expect(body).toContain("Did not flag: tests&amp;perf")
     expect(body).toContain("`siblingMapping:src/lib/foo.ts-&gt;tests/foo.test.ts&lt;/script&gt;&amp;`")
     expect(body).toContain("`chunk-&#96;quoted&#96;`")
     expect(body).not.toContain("tests/foo.test.ts</script>&")

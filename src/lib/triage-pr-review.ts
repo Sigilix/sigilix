@@ -255,7 +255,7 @@ export interface EvidenceRecord {
   deterministicFactIds: string[]
   retrievalChunkIds: string[]
   relatedPriorPRs: string[]
-  synthDecision: "kept" | "merged" | "rewritten"
+  synthDecision: "kept" | "merged" | "rewritten" | "unknown"
   consensusScore: number
 }
 
@@ -3076,10 +3076,10 @@ function renderFindingEvidenceBlock(finding: PrReviewFinding): string {
   const lines = [
     `<details><summary>Why Sigilix flagged this (${count} ${count === 1 ? "piece" : "pieces"} of evidence)</summary>`,
     "",
-    `- Flagged by: ${record.specialistsThatFlagged.length > 0 ? record.specialistsThatFlagged.join(", ") : "none recorded"}`,
+    `- Flagged by: ${record.specialistsThatFlagged.length > 0 ? record.specialistsThatFlagged.map(escapeInlineEvidenceValue).join(", ") : "none recorded"}`,
   ]
   if (record.specialistsThatDeclined.length > 0) {
-    lines.push(`- Did not flag: ${record.specialistsThatDeclined.join(", ")}`)
+    lines.push(`- Did not flag: ${record.specialistsThatDeclined.map(escapeInlineEvidenceValue).join(", ")}`)
   }
   if (record.deterministicFactIds.length > 0) {
     lines.push(`- Deterministic facts: ${formatEvidenceValues(record.deterministicFactIds)}`)

@@ -6681,6 +6681,7 @@ export async function handlePrReviewEnsemble(
         ...renderableUnanchoredForSubmission,
       ].entries()) {
         const record = finding.evidence
+        const evidencePieces = evidencePieceCountForTelemetry(record)
         console.log(JSON.stringify({
           event: "pr-review-evidence-emitted",
           owner, repo, prNumber, headSha: headSha.slice(0, 7),
@@ -6697,10 +6698,7 @@ export async function handlePrReviewEnsemble(
           related_prior_prs: record?.relatedPriorPRs.length ?? 0,
           consensus_score: record?.consensusScore ?? 0,
           synth_decision: record?.synthDecision ?? null,
-          structured_evidence_empty:
-            (record?.deterministicFactIds.length ?? 0) === 0 &&
-            (record?.retrievalChunkIds.length ?? 0) === 0 &&
-            (record?.relatedPriorPRs.length ?? 0) === 0,
+          structured_evidence_empty: evidencePieces === 0,
         }))
       }
     }
@@ -9474,7 +9472,17 @@ function hasDeterministicPrefix(value: string, prefixes: readonly string[]): boo
 }
 
 function normalizeSynthDecision(action: unknown): EvidenceRecord["synthDecision"] {
-  return action === "kept" || action === "merged" || action === "rewritten" ? action : "kept"
+  return action === "kept" || action === "merged" || action === "rewritten" ? action : "unknown"
+}
+
+function evidencePieceCountForTelemetry(record: EvidenceRecord | undefined): number {
+  if (!record) return 0
+  return (
+    record.specialistsThatFlagged.length +
+    record.deterministicFactIds.length +
+    record.retrievalChunkIds.length +
+    record.relatedPriorPRs.length
+  )
 }
 
 function specialistReturnedMatchingFinding(

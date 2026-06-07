@@ -117,11 +117,10 @@ export function scoreCase(
     }
   }
   let nearestLine: number | null = null
-  let caught = false
+  const caught = onPath.length > 0
   for (const f of onPath) {
     const dist = Math.abs(f.line - c.targetLine)
     if (nearestLine === null || dist < Math.abs(nearestLine - c.targetLine)) nearestLine = f.line
-    if (dist <= WINDOW) caught = true
   }
   return {
     id: c.id,

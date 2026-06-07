@@ -210,6 +210,19 @@ const SYNC_EXEC_CALL_RE = /\b(?:execSync|execFileSync|spawnSync)\s*\(/
 // (the real cmd-injection at report.ts:17) is NOT matched.
 const TRIVIAL_PROBE_RE = /["'`][^"'`$]*(?:--version\b|--help\b|(?:^|\s)-v\b|(?:^|\s)-V\b)/
 
+function normalizeFindingPath(rawPath: string): string {
+  return typeof rawPath === "string" ? rawPath.trim() : ""
+}
+
+function addedLinesForFindingPath(
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>>,
+  rawPath: string,
+): ReadonlyMap<number, string> | undefined {
+  const path = normalizeFindingPath(rawPath)
+  if (path.length === 0) return undefined
+  return addedLineTextByLine.get(path) ?? (path !== rawPath ? addedLineTextByLine.get(rawPath) : undefined)
+}
+
 /**
  * Clamp, IN PLACE, the score of any sev>=4 (P0/P1) PERFORMANCE finding whose
  * cited line (± 2 lines) is a synchronous child-process call to a CONSTANT
@@ -229,7 +242,7 @@ export function clampTrivialSyncIoSeverity(
   let clamped = 0
   for (const f of findings) {
     if (f.category !== "performance" || f.score < 4) continue
-    const lines = addedLineTextByLine.get(f.path)
+    const lines = addedLinesForFindingPath(addedLineTextByLine, f.path)
     if (!lines) continue
     let isTrivialProbe = false
     for (let l = f.line - 2; l <= f.line + 2; l++) {
@@ -317,9 +330,9 @@ export function clampIntentionalLiveEvalSerialLoopSeverity(
   let clamped = 0
   for (const f of findings) {
     if (f.category !== "performance" || f.score < 4) continue
-    const path = typeof f.path === "string" ? f.path.trim() : ""
+    const path = normalizeFindingPath(f.path)
     if (!LIVE_EVAL_TEST_PATH_RE.test(path)) continue
-    const lines = addedLineTextByLine.get(path)
+    const lines = addedLinesForFindingPath(addedLineTextByLine, f.path)
     if (!lines) continue
     const fileText = [...lines.values()].join("\n")
     const findingText = findingTextForClamp(f)

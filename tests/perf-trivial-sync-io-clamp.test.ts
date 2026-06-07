@@ -20,6 +20,20 @@ describe("clampTrivialSyncIoSeverity", () => {
     expect(f[0].score).toBe(2)
   })
 
+  it("normalizes whitespace-padded paths before matching trivial sync-IO evidence", () => {
+    const f = [{ path: "  src/report.ts  ", line: 9, category: "performance", score: 5 }]
+    const alt = lines("src/report.ts", [[7, `  return execSync("/usr/bin/usage-report --version").toString().trim();`]])
+    expect(clampTrivialSyncIoSeverity(f, alt)).toBe(1)
+    expect(f[0].score).toBe(2)
+  })
+
+  it("falls back to a raw padded map key when the normalized key is unavailable", () => {
+    const f = [{ path: "  src/report.ts  ", line: 9, category: "performance", score: 5 }]
+    const alt = lines("  src/report.ts  ", [[7, `  return execSync("/usr/bin/usage-report --version").toString().trim();`]])
+    expect(clampTrivialSyncIoSeverity(f, alt)).toBe(1)
+    expect(f[0].score).toBe(2)
+  })
+
   it("does NOT cap an INTERPOLATED exec (the real command injection — B1)", () => {
     const f = [{ path: "src/report.ts", line: 17, category: "performance", score: 5 }]
     const alt = lines("src/report.ts", [[17, "  const out = execSync(`/usr/bin/usage-report --account ${accountId} --format ${fmt}`);"]])

@@ -18,6 +18,13 @@ import { indexNamespace } from "./repo-index-manifest"
 import { parseFirstJsonObject } from "./json-extract"
 import { CI_TRIAGE_SCHEMA } from "./schemas"
 import { CI_TRIAGE_PROMPT } from "../prompts/ci-triage"
+import { parseDiffToReviewablePositions } from "./diff-positions"
+import { isRepoSensitive } from "./repo-policy"
+import {
+  parseCiSuggestionsMode,
+  planCiSuggestions,
+  submitCiSuggestionReview,
+} from "./ci-suggestions"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -234,8 +241,25 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     return
   }
 
+  // SIG-333: decide whether to post apply-able inline `suggestion` review
+  // comments for the diagnosis patches. Shadow-first
+  // (OPENCLAW_CI_SUGGESTIONS_MODE, default shadow) + sensitive-repo gated.
+  // The pure planner returns the sticky suffix (un-anchorable patches,
+  // shown so a fix off-diff isn't dropped) and the inline review to submit.
+  // In shadow / sensitive both are empty/null, so the sticky stays exactly
+  // as SIG-332 built it and nothing posts inline.
+  const suggestionsMode = parseCiSuggestionsMode(env.OPENCLAW_CI_SUGGESTIONS_MODE)
+  const sensitive = isRepoSensitive(env.OPENCLAW_SENSITIVE_REPOS, owner, repo)
+  const plan = planCiSuggestions({
+    patches: draft.diagnosis?.patches ?? [],
+    reviewable: parseDiffToReviewablePositions(diff),
+    mode: suggestionsMode,
+    sensitive,
+    headSha,
+  })
+
   const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Sigilix · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
-  const body = draft.body + footer
+  const body = draft.body + plan.stickySuffix + footer
 
   const existing = await findExistingCiComment(client, owner, repo, prNumber)
   if (existing != null) {
@@ -251,6 +275,28 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
       `ci-triage created on ${owner}/${repo}#${prNumber} as comment ${created.id} (run ${runId}, confidence ${verdict})`
     )
   }
+
+  // SIG-333: submit the planned inline review (enforce only). The extracted
+  // helper handles dedup (skip if already posted), the bulk happy path, and
+  // split-on-422 (one bad anchor only drops itself) — all unit-tested in
+  // tests/ci-suggestions.test.ts. The sticky was already posted above, so a
+  // total failure here never loses the diagnosis.
+  let inlineResult: { posted: number; skip: string | null } = { posted: 0, skip: null }
+  if (plan.review != null) {
+    inlineResult = await submitCiSuggestionReview(client, owner, repo, prNumber, plan.review)
+    if (inlineResult.posted > 0) since(`ci-suggestions-posted-${inlineResult.posted}`)
+  }
+
+  console.log(JSON.stringify({
+    event: "ci-suggestions",
+    owner, repo, prNumber, runId,
+    mode: suggestionsMode,
+    sensitive,
+    anchorable: plan.anchorableCount,
+    unanchorable: plan.unanchorableCount,
+    posted: inlineResult.posted,
+    skip: inlineResult.skip,
+  }))
 }
 
 /**

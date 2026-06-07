@@ -76,12 +76,12 @@ const INJECTION_CALL_RE =
   /\b(?:exec|execSync|execFile|execFileSync|eval|spawn|spawnSync|system|popen|shell_exec|execa)\s*\(|\bRuntime\s*\.\s*exec\s*\(|\bshell\s*\.\s*exec\s*\(/
 const XSS_TOKEN_RE =
   /\b(?:dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|srcdoc|setHTMLUnsafe)\b|\bdocument\s*\.\s*(?:write|writeln)\s*\(/
-const SHELL_MODULE_RE = /["'](?:node:)?child_process["']|["'](?:execa|shelljs|cross-spawn|@actions\/exec)["']/
+const SHELL_MODULE_RE = /[`"'](?:node:)?child_process[`"']|[`"'](?:execa|shelljs|cross-spawn|@actions\/exec)[`"']/
 const TRIVIAL_ASSESSMENT_RE = /^(?:none|n\/a|not applicable|unknown)$/i
 const ASSESSMENT_SINK_RE =
-  /\b(?:child_process(?:\s*\.\s*)?|exec(?:Sync|File|FileSync)?|spawn(?:Sync)?|eval|system|popen|shell_exec|Runtime\s*\.\s*exec|shell\s*\.\s*exec|execa|shelljs|cross-spawn|@actions\/exec|shell(?:\s+(?:sink|command|executor|execution))?)\b/i
+  /(?:\bchild_process(?:\s*\.\s*(?:exec(?:Sync|File|FileSync)?|spawn(?:Sync)?))?\b|\b(?:exec(?:Sync|File|FileSync)?|spawn(?:Sync)?|eval|system|popen|shell_exec)\s*(?:\(|\b(?:sink|call|function|command|execution)\b)|\bRuntime\s*\.\s*exec\b|\bshell\s*\.\s*exec\b|\b(?:execa|shelljs|cross-spawn)\b|@actions\/exec\b|\bshell\s+(?:sink|command|executor|execution)\b)/i
 const ASSESSMENT_FLOW_RE =
-  /\b(?:req|request)\s*\.\s*(?:query|body|params|headers)\b|\b(?:user[ -]?(?:input|supplied|controlled|provided)|attacker(?:[ -]?controlled)?|tainted?|untrusted|interpolat(?:ed|ion)|source|sink|flow(?:s|ed)?|fed by|reaches|passes to|supplied to)\b|\$\{[^}]+\}/i
+  /\b(?:req|request)\s*\.\s*(?:query|body|params|headers)\b|\b(?:user[ -]?(?:input|supplied|controlled|provided)|attacker(?:[ -]?controlled)?|tainted?|untrusted|interpolat(?:ed|ion)|source|flow(?:s|ed)?|fed by|reaches|passes to|supplied to)\b/i
 const ASSESSMENT_CODE_REF_RE = /\b[\w./-]+\.[cm]?[jt]sx?:\d+\b|\bline\s+\d+\b/i
 /** `.exec(` on a RegExp-conventional receiver — `RegExp.prototype.exec`, never a
  *  shell (the PR #296 model-FP shape). */

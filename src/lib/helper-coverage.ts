@@ -7,6 +7,7 @@
 // tri-state contract (all = every substantive added line delegates).
 
 import { parseSource, type SourceExt } from "./ast-rules/parser"
+import type { AstCache } from "./ast-rules/parse-cache"
 import { walkAst, type AstNode } from "./ast-rules/walker"
 import type { TestingSiblingMapping } from "./testing-evidence-pack"
 
@@ -97,8 +98,10 @@ export function extractTestedHelperBindings(
   code: string,
   ext: SourceExt,
   testedHelpers: ReadonlyMap<string, string>,
+  astCache?: AstCache,
 ): HelperBinding[] {
-  const parsed = parseSource(code, ext)
+  // SIG-336: parse-once via the shared cache when provided (else direct).
+  const parsed = astCache ? astCache.get(importerPath, code, ext) : parseSource(code, ext)
   if (!parsed.ok) return []
   const ast = parsed.ast as AstNode
   const candidateSources = new Set(testedHelpers.keys())
@@ -342,6 +345,9 @@ export interface DetectHelperCoverageArgs {
   addedLineTextByPath: ReadonlyMap<string, ReadonlyMap<number, string>>
   siblingMappings: readonly TestingSiblingMapping[]
   testContentByPath: Readonly<Record<string, string>>
+  /** SIG-336: optional per-review parse-once cache (shared with the other AST
+   *  consumers). Absent → parse directly. */
+  astCache?: AstCache
 }
 
 /**
@@ -382,7 +388,7 @@ function computeOne(
   // delegates to a mix of same-PR + pre-existing helpers is still caught.
   const structurallyGlue = isStructurallyOrchestratorGlue(added)
 
-  const bindings = extractTestedHelperBindings(source, content, ext, testedHelpers)
+  const bindings = extractTestedHelperBindings(source, content, ext, testedHelpers, args.astCache)
   if (bindings.length === 0) {
     return structurallyGlue
       ? { status: "none", helpers: [], structurallyGlue: true }

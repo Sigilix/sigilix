@@ -23,7 +23,7 @@ import { isRepoSensitive } from "./repo-policy"
 import {
   parseCiSuggestionsMode,
   planCiSuggestions,
-  hasExistingCiSuggestion,
+  submitCiSuggestionReview,
 } from "./ci-suggestions"
 import type { Env } from "../index"
 
@@ -276,34 +276,15 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     )
   }
 
-  // SIG-333: submit the planned inline review (enforce only). Deduped
-  // against existing CI-suggestion review comments — note this skips if
-  // suggestions were EVER posted on this PR, so a re-run never appends a
-  // second set (the sticky always carries the latest diagnosis regardless).
-  // A 422 from a context-line anchor GitHub rejects is logged + swallowed,
-  // so the inline review never blocks the sticky.
-  let inlinePosted = false
-  let inlineSkip: string | null = null
+  // SIG-333: submit the planned inline review (enforce only). The extracted
+  // helper handles dedup (skip if already posted), the bulk happy path, and
+  // split-on-422 (one bad anchor only drops itself) — all unit-tested in
+  // tests/ci-suggestions.test.ts. The sticky was already posted above, so a
+  // total failure here never loses the diagnosis.
+  let inlineResult: { posted: number; skip: string | null } = { posted: 0, skip: null }
   if (plan.review != null) {
-    const priorComments = await client
-      .listPullRequestReviewComments(owner, repo, prNumber)
-      .catch(() => [])
-    if (hasExistingCiSuggestion(priorComments.map((c) => c.body))) {
-      inlineSkip = "already-posted"
-    } else {
-      try {
-        await client.submitReview(owner, repo, prNumber, plan.review)
-        inlinePosted = true
-        since(`ci-suggestions-posted-${plan.anchorableCount}`)
-      } catch (err) {
-        inlineSkip = "submit-failed"
-        console.error(JSON.stringify({
-          event: "ci-suggestions-submit-failed",
-          owner, repo, prNumber, runId,
-          err: err instanceof Error ? err.message : String(err),
-        }))
-      }
-    }
+    inlineResult = await submitCiSuggestionReview(client, owner, repo, prNumber, plan.review)
+    if (inlineResult.posted > 0) since(`ci-suggestions-posted-${inlineResult.posted}`)
   }
 
   console.log(JSON.stringify({
@@ -313,8 +294,8 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     sensitive,
     anchorable: plan.anchorableCount,
     unanchorable: plan.unanchorableCount,
-    posted: inlinePosted,
-    skip: inlineSkip,
+    posted: inlineResult.posted,
+    skip: inlineResult.skip,
   }))
 }
 

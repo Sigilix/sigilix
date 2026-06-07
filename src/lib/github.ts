@@ -148,12 +148,14 @@ export class GitHubClient {
     owner: string,
     repo: string,
     branch: string,
+    opts?: { signal?: AbortSignal },
   ): Promise<{ headSha: string; treeSha: string } | null> {
     try {
       const res = await this.restGet<{
         commit?: { sha?: string; commit?: { tree?: { sha?: string } } }
       }>(
         `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
+        opts,
       )
       const headSha = res.commit?.sha
       const treeSha = res.commit?.commit?.tree?.sha
@@ -178,6 +180,7 @@ export class GitHubClient {
     owner: string,
     repo: string,
     treeSha: string,
+    opts?: { signal?: AbortSignal },
   ): Promise<{
     tree: Array<{ path?: string; type?: string; sha?: string; size?: number }>
     truncated: boolean
@@ -188,6 +191,7 @@ export class GitHubClient {
         truncated?: boolean
       }>(
         `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`,
+        opts,
       )
       return {
         tree: Array.isArray(res.tree) ? res.tree : [],

@@ -25,6 +25,7 @@ import {
   isSubstantiveAnchorLine,
   pickAnchorLineForward,
   pickSubstantiveAnchorLineForward,
+  previewFallbackSubmissionEvent,
   previewReviewSubmissionEvent,
   parsePrReviewResponse,
   renderCommentBody,
@@ -2295,6 +2296,52 @@ describe("buildReviewSubmission — SIG-222 testing findings are non-blocking an
       expect.objectContaining({ ...coverageGapFinding, score: 2 }),
     ])
     expect(out.submission.body).toContain("branch coverage regressed")
+  })
+
+  it("drops missing-sibling testing findings from anchorless fallback routing", () => {
+    const verdict: PrReviewVerdict = {
+      summary: "Fallback should not body-route missing tests.",
+      confidence: 5,
+      confidenceReason: "Concrete.",
+      findings: [testingFinding],
+    }
+
+    expect(previewFallbackSubmissionEvent({ verdict, unanchored: [] })).toBe("APPROVE")
+
+    const fallback = buildFallbackSubmission({
+      verdict,
+      unanchored: [],
+      headSha: "abc",
+    })
+    expect(fallback.event).toBe("APPROVE")
+    expect(fallback.body).not.toContain("new module has no sibling test")
+  })
+
+  it("keeps removed-test coverage in anchorless fallback routing", () => {
+    const removedCoverage = {
+      ...testingFinding,
+      score: 4,
+      headline: "test coverage was removed",
+      body: "The PR removes coverage for the exported behavior.",
+      evidenceRefs: ["testFileChanged:tests/new-source.test.ts"],
+    }
+    const verdict: PrReviewVerdict = {
+      summary: "Fallback should keep removed coverage.",
+      confidence: 5,
+      confidenceReason: "Concrete.",
+      findings: [removedCoverage],
+    }
+
+    expect(previewFallbackSubmissionEvent({ verdict, unanchored: [] })).toBe("COMMENT")
+
+    const fallback = buildFallbackSubmission({
+      verdict,
+      unanchored: [],
+      headSha: "abc",
+    })
+    expect(fallback.event).toBe("COMMENT")
+    expect(fallback.body).toContain("test coverage was removed")
+    expect(fallback.body).toContain("score 4")
   })
 })
 

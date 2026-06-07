@@ -1203,9 +1203,9 @@ function prepareReviewSubmissionFindings(args: {
     ...sanitizedVerdict,
     findings: sanitizedVerdict.findings.map(normalizeTestingFindingForFinalPolicy),
   }
-  const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored).map(
-    normalizeTestingFindingForFinalPolicy,
-  )
+  const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
+    .map(normalizeTestingFindingForFinalPolicy)
+    .filter((finding) => !shouldDropUnanchoredTestingFinding(finding))
 
   const inlineCandidates: InlineFindingCandidate[] = []
   const bodyFindings: PrReviewFinding[] = []
@@ -1437,7 +1437,7 @@ export function previewFallbackSubmissionEvent({
 }: PreviewFallbackSubmissionEventArgs): ReviewEvent {
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
-  const all = [...verdict.findings, ...unanchored].map(normalizeTestingFindingForFinalPolicy)
+  const all = normalizeFallbackBodyFindings([...verdict.findings, ...unanchored])
   return chooseRenderedEventWithOverride({
     inlineFindings: [],
     bodyOnlyFindings: all,
@@ -1634,9 +1634,15 @@ export function buildFallbackSubmission({
   // ARC-156 follow-up: sanitize prose before rendering — same as
   // buildReviewSubmission, applied here for the anchorless-fallback
   // path so the body-rendered findings also get HTML-tag wrap.
-  const verdict = sanitizeVerdictForGitHub(rawVerdict)
+  const sanitizedVerdict = sanitizeVerdictForGitHub(rawVerdict)
+  const verdict: PrReviewVerdict = {
+    ...sanitizedVerdict,
+    findings: sanitizedVerdict.findings.map(normalizeTestingFindingForFinalPolicy),
+  }
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
-  const all = [...verdict.findings, ...unanchored]
+    .map(normalizeTestingFindingForFinalPolicy)
+    .filter((finding) => !shouldDropUnanchoredTestingFinding(finding))
+  const all = normalizeFallbackBodyFindings([...verdict.findings, ...unanchored])
   const event = chooseRenderedEventWithOverride({
     inlineFindings: [],
     bodyOnlyFindings: all,
@@ -1687,7 +1693,7 @@ export function buildFallbackBody(
   // single `unanchored` bucket of the new renderer — they render as
   // the body-only findings section grouped by file, which is exactly
   // the right place when none of them landed inline.
-  const all = [...verdict.findings, ...unanchored]
+  const all = normalizeFallbackBodyFindings([...verdict.findings, ...unanchored])
   const event = chooseRenderedEventWithOverride({
     inlineFindings: [],
     bodyOnlyFindings: all,
@@ -1844,6 +1850,12 @@ function normalizeTestingFindingForFinalPolicy(f: PrReviewFinding): PrReviewFind
   if (isExplicitRemovedTestCoverageFinding(f)) return f
   if (f.score <= 2) return f
   return { ...f, score: 2 }
+}
+
+function normalizeFallbackBodyFindings(findings: readonly PrReviewFinding[]): PrReviewFinding[] {
+  return findings
+    .map(normalizeTestingFindingForFinalPolicy)
+    .filter((finding) => !shouldDropUnanchoredTestingFinding(finding))
 }
 
 function shouldDropUnanchoredTestingFinding(f: PrReviewFinding): boolean {

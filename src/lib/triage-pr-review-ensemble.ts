@@ -3616,6 +3616,7 @@ export async function handlePrReviewEnsemble(
       splitFilePaths: filesAfterFilter.map((f) => f.path),
       reviewedFilePaths: reviewedFiles.map((f) => f.path),
     })
+    const changedLineTextByPath = buildChangedLineTextByPath(fullPrDiff)
     const missingSiblingSources = testingEvidencePackInitial.siblingMappings
       .filter((m) => m.test === null)
       .map((m) => m.source)
@@ -3644,13 +3645,17 @@ export async function handlePrReviewEnsemble(
           repoTreeStatus = "missing-head-ref"
         } else {
           try {
-            const branch = await treeCapableClient.getBranch(owner, repo, headRef)
+            const branch = await treeCapableClient.getBranch(owner, repo, headRef, {
+              signal: orchCtrl.signal,
+            })
             if (branch === null) {
               repoTreeStatus = "branch-missing"
             } else if (branch.headSha !== headSha) {
               repoTreeStatus = "head-ref-mismatch"
             } else {
-              const tree = await treeCapableClient.getRepoTree(owner, repo, branch.treeSha)
+              const tree = await treeCapableClient.getRepoTree(owner, repo, branch.treeSha, {
+                signal: orchCtrl.signal,
+              })
               if (tree === null) {
                 repoTreeStatus = "tree-missing"
               } else if (tree.truncated) {
@@ -3686,7 +3691,7 @@ export async function handlePrReviewEnsemble(
     const testingEvidenceSuppression = filterTestingEvidenceForSuppressedMissingCoverage(
       testingEvidencePackInitial,
       {
-        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        changedLineTextByPath,
         ...(repoPathsForTestingEvidence !== undefined ? { repoPaths: repoPathsForTestingEvidence } : {}),
       },
     )
@@ -5164,7 +5169,7 @@ export async function handlePrReviewEnsemble(
       // "enforce". Reuses the `pr-review-finding-rejected-validation`
       // event with a `gate: "logic"` discriminator.
       logicEvidence: {
-        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        changedLineTextByPath,
         astLogicFindings: astResult.findings.filter((f) => f.roleHint === "logic"),
       },
       logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
@@ -5229,7 +5234,7 @@ export async function handlePrReviewEnsemble(
       // flips OPENCLAW_PERF_VALIDATOR_MODE to "enforce". Reuses the
       // `pr-review-finding-rejected-validation` event (`gate: "perf"`).
       perfEvidence: {
-        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        changedLineTextByPath,
         astPerfFindings: astResult.findings.filter((f) => f.roleHint === "performance"),
       },
       perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),

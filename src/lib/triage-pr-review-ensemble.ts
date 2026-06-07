@@ -264,7 +264,12 @@ import {
   type SigilixConfig,
   type SigilixProfile,
 } from "./sigilix-config"
-import { loadAiInstructions, buildAiInstructionGuidance, shouldIngestAiInstructions } from "./ai-instructions"
+import {
+  buildAiInstructionGuidance,
+  filterAiInstructionsForChangedPaths,
+  loadAiInstructions,
+  shouldIngestAiInstructions,
+} from "./ai-instructions"
 import {
   renderScopedRulesForPrompt,
   resolveScopedRulesForChangedPaths,
@@ -1944,24 +1949,10 @@ export async function handlePrReviewEnsemble(
     // BEFORE the diff split so ARC-176 pathFilters can drop files
     // before packing decides what to send to specialists.
     let sigilixConfig = await loadSigilixConfig(client, owner, repo, headSha)
-
-    // Lane D: when the repo configured NO explicit sigilix.json guidance, fall
-    // back to its own AI-instruction file (CLAUDE.md / AGENTS.md / .cursorrules /
-    // copilot-instructions) as ADVISORY review guidance — parity with CodeRabbit,
-    // without requiring a sigilix.json. sigilix.json always takes precedence
-    // (`shouldIngestAiInstructions`). The injected text rides the existing
-    // `guidance` channel (header generically reads "from sigilix.json"); the
-    // wrapper names the real source + fences it as untrusted/advisory.
-    // Placement: kept here next to the config load for simplicity. On a
-    // label-gated/empty-router skip this does up to 4 (cheap, mostly-404) Contents
-    // calls for a review that won't run — acceptable while engine-only (no
-    // runOnLabels customers); revisit when SIG-318 splits this orchestrator.
-    if (shouldIngestAiInstructions(sigilixConfig.guidance, env.OPENCLAW_INGEST_AI_INSTRUCTIONS)) {
-      const aiInstructions = await loadAiInstructions(client, owner, repo, headSha)
-      if (aiInstructions) {
-        sigilixConfig = { ...sigilixConfig, guidance: buildAiInstructionGuidance(aiInstructions) }
-      }
-    }
+    const shouldLoadAiInstructions = shouldIngestAiInstructions(
+      sigilixConfig.guidance,
+      env.OPENCLAW_INGEST_AI_INSTRUCTIONS,
+    )
 
     // ARC-273: label gate. When the operator configures
     // `costControls.runOnLabels`, pr-review only fires on PRs
@@ -2009,6 +2000,35 @@ export async function handlePrReviewEnsemble(
     // with parallel specialist calls + verdict merge is the v2
     // enhancement; v1 ships the bound + telemetry.
     const splitFiles = splitDiffByFile(fullDiff)
+    // Lane D: when the repo configured NO explicit sigilix.json guidance, fall
+    // back to its own AI-instruction files as ADVISORY review guidance — parity
+    // with CodeRabbit/Greptile-style context ingestion, without requiring a
+    // sigilix.json. sigilix.json always takes precedence
+    // (`shouldLoadAiInstructions`). GitHub `.github/instructions/**` files may
+    // carry `applyTo:` path scopes, so binding happens against the full selected
+    // diff's changed-file set (not the post-packing reviewed batch) for stable
+    // per-PR semantics.
+    if (shouldLoadAiInstructions) {
+      const aiInstructions = await loadAiInstructions(client, owner, repo, headSha)
+      const applicableAiInstructions = aiInstructions
+        ? filterAiInstructionsForChangedPaths(aiInstructions, splitFiles.map((f) => f.path))
+        : null
+      if (applicableAiInstructions) {
+        sigilixConfig = {
+          ...sigilixConfig,
+          guidance: buildAiInstructionGuidance(applicableAiInstructions),
+        }
+        console.log(JSON.stringify({
+          event: "pr-review-ai-instructions-ingested",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          source_count: applicableAiInstructions.chunks.length,
+          sources: applicableAiInstructions.chunks.map((chunk) => chunk.source),
+          scoped_source_count: applicableAiInstructions.chunks.filter((chunk) =>
+            chunk.applyTo !== undefined && chunk.applyTo.length > 0
+          ).length,
+        }))
+      }
+    }
     const filterPatterns = sigilixConfig.pathFilters ?? []
     const filesAfterFilter = filterPatterns.length === 0
       ? splitFiles

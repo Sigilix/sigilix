@@ -323,6 +323,29 @@ Each entry applies only when at least one reviewable changed file matches `paths
 
 Bad entries are dropped fail-open. Empty strings, unknown role names, and entries without a valid path are ignored. Entries are capped defensively to avoid prompt blowups (`20` entries, `50` paths per entry, `4000` code points per guidance/rule string).
 
+### Existing AI instruction files
+
+When `sigilix.json` has no top-level `guidance`, Sigilix also reads common repo-authored AI instruction files as advisory review context. Explicit Sigilix config always wins: a non-empty `guidance` field disables this fallback, and `OPENCLAW_INGEST_AI_INSTRUCTIONS=off` disables it globally.
+
+Supported files:
+
+- `CLAUDE.md`
+- `AGENTS.md`
+- `.cursorrules`
+- `.github/copilot-instructions.md`
+- `.github/instructions/**/*.instructions.md`
+
+Root instruction files keep priority order: `CLAUDE.md` first, then `AGENTS.md`, `.cursorrules`, and `.github/copilot-instructions.md`; the first non-empty file wins. GitHub instruction files under `.github/instructions/` are additive and may include flat frontmatter:
+
+```markdown
+---
+applyTo: src/auth/**, workers/**/*.ts
+---
+Auth and worker changes need integration coverage for failure paths.
+```
+
+`applyTo` is matched against the PR's changed file paths. Files without `applyTo` apply repo-wide. All ingested instruction text is fenced as untrusted advisory context, source-labeled for provenance, and cannot override Sigilix's correctness, security, or recall constraints. Caps: 4,000 code points per instruction chunk, 12,000 code points total, at most 20 `.github/instructions/` files, and 64 KiB per GitHub instruction file.
+
 ### Path filters (ARC-176)
 
 Drop files from review entirely via the top-level `pathFilters` array. Plain pattern excludes; `!pattern` re-includes (override prior excludes). Saves model spend on lockfiles, generated files, snapshots, etc. Triggers the existing "router said no specialists" short-circuit when only filtered paths changed.

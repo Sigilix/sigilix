@@ -5091,7 +5091,8 @@ export async function handlePrReviewEnsemble(
         args.validationSink?.push({ kind: "gate-rejection", gate: "logic-refutation", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
       // SIG-328: logic-claim refutation gate. Drops a sev>=4 logic finding only
-      // when its control-flow / sync-race claim is PROVABLY false against the
+      // when its claim (control-flow / sync-race / retry idempotency) is
+      // PROVABLY false against the
       // AST of the cited file (`fullFileByPath` = `astFilesByPath`). Default
       // `shadow` — counts/telemeters the would-drop until the operator flips
       // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".

@@ -2,6 +2,7 @@
 // REAL logic specialist (Ollama Turbo) and reports recall + FP-rate.
 //
 //   OLLAMA_API_KEY=ollama_... npm run logic-recall-eval
+//   OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE=enforce OLLAMA_API_KEY=... npm run logic-recall-eval
 //
 // This is a LIVE test: it makes real model calls, so it's gated on OLLAMA_API_KEY
 // and SKIPS in normal CI (`npm run build`) — the import chain still resolves via
@@ -12,6 +13,7 @@
 import { describe, it } from "vitest"
 import {
   LOGIC_RECALL_CASES,
+  buildRightFileByPathFromDiff,
   scoreCase,
   type CaseResult,
   type ScoredFinding,
@@ -19,6 +21,8 @@ import {
 import { runShadowSpecialist } from "../src/lib/shadow-bakeoff-runner"
 import { SPECIALIST_CONFIGS } from "../src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
+import { evaluateLogicClaimRefutation, parseLogicClaimRefutationMode } from "../src/lib/validate-logic-claim-refutation"
+import type { PrReviewFinding } from "../src/lib/triage-pr-review"
 
 const API_KEY = process.env.OLLAMA_API_KEY
 const PER_CASE_TIMEOUT_MS = 180_000
@@ -33,7 +37,21 @@ const MODEL_OVERRIDE = process.env.LOGIC_RECALL_MODEL?.trim()
 const LOGIC_CONFIG = MODEL_OVERRIDE
   ? { ...SPECIALIST_CONFIGS.logic, primary: MODEL_OVERRIDE, fallback: null }
   : SPECIALIST_CONFIGS.logic
+const CLAIM_REFUTATION_MODE = parseLogicClaimRefutationMode(process.env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE)
 const pct = (x: number): string => `${(x * 100).toFixed(0)}%`
+
+function applyClaimRefutationPostFilter(
+  c: (typeof LOGIC_RECALL_CASES)[number],
+  findings: ReadonlyArray<PrReviewFinding>,
+): { findings: PrReviewFinding[]; refuted: number } {
+  if (CLAIM_REFUTATION_MODE !== "enforce") return { findings: [...findings], refuted: 0 }
+  const fullFileByPath = buildRightFileByPathFromDiff(c.diff)
+  const kept = findings.filter((f) => evaluateLogicClaimRefutation(
+    { ...f, category: "logic" },
+    { fullFileByPath },
+  ).keep)
+  return { findings: kept, refuted: findings.length - kept.length }
+}
 
 async function runCase(c: (typeof LOGIC_RECALL_CASES)[number], apiKey: string): Promise<{ result: CaseResult; errored: boolean }> {
   // Minimal context (diff only) — omits the optional graph/retrieval/guidance
@@ -60,13 +78,21 @@ async function runCase(c: (typeof LOGIC_RECALL_CASES)[number], apiKey: string): 
       perfCtx: { owner: "eval", repo: "eval", prNumber: 0, headSha: "0".repeat(40) },
     })
     rawFindings = r.rawFindings ?? r.findings
-    findings = r.findings.map((f) => ({ path: f.path, line: f.line, score: f.score }))
+    const raw = rawFindings as ReadonlyArray<Partial<PrReviewFinding>>
+    const filterInput = (r.findings as PrReviewFinding[]).map((f, i) => ({
+      ...f,
+      headline: raw[i]?.headline ?? f.headline ?? "",
+      body: raw[i]?.body ?? f.body ?? "",
+    }))
+    const filtered = applyClaimRefutationPostFilter(c, filterInput)
+    findings = filtered.findings.map((f) => ({ path: f.path, line: f.line, score: f.score }))
     // A non-throwing failure (parse-fail / timeout / fallthrough leaves verdictOk=false
     // and a failureReason) must NOT count as a verdict: an unparsed vuln looks like a
     // miss, an unparsed safe looks clean. Treat it as errored, same as a throw (Codex +
     // code-reviewer). r.findings is already [] when !verdictOk, so scoring is moot.
     if (!r.verdictOk || r.failureReason) errored = true
-    tag = `${r.findings.length}f · ${r.modelUsed} · ${r.elapsedMs}ms${r.failureReason ? ` · FAIL:${r.failureReason}` : ""}`
+    const filterTag = filtered.refuted ? `/${r.findings.length} raw, ${filtered.refuted} claim-refuted` : ""
+    tag = `${filtered.findings.length}f${filterTag} · ${r.modelUsed} · ${r.elapsedMs}ms${r.failureReason ? ` · FAIL:${r.failureReason}` : ""}`
   } catch (e) {
     errored = true
     tag = `ERROR ${e instanceof Error ? e.message : String(e)}`
@@ -126,7 +152,8 @@ describe.skipIf(!API_KEY)("subtle-logic recall baseline (LIVE — needs OLLAMA_A
       const errSuffix = (id: string): string => { const e = perCase.get(id)!; return e.errors ? `  [${e.errors} err]` : "" }
       // ✓ all clean/caught · ✗ all wrong · ~ mixed · ⚠ no verdict ever (only errors).
       const marker = (id: string): string => { const e = perCase.get(id)!; return e.runs === 0 ? "⚠" : e.hits === e.runs ? "✓" : e.hits === 0 ? "✗" : "~" }
-      const lines: string[] = ["", `┌─ SUBTLE-LOGIC RECALL · model=${LOGIC_CONFIG.primary} · ${REPEATS}×/case ─────────────┐`]
+      const postFilter = CLAIM_REFUTATION_MODE === "enforce" ? " · postfilter=logic-claim-refutation" : ""
+      const lines: string[] = ["", `┌─ SUBTLE-LOGIC RECALL · model=${LOGIC_CONFIG.primary} · ${REPEATS}×/case${postFilter} ─────────────┐`]
       lines.push(`MEAN: recall ${pct(meanRecall)}  ·  clean-on-safe ${pct(meanClean)}  (FP-rate ${pct(1 - meanClean)})${totalErrors ? `  · ${totalErrors} errored attempt(s) excluded` : ""}${droppedCases ? ` · ${droppedCases} case(s) all-errored (excluded from mean)` : ""}`)
       lines.push("per VULN case (caught / runs):")
       for (const c of vuln) { const e = perCase.get(c.id)!; lines.push(`  ${marker(c.id)} ${c.id.padEnd(26)} ${e.hits}/${e.runs}  (${c.bugClass})${errSuffix(c.id)}`) }

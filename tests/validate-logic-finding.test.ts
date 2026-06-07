@@ -267,9 +267,9 @@ describe("evaluateLogicFinding (pure FP-safe decision)", () => {
 
 // ── Integration with validateForSubmission ──────────────────────
 
-function makeReviewable(path = PATH): ReviewableMap {
+function makeReviewable(path = PATH, line = 17): ReviewableMap {
   return new Map([
-    [path, [{ line: 17, side: "RIGHT" as const, position: 1 }]],
+    [path, [{ line, side: "RIGHT" as const, position: 1 }]],
   ])
 }
 
@@ -561,5 +561,79 @@ describe("validateForSubmission — SIG-308 logic-refutation backstop", () => {
     })
     expect(result.droppedForFailedLogicRefutation).toBe(1) // security note must not backfill the logic gate
     expect(result.verdict.findings).toHaveLength(0)
+  })
+})
+
+describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => {
+  const AUTH_PATH = "src/middleware/auth.ts"
+  const AUTH_SOURCE = `export function requireAdmin(svc) {
+  return async (req, res, next) => {
+    if (!(await svc.isAdmin(req.user))) {
+      return res.status(403).end()
+    }
+    next()
+  }
+}`
+  const refutableFinding = finding({
+    path: AUTH_PATH,
+    line: 6,
+    headline: "`next()` runs after 403 response, causing a double-response error",
+    body: "When `svc.isAdmin(req.user)` returns false, the middleware sends `res.status(403).end()` and then calls `next()`.",
+  })
+
+  it("ENFORCE: drops a provably-refuted logic claim + counts + fires callback", () => {
+    const onFlag = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [refutableFinding] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(AUTH_PATH, 6),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      logicClaimRefutationMode: "enforce",
+      fullFileByPath: new Map([[AUTH_PATH, AUTH_SOURCE]]),
+      onLogicClaimRefutationFindingDropped: onFlag,
+    })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), {
+      reason: "control-flow-claim-refuted-by-guard",
+      dropped: true,
+    })
+  })
+
+  it("SHADOW: counts the would-drop + fires callback dropped:false but KEEPS the finding", () => {
+    const onFlag = vi.fn()
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [refutableFinding] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(AUTH_PATH, 6),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      logicClaimRefutationMode: "shadow",
+      fullFileByPath: new Map([[AUTH_PATH, AUTH_SOURCE]]),
+      onLogicClaimRefutationFindingDropped: onFlag,
+    })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(onFlag).toHaveBeenCalledWith(expect.anything(), {
+      reason: "control-flow-claim-refuted-by-guard",
+      dropped: false,
+    })
+  })
+
+  it("defaults to OFF when logicClaimRefutationMode is omitted (gate does not run)", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [refutableFinding] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(AUTH_PATH, 6),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      fullFileByPath: new Map([[AUTH_PATH, AUTH_SOURCE]]),
+    })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
   })
 })

@@ -148,19 +148,15 @@ function eachNode(node: Node, cb: (n: Node) => void): void {
 }
 
 /** The SMALLEST function node whose body spans `line`. */
-function enclosingFunction(ast: Node, line: number): Node | null {
-  let best: Node | null = null
-  let bestSize = Infinity
+function enclosingFunctions(ast: Node, line: number): Node[] {
+  const matches: Node[] = []
   eachNode(ast, (n) => {
     if (!FUNCTION_TYPES.has(n.type)) return
     if (!spans(n, line)) return
-    const size = n.loc.end.line - n.loc.start.line
-    if (size < bestSize) {
-      best = n
-      bestSize = size
-    }
+    matches.push(n)
   })
-  return best
+  matches.sort((a, b) => (a.loc.end.line - a.loc.start.line) - (b.loc.end.line - b.loc.start.line))
+  return matches
 }
 
 /** Is this statement an unconditional terminator at the top level of its branch? */
@@ -242,14 +238,40 @@ function refutesControlFlow(fn: Node, line: number, finding: PrReviewFinding, li
     // PRIOR-ACTION CHECK (code-reviewer P1): the early-return guard only proves
     // the cited tail is the else-path — NOT that the flagged action hasn't
     // ALREADY happened. `res.json(a); if (x) return; res.json(b)` double-responds
-    // on the !x path. If any statement BEFORE the guard (or the guard's own
-    // consequent) contains a call whose callee identifiers the finding complains
-    // about, the cited tail may be a genuine SECOND occurrence → fail open.
-    const priorScope: Node[] = [...block.slice(0, citedIdx - 1), prev.consequent]
+    // on the !x path. Statements BEFORE the guard are on the same path as the
+    // tail. The guard consequent is mutually exclusive with the tail, but if it
+    // repeats the same cited tail action, fail open rather than suppress a
+    // possible "called twice in this handler" claim.
+    const priorScope: Node[] = block.slice(0, citedIdx - 1)
     if (priorScope.some((n) => containsConflictingCall(n, findingIds))) continue
+    const citedActionIds = new Set(callCalleeIdentifiers(citedStmt).filter((id) => findingIds.has(id)))
+    if (citedActionIds.size > 0 && containsConflictingCall(prev.consequent, citedActionIds)) continue
     return true
   }
   return false
+}
+
+function callCalleeIdentifiers(node: Node): string[] {
+  const ids = new Set<string>()
+  eachNode(node, (n) => {
+    if (n.type !== "CallExpression") return
+    let callee = n.callee
+    while (callee) {
+      if (callee.type === "Identifier") {
+        ids.add(callee.name)
+        return
+      }
+      if (callee.type === "MemberExpression") {
+        if (callee.property?.type === "Identifier") ids.add(callee.property.name)
+        callee = callee.object
+      } else if (callee.type === "CallExpression") {
+        callee = callee.callee
+      } else {
+        break
+      }
+    }
+  })
+  return [...ids]
 }
 
 /** Does `node` contain a CallExpression whose callee identifiers intersect `findingIds`? */
@@ -375,6 +397,10 @@ function callNearLine(node: Node, line: number): boolean {
   return node.loc.start.line <= line + 3 && node.loc.end.line >= line - 3
 }
 
+function candidateLines(line: number): number[] {
+  return [line, line - 1, line + 1].filter((n) => n >= 1)
+}
+
 function eachNodeInCurrentFunction(node: Node, cb: (n: Node) => void): void {
   if (!node || typeof node.type !== "string") return
   cb(node)
@@ -453,6 +479,36 @@ function refutesIdempotencyRetryClaim(fn: Node, line: number, finding: PrReviewF
 
   const call = targetCallNearLine(fn, line)
   return call ? callHasStableIdempotencyOption(call, lines) : false
+}
+
+function statementsSpanningLine(fn: Node, line: number): Node[] {
+  const seen = new Set<Node>()
+  const statements: Node[] = []
+  for (const block of statementBlocks(fn.body ?? fn)) {
+    for (const stmt of block) {
+      if (!spans(stmt, line) || seen.has(stmt)) continue
+      seen.add(stmt)
+      statements.push(stmt)
+    }
+  }
+  return statements
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function lineContainsAnyIdentifier(lines: readonly string[], line: number, ids: ReadonlySet<string>): boolean {
+  const text = lines[line - 1] ?? ""
+  return [...ids].some((id) => new RegExp(`\\b${escapeRegExp(id)}\\b`).test(text))
+}
+
+function candidateLinesWhenUnanchored(fn: Node, line: number, lines: readonly string[], finding: PrReviewFinding): number[] {
+  const ids = new Set(extractCitedIdentifiers(findingText(finding)))
+  const spanning = statementsSpanningLine(fn, line)
+  if (spanning.some((stmt) => lineContainsAnyIdentifier(lines, stmt.loc.end.line, ids))) return [line]
+  return candidateLines(line)
+    .filter((candidate) => candidate === line || lineContainsAnyIdentifier(lines, candidate, ids))
 }
 
 const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g
@@ -542,7 +598,13 @@ export function evaluateLogicClaimRefutation(
   const isIdempotencyRetry = IDEMPOTENCY_RETRY_CLAIM_RE.test(text)
   const isUnused = UNUSED_CLAIM_RE.test(text)
   const isMissingReturnType = MISSING_RETURN_TYPE_CLAIM_RE.test(text)
-  if (!isControlFlow && !isSyncRace && !isIdempotencyRetry && !isUnused && !isMissingReturnType) return { keep: true }
+  if (
+    !isControlFlow &&
+    !isSyncRace &&
+    !isIdempotencyRetry &&
+    !isUnused &&
+    !isMissingReturnType
+  ) return { keep: true }
 
   const source = context.fullFileByPath.get(finding.path)
   if (typeof source !== "string" || source.length === 0) return { keep: true }
@@ -553,11 +615,14 @@ export function evaluateLogicClaimRefutation(
 
   const line = finding.line
   if (typeof line !== "number" || line < 1) return { keep: true }
-  const fn = enclosingFunction(parsed.ast, line)
+  const fnChain = enclosingFunctions(parsed.ast, line)
+  const fn = fnChain[0] ?? null
   if (!fn) return { keep: true }
   const lines = source.split(/\r?\n/)
 
-  if (isControlFlow && refutesControlFlow(fn, line, finding, lines)) {
+  const controlLinesToTry = candidateLinesWhenUnanchored(fn, line, lines, finding)
+
+  if (isControlFlow && controlLinesToTry.some((l) => refutesControlFlow(fn, l, finding, lines))) {
     return { keep: false, reason: "control-flow-claim-refuted-by-guard" }
   }
   if (isSyncRace && refutesSyncRace(fn, line)) {

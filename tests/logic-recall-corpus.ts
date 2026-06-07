@@ -40,6 +40,69 @@ export interface LogicRecallCase {
   diff: string
 }
 
+/** Reconstruct the right-side source snippets in a corpus diff, preserving new-side line numbers. */
+export function buildRightFileByPathFromDiff(diff: string): Map<string, string> {
+  const files = new Map<string, string[]>()
+  let currentPath: string | null = null
+  let newLine: number | null = null
+
+  const ensureFile = (path: string): string[] => {
+    const existing = files.get(path)
+    if (existing) return existing
+    const lines: string[] = []
+    files.set(path, lines)
+    return lines
+  }
+
+  const writeLine = (text: string): void => {
+    if (!currentPath || newLine == null) return
+    const lines = ensureFile(currentPath)
+    while (lines.length < newLine - 1) lines.push("")
+    lines[newLine - 1] = text
+    newLine++
+  }
+
+  for (const raw of diff.split(/\r?\n/)) {
+    const fileMatch = raw.match(/^diff --git a\/.+ b\/(.+)$/)
+    if (fileMatch) {
+      currentPath = fileMatch[1] ?? null
+      newLine = null
+      continue
+    }
+    const newFileMatch = raw.match(/^\+\+\+ b\/(.+)$/)
+    if (newFileMatch) {
+      currentPath = newFileMatch[1] ?? currentPath
+      continue
+    }
+    if (raw === "+++ /dev/null") {
+      currentPath = null
+      continue
+    }
+    const hunkMatch = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@\s?(.*)$/)
+    if (hunkMatch) {
+      newLine = Number(hunkMatch[1])
+      const headerContext = hunkMatch[2]
+      if (currentPath && headerContext && newLine > 1) {
+        const lines = ensureFile(currentPath)
+        while (lines.length < newLine - 2) lines.push("")
+        if (lines[newLine - 2] == null || lines[newLine - 2] === "") lines[newLine - 2] = headerContext
+      }
+      continue
+    }
+    if (newLine == null) continue
+    if (raw.startsWith("+") && !raw.startsWith("+++")) {
+      writeLine(raw.slice(1))
+    } else if (raw.startsWith(" ")) {
+      writeLine(raw.slice(1))
+    } else if (raw.startsWith("-") && !raw.startsWith("---")) {
+      // Deleted line: advances old-side only.
+      continue
+    }
+  }
+
+  return new Map([...files.entries()].map(([path, lines]) => [path, lines.join("\n")]))
+}
+
 export const LOGIC_RECALL_CASES: LogicRecallCase[] = [
   {
     id: "toctou-balance",

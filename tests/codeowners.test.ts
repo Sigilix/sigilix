@@ -83,6 +83,63 @@ src/[ab].ts @bad-pattern
     expect(reviewers).toEqual(["alice", "acme/platform"])
   })
 
+  it("accepts GitHub Enterprise Managed User owner suffixes", () => {
+    const reviewers = suggestedReviewersFromCodeowners("*.ts @mona-cat_octo @plain-user", ["app.ts"], {
+      limit: 2,
+    })
+
+    expect(reviewers).toEqual(["mona-cat_octo", "plain-user"])
+  })
+
+  it("accepts GitHub Enterprise Managed User suffixes in team owners when teams are included", () => {
+    const reviewers = suggestedReviewersFromCodeowners("*.ts @org/team_user", ["app.ts"], {
+      includeTeams: true,
+      limit: 1,
+    })
+
+    expect(reviewers).toEqual(["org/team_user"])
+  })
+
+  it("checks team owner suffix length from the slug segment, not the full owner string", () => {
+    const org = "o".repeat(39)
+    const team = `${"t".repeat(30)}_octo`
+    const reviewers = suggestedReviewersFromCodeowners(`*.ts @${org}/${team}`, ["app.ts"], {
+      includeTeams: true,
+      limit: 1,
+    })
+
+    expect(reviewers).toEqual([`${org}/${team}`])
+  })
+
+  it("does not accept GitHub Enterprise Managed User suffixes in team organization names", () => {
+    const reviewers = suggestedReviewersFromCodeowners("*.ts @org_octo/platform @fallback", ["app.ts"], {
+      includeTeams: true,
+      limit: 2,
+    })
+
+    expect(reviewers).toEqual(["fallback"])
+  })
+
+  it("rejects malformed GitHub Enterprise Managed User suffix lengths", () => {
+    const reviewers = suggestedReviewersFromCodeowners(
+      "*.ts @mona-cat_ @mona-cat_ab @mona-cat_abcdefghi @valid-owner",
+      ["app.ts"],
+      { limit: 2 },
+    )
+
+    expect(reviewers).toEqual(["valid-owner"])
+  })
+
+  it("rejects GitHub Enterprise Managed User suffixes beyond the username length limit", () => {
+    const maxLengthOwner = `${"a".repeat(34)}_octo`
+    const overLengthOwner = `${"b".repeat(35)}_octo`
+    const reviewers = suggestedReviewersFromCodeowners(`*.ts @${maxLengthOwner} @${overLengthOwner}`, ["app.ts"], {
+      limit: 2,
+    })
+
+    expect(reviewers).toEqual([maxLengthOwner])
+  })
+
   it("ignores impossible traversal or oversized paths before glob matching", () => {
     const parsed = parseCodeowners("*.ts @all-ts")
 

@@ -10,9 +10,11 @@ import type { Matcher } from "picomatch/posix"
 export const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"] as const
 const MAX_CODEOWNERS_MATCH_PATH_CHARS = 4096
 const MAX_CODEOWNERS_MATCH_PATH_SEGMENTS = 256
-const GH_NAME_PATTERN = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?"
+const GH_NAME_BASE_PATTERN = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?"
+const GH_EMU_SHORTCODE_PATTERN = "_[A-Za-z0-9]{3,8}"
+const GH_NAME_PATTERN = `(?=.{1,39}$)${GH_NAME_BASE_PATTERN}(?:${GH_EMU_SHORTCODE_PATTERN})?`
 const USER_RE = new RegExp(`^${GH_NAME_PATTERN}$`, "u")
-const TEAM_RE = new RegExp(`^${GH_NAME_PATTERN}\\/${GH_NAME_PATTERN}$`, "u")
+const TEAM_RE = new RegExp(`^${GH_NAME_BASE_PATTERN}\\/${GH_NAME_PATTERN}$`, "u")
 
 export interface CodeownersRule {
   line: number

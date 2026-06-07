@@ -210,17 +210,18 @@ const SYNC_EXEC_CALL_RE = /\b(?:execSync|execFileSync|spawnSync)\s*\(/
 // (the real cmd-injection at report.ts:17) is NOT matched.
 const TRIVIAL_PROBE_RE = /["'`][^"'`$]*(?:--version\b|--help\b|(?:^|\s)-v\b|(?:^|\s)-V\b)/
 
-function normalizeFindingPath(rawPath: string): string {
+function normalizeFindingPath(rawPath: unknown): string {
   return typeof rawPath === "string" ? rawPath.trim() : ""
 }
 
 function addedLinesForFindingPath(
   addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>>,
-  rawPath: string,
+  rawPath: unknown,
 ): ReadonlyMap<number, string> | undefined {
   const path = normalizeFindingPath(rawPath)
   if (path.length === 0) return undefined
-  return addedLineTextByLine.get(path) ?? (path !== rawPath ? addedLineTextByLine.get(rawPath) : undefined)
+  return addedLineTextByLine.get(path)
+    ?? (typeof rawPath === "string" && path !== rawPath ? addedLineTextByLine.get(rawPath) : undefined)
 }
 
 /**
@@ -328,15 +329,20 @@ export function clampIntentionalLiveEvalSerialLoopSeverity(
 ): number {
   if (!addedLineTextByLine) return 0
   let clamped = 0
+  const fileTextByLines = new WeakMap<ReadonlyMap<number, string>, string>()
   for (const f of findings) {
     if (f.category !== "performance" || f.score < 4) continue
     const path = normalizeFindingPath(f.path)
     if (!LIVE_EVAL_TEST_PATH_RE.test(path)) continue
     const lines = addedLinesForFindingPath(addedLineTextByLine, f.path)
     if (!lines) continue
-    const fileText = [...lines.values()].join("\n")
     const findingText = findingTextForClamp(f)
     if (!isSerialEvalLoopClaim(findingText)) continue
+    let fileText = fileTextByLines.get(lines)
+    if (fileText === undefined) {
+      fileText = [...lines.values()].join("\n")
+      fileTextByLines.set(lines, fileText)
+    }
     const combinedText = `${fileText}\n${findingText}`
     if (!LIVE_EVAL_MARKER_RE.test(combinedText) || !LIVE_EVAL_INTENT_RE.test(combinedText)) continue
     const nearby = nearbyAddedLines(lines, f.line, 5)

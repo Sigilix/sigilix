@@ -459,6 +459,7 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
     const getBranchStarted = new Promise<void>((resolve) => {
       getBranchCalled = resolve
     })
+    let getRepoTreeCallsAtBranchStart = 0
     mockGetBranch.mockImplementationOnce(async (
       _owner: string,
       _repo: string,
@@ -466,6 +467,7 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
       opts?: { signal?: AbortSignal },
     ) => {
       expect(opts?.signal?.aborted).toBe(false)
+      getRepoTreeCallsAtBranchStart = mockGetRepoTree.mock.calls.length
       getBranchCalled()
       return await new Promise<never>((_resolve, reject) => {
         opts?.signal?.addEventListener("abort", () => {
@@ -498,6 +500,7 @@ describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (
       "sig-222",
       { signal: expect.any(AbortSignal) },
     )
+    expect(mockGetRepoTree.mock.calls.length).toBe(getRepoTreeCallsAtBranchStart)
     expect(warnSpy.mock.calls.some((args) =>
       args.some((arg) => String(arg).includes("tests-evidence-repo-tree-aborted")),
     )).toBe(true)

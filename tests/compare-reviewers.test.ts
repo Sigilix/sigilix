@@ -209,6 +209,51 @@ describe("parseWorksheet", () => {
     ])
   })
 
+  it("does not silently drop the first data row when the header is missing", () => {
+    const base = buildWorksheet(file)
+      .replace("| findings | outcome | category | note |\n", "")
+      .replace("|----------|-------|----------|------|\n", "")
+    const md = fillWorksheet(base, ["| s1 | real_bug | logic | headerless first row |"])
+
+    const { items, errors } = parseWorksheet(md, file)
+
+    expect(errors).toEqual([])
+    expect(items[0]).toEqual<LabeledItem>({
+      id: 1,
+      findings: ["s1"],
+      outcome: "real_bug",
+      category: "logic",
+      note: "headerless first row",
+    })
+  })
+
+  it("skips the separator when the header is missing but the separator remains", () => {
+    const base = buildWorksheet(file).replace("| findings | outcome | category | note |\n", "")
+    const md = fillWorksheet(base, ["| s1 | real_bug | logic | separator only |"])
+
+    const { items, errors } = parseWorksheet(md, file)
+
+    expect(errors).toEqual([])
+    expect(items[0]).toEqual<LabeledItem>({
+      id: 1,
+      findings: ["s1"],
+      outcome: "real_bug",
+      category: "logic",
+      note: "separator only",
+    })
+  })
+
+  it("does not silently skip a header-like row after data has started", () => {
+    const md = fillWorksheet(buildWorksheet(file), [
+      "| s1 | real_bug | logic | first row |",
+      "| findings | outcome | category | note |",
+    ])
+
+    const { errors } = parseWorksheet(md, file)
+
+    expect(errors.some((e) => e.includes('unknown finding ref "findings"'))).toBe(true)
+  })
+
   it("rejects an unknown outcome and an unknown category", () => {
     const md = fillWorksheet(buildWorksheet(file), [
       "| s1 | maybe_real | logic | |",

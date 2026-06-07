@@ -93,6 +93,16 @@ function isSeparatorRow(cells: string[]): boolean {
   return cells.some(isDash) && cells.every((c) => isDash(c) || c === "")
 }
 
+function isLabelsHeaderRow(cells: string[]): boolean {
+  return (
+    cells.length >= 4 &&
+    (cells[0] ?? "").toLowerCase() === "findings" &&
+    (cells[1] ?? "").toLowerCase() === "outcome" &&
+    (cells[2] ?? "").toLowerCase() === "category" &&
+    (cells[3] ?? "").toLowerCase() === "note"
+  )
+}
+
 /**
  * Parse the `## Labels` table from a filled worksheet into validated items.
  * Returns every error found (never throws) so the CLI can print them all and
@@ -120,26 +130,24 @@ export function parseWorksheet(md: string, file: ComparisonFile): ParseResult {
 
   const section = md.slice(headingIdx + LABELS_HEADING.length)
   const rows = section.split("\n")
-  let sawHeaderRow = false
+  let sawDataRow = false
   let rowNum = 0
 
   for (const raw of rows) {
     const line = raw.trim()
     if (!line.startsWith("|")) continue // skips prose, comments, blank lines
     const cells = splitRow(line)
-    // Skip the markdown header row + its `---` separator.
-    if (!sawHeaderRow) {
-      sawHeaderRow = true
-      continue
-    }
+    // Skip the markdown header row + its `---` separator when present.
+    if (!sawDataRow && isLabelsHeaderRow(cells)) continue
     if (isSeparatorRow(cells)) continue
     // A wholly-empty placeholder row (the `| | | | |` template line) is skipped.
     if (cells.every((c) => c === "")) continue
 
+    sawDataRow = true
     rowNum += 1
     const where = `Labels row ${rowNum}`
     if (cells.length < 3) {
-      errors.push(`${where}: expected at least 3 columns (findings | label | category), got ${cells.length}`)
+      errors.push(`${where}: expected at least 3 columns (findings | outcome | category), got ${cells.length}`)
       continue
     }
     const [findingsCell, outcomeCell, categoryCell] = cells

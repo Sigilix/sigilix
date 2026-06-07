@@ -29,9 +29,10 @@
 // "command injection" on `re.exec` inside the XSS detector, child_process not
 // even imported). Now the rule only emits when `exec`/`execSync` provably
 // resolves to a `child_process` import binding in the same file. Recall-safe by
-// construction: the only calls it stops flagging are NON-child_process `.exec`
-// (never a shell sink) and exotic aliases the v1 rule never reliably handled
-// anyway — every real `child_process.exec` via a standard import still emits.
+// construction: the calls it stops flagging are NON-child_process `.exec` (never
+// a shell sink), re-export-only names (not local call bindings), and arbitrary
+// higher-order wrappers the v1 rule never reliably handled anyway — every real
+// `child_process.exec` via an explicit supported import still emits.
 
 import type { AstRule, AstRuleHit, RuleContext } from "../types"
 import type { AstNode } from "../walker"
@@ -46,12 +47,33 @@ function sliceEvidence(source: string, node: AstNode): string {
 }
 
 interface CallBinding {
-  /** The called function name (`exec` / `execSync`). */
+  /** The called identifier or member-property name. */
   fn: string
   /** The receiver identifier for `x.exec(...)`, or null for a bare `exec(...)`. */
   object: string | null
   /** True for the inline `require("child_process").exec(...)` form. */
   inlineCp: boolean
+}
+
+type TargetFn = "exec" | "execSync"
+
+interface ChildProcessBindingSet {
+  bareNames: Map<string, TargetFn>
+  namespaces: Set<string>
+}
+
+function stringSpecifier(node: AstNode | undefined): string | null {
+  if (node?.type === "Literal" && typeof node.value === "string") return node.value
+  if (node?.type === "TemplateLiteral" && (node.expressions?.length ?? 0) === 0) {
+    const quasi = node.quasis?.[0]
+    return (quasi?.value?.cooked ?? quasi?.value?.raw ?? null) as string | null
+  }
+  return null
+}
+
+function isChildProcessSpecifier(node: AstNode | undefined): boolean {
+  const specifier = stringSpecifier(node)
+  return specifier !== null && /^(?:node:)?child_process$/.test(specifier)
 }
 
 /** Is `node` a `require("child_process")` / `require("node:child_process")` call? */
@@ -60,8 +82,7 @@ function isRequireChildProcess(node: AstNode | undefined): boolean {
     node?.type === "CallExpression" &&
     node.callee?.type === "Identifier" &&
     node.callee.name === "require" &&
-    node.arguments?.[0]?.type === "Literal" &&
-    /^(?:node:)?child_process$/.test(String(node.arguments[0].value))
+    isChildProcessSpecifier(node.arguments?.[0])
   )
 }
 
@@ -79,66 +100,142 @@ function callBinding(node: AstNode): CallBinding | null {
     if (isRequireChildProcess(c.object)) {
       return { fn: c.property.name as string, object: null, inlineCp: true }
     }
-    return { fn: c.property.name as string, object: null, inlineCp: false }
+    return null
   }
   return null
 }
 
 /** `child_process` / `node:child_process` import-or-require source. */
 const CP_SRC = String.raw`["'](?:node:)?child_process["']`
+const CP_CALL_SRC = String.raw`["'\`](?:node:)?child_process["'\`]`
+
+function escapedAlternation(values: ReadonlySet<string>): string | null {
+  if (values.size === 0) return null
+  return [...values].map((v) => v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")
+}
 
 /**
  * Resolve, from one file's source, which names bind to `child_process`'s
  * `exec`/`execSync`:
- *  - `bareNames`: destructured `import { exec } from "child_process"` or
- *    `const { exec } = require("child_process")` → a bare `exec(...)` call.
+ *  - `bareNames`: local bare-call bindings from
+ *    `import { exec } from "child_process"` or
+ *    `const { exec } = require("child_process")` / dynamic `import(...)` →
+ *    a bare `exec(...)` call. Aliases such as `{ exec: run }` are stored as
+ *    `run -> exec`. Parenthesized destructuring assignments are supported too:
+ *    `({ exec } = require("child_process"))`.
  *  - `namespaces`: `import cp from "child_process"` / `import * as cp` /
- *    `const cp = require("child_process")` → a `cp.exec(...)` call.
+ *    `const cp = require("child_process")` / `await import(...)` →
+ *    a `cp.exec(...)` call.
  * Regex on the source (imports live at module scope; `child_process` rarely
  * appears in a string/comment). Conservative: only the standard import forms.
  */
-function childProcessBindings(source: string): { bareNames: Set<string>; namespaces: Set<string> } {
-  const bareNames = new Set<string>()
+function childProcessBindings(source: string): ChildProcessBindingSet {
+  const bareNames = new Map<string, TargetFn>()
   const namespaces = new Set<string>()
+  const addBare = (local: string | undefined | null, imported: string | undefined | null): void => {
+    if ((imported === "exec" || imported === "execSync") && local) bareNames.set(local, imported)
+  }
   const addDestructured = (list: string): void => {
     for (const part of list.split(",")) {
-      const name = part.trim().split(/\s+as\s+|:/)[0]!.trim() // `exec`, `exec as run`, `exec: run`
-      if (name === "exec" || name === "execSync") bareNames.add(name)
+      const spec = part.trim().replace(/\s*=.*$/, "").trim()
+      if (!spec || spec.startsWith("...")) continue
+      const importAlias = /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(spec)
+      const objectAlias = /^([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)$/.exec(spec)
+      const simple = /^([A-Za-z_$][\w$]*)$/.exec(spec)
+      addBare(importAlias?.[2] ?? objectAlias?.[2] ?? simple?.[1] ?? null, importAlias?.[1] ?? objectAlias?.[1] ?? simple?.[1] ?? null)
     }
   }
   for (const m of source.matchAll(new RegExp(String.raw`import\s*\{([^}]*)\}\s*from\s*${CP_SRC}`, "g"))) {
     addDestructured(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`\{([^}]*)\}\s*=\s*require\(\s*${CP_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
     addDestructured(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    addDestructured(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`,\s*\{([^}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    addDestructured(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`,\s*\{([^}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    addDestructured(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\)`, "g"))) {
+    addDestructured(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)\s*\)`, "g"))) {
+    addDestructured(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`, "g"))) {
+    addBare(m[1], m[2])
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`, "g"))) {
+    addBare(m[1], m[2])
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)\s*\.\s*(exec|execSync)\b`, "g"))) {
+    addBare(m[1], m[2])
   }
   for (const m of source.matchAll(new RegExp(String.raw`import\s+(?:\*\s+as\s+)?([A-Za-z_$][\w$]*)\s+from\s*${CP_SRC}`, "g"))) {
     namespaces.add(m[1]!)
   }
-  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_SRC}\s*\)`, "g"))) {
+  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
     namespaces.add(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    namespaces.add(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    namespaces.add(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    namespaces.add(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*require\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    namespaces.add(m[1]!)
+  }
+  for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\(\s*${CP_CALL_SRC}\s*\)`, "g"))) {
+    namespaces.add(m[1]!)
+  }
+  const namespaceNames = escapedAlternation(namespaces)
+  if (namespaceNames !== null) {
+    for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s*\{([^}]*)\}\s*=\s*(?:${namespaceNames})\b`, "g"))) {
+      addDestructured(m[1]!)
+    }
+    for (const m of source.matchAll(new RegExp(String.raw`,\s*\{([^}]*)\}\s*=\s*(?:${namespaceNames})\b`, "g"))) {
+      addDestructured(m[1]!)
+    }
+    for (const m of source.matchAll(new RegExp(String.raw`\(\s*\{([^{}]*)\}\s*=\s*(?:${namespaceNames})\b\s*\)`, "g"))) {
+      addDestructured(m[1]!)
+    }
+    for (const m of source.matchAll(new RegExp(String.raw`(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`, "g"))) {
+      addBare(m[1], m[2])
+    }
+    for (const m of source.matchAll(new RegExp(String.raw`,\s*([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`, "g"))) {
+      addBare(m[1], m[2])
+    }
+    for (const m of source.matchAll(new RegExp(String.raw`(?:^|[;({\n])\s*([A-Za-z_$][\w$]*)\s*=\s*(?:${namespaceNames})\s*\.\s*(exec|execSync)\b`, "g"))) {
+      addBare(m[1], m[2])
+    }
   }
   return { bareNames, namespaces }
 }
 
-/** The quoted `child_process` module specifier. The closing quote anchors it so
- *  it can't substring-match `child_process_extra` / `child-process-x` (#316). */
-const CP_MODULE_RE = /["'](?:node:)?child_process["']/
+const bindingsCache = new WeakMap<object, { source: string; bindings: ChildProcessBindingSet }>()
 
-/** Does this `exec`/`execSync` call resolve to a `child_process` binding? */
-function resolvesToChildProcess(binding: CallBinding, source: string): boolean {
-  if (binding.inlineCp) return true // require("child_process").exec(...)
-  const { bareNames, namespaces } = childProcessBindings(source)
-  const resolved = binding.object === null ? bareNames.has(binding.fn) : namespaces.has(binding.object)
-  if (resolved) return true
-  // RECALL FALLBACK (Sigilix dogfood #316): `childProcessBindings` only parses
-  // the standard static import forms. If the file references the child_process
-  // module in a shape it can't parse — dynamic `import("child_process")`,
-  // `export { exec } from "child_process"`, a conditional require — fall back to
-  // the old name-match so a REAL shell-out is never dropped. The PR #296 self-FP
-  // still dies: a detector calling `re.exec` references no child_process module
-  // at all, so this fallback never fires there.
-  return CP_MODULE_RE.test(source)
+function childProcessBindingsFor(ctx: RuleContext): ChildProcessBindingSet {
+  const cached = bindingsCache.get(ctx.ast)
+  if (cached?.source === ctx.source) return cached.bindings
+  const bindings = childProcessBindings(ctx.source)
+  bindingsCache.set(ctx.ast, { source: ctx.source, bindings })
+  return bindings
+}
+
+/** Return the child_process function this call resolves to, if any. */
+function resolveChildProcessCall(binding: CallBinding, bindings: ChildProcessBindingSet): TargetFn | null {
+  if (binding.inlineCp) return TARGET_FNS.has(binding.fn) ? (binding.fn as TargetFn) : null
+  const { bareNames, namespaces } = bindings
+  if (binding.object === null) return bareNames.get(binding.fn) ?? null
+  return TARGET_FNS.has(binding.fn) && namespaces.has(binding.object) ? (binding.fn as TargetFn) : null
 }
 
 /**
@@ -170,20 +267,22 @@ export const noExecShellInterpolation: AstRule = {
   visit(node: AstNode, ctx: RuleContext): AstRuleHit | null {
     if (!node || node.type !== "CallExpression") return null
     const binding = callBinding(node)
-    if (!binding || !TARGET_FNS.has(binding.fn)) return null
+    if (!binding) return null
     // SIG-311 (import-binding fix): only a real `child_process` exec/execSync runs
     // a shell. `re.exec(line)` (RegExp), `db.exec(sql)`, `stmt.exec(...)`, or a
     // bare `exec(...)` not imported from child_process are NOT shell sinks — do
     // not mint a command-injection fact (the PR #296 self-FP). Recall-safe: every
     // real `child_process.exec` via a standard import still resolves and emits.
-    if (!resolvesToChildProcess(binding, ctx.source)) return null
+    const shellFn = resolveChildProcessCall(binding, childProcessBindingsFor(ctx))
+    if (!shellFn) return null
     const command = (node.arguments ?? [])[0]
     if (!command) return null
     // FP-safe: a provably-constant command string is never a shell-injection
     // path, so do not flag it.
     if (isConstantStringExpr(command)) return null
+    const calleeLabel = binding.object === null ? binding.fn : `${binding.object}.${binding.fn}`
     return {
-      message: `\`${binding.fn}\` runs its command through a shell, and the command here is built from a dynamic value — a command-injection sink. Shell metacharacters in the interpolated value would execute. Use \`execFile(cmd, [args])\` / \`spawn\` without a shell (argv array, no interpolation), or strictly validate/allowlist the value before use.`,
+      message: `\`${calleeLabel}\` resolves to \`child_process.${shellFn}\`, which runs its command through a shell, and the command here is built from a dynamic value — a command-injection sink. Shell metacharacters in the interpolated value would execute. Use \`execFile(cmd, [args])\` / \`spawn\` without a shell (argv array, no interpolation), or strictly validate/allowlist the value before use.`,
       evidence: sliceEvidence(ctx.source, node),
       line: node.loc?.start?.line ?? 1,
       // A multi-line exec call (wrapped template / line-broken concat) must

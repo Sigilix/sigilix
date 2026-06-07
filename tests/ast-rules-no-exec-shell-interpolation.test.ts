@@ -64,27 +64,91 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
   it("emits for `const { exec } = require('child_process')`", () => {
     expect(runRule(`const { exec } = require("child_process"); exec(\`x \${y}\`)`).length).toBe(1)
   })
+  it("emits for an aliased destructured `require('child_process')` binding", () => {
+    expect(runRule(`const { exec: run } = require("child_process"); run(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for an aliased destructured require binding with a default", () => {
+    expect(runRule(`const { exec: run = fallback } = require("child_process"); run(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for an aliased named import from child_process", () => {
+    expect(runRule(`import { execSync as runSync } from "child_process"; runSync(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for a comma declarator destructured `require('child_process')` binding", () => {
+    expect(runRule(`let ignored, { exec } = require("child_process"); exec(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for parenthesized destructured `require('child_process')` assignment", () => {
+    expect(runRule(`let exec; ({ exec } = require("child_process")); exec(\`x \${y}\`)`).length).toBe(1)
+  })
   it("emits for `import * as cp from 'node:child_process'` + cp.execSync", () => {
     expect(runRule(`import * as cp from "node:child_process"; cp.execSync(\`x \${y}\`)`).length).toBe(1)
   })
   it("emits for `const cp = require('child_process')` + cp.exec", () => {
     expect(runRule(`const cp = require("child_process"); cp.exec("a " + b)`).length).toBe(1)
   })
+  it("emits for a predeclared namespace assigned from require('child_process')", () => {
+    expect(runRule(`let cp; cp = require("child_process"); cp.exec(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for a comma declarator namespace assigned from require('child_process')", () => {
+    expect(runRule(`let ignored = 1, cp = require("child_process"); cp.exec(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for destructuring exec from a child_process namespace", () => {
+    expect(runRule(`import cp from "child_process"; const { exec } = cp; exec(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for destructuring exec from a predeclared child_process namespace", () => {
+    expect(runRule(`let cp; cp = require("child_process"); const { exec } = cp; exec(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for comma declarator destructuring from a child_process namespace", () => {
+    expect(runRule(`const cp = require("child_process"); let ignored, { exec } = cp; exec(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for a local alias assigned from a child_process namespace method", () => {
+    expect(runRule(`const cp = require("child_process"); const run = cp.exec; run(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for a comma declarator local alias assigned from a namespace method", () => {
+    expect(runRule(`const cp = require("child_process"); let ignored, run = cp.execSync; run(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for a reassigned local alias from a namespace method", () => {
+    expect(runRule(`const cp = require("child_process"); let run; run = cp.exec; run(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for an aliased destructure from a child_process namespace", () => {
+    expect(runRule(`const cp = require("child_process"); const { exec: run } = cp; run(\`x \${y}\`)`).length).toBe(1)
+  })
   it("emits for inline `require('child_process').exec(...)`", () => {
     expect(runRule('require("child_process").exec(`run ${cmd}`)').length).toBe(1)
   })
-  // RECALL FALLBACK (dogfood #316): a child_process reference the static resolver
-  // can't parse (dynamic import / re-export) must still emit — never drop a real
-  // shell-out.
-  it("emits via the recall fallback for a dynamic import('child_process')", () => {
+  it("emits for a local alias assigned from require('child_process').exec", () => {
+    expect(runRule(`const run = require("child_process").exec; run(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for a reassigned local alias from require('child_process').execSync", () => {
+    expect(runRule(`let run; run = require("child_process").execSync; run(\`x \${y}\`)`).length).toBe(1)
+  })
+  it("emits for inline require(`child_process`).exec(...) with a constant template specifier", () => {
+    expect(runRule("require(`child_process`).exec(`run ${cmd}`)").length).toBe(1)
+  })
+  // Dynamic import bindings are explicit child_process bindings too — keep this
+  // recall path without falling back to every `.exec(...)` in the file.
+  it("emits for a dynamic import('child_process') namespace binding", () => {
     expect(
       runRule(`async function f(){ const cp = await import("child_process"); cp.exec(\`x \${cmd}\`); }`).length,
     ).toBe(1)
   })
-  it("emits via the recall fallback for `export { exec } from 'child_process'`", () => {
-    expect(runRule(`export { exec } from "child_process";\nexec(\`run \${x}\`)`).length).toBe(1)
+  it("emits for a dynamic import(`child_process`) namespace binding", () => {
+    expect(runRule("async function f(){ const cp = await import(`child_process`); cp.exec(`x ${cmd}`); }").length).toBe(1)
   })
-  it("the fallback does NOT fire on a substring module name (./child_process_extra)", () => {
+  it("emits for a dynamic import('child_process') destructured binding", () => {
+    expect(runRule(`async function f(){ const { exec } = await import("child_process"); exec(\`run \${x}\`); }`).length).toBe(1)
+  })
+  it("emits for an aliased dynamic import('child_process') destructured binding", () => {
+    expect(runRule(`async function f(){ const { exec: run } = await import("child_process"); run(\`run \${x}\`); }`).length).toBe(1)
+  })
+  it("emits for a parenthesized dynamic import('child_process') destructured assignment", () => {
+    expect(runRule(`async function f(){ let execSync; ({ execSync } = await import("child_process")); execSync(\`run \${x}\`); }`).length).toBe(1)
+  })
+  it("does NOT treat `export { exec } from 'child_process'` as a local callable binding", () => {
+    // Node ESM confirms an indirect re-export is not callable in the same module:
+    // `export { readFile } from "node:fs"; readFile(...)` throws ReferenceError.
+    expect(runRule(`export { exec } from "child_process";\nexec(\`run \${x}\`)`).length).toBe(0)
+  })
+  it("does NOT match a substring module name (./child_process_extra)", () => {
     expect(runRule(`import { exec } from "./child_process_extra"; exec(\`x \${y}\`)`).length).toBe(0)
   })
   // PRECISION (the PR #296 family): a same-named .exec on a NON-child_process
@@ -92,8 +156,17 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
   it("does NOT flag re.exec(line) (RegExp.exec — the PR #296 self-FP)", () => {
     expect(runRule("const re = /x/g; re.exec(line)").length).toBe(0)
   })
+  it("does NOT flag re.exec(line) in a file that also imports child_process", () => {
+    expect(runRule(CP + "const re = /x/g; re.exec(line)").length).toBe(0)
+  })
   it("does NOT flag db.exec(sql) (no child_process in file)", () => {
     expect(runRule("db.exec(`SELECT ${id}`)").length).toBe(0)
+  })
+  it("does NOT flag db.exec(sql) in a file that also imports child_process", () => {
+    expect(runRule(CP + "db.exec(`SELECT ${id}`)").length).toBe(0)
+  })
+  it("does NOT flag non-identifier receiver expressions when child_process imports exec", () => {
+    expect(runRule(CP + "getDb().exec(`SELECT ${id}`)").length).toBe(0)
   })
   it("does NOT flag stmt.exec(...) (no child_process in file)", () => {
     expect(runRule("stmt.exec(params)").length).toBe(0)
@@ -103,6 +176,12 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
   })
   it("does NOT flag exec imported from a DIFFERENT module", () => {
     expect(runRule(`import { exec } from "./my-runner"; exec(\`x \${y}\`)`).length).toBe(0)
+  })
+  it("does NOT treat an object method as child_process just because it wraps exec", () => {
+    expect(runRule(`const { exec } = require("child_process"); const wrapper = { exec }; wrapper.exec(\`x \${y}\`)`).length).toBe(0)
+  })
+  it("does NOT infer a namespace from an object-literal property named cp", () => {
+    expect(runRule(`const holder = { cp: require("child_process") }; const cp = { exec() {} }; cp.exec(\`x \${y}\`)`).length).toBe(0)
   })
 })
 

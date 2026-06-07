@@ -19,7 +19,7 @@
 // NOT post inline comments — that's Task 9's `postAstInlineFindings`
 // gated by `astRules.autoInline`.
 
-import { parseSource, type SourceExt } from "./parser"
+import { parseSource, LARGE_FILE_BYTES, type SourceExt } from "./parser"
 import { walkAst, type AstNode } from "./walker"
 import {
   buildChangedLines,
@@ -123,7 +123,6 @@ const FLOAT_CENTS_PSEUDO_RULE: AstRule = {
   visit: () => null,
 }
 
-const LARGE_FILE_BYTES = 500_000
 const EVIDENCE_MAX_CHARS = 200
 
 const SUPPORTED_EXT_RE = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/

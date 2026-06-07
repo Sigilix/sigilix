@@ -2,9 +2,9 @@
 
 https://github.com/Sigilix/sigilix-e2e-frontend/pull/13
 
-Sigilix flagged **5**; CodeRabbit flagged **7**.
+Sigilix flagged **5**; CodeRabbit flagged **7**; Greptile flagged **0**.
 
-Label each *real-world issue* once in the table at the bottom. If both bots flagged the same issue, put both refs in one row and use a `both_*` label. Leave a finding out of the table only if it is a pure duplicate of a row you already wrote.
+Label each *real-world issue* once in the table at the bottom. If multiple tools flagged the same issue, put all refs in one row. Use `none` only for a ground-truth real bug every tool missed. Leave a finding out of the table only if it is a pure duplicate of a row you already wrote.
 
 ### Sigilix findings
 
@@ -24,21 +24,25 @@ Label each *real-world issue* once in the table at the bottom. If both bots flag
 - `c6` src/components/NotificationsPanel.tsx:24 — _⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_
 - `c7` src/components/NotificationsPanel.tsx:33 — _⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_
 
+### Greptile findings
+
+_(none)_
+
 ## Labels
 
-<!-- label    ∈ sigilix_only_real_bug | sigilix_only_noise | cr_only_real_bug | cr_only_noise | both_real | both_noise -->
+<!-- outcome  ∈ real_bug | noise -->
 <!-- category ∈ security | perf | logic | tests | style -->
-<!-- findings: comma-separated refs, e.g. s1,c3 -->
+<!-- findings: comma-separated refs, e.g. s1,c3,g2; use `none` for a real bug every tool missed -->
 
-| findings | label | category | note |
+| findings | outcome | category | note |
 |----------|-------|----------|------|
-| s2,c3 | both_real | security | both flagged ActivityFeed dangerouslySetInnerHTML XSS |
-| s4,c6 | both_real | security | both flagged NotificationsPanel innerHTML XSS |
-| s1 | sigilix_only_real_bug | perf | N+1 fetches per feed item |
-| s3 | sigilix_only_real_bug | security | CommentThread jQuery .html() XSS |
-| s5 | sigilix_only_real_bug | logic | stale bodyHtml race in preview effect |
-| c2 | cr_only_real_bug | security | activity API returns untrusted HTML |
-| c4 | cr_only_real_bug | security | DigestBanner XSS |
-| c5 | cr_only_real_bug | security | EmbedCard iframe XSS |
-| c7 | cr_only_real_bug | logic | summary not cleared when list empties |
-| c1 | cr_only_noise | style | @types/dompurify deprecated -- hygiene, not a bug |
+| s2,c3 | real_bug | security | both flagged ActivityFeed dangerouslySetInnerHTML XSS |
+| s4,c6 | real_bug | security | both flagged NotificationsPanel innerHTML XSS |
+| s1 | real_bug | perf | N+1 fetches per feed item |
+| s3 | real_bug | security | CommentThread jQuery .html() XSS |
+| s5 | real_bug | logic | stale bodyHtml race in preview effect |
+| c2 | real_bug | security | activity API returns untrusted HTML |
+| c4 | real_bug | security | DigestBanner XSS |
+| c5 | real_bug | security | EmbedCard iframe XSS |
+| c7 | real_bug | logic | summary not cleared when list empties |
+| c1 | noise | style | @types/dompurify deprecated -- hygiene, not a bug |

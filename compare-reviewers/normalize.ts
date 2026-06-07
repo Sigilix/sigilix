@@ -1,14 +1,19 @@
-// SIG-70 — normalize raw GitHub review comments into bot findings.
+// SIG-70/SIG-326 — normalize raw GitHub review comments into tool findings.
 //
 // Pure: input is the raw JSON GitHub returns from
 // `GET /repos/{o}/{r}/pulls/{n}/comments` (inline review comments); output
 // is the `NormalizedFinding[]` the worksheet + summary work against. No IO —
 // `github.ts` does the fetching and hands the arrays here.
 
-import type { Bot, NormalizedFinding } from "./types"
+import type { NormalizedFinding, Tool } from "./types"
 
 export const SIGILIX_BOT = "sigilix[bot]"
 export const CODERABBIT_BOT = "coderabbitai[bot]"
+export const DEFAULT_GREPTILE_BOTS = [
+  "greptile-apps[bot]",
+  "greptile-app[bot]",
+  "greptile[bot]",
+] as const
 
 /** The subset of GitHub's review-comment shape we depend on. */
 export interface RawComment {
@@ -65,14 +70,14 @@ function sigilixCategory(body: string): string | undefined {
 }
 
 function toFinding(
-  bot: Bot,
+  tool: Tool,
   ref: string,
   comment: RawComment,
   botCategory: string | undefined,
 ): NormalizedFinding {
   const finding: NormalizedFinding = {
     ref,
-    bot,
+    tool,
     commentId: comment.id,
     path: comment.path ?? null,
     line: comment.line ?? null,
@@ -94,9 +99,13 @@ function byCommentId(a: RawComment, b: RawComment): number {
  * Comments not authored by a bot (human reviewers) are dropped; Sigilix
  * comments without the finding marker (overviews, mention replies) are dropped.
  */
-export function normalizeFindings(comments: RawComment[]): {
+export function normalizeFindings(
+  comments: RawComment[],
+  opts: { greptileLogins?: readonly string[] } = {},
+): {
   sigilix: NormalizedFinding[]
   coderabbit: NormalizedFinding[]
+  greptile: NormalizedFinding[]
 } {
   // A reply within a thread (in_reply_to_id set) is conversation, not a fresh
   // finding — CodeRabbit in particular posts follow-up replies as inline review
@@ -109,6 +118,10 @@ export function normalizeFindings(comments: RawComment[]): {
   const coderabbitRaw = topLevel
     .filter((c) => c.user?.login === CODERABBIT_BOT)
     .sort(byCommentId)
+  const greptileLogins = new Set(opts.greptileLogins ?? DEFAULT_GREPTILE_BOTS)
+  const greptileRaw = topLevel
+    .filter((c) => c.user?.login != null && greptileLogins.has(c.user.login))
+    .sort(byCommentId)
 
   const sigilix = sigilixRaw.map((c, i) =>
     toFinding("sigilix", `s${i + 1}`, c, sigilixCategory(c.body)),
@@ -116,5 +129,8 @@ export function normalizeFindings(comments: RawComment[]): {
   const coderabbit = coderabbitRaw.map((c, i) =>
     toFinding("coderabbit", `c${i + 1}`, c, undefined),
   )
-  return { sigilix, coderabbit }
+  const greptile = greptileRaw.map((c, i) =>
+    toFinding("greptile", `g${i + 1}`, c, undefined),
+  )
+  return { sigilix, coderabbit, greptile }
 }

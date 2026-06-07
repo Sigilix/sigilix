@@ -9,8 +9,8 @@ import type { PrReviewFinding, FindingTrust, FindingTrustTier } from "./triage-p
 
 /** PR2 flag (`OPENCLAW_TRUST_LEDGER`). `off` = attach metadata in-memory but
  *  record no telemetry + render nothing. `shadow` = attach + record the tier
- *  distribution, still render nothing. `on` = reserved for the PR3 render wiring;
- *  in PR2 it behaves like `shadow` (no render). */
+ *  distribution, still render nothing. `on` = attach + record + render the
+ *  Trust Summary and per-finding VERIFIED/GROUNDED/MODEL pills. */
 export type TrustLedgerMode = "off" | "shadow" | "on"
 
 export function parseTrustLedgerMode(raw: string | undefined): TrustLedgerMode {

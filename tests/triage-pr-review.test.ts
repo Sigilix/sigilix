@@ -3844,6 +3844,100 @@ describe("Trust Ledger render (PR3a) — gated on `trustLedger`", () => {
   })
 })
 
+describe("Evidence provenance render (SIG-112) — gated on `showEvidence`", () => {
+  const withEvidence: PrReviewFinding = {
+    ...baseFinding,
+    evidence: {
+      specialistsThatFlagged: ["logic", "security"],
+      specialistsThatDeclined: ["performance", "tests"],
+      deterministicFactIds: ["secret:generic-api-key:abc123:42", "siblingMapping:src/lib/foo.ts->NONE"],
+      retrievalChunkIds: ["chunk-7"],
+      relatedPriorPRs: ["#123"],
+      synthDecision: "merged",
+      consensusScore: 2,
+    },
+  }
+
+  it("renders the collapsible evidence block in inline comments only when enabled", () => {
+    const on = formatFindingComment(withEvidence, 5, undefined, undefined, false, true)
+    expect(on).toContain("Why Sigilix flagged this (6 pieces of evidence)")
+    expect(on).toContain("Flagged by: logic, security")
+    expect(on).toContain("Did not flag: performance, tests")
+    expect(on).toContain("Deterministic facts: `secret:generic-api-key:abc123:42`, `siblingMapping:src/lib/foo.ts-&gt;NONE`")
+    expect(on).toContain("Retrieval chunks: `chunk-7`")
+    expect(on).toContain("Related prior PRs: `#123`")
+    expect(on).toContain("Synth decision: merged")
+
+    const off = formatFindingComment(withEvidence, 5, undefined, undefined, false, false)
+    expect(off).not.toContain("Why Sigilix flagged this")
+  })
+
+  it("escapes evidence values rendered inside the details block", () => {
+    const body = formatFindingComment({
+      ...baseFinding,
+      evidence: {
+        specialistsThatFlagged: ["logic<script>"],
+        specialistsThatDeclined: ["tests&perf"],
+        deterministicFactIds: ["siblingMapping:src/lib/foo.ts->tests/foo.test.ts</script>&"],
+        retrievalChunkIds: ["chunk-`quoted`"],
+        relatedPriorPRs: [],
+        synthDecision: "kept",
+        consensusScore: 1,
+      },
+    }, 5, undefined, undefined, false, true)
+
+    expect(body).toContain("Flagged by: logic&lt;script&gt;")
+    expect(body).toContain("Did not flag: tests&amp;perf")
+    expect(body).toContain("`siblingMapping:src/lib/foo.ts-&gt;tests/foo.test.ts&lt;/script&gt;&amp;`")
+    expect(body).toContain("`chunk-&#96;quoted&#96;`")
+    expect(body).not.toContain("tests/foo.test.ts</script>&")
+  })
+
+  it("does not render an evidence block for empty structured records", () => {
+    const emptyEvidence: PrReviewFinding = {
+      ...baseFinding,
+      evidence: {
+        specialistsThatFlagged: [],
+        specialistsThatDeclined: [],
+        deterministicFactIds: [],
+        retrievalChunkIds: [],
+        relatedPriorPRs: [],
+        synthDecision: "merged",
+        consensusScore: 0,
+      },
+    }
+
+    const body = formatFindingComment(emptyEvidence, 5, undefined, undefined, false, true)
+    expect(body).not.toContain("Why Sigilix flagged this")
+  })
+
+  it("renders evidence blocks for body-only findings only when enabled", () => {
+    const verdict: PrReviewVerdict = {
+      summary: "One body finding.",
+      confidence: 4,
+      confidenceReason: "Fixture.",
+      findings: [],
+    }
+    const on = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      unanchored: [{ ...withEvidence, scope: "comment", score: 3 }],
+      showEvidence: true,
+    }).submission.body
+    expect(on).toContain("Why Sigilix flagged this (6 pieces of evidence)")
+
+    const off = buildReviewSubmissionWithMetadata({
+      verdict,
+      prAuthor: null,
+      headSha: "abc1234",
+      unanchored: [{ ...withEvidence, scope: "comment", score: 3 }],
+      showEvidence: false,
+    }).submission.body
+    expect(off).not.toContain("Why Sigilix flagged this")
+  })
+})
+
 describe("resolveFindingConfidence (SIG-101)", () => {
   const fnd = (overrides: Partial<PrReviewFinding>): PrReviewFinding => ({
     ...baseFinding,

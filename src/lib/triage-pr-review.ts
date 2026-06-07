@@ -244,6 +244,21 @@ export interface FindingTrust {
     | "window-blindness"
 }
 
+/**
+ * SIG-112: runtime provenance record shown in the optional evidence
+ * block. Built by the ensemble from validated synth provenance and
+ * structured evidence fields; never parsed from model JSON.
+ */
+export interface EvidenceRecord {
+  specialistsThatFlagged: string[]
+  specialistsThatDeclined: string[]
+  deterministicFactIds: string[]
+  retrievalChunkIds: string[]
+  relatedPriorPRs: string[]
+  synthDecision: "kept" | "merged" | "rewritten" | "unknown"
+  consensusScore: number
+}
+
 export interface PrReviewFinding {
   path: string
   line: number
@@ -265,6 +280,8 @@ export interface PrReviewFinding {
   /** SIG Trust Ledger v0: runtime-only trust metadata (the renderer reads this);
    *  attached at submission time, never parsed from model output. */
   trust?: FindingTrust
+  /** SIG-112: runtime-only provenance record for the optional evidence block. */
+  evidence?: EvidenceRecord
   /**
    * SIG-217: runtime-only content fingerprint —
    * `sha256(category + path + bodySnippet(0,80))`, attached by the ensemble
@@ -1022,6 +1039,9 @@ interface BuildReviewArgs {
   /** SIG Trust Ledger v0: forwarded to `RenderBodyArgs.trustLedger` (render the
    *  trust layer when OPENCLAW_TRUST_LEDGER=on) + the inline-comment pills. */
   trustLedger?: boolean
+  /** SIG-112: forwarded to body renderers + inline comments to show the
+   *  collapsible evidence/provenance block when explicitly enabled. */
+  showEvidence?: boolean
   /** Trust Ledger: forwarded to `RenderBodyArgs.trustLedgerSuppressed`. */
   trustLedgerSuppressed?: number
   /** SIG-245: changed files dropped from review (diff-budget spill or
@@ -1435,6 +1455,7 @@ export function buildReviewSubmissionWithMetadata({
   eventOverride,
   linkContext,
   trustLedger,
+  showEvidence,
   trustLedgerSuppressed,
   notReviewedFiles,
 }: BuildReviewArgs): ReviewSubmissionBuildResult {
@@ -1475,6 +1496,7 @@ export function buildReviewSubmissionWithMetadata({
   if (linkContext) renderArgs.linkContext = linkContext
   // SIG Trust Ledger v0: forward the render flag + the suppressed count.
   if (trustLedger) renderArgs.trustLedger = true
+  if (showEvidence) renderArgs.showEvidence = true
   if (typeof trustLedgerSuppressed === "number") renderArgs.trustLedgerSuppressed = trustLedgerSuppressed
   if (notReviewedFiles && notReviewedFiles.length > 0) renderArgs.notReviewedFiles = notReviewedFiles
   const body =
@@ -1499,7 +1521,7 @@ export function buildReviewSubmissionWithMetadata({
     // and pass to the formatter so the inline comment carries the
     // P0/P1/P2 badge + `confidence: N/5` suffix.
     const confidence = resolveFindingConfidence(f, verdict.confidence)
-    const baseBody = formatFindingComment(f, confidence, reviewable, addedLineTextByLine, trustLedger)
+    const baseBody = formatFindingComment(f, confidence, reviewable, addedLineTextByLine, trustLedger, showEvidence)
     const fullBody = marker ? `${baseBody}\n\n${marker}` : baseBody
     const c: SubmitReviewComment = {
       path: f.path,
@@ -1559,6 +1581,8 @@ interface BuildFallbackArgs {
   /** SIG Trust Ledger v0: render the trust layer in the anchorless-fallback body
    *  too (post-`on`-flip consistency). Forwarded to buildFallbackBody. */
   trustLedger?: boolean
+  /** SIG-112: render evidence/provenance blocks in anchorless fallback too. */
+  showEvidence?: boolean
   /** SIG-245: files dropped from review — render the "files not reviewed"
    *  notice on the anchorless-fallback body too (CR #286). */
   notReviewedFiles?: string[]
@@ -1595,6 +1619,7 @@ export function buildFallbackSubmission({
   retriggerUrl,
   eventOverride,
   trustLedger,
+  showEvidence,
   notReviewedFiles,
 }: BuildFallbackArgs): SubmitReviewBody {
   // ARC-156 follow-up: sanitize prose before rendering — same as
@@ -1615,6 +1640,7 @@ export function buildFallbackSubmission({
     // APPROVE for an empty-findings review and discards the notice/caveat.
     eventOverride,
     trustLedger,
+    showEvidence,
     notReviewedFiles,
   )
   return {
@@ -1643,6 +1669,7 @@ export function buildFallbackBody(
   retriggerUrl?: string,
   eventOverride?: ReviewEventOverride,
   trustLedger?: boolean,
+  showEvidence?: boolean,
   notReviewedFiles?: string[],
 ): string {
   // ARC-281: the anchorless-fallback path means GitHub silently
@@ -1663,6 +1690,7 @@ export function buildFallbackBody(
     // it (Codex #2). renderApproveBody renders only the outOfPrScope subset.
     const args: RenderBodyArgs = { verdict: { ...verdict, findings: [] }, unanchored: all }
     if (trustLedger) args.trustLedger = true
+    if (showEvidence) args.showEvidence = true
     if (stack !== undefined) args.stack = stack
     if (prov !== undefined) args.prov = prov
     if (coverage) args.coverage = coverage
@@ -1674,6 +1702,7 @@ export function buildFallbackBody(
     unanchored: all,
   }
   if (trustLedger) args.trustLedger = true
+  if (showEvidence) args.showEvidence = true
   if (stack !== undefined) args.stack = stack
   if (prov !== undefined) args.prov = prov
   if (coverage) args.coverage = coverage
@@ -2236,6 +2265,11 @@ export interface RenderBodyArgs {
    * VERIFIED/GROUNDED/MODEL pills on body rows. Off → body byte-identical to today.
    */
   trustLedger?: boolean
+  /**
+   * SIG-112: when true, render the collapsible evidence/provenance block for
+   * each finding that carries an EvidenceRecord. Off → byte-identical.
+   */
+  showEvidence?: boolean
   /** Trust Ledger: the upstream hard-drop/suppressed count for the Summary's
    *  "Quiet" line (the renderer derives demoted-to-body itself from the body
    *  findings' demoteReason). Omitted → treated as 0. */
@@ -2273,6 +2307,7 @@ function renderOutsideYourChanges(
   findings: readonly PrReviewFinding[],
   linkContext?: BodyFindingLinkContext,
   trustLedger?: boolean,
+  showEvidence?: boolean,
 ): string[] {
   if (findings.length === 0) return []
   return [
@@ -2280,7 +2315,7 @@ function renderOutsideYourChanges(
     "### Outside your changes",
     "",
     "_These relate to code **not modified in this PR** — shown for awareness only; they don't block the merge._",
-    ...renderBodyOnlyFindings([...findings], linkContext, trustLedger),
+    ...renderBodyOnlyFindings([...findings], linkContext, trustLedger, showEvidence),
   ]
 }
 
@@ -2311,7 +2346,7 @@ export function renderApproveBody(args: RenderBodyArgs): string {
     SIGILIX_REVIEW_MARKER,
     "",
     `**Approved** — no issues in your changes. ${n} ${n === 1 ? "note" : "notes"} about code outside this PR below.`,
-    ...renderOutsideYourChanges(outOfScope, args.linkContext, args.trustLedger),
+    ...renderOutsideYourChanges(outOfScope, args.linkContext, args.trustLedger, args.showEvidence),
   ]
   return `${lines.join("\n")}\n`
 }
@@ -2559,7 +2594,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
       lines.push("<details>")
       lines.push(BODY_ONLY_BLOCKER_DETAILS_SUMMARY)
       lines.push("")
-      lines.push(...renderBodyOnlyFindings(bodyOnlyBlockers, args.linkContext, args.trustLedger))
+      lines.push(...renderBodyOnlyFindings(bodyOnlyBlockers, args.linkContext, args.trustLedger, args.showEvidence))
       lines.push("")
       lines.push("</details>")
     }
@@ -2599,11 +2634,11 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
       )
       // Per-finding row formatter for the PR-level + dropdown sections.
       const renderRow = (f: PrReviewFinding): string =>
-        renderBodyOnlyFindings([f], args.linkContext, args.trustLedger).join("\n").trimStart()
+        renderBodyOnlyFindings([f], args.linkContext, args.trustLedger, args.showEvidence).join("\n").trimStart()
       lines.push("")
       lines.push(BODY_ONLY_FINDINGS_HEADING)
       if (flat.length > 0) {
-        lines.push(...renderBodyOnlyFindings(flat, args.linkContext, args.trustLedger))
+        lines.push(...renderBodyOnlyFindings(flat, args.linkContext, args.trustLedger, args.showEvidence))
       }
       const prSection = renderPrLevelSection(prLevel, renderRow)
       if (prSection) {
@@ -2620,7 +2655,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
       lines.push(BODY_ONLY_FINDINGS_HEADING)
       lines.push("")
       lines.push(BODY_ONLY_FINDINGS_EXPLANATION)
-      lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext, args.trustLedger))
+      lines.push(...renderBodyOnlyFindings(bodyOnlyNonBlockers, args.linkContext, args.trustLedger, args.showEvidence))
     }
   }
 
@@ -2628,7 +2663,7 @@ function renderFindingsReviewBody(args: RenderBodyArgs, posture: FindingsReviewP
   // about code NOT in this PR's changes — below the in-scope findings, so it
   // reads as a postscript, not a directive. It's in the droppable tail (after
   // the headLineCount snapshot) so the 65k cap sheds it before any blocker.
-  lines.push(...renderOutsideYourChanges(outOfPrScopeFindings, args.linkContext, args.trustLedger))
+  lines.push(...renderOutsideYourChanges(outOfPrScopeFindings, args.linkContext, args.trustLedger, args.showEvidence))
 
   // Single-line footer (replaces the four separate metadata lines).
   // Built separately from `lines` so the 65k cap can truncate the
@@ -3003,6 +3038,64 @@ function formatFindingCategory(f: PrReviewFinding): string {
   return f.category ?? "logic"
 }
 
+const MAX_EVIDENCE_VALUES_PER_ROW = 8
+
+function escapeInlineEvidenceValue(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/`/g, "&#96;")
+}
+
+function formatInlineEvidenceValue(value: string): string {
+  return `\`${escapeInlineEvidenceValue(value)}\``
+}
+
+function formatEvidenceValues(values: readonly string[]): string {
+  const shown = values.slice(0, MAX_EVIDENCE_VALUES_PER_ROW)
+  const rest = values.length - shown.length
+  const suffix = rest > 0 ? `, +${rest} more` : ""
+  return `${shown.map(formatInlineEvidenceValue).join(", ")}${suffix}`
+}
+
+function evidencePieceCount(record: EvidenceRecord): number {
+  return (
+    record.specialistsThatFlagged.length +
+    record.deterministicFactIds.length +
+    record.retrievalChunkIds.length +
+    record.relatedPriorPRs.length
+  )
+}
+
+function renderFindingEvidenceBlock(finding: PrReviewFinding): string {
+  const record = finding.evidence
+  if (!record) return ""
+  const count = evidencePieceCount(record)
+  if (count === 0) return ""
+  const lines = [
+    `<details><summary>Why Sigilix flagged this (${count} ${count === 1 ? "piece" : "pieces"} of evidence)</summary>`,
+    "",
+    `- Flagged by: ${record.specialistsThatFlagged.length > 0 ? record.specialistsThatFlagged.map(escapeInlineEvidenceValue).join(", ") : "none recorded"}`,
+  ]
+  if (record.specialistsThatDeclined.length > 0) {
+    lines.push(`- Did not flag: ${record.specialistsThatDeclined.map(escapeInlineEvidenceValue).join(", ")}`)
+  }
+  if (record.deterministicFactIds.length > 0) {
+    lines.push(`- Deterministic facts: ${formatEvidenceValues(record.deterministicFactIds)}`)
+  }
+  if (record.retrievalChunkIds.length > 0) {
+    lines.push(`- Retrieval chunks: ${formatEvidenceValues(record.retrievalChunkIds)}`)
+  }
+  if (record.relatedPriorPRs.length > 0) {
+    lines.push(`- Related prior PRs: ${formatEvidenceValues(record.relatedPriorPRs)}`)
+  }
+  lines.push(`- Synth decision: ${escapeInlineEvidenceValue(record.synthDecision)}`)
+  lines.push(`- Consensus: ${record.consensusScore} ${record.consensusScore === 1 ? "specialist" : "specialists"}`)
+  lines.push("", "</details>")
+  return lines.join("\n")
+}
+
 /**
  * Sort findings by severity DESC, then path, then line, and render a
  * compact Markdown list. Body-only findings deliberately do not use
@@ -3028,6 +3121,7 @@ function renderBodyOnlyFindings(
   findings: PrReviewFinding[],
   linkContext?: BodyFindingLinkContext,
   trustLedger?: boolean,
+  showEvidence?: boolean,
 ): string[] {
   const sorted = [...findings].sort((a, b) =>
     b.score - a.score || a.path.localeCompare(b.path) || a.line - b.line,
@@ -3050,6 +3144,7 @@ function renderBodyOnlyFindings(
     // Indent the body so it nests under the bullet visually.
     const detailLines = [
       formatFindingBodyMarkdown(f.body),
+      showEvidence ? renderFindingEvidenceBlock(f) : "",
       formatFindingStructuredDetailsMarkdown(f),
       formatBodyFindingSuggestedChange(f),
     ].filter((s) => s !== "")
@@ -3741,6 +3836,7 @@ export function formatFindingComment(
   reviewable?: ReviewableMap,
   addedLineTextByPath?: ReadonlyMap<string, ReadonlyMap<number, string>>,
   trustLedger?: boolean,
+  showEvidence?: boolean,
 ): string {
   const lines: string[] = ["<!-- sigilix:pr-review-finding -->"]
   // SIG-164 PR 5: badge is always present (P3 covers low severity).
@@ -3765,6 +3861,7 @@ export function formatFindingComment(
   }
   lines.push("")
   const structuredDetails = formatFindingStructuredDetailsMarkdown(finding)
+  const evidenceBlock = showEvidence ? renderFindingEvidenceBlock(finding) : ""
   if (confidence <= 2 && finding.score < 4) {
     // Low-confidence findings collapse the body so the thread skims
     // cleanly. The headline + severity badge + confidence suffix stay
@@ -3788,6 +3885,10 @@ export function formatFindingComment(
       lines.push("")
       lines.push(structuredDetails)
     }
+  }
+  if (evidenceBlock) {
+    lines.push("")
+    lines.push(evidenceBlock)
   }
   // SIG-282 Phase 3: append a deterministic, vetted remediation for a
   // confirmed security finding, keyed by its CWE bucket — rather than

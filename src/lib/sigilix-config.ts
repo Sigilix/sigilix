@@ -140,6 +140,14 @@ export interface SigilixConfig {
     enabled?: boolean
   }
   /**
+   * SIG-112: per-repo opt-IN for customer-visible finding evidence blocks.
+   * Default OFF. Dev/dogfood can also force visibility with env
+   * `OPENCLAW_SHOW_EVIDENCE=on`.
+   */
+  evidence?: {
+    visible?: boolean
+  }
+  /**
    * SIG-135: per-repo opt-OUT for automatic PR label application.
    * Default (missing field) = enabled. Only literal `false` disables;
    * anything else is dropped at parse time and treated as enabled.
@@ -832,6 +840,18 @@ export function parseSigilixConfigDetailed(raw: string): ParseResult {
     const overviewIn = obj.overview as Record<string, unknown>
     if (typeof overviewIn.enabled === "boolean") {
       out.overview = { enabled: overviewIn.enabled }
+    }
+  }
+  // SIG-112: evidence.visible — strict-bool opt-IN. Unknown subfields
+  // are ignored so future evidence settings can ship compatibly.
+  if (
+    obj.evidence &&
+    typeof obj.evidence === "object" &&
+    !Array.isArray(obj.evidence)
+  ) {
+    const evidenceIn = obj.evidence as Record<string, unknown>
+    if (typeof evidenceIn.visible === "boolean") {
+      out.evidence = { visible: evidenceIn.visible }
     }
   }
   // SIG-135: labels.enabled — strict boolean parsing, same opt-OUT
@@ -1553,6 +1573,20 @@ export function isPrOverviewEnabled(config: SigilixConfig | null): boolean {
  */
 export function isPrLabelsEnabled(config: SigilixConfig | null): boolean {
   return config?.labels?.enabled !== false
+}
+
+// ─── SIG-112: evidence block visibility resolution ───────────────────
+
+/**
+ * Resolve the customer-visible evidence block flag. Default-off: only
+ * `sigilix.json` with `evidence.visible: true` or dev/dogfood env
+ * `OPENCLAW_SHOW_EVIDENCE=on` enables rendering.
+ */
+export function isFindingEvidenceVisible(
+  config: SigilixConfig | null,
+  env: { OPENCLAW_SHOW_EVIDENCE?: string },
+): boolean {
+  return env.OPENCLAW_SHOW_EVIDENCE === "on" || config?.evidence?.visible === true
 }
 
 /** Pure clamp helper for the reviewMemory numeric fields. */

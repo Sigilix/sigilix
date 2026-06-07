@@ -452,6 +452,175 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.demotedScore1).toBe(0)
   })
 
+  it("attaches EvidenceRecord from validated synth provenance without changing score or confidence", () => {
+    const astId = "ast/no-unsafe-call/abc123/42"
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{
+            ...baseFinding,
+            line: 42,
+            score: 4,
+            confidence: 4,
+            evidenceId: "freeform-model-id",
+            evidenceRefs: ["siblingMapping:src/lib/foo.ts->NONE", "freeform:<script>"],
+          }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0", "security-0", astId],
+            action: "merged",
+            verifiedViaRetrieval: true,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts: [
+        ...specialistVerdicts,
+        {
+          role: "security" as const,
+          verdict: {
+            ...baseVerdict,
+            findings: [{
+              ...baseFinding,
+              id: "security-0",
+              line: 42,
+              score: 4,
+              evidenceId: "secret:generic-api-key:abc123:42",
+            }],
+          },
+          elapsedMs: 100,
+        },
+        {
+          role: "performance" as const,
+          verdict: { ...baseVerdict, findings: [] },
+          elapsedMs: 100,
+        },
+        {
+          role: "tests" as const,
+          verdict: null,
+          elapsedMs: 100,
+        },
+      ],
+      astFindingIds: [astId],
+    })
+
+    const finding = out.verdict.findings[0]
+    expect(finding?.score).toBe(4)
+    expect(finding?.confidence).toBe(4)
+    expect(finding?.evidence).toEqual({
+      specialistsThatFlagged: ["logic", "security"],
+      specialistsThatDeclined: ["performance"],
+      deterministicFactIds: [
+        "secret:generic-api-key:abc123:42",
+        "siblingMapping:src/lib/foo.ts->NONE",
+        astId,
+      ],
+      retrievalChunkIds: [],
+      relatedPriorPRs: [],
+      synthDecision: "merged",
+      consensusScore: 2,
+    })
+  })
+
+  it("does not attribute fallback sourceSpecialists that returned no findings", () => {
+    const astId = "ast/no-unsafe-call/abc123/42"
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{ ...baseFinding, line: 42, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["security"],
+            sourceFindingIds: [astId],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts: [
+        ...specialistVerdicts,
+        {
+          role: "security" as const,
+          verdict: { ...baseVerdict, findings: [] },
+          elapsedMs: 100,
+        },
+      ],
+      astFindingIds: [astId],
+    })
+
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatFlagged).toEqual([])
+    expect(out.verdict.findings[0]?.evidence?.consensusScore).toBe(0)
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatDeclined).toEqual(["logic", "security"])
+  })
+
+  it("uses sourceSpecialists fallback only for a matching specialist finding", () => {
+    const astId = "ast/no-unsafe-call/abc123/42"
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{ ...baseFinding, line: 42, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: [astId],
+            action: "kept",
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+      astFindingIds: [astId],
+    })
+
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatFlagged).toEqual(["logic"])
+    expect(out.verdict.findings[0]?.evidence?.consensusScore).toBe(1)
+    expect(out.verdict.findings[0]?.evidence?.specialistsThatDeclined).toEqual([])
+  })
+
+  it("normalizes malformed synth evidence actions before rendering metadata", () => {
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: [{ ...baseFinding, line: 42, score: 4 }],
+        },
+        provenance: {
+          findings: [{
+            sourceSpecialists: ["logic"],
+            sourceFindingIds: ["logic-0"],
+            action: "split" as unknown as SynthesizerProvenance["findings"][number]["action"],
+            verifiedViaRetrieval: false,
+          }],
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+
+    expect(out.verdict.findings[0]?.evidence?.synthDecision).toBe("unknown")
+  })
+
   it("tags a finding on a NON-changed file as outOfPrScope; a mis-anchored finding on a CHANGED file is NOT (Codex recall-hole fix)", () => {
     const out = validateForSubmission({
       synthOutput: {

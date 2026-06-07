@@ -77,6 +77,18 @@ describe("createAstCache", () => {
     expect(cache.get("src/x.ts", SRC, ".ts")).toBe(first)
   })
 
+  it("PARSES a large-but-under-ceiling ASCII source (slow byte-check path, under the ceiling)", () => {
+    const cache = createAstCache()
+    // ASCII so 1 byte/char: length*3 > ceiling forces the exact-byte branch, but
+    // the true byte count is under the ceiling → must still parse (not skip).
+    const big = `${SRC}// ${"x".repeat(LARGE_FILE_BYTES - 1000)}\n`
+    expect(big.length * 3).toBeGreaterThan(LARGE_FILE_BYTES) // takes the encode() branch
+    expect(new TextEncoder().encode(big).byteLength).toBeLessThan(LARGE_FILE_BYTES) // under the ceiling
+    const r = cache.get("src/big.ts", big, ".ts")
+
+    expect(r.ok).toBe(true)
+  })
+
   it("parses distinct paths independently and grows size per unique path", () => {
     const cache = createAstCache()
     const a = cache.get("src/a.ts", SRC, ".ts")

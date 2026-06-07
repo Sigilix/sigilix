@@ -45,6 +45,11 @@ export interface AstCache {
 
 type CacheEntry = { source: string; ext: SourceExt; result: ParseResult }
 
+// Sigilix (PR #392): one shared encoder — `new TextEncoder()` per call is pure
+// churn. TextEncoder is stateless, so a module-level instance is safe to reuse
+// across reviews/isolates.
+const encoder = new TextEncoder()
+
 export function createAstCache(): AstCache {
   const cache = new Map<string, CacheEntry>()
   return {
@@ -62,13 +67,22 @@ export function createAstCache(): AstCache {
         }
         return hit.result
       }
-      // Byte length (not UTF-16 code-unit length): matches the runner's guard so
-      // non-ASCII sources can't sneak past the ceiling.
-      const bytes = new TextEncoder().encode(source).length
-      const result: ParseResult =
-        bytes > LARGE_FILE_BYTES
-          ? { ok: false, reason: `${LARGE_FILE_SKIP_PREFIX}${bytes}` }
-          : parseSource(source, ext)
+      // Size guard against the BYTE length (not UTF-16 code-unit length), so a
+      // non-ASCII source can't sneak past the ceiling. Sigilix (PR #392): UTF-8
+      // is at most 3 bytes per UTF-16 code unit, so if `length * 3 <= ceiling`
+      // the file CANNOT exceed it — parse directly and skip the full-string
+      // `encode()` allocation (the common small-file case). Only encode in the
+      // slow branch, where we genuinely need the exact byte count.
+      let result: ParseResult
+      if (source.length * 3 <= LARGE_FILE_BYTES) {
+        result = parseSource(source, ext)
+      } else {
+        const bytes = encoder.encode(source).length
+        result =
+          bytes > LARGE_FILE_BYTES
+            ? { ok: false, reason: `${LARGE_FILE_SKIP_PREFIX}${bytes}` }
+            : parseSource(source, ext)
+      }
       cache.set(path, { source, ext, result })
       return result
     },

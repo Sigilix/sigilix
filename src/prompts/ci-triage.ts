@@ -27,26 +27,30 @@ The repo's language, framework, and tooling are not declared up front — infer 
 
 ## What to output
 
-Produce a single markdown comment in **exactly this shape** (no preamble, no postscript, no greeting):
+Return **only** one JSON object matching this shape. No preamble, no postscript, no markdown fence:
 
+\`\`\`json
+{
+  "rootCause": "<one sentence — be specific>",
+  "suggestedFix": "<1-3 concrete fix steps; include path/to/file.ext:LINE when known>",
+  "affectedFiles": ["path/to/file.ext"],
+  "failureExcerpt": "<3-8 most diagnostic lines from the log, verbatim>",
+  "patches": [
+    {
+      "path": "path/to/file.ext",
+      "line": 42,
+      "replacement": "<literal replacement text for that line or contiguous block>"
+    }
+  ],
+  "confidence": "high"
+}
 \`\`\`
-🔴 **Root cause:** <one sentence — be specific>
 
-📍 **Likely fix:**
-- <bulleted list of concrete changes; include \`path/to/file.ext:LINE\` when known>
-- <next change>
-
-📋 **Failure excerpt:**
-\\\`\\\`\\\`
-<3–8 most diagnostic lines from the log, verbatim>
-\\\`\\\`\\\`
-
-🤔 **Confidence:** <high | medium | low>
-\`\`\`
+The runner renders the user-facing markdown comment from this object. Keep \`patches\` empty or omit it unless the fix is a concrete, mechanical code replacement.
 
 ## Rules
 
-- **Only post if confidence is \`high\` or \`medium\`.** If you genuinely can't tell from the log + diff what broke, set confidence to \`low\` and explain _what additional info would resolve it_ in one sentence in place of the "Likely fix" bullets. The runner refuses to post low-confidence diagnoses.
+- **Only post if confidence is \`high\` or \`medium\`.** If you genuinely can't tell from the log + diff what broke, set \`confidence\` to \`low\` and put _what additional info would resolve it_ in \`suggestedFix\`. The runner refuses to post low-confidence diagnoses.
 - **Quote the actual error.** "Type error" is bad. "TS2339: Property 'foo' does not exist on type 'Bar'" is good. The failure excerpt block should let a developer skim and instantly know what tripped.
 - **Be specific in fixes.** "Update the test" is useless. "Update \`tests/foo.test.ts:42\` to expect \`{ regions, metadata }\` (the new return shape from commit \`abc123\` in this PR)" is useful.
 - **Use the diff to identify intent.** If the diff shows a function signature changed and the log shows callers failing, the fix is to update the callers.
@@ -55,6 +59,7 @@ Produce a single markdown comment in **exactly this shape** (no preamble, no pos
 - **One comment per failure.** Don't list every possible cause — pick the most likely root cause.
 - **No filler.** No "I notice that..." preambles. No "hope this helps" sign-offs. The output goes straight to a developer who is mid-task.
 - **Don't assume a stack.** If you don't know whether the project uses Vitest vs Jest, npm vs pnpm, ESLint flat config vs legacy, etc., don't make a recommendation that depends on the answer. Diagnose what the log shows and stop there.
+- **Patch discipline.** Only emit \`patches\` for mechanical one-file edits where \`path\`, \`line\`, and \`replacement\` are clear from the diff + file context. Do not invent patches for semantic fixes, multi-file refactors, or fixes that need validation outside the provided context.
 
 ## Confidence calibration
 

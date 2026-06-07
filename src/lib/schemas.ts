@@ -275,6 +275,47 @@ export const PR_IMPROVE_SCHEMA = {
 } as const
 
 /**
+ * CI-triage verdict. Mirrors CiTriageDiagnosis in src/lib/triage-ci.ts.
+ *
+ * `patches` is intentionally optional: SIG-332 only makes patch data
+ * available to the handler; SIG-333 validates anchors and decides how to post
+ * applyable suggestions. The sticky comment renderer ignores patches for now.
+ */
+export const CI_TRIAGE_SCHEMA = {
+  type: "object",
+  properties: {
+    rootCause: { type: "string", minLength: 1 },
+    suggestedFix: { type: "string" },
+    affectedFiles: {
+      type: "array",
+      maxItems: 10,
+      items: { type: "string", minLength: 1 },
+    },
+    failureExcerpt: { type: "string", minLength: 1 },
+    // TODO(SIG-333): Validate patch anchors against the PR diff before
+    // rendering these as applyable suggestion blocks.
+    patches: {
+      type: "array",
+      maxItems: 5,
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string", minLength: 1, maxLength: 512 },
+          line: { type: "integer", minimum: 1 },
+          replacement: { type: "string", minLength: 1, maxLength: 5000 },
+        },
+        required: ["path", "line", "replacement"],
+      },
+    },
+    confidence: {
+      type: "string",
+      enum: ["high", "medium", "low"],
+    },
+  },
+  required: ["rootCause", "affectedFiles", "failureExcerpt", "confidence"],
+} as const
+
+/**
  * Issue-triage verdict (Linear issue post + field updates).
  * Mirrors Verdict in src/lib/triage.ts.
  */

@@ -19,7 +19,8 @@
 // NOT post inline comments — that's Task 9's `postAstInlineFindings`
 // gated by `astRules.autoInline`.
 
-import { parseSource, type SourceExt } from "./parser"
+import { parseSource, LARGE_FILE_BYTES, type SourceExt } from "./parser"
+import type { AstCache } from "./parse-cache"
 import { walkAst, type AstNode } from "./walker"
 import {
   buildChangedLines,
@@ -123,7 +124,6 @@ const FLOAT_CENTS_PSEUDO_RULE: AstRule = {
   visit: () => null,
 }
 
-const LARGE_FILE_BYTES = 500_000
 const EVIDENCE_MAX_CHARS = 200
 
 const SUPPORTED_EXT_RE = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/
@@ -143,6 +143,10 @@ export interface RunAstRulesArgs {
   config: ResolvedAstRulesConfig
   /** Telemetry context. */
   ctx: { owner: string; repo: string; prNumber: number }
+  /** SIG-336: optional per-review parse-once cache. When provided, files are
+   *  parsed through it so other review-path consumers reuse the same AST (and
+   *  vice versa). Absent → parse directly (existing behavior / standalone tests). */
+  astCache?: AstCache
 }
 
 export interface RunnerTelemetry {
@@ -192,7 +196,7 @@ function normalizeHits(hit: AstRuleHit | AstRuleHit[] | null): AstRuleHit[] {
 }
 
 export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesResult> {
-  const { diff, filesByPath, reviewable, config, ctx } = args
+  const { diff, filesByPath, reviewable, config, ctx, astCache } = args
   const t0 = Date.now()
 
   if (!config.enabled) {
@@ -257,7 +261,10 @@ export async function runAstRules(args: RunAstRulesArgs): Promise<RunAstRulesRes
       continue
     }
 
-    const parsed = parseSource(source, ext)
+    // SIG-336: the >500KB pre-skip above already `continue`d, so this only runs
+    // for parseable-size files. Route through the shared cache when present so
+    // other consumers reuse this AST (and vice versa); else parse directly.
+    const parsed = astCache ? astCache.get(path, source, ext) : parseSource(source, ext)
     if (!parsed.ok) {
       filesParseFailed++
       emitTelemetry("ast-rules-parse-failed", {

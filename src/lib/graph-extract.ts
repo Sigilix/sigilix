@@ -17,6 +17,7 @@
 // This is O(2n) on AST nodes but both passes are cheap and O(n) memory.
 
 import { parseSource, type SourceExt } from "./ast-rules/parser"
+import type { AstCache } from "./ast-rules/parse-cache"
 import { walkAst, type AstNode } from "./ast-rules/walker"
 // SIG-146: shared contract moved to graph-extract-types.ts so language
 // extractor modules can depend on it without a cycle. Re-exported here so
@@ -60,13 +61,13 @@ function sourceExt(path: string): SourceExt | null {
  * `FileGraph`. Unknown extensions → empty (no-op). Adding a language is a new
  * module + one branch here. All extractors are best-effort and never throw.
  */
-export function extractFileGraph(path: string, content: string): FileGraph {
+export function extractFileGraph(path: string, content: string, astCache?: AstCache): FileGraph {
   const dot = path.lastIndexOf(".")
   const ext = dot < 0 ? "" : path.slice(dot).toLowerCase()
   if (ext === ".py") return extractPythonFileGraph(path, content)
   // JS/TS (acorn) owns the rest of the source extensions; it returns empty
   // for anything outside KNOWN_EXTS, preserving the prior no-op behavior.
-  return extractJsTsFileGraph(path, content)
+  return extractJsTsFileGraph(path, content, astCache)
 }
 
 /**
@@ -74,13 +75,14 @@ export function extractFileGraph(path: string, content: string): FileGraph {
  * Returns an empty FileGraph on unsupported extensions or parse failure —
  * never throws. Prefers missing symbols over false ones.
  */
-function extractJsTsFileGraph(path: string, content: string): FileGraph {
+function extractJsTsFileGraph(path: string, content: string, astCache?: AstCache): FileGraph {
   const empty: FileGraph = { symbols: [], fileEdgesRaw: [], callEdges: [] }
 
   const ext = sourceExt(path)
   if (!ext) return empty
 
-  const parsed = parseSource(content, ext)
+  // SIG-336: parse-once via the shared cache when provided (else direct).
+  const parsed = astCache ? astCache.get(path, content, ext) : parseSource(content, ext)
   if (!parsed.ok) return empty
 
   const ast = parsed.ast as AstNode

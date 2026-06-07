@@ -38,6 +38,7 @@
 
 import type { PrReviewFinding } from "./triage-pr-review"
 import { parseSource, type SourceExt } from "./ast-rules/parser"
+import type { AstCache } from "./ast-rules/parse-cache"
 import { extractCitedIdentifiers } from "./validate-window-blindness"
 
 export type LogicClaimRefutationMode = "off" | "shadow" | "enforce"
@@ -68,6 +69,14 @@ export type LogicClaimRefutationDecision =
 export interface LogicClaimRefutationContext {
   /** Full source of changed files (same map the AST floors use). */
   fullFileByPath: ReadonlyMap<string, string>
+  /**
+   * SIG-336: optional per-review parse-once cache. When provided, the cited file
+   * is acorn-parsed at most ONCE per review across all findings (and the shared
+   * 500KB large-file guard applies) instead of re-parsing per finding. Absent
+   * (e.g. standalone unit tests) → parse directly. Either way the gate fails open
+   * on a parse failure or large-file skip, so behavior is unchanged.
+   */
+  astCache?: AstCache
 }
 
 // --- claim-shape detection -------------------------------------------------
@@ -788,7 +797,11 @@ export function evaluateLogicClaimRefutation(
   if (typeof source !== "string" || source.length === 0) return { keep: true }
   const ext = extOf(finding.path)
   if (!ext) return { keep: true }
-  const parsed = parseSource(source, ext)
+  // SIG-336: parse via the per-review cache when present (parse-once + size
+  // guard); fall back to a direct parse when called without a cache.
+  const parsed = context.astCache
+    ? context.astCache.get(finding.path, source, ext)
+    : parseSource(source, ext)
   if (!parsed.ok) return { keep: true }
 
   const line = finding.line

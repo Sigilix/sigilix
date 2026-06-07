@@ -25,6 +25,13 @@ export type ParseOk = { ok: true; ast: unknown }
 export type ParseErr = { ok: false; reason: string }
 export type ParseResult = ParseOk | ParseErr
 
+// SIG-336: shared large-file ceiling for AST parsing. Source > this many BYTES
+// is skipped rather than parsed — acorn parse cost grows with file size and a
+// single huge (often generated) file can dominate the worker's 300s CPU budget.
+// Single source of truth so every parser path (the security runner AND the
+// parse-once cache) applies the SAME skip — previously only `runner.ts` guarded.
+export const LARGE_FILE_BYTES = 500_000
+
 // acorn-typescript exports a function that returns a Parser subclass;
 // we instantiate two parsers — JS-only and TS-extended — once at module
 // load. acorn parsers are stateless w.r.t. the configuration so this

@@ -8,6 +8,7 @@
 // access-control bug there is still surfaced.
 
 import { parseSource, type SourceExt } from "./ast-rules/parser"
+import type { AstCache } from "./ast-rules/parse-cache"
 import { walkAst, type AstNode } from "./ast-rules/walker"
 
 const KNOWN_EXTS: ReadonlySet<string> = new Set([
@@ -45,12 +46,14 @@ function extendsDurableObject(node: AstNode): boolean {
  */
 export function durableObjectClassSpans(
   filesByPath: ReadonlyMap<string, string>,
+  astCache?: AstCache,
 ): Map<string, LineSpan[]> {
   const out = new Map<string, LineSpan[]>()
   for (const [path, src] of filesByPath) {
     const ext = extOf(path)
     if (ext === null) continue
-    const parsed = parseSource(src, ext)
+    // SIG-336: parse-once via the shared cache when provided (else direct).
+    const parsed = astCache ? astCache.get(path, src, ext) : parseSource(src, ext)
     if (!parsed.ok) continue
     const spans: LineSpan[] = []
     const collect = (n: AstNode): void => {

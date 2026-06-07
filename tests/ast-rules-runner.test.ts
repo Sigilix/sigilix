@@ -2,6 +2,7 @@
 //
 // Covers all skip-paths + finding emission + multi-file resilience.
 
+import { readFileSync } from "node:fs"
 import { describe, it, expect } from "vitest"
 import { runAstRules } from "../src/lib/ast-rules/runner"
 import type { ReviewableMap } from "../src/lib/diff-positions"
@@ -69,6 +70,28 @@ describe("runAstRules — skip paths", () => {
     })
     expect(r.findings).toEqual([])
     expect(r.telemetry.filesSkippedLarge).toBe(1)
+  })
+
+  it("keeps enum-drift scanning bounded when another file seeds a union map", async () => {
+    const sourcePath = "src/lib/validate-logic-claim-refutation.ts"
+    const unionPath = "src/types.ts"
+    const source = readFileSync(new URL("../src/lib/validate-logic-claim-refutation.ts", import.meta.url), "utf8")
+    const unionSource = `export interface Charge { status: "pending" | "settled" | "failed" }\n`
+    const r = await runAstRules({
+      diff: diffAddingLineAt(1, sourcePath, "// touched")
+        + diffAddingLineAt(1, unionPath, unionSource.trim()),
+      filesByPath: new Map([
+        [sourcePath, source],
+        [unionPath, unionSource],
+      ]),
+      reviewable: new Map([
+        [sourcePath, [{ line: 1, side: "RIGHT" }]],
+        [unionPath, [{ line: 1, side: "RIGHT" }]],
+      ]),
+      config: DEFAULT_CONFIG,
+      ctx: CTX,
+    })
+    expect(r.findings.filter((f) => f.ruleId === "no-enum-literal-drift")).toEqual([])
   })
 })
 

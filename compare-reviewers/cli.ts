@@ -17,9 +17,10 @@ import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
+import { greptileLoginsFromEnv } from "./env"
 import { fetchPrUrl, fetchReviewComments } from "./github"
 import { comparisonBasename, mergeComparison, parseTarget } from "./io"
-import { DEFAULT_GREPTILE_BOTS, normalizeFindings } from "./normalize"
+import { normalizeFindings } from "./normalize"
 import { formatSummaryMarkdown, summarize } from "./summary"
 import { buildWorksheet, parseWorksheet } from "./worksheet"
 import type { ComparisonFile } from "./types"
@@ -57,13 +58,6 @@ async function readComparison(path: string): Promise<ComparisonFile | null> {
   return parsed
 }
 
-function greptileLoginsFromEnv(): readonly string[] {
-  const raw = process.env.COMPARE_REVIEWERS_GREPTILE_LOGINS
-  if (!raw) return DEFAULT_GREPTILE_BOTS
-  const values = raw.split(",").map((s) => s.trim()).filter(Boolean)
-  return values.length > 0 ? values : DEFAULT_GREPTILE_BOTS
-}
-
 async function writeJson(path: string, file: ComparisonFile): Promise<void> {
   await writeFile(path, JSON.stringify(file, null, 2) + "\n", "utf8")
 }
@@ -82,7 +76,7 @@ async function cmdCollect(opts: { repo?: string; pr?: string; dataDir: string })
     fetchPrUrl(owner, repo, pr),
     fetchReviewComments(owner, repo, pr),
   ])
-  const findings = normalizeFindings(comments, { greptileLogins: greptileLoginsFromEnv() })
+  const findings = normalizeFindings(comments, { greptileLogins: greptileLoginsFromEnv(process.env, console.warn) })
 
   const prev = await readComparison(jsonPath)
   const file = mergeComparison(prev, {

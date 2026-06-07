@@ -1,14 +1,15 @@
 // SIG-70/SIG-326 — compare-reviewers tool tests.
 //
-// The CLI shell (`cli.ts`) and the `gh` fetch (`github.ts`) need the
-// network/filesystem and aren't unit-tested; everything load-bearing is pure
-// and covered here: normalization, worksheet build + parse/validate, the
+// The `gh` fetch (`github.ts`) needs the network and isn't unit-tested; the
+// load-bearing logic is pure and covered here: CLI env parsing, normalization,
+// worksheet build + parse/validate, the
 // summary tally + markdown, and the path/merge/arg helpers. The final block
 // is an end-to-end pass through the real chain (raw comments → worksheet →
 // labels → report) that fails if any stage regresses.
 
 import { describe, expect, it } from "vitest"
-import { normalizeFindings, summarizeBody, type RawComment } from "../compare-reviewers/normalize"
+import { greptileLoginsFromEnv } from "../compare-reviewers/env"
+import { DEFAULT_GREPTILE_BOTS, normalizeFindings, summarizeBody, type RawComment } from "../compare-reviewers/normalize"
 import { buildWorksheet, parseWorksheet } from "../compare-reviewers/worksheet"
 import { formatSummaryMarkdown, summarize } from "../compare-reviewers/summary"
 import { comparisonBasename, mergeComparison, parseTarget } from "../compare-reviewers/io"
@@ -145,6 +146,32 @@ describe("summarizeBody", () => {
     // emit a lone surrogate. Code-point slicing keeps every char whole.
     const out = summarizeBody("🟠".repeat(300))
     expect([...out].every((c) => c === "🟠" || c === "…")).toBe(true)
+  })
+})
+
+describe("greptileLoginsFromEnv", () => {
+  it("falls back to default Greptile logins when the env var is unset", () => {
+    expect(greptileLoginsFromEnv({})).toEqual(DEFAULT_GREPTILE_BOTS)
+  })
+
+  it("parses comma-separated Greptile login overrides", () => {
+    expect(greptileLoginsFromEnv({ COMPARE_REVIEWERS_GREPTILE_LOGINS: "greptile-a, greptile-b" })).toEqual([
+      "greptile-a",
+      "greptile-b",
+    ])
+  })
+
+  it("warns before falling back when the env var contains only whitespace", () => {
+    const warnings: string[] = []
+    const out = greptileLoginsFromEnv(
+      { COMPARE_REVIEWERS_GREPTILE_LOGINS: "   " },
+      (message) => warnings.push(message),
+    )
+
+    expect(out).toEqual(DEFAULT_GREPTILE_BOTS)
+    expect(warnings).toEqual([
+      "COMPARE_REVIEWERS_GREPTILE_LOGINS is set but contains no valid logins; using default Greptile bot logins",
+    ])
   })
 })
 

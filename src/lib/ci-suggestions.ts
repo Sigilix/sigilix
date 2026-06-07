@@ -12,7 +12,7 @@
 // performs the GitHub calls and the mode/sensitive gating.
 
 import { deriveSide, type ReviewableMap } from "./diff-positions"
-import type { SubmitReviewBody, SubmitReviewComment } from "./github"
+import { GitHubHttpError, type SubmitReviewBody, type SubmitReviewComment } from "./github"
 import type { CiTriagePatch } from "./triage-ci"
 
 export type CiSuggestionsMode = "shadow" | "enforce"
@@ -82,12 +82,18 @@ export function partitionCiPatches(
   const seen = new Set<string>()
   for (const patch of patches) {
     const key = `${patch.path}:${patch.line}`
+    // First-wins: the first patch for a path:line claims it; every later
+    // patch on that line falls back, so a line never gets two (possibly
+    // conflicting) suggestions — even if the first one was un-anchorable.
+    if (seen.has(key)) {
+      unanchorable.push(patch)
+      continue
+    }
+    seen.add(key)
     if (
-      !seen.has(key) &&
       isSuggestionSafe(patch.replacement) &&
       deriveSide(reviewable, patch.path, patch.line) === "RIGHT"
     ) {
-      seen.add(key)
       anchorable.push(patch)
     } else {
       unanchorable.push(patch)
@@ -283,30 +289,47 @@ export async function submitCiSuggestionReview(
   try {
     await client.submitReview(owner, repo, prNumber, review)
     return { posted: comments.length, skip: null }
-  } catch {
-    // Split-on-422: re-submit each comment on its own so a single bad
-    // anchor only drops itself. Bare body — the per-anchor reviews don't
-    // repeat the bulk header.
-    let posted = 0
-    for (const comment of comments) {
-      try {
-        await client.submitReview(owner, repo, prNumber, {
+  } catch (err) {
+    // Split retry ONLY on a 422 (bad anchor) — that's the failure a
+    // per-comment resubmission can route around. Any other error (network,
+    // 5xx, auth, rate-limit) is not anchor-specific; retrying each comment
+    // would just amplify it, so fail fast and let the sticky carry the
+    // diagnosis.
+    if (!(err instanceof GitHubHttpError) || err.status !== 422) {
+      console.warn(JSON.stringify({
+        event: "ci-suggestions-submit-failed",
+        owner, repo, prNumber,
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      return { posted: 0, skip: "submit-failed" }
+    }
+
+    // Re-submit each comment on its own so a single bad anchor only drops
+    // itself. Concurrent — bounded to ≤5 by the schema, on a cold path —
+    // with a bare body so the per-anchor reviews don't repeat the header.
+    const results = await Promise.allSettled(
+      comments.map((comment) =>
+        client.submitReview(owner, repo, prNumber, {
           event: "COMMENT",
           ...(review.commit_id !== undefined ? { commit_id: review.commit_id } : {}),
           comments: [comment],
-        })
+        }),
+      ),
+    )
+    let posted = 0
+    results.forEach((res, i) => {
+      if (res.status === "fulfilled") {
         posted += 1
-      } catch (err) {
-        // This anchor is unpostable; skip it and keep going. Log which one
-        // so an operator can see WHY a specific suggestion didn't post.
-        console.warn(JSON.stringify({
-          event: "ci-suggestion-anchor-unpostable",
-          owner, repo, prNumber,
-          path: comment.path, line: comment.line,
-          err: err instanceof Error ? err.message : String(err),
-        }))
+        return
       }
-    }
+      const comment = comments[i]
+      console.warn(JSON.stringify({
+        event: "ci-suggestion-anchor-unpostable",
+        owner, repo, prNumber,
+        path: comment?.path, line: comment?.line,
+        err: res.reason instanceof Error ? res.reason.message : String(res.reason),
+      }))
+    })
     const skip =
       posted === 0 ? "submit-failed" : posted === comments.length ? "split-recovered" : "partial"
     return { posted, skip }

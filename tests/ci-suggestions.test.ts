@@ -15,7 +15,7 @@ import {
   CI_SUGGESTION_MARKER,
   type CiSuggestionClient,
 } from "../src/lib/ci-suggestions"
-import type { SubmitReviewBody } from "../src/lib/github"
+import { GitHubHttpError, type SubmitReviewBody } from "../src/lib/github"
 
 // A small unified diff: line 2 is added; lines 1 and 3 are context. All
 // three are RIGHT-reviewable in the new file.
@@ -85,6 +85,15 @@ describe("partitionCiPatches", () => {
     )
     expect(anchorable.map((p) => p.line)).toEqual([1, 3])
     expect(unanchorable.map((p) => p.line)).toEqual([99])
+  })
+
+  it("first-wins is strict: an un-anchorable first patch claims the line, a later anchorable duplicate falls back", () => {
+    const { anchorable, unanchorable } = partitionCiPatches(
+      [patch("src/a.ts", 2, "x ``` y"), patch("src/a.ts", 2, "clean")],
+      reviewable,
+    )
+    expect(anchorable).toHaveLength(0)
+    expect(unanchorable).toHaveLength(2)
   })
 })
 
@@ -232,7 +241,7 @@ describe("fence safety", () => {
 function fakeClient(opts: {
   prior?: Array<{ body: string }>
   listThrows?: boolean
-  bulkThrows?: boolean
+  bulkError?: unknown
   perCommentThrows?: (i: number) => boolean
 }): { client: CiSuggestionClient; calls: SubmitReviewBody[] } {
   const calls: SubmitReviewBody[] = []
@@ -244,13 +253,15 @@ function fakeClient(opts: {
     async submitReview(_owner, _repo, _pr, review) {
       const index = calls.length // 0 = bulk, 1.. = per-comment retries
       calls.push(review)
-      if (index === 0 && opts.bulkThrows) throw new Error("bulk 422")
-      if (index > 0 && opts.perCommentThrows?.(index - 1)) throw new Error("per-comment 422")
+      if (index === 0 && opts.bulkError !== undefined) throw opts.bulkError
+      if (index > 0 && opts.perCommentThrows?.(index - 1)) throw new GitHubHttpError(422, "anchor")
       return { id: index + 1, state: "COMMENTED" }
     },
   }
   return { client, calls }
 }
+
+const http422 = (): GitHubHttpError => new GitHubHttpError(422, "Unprocessable Entity")
 
 describe("submitCiSuggestionReview", () => {
   const review = buildCiSuggestionReview(
@@ -281,7 +292,7 @@ describe("submitCiSuggestionReview", () => {
   })
 
   it("split-on-422: bulk rejected, every comment recovered individually", async () => {
-    const { client, calls } = fakeClient({ bulkThrows: true })
+    const { client, calls } = fakeClient({ bulkError: http422() })
     const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
     expect(r).toEqual({ posted: 3, skip: "split-recovered" })
     expect(calls).toHaveLength(4) // 1 failed bulk + 3 per-comment
@@ -289,15 +300,29 @@ describe("submitCiSuggestionReview", () => {
   })
 
   it("split-on-422: one bad anchor only drops itself (partial)", async () => {
-    const { client } = fakeClient({ bulkThrows: true, perCommentThrows: (i) => i === 1 })
+    const { client } = fakeClient({ bulkError: http422(), perCommentThrows: (i) => i === 1 })
     const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
     expect(r.posted).toBe(2)
     expect(r.skip).toBe("partial")
   })
 
   it("reports submit-failed when nothing posts", async () => {
-    const { client } = fakeClient({ bulkThrows: true, perCommentThrows: () => true })
+    const { client } = fakeClient({ bulkError: http422(), perCommentThrows: () => true })
     const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
     expect(r).toEqual({ posted: 0, skip: "submit-failed" })
+  })
+
+  it("does NOT split-retry on a non-422 HTTP failure — fails fast without amplifying", async () => {
+    const { client, calls } = fakeClient({ bulkError: new GitHubHttpError(500, "server error") })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 0, skip: "submit-failed" })
+    expect(calls).toHaveLength(1) // only the bulk attempt; no per-comment retries
+  })
+
+  it("does NOT split-retry on a non-HTTP error (network/unknown)", async () => {
+    const { client, calls } = fakeClient({ bulkError: new Error("socket hang up") })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 0, skip: "submit-failed" })
+    expect(calls).toHaveLength(1)
   })
 })

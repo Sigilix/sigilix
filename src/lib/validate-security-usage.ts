@@ -15,7 +15,8 @@
 // injection/xss finding ONLY when ALL THREE hold:
 //   (A) PATH-CONTEXT: the cited path is a mention surface — an ast-rules/
 //       detector, a validate-*.ts gate, a *.test.ts / *.spec.ts, a tests/ or
-//       __tests__/ file, or a *.md / *.mdx doc.
+//       __tests__/ file, or a *.md doc. MDX can contain executable JSX and is
+//       intentionally not treated as prose-only.
 //   (B) NON-EXECUTABLE POSITION: the bucket's dangerous token on the cited code
 //       is provably not a live call — present only inside a blanked string /
 //       comment, OR a `.exec(` on a RegExp-conventional receiver (RegExp.exec,
@@ -67,12 +68,21 @@ const GATED_BUCKETS: ReadonlySet<SecurityBucket> = new Set<SecurityBucket>(["inj
 /** (A) Mention-surface paths: detector / validator / test / doc. */
 const MENTION_PATH_RE =
   /(?:\/ast-rules\/)|(?:(?:^|\/)validate-[^/]*\.ts$)|(?:\.(?:test|spec)\.[cm]?[jt]sx?$)|(?:(?:^|\/)(?:tests|__tests__)\/)|(?:\.md$)/i
+// MDX intentionally NOT included — it can execute JSX; see the header comment.
 const DOC_PATH_RE = /\.md$/i
 
 /** Bucket-specific dangerous token in an EXECUTABLE shape. */
-const INJECTION_CALL_RE = /\b(?:exec|execSync|execFileSync|eval|spawnSync|system)\s*\(/
+const INJECTION_CALL_RE =
+  /\b(?:exec|execSync|execFile|execFileSync|eval|spawn|spawnSync|system|popen|shell_exec|execa)\s*\(|\bRuntime\s*\.\s*exec\s*\(|\bshell\s*\.\s*exec\s*\(/
 const XSS_TOKEN_RE =
   /\b(?:dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|srcdoc|setHTMLUnsafe)\b|\bdocument\s*\.\s*(?:write|writeln)\s*\(/
+const SHELL_MODULE_RE = /["'](?:node:)?child_process["']|["'](?:execa|shelljs|cross-spawn|@actions\/exec)["']/
+const TRIVIAL_ASSESSMENT_RE = /^(?:none|n\/a|not applicable|unknown)$/i
+const ASSESSMENT_SINK_RE =
+  /\b(?:child_process(?:\s*\.\s*)?|exec(?:Sync|File|FileSync)?|spawn(?:Sync)?|eval|system|popen|shell_exec|Runtime\s*\.\s*exec|shell\s*\.\s*exec|execa|shelljs|cross-spawn|@actions\/exec|shell(?:\s+(?:sink|command|executor|execution))?)\b/i
+const ASSESSMENT_FLOW_RE =
+  /\b(?:req|request)\s*\.\s*(?:query|body|params|headers)\b|\b(?:user[ -]?(?:input|supplied|controlled|provided)|attacker(?:[ -]?controlled)?|tainted?|untrusted|interpolat(?:ed|ion)|source|sink|flow(?:s|ed)?|fed by|reaches|passes to|supplied to)\b|\$\{[^}]+\}/i
+const ASSESSMENT_CODE_REF_RE = /\b[\w./-]+\.[cm]?[jt]sx?:\d+\b|\bline\s+\d+\b/i
 /** `.exec(` on a RegExp-conventional receiver — `RegExp.prototype.exec`, never a
  *  shell (the PR #296 model-FP shape). */
 const REGEX_EXEC_RE =
@@ -116,7 +126,7 @@ function collectCitedCode(
 function collectNearbyAddedCode(
   finding: PrReviewFinding,
   addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>>,
-  radius = 2,
+  radius = 5,
 ): string | null {
   const lineMap = addedLineTextByLine.get(finding.path)
   if (!lineMap || lineMap.size === 0) return null
@@ -151,12 +161,12 @@ function isMentionNotUsage(cited: string, bucket: SecurityBucket, path: string):
 function fileAddsRealSink(addedFileText: string, bucket: SecurityBucket, path: string): boolean {
   if (DOC_PATH_RE.test(path)) return false // markdown examples are not runtime sinks.
   if (bucket === "injection") {
-    // A real child_process import gives the file shell capability — keep. The
+    // A real shell-runner import gives the file shell capability — keep. The
     // module specifier is a string literal, so check the UN-blanked text. Also
     // keep if the added code itself contains any executable shell-shaped call
     // after strings/comments and benign RegExp `.exec(` uses are removed; this
     // protects files whose import/binding lives outside the diff.
-    if (/["'](?:node:)?child_process["']/.test(addedFileText)) return true
+    if (SHELL_MODULE_RE.test(addedFileText)) return true
     const executableAddedCode = blank(addedFileText, true).replace(new RegExp(REGEX_EXEC_RE.source, "gi"), " ")
     return INJECTION_CALL_RE.test(executableAddedCode)
   }
@@ -175,7 +185,11 @@ function hasPositiveSinkAssessment(finding: PrReviewFinding, bucket: SecurityBuc
   if (bucket !== "injection") return false
   const text = finding.independentAssessment?.trim()
   if (!text) return false
-  return !/^(?:none|n\/a|not applicable|unknown)$/i.test(text)
+  if (TRIVIAL_ASSESSMENT_RE.test(text)) return false
+  // The escape hatch is recall-only: accept it only when the model cites a
+  // concrete shell sink plus either data-flow evidence or a code location. Vague
+  // risk language must not bypass the deterministic mention proof.
+  return ASSESSMENT_SINK_RE.test(text) && (ASSESSMENT_FLOW_RE.test(text) || ASSESSMENT_CODE_REF_RE.test(text))
 }
 
 /**

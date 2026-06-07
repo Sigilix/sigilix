@@ -55,8 +55,13 @@ function samePath(found: string, expected: string): boolean {
   const f = norm(found)
   const e = norm(expected)
   if (f === e || f.endsWith("/" + e) || e.endsWith("/" + f)) return true
-  const base = (p: string): string => p.slice(p.lastIndexOf("/") + 1)
-  return base(f) === base(e)
+  const fParts = f.split("/")
+  const eParts = e.split("/")
+  if (fParts.length < 2 || eParts.length < 2) return false
+  return (
+    fParts[fParts.length - 1] === eParts[eParts.length - 1] &&
+    fParts[fParts.length - 2] === eParts[eParts.length - 2]
+  )
 }
 
 function isSecurityBlocker(f: SecurityScoredFinding): boolean {

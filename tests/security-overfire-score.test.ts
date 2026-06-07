@@ -41,6 +41,17 @@ describe("security overfire scorer", () => {
     expect(scoreCase(realExec(), findings).caught).toBe(true)
   })
 
+  it("does not credit duplicate basenames from different parent directories", () => {
+    const findings: SecurityScoredFinding[] = [{
+      path: "tests/fixtures/convert.ts",
+      line: 5,
+      score: 4,
+      category: "security",
+      cweId: "CWE-78",
+    }]
+    expect(scoreCase(realExec(), findings).caught).toBe(false)
+  })
+
   it("applies the usage gate to remove RegExp.exec mention FPs from the inline metric", () => {
     const findings: SecurityScoredFinding[] = [{
       path: safeRegex().path,

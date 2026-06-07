@@ -8,6 +8,7 @@ import {
   LOGIC_RECALL_CASES,
   scoreCase,
   aggregate,
+  buildRightFileByPathFromDiff,
   type LogicRecallCase,
   type ScoredFinding,
 } from "./logic-recall-corpus"
@@ -68,5 +69,47 @@ describe("corpus shape", () => {
   it("case ids are unique", () => {
     const ids = LOGIC_RECALL_CASES.map((c) => c.id)
     expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe("right-side file reconstruction for post-filtered live evals", () => {
+  it("preserves new-side line numbers from corpus diffs", () => {
+    const c = LOGIC_RECALL_CASES.find((x) => x.id === "safe-literal-substring-filter")!
+    const source = buildRightFileByPathFromDiff(c.diff).get("src/search/filter.ts")
+    expect(source?.split("\n")[0]).toBe("export function filterRows(rows: Row[], req: Req): Row[] {")
+    expect(source?.split("\n")[1]).toBe("  const needle = String(req.query.q ?? \"\")")
+    expect(source?.split("\n")[2]).toBe("  return rows.filter((r) => r.name.includes(needle))")
+  })
+
+  it("omits removed lines while advancing context and added lines", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -2,3 +2,4 @@",
+      " keep",
+      "-old",
+      "+new",
+      " tail",
+    ].join("\n")
+    expect(buildRightFileByPathFromDiff(diff).get("src/a.ts")?.split("\n")).toEqual(["", "keep", "new", "tail"])
+  })
+
+  it("uses hunk header context only to fill missing wrapper lines", () => {
+    const diff = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -10,2 +10,2 @@ export function f() {",
+      " context",
+      "+added",
+      "@@ -10,2 +10,2 @@ wrong replacement {",
+      " context",
+      "+more",
+    ].join("\n")
+    const lines = buildRightFileByPathFromDiff(diff).get("src/a.ts")?.split("\n")
+    expect(lines?.[8]).toBe("export function f() {")
+    expect(lines?.[9]).toBe("context")
+    expect(lines?.[10]).toBe("more")
   })
 })

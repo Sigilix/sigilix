@@ -65,6 +65,40 @@ describe("control-flow refutation (REFUTE: the early-return guard makes the tail
     const f = finding({ line: 3, headline: "doWork() runs unconditionally", body: "doWork always executes." })
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(false)
   })
+
+  it("refutes when the finding is anchored one line after the refuted tail statement", () => {
+    const f = finding({
+      path: "src/middleware/auth.ts",
+      line: 7,
+      headline: "`next()` runs unconditionally after the 403 response",
+      body: "The next call is not inside an else branch.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", AUTH))).toEqual({
+      keep: false,
+      reason: "control-flow-claim-refuted-by-guard",
+    })
+  })
+
+  it("refutes the typed corpus auth shape when the live model anchors the closing brace", () => {
+    const SRC = `export function requireAdmin(svc: AuthService) {
+  return async (req: Req, res: Res, next: Next) => {
+    if (!(await svc.isAdmin(req.user))) {
+      return res.status(403).end()
+    }
+    next()
+  }
+}`
+    const f = finding({
+      path: "src/middleware/auth.ts",
+      line: 7,
+      headline: "`next()` runs after 403 response, causing a double-response error",
+      body: "When `svc.isAdmin(req.user)` returns `false`, the middleware sends `res.status(403).end()` and returns. However, the `next()` call is not inside an `else` block.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", SRC))).toEqual({
+      keep: false,
+      reason: "control-flow-claim-refuted-by-guard",
+    })
+  })
 })
 
 describe("control-flow recall-safety (KEEP: a real bug whose claim is true/unprovable)", () => {
@@ -91,6 +125,36 @@ describe("control-flow recall-safety (KEEP: a real bug whose claim is true/unpro
       line: 4,
       headline: "Double-response: res.json is called twice",
       body: "On the !x path the second res.json send throws ERR_HTTP_HEADERS_SENT.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a real response-before-tail bug even when a later guard terminates", () => {
+    const SRC = `export function h(res, x, next) {
+  res.status(403).end()
+  if (x) return
+  next()
+}`
+    const f = finding({
+      line: 4,
+      headline: "`next()` runs after `res.status(403).end()`, causing a double response",
+      body: "The response is sent before the guard, so the later `next()` still runs after it on the non-x path.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS when the terminating guard repeats the same cited tail action", () => {
+    const SRC = `export function h(res, x, a, b) {
+  if (x) {
+    res.json(a)
+    return
+  }
+  res.json(b)
+}`
+    const f = finding({
+      line: 6,
+      headline: "Double-response: res.json is called twice",
+      body: "The handler calls `res.json` in both the guard and the tail path.",
     })
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
   })
@@ -419,6 +483,242 @@ describe("idempotency retry refutation", () => {
       keep: false,
       reason: "idempotency-claim-refuted-by-visible-key",
     })
+  })
+})
+
+describe("string FP refutations", () => {
+  const FILTER = `export function filterRows(rows, req) {
+  const needle = String(req.query.q ?? "")
+  return rows.filter((r) => r.name.includes(needle))
+}`
+
+  it("KEEPS a regex/ReDoS claim even when the cited code uses a string-only substring API", () => {
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "User-controlled regex can cause ReDoS",
+      body: "`needle` is compiled into a regular expression, but the cited filter uses includes.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", FILTER)).keep).toBe(true)
+  })
+
+  it("KEEPS a regex/ReDoS claim when the function has a visible RegExp surface", () => {
+    const SRC = `export function filterRows(rows, req) {
+  const needle = String(req.query.q ?? "")
+  const re = new RegExp(needle)
+  return rows.filter((r) => re.test(r.name) || r.name.includes(needle))
+}`
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 4,
+      headline: "User-controlled regex can cause ReDoS",
+      body: "`needle` is compiled into a regular expression.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a regex/ReDoS claim when the same file has a regex surface outside the cited function", () => {
+    const SRC = `${FILTER}
+
+export function compileRows(rows, req) {
+  return new RegExp(String(req.query.q ?? ""))
+}`
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "User-controlled regex can cause ReDoS",
+      body: "`needle` is compiled into a regular expression elsewhere in this file.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a regex/ReDoS claim when an imported builder could hide the regex surface", () => {
+    const SRC = `import { compilePattern } from "regex-builder"
+
+export function filterRows(rows, req) {
+  const needle = String(req.query.q ?? "")
+  if ("test".includes(needle)) return []
+  return rows.filter((r) => compilePattern(needle, r.name))
+}`
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 5,
+      headline: "User-controlled regex surface leads to ReDoS",
+      body: "The input is passed to `compilePattern`, which constructs a regular expression.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS an ignored/undefined argument claim even when the cited string call directly passes the named argument", () => {
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "Filter ignores the extracted `needle` and uses a hardcoded empty string",
+      body: "The filter callback never uses `needle`.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", FILTER)).keep).toBe(true)
+  })
+
+  it("KEEPS an ignored argument claim when the finding is anchored on the adjacent closing brace", () => {
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 4,
+      headline: "Filter ignores the extracted `needle` and uses a hardcoded empty string",
+      body: "The filter callback never uses `needle`.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", FILTER)).keep).toBe(true)
+  })
+
+  it("KEEPS an ignored-argument claim naming multiple identifiers", () => {
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "Filter ignores `locale` while using `needle`",
+      body: "The callback passes `needle`, but never uses the requested `locale`.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", FILTER)).keep).toBe(true)
+  })
+
+  it("KEEPS a contrastive ignored-argument claim where the quoted identifier is the used value", () => {
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "Filter ignores the locale parameter but the cited `needle` is still passed to includes",
+      body: "The bug is the missing locale handling, not use of the search needle.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", FILTER)).keep).toBe(true)
+  })
+
+  it("KEEPS a case-insensitive contract claim that is not AST-refutable", () => {
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "Case-sensitive filter breaks existing case-insensitive contract",
+      body: "The product expects names to match regardless of case.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", FILTER)).keep).toBe(true)
+  })
+
+  it("KEEPS an ignores-case claim even when the named argument is used by includes", () => {
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "Case-insensitive search invariant broken: filter ignores case of `needle`",
+      body: "The filter uses includes, which is case-sensitive.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", FILTER)).keep).toBe(true)
+  })
+
+  it("KEEPS a lowercased-query claim when a lowercase operation is actually present", () => {
+    const SRC = `export function filterRows(rows, req) {
+  const needle = String(req.query.q ?? "").toLowerCase()
+  return rows.filter((r) => r.name.includes(needle))
+}`
+    const f = finding({
+      path: "src/search/filter.ts",
+      line: 3,
+      headline: "Case-insensitive search invariant broken: `needle` is lowercased but `r.name` is not",
+      body: "The query is lowercased before the includes call.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/search/filter.ts", SRC)).keep).toBe(true)
+  })
+})
+
+describe("removed unsound return-value FP refutation", () => {
+  const TRANSITION = `export function transition(order, to) {
+  if (to === "refunded") {
+    if (order.status !== "paid") throw new Error("only paid orders can be refunded")
+    order.status = "refunded"
+    order.refundedAt = Date.now()
+    return order
+  }
+  return order
+}`
+
+  it("KEEPS an undefined-return claim even when the cited branch returns an identifier", () => {
+    const f = finding({
+      path: "src/order/transition.ts",
+      line: 6,
+      headline: "`transition` returns `undefined` for the 'refunded' case",
+      body: "The return is inside the if block, so callers receive undefined.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/order/transition.ts", TRANSITION)).keep).toBe(true)
+  })
+
+  it("KEEPS an undefined-return claim when the line is broad and another branch can fall through", () => {
+    const SRC = `export function maybe(x) {
+  if (x) return 1
+}`
+    const f = finding({
+      path: "src/maybe.ts",
+      line: 1,
+      headline: "`maybe` returns undefined",
+      body: "The false branch falls through with no return value.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/maybe.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS an undefined-return claim anchored on an if statement with a valued return in only one branch", () => {
+    const SRC = `export function maybe(x) {
+  if (x) return 1
+}`
+    const f = finding({
+      path: "src/maybe.ts",
+      line: 2,
+      headline: "`maybe` returns undefined",
+      body: "The false branch falls through with no return value.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/maybe.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS an undefined-return claim when the cited return explicitly returns undefined", () => {
+    const SRC = `export function maybe() {
+  return undefined
+}`
+    const f = finding({
+      path: "src/maybe.ts",
+      line: 2,
+      headline: "`maybe` returns `undefined`",
+      body: "This return returns `undefined` explicitly.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/maybe.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS an undefined-return claim when the cited return uses void 0", () => {
+    const SRC = `export function maybe() {
+  return void 0
+}`
+    const f = finding({
+      path: "src/maybe.ts",
+      line: 2,
+      headline: "`maybe` returns `undefined`",
+      body: "The return statement returns void.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/maybe.ts", SRC)).keep).toBe(true)
+  })
+})
+
+describe("removed unsound state-transition FP refutation", () => {
+  it("KEEPS a double-refund claim even when a nearby guard appears to protect one assignment path", () => {
+    const SRC = `export function transition(order, to) {
+  if (to === "refunded") {
+    if (order.status !== "paid") throw new Error("only paid orders can be refunded")
+    order.status = "refunded"
+    return order
+  }
+  if (to === "force-refunded") {
+    order.status = "refunded"
+    return order
+  }
+  return order
+}`
+    const f = finding({
+      path: "src/order/transition.ts",
+      line: 4,
+      headline: "Refund transition allows double-refund, overwriting `refundedAt`",
+      body: "Another path can still set the order to refunded without the paid-only guard.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/order/transition.ts", SRC)).keep).toBe(true)
   })
 })
 

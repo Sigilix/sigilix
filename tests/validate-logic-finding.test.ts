@@ -622,4 +622,18 @@ describe("validateForSubmission — SIG-328 logic-claim refutation gate", () => 
       dropped: false,
     })
   })
+
+  it("defaults to OFF when logicClaimRefutationMode is omitted (gate does not run)", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [refutableFinding] },
+        provenance: logicProvenance(),
+      },
+      reviewable: makeReviewable(AUTH_PATH, 6),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      fullFileByPath: new Map([[AUTH_PATH, AUTH_SOURCE]]),
+    })
+    expect(result.droppedForFailedLogicClaimRefutation).toBe(0)
+    expect(result.verdict.findings).toHaveLength(1)
+  })
 })

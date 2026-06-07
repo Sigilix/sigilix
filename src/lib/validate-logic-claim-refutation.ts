@@ -504,8 +504,11 @@ function lineContainsAnyIdentifier(lines: readonly string[], line: number, ids: 
 }
 
 function candidateLinesWhenUnanchored(fn: Node, line: number, lines: readonly string[], finding: PrReviewFinding): number[] {
-  return statementsSpanningLine(fn, line).length > 0 ? [line] : candidateLines(line)
-    .filter((candidate) => candidate === line || lineContainsAnyIdentifier(lines, candidate, new Set(extractCitedIdentifiers(findingText(finding)))))
+  const ids = new Set(extractCitedIdentifiers(findingText(finding)))
+  const spanning = statementsSpanningLine(fn, line)
+  if (spanning.some((stmt) => lineContainsAnyIdentifier(lines, stmt.loc.end.line, ids))) return [line]
+  return candidateLines(line)
+    .filter((candidate) => candidate === line || lineContainsAnyIdentifier(lines, candidate, ids))
 }
 
 const BACKTICK_IDENT_RE = /[`'"]([A-Za-z_$][\w$]*)[`'"]/g

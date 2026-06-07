@@ -79,6 +79,19 @@ describe("control-flow refutation (REFUTE: the early-return guard makes the tail
     })
   })
 
+  it("refutes when the finding is anchored on the preceding guard's closing brace", () => {
+    const f = finding({
+      path: "src/middleware/auth.ts",
+      line: 5,
+      headline: "`next()` runs unconditionally after the 403 response",
+      body: "The next call is not inside an else branch.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", AUTH))).toEqual({
+      keep: false,
+      reason: "control-flow-claim-refuted-by-guard",
+    })
+  })
+
   it("refutes the typed corpus auth shape when the live model anchors the closing brace", () => {
     const SRC = `export function requireAdmin(svc: AuthService) {
   return async (req: Req, res: Res, next: Next) => {
@@ -155,6 +168,22 @@ describe("control-flow recall-safety (KEEP: a real bug whose claim is true/unpro
       line: 6,
       headline: "Double-response: res.json is called twice",
       body: "The handler calls `res.json` in both the guard and the tail path.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
+  })
+
+  it("KEEPS a nested callback bug even when an outer guard terminates before the callback statement", () => {
+    const SRC = `export function h(res, items, blocked) {
+  if (blocked) return
+  items.forEach((item) => {
+    if (item.bad) res.json({ bad: true })
+    res.json(item)
+  })
+}`
+    const f = finding({
+      line: 5,
+      headline: "Double response: `res.json` is called twice inside the callback",
+      body: "When `item.bad` is true, the callback sends one response and then sends another response.",
     })
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
   })

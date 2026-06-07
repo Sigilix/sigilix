@@ -137,13 +137,20 @@ beforeEach(() => {
 
 describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => {
   it("merges CODEOWNERS reviewers from the base branch into the SIG-99 reviewer slot", async () => {
+    mockGetPullRequest.mockResolvedValue({
+      head: { sha: args.headSha, ref: "feature" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      title: "Some PR",
+      body: "Body",
+      user: { login: "alice" },
+    })
     mockListIssueComments.mockResolvedValue([])
     mockListPullRequestFiles.mockResolvedValue([
       { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
     ])
     mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string, ref: string) => {
       if (path === ".github/CODEOWNERS" && ref === "b".repeat(40)) {
-        return "*.ts @fallback\n/src/** @alice @acme/platform\n"
+        return "*.ts @fallback\n/src/** @alice @bob @acme/platform\n"
       }
       return null
     })
@@ -153,14 +160,16 @@ describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => 
       confidenceReason: "Small surface, well-tested.",
       files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
       bullets: ["Verify the regex catches `..` segments"],
-      suggestedReviewers: ["model-owner"],
+      suggestedReviewers: ["alice", "charlie"],
     }))
     const { kv } = makeKvStub()
 
     await handlePrOverview({ ...args, env: makeEnv(kv) })
 
     const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
-    expect(body).toContain("**Suggested reviewers:** @alice, @model-owner")
+    expect(body).toContain("**Suggested reviewers:** @bob, @charlie")
+    expect(body).not.toContain("@alice")
+    expect(body).not.toContain("@acme/platform")
     expect(mockGetFileContent).toHaveBeenCalledWith("acme", "site", ".github/CODEOWNERS", "b".repeat(40))
   })
 

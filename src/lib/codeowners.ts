@@ -10,6 +10,9 @@ import type { Matcher } from "picomatch/posix"
 export const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"] as const
 const MAX_CODEOWNERS_MATCH_PATH_CHARS = 4096
 const MAX_CODEOWNERS_MATCH_PATH_SEGMENTS = 256
+const GH_NAME_PATTERN = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?"
+const USER_RE = new RegExp(`^${GH_NAME_PATTERN}$`, "u")
+const TEAM_RE = new RegExp(`^${GH_NAME_PATTERN}\\/${GH_NAME_PATTERN}$`, "u")
 
 export interface CodeownersRule {
   line: number
@@ -163,7 +166,6 @@ function compileCodeownersPattern(pattern: string): Matcher {
 
   const globs: string[] = []
   if (directoryPattern) {
-    if (!anchored) globs.push(`${body}/**`)
     globs.push(anchored ? `${body}/**` : `**/${body}/**`)
   } else if (anchored) {
     globs.push(body)
@@ -198,11 +200,8 @@ function normalizePath(path: string): string | null {
 function normalizeOwnerForMention(owner: string, options: { includeTeams?: boolean } = {}): string | null {
   const value = owner.trim().replace(/^@/u, "")
   if (!value || value.includes("@")) return null
-  const ghName = "[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?"
-  const user = new RegExp(`^${ghName}$`, "u")
-  const team = new RegExp(`^${ghName}\\/${ghName}$`, "u")
-  if (user.test(value)) return value
-  if (options.includeTeams === true && team.test(value)) return value
+  if (USER_RE.test(value)) return value
+  if (options.includeTeams === true && TEAM_RE.test(value)) return value
   return null
 }
 

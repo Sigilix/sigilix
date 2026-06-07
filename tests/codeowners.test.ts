@@ -31,6 +31,7 @@ docs/* @docs-one-level
 
     expect(ownersForPath(parsed.rules, "src/client.js")).toEqual(["@js-owner"])
     expect(ownersForPath(parsed.rules, "docs/guide/setup.md")).toEqual(["@docs-owner"])
+    expect(ownersForPath(parsed.rules, "apps/index.ts")).toEqual(["@apps-owner"])
     expect(ownersForPath(parsed.rules, "packages/web/apps/index.ts")).toEqual(["@apps-owner"])
     expect(ownersForPath(parsed.rules, "services/api/logs/app.log")).toEqual(["@logs-owner"])
     expect(ownersForPath(parsed.rules, "docs/README.md")).toEqual(["@docs-one-level"])
@@ -51,6 +52,15 @@ src/[ab].ts @bad-pattern
     expect(ownersForPath(parsed.rules, "src/private/key.ts")).toEqual(["@all-ts"])
   })
 
+  it("records compile-failed when picomatch rejects a pattern", () => {
+    // Picomatch's default maxLength guard rejects patterns longer than 65,536 chars.
+    const tooLongPattern = "a".repeat(65_537)
+    const parsed = parseCodeowners(`${tooLongPattern} @owner`)
+
+    expect(parsed.rules).toEqual([])
+    expect(parsed.skipped).toEqual([{ line: 1, pattern: tooLongPattern, reason: "compile-failed" }])
+  })
+
   it("dedupes and filters CODEOWNERS owners for the existing reviewer contract", () => {
     const reviewers = suggestedReviewersFromCodeowners(
       `
@@ -62,6 +72,15 @@ src/[ab].ts @bad-pattern
     )
 
     expect(reviewers).toEqual(["alice", "docs"])
+  })
+
+  it("includes team owners when requested", () => {
+    const reviewers = suggestedReviewersFromCodeowners("*.ts @alice @acme/platform", ["app.ts"], {
+      includeTeams: true,
+      limit: 2,
+    })
+
+    expect(reviewers).toEqual(["alice", "acme/platform"])
   })
 
   it("ignores impossible traversal or oversized paths before glob matching", () => {

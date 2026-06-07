@@ -267,7 +267,12 @@ export async function submitCiSuggestionReview(
   let prior: ReadonlyArray<{ body: string }>
   try {
     prior = await client.listPullRequestReviewComments(owner, repo, prNumber)
-  } catch {
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "ci-suggestions-dedup-check-failed",
+      owner, repo, prNumber,
+      err: err instanceof Error ? err.message : String(err),
+    }))
     return { posted: 0, skip: "dedup-check-failed" }
   }
   if (hasExistingCiSuggestion(prior.map((c) => c.body))) {
@@ -291,8 +296,15 @@ export async function submitCiSuggestionReview(
           comments: [comment],
         })
         posted += 1
-      } catch {
-        // This anchor is unpostable; skip it and keep going.
+      } catch (err) {
+        // This anchor is unpostable; skip it and keep going. Log which one
+        // so an operator can see WHY a specific suggestion didn't post.
+        console.warn(JSON.stringify({
+          event: "ci-suggestion-anchor-unpostable",
+          owner, repo, prNumber,
+          path: comment.path, line: comment.line,
+          err: err instanceof Error ? err.message : String(err),
+        }))
       }
     }
     const skip =

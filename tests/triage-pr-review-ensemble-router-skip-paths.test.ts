@@ -47,6 +47,8 @@ const {
   mockListPullRequestReviews,
   mockCreateIssueComment,
   mockRunSarifEvidence,
+  mockGetBranch,
+  mockGetRepoTree,
 } = vi.hoisted(() => ({
   mockGetInstallationToken: vi.fn(async () => "test-token"),
   mockChat: vi.fn(),
@@ -58,6 +60,8 @@ const {
   mockListPullRequestReviews: vi.fn(),
   mockCreateIssueComment: vi.fn(),
   mockRunSarifEvidence: vi.fn(),
+  mockGetBranch: vi.fn(),
+  mockGetRepoTree: vi.fn(),
 }))
 
 vi.mock("../src/lib/github-app", () => ({
@@ -96,6 +100,12 @@ vi.mock("../src/lib/github", async () => {
     async createIssueComment(...args: unknown[]): Promise<unknown> {
       return mockCreateIssueComment(...args)
     }
+    async getBranch(...args: unknown[]): Promise<unknown> {
+      return mockGetBranch(...args)
+    }
+    async getRepoTree(...args: unknown[]): Promise<unknown> {
+      return mockGetRepoTree(...args)
+    }
   }
   return { ...actual, GitHubClient: GitHubClientMock }
 })
@@ -110,7 +120,10 @@ vi.mock("../src/lib/sarif-evidence/runner", async () => {
   }
 })
 
-import { handlePrReviewEnsemble } from "../src/lib/triage-pr-review-ensemble"
+import {
+  handlePrReviewEnsemble,
+  ORCHESTRATOR_TIMEOUT_MS,
+} from "../src/lib/triage-pr-review-ensemble"
 import type { Env } from "../src/index"
 
 function makeKvStub(): Env["OPENCLAW_STATE"] {
@@ -194,6 +207,8 @@ beforeEach(() => {
   mockSubmitReview.mockReset()
   mockListPullRequestReviews.mockReset()
   mockCreateIssueComment.mockReset()
+  mockGetBranch.mockReset()
+  mockGetRepoTree.mockReset()
   mockRunSarifEvidence.mockReset().mockResolvedValue({
     skipped: true,
     reason: "disabled-config",
@@ -204,6 +219,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   logSpy.mockRestore()
   warnSpy.mockRestore()
   errorSpy.mockRestore()
@@ -421,5 +437,81 @@ describe("handlePrReviewEnsemble — deterministic SARIF annotation threading (S
       title: "[SARIF error] Semgrep: no-token",
     }])
     expect(mockCreateIssueComment).toHaveBeenCalledOnce()
+  })
+})
+
+describe("handlePrReviewEnsemble — testing evidence repo-tree abort handling (SIG-222)", () => {
+  it("propagates orchestrator aborts during repo-tree fetch instead of soft-failing", async () => {
+    vi.useFakeTimers()
+    mockGetPullRequest.mockResolvedValueOnce({
+      head: { sha: HEAD_SHA, ref: "sig-222" },
+      base: { sha: BASE_SHA, ref: "main" },
+      merged_at: null,
+      labels: [],
+      title: "source-only test evidence change",
+      body: "",
+      user: { login: "alice" },
+    })
+    mockGetPullRequestDiff.mockResolvedValueOnce(SOURCE_DIFF)
+    mockListOpenPullRequests.mockResolvedValueOnce([])
+    mockGetFileContent.mockResolvedValue(null)
+    let getBranchCalled!: () => void
+    const getBranchStarted = new Promise<void>((resolve) => {
+      getBranchCalled = resolve
+    })
+    mockGetBranch.mockImplementationOnce(async (
+      _owner: string,
+      _repo: string,
+      _branch: string,
+      opts?: { signal?: AbortSignal },
+    ) => {
+      expect(opts?.signal?.aborted).toBe(false)
+      getBranchCalled()
+      return await new Promise<never>((_resolve, reject) => {
+        opts?.signal?.addEventListener("abort", () => {
+          expect(opts.signal?.aborted).toBe(true)
+          reject(new DOMException("The operation was aborted", "AbortError"))
+        }, { once: true })
+      })
+    })
+
+    const resultPromise = handlePrReviewEnsemble({
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 9006,
+      headSha: HEAD_SHA,
+      installationId: 1,
+      env: makeEnv({
+        OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR: "0",
+      } as unknown as Env),
+    })
+    await getBranchStarted
+    await vi.advanceTimersByTimeAsync(ORCHESTRATOR_TIMEOUT_MS)
+    const result = await resultPromise
+
+    expect(result.status).toBe("errored")
+    expect(result.telemetry.fellBackReason).toBe("internal_error")
+    expect(result.telemetry.internalError).toMatch(/aborted/i)
+    expect(mockGetBranch).toHaveBeenCalledWith(
+      "Arc-and-Anchor",
+      "sigilix",
+      "sig-222",
+      { signal: expect.any(AbortSignal) },
+    )
+    expect(warnSpy.mock.calls.some((args) =>
+      args.some((arg) => String(arg).includes("tests-evidence-repo-tree-aborted")),
+    )).toBe(true)
+    expect(warnSpy.mock.calls.some((args) =>
+      args.some((arg) => String(arg).includes("tests-evidence-repo-tree-fetch-failed")),
+    )).toBe(false)
+    expect(logSpy.mock.calls.some((args) =>
+      args.some((arg) =>
+        String(arg).includes("tests-evidence-repo-tree-status") &&
+        String(arg).includes("fetch-failed"),
+      ),
+    )).toBe(false)
+    expect(logSpy.mock.calls.some((args) =>
+      args.some((arg) => String(arg).includes("tests-evidence-repo-tree-status")),
+    )).toBe(false)
   })
 })

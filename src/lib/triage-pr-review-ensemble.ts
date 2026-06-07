@@ -3671,6 +3671,14 @@ export async function handlePrReviewEnsemble(
               }
             }
           } catch (err) {
+            if (orchCtrl.signal.aborted) {
+              console.warn(JSON.stringify({
+                event: "tests-evidence-repo-tree-aborted",
+                owner, repo, prNumber, headSha: headSha.slice(0, 7),
+                error: err instanceof Error ? err.message : String(err),
+              }))
+              throw err
+            }
             repoTreeStatus = "fetch-failed"
             console.warn(JSON.stringify({
               event: "tests-evidence-repo-tree-fetch-failed",

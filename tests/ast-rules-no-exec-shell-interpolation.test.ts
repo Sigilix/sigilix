@@ -165,6 +165,9 @@ describe("no-exec-shell-interpolation — SIG-311 import-binding resolution", ()
   it("does NOT flag db.exec(sql) in a file that also imports child_process", () => {
     expect(runRule(CP + "db.exec(`SELECT ${id}`)").length).toBe(0)
   })
+  it("does NOT flag non-identifier receiver expressions when child_process imports exec", () => {
+    expect(runRule(CP + "getDb().exec(`SELECT ${id}`)").length).toBe(0)
+  })
   it("does NOT flag stmt.exec(...) (no child_process in file)", () => {
     expect(runRule("stmt.exec(params)").length).toBe(0)
   })

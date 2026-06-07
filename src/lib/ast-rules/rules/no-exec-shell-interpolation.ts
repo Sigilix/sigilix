@@ -57,6 +57,11 @@ interface CallBinding {
 
 type TargetFn = "exec" | "execSync"
 
+interface ChildProcessBindingSet {
+  bareNames: Map<string, TargetFn>
+  namespaces: Set<string>
+}
+
 function stringSpecifier(node: AstNode | undefined): string | null {
   if (node?.type === "Literal" && typeof node.value === "string") return node.value
   if (node?.type === "TemplateLiteral" && (node.expressions?.length ?? 0) === 0) {
@@ -95,7 +100,7 @@ function callBinding(node: AstNode): CallBinding | null {
     if (isRequireChildProcess(c.object)) {
       return { fn: c.property.name as string, object: null, inlineCp: true }
     }
-    return { fn: c.property.name as string, object: null, inlineCp: false }
+    return null
   }
   return null
 }
@@ -124,7 +129,7 @@ function escapedAlternation(values: ReadonlySet<string>): string | null {
  * Regex on the source (imports live at module scope; `child_process` rarely
  * appears in a string/comment). Conservative: only the standard import forms.
  */
-function childProcessBindings(source: string): { bareNames: Map<string, TargetFn>; namespaces: Set<string> } {
+function childProcessBindings(source: string): ChildProcessBindingSet {
   const bareNames = new Map<string, TargetFn>()
   const namespaces = new Set<string>()
   const addBare = (local: string | undefined | null, imported: string | undefined | null): void => {
@@ -215,10 +220,20 @@ function childProcessBindings(source: string): { bareNames: Map<string, TargetFn
   return { bareNames, namespaces }
 }
 
+const bindingsCache = new WeakMap<object, { source: string; bindings: ChildProcessBindingSet }>()
+
+function childProcessBindingsFor(ctx: RuleContext): ChildProcessBindingSet {
+  const cached = bindingsCache.get(ctx.ast)
+  if (cached?.source === ctx.source) return cached.bindings
+  const bindings = childProcessBindings(ctx.source)
+  bindingsCache.set(ctx.ast, { source: ctx.source, bindings })
+  return bindings
+}
+
 /** Return the child_process function this call resolves to, if any. */
-function resolveChildProcessCall(binding: CallBinding, source: string): TargetFn | null {
+function resolveChildProcessCall(binding: CallBinding, bindings: ChildProcessBindingSet): TargetFn | null {
   if (binding.inlineCp) return TARGET_FNS.has(binding.fn) ? (binding.fn as TargetFn) : null
-  const { bareNames, namespaces } = childProcessBindings(source)
+  const { bareNames, namespaces } = bindings
   if (binding.object === null) return bareNames.get(binding.fn) ?? null
   return TARGET_FNS.has(binding.fn) && namespaces.has(binding.object) ? (binding.fn as TargetFn) : null
 }
@@ -258,7 +273,7 @@ export const noExecShellInterpolation: AstRule = {
     // bare `exec(...)` not imported from child_process are NOT shell sinks — do
     // not mint a command-injection fact (the PR #296 self-FP). Recall-safe: every
     // real `child_process.exec` via a standard import still resolves and emits.
-    const shellFn = resolveChildProcessCall(binding, ctx.source)
+    const shellFn = resolveChildProcessCall(binding, childProcessBindingsFor(ctx))
     if (!shellFn) return null
     const command = (node.arguments ?? [])[0]
     if (!command) return null

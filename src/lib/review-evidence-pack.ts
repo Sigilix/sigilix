@@ -8,6 +8,7 @@
 
 import { nodeOverlapsChanged, type ChangedLines } from "./ast-rules/diff-filter"
 import { extractFileGraph, type GraphSymbol } from "./graph-extract"
+import type { AstCache } from "./ast-rules/parse-cache"
 import type { RetrievedChunk } from "./retrieval"
 import type { TestingEvidencePack } from "./testing-evidence-pack"
 import type { GraphContextNode } from "../do/repo-graph"
@@ -78,6 +79,9 @@ export interface BuildDynamicReviewEvidencePackArgs {
   blastDependentPaths?: readonly string[]
   testingEvidence?: TestingEvidencePack
   maxCards?: number
+  /** SIG-336: optional per-review parse-once cache (shared with the other AST
+   *  consumers). Absent → parse directly. */
+  astCache?: AstCache
 }
 
 export function dynamicReviewEvidenceMode(
@@ -110,7 +114,7 @@ export function buildDynamicReviewEvidencePack(
 
     filesScanned++
     changedFilesWithSources++
-    const graph = extractFileGraph(path, source)
+    const graph = extractFileGraph(path, source, args.astCache)
     const symbols = graph.symbols
       .filter((s) => nodeOverlapsChanged(args.changedLines, path, s.startLine, s.endLine))
       .sort(compareSymbolsBySpecificity)

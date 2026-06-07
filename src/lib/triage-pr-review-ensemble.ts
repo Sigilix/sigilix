@@ -622,6 +622,9 @@ export interface ResolveDynamicEvidencePromptBlockArgs {
   blastCallerPaths: readonly string[]
   blastDependentPaths: readonly string[]
   testingEvidence: TestingEvidencePack | undefined
+  /** SIG-336: shared per-review parse-once cache (the evidence pack parses each
+   *  changed file via extractFileGraph — reuse the runner's AST). */
+  astCache?: AstCache
 }
 
 export interface ResolvedDynamicEvidencePromptBlock {
@@ -648,6 +651,7 @@ export function resolveDynamicEvidencePromptBlock(
     blastCallerPaths: args.blastCallerPaths,
     blastDependentPaths: args.blastDependentPaths,
     ...(args.testingEvidence !== undefined ? { testingEvidence: args.testingEvidence } : {}),
+    ...(args.astCache !== undefined ? { astCache: args.astCache } : {}),
   })
   const rendered = renderDynamicReviewEvidenceBlock(pack)
 
@@ -2524,6 +2528,13 @@ export async function handlePrReviewEnsemble(
       }
     }
 
+    // SIG-336: one parse-once AST cache for the whole review. Every acorn
+    // consumer below (runAstRules, durableObjectClassSpans, detectHelperCoverage,
+    // the graph expansion, and the logic-claim refutation gate) shares it, so a
+    // given file is parsed at most once per review instead of once per subsystem
+    // (and once per finding). The shared 500KB guard rides along.
+    const astCache = createAstCache()
+
     // SIG-129: build the branch retrieval set ONCE (best-effort), reused
     // across the preflight / perf / symbol merges. Empty set ⇒ every merge
     // is a no-op ⇒ identical to today's main-only behavior.
@@ -3020,6 +3031,7 @@ export async function handlePrReviewEnsemble(
       reviewable,
       config: astRulesConfig,
       ctx: { owner, repo, prNumber },
+      astCache,
     })
 
     // SIG-314: shadow-first gating for the deterministic IDOR/BOLA floor
@@ -3762,6 +3774,7 @@ export async function handlePrReviewEnsemble(
       addedLineTextByPath: buildAddedLineTextByLine(fullDiff),
       siblingMappings: testingEvidencePackFiltered.siblingMappings,
       testContentByPath: testingEvidenceFetchResult.contentByPath,
+      astCache,
     })
     const testingEvidencePackWithCoverage = mergeHelperCoverage(
       testingEvidencePack,
@@ -3819,6 +3832,7 @@ export async function handlePrReviewEnsemble(
     const dynamicEvidence = resolveDynamicEvidencePromptBlock({
       env,
       filesByPath: astFilesByPath,
+      astCache,
       changedLines: buildChangedLines(diff),
       reviewablePaths: filePaths,
       retrievalChunks: sharedChunksForOverlap,
@@ -5074,7 +5088,7 @@ export async function handlePrReviewEnsemble(
     // derived from the already-fetched changed JS/TS head content
     // (astFilesByPath) — empty when AST features are off, which is fail-safe
     // (no suppression → findings kept, never hidden).
-    const doClassSpans = durableObjectClassSpans(astFilesByPath)
+    const doClassSpans = durableObjectClassSpans(astFilesByPath, astCache)
     // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
     // demote sites can tag body-routed findings with their reason when enabled.
     const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
@@ -5317,6 +5331,7 @@ export async function handlePrReviewEnsemble(
       // `dropped` here = "demoted to body".
       windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
       fullFileByPath: astFilesByPath,
+      astCache,
       onWindowBlindnessFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",

@@ -17,6 +17,12 @@ import { readRepoIndexManifest } from "./repo-index-manifest"
 import { LEGACY_WARMUP_MARKER, WARMUP_CALLOUT_MARKER } from "./warmup"
 import { loadSigilixConfig, resolvePreMergeGatesConfig } from "./sigilix-config"
 import {
+  CODEOWNERS_PATHS,
+  mergeSuggestedReviewers,
+  parseCodeowners,
+  suggestedReviewersFromRules,
+} from "./codeowners"
+import {
   runPreMergeGates,
   renderPreMergeGatesSection,
   type GateResult,
@@ -44,6 +50,7 @@ const LIMITS = {
   prBody: 4_000,
   newCommitsBlock: 2_000,
 }
+const CODEOWNERS_MAX_BYTES = 3 * 1024 * 1024
 
 export interface PrOverviewVerdict {
   summary: string
@@ -324,6 +331,25 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       return
     }
 
+    const codeownersRef = meta.base?.sha
+    if (!codeownersRef) {
+      console.warn(JSON.stringify({
+        event: "pr-overview-codeowners-no-base-ref",
+        owner, repo, prNumber,
+      }))
+    }
+    const codeownersReviewers = codeownersRef
+      ? await resolveCodeownersSuggestedReviewers({
+        client,
+        owner,
+        repo,
+        prNumber,
+        ref: codeownersRef,
+        changedPaths: files.map((f) => f.filename),
+        prAuthor: meta.user?.login ?? null,
+      })
+      : []
+
     // ARC-263: walkthrough cache lookup. For each changed file, look
     // up `(filename, patch-sha256)` in KV. Hits reuse the cached
     // per-file row; misses go through Ollama. The cumulative
@@ -441,6 +467,13 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
         responseLength: response.length,
       }))
       return
+    }
+    const modelReviewers = excludePrAuthor(verdict.suggestedReviewers, meta.user?.login ?? null)
+    const suggestedReviewers = mergeSuggestedReviewers(codeownersReviewers, modelReviewers)
+    if (suggestedReviewers) {
+      verdict.suggestedReviewers = suggestedReviewers
+    } else {
+      delete verdict.suggestedReviewers
     }
 
     // Stage 1 race mitigation (ARC-231). KV remains advisory — Cloudflare
@@ -669,6 +702,79 @@ export async function handlePrOverview(args: PrOverviewArgs): Promise<void> {
       await env.OPENCLAW_STATE.delete(dedupeKey).catch(() => {})
     }
   }
+}
+
+async function resolveCodeownersSuggestedReviewers(args: {
+  client: GitHubClient
+  owner: string
+  repo: string
+  prNumber: number
+  ref: string
+  changedPaths: readonly string[]
+  prAuthor: string | null
+}): Promise<string[]> {
+  if (args.changedPaths.length === 0) return []
+
+  for (const path of CODEOWNERS_PATHS) {
+    let text: string | null | undefined
+    try {
+      text = await args.client.getFileContent(args.owner, args.repo, path, args.ref)
+    } catch (err) {
+      // `getFileContent` returns null for 404. A throw means the
+      // higher-precedence file may exist but could not be read, so fail
+      // closed instead of falling through to a lower-precedence path.
+      console.warn(JSON.stringify({
+        event: "pr-overview-codeowners-fetch-failed",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        path,
+        ref: args.ref.slice(0, 12),
+        err: err instanceof Error ? err.message : String(err),
+      }))
+      return []
+    }
+    if (typeof text !== "string") continue
+
+    if (new TextEncoder().encode(text).length > CODEOWNERS_MAX_BYTES) {
+      console.warn(JSON.stringify({
+        event: "pr-overview-codeowners-skipped",
+        reason: "too_large",
+        owner: args.owner,
+        repo: args.repo,
+        prNumber: args.prNumber,
+        path,
+      }))
+      return []
+    }
+
+    const parsed = parseCodeowners(text)
+    const reviewers = suggestedReviewersFromRules(parsed.rules, args.changedPaths, {
+      exclude: args.prAuthor ? [args.prAuthor] : [],
+      limit: 2,
+    })
+    console.log(JSON.stringify({
+      event: "pr-overview-codeowners-resolved",
+      owner: args.owner,
+      repo: args.repo,
+      prNumber: args.prNumber,
+      path,
+      changed_files: args.changedPaths.length,
+      rules: parsed.rules.length,
+      skipped: parsed.skipped.length,
+      reviewers: reviewers.length,
+    }))
+    return reviewers
+  }
+
+  return []
+}
+
+function excludePrAuthor(reviewers: readonly string[] | undefined, prAuthor: string | null): string[] | undefined {
+  if (!reviewers || reviewers.length === 0 || !prAuthor) return reviewers ? [...reviewers] : undefined
+  const author = prAuthor.toLowerCase()
+  const filtered = reviewers.filter((reviewer) => reviewer.trim().replace(/^@/u, "").toLowerCase() !== author)
+  return filtered.length > 0 ? filtered : undefined
 }
 
 export interface PromptCtx {

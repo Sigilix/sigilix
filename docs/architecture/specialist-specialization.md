@@ -174,7 +174,7 @@ posture (`wrangler.toml`):
 |---|---|---|---|---|
 | Security evidence | `validate-security-finding.ts` | `evaluateSecurityFinding` | `OPENCLAW_SECURITY_VALIDATOR_MODE` | **enforce** |
 | Security grounding | `validate-security-grounding.ts` | `evaluateSecurityGrounding` | `OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE` | **enforce** |
-| Security usage | `validate-security-usage.ts` | `evaluateSecurityUsage` | `OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE` | shadow |
+| Security usage | `validate-security-usage.ts` | `evaluateSecurityUsage` | `OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE` | **enforce** |
 | Tests specificity | `validate-test-finding.ts` | `evaluateTestFinding` | `OPENCLAW_TESTS_VALIDATOR_MODE` | **enforce** |
 | Logic evidence | `validate-logic-finding.ts` | `evaluateLogicFinding` | `OPENCLAW_LOGIC_VALIDATOR_MODE` | shadow |
 | Logic refutation | `validate-logic-refutation.ts` | `evaluateLogicRefutation` | `OPENCLAW_LOGIC_REFUTATION_MODE` | shadow |

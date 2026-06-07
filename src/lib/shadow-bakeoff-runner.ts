@@ -51,7 +51,17 @@ export interface ShadowRunResult {
    * comparison telemetry path ignores this; prod callers never read it. Optional
    * + additive so this is non-breaking.
    */
-  rawFindings?: ReadonlyArray<{ path: string; line: number; score: number; category: string; headline: string; body: string }>
+  rawFindings?: ReadonlyArray<{
+    path: string
+    line: number
+    score: number
+    category: string
+    headline: string
+    body: string
+    cweId?: string
+    evidenceId?: string
+    independentAssessment?: string
+  }>
   /** Wall-clock elapsed (start → finalize). */
   elapsedMs: number
   /** Failure reason from runWithRetryAndFallback, or undefined on success. */
@@ -176,6 +186,9 @@ export async function runShadowSpecialist(args: SpecialistShadowArgs): Promise<S
           category: f.category,
           headline: f.headline ?? "",
           body: f.body ?? "",
+          ...(f.cweId !== undefined ? { cweId: f.cweId } : {}),
+          ...(f.evidenceId !== undefined ? { evidenceId: f.evidenceId } : {}),
+          ...(f.independentAssessment !== undefined ? { independentAssessment: f.independentAssessment } : {}),
         }))
       : [],
     elapsedMs: outcome.elapsedMs,

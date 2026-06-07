@@ -21,8 +21,9 @@
 //       comment, OR a `.exec(` on a RegExp-conventional receiver (RegExp.exec,
 //       never a shell).
 //   (C) HARNESS GUARD: the cited file's added text does NOT itself add a real
-//       sink (a child_process import for injection, an executable HTML-write for
-//       xss) — so a genuine harness that also shells out is protected.
+//       sink (a child_process import or executable shell call for injection, an
+//       executable HTML-write for xss) — so a genuine harness that also shells
+//       out is protected.
 //
 // THE RECALL RULE (DeepSeek-validated): (A) NEVER demotes alone — it must
 // co-fire with (B). Every parse ambiguity, missing diff, or token-not-in-hand
@@ -65,11 +66,13 @@ const GATED_BUCKETS: ReadonlySet<SecurityBucket> = new Set<SecurityBucket>(["inj
 
 /** (A) Mention-surface paths: detector / validator / test / doc. */
 const MENTION_PATH_RE =
-  /(?:\/ast-rules\/)|(?:(?:^|\/)validate-[^/]*\.ts$)|(?:\.(?:test|spec)\.[cm]?[jt]sx?$)|(?:(?:^|\/)(?:tests|__tests__)\/)|(?:\.mdx?$)/i
+  /(?:\/ast-rules\/)|(?:(?:^|\/)validate-[^/]*\.ts$)|(?:\.(?:test|spec)\.[cm]?[jt]sx?$)|(?:(?:^|\/)(?:tests|__tests__)\/)|(?:\.md$)/i
+const DOC_PATH_RE = /\.md$/i
 
 /** Bucket-specific dangerous token in an EXECUTABLE shape. */
 const INJECTION_CALL_RE = /\b(?:exec|execSync|execFileSync|eval|spawnSync|system)\s*\(/
-const XSS_TOKEN_RE = /\b(?:dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|srcdoc|setHTMLUnsafe)\b/
+const XSS_TOKEN_RE =
+  /\b(?:dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|srcdoc|setHTMLUnsafe)\b|\bdocument\s*\.\s*(?:write|writeln)\s*\(/
 /** `.exec(` on a RegExp-conventional receiver — `RegExp.prototype.exec`, never a
  *  shell (the PR #296 model-FP shape). */
 const REGEX_EXEC_RE =
@@ -79,6 +82,11 @@ function bucketTokenRe(bucket: SecurityBucket): RegExp | null {
   if (bucket === "injection") return INJECTION_CALL_RE
   if (bucket === "xss") return XSS_TOKEN_RE
   return null
+}
+
+function hasBucketToken(cited: string, bucket: SecurityBucket): boolean {
+  const re = bucketTokenRe(bucket)
+  return re !== null && re.test(cited)
 }
 
 /**
@@ -105,10 +113,28 @@ function collectCitedCode(
   return lines.length > 0 ? lines.join("\n") : null
 }
 
+function collectNearbyAddedCode(
+  finding: PrReviewFinding,
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>>,
+  radius = 2,
+): string | null {
+  const lineMap = addedLineTextByLine.get(finding.path)
+  if (!lineMap || lineMap.size === 0) return null
+  const lo = Math.max(1, finding.line - radius)
+  const hi = finding.line + radius
+  const lines: string[] = []
+  for (let ln = lo; ln <= hi; ln++) {
+    const text = lineMap.get(ln)
+    if (text !== undefined) lines.push(text)
+  }
+  return lines.length > 0 ? lines.join("\n") : null
+}
+
 /** (B) Is the bucket's dangerous token a MENTION (non-executable) in `cited`? */
-function isMentionNotUsage(cited: string, bucket: SecurityBucket): boolean {
+function isMentionNotUsage(cited: string, bucket: SecurityBucket, path: string): boolean {
   const re = bucketTokenRe(bucket)
   if (re === null || !re.test(cited)) return false // token not present → can't prove a mention → keep
+  if (DOC_PATH_RE.test(path)) return true // markdown docs are prose/examples, not executable code.
   const code = blank(cited, true) // blank comments + string bodies
   if (!re.test(code)) return true // token survived only in a string/comment → mention
   // Executable but benign: EVERY surviving injection-shaped token is a `.exec(`
@@ -122,18 +148,34 @@ function isMentionNotUsage(cited: string, bucket: SecurityBucket): boolean {
 }
 
 /** (C) Does the file's added text itself add a REAL sink (don't demote over it)? */
-function fileAddsRealSink(addedFileText: string, bucket: SecurityBucket): boolean {
+function fileAddsRealSink(addedFileText: string, bucket: SecurityBucket, path: string): boolean {
+  if (DOC_PATH_RE.test(path)) return false // markdown examples are not runtime sinks.
   if (bucket === "injection") {
     // A real child_process import gives the file shell capability — keep. The
-    // module specifier is a string literal, so check the UN-blanked text.
-    return /["'](?:node:)?child_process["']/.test(addedFileText)
+    // module specifier is a string literal, so check the UN-blanked text. Also
+    // keep if the added code itself contains any executable shell-shaped call
+    // after strings/comments and benign RegExp `.exec(` uses are removed; this
+    // protects files whose import/binding lives outside the diff.
+    if (/["'](?:node:)?child_process["']/.test(addedFileText)) return true
+    const executableAddedCode = blank(addedFileText, true).replace(new RegExp(REGEX_EXEC_RE.source, "gi"), " ")
+    return INJECTION_CALL_RE.test(executableAddedCode)
   }
   // xss: a real executable HTML-write (not a mention) anywhere in the added code.
   // Sink set aligned with XSS_TOKEN_RE so a real srcdoc/setHTMLUnsafe also guards
   // (CodeRabbit #317).
-  return /\b(?:dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|srcdoc|setHTMLUnsafe)\b/.test(
-    blank(addedFileText, true),
-  )
+  return XSS_TOKEN_RE.test(blank(addedFileText, true))
+}
+
+function hasPositiveSinkAssessment(finding: PrReviewFinding, bucket: SecurityBucket): boolean {
+  // Keep this escape hatch injection-only. The reviewer counterexample is a
+  // pre-existing shell sink with a model anchor on a newly-added mention line;
+  // XSS mentions in test names are much easier for the model to over-justify,
+  // while newly-added executable XSS sinks are already protected by
+  // fileAddsRealSink's deterministic full-added-file scan.
+  if (bucket !== "injection") return false
+  const text = finding.independentAssessment?.trim()
+  if (!text) return false
+  return !/^(?:none|n\/a|not applicable|unknown)$/i.test(text)
 }
 
 /**
@@ -157,9 +199,26 @@ export function evaluateSecurityUsage(
   const cited = collectCitedCode(finding, context.addedLineTextByLine)
   if (cited === null || cited.trim().length === 0) return { keep: true } // not in hand → keep
   // (B) non-executable position — the mandatory conjunction partner.
-  if (!isMentionNotUsage(cited, bucket)) return { keep: true }
+  let mention = isMentionNotUsage(cited, bucket, finding.path)
+  // Models sometimes anchor a multiline rule message / test name to the
+  // neighboring added line. Only use a tiny local window when the exact cited
+  // line does NOT itself contain the dangerous token; if it does, the exact
+  // line's executable-vs-mention decision wins.
+  if (!mention && !hasBucketToken(cited, bucket)) {
+    const nearby = collectNearbyAddedCode(finding, context.addedLineTextByLine)
+    mention =
+      nearby !== null &&
+      !fileAddsRealSink(nearby, bucket, finding.path) &&
+      isMentionNotUsage(nearby, bucket, finding.path)
+  }
+  if (!mention) return { keep: true }
   // (C) harness guard — the file itself doesn't add a real sink.
   const addedFileText = [...(context.addedLineTextByLine.get(finding.path)?.values() ?? [])].join("\n")
-  if (fileAddsRealSink(addedFileText, bucket)) return { keep: true }
+  if (fileAddsRealSink(addedFileText, bucket, finding.path)) return { keep: true }
+  // The SIG-311 prompt requires concrete sink-resolution proof in
+  // independentAssessment for sev>=4 security-tooling/test/doc findings. If the
+  // specialist provided that positive evidence, keep inline; the real sink may
+  // be in unchanged context not present in addedLineTextByLine.
+  if (hasPositiveSinkAssessment(finding, bucket)) return { keep: true }
   return { keep: false, reason: "security-mention-not-usage" }
 }

@@ -61,7 +61,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 23", () => {
+  it("PROMPT_VERSION bumped to 24", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -98,7 +98,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // SIG-317 follow-up 22→23 (logic idempotency fence distinguishes
     // same-delivery retry safety from duplicate logical operations; return
     // semantics fence prevents safe auth middleware tail-call FPs).
-    expect(PROMPT_VERSION).toBe("23")
+    // SIG-311 23→24 (security usage-vs-mention evidence requirement on
+    // security-tooling/test/doc surfaces).
+    expect(PROMPT_VERSION).toBe("24")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {
@@ -159,5 +161,14 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(sec).toMatch(/DurableObject/i)
     // ties to the existing access-control evidence hatch
     expect(sec).toContain('evidenceId: "NONE"')
+  })
+
+  it("security specialist has the SIG-311 usage-vs-mention fence for security-tooling/test/doc code", () => {
+    const sec = SPECIALIST_PROMPTS.security
+    expect(sec).toContain("USAGE VS MENTION")
+    expect(sec).toContain("RegExp.prototype.exec")
+    expect(sec).toContain("not `child_process.exec`")
+    expect(sec).toContain("string literals, template text, comments")
+    expect(sec).toContain("concrete sink-resolution proof")
   })
 })

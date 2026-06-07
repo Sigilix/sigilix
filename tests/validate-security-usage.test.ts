@@ -48,8 +48,37 @@ describe("evaluateSecurityUsage — DEMOTE (the PR #296 mention family)", () => 
     const c = ctx(f.path, { 10: `  const hint = "use execSync(cmd) carefully";` })
     expect(demoted(evaluateSecurityUsage(f, c))).toBe(true)
   })
+  it("demotes a multiline rule-message mention when the model anchors the neighboring line", () => {
+    const f = finding({ path: "src/lib/ast-rules/rules/no-exec-shell-interpolation.ts", line: 12 })
+    const c = ctx(f.path, {
+      10: "  message:",
+      11: '    "`exec()` with a dynamic command is a command-injection sink; use `execFile` instead.",',
+      12: '  docs: "Flags shell interpolation.",',
+    })
+    expect(demoted(evaluateSecurityUsage(f, c))).toBe(true)
+  })
+  it("demotes an injection mention in a markdown code example", () => {
+    const f = finding({ path: "docs/security-rules.md", line: 8 })
+    const c = ctx(f.path, { 8: "exec(`convert ${path}`)" })
+    expect(demoted(evaluateSecurityUsage(f, c))).toBe(true)
+  })
+  it("demotes an xss mention where document.write is only in a test name", () => {
+    const f = finding({ path: "tests/dom-sink.test.ts", line: 10, cweId: "CWE-79" })
+    const c = ctx(f.path, { 10: `  it("flags document.write(userHtml)", () => {});` })
+    expect(demoted(evaluateSecurityUsage(f, c))).toBe(true)
+  })
   it("demotes an xss P0 where `dangerouslySetInnerHTML` is only a test describe-string", () => {
     const f = finding({ path: "tests/seat-panel.test.ts", line: 10, cweId: "CWE-79" })
+    const c = ctx(f.path, { 10: `  it("flags dangerouslySetInnerHTML on noteHtml", () => {});` })
+    expect(demoted(evaluateSecurityUsage(f, c))).toBe(true)
+  })
+  it("demotes an xss test-name mention even when the model over-justifies it", () => {
+    const f = finding({
+      path: "tests/seat-panel.test.ts",
+      line: 10,
+      cweId: "CWE-79",
+      independentAssessment: "The test name mentions dangerouslySetInnerHTML with attacker-controlled HTML.",
+    })
     const c = ctx(f.path, { 10: `  it("flags dangerouslySetInnerHTML on noteHtml", () => {});` })
     expect(demoted(evaluateSecurityUsage(f, c))).toBe(true)
   })
@@ -81,9 +110,44 @@ describe("evaluateSecurityUsage — KEEP (recall guards — never hide a real P0
     const c = ctx(f.path, { 10: "  return <div dangerouslySetInnerHTML={{ __html: userInput }} />;" })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
   })
+  it("KEEPS a real executable document.write sink on a test path (B fails)", () => {
+    const f = finding({ path: "tests/x.test.ts", line: 10, cweId: "CWE-79" })
+    const c = ctx(f.path, { 10: "  document.write(userHtml);" })
+    expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
+  })
+  it("KEEPS an xss string mention when the FILE also adds document.write", () => {
+    const f = finding({ path: "tests/x.test.ts", line: 10, cweId: "CWE-79" })
+    const c = ctx(f.path, {
+      10: `  const message = "document.write(userHtml) is unsafe";`,
+      12: "  document.write(userHtml);",
+    })
+    expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
+  })
+  it("KEEPS mdx because it is not treated as a markdown-prose path", () => {
+    const f = finding({ path: "docs/example.mdx", line: 10 })
+    const c = ctx(f.path, { 10: "exec(`convert ${path}`)" })
+    expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
+  })
   it("KEEPS a re.exec mention when the FILE also imports child_process (C — harness guard)", () => {
     const f = finding({ path: "src/lib/ast-rules/x.ts", line: 10 })
     const c = ctx(f.path, { 5: `import { exec } from "child_process";`, 10: "  re.exec(line);" })
+    expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
+  })
+  it("KEEPS a string mention when the FILE also adds an executable exec call without its import", () => {
+    const f = finding({ path: "src/lib/ast-rules/x.ts", line: 10 })
+    const c = ctx(f.path, {
+      10: `  const message = "exec(userInput) is unsafe";`,
+      12: "  exec(userInput);",
+    })
+    expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
+  })
+  it("KEEPS a mention-line finding when the specialist supplies positive sink proof", () => {
+    const f = finding({
+      path: "src/lib/ast-rules/x.ts",
+      line: 10,
+      independentAssessment: "Resolved `runUserCommand` to a pre-existing `child_process.exec` sink fed by req.query.cmd.",
+    })
+    const c = ctx(f.path, { 10: `  const message = "exec(userInput) is unsafe";` })
     expect(kept(evaluateSecurityUsage(f, c))).toBe(true)
   })
   it("KEEPS a sub-threshold (score 3) finding", () => {

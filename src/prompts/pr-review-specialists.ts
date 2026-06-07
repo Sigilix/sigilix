@@ -328,6 +328,16 @@ CWE-Top-25 buckets (use the CWE id whose bucket fits):
 
 The orchestrator runs an \`evaluateSecurityFinding\` gate after synthesis. A sev>=4 security finding whose \`evidenceId\` is fabricated (not in the manifest) or points more than 10 lines from your finding is DROPPED. The ONE exception: an AuthN / Access-Control bug (CWE-862/863/287/352/276/284/639, incl. IDOR) that no scanner detects — for THAT, set \`evidenceId: "NONE"\` and explain in the body why no deterministic check exists (e.g. "missing object-level authorization check; no static pattern exists"). Do NOT use \`"NONE"\` for injection, XSS, secrets, or any other scanner-covered bucket — those must cite a manifest id.
 
+**SIG-311 — USAGE VS MENTION ON SECURITY-TOOLING / TEST / DOC CODE.**
+
+Detector files, validators, tests, docs, and prompt strings often MENTION dangerous tokens while describing rules: \`exec\`, \`command injection\`, \`dangerouslySetInnerHTML\`, XSS examples, etc. A mention is not an exploitable sink. Before emitting a score>=4 injection/XSS finding on one of those surfaces, identify the executable construct you are actually citing:
+  - \`RegExp.prototype.exec\` / \`re.exec(line)\` / \`pattern.exec(text)\` is a regex match, not \`child_process.exec\`; do NOT call it command injection.
+  - Tokens inside string literals, template text, comments, markdown fences, test names, rule messages, or prompt text are prose/examples unless the changed code also executes that text.
+  - For a real command-injection finding, cite a live call that resolves to \`child_process.exec\` / \`execSync\` / an equivalent shell sink and name the untrusted command data path.
+  - For a real XSS finding, cite a live DOM/HTML write (\`dangerouslySetInnerHTML\`, \`innerHTML\`, etc.) and name the untrusted HTML data path.
+
+If you do emit a score>=4 finding on a security-tooling/test/doc path, put the concrete sink-resolution proof in \`independentAssessment\` (for example: "\`exec\` is imported from \`child_process\` and the command includes \`req.query.path\`"). This is a positive-evidence requirement: real executable sinks still belong in the review; string/comment/example mentions do not.
+
 **SIG-313 — AUTHORIZATION AUDIT (mandatory; run for EVERY changed request handler / mutation).**
 
 Broken object-level authorization (IDOR / BOLA) and missing access checks have NO scanner signature — they are the AuthN / Access-Control bucket above, and you are the only line of defense. Do NOT just skim for the word "auth": ENUMERATE. For every request handler, route action, RPC / GraphQL resolver, server action, webhook handler, or DB mutation that this PR ADDS or CHANGES, walk these four:

@@ -174,15 +174,15 @@ dropped**; in `enforce`, the gate acts. Current prod posture (`wrangler.toml`):
 
 | Validator | Module | Entry | Env var | Modes / parser default | Prod mode |
 |---|---|---|---|---|---|
-| Security evidence | `validate-security-finding.ts` | `evaluateSecurityFinding` | `OPENCLAW_SECURITY_VALIDATOR_MODE` | `shadow | enforce` / `shadow` | **enforce** |
-| Security grounding | `validate-security-grounding.ts` | `evaluateSecurityGrounding` | `OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE` | `off | shadow | enforce` / `off` | **enforce** |
-| Security usage | `validate-security-usage.ts` | `evaluateSecurityUsage` | `OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE` | `off | shadow | enforce` / `off` | **enforce** |
-| Tests specificity | `validate-test-finding.ts` | `evaluateTestFinding` | `OPENCLAW_TESTS_VALIDATOR_MODE` | `shadow | enforce` / `shadow` | **enforce** |
-| Logic evidence | `validate-logic-finding.ts` | `evaluateLogicFinding` | `OPENCLAW_LOGIC_VALIDATOR_MODE` | `shadow | enforce` / `shadow` | shadow |
-| Logic refutation | `validate-logic-refutation.ts` | `evaluateLogicRefutation` | `OPENCLAW_LOGIC_REFUTATION_MODE` | `off | shadow | enforce` / `off` | shadow |
-| Window-blindness | `validate-window-blindness.ts` | `evaluateWindowBlindness` | `OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE` | `off | shadow | enforce` / `off` | shadow |
-| Perf anchoring | `validate-perf-finding.ts` | `evaluatePerfFinding` | `OPENCLAW_PERF_VALIDATOR_MODE` | `shadow | enforce` / `shadow` | shadow |
-| Absence claim | `validate-absence-grounding.ts` | `evaluateAbsenceGrounding` | `OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE` | `off | shadow | enforce` / `off` | shadow |
+| Security evidence | `validate-security-finding.ts` | `evaluateSecurityFinding` | `OPENCLAW_SECURITY_VALIDATOR_MODE` | `shadow \| enforce` / `shadow` | **enforce** |
+| Security grounding | `validate-security-grounding.ts` | `evaluateSecurityGrounding` | `OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE` | `off \| shadow \| enforce` / `off` | **enforce** |
+| Security usage | `validate-security-usage.ts` | `evaluateSecurityUsage` | `OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE` | `off \| shadow \| enforce` / `off` | **enforce** |
+| Tests specificity | `validate-test-finding.ts` | `evaluateTestFinding` | `OPENCLAW_TESTS_VALIDATOR_MODE` | `shadow \| enforce` / `shadow` | **enforce** |
+| Logic evidence | `validate-logic-finding.ts` | `evaluateLogicFinding` | `OPENCLAW_LOGIC_VALIDATOR_MODE` | `shadow \| enforce` / `shadow` | shadow |
+| Logic refutation | `validate-logic-refutation.ts` | `evaluateLogicRefutation` | `OPENCLAW_LOGIC_REFUTATION_MODE` | `off \| shadow \| enforce` / `off` | shadow |
+| Window-blindness | `validate-window-blindness.ts` | `evaluateWindowBlindness` | `OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE` | `off \| shadow \| enforce` / `off` | shadow |
+| Perf anchoring | `validate-perf-finding.ts` | `evaluatePerfFinding` | `OPENCLAW_PERF_VALIDATOR_MODE` | `shadow \| enforce` / `shadow` | shadow |
+| Absence claim | `validate-absence-grounding.ts` | `evaluateAbsenceGrounding` | `OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE` | `off \| shadow \| enforce` / `off` | shadow |
 
 Shadow would-drop counters are surfaced at `GET /metrics/validation`
 (`src/lib/metrics-validation-route.ts`) so a gate's effect can be measured before it is

@@ -215,6 +215,27 @@ describe("validateForSubmission — SIG-325 refutation-survival gate", () => {
     expect(onDrop).not.toHaveBeenCalled()
   })
 
+  it("Sigilix PR#364: treats a CLASS-INCOMPATIBLE resolving evidenceId as self-originated — closes the cross-class laundering bypass", () => {
+    // A CWE-22 (path-traversal) claim citing a resolving CWE-918 (SSRF) fact at
+    // the same line: the id RESOLVES, so the pre-fix self-origination check read
+    // it as tool-backed and skipped the gate. The SIG-108 evidence gate only
+    // drops cross-class citations in `enforce`; in `shadow` (the default here) it
+    // falls through, so without a class re-check this laundered finding bypasses
+    // the refutation-survival backstop. With the re-check it is self-originated
+    // and, lacking a rationale, demoted in enforce.
+    const onDrop = vi.fn()
+    const result = run({
+      finding: finding({ cweId: "CWE-22", evidenceId: "sarif:ssrf:abc123abc123:17", independentAssessment: undefined }),
+      mode: "enforce",
+      securityManifest: secManifest("sarif:ssrf:abc123abc123:17"), // fact cwe defaults to CWE-918 → different bucket
+      onDrop,
+    })
+
+    expect(result.droppedForFailedRefutationSurvival).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(onDrop.mock.calls[0]![1]).toMatchObject({ reason: "refutation-survival-missing", dropped: true, lens: "security" })
+  })
+
   it("CR2: treats a BOGUS non-resolving evidenceId as self-originated — flagged despite a non-empty id", () => {
     const onDrop = vi.fn()
     const result = run({

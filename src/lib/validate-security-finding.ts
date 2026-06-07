@@ -425,7 +425,7 @@ function factMatchesFinding(fact: SecurityFact, finding: PrReviewFinding): boole
  * than the scanner proposed (e.g. a CWE-862 finding citing a CWE-863 fact —
  * both authn-access-control — still corroborates).
  */
-function factClassCompatible(fact: SecurityFact, finding: PrReviewFinding): boolean {
+export function factClassCompatible(fact: SecurityFact, finding: PrReviewFinding): boolean {
   const findingBucket = deriveSecurityBucket(finding)
   if (!findingBucket) return true
   const factCwe = typeof fact.cwe === "string" ? fact.cwe.trim().toUpperCase() : ""

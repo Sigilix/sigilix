@@ -141,6 +141,7 @@ import {
   evaluateScanFactDismissal,
   parseSecurityValidatorMode,
   deriveSecurityBucket,
+  factClassCompatible,
   AUTHZ_BUCKET,
   type SecurityValidatorMode,
   type SecurityDropReason,
@@ -9998,21 +9999,30 @@ function hasNonEmptyString(value: unknown): value is string {
 /**
  * SIG-325: a security finding is SELF-ORIGINATED when no deterministic scanner
  * fact backs it — its `evidenceId` is empty/missing, "NONE" (the authz/IDOR
- * exemption no scanner detects), OR a non-empty id that does NOT resolve in the
- * manifest. CodeRabbit (PR #364): the SIG-108 gate rejects a bogus id as
- * fabricated, but in `shadow` it falls through — so a bogus non-empty id must
- * not silently bypass this backstop. A finding carrying a REAL, resolving id
+ * exemption no scanner detects), a non-empty id that does NOT resolve in the
+ * manifest, OR a resolving id whose fact is a PROVABLY different CWE bucket than
+ * the finding's claimed class. CodeRabbit (PR #364): the SIG-108 gate rejects a
+ * bogus id as fabricated, but in `shadow` it falls through — so a bogus non-empty
+ * id must not silently bypass this backstop. Sigilix (PR #364): the SIG-108 gate
+ * also drops a cross-class citation (`factClassCompatible`), but again only in
+ * `enforce`; in `shadow` a CWE-22 claim citing a resolving CWE-798 fact would
+ * otherwise read as tool-backed here and skip the refutation-survival backstop.
+ * Re-check class compatibility so that laundering hole is closed in the
+ * orchestrator too. A finding carrying a REAL, class-compatible resolving id
  * (cited, or auto-enriched by `evaluateSecurityFinding`) is tool-backed and
  * covered by the SIG-108 gate, so it is NOT re-gated here. No manifest at all →
  * nothing to corroborate against → self-originated.
  */
 function isSelfOriginatedSecurityFinding(
   finding: PrReviewFinding,
-  manifest: ReadonlyMap<string, unknown> | undefined,
+  manifest: ReadonlyMap<string, SecurityFact> | undefined,
 ): boolean {
   const eid = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
   if (eid.length === 0 || eid === "NONE") return true
-  return !manifest || !manifest.has(eid)
+  if (!manifest) return true
+  const fact = manifest.get(eid)
+  if (!fact) return true
+  return !factClassCompatible(fact, finding)
 }
 
 /**

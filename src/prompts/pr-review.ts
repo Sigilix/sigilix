@@ -242,8 +242,16 @@
  * score>=4 findings, explicitly excluding string/comment/prompt mentions and
  * `RegExp.prototype.exec` from command-injection claims. Reviews with v23 go
  * stale on first deploy of v24.
+ *
+ * v24 → v25 (SIG-342): the performance specialist gains calibrated few-shots
+ * from the SIG-341 K=12 overfire baseline: direct `filter(...some(...))`
+ * membership scans over two growing inputs are a P1 complexity regression, a
+ * production serial fan-out remains a P1 even when a comment claims ordering
+ * intent, and explicit live-model eval/test harness loops with serial-by-design
+ * provider-rate-limit intent are not sev>=4 production perf findings. Reviews
+ * with v24 go stale on first deploy of v25.
  */
-export const PROMPT_VERSION = "24"
+export const PROMPT_VERSION = "25"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

@@ -246,3 +246,89 @@ export function clampTrivialSyncIoSeverity(
   }
   return clamped
 }
+
+// SIG-342: the performance K=12 ruler showed the model repeatedly rated
+// intentionally serial live-model eval loops as P1. These harnesses are
+// serial for stable K-repeat metrics and provider politeness; parallelizing
+// them changes the measurement and can trip provider limits. This is a
+// severity ceiling, not a drop: a reviewer may still see a P2 note, but it
+// cannot block as a production perf regression.
+const LIVE_EVAL_TEST_PATH_RE = /(?:^|\/)tests\/[^/]+\.live\.test\.tsx?$/
+const LIVE_EVAL_INTENT_RE = /\b(?:sequential\s+by\s+design|stable\s+(?:benchmark|eval|evaluation|metrics|order)|avoid\s+provider\s+bursts?|provider\s+(?:politeness|rate\s+limit)|rate\s+limits?)\b/i
+const LIVE_EVAL_MARKER_RE = /\b(?:runCase|repeats?|cases|apiKey|OLLAMA_API_KEY|live[-\s]?model|benchmark|eval)\b/i
+const SERIAL_WORD_RE = /\b(?:serial|sequential)\b/i
+const EVAL_LOOP_WORD_RE = /\b(?:runCase|cases?|eval(?:uation)?|benchmark|harness|loop|parallel|Promise\.all)\b/i
+
+interface MutablePerfFindingForClamp {
+  path: string
+  line: number
+  category: string
+  score: number
+  headline?: string
+  body?: string
+  complexityEstimate?: string
+  hotPathIdentifier?: string
+}
+
+function nearbyAddedLines(
+  lines: ReadonlyMap<number, string>,
+  line: number,
+  radius: number,
+): string {
+  const out: string[] = []
+  for (let l = line - radius; l <= line + radius; l++) {
+    const text = lines.get(l)
+    if (text) out.push(text)
+  }
+  return out.join("\n")
+}
+
+function findingTextForClamp(f: MutablePerfFindingForClamp): string {
+  return [
+    f.headline,
+    f.body,
+    f.complexityEstimate,
+    f.hotPathIdentifier,
+  ].filter((x): x is string => typeof x === "string" && x.length > 0).join("\n")
+}
+
+function isSerialEvalLoopClaim(text: string): boolean {
+  return SERIAL_WORD_RE.test(text) && EVAL_LOOP_WORD_RE.test(text)
+}
+
+/**
+ * Cap sev>=4 performance findings on explicit serial live-eval test harnesses
+ * to score 3. The proof is deliberately conjunctive:
+ *   - path is `tests/*.live.test.ts[x]`;
+ *   - the finding itself claims a serial/eval/loop parallelization issue;
+ *   - added file text or the finding names live-eval markers (`runCase`, `repeats`, `apiKey`, ...);
+ *   - added file text or the finding includes visible intent for serial execution / provider limits;
+ *   - the finding is anchored near an added `await`.
+ *
+ * Production files and tests without the explicit serial-eval intent are not
+ * touched, so a real N+1 or retry storm with a "sequential by design" comment
+ * keeps its original severity.
+ */
+export function clampIntentionalLiveEvalSerialLoopSeverity(
+  findings: MutablePerfFindingForClamp[],
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>> | undefined,
+): number {
+  if (!addedLineTextByLine) return 0
+  let clamped = 0
+  for (const f of findings) {
+    if (f.category !== "performance" || f.score < 4) continue
+    if (!LIVE_EVAL_TEST_PATH_RE.test(f.path)) continue
+    const lines = addedLineTextByLine.get(f.path)
+    if (!lines) continue
+    const fileText = [...lines.values()].join("\n")
+    const findingText = findingTextForClamp(f)
+    if (!isSerialEvalLoopClaim(findingText)) continue
+    const combinedText = `${fileText}\n${findingText}`
+    if (!LIVE_EVAL_MARKER_RE.test(combinedText) || !LIVE_EVAL_INTENT_RE.test(combinedText)) continue
+    const nearby = nearbyAddedLines(lines, f.line, 5)
+    if (!/\bawait\b/.test(nearby)) continue
+    f.score = 3
+    clamped++
+  }
+  return clamped
+}

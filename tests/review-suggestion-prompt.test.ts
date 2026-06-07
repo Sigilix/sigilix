@@ -100,7 +100,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // semantics fence prevents safe auth middleware tail-call FPs).
     // SIG-311 23→24 (security usage-vs-mention evidence requirement on
     // security-tooling/test/doc surfaces).
-    expect(PROMPT_VERSION).toBe("24")
+    // SIG-342 24→25 (performance specialist calibration for direct
+    // membership scans and intentional live-eval serial loops).
+    expect(PROMPT_VERSION).toBe("25")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

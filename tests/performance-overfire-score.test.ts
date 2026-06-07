@@ -11,6 +11,7 @@ import { buildChangedLineTextByPath } from "../src/lib/validate-logic-finding"
 
 const nPlusOneCase = PERFORMANCE_OVERFIRE_CASES.find((c) => c.id === "real-n-plus-one-request")!
 const safeLoopCase = PERFORMANCE_OVERFIRE_CASES.find((c) => c.id === "safe-tiny-fixed-loop")!
+const safeSerialEvalCase = PERFORMANCE_OVERFIRE_CASES.find((c) => c.id === "safe-serial-live-eval-loop")!
 
 describe("performance-overfire corpus", () => {
   it("all corpus diffs expose their target path to the perf evidence gate", () => {
@@ -74,5 +75,24 @@ describe("performance-overfire post-gate scoring", () => {
 
     expect(scoreCase(safeLoopCase, [finding]).falsePositive).toBe(true)
     expect(scoreCase(safeLoopCase, applyPerfEvidenceGate(safeLoopCase, [finding])).falsePositive).toBe(false)
+  })
+
+  it("scores the intentional serial live-eval false positive as clean after the post-gate caps severity", () => {
+    const finding: PerformanceScoredFinding = {
+      path: safeSerialEvalCase.path,
+      line: safeSerialEvalCase.targetLine,
+      score: 4,
+      category: "performance",
+      headline: "Serial live-eval loop should parallelize `runCase`",
+      body: "The loop awaits `runCase` for every case instead of using Promise.all.",
+      complexityEstimate: "O(k*n) sequential `runCase` calls over `repeats` x `cases`",
+    }
+
+    const postGate = applyPerfEvidenceGate(safeSerialEvalCase, [finding])
+
+    expect(scoreCase(safeSerialEvalCase, [finding]).falsePositive).toBe(true)
+    expect(postGate).toHaveLength(1)
+    expect(postGate[0]!.score).toBe(3)
+    expect(scoreCase(safeSerialEvalCase, postGate).falsePositive).toBe(false)
   })
 })

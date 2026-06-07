@@ -3,7 +3,10 @@
 // rated a CONSTANT `execSync("… --version")` as Critical "blocking".
 
 import { describe, it, expect } from "vitest"
-import { clampTrivialSyncIoSeverity } from "../src/lib/validate-perf-finding"
+import {
+  clampIntentionalLiveEvalSerialLoopSeverity,
+  clampTrivialSyncIoSeverity,
+} from "../src/lib/validate-perf-finding"
 
 const lines = (path: string, entries: [number, string][]) =>
   new Map([[path, new Map(entries)]])
@@ -56,5 +59,112 @@ describe("clampTrivialSyncIoSeverity", () => {
     const f = [{ path: "a.ts", line: 1, category: "performance", score: 5 }]
     expect(clampTrivialSyncIoSeverity(f, undefined)).toBe(0)
     expect(f[0].score).toBe(5)
+  })
+})
+
+describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
+  it("caps a sev>=4 serial live-eval harness finding to P2", () => {
+    const f = [{
+      path: "tests/model-recall-eval.live.test.ts",
+      line: 13,
+      category: "performance",
+      score: 4,
+      headline: "Serial live-eval loop should parallelize `runCase`",
+      body: "The benchmark awaits `runCase` for every case.",
+    }]
+    const alt = lines("tests/model-recall-eval.live.test.ts", [
+      [9, "    const perCase = new Map<string, Result>()"],
+      [10, "    for (let k = 0; k < repeats; k++) {"],
+      [11, "      for (const c of cases) {"],
+      [12, "        // Sequential by design: keep benchmark order stable and avoid provider bursts."],
+      [13, "        const result = await runCase(c, apiKey)"],
+      [14, "        perCase.set(c.id, result)"],
+    ])
+
+    expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(1)
+    expect(f[0].score).toBe(3)
+  })
+
+  it("caps when the serial-eval intent is visible in the finding text instead of added lines", () => {
+    const f = [{
+      path: "tests/model-recall-eval.live.test.ts",
+      line: 13,
+      category: "performance",
+      score: 4,
+      headline: "Serial live-eval loop should parallelize `runCase`",
+      body: "The loop is sequential by design for stable benchmark order and provider rate limits, but the finding still asks for Promise.all.",
+    }]
+    const alt = lines("tests/model-recall-eval.live.test.ts", [
+      [10, "    for (let k = 0; k < repeats; k++) {"],
+      [11, "      for (const c of cases) {"],
+      [12, "        const result = await runCase(c, apiKey)"],
+      [13, "        perCase.set(c.id, result)"],
+      [14, "      }"],
+    ])
+
+    expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(1)
+    expect(f[0].score).toBe(3)
+  })
+
+  it("does NOT cap production N+1 fanout even when a comment says sequential by design", () => {
+    const f = [{
+      path: "src/api/orders.ts",
+      line: 5,
+      category: "performance",
+      score: 4,
+      headline: "N+1 query waits sequentially in a loop",
+      body: "The request handler awaits `getUser(id)` once per id.",
+    }]
+    const alt = lines("src/api/orders.ts", [
+      [3, "  for (const id of ids) {"],
+      [4, "    // sequential by design to keep response order stable"],
+      [5, "    users.push(await getUser(id))"],
+      [6, "  }"],
+    ])
+
+    expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(0)
+    expect(f[0].score).toBe(4)
+  })
+
+  it("does NOT cap a live test serial await without explicit eval-rate-limit intent", () => {
+    const f = [{
+      path: "tests/model-recall-eval.live.test.ts",
+      line: 13,
+      category: "performance",
+      score: 4,
+      headline: "Serial live-eval loop should parallelize `runCase`",
+      body: "The loop awaits `runCase` for each case.",
+    }]
+    const alt = lines("tests/model-recall-eval.live.test.ts", [
+      [11, "      for (const c of cases) {"],
+      [12, "        const result = await runCase(c, apiKey)"],
+      [13, "        perCase.set(c.id, result)"],
+      [14, "      }"],
+    ])
+
+    expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(0)
+    expect(f[0].score).toBe(4)
+  })
+
+  it("does NOT cap a different real perf bug in a live-eval file with serial intent nearby", () => {
+    const f = [{
+      path: "tests/model-recall-eval.live.test.ts",
+      line: 13,
+      category: "performance",
+      score: 4,
+      headline: "`readFileSync` blocks every eval iteration",
+      body: "`readFileSync` reloads fixtures inside the loop and should move out of the per-case path.",
+    }]
+    const alt = lines("tests/model-recall-eval.live.test.ts", [
+      [10, "    for (let k = 0; k < repeats; k++) {"],
+      [11, "      for (const c of cases) {"],
+      [12, "        // Sequential by design: keep benchmark order stable and avoid provider bursts."],
+      [13, "        const result = await runCase(c, apiKey)"],
+      [14, "        const fixture = readFileSync(c.fixture, \"utf8\")"],
+      [15, "        perCase.set(c.id, result)"],
+    ])
+
+    expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(0)
+    expect(f[0].score).toBe(4)
   })
 })

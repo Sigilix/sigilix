@@ -185,6 +185,7 @@ import {
   evaluatePerfFinding,
   perfFindingIsSelfOriginated,
   clampTrivialSyncIoSeverity,
+  clampIntentionalLiveEvalSerialLoopSeverity,
   parsePerfValidatorMode,
   type PerfValidatorMode,
   type PerfDropReason,
@@ -5462,19 +5463,23 @@ export async function handlePrReviewEnsemble(
       console.log(JSON.stringify({ event: "ast-emit-score-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: astEmitClamped }))
     }
 
-    // BT1 (pr/07): cap a sev>=4 perf finding citing a CONSTANT version/help
-    // probe sync-exec (`execSync("… --version")`) to P3 — the only P0/P1 FP on
-    // pr/07. Mode-agnostic deterministic clamp (the perf evidence gate can't
-    // catch it: the call anchors to a real changed line, so it validates).
-    // Clamp BOTH the inline verdict findings AND the body-only (unanchored)
-    // findings (CodeRabbit #298): a demoted-to-body sync-exec would otherwise
-    // keep its sev>=4 score in the body/event output.
+    // BT1/SIG-342: deterministic performance severity clamps. These do NOT
+    // drop findings; they only cap narrow proof-backed FP shapes below the
+    // P0/P1 blocker tier. Clamp BOTH the inline verdict findings AND the
+    // body-only (unanchored) findings (CodeRabbit #298): a demoted-to-body
+    // finding would otherwise keep its sev>=4 score in the body/event output.
     const perfClampLines = buildAddedLineTextByLine(fullPrDiff)
-    const perfClamped =
+    const trivialSyncIoClamped =
       clampTrivialSyncIoSeverity(validated.verdict.findings, perfClampLines) +
       clampTrivialSyncIoSeverity(validated.unanchoredFindings, perfClampLines)
-    if (perfClamped > 0) {
-      console.log(JSON.stringify({ event: "perf-trivial-sync-io-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: perfClamped }))
+    if (trivialSyncIoClamped > 0) {
+      console.log(JSON.stringify({ event: "perf-trivial-sync-io-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: trivialSyncIoClamped }))
+    }
+    const liveEvalSerialClamped =
+      clampIntentionalLiveEvalSerialLoopSeverity(validated.verdict.findings, perfClampLines) +
+      clampIntentionalLiveEvalSerialLoopSeverity(validated.unanchoredFindings, perfClampLines)
+    if (liveEvalSerialClamped > 0) {
+      console.log(JSON.stringify({ event: "perf-live-eval-serial-clamped", owner, repo, prNumber, headSha: headSha.slice(0, 7), count: liveEvalSerialClamped }))
     }
 
     // ARC-270 — consensus-aware re-ranking. Strictly additive: we

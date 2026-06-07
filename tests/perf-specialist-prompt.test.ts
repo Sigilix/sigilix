@@ -44,6 +44,13 @@ describe("perf-examples.json", () => {
     expect(budgetBad).toBeTruthy()
     expect(budgetBad!.emit).toBe(false)
   })
+
+  it("pins the SIG-342 membership-scan and serial-eval boundary exemplars", () => {
+    const ids = new Set(perfExamples.examples.map((e) => e.id))
+    expect(ids.has("good-direct-membership-scan")).toBe(true)
+    expect(ids.has("good-production-serial-fanout-even-with-order-comment")).toBe(true)
+    expect(ids.has("bad-intentional-live-eval-serial-loop")).toBe(true)
+  })
 })
 
 describe("performance specialist prompt", () => {
@@ -66,6 +73,12 @@ describe("performance specialist prompt", () => {
 
   it("embeds the few-shot exemplar block", () => {
     expect(prompt).toContain("PERFORMANCE FEW-SHOT EXEMPLARS")
+  })
+
+  it("embeds the SIG-342 direct membership-scan and live-eval boundaries", () => {
+    expect(prompt).toContain("return items.filter(item => others.some(other => other.id === item.id))")
+    expect(prompt).toContain("tests/*.live.test.ts")
+    expect(prompt).toContain("This exception does NOT apply to production request fan-out")
   })
 })
 
@@ -130,12 +143,13 @@ describe("PR_REVIEW_SCHEMA — constrained decode surface", () => {
 })
 
 describe("PROMPT_VERSION", () => {
-  it("is at least 4 (SIG-110 bumped 3->4; carried forward by later prompt changes)", () => {
+  it("is at least 25 (SIG-342 bumped 24->25 for perf calibration)", () => {
     // SIG-110 bumped 3->4; SIG-125 bumped 4->5; SIG-162 bumped 5->6;
-    // SIG-161 PR 4b bumped 6->7. Assert the current value rather than
+    // SIG-161 PR 4b bumped 6->7; SIG-342 bumped 24->25. Assert the
+    // current value rather than
     // a frozen number so a legitimate later bump doesn't require
     // editing an unrelated specialist's test.
-    expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(4)
+    expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(25)
   })
 })
 

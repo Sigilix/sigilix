@@ -11,6 +11,7 @@ import {
   parseLogicClaimRefutationMode,
   LOGIC_CLAIM_REFUTATION_MIN_SEVERITY,
 } from "../src/lib/validate-logic-claim-refutation"
+import { createAstCache } from "../src/lib/ast-rules/parse-cache"
 
 function finding(overrides: Partial<PrReviewFinding> = {}): PrReviewFinding {
   return {
@@ -942,5 +943,58 @@ describe("missing-return-type refutation (REFUTE when the annotation is present)
 }`
     const f = finding({ path: "src/load.ts", line: 2, headline: "Missing the return-type guard before the await", body: "no narrowing before returning" })
     expect(evaluateLogicClaimRefutation(f, ctx("src/load.ts", S)).keep).toBe(true)
+  })
+})
+
+describe("SIG-336: parse-once cache integration (behavior-invariant, parses each file once)", () => {
+  const AUTH = `export function requireAdmin(svc) {
+  return async (req, res, next) => {
+    if (!(await svc.isAdmin(req.user))) {
+      return res.status(403).end()
+    }
+    next()
+  }
+}`
+  // A refuting control-flow finding (the canonical case from above).
+  const refuting = finding({
+    path: "src/middleware/auth.ts",
+    line: 6,
+    headline: "`next()` runs unconditionally after the 403 response, causing a double-response",
+    body: "When isAdmin returns false the middleware returns; next() is not inside an else block.",
+  })
+  // A second finding citing the SAME file that does NOT refute (no claim shape).
+  const nonRefuting = finding({
+    path: "src/middleware/auth.ts",
+    line: 6,
+    headline: "consider renaming next for clarity",
+    body: "stylistic only",
+  })
+
+  it("parses a file cited by N findings exactly ONCE (cache.size === 1)", () => {
+    const cache = createAstCache()
+    const fullFileByPath = new Map([["src/middleware/auth.ts", AUTH]])
+    evaluateLogicClaimRefutation(refuting, { fullFileByPath, astCache: cache })
+    evaluateLogicClaimRefutation(nonRefuting, { fullFileByPath, astCache: cache })
+    evaluateLogicClaimRefutation(refuting, { fullFileByPath, astCache: cache })
+    expect(cache.size).toBe(1) // one acorn parse for all three evaluations
+  })
+
+  it("yields the SAME decision with or without a cache (behavior-invariant)", () => {
+    const fullFileByPath = new Map([["src/middleware/auth.ts", AUTH]])
+    const cache = createAstCache()
+    const withCache = evaluateLogicClaimRefutation(refuting, { fullFileByPath, astCache: cache })
+    const withoutCache = evaluateLogicClaimRefutation(refuting, { fullFileByPath })
+    expect(withCache).toEqual(withoutCache)
+    expect(withCache).toEqual({ keep: false, reason: "control-flow-claim-refuted-by-guard" })
+  })
+
+  it("KEEPS (fails open) when the cited file exceeds the 500KB cache guard", () => {
+    const cache = createAstCache()
+    // Valid source padded past the byte ceiling — would refute if parsed, but the
+    // cache skips it by size, so the gate fails open and keeps the finding.
+    const huge = `${AUTH}\n// ${"x".repeat(500_001)}\n`
+    const fullFileByPath = new Map([["src/middleware/auth.ts", huge]])
+    const d = evaluateLogicClaimRefutation(refuting, { fullFileByPath, astCache: cache })
+    expect(d.keep).toBe(true)
   })
 })

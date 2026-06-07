@@ -331,6 +331,7 @@ import { dismissPriorSigilixReviews } from "./dismiss-prior-reviews"
 import { PROMPT_VERSION } from "../prompts/pr-review"
 import { runDepVulnScan, type ScanSkipReason as DepVulnSkipReason } from "./dep-vulns/scanner"
 import { runAstRules } from "./ast-rules/runner"
+import { createAstCache, type AstCache } from "./ast-rules/parse-cache"
 import { analyzeHelperBypass, renderAsymmetryHints } from "./ast-rules/analyze-helper-bypass"
 import { analyzeToctouRace, renderToctouHints } from "./ast-rules/analyze-toctou-race"
 import { renderAstFindingsAsJsonForSynth } from "./ast-rules/render"
@@ -10466,6 +10467,13 @@ export function validateForSubmission(args: {
    */
   fullFileByPath?: ReadonlyMap<string, string>
   /**
+   * SIG-336: per-review parse-once AST cache. Threaded into the logic-claim
+   * refutation gate so a file cited by N findings is acorn-parsed once (not N
+   * times) and the 500KB guard applies. Defaults to a fresh cache when omitted;
+   * the caller passes a shared instance so earlier parsers reuse it (Phase 3).
+   */
+  astCache?: AstCache
+  /**
    * Cross-cutting over-fire Option B: telemetry callback fired once per finding
    * the window-blindness gate flagged (reuses the `pr-review-finding-rejected-
    * validation` event with a `gate: "window-blindness"` discriminator).
@@ -10569,6 +10577,7 @@ export function validateForSubmission(args: {
     onAbsenceFindingDropped,
     windowBlindnessValidatorMode = "off",
     fullFileByPath = new Map<string, string>(),
+    astCache = createAstCache(),
     onWindowBlindnessFindingDropped,
     securityGroundingValidatorMode = "off",
     onSecurityGroundingFindingDropped,
@@ -10931,7 +10940,7 @@ export function validateForSubmission(args: {
     // re-checks category+sev), so it cannot suppress a real bug. Same
     // shadow-first semantics: only `enforce` drops.
     if (logicClaimRefutationMode !== "off" && sourceRolesInclude(sourceIds, "logic")) {
-      const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath })
+      const claimDecision = evaluateLogicClaimRefutation(f, { fullFileByPath, astCache })
       if (!claimDecision.keep) {
         const dropped = logicClaimRefutationMode === "enforce"
         droppedForFailedLogicClaimRefutation++

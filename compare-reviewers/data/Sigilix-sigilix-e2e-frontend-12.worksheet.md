@@ -2,9 +2,9 @@
 
 https://github.com/Sigilix/sigilix-e2e-frontend/pull/12
 
-Sigilix flagged **4**; CodeRabbit flagged **2**.
+Sigilix flagged **4**; CodeRabbit flagged **2**; Greptile flagged **0**.
 
-Label each *real-world issue* once in the table at the bottom. If both bots flagged the same issue, put both refs in one row and use a `both_*` label. Leave a finding out of the table only if it is a pure duplicate of a row you already wrote.
+Label each *real-world issue* once in the table at the bottom. If multiple tools flagged the same issue, put all refs in one row. Use `none` only for a ground-truth real bug every tool missed. Leave a finding out of the table only if it is a pure duplicate of a row you already wrote.
 
 ### Sigilix findings
 
@@ -18,17 +18,21 @@ Label each *real-world issue* once in the table at the bottom. If both bots flag
 - `c1` src/components/UserList.tsx:15 — _⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_
 - `c2` src/hooks/usePagedUsers.ts:36 — _⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_
 
+### Greptile findings
+
+_(none)_
+
 ## Labels
 
-<!-- label    ∈ sigilix_only_real_bug | sigilix_only_noise | cr_only_real_bug | cr_only_noise | both_real | both_noise -->
+<!-- outcome  ∈ real_bug | noise -->
 <!-- category ∈ security | perf | logic | tests | style -->
-<!-- findings: comma-separated refs, e.g. s1,c3 -->
+<!-- findings: comma-separated refs, e.g. s1,c3,g2; use `none` for a real bug every tool missed -->
 
-| findings | label | category | note |
+| findings | outcome | category | note |
 |----------|-------|----------|------|
-| s1 | sigilix_only_real_bug | logic | stale closure in loadMore |
-| s2 | sigilix_only_real_bug | tests | pagination hook untested |
-| s3 | sigilix_only_real_bug | tests | getUsersPaged untested |
-| s4 | sigilix_only_real_bug | tests | UserList filter untested |
-| c1 | cr_only_real_bug | logic | error short-circuit discards already-loaded users |
-| c2 | cr_only_real_bug | logic | StrictMode double-invoke concern |
+| s1 | real_bug | logic | stale closure in loadMore |
+| s2 | real_bug | tests | pagination hook untested |
+| s3 | real_bug | tests | getUsersPaged untested |
+| s4 | real_bug | tests | UserList filter untested |
+| c1 | real_bug | logic | error short-circuit discards already-loaded users |
+| c2 | real_bug | logic | StrictMode double-invoke concern |

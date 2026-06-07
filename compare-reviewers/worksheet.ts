@@ -1,21 +1,22 @@
-// SIG-70 — labeling worksheet: build it, parse it back.
+// SIG-70/SIG-326 — labeling worksheet: build it, parse it back.
 //
 // The worksheet is the markdown surface the reviewer fills in. `collect`
 // writes it; the reviewer groups each real-world issue into one row of the
-// `## Labels` table (pairing a Sigilix + a CodeRabbit finding into one
-// `both_*` row when both bots caught the same thing); `label` parses it back
-// into validated `LabeledItem[]`. Pure — no IO.
+// `## Labels` table. `findings` lists whichever tool refs found the same issue
+// (`s*`, `c*`, `g*`), or `none` for a labeled real bug every tool missed.
+// `label` parses it back into validated `LabeledItem[]`. Pure — no IO.
 
 import {
   CATEGORIES,
-  CR_LABELS,
   isCategory,
-  isLabel,
-  LABELS,
-  SIGILIX_LABELS,
+  isOutcome,
+  OUTCOMES,
+  TOOLS,
+  toolDisplayName,
   type ComparisonFile,
   type LabeledItem,
   type NormalizedFinding,
+  type Tool,
 } from "./types"
 
 const LABELS_HEADING = "## Labels"
@@ -45,26 +46,26 @@ export function buildWorksheet(file: ComparisonFile): string {
   lines.push(prUrl)
   lines.push("")
   lines.push(
-    `Sigilix flagged **${findings.sigilix.length}**; CodeRabbit flagged ` +
-      `**${findings.coderabbit.length}**.`,
+    TOOLS.map((tool) => `${toolDisplayName(tool)} flagged **${findings[tool].length}**`).join("; ") + ".",
   )
   lines.push("")
   lines.push(
-    "Label each *real-world issue* once in the table at the bottom. If both " +
-      "bots flagged the same issue, put both refs in one row and use a " +
-      "`both_*` label. Leave a finding out of the table only if it is a pure " +
-      "duplicate of a row you already wrote.",
+    "Label each *real-world issue* once in the table at the bottom. If multiple " +
+      "tools flagged the same issue, put all refs in one row. Use `none` only " +
+      "for a ground-truth real bug every tool missed. Leave a finding out of " +
+      "the table only if it is a pure duplicate of a row you already wrote.",
   )
   lines.push("")
   lines.push(findingSection("Sigilix findings", findings.sigilix))
   lines.push(findingSection("CodeRabbit findings", findings.coderabbit))
+  lines.push(findingSection("Greptile findings", findings.greptile))
   lines.push(LABELS_HEADING)
   lines.push("")
-  lines.push(`<!-- label    ∈ ${LABELS.join(" | ")} -->`)
+  lines.push(`<!-- outcome  ∈ ${OUTCOMES.join(" | ")} -->`)
   lines.push(`<!-- category ∈ ${CATEGORIES.join(" | ")} -->`)
-  lines.push("<!-- findings: comma-separated refs, e.g. s1,c3 -->")
+  lines.push("<!-- findings: comma-separated refs, e.g. s1,c3,g2; use `none` for a real bug every tool missed -->")
   lines.push("")
-  lines.push("| findings | label | category | note |")
+  lines.push("| findings | outcome | category | note |")
   lines.push("|----------|-------|----------|------|")
   lines.push("| | | | |")
   lines.push("")
@@ -110,10 +111,11 @@ export function parseWorksheet(md: string, file: ComparisonFile): ParseResult {
 
   // ref -> which bot owns it, taken from the finding set (not inferred from
   // the ref's first letter — robust if the ref scheme ever changes).
-  const refBot = new Map<string, "sigilix" | "coderabbit">()
-  for (const f of file.findings.sigilix) refBot.set(f.ref, "sigilix")
-  for (const f of file.findings.coderabbit) refBot.set(f.ref, "coderabbit")
-  const knownRefs = new Set<string>(refBot.keys())
+  const refTool = new Map<string, Tool>()
+  for (const tool of TOOLS) {
+    for (const f of file.findings[tool]) refTool.set(f.ref, tool)
+  }
+  const knownRefs = new Set<string>(refTool.keys())
   const usedRefs = new Map<string, number>() // ref -> first row that used it
 
   const section = md.slice(headingIdx + LABELS_HEADING.length)
@@ -140,7 +142,7 @@ export function parseWorksheet(md: string, file: ComparisonFile): ParseResult {
       errors.push(`${where}: expected at least 3 columns (findings | label | category), got ${cells.length}`)
       continue
     }
-    const [findingsCell, labelCell, categoryCell] = cells
+    const [findingsCell, outcomeCell, categoryCell] = cells
     // Take the note from the RAW (untrimmed) split past the 3rd cell, so a note
     // containing a literal `|` (e.g. "use a || b") keeps both its text and its
     // internal spacing instead of being truncated at the first pipe.
@@ -152,12 +154,14 @@ export function parseWorksheet(md: string, file: ComparisonFile): ParseResult {
       .join("|")
       .trim()
 
-    const refs = (findingsCell ?? "")
+    const rawFindings = (findingsCell ?? "").trim()
+    const noFindingRefs = /^(none|n\/a|-|—)$/i.test(rawFindings)
+    const refs = noFindingRefs ? [] : rawFindings
       .split(",")
       .map((r) => r.trim())
       .filter((r) => r.length > 0)
     if (refs.length === 0) {
-      errors.push(`${where}: no finding refs`)
+      if (!noFindingRefs) errors.push(`${where}: no finding refs (use "none" for a missed real bug)`)
     }
     for (const ref of refs) {
       if (!knownRefs.has(ref)) {
@@ -172,37 +176,21 @@ export function parseWorksheet(md: string, file: ComparisonFile): ParseResult {
       }
     }
 
-    const label = labelCell ?? ""
-    if (!isLabel(label)) {
-      errors.push(`${where}: invalid label "${label}" (expected one of ${LABELS.join(", ")})`)
+    const outcome = outcomeCell ?? ""
+    if (!isOutcome(outcome)) {
+      errors.push(`${where}: invalid outcome "${outcome}" (expected one of ${OUTCOMES.join(", ")})`)
     }
     const category = categoryCell ?? ""
     if (!isCategory(category)) {
       errors.push(`${where}: invalid category "${category}" (expected one of ${CATEGORIES.join(", ")})`)
     }
 
-    // Cross-check label against which bots' refs are present — catches the
-    // common mislabel (a `both_*` row with only one bot's finding, or a
-    // `sigilix_only_*` row that lists a CodeRabbit ref).
-    if (isLabel(label) && refs.every((r) => knownRefs.has(r))) {
-      const hasS = refs.some((r) => refBot.get(r) === "sigilix")
-      const hasC = refs.some((r) => refBot.get(r) === "coderabbit")
-      const expectsS = (SIGILIX_LABELS as readonly string[]).includes(label)
-      const expectsC = (CR_LABELS as readonly string[]).includes(label)
-      const isBoth = expectsS && expectsC
-      if (isBoth && !(hasS && hasC)) {
-        errors.push(`${where}: label "${label}" needs both a Sigilix (s*) and a CodeRabbit (c*) ref`)
-      }
-      if (!isBoth && expectsS && hasC) {
-        errors.push(`${where}: label "${label}" is Sigilix-only but lists a CodeRabbit (c*) ref`)
-      }
-      if (!isBoth && expectsC && hasS) {
-        errors.push(`${where}: label "${label}" is CodeRabbit-only but lists a Sigilix (s*) ref`)
-      }
+    if (isOutcome(outcome) && outcome === "noise" && refs.length === 0) {
+      errors.push(`${where}: outcome "noise" requires at least one tool finding ref`)
     }
 
-    if (isLabel(label) && isCategory(category)) {
-      items.push({ id: rowNum, findings: refs, label, category, note })
+    if (isOutcome(outcome) && isCategory(category)) {
+      items.push({ id: rowNum, findings: refs, outcome, category, note })
     }
   }
 

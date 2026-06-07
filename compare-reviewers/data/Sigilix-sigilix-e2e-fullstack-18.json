@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "owner": "Sigilix",
   "repo": "sigilix-e2e-fullstack",
   "pr": 18,
@@ -9,64 +9,65 @@
     "sigilix": [
       {
         "ref": "s1",
-        "bot": "sigilix",
         "commentId": 3352945408,
         "path": "server/invoice-summary.ts",
         "line": 14,
         "excerpt": "**Unhandled promise rejection on database query will crash the process under load**",
         "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352945408",
-        "botCategory": "error-handling"
+        "botCategory": "error-handling",
+        "tool": "sigilix"
       },
       {
         "ref": "s2",
-        "bot": "sigilix",
         "commentId": 3352945415,
         "path": "server/invoice-summary.ts",
         "line": 12,
         "excerpt": "**New endpoint has no authentication: any caller can read per-status invoice summary data**",
         "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352945415",
-        "botCategory": "security"
+        "botCategory": "security",
+        "tool": "sigilix"
       },
       {
         "ref": "s3",
-        "bot": "sigilix",
         "commentId": 3352945423,
         "path": "server/invoice-summary.ts",
         "line": 1,
         "excerpt": "**New endpoint ships without test coverage**",
         "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352945423",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       }
     ],
     "coderabbit": [
       {
         "ref": "c1",
-        "bot": "coderabbit",
         "commentId": 3352949500,
         "path": "server/invoice-summary.ts",
         "line": 5,
         "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949500"
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949500",
+        "tool": "coderabbit"
       },
       {
         "ref": "c2",
-        "bot": "coderabbit",
         "commentId": 3352949505,
         "path": "server/invoice-summary.ts",
         "line": 30,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949505"
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949505",
+        "tool": "coderabbit"
       },
       {
         "ref": "c3",
-        "bot": "coderabbit",
         "commentId": 3352949507,
         "path": "server/invoice-summary.ts",
         "line": 19,
         "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949507"
+        "url": "https://github.com/Sigilix/sigilix-e2e-fullstack/pull/18#discussion_r3352949507",
+        "tool": "coderabbit"
       }
-    ]
+    ],
+    "greptile": []
   },
   "items": [
     {
@@ -75,45 +76,45 @@
         "s1",
         "c2"
       ],
-      "label": "both_real",
       "category": "logic",
-      "note": "both flagged unhandled async rejection crashing the route"
+      "note": "both flagged unhandled async rejection crashing the route",
+      "outcome": "real_bug"
     },
     {
       "id": 2,
       "findings": [
         "s2"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "security",
-      "note": "no auth on invoice-summary endpoint"
+      "note": "no auth on invoice-summary endpoint",
+      "outcome": "real_bug"
     },
     {
       "id": 3,
       "findings": [
         "s3"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "tests",
-      "note": "endpoint untested"
+      "note": "endpoint untested",
+      "outcome": "real_bug"
     },
     {
       "id": 4,
       "findings": [
         "c1"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "fail fast when DATABASE_URL missing"
+      "note": "fail fast when DATABASE_URL missing",
+      "outcome": "real_bug"
     },
     {
       "id": 5,
       "findings": [
         "c3"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "::int casts on aggregates can overflow"
+      "note": "::int casts on aggregates can overflow",
+      "outcome": "real_bug"
     }
   ]
 }

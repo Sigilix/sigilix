@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "owner": "Sigilix",
   "repo": "sigilix-e2e-frontend",
   "pr": 13,
@@ -9,120 +9,121 @@
     "sigilix": [
       {
         "ref": "s1",
-        "bot": "sigilix",
         "commentId": 3346283005,
         "path": "src/components/ActivityFeed.tsx",
         "line": 38,
         "excerpt": "**N+1 network requests: each feed item fetches its own embed preview and comments**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346283005",
-        "botCategory": "performance"
+        "botCategory": "performance",
+        "tool": "sigilix"
       },
       {
         "ref": "s2",
-        "bot": "sigilix",
         "commentId": 3346283011,
         "path": "src/components/ActivityFeed.tsx",
         "line": 34,
         "excerpt": "**ActivityFeed renders untrusted user HTML without React sanitization**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346283011",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       },
       {
         "ref": "s3",
-        "bot": "sigilix",
         "commentId": 3346283013,
         "path": "src/components/CommentThread.tsx",
         "line": 19,
         "excerpt": "**CommentThread injects comment bodies via jQuery .html() without client-side sanitization**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346283013",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       },
       {
         "ref": "s4",
-        "bot": "sigilix",
         "commentId": 3346283017,
         "path": "src/components/NotificationsPanel.tsx",
         "line": 24,
         "excerpt": "**NotificationsPanel injects bodyHtml directly into innerHTML**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346283017",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       },
       {
         "ref": "s5",
-        "bot": "sigilix",
         "commentId": 3346283021,
         "path": "src/components/NotificationsPanel.tsx",
         "line": 24,
         "excerpt": "**Race condition in preview rendering assigns `bodyHtml` from older data**",
         "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346283021",
-        "botCategory": "logic"
+        "botCategory": "logic",
+        "tool": "sigilix"
       }
     ],
     "coderabbit": [
       {
         "ref": "c1",
-        "bot": "coderabbit",
         "commentId": 3346296180,
         "path": "package.json",
         "line": 18,
         "excerpt": "_⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296180"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296180",
+        "tool": "coderabbit"
       },
       {
         "ref": "c2",
-        "bot": "coderabbit",
         "commentId": 3346296199,
         "path": "src/api/activity.ts",
         "line": 45,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296199"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296199",
+        "tool": "coderabbit"
       },
       {
         "ref": "c3",
-        "bot": "coderabbit",
         "commentId": 3346296205,
         "path": "src/components/ActivityFeed.tsx",
         "line": 34,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296205"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296205",
+        "tool": "coderabbit"
       },
       {
         "ref": "c4",
-        "bot": "coderabbit",
         "commentId": 3346296215,
         "path": "src/components/DigestBanner.tsx",
         "line": 16,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296215"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296215",
+        "tool": "coderabbit"
       },
       {
         "ref": "c5",
-        "bot": "coderabbit",
         "commentId": 3346296229,
         "path": "src/components/EmbedCard.tsx",
         "line": 20,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296229"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296229",
+        "tool": "coderabbit"
       },
       {
         "ref": "c6",
-        "bot": "coderabbit",
         "commentId": 3346296242,
         "path": "src/components/NotificationsPanel.tsx",
         "line": 24,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296242"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296242",
+        "tool": "coderabbit"
       },
       {
         "ref": "c7",
-        "bot": "coderabbit",
         "commentId": 3346296245,
         "path": "src/components/NotificationsPanel.tsx",
         "line": 33,
         "excerpt": "_⚠️ Potential issue_ | _🟡 Minor_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296245"
+        "url": "https://github.com/Sigilix/sigilix-e2e-frontend/pull/13#discussion_r3346296245",
+        "tool": "coderabbit"
       }
-    ]
+    ],
+    "greptile": []
   },
   "items": [
     {
@@ -131,9 +132,9 @@
         "s2",
         "c3"
       ],
-      "label": "both_real",
       "category": "security",
-      "note": "both flagged ActivityFeed dangerouslySetInnerHTML XSS"
+      "note": "both flagged ActivityFeed dangerouslySetInnerHTML XSS",
+      "outcome": "real_bug"
     },
     {
       "id": 2,
@@ -141,81 +142,81 @@
         "s4",
         "c6"
       ],
-      "label": "both_real",
       "category": "security",
-      "note": "both flagged NotificationsPanel innerHTML XSS"
+      "note": "both flagged NotificationsPanel innerHTML XSS",
+      "outcome": "real_bug"
     },
     {
       "id": 3,
       "findings": [
         "s1"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "perf",
-      "note": "N+1 fetches per feed item"
+      "note": "N+1 fetches per feed item",
+      "outcome": "real_bug"
     },
     {
       "id": 4,
       "findings": [
         "s3"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "security",
-      "note": "CommentThread jQuery .html() XSS"
+      "note": "CommentThread jQuery .html() XSS",
+      "outcome": "real_bug"
     },
     {
       "id": 5,
       "findings": [
         "s5"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "logic",
-      "note": "stale bodyHtml race in preview effect"
+      "note": "stale bodyHtml race in preview effect",
+      "outcome": "real_bug"
     },
     {
       "id": 6,
       "findings": [
         "c2"
       ],
-      "label": "cr_only_real_bug",
       "category": "security",
-      "note": "activity API returns untrusted HTML"
+      "note": "activity API returns untrusted HTML",
+      "outcome": "real_bug"
     },
     {
       "id": 7,
       "findings": [
         "c4"
       ],
-      "label": "cr_only_real_bug",
       "category": "security",
-      "note": "DigestBanner XSS"
+      "note": "DigestBanner XSS",
+      "outcome": "real_bug"
     },
     {
       "id": 8,
       "findings": [
         "c5"
       ],
-      "label": "cr_only_real_bug",
       "category": "security",
-      "note": "EmbedCard iframe XSS"
+      "note": "EmbedCard iframe XSS",
+      "outcome": "real_bug"
     },
     {
       "id": 9,
       "findings": [
         "c7"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "summary not cleared when list empties"
+      "note": "summary not cleared when list empties",
+      "outcome": "real_bug"
     },
     {
       "id": 10,
       "findings": [
         "c1"
       ],
-      "label": "cr_only_noise",
       "category": "style",
-      "note": "@types/dompurify deprecated -- hygiene, not a bug"
+      "note": "@types/dompurify deprecated -- hygiene, not a bug",
+      "outcome": "noise"
     }
   ]
 }

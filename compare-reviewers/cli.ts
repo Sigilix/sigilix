@@ -1,5 +1,5 @@
 #!/usr/bin/env -S npx tsx
-// SIG-70 — Sigilix vs CodeRabbit head-to-head measurement CLI.
+// SIG-70/SIG-326 — reviewer head-to-head measurement CLI.
 //
 // Thin shell: argument parsing + filesystem + the `gh` fetch (github.ts).
 // All judgment logic — normalization, worksheet parse/validate, the summary
@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url"
 import { parseArgs } from "node:util"
 import { fetchPrUrl, fetchReviewComments } from "./github"
 import { comparisonBasename, mergeComparison, parseTarget } from "./io"
-import { normalizeFindings } from "./normalize"
+import { DEFAULT_GREPTILE_BOTS, normalizeFindings } from "./normalize"
 import { formatSummaryMarkdown, summarize } from "./summary"
 import { buildWorksheet, parseWorksheet } from "./worksheet"
 import type { ComparisonFile } from "./types"
@@ -51,10 +51,17 @@ async function readComparison(path: string): Promise<ComparisonFile | null> {
     throw err
   }
   const parsed = JSON.parse(raw) as ComparisonFile
-  if (parsed.schemaVersion !== 1) {
+  if (parsed.schemaVersion !== 2) {
     die(`${path}: unsupported schemaVersion ${String(parsed.schemaVersion)}`)
   }
   return parsed
+}
+
+function greptileLoginsFromEnv(): readonly string[] {
+  const raw = process.env.COMPARE_REVIEWERS_GREPTILE_LOGINS
+  if (!raw) return DEFAULT_GREPTILE_BOTS
+  const values = raw.split(",").map((s) => s.trim()).filter(Boolean)
+  return values.length > 0 ? values : DEFAULT_GREPTILE_BOTS
 }
 
 async function writeJson(path: string, file: ComparisonFile): Promise<void> {
@@ -75,7 +82,7 @@ async function cmdCollect(opts: { repo?: string; pr?: string; dataDir: string })
     fetchPrUrl(owner, repo, pr),
     fetchReviewComments(owner, repo, pr),
   ])
-  const findings = normalizeFindings(comments)
+  const findings = normalizeFindings(comments, { greptileLogins: greptileLoginsFromEnv() })
 
   const prev = await readComparison(jsonPath)
   const file = mergeComparison(prev, {
@@ -90,7 +97,8 @@ async function cmdCollect(opts: { repo?: string; pr?: string; dataDir: string })
 
   console.error(
     `[collect] Sigilix: ${findings.sigilix.length} finding(s), ` +
-      `CodeRabbit: ${findings.coderabbit.length} finding(s) → ${jsonPath}`,
+      `CodeRabbit: ${findings.coderabbit.length} finding(s), ` +
+      `Greptile: ${findings.greptile.length} finding(s) → ${jsonPath}`,
   )
 
   if (await fileExists(worksheetPath)) {
@@ -161,13 +169,15 @@ async function cmdSummary(opts: { out?: string; dataDir: string }): Promise<void
 
 // ─── entry ───────────────────────────────────────────────────────
 
-const USAGE = `compare-reviewers — Sigilix vs CodeRabbit head-to-head
+const USAGE = `compare-reviewers — reviewer head-to-head
 
-  collect  --repo OWNER/REPO --pr N    fetch both bots' findings + write a worksheet
+  collect  --repo OWNER/REPO --pr N    fetch tool findings + write a worksheet
   label    --repo OWNER/REPO --pr N    parse the filled worksheet into the JSON
   summary  [--out path.md]             aggregate all data/*.json into a report
 
-  --data-dir <path>   override the data directory (default: compare-reviewers/data)`
+  --data-dir <path>   override the data directory (default: compare-reviewers/data)
+
+  COMPARE_REVIEWERS_GREPTILE_LOGINS=login1,login2 overrides Greptile app logins`
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({

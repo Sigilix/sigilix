@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "owner": "Sigilix",
   "repo": "sigilix-e2e-backend",
   "pr": 18,
@@ -9,44 +9,45 @@
     "sigilix": [
       {
         "ref": "s1",
-        "bot": "sigilix",
         "commentId": 3352955469,
         "path": "src/routes/session.ts",
         "line": 1,
         "excerpt": "**Authentication endpoint ships without test coverage**",
         "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352955469",
-        "botCategory": "testing"
+        "botCategory": "testing",
+        "tool": "sigilix"
       }
     ],
     "coderabbit": [
       {
         "ref": "c1",
-        "bot": "coderabbit",
         "commentId": 3352961995,
         "path": "src/routes/session.ts",
         "line": 6,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352961995"
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352961995",
+        "tool": "coderabbit"
       },
       {
         "ref": "c2",
-        "bot": "coderabbit",
         "commentId": 3352962000,
         "path": "src/routes/session.ts",
         "line": 16,
         "excerpt": "_⚠️ Potential issue_ | _🔴 Critical_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352962000"
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352962000",
+        "tool": "coderabbit"
       },
       {
         "ref": "c3",
-        "bot": "coderabbit",
         "commentId": 3352962002,
         "path": "src/routes/session.ts",
         "line": 14,
         "excerpt": "_⚠️ Potential issue_ | _🟠 Major_ | _⚡ Quick win_",
-        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352962002"
+        "url": "https://github.com/Sigilix/sigilix-e2e-backend/pull/18#discussion_r3352962002",
+        "tool": "coderabbit"
       }
-    ]
+    ],
+    "greptile": []
   },
   "items": [
     {
@@ -54,36 +55,36 @@
       "findings": [
         "s1"
       ],
-      "label": "sigilix_only_real_bug",
       "category": "tests",
-      "note": "auth endpoint untested"
+      "note": "auth endpoint untested",
+      "outcome": "real_bug"
     },
     {
       "id": 2,
       "findings": [
         "c1"
       ],
-      "label": "cr_only_real_bug",
       "category": "security",
-      "note": "empty SESSION_SECRET allows auth bypass"
+      "note": "empty SESSION_SECRET allows auth bypass",
+      "outcome": "real_bug"
     },
     {
       "id": 3,
       "findings": [
         "c2"
       ],
-      "label": "cr_only_real_bug",
       "category": "logic",
-      "note": "split('.') breaks payload containing dots"
+      "note": "split('.') breaks payload containing dots",
+      "outcome": "real_bug"
     },
     {
       "id": 4,
       "findings": [
         "c3"
       ],
-      "label": "cr_only_real_bug",
       "category": "security",
-      "note": "non-constant-time token compare"
+      "note": "non-constant-time token compare",
+      "outcome": "real_bug"
     }
   ]
 }

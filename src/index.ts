@@ -546,6 +546,12 @@ export interface Env {
   // would shadow the var; do not `wrangler secret put` this flag.
   OPENCLAW_TESTS_VALIDATOR_MODE?: string
 
+  // SIG-333: CI-triage inline-suggestion mode. "shadow" (default; any
+  // value other than "enforce") computes + telemeters the would-post
+  // anchorable/un-anchorable counts WITHOUT posting inline; "enforce"
+  // posts apply-able `suggestion` review comments on CI-failure fixes.
+  OPENCLAW_CI_SUGGESTIONS_MODE?: string
+
   // SIG-109: logic-finding evidence gate mode. "shadow" (default; any
   // value other than "enforce") counts + telemeters what the gate WOULD
   // drop without dropping; "enforce" actually drops sev>=4 logic findings

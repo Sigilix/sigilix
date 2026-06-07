@@ -5,6 +5,7 @@ import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
+  filterTestingEvidenceForSuppressedMissingCoverage,
   mergeHelperCoverage,
   mergeInspectedTestFileContents,
   pickFence,
@@ -115,6 +116,198 @@ describe("buildTestingEvidencePack", () => {
       reviewedFilePaths: ["src/lib/foo.ts", "tests/foo.test.ts"],
     })
     expect(pack.inspectedTestFiles).toEqual([])
+  })
+})
+
+describe("filterTestingEvidenceForSuppressedMissingCoverage", () => {
+  it("suppresses a ->NONE source when a repo-wide test sibling already exists", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([["src/lib/foo.ts", ["export function foo() { return 1 }"]]]),
+      repoPaths: ["src/lib/foo.ts", "tests/foo.test.ts"],
+    })
+
+    expect(result.suppressions).toEqual([{
+      source: "src/lib/foo.ts",
+      reason: "repo-sibling-exists",
+      test: "tests/foo.test.ts",
+    }])
+    expect(result.pack.sourceFilesChanged).toEqual([])
+    expect(result.pack.siblingMappings).toEqual([])
+    expect(renderTestingEvidenceBlock(result.pack, {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    })).toBe("")
+  })
+
+  it("normalizes repo-tree paths before matching existing siblings", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([["src/lib/foo.ts", ["export function foo() { return 1 }"]]]),
+      repoPaths: [".\\tests\\foo.test.ts"],
+    })
+
+    expect(result.suppressions).toEqual([{
+      source: "src/lib/foo.ts",
+      reason: "repo-sibling-exists",
+      test: "tests/foo.test.ts",
+    }])
+  })
+
+  it("does not let a package-scoped repo sibling suppress an unrelated root source", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([["src/lib/foo.ts", ["export function foo() { return 1 }"]]]),
+      repoPaths: ["packages/app/tests/foo.test.ts"],
+    })
+
+    expect(result.suppressions).toEqual([])
+    expect(result.pack.siblingMappings).toEqual([{ source: "src/lib/foo.ts", test: null }])
+  })
+
+  it("suppresses package-local repo siblings within the same package root", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["packages/app/src/foo.ts"],
+      reviewedFilePaths: ["packages/app/src/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([["packages/app/src/foo.ts", ["export function foo() { return 1 }"]]]),
+      repoPaths: ["packages/app/tests/foo.test.ts"],
+    })
+
+    expect(result.suppressions).toEqual([{
+      source: "packages/app/src/foo.ts",
+      reason: "repo-sibling-exists",
+      test: "packages/app/tests/foo.test.ts",
+    }])
+  })
+
+  it("does not let a prefixed __tests__ file suppress package source-root variants", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["packages/app/src/foo.ts"],
+      reviewedFilePaths: ["packages/app/src/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([["packages/app/src/foo.ts", ["export function foo() { return 1 }"]]]),
+      repoPaths: ["packages/app/__tests__/foo.test.ts"],
+    })
+
+    expect(result.suppressions).toEqual([])
+    expect(result.pack.siblingMappings).toEqual([{ source: "packages/app/src/foo.ts", test: null }])
+  })
+
+  it("suppresses a prefixed __tests__ file only for its direct parent sibling", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["packages/app/foo.ts"],
+      reviewedFilePaths: ["packages/app/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([["packages/app/foo.ts", ["export function foo() { return 1 }"]]]),
+      repoPaths: ["packages/app/__tests__/foo.test.ts"],
+    })
+
+    expect(result.suppressions).toEqual([{
+      source: "packages/app/foo.ts",
+      reason: "repo-sibling-exists",
+      test: "packages/app/__tests__/foo.test.ts",
+    }])
+  })
+
+  it("fails open when repo-wide sibling matching is ambiguous", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo-bar.ts"],
+      reviewedFilePaths: ["src/lib/foo-bar.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([["src/lib/foo-bar.ts", ["export function fooBar() { return 1 }"]]]),
+      repoPaths: ["tests/foo-bar.test.ts", "src/lib/foo-bar.test.ts"],
+    })
+
+    expect(result.suppressions).toEqual([])
+    expect(result.pack.siblingMappings).toEqual([{ source: "src/lib/foo-bar.ts", test: null }])
+  })
+
+  it("suppresses comment-only source changes even without repo tree evidence", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([
+        ["src/lib/foo.ts", [
+          "import { bar } from './bar'",
+          "// clarify why the branch is safe",
+          "export type Foo = { id: string }",
+          "}",
+        ]],
+      ]),
+    })
+
+    expect(result.suppressions).toEqual([{
+      source: "src/lib/foo.ts",
+      reason: "no-substantive-change",
+    }])
+    expect(result.pack.sourceFilesChanged).toEqual([])
+    expect(result.pack.siblingMappings).toEqual([])
+  })
+
+  it("suppresses raw-prefixed comment-only source changes", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([
+        ["src/lib/foo.ts", [
+          "-// old explanation",
+          "+// clearer explanation",
+        ]],
+      ]),
+    })
+
+    expect(result.suppressions).toEqual([{
+      source: "src/lib/foo.ts",
+      reason: "no-substantive-change",
+    }])
+  })
+
+  it("does not suppress when the changed-line evidence includes a substantive deletion", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/foo.ts"],
+      reviewedFilePaths: ["src/lib/foo.ts"],
+    })
+
+    const result = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([
+        ["src/lib/foo.ts", [
+          "-if (!user) return null",
+          "// explain why the remaining branch is safe",
+        ]],
+      ]),
+    })
+
+    expect(result.suppressions).toEqual([])
+    expect(result.pack.siblingMappings).toEqual([{ source: "src/lib/foo.ts", test: null }])
   })
 })
 

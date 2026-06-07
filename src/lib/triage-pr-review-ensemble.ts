@@ -124,6 +124,7 @@ import { buildPrUrl, preparePrReviewCounter } from "./pr-review-counter"
 import {
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
+  filterTestingEvidenceForSuppressedMissingCoverage,
   mergeInspectedTestFileContents,
   mergeHelperCoverage,
   renderTestingEvidenceBlock,
@@ -3615,6 +3616,97 @@ export async function handlePrReviewEnsemble(
       splitFilePaths: filesAfterFilter.map((f) => f.path),
       reviewedFilePaths: reviewedFiles.map((f) => f.path),
     })
+    const missingSiblingSources = testingEvidencePackInitial.siblingMappings
+      .filter((m) => m.test === null)
+      .map((m) => m.source)
+    let repoPathsForTestingEvidence: string[] | undefined
+    if (missingSiblingSources.length > 0) {
+      let repoTreeStatus:
+        | "ok"
+        | "unavailable"
+        | "missing-head-ref"
+        | "branch-missing"
+        | "head-ref-mismatch"
+        | "tree-missing"
+        | "tree-truncated"
+        | "fetch-failed" = "unavailable"
+      let repoTreePathsCount = 0
+      const treeCapableClient = client as GitHubClient & {
+        getBranch?: GitHubClient["getBranch"]
+        getRepoTree?: GitHubClient["getRepoTree"]
+      }
+      const headRef = meta.head?.ref ?? ""
+      if (
+        typeof treeCapableClient.getBranch === "function" &&
+        typeof treeCapableClient.getRepoTree === "function"
+      ) {
+        if (headRef.length === 0) {
+          repoTreeStatus = "missing-head-ref"
+        } else {
+          try {
+            const branch = await treeCapableClient.getBranch(owner, repo, headRef)
+            if (branch === null) {
+              repoTreeStatus = "branch-missing"
+            } else if (branch.headSha !== headSha) {
+              repoTreeStatus = "head-ref-mismatch"
+            } else {
+              const tree = await treeCapableClient.getRepoTree(owner, repo, branch.treeSha)
+              if (tree === null) {
+                repoTreeStatus = "tree-missing"
+              } else if (tree.truncated) {
+                repoTreeStatus = "tree-truncated"
+              } else {
+                repoPathsForTestingEvidence = tree.tree.flatMap((entry) =>
+                  entry.type === "blob" && typeof entry.path === "string" && entry.path.length > 0
+                    ? [entry.path]
+                    : [],
+                )
+                repoTreePathsCount = repoPathsForTestingEvidence.length
+                repoTreeStatus = "ok"
+              }
+            }
+          } catch (err) {
+            repoTreeStatus = "fetch-failed"
+            console.warn(JSON.stringify({
+              event: "tests-evidence-repo-tree-fetch-failed",
+              owner, repo, prNumber, headSha: headSha.slice(0, 7),
+              error: err instanceof Error ? err.message : String(err),
+            }))
+          }
+        }
+      }
+      console.log(JSON.stringify({
+        event: "tests-evidence-repo-tree-status",
+        owner, repo, prNumber, headSha: headSha.slice(0, 7),
+        status: repoTreeStatus,
+        missingSiblingSources_count: missingSiblingSources.length,
+        repoTreePaths_count: repoTreePathsCount,
+      }))
+    }
+    const testingEvidenceSuppression = filterTestingEvidenceForSuppressedMissingCoverage(
+      testingEvidencePackInitial,
+      {
+        changedLineTextByPath: buildChangedLineTextByPath(fullPrDiff),
+        ...(repoPathsForTestingEvidence !== undefined ? { repoPaths: repoPathsForTestingEvidence } : {}),
+      },
+    )
+    for (const suppression of testingEvidenceSuppression.suppressions) {
+      if (suppression.reason === "repo-sibling-exists") {
+        console.log(JSON.stringify({
+          event: "tests-finding-suppressed-repo-sibling-exists",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          source: suppression.source,
+          test: suppression.test ?? null,
+        }))
+      } else {
+        console.log(JSON.stringify({
+          event: "tests-finding-suppressed-comment-only-source",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          source: suppression.source,
+        }))
+      }
+    }
+    const testingEvidencePackFiltered = testingEvidenceSuppression.pack
     let testingEvidenceFetchResult: InspectedTestFileFetchResult = {
       contentByPath: {},
       failedPaths: [],
@@ -3624,9 +3716,9 @@ export async function handlePrReviewEnsemble(
     }
     let testingEvidenceFetchedCount = 0
     let testingEvidenceSkippedForBudgetCount = 0
-    if (testingEvidencePackInitial.testFilesChanged.length > 0) {
+    if (testingEvidencePackFiltered.testFilesChanged.length > 0) {
       const fetched = await fetchTestFileContentsWithBudget({
-        paths: testingEvidencePackInitial.testFilesChanged,
+        paths: testingEvidencePackFiltered.testFilesChanged,
         fetchContent: async (p) => {
           const src = await client.getFileContent(owner, repo, p, headSha)
           if (typeof src !== "string") throw new Error("content unavailable")
@@ -3639,7 +3731,7 @@ export async function handlePrReviewEnsemble(
       testingEvidenceSkippedForBudgetCount = fetched.skippedForBudgetCount
     }
     const testingEvidencePack = mergeInspectedTestFileContents(
-      testingEvidencePackInitial,
+      testingEvidencePackFiltered,
       testingEvidenceFetchResult,
     )
     // SIG-128: credit orchestrator glue whose changed logic delegates to
@@ -3654,7 +3746,7 @@ export async function handlePrReviewEnsemble(
     const helperCoverage = detectHelperCoverage({
       filesByPath: astFilesByPath,
       addedLineTextByPath: buildAddedLineTextByLine(fullDiff),
-      siblingMappings: testingEvidencePackInitial.siblingMappings,
+      siblingMappings: testingEvidencePackFiltered.siblingMappings,
       testContentByPath: testingEvidenceFetchResult.contentByPath,
     })
     const testingEvidencePackWithCoverage = mergeHelperCoverage(

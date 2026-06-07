@@ -60,6 +60,11 @@ import {
   type PrReviewVerdict,
   type PrReviewFinding,
 } from "../src/lib/triage-pr-review"
+import {
+  buildTestingEvidencePack,
+  filterTestingEvidenceForSuppressedMissingCoverage,
+  renderTestingEvidenceBlock,
+} from "../src/lib/testing-evidence-pack"
 import type { ReviewableMap } from "../src/lib/diff-positions"
 import type { Env } from "../src/index"
 
@@ -95,6 +100,87 @@ function makeCounterEnv(store = new Map<string, string>(), puts: Array<[string, 
     },
   } as unknown as Env
 }
+
+describe("SIG-222 testing evidence policy integration", () => {
+  it("suppresses repo-known/comment-only missing-sibling rows and keeps remaining testing findings P3 inline COMMENT", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: [
+        "src/lib/comment-only.ts",
+        "src/lib/existing-tested.ts",
+        "src/lib/new-source.ts",
+      ],
+      reviewedFilePaths: [
+        "src/lib/comment-only.ts",
+        "src/lib/existing-tested.ts",
+        "src/lib/new-source.ts",
+      ],
+    })
+    const filtered = filterTestingEvidenceForSuppressedMissingCoverage(pack, {
+      changedLineTextByPath: new Map([
+        ["src/lib/comment-only.ts", ["// update docs for maintainers"]],
+        ["src/lib/existing-tested.ts", ["export function existingTested() { return run() }"]],
+        ["src/lib/new-source.ts", ["export function newSource() { return run() }"]],
+      ]),
+      repoPaths: [
+        "src/lib/existing-tested.ts",
+        "tests/existing-tested.test.ts",
+      ],
+    })
+
+    expect(filtered.suppressions).toEqual([
+      { source: "src/lib/comment-only.ts", reason: "no-substantive-change" },
+      {
+        source: "src/lib/existing-tested.ts",
+        reason: "repo-sibling-exists",
+        test: "tests/existing-tested.test.ts",
+      },
+    ])
+    expect(filtered.pack.siblingMappings).toEqual([
+      { source: "src/lib/new-source.ts", test: null },
+    ])
+    const evidenceBlock = renderTestingEvidenceBlock(filtered.pack, {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    })
+    expect(evidenceBlock).not.toContain("src/lib/comment-only.ts")
+    expect(evidenceBlock).not.toContain("src/lib/existing-tested.ts")
+    expect(evidenceBlock).toContain("siblingMapping:src/lib/new-source.ts->NONE")
+
+    const reviewable: ReviewableMap = new Map([
+      ["src/lib/new-source.ts", [{ line: 12, side: "RIGHT" }]],
+    ])
+    const addedLineTextByLine = new Map<string, Map<number, string>>([
+      ["src/lib/new-source.ts", new Map([[12, "export function newSource() { return run() }"]])],
+    ])
+    const out = buildReviewSubmissionWithMetadata({
+      verdict: {
+        summary: "One test gap.",
+        confidence: 5,
+        confidenceReason: "Grounded by evidence pack.",
+        findings: [{
+          path: "src/lib/new-source.ts",
+          line: 12,
+          scope: "line",
+          score: 5,
+          category: "testing",
+          headline: "new source lacks a sibling test",
+          body: "Add a sibling test covering the new exported behavior.",
+          evidenceRefs: ["siblingMapping:src/lib/new-source.ts->NONE"],
+        }],
+      },
+      prAuthor: null,
+      headSha: "abc",
+      reviewable,
+      addedLineTextByLine,
+    })
+
+    expect(out.submission.event).toBe("COMMENT")
+    expect(out.submission.comments).toHaveLength(1)
+    expect(out.submission.comments?.[0]?.body).toContain("<!-- sigilix:severity:2 -->")
+  })
+})
 
 describe("buildAstFindingsSynthBlock (SIG-245 AST-supersession recall fix)", () => {
   const astJson = '[{"id":"spawn-shell-true","path":"src/services/exec.ts","line":5}]'

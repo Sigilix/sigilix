@@ -1198,8 +1198,14 @@ function prepareReviewSubmissionFindings(args: {
   addedLineTextByLine?: ReadonlyMap<string, ReadonlyMap<number, string>>
 }): PreparedReviewSubmissionFindings {
   const { rawVerdict, rawUnanchored, headSha, reviewable, addedLineTextByLine } = args
-  const verdict = sanitizeVerdictForGitHub(rawVerdict)
-  const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored)
+  const sanitizedVerdict = sanitizeVerdictForGitHub(rawVerdict)
+  const verdict: PrReviewVerdict = {
+    ...sanitizedVerdict,
+    findings: sanitizedVerdict.findings.map(normalizeTestingFindingForFinalPolicy),
+  }
+  const sanitizedUnanchored = sanitizeFindingsForGitHub(rawUnanchored).map(
+    normalizeTestingFindingForFinalPolicy,
+  )
 
   const inlineCandidates: InlineFindingCandidate[] = []
   const bodyFindings: PrReviewFinding[] = []
@@ -1226,6 +1232,7 @@ function prepareReviewSubmissionFindings(args: {
     // anchors. Review-level, file-level, and comment-event findings stay
     // in the body even if they carry a nearby line for context.
     if (scope !== "line" && !hasSuggestion) {
+      if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
       bodyFindings.push(validatedFinding)
       return
     }
@@ -1251,6 +1258,7 @@ function prepareReviewSubmissionFindings(args: {
         findingForInline.startLine,
       )
       if (resolved === null) {
+        if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
         bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
         return
       }
@@ -1258,6 +1266,7 @@ function prepareReviewSubmissionFindings(args: {
         reviewable !== undefined &&
         deriveSide(reviewable, findingForInline.path, resolved) !== "RIGHT"
       ) {
+        if (shouldDropUnanchoredTestingFinding(validatedFinding)) return
         bodyFindings.push(withLineMovedNote(validatedFinding, headSha))
         return
       }
@@ -1428,7 +1437,7 @@ export function previewFallbackSubmissionEvent({
 }: PreviewFallbackSubmissionEventArgs): ReviewEvent {
   const verdict = sanitizeVerdictForGitHub(rawVerdict)
   const unanchored = sanitizeFindingsForGitHub(rawUnanchored)
-  const all = [...verdict.findings, ...unanchored]
+  const all = [...verdict.findings, ...unanchored].map(normalizeTestingFindingForFinalPolicy)
   return chooseRenderedEventWithOverride({
     inlineFindings: [],
     bodyOnlyFindings: all,
@@ -1786,6 +1795,8 @@ export function chooseReviewEventForRenderedFindings(
     (f) => !f.outOfPrScope,
   )
   if (inScope.length === 0) return "APPROVE"
+  const nonTestingInScope = inScope.filter((f) => f.category !== "testing")
+  if (nonTestingInScope.length === 0) return "COMMENT"
 
   // Founder verdict rule: Sigilix NEVER approves a PR that carries a real
   // finding, and ANY substantive finding — inline or body, any severity —
@@ -1793,7 +1804,7 @@ export function chooseReviewEventForRenderedFindings(
   // a truly trivial cosmetic nit (`isTrivialFinding`), which posts as a neutral
   // COMMENT. The SAME predicate routes the body renderer's blocking-vs-non-
   // blocking split, so the verdict and the presentation can never contradict.
-  if (inScope.some((f) => !isTrivialFinding(f))) return "REQUEST_CHANGES"
+  if (nonTestingInScope.some((f) => !isTrivialFinding(f))) return "REQUEST_CHANGES"
   return "COMMENT"
 }
 
@@ -1808,6 +1819,35 @@ export function chooseReviewEventForRenderedFindings(
  */
 export function isTrivialFinding(f: PrReviewFinding): boolean {
   return (f.category === "style" || f.category === "docs") && f.score < 4
+}
+
+function isExplicitRemovedTestCoverageFinding(f: PrReviewFinding): boolean {
+  if (f.category !== "testing") return false
+  return Array.isArray(f.evidenceRefs) &&
+    f.evidenceRefs.some((ref) =>
+      typeof ref === "string" && ref.trim().startsWith("testFileChanged:"),
+    )
+}
+
+function isMissingSiblingTestingFinding(f: PrReviewFinding): boolean {
+  if (f.category !== "testing") return false
+  return Array.isArray(f.evidenceRefs) &&
+    f.evidenceRefs.some((ref) => {
+      if (typeof ref !== "string") return false
+      const trimmed = ref.trim()
+      return trimmed.startsWith("siblingMapping:") && trimmed.endsWith("->NONE")
+    })
+}
+
+function normalizeTestingFindingForFinalPolicy(f: PrReviewFinding): PrReviewFinding {
+  if (f.category !== "testing") return f
+  if (isExplicitRemovedTestCoverageFinding(f)) return f
+  if (f.score <= 2) return f
+  return { ...f, score: 2 }
+}
+
+function shouldDropUnanchoredTestingFinding(f: PrReviewFinding): boolean {
+  return isMissingSiblingTestingFinding(f) && !isExplicitRemovedTestCoverageFinding(f)
 }
 
 export function chooseRenderedEventWithOverride(

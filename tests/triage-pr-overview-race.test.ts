@@ -21,6 +21,7 @@ const mockListIssueComments = vi.fn()
 const mockCreateIssueComment = vi.fn()
 const mockUpdateIssueComment = vi.fn()
 const mockGenerate = vi.fn()
+const mockGetFileContent = vi.fn(async () => null)
 // ARC-263: handlePrOverview now also calls listPullRequestFiles for
 // the walkthrough cache. Default to an empty list — the race tests
 // don't care about per-file caching; they assert dedupe/race behavior.
@@ -49,6 +50,7 @@ vi.mock("../src/lib/github", async () => {
       createIssueComment: (...args: unknown[]) => mockCreateIssueComment(...args),
       updateIssueComment: (...args: unknown[]) => mockUpdateIssueComment(...args),
       listPullRequestFiles: (...args: unknown[]) => mockListPullRequestFiles(...args),
+      getFileContent: (...args: unknown[]) => mockGetFileContent(...args),
     })),
   }
 })
@@ -118,8 +120,11 @@ beforeEach(() => {
   mockCreateIssueComment.mockClear()
   mockUpdateIssueComment.mockClear()
   mockGenerate.mockClear()
+  mockGetFileContent.mockClear()
+  mockGetFileContent.mockImplementation(async () => null)
   mockGetPullRequest.mockResolvedValue({
-    head: { sha: args.headSha },
+    head: { sha: args.headSha, ref: "feature" },
+    base: { sha: "b".repeat(40), ref: "main" },
     title: "Some PR",
     body: "Body",
   })
@@ -128,6 +133,166 @@ beforeEach(() => {
   mockCreateIssueComment.mockResolvedValue({ id: 12345 })
   mockUpdateIssueComment.mockResolvedValue({})
   mockGenerate.mockResolvedValue(VALID_VERDICT_JSON)
+})
+
+describe("handlePrOverview — CODEOWNERS suggested reviewers (SIG-150)", () => {
+  it("merges CODEOWNERS reviewers from the base branch into the SIG-99 reviewer slot", async () => {
+    mockGetPullRequest.mockResolvedValue({
+      head: { sha: args.headSha, ref: "feature" },
+      base: { sha: "b".repeat(40), ref: "main" },
+      title: "Some PR",
+      body: "Body",
+      user: { login: "alice" },
+    })
+    mockListIssueComments.mockResolvedValue([])
+    mockListPullRequestFiles.mockResolvedValue([
+      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+    ])
+    mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string, ref: string) => {
+      if (path === ".github/CODEOWNERS" && ref === "b".repeat(40)) {
+        return "*.ts @fallback\n/src/** @alice @bob @acme/platform\n"
+      }
+      return null
+    })
+    mockGenerate.mockResolvedValue(JSON.stringify({
+      summary: "Adds a regex guard around path normalization.",
+      confidence: 4,
+      confidenceReason: "Small surface, well-tested.",
+      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+      bullets: ["Verify the regex catches `..` segments"],
+      suggestedReviewers: ["alice", "charlie"],
+    }))
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv) })
+
+    const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
+    expect(body).toContain("**Suggested reviewers:** @bob, @charlie")
+    expect(body).not.toContain("@alice")
+    expect(body).not.toContain("@acme/platform")
+    expect(mockGetFileContent).toHaveBeenCalledWith("acme", "site", ".github/CODEOWNERS", "b".repeat(40))
+  })
+
+  it("falls back to model-only reviewers when the base branch has no CODEOWNERS file", async () => {
+    mockListIssueComments.mockResolvedValue([])
+    mockListPullRequestFiles.mockResolvedValue([
+      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+    ])
+    mockGenerate.mockResolvedValue(JSON.stringify({
+      summary: "Adds a regex guard around path normalization.",
+      confidence: 4,
+      confidenceReason: "Small surface, well-tested.",
+      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+      bullets: ["Verify the regex catches `..` segments"],
+      suggestedReviewers: ["model-owner"],
+    }))
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv) })
+
+    const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
+    expect(body).toContain("**Suggested reviewers:** @model-owner")
+  })
+
+  it("checks lower-priority CODEOWNERS locations only when higher-priority files are missing", async () => {
+    mockListIssueComments.mockResolvedValue([])
+    mockListPullRequestFiles.mockResolvedValue([
+      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+    ])
+    mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string) => {
+      if (path === "CODEOWNERS") return "*.ts @root-owner\n"
+      return null
+    })
+    mockGenerate.mockResolvedValue(JSON.stringify({
+      summary: "Adds a regex guard around path normalization.",
+      confidence: 4,
+      confidenceReason: "Small surface, well-tested.",
+      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+      bullets: ["Verify the regex catches `..` segments"],
+      suggestedReviewers: ["model-owner"],
+    }))
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv) })
+
+    const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
+    expect(body).toContain("**Suggested reviewers:** @root-owner, @model-owner")
+    const codeownersCalls = mockGetFileContent.mock.calls.filter((call) =>
+      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string)
+    )
+    expect(codeownersCalls).toEqual([
+      ["acme", "site", ".github/CODEOWNERS", "b".repeat(40)],
+      ["acme", "site", "CODEOWNERS", "b".repeat(40)],
+    ])
+  })
+
+  it("fails closed on non-404 CODEOWNERS fetch errors instead of using a lower-priority file", async () => {
+    mockListIssueComments.mockResolvedValue([])
+    mockListPullRequestFiles.mockResolvedValue([
+      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+    ])
+    mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string) => {
+      if (path === ".github/CODEOWNERS") throw new Error("rate limited")
+      if (path === "CODEOWNERS") return "*.ts @root-owner\n"
+      return null
+    })
+    mockGenerate.mockResolvedValue(JSON.stringify({
+      summary: "Adds a regex guard around path normalization.",
+      confidence: 4,
+      confidenceReason: "Small surface, well-tested.",
+      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+      bullets: ["Verify the regex catches `..` segments"],
+      suggestedReviewers: ["model-owner"],
+    }))
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv) })
+
+    const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
+    expect(body).toContain("**Suggested reviewers:** @model-owner")
+    expect(body).not.toContain("@root-owner")
+    const codeownersCalls = mockGetFileContent.mock.calls.filter((call) =>
+      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string)
+    )
+    expect(codeownersCalls).toEqual([
+      ["acme", "site", ".github/CODEOWNERS", "b".repeat(40)],
+    ])
+  })
+
+  it("does not read CODEOWNERS from the head SHA when PR metadata has no base SHA", async () => {
+    mockGetPullRequest.mockResolvedValue({
+      head: { sha: args.headSha, ref: "feature" },
+      title: "Some PR",
+      body: "Body",
+    })
+    mockListIssueComments.mockResolvedValue([])
+    mockListPullRequestFiles.mockResolvedValue([
+      { filename: "src/foo.ts", status: "modified", additions: 2, deletions: 1, patch: "@@ -1 +1 @@" },
+    ])
+    mockGetFileContent.mockImplementation(async (_owner: string, _repo: string, path: string) => {
+      if (path === ".github/CODEOWNERS") return "*.ts @head-owner\n"
+      return null
+    })
+    mockGenerate.mockResolvedValue(JSON.stringify({
+      summary: "Adds a regex guard around path normalization.",
+      confidence: 4,
+      confidenceReason: "Small surface, well-tested.",
+      files: [{ path: "src/foo.ts", score: 4, overview: "Guard added", nextStep: "Add a fuzz test" }],
+      bullets: ["Verify the regex catches `..` segments"],
+      suggestedReviewers: ["model-owner"],
+    }))
+    const { kv } = makeKvStub()
+
+    await handlePrOverview({ ...args, env: makeEnv(kv) })
+
+    const body = mockCreateIssueComment.mock.calls[0]?.[3] as string
+    expect(body).toContain("**Suggested reviewers:** @model-owner")
+    expect(body).not.toContain("@head-owner")
+    const codeownersCalls = mockGetFileContent.mock.calls.filter((call) =>
+      [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"].includes(call[2] as string)
+    )
+    expect(codeownersCalls).toEqual([])
+  })
 })
 
 describe("handlePrOverview — 2nd-pass dedupe (ARC-231)", () => {

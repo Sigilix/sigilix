@@ -317,8 +317,9 @@ export function clampIntentionalLiveEvalSerialLoopSeverity(
   let clamped = 0
   for (const f of findings) {
     if (f.category !== "performance" || f.score < 4) continue
-    if (!LIVE_EVAL_TEST_PATH_RE.test(f.path)) continue
-    const lines = addedLineTextByLine.get(f.path)
+    const path = typeof f.path === "string" ? f.path.trim() : ""
+    if (!LIVE_EVAL_TEST_PATH_RE.test(path)) continue
+    const lines = addedLineTextByLine.get(path)
     if (!lines) continue
     const fileText = [...lines.values()].join("\n")
     const findingText = findingTextForClamp(f)

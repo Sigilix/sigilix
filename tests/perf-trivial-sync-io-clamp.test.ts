@@ -63,7 +63,7 @@ describe("clampTrivialSyncIoSeverity", () => {
 })
 
 describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
-  it("caps a sev>=4 serial live-eval harness finding to P2", () => {
+  it("caps a sev>=4 serial live-eval harness finding to score 3", () => {
     const f = [{
       path: "tests/model-recall-eval.live.test.ts",
       line: 13,
@@ -75,6 +75,26 @@ describe("clampIntentionalLiveEvalSerialLoopSeverity", () => {
     const alt = lines("tests/model-recall-eval.live.test.ts", [
       [9, "    const perCase = new Map<string, Result>()"],
       [10, "    for (let k = 0; k < repeats; k++) {"],
+      [11, "      for (const c of cases) {"],
+      [12, "        // Sequential by design: keep benchmark order stable and avoid provider bursts."],
+      [13, "        const result = await runCase(c, apiKey)"],
+      [14, "        perCase.set(c.id, result)"],
+    ])
+
+    expect(clampIntentionalLiveEvalSerialLoopSeverity(f, alt)).toBe(1)
+    expect(f[0].score).toBe(3)
+  })
+
+  it("normalizes whitespace-padded finding paths before matching live-eval harness evidence", () => {
+    const f = [{
+      path: "  tests/model-recall-eval.live.test.ts  ",
+      line: 13,
+      category: "performance",
+      score: 4,
+      headline: "Serial live-eval loop should parallelize `runCase`",
+      body: "The benchmark awaits `runCase` for every case.",
+    }]
+    const alt = lines("tests/model-recall-eval.live.test.ts", [
       [11, "      for (const c of cases) {"],
       [12, "        // Sequential by design: keep benchmark order stable and avoid provider bursts."],
       [13, "        const result = await runCase(c, apiKey)"],

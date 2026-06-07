@@ -46,6 +46,35 @@
       "why": "Concrete complexity regression with no deterministic backing, anchored to `others.some`/`items` on changed lines, with a complexityEstimate that names the changed collections. KEEP."
     },
     {
+      "id": "good-direct-membership-scan",
+      "situation": "An added direct membership scan does `return items.filter(item => others.some(other => other.id === item.id))`, where both arrays can grow with request/user input.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/reconcile.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "O(n·m) membership scan: `others.some` runs once per `items` element",
+        "body": "`items.filter(...)` calls `others.some(...)` for every `item`, so each request-sized `items` list re-scans the request-sized `others` list. Build a `Set` of `others` ids once and check membership in O(1).",
+        "complexityEstimate": "O(n·m) over `items` × `others`; O(n+m) with a `Set` of `others` ids"
+      },
+      "why": "Direct filter+some membership scans are already nested work even without a visible `for` loop or outer `.map`. The changed tokens name both growing inputs and the fix is a standard Set index. KEEP."
+    },
+    {
+      "id": "good-production-serial-fanout-even-with-order-comment",
+      "situation": "A production request handler adds `for (const id of ids) { // sequential by design to keep order stable; users.push(await getUser(id)) }` instead of using an existing batch fetch.",
+      "emit": true,
+      "finding": {
+        "path": "src/api/orders.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "N+1 query: `getUser` still runs once per `id` despite the ordering comment",
+        "body": "The `for` loop awaits `getUser(id)` once per request `id`; preserving response order does not require serial DB round-trips because a batched fetch can be re-ordered in memory afterward. Use the existing batch API and map results back to `ids` order.",
+        "complexityEstimate": "O(n) sequential round-trips on `ids`; O(1) round-trips with batch fetch plus in-memory ordering",
+        "hotPathIdentifier": "GET /api/orders"
+      },
+      "why": "A comment saying serial execution preserves order is not a safe-skip for production request fan-out. If the hot path performs one network/DB call per user-controlled item, KEEP."
+    },
+    {
       "id": "good-unbounded-growth-anchored",
       "situation": "An added line pushes into a module-level `cache` array on every call with no eviction: `cache.push(entry)`.",
       "emit": true,
@@ -98,6 +127,19 @@
         "body": "The added code pushes p95 latency over the 200ms budget."
       },
       "why": "Sigilix has NOT measured this PR's latency — perfBudgets are policy TARGETS, not data. Asserting a budget is 'exceeded' from no measurement is a fabrication. Use the budget only to judge whether added code plausibly threatens it, and anchor any finding to the concrete slow code, not the number."
+    },
+    {
+      "id": "bad-intentional-live-eval-serial-loop",
+      "situation": "A `tests/*.live.test.ts` or benchmark/eval harness loops over `repeats`/`cases` with `await runCase(c, apiKey)` and visible text says it is sequential by design to keep live-model metrics stable and avoid provider bursts/rate limits.",
+      "emit": false,
+      "finding": {
+        "path": "tests/model-recall-eval.live.test.ts",
+        "category": "performance",
+        "score": 4,
+        "headline": "Serial live-eval loop should run cases in parallel",
+        "body": "The loop awaits each `runCase` call sequentially; use `Promise.all` to improve throughput."
+      },
+      "why": "This is an eval/test harness, not a production request path. The visible intent is stable K-repeat metrics plus provider politeness/rate-limit avoidance; parallelizing changes what the benchmark measures and can trip the provider. SKIP the sev>=4 perf finding. This exception does NOT apply to production request fan-out or N+1 loops."
     },
     {
       "id": "bad-premature-optimization-nit",

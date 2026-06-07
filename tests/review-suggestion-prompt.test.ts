@@ -61,7 +61,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 24", () => {
+  it("PROMPT_VERSION bumped to 25", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -100,7 +100,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // semantics fence prevents safe auth middleware tail-call FPs).
     // SIG-311 23→24 (security usage-vs-mention evidence requirement on
     // security-tooling/test/doc surfaces).
-    expect(PROMPT_VERSION).toBe("24")
+    // SIG-342 24→25 (performance specialist calibration for direct
+    // membership scans and intentional live-eval serial loops).
+    expect(PROMPT_VERSION).toBe("25")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

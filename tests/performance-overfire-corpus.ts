@@ -4,7 +4,13 @@
 // regressions from common overfire shapes. The live harness replays these diffs
 // through the real performance specialist and reports raw vs post-gate metrics.
 
-import { evaluatePerfFinding, type PerfEvidence } from "../src/lib/validate-perf-finding"
+import { buildAddedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
+import {
+  clampIntentionalLiveEvalSerialLoopSeverity,
+  clampTrivialSyncIoSeverity,
+  evaluatePerfFinding,
+  type PerfEvidence,
+} from "../src/lib/validate-perf-finding"
 import { buildChangedLineTextByPath } from "../src/lib/validate-logic-finding"
 import type { PrReviewFinding } from "../src/lib/triage-pr-review"
 
@@ -98,7 +104,13 @@ export function applyPerfEvidenceGate(
     changedLineTextByPath: buildChangedLineTextByPath(c.diff),
     astPerfFindings: [],
   }
-  return findings.filter((f) => evaluatePerfFinding(toPrReviewFinding(f), evidence).keep)
+  const kept = findings
+    .filter((f) => evaluatePerfFinding(toPrReviewFinding(f), evidence).keep)
+    .map((f) => ({ ...f }))
+  const addedLineTextByLine = buildAddedLineTextByLine(c.diff)
+  clampTrivialSyncIoSeverity(kept, addedLineTextByLine)
+  clampIntentionalLiveEvalSerialLoopSeverity(kept, addedLineTextByLine)
+  return kept
 }
 
 export function scoreCase(

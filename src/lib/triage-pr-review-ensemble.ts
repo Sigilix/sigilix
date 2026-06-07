@@ -95,6 +95,7 @@ import { PR_REVIEW_SCHEMA } from "./schemas"
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
+  type EvidenceRecord,
   type ReviewFindingScope,
   type CoverageRoles,
   type DeltaBadgeCounts,
@@ -249,6 +250,7 @@ import {
 } from "./logic-prompt-budget"
 import {
   isPrOverviewEnabled,
+  isFindingEvidenceVisible,
   loadSigilixConfig,
   passesLabelGate,
   renderPathInstructionsForPrompt,
@@ -4950,6 +4952,7 @@ export async function handlePrReviewEnsemble(
     // SIG Trust Ledger v0: read the mode here (before validateForSubmission) so the
     // demote sites can tag body-routed findings with their reason when enabled.
     const trustLedgerMode = parseTrustLedgerMode(env.OPENCLAW_TRUST_LEDGER)
+    const showEvidence = isFindingEvidenceVisible(sigilixConfig, env)
     // Re-point the synth telemetry at the SAME (verdict, provenance) pair fed to
     // validateForSubmission. telemetry.synthesizer.verdict was captured from the
     // raw synthOutput (above), but the post-synth augmentations (SIG-317 recovery
@@ -6625,7 +6628,7 @@ export async function handlePrReviewEnsemble(
       )
     }
 
-    // SIG Trust Ledger v0 (thread + measure, INERT): give every final visible
+    // SIG Trust Ledger v0: give every final visible
     // finding a BASELINE trust tier (the strong proof signals — worker-token-confirmed,
     // runner-confirmed — were already set in place above), then record the per-tier
     // distribution. The baseline is surface-aware + honest-conservative:
@@ -6638,8 +6641,8 @@ export async function handlePrReviewEnsemble(
     // resolveTier keeps the stronger tier, so a baseline never lowers a proven
     // finding. Distribution persists to VerificationMetricsDO under TRUSTLEDGER_CATEGORY
     // (a SEPARATE corpus, read at GET /metrics/verification). Whole block is flag-gated,
-    // so `off` (default) is a true no-op. NO render — production renderers ignore
-    // `finding.trust` until the PR3 render wiring.
+    // so `off` (default) is a true no-op; `on` lets the renderer surface these
+    // tiers as the Trust Summary and per-finding pills.
     if (trustLedgerMode !== "off") {
       const hasManifestEvidence = (finding: PrReviewFinding): boolean => {
         const ev = typeof finding.evidenceId === "string" ? finding.evidenceId.trim() : ""
@@ -6670,6 +6673,36 @@ export async function handlePrReviewEnsemble(
         env, trustItems, 1_500,
         (event, detail) => console.warn(JSON.stringify({ event, owner, repo, prNumber, ...detail })),
       )
+    }
+
+    if (showEvidence) {
+      for (const [index, finding] of [
+        ...submissionVerdict.findings,
+        ...renderableUnanchoredForSubmission,
+      ].entries()) {
+        const record = finding.evidence
+        console.log(JSON.stringify({
+          event: "pr-review-evidence-emitted",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          index,
+          path: finding.path,
+          line: finding.line,
+          score: finding.score,
+          category: finding.category,
+          visible: true,
+          specialists_flagged: record?.specialistsThatFlagged.length ?? 0,
+          specialists_declined: record?.specialistsThatDeclined.length ?? 0,
+          deterministic_fact_ids: record?.deterministicFactIds.length ?? 0,
+          retrieval_chunk_ids: record?.retrievalChunkIds.length ?? 0,
+          related_prior_prs: record?.relatedPriorPRs.length ?? 0,
+          consensus_score: record?.consensusScore ?? 0,
+          synth_decision: record?.synthDecision ?? null,
+          structured_evidence_empty:
+            (record?.deterministicFactIds.length ?? 0) === 0 &&
+            (record?.retrievalChunkIds.length ?? 0) === 0 &&
+            (record?.relatedPriorPRs.length ?? 0) === 0,
+        }))
+      }
     }
 
     for (const finding of submissionVerdict.findings) {
@@ -6716,6 +6749,7 @@ export async function handlePrReviewEnsemble(
       // VERIFIED/GROUNDED/MODEL pills) only in `on` mode. off/shadow → byte-identical
       // body. (The Summary's `suppressed` count is a PR3b follow-up.)
       trustLedger: trustLedgerMode === "on",
+      showEvidence,
       unanchored: renderableUnanchoredForSubmission,
       findingMarkers,
       ...(reviewEventOverride !== undefined ? { eventOverride: reviewEventOverride } : {}),
@@ -7026,6 +7060,7 @@ export async function handlePrReviewEnsemble(
         const fallbackCommentAffordance = await prepareFallbackAffordance(fallbackCommentEvent)
         const fallbackCommentSubmission = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          showEvidence,
           notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
@@ -7199,6 +7234,7 @@ export async function handlePrReviewEnsemble(
         const fallbackBodyOnlyAffordance = await prepareFallbackAffordance(fallbackBodyOnlyEvent)
         const fallbackBodyOnly = buildFallbackSubmission(withSubmissionAffordance({
           trustLedger: trustLedgerMode === "on",
+          showEvidence,
           notReviewedFiles: filesDroppedFromReview,
           verdict: submissionVerdict,
           unanchored: renderableUnanchoredForSubmission,
@@ -7256,6 +7292,7 @@ export async function handlePrReviewEnsemble(
       const fallbackAffordance = await prepareFallbackAffordance(fallbackEvent)
       const fallback = buildFallbackSubmission(withSubmissionAffordance({
         trustLedger: trustLedgerMode === "on",
+        showEvidence,
         notReviewedFiles: filesDroppedFromReview,
         // ARC-189: fallback path also receives the soften-applied
         // verdict. Markers are NOT emitted on the fallback (it's a
@@ -9412,6 +9449,125 @@ function backfillSecurityEvidenceFromSources(
   }
 }
 
+function uniqueNonEmpty(values: Iterable<string | null | undefined>): string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const raw of values) {
+    const value = typeof raw === "string" ? raw.trim() : ""
+    if (!value || seen.has(value)) continue
+    seen.add(value)
+    out.push(value)
+  }
+  return out
+}
+
+const DETERMINISTIC_EVIDENCE_ID_PREFIXES = ["secret:", "depvuln:", "sarif:", "ast/"] as const
+const DETERMINISTIC_EVIDENCE_REF_PREFIXES = [
+  "coverageGap:",
+  "inspectedTestFile:",
+  "siblingMapping:",
+  "testFileChanged:",
+] as const
+
+function hasDeterministicPrefix(value: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => value.startsWith(prefix))
+}
+
+function normalizeSynthDecision(action: unknown): EvidenceRecord["synthDecision"] {
+  return action === "kept" || action === "merged" || action === "rewritten" ? action : "kept"
+}
+
+function specialistReturnedMatchingFinding(
+  role: SpecialistRole,
+  finding: PrReviewFinding,
+  specialistVerdicts: readonly CollectedVerdict[],
+): boolean {
+  const verdict = specialistVerdicts.find((v) => v.role === role)?.verdict
+  if (!verdict) return false
+  const findingPath = finding.path.trim()
+  const findingEvidenceId = hasNonEmptyString(finding.evidenceId) ? finding.evidenceId.trim() : ""
+  return verdict.findings.some((source) => {
+    if (source.path.trim() !== findingPath) return false
+    if (source.line === finding.line) return true
+    const sourceEvidenceId = hasNonEmptyString(source.evidenceId) ? source.evidenceId.trim() : ""
+    return findingEvidenceId !== "" && sourceEvidenceId === findingEvidenceId
+  })
+}
+
+function rolesFromValidatedSources(
+  provenance: SynthesizerProvenance["findings"][number],
+  finding: PrReviewFinding,
+  specialistVerdicts: readonly CollectedVerdict[],
+): SpecialistRole[] {
+  const rolesFromIds = ALL_SPECIALISTS.filter((role) =>
+    provenance.sourceFindingIds.some((id) => id.startsWith(`${role}-`)),
+  )
+  if (rolesFromIds.length > 0) return rolesFromIds
+  return ALL_SPECIALISTS.filter((role) =>
+    provenance.sourceSpecialists.includes(role) &&
+    specialistReturnedMatchingFinding(role, finding, specialistVerdicts),
+  )
+}
+
+function deterministicFactIdsForFinding(
+  finding: PrReviewFinding,
+  sourceIds: readonly string[],
+  sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>,
+  validSourceIds: ReadonlySet<string>,
+): string[] {
+  const evidenceId = hasNonEmptyString(finding.evidenceId) ? finding.evidenceId.trim() : ""
+  const sourceEvidenceIds = sourceIds
+    .map((id) => sourceEvidenceById.get(id)?.evidenceId)
+    .filter((id): id is string =>
+      hasNonEmptyString(id) &&
+      id !== "NONE" &&
+      hasDeterministicPrefix(id, DETERMINISTIC_EVIDENCE_ID_PREFIXES),
+    )
+  return uniqueNonEmpty([
+    ...(evidenceId !== "" &&
+      evidenceId !== "NONE" &&
+      hasDeterministicPrefix(evidenceId, DETERMINISTIC_EVIDENCE_ID_PREFIXES)
+      ? [evidenceId]
+      : []),
+    ...sourceEvidenceIds,
+    ...(finding.evidenceRefs ?? []).filter((ref) =>
+      hasDeterministicPrefix(ref.trim(), DETERMINISTIC_EVIDENCE_REF_PREFIXES),
+    ),
+    ...sourceIds.filter((id) => id.startsWith("ast/") && validSourceIds.has(id)),
+  ])
+}
+
+function buildFindingEvidenceRecord(args: {
+  finding: PrReviewFinding
+  provenance: SynthesizerProvenance["findings"][number]
+  specialistVerdicts: readonly CollectedVerdict[]
+  sourceEvidenceById: ReadonlyMap<string, SourceFindingSecurityEvidence>
+  validSourceIds: ReadonlySet<string>
+}): EvidenceRecord {
+  const flagged = rolesFromValidatedSources(args.provenance, args.finding, args.specialistVerdicts)
+  const flaggedSet = new Set(flagged)
+  const returnedRoles = ALL_SPECIALISTS.filter((role) =>
+    args.specialistVerdicts.some((v) => v.role === role && v.verdict !== null),
+  )
+  return {
+    specialistsThatFlagged: flagged,
+    specialistsThatDeclined: returnedRoles.filter((role) => !flaggedSet.has(role)),
+    deterministicFactIds: deterministicFactIdsForFinding(
+      args.finding,
+      args.provenance.sourceFindingIds,
+      args.sourceEvidenceById,
+      args.validSourceIds,
+    ),
+    // SIG-112 Phase 1: the prompt may have retrieval context, but the
+    // synth provenance does not yet carry stable chunk/pr IDs. Keep
+    // these explicit empty arrays until SIG-44 exposes structured ids.
+    retrievalChunkIds: [],
+    relatedPriorPRs: [],
+    synthDecision: normalizeSynthDecision(args.provenance.action),
+    consensusScore: flagged.length,
+  }
+}
+
 /**
  * SIG-308 (PR #290 review): map each source finding's id → its trimmed,
  * non-empty `independentAssessment`, for one `role` only. The logic analogue
@@ -10359,7 +10515,11 @@ export function validateForSubmission(args: {
     // Hallucination guard. Defensive against malformed provenance
     // even though isValidProvenance pre-validated (belt + suspenders
     // per CR PR #35 — provenance might be partially valid).
-    const sourceIds = Array.isArray(provenance?.sourceFindingIds)
+    if (!provenance) {
+      droppedForHallucination++
+      continue
+    }
+    const sourceIds = Array.isArray(provenance.sourceFindingIds)
       ? provenance.sourceFindingIds
       : []
     if (sourceIds.length === 0) {
@@ -10382,6 +10542,19 @@ export function validateForSubmission(args: {
     // synthesis BEFORE the logic-refutation backstop reads it, so a logic
     // finding whose specialist justified survival isn't wrongly flagged.
     f = backfillIndependentAssessmentFromSources(f, sourceIds, sourceRationaleById)
+    // Attach once after provenance/security backfills but before the demote-to-body
+    // gates below. Dropped findings discard this clone; demoted findings keep the
+    // same provenance block when rendered in the review body.
+    f = {
+      ...f,
+      evidence: buildFindingEvidenceRecord({
+        finding: f,
+        provenance,
+        specialistVerdicts,
+        sourceEvidenceById,
+        validSourceIds: validIds,
+      }),
+    }
 
     // SIG-216: normalize scope BEFORE any scope-dependent gates fire.
     // LLM specialists sometimes emit `scope: "file"` for findings that

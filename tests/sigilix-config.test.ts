@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from "vitest"
 
 import {
   isPrOverviewEnabled,
+  isFindingEvidenceVisible,
   isPrLabelsEnabled,
   parseSigilixConfig,
   parseSigilixConfigDetailed,
@@ -616,6 +617,64 @@ describe("parseSigilixConfig — overview.enabled (SIG-84)", () => {
 
     it("overview.enabled === false → disabled", () => {
       expect(isPrOverviewEnabled({ overview: { enabled: false } })).toBe(false)
+    })
+  })
+})
+
+describe("parseSigilixConfig — evidence.visible (SIG-112)", () => {
+  it("parses evidence.visible === true", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      evidence: { visible: true },
+    }))
+    expect(result).toEqual({ evidence: { visible: true } })
+  })
+
+  it("parses evidence.visible === false", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      evidence: { visible: false },
+    }))
+    expect(result).toEqual({ evidence: { visible: false } })
+  })
+
+  it("strips non-boolean evidence.visible values", () => {
+    expect(parseSigilixConfig(JSON.stringify({ evidence: { visible: "true" } }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ evidence: { visible: 1 } }))).toEqual({})
+  })
+
+  it("strips a top-level evidence value that isn't an object", () => {
+    expect(parseSigilixConfig(JSON.stringify({ evidence: "on" }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ evidence: true }))).toEqual({})
+    expect(parseSigilixConfig(JSON.stringify({ evidence: [] }))).toEqual({})
+  })
+
+  it("ignores unknown subfields under evidence (forward-compat)", () => {
+    const result = parseSigilixConfig(JSON.stringify({
+      evidence: { visible: true, density: "future-field" },
+    }))
+    expect(result).toEqual({ evidence: { visible: true } })
+  })
+
+  describe("isFindingEvidenceVisible resolver — defaults to HIDDEN", () => {
+    it("missing config + missing env → hidden", () => {
+      expect(isFindingEvidenceVisible(null, {})).toBe(false)
+      expect(isFindingEvidenceVisible({}, {})).toBe(false)
+    })
+
+    it("evidence.visible === true → visible", () => {
+      expect(isFindingEvidenceVisible({ evidence: { visible: true } }, {})).toBe(true)
+    })
+
+    it("evidence.visible === false → hidden unless env forces it", () => {
+      expect(isFindingEvidenceVisible({ evidence: { visible: false } }, {})).toBe(false)
+      expect(isFindingEvidenceVisible(
+        { evidence: { visible: false } },
+        { OPENCLAW_SHOW_EVIDENCE: "on" },
+      )).toBe(true)
+    })
+
+    it("env override is exact and case-sensitive", () => {
+      expect(isFindingEvidenceVisible(null, { OPENCLAW_SHOW_EVIDENCE: "on" })).toBe(true)
+      expect(isFindingEvidenceVisible(null, { OPENCLAW_SHOW_EVIDENCE: "ON" })).toBe(false)
     })
   })
 })

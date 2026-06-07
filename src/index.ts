@@ -501,8 +501,8 @@ export interface Env {
   // SIG Trust Ledger v0: off | shadow | on. `off` (default) attaches per-finding
   // trust metadata in-memory but records no telemetry + renders nothing. `shadow`
   // also records the tier distribution (TRUSTLEDGER_CATEGORY on VerificationMetricsDO,
-  // read at GET /metrics/verification). `on` reserved for the render wiring; in the
-  // thread-only PR it behaves like `shadow` (no render). Review UNCHANGED in all modes.
+  // read at GET /metrics/verification). `on` also renders the Trust Summary and
+  // per-finding VERIFIED/GROUNDED/MODEL pills.
   OPENCLAW_TRUST_LEDGER?: string
   // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
@@ -671,6 +671,12 @@ export interface Env {
   // "post" injects the precomputed changed-symbol/context cards into
   // specialist + synth prompts. Any other value keeps it off.
   OPENCLAW_DYNAMIC_REVIEW_EVIDENCE?: string
+
+  // SIG-112: dev/dogfood override for visible finding evidence blocks.
+  // "on" renders the per-finding collapsible provenance block regardless of
+  // sigilix.json; any other value leaves customer visibility to
+  // sigilix.json::evidence.visible.
+  OPENCLAW_SHOW_EVIDENCE?: string
 
   // SIG-228 Phase 3c — synth-bypass single-specialist hot path. When "on",
   // skip the synthesizer LLM call entirely if the dispatcher returned

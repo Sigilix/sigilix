@@ -546,14 +546,13 @@ OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE = "shadow"
 # the validate-injection-taint + validate-security-grounding suites. Rollback: "shadow".
 OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE = "enforce"
 
-# SIG-311 Layers A+B: security USAGE-vs-MENTION validator. Shadow-first — logs the
-# would-demote (`pr-review-finding-rejected-validation`, gate "security-usage") +
-# counts on GET /metrics/validation, KEEPS every finding inline (zero behavior
-# change). Demotes a sev>=4 injection/xss finding only when path-is-detector/
-# test/doc AND token-is-non-executable AND file-adds-no-real-sink (the PR #296
-# self-FP family). Flip to "enforce" after the pr/14 benchmark + a clean shadow
-# window (zero real-finding demotes). Rollback: "off".
-OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "shadow"
+# SIG-311 Layers A+B: security USAGE-vs-MENTION validator. Enforce demotes a
+# sev>=4 injection/xss finding to body-only only when path-is-detector/test/doc
+# AND token-is-non-executable AND file-adds-no-real-sink (the PR #296 self-FP
+# family). Real child_process/HTML sinks always keep inline, including inside
+# security-tooling paths. Promoted shadow->enforce after K=12 live corpus +
+# regression coverage; rollback: "shadow" (observe only) or "off".
+OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE = "enforce"
 
 # Cross-cutting over-fire Option B: window-blindness validator. Shadow-first —
 # logs the would-demote (`pr-review-finding-rejected-validation`, gate

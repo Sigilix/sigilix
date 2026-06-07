@@ -235,8 +235,15 @@
  * control-flow fence with the JS/TS rule that `return` inside an `if` exits the
  * enclosing function/callback, preventing a safe auth middleware FP. Reviews
  * with v22 go stale on first deploy of v23.
+ *
+ * v23 → v24 (SIG-311): the security specialist gains a usage-vs-mention
+ * evidence requirement for security-tooling/test/doc surfaces. It must resolve
+ * command/XSS sink tokens to live executable calls/member writes before emitting
+ * score>=4 findings, explicitly excluding string/comment/prompt mentions and
+ * `RegExp.prototype.exec` from command-injection claims. Reviews with v23 go
+ * stale on first deploy of v24.
  */
-export const PROMPT_VERSION = "23"
+export const PROMPT_VERSION = "24"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

@@ -538,6 +538,79 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.demotedScore1).toBe(0)
   })
 
+  it("SIG-311 demotes a security-sourced usage-vs-mention finding to the body in enforce mode", () => {
+    const path = "src/lib/ast-rules/scan-dynamic-html-sink.ts"
+    const securityFinding: PrReviewFinding = {
+      path,
+      line: 10,
+      score: 5,
+      category: "security",
+      cweId: "CWE-78",
+      headline: "Command injection sink via shell interpolation in `exec`",
+      body: "`re.exec(line)` executes attacker-controlled input as a shell command.",
+    }
+    const synthOutput = () => ({
+      verdict: {
+        summary: "ok",
+        confidence: 4,
+        confidenceReason: "...",
+        findings: [{ ...securityFinding }],
+      },
+      provenance: {
+        findings: [{
+          sourceSpecialists: ["security"],
+          sourceFindingIds: ["security-0"],
+          action: "kept" as const,
+          verifiedViaRetrieval: false,
+        }],
+        dropped: [],
+      },
+    })
+    const securityVerdicts = [{
+      role: "security" as const,
+      verdict: {
+        ...baseVerdict,
+        findings: [{ ...securityFinding, id: "security-0" }],
+      },
+      elapsedMs: 100,
+    }]
+    const securityReviewable: ReviewableMap = new Map([
+      [path, [{ line: 10, side: "RIGHT" }]],
+    ])
+    const addedLineTextByLine = new Map<string, Map<number, string>>([
+      [path, new Map([[10, "  for (const re of HTML_WRITE_SINK_EXTRACTORS) { re.exec(line); }"]])],
+    ])
+
+    const shadow = validateForSubmission({
+      synthOutput: synthOutput(),
+      reviewable: securityReviewable,
+      specialistVerdicts: securityVerdicts,
+      addedLineTextByLine,
+      securityUsageValidatorMode: "shadow",
+    })
+    expect(shadow.verdict.findings).toHaveLength(1)
+    expect(shadow.unanchoredFindings).toHaveLength(0)
+    expect(shadow.droppedForFailedSecurityUsageValidation).toBe(1)
+
+    const enforce = validateForSubmission({
+      synthOutput: synthOutput(),
+      reviewable: securityReviewable,
+      specialistVerdicts: securityVerdicts,
+      addedLineTextByLine,
+      securityUsageValidatorMode: "enforce",
+      trustLedgerEnabled: true,
+    })
+    expect(enforce.verdict.findings).toHaveLength(0)
+    expect(enforce.unanchoredFindings).toHaveLength(1)
+    expect(enforce.unanchoredFindings[0]?.headline).toContain("Command injection")
+    expect(enforce.unanchoredFindings[0]?.trust).toEqual({
+      tier: "body-only-ungrounded",
+      surface: "body",
+      demoteReason: "security-usage",
+    })
+    expect(enforce.droppedForFailedSecurityUsageValidation).toBe(1)
+  })
+
   it("attaches EvidenceRecord from validated synth provenance without changing score or confidence", () => {
     const astId = "ast/no-unsafe-call/abc123/42"
     const out = validateForSubmission({

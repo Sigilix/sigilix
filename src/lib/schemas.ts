@@ -275,6 +275,45 @@ export const PR_IMPROVE_SCHEMA = {
 } as const
 
 /**
+ * SIG-332: CI-failure-triage verdict (`triage-ci.ts`). The CI-triage
+ * handler asks the model for a structured diagnosis instead of free-form
+ * markdown so individual fix `patches` can be anchored to diff lines —
+ * SIG-333 renders those as committable inline `suggestion` blocks.
+ * `rootCause` + `confidence` are the minimum the sticky-comment renderer
+ * and the confidence gate need; everything else is optional (a diagnosis
+ * with no clean single-line fix simply omits `patches`). Mirrors the
+ * PR_IMPROVE_SCHEMA shape + `format`-constrained usage.
+ */
+export const CI_TRIAGE_SCHEMA = {
+  type: "object",
+  properties: {
+    rootCause: { type: "string" },
+    suggestedFix: { type: "string" },
+    affectedFiles: {
+      type: "array",
+      maxItems: 20,
+      items: { type: "string" },
+    },
+    patches: {
+      type: "array",
+      maxItems: 10,
+      items: {
+        type: "object",
+        properties: {
+          path: { type: "string" },
+          line: { type: "integer", minimum: 1 },
+          replacement: { type: "string" },
+        },
+        required: ["path", "line", "replacement"],
+      },
+    },
+    failureExcerpt: { type: "string" },
+    confidence: { type: "string", enum: ["high", "medium", "low"] },
+  },
+  required: ["rootCause", "confidence"],
+} as const
+
+/**
  * Issue-triage verdict (Linear issue post + field updates).
  * Mirrors Verdict in src/lib/triage.ts.
  */

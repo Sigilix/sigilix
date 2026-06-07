@@ -16,6 +16,8 @@ import { GitHubClient, GitHubHttpError, type WorkflowJob } from "./github"
 import { retrieveChunks } from "./retrieval"
 import { indexNamespace } from "./repo-index-manifest"
 import { CI_TRIAGE_PROMPT } from "../prompts/ci-triage"
+import { CI_TRIAGE_SCHEMA } from "./schemas"
+import { parseFirstJsonObject } from "./json-extract"
 import type { Env } from "../index"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"
@@ -41,6 +43,35 @@ const LIMITS = {
 
 interface CiVerdict {
   raw: string
+  confidence: "high" | "medium" | "low"
+}
+
+/**
+ * SIG-332: one precise, mechanical line replacement the model proposes
+ * as a fix. `line` is 1-based in `path`'s current content; `replacement`
+ * is the full text the line should become (an empty string is a valid
+ * deletion patch). SIG-333 anchors these to the PR diff and renders them
+ * as committable inline `suggestion` blocks; PR A only parses + carries
+ * them.
+ */
+export interface CiTriagePatch {
+  path: string
+  line: number
+  replacement: string
+}
+
+/**
+ * SIG-332: the structured CI-failure diagnosis (constrained by
+ * `CI_TRIAGE_SCHEMA`). `rootCause` + `confidence` are required; the rest
+ * are best-effort. `affectedFiles` / `patches` default to empty arrays so
+ * downstream consumers never have to null-check them.
+ */
+export interface CiTriageVerdict {
+  rootCause: string
+  suggestedFix?: string
+  affectedFiles: string[]
+  patches: CiTriagePatch[]
+  failureExcerpt?: string
   confidence: "high" | "medium" | "low"
 }
 
@@ -199,32 +230,55 @@ async function runCiTriage(args: CiTriageInner): Promise<void> {
     prompt,
     apiKey: env.OLLAMA_API_KEY,
     temperature: 0.2,
+    format: CI_TRIAGE_SCHEMA as unknown as Record<string, unknown>,
   })
   since("ollama-done")
 
-  const verdict = parseConfidence(response)
-  if (verdict == null || verdict === "low") {
+  // SIG-332: parse the structured diagnosis. The model is constrained to
+  // CI_TRIAGE_SCHEMA, so the normal path is a typed object we render the
+  // sticky comment from (and whose `patches` SIG-333 will anchor inline).
+  // Fallback when the structured parse fails: read confidence from the raw
+  // text and post it as-is. That rescues a model which ignored `format` and
+  // emitted the OLD free-form markdown — its "Confidence: <level>" line
+  // still parses, so the prior behavior is preserved with no regression. If
+  // the raw text yields no usable confidence either (e.g. broken JSON that
+  // won't parse), the gate below skips the post rather than dumping
+  // unrenderable output onto the PR.
+  const structured = parseCiTriageResponse(response)
+  const confidence = structured?.confidence ?? parseConfidence(response)
+  // Observe structured-parse success + patch frequency ahead of SIG-333
+  // flipping these `patches` into inline suggestions.
+  console.log(JSON.stringify({
+    event: "ci-triage-diagnosis",
+    owner, repo, prNumber, runId,
+    structured: structured != null,
+    confidence: confidence ?? "unparsed",
+    affectedFiles: structured?.affectedFiles.length ?? 0,
+    patches: structured?.patches.length ?? 0,
+  }))
+  if (confidence == null || confidence === "low") {
     console.log(
-      `Skipping ci-triage post — confidence=${verdict ?? "unparsed"} on ${owner}/${repo}#${prNumber}`
+      `Skipping ci-triage post — confidence=${confidence ?? "unparsed"} on ${owner}/${repo}#${prNumber}`
     )
     return
   }
 
-  const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Sigilix · model \`${model}\` · run \`${runId}\` · confidence \`${verdict}\`_`
-  const body = response + footer
+  const diagnosis = structured ? renderCiTriageVerdict(structured) : response
+  const footer = `\n\n${CI_MARKER}\n_⚓ Auto-triage by Sigilix · model \`${model}\` · run \`${runId}\` · confidence \`${confidence}\`_`
+  const body = diagnosis + footer
 
   const existing = await findExistingCiComment(client, owner, repo, prNumber)
   if (existing != null) {
     await client.updateIssueComment(owner, repo, existing, body)
     since("comment-updated")
     console.log(
-      `ci-triage updated on ${owner}/${repo}#${prNumber} (run ${runId}, confidence ${verdict})`
+      `ci-triage updated on ${owner}/${repo}#${prNumber} (run ${runId}, confidence ${confidence})`
     )
   } else {
     const created = await client.createIssueComment(owner, repo, prNumber, body)
     since("comment-created")
     console.log(
-      `ci-triage created on ${owner}/${repo}#${prNumber} as comment ${created.id} (run ${runId}, confidence ${verdict})`
+      `ci-triage created on ${owner}/${repo}#${prNumber} as comment ${created.id} (run ${runId}, confidence ${confidence})`
     )
   }
 }
@@ -265,6 +319,86 @@ export function parseConfidence(response: string): "high" | "medium" | "low" | n
   const level = match[1].toLowerCase()
   if (level === "high" || level === "medium" || level === "low") return level
   return null
+}
+
+/**
+ * SIG-332: parse the model's structured CI diagnosis. Uses the shared
+ * tolerant JSON extractor (handles ```json fences, preambles, and the
+ * unescaped-newline / trailing-comma malformations GLM-5.1 emits). Returns
+ * null when the object is unusable — no `rootCause` or no valid
+ * `confidence` — so the caller falls back to the free-form path rather
+ * than posting an empty diagnosis. Invalid individual `patches` /
+ * `affectedFiles` entries are dropped, not fatal. Pure — exported for tests.
+ */
+export function parseCiTriageResponse(text: string): CiTriageVerdict | null {
+  const obj = parseFirstJsonObject(text)
+  if (obj == null) return null
+
+  const rootCause = typeof obj.rootCause === "string" ? obj.rootCause.trim() : ""
+  const confidence = coerceConfidence(obj.confidence)
+  if (rootCause.length === 0 || confidence == null) return null
+
+  const affectedFiles = Array.isArray(obj.affectedFiles)
+    ? obj.affectedFiles
+        .filter((f): f is string => typeof f === "string" && f.trim().length > 0)
+        .map((f) => f.trim())
+    : []
+  const patches = Array.isArray(obj.patches)
+    ? obj.patches.map(coercePatch).filter((p): p is CiTriagePatch => p !== null)
+    : []
+
+  const verdict: CiTriageVerdict = { rootCause, affectedFiles, patches, confidence }
+  if (typeof obj.suggestedFix === "string" && obj.suggestedFix.trim().length > 0) {
+    verdict.suggestedFix = obj.suggestedFix.trim()
+  }
+  if (typeof obj.failureExcerpt === "string" && obj.failureExcerpt.trim().length > 0) {
+    verdict.failureExcerpt = obj.failureExcerpt.trim()
+  }
+  return verdict
+}
+
+/** Coerce an arbitrary value to a confidence level, or null. */
+function coerceConfidence(value: unknown): "high" | "medium" | "low" | null {
+  if (typeof value !== "string") return null
+  const v = value.trim().toLowerCase()
+  return v === "high" || v === "medium" || v === "low" ? v : null
+}
+
+/**
+ * Validate one `patches[]` entry. Requires a non-empty `path` and a
+ * positive integer `line`; `replacement` may be empty (a deletion patch).
+ * Any shape mismatch returns null so one bad patch is dropped rather than
+ * discarding the whole diagnosis.
+ */
+function coercePatch(raw: unknown): CiTriagePatch | null {
+  if (raw == null || typeof raw !== "object") return null
+  const r = raw as Record<string, unknown>
+  const path = typeof r.path === "string" ? r.path.trim() : ""
+  if (path.length === 0) return null
+  if (typeof r.line !== "number" || !Number.isInteger(r.line) || r.line < 1) return null
+  const replacement = typeof r.replacement === "string" ? r.replacement : ""
+  return { path, line: r.line, replacement }
+}
+
+/**
+ * SIG-332: render the structured diagnosis into the sticky-comment body —
+ * the same 🔴 / 📍 / 📋 / 🤔 shape the prior free-form prompt produced, so
+ * the user-facing comment is unchanged. The footer (marker + model / run /
+ * confidence) is appended by the caller. Optional sections are emitted only
+ * when present. `affectedFiles` / `patches` are intentionally NOT rendered
+ * here (PR A is no-posting-change); SIG-333 consumes `patches` for inline
+ * `suggestion` blocks. Pure — exported for tests.
+ */
+export function renderCiTriageVerdict(v: CiTriageVerdict): string {
+  const parts: string[] = [`🔴 **Root cause:** ${v.rootCause}`]
+  if (v.suggestedFix) {
+    parts.push("", "📍 **Likely fix:**", v.suggestedFix)
+  }
+  if (v.failureExcerpt) {
+    parts.push("", "📋 **Failure excerpt:**", "```", v.failureExcerpt, "```")
+  }
+  parts.push("", `🤔 **Confidence:** ${v.confidence}`)
+  return parts.join("\n")
 }
 
 interface PromptCtx {
@@ -329,7 +463,7 @@ function buildPrompt(ctx: PromptCtx): string {
     }
   }
 
-  sections.push("", "[OUTPUT]", "Produce the comment in the exact format specified above. No preamble.")
+  sections.push("", "[OUTPUT]", "Return the JSON object specified above — no preamble, no markdown fence.")
   return sections.join("\n")
 }
 

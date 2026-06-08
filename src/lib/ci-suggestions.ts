@@ -82,13 +82,11 @@ export function partitionCiPatches(
   const seen = new Set<string>()
   for (const patch of patches) {
     const key = `${patch.path}:${patch.line}`
-    // First-wins: the first patch for a path:line claims it; every later
-    // patch on that line falls back, so a line never gets two (possibly
-    // conflicting) suggestions — even if the first one was un-anchorable.
-    if (seen.has(key)) {
-      unanchorable.push(patch)
-      continue
-    }
+    // First-wins: the first patch for a path:line claims it. Later patches on
+    // that same line are duplicates — you can't apply two replacements to one
+    // line — so they're dropped entirely (not re-shown in the sticky, which
+    // would just add a conflicting entry for a line already covered).
+    if (seen.has(key)) continue
     seen.add(key)
     if (
       isSuggestionSafe(patch.replacement) &&
@@ -290,12 +288,19 @@ export async function submitCiSuggestionReview(
     await client.submitReview(owner, repo, prNumber, review)
     return { posted: comments.length, skip: null }
   } catch (err) {
-    // Split retry ONLY on a 422 (bad anchor) — that's the failure a
-    // per-comment resubmission can route around. Any other error (network,
-    // 5xx, auth, rate-limit) is not anchor-specific; retrying each comment
-    // would just amplify it, so fail fast and let the sticky carry the
-    // diagnosis.
-    if (!(err instanceof GitHubHttpError) || err.status !== 422) {
+    // Split retry ONLY on a 422 *validation* failure — a bad anchor GitHub
+    // rejected, which a per-comment resubmission can route around. A 422 is
+    // not always anchor-related: GitHub also returns it for secondary rate
+    // limiting and other validation, where splitting into N concurrent
+    // retries would AMPLIFY the problem. Anchor rejections carry a
+    // "Validation Failed" body (the error message includes the response
+    // body), so gate on that + the status. Everything else fails fast — the
+    // sticky already carries the diagnosis.
+    const isAnchorValidation =
+      err instanceof GitHubHttpError &&
+      err.status === 422 &&
+      /validation failed/i.test(err.message)
+    if (!isAnchorValidation) {
       console.warn(JSON.stringify({
         event: "ci-suggestions-submit-failed",
         owner, repo, prNumber,

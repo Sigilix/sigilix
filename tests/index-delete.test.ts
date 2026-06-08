@@ -210,7 +210,7 @@ describe("deleteRepoIndex — happy path", () => {
     expect(result.errors).toEqual([])
   })
 
-  it("batches deleteByIds at 1000 ids per call", async () => {
+  it("batches deleteByIds at <=100 ids per call (Vectorize cap; regression guard)", async () => {
     const { kv, store } = makeKvStub()
     store.set(repoIndexManifestKey("Arc-and-Anchor", "sigilix"), JSON.stringify(manifest()))
     const bigByPath: Record<string, string[]> = {}
@@ -224,10 +224,11 @@ describe("deleteRepoIndex — happy path", () => {
     })
     expect(result.status).toBe("complete")
     expect(result.vectorIds).toBe(2500)
-    expect(deletedBatches.length).toBe(3) // 1000, 1000, 500
-    expect(deletedBatches[0]?.length).toBe(1000)
-    expect(deletedBatches[1]?.length).toBe(1000)
-    expect(deletedBatches[2]?.length).toBe(500)
+    // Vectorize deleteByIds rejects >100 ids/call (error 40007). NO batch may
+    // exceed 100 — this fails if VECTORIZE_DELETE_BATCH is reverted above 100.
+    expect(deletedBatches.every((b) => b.length <= 100)).toBe(true)
+    expect(deletedBatches.length).toBe(25) // 2500 / 100
+    expect(deletedBatches.reduce((n, b) => n + b.length, 0)).toBe(2500)
   })
 })
 

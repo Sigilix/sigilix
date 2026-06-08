@@ -399,15 +399,18 @@ function isCrossReferencedInSiblingTest(
     if (m.source === findingPath && typeof m.test === "string") siblingTests.add(m.test)
   }
   if (siblingTests.size === 0) return false
+  // Word-boundary match (no lookbehind) so `parse` doesn't hit inside
+  // `parseFoo`; `$`/`_` count as identifier chars at the boundary. Compiled
+  // once per identifier (not per identifier × test-body) — Sigilix #401 perf.
+  const idRegexes = idents.map(
+    (id) => new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeForRegExp(id)}(?:[^A-Za-z0-9_$]|$)`),
+  )
   const changed = new Set(pack.testFilesChanged)
   for (const testPath of siblingTests) {
     if (!changed.has(testPath)) continue
     const body = contentByPath[testPath]
     if (typeof body !== "string" || body.length === 0) continue
-    for (const id of idents) {
-      // Word-boundary match (no lookbehind) so `parse` doesn't hit inside
-      // `parseFoo`; `$`/`_` count as identifier chars at the boundary.
-      const re = new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeForRegExp(id)}(?:[^A-Za-z0-9_$]|$)`)
+    for (const re of idRegexes) {
       if (re.test(body)) return true
     }
   }

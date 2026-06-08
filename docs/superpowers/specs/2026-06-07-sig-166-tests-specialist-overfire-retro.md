@@ -55,7 +55,9 @@ being dropped). SIG-347's additions preserve that bias.
 The direct fix for the PR #144 frontier. In the `insufficientClass` keep path
 (`evaluateTestFinding`), before emitting, scan the **in-diff sibling test** of the
 finding's own source path for the finding's cited identifier. A word-boundary hit ⇒
-the "existing tests are insufficient" claim is an over-fire ⇒ drop.
+the "existing tests are insufficient" claim is an over-fire and the finding is
+**suppressed** — *demote-not-drop* at the call site (see the belt note below), not a
+hard delete.
 
 Belts: (1) **in-diff, sibling-scoped only** — only the test paired with the finding's
 source in `siblingMappings`, and only when that test is in `testFilesChanged` *with*

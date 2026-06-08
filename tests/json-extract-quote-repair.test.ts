@@ -22,6 +22,42 @@ describe("parseFirstJsonObject quote repair", () => {
     expect(out?.ok).toBe(true)
   })
 
+  it("does not terminate before an object-snippet comma followed by prose", () => {
+    const out = parseFirstJsonObject('{ "body": "Nested {"name": "Alice"}, payload", "ok": true }')
+
+    expect(out?.body).toBe('Nested {"name": "Alice"}, payload')
+    expect(out?.ok).toBe(true)
+  })
+
+  it.each([
+    [
+      "number-like prose",
+      '{ "body": "Nested {"name": "Alice"}, 3.14 is pi", "ok": true }',
+      'Nested {"name": "Alice"}, 3.14 is pi',
+    ],
+    [
+      "boolean-like prose",
+      '{ "body": "Nested {"name": "Alice"}, true story", "ok": true }',
+      'Nested {"name": "Alice"}, true story',
+    ],
+    [
+      "null-like prose",
+      '{ "body": "Nested {"name": "Alice"}, null void", "ok": true }',
+      'Nested {"name": "Alice"}, null void',
+    ],
+  ])("does not terminate before object-snippet comma followed by %s", (_name, text, expected) => {
+    const out = parseFirstJsonObject(text)
+
+    expect(out?.body).toBe(expected)
+    expect(out?.ok).toBe(true)
+  })
+
+  it("does not repair a dangling object-snippet comma at EOF into a finding", () => {
+    const out = parseFirstJsonObject('{ "body": "Nested {"name": "Alice"},')
+
+    expect(out).toBeNull()
+  })
+
   it("repairs unescaped quotes inside array element strings", () => {
     const out = parseFirstJsonObject('{ "items": ["Cover "kind" parsing", "ok"] }')
 

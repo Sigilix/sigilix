@@ -213,7 +213,7 @@ function canFollowClosingContainerInJson(s: string, closingIndex: number): boole
       idx = next
       continue
     }
-    return ch === ","
+    return ch === "," && canFollowCommaInJson(s, next)
   }
 }
 

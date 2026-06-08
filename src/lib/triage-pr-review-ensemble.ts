@@ -399,7 +399,7 @@ import {
   type ShadowMatchFinding,
 } from "./review-memory/shadow-match"
 import { isSoftenActive, softenScoreWithFloor } from "./review-memory/soften-gate"
-import { applyDegradedCoverageFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits, parseAstEmitFloorMode } from "./degraded-finding-floor"
+import { applyDegradedCoverageFindingFloor, applySynthSourceFindingFloor, recoverTruncatedSynthFindings, injectUnmatchedAstEmits, parseAstEmitFloorMode } from "./degraded-finding-floor"
 import {
   readCalibrationParams,
   shouldKeepSoften,
@@ -5060,6 +5060,34 @@ export async function handlePrReviewEnsemble(
         // Install unconditionally — `rec` is always aligned (trim ± recovery).
         effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: rec.findings }
         effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: rec.provenanceFindings }
+      }
+    }
+
+    // SIG-351: full-coverage source-finding floor. Prompt-level FP
+    // adjudication is allowed ONLY when the synth records a proof-like drop
+    // (`false positive on diff inspection` / AST supersession). If a score>=4
+    // source finding is neither represented in kept provenance nor proof-dropped,
+    // restore it before validation. This is recall-only: restored findings still
+    // pass through the normal hallucination, grounding, validator, anchor, and
+    // rendering gates below.
+    {
+      const floored = applySynthSourceFindingFloor({
+        findings: effectiveSynthVerdict.findings,
+        provenanceFindings: effectiveSynthProvenance.findings,
+        provenanceDropped: effectiveSynthProvenance.dropped,
+        specialists: synthInputVerdicts
+          .filter((v) => v.verdict !== null)
+          .map((v) => ({ role: v.role, findings: v.verdict!.findings })),
+      })
+      if (floored.restored.length > 0) {
+        effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
+        effectiveSynthProvenance = { ...effectiveSynthProvenance, findings: floored.provenanceFindings }
+        console.log(JSON.stringify({
+          event: "pr-review-synth-source-findings-restored",
+          owner, repo, prNumber, headSha: headSha.slice(0, 7),
+          restoredCount: floored.restored.length,
+          restored: floored.restored.map((r) => ({ role: r.role, id: r.id, score: r.score })),
+        }))
       }
     }
 

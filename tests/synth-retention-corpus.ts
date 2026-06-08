@@ -12,6 +12,7 @@ import type {
 } from "../src/lib/triage-pr-review"
 import type { SynthesizerProvenance } from "../src/lib/triage-pr-review-ensemble"
 import type { SpecialistRole } from "../src/lib/ensemble-router"
+import { applySynthSourceFindingFloor } from "../src/lib/degraded-finding-floor"
 
 export interface SynthSourceFinding extends PrReviewFinding {
   id: string
@@ -135,6 +136,43 @@ function diagnosticTextOf(f: PrReviewFinding): string {
 
 function knownSourceIds(c: SynthRetentionCase): Set<string> {
   return new Set(c.specialistVerdicts.flatMap((v) => v.verdict.findings.map((f) => f.id)))
+}
+
+/**
+ * Mirror the post-synth product gates that materially affect the retention
+ * oracle: SIG-351 source-floor restoration plus the provenance hallucination
+ * guard. The full Worker path runs additional validators/anchor gates, but the
+ * retention corpus is source-ID based; this keeps the live K runs measuring the
+ * customer-visible review signal rather than raw synth bookkeeping mistakes.
+ */
+export function applySynthRetentionProductGates(
+  c: SynthRetentionCase,
+  output: SynthRetentionOutput,
+): SynthRetentionOutput {
+  const knownIds = knownSourceIds(c)
+  const floored = applySynthSourceFindingFloor({
+    findings: output.verdict.findings,
+    provenanceFindings: output.provenance.findings,
+    provenanceDropped: output.provenance.dropped,
+    specialists: c.specialistVerdicts.map((v) => ({ role: v.role, findings: v.verdict.findings })),
+  })
+  const findings: PrReviewFinding[] = []
+  const provenanceFindings: SynthesizerProvenance["findings"] = []
+  for (let i = 0; i < floored.findings.length; i++) {
+    const provenance = floored.provenanceFindings[i]
+    if (!provenance) continue
+    const sourceIds = provenance.sourceFindingIds
+    if (sourceIds.length === 0) continue
+    if (!sourceIds.every((id) => knownIds.has(id))) continue
+    findings.push(floored.findings[i]!)
+    provenanceFindings.push(provenance)
+  }
+
+  return {
+    ...output,
+    verdict: { ...output.verdict, findings },
+    provenance: { ...output.provenance, findings: provenanceFindings },
+  }
 }
 
 function validateSynthRetentionCase(c: SynthRetentionCase): void {

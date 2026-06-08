@@ -1,7 +1,8 @@
 // SIG-350 synthesizer-retention baseline - replays frozen specialist verdict
-// bundles through the REAL synthesizer (Ollama Turbo) and reports retention,
-// FP filtering, hallucination, severity drift, duplicate collapse, precision,
-// and runtime.
+// bundles through the REAL synthesizer (Ollama Turbo), applies the post-synth
+// source-floor + hallucination product gates that affect the final review
+// signal, and reports retention, FP filtering, hallucination, severity drift,
+// duplicate collapse, precision, and runtime.
 //
 //   OLLAMA_API_KEY=ollama_... npm run synth-retention-eval
 //   SYNTH_RETENTION_REPEATS=12 OLLAMA_API_KEY=... npm run synth-retention-eval
@@ -11,6 +12,7 @@
 
 import { describe, it } from "vitest"
 import {
+  applySynthRetentionProductGates,
   formatSynthRetentionSummary,
   scoreSynthRetentionCase,
   summarizeSynthRetentionResults,
@@ -114,7 +116,8 @@ describe.skipIf(!API_KEY)("synth retention baseline (LIVE - needs OLLAMA_API_KEY
       const scores = []
       for (let k = 0; k < REPEATS; k++) {
         for (const c of cases) {
-          const output = await runCase(c, API_KEY as string)
+          const rawOutput = await runCase(c, API_KEY as string)
+          const output = applySynthRetentionProductGates(c, rawOutput)
           const score = scoreSynthRetentionCase(c, output)
           scores.push(score)
           const mark = [

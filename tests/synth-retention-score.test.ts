@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "vitest"
 import {
+  applySynthRetentionProductGates,
   scoreSynthRetentionCase,
   summarizeSynthRetentionResults,
   SYNTH_RETENTION_CASES,
@@ -12,6 +13,175 @@ const collisionCase = SYNTH_RETENTION_CASES.find((c) => c.id === "distinct-bugs-
 const cleanCase = SYNTH_RETENTION_CASES.find((c) => c.id === "fp-filter-plus-tp-retention")!
 
 describe("synth-retention oracle", () => {
+  it("product gates restore omitted score>=4 source findings before scoring recall", () => {
+    const rawOutput: SynthRetentionOutput = {
+      verdict: {
+        summary: "Looks clean.",
+        confidence: 4,
+        confidenceReason: "No actionable issues.",
+        findings: [],
+      },
+      provenance: {
+        findings: [],
+        dropped: [{
+          specialist: "logic",
+          sourceFindingId: "logic-0",
+          headline: "Missing tenant authorization before returning an order",
+          reason: "duplicate",
+        }],
+      },
+      elapsedMs: 12_000,
+      modelUsed: "gpt-oss:120b-cloud",
+    }
+
+    const score = scoreSynthRetentionCase(cleanCase, applySynthRetentionProductGates(cleanCase, rawOutput))
+
+    expect(score.retained).toBe(1)
+    expect(score.missedSourceIds).toEqual([])
+    expect(score.recall).toBe(1)
+  })
+
+  it("product gates do not restore a source finding explicitly dropped as a proven FP", () => {
+    const rawOutput: SynthRetentionOutput = {
+      verdict: {
+        summary: "One issue.",
+        confidence: 4,
+        confidenceReason: "The authz finding is real.",
+        findings: [{
+          path: "src/api/orders.ts",
+          line: 5,
+          score: 4,
+          category: "logic",
+          headline: "Missing tenant authorization before returning an order",
+          body: "The handler returns arbitrary orders without checking the caller's `tenantId`.",
+        }],
+      },
+      provenance: {
+        findings: [
+          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+        ],
+        dropped: [{
+          specialist: "security",
+          sourceFindingId: "security-0",
+          headline: "SSRF via Content-Type",
+          reason: "false positive on diff inspection",
+        }],
+      },
+      elapsedMs: 12_000,
+      modelUsed: "gpt-oss:120b-cloud",
+    }
+
+    const score = scoreSynthRetentionCase(cleanCase, applySynthRetentionProductGates(cleanCase, rawOutput))
+
+    expect(score.retained).toBe(1)
+    expect(score.falsePositivesKept).toBe(0)
+    expect(score.fpFilteringRate).toBe(1)
+  })
+
+  it("product gates restore source findings dropped with an unrecognized reason", () => {
+    const rawOutput: SynthRetentionOutput = {
+      verdict: {
+        summary: "Looks clean.",
+        confidence: 4,
+        confidenceReason: "The synth dropped the only source finding.",
+        findings: [],
+      },
+      provenance: {
+        findings: [],
+        dropped: [{
+          specialist: "logic",
+          sourceFindingId: "logic-0",
+          headline: "Missing tenant authorization before returning an order",
+          reason: "impossible per diff analysis",
+        }],
+      },
+      elapsedMs: 12_000,
+      modelUsed: "gpt-oss:120b-cloud",
+    }
+
+    const score = scoreSynthRetentionCase(cleanCase, applySynthRetentionProductGates(cleanCase, rawOutput))
+
+    expect(score.retained).toBe(1)
+    expect(score.missedSourceIds).toEqual([])
+    expect(score.recall).toBe(1)
+  })
+
+  it("product gates count a raw kept false-positive source unless the synth records proof", () => {
+    const rawOutput: SynthRetentionOutput = {
+      verdict: {
+        summary: "Two issues.",
+        confidence: 4,
+        confidenceReason: "The synth kept both sources.",
+        findings: [
+          {
+            path: "src/api/orders.ts",
+            line: 5,
+            score: 4,
+            category: "logic",
+            headline: "Missing tenant authorization before returning an order",
+            body: "The handler returns arbitrary orders without checking the caller's `tenantId`.",
+          },
+          {
+            path: "src/parse/ndjson.ts",
+            line: 4,
+            score: 4,
+            category: "security",
+            headline: "SSRF via Content-Type",
+            body: "The parser trusts a response Content-Type header, but this PR only reads bytes from a local object binding.",
+          },
+        ],
+      },
+      provenance: {
+        findings: [
+          { sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false },
+          { sourceSpecialists: ["security"], sourceFindingIds: ["security-0"], action: "kept", verifiedViaRetrieval: false },
+        ],
+        dropped: [],
+      },
+      elapsedMs: 12_000,
+      modelUsed: "gpt-oss:120b-cloud",
+    }
+
+    const score = scoreSynthRetentionCase(cleanCase, applySynthRetentionProductGates(cleanCase, rawOutput))
+
+    expect(score.retained).toBe(1)
+    expect(score.falsePositivesKept).toBe(1)
+    expect(score.fpFilteringRate).toBe(0)
+  })
+
+  it("product gates filter unsupported raw synth-only rows before scoring hallucinations", () => {
+    const rawOutput: SynthRetentionOutput = {
+      verdict: {
+        summary: "One issue.",
+        confidence: 4,
+        confidenceReason: "The diff shows it.",
+        findings: [
+          {
+            path: "src/parse/ndjson.ts",
+            line: 4,
+            score: 4,
+            category: "security",
+            headline: "SSRF via Content-Type",
+            body: "The new parser trusts a response Content-Type header.",
+          },
+        ],
+      },
+      provenance: {
+        findings: [
+          { sourceSpecialists: [], sourceFindingIds: [], action: "kept", verifiedViaRetrieval: false },
+        ],
+        dropped: [],
+      },
+      elapsedMs: 11_000,
+      modelUsed: "gpt-oss:120b-cloud",
+    }
+
+    const score = scoreSynthRetentionCase(cleanCase, applySynthRetentionProductGates(cleanCase, rawOutput))
+
+    expect(score.unsupportedFindings).toBe(0)
+    expect(score.hallucinated).toBe(false)
+  })
+
   it("counts high-severity true positives as missed when their source IDs disappear", () => {
     const synthOutput: SynthRetentionOutput = {
       verdict: {

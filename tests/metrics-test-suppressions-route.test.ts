@@ -70,6 +70,12 @@ describe("handleTestSuppressionsMetricsRoute", () => {
     expect(res.status).toBe(400)
   })
 
+  it("accepts the max window (30d) and rejects max+1 — pins the cap (mirrors /metrics/validation)", async () => {
+    const env = makeEnv()
+    expect((await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions?window=30", `Bearer ${TOKEN}`), env)).status).toBe(200)
+    expect((await handleTestSuppressionsMetricsRoute(get("https://x/metrics/test-suppressions?window=31", `Bearer ${TOKEN}`), env)).status).toBe(400)
+  })
+
   it("200 projects only the tests gate, per reason, with suppression rates", async () => {
     const do_ = makeDo()
     await do_.recordBatch({

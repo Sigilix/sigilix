@@ -368,15 +368,20 @@ function escapeForRegExp(s: string): string {
 
 /**
  * SIG-347 (AC #2): is the finding's cited identifier already referenced by
- * an in-diff sibling test we fetched? Only test files that are BOTH in the
- * PR's changed set (`testFilesChanged`) AND have fetched content
- * (`inspectedTestContentByPath`) are scanned — the cross-check reflects the
- * actual diff, not the whole repo. A word-boundary identifier hit in any
- * such test body means the "existing tests don't cover X" claim is an
- * over-fire (PR #144: `parsePrReviewResponse` cited while the same PR's
- * `tests/triage-pr-review.test.ts` references it). FP-safe: returns false
- * when no identifier is extractable or no in-diff test body is available —
- * the gate then keeps the finding via its normal path.
+ * the in-diff **sibling** test of the finding's own source path?
+ *
+ * Sibling-scoped (AC #2 is about the "corresponding source"): only the test
+ * paired with `finding.path` in `pack.siblingMappings` is scanned — an
+ * UNRELATED changed test that happens to mention the same token must not
+ * suppress the finding. That sibling is scanned only when it is BOTH in the
+ * PR's changed set (`testFilesChanged`) AND has fetched content
+ * (`inspectedTestContentByPath`), so the check reflects the actual diff, not
+ * the whole repo. A word-boundary identifier hit means the "existing tests
+ * don't cover X" claim is an over-fire (PR #144: `parsePrReviewResponse`
+ * cited while the same PR's `tests/triage-pr-review.test.ts` references it).
+ * FP-safe: returns false when no identifier is extractable, the source has no
+ * in-diff sibling test, or no sibling body is available — the gate then keeps
+ * the finding via its normal path.
  */
 function isCrossReferencedInSiblingTest(
   finding: PrReviewFinding,
@@ -386,9 +391,18 @@ function isCrossReferencedInSiblingTest(
   if (!contentByPath) return false
   const idents = extractCitedIdentifiers(finding)
   if (idents.length === 0) return false
+  const findingPath = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (findingPath.length === 0) return false
+  // The sibling test(s) of THIS finding's source path — not every changed test.
+  const siblingTests = new Set<string>()
+  for (const m of pack.siblingMappings) {
+    if (m.source === findingPath && typeof m.test === "string") siblingTests.add(m.test)
+  }
+  if (siblingTests.size === 0) return false
   const changed = new Set(pack.testFilesChanged)
-  for (const [path, body] of Object.entries(contentByPath)) {
-    if (!changed.has(path)) continue
+  for (const testPath of siblingTests) {
+    if (!changed.has(testPath)) continue
+    const body = contentByPath[testPath]
     if (typeof body !== "string" || body.length === 0) continue
     for (const id of idents) {
       // Word-boundary match (no lookbehind) so `parse` doesn't hit inside

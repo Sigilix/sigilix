@@ -54,6 +54,14 @@ const DIFF_FILE_DELETED = `diff --git a/src/zap.ts b/src/zap.ts
 -line2
 `
 
+const DIFF_NEW_FILE = `diff --git a/src/new.ts b/src/new.ts
+--- /dev/null
++++ b/src/new.ts
+@@ -0,0 +1,2 @@
++line1
++line2
+`
+
 describe("buildChangedLines", () => {
   it("collects + lines from a simple add hunk", () => {
     const m = buildChangedLines(DIFF_ADD_BLOCK)
@@ -154,6 +162,34 @@ describe("buildDeletedLineTextByLine (SIG-349)", () => {
     const fileMap = m.get("src/r.ts")
     expect(fileMap?.get(6)).toBe("removed_line")
     expect(fileMap?.size).toBe(1)
+  })
+
+  it("resets old-side numbering across multiple hunks in the same file", () => {
+    const diff = `diff --git a/src/multi.ts b/src/multi.ts
+--- a/src/multi.ts
++++ b/src/multi.ts
+@@ -2,2 +2,1 @@
+ keep
+-removed_first_hunk
+@@ -20,1 +19,2 @@
+ context
++inserted_second_hunk
+@@ -40,2 +40,1 @@
+ keep
+-removed_third_hunk
+`
+    const m = buildDeletedLineTextByLine(diff)
+    const fileMap = m.get("src/multi.ts")
+
+    expect(fileMap?.get(3)).toBe("removed_first_hunk")
+    expect(fileMap?.get(41)).toBe("removed_third_hunk")
+    expect(fileMap?.has(20)).toBe(false)
+  })
+
+  it("NEW FILE: no old-side deletion map is created", () => {
+    const m = buildDeletedLineTextByLine(DIFF_NEW_FILE)
+
+    expect(m.size).toBe(0)
   })
 
   it("returns empty map on empty input", () => {

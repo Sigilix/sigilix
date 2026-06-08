@@ -185,7 +185,36 @@ function canFollowCommaInJson(s: string, commaIndex: number): boolean {
   const idx = nextNonWhitespaceIndex(s, commaIndex + 1)
   if (idx === -1) return false
   const ch = s.charAt(idx)
-  return ch === "\"" || ch === "{" || ch === "[" || ch === "t" || ch === "f" || ch === "n" || ch === "-" || /\d/.test(ch)
+  if (ch === "\"" || ch === "{" || ch === "[") return true
+  if (s.startsWith("true", idx)) return isJsonValueBoundary(s, idx + 4)
+  if (s.startsWith("false", idx)) return isJsonValueBoundary(s, idx + 5)
+  if (s.startsWith("null", idx)) return isJsonValueBoundary(s, idx + 4)
+  if (ch === "-" || /\d/.test(ch)) {
+    const number = s.slice(idx).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)
+    return Boolean(number && isJsonValueBoundary(s, idx + number[0].length))
+  }
+  return false
+}
+
+function isJsonValueBoundary(s: string, start: number): boolean {
+  const idx = nextNonWhitespaceIndex(s, start)
+  if (idx === -1) return true
+  const ch = s.charAt(idx)
+  return ch === "," || ch === "}" || ch === "]"
+}
+
+function canFollowClosingContainerInJson(s: string, closingIndex: number): boolean {
+  let idx = closingIndex
+  while (true) {
+    const next = nextNonWhitespaceIndex(s, idx + 1)
+    if (next === -1) return true
+    const ch = s.charAt(next)
+    if (ch === "}" || ch === "]") {
+      idx = next
+      continue
+    }
+    return ch === ","
+  }
 }
 
 function quoteCanTerminateJsonString(s: string, quoteIndex: number, canTerminateKey: boolean): boolean {
@@ -193,7 +222,11 @@ function quoteCanTerminateJsonString(s: string, quoteIndex: number, canTerminate
   if (idx === -1) return true
   const ch = s.charAt(idx)
   if (ch === ":") return canTerminateKey
-  if (ch === "}" || ch === "]") return true
+  // Raw code examples inside model strings often contain snippets like
+  // `{"kind": "bug"}` or `[{"name": "Alice"}]`. Treat a quote before their
+  // closing containers as internal unless the full closing-container run is
+  // followed by JSON punctuation or EOF.
+  if (ch === "}" || ch === "]") return canFollowClosingContainerInJson(s, idx)
   if (ch === ",") return canFollowCommaInJson(s, idx)
   return false
 }

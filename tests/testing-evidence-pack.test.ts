@@ -691,6 +691,12 @@ describe("SIG-349 testing focus hints", () => {
       ["src/lib/comment-only.ts", new Map([[1, "if (commentOnly) return"]])],
       ["src/lib/parse-kind.ts", new Map([[4, "const kind = String(raw ?? \"task\").toLowerCase()"]])],
     ]))
+    expect(withFocus.testingFocusHints).toEqual([{
+      source: "src/lib/parse-kind.ts",
+      line: 4,
+      kind: "parser-coercion",
+      token: "const kind = String(raw ?? \"task\").toLowerCase()",
+    }])
     const withCoverage = mergeHelperCoverage(withFocus, {})
     const block = renderTestingEvidenceBlock(withCoverage, {
       contentByPath: {

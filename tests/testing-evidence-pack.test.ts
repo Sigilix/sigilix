@@ -1,6 +1,7 @@
 // SIG-113: testing-specialist evidence-pack unit tests.
 
 import { describe, it, expect } from "vitest"
+import { buildDeletedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
 import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,
@@ -518,6 +519,8 @@ describe("SIG-349 testing focus hints", () => {
       ["src/lib/retry.ts", new Map([
         [2, "  if (signal?.aborted) {"],
         [3, "    throw new Error(\"timeout\")"],
+        [4, "  if (signal?.aborted) throw new Error(\"timeout\")"],
+        [5, "  if (raw) return JSON.parse(raw)"],
         [7, "  const kind = String(raw ?? \"task\").toLowerCase()"],
         [8, "  return kind"],
       ])],
@@ -529,6 +532,9 @@ describe("SIG-349 testing focus hints", () => {
     expect(merged.testingFocusHints).toEqual([
       { source: "src/lib/retry.ts", line: 2, kind: "branch", token: "if (signal?.aborted) {" },
       { source: "src/lib/retry.ts", line: 3, kind: "error-path", token: "throw new Error(\"timeout\")" },
+      // Error-path tokens intentionally outrank branch tokens when both appear on one line.
+      { source: "src/lib/retry.ts", line: 4, kind: "error-path", token: "if (signal?.aborted) throw new Error(\"timeout\")" },
+      { source: "src/lib/retry.ts", line: 5, kind: "parser-coercion", token: "if (raw) return JSON.parse(raw)" },
       {
         source: "src/lib/retry.ts",
         line: 7,
@@ -639,12 +645,17 @@ describe("SIG-349 testing focus hints", () => {
       splitFilePaths: ["tests/refunds.test.ts"],
       reviewedFilePaths: ["tests/refunds.test.ts"],
     })
+    const diff = `diff --git a/tests/refunds.test.ts b/tests/refunds.test.ts
+--- a/tests/refunds.test.ts
++++ b/tests/refunds.test.ts
+@@ -4,3 +4,0 @@
+-  it("rejects negative amounts", () => {
+-    expect(() => refund({ amount: -1 })).toThrow("amount")
+-  })`
     const pack = mergeTestingFocusHints(
       base,
       new Map(),
-      new Map([["tests/refunds.test.ts", new Map([
-        [5, "expect(() => refund({ amount: -1 })).toThrow(\"amount\")"],
-      ])]]),
+      buildDeletedLineTextByLine(diff),
     )
 
     const block = renderTestingEvidenceBlock(pack, {
@@ -655,7 +666,10 @@ describe("SIG-349 testing focus hints", () => {
     })
 
     expect(block).toContain("changed source lines and deleted test assertions")
+    // The deletion-only hunk starts on old-side line 4.
+    expect(block).toContain("tests/refunds.test.ts:4")
     expect(block).toContain("tests/refunds.test.ts:5")
+    expect(block).not.toContain("tests/refunds.test.ts:6")
     expect(block).toContain("deleted-test")
     expect(block).toContain("testFileChanged:<path>")
   })

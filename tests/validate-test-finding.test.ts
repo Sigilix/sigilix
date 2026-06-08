@@ -77,8 +77,12 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
   it("DROPS a source coverage claim when the pack is empty (no testing evidence)", () => {
     const empty = pack({ sourceFilesChanged: [], testFilesChanged: [], siblingMappings: [] })
     const r = evaluateTestFinding(finding(), empty)
-    expect(r.keep).toBe(false)
-    if (!r.keep) expect(r.reason).toBe("unbacked-source-coverage-no-evidence")
+    expect(r).toMatchObject({ keep: false, reason: "unbacked-source-coverage-no-evidence" })
+  })
+
+  it("keeps the same source coverage claim when the pack has testing evidence", () => {
+    const r = evaluateTestFinding(finding(), pack())
+    expect(r).toEqual({ keep: true })
   })
 
   it("keeps a changed test-file quality finding when the pack is empty", () => {
@@ -197,8 +201,7 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
       }),
       pack({ inspectedTestFiles: ["tests/retry.test.ts"] }),
     )
-    expect(r.keep).toBe(false)
-    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+    expect(r).toMatchObject({ keep: false, reason: "vague-insufficient-test" })
   })
 
   it("DROPS a speculative constant-intent finding that invents retry/backoff behavior", () => {
@@ -226,6 +229,25 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
         path: "src/lib/retry.ts",
         headline: "Added delayMs without any retry or delay behavior",
         body: "The declaration `const delayMs = 10` suggests intent to add a delay before retrying a failed attempt, but the sibling test only asserts the happy path.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("DROPS a constant-intent finding whose headline says delayMs suggests eventual retry", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "constant `delayMs` suggests eventual retry behavior without coverage",
+        body: "The new `delayMs` constant suggests eventual retry behavior, but the sibling test only asserts the happy path.",
         evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
         inspectedTestFiles: undefined,
       }),
@@ -759,6 +781,29 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
       }),
     )
     expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS a BadConfig error-path finding when the sibling test only mentions BadConfig via toBe", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/config.ts",
+        headline: "`parseConfig` `BadConfig` error path lacks coverage",
+        body: "The changed code throws `new Error(\"BadConfig\")`, but the sibling test only mentions `BadConfig` in a happy-path `toBe` assertion.",
+        evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
+        inspectedTestFiles: ["tests/config.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/config.ts"],
+        testFilesChanged: ["tests/config.test.ts"],
+        siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
+        inspectedTestFiles: ["tests/config.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/config.test.ts": "expect(parseConfig(validConfig).name).toBe(\"BadConfig\")",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r).toEqual({ keep: true })
   })
 
   it("KEEPS a concrete error-path finding when the sibling test throws a different error", () => {

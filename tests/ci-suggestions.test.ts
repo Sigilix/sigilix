@@ -68,14 +68,14 @@ describe("partitionCiPatches", () => {
     expect(unanchorable).toHaveLength(1)
   })
 
-  it("dedupes by path:line — first wins, the rest fall back", () => {
+  it("dedupes by path:line — first wins, later duplicates are dropped entirely", () => {
     const { anchorable, unanchorable } = partitionCiPatches(
       [patch("src/a.ts", 2, "first"), patch("src/a.ts", 2, "second")],
       reviewable,
     )
     expect(anchorable).toHaveLength(1)
     expect(anchorable[0]?.replacement).toBe("first")
-    expect(unanchorable).toHaveLength(1)
+    expect(unanchorable).toHaveLength(0) // the duplicate is dropped, not re-shown in the sticky
   })
 
   it("partitions a mix, preserving order within each bucket", () => {
@@ -87,13 +87,13 @@ describe("partitionCiPatches", () => {
     expect(unanchorable.map((p) => p.line)).toEqual([99])
   })
 
-  it("first-wins is strict: an un-anchorable first patch claims the line, a later anchorable duplicate falls back", () => {
+  it("first-wins is strict: an un-anchorable first patch claims the line; a later anchorable duplicate is dropped, not posted", () => {
     const { anchorable, unanchorable } = partitionCiPatches(
       [patch("src/a.ts", 2, "x ``` y"), patch("src/a.ts", 2, "clean")],
       reviewable,
     )
-    expect(anchorable).toHaveLength(0)
-    expect(unanchorable).toHaveLength(2)
+    expect(anchorable).toHaveLength(0) // the second (anchorable) does NOT post inline
+    expect(unanchorable).toHaveLength(1) // only the first; the duplicate is dropped
   })
 })
 
@@ -246,22 +246,24 @@ function fakeClient(opts: {
 }): { client: CiSuggestionClient; calls: SubmitReviewBody[] } {
   const calls: SubmitReviewBody[] = []
   const client: CiSuggestionClient = {
-    async listPullRequestReviewComments() {
-      if (opts.listThrows) throw new Error("list boom")
-      return opts.prior ?? []
+    listPullRequestReviewComments() {
+      if (opts.listThrows) return Promise.reject(new Error("list boom"))
+      return Promise.resolve(opts.prior ?? [])
     },
-    async submitReview(_owner, _repo, _pr, review) {
+    submitReview(_owner, _repo, _pr, review) {
       const index = calls.length // 0 = bulk, 1.. = per-comment retries
       calls.push(review)
-      if (index === 0 && opts.bulkError !== undefined) throw opts.bulkError
-      if (index > 0 && opts.perCommentThrows?.(index - 1)) throw new GitHubHttpError(422, "anchor")
-      return { id: index + 1, state: "COMMENTED" }
+      if (index === 0 && opts.bulkError !== undefined) return Promise.reject(opts.bulkError)
+      if (index > 0 && opts.perCommentThrows?.(index - 1)) {
+        return Promise.reject(new GitHubHttpError(422, "Validation Failed: bad anchor"))
+      }
+      return Promise.resolve({ id: index + 1, state: "COMMENTED" })
     },
   }
   return { client, calls }
 }
 
-const http422 = (): GitHubHttpError => new GitHubHttpError(422, "Unprocessable Entity")
+const http422 = (): GitHubHttpError => new GitHubHttpError(422, "Validation Failed: pull_request_review_thread.line")
 
 describe("submitCiSuggestionReview", () => {
   const review = buildCiSuggestionReview(
@@ -324,5 +326,14 @@ describe("submitCiSuggestionReview", () => {
     const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
     expect(r).toEqual({ posted: 0, skip: "submit-failed" })
     expect(calls).toHaveLength(1)
+  })
+
+  it("does NOT split-retry on a 422 that is not a validation failure (e.g. secondary rate limit)", async () => {
+    const { client, calls } = fakeClient({
+      bulkError: new GitHubHttpError(422, "You have exceeded a secondary rate limit"),
+    })
+    const r = await submitCiSuggestionReview(client, "o", "r", 1, review)
+    expect(r).toEqual({ posted: 0, skip: "submit-failed" })
+    expect(calls).toHaveLength(1) // no amplification — single bulk attempt only
   })
 })

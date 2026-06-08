@@ -173,6 +173,14 @@ function nextNonWhitespaceIndex(s: string, start: number): number {
   return -1
 }
 
+function previousNonWhitespaceIndex(s: string, start: number): number {
+  for (let i = start - 1; i >= 0; i--) {
+    const ch = s.charAt(i)
+    if (ch !== " " && ch !== "\n" && ch !== "\r" && ch !== "\t") return i
+  }
+  return -1
+}
+
 function canFollowCommaInJson(s: string, commaIndex: number): boolean {
   const idx = nextNonWhitespaceIndex(s, commaIndex + 1)
   if (idx === -1) return false
@@ -180,11 +188,12 @@ function canFollowCommaInJson(s: string, commaIndex: number): boolean {
   return ch === "\"" || ch === "{" || ch === "[" || ch === "t" || ch === "f" || ch === "n" || ch === "-" || /\d/.test(ch)
 }
 
-function quoteCanTerminateJsonString(s: string, quoteIndex: number): boolean {
+function quoteCanTerminateJsonString(s: string, quoteIndex: number, canTerminateKey: boolean): boolean {
   const idx = nextNonWhitespaceIndex(s, quoteIndex + 1)
   if (idx === -1) return true
   const ch = s.charAt(idx)
-  if (ch === ":" || ch === "}" || ch === "]") return true
+  if (ch === ":") return canTerminateKey
+  if (ch === "}" || ch === "]") return true
   if (ch === ",") return canFollowCommaInJson(s, idx)
   return false
 }
@@ -193,10 +202,21 @@ function escapeLikelyUnescapedStringQuotes(candidate: string): string {
   let out = ""
   let inString = false
   let escape = false
+  let stringCanTerminateKey = false
+  const containers: Array<"object" | "array"> = []
   for (let i = 0; i < candidate.length; i++) {
     const ch = candidate.charAt(i)
     if (!inString) {
-      if (ch === "\"") inString = true
+      if (ch === "{") containers.push("object")
+      else if (ch === "[") containers.push("array")
+      else if (containers.length > 0 && ch === "}" && containers[containers.length - 1] === "object") containers.pop()
+      else if (containers.length > 0 && ch === "]" && containers[containers.length - 1] === "array") containers.pop()
+      if (ch === "\"") {
+        const prevIdx = previousNonWhitespaceIndex(candidate, i)
+        const prev = prevIdx === -1 ? "" : candidate.charAt(prevIdx)
+        stringCanTerminateKey = containers[containers.length - 1] === "object" && (prev === "{" || prev === ",")
+        inString = true
+      }
       out += ch
       continue
     }
@@ -212,8 +232,9 @@ function escapeLikelyUnescapedStringQuotes(candidate: string): string {
       continue
     }
     if (ch === "\"") {
-      if (quoteCanTerminateJsonString(candidate, i)) {
+      if (quoteCanTerminateJsonString(candidate, i, stringCanTerminateKey)) {
         inString = false
+        stringCanTerminateKey = false
         out += ch
       } else {
         out += "\\\""

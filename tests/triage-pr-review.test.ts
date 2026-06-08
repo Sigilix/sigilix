@@ -76,6 +76,14 @@ describe("parsePrReviewResponse", () => {
     expect(out?.findings[0]?.body).toContain('"bug"')
   })
 
+  it("repairs unescaped quoted object-key text inside finding string fields", () => {
+    const text = '{ "summary": "Parser coverage gap.", "confidence": 5, "confidenceReason": "Visible from testing evidence.", "findings": [{ "path": "src/lib/parse-kind.ts", "line": 5, "scope": "file", "score": 4, "category": "testing", "headline": "Exported parser function `parseKind` ships without test coverage", "body": "The parser should cover `"kind": "bug"` and `"kind": "task"` payloads." }] }'
+    const out = parsePrReviewResponse(text)
+    expect(out?.findings).toHaveLength(1)
+    expect(out?.findings[0]?.body).toContain('"kind": "bug"')
+    expect(out?.findings[0]?.body).toContain('"kind": "task"')
+  })
+
   it("preserves already-escaped quotes inside finding string fields", () => {
     const text = JSON.stringify({
       ...valid,

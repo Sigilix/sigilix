@@ -784,6 +784,29 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
     expect(r.keep).toBe(true)
   })
 
+  it("KEEPS when the only shared quoted token is not an Error/Exception class", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/config.ts",
+        headline: "`parseConfig` `Timeout` error branch lacks coverage",
+        body: "The sibling test references `parseConfig`, but a generic `Timeout` token is not proof that the same error path is asserted.",
+        evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
+        inspectedTestFiles: ["tests/config.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/config.ts"],
+        testFilesChanged: ["tests/config.test.ts"],
+        siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
+        inspectedTestFiles: ["tests/config.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/config.test.ts": "const Timeout = 1000; expect(() => parseConfig(bad)).toThrow()",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
   it("DROPS a concrete error-path finding when the sibling test asserts the same specific error", () => {
     const r = evaluateTestFinding(
       finding({

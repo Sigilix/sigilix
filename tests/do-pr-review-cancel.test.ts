@@ -16,11 +16,13 @@ import type { Env } from "../src/index"
 const startSpy = vi.fn()
 const attachSpy = vi.fn()
 const completeSpy = vi.fn()
+const closeOrphanSpy = vi.fn()
 
 vi.mock("../src/lib/pr-review-check-run", () => ({
   startInProgressCheckRun: (...args: unknown[]) => startSpy(...args),
   attachExistingCheckRun: (...args: unknown[]) => attachSpy(...args),
   completeCheckRun: (...args: unknown[]) => completeSpy(...args),
+  closeOrphanedInProgressChecksByHeadSha: (...args: unknown[]) => closeOrphanSpy(...args),
   CHECK_RUN_NAME: "Sigilix",
 }))
 
@@ -106,8 +108,10 @@ beforeEach(() => {
   startSpy.mockReset()
   attachSpy.mockReset()
   completeSpy.mockReset()
+  closeOrphanSpy.mockReset()
   attachSpy.mockResolvedValue({ id: CHECK_RUN_ID })
   completeSpy.mockResolvedValue(undefined)
+  closeOrphanSpy.mockResolvedValue(undefined)
 })
 afterEach(() => {
   vi.restoreAllMocks()
@@ -136,7 +140,7 @@ describe("PrReviewRunDO /cancel — terminates an active run", () => {
     })
   }
 
-  it("closes the upstream check as `skipped` when checkRunId is set", async () => {
+  it("closes the upstream check as `skipped` when checkRunId is set (attach-by-id fast path; no head-sha fallback)", async () => {
     const env = makeEnv()
     const { ctx, store } = makeDoState()
     seedState(store, { state: "running", checkRunId: CHECK_RUN_ID })
@@ -150,17 +154,50 @@ describe("PrReviewRunDO /cancel — terminates an active run", () => {
     })
     expect(completeSpy).toHaveBeenCalledTimes(1)
     expect(completeSpy.mock.calls[0]![0]).toMatchObject({ conclusion: "skipped" })
+    // Fast path only — the head-sha orphan fallback must stay dormant.
+    expect(closeOrphanSpy).not.toHaveBeenCalled()
   })
 
-  it("does not touch the check when checkRunId is unset", async () => {
+  // SIG-stuck-check (PR #402): when the DO never received a checkRunId
+  // (handleEnqueue's synchronous create lost the 3s race and the consumer
+  // created the check via startInProgressCheckRun instead), the attach-by-id
+  // close is impossible. The cancel path MUST fall back to closing any
+  // orphaned in-progress Sigilix check by head_sha — otherwise the check
+  // hangs `in_progress` forever, which is the bug observed in prod.
+  it("falls back to closing the orphaned check by head_sha when checkRunId is unset", async () => {
     const env = makeEnv()
     const { ctx, store } = makeDoState()
     seedState(store, { state: "running" })
     const instance = new PrReviewRunDO(ctx, env)
 
     await cancel(instance)
+
+    // Attach-by-id is impossible without an id; the head-sha fallback runs.
     expect(attachSpy).not.toHaveBeenCalled()
     expect(completeSpy).not.toHaveBeenCalled()
+    expect(closeOrphanSpy).toHaveBeenCalledTimes(1)
+    expect(closeOrphanSpy.mock.calls[0]![0]).toMatchObject({
+      env,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      installationId: 99,
+      headSha: HEAD_SHA,
+    })
+  })
+
+  it("swallows a head-sha fallback failure — a GitHub hiccup never breaks the cancel state machine", async () => {
+    closeOrphanSpy.mockRejectedValueOnce(new Error("HTTP 503 GitHub down"))
+    const env = makeEnv()
+    const { ctx, store } = makeDoState()
+    seedState(store, { state: "running" })
+    const instance = new PrReviewRunDO(ctx, env)
+
+    // Still resolves 200 cancelled, and the state machine still finalized.
+    const res = await cancel(instance)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ cancelled: true, runId: RUN_ID })
+    const after = store.get("state") as RunState
+    expect(after.state).toBe("failed")
   })
 
   it("prunes history to historyLimit WITHOUT nuking valid records (refutes Sigilix PR #370 #1)", async () => {

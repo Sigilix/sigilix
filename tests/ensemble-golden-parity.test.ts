@@ -3,9 +3,10 @@
 //
 // Loads every captured fixture in `tests/_golden/ensemble-fixtures/*.json`,
 // decodes it, and re-runs the two pure ensemble seams against the captured
-// inputs, asserting the output is deep-equal to what was captured:
-//   - validateForSubmission(decode(fx.validate.args))  === decode(fx.validate.output)
-//   - buildReviewSubmissionWithMetadata(decode(fx.render.input)) === decode(fx.render.output)
+// inputs, asserting the CANONICAL-ENCODED output is byte-identical to what was
+// captured (order-sensitive — catches Map/Set/key drift, not just deep-equal):
+//   - encode(validateForSubmission(decode(fx.validate.args)))  === fx.validate.output
+//   - encode(buildReviewSubmissionWithMetadata(decode(fx.render.input))) === fx.render.output
 //
 // With an EMPTY fixtures dir this loop is a green no-op (expected for PR 0b —
 // the mechanism ships first; fixtures are lifted from prod logs in a separate
@@ -20,7 +21,7 @@ import { describe, it, expect } from "vitest"
 import { readFileSync, readdirSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { decode, type EnsembleGoldenFixture } from "../src/lib/ensemble-golden-capture"
+import { decode, encode, type EnsembleGoldenFixture } from "../src/lib/ensemble-golden-capture"
 import { validateForSubmission } from "../src/lib/triage-pr-review-ensemble"
 import { buildReviewSubmissionWithMetadata } from "../src/lib/triage-pr-review"
 
@@ -57,9 +58,11 @@ describe("ensemble golden-output parity (validate + render seams)", () => {
     "validate seam replays byte-identical for $file",
     ({ fx }) => {
       const args = decode(fx.validate.args) as ValidateArgs
-      const expected = decode(fx.validate.output)
       const actual = validateForSubmission(args)
-      expect(actual).toEqual(expected)
+      // Byte-identical: compare the CANONICAL-ENCODED actual to the captured
+      // encoded payload (order-sensitive — catches Map/Set/key drift), not
+      // decoded deep-equality (CodeRabbit #408).
+      expect(encode(actual)).toEqual(fx.validate.output)
     },
   )
 
@@ -67,9 +70,8 @@ describe("ensemble golden-output parity (validate + render seams)", () => {
     "render seam replays byte-identical for $file",
     ({ fx }) => {
       const input = decode(fx.render.input) as RenderArgs
-      const expected = decode(fx.render.output)
       const actual = buildReviewSubmissionWithMetadata(input)
-      expect(actual).toEqual(expected)
+      expect(encode(actual)).toEqual(fx.render.output)
     },
   )
 })

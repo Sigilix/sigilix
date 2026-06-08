@@ -71,6 +71,7 @@ export type TestDropReason =
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
   | "glue-covered-by-helper" // SIG-128 / SIG-166-1: missing-coverage (->NONE) OR insufficient-test finding on a file whose changed logic fully delegates to same-PR tested helpers
   | "glue-covered-by-structure" // SIG-128 PR 6 / SIG-166-1: missing-coverage (->NONE) OR insufficient-test finding on a file whose changed logic is structurally orchestrator glue (small + delegation-shaped), independent of whether the delegated-to helpers are same-PR tested
+  | "cross-referenced-in-sibling-test" // SIG-347 / SIG-166-2: insufficient-test finding whose cited concrete identifier is already referenced by an in-diff sibling test we fetched (the PR #144 over-fire shape — `parsePrReviewResponse` cited while tests/triage-pr-review.test.ts covers it in the same PR)
 
 /**
  * Parse a `siblingMapping:<source>-><test|NONE>` evidenceRef into its
@@ -320,6 +321,86 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
 }
 
 /**
+ * SIG-347 (AC #2): generic identifiers that would match almost any test
+ * body — excluded from the sibling-test cross-check so a finding citing
+ * only a token like `error` can't be falsely suppressed. The cross-check's
+ * safety belt (a too-generic / too-short token never triggers a drop).
+ */
+const CROSS_CHECK_STOPLIST = new Set<string>([
+  "null", "undefined", "true", "false", "error", "value", "result", "data",
+  "function", "return", "async", "await", "const", "type", "test", "expect",
+  "string", "number", "object", "array", "promise", "void",
+])
+
+/**
+ * SIG-347 (AC #2): extract the concrete identifiers a finding names, for
+ * the sibling-test cross-check. Reads the HEADLINE only — the finding's
+ * primary subject (the prompt instructs the model to name the concrete
+ * target there). Scoping to the headline (not headline+body) shrinks the
+ * false-suppression surface: a finding that only mentions a symbol in
+ * passing body prose is NOT cross-checked, so it keeps (recall-favoring).
+ * Pulls backticked code spans and keeps the LEADING identifier token of
+ * each — `parsePrReviewResponse(x)` → `parsePrReviewResponse`,
+ * `parser.run` → `parser`. Keeps only identifier-shaped tokens of length
+ * >= 4 that aren't in `CROSS_CHECK_STOPLIST`. The length + stoplist floor is
+ * the safety belt: a too-generic / too-short token can't trigger a false drop.
+ */
+function extractCitedIdentifiers(finding: PrReviewFinding): string[] {
+  const text = typeof finding.headline === "string" ? finding.headline : ""
+  const out = new Set<string>()
+  const backtick = /`([^`]+)`/g
+  let m: RegExpExecArray | null
+  while ((m = backtick.exec(text)) !== null) {
+    const span = m[1] ?? ""
+    const idMatch = /[A-Za-z_$][A-Za-z0-9_$]*/.exec(span)
+    if (!idMatch) continue
+    const id = idMatch[0]
+    if (id.length < 4) continue
+    if (CROSS_CHECK_STOPLIST.has(id.toLowerCase())) continue
+    out.add(id)
+  }
+  return [...out]
+}
+
+function escapeForRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * SIG-347 (AC #2): is the finding's cited identifier already referenced by
+ * an in-diff sibling test we fetched? Only test files that are BOTH in the
+ * PR's changed set (`testFilesChanged`) AND have fetched content
+ * (`inspectedTestContentByPath`) are scanned — the cross-check reflects the
+ * actual diff, not the whole repo. A word-boundary identifier hit in any
+ * such test body means the "existing tests don't cover X" claim is an
+ * over-fire (PR #144: `parsePrReviewResponse` cited while the same PR's
+ * `tests/triage-pr-review.test.ts` references it). FP-safe: returns false
+ * when no identifier is extractable or no in-diff test body is available —
+ * the gate then keeps the finding via its normal path.
+ */
+function isCrossReferencedInSiblingTest(
+  finding: PrReviewFinding,
+  pack: TestingEvidencePack,
+): boolean {
+  const contentByPath = pack.inspectedTestContentByPath
+  if (!contentByPath) return false
+  const idents = extractCitedIdentifiers(finding)
+  if (idents.length === 0) return false
+  const changed = new Set(pack.testFilesChanged)
+  for (const [path, body] of Object.entries(contentByPath)) {
+    if (!changed.has(path)) continue
+    if (typeof body !== "string" || body.length === 0) continue
+    for (const id of idents) {
+      // Word-boundary match (no lookbehind) so `parse` doesn't hit inside
+      // `parseFoo`; `$`/`_` count as identifier chars at the boundary.
+      const re = new RegExp(`(?:^|[^A-Za-z0-9_$])${escapeForRegExp(id)}(?:[^A-Za-z0-9_$]|$)`)
+      if (re.test(body)) return true
+    }
+  }
+  return false
+}
+
+/**
  * Pure decision for ONE testing-applicable finding. The caller has
  * already confirmed `finding.category === "testing"` upstream context
  * and run the SIG-113 citation gate; this helper applies the
@@ -464,6 +545,23 @@ export function evaluateTestFinding(
   // the positive signal). When the inspected citation doesn't resolve OR
   // nothing concrete is named, it's the vague-insufficient-test FP shape.
   if (citesRealInspectedTest(finding, pack) && namesConcreteTarget(finding)) {
+    // SIG-347 (AC #2): the specialist read a real test AND named a concrete
+    // target — but if that target is already referenced by an in-diff sibling
+    // test, the "existing tests are insufficient" claim is the PR #144
+    // over-fire shape. Cross-check the fetched test body before keeping.
+    //
+    // ACCEPTED RECALL TRADE-OFF: "referenced by the test" is treated as a
+    // strong coverage signal, so a genuinely-uncovered BRANCH of an otherwise-
+    // referenced symbol can be suppressed. Three belts bound the downside:
+    // (1) headline-scoped, concrete-identifier extraction (passing body prose
+    // never triggers it); (2) this is NOT a hard delete — the call site DEMOTES
+    // a failed-gate testing finding to a non-blocking body note in enforce
+    // (residual real gap stays visible), and keeps it inline in shadow;
+    // (3) shadow-first via OPENCLAW_TESTS_VALIDATOR_MODE (same flag as the
+    // other tests-gate reasons) so it never drops in prod until an explicit flip.
+    if (isCrossReferencedInSiblingTest(finding, pack)) {
+      return { keep: false, reason: "cross-referenced-in-sibling-test" }
+    }
     return { keep: true }
   }
   return { keep: false, reason: "vague-insufficient-test" }

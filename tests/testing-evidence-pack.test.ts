@@ -480,6 +480,20 @@ describe("mergeInspectedTestFileContents", () => {
     expect(merged.inspectedTestFiles).toEqual(["tests/foo.test.ts"])
   })
 
+  it("SIG-347: attaches the fetched bodies as inspectedTestContentByPath (for the cross-check)", () => {
+    const merged = mergeInspectedTestFileContents(basePack, {
+      contentByPath: { "tests/foo.test.ts": "expect(parseConfig(x)).toBe(y)" },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 30,
+    })
+    expect(merged.inspectedTestContentByPath).toEqual({
+      "tests/foo.test.ts": "expect(parseConfig(x)).toBe(y)",
+    })
+    // same key set as inspectedTestFiles
+    expect(Object.keys(merged.inspectedTestContentByPath ?? {})).toEqual(merged.inspectedTestFiles)
+  })
+
   it("returns a new object (immutability)", () => {
     const merged = mergeInspectedTestFileContents(basePack, {
       contentByPath: {},

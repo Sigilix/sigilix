@@ -92,9 +92,16 @@ export interface TestingEvidencePack {
    *  PR). Derived from `classifyDiffFiles` on the FULL diff list. */
   siblingMappings: TestingSiblingMapping[]
   /** Paths of test files whose full content is available in
-   *  `inspectedTestFileContents` (populated separately by an async
+   *  `inspectedTestContentByPath` (populated separately by an async
    *  fetch step in the orchestrator). */
   inspectedTestFiles: string[]
+  /** SIG-347 (AC #2): fetched body of each inspected (in-diff) test file,
+   *  keyed by path. Same key set as `inspectedTestFiles`. Used by the
+   *  SIG-111 specificity gate's sibling-test cross-check to confirm an
+   *  insufficient-test finding's cited identifier really is unreferenced
+   *  before emitting. Optional / default `{}` (populated by
+   *  `mergeInspectedTestFileContents`; absent for callers that don't fetch). */
+  inspectedTestContentByPath?: Record<string, string>
   /** SIG-128: per-source helper-coverage status, keyed by source path.
    *  Only `->NONE` sources are present. Default {} (populated by
    *  `mergeHelperCoverage` at orchestrator level). */
@@ -415,6 +422,10 @@ export function mergeInspectedTestFileContents(
   return {
     ...pack,
     inspectedTestFiles: Object.keys(fetchResult.contentByPath),
+    // SIG-347 (AC #2): keep the fetched bodies on the pack so the
+    // specificity gate can cross-check a cited identifier against the
+    // in-diff sibling test without re-threading content through the call site.
+    inspectedTestContentByPath: { ...fetchResult.contentByPath },
   }
 }
 

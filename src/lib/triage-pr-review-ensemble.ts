@@ -78,6 +78,11 @@ import {
 } from "./review-evidence-pack"
 import { embedText } from "./embeddings"
 import { buildAddedLineTextByLine, buildChangedLines, type ChangedLines } from "./ast-rules/diff-filter"
+import {
+  computeTestToSourceAddedRatio,
+  dampTestingScoreForRatio,
+  TEST_RATIO_DAMPER_THRESHOLD,
+} from "./test-ratio-damper"
 import { mapWithConcurrency } from "./bounded-concurrency"
 import {
   loadWithdrawals,
@@ -5122,6 +5127,12 @@ export async function handlePrReviewEnsemble(
       telemetry.synthesizer.verdict = effectiveSynthVerdict
       telemetry.synthesizer.provenance = effectiveSynthProvenance
     }
+    // SIG-347 (AC #3): compute the diff-wide test-to-source added-line ratio
+    // once from the FULL PR diff (reused as the addedLineTextByLine arg below,
+    // so the map is built once). The gate damps kept testing findings when
+    // the ratio is positive (> THRESHOLD).
+    const fullPrAddedLineText = buildAddedLineTextByLine(fullPrDiff)
+    const testToSourceRatio = computeTestToSourceAddedRatio(fullPrAddedLineText)
     const validated = validateForSubmission({
       trustLedgerEnabled: trustLedgerMode !== "off",
       synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
@@ -5183,7 +5194,9 @@ export async function handlePrReviewEnsemble(
       // `coverageGap:<path>:<line>` ref as a genuine missing-coverage
       // citation. Empty when coverage ingestion is off / yielded nothing.
       coverageGaps: coverageGapSet,
-      addedLineTextByLine: buildAddedLineTextByLine(fullPrDiff),
+      // SIG-347 (AC #3): diff-wide test-to-source ratio drives the damper.
+      testToSourceRatio,
+      addedLineTextByLine: fullPrAddedLineText,
       onTestFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -10435,6 +10448,15 @@ export function validateForSubmission(args: {
    */
   coverageGaps?: ReadonlySet<string>
   /**
+   * SIG-347 (AC #3 of SIG-166): diff-wide test-to-source added-line ratio,
+   * computed by the orchestrator via `computeTestToSourceAddedRatio` from the
+   * FULL PR diff. When > TEST_RATIO_DAMPER_THRESHOLD the loop damps each KEPT
+   * `category: "testing"` finding's confidence by one point — de-emphasis on a
+   * visibly test-heavy PR, never a drop. Default 0 → no damping (back-compat
+   * for callers not threading it).
+   */
+  testToSourceRatio?: number
+  /**
    * SIG-109: logic-finding evidence (added-line text per path + the
    * roleHint:logic AST findings). Threaded so `evaluateLogicFinding` can
    * anchor sev>=4 logic findings to the diff. Absent → the gate no-ops
@@ -10705,6 +10727,7 @@ export function validateForSubmission(args: {
     testsValidatorMode = "shadow",
     onTestFindingDropped,
     coverageGaps = new Set<string>(),
+    testToSourceRatio = 0,
     logicEvidence,
     logicValidatorMode = "shadow",
     onLogicFindingDropped,
@@ -10948,6 +10971,28 @@ export function validateForSubmission(args: {
           continue
         }
         // shadow mode: fall through and keep the finding.
+      }
+    }
+
+    // SIG-347 (AC #3): diff-test-ratio damper. On a visibly test-heavy PR
+    // (the diff itself adds substantial tests, ratio > THRESHOLD), de-emphasize
+    // a SURVIVING testing finding by one confidence point. Recall-safe: this
+    // never drops — a real high-severity finding stays actionable (5→4), a
+    // borderline P2 over-fire becomes a quiet P3 body note (4→3). Runs AFTER
+    // the SIG-111 gate so it only touches findings the specificity check kept,
+    // and clones (never mutates the synth-aliased finding the telemetry holds).
+    if (f.category === "testing" && testToSourceRatio > TEST_RATIO_DAMPER_THRESHOLD) {
+      const dampedScore = dampTestingScoreForRatio(f.score, testToSourceRatio)
+      if (dampedScore !== f.score) {
+        console.log(JSON.stringify({
+          event: "pr-review-testing-finding-ratio-damped",
+          path: f.path,
+          line: f.line,
+          fromScore: f.score,
+          toScore: dampedScore,
+          ratio: Number(testToSourceRatio.toFixed(3)),
+        }))
+        f = { ...f, score: dampedScore }
       }
     }
 

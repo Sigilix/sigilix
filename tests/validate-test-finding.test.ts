@@ -515,6 +515,161 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
   })
 })
 
+// ── SIG-347 (SIG-166 AC #2): sibling-test identifier cross-check ──
+//
+// The PR #144 over-fire shape: an insufficient-test finding that cites a
+// real inspected test AND names a concrete identifier, on a NON-glue file
+// (so the SIG-166-1 glue suppression never fires) — but the cited
+// identifier is already referenced by an in-diff sibling test we fetched.
+describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () => {
+  it("DROPS the PR #144 over-fire: `parsePrReviewResponse` cited while an in-diff test references it", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/triage-pr-review.ts",
+        headline: "Missing test for `kind` coercion logic in `parsePrReviewResponse`",
+        body: "The `parsePrReviewResponse` coercion branches are not exercised by the existing tests.",
+        evidenceRefs: ["inspectedTestFile:tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
+        testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        siblingMappings: [{ source: "src/lib/triage-pr-review.ts", test: "tests/triage-pr-review.test.ts" }],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/triage-pr-review.test.ts":
+            'it("coerces kind", () => { expect(parsePrReviewResponse(raw).kind).toBe("bug") })',
+        },
+        helperCoverageBySource: {}, // NOT glue — so the SIG-166-1 suppression can't fire
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("cross-referenced-in-sibling-test")
+  })
+
+  it("KEEPS (FP-safe) when the cited identifier is NOT referenced by the in-diff test", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/triage-pr-review.ts",
+        headline: "`coerceVerdictKind` fallback branch is untested",
+        body: "The new `coerceVerdictKind` helper's fallback branch has no assertion in the suite.",
+        evidenceRefs: ["inspectedTestFile:tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
+        testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+        inspectedTestContentByPath: {
+          // references parsePrReviewResponse but NOT coerceVerdictKind → no over-fire
+          "tests/triage-pr-review.test.ts":
+            'it("parses", () => { expect(parsePrReviewResponse(raw)).toBeTruthy() })',
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS when the referencing test is NOT in the PR diff (cross-check is in-diff only)", () => {
+    // The test was inspected (pre-existing sibling) but is NOT in testFilesChanged,
+    // so its content is not scanned — a real "new code path uncovered" finding
+    // against pre-existing tests must survive.
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/triage-pr-review.ts",
+        headline: "`parsePrReviewResponse` new branch untested",
+        body: "The new branch in `parsePrReviewResponse` is not covered by the existing test.",
+        evidenceRefs: ["inspectedTestFile:tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
+        testFilesChanged: [], // NOT changed in this PR
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/triage-pr-review.test.ts": "expect(parsePrReviewResponse(raw)).toBeTruthy()",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS when the only cited token is too generic to cross-check (stoplist safety belt)", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/triage-pr-review.ts",
+        headline: "The `null` case needs more tests",
+        body: "The `error` and `data` handling could use additional coverage.",
+        evidenceRefs: ["inspectedTestFile:tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
+        testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/triage-pr-review.test.ts": "const data = null; const error = data",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    // `null` (the only headline-backticked token) is stoplisted → no concrete
+    // identifier extracted → no cross-check drop → keep.
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS when the cited identifier appears only in body prose, not the headline (headline-scoped belt)", () => {
+    // Recall-favoring: the headline names no concrete symbol, so even though the
+    // body mentions a symbol the in-diff test references, the finding is NOT
+    // cross-checked — a real uncovered-branch claim survives.
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/triage-pr-review.ts",
+        headline: "The coercion fallback branch is untested",
+        body: "Specifically `parsePrReviewResponse` never asserts the fallback path.",
+        evidenceRefs: ["inspectedTestFile:tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
+        testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/triage-pr-review.test.ts": "expect(parsePrReviewResponse(raw)).toBeTruthy()",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("matches the cited identifier on a word boundary, not as a substring", () => {
+    // body cites `parse`; test references `parseConfig` only. A substring
+    // match would falsely drop — the boundary check must keep it.
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/triage-pr-review.ts",
+        headline: "`parseHeader` branch untested",
+        body: "The `parseHeader` boundary case is not asserted.",
+        evidenceRefs: ["inspectedTestFile:tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
+        testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/triage-pr-review.test.ts": "expect(parseHeaderName(x)).toBe(y)", // parseHeaderName ≠ parseHeader
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+})
+
 // ── Integration with validateForSubmission ──────────────────────
 
 function makeReviewable(path = "src/lib/foo.ts"): ReviewableMap {
@@ -731,5 +886,112 @@ describe("validateForSubmission — SIG-111 tests specificity gate", () => {
     })
     expect(result.droppedForFailedTestValidation).toBe(0)
     expect(result.verdict.findings).toHaveLength(1)
+  })
+})
+
+describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio damper", () => {
+  it("ENFORCE: demotes a cross-referenced insufficient-test finding to the body (AC #2)", () => {
+    const onDrop = vi.fn()
+    const f = finding({
+      path: "src/lib/foo.ts",
+      line: 17,
+      score: 4,
+      headline: "`parseConfig` error branch untested",
+      body: "The `parseConfig` error branch lacks an assertion in the existing test.",
+      evidenceRefs: ["inspectedTestFile:tests/foo.test.ts"],
+      inspectedTestFiles: ["tests/foo.test.ts"],
+    })
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [f] },
+        provenance: testsProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      testingEvidence: pack({
+        sourceFilesChanged: ["src/lib/foo.ts"],
+        testFilesChanged: ["tests/foo.test.ts"],
+        siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }],
+        inspectedTestFiles: ["tests/foo.test.ts"],
+        inspectedTestContentByPath: { "tests/foo.test.ts": "expect(parseConfig(bad)).toThrow()" },
+      }),
+      testsValidatorMode: "enforce",
+      onTestFindingDropped: onDrop,
+    })
+    expect(onDrop).toHaveBeenCalledWith(expect.anything(), {
+      reason: "cross-referenced-in-sibling-test",
+      dropped: true,
+    })
+    expect(result.droppedForFailedTestValidation).toBe(1)
+    expect(result.verdict.findings).toHaveLength(0)
+    expect(result.unanchoredFindings).toHaveLength(1)
+  })
+
+  it("AC #3: lowers a KEPT testing finding's score by 1 on a test-heavy PR (ratio > 0.3)", () => {
+    const f = finding({ score: 4 }) // missing-coverage citing a real ->NONE → kept
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [f] },
+        provenance: testsProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      testingEvidence: pack(),
+      testToSourceRatio: 0.5,
+    })
+    expect(result.verdict.findings).toHaveLength(1)
+    expect(result.verdict.findings[0].score).toBe(3) // 4 → 3 (P2 → P3 de-emphasis)
+    expect(f.score).toBe(4) // clone-safe: the synth-aliased finding is untouched
+  })
+
+  it("AC #3: does NOT damp when the ratio is at/below threshold", () => {
+    const f = finding({ score: 4 })
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [f] },
+        provenance: testsProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      testingEvidence: pack(),
+      testToSourceRatio: 0.2,
+    })
+    expect(result.verdict.findings[0].score).toBe(4)
+  })
+
+  it("AC #3: does NOT damp a non-testing finding even on a test-heavy PR", () => {
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "Test", confidence: 3, confidenceReason: "Reason.",
+          findings: [finding({ category: "logic", score: 4, headline: "Off-by-one", evidenceRefs: undefined })],
+        },
+        provenance: {
+          findings: [{ sourceSpecialists: ["logic"], sourceFindingIds: ["logic-0"], action: "kept", verifiedViaRetrieval: false }],
+          dropped: [], softened: [],
+        },
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: [
+        { role: "logic", verdict: { findings: [{ id: "logic-0" }] } },
+      ] as unknown as SpecialistVerdictsArg,
+      testingEvidence: pack(),
+      testToSourceRatio: 0.9,
+    })
+    expect(result.verdict.findings[0].score).toBe(4)
+  })
+
+  it("AC #3: defaults to no damping when testToSourceRatio is omitted", () => {
+    const f = finding({ score: 4 })
+    const result = validateForSubmission({
+      synthOutput: {
+        verdict: { summary: "Test", confidence: 3, confidenceReason: "Reason.", findings: [f] },
+        provenance: testsProvenance(),
+      },
+      reviewable: makeReviewable(),
+      specialistVerdicts: makeSpecialistVerdicts(),
+      testingEvidence: pack(),
+    })
+    expect(result.verdict.findings[0].score).toBe(4)
   })
 })

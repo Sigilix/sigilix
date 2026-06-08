@@ -69,6 +69,7 @@ export type TestDropReason =
   | "missing-path" // sev>=4 testing finding with no concrete path to anchor
   | "unbacked-source-coverage-no-evidence" // sev>=4 source coverage claim when no testing evidence pack exists
   | "uncited-missing-coverage" // "source lacks tests" claim not backed by a real ->NONE mapping for finding.path
+  | "unresolved-sibling-mapping" // insufficient-test claim cites a covered siblingMapping that is not present in the evidence pack
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
   | "glue-covered-by-helper" // SIG-128 / SIG-166-1: missing-coverage (->NONE) OR insufficient-test finding on a file whose changed logic fully delegates to same-PR tested helpers
   | "glue-covered-by-structure" // SIG-128 PR 6 / SIG-166-1: missing-coverage (->NONE) OR insufficient-test finding on a file whose changed logic is structurally orchestrator glue (small + delegation-shaped), independent of whether the delegated-to helpers are same-PR tested
@@ -732,6 +733,9 @@ export function evaluateTestFinding(
       return { keep: false, reason: "cross-referenced-in-sibling-test" }
     }
     return { keep: true }
+  }
+  if (citesCoveredSiblingMappingClass(finding) && !citesRealCoveredSiblingMapping(finding, pack)) {
+    return { keep: false, reason: "unresolved-sibling-mapping" }
   }
   return { keep: false, reason: "vague-insufficient-test" }
 }

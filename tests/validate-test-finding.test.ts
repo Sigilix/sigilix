@@ -98,6 +98,22 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     expect(r.keep).toBe(true)
   })
 
+  it("keeps an empty-pack finding when the finding path is itself a test file", () => {
+    // The empty-pack branch has no file-list evidence to consult; it keeps
+    // test-path findings by path shape so changed test quality nits do not
+    // get misclassified as unbacked source-coverage claims.
+    const empty = pack({ sourceFilesChanged: [], testFilesChanged: [], siblingMappings: [] })
+    const r = evaluateTestFinding(
+      finding({
+        path: "tests/foo.test.ts",
+        headline: "`foo.test.ts` lacks rejection assertions",
+        body: "The changed test file only asserts the happy path.",
+      }),
+      empty,
+    )
+    expect(r.keep).toBe(true)
+  })
+
   // ── deletion / rename exception (SIG-113, preserved) ──────────────
   it("ALWAYS keeps a finding citing a real testFileChanged (deleted/renamed test)", () => {
     const r = evaluateTestFinding(
@@ -189,6 +205,44 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
       pack({ inspectedTestFiles: ["tests/retry.test.ts"] }),
     )
     expect(r.keep).toBe(true)
+  })
+
+  it("keeps an insufficient-test finding citing a real covered sibling mapping with no inspected-test citation", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "`retryWithBackoff` timeout branch lacks coverage",
+        body: "The covered sibling test only asserts the successful attempt; the new timeout branch is untested.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: [],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        testFilesChanged: ["tests/retry.test.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: [],
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("DROPS an insufficient-test finding citing an unresolved covered sibling mapping", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "`retryWithBackoff` timeout branch lacks coverage",
+        body: "The covered sibling test only asserts the successful attempt; the new timeout branch is untested.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/made-up.test.ts"],
+        inspectedTestFiles: [],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        testFilesChanged: ["tests/retry.test.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: [],
+      }),
+    )
+    expect(r).toEqual({ keep: false, reason: "unresolved-sibling-mapping" })
   })
 
   it("DROPS a vague insufficient-test finding that names nothing concrete (needs more tests)", () => {

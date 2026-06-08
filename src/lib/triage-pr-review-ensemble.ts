@@ -8242,10 +8242,9 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "specialist_did_not_parse",
     startedAt: t0,
-    // SIG-236/SIG-345: honor a per-role per-attempt cap when a specialist's
-    // prompt/evidence shape needs >60s. Omitted roles fall back to the global
-    // PER_ATTEMPT_TIMEOUT_MS.
-    // (Conditional spread, not `: undefined`, under exactOptionalPropertyTypes.)
+    // Keep the prod path explicit even though runWithRetryAndFallback also
+    // defaults from config.perAttemptTimeoutMs. Shadow callers rely on the
+    // shared default; prod keeps the override visible at the role boundary.
     ...(config.perAttemptTimeoutMs !== undefined
       ? { perAttemptTimeoutMs: config.perAttemptTimeoutMs }
       : {}),
@@ -8365,9 +8364,9 @@ export async function runWithRetryAndFallback<T>(args: {
    * Phase 4a.4 (ARC-175): per-attempt timeout cap. Each individual
    * `attemptChat` call aborts after this many ms so a single slow
    * primary can't eat the entire `SPECIALIST_TIMEOUT_MS` budget.
-   * Defaults to `PER_ATTEMPT_TIMEOUT_MS` (60s) — tests pass a smaller
-   * value to exercise the abort path without real-time waits. The logic
-   * role overrides this to 240s (SIG-287) via its `ModelConfig`.
+   * Defaults to `config.perAttemptTimeoutMs` when the role config provides
+   * one, otherwise `PER_ATTEMPT_TIMEOUT_MS` (60s). Tests and special callers
+   * may pass this field explicitly to override the config without mutating it.
    */
   perAttemptTimeoutMs?: number
   /**
@@ -8397,7 +8396,7 @@ export async function runWithRetryAndFallback<T>(args: {
   attemptsUsed: number
 }> {
   const { config, apiKey, messages, signal, chatEnabled, format, parseAnswer, parseFailureLabel, startedAt } = args
-  const perAttemptCap = args.perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS
+  const perAttemptCap = args.perAttemptTimeoutMs ?? config.perAttemptTimeoutMs ?? PER_ATTEMPT_TIMEOUT_MS
 
   let attemptsUsed = 0
   let lastFailureReason: string | undefined

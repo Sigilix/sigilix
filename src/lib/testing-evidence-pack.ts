@@ -63,6 +63,23 @@ export const TEST_FILE_CONTENT_TOTAL_CHAR_CAP = 60_000
 export const DEFAULT_TEST_FILE_FETCH_CONCURRENCY = 5
 
 /**
+ * SIG-349: cap per-source changed-line focus hints so large PRs cannot
+ * balloon the tests prompt. Hints are emitted in source line order and
+ * the earliest matches win once this cap is reached.
+ */
+export const MAX_TESTING_FOCUS_HINTS_PER_SOURCE = 6
+
+export type TestingFocusHintKind = "branch" | "parser-coercion" | "error-path" | "deleted-test"
+
+export interface TestingFocusHint {
+  /** Source path for source-code hints; test path for deleted-test hints. */
+  source: string
+  line: number
+  kind: TestingFocusHintKind
+  token: string
+}
+
+/**
  * A single source/test sibling mapping derived from the full diff
  * inventory. `test === null` means the source file has no sibling
  * test in this PR — the specialist may legitimately fire a "missing
@@ -106,6 +123,10 @@ export interface TestingEvidencePack {
    *  Only `->NONE` sources are present. Default {} (populated by
    *  `mergeHelperCoverage` at orchestrator level). */
   helperCoverageBySource: Record<string, HelperCoverage>
+  /** SIG-349: deterministic changed-line hints for tests-specialist recall.
+   *  These are advisory pointers only: they neither create nor suppress
+   *  findings without the normal citation evidence. */
+  testingFocusHints?: TestingFocusHint[]
 }
 
 export type TestingEvidenceSuppressionReason =
@@ -176,6 +197,7 @@ export function buildTestingEvidencePack(args: {
     siblingMappings,
     inspectedTestFiles: [], // populated by mergeInspectedTestFileContents
     helperCoverageBySource: {}, // populated by mergeHelperCoverage
+    testingFocusHints: [], // populated by mergeTestingFocusHints
   }
 }
 
@@ -239,6 +261,7 @@ export function filterTestingEvidenceForSuppressedMissingCoverage(
   const helperCoverageBySource = Object.fromEntries(
     Object.entries(pack.helperCoverageBySource).filter(([source]) => !suppressedSources.has(source)),
   )
+  const testingFocusHints = pack.testingFocusHints?.filter((hint) => !suppressedSources.has(hint.source))
 
   return {
     pack: {
@@ -246,6 +269,7 @@ export function filterTestingEvidenceForSuppressedMissingCoverage(
       sourceFilesChanged: pack.sourceFilesChanged.filter((source) => !suppressedSources.has(source)),
       siblingMappings: pack.siblingMappings.filter((mapping) => !suppressedSources.has(mapping.source)),
       helperCoverageBySource,
+      ...(testingFocusHints !== undefined ? { testingFocusHints } : {}),
     },
     suppressions,
   }
@@ -441,6 +465,111 @@ export function mergeHelperCoverage(
   return { ...pack, helperCoverageBySource: { ...coverageBySource } }
 }
 
+function classifyTestingFocusHint(line: string): TestingFocusHintKind | null {
+  const text = stripRawDiffLinePrefix(line).trim()
+  if (!isSubstantiveAddedLine(text)) return null
+
+  if (
+    /\b(?:throw|catch|reject|timeout|fallback|abort|retry)\b/i.test(text) ||
+    /\bnew\s+Error\b/.test(text)
+  ) {
+    return "error-path"
+  }
+  if (
+    /\b(?:String|Number|Boolean|parseInt|parseFloat)\s*\(/.test(text) ||
+    /\bJSON\.parse\s*\(/.test(text) ||
+    /\?\?/.test(text) ||
+    /\b(?:coerce|z\.coerce)\b/i.test(text)
+  ) {
+    return "parser-coercion"
+  }
+  if (/\b(?:if|switch|case)\b/.test(text)) {
+    return "branch"
+  }
+  return null
+}
+
+function classifyDeletedTestFocusHint(line: string): TestingFocusHintKind | null {
+  const text = stripRawDiffLinePrefix(line).trim()
+  if (!isSubstantiveAddedLine(text)) return null
+  if (
+    /\b(?:it|test)\s*\(/.test(text) ||
+    /\bexpect\s*\(/.test(text) ||
+    /\.(?:toThrow|rejects|resolves|toEqual|toBe|toMatch|toContain)\b/.test(text) ||
+    /\bassert(?:\s*\(|\.)/.test(text)
+  ) {
+    return "deleted-test"
+  }
+  return null
+}
+
+function testingFocusToken(line: string): string {
+  const text = stripRawDiffLinePrefix(line).trim().replace(/\s+/g, " ")
+  return text.length > 160 ? text.slice(0, 157) + "..." : text
+}
+
+function inlineCode(text: string): string {
+  const runs = text.match(/`+/g)?.map((m) => m.length) ?? []
+  const longestRun = Math.max(0, ...runs)
+  const fence = "`".repeat(longestRun + 1)
+  return longestRun === 0 ? `${fence}${text}${fence}` : `${fence} ${text} ${fence}`
+}
+
+/**
+ * SIG-349: merge deterministic changed-line focus hints into the pack.
+ *
+ * The hints are recall pointers for the tests specialist. They are NOT a
+ * validator gate and never suppress a finding: normal SIG-113 citations still
+ * decide whether a testing finding reaches the customer.
+ */
+export function mergeTestingFocusHints(
+  pack: TestingEvidencePack,
+  addedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>>,
+  deletedLineTextByLine: ReadonlyMap<string, ReadonlyMap<number, string>> = new Map(),
+): TestingEvidencePack {
+  const hints: TestingFocusHint[] = []
+
+  for (const source of pack.sourceFilesChanged) {
+    const lineText = addedLineTextByLine.get(source)
+    if (lineText === undefined || lineText.size === 0) continue
+
+    let emittedForSource = 0
+    for (const [line, text] of lineText) {
+      if (emittedForSource >= MAX_TESTING_FOCUS_HINTS_PER_SOURCE) break
+      const kind = classifyTestingFocusHint(text)
+      if (kind === null) continue
+      hints.push({
+        source,
+        line,
+        kind,
+        token: testingFocusToken(text),
+      })
+      emittedForSource++
+    }
+  }
+
+  for (const testPath of pack.testFilesChanged) {
+    const lineText = deletedLineTextByLine.get(testPath)
+    if (lineText === undefined || lineText.size === 0) continue
+
+    let emittedForTest = 0
+    for (const [line, text] of lineText) {
+      if (emittedForTest >= MAX_TESTING_FOCUS_HINTS_PER_SOURCE) break
+      const kind = classifyDeletedTestFocusHint(text)
+      if (kind === null) continue
+      hints.push({
+        source: testPath,
+        line,
+        kind,
+        token: testingFocusToken(text),
+      })
+      emittedForTest++
+    }
+  }
+
+  return { ...pack, testingFocusHints: hints }
+}
+
 /**
  * Render the `[TESTING EVIDENCE]` block injected at the top of the
  * testing specialist's user message. The block:
@@ -448,8 +577,10 @@ export function mergeHelperCoverage(
  *   2. Lists every test file changed in the PR + flags which are
  *      missing from the prompt's `[DIFF]` block
  *   3. Documents source → test sibling pairings (or "NONE")
- *   4. Embeds full content of inspected test files (subject to caps)
- *   5. Instructs the specialist HOW to cite via `inspectedTestFiles` +
+ *   4. Adds capped changed-line focus hints for branch/parser/error
+ *      recall (advisory only; not a citation or suppression gate)
+ *   5. Embeds full content of inspected test files (subject to caps)
+ *   6. Instructs the specialist HOW to cite via `inspectedTestFiles` +
  *      `evidenceRefs` schema fields
  *
  * Returns "" when the diff has zero source AND zero test files (e.g.
@@ -486,6 +617,20 @@ export function renderTestingEvidenceBlock(
         siblingHint = `  ← no sibling test file in this PR`
       }
       lines.push(`- \`${p}\`${siblingHint}`)
+    }
+    lines.push("")
+  }
+
+  const testingFocusHints = pack.testingFocusHints ?? []
+  if (testingFocusHints.length > 0) {
+    lines.push(
+      "Testing focus hints (changed source lines and deleted test assertions; pointers only, not findings):",
+    )
+    lines.push(
+      "Use these as recall targets when comparing changed code to cited tests. A customer-visible testing finding still needs the citation fields below.",
+    )
+    for (const h of testingFocusHints) {
+      lines.push(`- \`${h.source}:${h.line}\` ${h.kind} — ${inlineCode(h.token)}`)
     }
     lines.push("")
   }

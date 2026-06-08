@@ -68,6 +68,35 @@ describe("parsePrReviewResponse", () => {
     expect(parsePrReviewResponse(text)?.summary).toBe(valid.summary)
   })
 
+  it("repairs unescaped double quotes inside finding string fields", () => {
+    const text = '{ "summary": "Parser coverage gap.", "confidence": 5, "confidenceReason": "Visible from testing evidence.", "findings": [{ "path": "src/lib/parse-kind.ts", "line": 5, "scope": "file", "score": 4, "category": "testing", "headline": "Exported parser function `parseKind` ships without test coverage", "body": "`parseKind` calls `String(raw ?? "task").toLowerCase()` and should test `"bug"` plus `"task"` inputs." }] }'
+    const out = parsePrReviewResponse(text)
+    expect(out?.findings).toHaveLength(1)
+    expect(out?.findings[0]?.body).toContain('String(raw ?? "task").toLowerCase()')
+    expect(out?.findings[0]?.body).toContain('"bug"')
+  })
+
+  it("repairs unescaped quoted object-key text inside finding string fields", () => {
+    const text = '{ "summary": "Parser coverage gap.", "confidence": 5, "confidenceReason": "Visible from testing evidence.", "findings": [{ "path": "src/lib/parse-kind.ts", "line": 5, "scope": "file", "score": 4, "category": "testing", "headline": "Exported parser function `parseKind` ships without test coverage", "body": "The parser should cover `"kind": "bug"` and `"kind": "task"` payloads." }] }'
+    const out = parsePrReviewResponse(text)
+    expect(out?.findings).toHaveLength(1)
+    expect(out?.findings[0]?.body).toContain('"kind": "bug"')
+    expect(out?.findings[0]?.body).toContain('"kind": "task"')
+  })
+
+  it("preserves already-escaped quotes inside finding string fields", () => {
+    const text = JSON.stringify({
+      ...valid,
+      findings: [{
+        ...baseFinding,
+        body: '`parseKind` should keep `String(raw ?? "task").toLowerCase()` and `"bug"` examples intact.',
+      }],
+    })
+    const out = parsePrReviewResponse(text)
+    expect(out?.findings[0]?.body).toContain('String(raw ?? "task").toLowerCase()')
+    expect(out?.findings[0]?.body).toContain('"bug"')
+  })
+
   it("returns null on missing summary", () => {
     expect(parsePrReviewResponse(JSON.stringify({ ...valid, summary: "" }))).toBeNull()
   })

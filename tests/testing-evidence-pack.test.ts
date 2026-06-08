@@ -1,13 +1,16 @@
 // SIG-113: testing-specialist evidence-pack unit tests.
 
 import { describe, it, expect } from "vitest"
+import { buildDeletedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
 import {
   applyTestFileContentCaps,
   buildTestingEvidencePack,
   fetchTestFileContentsWithBudget,
   filterTestingEvidenceForSuppressedMissingCoverage,
+  MAX_TESTING_FOCUS_HINTS_PER_SOURCE,
   mergeHelperCoverage,
   mergeInspectedTestFileContents,
+  mergeTestingFocusHints,
   pickFence,
   renderTestingEvidenceBlock,
   TEST_FILE_CONTENT_CHAR_CAP,
@@ -502,6 +505,228 @@ describe("mergeInspectedTestFileContents", () => {
       totalChars: 0,
     })
     expect(merged).not.toBe(basePack)
+  })
+})
+
+describe("SIG-349 testing focus hints", () => {
+  it("extracts branch, parser/coercion, and error-path hints from added source lines", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/retry.ts", "tests/retry.test.ts"],
+      reviewedFilePaths: ["src/lib/retry.ts", "tests/retry.test.ts"],
+    })
+
+    const merged = mergeTestingFocusHints(pack, new Map([
+      ["src/lib/retry.ts", new Map([
+        [2, "  if (signal?.aborted) {"],
+        [3, "    throw new Error(\"timeout\")"],
+        [4, "  if (signal?.aborted) throw new Error(\"timeout\")"],
+        [5, "  if (raw) return JSON.parse(raw)"],
+        [7, "  const kind = String(raw ?? \"task\").toLowerCase()"],
+        [8, "  return kind"],
+      ])],
+      // Added test-file lines are still ignored; deleted test assertions have
+      // their own old-side input map below.
+      ["tests/retry.test.ts", new Map([[4, "it(\"rejects on timeout\", () => {})"]])],
+    ]))
+
+    expect(merged.testingFocusHints).toEqual([
+      { source: "src/lib/retry.ts", line: 2, kind: "branch", token: "if (signal?.aborted) {" },
+      { source: "src/lib/retry.ts", line: 3, kind: "error-path", token: "throw new Error(\"timeout\")" },
+      // Error-path tokens intentionally outrank branch tokens when both appear on one line.
+      { source: "src/lib/retry.ts", line: 4, kind: "error-path", token: "if (signal?.aborted) throw new Error(\"timeout\")" },
+      { source: "src/lib/retry.ts", line: 5, kind: "parser-coercion", token: "if (raw) return JSON.parse(raw)" },
+      {
+        source: "src/lib/retry.ts",
+        line: 7,
+        kind: "parser-coercion",
+        token: "const kind = String(raw ?? \"task\").toLowerCase()",
+      },
+    ])
+  })
+
+  it("extracts deleted-test hints from old-side test assertions", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["tests/refunds.test.ts"],
+      reviewedFilePaths: ["tests/refunds.test.ts"],
+    })
+
+    const merged = mergeTestingFocusHints(
+      pack,
+      new Map(),
+      new Map([
+        ["tests/refunds.test.ts", new Map([
+          [1, "import { describe, expect, it } from \"vitest\""],
+          [4, "it(\"rejects negative refund amounts\", () => {"],
+          [5, "  expect(() => refund({ amount: -1 })).toThrow(\"amount\")"],
+        ])],
+      ]),
+    )
+
+    expect(merged.testingFocusHints).toEqual([
+      {
+        source: "tests/refunds.test.ts",
+        line: 4,
+        kind: "deleted-test",
+        token: "it(\"rejects negative refund amounts\", () => {",
+      },
+      {
+        source: "tests/refunds.test.ts",
+        line: 5,
+        kind: "deleted-test",
+        token: "expect(() => refund({ amount: -1 })).toThrow(\"amount\")",
+      },
+    ])
+  })
+
+  it("caps focus hints per source in deterministic line order", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/routes.ts"],
+      reviewedFilePaths: ["src/lib/routes.ts"],
+    })
+    const addedLines = new Map<number, string>()
+    for (let i = 1; i <= MAX_TESTING_FOCUS_HINTS_PER_SOURCE + 3; i++) {
+      addedLines.set(i, `if (branch${i}) return ${i}`)
+    }
+
+    const merged = mergeTestingFocusHints(pack, new Map([["src/lib/routes.ts", addedLines]]))
+
+    expect(merged.testingFocusHints).toHaveLength(MAX_TESTING_FOCUS_HINTS_PER_SOURCE)
+    expect(merged.testingFocusHints?.map((h) => h.line)).toEqual(
+      Array.from({ length: MAX_TESTING_FOCUS_HINTS_PER_SOURCE }, (_unused, i) => i + 1),
+    )
+  })
+
+  it("does not treat standalone string normalization as parser/coercion focus", () => {
+    const pack = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/slug.ts", "tests/slug.test.ts"],
+      reviewedFilePaths: ["src/lib/slug.ts", "tests/slug.test.ts"],
+    })
+
+    const merged = mergeTestingFocusHints(pack, new Map([
+      ["src/lib/slug.ts", new Map([
+        [2, "  const normalized = input.trim().toLowerCase()"],
+      ])],
+    ]))
+
+    expect(merged.testingFocusHints).toEqual([])
+  })
+
+  it("renders focus hints as advisory pointers while keeping citation requirements", () => {
+    const base = buildTestingEvidencePack({
+      splitFilePaths: ["src/lib/parse-kind.ts"],
+      reviewedFilePaths: ["src/lib/parse-kind.ts"],
+    })
+    const pack = mergeTestingFocusHints(base, new Map([
+      ["src/lib/parse-kind.ts", new Map([
+        [3, "  const kind = String(raw ?? \"task\").toLowerCase()"],
+        [4, "  const fallback = String(raw ?? `task`).toLowerCase()"],
+      ])],
+    ]))
+
+    const block = renderTestingEvidenceBlock(pack, {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    })
+
+    expect(block).toContain("Testing focus hints")
+    expect(block).toContain("pointers only, not findings")
+    expect(block).toContain("src/lib/parse-kind.ts:3")
+    expect(block).toContain("parser-coercion")
+    expect(block).toContain("`` const fallback = String(raw ?? `task`).toLowerCase() ``")
+    expect(block).toContain("A customer-visible testing finding still needs the citation fields below")
+    expect(block).toContain("Citation requirements")
+    expect(block).toContain("siblingMapping:src/lib/parse-kind.ts->NONE")
+  })
+
+  it("renders deleted-test hints before citation requirements", () => {
+    const base = buildTestingEvidencePack({
+      splitFilePaths: ["tests/refunds.test.ts"],
+      reviewedFilePaths: ["tests/refunds.test.ts"],
+    })
+    const diff = `diff --git a/tests/refunds.test.ts b/tests/refunds.test.ts
+--- a/tests/refunds.test.ts
++++ b/tests/refunds.test.ts
+@@ -4,3 +4,0 @@
+-  it("rejects negative amounts", () => {
+-    expect(() => refund({ amount: -1 })).toThrow("amount")
+-  })`
+    const pack = mergeTestingFocusHints(
+      base,
+      new Map(),
+      buildDeletedLineTextByLine(diff),
+    )
+
+    const block = renderTestingEvidenceBlock(pack, {
+      contentByPath: {},
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 0,
+    })
+
+    expect(block).toContain("changed source lines and deleted test assertions")
+    // The deletion-only hunk starts on old-side line 4.
+    expect(block).toContain("tests/refunds.test.ts:4")
+    expect(block).toContain("tests/refunds.test.ts:5")
+    expect(block).not.toContain("tests/refunds.test.ts:6")
+    expect(block).toContain("deleted-test")
+    expect(block).toContain("testFileChanged:<path>")
+  })
+
+  it("keeps focus hints in the production filter/inspect/focus/coverage/render order", () => {
+    const initial = buildTestingEvidencePack({
+      splitFilePaths: [
+        "src/lib/comment-only.ts",
+        "src/lib/parse-kind.ts",
+        "tests/parse-kind.test.ts",
+      ],
+      reviewedFilePaths: [
+        "src/lib/comment-only.ts",
+        "src/lib/parse-kind.ts",
+        "tests/parse-kind.test.ts",
+      ],
+    })
+    const filtered = filterTestingEvidenceForSuppressedMissingCoverage(initial, {
+      changedLineTextByPath: new Map([
+        ["src/lib/comment-only.ts", ["// update comment"]],
+        ["src/lib/parse-kind.ts", ["const kind = String(raw ?? \"task\").toLowerCase()"]],
+      ]),
+    }).pack
+    const inspected = mergeInspectedTestFileContents(filtered, {
+      contentByPath: {
+        "tests/parse-kind.test.ts": "it('keeps known kinds', () => expect(parseKind('task')).toBe('task'))",
+      },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 70,
+    })
+    const withFocus = mergeTestingFocusHints(inspected, new Map([
+      ["src/lib/comment-only.ts", new Map([[1, "if (commentOnly) return"]])],
+      ["src/lib/parse-kind.ts", new Map([[4, "const kind = String(raw ?? \"task\").toLowerCase()"]])],
+    ]))
+    expect(withFocus.testingFocusHints).toEqual([{
+      source: "src/lib/parse-kind.ts",
+      line: 4,
+      kind: "parser-coercion",
+      token: "const kind = String(raw ?? \"task\").toLowerCase()",
+    }])
+    const withCoverage = mergeHelperCoverage(withFocus, {})
+    const block = renderTestingEvidenceBlock(withCoverage, {
+      contentByPath: {
+        "tests/parse-kind.test.ts": "it('keeps known kinds', () => expect(parseKind('task')).toBe('task'))",
+      },
+      failedPaths: [],
+      truncatedPaths: [],
+      totalChars: 70,
+    })
+
+    expect(block).toContain("Testing focus hints")
+    expect(block).toContain("src/lib/parse-kind.ts:4")
+    expect(block).toContain("parser-coercion")
+    expect(block).toContain("Inspected test files")
+    expect(block).toContain("tests/parse-kind.test.ts")
+    expect(block).not.toContain("src/lib/comment-only.ts")
   })
 })
 

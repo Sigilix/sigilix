@@ -27,7 +27,7 @@ describe("specialist per-attempt timeout overrides", () => {
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
 
-  it("caps tests at 160s per attempt so MiniMax M3 can finish testing-evidence cases", () => {
+  it("caps tests at 160s per attempt so V4 Flash can fall back to MiniMax M3 inside the wall", () => {
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(160_000)
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
@@ -54,7 +54,7 @@ describe("specialist per-attempt timeout overrides", () => {
 
   it("keeps the tests primary+fallback chain inside the specialist wall with 50s headroom", () => {
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(0)
-    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("deepseek-v4-pro:cloud")
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("minimax-m3:cloud")
     const chainMs = 2 * SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!
     expect(SPECIALIST_TIMEOUT_MS - chainMs).toBeGreaterThanOrEqual(TESTS_SPECIALIST_MIN_HEADROOM_MS)
   })

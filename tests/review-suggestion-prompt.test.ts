@@ -37,6 +37,8 @@ describe("SIG-125 suggestion prompt wiring", () => {
     }
     expect(SPECIALIST_PROMPTS.logic).toMatch(/STRUCTURED FINDING DETAILS/i)
     expect(SPECIALIST_PROMPTS.logic).toMatch(/Do NOT put Markdown fences/i)
+    expect(SPECIALIST_PROMPTS.tests).toContain("JSON-string safety")
+    expect(SPECIALIST_PROMPTS.tests).toContain("One unescaped `\"` inside a string makes the whole verdict unparseable")
     expect(SYNTHESIZER_PROMPT).toMatch(/"failureExample"[\s\S]*?PRESERVE VERBATIM/i)
     expect(PR_REVIEW_PROMPT).toContain("Structured finding details")
     expect(PR_REVIEW_PROMPT).toContain("suggestedReplacement")
@@ -61,7 +63,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 25", () => {
+  it("PROMPT_VERSION bumped to 27", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -102,7 +104,9 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // security-tooling/test/doc surfaces).
     // SIG-342 24→25 (performance specialist calibration for direct
     // membership scans and intentional live-eval serial loops).
-    expect(PROMPT_VERSION).toBe("25")
+    // SIG-349 26→27 (tests focus hints include deleted assertions and source
+    // behavior gaps must anchor to the changed source path).
+    expect(PROMPT_VERSION).toBe("27")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {
@@ -144,6 +148,35 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(tests).toContain("synthesizer dedupes against the security specialist")
     // the score-5 reframe — a CORRECT boundary with no test, not a vuln
     expect(tests).toContain("CORRECT security boundary")
+  })
+
+  it("tests specialist has SIG-349 testing focus hint guidance", () => {
+    const tests = SPECIALIST_PROMPTS.tests
+    expect(tests).toContain("TESTING FOCUS HINTS")
+    expect(tests).toContain("RECALL TARGETS, NOT AS A NEW GATE")
+    expect(tests).toContain("every finding you emit from this role MUST use `category: \"testing\"`")
+    expect(tests).toContain("PERFORMANCE BUGS ARE NOT TESTING FINDINGS")
+    expect(tests).toContain("DIFF-ONLY SECURITY/PERF DUPLICATES ARE HARD SKIPS")
+    expect(tests).toContain("if the comment would still be valid even if perfect tests already existed")
+    expect(tests).toContain("Treat source-coverage claims as unavailable")
+    expect(tests).toContain("Anchor discipline")
+    expect(tests).toContain("Do NOT set `path` to the test file for source-behavior gaps")
+    expect(tests).toContain("parser/coercion")
+    expect(tests).toContain("deleted-test assertions")
+    expect(tests).toContain("DELETED TESTS ARE REGRESSION SIGNALS")
+    expect(tests).toContain("do not return a clean verdict unless the diff shows an equivalent replacement assertion")
+    expect(tests).toContain('evidenceRefs: ["testFileChanged:<path>"]')
+    expect(tests).toContain("do not suppress a finding just because no hint exists")
+    expect(tests).toContain("Severity calibration for hinted gaps")
+    expect(tests).toContain("do not down-score a real reachable untested runtime path to 3")
+    expect(tests).toContain("untested exported parser/coercion behavior")
+    expect(tests).toContain("Do NOT emit score>=4 for generic \"needs more tests\" claims")
+    expect(tests).toContain("Speculative intent is not behavior")
+    expect(tests).toContain("const delayMs = 10")
+    expect(tests).toContain("throw new Error('boom')")
+    expect(tests).toContain('NOT `throw new Error("boom")`')
+    expect(tests).toContain("inspectedTestFiles")
+    expect(tests).toContain("siblingMapping")
   })
 
   it("security specialist has the SIG-313 authorization audit (forced enumeration + exploit-tuple gate + safe skips)", () => {

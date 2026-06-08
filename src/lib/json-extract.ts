@@ -80,12 +80,13 @@ export function extractJsonObjectCandidates(text: string): string[] {
 /**
  * Run extractJsonObjectCandidates and return the first candidate that
  * parses to a non-null, non-array object. Tries strict JSON.parse first
- * on every candidate (fast path for well-formed output), then falls
- * back to jsonrepair on every candidate (handles unescaped newlines,
- * trailing commas, smart quotes, etc. that GLM-5.1 routinely emits).
+ * on every candidate (fast path for well-formed output), then guarded
+ * quote repair for raw quotes inside strings, then jsonrepair on every
+ * candidate (handles unescaped newlines, trailing commas, smart quotes,
+ * etc. that GLM-5.1 routinely emits).
  */
 export function parseFirstJsonObject(text: string): Record<string, unknown> | null {
-  const candidates = extractJsonObjectCandidates(text)
+  const candidates = [...new Set(extractJsonObjectCandidates(text))]
 
   for (const candidate of candidates) {
     try {
@@ -95,6 +96,32 @@ export function parseFirstJsonObject(text: string): Record<string, unknown> | nu
       }
     } catch {
       // Try the next candidate (and after that, the repair pass).
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (!hasLikelyUnescapedStringQuote(candidate)) continue
+    const quoteRepaired = escapeLikelyUnescapedStringQuotes(candidate)
+    if (quoteRepaired === candidate) continue
+    try {
+      const parsed = JSON.parse(quoteRepaired)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // Try the next quote-repair candidate.
+    }
+    try {
+      // Run the quote-specific repair before generic jsonrepair: for raw
+      // quotes inside code snippets, jsonrepair can produce a parseable object
+      // with corrupted string fields, which would hide valid findings.
+      const repaired = jsonrepair(quoteRepaired)
+      const parsed = JSON.parse(repaired)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // Try the next quote-repair candidate.
     }
   }
 
@@ -119,7 +146,7 @@ export function parseFirstJsonObject(text: string): Record<string, unknown> | nu
  * `[{verdict}, {verdict}, ...]`.
  */
 export function parseFirstJsonValue(text: string): unknown {
-  const candidates = extractJsonObjectCandidates(text)
+  const candidates = [...new Set(extractJsonObjectCandidates(text))]
 
   for (const candidate of candidates) {
     try {
@@ -138,4 +165,159 @@ export function parseFirstJsonValue(text: string): unknown {
   }
 
   return null
+}
+
+function nextNonWhitespaceIndex(s: string, start: number): number {
+  for (let i = start; i < s.length; i++) {
+    const ch = s.charAt(i)
+    if (ch !== " " && ch !== "\n" && ch !== "\r" && ch !== "\t") return i
+  }
+  return -1
+}
+
+function previousNonWhitespaceIndex(s: string, start: number): number {
+  for (let i = start - 1; i >= 0; i--) {
+    const ch = s.charAt(i)
+    if (ch !== " " && ch !== "\n" && ch !== "\r" && ch !== "\t") return i
+  }
+  return -1
+}
+
+function canFollowCommaInJson(s: string, commaIndex: number): boolean {
+  const idx = nextNonWhitespaceIndex(s, commaIndex + 1)
+  if (idx === -1) return false
+  const ch = s.charAt(idx)
+  if (ch === "\"" || ch === "{" || ch === "[") return true
+  if (s.startsWith("true", idx)) return isJsonValueBoundary(s, idx + 4)
+  if (s.startsWith("false", idx)) return isJsonValueBoundary(s, idx + 5)
+  if (s.startsWith("null", idx)) return isJsonValueBoundary(s, idx + 4)
+  if (ch === "-" || /\d/.test(ch)) {
+    const number = s.slice(idx).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/)
+    return Boolean(number && isJsonValueBoundary(s, idx + number[0].length))
+  }
+  return false
+}
+
+function isJsonValueBoundary(s: string, start: number): boolean {
+  const idx = nextNonWhitespaceIndex(s, start)
+  if (idx === -1) return true
+  const ch = s.charAt(idx)
+  return ch === "," || ch === "}" || ch === "]"
+}
+
+function canFollowClosingContainerInJson(s: string, closingIndex: number): boolean {
+  let idx = closingIndex
+  while (true) {
+    const next = nextNonWhitespaceIndex(s, idx + 1)
+    if (next === -1) return true
+    const ch = s.charAt(next)
+    if (ch === "}" || ch === "]") {
+      idx = next
+      continue
+    }
+    return ch === "," && canFollowCommaInJson(s, next)
+  }
+}
+
+function quoteCanTerminateJsonString(s: string, quoteIndex: number, canTerminateKey: boolean): boolean {
+  const idx = nextNonWhitespaceIndex(s, quoteIndex + 1)
+  if (idx === -1) return true
+  const ch = s.charAt(idx)
+  if (ch === ":") return canTerminateKey
+  // Raw code examples inside model strings often contain snippets like
+  // `{"kind": "bug"}` or `[{"name": "Alice"}]`. Treat a quote before their
+  // closing containers as internal unless the full closing-container run is
+  // followed by JSON punctuation or EOF.
+  if (ch === "}" || ch === "]") return canFollowClosingContainerInJson(s, idx)
+  if (ch === ",") return canFollowCommaInJson(s, idx)
+  return false
+}
+
+function hasLikelyUnescapedStringQuote(candidate: string): boolean {
+  let inString = false
+  let escape = false
+  let stringCanTerminateKey = false
+  const containers: Array<"object" | "array"> = []
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate.charAt(i)
+    if (!inString) {
+      if (ch === "{") containers.push("object")
+      else if (ch === "[") containers.push("array")
+      else if (containers.length > 0 && ch === "}" && containers[containers.length - 1] === "object") containers.pop()
+      else if (containers.length > 0 && ch === "]" && containers[containers.length - 1] === "array") containers.pop()
+      if (ch === "\"") {
+        const prevIdx = previousNonWhitespaceIndex(candidate, i)
+        const prev = prevIdx === -1 ? "" : candidate.charAt(prevIdx)
+        stringCanTerminateKey = containers[containers.length - 1] === "object" && (prev === "{" || prev === ",")
+        inString = true
+      }
+      continue
+    }
+
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (ch === "\\") {
+      escape = true
+      continue
+    }
+    if (ch === "\"") {
+      if (quoteCanTerminateJsonString(candidate, i, stringCanTerminateKey)) {
+        inString = false
+        stringCanTerminateKey = false
+      } else {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function escapeLikelyUnescapedStringQuotes(candidate: string): string {
+  let out = ""
+  let inString = false
+  let escape = false
+  let stringCanTerminateKey = false
+  const containers: Array<"object" | "array"> = []
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate.charAt(i)
+    if (!inString) {
+      if (ch === "{") containers.push("object")
+      else if (ch === "[") containers.push("array")
+      else if (containers.length > 0 && ch === "}" && containers[containers.length - 1] === "object") containers.pop()
+      else if (containers.length > 0 && ch === "]" && containers[containers.length - 1] === "array") containers.pop()
+      if (ch === "\"") {
+        const prevIdx = previousNonWhitespaceIndex(candidate, i)
+        const prev = prevIdx === -1 ? "" : candidate.charAt(prevIdx)
+        stringCanTerminateKey = containers[containers.length - 1] === "object" && (prev === "{" || prev === ",")
+        inString = true
+      }
+      out += ch
+      continue
+    }
+
+    if (escape) {
+      escape = false
+      out += ch
+      continue
+    }
+    if (ch === "\\") {
+      escape = true
+      out += ch
+      continue
+    }
+    if (ch === "\"") {
+      if (quoteCanTerminateJsonString(candidate, i, stringCanTerminateKey)) {
+        inString = false
+        stringCanTerminateKey = false
+        out += ch
+      } else {
+        out += "\\\""
+      }
+      continue
+    }
+    out += ch
+  }
+  return out
 }

@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest"
 import {
   buildAddedLineTextByLine,
   buildChangedLines,
+  buildDeletedLineTextByLine,
   nodeOverlapsChanged,
   findReviewPosition,
 } from "../src/lib/ast-rules/diff-filter"
@@ -51,6 +52,14 @@ const DIFF_FILE_DELETED = `diff --git a/src/zap.ts b/src/zap.ts
 @@ -1,2 +0,0 @@
 -line1
 -line2
+`
+
+const DIFF_NEW_FILE = `diff --git a/src/new.ts b/src/new.ts
+--- /dev/null
++++ b/src/new.ts
+@@ -0,0 +1,2 @@
++line1
++line2
 `
 
 describe("buildChangedLines", () => {
@@ -129,6 +138,63 @@ describe("buildAddedLineTextByLine (SIG-127)", () => {
   it("returns empty map on empty input", () => {
     expect(buildAddedLineTextByLine("").size).toBe(0)
     expect(buildAddedLineTextByLine(undefined as unknown as string).size).toBe(0)
+  })
+})
+
+describe("buildDeletedLineTextByLine (SIG-349)", () => {
+  it("maps each --line's old-side number to its text", () => {
+    const m = buildDeletedLineTextByLine(DIFF_PURE_DELETION)
+    const fileMap = m.get("src/del.ts")
+    expect(fileMap?.get(2)).toBe("gone1")
+    expect(fileMap?.get(3)).toBe("gone2")
+    expect(fileMap?.has(1)).toBe(false)
+  })
+
+  it("FILE DELETED: uses the old-side path", () => {
+    const m = buildDeletedLineTextByLine(DIFF_FILE_DELETED)
+    const fileMap = m.get("src/zap.ts")
+    expect(fileMap?.get(1)).toBe("line1")
+    expect(fileMap?.get(2)).toBe("line2")
+  })
+
+  it("REPLACEMENT HUNK: captures only old-side deleted text", () => {
+    const m = buildDeletedLineTextByLine(DIFF_REPLACEMENT)
+    const fileMap = m.get("src/r.ts")
+    expect(fileMap?.get(6)).toBe("removed_line")
+    expect(fileMap?.size).toBe(1)
+  })
+
+  it("resets old-side numbering across multiple hunks in the same file", () => {
+    const diff = `diff --git a/src/multi.ts b/src/multi.ts
+--- a/src/multi.ts
++++ b/src/multi.ts
+@@ -2,2 +2,1 @@
+ keep
+-removed_first_hunk
+@@ -20,1 +19,2 @@
+ context
++inserted_second_hunk
+@@ -40,2 +40,1 @@
+ keep
+-removed_third_hunk
+`
+    const m = buildDeletedLineTextByLine(diff)
+    const fileMap = m.get("src/multi.ts")
+
+    expect(fileMap?.get(3)).toBe("removed_first_hunk")
+    expect(fileMap?.get(41)).toBe("removed_third_hunk")
+    expect(fileMap?.has(20)).toBe(false)
+  })
+
+  it("NEW FILE: no old-side deletion map is created", () => {
+    const m = buildDeletedLineTextByLine(DIFF_NEW_FILE)
+
+    expect(m.size).toBe(0)
+  })
+
+  it("returns empty map on empty input", () => {
+    expect(buildDeletedLineTextByLine("").size).toBe(0)
+    expect(buildDeletedLineTextByLine(undefined as unknown as string).size).toBe(0)
   })
 })
 

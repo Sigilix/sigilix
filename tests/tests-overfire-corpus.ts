@@ -33,6 +33,7 @@ export interface TestsOverfireCase {
   diff: string
   testingEvidenceBlock: string
   testingEvidence: TestingEvidencePack
+  inspectedTestContentByPath?: Readonly<Record<string, string>>
   targetTokens: readonly string[]
   coverageGaps?: ReadonlySet<string>
   /** Safe cases default to target-path scoring; set true for docs/config. */
@@ -73,6 +74,24 @@ const EMPTY_TESTING_EVIDENCE: TestingEvidencePack = {
   inspectedTestFiles: [],
   helperCoverageBySource: {},
 }
+
+const slugTestContent = `import { describe, expect, it } from "vitest"
+import { slugify } from "../src/lib/slug"
+
+describe("slugify", () => {
+  it("normalizes labels", () => {
+    expect(slugify("Hello, World!")).toBe("hello-world")
+  })
+})`
+
+const retryTestContent = `import { describe, expect, it } from "vitest"
+import { retryWithBackoff } from "../src/lib/retry"
+
+describe("retryWithBackoff", () => {
+  it("returns successful attempt", async () => {
+    await expect(retryWithBackoff(async () => "ok")).resolves.toBe("ok")
+  })
+})`
 
 function pack(overrides: Partial<TestingEvidencePack>): TestingEvidencePack {
   return {
@@ -349,6 +368,7 @@ export const TESTS_OVERFIRE_CASES: TestsOverfireCase[] = [
       siblingMappings: [{ source: "src/lib/slug.ts", test: "tests/slug.test.ts" }],
       inspectedTestFiles: ["tests/slug.test.ts"],
     }),
+    inspectedTestContentByPath: { "tests/slug.test.ts": slugTestContent },
     targetTokens: ["slugify", "slug", "test"],
     diff: `diff --git a/src/lib/slug.ts b/src/lib/slug.ts
 --- a/src/lib/slug.ts
@@ -426,6 +446,7 @@ diff --git a/tests/slug.test.ts b/tests/slug.test.ts
       siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
       inspectedTestFiles: ["tests/retry.test.ts"],
     }),
+    inspectedTestContentByPath: { "tests/retry.test.ts": retryTestContent },
     targetTokens: ["needs more tests", "coverage", "retry"],
     diff: `diff --git a/src/lib/retry.ts b/src/lib/retry.ts
 --- a/src/lib/retry.ts
@@ -459,6 +480,7 @@ diff --git a/tests/retry.test.ts b/tests/retry.test.ts
       siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
       inspectedTestFiles: ["tests/retry.test.ts"],
     }),
+    inspectedTestContentByPath: { "tests/retry.test.ts": retryTestContent },
     targetTokens: ["timeout", "branch", "retrywithbackoff", "inspectedtestfile:tests/retry.test.ts"],
     diff: `diff --git a/src/lib/retry.ts b/src/lib/retry.ts
 --- a/src/lib/retry.ts
@@ -543,6 +565,7 @@ diff --git a/tests/retry.test.ts b/tests/retry.test.ts
       siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
       inspectedTestFiles: ["tests/retry.test.ts"],
     }),
+    inspectedTestContentByPath: { "tests/retry.test.ts": retryTestContent },
     targetTokens: ["error path", "reject", "throw", "retrywithbackoff", "tests/retry.test.ts"],
     diff: `diff --git a/src/lib/retry.ts b/src/lib/retry.ts
 --- a/src/lib/retry.ts

@@ -575,14 +575,14 @@ export const KNOWN_MODELS: ReadonlySet<string> = new Set([
   // listed. CodeRabbit M1 on PR #186 fix: dropped `kimi-k2.6:cloud`
   // because it's no longer referenced after the synth swap to
   // `gpt-oss:120b-cloud`. `deepseek-v4-pro:cloud` STAYS because it's
-  // still the cross-provider fallback for security + tests.
+  // still the cross-provider fallback for security.
   "glm-5.1:cloud",            // performance primary
   "kimi-k2.5:cloud",          // logic + performance fallback
   "qwen3-coder:480b-cloud",   // reserved for per-repo overrides
   "qwen3-coder-next:cloud",   // logic fallback (was security primary; swapped to a reasoner after pr/07)
-  "deepseek-v4-pro:cloud",    // logic primary (2026-06-05) + security/tests fallback
-  "deepseek-v4-flash:cloud",  // security primary (reasoner), synth fallback
-  "minimax-m3:cloud",         // tests primary (upgraded from m2.5, 2026-06-05)
+  "deepseek-v4-pro:cloud",    // logic primary (2026-06-05) + security fallback
+  "deepseek-v4-flash:cloud",  // security + tests primary (reasoner), synth fallback
+  "minimax-m3:cloud",         // tests fallback (SIG-349; upgraded from m2.5, 2026-06-05)
   "gpt-oss:120b-cloud",       // synth primary
 ])
 

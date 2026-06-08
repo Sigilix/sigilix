@@ -74,9 +74,44 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     expect(evaluateTestFinding(finding(), undefined).keep).toBe(true)
   })
 
-  it("keeps when the pack is empty (pure docs PR)", () => {
+  it("DROPS a source coverage claim when the pack is empty (no testing evidence)", () => {
     const empty = pack({ sourceFilesChanged: [], testFilesChanged: [], siblingMappings: [] })
-    expect(evaluateTestFinding(finding(), empty).keep).toBe(true)
+    const r = evaluateTestFinding(finding(), empty)
+    expect(r).toMatchObject({ keep: false, reason: "unbacked-source-coverage-no-evidence" })
+  })
+
+  it("keeps the same source coverage claim when the pack has testing evidence", () => {
+    const r = evaluateTestFinding(finding(), pack())
+    expect(r).toEqual({ keep: true })
+  })
+
+  it("keeps a changed test-file quality finding when the pack is empty", () => {
+    const empty = pack({ sourceFilesChanged: [], testFilesChanged: [], siblingMappings: [] })
+    const r = evaluateTestFinding(
+      finding({
+        path: "tests/foo.test.ts",
+        headline: "`foo.test.ts` never asserts rejection",
+        body: "The test calls the failing path but has no assertion.",
+      }),
+      empty,
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("keeps an empty-pack finding when the finding path is itself a test file", () => {
+    // The empty-pack branch has no file-list evidence to consult; it keeps
+    // test-path findings by path shape so changed test quality nits do not
+    // get misclassified as unbacked source-coverage claims.
+    const empty = pack({ sourceFilesChanged: [], testFilesChanged: [], siblingMappings: [] })
+    const r = evaluateTestFinding(
+      finding({
+        path: "tests/foo.test.ts",
+        headline: "`foo.test.ts` lacks rejection assertions",
+        body: "The changed test file only asserts the happy path.",
+      }),
+      empty,
+    )
+    expect(r.keep).toBe(true)
   })
 
   // ── deletion / rename exception (SIG-113, preserved) ──────────────
@@ -172,6 +207,44 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
     expect(r.keep).toBe(true)
   })
 
+  it("keeps an insufficient-test finding citing a real covered sibling mapping with no inspected-test citation", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "`retryWithBackoff` timeout branch lacks coverage",
+        body: "The covered sibling test only asserts the successful attempt; the new timeout branch is untested.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: [],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        testFilesChanged: ["tests/retry.test.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: [],
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("DROPS an insufficient-test finding citing an unresolved covered sibling mapping", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "`retryWithBackoff` timeout branch lacks coverage",
+        body: "The covered sibling test only asserts the successful attempt; the new timeout branch is untested.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/made-up.test.ts"],
+        inspectedTestFiles: [],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        testFilesChanged: ["tests/retry.test.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: [],
+      }),
+    )
+    expect(r).toEqual({ keep: false, reason: "unresolved-sibling-mapping" })
+  })
+
   it("DROPS a vague insufficient-test finding that names nothing concrete (needs more tests)", () => {
     const r = evaluateTestFinding(
       finding({
@@ -181,6 +254,175 @@ describe("evaluateTestFinding (pure FP-safe decision)", () => {
         inspectedTestFiles: ["tests/retry.test.ts"],
       }),
       pack({ inspectedTestFiles: ["tests/retry.test.ts"] }),
+    )
+    expect(r).toMatchObject({ keep: false, reason: "vague-insufficient-test" })
+  })
+
+  it("DROPS a speculative constant-intent finding that invents retry/backoff behavior", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "Backoff/retry logic lands without retry-failure test coverage",
+        body: "The function `retryWithBackoff` now declares `const delayMs = 10`, signaling an intent to delay and retry on failure, but the sibling test only asserts the happy path.",
+        evidenceRefs: undefined,
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("DROPS a speculative constant-intent finding that cites only a covered sibling mapping", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "Added delayMs without any retry or delay behavior",
+        body: "The declaration `const delayMs = 10` suggests intent to add a delay before retrying a failed attempt, but the sibling test only asserts the happy path.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("DROPS a constant-intent finding whose headline says delayMs suggests eventual retry", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "constant `delayMs` suggests eventual retry behavior without coverage",
+        body: "The new `delayMs` constant suggests eventual retry behavior, but the sibling test only asserts the happy path.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("DROPS a retry-delay happy-path-only nudge when no concrete branch or error path is named", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "retryWithBackoff needs delay coverage",
+        body: "The new `delayMs` retry delay is not covered because the sibling test only asserts the successful attempt.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("DROPS a function-name-implies-retry finding as a non-testing gap", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "retryWithBackoff function name implies retry behavior that is absent from both implementation and tests",
+        body: "The function is named `retryWithBackoff` suggesting retry-and-backoff semantics, but neither the implementation nor the sibling test exercises retry behavior.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("DROPS a retry-utility-name finding that infers unimplemented retry/backoff semantics", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        line: 4,
+        headline: "Exported retry function ships without any retry/failure or backoff behavior tested",
+        body: "`retryWithBackoff` exports a promise-based retry utility, yet the only test (`tests/retry.test.ts`) asserts a single success path. The sibling test file inspects no retry attempts, no `catch`/failure or backoff behavior.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
+  })
+
+  it("KEEPS a constant-intent finding when it also names a concrete branch/error path", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "Retry limit branch lacks failure coverage",
+        body: "The changed `retryWithBackoff` now contains `const delayMs = 10` and a new `if (attempt > 3) throw` branch, but the sibling test never exercises that error path.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS a retry finding that names a concrete rejection path despite happy-path wording", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "retryWithBackoff rejection path lacks coverage",
+        body: "The sibling test only asserts the successful attempt, but the changed catch block now throws `retry failed` and needs a rejection-path assertion.",
+        evidenceRefs: ["siblingMapping:src/lib/retry.ts->tests/retry.test.ts"],
+        inspectedTestFiles: undefined,
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("DROPS an absent retry-loop implementation claim even when phrased as missing coverage", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/retry.ts",
+        headline: "retryWithBackoff's retry/fallback logic has no coverage",
+        body: "The new `delayMs` constant signals intent to add backoff timing, but the function still contains no retry loop, no error handling, and no timeout/backoff logic.",
+        evidenceRefs: undefined,
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/retry.ts"],
+        siblingMappings: [{ source: "src/lib/retry.ts", test: "tests/retry.test.ts" }],
+        inspectedTestFiles: ["tests/retry.test.ts"],
+      }),
     )
     expect(r.keep).toBe(false)
     if (!r.keep) expect(r.reason).toBe("vague-insufficient-test")
@@ -572,6 +814,122 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
     expect(r.keep).toBe(true)
   })
 
+  it("KEEPS a concrete error-path finding when the sibling test only references the happy path", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/config.ts",
+        headline: "`parseConfig` rejection path lacks coverage",
+        body: "The sibling test references `parseConfig`, but it only asserts the valid-input path; the new rejection path is still untested.",
+        evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
+        inspectedTestFiles: ["tests/config.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/config.ts"],
+        testFilesChanged: ["tests/config.test.ts"],
+        siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
+        inspectedTestFiles: ["tests/config.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/config.test.ts": "expect(parseConfig(validConfig)).toEqual({ ok: true })",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS a BadConfig error-path finding when the sibling test only mentions BadConfig via toBe", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/config.ts",
+        headline: "`parseConfig` `BadConfig` error path lacks coverage",
+        body: "The changed code throws `new Error(\"BadConfig\")`, but the sibling test only mentions `BadConfig` in a happy-path `toBe` assertion.",
+        evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
+        inspectedTestFiles: ["tests/config.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/config.ts"],
+        testFilesChanged: ["tests/config.test.ts"],
+        siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
+        inspectedTestFiles: ["tests/config.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/config.test.ts": "expect(parseConfig(validConfig).name).toBe(\"BadConfig\")",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r).toEqual({ keep: true })
+  })
+
+  it("KEEPS a concrete error-path finding when the sibling test throws a different error", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/config.ts",
+        headline: "`parseConfig` `missing user` rejection path lacks coverage",
+        body: "The sibling test references `parseConfig`, but it only asserts another throw; the `missing user` rejection path is still untested.",
+        evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
+        inspectedTestFiles: ["tests/config.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/config.ts"],
+        testFilesChanged: ["tests/config.test.ts"],
+        siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
+        inspectedTestFiles: ["tests/config.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/config.test.ts": "expect(() => parseConfig(badToken)).toThrow('invalid token')",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS when the only shared quoted token is not an Error/Exception class", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/config.ts",
+        headline: "`parseConfig` `Timeout` error branch lacks coverage",
+        body: "The sibling test references `parseConfig`, but a generic `Timeout` token is not proof that the same error path is asserted.",
+        evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
+        inspectedTestFiles: ["tests/config.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/config.ts"],
+        testFilesChanged: ["tests/config.test.ts"],
+        siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
+        inspectedTestFiles: ["tests/config.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/config.test.ts": "const Timeout = 1000; expect(() => parseConfig(bad)).toThrow()",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("DROPS a concrete error-path finding when the sibling test asserts the same specific error", () => {
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/config.ts",
+        headline: "`parseConfig` `missing user` rejection path lacks coverage",
+        body: "The sibling test references `parseConfig`; verify whether the `missing user` rejection path is actually asserted.",
+        evidenceRefs: ["inspectedTestFile:tests/config.test.ts"],
+        inspectedTestFiles: ["tests/config.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/config.ts"],
+        testFilesChanged: ["tests/config.test.ts"],
+        siblingMappings: [{ source: "src/lib/config.ts", test: "tests/config.test.ts" }],
+        inspectedTestFiles: ["tests/config.test.ts"],
+        inspectedTestContentByPath: {
+          "tests/config.test.ts": "expect(() => parseConfig(missingUser)).toThrow('missing user')",
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(false)
+    if (!r.keep) expect(r.reason).toBe("cross-referenced-in-sibling-test")
+  })
+
   it("KEEPS when the referencing test is NOT in the PR diff (cross-check is in-diff only)", () => {
     // The test was inspected (pre-existing sibling) but is NOT in testFilesChanged,
     // so its content is not scanned — a real "new code path uncovered" finding
@@ -930,8 +1288,8 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
       path: "src/lib/foo.ts",
       line: 17,
       score: 4,
-      headline: "`parseConfig` error branch untested",
-      body: "The `parseConfig` error branch lacks an assertion in the existing test.",
+      headline: "Missing test for `kind` coercion logic in `parseConfig`",
+      body: "The `parseConfig` coercion branches are not exercised by the existing test.",
       evidenceRefs: ["inspectedTestFile:tests/foo.test.ts"],
       inspectedTestFiles: ["tests/foo.test.ts"],
     })
@@ -947,7 +1305,9 @@ describe("validateForSubmission — SIG-347 sibling-test cross-check + ratio dam
         testFilesChanged: ["tests/foo.test.ts"],
         siblingMappings: [{ source: "src/lib/foo.ts", test: "tests/foo.test.ts" }],
         inspectedTestFiles: ["tests/foo.test.ts"],
-        inspectedTestContentByPath: { "tests/foo.test.ts": "expect(parseConfig(bad)).toThrow()" },
+        inspectedTestContentByPath: {
+          "tests/foo.test.ts": 'expect(parseConfig(raw).kind).toBe("bug")',
+        },
       }),
       testsValidatorMode: "enforce",
       onTestFindingDropped: onDrop,

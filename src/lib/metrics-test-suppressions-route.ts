@@ -10,7 +10,7 @@
 // Drop reasons reported (see `TestDropReason` in validate-test-finding.ts):
 //   glue-covered-by-helper, glue-covered-by-structure,
 //   cross-referenced-in-sibling-test (SIG-347), vague-insufficient-test,
-//   uncited-missing-coverage, missing-path.
+//   unresolved-sibling-mapping, uncited-missing-coverage, missing-path.
 //
 // No new storage — reuses the global ValidationMetricsDO and the same
 // bearer token as the other /metrics/* reads.

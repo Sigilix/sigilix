@@ -79,8 +79,8 @@ export const SYNTHESIZER_TIMEOUT_MS = 325_000
 // PR #94 review catch to make room for pre-flight retrieval in
 // the headroom envelope (see invariant block below).
 //
-// Budget math (post-Sigilix-PR-#94-catch):
-//   SPECIALIST (270) + SYNTHESIZER (420) + RESERVED_HEADROOM (195) = 885
+// Budget math (current — post-SIG-287):
+//   SPECIALIST (370) + SYNTHESIZER (325) + RESERVED_HEADROOM (195) = 890
 //   Inside the 195s headroom: pre-flight (15) + retry (160) + finalize (20).
 //   So `RESERVED_HEADROOM_MS` is NOT spent in addition to retry —
 //   pre-flight, retry, AND finalize all carve out of it. The second
@@ -100,9 +100,9 @@ export const SYNTHESIZER_RETRY_TIMEOUT_MS = 160_000
 // and abort the run during finalize (reintroducing the very failure
 // mode ARC-283 was meant to eliminate).
 export const RESERVED_HEADROOM_MS = 195_000
-// ARC-283: 270 + 420 + 195 = 885, with 10s slack inside the
-// orchestrator. Cloudflare queue consumer ceiling is 900s, so the
-// new 895s budget stays just inside the platform limit while
+// Current (post-SIG-287): 370 + 325 + 195 = 890, with 5s slack inside
+// the orchestrator. Cloudflare queue consumer ceiling is 900s, so the
+// 895s budget stays just inside the platform limit while
 // extending the per-review wall-clock from 8.2 min → 14.9 min.
 // Phase B (DO-alarm-driven synth) lifts the queue ceiling entirely;
 // tracked in ARC-283. For now, 895s comfortably absorbs the diffs
@@ -135,8 +135,8 @@ export const RETRIEVAL_PREFLIGHT_TIMEOUT_MS = 15_000
 //     same chain would take 181s — saving ~75s per offending role.
 //
 // Math under the new cap: 2 × 60s primary + ~1s backoff + 60s
-// fallback = ~181s, fits comfortably within the 270s SPECIALIST
-// budget (89s slack).
+// fallback = ~181s, fits comfortably within the 370s SPECIALIST
+// budget (189s slack).
 export const PER_ATTEMPT_TIMEOUT_MS = 60_000
 // Graph RPC budget: graph context is purely additive; a slow DO call must
 // not consume orchestrator wall time. Env-tunable via

@@ -101,4 +101,11 @@ describe("SIG-318 ensemble budget — god-file re-export surface", () => {
     expect(ensemble.SYNTH_RETRY_FINALIZE_RESERVE_MS).toBe(SYNTH_RETRY_FINALIZE_RESERVE_MS)
     expect(ensemble.SHADOW_FINALIZE_GRACE_MS).toBe(SHADOW_FINALIZE_GRACE_MS)
   })
+
+  it("does NOT re-export CF_QUEUE_CONSUMER_CEILING_MS (god-file surface stays unchanged)", () => {
+    // CF_QUEUE_CONSUMER_CEILING_MS was module-private in the god-file; it's
+    // exported from budget.ts only. Pin that it never leaks into the god-file's
+    // public surface (CodeRabbit #411).
+    expect("CF_QUEUE_CONSUMER_CEILING_MS" in (ensemble as Record<string, unknown>)).toBe(false)
+  })
 })

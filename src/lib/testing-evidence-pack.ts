@@ -534,8 +534,7 @@ export function mergeTestingFocusHints(
     if (lineText === undefined || lineText.size === 0) continue
 
     let emittedForSource = 0
-    const entries = [...lineText.entries()].sort(([a], [b]) => a - b)
-    for (const [line, text] of entries) {
+    for (const [line, text] of lineText) {
       if (emittedForSource >= MAX_TESTING_FOCUS_HINTS_PER_SOURCE) break
       const kind = classifyTestingFocusHint(text)
       if (kind === null) continue
@@ -554,8 +553,7 @@ export function mergeTestingFocusHints(
     if (lineText === undefined || lineText.size === 0) continue
 
     let emittedForTest = 0
-    const entries = [...lineText.entries()].sort(([a], [b]) => a - b)
-    for (const [line, text] of entries) {
+    for (const [line, text] of lineText) {
       if (emittedForTest >= MAX_TESTING_FOCUS_HINTS_PER_SOURCE) break
       const kind = classifyDeletedTestFocusHint(text)
       if (kind === null) continue

@@ -80,12 +80,13 @@ export function extractJsonObjectCandidates(text: string): string[] {
 /**
  * Run extractJsonObjectCandidates and return the first candidate that
  * parses to a non-null, non-array object. Tries strict JSON.parse first
- * on every candidate (fast path for well-formed output), then falls
- * back to jsonrepair on every candidate (handles unescaped newlines,
- * trailing commas, smart quotes, etc. that GLM-5.1 routinely emits).
+ * on every candidate (fast path for well-formed output), then guarded
+ * quote repair for raw quotes inside strings, then jsonrepair on every
+ * candidate (handles unescaped newlines, trailing commas, smart quotes,
+ * etc. that GLM-5.1 routinely emits).
  */
 export function parseFirstJsonObject(text: string): Record<string, unknown> | null {
-  const candidates = extractJsonObjectCandidates(text)
+  const candidates = [...new Set(extractJsonObjectCandidates(text))]
 
   for (const candidate of candidates) {
     try {
@@ -99,6 +100,7 @@ export function parseFirstJsonObject(text: string): Record<string, unknown> | nu
   }
 
   for (const candidate of candidates) {
+    if (!hasLikelyUnescapedStringQuote(candidate)) continue
     const quoteRepaired = escapeLikelyUnescapedStringQuotes(candidate)
     if (quoteRepaired === candidate) continue
     try {
@@ -144,7 +146,7 @@ export function parseFirstJsonObject(text: string): Record<string, unknown> | nu
  * `[{verdict}, {verdict}, ...]`.
  */
 export function parseFirstJsonValue(text: string): unknown {
-  const candidates = extractJsonObjectCandidates(text)
+  const candidates = [...new Set(extractJsonObjectCandidates(text))]
 
   for (const candidate of candidates) {
     try {
@@ -228,6 +230,47 @@ function quoteCanTerminateJsonString(s: string, quoteIndex: number, canTerminate
   // followed by JSON punctuation or EOF.
   if (ch === "}" || ch === "]") return canFollowClosingContainerInJson(s, idx)
   if (ch === ",") return canFollowCommaInJson(s, idx)
+  return false
+}
+
+function hasLikelyUnescapedStringQuote(candidate: string): boolean {
+  let inString = false
+  let escape = false
+  let stringCanTerminateKey = false
+  const containers: Array<"object" | "array"> = []
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate.charAt(i)
+    if (!inString) {
+      if (ch === "{") containers.push("object")
+      else if (ch === "[") containers.push("array")
+      else if (containers.length > 0 && ch === "}" && containers[containers.length - 1] === "object") containers.pop()
+      else if (containers.length > 0 && ch === "]" && containers[containers.length - 1] === "array") containers.pop()
+      if (ch === "\"") {
+        const prevIdx = previousNonWhitespaceIndex(candidate, i)
+        const prev = prevIdx === -1 ? "" : candidate.charAt(prevIdx)
+        stringCanTerminateKey = containers[containers.length - 1] === "object" && (prev === "{" || prev === ",")
+        inString = true
+      }
+      continue
+    }
+
+    if (escape) {
+      escape = false
+      continue
+    }
+    if (ch === "\\") {
+      escape = true
+      continue
+    }
+    if (ch === "\"") {
+      if (quoteCanTerminateJsonString(candidate, i, stringCanTerminateKey)) {
+        inString = false
+        stringCanTerminateKey = false
+      } else {
+        return true
+      }
+    }
+  }
   return false
 }
 

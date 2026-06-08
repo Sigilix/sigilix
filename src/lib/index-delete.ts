@@ -15,7 +15,8 @@
 //      gate destructive ops on `vectors.owner === owner` — a same-named
 //      repo under a different owner doesn't get its data deleted by
 //      mistake.
-//   2. Batches `deleteByIds` against Vectorize, dedup'd, ≤1000 per call.
+//   2. Batches `deleteByIds` against Vectorize, dedup'd, ≤100 per call
+//      (Vectorize caps deleteByIds at 100 ids — error 40007 above that).
 //      (Vectorize delete is by id and namespace-independent, so legacy
 //      vectors records purge their embeddings just the same.)
 //   3. Deletes the `repo-index-vectors:*` KV record at the EXACT key it
@@ -63,7 +64,11 @@ import { deleteLexicalNamespace } from "./lexical-index"
 import { deleteGraph } from "./repo-graph-client"
 import { deleteScopedRulesManifest } from "./scoped-rules-kv"
 
-const VECTORIZE_DELETE_BATCH = 1000
+// Vectorize `deleteByIds` caps at 100 ids per call — above that the API
+// throws VECTOR_DELETE_ERROR 40007 ("too many ids in payload; max id count
+// is 100"), which was silently failing every branch-index cleanup whose
+// id-list exceeded 100. Batch at the documented limit.
+const VECTORIZE_DELETE_BATCH = 100
 const KV_LIST_PAGE_LIMIT = 1000
 
 export type DeleteReason =

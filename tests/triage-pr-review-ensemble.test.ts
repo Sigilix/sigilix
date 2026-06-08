@@ -1512,16 +1512,19 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
   })
 
-  it("tests specialist runs minimax-m3:cloud + deepseek-v4-pro fallback with a 110s attempt cap", () => {
+  it("tests specialist runs minimax-m3:cloud + deepseek-v4-pro fallback with a 160s attempt cap", () => {
     // SIG-234: was `deepseek-v4-flash:cloud` (collided with security), then
     // MiniMax M2.5 (ARC-292). 2026-06-05: upgraded M2.5→M3 (founder-tested,
     // Turbo-probed available + format-clean). SIG-344 K=12 tests-overfire
     // baseline showed M3 often needs more than the global 60s cap on
-    // testing-evidence cases, so tests gets a 110s per-attempt cap.
+    // testing-evidence cases, so tests gets a longer per-attempt cap.
+    // SIG-348: the valid K=12 after SIG-346 showed 110s timeout aborts mostly
+    // burned same-model retry time, so tests now skips same-primary retry and
+    // preserves the cross-provider fallback inside the specialist wall.
     expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m3:cloud")
     expect(SPECIALIST_CONFIGS.tests.fallback).toBe("deepseek-v4-pro:cloud")
-    expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
-    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(110_000)
+    expect(SPECIALIST_CONFIGS.tests.retries).toBe(0)
+    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(160_000)
   })
 
   it("all five primaries are distinct again after the logic→v4-pro swap (2026-06-05)", () => {
@@ -1575,7 +1578,7 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(fallbackFamily).not.toBe(primaryFamily)
   })
 
-  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (17 after SIG-287 logic fast-fallback)", () => {
+  it("MAX_CALLS_PER_ENSEMBLE_RUN matches the production daily-budget admission gate (16 after SIG-348 tests retry removal)", () => {
     // The production constant is what `dailyBudgetAvailable()` reserves
     // before admitting a PR, so the regression must assert against it
     // directly — not against a hand-calc that would silently drift if
@@ -1588,13 +1591,13 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     //   logic:       primary + fallback (retries:0)           = 2 (SIG-287)
     //   security:    primary + 1 retry + fallback             = 3
     //   performance: primary + 1 retry + fallback             = 3
-    //   tests:       primary + 1 retry + fallback             = 3
+    //   tests:       primary + fallback (retries:0)           = 2 (SIG-348)
     //   synth:       primary + 1 retry + fallback             = 3 (attempt 1)
     //   synth retry: primary + 1 retry + fallback             = 3 (ARC-278
     //                retry path, fires when attempt 1 fails)
-    //   total: 17.  Up from 16 — SIG-287 restored logic's cross-provider
-    //   fallback (the prior fallback:null capped logic at 1 call).
-    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(17)
+    //   total: 16.  Down from 17 — SIG-348 removed tests' same-model retry and
+    //   preserved cross-provider fallback as the runtime rescue path.
+    expect(MAX_CALLS_PER_ENSEMBLE_RUN).toBe(16)
 
     // Cross-check: the constant matches the sum of `1 + retries + (fallback ? 1 : 0)`
     // across the 4 specialists + 2 synth runs (attempt + ARC-278 retry).

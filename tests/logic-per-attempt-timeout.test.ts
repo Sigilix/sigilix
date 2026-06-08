@@ -17,7 +17,7 @@ import {
   PER_ATTEMPT_TIMEOUT_MS,
 } from "../src/lib/triage-pr-review-ensemble"
 
-const TESTS_SPECIALIST_MIN_HEADROOM_MS = 40_000
+const TESTS_SPECIALIST_MIN_HEADROOM_MS = 50_000
 
 describe("specialist per-attempt timeout overrides", () => {
   it("caps logic at 120s per attempt (think:false makes it fast; 2× the expected <60s for route variance)", () => {
@@ -27,8 +27,8 @@ describe("specialist per-attempt timeout overrides", () => {
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
 
-  it("caps tests at 110s per attempt so MiniMax M3 can finish testing-evidence cases", () => {
-    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(110_000)
+  it("caps tests at 160s per attempt so MiniMax M3 can finish testing-evidence cases", () => {
+    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(160_000)
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
 
@@ -52,8 +52,10 @@ describe("specialist per-attempt timeout overrides", () => {
     expect(chainMs).toBeLessThanOrEqual(SPECIALIST_TIMEOUT_MS)
   })
 
-  it("keeps the tests primary+retry+fallback chain inside the specialist wall with 40s headroom", () => {
-    const chainMs = 3 * SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!
+  it("keeps the tests primary+fallback chain inside the specialist wall with 50s headroom", () => {
+    expect(SPECIALIST_CONFIGS.tests.retries).toBe(0)
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("deepseek-v4-pro:cloud")
+    const chainMs = 2 * SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!
     expect(SPECIALIST_TIMEOUT_MS - chainMs).toBeGreaterThanOrEqual(TESTS_SPECIALIST_MIN_HEADROOM_MS)
   })
 })

@@ -122,12 +122,36 @@ export interface SourceFloorDroppedFinding {
   reason: string
 }
 
-function isProofResolvedDrop(reason: string): boolean {
-  const normalized = reason.trim().toLowerCase()
-  return (
-    normalized.startsWith("false positive on diff inspection") ||
-    normalized.startsWith("superseded_by_ast/")
-  )
+const SUPERSEDED_BY_AST_PREFIX = "superseded_by_ast/"
+
+/**
+ * A drop counts as proof-resolved (the synth may legitimately SUPPRESS a
+ * score>=4 source finding) only when it is one of:
+ *
+ *   - `false positive on diff inspection` — irreducibly model-trusted; the
+ *     model claims the diff disproves the finding. Left as-is.
+ *   - `superseded_by_ast/<id>` — the synth dropped the specialist finding
+ *     because a deterministic AST emit covers it. This IS deterministically
+ *     checkable: `<id>` must be a REAL AST finding id. We mirror the SIG-314
+ *     kept-path guard (triage-pr-review-ensemble.ts builds `validIds` from
+ *     `astResult.findings.map(f => f.astFindingId)`) so a hallucinated or
+ *     nonexistent `<id>` is NOT honored — the floor then restores the finding
+ *     (recall-safe: this can only ever ADD a restore, never silence a real one).
+ *
+ * `astFindingIds` is the real AST id set (`ast/<ruleId>/<pathHash7>/<line>`,
+ * canonically lowercase). It is matched case-exactly: if the synth echoes a
+ * different-cased id it is treated as unverified → restore, which is the
+ * conservative (recall-positive) direction.
+ */
+function isProofResolvedDrop(reason: string, astFindingIds: ReadonlySet<string>): boolean {
+  const trimmed = reason.trim()
+  const normalized = trimmed.toLowerCase()
+  if (normalized.startsWith("false positive on diff inspection")) return true
+  if (normalized.startsWith(SUPERSEDED_BY_AST_PREFIX)) {
+    const astId = trimmed.slice(SUPERSEDED_BY_AST_PREFIX.length).trim()
+    return astFindingIds.has(astId)
+  }
+  return false
 }
 
 function findingText(finding: PrReviewFinding): string {
@@ -207,15 +231,22 @@ function preservesSourceMechanism(source: PrReviewFinding, emitted: PrReviewFind
  * source wording rather than trusting a vague rewrite. This is recall-safe: the
  * original specialist finding remains the evidence source and still passes
  * through the normal post-synth gates.
+ *
+ * `astFindingIds` is the real AST id set used to verify `superseded_by_ast/<id>`
+ * drops — a spoofed/hallucinated `<id>` is NOT honored as a suppression, mirroring
+ * the SIG-314 kept-path guard. Defaults to empty (fail-safe: no AST supersession is
+ * honored → restore), so callers without an AST result can omit it.
  */
 export function applySynthSourceFindingFloor(args: {
   findings: ReadonlyArray<PrReviewFinding>
   provenanceFindings: ReadonlyArray<FloorProvenanceFinding>
   provenanceDropped: ReadonlyArray<SourceFloorDroppedFinding>
   specialists: ReadonlyArray<DegradedFloorSpecialist>
+  astFindingIds?: ReadonlySet<string>
   minScore?: number
 }): DegradedFloorResult {
   const minScore = args.minScore ?? SYNTH_SOURCE_FLOOR_MIN_SCORE
+  const astFindingIds = args.astFindingIds ?? new Set<string>()
   const alignedFindings = args.findings.slice()
   const alignedProvenanceFindings = alignedFindings.map((_, i) =>
     args.provenanceFindings[i] ?? {
@@ -227,7 +258,7 @@ export function applySynthSourceFindingFloor(args: {
   )
   const proofResolved = new Set<string>()
   for (const d of args.provenanceDropped) {
-    if (isProofResolvedDrop(d.reason)) proofResolved.add(d.sourceFindingId)
+    if (isProofResolvedDrop(d.reason, astFindingIds)) proofResolved.add(d.sourceFindingId)
   }
 
   const sourceIndexes = new Map<string, number[]>()

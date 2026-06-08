@@ -5081,6 +5081,11 @@ export async function handlePrReviewEnsemble(
         specialists: synthInputVerdicts
           .filter((v) => v.verdict !== null)
           .map((v) => ({ role: v.role, findings: v.verdict!.findings })),
+        // SIG-351: verify `superseded_by_ast/<id>` suppressions against the REAL
+        // AST id set — same source SIG-314 uses for the kept-path hallucination
+        // guard (validateForSubmission's `astFindingIds`, below). A spoofed
+        // `<id>` is NOT honored, so the floor restores the finding (recall-safe).
+        astFindingIds: new Set(astResult.findings.map((f) => f.astFindingId)),
       })
       if (floored.restored.length > 0) {
         effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }

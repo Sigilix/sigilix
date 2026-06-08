@@ -459,6 +459,9 @@ import {
   type ShadowRunResult,
 } from "./shadow-bakeoff-runner"
 import type { Env } from "../index"
+// SIG-318 (PR 0b): golden-output safety harness capture hook. Flag-gated
+// (OPENCLAW_GOLDEN_CAPTURE), off by default → byte-identical behavior.
+import { captureGolden } from "./ensemble-golden-capture"
 // SIG-138 Phase 2 — graph expansion.
 import { graphContextFor, blastRadiusByNamesFor } from "./repo-graph-client"
 // SIG-286 — graph-context body expansion (shadow-only in PR1).
@@ -4848,6 +4851,11 @@ export async function handlePrReviewEnsemble(
         specialists: synthInputVerdicts
           .filter((v) => v.verdict !== null)
           .map((v) => ({ role: v.role, findings: v.verdict!.findings })),
+        // SIG-351: verify `superseded_by_ast/<id>` suppressions against the REAL
+        // AST id set — same source SIG-314 uses for the kept-path hallucination
+        // guard (validateForSubmission's `astFindingIds`, below). A spoofed
+        // `<id>` is NOT honored, so the floor restores the finding (recall-safe).
+        astFindingIds: new Set(astResult.findings.map((f) => f.astFindingId)),
       })
       if (floored.restored.length > 0) {
         effectiveSynthVerdict = { ...effectiveSynthVerdict, findings: floored.findings }
@@ -4946,7 +4954,11 @@ export async function handlePrReviewEnsemble(
     // the ratio is positive (> THRESHOLD).
     const fullPrAddedLineText = buildAddedLineTextByLine(fullPrDiff)
     const testToSourceRatio = computeTestToSourceAddedRatio(fullPrAddedLineText)
-    const validated = validateForSubmission({
+    // SIG-318 (PR 0b): bind the validate args so the golden-capture hook below
+    // records the EXACT object passed to validateForSubmission (no behavior
+    // change — same object, same call). The hook is a no-op unless
+    // OPENCLAW_GOLDEN_CAPTURE === "on".
+    const validateArgs = {
       trustLedgerEnabled: trustLedgerMode !== "off",
       synthOutput: { verdict: effectiveSynthVerdict, provenance: effectiveSynthProvenance },
       reviewable,
@@ -5257,7 +5269,11 @@ export async function handlePrReviewEnsemble(
         }))
         args.validationSink?.push({ kind: "gate-rejection", gate: "security-usage", reason: info.reason, dropped: info.dropped, category: finding.category })
       },
-    })
+    } satisfies Parameters<typeof validateForSubmission>[0]
+    const validated = validateForSubmission(validateArgs)
+    // SIG-318 (PR 0b): golden-output capture seam #1 (validate). No-op unless
+    // OPENCLAW_GOLDEN_CAPTURE === "on"; off/unset → byte-identical behavior.
+    captureGolden(env, "validate", { args: validateArgs, output: validated })
     if (telemetry.synthesizer) {
       telemetry.synthesizer.provenance = validated.provenance
     }
@@ -6752,7 +6768,11 @@ export async function handlePrReviewEnsemble(
         ? primaryAffordance
         : prepareSubmissionAffordance({ env, owner, repo, prNumber, event })
 
-    const submissionBuild = buildReviewSubmissionWithMetadata({
+    // SIG-318 (PR 0b): bind the render args so the golden-capture hook below
+    // records the EXACT object passed to buildReviewSubmissionWithMetadata (no
+    // behavior change — same object, same call). No-op unless
+    // OPENCLAW_GOLDEN_CAPTURE === "on".
+    const submissionBuildArgs = {
       verdict: submissionVerdict,
       prAuthor: meta.user?.login ?? null,
       headSha,
@@ -6803,6 +6823,29 @@ export async function handlePrReviewEnsemble(
       // because the ensemble didn't pass `linkContext`, so real PR
       // reviews fell back to the back-compat inline-code anchor.
       linkContext: { owner, repo, headSha },
+    } satisfies Parameters<typeof buildReviewSubmissionWithMetadata>[0]
+    const submissionBuild = buildReviewSubmissionWithMetadata(submissionBuildArgs)
+    // SIG-318 (PR 0b): golden-output capture seam #2 (render). No-op unless
+    // OPENCLAW_GOLDEN_CAPTURE === "on"; off/unset → byte-identical behavior.
+    // `trace` = the in-scope decision values at this seam (Kimi's ask): specialist
+    // coverage, degraded-coverage + downgrade signals, consensus ranking, finding
+    // delta, verdict-gate override, trust-ledger mode, and the token ledger. These
+    // are diagnostic context, NOT asserted by the parity test.
+    captureGolden(env, "render", {
+      input: submissionBuildArgs,
+      output: submissionBuild,
+      trace: {
+        coverage,
+        degradedCoverage,
+        reviewIncomplete,
+        synthConfidence,
+        approvalReadiness,
+        deltaCounts,
+        reviewEventOverride,
+        trustLedgerMode,
+        consensusByIndex: filteredConsensusByIndex,
+        tokenUsageByModel,
+      },
     })
     const submission = submissionBuild.submission
     const bodyOnlyAnnotations = submissionBuild.bodyOnlyAnnotations

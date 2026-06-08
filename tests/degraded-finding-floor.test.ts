@@ -471,6 +471,7 @@ describe("applySynthSourceFindingFloor", () => {
       }],
       provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
       specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+      astFindingIds: new Set(["ast/cents-as-dollars/abc/12"]),
     })
     expect(r.findings).toHaveLength(1)
     expect(r.provenanceFindings).toHaveLength(1)
@@ -478,7 +479,7 @@ describe("applySynthSourceFindingFloor", () => {
     expect(r.restored).toHaveLength(0)
   })
 
-  it("does NOT re-inject a source finding explicitly superseded by an AST finding", () => {
+  it("does NOT re-inject a source finding explicitly superseded by a REAL AST finding", () => {
     const r = applySynthSourceFindingFloor({
       findings: [finding("ast/cents-as-dollars/abc/12", 4)],
       provenanceFindings: [{
@@ -489,9 +490,55 @@ describe("applySynthSourceFindingFloor", () => {
       }],
       provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
       specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+      astFindingIds: new Set(["ast/cents-as-dollars/abc/12"]),
     })
     expect(r.findings).toHaveLength(1)
     expect(r.restored).toHaveLength(0)
+  })
+
+  // SIG-351 recall hole: the synth must not be able to SUPPRESS a score>=4 source
+  // finding by citing a `superseded_by_ast/<id>` whose <id> is not a real AST
+  // finding. The floor verifies <id> against the AST id set (mirroring the
+  // SIG-314 kept-path guard) and RESTORES the finding when the supersession is
+  // spoofed. If the AST-id check is removed, this test fails (the spoof would
+  // silence the blocker).
+  it("RESTORES a score>=4 source finding when superseded_by_ast cites a non-existent AST id (spoof)", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/deadbee/99")],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+      // The cited id is NOT in the real AST set → the supersession is rejected.
+      astFindingIds: new Set(["ast/cents-as-dollars/abc/12"]),
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored.map((x) => x.id)).toEqual(["logic-0"])
+  })
+
+  it("keeps a score>=4 source SUPPRESSED when superseded_by_ast cites a real AST id (control)", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+      // The cited id IS in the real AST set → the supersession is honored.
+      astFindingIds: new Set(["ast/cents-as-dollars/abc/12"]),
+    })
+    expect(r.findings).toHaveLength(0)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("RESTORES when no AST id set is supplied and a superseded_by_ast drop is cited (fail-safe default)", () => {
+    // Omitting `astFindingIds` means no AST supersession can be verified, so a
+    // `superseded_by_ast/<id>` drop is never honored → the finding is restored.
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored.map((x) => x.id)).toEqual(["logic-0"])
   })
 
   it("restores a score>=4 source finding if the synth only labeled it duplicate without representing it", () => {

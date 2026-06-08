@@ -578,4 +578,73 @@ describe("model-attempt-completed prod-path wire-up (ARC-283 B1b)", () => {
       logSpy.mockRestore()
     }
   })
+
+  it("routes tests specialist timeout directly to fallback without a same-model retry", async () => {
+    vi.useFakeTimers()
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {})
+    const outerCtrl = new AbortController()
+    const slowChat = (args: { signal?: AbortSignal }) => new Promise((_, reject) => {
+      args.signal?.addEventListener(
+        "abort",
+        () => reject(new DOMException("The operation was aborted", "AbortError")),
+        { once: true },
+      )
+    })
+    try {
+      mockChat
+        .mockImplementationOnce(slowChat)
+        .mockResolvedValueOnce(ok(JSON.stringify({
+          summary: "tests fallback verdict",
+          confidence: 3,
+          findings: [],
+        })))
+      const resultPromise = runSpecialist({
+        role: "tests",
+        apiKey: "test-key",
+        systemPrompt: "system",
+        initialMessage: "user",
+        chatEnabled: "on",
+        signal: outerCtrl.signal,
+        perfCtx,
+      })
+      await vi.advanceTimersByTimeAsync(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs! + 1)
+      const primarySignal = mockChat.mock.calls[0]?.[0]?.signal
+      expect(primarySignal).toBeDefined()
+      expect(primarySignal?.aborted).toBe(true)
+      const result = await resultPromise
+      expect(result.verdict).not.toBeNull()
+      expect(result.modelUsed).toBe(SPECIALIST_CONFIGS.tests.fallback)
+      expect(result.attemptsUsed).toBe(2)
+      expect(mockChat).toHaveBeenCalledTimes(2)
+
+      const events = logSpy.mock.calls
+        .map((c) => {
+          try { return JSON.parse(c[0] as string) as Record<string, unknown> }
+          catch { return null }
+        })
+        .filter((e): e is Record<string, unknown> =>
+          e !== null
+          && e["event"] === "model-attempt-completed"
+          && e["role"] === "tests",
+        )
+      expect(events).toHaveLength(2)
+      expect(events.map((e) => e["attemptKind"])).toEqual(["primary", "fallback"])
+      expect(events.map((e) => e["model"])).toEqual([
+        SPECIALIST_CONFIGS.tests.primary,
+        SPECIALIST_CONFIGS.tests.fallback,
+      ])
+      expect(events[0]).toMatchObject({
+        outcome: "aborted",
+        timeoutMs: SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs,
+      })
+      expect(events[1]).toMatchObject({
+        outcome: "ok",
+        timeoutMs: SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs,
+      })
+    } finally {
+      outerCtrl.abort()
+      logSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
 })

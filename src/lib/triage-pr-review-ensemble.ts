@@ -1347,17 +1347,17 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // The M2.5 line was the ARC-292 (Codex) pick; M3 is the same family, newer.
     // Was `deepseek-v4-flash:cloud` before M2.5 (collided with security's primary).
     primary: "minimax-m3:cloud",
-    retries: 1,
+    // SIG-348: the valid SIG-346 K=12 showed timeout aborts were retrying the
+    // same MiniMax prompt/model, usually just burning another long attempt.
+    // Give MiniMax a larger first window, then route failures directly to the
+    // cross-provider fallback instead of spending the same-model retry.
+    retries: 0,
     // `deepseek-v4-pro:cloud` reused as fallback — cross-provider
     // from MiniMax, proven on reasoning tasks.
     fallback: "deepseek-v4-pro:cloud",
-    // SIG-345: during the SIG-344 K=12 tests-overfire baseline, MiniMax M3
-    // inputs were only ~7-8k tokens, but several real-path testing-evidence
-    // cases were still generating at the global 60s per-attempt cap. Use
-    // 110s: enough headroom for the tests prompt, while primary+retry+fallback
-    // preserves a 40s non-model overhead budget inside SPECIALIST_TIMEOUT_MS
-    // (3 * 110s = 330s <= 370s).
-    perAttemptTimeoutMs: 110_000,
+    // 160s keeps primary+fallback at 320s, leaving 50s of the 370s specialist
+    // wall for orchestration overhead while avoiding the old 110s retry churn.
+    perAttemptTimeoutMs: 160_000,
   },
 }
 

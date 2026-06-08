@@ -1512,13 +1512,16 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
   })
 
-  it("tests specialist runs minimax-m3:cloud + deepseek-v4-pro fallback", () => {
+  it("tests specialist runs minimax-m3:cloud + deepseek-v4-pro fallback with a 110s attempt cap", () => {
     // SIG-234: was `deepseek-v4-flash:cloud` (collided with security), then
     // MiniMax M2.5 (ARC-292). 2026-06-05: upgraded M2.5→M3 (founder-tested,
-    // Turbo-probed available + format-clean).
+    // Turbo-probed available + format-clean). SIG-344 K=12 tests-overfire
+    // baseline showed M3 often needs more than the global 60s cap on
+    // testing-evidence cases, so tests gets a 110s per-attempt cap.
     expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m3:cloud")
     expect(SPECIALIST_CONFIGS.tests.fallback).toBe("deepseek-v4-pro:cloud")
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(1)
+    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(110_000)
   })
 
   it("all five primaries are distinct again after the logic→v4-pro swap (2026-06-05)", () => {

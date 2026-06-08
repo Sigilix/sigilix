@@ -454,7 +454,8 @@ function setUnion(
 /**
  * Flatten a vectors record's `byPath` to a deduped array of chunk
  * ids. Used by `deleteRepoIndex` to call `deleteByIds` in batches of
- * up to 1000 (Cloudflare's documented Vectorize delete batch limit).
+ * up to 100 (Cloudflare's documented Vectorize `deleteByIds` cap;
+ * error 40007 "too many ids in payload; max id count is 100" above that).
  */
 export function flattenIds(vectors: RepoIndexVectorsV1): string[] {
   const set = new Set<string>()

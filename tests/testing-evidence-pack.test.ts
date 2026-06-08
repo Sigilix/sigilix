@@ -613,6 +613,7 @@ describe("SIG-349 testing focus hints", () => {
     const pack = mergeTestingFocusHints(base, new Map([
       ["src/lib/parse-kind.ts", new Map([
         [3, "  const kind = String(raw ?? \"task\").toLowerCase()"],
+        [4, "  const fallback = String(raw ?? `task`).toLowerCase()"],
       ])],
     ]))
 
@@ -627,6 +628,7 @@ describe("SIG-349 testing focus hints", () => {
     expect(block).toContain("pointers only, not findings")
     expect(block).toContain("src/lib/parse-kind.ts:3")
     expect(block).toContain("parser-coercion")
+    expect(block).toContain("`` const fallback = String(raw ?? `task`).toLowerCase() ``")
     expect(block).toContain("A customer-visible testing finding still needs the citation fields below")
     expect(block).toContain("Citation requirements")
     expect(block).toContain("siblingMapping:src/lib/parse-kind.ts->NONE")

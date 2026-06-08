@@ -508,6 +508,13 @@ function testingFocusToken(line: string): string {
   return text.length > 160 ? text.slice(0, 157) + "..." : text
 }
 
+function inlineCode(text: string): string {
+  const runs = text.match(/`+/g)?.map((m) => m.length) ?? []
+  const longestRun = Math.max(0, ...runs)
+  const fence = "`".repeat(longestRun + 1)
+  return longestRun === 0 ? `${fence}${text}${fence}` : `${fence} ${text} ${fence}`
+}
+
 /**
  * SIG-349: merge deterministic changed-line focus hints into the pack.
  *
@@ -625,7 +632,7 @@ export function renderTestingEvidenceBlock(
       "Use these as recall targets when comparing changed code to cited tests. A customer-visible testing finding still needs the citation fields below.",
     )
     for (const h of testingFocusHints) {
-      lines.push(`- \`${h.source}:${h.line}\` ${h.kind} — \`${h.token}\``)
+      lines.push(`- \`${h.source}:${h.line}\` ${h.kind} — ${inlineCode(h.token)}`)
     }
     lines.push("")
   }

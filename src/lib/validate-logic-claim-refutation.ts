@@ -251,6 +251,12 @@ function refutesControlFlow(fn: Node, line: number, finding: PrReviewFinding, li
     if (!prev || prev.type !== "IfStatement") continue
     if (prev.alternate) continue // simple guard only (no else)
     if (!terminatesUnconditionally(prev.consequent)) continue
+    // SIG-328 await-awareness: a guard whose condition relies on an UN-awaited
+    // call is unprovable — a missing `await` (a Promise used as a boolean is
+    // always truthy/falsy) makes the guard dead, which IS the bug we must not
+    // refute (`if (!svc.isAdmin(req)) return 403` without await → auth bypass).
+    // Fail open; an awaited call in the condition is effective and still refutes.
+    if (guardTestHasUnawaitedCall(prev.test)) continue
     // subject binding: the finding must complain about an identifier in the
     // cited statement or the guard (so we don't refute via a coincidental guard).
     const citedStmt = block[citedIdx]
@@ -318,6 +324,29 @@ function containsConflictingCall(node: Node, findingIds: Set<string>): boolean {
     }
   })
   return hit
+}
+
+/**
+ * SIG-328 await-awareness: TRUE when `test` (a guard condition) contains a
+ * CallExpression that is NOT the argument of an `await`. The AST cannot prove a
+ * callee is synchronous, and a Promise-returning call used un-awaited in a
+ * boolean guard (`if (!svc.isAdmin(req)) return 403`) is always truthy/falsy —
+ * the guard is dead and the missing `await` is the bug. So such a guard cannot
+ * be trusted to refute a "runs unconditionally" claim; the caller fails open. An
+ * awaited call (`await svc.isAdmin(req)`) is effective and does not trip this.
+ */
+function guardTestHasUnawaitedCall(test: Node): boolean {
+  const awaitedCalls = new Set<Node>()
+  eachNode(test, (n) => {
+    if (n.type === "AwaitExpression" && n.argument?.type === "CallExpression") {
+      awaitedCalls.add(n.argument)
+    }
+  })
+  let found = false
+  eachNode(test, (n) => {
+    if (!found && n.type === "CallExpression" && !awaitedCalls.has(n)) found = true
+  })
+  return found
 }
 
 /**

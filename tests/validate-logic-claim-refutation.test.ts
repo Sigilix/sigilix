@@ -158,6 +158,47 @@ describe("control-flow recall-safety (KEEP: a real bug whose claim is true/unpro
     expect(evaluateLogicClaimRefutation(f, ctx("src/x.ts", SRC)).keep).toBe(true)
   })
 
+  it("KEEPS a missing-await auth guard — un-awaited call makes the guard dead → real bypass (SIG-328)", () => {
+    // Identical to the refuted AUTH shape above, but the guard call is NOT
+    // awaited: `!svc.isAdmin(req)` is `!Promise` === always false, so the 403
+    // never fires and next() truly runs unconditionally. The guard is dead — the
+    // missing await IS the bug — so the gate must NOT refute it (the prod eval
+    // showed this case regressing 6/12 → 1/12 recall when SIG-328 was enforced).
+    const SRC = `export function requireAdmin(svc: AuthService) {
+  return async (req: Req, res: Res, next: Next) => {
+    if (!svc.isAdmin(req.user)) {
+      return res.status(403).end()
+    }
+    next()
+  }
+}`
+    const f = finding({
+      path: "src/middleware/auth.ts",
+      line: 6,
+      headline: "`next()` runs unconditionally — auth bypass from a missing await",
+      body: "`svc.isAdmin(req.user)` returns a Promise; without `await`, `!Promise` is always false, so the 403 guard never triggers and next() always runs.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", SRC)).keep).toBe(true)
+  })
+
+  it("still REFUTES the same shape once the guard call is awaited (await → effective guard)", () => {
+    const SRC = `export function requireAdmin(svc: AuthService) {
+  return async (req: Req, res: Res, next: Next) => {
+    if (!(await svc.isAdmin(req.user))) {
+      return res.status(403).end()
+    }
+    next()
+  }
+}`
+    const f = finding({
+      path: "src/middleware/auth.ts",
+      line: 6,
+      headline: "`next()` runs unconditionally after the 403 response",
+      body: "next() is not inside an else block.",
+    })
+    expect(evaluateLogicClaimRefutation(f, ctx("src/middleware/auth.ts", SRC)).keep).toBe(false)
+  })
+
   it("KEEPS when the terminating guard repeats the same cited tail action", () => {
     const SRC = `export function h(res, x, a, b) {
   if (x) {

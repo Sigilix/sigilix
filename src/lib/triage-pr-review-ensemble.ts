@@ -524,6 +524,7 @@ import {
   computeFindingDelta,
 } from "./ensemble/domain/findings"
 import type { PrReviewVerdictWithIds } from "./ensemble/domain/findings"
+import { parseEnsembleConfig } from "./ensemble/config"
 export {
   assignStableFindingIds,
   computeConsensusRanking,
@@ -2867,7 +2868,13 @@ export async function handlePrReviewEnsemble(
     // promoting. The rule is structurally P2-capped (clampAstEmitScores), so the
     // residual risk we're measuring is middleware-only-authz false positives,
     // never a P0/P1.
-    const authzIdorMode = (env.OPENCLAW_AUTHZ_IDOR_SCAN ?? "off").trim().toLowerCase()
+    // SIG-318: env-derived settings parsed ONCE into a typed EnsembleConfig
+    // (the AST security-scan modes for now; the Config grows per cluster and this
+    // parse consolidates to the orchestrator edge as later clusters migrate). The
+    // scanner gates below read config.astScanModes.* instead of env.OPENCLAW_*,
+    // removing the inline env-reading traps.
+    const ensembleConfig = parseEnsembleConfig(env)
+    const authzIdorMode = ensembleConfig.astScanModes.authzIdor
     if (authzIdorMode !== "post") {
       const authzEmits = astResult.findings.filter((f) => f.ruleId === "no-unauthorized-object-lookup")
       if (authzEmits.length > 0) {
@@ -2891,7 +2898,7 @@ export async function handlePrReviewEnsemble(
     // its emits reach synth/post ONLY in `post`. `off` (default) strips silently;
     // `shadow` strips-but-logs a rollup so we can read the firing + FP rate on
     // dogfood before promoting. Structurally P2-capped (clampAstEmitScores).
-    const weakRandomMode = (env.OPENCLAW_WEAK_RANDOM_SCAN ?? "off").trim().toLowerCase()
+    const weakRandomMode = ensembleConfig.astScanModes.weakRandom
     if (weakRandomMode !== "post") {
       const weakRandomEmits = astResult.findings.filter((f) => f.ruleId === "no-insecure-random-token")
       if (weakRandomEmits.length > 0) {
@@ -2911,7 +2918,7 @@ export async function handlePrReviewEnsemble(
     // Shadow-first gating for the deterministic open-redirect floor
     // (no-open-redirect, CWE-601) — same off/shadow/post contract. Default off;
     // shadow strips-but-logs the firing + FP rate on dogfood before promoting.
-    const openRedirectMode = (env.OPENCLAW_OPEN_REDIRECT_SCAN ?? "off").trim().toLowerCase()
+    const openRedirectMode = ensembleConfig.astScanModes.openRedirect
     if (openRedirectMode !== "post") {
       const openRedirectEmits = astResult.findings.filter((f) => f.ruleId === "no-open-redirect")
       if (openRedirectEmits.length > 0) {
@@ -2930,7 +2937,7 @@ export async function handlePrReviewEnsemble(
     // Shadow-first gating for the deterministic SSRF floor (no-ssrf, CWE-918) —
     // same off/shadow/post contract. Default off; shadow strips-but-logs the
     // firing + FP rate on dogfood before promoting.
-    const ssrfMode = (env.OPENCLAW_SSRF_SCAN ?? "off").trim().toLowerCase()
+    const ssrfMode = ensembleConfig.astScanModes.ssrf
     if (ssrfMode !== "post") {
       const ssrfEmits = astResult.findings.filter((f) => f.ruleId === "no-ssrf")
       if (ssrfEmits.length > 0) {
@@ -2948,7 +2955,7 @@ export async function handlePrReviewEnsemble(
     }
     // Shadow-first gating for the deterministic path-traversal floor
     // (no-path-traversal, CWE-22) — same off/shadow/post contract.
-    const pathTraversalMode = (env.OPENCLAW_PATH_TRAVERSAL_SCAN ?? "off").trim().toLowerCase()
+    const pathTraversalMode = ensembleConfig.astScanModes.pathTraversal
     const pathTraversalStripped = applyAstScanGate(astResult, "no-path-traversal", pathTraversalMode)
     if (pathTraversalMode === "shadow" && pathTraversalStripped.length > 0) {
       console.log(JSON.stringify({
@@ -2960,7 +2967,7 @@ export async function handlePrReviewEnsemble(
     }
     // Shadow-first gating for the deterministic SQL-injection floor
     // (no-sql-injection, CWE-89) — same off/shadow/post contract.
-    const sqlInjectionMode = (env.OPENCLAW_SQL_INJECTION_SCAN ?? "off").trim().toLowerCase()
+    const sqlInjectionMode = ensembleConfig.astScanModes.sqlInjection
     const sqlInjectionStripped = applyAstScanGate(astResult, "no-sql-injection", sqlInjectionMode)
     if (sqlInjectionMode === "shadow" && sqlInjectionStripped.length > 0) {
       console.log(JSON.stringify({
@@ -2971,7 +2978,7 @@ export async function handlePrReviewEnsemble(
       }))
     }
     // Shadow-first gating for the deterministic SSTI floor (no-ssti, CWE-1336).
-    const sstiMode = (env.OPENCLAW_SSTI_SCAN ?? "off").trim().toLowerCase()
+    const sstiMode = ensembleConfig.astScanModes.ssti
     const sstiStripped = applyAstScanGate(astResult, "no-ssti", sstiMode)
     if (sstiMode === "shadow" && sstiStripped.length > 0) {
       console.log(JSON.stringify({
@@ -2983,7 +2990,7 @@ export async function handlePrReviewEnsemble(
     }
     // Shadow-first gating for the deterministic NoSQL-injection floor
     // (no-nosql-injection, CWE-943) — same off/shadow/post contract.
-    const nosqlInjectionMode = (env.OPENCLAW_NOSQL_INJECTION_SCAN ?? "off").trim().toLowerCase()
+    const nosqlInjectionMode = ensembleConfig.astScanModes.nosqlInjection
     const nosqlInjectionStripped = applyAstScanGate(astResult, "no-nosql-injection", nosqlInjectionMode)
     if (nosqlInjectionMode === "shadow" && nosqlInjectionStripped.length > 0) {
       console.log(JSON.stringify({
@@ -2995,7 +3002,7 @@ export async function handlePrReviewEnsemble(
     }
     // Shadow-first gating for the deterministic prototype-pollution floor
     // (no-prototype-pollution, CWE-1321) — same off/shadow/post contract.
-    const protoPollutionMode = (env.OPENCLAW_PROTO_POLLUTION_SCAN ?? "off").trim().toLowerCase()
+    const protoPollutionMode = ensembleConfig.astScanModes.protoPollution
     const protoPollutionStripped = applyAstScanGate(astResult, "no-prototype-pollution", protoPollutionMode)
     if (protoPollutionMode === "shadow" && protoPollutionStripped.length > 0) {
       console.log(JSON.stringify({
@@ -3007,7 +3014,7 @@ export async function handlePrReviewEnsemble(
     }
     // Shadow-first gating for the deterministic XXE floor
     // (no-xxe, CWE-611) — same off/shadow/post contract.
-    const xxeMode = (env.OPENCLAW_XXE_SCAN ?? "off").trim().toLowerCase()
+    const xxeMode = ensembleConfig.astScanModes.xxe
     const xxeStripped = applyAstScanGate(astResult, "no-xxe", xxeMode)
     if (xxeMode === "shadow" && xxeStripped.length > 0) {
       console.log(JSON.stringify({

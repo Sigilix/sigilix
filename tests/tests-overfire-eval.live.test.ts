@@ -19,8 +19,14 @@ import {
   type TestsScoredFinding,
 } from "./tests-overfire-corpus"
 import { runShadowSpecialist } from "../src/lib/shadow-bakeoff-runner"
+import { buildAddedLineTextByLine, buildDeletedLineTextByLine } from "../src/lib/ast-rules/diff-filter"
 import { SPECIALIST_CONFIGS, SPECIALIST_TIMEOUT_MS } from "../src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
+import {
+  mergeTestingFocusHints,
+  renderTestingEvidenceBlock,
+  type InspectedTestFileFetchResult,
+} from "../src/lib/testing-evidence-pack"
 
 const API_KEY = process.env.OLLAMA_API_KEY
 // The production tests specialist can spend 110s each on primary, retry, and
@@ -61,6 +67,25 @@ function rawFindingsFrom(result: Awaited<ReturnType<typeof runShadowSpecialist>>
   })
 }
 
+function testingEvidenceBlockForCase(c: TestsOverfireCase): string {
+  if (c.testingEvidenceBlock.length === 0) return ""
+
+  const contentByPath = { ...(c.inspectedTestContentByPath ?? {}) }
+  const fetchResult: InspectedTestFileFetchResult = {
+    contentByPath,
+    failedPaths: [],
+    budgetOmittedPaths: [],
+    truncatedPaths: [],
+    totalChars: Object.values(contentByPath).reduce((sum, body) => sum + body.length, 0),
+  }
+  const pack = mergeTestingFocusHints(
+    c.testingEvidence,
+    buildAddedLineTextByLine(c.diff),
+    buildDeletedLineTextByLine(c.diff),
+  )
+  return renderTestingEvidenceBlock(pack, fetchResult) || c.testingEvidenceBlock
+}
+
 async function runCase(
   c: TestsOverfireCase,
   apiKey: string,
@@ -76,11 +101,12 @@ async function runCase(
     diff: c.diff,
     retrievalSnapshot: "",
     namespace: "eval",
-    ...(c.testingEvidenceBlock.length > 0 ? { testingEvidenceBlock: c.testingEvidenceBlock } : {}),
+    ...(c.testingEvidenceBlock.length > 0 ? { testingEvidenceBlock: testingEvidenceBlockForCase(c) } : {}),
   })
   let rawFindings: TestsScoredFinding[] = []
   let errored = false
   let tag = ""
+  let shadowResult: Awaited<ReturnType<typeof runShadowSpecialist>> | undefined
   try {
     const r = await runShadowSpecialist({
       role: "tests",
@@ -92,6 +118,7 @@ async function runCase(
       signal: AbortSignal.timeout(PER_CASE_TIMEOUT_MS),
       perfCtx: { owner: "eval", repo: "eval", prNumber: 0, headSha: "0".repeat(40) },
     })
+    shadowResult = r
     rawFindings = rawFindingsFrom(r)
     if (!r.verdictOk || r.failureReason) errored = true
     tag = `${rawFindings.length}f - ${r.modelUsed} - ${r.elapsedMs}ms${r.failureReason ? ` - FAIL:${r.failureReason}` : ""}`
@@ -105,7 +132,10 @@ async function runCase(
   const rawMark = c.label === "vuln" ? (raw.caught ? "raw caught" : "raw MISSED") : raw.falsePositive ? "raw FP" : "raw clean"
   const gateMark = c.label === "vuln" ? (postGate.caught ? "gate caught" : "gate MISSED") : postGate.falsePositive ? "gate FP" : "gate clean"
   console.log(`  [${c.label.padEnd(4)}] ${c.id.padEnd(36)} ${rawMark.padEnd(10)} / ${gateMark.padEnd(11)} (${tag})`)
-  if (!errored && process.env.TESTS_OVERFIRE_DEBUG && (raw.falsePositive || (c.label === "vuln" && !raw.caught))) {
+  if (errored && process.env.TESTS_OVERFIRE_DEBUG && shadowResult?.failureRawAnswer) {
+    console.log(`      raw-error: ${shadowResult.failureRawAnswer.slice(0, 1200).replace(/\s+/g, " ")}`)
+  }
+  if (!errored && process.env.TESTS_OVERFIRE_DEBUG && (raw.falsePositive || (c.label === "vuln" && (!raw.caught || !postGate.caught)))) {
     for (const f of rawFindings) {
       console.log(`      -> score=${f.score} ${f.category ?? "?"} ${f.path}:${f.line} - ${f.headline ?? ""}${f.body ? ` :: ${String(f.body).slice(0, 200)}` : ""}`)
     }

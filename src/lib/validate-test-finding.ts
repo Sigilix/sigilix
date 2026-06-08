@@ -67,6 +67,7 @@ export type TestFindingDecision =
 
 export type TestDropReason =
   | "missing-path" // sev>=4 testing finding with no concrete path to anchor
+  | "unbacked-source-coverage-no-evidence" // sev>=4 source coverage claim when no testing evidence pack exists
   | "uncited-missing-coverage" // "source lacks tests" claim not backed by a real ->NONE mapping for finding.path
   | "vague-insufficient-test" // "tests inadequate" claim that names no concrete source/API/branch
   | "glue-covered-by-helper" // SIG-128 / SIG-166-1: missing-coverage (->NONE) OR insufficient-test finding on a file whose changed logic fully delegates to same-PR tested helpers
@@ -211,7 +212,7 @@ function citesCoverageGapClass(finding: PrReviewFinding): boolean {
 /**
  * Does the finding cite at least one REAL inspected test file (via the
  * `inspectedTestFiles` array OR an `inspectedTestFile:<path>`
- * evidenceRef)? This is the insufficient-test admissibility signal: the
+ * evidenceRef)? This is one insufficient-test admissibility signal: the
  * specialist actually read a test file before judging it inadequate.
  */
 function citesRealInspectedTest(finding: PrReviewFinding, pack: TestingEvidencePack): boolean {
@@ -228,6 +229,24 @@ function citesRealInspectedTest(finding: PrReviewFinding, pack: TestingEvidenceP
       if (!trimmed.startsWith("inspectedTestFile:")) continue
       if (realInspected.has(trimmed.slice("inspectedTestFile:".length).trim())) return true
     }
+  }
+  return false
+}
+
+function citesRealCoveredSiblingMapping(finding: PrReviewFinding, pack: TestingEvidencePack): boolean {
+  if (!Array.isArray(finding.evidenceRefs)) return false
+  const realMappingBySource = new Map<string, string>()
+  for (const m of pack.siblingMappings) {
+    if (m.test !== null) realMappingBySource.set(m.source, m.test)
+  }
+  const findingPath = typeof finding.path === "string" ? finding.path.trim() : ""
+  for (const ref of finding.evidenceRefs) {
+    if (typeof ref !== "string") continue
+    const parsed = parseSiblingMappingRef(ref)
+    if (!parsed) continue
+    if (parsed.source !== findingPath) continue
+    const realTest = realMappingBySource.get(parsed.source)
+    if (realTest !== undefined && parsed.arrowValue === realTest) return true
   }
   return false
 }
@@ -259,13 +278,18 @@ function citesSiblingMappingClass(finding: PrReviewFinding): boolean {
   })
 }
 
+function isLikelyTestPath(path: string): boolean {
+  return /(^|\/)(tests?|__tests__)\/|(?:^|\/)[^/]+\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(path)
+}
+
 /**
  * CLASS detection (vs admissibility): does the finding cite an
  * inspected-test signal AT ALL (a non-empty `inspectedTestFiles` array
  * OR an `inspectedTestFile:<path>` evidenceRef), regardless of whether
  * the cited path is real? A finding citing an inspected test is making
  * an INSUFFICIENT-TEST claim; `citesRealInspectedTest` then decides
- * admissibility, and `namesConcreteTarget` the specificity.
+ * whether that inspected-test citation is real, and `namesConcreteTarget`
+ * the specificity.
  */
 function citesInspectedClass(finding: PrReviewFinding): boolean {
   if (Array.isArray(finding.inspectedTestFiles)) {
@@ -279,6 +303,15 @@ function citesInspectedClass(finding: PrReviewFinding): boolean {
     )
   }
   return false
+}
+
+function citesCoveredSiblingMappingClass(finding: PrReviewFinding): boolean {
+  if (!Array.isArray(finding.evidenceRefs)) return false
+  return finding.evidenceRefs.some((ref) => {
+    if (typeof ref !== "string") return false
+    const parsed = parseSiblingMappingRef(ref)
+    return parsed !== null && parsed.arrowValue !== "NONE"
+  })
 }
 
 /**
@@ -318,6 +351,52 @@ function namesConcreteTarget(finding: PrReviewFinding): boolean {
     return true
   }
   return false
+}
+
+function claimsSpeculativeConstantIntent(finding: PrReviewFinding): boolean {
+  const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
+  return (
+    /\b(?:signal(?:s|ing|ed)?|suggest(?:s|ing|ed)?|indicat(?:es|ing|ed)?|implies|intent|future|eventually|prepar(?:es|ing|ed)?)\b/i.test(text)
+    && /\b(?:const(?:ant)?|default value|delayMs|timeoutMs|backoff delay|retry delay)\b/i.test(text)
+  )
+}
+
+function namesConcreteBranchOrErrorPath(finding: PrReviewFinding): boolean {
+  const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
+  return (
+    /\b(?:branch|error path|failure path|failure case|rejection|throw|throws|thrown|catch|rejects?|exception|guard|negative case|null case|undefined case|boundary case|overflow case|race case|timeout branch)\b/i.test(text)
+    || /`[^`]*(?:if\s*\(|throw|catch|reject|timeout|null|undefined)[^`]*`/i.test(text)
+  )
+}
+
+function claimsRetryDelayWithoutConcreteExecutionPath(finding: PrReviewFinding): boolean {
+  const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
+  return (
+    /\b(?:backoff|delayMs|timeoutMs|delay|timeout)\b/i.test(text)
+    && /\b(?:happy path|success(?:ful)? path|successful attempt|only asserts|only covers|only exercises|does not cover|doesn't cover|missing coverage|needs coverage)\b/i.test(text)
+    && !namesConcreteBranchOrErrorPath(finding)
+  )
+}
+
+function claimsAbsentRetryImplementationAsTestGap(finding: PrReviewFinding): boolean {
+  const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
+  const retryConcept = /\b(?:retry|backoff|fallback)\b/i.test(text)
+  if (!retryConcept) return false
+  const nameImpliesBehavior = /\b(?:function|method|api)\s+name\s+(?:implies|suggests|signals)\b/i.test(text)
+  const nameOrUtilityOnly =
+    /\bnamed\s+`?retry/i.test(text) ||
+    /\bexports?\s+(?:a\s+)?(?:promise-based\s+)?retry\s+(?:utility|function|helper)\b/i.test(text) ||
+    /\bfunction\s+is\s+named\s+`?retry/i.test(text)
+  const absentBehavior =
+    /\bno\s+retry\s+attempts\b/i.test(text) ||
+    /\bwithout\s+(?:any\s+)?(?:retry|failure|backoff|fallback)[^.]{0,80}\bbehavior\s+tested\b/i.test(text) ||
+    /\bno\s+`?catch`?\/failure\s+or\s+backoff\s+behavior\b/i.test(text)
+  if ((nameImpliesBehavior || nameOrUtilityOnly) && absentBehavior) return true
+  return (
+    nameImpliesBehavior ||
+    /\b(?:no|without|lacks?)\s+(?:retry|backoff|fallback)\s+(?:loop|logic|behavior|behaviour|implementation)\b/i.test(text) ||
+    /\bstill\s+(?:contains|has)\s+no\s+(?:retry|backoff|fallback)\b/i.test(text)
+  )
 }
 
 /**
@@ -417,6 +496,57 @@ function isCrossReferencedInSiblingTest(
   return false
 }
 
+const ERROR_PATH_ASSERTION_RE = /\b(?:toThrow|toThrowError|rejects|toReject|catch|throws?)\b/
+const ERROR_TOKEN_RE = /\b[A-Z][A-Za-z0-9_$]*(?:Error|Exception)\b/g
+const QUOTED_ERROR_TOKEN_RE = /(["'`])([^"'`\n]{4,120})\1/g
+
+function normalizeErrorPathToken(token: string): string | null {
+  const t = token.trim().replace(/\s+/g, " ")
+  if (t.length < 4) return null
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(t) && !/(?:Error|Exception)$/i.test(t)) return null
+  if (/^(?:error branch|error path|failure path|rejection path|exception branch)$/i.test(t)) return null
+  return t.toLowerCase()
+}
+
+function extractConcreteErrorPathTokens(finding: PrReviewFinding): string[] {
+  const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
+  const out = new Set<string>()
+  for (const m of text.matchAll(ERROR_TOKEN_RE)) {
+    const token = normalizeErrorPathToken(m[0] ?? "")
+    if (token) out.add(token)
+  }
+  for (const m of text.matchAll(QUOTED_ERROR_TOKEN_RE)) {
+    const token = normalizeErrorPathToken(m[2] ?? "")
+    if (token) out.add(token)
+  }
+  return [...out]
+}
+
+function concreteBranchOrErrorPathAlreadyAssertedInSiblingTest(
+  finding: PrReviewFinding,
+  pack: TestingEvidencePack,
+): boolean {
+  const contentByPath = pack.inspectedTestContentByPath
+  if (!contentByPath) return false
+  const text = `${finding.headline} ${finding.body} ${finding.testGap ?? ""}`
+  if (!/\b(?:error path|error branch|failure path|failure branch|failure case|rejection|rejection branch|throw|throws|thrown|throw branch|catch|rejects?|exception|exception branch)\b/i.test(text)) {
+    return false
+  }
+  const tokens = extractConcreteErrorPathTokens(finding)
+  if (tokens.length === 0) return false
+  const findingPath = typeof finding.path === "string" ? finding.path.trim() : ""
+  if (findingPath.length === 0) return false
+  const changed = new Set(pack.testFilesChanged)
+  for (const m of pack.siblingMappings) {
+    if (m.source !== findingPath || typeof m.test !== "string" || !changed.has(m.test)) continue
+    const body = contentByPath[m.test]
+    if (typeof body !== "string" || body.length === 0) continue
+    const normalizedBody = body.toLowerCase()
+    if (ERROR_PATH_ASSERTION_RE.test(body) && tokens.some((token) => normalizedBody.includes(token))) return true
+  }
+  return false
+}
+
 /**
  * Pure decision for ONE testing-applicable finding. The caller has
  * already confirmed `finding.category === "testing"` upstream context
@@ -469,12 +599,9 @@ export function evaluateTestFinding(
   if (finding.category !== "testing") return { keep: true }
   if (finding.score < 4) return { keep: true }
 
-  // No pack to cross-check against (pure docs PR, or caller hasn't
-  // threaded the pack) → no evidence to gate on; keep (mirrors the
-  // SIG-113 "absent/empty pack" branch + back-compat for the staged
-  // rollout). A coverage gap can only exist on a changed source line, so
-  // an empty pack also implies no relevant gaps — the keep is correct.
-  if (!pack || (pack.sourceFilesChanged.length === 0 && pack.testFilesChanged.length === 0)) {
+  // No pack to cross-check against (legacy caller hasn't threaded it) →
+  // no evidence to gate on; keep for back-compat.
+  if (!pack) {
     return { keep: true }
   }
 
@@ -498,13 +625,27 @@ export function evaluateTestFinding(
     return { keep: false, reason: "missing-path" }
   }
 
+  // SIG-349 / V4 Flash calibration: when the testing evidence pack is
+  // empty, there is no authoritative source→test map or inspected test
+  // content. A score>=4 source-coverage finding in that state is an
+  // unbacked "no tests/no coverage" claim, often a duplicate security or
+  // performance bug wearing a testing label. Changed test-file quality
+  // findings remain admissible, but source coverage claims must wait for
+  // real testing evidence.
+  if (pack.sourceFilesChanged.length === 0 && pack.testFilesChanged.length === 0) {
+    return isLikelyTestPath(finding.path.trim())
+      ? { keep: true }
+      : { keep: false, reason: "unbacked-source-coverage-no-evidence" }
+  }
+
   // Classify by which citation KIND the finding leans on — independent
   // of whether that citation resolves. A `siblingMapping:` ref is a
-  // MISSING-COVERAGE claim; an inspected test is an INSUFFICIENT-TEST
-  // claim. The resolve / specificity checks below decide admissibility
-  // WITHIN the chosen class.
+  // MISSING-COVERAGE claim only when it points to `->NONE`; a covered
+  // `siblingMapping:<source>-><test>` or inspected-test citation is an
+  // INSUFFICIENT-TEST claim. The resolve / specificity checks below
+  // decide admissibility WITHIN the chosen class.
   //
-  const insufficientClass = citesInspectedClass(finding)
+  const insufficientClass = citesInspectedClass(finding) || citesCoveredSiblingMappingClass(finding)
   const siblingMissingClass = citesSiblingMappingClass(finding)
   // Codex review (HIGH): an UNRESOLVED `coverageGap:` ref (a real one for
   // the finding's path already kept at :381) promotes to missing-class
@@ -538,6 +679,10 @@ export function evaluateTestFinding(
     }
   }
 
+  if (claimsAbsentRetryImplementationAsTestGap(finding)) {
+    return { keep: false, reason: "vague-insufficient-test" }
+  }
+
   // AMBIGUOUS: cites BOTH kinds, or NEITHER. Prefer keep (the FP-safe
   // crux) — the SIG-113 gate already required SOME real citation, and a
   // finding that straddles both classes (or fits neither cleanly) is not
@@ -555,28 +700,35 @@ export function evaluateTestFinding(
       : { keep: false, reason: "uncited-missing-coverage" }
   }
 
-  // Insufficient-test claim. Require (a) a real inspected test was read
-  // AND (b) the body/headline names a concrete source/API/branch — not a
-  // bare "needs more tests" nudge. A finding that names a concrete target
+  // Insufficient-test claim. Require (a) a real inspected test or covered
+  // sibling mapping was cited AND (b) the body/headline names a concrete
+  // source/API/branch — not a bare "needs more tests" nudge.
+  // A finding that names a concrete target
   // keeps even if it ALSO uses vague phrasing (`namesConcreteTarget` is
   // the positive signal). When the inspected citation doesn't resolve OR
   // nothing concrete is named, it's the vague-insufficient-test FP shape.
-  if (citesRealInspectedTest(finding, pack) && namesConcreteTarget(finding)) {
+  if (
+    (citesRealInspectedTest(finding, pack) || citesRealCoveredSiblingMapping(finding, pack))
+    && namesConcreteTarget(finding)
+    && (!claimsSpeculativeConstantIntent(finding) || namesConcreteBranchOrErrorPath(finding))
+    && !claimsRetryDelayWithoutConcreteExecutionPath(finding)
+  ) {
     // SIG-347 (AC #2): the specialist read a real test AND named a concrete
     // target — but if that target is already referenced by an in-diff sibling
     // test, the "existing tests are insufficient" claim is the PR #144
     // over-fire shape. Cross-check the fetched test body before keeping.
-    //
-    // ACCEPTED RECALL TRADE-OFF: "referenced by the test" is treated as a
-    // strong coverage signal, so a genuinely-uncovered BRANCH of an otherwise-
-    // referenced symbol can be suppressed. Three belts bound the downside:
-    // (1) headline-scoped, concrete-identifier extraction (passing body prose
-    // never triggers it); (2) this is NOT a hard delete — the call site DEMOTES
-    // a failed-gate testing finding to a non-blocking body note in enforce
-    // (residual real gap stays visible), and keeps it inline in shadow;
-    // (3) shadow-first via OPENCLAW_TESTS_VALIDATOR_MODE (same flag as the
-    // other tests-gate reasons) so it never drops in prod until an explicit flip.
-    if (isCrossReferencedInSiblingTest(finding, pack)) {
+    // A finding that names a concrete branch/error/rejection path is not
+    // refuted merely because the test mentions the same exported function on
+    // a happy path. It can only be demoted when the sibling test also shows an
+    // error assertion and shares a specific error/path token from the finding.
+    if (
+      citesRealInspectedTest(finding, pack) &&
+      (
+        !namesConcreteBranchOrErrorPath(finding) ||
+        concreteBranchOrErrorPathAlreadyAssertedInSiblingTest(finding, pack)
+      ) &&
+      isCrossReferencedInSiblingTest(finding, pack)
+    ) {
       return { keep: false, reason: "cross-referenced-in-sibling-test" }
     }
     return { keep: true }

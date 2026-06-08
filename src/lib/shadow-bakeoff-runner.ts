@@ -68,6 +68,8 @@ export interface ShadowRunResult {
   elapsedMs: number
   /** Failure reason from runWithRetryAndFallback, or undefined on success. */
   failureReason?: string
+  /** Raw model output on parse failure; diagnostics only. */
+  failureRawAnswer?: string
 }
 
 export interface SpecialistShadowArgs {
@@ -197,6 +199,7 @@ export async function runShadowSpecialist(args: SpecialistShadowArgs): Promise<S
       : [],
     elapsedMs: outcome.elapsedMs,
     ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+    ...(outcome.failureRawAnswer !== undefined ? { failureRawAnswer: outcome.failureRawAnswer } : {}),
   }
 }
 
@@ -273,5 +276,6 @@ export async function runShadowSynth(args: SynthShadowArgs): Promise<ShadowRunRe
       : [],
     elapsedMs: outcome.elapsedMs,
     ...(outcome.failureReason !== undefined ? { failureReason: outcome.failureReason } : {}),
+    ...(outcome.failureRawAnswer !== undefined ? { failureRawAnswer: outcome.failureRawAnswer } : {}),
   }
 }

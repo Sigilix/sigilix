@@ -77,7 +77,12 @@ import {
   type DynamicReviewEvidencePack,
 } from "./review-evidence-pack"
 import { embedText } from "./embeddings"
-import { buildAddedLineTextByLine, buildChangedLines, type ChangedLines } from "./ast-rules/diff-filter"
+import {
+  buildAddedLineTextByLine,
+  buildChangedLines,
+  buildDeletedLineTextByLine,
+  type ChangedLines,
+} from "./ast-rules/diff-filter"
 import {
   computeTestToSourceAddedRatio,
   dampTestingScoreForRatio,
@@ -132,6 +137,7 @@ import {
   filterTestingEvidenceForSuppressedMissingCoverage,
   mergeInspectedTestFileContents,
   mergeHelperCoverage,
+  mergeTestingFocusHints,
   renderTestingEvidenceBlock,
   type TestingEvidencePack,
   type InspectedTestFileFetchResult,
@@ -1240,8 +1246,8 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
   // `glm-4.6:cloud`, and `deepseek-v3.1:671b-cloud` ALL wrap output
   // in ```json``` markdown fences and are NOT used). The slow logic
   // primary (deepseek-v4-pro:cloud at 100-270s) is demoted to
-  // security + tests fallback — kept reachable for its reasoning
-  // capability without anchoring wall-time.
+  // security fallback — kept reachable for its reasoning capability
+  // without anchoring wall-time.
   logic: {
     // 2026-06-05 — SWAPPED BACK to `deepseek-v4-pro:cloud` from
     // `deepseek-v4-flash:cloud`. The original demotion reason (100-270s
@@ -1346,22 +1352,25 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     fallback: "kimi-k2.5:cloud",
   },
   tests: {
-    // MiniMax M3 — agentic-code / test-workflow model. 2026-06-05 upgrade
-    // from `minimax-m2.5:cloud` (founder-tested, works well); Turbo-probed
-    // available + format-clean (think:false + schema → bare JSON, no fences).
-    // The M2.5 line was the ARC-292 (Codex) pick; M3 is the same family, newer.
-    // Was `deepseek-v4-flash:cloud` before M2.5 (collided with security's primary).
-    primary: "minimax-m3:cloud",
-    // SIG-348: the valid SIG-346 K=12 showed timeout aborts were retrying the
-    // same MiniMax prompt/model, usually just burning another long attempt.
-    // Give MiniMax a larger first window, then route failures directly to the
-    // cross-provider fallback instead of spending the same-model retry.
+    // SIG-349: deepseek-v4-flash becomes the tests primary after the
+    // tests-overfire ruler showed the tuned prompt + deterministic citation gate
+    // beating the MiniMax M3 baseline on post-gate recall/precision/FP while
+    // returning in seconds instead of ~70s/call. It deliberately shares the
+    // security primary: tests-lane believability + runtime beats model-diversity
+    // neatness here, and the tests prompt/gate keeps security/perf duplicates
+    // from surfacing customer-visible testing findings.
+    primary: "deepseek-v4-flash:cloud",
+    // Keep MiniMax M3 as the cross-provider fallback, not a same-model retry.
+    // V4 Flash is fast but has occasional schema parse failures on testing
+    // evidence prompts; fallback routes those failures to the known tests-lane
+    // baseline instead of dropping coverage. A retry on the same model would
+    // usually cost less than MiniMax, but the existing runner treats parse
+    // failures as permanent, so the fallback is the reliable rescue path today.
     retries: 0,
-    // `deepseek-v4-pro:cloud` reused as fallback — cross-provider
-    // from MiniMax, proven on reasoning tasks.
-    fallback: "deepseek-v4-pro:cloud",
-    // 160s keeps primary+fallback at 320s, leaving 50s of the 370s specialist
-    // wall for orchestration overhead while avoiding the old 110s retry churn.
+    fallback: "minimax-m3:cloud",
+    // 160s keeps V4 Flash + MiniMax fallback at 320s, leaving 50s of the 370s
+    // specialist wall for orchestration overhead. Healthy V4 Flash attempts are
+    // far below this; the cap exists so MiniMax fallback has its old budget.
     perAttemptTimeoutMs: 160_000,
   },
 }
@@ -3780,6 +3789,11 @@ export async function handlePrReviewEnsemble(
       testingEvidencePackFiltered,
       testingEvidenceFetchResult,
     )
+    const testingEvidencePackWithFocus = mergeTestingFocusHints(
+      testingEvidencePack,
+      buildAddedLineTextByLine(fullPrDiff),
+      buildDeletedLineTextByLine(fullPrDiff),
+    )
     // SIG-128: credit orchestrator glue whose changed logic delegates to
     // same-PR tested helpers. Uses `fullDiff` (the COMPLETE per-file patch)
     // for added-line text — NOT the truncated/first-batch `diff` — and the
@@ -3797,7 +3811,7 @@ export async function handlePrReviewEnsemble(
       astCache,
     })
     const testingEvidencePackWithCoverage = mergeHelperCoverage(
-      testingEvidencePack,
+      testingEvidencePackWithFocus,
       helperCoverage.coverageBySource,
     )
     const testingEvidenceBlock = renderTestingEvidenceBlock(
@@ -3837,6 +3851,7 @@ export async function handlePrReviewEnsemble(
         testFilesInPromptDiff_count: testingEvidencePackWithCoverage.testFilesInPromptDiff.length,
         testFilesNotInPromptDiff_count: testingEvidencePackWithCoverage.testFilesNotInPromptDiff.length,
         inspectedTestFiles_count: testingEvidencePackWithCoverage.inspectedTestFiles.length,
+        testingFocusHints_count: testingEvidencePackWithCoverage.testingFocusHints?.length ?? 0,
         contentTotalChars: testingEvidenceFetchResult.totalChars,
         truncatedPaths_count: testingEvidenceFetchResult.truncatedPaths.length,
         failedFetchPaths_count: testingEvidenceFetchResult.failedPaths.length,

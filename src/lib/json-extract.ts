@@ -99,6 +99,31 @@ export function parseFirstJsonObject(text: string): Record<string, unknown> | nu
   }
 
   for (const candidate of candidates) {
+    const quoteRepaired = escapeLikelyUnescapedStringQuotes(candidate)
+    if (quoteRepaired === candidate) continue
+    try {
+      const parsed = JSON.parse(quoteRepaired)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // Try the next quote-repair candidate.
+    }
+    try {
+      // Run the quote-specific repair before generic jsonrepair: for raw
+      // quotes inside code snippets, jsonrepair can produce a parseable object
+      // with corrupted string fields, which would hide valid findings.
+      const repaired = jsonrepair(quoteRepaired)
+      const parsed = JSON.parse(repaired)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>
+      }
+    } catch {
+      // Try the next quote-repair candidate.
+    }
+  }
+
+  for (const candidate of candidates) {
     try {
       const repaired = jsonrepair(candidate)
       const parsed = JSON.parse(repaired)
@@ -138,4 +163,64 @@ export function parseFirstJsonValue(text: string): unknown {
   }
 
   return null
+}
+
+function nextNonWhitespaceIndex(s: string, start: number): number {
+  for (let i = start; i < s.length; i++) {
+    const ch = s.charAt(i)
+    if (ch !== " " && ch !== "\n" && ch !== "\r" && ch !== "\t") return i
+  }
+  return -1
+}
+
+function canFollowCommaInJson(s: string, commaIndex: number): boolean {
+  const idx = nextNonWhitespaceIndex(s, commaIndex + 1)
+  if (idx === -1) return false
+  const ch = s.charAt(idx)
+  return ch === "\"" || ch === "{" || ch === "[" || ch === "t" || ch === "f" || ch === "n" || ch === "-" || /\d/.test(ch)
+}
+
+function quoteCanTerminateJsonString(s: string, quoteIndex: number): boolean {
+  const idx = nextNonWhitespaceIndex(s, quoteIndex + 1)
+  if (idx === -1) return true
+  const ch = s.charAt(idx)
+  if (ch === ":" || ch === "}" || ch === "]") return true
+  if (ch === ",") return canFollowCommaInJson(s, idx)
+  return false
+}
+
+function escapeLikelyUnescapedStringQuotes(candidate: string): string {
+  let out = ""
+  let inString = false
+  let escape = false
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate.charAt(i)
+    if (!inString) {
+      if (ch === "\"") inString = true
+      out += ch
+      continue
+    }
+
+    if (escape) {
+      escape = false
+      out += ch
+      continue
+    }
+    if (ch === "\\") {
+      escape = true
+      out += ch
+      continue
+    }
+    if (ch === "\"") {
+      if (quoteCanTerminateJsonString(candidate, i)) {
+        inString = false
+        out += ch
+      } else {
+        out += "\\\""
+      }
+      continue
+    }
+    out += ch
+  }
+  return out
 }

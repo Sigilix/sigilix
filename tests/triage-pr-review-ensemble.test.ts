@@ -1471,7 +1471,7 @@ describe("Phase 4a.3 — timeout schedule", () => {
   })
 })
 
-describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
+describe("SIG-349 — measured model lineup", () => {
   it("logic specialist runs deepseek-v4-pro:cloud primary, retries:0, with a qwen3-coder-next cross-provider fallback (think:false + fast-fallback)", () => {
     // SIG-287 (2026-05-30): the prior "trim to 1-attempt-only, fallback:null"
     // (PR #188) was built on the wrong diagnosis ("prompt-driven, not model-
@@ -1512,22 +1512,18 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
     expect(SPECIALIST_CONFIGS.security.retries).toBe(1)
   })
 
-  it("tests specialist runs minimax-m3:cloud + deepseek-v4-pro fallback with a 160s attempt cap", () => {
-    // SIG-234: was `deepseek-v4-flash:cloud` (collided with security), then
-    // MiniMax M2.5 (ARC-292). 2026-06-05: upgraded M2.5→M3 (founder-tested,
-    // Turbo-probed available + format-clean). SIG-344 K=12 tests-overfire
-    // baseline showed M3 often needs more than the global 60s cap on
-    // testing-evidence cases, so tests gets a longer per-attempt cap.
-    // SIG-348: the valid K=12 after SIG-346 showed 110s timeout aborts mostly
-    // burned same-model retry time, so tests now skips same-primary retry and
-    // preserves the cross-provider fallback inside the specialist wall.
-    expect(SPECIALIST_CONFIGS.tests.primary).toBe("minimax-m3:cloud")
-    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("deepseek-v4-pro:cloud")
+  it("tests specialist runs deepseek-v4-flash primary + MiniMax M3 fallback with a 160s attempt cap", () => {
+    // SIG-349: V4 Flash primary beats the MiniMax M3 K=12 baseline on the
+    // tests-overfire post-gate surface while returning in seconds. MiniMax M3
+    // stays as the cross-provider tests-lane fallback so V4 parse/timeouts
+    // route to the known baseline instead of dropping coverage.
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe("deepseek-v4-flash:cloud")
+    expect(SPECIALIST_CONFIGS.tests.fallback).toBe("minimax-m3:cloud")
     expect(SPECIALIST_CONFIGS.tests.retries).toBe(0)
     expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(160_000)
   })
 
-  it("all five primaries are distinct again after the logic→v4-pro swap (2026-06-05)", () => {
+  it("tests intentionally shares security's V4 Flash primary after SIG-349", () => {
     const primaries = [
       SPECIALIST_CONFIGS.logic.primary,
       SPECIALIST_CONFIGS.security.primary,
@@ -1535,17 +1531,15 @@ describe("SIG-234 — 5-unique-primary model lineup (2026-05-26)", () => {
       SPECIALIST_CONFIGS.tests.primary,
       SYNTHESIZER_CONFIG.primary,
     ]
-    // History: SIG-234 required 4+1-unique primaries; pr/07 relaxed it so
-    // security REUSED logic's reasoner (both deepseek-v4-flash) — "authz needs
-    // reasoning, recall beats model-diversity". The 2026-06-05 logic→v4-pro swap
-    // (a measured logic-only believability change) un-shares them: logic is now
-    // deepseek-v4-pro and security STAYS on deepseek-v4-flash (security-on-pro is
-    // a deliberately-deferred, separately-measured follow-up). Net effect — all
-    // five primaries are distinct again. v4-pro remains security's + tests'
-    // FALLBACK; primary-uniqueness does not constrain fallbacks.
+    // History: SIG-234 preferred 4+1-unique primaries, but recall/runtime wins
+    // over model-diversity when measured. Security uses V4 Flash because authz
+    // needs a reasoner; SIG-349 intentionally moves tests onto the same fast
+    // reasoner after K-repeated tests-overfire measurement, with MiniMax as the
+    // fallback safety net.
     expect(SPECIALIST_CONFIGS.security.primary).not.toBe(SPECIALIST_CONFIGS.logic.primary)
     expect(SPECIALIST_CONFIGS.security.primary).toBe("deepseek-v4-flash:cloud")
-    expect(new Set(primaries).size).toBe(5)
+    expect(SPECIALIST_CONFIGS.tests.primary).toBe(SPECIALIST_CONFIGS.security.primary)
+    expect(new Set(primaries).size).toBe(4)
   })
 
   it("synthesizer uses gpt-oss:120b primary + DeepSeek-flash cross-provider fallback (SIG-234)", () => {

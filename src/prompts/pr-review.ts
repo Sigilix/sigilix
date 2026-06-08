@@ -250,8 +250,18 @@
  * intent, and explicit live-model eval/test harness loops with serial-by-design
  * provider-rate-limit intent are not sev>=4 production perf findings. Reviews
  * with v24 go stale on first deploy of v25.
+ *
+ * v25 → v26 (SIG-349): the tests specialist consumes deterministic testing
+ * focus hints for changed branch/parser-coercion/error-path lines. Hints are
+ * advisory recall targets only — not a new gate or suppression path — and the
+ * existing SIG-113 citation requirements still decide whether findings reach
+ * the customer-visible review.
+ *
+ * v26 → v27 (SIG-349): the tests specialist focus hints now include deleted
+ * test assertions, and the tests prompt requires source-path anchoring for
+ * source-behavior gaps while citing the inspected test separately.
  */
-export const PROMPT_VERSION = "25"
+export const PROMPT_VERSION = "27"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

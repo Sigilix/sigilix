@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest"
 import {
   buildAddedLineTextByLine,
   buildChangedLines,
+  buildDeletedLineTextByLine,
   nodeOverlapsChanged,
   findReviewPosition,
 } from "../src/lib/ast-rules/diff-filter"
@@ -129,6 +130,35 @@ describe("buildAddedLineTextByLine (SIG-127)", () => {
   it("returns empty map on empty input", () => {
     expect(buildAddedLineTextByLine("").size).toBe(0)
     expect(buildAddedLineTextByLine(undefined as unknown as string).size).toBe(0)
+  })
+})
+
+describe("buildDeletedLineTextByLine (SIG-349)", () => {
+  it("maps each --line's old-side number to its text", () => {
+    const m = buildDeletedLineTextByLine(DIFF_PURE_DELETION)
+    const fileMap = m.get("src/del.ts")
+    expect(fileMap?.get(2)).toBe("gone1")
+    expect(fileMap?.get(3)).toBe("gone2")
+    expect(fileMap?.has(1)).toBe(false)
+  })
+
+  it("FILE DELETED: uses the old-side path", () => {
+    const m = buildDeletedLineTextByLine(DIFF_FILE_DELETED)
+    const fileMap = m.get("src/zap.ts")
+    expect(fileMap?.get(1)).toBe("line1")
+    expect(fileMap?.get(2)).toBe("line2")
+  })
+
+  it("REPLACEMENT HUNK: captures only old-side deleted text", () => {
+    const m = buildDeletedLineTextByLine(DIFF_REPLACEMENT)
+    const fileMap = m.get("src/r.ts")
+    expect(fileMap?.get(6)).toBe("removed_line")
+    expect(fileMap?.size).toBe(1)
+  })
+
+  it("returns empty map on empty input", () => {
+    expect(buildDeletedLineTextByLine("").size).toBe(0)
+    expect(buildDeletedLineTextByLine(undefined as unknown as string).size).toBe(0)
   })
 })
 

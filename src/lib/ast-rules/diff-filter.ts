@@ -193,6 +193,76 @@ export function buildAddedLineTextByLine(diff: string): Map<string, Map<number, 
 }
 
 /**
+ * Per-file map of old-side `-`-line NUMBER → deleted line TEXT
+ * (content WITHOUT the leading `-`). Used by tests-specialist evidence
+ * to make deleted regression assertions salient without treating them
+ * as new-side reviewable source lines.
+ */
+export function buildDeletedLineTextByLine(diff: string): Map<string, Map<number, string>> {
+  const out = new Map<string, Map<number, string>>()
+  if (!diff || typeof diff !== "string") return out
+
+  const lines = diff.split("\n")
+  let currentPath: string | null = null
+  let oldLine = 0
+  let inHunk = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i] ?? ""
+
+    if (raw.startsWith("diff --git ")) {
+      currentPath = null
+      inHunk = false
+      continue
+    }
+
+    if (raw.startsWith("--- ")) {
+      const oldPath = raw.slice(4).trim()
+      if (oldPath === "/dev/null") {
+        currentPath = null
+      } else {
+        currentPath = oldPath.startsWith("a/") ? oldPath.slice(2) : oldPath
+        if (!out.has(currentPath)) out.set(currentPath, new Map())
+      }
+      inHunk = false
+      continue
+    }
+
+    if (raw.startsWith("+++ ")) {
+      inHunk = false
+      continue
+    }
+
+    const hunk = /^@@\s+-(\d+)(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/.exec(raw)
+    if (hunk) {
+      oldLine = Number(hunk[1])
+      inHunk = true
+      continue
+    }
+
+    if (!inHunk || currentPath === null) continue
+
+    if (raw[0] === "-") {
+      const map = out.get(currentPath)
+      if (map) map.set(oldLine, raw.slice(1))
+      oldLine++
+      continue
+    }
+    if (raw[0] === "+") {
+      continue
+    }
+    if (raw.startsWith(" ")) {
+      oldLine++
+      continue
+    }
+    if (raw.startsWith("\\")) {
+      continue
+    }
+  }
+  return out
+}
+
+/**
  * Returns true when `[startLine, endLine]` (inclusive, 1-based)
  * intersects the changed-lines set for the given path.
  */

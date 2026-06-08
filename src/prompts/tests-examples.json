@@ -30,6 +30,34 @@
       "why": "Cites a real inspected test AND names a concrete API + branch. Specific, not a generic 'add more tests'. Admissible."
     },
     {
+      "id": "good-missing-parser-coercion",
+      "situation": "Source `src/lib/parse-kind.ts` is a new exported parser that coerces unknown input with `String(raw ?? 'task').toLowerCase()`, branches on accepted kinds, and falls back to `'task'`. The [TESTING EVIDENCE] block shows `siblingMapping:src/lib/parse-kind.ts->NONE`.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/parse-kind.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "`parseKind` coercion behavior ships without tests",
+        "body": "The new `parseKind` parser changes runtime behavior for nullish, mixed-case, and unknown inputs, but the PR has no sibling test for those coercion/fallback cases. Add tests for `'bug'`, `'BUG'`, nullish input, and an unknown value.",
+        "evidenceRefs": ["siblingMapping:src/lib/parse-kind.ts->NONE"]
+      },
+      "why": "Parser/coercion/fallback behavior is non-trivial runtime logic. A real ->NONE mapping for the source is enough to flag this missing-coverage gap."
+    },
+    {
+      "id": "good-insufficient-test-error-path",
+      "situation": "Source `src/lib/retry.ts` wraps `fn()` in `try/catch` and throws `new Error('retry failed: ...')`. Its inspected sibling test `tests/retry.test.ts` only asserts the successful attempt with `.resolves.toBe('ok')`.",
+      "emit": true,
+      "finding": {
+        "path": "src/lib/retry.ts",
+        "category": "testing",
+        "score": 4,
+        "headline": "`retryWithBackoff` rejection path is untested",
+        "body": "The sibling test covers the success path but never forces `fn()` to reject, so the new catch-and-rethrow behavior could regress silently. Add a test that rejects from `fn()` and asserts `.rejects.toThrow('retry failed')`.",
+        "inspectedTestFiles": ["tests/retry.test.ts"]
+      },
+      "why": "Cites a real inspected test and names the concrete error/rejection path missing from it. This is a tests finding even though the source behavior may be correct."
+    },
+    {
       "id": "good-removed-coverage",
       "situation": "This PR DELETES `tests/auth.test.ts`, the only test for the auth-token refresh path. The deleted file appears in the [TESTING EVIDENCE] block's changed test files.",
       "emit": true,
@@ -62,6 +90,36 @@
         "inspectedTestFiles": ["tests/parser.test.ts"]
       },
       "why": "Names no concrete API, branch, or gap — a bare 'needs more tests' nudge. The specificity gate drops this as vague-insufficient-test. If the existing tests genuinely miss a branch, name THAT branch instead."
+    },
+    {
+      "id": "bad-harmless-default-constant",
+      "situation": "Source `src/lib/retry.ts` adds only `const delayMs = 10` before returning the same happy-path call; its inspected sibling test already covers the success path, and no new branch/error/parser/state behavior is added.",
+      "emit": false,
+      "why": "A single harmless constant/default value is not a score-4 testing gap. Do NOT emit a generic 'needs timeout/backoff tests' finding unless the diff adds a concrete branch, parser/coercion behavior, error/fallback path, state transition, or deleted regression test."
+    },
+    {
+      "id": "bad-covered-normalization-refactor",
+      "situation": "Source `src/lib/slug.ts` changes normalization with `input.trim().toLowerCase()`, and the inspected sibling test asserts `slugify(\"Hello, World!\")` returns `hello-world`.",
+      "emit": false,
+      "why": "The inspected test already exercises the changed normalization behavior. Do NOT treat ordinary string normalization as an untested parser/coercion gap when the sibling test covers the before/after behavior."
+    },
+    {
+      "id": "bad-performance-duplicate",
+      "situation": "A request handler adds a loop that fetches one user per id (`for ... await db.users.findUnique(...)`). No [TESTING EVIDENCE] block is present.",
+      "emit": false,
+      "why": "The underlying problem is an N+1/performance regression, not a testing finding. Do NOT re-file performance bugs as missing tests; leave them to the performance specialist unless the code is correct-but-untested and a specific behavior assertion is missing."
+    },
+    {
+      "id": "bad-security-duplicate-xss-no-evidence",
+      "situation": "Source `src/ui/render.tsx` adds `<div dangerouslySetInnerHTML={{ __html: html }} />` with unsanitized input. No [TESTING EVIDENCE] block is present.",
+      "emit": false,
+      "why": "This is a SECURITY finding, not a testing finding. Do NOT emit `dangerouslySetInnerHTML`/XSS as `no test coverage for the XSS boundary`; the defect is the dangerous sink itself, not a missing test."
+    },
+    {
+      "id": "bad-performance-duplicate-db-loop-no-evidence",
+      "situation": "Source `src/routes/users.ts` adds `for (const id of ids) await db.users.findUnique(...)` in a request handler. No [TESTING EVIDENCE] block is present.",
+      "emit": false,
+      "why": "This is a PERFORMANCE finding, not a testing finding. Do NOT emit `no test coverage for the DB query loop`; the defect is serial per-id database work, not a missing assertion."
     },
     {
       "id": "bad-uncited-missing-coverage",

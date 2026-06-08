@@ -310,6 +310,27 @@ describe("runWithRetryAndFallback — per-attempt timeout cap", () => {
     expect(attempts[0]?.timeoutMs).toBe(110_000)
   })
 
+  it("uses an explicit perAttemptTimeoutMs for the actual timer instead of the config cap", async () => {
+    vi.useFakeTimers()
+    try {
+      mockChat.mockImplementationOnce(slowChat(40, ok("GOOD")))
+      const attempts: AttemptCallbackInfo[] = []
+      const resultPromise = runWithRetryAndFallback({
+        config: { ...baseConfig, retries: 0, fallback: null, perAttemptTimeoutMs: 25 },
+        ...baseArgs,
+        perAttemptTimeoutMs: 80,
+        onAttempt: (info) => attempts.push(info),
+      })
+      await vi.advanceTimersByTimeAsync(40)
+      const result = await resultPromise
+      expect(result.verdict).toEqual({ ok: true })
+      expect(attempts).toHaveLength(1)
+      expect(attempts[0]?.timeoutMs).toBe(80)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("uses config.perAttemptTimeoutMs for the actual abort timer", async () => {
     mockChat.mockImplementationOnce(slowChat(200, ok("late-primary")))
     const attempts: AttemptCallbackInfo[] = []

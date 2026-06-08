@@ -64,6 +64,27 @@ function shadowAttemptEvents(): Array<Record<string, unknown>> {
     .filter((e) => e["event"] === "shadow-model-attempt-completed")
 }
 
+function slowShadowChat(delay: number, content: string) {
+  return (args: { signal?: AbortSignal }) => new Promise((resolve, reject) => {
+    let settled = false
+    const t = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve({ message: { role: "assistant", content } })
+    }, delay)
+    args.signal?.addEventListener(
+      "abort",
+      () => {
+        if (settled) return
+        settled = true
+        clearTimeout(t)
+        reject(new DOMException("The operation was aborted", "AbortError"))
+      },
+      { once: true },
+    )
+  })
+}
+
 describe("runShadowSpecialist", () => {
   it("returns the verdict + emits one shadow-model-attempt-completed event on primary success", async () => {
     vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_VERDICT_JSON } })
@@ -152,6 +173,49 @@ describe("runShadowSpecialist", () => {
     const events = shadowAttemptEvents()
     expect(events).toHaveLength(1)
     expect(events[0]?.["timeoutMs"]).toBe(110_000)
+  })
+
+  it("uses shadowConfig.perAttemptTimeoutMs for the actual specialist abort timer", async () => {
+    vi.useFakeTimers()
+    const outerCtrl = new AbortController()
+    try {
+      // The chat resolves after the config cap. Advancing past only that cap
+      // proves shadowConfig drives the actual abort, not just telemetry.
+      vi.mocked(chat).mockImplementationOnce(slowShadowChat(100, VALID_VERDICT_JSON))
+      const resultPromise = runShadowSpecialist({
+        role: "tests",
+        shadowConfig: {
+          primary: "minimax-m3:cloud",
+          retries: 0,
+          fallback: null,
+          perAttemptTimeoutMs: 25,
+        },
+        apiKey: "fake",
+        systemPrompt: "sys",
+        userMessage: "usr",
+        chatEnabled: "on",
+        signal: outerCtrl.signal,
+        perfCtx: CTX,
+      })
+      await vi.advanceTimersByTimeAsync(30)
+      expect(vi.mocked(chat)).toHaveBeenCalledTimes(1)
+      const chatSignal = vi.mocked(chat).mock.calls[0]?.[0]?.signal
+      expect(chatSignal).toBeDefined()
+      expect(chatSignal?.aborted).toBe(true)
+      const result = await resultPromise
+      expect(result.verdictOk).toBe(false)
+      expect(result.failureReason?.toLowerCase()).toContain("abort")
+      const events = shadowAttemptEvents()
+      expect(events).toHaveLength(1)
+      expect(events[0]).toMatchObject({
+        role: "tests",
+        outcome: "aborted",
+        timeoutMs: 25,
+      })
+    } finally {
+      outerCtrl.abort()
+      vi.useRealTimers()
+    }
   })
 
   it("aborts cleanly when the outer signal is already aborted (no chat calls)", async () => {

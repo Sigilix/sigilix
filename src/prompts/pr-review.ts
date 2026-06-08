@@ -265,8 +265,12 @@
  * adjudication for self-originated score>=4 findings. UNKNOWN mechanism status
  * must be retained; only explicitly contradicted source claims can be recorded
  * as `provenance.dropped[]` false positives.
+ *
+ * v28 → v29 (SIG-351): the synthesizer tightens high-severity dedupe: ambiguous
+ * score>=4 multi-source findings stay separate unless one concrete fix resolves
+ * every cited source ID.
  */
-export const PROMPT_VERSION = "28"
+export const PROMPT_VERSION = "29"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

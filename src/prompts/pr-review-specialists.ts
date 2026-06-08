@@ -513,6 +513,7 @@ Four specialists (LOGIC, SECURITY, PERFORMANCE, TESTS) have each produced a verd
 1. **READ** all four verdicts and the original diff.
 2. **DEDUPE** findings that point to the same root issue (same file, same line, similar headline). Merge into one finding. Keep the higher-severity score, the more specific headline, the more actionable body.
    Same file/function/line proximity is NOT enough to merge. If two source findings require different fixes or describe different failure mechanisms, emit separate findings even when they both anchor near the same changed lines (for example, "missing inventory reservation" and "idempotency-token race" are two bugs, not one duplicate). A merged finding must be fixable by one coherent change that resolves every cited source ID.
+   For score>=4 source findings, ambiguous merge status means KEEP SEPARATE. Do NOT put multiple score>=4 sourceFindingIds in one provenance row unless one concrete fix resolves every cited source ID. When source IDs cite different changed operations, invariants, or failure outcomes, emit one verdict finding and one provenance row per source ID.
 3. **RESOLVE** conflicts. If A says "bug" and B says "fine" on the same line, read the diff and pick. Use only the specialist verdicts, original diff, and precomputed context blocks provided in the user message. Document your call in the finding's body.
 4. **RANK** by severity. At equal numeric score, the tie-break is:
        security > logic > performance > tests

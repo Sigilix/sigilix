@@ -32,6 +32,12 @@ describe("SIG-351 synthesizer proof-only FP adjudication prompt", () => {
     expect(SYNTHESIZER_PROMPT).toContain("\"missing inventory reservation\" and \"idempotency-token race\" are two bugs")
   })
 
+  it("keeps ambiguous score>=4 multi-source findings separate", () => {
+    expect(SYNTHESIZER_PROMPT).toContain("For score>=4 source findings, ambiguous merge status means KEEP SEPARATE")
+    expect(SYNTHESIZER_PROMPT).toContain("one concrete fix resolves every cited source ID")
+    expect(SYNTHESIZER_PROMPT).toContain("Do NOT put multiple score>=4 sourceFindingIds in one provenance row")
+  })
+
   it("anchors the observed impossible-claim classes without making them heuristic drop rules", () => {
     expect(SYNTHESIZER_PROMPT).toContain("SSRF requires an outbound request primitive")
     expect(SYNTHESIZER_PROMPT).toContain("path traversal requires an attacker-controlled string reaching a filesystem path sink")
@@ -49,6 +55,6 @@ describe("SIG-351 synthesizer proof-only FP adjudication prompt", () => {
   })
 
   it("bumps PROMPT_VERSION so stale reviews re-run with the adjudication contract", () => {
-    expect(PROMPT_VERSION).toBe("28")
+    expect(PROMPT_VERSION).toBe("29")
   })
 })

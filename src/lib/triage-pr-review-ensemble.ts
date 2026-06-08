@@ -510,6 +510,28 @@ export {
   SYNTH_RETRY_FINALIZE_RESERVE_MS,
   SHADOW_FINALIZE_GRACE_MS,
 }
+// SIG-318 (PR 2): the FINDINGS domain (stable IDs, consensus ranking +
+// annotation, the stable (path, headline) key, and cross-push deltas) moved to
+// ./ensemble/domain/findings. Value-imported for internal use + re-exported so
+// existing importers (tests) are unaffected. PrReviewVerdictWithIds is
+// type-imported for internal use only — it was god-file-private; its home is now
+// the domain, so it is NOT re-exported here (surface unchanged).
+import {
+  assignStableFindingIds,
+  computeConsensusRanking,
+  annotateWithConsensus,
+  computeFindingKey,
+  computeFindingDelta,
+} from "./ensemble/domain/findings"
+import type { PrReviewVerdictWithIds } from "./ensemble/domain/findings"
+export {
+  assignStableFindingIds,
+  computeConsensusRanking,
+  annotateWithConsensus,
+  computeFindingKey,
+  computeFindingDelta,
+}
+export type { ConsensusRanked, FindingDelta } from "./ensemble/domain/findings"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -8825,10 +8847,6 @@ interface CollectedVerdict {
   modelUsed?: string
 }
 
-interface PrReviewVerdictWithIds extends PrReviewVerdict {
-  findings: Array<PrReviewFinding & { id: string }>
-}
-
 export interface ApprovalReadinessSourceVerdict {
   role: SpecialistRole
   verdict: (PrReviewVerdict & { findings: Array<PrReviewFinding & { id: string }> }) | null
@@ -8951,219 +8969,6 @@ function collectSpecialistVerdicts(
     })
   }
   return out
-}
-
-export function assignStableFindingIds(role: SpecialistRole, verdict: PrReviewVerdict): PrReviewVerdictWithIds {
-  return {
-    ...verdict,
-    findings: verdict.findings.map((f, i) => ({ ...f, id: `${role}-${i}` })),
-  }
-}
-
-/**
- * ARC-270 — consensus-aware ranking of post-synth findings.
- *
- * Re-orders `verdict.findings` (and the parallel `provenance` array)
- * by **`(consensus, score)` DESC** where `consensus = number of
- * distinct specialists that cited the finding via `sourceSpecialists`.
- * Two specialists independently flagging the same line is much
- * stronger signal than one specialist's opinion — surface that
- * agreement at the top, where reviewers will look first.
- *
- * **Why consensus is primary, not score.** A 2-specialist score-2
- * finding ranks above a 1-specialist score-5 finding. This is
- * deliberate: lone-specialist score-5 is the most common LLM
- * over-confidence failure mode, and cross-specialist agreement is
- * exactly the signal that distinguishes "real bug" from "model
- * hallucinated a confident concern". Reversing the keys would put
- * over-confident solo findings at the top.
- *
- * Strictly additive (Codex spec catch): we do NOT change the gate
- * (`chooseReviewEvent`) or drop any findings here. The score values
- * stay untouched. This is a reorder-and-annotate step only.
- *
- * Stable: ties on `(consensus, score)` preserve the synth's emit
- * order (so the synth's logical grouping survives the reorder when
- * there's no consensus signal to leverage).
- *
- * Returns a NEW verdict object + a NEW parallel provenance array +
- * a `consensusByIndex` array aligned with the new ordering. Callers
- * use `consensusByIndex` to render a "Flagged by N specialists"
- * annotation on findings with `consensus >= 2`.
- *
- * Pure — exported for unit tests.
- */
-export interface ConsensusRanked {
-  verdict: PrReviewVerdict
-  provenance: SynthesizerProvenance["findings"]
-  /** `consensusByIndex[i]` is the number of distinct specialists for
-   *  the finding at NEW index `i`. Always >= 1 (validateForSubmission
-   *  drops zero-source findings as hallucinations).
-   */
-  consensusByIndex: number[]
-}
-
-export function computeConsensusRanking(
-  verdict: PrReviewVerdict,
-  provenance: SynthesizerProvenance["findings"],
-): ConsensusRanked {
-  // Defensive: provenance.length should equal findings.length post-
-  // validateForSubmission. If misaligned, fall back to a no-op
-  // (preserve order + emit consensus=1 for all) so we don't
-  // accidentally drop findings.
-  if (provenance.length !== verdict.findings.length) {
-    return {
-      verdict,
-      provenance,
-      consensusByIndex: verdict.findings.map(() => 1),
-    }
-  }
-
-  const consensusOf = (i: number): number => {
-    const specs = provenance[i]?.sourceSpecialists
-    if (!Array.isArray(specs) || specs.length === 0) return 1
-    return new Set(specs).size
-  }
-
-  // Build index permutation. Sort by `(consensus DESC, score DESC,
-  // originalIndex ASC)` for stable tiebreaking.
-  const order = verdict.findings.map((_, i) => i)
-  order.sort((a, b) => {
-    const ca = consensusOf(a)
-    const cb = consensusOf(b)
-    if (cb !== ca) return cb - ca
-    const sa = verdict.findings[a]!.score
-    const sb = verdict.findings[b]!.score
-    if (sb !== sa) return sb - sa
-    return a - b
-  })
-
-  const newFindings = order.map((i) => verdict.findings[i]!)
-  const newProvenance = order.map((i) => provenance[i]!)
-  const consensusByIndex = order.map((i) => consensusOf(i))
-
-  return {
-    verdict: { ...verdict, findings: newFindings },
-    provenance: newProvenance,
-    consensusByIndex,
-  }
-}
-
-/**
- * ARC-270 — annotate a finding's `body` with a "Flagged by N
- * specialists" prefix when consensus >= 2. Returns a CLONE of the
- * finding; never mutates the original (same immutability pattern
- * as the review-memory soften clone in the ensemble flow).
- *
- * For consensus < 2, returns the finding unchanged (no annotation,
- * since a single specialist's opinion is the default expectation).
- *
- * Pure — exported for unit tests.
- */
-export function annotateWithConsensus(
-  finding: PrReviewFinding,
-  consensus: number,
-): PrReviewFinding {
-  if (consensus < 2) return finding
-  const annotation = `_Flagged by ${consensus} specialists._`
-  const body = finding.body.length > 0
-    ? `${annotation}\n\n${finding.body}`
-    : annotation
-  return { ...finding, body }
-}
-
-// ─── ARC-271 — finding deltas across pushes ──────────────────────────
-
-/**
- * Normalize a headline for stable-key derivation: lowercase, collapse
- * whitespace runs, strip trailing punctuation. Tolerates minor LLM
- * rephrasing across pushes (different casing, extra spaces, optional
- * trailing period). Major rephrasing produces a new key — accepted
- * v1 trade-off (over-report new is safer than silent drop).
- */
-function normalizeHeadline(headline: string): string {
-  return headline
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.!?,;:]+$/, "")
-}
-
-/**
- * ARC-271 — compute a stable finding key from `(path, headline)`.
- * Pure SHA-256 → first 16 hex chars (64 bits — enough to avoid
- * collisions within a single PR's finding set, which is bounded to
- * MAX_SYNTH_FINDINGS).
- *
- * Exported for unit tests.
- */
-export async function computeFindingKey(path: string, headline: string): Promise<string> {
-  const input = `${path.toLowerCase()}|${normalizeHeadline(headline)}`
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input))
-  const bytes = new Uint8Array(buf)
-  let hex = ""
-  for (let i = 0; i < 8; i++) hex += bytes[i]!.toString(16).padStart(2, "0")
-  return hex
-}
-
-/**
- * ARC-271 — delta classification result.
- *
- * - `new` — finding has no matching key in the prior manifest.
- * - `stillOpen` — finding's key was also in the prior manifest.
- * - `likelyFixed` — prior finding's key is NOT in current AND the
- *   prior finding's path is in the current PR's changed-file set.
- *   (Path-in-diff implies the file was edited; finding gone → likely
- *   resolved by the edit.)
- * - `carriedOver` — prior finding's key is NOT in current AND the
- *   prior finding's path is NOT in the current PR's changed-file set.
- *   (File untouched since prior review — incremental review didn't
- *   look at it. Finding may still apply but we have no fresh signal.)
- *
- * Codex spec warning: NEVER classify a non-touched-file finding as
- * `fixed`. Incremental review only sends changed-file diffs to
- * specialists, so an old finding for an unchanged file would not
- * reappear in the new run for reasons orthogonal to whether the
- * code was fixed.
- */
-export interface FindingDelta {
-  newCount: number
-  stillOpenCount: number
-  likelyFixedCount: number
-  carriedOverCount: number
-}
-
-/**
- * Compute the delta against the prior manifest's findings. Pure;
- * exported for unit tests.
- */
-export function computeFindingDelta(
-  currentKeys: ReadonlySet<string>,
-  priorFindings: ReadonlyArray<{ key: string; path: string }>,
-  changedPaths: ReadonlySet<string>,
-): FindingDelta {
-  const priorKeys = new Set(priorFindings.map((f) => f.key))
-  let newCount = 0
-  for (const k of currentKeys) {
-    if (!priorKeys.has(k)) newCount += 1
-  }
-  const stillOpenCount = [...currentKeys].filter((k) => priorKeys.has(k)).length
-  // code-reviewer HIGH catch: `computeFindingKey` lowercases path for
-  // key derivation (so case-renamed files don't drift). The
-  // changed-path lookup must use the same normalization or a prior
-  // finding stored as `Src/Foo.ts` won't match `changedPaths`
-  // entries like `src/foo.ts` from the diff — falsely landing in
-  // `carried-over`. Lowercase both sides of the comparison.
-  const changedPathsLower = new Set<string>()
-  for (const p of changedPaths) changedPathsLower.add(p.toLowerCase())
-  let likelyFixedCount = 0
-  let carriedOverCount = 0
-  for (const p of priorFindings) {
-    if (currentKeys.has(p.key)) continue
-    if (changedPathsLower.has(p.path.toLowerCase())) likelyFixedCount += 1
-    else carriedOverCount += 1
-  }
-  return { newCount, stillOpenCount, likelyFixedCount, carriedOverCount }
 }
 
 /**

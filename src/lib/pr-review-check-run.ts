@@ -285,6 +285,77 @@ export async function attachExistingCheckRun(args: AttachArgs): Promise<InProgre
   }
 }
 
+export interface CloseOrphanByHeadShaArgs {
+  env: Env
+  owner: string
+  repo: string
+  installationId: number
+  headSha: string
+  /** Override the closed check's title (defaults to the superseded copy). */
+  title?: string
+  /** Override the closed check's summary (defaults to the superseded copy). */
+  summary?: string
+  /**
+   * Override the wire conclusion — raw GitHub union, NOT SigilixCheckConclusion
+   * (which deliberately excludes these). Defaults to "cancelled"; the watchdog
+   * path passes "timed_out" so the closed check's conclusion matches its title.
+   */
+  conclusion?: "cancelled" | "timed_out"
+}
+
+/**
+ * SIG-stuck-check: close any orphaned Sigilix-named in-progress check on
+ * `headSha` when the DO has no `checkRunId` to attach to. This bites on the
+ * cancel + watchdog-terminal paths: when `handleEnqueue`'s synchronous
+ * check-create lost its 3s `Promise.race` (GitHub 5xx / timeout under
+ * contention), the consumer created the check via `startInProgressCheckRun`
+ * and that id never reached the DO — so `RunState.checkRunId` is undefined
+ * and the existing attach-by-id close is skipped, leaving the check
+ * `in_progress` forever (observed on PR #402 after `/sigilix cancel`).
+ *
+ * Builds an installation-scoped `GitHubClient` exactly like
+ * `attachExistingCheckRun` (the DO never constructs a client directly — it
+ * only calls the helpers in this module), then delegates to
+ * `cancelStaleInProgressChecks`, which lists the head's check runs and
+ * closes the Sigilix-named in_progress/queued ones (idempotent — safe even
+ * if the attached-id path already closed one). Best-effort throughout: a
+ * missing-creds guard, token failure, or any list/PATCH error logs and
+ * returns; nothing thrown reaches the DO state machine.
+ */
+export async function closeOrphanedInProgressChecksByHeadSha(
+  args: CloseOrphanByHeadShaArgs,
+): Promise<void> {
+  const { env, owner, repo, installationId, headSha, title, summary, conclusion } = args
+  if (!env.GITHUB_APP_ID || !env.GITHUB_PRIVATE_KEY) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-close-orphan-skip-missing-creds",
+      owner, repo, head_sha: headSha, installation_id: installationId,
+    }))
+    return
+  }
+  try {
+    const token = await getInstallationToken({
+      kv: env.OPENCLAW_STATE,
+      appId: env.GITHUB_APP_ID,
+      privateKey: env.GITHUB_PRIVATE_KEY,
+      installationId,
+    })
+    const client = new GitHubClient({ token })
+    await cancelStaleInProgressChecks({
+      client, owner, repo, headSha,
+      ...(title !== undefined ? { title } : {}),
+      ...(summary !== undefined ? { summary } : {}),
+      ...(conclusion !== undefined ? { conclusion } : {}),
+    })
+  } catch (err) {
+    console.warn(JSON.stringify({
+      event: "pr-review-check-run-close-orphan-failed",
+      owner, repo, head_sha: headSha, installation_id: installationId,
+      err: err instanceof Error ? err.message : String(err),
+    }))
+  }
+}
+
 /**
  * ARC-276: payload threaded from the dispatcher's posted-path so the
  * Check Run title can render the customer-visible verdict (Approved
@@ -648,14 +719,30 @@ function isPostableAnnotation(a: CheckRunAnnotation): boolean {
  * `POST /check-runs` creates a new row. Without this cleanup, every
  * queue retry + every name-rename deploy + every concurrent
  * dispatcher run would stack another in-progress row on the PR.
+ *
+ * SIG-stuck-check: exported so the DO's cancel + watchdog fallback
+ * (via `closeOrphanedInProgressChecksByHeadSha`) can reuse the
+ * close-by-head-sha logic when it has no `checkRunId` to attach to
+ * (the upstream create timed out / 5xx'd and the consumer created
+ * the check instead, so the id never reached the DO). The optional
+ * `title`/`summary` override lets the cancel path read "Cancelled"
+ * and the watchdog path "Timed out" instead of the default
+ * superseded copy.
  */
-async function cancelStaleInProgressChecks(args: {
+export async function cancelStaleInProgressChecks(args: {
   client: GitHubClient
   owner: string
   repo: string
   headSha: string
+  title?: string
+  summary?: string
+  conclusion?: "cancelled" | "timed_out"
 }): Promise<void> {
   const { client, owner, repo, headSha } = args
+  const title = args.title ?? "Cancelled (superseded)"
+  const summary = args.summary
+    ?? "A newer Sigilix review run started for this commit and replaced this check."
+  const conclusion = args.conclusion ?? "cancelled"
   let existing: Array<{ id: number; name: string; status: string }>
   try {
     existing = await client.listCheckRunsForRef(owner, repo, headSha)
@@ -675,12 +762,9 @@ async function cancelStaleInProgressChecks(args: {
     try {
       await client.updateCheckRun(owner, repo, run.id, {
         status: "completed",
-        conclusion: "cancelled",
+        conclusion,
         completedAt: new Date().toISOString(),
-        output: {
-          title: "Cancelled (superseded)",
-          summary: "A newer Sigilix review run started for this commit and replaced this check.",
-        },
+        output: { title, summary },
       })
       console.log(JSON.stringify({
         event: "pr-review-check-run-cancelled-stale",

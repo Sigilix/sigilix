@@ -51,14 +51,17 @@ being dropped). SIG-347's additions preserve that bias.
 ## What SIG-347 adds (the proactive belts)
 
 ### AC #2 — sibling-test identifier cross-check (`cross-referenced-in-sibling-test`)
-The direct fix for the PR #144 frontier. In the `insufficientClass` keep path
-(`evaluateTestFinding`), before emitting, scan the **in-diff** sibling test bodies
-we already fetched for the finding's cited identifier. A word-boundary hit ⇒ the
-"existing tests are insufficient" claim is an over-fire ⇒ drop.
 
-Belts: (1) **in-diff only** — only test files in `testFilesChanged` *with* fetched
-content are scanned, so a real "new code path uncovered by a pre-existing test"
-finding survives; (2) **headline-scoped, concrete-identifier only** — the cited
+The direct fix for the PR #144 frontier. In the `insufficientClass` keep path
+(`evaluateTestFinding`), before emitting, scan the **in-diff sibling test** of the
+finding's own source path for the finding's cited identifier. A word-boundary hit ⇒
+the "existing tests are insufficient" claim is an over-fire ⇒ drop.
+
+Belts: (1) **in-diff, sibling-scoped only** — only the test paired with the finding's
+source in `siblingMappings`, and only when that test is in `testFilesChanged` *with*
+fetched content, is scanned; an unrelated changed test that mentions the same token
+never suppresses, and a real "new code path uncovered by a pre-existing test" finding
+survives; (2) **headline-scoped, concrete-identifier only** — the cited
 identifier is extracted from the finding's *headline* (its primary subject), must
 be backticked, identifier-shaped, length ≥ 4, and not in a generic stoplist
 (`null`/`error`/`data`/…). A symbol mentioned only in passing body prose never
@@ -74,6 +77,7 @@ failed-gate testing finding is demoted to a non-blocking body note in `enforce`
 flip). The dogfood FPR/recall gate (PR 2) measures this directly before any flip.
 
 ### AC #3 — diff-test-ratio damper
+
 When the PR's diff is itself test-heavy (substantive added test-to-source line
 ratio > 0.3), a surviving testing finding is much more likely to be noise. Damp a
 **kept** testing finding's confidence by one point.
@@ -86,6 +90,7 @@ specificity gate, so it only touches findings the gate already kept, and clones
 (never mutates the synth-aliased finding telemetry holds).
 
 ### AC #4 — per-drop-reason telemetry + `GET /metrics/test-suppressions`
+
 Every drop reason already flows through `onTestFindingDropped` →
 `pr-review-finding-rejected-validation` (gate `tests`) → the shared
 `ValidationMetricsDO`. The new endpoint is a **focused projection** of that DO's

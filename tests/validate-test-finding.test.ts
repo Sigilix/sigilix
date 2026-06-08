@@ -559,6 +559,7 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
       pack({
         sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
         testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        siblingMappings: [{ source: "src/lib/triage-pr-review.ts", test: "tests/triage-pr-review.test.ts" }],
         inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
         inspectedTestContentByPath: {
           // references parsePrReviewResponse but NOT coerceVerdictKind → no over-fire
@@ -586,6 +587,7 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
       pack({
         sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
         testFilesChanged: [], // NOT changed in this PR
+        siblingMappings: [{ source: "src/lib/triage-pr-review.ts", test: "tests/triage-pr-review.test.ts" }],
         inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
         inspectedTestContentByPath: {
           "tests/triage-pr-review.test.ts": "expect(parsePrReviewResponse(raw)).toBeTruthy()",
@@ -608,6 +610,7 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
       pack({
         sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
         testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        siblingMappings: [{ source: "src/lib/triage-pr-review.ts", test: "tests/triage-pr-review.test.ts" }],
         inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
         inspectedTestContentByPath: {
           "tests/triage-pr-review.test.ts": "const data = null; const error = data",
@@ -635,6 +638,7 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
       pack({
         sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
         testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        siblingMappings: [{ source: "src/lib/triage-pr-review.ts", test: "tests/triage-pr-review.test.ts" }],
         inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
         inspectedTestContentByPath: {
           "tests/triage-pr-review.test.ts": "expect(parsePrReviewResponse(raw)).toBeTruthy()",
@@ -659,9 +663,39 @@ describe("evaluateTestFinding — sibling-test cross-check (SIG-347 AC #2)", () 
       pack({
         sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
         testFilesChanged: ["tests/triage-pr-review.test.ts"],
+        siblingMappings: [{ source: "src/lib/triage-pr-review.ts", test: "tests/triage-pr-review.test.ts" }],
         inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
         inspectedTestContentByPath: {
           "tests/triage-pr-review.test.ts": "expect(parseHeaderName(x)).toBe(y)", // parseHeaderName ≠ parseHeader
+        },
+        helperCoverageBySource: {},
+      }),
+    )
+    expect(r.keep).toBe(true)
+  })
+
+  it("KEEPS when only a NON-sibling changed test references the identifier (sibling-scoped, CodeRabbit)", () => {
+    // Two changed tests in the PR; the SIBLING of the finding's source does NOT
+    // reference the identifier, but an UNRELATED changed test does. Sibling-
+    // scoping must keep the finding — an unrelated test's token can't suppress it.
+    const r = evaluateTestFinding(
+      finding({
+        path: "src/lib/triage-pr-review.ts",
+        headline: "`parsePrReviewResponse` fallback branch untested",
+        body: "The `parsePrReviewResponse` fallback branch has no assertion in its sibling test.",
+        evidenceRefs: ["inspectedTestFile:tests/triage-pr-review.test.ts"],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts"],
+      }),
+      pack({
+        sourceFilesChanged: ["src/lib/triage-pr-review.ts"],
+        testFilesChanged: ["tests/triage-pr-review.test.ts", "tests/unrelated.test.ts"],
+        siblingMappings: [{ source: "src/lib/triage-pr-review.ts", test: "tests/triage-pr-review.test.ts" }],
+        inspectedTestFiles: ["tests/triage-pr-review.test.ts", "tests/unrelated.test.ts"],
+        inspectedTestContentByPath: {
+          // the SIBLING does NOT reference the cited identifier…
+          "tests/triage-pr-review.test.ts": "expect(somethingElse()).toBe(1)",
+          // …but an UNRELATED changed test does — must NOT suppress.
+          "tests/unrelated.test.ts": "expect(parsePrReviewResponse(raw)).toBeTruthy()",
         },
         helperCoverageBySource: {},
       }),

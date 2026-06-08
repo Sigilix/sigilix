@@ -7,7 +7,9 @@
 import { describe, it, expect } from "vitest"
 import {
   applyDegradedCoverageFindingFloor,
+  applySynthSourceFindingFloor,
   DEGRADED_FLOOR_MIN_SCORE,
+  SYNTH_SOURCE_FLOOR_MIN_SCORE,
   type FloorProvenanceFinding,
   type DegradedFloorSpecialist,
 } from "../src/lib/degraded-finding-floor"
@@ -28,6 +30,10 @@ function finding(id: string, score: number, over: Partial<PrReviewFinding> = {})
 
 function prov(...ids: string[]): FloorProvenanceFinding {
   return { sourceSpecialists: ["logic"], sourceFindingIds: ids, action: "kept", verifiedViaRetrieval: false }
+}
+
+function dropped(id: string, reason: string) {
+  return { specialist: "security" as const, sourceFindingId: id, headline: `finding ${id}`, reason }
 }
 
 describe("applyDegradedCoverageFindingFloor", () => {
@@ -115,6 +121,467 @@ describe("applyDegradedCoverageFindingFloor", () => {
       specialists: [{ role: "logic", findings: [finding("logic-0", 5)] }],
     })
     expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+})
+
+// ─── SIG-351 — synth source-finding floor ────────────────────────────────
+//
+// Full-coverage synth runs can still silently omit a P0/P1 source finding while
+// trying to clean up false positives. The SIG-351 floor restores omitted
+// score>=4 source findings unless the synth either represented the source in
+// kept provenance or recorded a proof-like drop. Restored findings still go
+// through the normal hallucination/grounding/validation path downstream.
+describe("applySynthSourceFindingFloor", () => {
+  it("pins the recall floor at score 4 (P0/P1 only)", () => {
+    expect(SYNTH_SOURCE_FLOOR_MIN_SCORE).toBe(4)
+  })
+
+  it("re-injects an omitted score>=4 source finding on a full-coverage synth run", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.provenanceFindings).toHaveLength(1)
+    expect(r.findings.length).toBe(r.provenanceFindings.length)
+    expect(r.restored).toEqual([{ role: "logic", id: "logic-0", score: 4, headline: "finding logic-0" }])
+    expect(r.provenanceFindings[0]).toMatchObject({
+      sourceSpecialists: ["logic"],
+      sourceFindingIds: ["logic-0"],
+      action: "kept",
+    })
+  })
+
+  it("does NOT re-inject a score>=4 source finding represented by kept or merged provenance", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("security-0", 5)],
+      provenanceFindings: [prov("logic-0", "security-0")],
+      provenanceDropped: [],
+      specialists: [
+        { role: "logic", findings: [finding("logic-0", 4)] },
+        { role: "security", findings: [finding("security-0", 5)] },
+      ],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps a represented blocker when the synth row preserves its distinctive source token", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("synth-0", 4, {
+        body: "The handler still returns another tenant's order without checking `tenantId`.",
+      })],
+      provenanceFindings: [prov("logic-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 4, {
+        body: "The handler reads an arbitrary order ID and returns it without checking the caller's `tenantId`.",
+      })] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("replaces a represented blocker when the synth row drops its distinctive source token", () => {
+    const source = finding("logic-0", 4, {
+      headline: "Missing tenant authorization before returning an order",
+      body: "The handler reads an arbitrary order ID and returns it without checking the caller's `tenantId`.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("synth-0", 4, {
+        headline: "Order lookup is too broad",
+        body: "The handler returns arbitrary orders without an ownership check.",
+      })],
+      provenanceFindings: [prov("logic-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "logic", findings: [source] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.provenanceFindings).toHaveLength(1)
+    expect(r.findings[0]?.headline).toBe("Missing tenant authorization before returning an order")
+    expect(r.provenanceFindings[0]?.sourceFindingIds).toEqual(["logic-0"])
+    expect(r.restored.map((x) => x.id)).toEqual(["logic-0"])
+  })
+
+  it("replaces a represented blocker when the synth drops a standalone short source token", () => {
+    const source = finding("security-0", 4, {
+      category: "security",
+      headline: "Untrusted redirect target is fetched",
+      body: "The handler passes the attacker-controlled `url` value into a follow-up fetch.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("synth-0", 4, {
+        category: "security",
+        headline: "Redirect handling is unsafe",
+        body: "The handler follows attacker-controlled redirects without validating the destination.",
+      })],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [source] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.findings[0]?.headline).toBe("Untrusted redirect target is fetched")
+    expect(r.provenanceFindings[0]?.sourceFindingIds).toEqual(["security-0"])
+    expect(r.restored.map((x) => x.id)).toEqual(["security-0"])
+  })
+
+  it("keeps a represented blocker when the synth preserves a standalone short source token", () => {
+    const source = finding("security-0", 4, {
+      category: "security",
+      headline: "Untrusted redirect target is fetched",
+      body: "The handler passes the attacker-controlled `url` value into a follow-up fetch.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("synth-0", 4, {
+        category: "security",
+        headline: "Untrusted URL can be fetched",
+        body: "The handler fetches an attacker-controlled `url` without destination validation.",
+      })],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [source] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.findings[0]?.headline).toBe("Untrusted URL can be fetched")
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("replaces a represented blocker when the synth mentions the token but loses the mechanism", () => {
+    const source = finding("security-0", 4, {
+      category: "security",
+      headline: "Untrusted redirect target is fetched",
+      body: "The handler passes the attacker-controlled `url` value into a follow-up fetch.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("synth-0", 4, {
+        category: "security",
+        headline: "Redirect URL is handled",
+        body: "The `url` value is sanitized before redirect handling, so the risk is not described.",
+      })],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [source] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.findings[0]?.headline).toBe("Untrusted redirect target is fetched")
+    expect(r.provenanceFindings[0]?.sourceFindingIds).toEqual(["security-0"])
+    expect(r.restored.map((x) => x.id)).toEqual(["security-0"])
+  })
+
+  it("splits one under-preserved source out of a merged synth row while keeping the preserved source", () => {
+    const logic = finding("logic-0", 4, {
+      body: "The new flow calls `charge(order)` but never calls `reserveInventory`, so two checkouts can sell the same item.",
+    })
+    const perf = finding("performance-0", 4, {
+      body: "The `seenToken` check happens before `markTokenSeen`, so concurrent retries with the same token can double-charge.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("synth-0", 4, {
+        body: "Checkout can oversell because it never calls `reserveInventory` before charging.",
+      })],
+      provenanceFindings: [{
+        sourceSpecialists: ["logic", "performance"],
+        sourceFindingIds: ["logic-0", "performance-0"],
+        action: "merged",
+        verifiedViaRetrieval: false,
+      }],
+      provenanceDropped: [],
+      specialists: [
+        { role: "logic", findings: [logic] },
+        { role: "performance", findings: [perf] },
+      ],
+    })
+    expect(r.findings).toHaveLength(2)
+    expect(r.provenanceFindings).toHaveLength(2)
+    expect(r.provenanceFindings[0]?.sourceFindingIds).toEqual(["logic-0"])
+    expect(r.provenanceFindings[1]?.sourceFindingIds).toEqual(["performance-0"])
+    expect(r.restored.map((x) => x.id)).toEqual(["performance-0"])
+  })
+
+  it("does NOT re-inject a source finding explicitly dropped as a proven false positive", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [dropped("security-0", "false positive on diff inspection")],
+      specialists: [{ role: "security", findings: [finding("security-0", 4)] }],
+    })
+    expect(r.findings).toHaveLength(0)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps a self-contradicted SSRF source unless the synth records explicit FP proof", () => {
+    const ssrf = finding("security-0", 4, {
+      category: "security",
+      headline: "SSRF via Content-Type",
+      body: "The parser trusts a response Content-Type header, but this PR only reads bytes from a local object binding.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [ssrf],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [ssrf] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.provenanceFindings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps an SSRF source finding when the source text does not explicitly prove a local-only path", () => {
+    const ssrf = finding("security-0", 4, {
+      category: "security",
+      headline: "SSRF via URL fetch",
+      body: "The handler passes attacker-controlled `url` into `fetch(url)` without allow-listing the destination.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [ssrf],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [ssrf] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps an SSRF source finding when local bytes feed a later outbound URL action", () => {
+    const ssrf = finding("security-0", 4, {
+      category: "security",
+      headline: "SSRF via Content-Type redirect",
+      body: "The parser only reads bytes from a local R2 object binding and then constructs a redirect URL from the parsed content.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [ssrf],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [ssrf] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps an SSRF source finding when outbound evidence appears far after local bytes", () => {
+    const filler = " The parsing notes are long and mostly about compression boundaries.".repeat(5)
+    const ssrf = finding("security-0", 4, {
+      category: "security",
+      headline: "SSRF via Content-Type redirect",
+      body: `The parser only reads bytes from a local R2 object binding.${filler} It later builds a redirect URL from parsed content and sends an outbound request.`,
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [ssrf],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [ssrf] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps an SSRF source finding when outbound evidence appears before local bytes", () => {
+    const ssrf = finding("security-0", 4, {
+      category: "security",
+      headline: "SSRF via Content-Type redirect",
+      body: "The parser builds a redirect URL and sends an outbound request before it only reads bytes from a local R2 object binding.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [ssrf],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [ssrf] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps a path-traversal source even when its own text argues impossibility", () => {
+    const traversal = finding("security-0", 4, {
+      category: "security",
+      headline: "Path traversal via `baseMs`",
+      body: "`baseMs` is numeric and cannot reach a filesystem path sink; there is no filesystem path sink in this code.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [traversal],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [traversal] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps a prototype-pollution source when safe-parse text is followed by a real merge sink", () => {
+    const proto = finding("security-0", 4, {
+      category: "security",
+      headline: "Prototype pollution through parsed config merge",
+      body: "`JSON.parse` alone does not pollute prototypes, but the later `Object.assign` merges parsed `__proto__` into the shared config object.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [proto],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [proto] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("does not apply text-impossibility filtering to AST findings", () => {
+    const ast = finding("ast/no-prototype-pollution/abc/12", 5, {
+      category: "security",
+      headline: "AST-confirmed prototype pollution merge",
+      body: "`JSON.parse` alone does not pollute prototypes, but the AST saw `Object.assign` merge `__proto__` into a target object.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [ast],
+      provenanceFindings: [prov("ast/no-prototype-pollution/abc/12")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [ast] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("keeps a path-traversal source when numeric text does not explicitly prove impossibility", () => {
+    const traversal = finding("security-0", 4, {
+      category: "security",
+      headline: "Path traversal in `loadConfig`",
+      body: "The numeric filename suffix is attacker-controlled and there is no path sanitization before the filesystem read.",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [traversal],
+      provenanceFindings: [prov("security-0")],
+      provenanceDropped: [],
+      specialists: [{ role: "security", findings: [traversal] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("removes a superseded source id from kept provenance instead of restoring the duplicate", () => {
+    const ast = finding("ast/cents-as-dollars/abc/12", 4, {
+      headline: "AST-confirmed cents-as-dollars bug",
+    })
+    const r = applySynthSourceFindingFloor({
+      findings: [ast],
+      provenanceFindings: [{
+        sourceSpecialists: ["logic"],
+        sourceFindingIds: ["logic-0", "ast/cents-as-dollars/abc/12"],
+        action: "merged",
+        verifiedViaRetrieval: true,
+      }],
+      provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.provenanceFindings).toHaveLength(1)
+    expect(r.provenanceFindings[0]?.sourceFindingIds).toEqual(["ast/cents-as-dollars/abc/12"])
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("does NOT re-inject a source finding explicitly superseded by an AST finding", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("ast/cents-as-dollars/abc/12", 4)],
+      provenanceFindings: [{
+        sourceSpecialists: ["logic"],
+        sourceFindingIds: ["ast/cents-as-dollars/abc/12"],
+        action: "kept",
+        verifiedViaRetrieval: false,
+      }],
+      provenanceDropped: [dropped("logic-0", "superseded_by_ast/ast/cents-as-dollars/abc/12")],
+      specialists: [{ role: "logic", findings: [finding("logic-0", 4)] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("restores a score>=4 source finding if the synth only labeled it duplicate without representing it", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [dropped("performance-0", "duplicate")],
+      specialists: [{ role: "performance", findings: [finding("performance-0", 4)] }],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.restored.map((x) => x.id)).toEqual(["performance-0"])
+  })
+
+  it("ignores lower-severity findings so FP cleanup does not get noisier", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [],
+      specialists: [{ role: "tests", findings: [finding("tests-0", 3)] }],
+    })
+    expect(r.findings).toHaveLength(0)
+    expect(r.restored).toHaveLength(0)
+  })
+
+  it("dedupes duplicate source ids while preserving findings/provenance alignment", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("logic-kept", 4)],
+      provenanceFindings: [prov("logic-kept")],
+      provenanceDropped: [],
+      specialists: [
+        { role: "logic", findings: [finding("dup-0", 4, { headline: "low severity duplicate" })] },
+        { role: "security", findings: [finding("dup-0", 5, { headline: "high severity duplicate" })] },
+      ],
+    })
+    expect(r.findings).toHaveLength(2)
+    expect(r.provenanceFindings).toHaveLength(2)
+    expect(r.findings.length).toBe(r.provenanceFindings.length)
+    expect(r.restored.map((x) => x.id)).toEqual(["dup-0"])
+    expect(r.restored[0]).toMatchObject({ role: "security", score: 5, headline: "high severity duplicate" })
+    expect(r.findings[1]?.headline).toBe("high severity duplicate")
+  })
+
+  it("prefers security over logic for duplicate source ids with equal severity", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("logic-kept", 4)],
+      provenanceFindings: [prov("logic-kept")],
+      provenanceDropped: [],
+      specialists: [
+        { role: "logic", findings: [finding("dup-0", 4, { headline: "logic duplicate" })] },
+        { role: "security", findings: [finding("dup-0", 4, { headline: "security duplicate" })] },
+      ],
+    })
+    expect(r.findings).toHaveLength(2)
+    expect(r.restored).toHaveLength(1)
+    expect(r.restored[0]).toMatchObject({ role: "security", score: 4, headline: "security duplicate" })
+    expect(r.findings[1]?.headline).toBe("security duplicate")
+  })
+
+  it("trims stale provenance tail before restoring so appended findings stay index-paired", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("security-0", 5)],
+      // Synth wrote a provenance tail entry but no matching verdict finding.
+      provenanceFindings: [prov("security-0"), prov("logic-0")],
+      provenanceDropped: [],
+      specialists: [
+        { role: "security", findings: [finding("security-0", 5)] },
+        { role: "logic", findings: [finding("logic-0", 4)] },
+      ],
+    })
+    expect(r.findings).toHaveLength(2)
+    expect(r.provenanceFindings).toHaveLength(2)
+    expect(r.provenanceFindings[1]?.sourceFindingIds).toEqual(["logic-0"])
+    expect(r.restored.map((x) => x.id)).toEqual(["logic-0"])
+  })
+
+  it("keeps extra synth verdict findings when provenance is shorter", () => {
+    const r = applySynthSourceFindingFloor({
+      findings: [finding("synth-extra", 4, { headline: "synth finding without provenance" })],
+      provenanceFindings: [],
+      provenanceDropped: [],
+      specialists: [],
+    })
+    expect(r.findings).toHaveLength(1)
+    expect(r.provenanceFindings).toHaveLength(1)
+    expect(r.provenanceFindings[0]).toMatchObject({
+      sourceSpecialists: [],
+      sourceFindingIds: [],
+      action: "rewritten",
+      verifiedViaRetrieval: false,
+    })
     expect(r.restored).toHaveLength(0)
   })
 })

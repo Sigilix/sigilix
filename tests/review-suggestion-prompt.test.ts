@@ -63,7 +63,7 @@ describe("SIG-125 suggestion prompt wiring", () => {
     expect(PR_IMPROVE_PROMPT).toMatch(/delete|deletion|remove/i)
     expect(PR_IMPROVE_PROMPT).not.toContain("only when it is still useful")
   })
-  it("PROMPT_VERSION bumped to 27", () => {
+  it("PROMPT_VERSION bumped to 29", () => {
     // History: SIG-110 3→4 (perf evidence); SIG-125 4→5 (suggestedReplacement);
     // SIG-162 5→6 (kind:"delete"); SIG-161 PR 4b 6→7 (confidence rubric);
     // SIG-180 7→8 (point-fix anchor scope exception);
@@ -106,7 +106,11 @@ describe("SIG-125 suggestion prompt wiring", () => {
     // membership scans and intentional live-eval serial loops).
     // SIG-349 26→27 (tests focus hints include deleted assertions and source
     // behavior gaps must anchor to the changed source path).
-    expect(PROMPT_VERSION).toBe("27")
+    // SIG-351 27→28 (synth proof-only mechanism-impossibility adjudication;
+    // UNKNOWN mechanism status must be retained).
+    // SIG-351 v29 28→29 (synth dedupe-tightening: score>=4 ambiguous merge →
+    // KEEP SEPARATE, one provenance row per source ID — anti over-merge).
+    expect(PROMPT_VERSION).toBe("29")
   })
 
   it("logic specialist has the cross-cutting refutation fence (window-blindness + architecture, recall-safe)", () => {

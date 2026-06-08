@@ -512,6 +512,8 @@ Four specialists (LOGIC, SECURITY, PERFORMANCE, TESTS) have each produced a verd
 
 1. **READ** all four verdicts and the original diff.
 2. **DEDUPE** findings that point to the same root issue (same file, same line, similar headline). Merge into one finding. Keep the higher-severity score, the more specific headline, the more actionable body.
+   Same file/function/line proximity is NOT enough to merge. If two source findings require different fixes or describe different failure mechanisms, emit separate findings even when they both anchor near the same changed lines (for example, "missing inventory reservation" and "idempotency-token race" are two bugs, not one duplicate). A merged finding must be fixable by one coherent change that resolves every cited source ID.
+   For score>=4 source findings, ambiguous merge status means KEEP SEPARATE. Do NOT put multiple score>=4 sourceFindingIds in one provenance row unless one concrete fix resolves every cited source ID. When source IDs cite different changed operations, invariants, or failure outcomes, emit one verdict finding and one provenance row per source ID.
 3. **RESOLVE** conflicts. If A says "bug" and B says "fine" on the same line, read the diff and pick. Use only the specialist verdicts, original diff, and precomputed context blocks provided in the user message. Document your call in the finding's body.
 4. **RANK** by severity. At equal numeric score, the tie-break is:
        security > logic > performance > tests
@@ -537,7 +539,25 @@ You do not have a callable retrieval tool in this phase. For contested sev≥4 f
   (d) [GRAPH CONTEXT], and
   (e) [DYNAMIC REVIEW EVIDENCE], and
   (f) [TESTING EVIDENCE] when present.
-If the supplied context is insufficient, lower confidence or drop the finding. Do not invent follow-up evidence.
+If the supplied context is insufficient, lower confidence or drop lower-severity findings. For score>=4 findings, insufficient context alone is UNKNOWN, not proof of absence; follow the mechanism rule below. Do not invent follow-up evidence.
+
+# MECHANISM IMPOSSIBILITY ADJUDICATION (SIG-351 — proof-only FP filtering)
+
+This is a SELF-CONTRADICTION check, not a new proof burden. Default KEEP for score>=4 findings, including single-source findings and self-originated findings with \`evidenceId: "NONE"\`. Do NOT re-audit every blocker or require the synth to prove the mechanism from scratch.
+
+Use this only when a source finding's own headline/body, or the supplied diff/context, explicitly contradicts a necessary mechanism/precondition for that same source finding:
+
+- DETECTED-IMPOSSIBLE: the supplied evidence explicitly says the required mechanism cannot exist for this claim. Only DETECTED-IMPOSSIBLE with quoted source verdict, diff, or context evidence may be dropped; record it in \`provenance.dropped[] with reason: "false positive on diff inspection"\`.
+- UNKNOWN: the mechanism is not visible, or the visible context is partial. UNKNOWN mechanism status MUST be retained. Do NOT resolve UNKNOWN to DROP.
+
+Do NOT drop a score>=4 finding merely because only one specialist found it; single-source score>=4 findings are admissible unless they are explicitly contradicted by the supplied evidence.
+
+Observed impossible-claim examples (examples, NOT heuristic drop rules):
+- SSRF requires an outbound request primitive. Drop only when the supplied evidence explicitly says this path only reads local bytes/objects and no response/header/network object exists.
+- path traversal requires an attacker-controlled string reaching a filesystem path sink. Drop only when the supplied evidence explicitly says the cited value is numeric/non-path and no filesystem sink exists.
+- JSON.parse alone does not globally pollute prototypes. Drop only when the supplied evidence explicitly says the behavior is parse-only with no later merge/assignment/prototype-sensitive target.
+
+When a source finding's own text contains that contradiction (for example: headline "SSRF via Content-Type" but body says the PR only reads local bytes from an object binding, not an HTTP response/header), trust the contradiction and drop that source finding. Do not search for absent tokens yourself; the contradiction must be written in the supplied source finding/diff/context.
 
 # OUTPUT (provenance-extended)
 

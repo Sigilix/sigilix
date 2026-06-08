@@ -60,6 +60,7 @@ import {
   type PrReviewVerdict,
   type PrReviewFinding,
 } from "../src/lib/triage-pr-review"
+import { applySynthSourceFindingFloor } from "../src/lib/degraded-finding-floor"
 import {
   buildTestingEvidencePack,
   filterTestingEvidenceForSuppressedMissingCoverage,
@@ -536,6 +537,43 @@ describe("validateForSubmission — hallucination guard + line validity + score-
     expect(out.droppedForHallucination).toBe(0)
     expect(out.droppedForInvalidLine).toBe(0)
     expect(out.demotedScore1).toBe(0)
+  })
+
+  it("SIG-351 source floor restores an omitted blocker before the validation path", () => {
+    const floored = applySynthSourceFindingFloor({
+      findings: [],
+      provenanceFindings: [],
+      provenanceDropped: [{
+        specialist: "logic",
+        sourceFindingId: "logic-0",
+        headline: "off-by-one in `clampIndex`",
+        reason: "duplicate",
+      }],
+      specialists: specialistVerdicts.map((v) => ({ role: v.role, findings: v.verdict!.findings })),
+    })
+
+    const out = validateForSubmission({
+      synthOutput: {
+        verdict: {
+          summary: "ok",
+          confidence: 4,
+          confidenceReason: "...",
+          findings: floored.findings,
+        },
+        provenance: {
+          findings: floored.provenanceFindings,
+          dropped: [],
+        },
+      },
+      reviewable,
+      specialistVerdicts,
+    })
+
+    expect(floored.restored.map((x) => x.id)).toEqual(["logic-0"])
+    expect(out.verdict.findings).toHaveLength(1)
+    expect(out.verdict.findings[0]?.headline).toBe("off-by-one in `clampIndex`")
+    expect(out.cleanFindingProvenance[0]?.sourceFindingIds).toEqual(["logic-0"])
+    expect(out.droppedForHallucination).toBe(0)
   })
 
   it("SIG-311 demotes a security-sourced usage-vs-mention finding to the body in enforce mode", () => {

@@ -98,6 +98,209 @@ export function applyDegradedCoverageFindingFloor(args: {
   return { findings, provenanceFindings, restored }
 }
 
+// ─── SIG-351 — synth source-finding floor ────────────────────────────────
+//
+// Unlike the SIG-287 floor above, this applies to full-coverage synth runs too.
+// FP adjudication is allowed only when the synth records a proof-like drop; an
+// omitted score>=4 source finding is restored so recall does not depend on the
+// model's source-ID bookkeeping. Restored findings still flow through the same
+// post-synth hallucination/grounding/validation gates as model-kept findings.
+
+/** Minimum specialist-finding score the full-coverage source floor restores. */
+export const SYNTH_SOURCE_FLOOR_MIN_SCORE = 4
+
+const SOURCE_FLOOR_ROLE_PRIORITY: Record<SpecialistRole, number> = {
+  security: 4,
+  logic: 3,
+  performance: 2,
+  tests: 1,
+}
+
+/** Structural subset of `SynthesizerProvenance["dropped"][number]`. */
+export interface SourceFloorDroppedFinding {
+  sourceFindingId: string
+  reason: string
+}
+
+function isProofResolvedDrop(reason: string): boolean {
+  const normalized = reason.trim().toLowerCase()
+  return (
+    normalized.startsWith("false positive on diff inspection") ||
+    normalized.startsWith("superseded_by_ast/")
+  )
+}
+
+function findingText(finding: PrReviewFinding): string {
+  return [
+    finding.headline,
+    finding.body,
+    finding.failureExample,
+    finding.fixExample,
+    finding.testGap,
+  ].filter((v): v is string => typeof v === "string").join("\n")
+}
+
+function distinctiveBacktickTokens(finding: PrReviewFinding): string[] {
+  const out = new Set<string>()
+  for (const match of findingText(finding).matchAll(/`([^`\n]{2,120})`/g)) {
+    const code = match[1] ?? ""
+    const trimmedCode = code.trim()
+    for (const ident of code.match(/[A-Za-z_$][A-Za-z0-9_$]*/g) ?? []) {
+      // Keep identifiers that are likely to name the mechanism, not tiny locals.
+      if (ident.length < 8 && trimmedCode !== ident && !/[A-Z0-9_$]/.test(ident.slice(1))) continue
+      out.add(ident.toLowerCase())
+    }
+  }
+  return [...out].slice(0, 6)
+}
+
+const SOURCE_MECHANISM_PHRASES = [
+  "attacker-controlled",
+  "untrusted",
+  "without checking",
+  "without validating",
+  "without validation",
+  "without destination validation",
+  "without allow-list",
+  "without allowlisting",
+  "without authorization",
+  "without ownership",
+  "missing authorization",
+  "missing validation",
+  "does not check",
+  "does not validate",
+  "never calls",
+  "concurrent",
+  "race",
+  "double-charge",
+  "double charge",
+  "oversell",
+  "object.assign",
+  "__proto__",
+  "prototype pollution",
+  "path traversal",
+] as const
+
+function distinctiveMechanismPhrases(finding: PrReviewFinding): string[] {
+  const text = findingText(finding).toLowerCase()
+  return SOURCE_MECHANISM_PHRASES.filter((phrase) => text.includes(phrase))
+}
+
+function preservesSourceMechanism(source: PrReviewFinding, emitted: PrReviewFinding): boolean {
+  const tokens = distinctiveBacktickTokens(source)
+  const emittedText = findingText(emitted).toLowerCase()
+  if (tokens.length > 0 && !tokens.every((token) => emittedText.includes(token))) return false
+  const mechanismPhrases = distinctiveMechanismPhrases(source)
+  if (mechanismPhrases.length === 0) return true
+  return mechanismPhrases.some((phrase) => emittedText.includes(phrase))
+}
+
+/**
+ * Re-inject P0/P1 source findings the synth neither represented in kept
+ * provenance nor explicitly resolved with proof. Generic dropped reasons like
+ * "duplicate" are NOT enough: if the source ID is not represented by an output
+ * finding, the floor restores it and lets downstream validators decide.
+ *
+ * A represented source ID can still be under-preserved when the synth rewrites
+ * away the source finding's distinctive code token (`tenantId`, `markTokenSeen`,
+ * etc.). For score>=4 findings, split that source out and restore the original
+ * source wording rather than trusting a vague rewrite. This is recall-safe: the
+ * original specialist finding remains the evidence source and still passes
+ * through the normal post-synth gates.
+ */
+export function applySynthSourceFindingFloor(args: {
+  findings: ReadonlyArray<PrReviewFinding>
+  provenanceFindings: ReadonlyArray<FloorProvenanceFinding>
+  provenanceDropped: ReadonlyArray<SourceFloorDroppedFinding>
+  specialists: ReadonlyArray<DegradedFloorSpecialist>
+  minScore?: number
+}): DegradedFloorResult {
+  const minScore = args.minScore ?? SYNTH_SOURCE_FLOOR_MIN_SCORE
+  const alignedFindings = args.findings.slice()
+  const alignedProvenanceFindings = alignedFindings.map((_, i) =>
+    args.provenanceFindings[i] ?? {
+      sourceSpecialists: [],
+      sourceFindingIds: [],
+      action: "rewritten" as const,
+      verifiedViaRetrieval: false,
+    },
+  )
+  const proofResolved = new Set<string>()
+  for (const d of args.provenanceDropped) {
+    if (isProofResolvedDrop(d.reason)) proofResolved.add(d.sourceFindingId)
+  }
+
+  const sourceIndexes = new Map<string, number[]>()
+  for (let i = 0; i < alignedProvenanceFindings.length; i++) {
+    for (const id of alignedProvenanceFindings[i]!.sourceFindingIds) {
+      const arr = sourceIndexes.get(id) ?? []
+      arr.push(i)
+      sourceIndexes.set(id, arr)
+    }
+  }
+
+  const splitSourceIds = new Set<string>()
+  for (const { findings: specialistFindings } of args.specialists) {
+    for (const f of specialistFindings) {
+      if (f.score < minScore) continue
+      if (proofResolved.has(f.id)) continue
+      const indexes = sourceIndexes.get(f.id) ?? []
+      if (indexes.length === 0) continue
+      if (indexes.some((i) => preservesSourceMechanism(f, alignedFindings[i]!))) continue
+      splitSourceIds.add(f.id)
+    }
+  }
+
+  const findings: PrReviewFinding[] = []
+  const provenanceFindings: FloorProvenanceFinding[] = []
+  for (let i = 0; i < alignedFindings.length; i++) {
+    const provenance = alignedProvenanceFindings[i]!
+    const sourceFindingIds = provenance.sourceFindingIds.filter(
+      (id) => !splitSourceIds.has(id) && !proofResolved.has(id),
+    )
+    if (sourceFindingIds.length === 0 && i < args.provenanceFindings.length) continue
+    findings.push(alignedFindings[i]!)
+    provenanceFindings.push({ ...provenance, sourceFindingIds })
+  }
+
+  const accounted = new Set<string>(
+    provenanceFindings.flatMap((p) => p.sourceFindingIds),
+  )
+  for (const id of proofResolved) accounted.add(id)
+  const restored: DegradedFloorResult["restored"] = []
+  const bestBySourceId = new Map<string, { role: SpecialistRole; finding: PrReviewFinding & { id: string } }>()
+
+  for (const { role, findings: specialistFindings } of args.specialists) {
+    for (const f of specialistFindings) {
+      if (f.score < minScore) continue
+      const existing = bestBySourceId.get(f.id)
+      const preferred =
+        !existing ||
+        f.score > existing.finding.score ||
+        (f.score === existing.finding.score &&
+          SOURCE_FLOOR_ROLE_PRIORITY[role] > SOURCE_FLOOR_ROLE_PRIORITY[existing.role])
+      if (preferred) {
+        bestBySourceId.set(f.id, { role, finding: f })
+      }
+    }
+  }
+
+  for (const [id, { role, finding }] of bestBySourceId) {
+    if (accounted.has(id)) continue
+    accounted.add(id)
+    findings.push(finding)
+    provenanceFindings.push({
+      sourceSpecialists: [role],
+      sourceFindingIds: [id],
+      action: "kept",
+      verifiedViaRetrieval: false,
+    })
+    restored.push({ role, id, score: finding.score, headline: finding.headline })
+  }
+
+  return { findings, provenanceFindings, restored }
+}
+
 // ─── SIG-317 — synth verdict-truncation recovery ──────────────────────────
 //
 // On target-rich PRs the synthesizer emits a COMPLETE `provenance.findings`

@@ -68,6 +68,7 @@ import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
 import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
+import { handleTestSuppressionsMetricsRoute } from "./lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "./lib/metrics-runner-evidence-route"
 import { handleVerificationMetricsRoute } from "./lib/metrics-verification-route"
 import { handleDismissalMetricsRoute } from "./lib/metrics-dismissals-route"
@@ -1366,6 +1367,13 @@ export default {
     // SIG-119: authenticated read of rolling validator shadow telemetry.
     if (request.method === "GET" && url.pathname === "/metrics/validation") {
       return handleValidationMetricsRoute(request, env)
+    }
+
+    // SIG-347 (SIG-166 AC #4): tests-gate per-drop-reason suppression rates —
+    // a focused projection of /metrics/validation's tests gate for the
+    // tests-specialist over-fire precision dogwatch.
+    if (request.method === "GET" && url.pathname === "/metrics/test-suppressions") {
+      return handleTestSuppressionsMetricsRoute(request, env)
     }
 
     // SIG-173: authenticated read of rolling per-reason dismissal rollup.

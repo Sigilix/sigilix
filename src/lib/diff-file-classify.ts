@@ -73,7 +73,7 @@ function isTestPath(path: string): boolean {
   return false
 }
 
-function classifyKind(path: string): DiffFileKind {
+export function classifyKind(path: string): DiffFileKind {
   if (isTestPath(path)) return "test"
   const base = path.split("/").pop() ?? path
   if (CONFIG_FILE_RE.test(base)) return "config"

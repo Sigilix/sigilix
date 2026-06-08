@@ -296,6 +296,34 @@ describe("runWithRetryAndFallback — per-attempt timeout cap", () => {
     expect(result.verdict).toEqual({ ok: true })
     expect(result.attemptsUsed).toBe(1)
   })
+
+  it("uses config.perAttemptTimeoutMs when the caller does not pass an explicit cap", async () => {
+    mockChat.mockResolvedValueOnce(ok("GOOD"))
+    const attempts: AttemptCallbackInfo[] = []
+    const result = await runWithRetryAndFallback({
+      config: { ...baseConfig, perAttemptTimeoutMs: 110_000 },
+      ...baseArgs,
+      onAttempt: (info) => attempts.push(info),
+    })
+    expect(result.verdict).toEqual({ ok: true })
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]?.timeoutMs).toBe(110_000)
+  })
+
+  it("uses config.perAttemptTimeoutMs for the actual abort timer", async () => {
+    mockChat.mockImplementationOnce(slowChat(200, ok("late-primary")))
+    const attempts: AttemptCallbackInfo[] = []
+    const result = await runWithRetryAndFallback({
+      config: { primary: "primary-model:cloud", retries: 0, fallback: null, perAttemptTimeoutMs: 50 },
+      ...baseArgs,
+      onAttempt: (info) => attempts.push(info),
+    })
+    expect(result.verdict).toBeNull()
+    expect(result.failureReason?.toLowerCase()).toContain("abort")
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]?.timeoutMs).toBe(50)
+    expect(attempts[0]?.failureReason?.toLowerCase()).toContain("abort")
+  })
 })
 
 describe("runWithRetryAndFallback — Phase 4a.4 budget invariant", () => {

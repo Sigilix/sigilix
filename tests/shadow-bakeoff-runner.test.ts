@@ -131,6 +131,29 @@ describe("runShadowSpecialist", () => {
     expect(result.findings).toEqual([])
   })
 
+  it("honors shadowConfig.perAttemptTimeoutMs in attempt telemetry", async () => {
+    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_VERDICT_JSON } })
+    const result = await runShadowSpecialist({
+      role: "tests",
+      shadowConfig: {
+        primary: "minimax-m3:cloud",
+        retries: 1,
+        fallback: "deepseek-v4-pro:cloud",
+        perAttemptTimeoutMs: 110_000,
+      },
+      apiKey: "fake",
+      systemPrompt: "sys",
+      userMessage: "usr",
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      perfCtx: CTX,
+    })
+    expect(result.verdictOk).toBe(true)
+    const events = shadowAttemptEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]?.["timeoutMs"]).toBe(110_000)
+  })
+
   it("aborts cleanly when the outer signal is already aborted (no chat calls)", async () => {
     const ac = new AbortController()
     ac.abort()
@@ -221,5 +244,28 @@ describe("runShadowSynth", () => {
     const events = shadowAttemptEvents()
     expect(events).toHaveLength(1)
     expect(events[0]?.["role"]).toBe("synth")
+  })
+
+  it("honors shadowConfig.perAttemptTimeoutMs in synth attempt telemetry", async () => {
+    vi.mocked(chat).mockResolvedValueOnce({ message: { role: "assistant", content: VALID_SYNTH_JSON } })
+    const result = await runShadowSynth({
+      shadowConfig: {
+        primary: "deepseek-v4-flash:cloud",
+        retries: 1,
+        fallback: "qwen3-coder-next:cloud",
+        perAttemptTimeoutMs: 95_000,
+      },
+      apiKey: "fake",
+      systemPrompt: "sys",
+      userMessage: "usr",
+      chatEnabled: "on",
+      signal: new AbortController().signal,
+      perfCtx: CTX,
+    })
+    expect(result.verdictOk).toBe(true)
+    const events = shadowAttemptEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]?.["role"]).toBe("synth")
+    expect(events[0]?.["timeoutMs"]).toBe(95_000)
   })
 })

@@ -150,7 +150,6 @@ import {
 import {
   evaluateSecurityFinding,
   evaluateScanFactDismissal,
-  parseSecurityValidatorMode,
   deriveSecurityBucket,
   factClassCompatible,
   AUTHZ_BUCKET,
@@ -161,14 +160,12 @@ import { durableObjectClassSpans, lineInDurableObjectClass, type LineSpan } from
 import { findingClaimsIntraInstanceRace } from "./validate-do-race-finding"
 import {
   evaluateTestFinding,
-  parseTestsValidatorMode,
   parseCoverageGapRef,
   type TestsValidatorMode,
   type TestDropReason,
 } from "./validate-test-finding"
 import {
   evaluateLogicFinding,
-  parseLogicValidatorMode,
   buildChangedLineTextByPath,
   type LogicValidatorMode,
   type LogicDropReason,
@@ -176,13 +173,11 @@ import {
 } from "./validate-logic-finding"
 import {
   evaluateLogicRefutation,
-  parseLogicRefutationMode,
   type LogicRefutationMode,
   type LogicRefutationDropReason,
 } from "./validate-logic-refutation"
 import {
   evaluateRefutationSurvival,
-  parseRefutationSurvivalMode,
   type RefutationSurvivalMode,
   type RefutationSurvivalDropReason,
 } from "./validate-refutation-survival"
@@ -197,20 +192,17 @@ import {
   perfFindingIsSelfOriginated,
   clampTrivialSyncIoSeverity,
   clampIntentionalLiveEvalSerialLoopSeverity,
-  parsePerfValidatorMode,
   type PerfValidatorMode,
   type PerfDropReason,
   type PerfEvidence,
 } from "./validate-perf-finding"
 import {
   evaluateInlineGrounding,
-  parseInlineGroundingValidatorMode,
   type InlineGroundingValidatorMode,
   type InlineGroundingDropReason,
 } from "./validate-inline-grounding"
 import {
   evaluateAbsenceGrounding,
-  parseAbsenceClaimValidatorMode,
   type AbsenceClaimValidatorMode,
   type AbsenceGroundingDropReason,
 } from "./validate-absence-grounding"
@@ -222,13 +214,11 @@ import {
 } from "./validate-window-blindness"
 import {
   evaluateSecurityGrounding,
-  parseSecurityGroundingValidatorMode,
   type SecurityGroundingValidatorMode,
   type SecurityGroundingDropReason,
 } from "./validate-security-grounding"
 import {
   evaluateSecurityUsage,
-  parseSecurityUsageValidatorMode,
   type SecurityUsageValidatorMode,
   type SecurityUsageDropReason,
 } from "./validate-security-usage"
@@ -5021,7 +5011,7 @@ export async function handlePrReviewEnsemble(
       // SIG-141: DurableObject class spans — authz findings inside a DO class
       // body are suppressed (the binding is the trust boundary).
       durableObjectClassSpans: doClassSpans,
-      securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
+      securityValidatorMode: ensembleConfig.validatorModes.securityValidatorMode,
       onSecurityFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -5042,7 +5032,7 @@ export async function handlePrReviewEnsemble(
       // would-drop until the operator flips OPENCLAW_TESTS_VALIDATOR_MODE
       // to "enforce". Reuses the `pr-review-finding-rejected-validation`
       // event with a `gate: "tests"` discriminator.
-      testsValidatorMode: parseTestsValidatorMode(env.OPENCLAW_TESTS_VALIDATOR_MODE),
+      testsValidatorMode: ensembleConfig.validatorModes.testsValidatorMode,
       // SIG-118: thread the real coverage-gap set so both the SIG-113
       // citation gate and the SIG-111 specificity gate accept a
       // `coverageGap:<path>:<line>` ref as a genuine missing-coverage
@@ -5077,7 +5067,7 @@ export async function handlePrReviewEnsemble(
         changedLineTextByPath,
         astLogicFindings: astResult.findings.filter((f) => f.roleHint === "logic"),
       },
-      logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
+      logicValidatorMode: ensembleConfig.validatorModes.logicValidatorMode,
       onLogicFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -5097,7 +5087,7 @@ export async function handlePrReviewEnsemble(
       // (a sev>=4 logic finding lacking a survival rationale) until the
       // operator flips OPENCLAW_LOGIC_REFUTATION_MODE to "enforce". Reuses the
       // `pr-review-finding-rejected-validation` event (`gate: "logic-refutation"`).
-      logicRefutationMode: parseLogicRefutationMode(env.OPENCLAW_LOGIC_REFUTATION_MODE),
+      logicRefutationMode: ensembleConfig.validatorModes.logicRefutationMode,
       onLogicRefutationFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -5118,7 +5108,7 @@ export async function handlePrReviewEnsemble(
       // until the operator flips OPENCLAW_REFUTATION_SURVIVAL_MODE to "enforce".
       // Reuses the `pr-review-finding-rejected-validation` event (`gate:
       // "refutation-survival"`). `dropped` here = "demoted to body".
-      refutationSurvivalMode: parseRefutationSurvivalMode(env.OPENCLAW_REFUTATION_SURVIVAL_MODE),
+      refutationSurvivalMode: ensembleConfig.validatorModes.refutationSurvivalMode,
       onRefutationSurvivalFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -5143,7 +5133,7 @@ export async function handlePrReviewEnsemble(
       // `astFilesByPath`). Default
       // `shadow` — counts/telemeters the would-drop until the operator flips
       // OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE to "enforce".
-      logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
+      logicClaimRefutationMode: ensembleConfig.validatorModes.logicClaimRefutationMode,
       onLogicClaimRefutationFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -5167,7 +5157,7 @@ export async function handlePrReviewEnsemble(
         changedLineTextByPath,
         astPerfFindings: astResult.findings.filter((f) => f.roleHint === "performance"),
       },
-      perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
+      perfValidatorMode: ensembleConfig.validatorModes.perfValidatorMode,
       profile: sigilixConfig.profile ?? "chill",
       onPerfFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
@@ -5188,7 +5178,7 @@ export async function handlePrReviewEnsemble(
       // OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE to "enforce". Reuses the
       // `pr-review-finding-rejected-validation` event (`gate:
       // "inline-grounding"`). `dropped` here = "demoted to body".
-      inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
+      inlineGroundingValidatorMode: ensembleConfig.validatorModes.inlineGroundingValidatorMode,
       onInlineGroundingFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -5211,7 +5201,7 @@ export async function handlePrReviewEnsemble(
       // packing signals from `handlePrReviewEnsemble`. Reuses the
       // `pr-review-finding-rejected-validation` event (`gate:
       // "absence-grounding"`). `dropped` here = "demoted to body".
-      absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
+      absenceClaimValidatorMode: ensembleConfig.validatorModes.absenceClaimValidatorMode,
       wasTruncated,
       droppedPaths: droppedTooLarge,
       onAbsenceFindingDropped: (finding, info) => {
@@ -5235,7 +5225,7 @@ export async function handlePrReviewEnsemble(
       // `astFilesByPath` as the full-file source. Reuses the
       // `pr-review-finding-rejected-validation` event (`gate: "window-blindness"`).
       // `dropped` here = "demoted to body".
-      windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
+      windowBlindnessValidatorMode: ensembleConfig.validatorModes.windowBlindnessValidatorMode,
       fullFileByPath: astFilesByPath,
       astCache,
       onWindowBlindnessFindingDropped: (finding, info) => {
@@ -5264,7 +5254,7 @@ export async function handlePrReviewEnsemble(
       // `securityManifest` + `addedLineTextByLine` already threaded above,
       // and the `pr-review-finding-rejected-validation` event (`gate:
       // "security-grounding"`). `dropped` here = "demoted to body".
-      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE),
+      securityGroundingValidatorMode: ensembleConfig.validatorModes.securityGroundingValidatorMode,
       onSecurityGroundingFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",
@@ -5282,7 +5272,7 @@ export async function handlePrReviewEnsemble(
       },
       // SIG-311 Layers A+B: security usage-vs-mention gate. Default off until
       // OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE is flipped to shadow/enforce.
-      securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
+      securityUsageValidatorMode: ensembleConfig.validatorModes.securityUsageValidatorMode,
       onSecurityUsageFindingDropped: (finding, info) => {
         console.log(JSON.stringify({
           event: "pr-review-finding-rejected-validation",

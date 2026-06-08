@@ -1,42 +1,33 @@
-// SIG-318 (PR 3) — EnsembleConfig: the parse-once, typed view of the ensemble's
-// env-derived settings.
+// SIG-318 — the EDGE: parses the Worker env into the domain `EnsembleConfig`
+// contract (`./domain/config`).
 //
-// `parseEnsembleConfig` is a PURE function of a structural env (it takes the env
-// fields it reads, not the live Worker `env`), so it is fully unit-testable and
-// the rest of the ensemble can depend on a typed `EnsembleConfig` instead of
-// reading `env.OPENCLAW_*` ad hoc — the "env-reading traps" the clean-arch
-// decomposition removes. It is migrated one cohesive cluster at a time
-// (SIG-318 PR 3+); this PR covers the AST security-scan modes. As later clusters
-// (validator gate modes, feature flags, tunables) migrate, this Config grows and
-// the single parse call moves up to the orchestrator edge.
+// This is the ONLY module that reads the Worker env and knows the `OPENCLAW_*`
+// variable names. It composes the domain mode-parsers (an inward dependency) to
+// IMPLEMENT the contract, then the orchestrator gets the typed config injected —
+// so domain/use-case code never reads `env` (the "env-reading traps" the
+// clean-arch decomposition removes). The contract's home is `./domain/config`;
+// this module only produces it. Migrated one cohesive cluster at a time
+// (SIG-318 PR 3+): PR 3 = AST scan modes, PR 4 = validator gate modes; feature
+// flags + tunables follow, after which the single parse call hoists to the edge.
 
-/** Normalized `off | shadow | post` mode for an AST security scanner. Kept as a
- *  string to preserve the exact `(value ?? "off").trim().toLowerCase()` contract
- *  the call sites compare against (`mode !== "post"`, `applyAstScanGate(...)`). */
-export type AstScanMode = string
-
-/** The AST security-scanner modes, one per scanner rule. */
-export interface AstScanModes {
-  authzIdor: AstScanMode
-  weakRandom: AstScanMode
-  openRedirect: AstScanMode
-  ssrf: AstScanMode
-  pathTraversal: AstScanMode
-  sqlInjection: AstScanMode
-  ssti: AstScanMode
-  nosqlInjection: AstScanMode
-  protoPollution: AstScanMode
-  xxe: AstScanMode
-}
-
-export interface EnsembleConfig {
-  astScanModes: AstScanModes
-}
+import { parseSecurityValidatorMode } from "../validate-security-finding"
+import { parseTestsValidatorMode } from "../validate-test-finding"
+import { parseLogicValidatorMode } from "../validate-logic-finding"
+import { parseLogicRefutationMode } from "../validate-logic-refutation"
+import { parseRefutationSurvivalMode } from "../validate-refutation-survival"
+import { parseLogicClaimRefutationMode } from "../validate-logic-claim-refutation"
+import { parsePerfValidatorMode } from "../validate-perf-finding"
+import { parseInlineGroundingValidatorMode } from "../validate-inline-grounding"
+import { parseAbsenceClaimValidatorMode } from "../validate-absence-grounding"
+import { parseWindowBlindnessValidatorMode } from "../validate-window-blindness"
+import { parseSecurityGroundingValidatorMode } from "../validate-security-grounding"
+import { parseSecurityUsageValidatorMode } from "../validate-security-usage"
+import type { AstScanMode, EnsembleConfig } from "./domain/config"
 
 /** The structural subset of the Worker env that `parseEnsembleConfig` reads.
- *  Declared here so the parser depends only on the variables it consumes, not on
- *  the full Worker `Env` binding type. */
+ *  Declared at the edge (it names framework/env details) — never in the domain. */
 export interface EnsembleConfigEnv {
+  // AST security-scan modes (PR 3)
   OPENCLAW_AUTHZ_IDOR_SCAN?: string | undefined
   OPENCLAW_WEAK_RANDOM_SCAN?: string | undefined
   OPENCLAW_OPEN_REDIRECT_SCAN?: string | undefined
@@ -47,10 +38,23 @@ export interface EnsembleConfigEnv {
   OPENCLAW_NOSQL_INJECTION_SCAN?: string | undefined
   OPENCLAW_PROTO_POLLUTION_SCAN?: string | undefined
   OPENCLAW_XXE_SCAN?: string | undefined
+  // validator gate modes (PR 4)
+  OPENCLAW_SECURITY_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_TESTS_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_LOGIC_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_LOGIC_REFUTATION_MODE?: string | undefined
+  OPENCLAW_REFUTATION_SURVIVAL_MODE?: string | undefined
+  OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE?: string | undefined
+  OPENCLAW_PERF_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE?: string | undefined
+  OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE?: string | undefined
 }
 
-// The exact normalization the inline call sites used: default "off", trim,
-// lowercase. Centralized here so every scanner mode is parsed identically.
+// The exact normalization the inline scan call sites used: default "off", trim,
+// lowercase. Centralized so every scanner mode parses identically.
 const scanMode = (v: string | undefined): AstScanMode => (v ?? "off").trim().toLowerCase()
 
 export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
@@ -66,6 +70,20 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       nosqlInjection: scanMode(env.OPENCLAW_NOSQL_INJECTION_SCAN),
       protoPollution: scanMode(env.OPENCLAW_PROTO_POLLUTION_SCAN),
       xxe: scanMode(env.OPENCLAW_XXE_SCAN),
+    },
+    validatorModes: {
+      securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
+      testsValidatorMode: parseTestsValidatorMode(env.OPENCLAW_TESTS_VALIDATOR_MODE),
+      logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
+      logicRefutationMode: parseLogicRefutationMode(env.OPENCLAW_LOGIC_REFUTATION_MODE),
+      refutationSurvivalMode: parseRefutationSurvivalMode(env.OPENCLAW_REFUTATION_SURVIVAL_MODE),
+      logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
+      perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
+      inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
+      absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
+      windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
+      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE),
+      securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
     },
   }
 }

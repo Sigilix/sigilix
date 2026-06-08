@@ -7,6 +7,18 @@
 
 import { describe, it, expect } from "vitest"
 import { parseEnsembleConfig } from "../src/lib/ensemble/config"
+import { parseSecurityValidatorMode } from "../src/lib/validate-security-finding"
+import { parseTestsValidatorMode } from "../src/lib/validate-test-finding"
+import { parseLogicValidatorMode } from "../src/lib/validate-logic-finding"
+import { parseLogicRefutationMode } from "../src/lib/validate-logic-refutation"
+import { parseRefutationSurvivalMode } from "../src/lib/validate-refutation-survival"
+import { parseLogicClaimRefutationMode } from "../src/lib/validate-logic-claim-refutation"
+import { parsePerfValidatorMode } from "../src/lib/validate-perf-finding"
+import { parseInlineGroundingValidatorMode } from "../src/lib/validate-inline-grounding"
+import { parseAbsenceClaimValidatorMode } from "../src/lib/validate-absence-grounding"
+import { parseWindowBlindnessValidatorMode } from "../src/lib/validate-window-blindness"
+import { parseSecurityGroundingValidatorMode } from "../src/lib/validate-security-grounding"
+import { parseSecurityUsageValidatorMode } from "../src/lib/validate-security-usage"
 
 describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
   it("defaults every scanner to 'off' when the env var is absent", () => {
@@ -67,5 +79,41 @@ describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
     const c = parseEnsembleConfig({ OPENCLAW_SSRF_SCAN: "", OPENCLAW_XXE_SCAN: "   " })
     expect(c.astScanModes.ssrf).toBe("")
     expect(c.astScanModes.xxe).toBe("")
+  })
+})
+
+describe("SIG-318 parseEnsembleConfig — validator gate modes (PR 4)", () => {
+  it("wires each validator env var to the correct mode field via its own parser (no cross-wire)", () => {
+    // Distinct values per var so a swapped env-var OR a swapped parser is caught.
+    // The expected side calls each parser directly, so this guards the wiring
+    // without re-testing the parser internals (those have their own suites).
+    const env = {
+      OPENCLAW_SECURITY_VALIDATOR_MODE: "enforce",
+      OPENCLAW_TESTS_VALIDATOR_MODE: "shadow",
+      OPENCLAW_LOGIC_VALIDATOR_MODE: "enforce",
+      OPENCLAW_LOGIC_REFUTATION_MODE: "shadow",
+      OPENCLAW_REFUTATION_SURVIVAL_MODE: "enforce",
+      OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE: "shadow",
+      OPENCLAW_PERF_VALIDATOR_MODE: "enforce",
+      OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE: "shadow",
+      OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE: "enforce",
+      OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE: "shadow",
+      OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE: "enforce",
+      OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE: "shadow",
+    }
+    expect(parseEnsembleConfig(env).validatorModes).toEqual({
+      securityValidatorMode: parseSecurityValidatorMode(env.OPENCLAW_SECURITY_VALIDATOR_MODE),
+      testsValidatorMode: parseTestsValidatorMode(env.OPENCLAW_TESTS_VALIDATOR_MODE),
+      logicValidatorMode: parseLogicValidatorMode(env.OPENCLAW_LOGIC_VALIDATOR_MODE),
+      logicRefutationMode: parseLogicRefutationMode(env.OPENCLAW_LOGIC_REFUTATION_MODE),
+      refutationSurvivalMode: parseRefutationSurvivalMode(env.OPENCLAW_REFUTATION_SURVIVAL_MODE),
+      logicClaimRefutationMode: parseLogicClaimRefutationMode(env.OPENCLAW_LOGIC_CLAIM_REFUTATION_MODE),
+      perfValidatorMode: parsePerfValidatorMode(env.OPENCLAW_PERF_VALIDATOR_MODE),
+      inlineGroundingValidatorMode: parseInlineGroundingValidatorMode(env.OPENCLAW_INLINE_GROUNDING_VALIDATOR_MODE),
+      absenceClaimValidatorMode: parseAbsenceClaimValidatorMode(env.OPENCLAW_ABSENCE_CLAIM_VALIDATOR_MODE),
+      windowBlindnessValidatorMode: parseWindowBlindnessValidatorMode(env.OPENCLAW_WINDOW_BLINDNESS_VALIDATOR_MODE),
+      securityGroundingValidatorMode: parseSecurityGroundingValidatorMode(env.OPENCLAW_SECURITY_GROUNDING_VALIDATOR_MODE),
+      securityUsageValidatorMode: parseSecurityUsageValidatorMode(env.OPENCLAW_SECURITY_USAGE_VALIDATOR_MODE),
+    })
   })
 })

@@ -17,7 +17,9 @@ import {
   PER_ATTEMPT_TIMEOUT_MS,
 } from "../src/lib/triage-pr-review-ensemble"
 
-describe("SIG-287 logic per-attempt timeout + fast-fallback", () => {
+const TESTS_SPECIALIST_MIN_HEADROOM_MS = 40_000
+
+describe("specialist per-attempt timeout overrides", () => {
   it("caps logic at 120s per attempt (think:false makes it fast; 2× the expected <60s for route variance)", () => {
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs).toBe(120_000)
     // Still above the global 60s default — logic's prompt is the largest, so
@@ -25,10 +27,14 @@ describe("SIG-287 logic per-attempt timeout + fast-fallback", () => {
     expect(SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
   })
 
-  it("leaves the other roles on the global default (no per-role override)", () => {
+  it("caps tests at 110s per attempt so MiniMax M3 can finish testing-evidence cases", () => {
+    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBe(110_000)
+    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!).toBeGreaterThan(PER_ATTEMPT_TIMEOUT_MS)
+  })
+
+  it("leaves security and performance on the global default (no per-role override)", () => {
     expect(SPECIALIST_CONFIGS.security.perAttemptTimeoutMs).toBeUndefined()
     expect(SPECIALIST_CONFIGS.performance.perAttemptTimeoutMs).toBeUndefined()
-    expect(SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs).toBeUndefined()
   })
 
   it("gives logic a cross-provider fallback (retries:0) whose primary+fallback chain fits the specialist wall", () => {
@@ -44,5 +50,10 @@ describe("SIG-287 logic per-attempt timeout + fast-fallback", () => {
     // rescued within the wall.
     const chainMs = 2 * SPECIALIST_CONFIGS.logic.perAttemptTimeoutMs!
     expect(chainMs).toBeLessThanOrEqual(SPECIALIST_TIMEOUT_MS)
+  })
+
+  it("keeps the tests primary+retry+fallback chain inside the specialist wall with 40s headroom", () => {
+    const chainMs = 3 * SPECIALIST_CONFIGS.tests.perAttemptTimeoutMs!
+    expect(SPECIALIST_TIMEOUT_MS - chainMs).toBeGreaterThanOrEqual(TESTS_SPECIALIST_MIN_HEADROOM_MS)
   })
 })

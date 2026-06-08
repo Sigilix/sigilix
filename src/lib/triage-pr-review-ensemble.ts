@@ -1220,9 +1220,8 @@ export interface ModelConfig {
   /**
    * SIG-236: per-role override for the per-attempt timeout. Omitted → the
    * runner defaults to the global PER_ATTEMPT_TIMEOUT_MS (no behavior change).
-   * Logic sets this higher: its prompt is uniquely large (graph+symbol+full
-   * retrieval, ~8.4k tok even after the SIG-287 trim) and needs >60s, so the
-   * global 60s cap aborted it mid-generation on every review.
+   * Logic and tests set this higher when their role-specific prompt/evidence
+   * shape needs >60s, so the global cap does not abort the primary mid-review.
    */
   perAttemptTimeoutMs?: number
 }
@@ -1352,6 +1351,13 @@ export const SPECIALIST_CONFIGS: Record<SpecialistRole, ModelConfig> = {
     // `deepseek-v4-pro:cloud` reused as fallback — cross-provider
     // from MiniMax, proven on reasoning tasks.
     fallback: "deepseek-v4-pro:cloud",
+    // SIG-345: during the SIG-344 K=12 tests-overfire baseline, MiniMax M3
+    // inputs were only ~7-8k tokens, but several real-path testing-evidence
+    // cases were still generating at the global 60s per-attempt cap. Use
+    // 110s: enough headroom for the tests prompt, while primary+retry+fallback
+    // preserves a 40s non-model overhead budget inside SPECIALIST_TIMEOUT_MS
+    // (3 * 110s = 330s <= 370s).
+    perAttemptTimeoutMs: 110_000,
   },
 }
 
@@ -8236,9 +8242,9 @@ export async function runSpecialist(args: SpecialistRunArgs): Promise<Specialist
     parseAnswer: parsePrReviewResponse,
     parseFailureLabel: "specialist_did_not_parse",
     startedAt: t0,
-    // SIG-236: honor a per-role per-attempt cap (logic = 110s; its prompt is
-    // ~8.4k tok and needs >60s). Omitted for the other roles → the runner
-    // falls back to PER_ATTEMPT_TIMEOUT_MS, so their behavior is unchanged.
+    // SIG-236/SIG-345: honor a per-role per-attempt cap when a specialist's
+    // prompt/evidence shape needs >60s. Omitted roles fall back to the global
+    // PER_ATTEMPT_TIMEOUT_MS.
     // (Conditional spread, not `: undefined`, under exactOptionalPropertyTypes.)
     ...(config.perAttemptTimeoutMs !== undefined
       ? { perAttemptTimeoutMs: config.perAttemptTimeoutMs }

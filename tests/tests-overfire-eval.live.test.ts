@@ -19,11 +19,14 @@ import {
   type TestsScoredFinding,
 } from "./tests-overfire-corpus"
 import { runShadowSpecialist } from "../src/lib/shadow-bakeoff-runner"
-import { SPECIALIST_CONFIGS } from "../src/lib/triage-pr-review-ensemble"
+import { SPECIALIST_CONFIGS, SPECIALIST_TIMEOUT_MS } from "../src/lib/triage-pr-review-ensemble"
 import { SPECIALIST_PROMPTS, buildSpecialistInitialMessage } from "../src/prompts/pr-review-specialists"
 
 const API_KEY = process.env.OLLAMA_API_KEY
-const PER_CASE_TIMEOUT_MS = 180_000
+// The production tests specialist can spend 110s each on primary, retry, and
+// fallback. Give the eval wrapper a small extra guard so benchmark overhead
+// does not misclassify a slow-but-valid production-length case as a timeout.
+const PER_CASE_TIMEOUT_MS = SPECIALIST_TIMEOUT_MS + 30_000
 const REPEATS = (() => {
   const n = Number(process.env.TESTS_OVERFIRE_REPEATS ?? 1)
   return Number.isFinite(n) && n >= 1 ? Math.floor(n) : 1

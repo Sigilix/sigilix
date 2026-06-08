@@ -23,6 +23,7 @@ import type {
 import { resolveDoConfig } from "./config"
 import {
   attachExistingCheckRun,
+  closeOrphanedInProgressChecksByHeadSha,
   completeCheckRun,
   startInProgressCheckRun,
 } from "../lib/pr-review-check-run"
@@ -578,8 +579,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
 
     // Close the upstream check as `skipped` (wire `neutral`): the bot
     // did not complete a review. `cancelled` is intentionally not a
-    // SigilixCheckConclusion. Best-effort; null handle / undefined
-    // checkRunId is a no-op.
+    // SigilixCheckConclusion. Best-effort; null handle is a no-op.
     if (existing.checkRunId !== undefined) {
       const handle = await attachExistingCheckRun({
         env: this.env,
@@ -589,6 +589,33 @@ export class PrReviewRunDO extends DurableObject<Env> {
         checkRunId: existing.checkRunId,
       })
       await completeCheckRun({ handle, conclusion: "skipped" })
+    } else {
+      // SIG-stuck-check: no `checkRunId` means `handleEnqueue`'s
+      // synchronous check-create lost its 3s race (GitHub 5xx / timeout
+      // under contention) and the CONSUMER created the check via
+      // `startInProgressCheckRun` — that id never reached the DO. Without
+      // this fallback the cancel would silently skip the close and the
+      // check stays `in_progress` forever (observed on PR #402). Close
+      // any orphaned in-progress Sigilix check by head_sha instead.
+      // Best-effort: the helper swallows all errors, but guard anyway so
+      // a GitHub hiccup can never break the cancel state machine.
+      try {
+        await closeOrphanedInProgressChecksByHeadSha({
+          env: this.env,
+          owner: existing.owner,
+          repo: existing.repo,
+          installationId: existing.installationId,
+          headSha: existing.headSha,
+          title: "Cancelled",
+          summary: "This review was cancelled via /sigilix cancel.",
+        })
+      } catch (err) {
+        emit("do-review-cancel-orphan-close-failed", {
+          owner: existing.owner, repo: existing.repo, prNumber: existing.prNumber,
+          runId: existing.runId,
+          err: err instanceof Error ? err.message : String(err),
+        })
+      }
     }
 
     emit("do-review-cancelled", {
@@ -882,8 +909,7 @@ export class PrReviewRunDO extends DurableObject<Env> {
       // so the upstream-created check is still `in_progress`. Close it as
       // `failure` (wire-mapped to `neutral` per the SIG-216 advisory-bot
       // convention in `completeCheckRun`). Best-effort; null handle on
-      // token failure is a no-op. If `checkRunId` is undefined (creation
-      // failed at enqueue time), nothing to close.
+      // token failure is a no-op.
       if (state.checkRunId !== undefined) {
         const handle = await attachExistingCheckRun({
           env: this.env,
@@ -893,6 +919,34 @@ export class PrReviewRunDO extends DurableObject<Env> {
           checkRunId: state.checkRunId,
         })
         await completeCheckRun({ handle, conclusion: "failure" })
+      } else {
+        // SIG-stuck-check: `checkRunId` is undefined when `handleEnqueue`'s
+        // synchronous check-create lost its 3s race (GitHub 5xx / timeout
+        // under contention) and the CONSUMER created the check via
+        // `startInProgressCheckRun` — that id never reached the DO. Without
+        // this fallback the watchdog terminal close is silently skipped and
+        // the check stays `in_progress` forever. Close any orphaned
+        // in-progress Sigilix check by head_sha instead. Best-effort: the
+        // helper swallows all errors, but guard anyway so a GitHub hiccup
+        // can never break the alarm state machine.
+        try {
+          await closeOrphanedInProgressChecksByHeadSha({
+            env: this.env,
+            owner: state.owner,
+            repo: state.repo,
+            installationId: state.installationId,
+            headSha: state.headSha,
+            title: "Timed out",
+            summary: "Sigilix did not finish reviewing this commit in time.",
+            conclusion: "timed_out",
+          })
+        } catch (err) {
+          emit("do-review-watchdog-orphan-close-failed", {
+            owner: state.owner, repo: state.repo, prNumber: state.prNumber,
+            runId: state.runId, trigger,
+            err: err instanceof Error ? err.message : String(err),
+          })
+        }
       }
       emit("do-review-watchdog-terminal", {
         owner: state.owner, repo: state.repo, prNumber: state.prNumber,

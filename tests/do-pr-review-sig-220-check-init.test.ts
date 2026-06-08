@@ -22,11 +22,13 @@ import type { Env } from "../src/index"
 const startSpy = vi.fn()
 const attachSpy = vi.fn()
 const completeSpy = vi.fn()
+const closeOrphanSpy = vi.fn()
 
 vi.mock("../src/lib/pr-review-check-run", () => ({
   startInProgressCheckRun: (...args: unknown[]) => startSpy(...args),
   attachExistingCheckRun: (...args: unknown[]) => attachSpy(...args),
   completeCheckRun: (...args: unknown[]) => completeSpy(...args),
+  closeOrphanedInProgressChecksByHeadSha: (...args: unknown[]) => closeOrphanSpy(...args),
   // CHECK_RUN_NAME is exported for KNOWN_CHECK_NAMES tests; not used here.
   CHECK_RUN_NAME: "Sigilix",
 }))
@@ -129,6 +131,7 @@ beforeEach(() => {
   startSpy.mockReset()
   attachSpy.mockReset()
   completeSpy.mockReset()
+  closeOrphanSpy.mockReset()
   // Default: createCheckRun succeeds, returns a stub handle.
   startSpy.mockResolvedValue({
     id: SAMPLE_CHECK_RUN_ID,
@@ -143,6 +146,7 @@ beforeEach(() => {
     repo: "sigilix",
   }))
   completeSpy.mockResolvedValue(undefined)
+  closeOrphanSpy.mockResolvedValue(undefined)
 })
 afterEach(() => {
   consoleSpy.mockRestore()
@@ -434,12 +438,20 @@ describe("SIG-220 — watchdog terminal failure closes the upstream check", () =
     expect(completeSpy.mock.calls[0]![0]).toMatchObject({
       conclusion: "failure",
     })
+    // Fast path only — the head-sha orphan fallback must stay dormant.
+    expect(closeOrphanSpy).not.toHaveBeenCalled()
 
     const updated = ds.store.get("state") as RunState
     expect(updated.state).toBe("failed")
   })
 
-  it("does not call completeCheckRun when RunState has no checkRunId (nothing to close)", async () => {
+  // SIG-stuck-check (PR #402): a terminal watchdog with no checkRunId — the
+  // enqueue-time synchronous create lost its 3s race and the consumer
+  // created the check via startInProgressCheckRun, so the id never reached
+  // the DO. The attach-by-id close is impossible, so the watchdog MUST fall
+  // back to closing the orphan by head_sha. Without this the in-progress
+  // check hangs forever even after the run is declared failed.
+  it("falls back to closing the orphaned check by head_sha on a terminal watchdog with no checkRunId", async () => {
     const queue: QueueState = { sent: [] }
     const env = makeEnv(queue, 1)
     const ds = makeDoState()
@@ -464,9 +476,49 @@ describe("SIG-220 — watchdog terminal failure closes the upstream check", () =
     ds.store.set("state", seeded)
 
     await instance.alarm()
+    // Attach-by-id is impossible without an id; the head-sha fallback runs.
     expect(completeSpy).not.toHaveBeenCalled()
     expect(attachSpy).not.toHaveBeenCalled()
+    expect(closeOrphanSpy).toHaveBeenCalledTimes(1)
+    expect(closeOrphanSpy.mock.calls[0]![0]).toMatchObject({
+      env,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      installationId: 99,
+      headSha: SAMPLE_HEAD_SHA,
+    })
     const updated = ds.store.get("state") as RunState
     expect(updated.state).toBe("failed")
+  })
+
+  it("swallows a head-sha fallback failure on a terminal watchdog — the alarm state machine still finalizes", async () => {
+    closeOrphanSpy.mockRejectedValueOnce(new Error("HTTP 503 GitHub down"))
+    const queue: QueueState = { sent: [] }
+    const env = makeEnv(queue, 1)
+    const ds = makeDoState()
+    const instance = new PrReviewRunDO(ds.ctx, env)
+
+    const seeded: RunState = {
+      schemaVersion: 1,
+      owner: "Arc-and-Anchor",
+      repo: "sigilix",
+      prNumber: 7,
+      runId: SAMPLE_RUN_ID,
+      headSha: SAMPLE_HEAD_SHA,
+      baseSha: SAMPLE_BASE_SHA,
+      installationId: 99,
+      state: "queued",
+      attempts: 1,
+      startedAt: "2026-05-07T06:00:00.000Z",
+      lastActivityAt: "2026-05-07T06:00:00.000Z",
+      alarmTargetRunId: SAMPLE_RUN_ID,
+      alarmKind: "watchdog",
+    }
+    ds.store.set("state", seeded)
+
+    await expect(instance.alarm()).resolves.toBeUndefined()
+    const updated = ds.store.get("state") as RunState
+    expect(updated.state).toBe("failed")
+    expect(ds.store.has(`run:${SAMPLE_RUN_ID}`)).toBe(true)
   })
 })

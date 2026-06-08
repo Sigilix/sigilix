@@ -45,6 +45,7 @@ vi.mock("../src/lib/github", async () => {
 import {
   CHECK_RUN_NAME,
   attachExistingCheckRun,
+  closeOrphanedInProgressChecksByHeadSha,
   completeCheckRun,
   startInProgressCheckRun,
 } from "../src/lib/pr-review-check-run"
@@ -239,6 +240,114 @@ describe("SIG-220: attachExistingCheckRun", () => {
 
     expect(handle!.id).toBe(999)
     expect(mockCreateCheckRun).toHaveBeenCalledTimes(1)
+  })
+})
+
+// SIG-stuck-check (PR #402): the DO's cancel + watchdog-terminal paths
+// close the in-progress check via `attachExistingCheckRun` ONLY when they
+// hold a `checkRunId`. That id is absent whenever `handleEnqueue`'s
+// synchronous create lost its 3s race and the consumer created the check
+// instead — so the close was silently skipped and the check hung
+// `in_progress` forever. `closeOrphanedInProgressChecksByHeadSha` is the
+// id-less fallback: it builds an installation-scoped client (exactly like
+// attachExistingCheckRun) and closes any Sigilix-named in_progress/queued
+// check on the head SHA. These exercises pin the contract: it closes the
+// orphan with status:completed + a terminal conclusion, honors the
+// title/summary override, and is best-effort (creds-missing / token / list
+// failures never throw).
+describe("SIG-stuck-check: closeOrphanedInProgressChecksByHeadSha", () => {
+  const orphanArgs = {
+    owner: "Arc-and-Anchor",
+    repo: "sigilix",
+    installationId: 99,
+    headSha: "a".repeat(40),
+  }
+
+  it("closes a head's in-progress Sigilix check with status:completed + a terminal conclusion", async () => {
+    mockListCheckRunsForRef.mockResolvedValue([
+      { id: 111, name: "Sigilix", status: "in_progress" },
+      { id: 222, name: "Sigilix Review", status: "queued" }, // legacy name, queued → also closed
+      { id: 333, name: "Sigilix", status: "completed" },      // already done → untouched
+      { id: 444, name: "Workers Builds: sigilix", status: "in_progress" }, // unrelated → untouched
+    ])
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    const env = makeEnv()
+
+    await closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs })
+
+    // The client was built from an installation token (the DO path).
+    expect(mockGetInstallationToken).toHaveBeenCalledTimes(1)
+    // Only the two Sigilix-named, not-yet-completed checks are closed.
+    expect(mockUpdateCheckRun).toHaveBeenCalledTimes(2)
+    const closedIds = mockUpdateCheckRun.mock.calls.map((c) => c[2])
+    expect(closedIds.sort((a, b) => (a as number) - (b as number))).toEqual([111, 222])
+    for (const call of mockUpdateCheckRun.mock.calls) {
+      const payload = call[3] as { status: string; conclusion: string }
+      expect(payload.status).toBe("completed")
+      expect(payload.conclusion).toBe("cancelled") // GitHub-terminal conclusion
+    }
+    expect(mockListCheckRunsForRef).toHaveBeenCalledWith("Arc-and-Anchor", "sigilix", orphanArgs.headSha)
+  })
+
+  it("applies the title/summary/conclusion override on the closed orphan (watchdog → timed_out)", async () => {
+    mockListCheckRunsForRef.mockResolvedValue([
+      { id: 111, name: "Sigilix", status: "in_progress" },
+    ])
+    mockUpdateCheckRun.mockResolvedValue(undefined)
+    const env = makeEnv()
+
+    await closeOrphanedInProgressChecksByHeadSha({
+      env, ...orphanArgs, title: "Timed out", summary: "Sigilix did not finish in time.",
+      conclusion: "timed_out",
+    })
+
+    const payload = mockUpdateCheckRun.mock.calls[0]![3] as { conclusion: string; output: { title: string; summary: string } }
+    expect(payload.output.title).toBe("Timed out")
+    expect(payload.output.summary).toBe("Sigilix did not finish in time.")
+    // conclusion must match the title — the believability nit code-reviewer flagged.
+    expect(payload.conclusion).toBe("timed_out")
+  })
+
+  it("no-ops (no token, no PATCH) when nothing on the head is a stale Sigilix check", async () => {
+    mockListCheckRunsForRef.mockResolvedValue([
+      { id: 333, name: "Sigilix", status: "completed" },
+      { id: 444, name: "Workers Builds: sigilix", status: "in_progress" },
+    ])
+    const env = makeEnv()
+
+    await closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs })
+    expect(mockUpdateCheckRun).not.toHaveBeenCalled()
+  })
+
+  it("returns (no throw, no token) when credentials are missing", async () => {
+    const env = makeEnv({ credentials: false })
+
+    await expect(
+      closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs }),
+    ).resolves.toBeUndefined()
+    expect(mockGetInstallationToken).not.toHaveBeenCalled()
+    expect(mockListCheckRunsForRef).not.toHaveBeenCalled()
+    expect(mockUpdateCheckRun).not.toHaveBeenCalled()
+  })
+
+  it("returns (no throw) when getInstallationToken rejects — best-effort contract", async () => {
+    mockGetInstallationToken.mockRejectedValueOnce(new Error("HTTP 503 token endpoint down"))
+    const env = makeEnv()
+
+    await expect(
+      closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs }),
+    ).resolves.toBeUndefined()
+    expect(mockListCheckRunsForRef).not.toHaveBeenCalled()
+  })
+
+  it("returns (no throw) when listing the head's check runs fails", async () => {
+    mockListCheckRunsForRef.mockRejectedValue(new Error("HTTP 502"))
+    const env = makeEnv()
+
+    await expect(
+      closeOrphanedInProgressChecksByHeadSha({ env, ...orphanArgs }),
+    ).resolves.toBeUndefined()
+    expect(mockUpdateCheckRun).not.toHaveBeenCalled()
   })
 })
 

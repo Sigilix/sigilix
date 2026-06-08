@@ -505,6 +505,13 @@ export interface Env {
   // read at GET /metrics/verification). `on` also renders the Trust Summary and
   // per-finding VERIFIED/GROUNDED/MODEL pills.
   OPENCLAW_TRUST_LEDGER?: string
+  // SIG-318 (golden-output safety harness): "on" makes the two pure ensemble
+  // seams (`validateForSubmission` + `buildReviewSubmissionWithMetadata`) emit
+  // a `[[GOLDEN:<stage>]]` log line carrying the encoded {args/input, output}
+  // so a fixture can be lifted from the logs for byte-identical parity replay.
+  // Unset / any other value (the default everywhere incl. prod) → the capture
+  // hooks are an immediate no-op (byte-identical behavior). Never "on" in prod.
+  OPENCLAW_GOLDEN_CAPTURE?: string
   // SIG-184: per-repo-sharded SQLite DO enforcing single-use of a runner receipt
   // (repository_id, sha, run_id, run_attempt) + holding the defensible record.
   RUNNER_RECEIPT_DO: DurableObjectNamespace

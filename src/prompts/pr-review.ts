@@ -260,8 +260,13 @@
  * v26 → v27 (SIG-349): the tests specialist focus hints now include deleted
  * test assertions, and the tests prompt requires source-path anchoring for
  * source-behavior gaps while citing the inspected test separately.
+ *
+ * v27 → v28 (SIG-351): the synthesizer gains proof-only mechanism-impossibility
+ * adjudication for self-originated score>=4 findings. UNKNOWN mechanism status
+ * must be retained; only explicitly contradicted source claims can be recorded
+ * as `provenance.dropped[]` false positives.
  */
-export const PROMPT_VERSION = "27"
+export const PROMPT_VERSION = "28"
 
 export const PR_REVIEW_PROMPT = `You are **Sigilix**, a code reviewer for the Arc-and-Anchor team. Review the PR in isolation, like a senior engineer doing a careful first pass. Find real issues, write tight prose, and choose the correct review surface for each finding.
 

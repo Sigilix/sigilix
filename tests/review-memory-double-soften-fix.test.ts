@@ -43,7 +43,7 @@ describe("SIG-280 prereq: double-soften fix (renderer-only soften)", () => {
     expect(SYNTHESIZER_PROMPT).toContain("provenance.softened[]")
   })
 
-  it("bumps PROMPT_VERSION so prior-version reviews go stale on deploy", () => {
-    expect(PROMPT_VERSION).toBe("27")
+  it("keeps PROMPT_VERSION at or beyond the double-soften stale-review bump", () => {
+    expect(Number(PROMPT_VERSION)).toBeGreaterThanOrEqual(27)
   })
 })

@@ -58,4 +58,14 @@ describe("SIG-318 parseEnsembleConfig — AST scan modes", () => {
       xxe: "shadow",
     })
   })
+
+  it("treats explicit empty / whitespace-only as '' (not 'off') — matching the old inline read", () => {
+    // `?? "off"` only defaults ABSENT (undefined) vars; an explicit "" or
+    // whitespace normalizes to "" exactly as the pre-migration inline read did.
+    // Downstream that reads as not-"post" → the scanner stays off, so behavior is
+    // unchanged; this pins the distinction (absent → "off", but "" → "").
+    const c = parseEnsembleConfig({ OPENCLAW_SSRF_SCAN: "", OPENCLAW_XXE_SCAN: "   " })
+    expect(c.astScanModes.ssrf).toBe("")
+    expect(c.astScanModes.xxe).toBe("")
+  })
 })

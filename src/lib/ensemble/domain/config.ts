@@ -29,6 +29,7 @@ import type { TrustLedgerMode } from "../../trust-ledger-thread"
 import type { ClaimShadowMode } from "../../review-memory/shadow-match"
 import type { PrecisionMode } from "../../precision-profile/types"
 import type { ReviewOutputSurface } from "../../pr-review-check-run"
+import type { MinSpecialistsEarlyExitMode } from "./policy"
 
 /** Normalized `off | shadow | post` mode for an AST security scanner. Kept as a
  *  string to preserve the call sites' exact contract (`mode !== "post"`,
@@ -97,6 +98,7 @@ export interface EnsembleFeatureFlags {
   reviewMemoryClaims: string | undefined
   precisionProfileMode: PrecisionMode
   reviewOutputSurface: ReviewOutputSurface
+  minSpecialistsEarlyExitMode: MinSpecialistsEarlyExitMode
 }
 
 /** Numeric, env-overridable tunables (SIG-318 PR 5c). Each is `parseIntEnv`-parsed

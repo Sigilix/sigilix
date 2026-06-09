@@ -518,6 +518,21 @@ export {
   computeFindingDelta,
 }
 export type { ConsensusRanked, FindingDelta } from "./ensemble/domain/findings"
+// SIG-318 (PR 7): the fan-out POLICY domain (min-specialists early-exit mode +
+// gate action, and the degraded-coverage split) moved to ./ensemble/domain/policy.
+// Value-imported for internal use + re-exported so existing importers (tests) are
+// unaffected.
+import {
+  parseMinSpecialistsEarlyExitMode,
+  decideEarlyExitAction,
+  computeDegradedCoverage,
+} from "./ensemble/domain/policy"
+export {
+  parseMinSpecialistsEarlyExitMode,
+  decideEarlyExitAction,
+  computeDegradedCoverage,
+}
+export type { MinSpecialistsEarlyExitMode, EarlyExitAction } from "./ensemble/domain/policy"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
@@ -643,57 +658,6 @@ export function graphRetrievalEnabled(env: Env): boolean {
  */
 export function isSynthBypassEnabled(env: Env): boolean {
   return (env.OPENCLAW_SYNTH_BYPASS_ENABLED ?? "").trim().toLowerCase() === "on"
-}
-
-/**
- * SIG-235 — min-specialists early exit mode parser. Returns one of:
- *   - "off"    (default): fan-out waits for ALL specialists to settle
- *   - "shadow"           : fan-out waits for all, BUT logs would-fire
- *   - "on"               : fires synth as soon as N-1 of N succeed,
- *                          cancels the laggard's outstanding ladder
- *
- * Case-insensitive, whitespace-tolerant. Unknown / unset values default
- * to "off" so a misconfigured env never silently changes fan-out semantics.
- *
- * Extracted as a pure helper so unit tests can pin the parser without
- * spinning up the orchestrator.
- */
-export type MinSpecialistsEarlyExitMode = "off" | "shadow" | "on"
-
-export function parseMinSpecialistsEarlyExitMode(
-  raw: string | undefined,
-): MinSpecialistsEarlyExitMode {
-  const v = (raw ?? "").trim().toLowerCase()
-  if (v === "shadow") return "shadow"
-  if (v === "on") return "on"
-  return "off"
-}
-
-/** What the fan-out loop should do at a given settle point (SIG-235 + SIG-236). */
-export type EarlyExitAction = "none" | "suppress-protected" | "cancel" | "shadow-mark"
-
-/**
- * Pure decision for the min-specialists early-exit gate. Extracted so the
- * SIG-236 protected-role guard is unit-testable without the orchestrator.
- *   none               — quorum not met (or nothing pending) → keep awaiting
- *   cancel             — "on" + no protected role pending → cancel the laggards
- *   suppress-protected — "on" + logic still pending → do NOT cancel (SIG-236):
- *                        logic is the intentional long-pole; its 110s per-attempt
- *                        cap bounds it, not early-exit. Without this, flipping
- *                        early-exit to "on" would silently re-drop logic.
- *   shadow-mark        — "shadow" → record the would-fire, keep awaiting
- */
-export function decideEarlyExitAction(args: {
-  mode: MinSpecialistsEarlyExitMode
-  succeededCount: number
-  quorumThreshold: number
-  pendingCount: number
-  logicProtectedPending: boolean
-}): EarlyExitAction {
-  if (args.succeededCount < args.quorumThreshold || args.pendingCount === 0) return "none"
-  if (args.mode === "on") return args.logicProtectedPending ? "suppress-protected" : "cancel"
-  if (args.mode === "shadow") return "shadow-mark"
-  return "none" // "off"
 }
 
 /**
@@ -3833,7 +3797,7 @@ export async function handlePrReviewEnsemble(
     // attempts without affecting the others. composeSignals fires on
     // EITHER orchCtrl OR the per-role controller — same pattern as
     // the shadow path so the ladder cancels cleanly mid-attempt.
-    const earlyExitMode = parseMinSpecialistsEarlyExitMode(env.OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT)
+    const earlyExitMode = ensembleConfig.flags.minSpecialistsEarlyExitMode
     const prodSpecialistAbortControllers = new Map<SpecialistRole, AbortController>()
     // Tracks roles whose perSpecialistEnd has been frozen at the early-
     // exit cancel point. Used by the `.finally()` below to skip
@@ -9027,26 +8991,6 @@ export function buildSynthRetryMessage(
       ? "RETRY: Your previous response's `provenance` field was malformed. Re-emit with a valid `provenance` object: `{ findings: [...], dropped: [...], softened?: [...] }`. Each `provenance.findings[i].sourceFindingIds[]` and each `provenance.softened[i].sourceFindingId` must reference real source specialist finding IDs from the [SPECIALIST VERDICTS] block."
       : "RETRY: Your previous response did not arrive within the time budget. Re-emit promptly and concisely; the schema and inputs above are unchanged."
   return `${originalMessage}\n\n${hint}`
-}
-
-/**
- * ARC-277: pure helper. Given the roles the router DISPATCHED and the
- * roles that actually RETURNED a verdict, compute the symmetric pair
- * the synth prompt block needs. Stable ordering follows
- * `ALL_SPECIALISTS` (logic, security, performance, tests) so two PRs
- * with the same coverage gap produce identical prompt text — easier
- * to grep telemetry by exact prompt-shape hash.
- */
-export function computeDegradedCoverage(
-  dispatched: readonly SpecialistRole[],
-  returned: readonly SpecialistRole[],
-): { rolesReturned: SpecialistRole[]; rolesMissing: SpecialistRole[] } {
-  const returnedSet = new Set(returned)
-  const stable = ALL_SPECIALISTS.filter((r) => dispatched.includes(r))
-  return {
-    rolesReturned: stable.filter((r) => returnedSet.has(r)),
-    rolesMissing: stable.filter((r) => !returnedSet.has(r)),
-  }
 }
 
 export function checkQuorum(

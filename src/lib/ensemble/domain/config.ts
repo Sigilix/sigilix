@@ -27,7 +27,7 @@ import type { LogicPromptBudgetMode } from "../../logic-prompt-budget"
 import type { AstEmitFloorMode } from "../../degraded-finding-floor"
 import type { TrustLedgerMode } from "../../trust-ledger-thread"
 import type { ClaimShadowMode } from "../../review-memory/shadow-match"
-import type { PrecisionMode } from "../../precision-profile/types"
+import type { PrecisionMode } from "@/features/precision-profile"
 import type { ReviewOutputSurface } from "../../pr-review-check-run"
 import type { MinSpecialistsEarlyExitMode } from "./policy"
 

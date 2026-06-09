@@ -164,28 +164,15 @@ function sanitizeFindingForGitHub(f: PrReviewFinding): PrReviewFinding {
   return sanitized
 }
 
-export type FindingCategory =
-  | "logic"
-  | "security"
-  | "performance"
-  | "error-handling"
-  | "testing"
-  | "complexity"
-  | "style"
-  | "syntax"
-  | "docs"
+import { FINDING_CATEGORIES } from "@/shared/domain/finding-category"
+import type { FindingCategory } from "@/shared/domain/finding-category"
 
-export const FINDING_CATEGORIES: ReadonlySet<FindingCategory> = new Set([
-  "logic",
-  "security",
-  "performance",
-  "error-handling",
-  "testing",
-  "complexity",
-  "style",
-  "syntax",
-  "docs",
-])
+// SIG-318: `FindingCategory` + `FINDING_CATEGORIES` moved to a shared/domain leaf
+// so features can reference the finding-category vocabulary without importing
+// this god-file (which would invert the dependency rule). Re-exported here so the
+// existing importers of this module are unchanged.
+export { FINDING_CATEGORIES }
+export type { FindingCategory }
 
 /**
  * ARC-182: stack-origin tag attached to findings on Graphite-style

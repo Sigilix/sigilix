@@ -13,10 +13,10 @@ import {
   outcomeTargets,
   prunePatterns,
   MAX_PATTERNS,
-} from "../src/lib/precision-profile/ema"
-import { applyPrecisionProfile } from "../src/lib/precision-profile/apply"
-import { loadPrecisionProfile, recordOutcome } from "../src/lib/precision-profile/store"
-import type { OutcomeEvent, PatternStat, PrecisionProfile } from "../src/lib/precision-profile/types"
+} from "@/features/precision-profile/domain/ema"
+import { applyPrecisionProfile } from "@/features/precision-profile/domain/apply"
+import { loadPrecisionProfile, recordOutcome } from "@/features/precision-profile/adapters/store"
+import type { OutcomeEvent, PatternStat, PrecisionProfile } from "@/features/precision-profile/domain/types"
 import type { Env } from "../src/shared/types/env"
 
 const TS = "2026-06-04T00:00:00.000Z"

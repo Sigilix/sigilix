@@ -399,8 +399,7 @@ import { renderReviewMemoryForPrompt } from "./review-memory/render"
 import { resolveReviewMemoryConfig } from "./sigilix-config"
 // SIG-147: per-repo precision-profile feedback loop (suppress repeatedly-dismissed
 // patterns, record outcome signal). Shadow-gated; recall-safe.
-import { loadPrecisionProfile, recordOutcome } from "./precision-profile/store"
-import { applyPrecisionProfile } from "./precision-profile/apply"
+import { loadPrecisionProfile, recordOutcome, applyPrecisionProfile } from "@/features/precision-profile"
 import type {
   ReviewMemoryClaimMarkerData,
   ReviewMemoryClaimType,

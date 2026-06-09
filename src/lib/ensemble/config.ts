@@ -29,6 +29,7 @@ import { parseTrustLedgerMode } from "../trust-ledger-thread"
 import { resolveClaimShadowMode } from "../review-memory/shadow-match"
 import { resolvePrecisionMode } from "../precision-profile/mode"
 import { parseReviewOutputSurface } from "../pr-review-check-run"
+import { parseMinSpecialistsEarlyExitMode } from "./domain/policy"
 import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import type { AstScanMode, EnsembleConfig } from "./domain/config"
 
@@ -75,6 +76,7 @@ export interface EnsembleConfigEnv {
   OPENCLAW_REVIEW_MEMORY_CLAIMS?: string | undefined
   OPENCLAW_PRECISION_PROFILE_MODE?: string | undefined
   OPENCLAW_REVIEW_OUTPUT_SURFACE?: string | undefined
+  OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT?: string | undefined
   // numeric tunables (PR 5c)
   OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string | undefined
   OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string | undefined
@@ -146,6 +148,7 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       reviewMemoryClaims: env.OPENCLAW_REVIEW_MEMORY_CLAIMS,
       precisionProfileMode: resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE),
       reviewOutputSurface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
+      minSpecialistsEarlyExitMode: parseMinSpecialistsEarlyExitMode(env.OPENCLAW_MIN_SPECIALISTS_EARLY_EXIT),
     },
     tunables: {
       maxRetrieveCallsPerPr: parseIntEnv(env.OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR, DEFAULT_MAX_RETRIEVE_CALLS_PER_PR),

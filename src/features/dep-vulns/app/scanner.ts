@@ -11,15 +11,15 @@
 //
 // Spec: docs/superpowers/specs/2026-05-06-arc-186-dep-vulns-design.md
 
-import type { GitHubClient } from "../../shared/adapters/github"
-import type { Env } from "../../shared/types/env"
-import { loadAdvisoryDb, type AdvisoryRecord } from "./advisory-db"
+import type { GitHubClient } from "@/shared/adapters/github"
+import type { Env } from "@/shared/types/env"
+import { loadAdvisoryDb, type AdvisoryRecord } from "@/features/dep-vulns/domain/advisory-db"
 import {
   parsePackageJson,
   parsePackageLock,
   rootDepNames,
-} from "./manifest-parsers"
-import { matchVersion } from "./version-matcher"
+} from "@/features/dep-vulns/domain/manifest-parsers"
+import { matchVersion } from "@/features/dep-vulns/domain/version-matcher"
 
 const PACKAGE_JSON_PATH = "package.json"
 const PACKAGE_LOCK_PATH = "package-lock.json"

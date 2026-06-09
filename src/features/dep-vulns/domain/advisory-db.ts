@@ -1,6 +1,6 @@
 // ARC-186: dependency-vulnerability advisory database — schema +
-// loader + validator. Bundled JSON snapshot (see
-// `src/data/dep-vulns.json`) shipped at build time. v1 is a partial
+// loader + validator. Bundled JSON snapshot (the co-located
+// `./dep-vulns.json`) shipped at build time. v1 is a partial
 // snapshot — see spec v3 §10a for the retention policy and the
 // quarterly-refresh model. Build-time CI check enforces the 500 KB
 // cap (see `scripts/check-advisory-db-size.sh`).
@@ -11,7 +11,7 @@
 // without the false-negative trap of a global-min `patched >= X`
 // rule (Codex BLOCKING #1 on the spec review).
 
-import bundledDb from "../../data/dep-vulns.json"
+import bundledDb from "./dep-vulns.json"
 
 export type SeverityClass = "low" | "medium" | "high" | "critical"
 

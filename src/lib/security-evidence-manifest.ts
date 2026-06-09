@@ -26,7 +26,7 @@
 //   treat a finding that cites none of them.
 
 import type { SecretHit } from "./secret-scan"
-import type { DepVulnFinding } from "./dep-vulns/scanner"
+import type { DepVulnFinding } from "@/features/dep-vulns"
 import type { SarifFinding } from "./sarif-evidence/types"
 import type { AstFinding } from "./ast-rules/types"
 import { DYNAMIC_HTML_SINK_RULE_ID } from "./ast-rules/scan-dynamic-html-sink"

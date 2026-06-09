@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-DB="src/data/dep-vulns.json"
+DB="src/features/dep-vulns/domain/dep-vulns.json"
 LIMIT_BYTES=$((500 * 1024))
 
 if [ ! -f "$DB" ]; then

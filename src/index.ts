@@ -67,6 +67,7 @@ import { SIGILIX_BOT_LOGIN } from "./lib/dismiss-prior-reviews"
 import { readReviewManifest, type ReviewManifestV1 } from "./lib/review-manifest"
 import { PROMPT_VERSION } from "./prompts/pr-review"
 import { handlePrReviewEnsemble } from "./lib/triage-pr-review-ensemble"
+import { parseEnsembleConfig } from "./lib/ensemble/config"
 import { handleValidationMetricsRoute } from "./lib/metrics-validation-route"
 import { handleTestSuppressionsMetricsRoute } from "./lib/metrics-test-suppressions-route"
 import { handleRunnerEvidenceMetricsRoute } from "./lib/metrics-runner-evidence-route"
@@ -1910,6 +1911,9 @@ export async function dispatchJob(job: JobMessage, env: Env): Promise<void> {
         headSha: job.headSha,
         installationId: job.installationId,
         env,
+        // SIG-318 (PR 5a): parse the typed ensemble config once here at the edge
+        // and inject it; the handler reads it instead of env.OPENCLAW_*.
+        ensembleConfig: parseEnsembleConfig(env),
         validationSink,
         graphMetricsSink,
         graphExpansionMetricsSink,

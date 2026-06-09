@@ -17,7 +17,7 @@
 // directly comparable to the query vector.
 
 import { indexNamespace } from "./repo-index-manifest"
-import { embedText } from "./embeddings"
+import { embedText } from "../shared/adapters/model"
 
 // ---------------------------------------------------------------------
 // Namespaces

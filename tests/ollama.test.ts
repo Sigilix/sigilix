@@ -1,6 +1,6 @@
 // SIG-216 fix-up — `generate()` abort-signal coverage.
 //
-// `src/lib/ollama.ts` grew an optional `signal: AbortSignal` arg so the
+// `src/shared/adapters/model/ollama.ts` grew an optional `signal: AbortSignal` arg so the
 // inline-overview retry helper can cancel the first attempt's in-flight
 // fetch before launching the second. Three concurrency-critical paths
 // needed coverage:
@@ -15,7 +15,7 @@
 //   4. Back-compat: no signal supplied still works as before.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { generate } from "../src/lib/ollama"
+import { generate } from "../src/shared/adapters/model/ollama"
 
 const FAKE_API_KEY = "test-key"
 const FAKE_MODEL = "glm-5.1:cloud"
@@ -211,7 +211,7 @@ describe("generate() — back-compat without signal", () => {
 
 describe("generate() — token usage capture (SIG-212)", () => {
   // Mirror of the chat() coverage in tests/ollama-chat.test.ts. The
-  // accumulateStream helper in src/lib/ollama.ts is structurally
+  // accumulateStream helper in src/shared/adapters/model/ollama.ts is structurally
   // identical to chat()'s — same captureCounts pattern, same final-
   // chunk-only emission contract from Ollama Turbo — so the same
   // regression classes apply.

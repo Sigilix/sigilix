@@ -7,7 +7,7 @@
 // lib/pr-overview.mjs. No filesystem, no gh CLI — everything goes
 // through the GitHubClient.
 
-import { generate } from "./ollama"
+import { generate } from "../shared/adapters/model"
 import { getInstallationToken } from "../shared/adapters/github/github-app"
 import { GitHubClient } from "../shared/adapters/github"
 import type { PrChangedFile, PrCommit, PullRequestMeta } from "../shared/types/github"

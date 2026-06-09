@@ -21,86 +21,15 @@
 //   parse failures so the model gets a single retry on bad args instead of
 //   the whole loop dying as `chat_error`.
 
-import type { LlmUsage } from "./ollama"
+import type {
+  LlmUsage,
+  ChatMessage,
+  ToolCall,
+  ChatArgs,
+  ChatResult,
+} from "../../ports/model"
 
 const OLLAMA_TURBO_URL = "https://ollama.com/api/chat"
-
-export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool"
-  content: string
-  /** For role="assistant": tool calls the model wants to make. */
-  tool_calls?: ToolCall[]
-  /** For role="tool": the call_id this response answers. Ollama pairs
-   *  tool responses to calls primarily via message ordering, but
-   *  supplying tool_call_id explicitly lets us validate pairings
-   *  before sending and lets future Ollama versions enforce strict
-   *  pairing without breaking us. */
-  tool_call_id?: string
-  /** For role="tool": the function name (clarity in logs + lets us
-   *  cross-check the tool_call_id pairing). */
-  tool_name?: string
-}
-
-export interface ToolCall {
-  /** Provider-supplied. Some providers omit; loop falls back to index. */
-  id?: string
-  function: {
-    name: string
-    /** RAW value as returned by Ollama. May be a JSON string OR an object
-     *  (version-dependent). Loop's `parseToolArguments` handles the parse
-     *  + validation; we don't touch it here. */
-    arguments: string | Record<string, unknown>
-  }
-}
-
-export interface ChatToolDef {
-  type: "function"
-  function: {
-    name: string
-    description: string
-    parameters: Record<string, unknown> // JSON Schema
-  }
-}
-
-export interface ChatArgs {
-  model: string
-  apiKey: string
-  messages: ChatMessage[]
-  tools?: ChatToolDef[]
-  /** Optional structured-output schema for the FINAL answer. Loop callers
-   *  must NOT pass `format` on tool-call turns — it can suppress tool
-   *  emission. */
-  format?: Record<string, unknown>
-  temperature?: number
-  /** Wall-clock cap. Default 600_000ms (10min) — same as `generate()`.
-   *  The agent loop's outer 120s cap still applies via `signal`. */
-  timeoutMs?: number
-  /** Per-call kill-switch. When "off", `chat()` throws a synchronous
-   *  ChatDisabledError before any network call. The agent loop also
-   *  reads OLLAMA_CHAT_ENABLE from env at entry and refuses to start
-   *  in the same way; this arg lets ad-hoc callers honor the kill
-   *  without re-reading env themselves. */
-  chatEnabled?: "on" | "off"
-  /** External AbortSignal. Composed with `timeoutMs` — either source
-   *  aborts the request. Loop callers pass their loop-wide signal here. */
-  signal?: AbortSignal
-}
-
-export interface ChatResult {
-  /** The assistant message the model emitted this turn. */
-  message: ChatMessage
-  /** True iff `Array.isArray(message.tool_calls) && message.tool_calls.length > 0`.
-   *  Empty array unambiguously means final-answer (no tool calls). */
-  hasToolCalls: boolean
-  /** SIG-212: token usage as reported by Ollama's final stream chunk.
-   *  Optional on the type so test mocks and alternative `ChatResult`
-   *  producers don't have to provide it. The production `chat()` path
-   *  ALWAYS sets this field (possibly to `{}` when neither count was
-   *  reported), so callers in the ensemble can safely assume it
-   *  exists for real LLM round-trips. Aggregators treat each missing
-   *  field within `usage` as "no data," not zero. */
-  usage?: LlmUsage
-}
 
 /**
  * Distinct error class so the agent loop can map kill-switch rejection

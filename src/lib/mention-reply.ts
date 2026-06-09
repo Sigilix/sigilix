@@ -7,7 +7,7 @@
 // produce a second reply. KV is the fast path; the comment-body marker
 // scan is the fallback for cold-cache scenarios.
 
-import { generate } from "./ollama"
+import { generate } from "../shared/adapters/model"
 import { LinearClient, buildLinearAuth } from "./linear"
 import { markBotAuthoredComment, isBotAuthoredComment } from "./bot-authored-comments"
 import {

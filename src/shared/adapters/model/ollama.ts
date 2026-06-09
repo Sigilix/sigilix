@@ -16,38 +16,9 @@
 // Output is a single string (the model's full response text), same
 // as the non-streaming version, so callers don't have to change.
 
-const OLLAMA_TURBO_URL = "https://ollama.com/api/generate"
+import type { GenerateArgs, GenerateResult, LlmUsage } from "../../ports/model"
 
-interface GenerateArgs {
-  model: string
-  prompt: string
-  apiKey: string
-  temperature?: number
-  /** Wall-clock timeout. Cloud routes can take 30-180s on long prompts; default 10min. */
-  timeoutMs?: number
-  /**
-   * JSON Schema enforced by Ollama during decoding. Eliminates the
-   * class of parse failures we previously hit ("verdict did not
-   * parse") because the runtime literally cannot emit malformed
-   * output — every token is constrained to the schema.
-   *
-   * When set, temperature defaults to 0 unless overridden, since
-   * structured output is deterministic by design.
-   *
-   * Reference: https://docs.ollama.com/structured-outputs
-   */
-  format?: Record<string, unknown>
-  /**
-   * SIG-216 fix-up: optional external abort signal. Aborting this
-   * signal aborts the in-flight fetch (cancels the streaming read)
-   * so the caller can reclaim wall-clock when a higher-level deadline
-   * fires — e.g. the inline-overview retry helper cancelling the
-   * first attempt before launching the second. Combined with the
-   * existing `timeoutMs` via a linked controller; whichever fires
-   * first wins.
-   */
-  signal?: AbortSignal
-}
+const OLLAMA_TURBO_URL = "https://ollama.com/api/generate"
 
 interface OllamaStreamChunk {
   response?: string
@@ -59,20 +30,6 @@ interface OllamaStreamChunk {
   // per-call cost.
   prompt_eval_count?: number
   eval_count?: number
-}
-
-/** SIG-212: token usage surfaced on `GenerateResult` / `ChatResult`.
- *  Fields are optional because non-Ollama providers may not surface
- *  them; emitters should omit rather than zero-fill (zero would skew
- *  aggregations). Shared by `ollama.ts` and `ollama-chat.ts`. */
-export interface LlmUsage {
-  inputTokens?: number
-  outputTokens?: number
-}
-
-export interface GenerateResult {
-  text: string
-  usage: LlmUsage
 }
 
 export async function generate({

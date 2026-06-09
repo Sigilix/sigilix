@@ -48,7 +48,7 @@ import {
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
   embedTexts,
-} from "./embeddings"
+} from "../shared/adapters/model"
 import {
   isManifestFresh,
   readRepoIndexManifest,

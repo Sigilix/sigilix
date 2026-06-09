@@ -10,7 +10,7 @@
 // no shell — so we use the Actions REST API: list jobs, fetch each
 // failed job's plain-text log, concat them.
 
-import { generate } from "./ollama"
+import { generate } from "../shared/adapters/model"
 import { getInstallationToken } from "../shared/adapters/github/github-app"
 import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
 import type { WorkflowJob } from "../shared/types/github"

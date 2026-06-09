@@ -16,7 +16,7 @@
 //   - Sensitive-repo gate IS enforced (we never send code to LLMs
 //     for repos on the OPENCLAW_SENSITIVE_REPOS denylist)
 
-import { generate } from "./ollama"
+import { generate } from "../shared/adapters/model"
 import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
 import { getInstallationToken } from "../shared/adapters/github/github-app"
 import type { SubmitReviewBody, SubmitReviewComment } from "../shared/types/github"

@@ -18,7 +18,7 @@
 // are an additive UX signal, not load-bearing — a missed labelling
 // run doesn't break the review pipeline.
 
-import { generate } from "./ollama"
+import { generate } from "../shared/adapters/model"
 import { GitHubClient } from "../shared/adapters/github"
 import { getInstallationToken } from "../shared/adapters/github/github-app"
 import { isPrLabelsEnabled, loadSigilixConfig } from "./sigilix-config"

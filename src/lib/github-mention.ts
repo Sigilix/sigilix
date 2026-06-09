@@ -10,7 +10,7 @@
 // Idempotency: KV-keyed on the source comment ID with a 30-day TTL so
 // re-deliveries of the same Comment.create event don't double-reply.
 
-import { generate } from "./ollama"
+import { generate } from "../shared/adapters/model"
 import { GitHubClient } from "../shared/adapters/github"
 import { getInstallationToken } from "../shared/adapters/github/github-app"
 import type { IssueComment, ReviewComment } from "../shared/types/github"

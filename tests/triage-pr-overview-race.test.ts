@@ -57,7 +57,7 @@ vi.mock("../src/shared/adapters/github", async () => {
 
 // SIG-212: adapt legacy string-returning mockGenerate to the new
 // `{ text, usage }` return shape.
-vi.mock("../src/lib/ollama", () => ({
+vi.mock("../src/shared/adapters/model/ollama", () => ({
   generate: async (args: unknown) => {
     const result = await mockGenerate(args)
     return typeof result === "string" ? { text: result, usage: {} } : result

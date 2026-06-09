@@ -48,7 +48,7 @@ import {
   maybeEnqueuePushIndexJob,
 } from "../src/lib/index-producer"
 import { repoIndexManifestKey, type RepoIndexManifestV1 } from "../src/lib/repo-index-manifest"
-import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/lib/embeddings"
+import { EMBEDDING_MODEL, EMBEDDING_DIMENSIONS } from "../src/shared/adapters/model"
 import type { Env } from "../src/shared/types/env"
 import type { JobMessage } from "../src/shared/types/job"
 

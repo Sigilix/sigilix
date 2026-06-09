@@ -26,7 +26,7 @@ import {
   type ChatMessage,
 } from "./triage-pr-review-ensemble"
 import { parsePrReviewResponse } from "./triage-pr-review"
-import { PR_REVIEW_SCHEMA } from "./schemas"
+import { PR_REVIEW_SCHEMA } from "../shared/domain/schemas"
 import {
   emitShadowAttempt,
   type ShadowAttemptKind,

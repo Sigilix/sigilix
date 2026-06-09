@@ -13,7 +13,7 @@
 import { getInstallationToken } from "./github-app"
 import { GitHubClient, GitHubHttpError, type PullRequestMeta, type PrChangedFile } from "./github"
 import { resolveInstallation } from "./github-installation"
-import { withTimeout } from "./with-timeout"
+import { withTimeout } from "../shared/util/with-timeout"
 import type { Env } from "../shared/types/env"
 
 const TIMEOUT_MS = 5_000

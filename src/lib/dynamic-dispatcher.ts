@@ -63,7 +63,7 @@ import {
   type SanitizedMetadata,
 } from "./dispatcher-prompt-sanitizer"
 import type { DispatcherConfig, DispatcherSafetyNetPattern, SigilixConfig } from "./sigilix-config"
-import { compileGlob } from "./path-glob"
+import { compileGlob } from "../shared/util/path-glob"
 
 // ─── Public types ─────────────────────────────────────────────────────
 

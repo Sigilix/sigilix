@@ -88,7 +88,7 @@ import {
   dampTestingScoreForRatio,
   TEST_RATIO_DAMPER_THRESHOLD,
 } from "./test-ratio-damper"
-import { mapWithConcurrency } from "./bounded-concurrency"
+import { mapWithConcurrency } from "../shared/util/bounded-concurrency"
 import {
   loadWithdrawals,
   filterWithdrawnFindings,
@@ -100,8 +100,8 @@ import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-
 import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
 import { applyOutputSurfaceToSubmission, selectPrimarySubmitAnnotations } from "./pr-review-check-run"
 import { getInstallationToken } from "./github-app"
-import { parseFirstJsonObject } from "./json-extract"
-import { PR_REVIEW_SCHEMA } from "./schemas"
+import { parseFirstJsonObject } from "../shared/util/json-extract"
+import { PR_REVIEW_SCHEMA } from "../shared/domain/schemas"
 import {
   type PrReviewVerdict,
   type PrReviewFinding,
@@ -309,7 +309,7 @@ import {
   classifyDiffFiles,
   renderDiffFileClassificationBlock,
 } from "./diff-file-classify"
-import { shouldReview } from "./path-glob"
+import { shouldReview } from "../shared/util/path-glob"
 import {
   runDeterministicChecks,
   renderHitsForPrompt,
@@ -462,7 +462,7 @@ import type { GraphExpansionSample } from "../do/graph-expansion-metrics"
 import { graphExpansionMode, injectArm } from "./graph-expansion-mode"
 import type { GraphContextNode } from "../do/repo-graph"
 import { edgeWeight, hopDecay } from "./graph-scoring"
-import { withTimeout } from "./with-timeout"
+import { withTimeout } from "../shared/util/with-timeout"
 // SIG-318: the ensemble timeout schedule + its load-time budget invariants now
 // live in the domain layer (src/lib/ensemble/domain/budget.ts). Value-imported
 // (NOT type-only) so budget.ts's module-load assertion fires whenever this

@@ -21,7 +21,7 @@
 // Pure module: no I/O, no async, no GitHub calls. Caller hands in
 // changed paths + config; helper returns hit-or-null.
 
-import { compileGlob } from "./path-glob"
+import { compileGlob } from "../shared/util/path-glob"
 
 export interface DocsCoverageHit {
   /** Architecture-impacting files touched in this PR (matched

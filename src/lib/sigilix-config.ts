@@ -32,7 +32,7 @@ import type { GitHubClient } from "./github"
 import type { SpecialistRole } from "./ensemble-router"
 import type { ResolvedPerfBudgets } from "./perf-budgets"
 import { parseDeterministicChecks, type DeterministicCheck } from "./deterministic-checks"
-import { pathMatchesAny } from "./path-glob"
+import { pathMatchesAny } from "../shared/util/path-glob"
 import {
   DEFAULT_PRE_MERGE_GATES_CONFIG,
   type ResolvedPreMergeGatesConfig,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mapWithConcurrency } from "../src/lib/bounded-concurrency"
+import { mapWithConcurrency } from "../src/shared/util/bounded-concurrency"
 
 describe("mapWithConcurrency", () => {
   it("preserves input order while limiting active tasks", async () => {

@@ -21,7 +21,7 @@
 import type { DescribeMode } from "./slash-commands"
 import { describeModeFriendlyName } from "./slash-commands"
 import { applyDescribeToBody } from "./describe-apply"
-import { parseFirstJsonObject } from "./json-extract"
+import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { PR_DESCRIBE_PROMPTS } from "../prompts/pr-describe"
 import { generate } from "./ollama"
 import { getInstallationToken } from "./github-app"
@@ -34,7 +34,7 @@ import {
 } from "./sigilix-config"
 import { postConfigErrorComment } from "./sigilix-config-error-comment"
 import { isRepoSensitive } from "./repo-policy"
-import { PR_DESCRIBE_SCHEMA } from "./schemas"
+import { PR_DESCRIBE_SCHEMA } from "../shared/domain/schemas"
 import type { Env } from "../shared/types/env"
 
 const DEFAULT_MODEL = "glm-5.1:cloud"

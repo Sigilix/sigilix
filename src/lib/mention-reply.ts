@@ -18,7 +18,7 @@ import {
 } from "./mention"
 import { retrieveChunks, formatChunksForPrompt } from "./retrieval"
 import { indexNamespace, readRepoIndexManifest } from "./repo-index-manifest"
-import { MENTION_REPLY_SCHEMA } from "./schemas"
+import { MENTION_REPLY_SCHEMA } from "../shared/domain/schemas"
 import type { Env } from "../shared/types/env"
 import { MENTION_REPLY_PROMPT } from "../prompts/mention-reply"
 import { extractPullRequestRefs, type PrRef } from "./github-pr-refs"
@@ -28,7 +28,7 @@ import {
   parseTeamGithubRepo,
 } from "./github-installation"
 import { fetchPullRequestContext, type PrContext } from "./github-pr-context"
-import { escapeXmlAttribute, escapeXmlText } from "./xml-escape"
+import { escapeXmlAttribute, escapeXmlText } from "../shared/util/xml-escape"
 import { runAgentLoop } from "./agent-loop"
 import { createAgentTools } from "./agent-tools"
 import { makeKvTelemetrySink } from "./agent-telemetry-kv"

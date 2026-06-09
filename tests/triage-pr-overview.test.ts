@@ -15,7 +15,7 @@ import {
   type PrOverviewVerdict,
 } from "../src/lib/triage-pr-overview"
 import type { CachedFileRow } from "../src/lib/pr-overview-file-cache"
-import type { PrCommit, PullRequestMeta } from "../src/lib/github"
+import type { PrCommit, PullRequestMeta } from "../src/shared/types/github"
 
 describe("parseOverviewResponse", () => {
   const valid: PrOverviewVerdict = {

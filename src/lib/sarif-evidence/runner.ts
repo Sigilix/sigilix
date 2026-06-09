@@ -15,7 +15,7 @@
 // inline comments — that's deferred to v2 (auto-inline NOT wired in
 // v1 per spec §3.5).
 
-import type { GitHubClient } from "../github"
+import type { GitHubClient } from "../../shared/adapters/github"
 import type { Env } from "../../shared/types/env"
 import { parseSarif } from "./sarif-parser"
 import { normalizeSarifPath } from "./path-normalize"

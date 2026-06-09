@@ -14,7 +14,7 @@
 // New head SHA → new marker → new comment (correctly).
 // Same head SHA → same marker → idempotent.
 
-import type { GitHubClient } from "./github"
+import type { GitHubClient } from "../shared/adapters/github"
 import type { Env } from "../shared/types/env"
 
 const RAW_SNIPPET_MAX = 500

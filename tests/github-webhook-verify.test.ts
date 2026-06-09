@@ -5,7 +5,7 @@
 // exercised.
 
 import { describe, expect, it } from "vitest"
-import { verifyGitHubWebhook } from "../src/lib/github-webhook-verify"
+import { verifyGitHubWebhook } from "../src/shared/adapters/github/github-webhook-verify"
 
 const SECRET = "github-test-secret"
 const encoder = new TextEncoder()

@@ -16,11 +16,11 @@ const { getInstallationTokenMock, addReactionToIssueCommentMock, addReactionToRe
   addReactionToIssueCommentMock: vi.fn(async () => {}),
   addReactionToReviewCommentMock: vi.fn(async () => {}),
 }))
-vi.mock("../src/lib/github-app", () => ({
+vi.mock("../src/shared/adapters/github/github-app", () => ({
   getInstallationToken: getInstallationTokenMock,
 }))
-vi.mock("../src/lib/github", async (importActual) => {
-  const actual = await importActual<typeof import("../src/lib/github")>()
+vi.mock("../src/shared/adapters/github", async (importActual) => {
+  const actual = await importActual<typeof import("../src/shared/adapters/github")>()
   class FakeClient {
     addReactionToIssueComment = addReactionToIssueCommentMock
     addReactionToReviewComment = addReactionToReviewCommentMock

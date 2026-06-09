@@ -8,8 +8,9 @@
 // through the GitHubClient.
 
 import { generate } from "./ollama"
-import { getInstallationToken } from "./github-app"
-import { GitHubClient, type PrChangedFile, type PrCommit, type PullRequestMeta } from "./github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient } from "../shared/adapters/github"
+import type { PrChangedFile, PrCommit, PullRequestMeta } from "../shared/types/github"
 import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { PR_OVERVIEW_SCHEMA } from "../shared/domain/schemas"
 import { PR_OVERVIEW_PROMPT } from "../prompts/pr-overview"

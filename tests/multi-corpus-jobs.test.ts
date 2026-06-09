@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { handleCorpusPrUpsert } from "../src/lib/multi-corpus-jobs"
-import { GitHubClient } from "../src/lib/github"
+import { GitHubClient } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 
 const EMBED_DIMS = 768

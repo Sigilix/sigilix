@@ -5,7 +5,7 @@ import {
   classifyEnsembleError,
   classifyEnsembleStage,
 } from "../src/do/classify-error"
-import { GitHubHttpError } from "../src/lib/github"
+import { GitHubHttpError } from "../src/shared/adapters/github"
 
 describe("classifyEnsembleError — TRANSIENT triggers", () => {
   it("HTTP 500 from GitHub → transient", () => {

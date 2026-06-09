@@ -97,9 +97,10 @@ import {
   type WithdrawalRecord,
 } from "./review-withdrawal-store"
 import { recordRepeatFpMetrics, type RepeatFpEvent } from "./validation-metrics-client"
-import { GitHubClient, GitHubHttpError, type CheckRunAnnotation } from "./github"
+import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import type { CheckRunAnnotation } from "../shared/types/github"
 import { applyOutputSurfaceToSubmission, selectPrimarySubmitAnnotations } from "./pr-review-check-run"
-import { getInstallationToken } from "./github-app"
 import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { PR_REVIEW_SCHEMA } from "../shared/domain/schemas"
 import {
@@ -251,7 +252,7 @@ import {
   type StackContext,
 } from "./pr-stack"
 import { renderStackPromptBlock } from "../prompts/pr-stack-prompt"
-import type { ListOpenPullsItem } from "./github"
+import type { ListOpenPullsItem } from "../shared/types/github"
 import { withComposedTimeout } from "./agent-loop"
 import {
   applyLogicPromptBudget,

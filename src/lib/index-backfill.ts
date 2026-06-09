@@ -5,7 +5,7 @@
 // already have a current manifest, so re-running is safe.
 
 import type { Env } from "../shared/types/env"
-import { listAppInstallationIds, listInstallationRepoFullNames } from "./github-app"
+import { listAppInstallationIds, listInstallationRepoFullNames } from "../shared/adapters/github/github-app"
 import { enqueueIndexJobsForRepos } from "./index-producer"
 
 export interface BackfillSummary {

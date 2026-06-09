@@ -6,7 +6,8 @@
 import { describe, it, expect, vi } from "vitest"
 import { postAstInlineFindings } from "../src/lib/ast-rules/inline-poster"
 import { resolveAstRulesConfig } from "../src/lib/sigilix-config"
-import type { GitHubClient, SubmitReviewBody } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
+import type { SubmitReviewBody } from "../src/shared/types/github"
 import type { AstFinding } from "../src/lib/ast-rules/types"
 
 const CTX = { owner: "o", repo: "r", prNumber: 1, headSha: "h".repeat(40) }

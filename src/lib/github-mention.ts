@@ -11,12 +11,9 @@
 // re-deliveries of the same Comment.create event don't double-reply.
 
 import { generate } from "./ollama"
-import { getInstallationToken } from "./github-app"
-import {
-  GitHubClient,
-  type IssueComment,
-  type ReviewComment,
-} from "./github"
+import { GitHubClient } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import type { IssueComment, ReviewComment } from "../shared/types/github"
 import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { GITHUB_MENTION_SCHEMA } from "../shared/domain/schemas"
 import { GITHUB_MENTION_PROMPT } from "../prompts/github-mention"

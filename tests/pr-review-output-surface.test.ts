@@ -17,7 +17,7 @@ import {
   ANNOTATIONS_ONLY_BODY_NOTE,
   toPlainTextAnnotation,
 } from "../src/lib/pr-review-check-run"
-import type { CheckRunAnnotation } from "../src/lib/github"
+import type { CheckRunAnnotation } from "../src/shared/types/github"
 
 describe("SIG-144: parseReviewOutputSurface + surface predicates", () => {
   it("defaults to `comments` when unset / empty / unrecognized", () => {

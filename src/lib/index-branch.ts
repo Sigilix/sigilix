@@ -1,6 +1,11 @@
 import { indexNamespace } from "./repo-index-manifest"
+import { BRANCH_STATE_SEGMENT } from "../shared/domain/index-keys"
 
-export const BRANCH_STATE_SEGMENT = "__branch__"
+// Re-exported so existing importers of this module keep their surface; the
+// canonical definition now lives in `shared/domain/index-keys` — a pure leaf
+// both `lib` and the GitHub installation adapter import, so the keyspace token
+// has one source of truth (SIG-380 / SIG-318).
+export { BRANCH_STATE_SEGMENT }
 
 /** Length of the hex hash suffix in encoded branch segments (64-bit truncation). */
 const BRANCH_HASH_HEX_LEN = 16

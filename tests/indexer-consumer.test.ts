@@ -37,12 +37,12 @@ const {
   mockDebugActiveGraphVersion: vi.fn(async () => null),
 }))
 
-vi.mock("../src/lib/github-app", () => ({
+vi.mock("../src/shared/adapters/github/github-app", () => ({
   getInstallationToken: (args: unknown) => mockGetInstallationToken(args),
 }))
 
-vi.mock("../src/lib/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/github")>("../src/lib/github")
+vi.mock("../src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
   class GitHubClientMock {
     async getRepository(owner: string, repo: string): Promise<unknown> {
       return mockGetRepository(owner, repo)

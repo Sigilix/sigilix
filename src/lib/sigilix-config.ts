@@ -28,7 +28,7 @@
 //   - YAML format support — JSON-only for v1
 //   - JSON Schema validation — defer until field set stabilizes
 
-import type { GitHubClient } from "./github"
+import type { GitHubClient } from "../shared/adapters/github"
 import type { SpecialistRole } from "./ensemble-router"
 import type { ResolvedPerfBudgets } from "./perf-budgets"
 import { parseDeterministicChecks, type DeterministicCheck } from "./deterministic-checks"

@@ -12,7 +12,8 @@
 // performs the GitHub calls and the mode/sensitive gating.
 
 import { deriveSide, type ReviewableMap } from "./diff-positions"
-import { GitHubHttpError, type SubmitReviewBody, type SubmitReviewComment } from "./github"
+import { GitHubHttpError } from "../shared/adapters/github"
+import type { SubmitReviewBody, SubmitReviewComment } from "../shared/types/github"
 import type { CiTriagePatch } from "./triage-ci"
 
 export type CiSuggestionsMode = "shadow" | "enforce"

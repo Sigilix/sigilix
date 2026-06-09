@@ -25,8 +25,8 @@
 
 import type { Env } from "../shared/types/env"
 import { isRepoSensitive } from "./repo-policy"
-import { getInstallationToken } from "./github-app"
-import { GitHubClient } from "./github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import { GitHubClient } from "../shared/adapters/github"
 import { readRepoIndexManifest } from "./repo-index-manifest"
 import { isTrackedLongLivedBranch } from "./index-branch"
 

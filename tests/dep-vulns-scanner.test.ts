@@ -3,7 +3,7 @@
 import { describe, it, expect, vi } from "vitest"
 import { runDepVulnScan, type DepVulnFinding } from "../src/lib/dep-vulns/scanner"
 import { renderDepVulnFindingsForPrompt } from "../src/lib/dep-vulns/render"
-import type { GitHubClient } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 
 function fakeClient(getFileContent: GitHubClient["getFileContent"]): GitHubClient {

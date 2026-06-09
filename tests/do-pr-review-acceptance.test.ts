@@ -19,7 +19,7 @@ import { handleReviewStatusRoute } from "../src/do/status-route"
 import type { Env } from "../src/shared/types/env"
 import type { JobMessage } from "../src/shared/types/job"
 import type { RunState, StatusResponse } from "../src/do/types"
-import { GitHubHttpError } from "../src/lib/github"
+import { GitHubHttpError } from "../src/shared/adapters/github"
 
 const SAMPLE_HEAD_SHA = "a".repeat(40)
 const SAMPLE_BASE_SHA = "b".repeat(40)

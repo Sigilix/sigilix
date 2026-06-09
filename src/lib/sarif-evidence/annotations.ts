@@ -4,7 +4,7 @@
 // This adapter turns the same normalized findings into Check annotations so
 // deterministic diagnostics can surface even when the LLM review degrades.
 
-import type { CheckRunAnnotation } from "../github"
+import type { CheckRunAnnotation } from "../../shared/types/github"
 import type { SarifFinding } from "./types"
 
 const CHECK_ANNOTATION_TEXT_LIMIT = 60000

@@ -29,11 +29,11 @@
 // `buildFallbackSubmission`, the ARC-281 body renderers
 // (`renderApproveBody` / `renderRequestChangesBody`),
 // `parsePrReviewResponse`, and the related sanitizers.
-import {
-  type CheckRunAnnotation,
-  type SubmitReviewBody,
-  type SubmitReviewComment,
-} from "./github"
+import type {
+  CheckRunAnnotation,
+  SubmitReviewBody,
+  SubmitReviewComment,
+} from "../shared/types/github"
 import { SIGILIX_BOT_LOGIN } from "./dismiss-prior-reviews"
 import { ALL_DISMISS_REASONS } from "./dismiss-reasons"
 import {

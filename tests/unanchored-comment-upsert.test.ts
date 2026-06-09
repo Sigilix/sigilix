@@ -22,7 +22,7 @@ import {
   upsertUnanchoredComment,
   type UnanchoredUpsertFinding,
 } from "../src/lib/unanchored-comment-upsert"
-import type { GitHubClient } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 import type { WithdrawalRecord } from "../src/lib/review-withdrawal-store"
 

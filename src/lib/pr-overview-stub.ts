@@ -79,8 +79,8 @@
 // the KV flag.
 
 import type { Env } from "../shared/types/env"
-import { GitHubClient } from "./github"
-import { getInstallationToken } from "./github-app"
+import { GitHubClient } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
 import {
   OVERVIEW_MARKER,
   LEGACY_OVERVIEW_MARKER,

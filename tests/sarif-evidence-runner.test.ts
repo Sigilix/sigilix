@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from "vitest"
 import { runSarifEvidence, type ResolvedSarifConfig } from "../src/lib/sarif-evidence/runner"
-import type { GitHubClient } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 
 const CTX = { owner: "o", repo: "r", prNumber: 1, headSha: "h".repeat(40) }

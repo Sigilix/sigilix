@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { GitHubHttpError, type PullRequestMeta, type PrChangedFile } from "../src/lib/github"
+import { GitHubHttpError } from "../src/shared/adapters/github"
+import type { PullRequestMeta, PrChangedFile } from "../src/shared/types/github"
 
 const mockMethods = {
   getPullRequest: vi.fn(),
@@ -7,12 +8,12 @@ const mockMethods = {
   listPullRequestFiles: vi.fn(),
 }
 
-vi.mock("../src/lib/github-app", () => ({
+vi.mock("../src/shared/adapters/github/github-app", () => ({
   getInstallationToken: vi.fn(async () => "test-token"),
 }))
 
-vi.mock("../src/lib/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/github")>("../src/lib/github")
+vi.mock("../src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
   return {
     ...actual,
     GitHubClient: vi.fn().mockImplementation(() => ({

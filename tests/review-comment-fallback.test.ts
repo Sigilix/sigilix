@@ -6,8 +6,8 @@ const { mockCreateIssueComment } = vi.hoisted(() => ({
   mockCreateIssueComment: vi.fn(),
 }))
 
-vi.mock("../src/lib/github", async () => {
-  const actual = await vi.importActual<typeof import("../src/lib/github")>("../src/lib/github")
+vi.mock("../src/shared/adapters/github", async () => {
+  const actual = await vi.importActual<typeof import("../src/shared/adapters/github")>("../src/shared/adapters/github")
   class GitHubClientMock {
     async createIssueComment(...args: unknown[]): Promise<unknown> {
       return mockCreateIssueComment(...args)
@@ -20,7 +20,7 @@ import {
   postReviewCommentFallback,
   renderReviewCommentFallback,
 } from "../src/lib/review-comment-fallback"
-import { GitHubClient } from "../src/lib/github"
+import { GitHubClient } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 
 let logSpy: ReturnType<typeof vi.spyOn>

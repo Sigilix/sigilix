@@ -30,7 +30,7 @@
 
 import type { Env } from "../shared/types/env"
 import type { JobMessage } from "../shared/types/job"
-import { GitHubClient } from "./github"
+import { GitHubClient } from "../shared/adapters/github"
 
 /**
  * Marker for the LEGACY standalone warmup sticky. Kept exported so

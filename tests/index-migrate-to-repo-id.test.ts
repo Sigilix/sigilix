@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest"
 import { migrateOneRepo } from "../src/lib/index-migrate-to-repo-id"
-import { GitHubClient } from "../src/lib/github"
+import { GitHubClient } from "../src/shared/adapters/github"
 import type { Env } from "../src/shared/types/env"
 import type { RepoIndexManifestV1 } from "../src/lib/repo-index-manifest"
 

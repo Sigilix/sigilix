@@ -2,14 +2,14 @@
 
 import { describe, expect, it, vi, beforeEach } from "vitest"
 
-vi.mock("../src/lib/github-app", () => ({
+vi.mock("../src/shared/adapters/github/github-app", () => ({
   listAppInstallationIds: vi.fn(),
   listInstallationRepoFullNames: vi.fn(),
 }))
 vi.mock("../src/lib/index-producer", () => ({ enqueueIndexJobsForRepos: vi.fn() }))
 
 import { runIndexBackfill } from "../src/lib/index-backfill"
-import { listAppInstallationIds, listInstallationRepoFullNames } from "../src/lib/github-app"
+import { listAppInstallationIds, listInstallationRepoFullNames } from "../src/shared/adapters/github/github-app"
 import { enqueueIndexJobsForRepos } from "../src/lib/index-producer"
 import type { Env } from "../src/shared/types/env"
 

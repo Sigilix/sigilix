@@ -17,13 +17,9 @@
 //     for repos on the OPENCLAW_SENSITIVE_REPOS denylist)
 
 import { generate } from "./ollama"
-import { getInstallationToken } from "./github-app"
-import {
-  GitHubClient,
-  GitHubHttpError,
-  type SubmitReviewBody,
-  type SubmitReviewComment,
-} from "./github"
+import { GitHubClient, GitHubHttpError } from "../shared/adapters/github"
+import { getInstallationToken } from "../shared/adapters/github/github-app"
+import type { SubmitReviewBody, SubmitReviewComment } from "../shared/types/github"
 import { parseFirstJsonObject } from "../shared/util/json-extract"
 import { PR_IMPROVE_SCHEMA } from "../shared/domain/schemas"
 import { PR_IMPROVE_PROMPT } from "../prompts/pr-improve"

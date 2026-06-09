@@ -10,7 +10,7 @@
 
 import type { Env } from "../shared/types/env"
 import { requireBearerToken } from "./auth-bearer"
-import { resolveRepoInstallationId } from "./github-app"
+import { resolveRepoInstallationId } from "../shared/adapters/github/github-app"
 import { runIndexBackfill } from "./index-backfill"
 import { runIndexReconciliation } from "./index-reconciliation"
 import { migrateInstallToRepoId } from "./index-migrate-to-repo-id"

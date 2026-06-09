@@ -27,7 +27,7 @@ import {
   SIGILIX_CONFIG_PATH,
   type SigilixConfig,
 } from "../src/lib/sigilix-config"
-import type { GitHubClient } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
 
 // Build a minimal stub of GitHubClient that only implements the one
 // method we exercise. Cast through `unknown` because we don't want to

@@ -18,7 +18,7 @@
 //
 // Fail-open: a missing file / fetch error yields no guidance (review unchanged).
 
-import type { GitHubClient } from "./github"
+import type { GitHubClient } from "../shared/adapters/github"
 import { pathMatchesAny } from "../shared/util/path-glob"
 
 /**

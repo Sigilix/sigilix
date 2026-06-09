@@ -1,5 +1,5 @@
 import type { Env } from "../shared/types/env"
-import type { GitHubClient } from "./github"
+import type { GitHubClient } from "../shared/adapters/github"
 
 const DRAFT_SKIP_MARKER = "<!-- sigilix:draft-skip -->"
 const DRAFT_SKIP_KV_PREFIX = "pr-draft-skip-notice:"

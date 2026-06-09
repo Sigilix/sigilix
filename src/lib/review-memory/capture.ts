@@ -29,7 +29,7 @@
 // Best-effort: never throws; all KV / GH errors logged-and-swallowed.
 
 import type { Env } from "../../shared/types/env"
-import type { GitHubClient } from "../github"
+import type { GitHubClient } from "../../shared/adapters/github"
 import type {
   ResolvedReviewMemoryConfig,
   ReviewMemoryClaim,

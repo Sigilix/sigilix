@@ -15,8 +15,8 @@
 // window. Phase 4 flips reads to the new key.
 
 import type { Env } from "../shared/types/env"
-import { GitHubClient } from "./github"
-import { getInstallationToken, listInstallationRepoFullNames } from "./github-app"
+import { GitHubClient } from "../shared/adapters/github"
+import { getInstallationToken, listInstallationRepoFullNames } from "../shared/adapters/github/github-app"
 import { parseFullName } from "./index-producer"
 import {
   readRepoIndexManifest,

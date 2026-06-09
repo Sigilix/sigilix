@@ -6,7 +6,7 @@ import {
   supersedeDraftPrSkipNotice,
 } from "../src/lib/pr-draft-skip-notice"
 import type { Env } from "../src/shared/types/env"
-import type { GitHubClient } from "../src/lib/github"
+import type { GitHubClient } from "../src/shared/adapters/github"
 
 function makeEnv(): { env: Env; kv: Map<string, string> } {
   const kv = new Map<string, string>()

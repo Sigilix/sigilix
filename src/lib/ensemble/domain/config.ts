@@ -99,10 +99,20 @@ export interface EnsembleFeatureFlags {
   reviewOutputSurface: ReviewOutputSurface
 }
 
+/** Numeric, env-overridable tunables (SIG-318 PR 5c). Each is `parseIntEnv`-parsed
+ *  at the edge with the orchestrator's original default. */
+export interface EnsembleTunables {
+  /** Pre-flight retrieval call cap (`OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR`, default 3). */
+  maxRetrieveCallsPerPr: number
+  /** Graph-RPC budget in ms (`OPENCLAW_GRAPH_RPC_TIMEOUT_MS`, default `GRAPH_RPC_TIMEOUT_MS` = 2500). */
+  graphRpcTimeoutMs: number
+}
+
 /** The parse-once, typed view of the ensemble's env-derived settings. Grows by
  *  cluster as the env→Config migration proceeds (SIG-318 PR 3+). */
 export interface EnsembleConfig {
   astScanModes: AstScanModes
   validatorModes: EnsembleValidatorModes
   flags: EnsembleFeatureFlags
+  tunables: EnsembleTunables
 }

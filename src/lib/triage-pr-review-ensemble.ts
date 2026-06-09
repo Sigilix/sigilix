@@ -521,11 +521,6 @@ export type { ConsensusRanked, FindingDelta } from "./ensemble/domain/findings"
 
 // ─── tunables (defaults — env-overridable) ─────────────────────────────
 
-// DEFAULT_MAX_MODEL_CALLS_PER_PR is configured via env but currently
-// unused at the orchestrator level — Phase 4a relies on the per-call
-// timeouts + the precomputed retrieval budget for cost control.
-const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
-
 // SIG-287: synth confidence (1-5) at or below this downgrades an otherwise-
 // clean APPROVE to a neutral COMMENT — a low-confidence review must not read as
 // a confident sign-off. Degraded coverage (a missing specialist) ALSO triggers
@@ -2164,7 +2159,7 @@ export async function handlePrReviewEnsemble(
 
     // ─── Pre-flight retrieval snapshot ─────────────────────────
     cache = createRetrievalCache({
-      maxCalls: parseIntEnv(env.OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR, DEFAULT_MAX_RETRIEVE_CALLS_PER_PR),
+      maxCalls: ensembleConfig.tunables.maxRetrieveCallsPerPr,
     })
     const namespace = indexNamespace(owner, repo)
     const preflightQuery = `${meta.title}\n\n${meta.body ?? ""}`
@@ -2573,7 +2568,7 @@ export async function handlePrReviewEnsemble(
     // SIG-143: blast paths folded into the prompt graph-context block (post mode).
     let graphBlastContextString = ""
     if (graphRetrievalEnabled(env)) {
-      const graphRpcBudgetMs = parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS)
+      const graphRpcBudgetMs = ensembleConfig.tunables.graphRpcTimeoutMs
       try {
         // Seed from deduplicated chunk paths of the merged hit set.
         const seedPaths = [...new Set(sharedChunksForOverlap.map((c) => c.path))]
@@ -7890,16 +7885,6 @@ async function incrementDailyBudget(env: Env, by: number): Promise<void> {
   const raw = await env.OPENCLAW_STATE.get(key)
   const used = raw ? Number.parseInt(raw, 10) : 0
   await env.OPENCLAW_STATE.put(key, String(used + by), { expirationTtl: 48 * 60 * 60 })
-}
-
-function parseIntEnv(raw: string | undefined, fallback: number): number {
-  if (!raw) return fallback
-  const parsed = Number.parseInt(raw, 10)
-  // Arc PR #35 catch: `parsed > 0` made the `cap <= 0` guard in
-  // dailyBudgetAvailable() dead code — operators setting
-  // OPENCLAW_ENSEMBLE_DAILY_BUDGET=0 silently got the default (200)
-  // instead of disabling ensemble. Allow 0 to propagate.
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
 }
 
 function countLines(diff: string): number {

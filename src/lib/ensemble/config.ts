@@ -29,6 +29,7 @@ import { parseTrustLedgerMode } from "../trust-ledger-thread"
 import { resolveClaimShadowMode } from "../review-memory/shadow-match"
 import { resolvePrecisionMode } from "../precision-profile/mode"
 import { parseReviewOutputSurface } from "../pr-review-check-run"
+import { GRAPH_RPC_TIMEOUT_MS } from "./domain/budget"
 import type { AstScanMode, EnsembleConfig } from "./domain/config"
 
 /** The structural subset of the Worker env that `parseEnsembleConfig` reads.
@@ -74,11 +75,26 @@ export interface EnsembleConfigEnv {
   OPENCLAW_REVIEW_MEMORY_CLAIMS?: string | undefined
   OPENCLAW_PRECISION_PROFILE_MODE?: string | undefined
   OPENCLAW_REVIEW_OUTPUT_SURFACE?: string | undefined
+  // numeric tunables (PR 5c)
+  OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR?: string | undefined
+  OPENCLAW_GRAPH_RPC_TIMEOUT_MS?: string | undefined
 }
 
 // The exact normalization the inline scan call sites used: default "off", trim,
 // lowercase. Centralized so every scanner mode parses identically.
 const scanMode = (v: string | undefined): AstScanMode => (v ?? "off").trim().toLowerCase()
+
+// Numeric tunable parser (moved from the orchestrator, SIG-318 PR 5c — int-from-env
+// parsing is an edge concern). Empty/undefined, non-numeric, or negative → fallback;
+// an explicit 0 propagates (a 0 override must take effect, not silently default).
+function parseIntEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback
+  const parsed = Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
+// Pre-flight retrieval call-cap default (was god-file-local, SIG-318 PR 5c).
+const DEFAULT_MAX_RETRIEVE_CALLS_PER_PR = 3
 
 export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
   return {
@@ -130,6 +146,10 @@ export function parseEnsembleConfig(env: EnsembleConfigEnv): EnsembleConfig {
       reviewMemoryClaims: env.OPENCLAW_REVIEW_MEMORY_CLAIMS,
       precisionProfileMode: resolvePrecisionMode(env.OPENCLAW_PRECISION_PROFILE_MODE),
       reviewOutputSurface: parseReviewOutputSurface(env.OPENCLAW_REVIEW_OUTPUT_SURFACE),
+    },
+    tunables: {
+      maxRetrieveCallsPerPr: parseIntEnv(env.OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR, DEFAULT_MAX_RETRIEVE_CALLS_PER_PR),
+      graphRpcTimeoutMs: parseIntEnv(env.OPENCLAW_GRAPH_RPC_TIMEOUT_MS, GRAPH_RPC_TIMEOUT_MS),
     },
   }
 }

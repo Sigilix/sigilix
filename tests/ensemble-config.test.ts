@@ -274,3 +274,38 @@ describe("SIG-318 parseEnsembleConfig — feature flags / modes (PR 5b)", () => 
     expect(parseEnsembleConfig(env).flags.trustLedgerMode).toBe(parseTrustLedgerMode("On"))
   })
 })
+
+describe("SIG-318 parseEnsembleConfig — numeric tunables (PR 5c)", () => {
+  it("parses each tunable to an int and wires it to the correct field", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR: "7",
+      OPENCLAW_GRAPH_RPC_TIMEOUT_MS: "1234",
+    }).tunables
+    expect(c.maxRetrieveCallsPerPr).toBe(7)
+    expect(c.graphRpcTimeoutMs).toBe(1234)
+  })
+
+  it("defaults to the orchestrator's original constants when absent", () => {
+    // 3 = DEFAULT_MAX_RETRIEVE_CALLS_PER_PR, 2500 = GRAPH_RPC_TIMEOUT_MS (both moved
+    // out of the god-file). A drift in either default fails here.
+    expect(parseEnsembleConfig({}).tunables).toEqual({
+      maxRetrieveCallsPerPr: 3,
+      graphRpcTimeoutMs: 2500,
+    })
+  })
+
+  it("falls back to the default on non-numeric or negative values (parseIntEnv contract)", () => {
+    const c = parseEnsembleConfig({
+      OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR: "abc",
+      OPENCLAW_GRAPH_RPC_TIMEOUT_MS: "-5",
+    }).tunables
+    expect(c.maxRetrieveCallsPerPr).toBe(3)
+    expect(c.graphRpcTimeoutMs).toBe(2500)
+  })
+
+  it("allows an explicit 0 to propagate (the documented parseIntEnv contract)", () => {
+    expect(
+      parseEnsembleConfig({ OPENCLAW_ENSEMBLE_MAX_RETRIEVE_CALLS_PER_PR: "0" }).tunables.maxRetrieveCallsPerPr,
+    ).toBe(0)
+  })
+})
